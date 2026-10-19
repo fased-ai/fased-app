@@ -16,12 +16,30 @@ jobs:
           node-version: "24"
           cache: npm
       - run: npm ci
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - run: node scripts/source-evidence.mjs
       - run: npm run check
+      - run: go mod verify
+      - run: test -z "$(gofmt -l cmd internal ui.go)"
+      - run: npm run test:core
+      - run: npm run build:core
+      - name: Headless Windows compilation
+        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o .evidence/bin/windows.exe ./cmd/fased-app
+      - name: Headless macOS compilation
+        run: GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o .evidence/bin/macos ./cmd/fased-app
       - run: npx playwright install --with-deps chromium
       - run: npm run test:ui
+      - run: npm run test:core-ui
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: prototype-failure-evidence
-          path: .evidence/
+          name: core-failure-evidence
+          path: |
+            .evidence/*.json
+            .evidence/*.png
+            .evidence/browser/
+            .evidence/core-browser/
           retention-days: 7

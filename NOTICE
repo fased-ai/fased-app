@@ -12,6 +12,11 @@ including React/React DOM (MIT) and Lucide (ISC), and the development tools
 recorded in package-lock.json. Their installed packages contain their own
 license texts. These terms are not replaced by the application license.
 
+The Go private core adds modernc.org/sqlite (BSD-3-Clause), golang.org/x/crypto,
+golang.org/x/sys and golang.org/x/term (BSD-3-Clause), Microsoft/go-winio (MIT),
+and the transitive modules pinned in go.sum. Module downloads include their
+license texts; artifact distribution must collect all required notices.
+
 Before distributing built artifacts, include the required notices for all
 bundled dependencies. Any later extraction from legacy Fased must retain its
 applicable copyright/license notices and record the source revision.

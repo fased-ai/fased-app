@@ -1,0 +1,211 @@
+import { expect, test } from "@playwright/test";
+import { spawn, type ChildProcess } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { once } from "node:events";
+
+const exec = promisify(execFile);
+const binary = resolve(".evidence/bin/fased-app");
+const fixturePassword = "generated-browser-fixture-password";
+let dir: string;
+let child: ChildProcess | undefined;
+let url: string;
+let output = "";
+
+async function start() {
+  output = "";
+  child = spawn(binary, [
+    "serve",
+    "--listen",
+    "127.0.0.1:0",
+    "--data-dir",
+    dir,
+  ]);
+  child.stdout!.on("data", (data) => (output += String(data)));
+  child.stderr!.on("data", (data) => (output += String(data)));
+  await expect.poll(() => output.includes('"event":"listening"')).toBe(true);
+  url = JSON.parse(output.trim().split("\n")[0]).url;
+}
+async function stop() {
+  if (!child || child.exitCode !== null) return;
+  const done = once(child, "exit");
+  child.kill("SIGTERM");
+  await done;
+  child = undefined;
+}
+test.beforeEach(async () => {
+  const root = resolve(".evidence/core-browser-fixtures");
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  dir = await mkdtemp(join(root, "f-"));
+  await start();
+});
+test.afterEach(async () => {
+  try {
+    await stop();
+  } finally {
+    if (dir) await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("claim, UI/CLI setup, restart and logout use one private instance", async ({
+  page,
+}) => {
+  await page.goto(url);
+  await expect(
+    page.getByRole("heading", { name: "Claim this workspace" }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: `.evidence/claim-${test.info().project.name}.png`,
+    fullPage: true,
+  });
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page.getByRole("button", { name: "Claim workspace" }).click();
+  await expect(
+    page.getByText("PRIVATE CORE · TERMINAL PROTOTYPES", { exact: true }),
+  ).toBeVisible();
+  const health = await (await page.request.get(`${url}/api/v1/health`)).json();
+  expect(health.capabilities.walletSigner).toBe(false);
+  expect(health.capabilities.financialExecution).toBe(false);
+  expect(
+    await page.evaluate(() =>
+      Object.keys(localStorage).some((key) => key.includes("session")),
+    ),
+  ).toBe(false);
+  expect(output).not.toContain(claim.code);
+  expect(output).not.toContain(fixturePassword);
+  await page
+    .getByRole("button", { name: "Set up workspace", exact: true })
+    .click();
+  await page.getByRole("button", { name: /Private VPS Always-on/ }).click();
+  await expect(
+    page.getByRole("button", { name: /Private VPS Always-on/ }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+
+  // CLI credentials travel over the protected socket, never URL/arguments.
+  await new Promise<void>((resolveLogin, reject) => {
+    const login = spawn(binary, [
+      "login",
+      "--data-dir",
+      dir,
+      "--password-stdin",
+    ]);
+    login.stdin.end(fixturePassword + "\n");
+    login.on("error", reject);
+    login.on("exit", (code) =>
+      code === 0
+        ? resolveLogin()
+        : reject(new Error("fixture CLI login failed")),
+    );
+  });
+  const current = JSON.parse(
+    (await exec(binary, ["setup", "--data-dir", dir])).stdout,
+  );
+  expect(current.settings.host).toBe("vps");
+  await exec(binary, [
+    "setup",
+    "--data-dir",
+    dir,
+    "--host",
+    "local",
+    "--wallet-mode",
+    "watch",
+  ]);
+  await page.reload();
+  await page
+    .getByRole("button", { name: "Set up workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: /Local computer Simpler/ }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Save setup preferences" }),
+  ).toBeEnabled();
+  // Another client edits after the review was loaded. The UI must stay open,
+  // show the conflict and require a second review rather than report success.
+  await exec(binary, ["setup", "--data-dir", dir, "--provider", "anthropic"]);
+  await page.getByRole("button", { name: "Save setup preferences" }).click();
+  await expect(page.getByRole("dialog").getByRole("alert")).toHaveText(
+    /settings changed in another client/,
+  );
+  expect(
+    JSON.parse((await exec(binary, ["setup", "--data-dir", dir])).stdout)
+      .settings.complete,
+  ).toBe(false);
+  await page.getByRole("button", { name: "Save setup preferences" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(
+    JSON.parse((await exec(binary, ["setup", "--data-dir", dir])).stdout)
+      .settings.complete,
+  ).toBe(true);
+  const duplicate = await exec(binary, [
+    "serve",
+    "--listen",
+    "127.0.0.1:0",
+    "--data-dir",
+    dir,
+  ]).then(
+    () => "unexpected",
+    (e: Error) => e.message,
+  );
+  expect(duplicate).toContain("already owns");
+
+  await stop();
+  await start();
+  const restarted = JSON.parse(
+    (await exec(binary, ["status", "--data-dir", dir])).stdout,
+  );
+  expect(restarted.instanceId).toBe(health.instanceId);
+  expect(
+    JSON.parse((await exec(binary, ["setup", "--data-dir", dir])).stdout)
+      .settings.walletMode,
+  ).toBe("watch");
+  await page.goto(url);
+  await expect(
+    page.getByRole("heading", { name: "Welcome back" }),
+  ).toBeVisible();
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Welcome back" }),
+  ).toBeVisible();
+  expect((await page.request.get(`${url}/api/v1/setup`)).status()).toBe(401);
+});
+
+test("production UI fails closed when the core API is unavailable", async ({
+  page,
+}) => {
+  await page.route("**/api/v1/auth/state", (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "text/html",
+      body: "unavailable",
+    }),
+  );
+  await page.goto(url);
+  await expect(
+    page.getByRole("heading", { name: "Core connection unavailable" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Set up workspace" }),
+  ).toHaveCount(0);
+});
