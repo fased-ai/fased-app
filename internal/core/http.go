@@ -148,7 +148,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.setCookie(w, r, token, int(SessionLifetime.Seconds()))
-		writeJSON(w, 200, map[string]any{"authenticated": true, "csrfToken": csrfToken(token), "sessionToken": token})
+		writeJSON(w, 200, map[string]any{"authenticated": true, "csrfToken": csrfToken(token), "sessionToken": token, "sessionMode": h.sessionMode(r)})
 		return
 	}
 	token := h.session(r)
@@ -279,6 +279,12 @@ func (h *HTTPHandler) setCookie(w http.ResponseWriter, r *http.Request, token st
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: token, Path: "/api/", HttpOnly: true, Secure: r.TLS != nil || (h.publicHost != "" && r.Host == h.publicHost), SameSite: http.SameSiteStrictMode, MaxAge: maxAge})
+}
+func (h *HTTPHandler) sessionMode(r *http.Request) string {
+	if r.TLS != nil || (h.publicHost != "" && r.Host == h.publicHost) {
+		return "cookie"
+	}
+	return "bearer"
 }
 func decodeJSON(w http.ResponseWriter, r *http.Request, value any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)

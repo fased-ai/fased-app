@@ -1,6 +1,6 @@
 # Fased App
 
-A focused financial automation workspace. **P2 private-core source foundation**: Go serves the production React interface, owns setup in SQLite, authenticates the instance owner, and exposes the same setup to the CLI. Native installation and desktop packaging are still unfinished. Wallet signing, financial execution, AI connections and updates are later phases.
+A focused financial automation workspace. **P2 engineering foundation**: Go serves the production React interface, owns setup in SQLite, authenticates the instance owner, and exposes the same setup to the CLI. A thin native client and ordinary-user Linux installation are implemented. Retail packages, public installation, other OS service installers and their acceptance remain unfinished. Wallet signing, financial execution, AI connections and updates are later phases.
 
 The interface includes shared navigation, resumable setup, wallet-mode and permission previews, agent profiles, scripted chat/action cards, scoped draft memory, a notification inbox, and four labelled terminal mockups. WEN Asset Mining and Loss Mining remain prototypes while their independent contracts are developed. Provider/wallet selections save preferences only; they create no account or authority.
 
@@ -55,6 +55,52 @@ npm run test:core-ui
 
 Browser tests require Playwright's Chromium (`npx playwright install chromium`). Core browser tests launch disposable instances and exercise UI/CLI edits, restart, logout and API failure on desktop/mobile. Screenshots, results and traces go to ignored `.evidence/`. Cross-compilation checks are source evidence, not installed OS acceptance.
 
+## Engineering installation on Linux
+
+The built core can install itself as the current user's service. This is an offline development path; release acquisition and verified updates are not implemented yet. Run it as an ordinary user:
+
+```sh
+./.evidence/bin/fased-app install
+```
+
+It installs under `~/.local/share/fased-app`, keeps data separately in the OS configuration directory, starts the loopback-only service and prints its URL. Login autostart is off. Explicit `--autostart` enables it; `--start=false` only installs files. A different existing binary is refused rather than overwritten. Partial first-copy staging can resume, and unknown files are never adopted. No wallet, RPC, AI account or root permission is required.
+
+```sh
+~/.local/share/fased-app/fased-app open
+~/.local/share/fased-app/fased-app claim-code
+~/.local/share/fased-app/fased-app service status
+~/.local/share/fased-app/fased-app service stop
+~/.local/share/fased-app/fased-app service start
+```
+
+`open` starts the same installed engine and opens the native client if it was bundled, otherwise the default browser. `open --print` returns the verified loopback URL. Obtain the one-use claim code in a private terminal, then establish your owner password in the UI. Closing a window leaves the engine running. Reinstalling the identical input preserves settings and existing files; changed binaries must wait for the verified update flow.
+
+Use the originally downloaded/built core to remove the application:
+
+```sh
+./.evidence/bin/fased-app uninstall
+```
+
+Uninstall first verifies the installed inventory and service identity, then stops/unregisters only its own service and removes its known application files. All instance data and unknown application files are preserved. `--prefix` and `--data-dir` are available for explicitly selected engineering instances; repeat them consistently across commands.
+
+The user service uses the current OS identity, `NoNewPrivileges`, read-only system/home mounts, private temporary space and a writable exception for its private state. The service definition alone is not evidence of enforcement: the local acceptance runner tests actual write-open permissions through the process mount namespace. This is application containment, not the future isolated wallet-custody boundary.
+
+On a VPS, a user service alone does not guarantee operation after logout or boot. The private-access/host setup must verify the service manager and the owner's linger or system-service policy. This installer changes no login/linger policy automatically. Windows/macOS service installation is explicitly unavailable in this engineering command.
+
+## Native window source
+
+The separate `desktop/` Go module pins Wails, keeping desktop dependencies out of the headless core. Build the shared UI, then:
+
+```sh
+npm run build:desktop
+```
+
+Linux needs GTK3/WebKitGTK 4.1 development packages; macOS needs Xcode; Windows execution needs WebView2. These are [Wails platform prerequisites](https://v2.wails.io/docs/gettingstarted/installation/). End-user runtime packaging is still a release gate. No global Wails CLI is required by this build. A matching Linux binary can be included with `install --desktop-binary /absolute/path/to/fased-desktop`.
+
+The window serves the same production UI and forwards only allowlisted API methods over the protected local IPC transport. It inherits no CLI session, supplies no owner credentials, pins instance identity per window and keeps bearer/CSRF checks. Its native custom-scheme origin handling is separate from the browser listener. There are no generic application Go bindings, file controls or shell tools; file-drop navigation is disabled. Window close never stops the engine.
+
+Linux CI uses a real WebKit window under Xvfb to exercise owner claim and private IPC setup against a separate core process, then verifies that core survives window close. The smoke executable and injected fixture script are development-only and are not installed. Native compilation and this controlled window journey do not establish signed/notarized installers or real Windows/macOS host acceptance.
+
 ## Private access and state
 
 The HTTP listener accepts explicit loopback IPs only (default `127.0.0.1:7331`). CLI traffic uses a Unix socket or Windows named pipe protected for the instance's OS user, and verifies instance/API identity before sending credentials. Browser mutations require an allowed origin and authenticated CSRF token; foreign hosts/origins, unsupported fields and oversized bodies are rejected. Concurrent stale setup writes return 409 and require review.
@@ -69,7 +115,7 @@ State defaults to the OS user's configuration directory under `fased-app`; `--da
 
 In core mode, setup lives in SQLite. Custom profiles, draft notes and notifications remain browser demo data; chats are temporary and scripted. Settings → Reset prototype clears those demo preferences and preserves core setup. Do not enter secrets or real financial information in demo pages. The application makes no provider, RPC or financial requests.
 
-Next P2 work: thin Wails client, package/service identities, guided private-access setup, clean supported-host install/uninstall and installed platform acceptance. The Go wallet signer, its independent policy/recovery storage, and a restricted update helper follow in P3/P4. The signer status API currently reports unavailable and the health API explicitly disables financial/provider/update capabilities.
+Remaining P2 work includes native OS service/installers beyond the Linux engineering path, retail shortcuts/prerequisites, guided private access, owner-controlled recovery guidance and supported-host acceptance. The Go wallet signer, its independent policy/recovery storage, and a restricted update helper follow in P3/P4. The signer status API reports unavailable and the health API explicitly disables financial/provider/update capabilities.
 
 The controlling product/implementation/checkpoint documents are maintained in the separate `fased-ai/docs` repository under `fased/` (local workspace: `../docs/fased/`). Source commands and boundaries live in [AGENTS.md](AGENTS.md). The old Fased and network server are independent repositories, not runtime dependencies.
 

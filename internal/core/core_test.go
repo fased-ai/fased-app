@@ -253,12 +253,28 @@ func TestAuthTransportAndRateLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 		r := httptest.NewRequest("POST", origin+"/api/v1/auth/login", strings.NewReader(`{"password":"`+testPassword+`"}`))
+		if secure {
+			r.TLS = nil
+		} // Private HTTPS proxy terminates TLS before loopback.
 		r.Header.Set("Origin", origin)
 		r.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		if w.Code != 200 {
 			t.Fatal("login failed")
+		}
+		var declared struct {
+			Mode string `json:"sessionMode"`
+		}
+		if err = json.Unmarshal(w.Body.Bytes(), &declared); err != nil {
+			t.Fatal(err)
+		}
+		wantMode := "bearer"
+		if secure {
+			wantMode = "cookie"
+		}
+		if declared.Mode != wantMode {
+			t.Fatal("wrong declared session transport")
 		}
 		cookies := w.Result().Cookies()
 		if !secure && len(cookies) != 0 {

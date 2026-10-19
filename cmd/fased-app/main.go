@@ -31,6 +31,9 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	if len(args) == 0 {
 		return errors.New("usage: fased-app serve|status|claim-code|claim|login|logout|setup|version [options]")
 	}
+	if args[0] == "install" || args[0] == "uninstall" || args[0] == "service" || args[0] == "open" {
+		return hostCommand(args, out, errOut)
+	}
 	if args[0] == "version" {
 		fmt.Fprintln(out, core.Version)
 		return nil
@@ -190,11 +193,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	return json.NewEncoder(out).Encode(setup)
 }
 func defaultDir() (string, error) {
-	base, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(base, "fased-app"), nil
+	return core.DefaultDataDir()
 }
 func serve(dir, listen, publicOrigin string, out io.Writer) error {
 	server, err := core.Start(context.Background(), dir, listen, publicOrigin, fasedapp.UI())

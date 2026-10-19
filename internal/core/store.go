@@ -149,6 +149,11 @@ func privateDir(dir string) error {
 	}
 	return protectPath(dir, info)
 }
+
+// EnsurePrivateDirectory is shared by the owner-run installer and the core.
+func EnsurePrivateDirectory(dir string) error { return privateDir(dir) }
+
+func ReadPrivateFile(path string) ([]byte, error) { return readPrivateFile(path) }
 func privateFile(path string) error {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {

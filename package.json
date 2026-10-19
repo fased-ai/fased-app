@@ -15,8 +15,10 @@
     "test": "vitest run",
     "test:ui": "playwright test",
     "build:core": "go build -trimpath -o .evidence/bin/fased-app ./cmd/fased-app",
-    "test:core": "go test -race ./internal/core ./cmd/fased-app",
+    "build:desktop": "node scripts/build-desktop.mjs",
+    "test:core": "go test -race ./internal/core ./internal/desktop ./internal/localinstall ./cmd/fased-app",
     "test:core-ui": "playwright test --config playwright.core.config.ts",
+    "test:native-window": "node scripts/check-native-window.mjs",
     "check": "npm run test && npm run build && npm run format:check",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

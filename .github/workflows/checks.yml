@@ -6,7 +6,7 @@ on:
 permissions:
   contents: read
 jobs:
-  prototype:
+  core:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -23,7 +23,7 @@ jobs:
       - run: node scripts/source-evidence.mjs
       - run: npm run check
       - run: go mod verify
-      - run: test -z "$(gofmt -l cmd internal ui.go)"
+      - run: test -z "$(gofmt -l cmd internal desktop ui.go)"
       - run: npm run test:core
       - run: npm run build:core
       - name: Headless Windows compilation
@@ -43,3 +43,51 @@ jobs:
             .evidence/browser/
             .evidence/core-browser/
           retention-days: 7
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache-dependency-path: |
+            go.sum
+            desktop/go.sum
+      - run: npm ci
+      - run: npm run build
+      - name: Native Linux build prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev xvfb dbus-x11
+      - run: go -C desktop mod verify
+      - run: npm run build:desktop
+      - name: Native Linux window and separate-core journey
+        if: runner.os == 'Linux'
+        run: |
+          npm run build:core
+          go -C desktop build -trimpath -tags production,webkit2_41 -o ../.evidence/bin/fased-native-smoke ./smoke
+          dbus-run-session -- npm run test:native-window
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: desktop-failure-${{ matrix.os }}
+          path: .evidence/*.json
+          retention-days: 7
+  prototype:
+    if: always()
+    needs: [core, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Required aggregate check
+        env:
+          CORE_RESULT: ${{ needs.core.result }}
+          DESKTOP_RESULT: ${{ needs.desktop.result }}
+        run: test "$CORE_RESULT" = success && test "$DESKTOP_RESULT" = success

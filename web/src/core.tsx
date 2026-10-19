@@ -122,6 +122,7 @@ function useCoreState() {
       const session = await request<{
         csrfToken: string;
         sessionToken: string;
+        sessionMode?: "bearer" | "cookie";
       }>(
         code === undefined ? "auth/login" : "auth/claim",
         "POST",
@@ -129,9 +130,11 @@ function useCoreState() {
       );
       csrf.current = session.csrfToken;
       // HTTP loopback cookies would be shared across ports. Use origin-scoped session
-      // storage for the bearer on loopback; HTTPS uses the Secure HttpOnly cookie.
-      token.current =
-        location.protocol === "https:" ? "" : session.sessionToken;
+      // storage for loopback/native bearer sessions; private HTTPS uses its cookie.
+      const cookieMode = session.sessionMode
+        ? session.sessionMode === "cookie"
+        : location.protocol === "https:";
+      token.current = cookieMode ? "" : session.sessionToken;
       try {
         if (token.current) sessionStorage.setItem(sessionKey, token.current);
         else sessionStorage.removeItem(sessionKey);

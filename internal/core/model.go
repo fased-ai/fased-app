@@ -2,11 +2,21 @@ package core
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"time"
 )
 
 const APIVersion = "1"
 const Version = "0.0.0-core.1"
+
+func DefaultDataDir() (string, error) {
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "fased-app"), nil
+}
 
 var ErrConflict = errors.New("settings changed in another client; reload and review before retrying")
 var ErrUnauthorized = errors.New("authentication failed")
