@@ -12,11 +12,21 @@
   };
   const input = (id, value) => {
     const field = document.getElementById(id);
+    field.focus();
     Object.getOwnPropertyDescriptor(
       HTMLInputElement.prototype,
       "value",
     ).set.call(field, value);
-    field.dispatchEvent(new Event("input", { bubbles: true }));
+    field.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        composed: true,
+        inputType: "insertText",
+        data: value,
+      }),
+    );
+    field.dispatchEvent(new Event("change", { bubbles: true }));
+    field.blur();
   };
   try {
     await wait(() => document.getElementById("owner-code"));
@@ -82,6 +92,14 @@
         href: location.href,
         origin: location.origin,
         screen: document.body.innerText.slice(0, 300),
+        uiError: document.querySelector(".core-error")?.textContent,
+        inputs: [...document.querySelectorAll(".core-auth input")].map(
+          (field) => ({
+            id: field.id,
+            length: field.value.length,
+            valid: field.checkValidity(),
+          }),
+        ),
         auth,
       }),
     );

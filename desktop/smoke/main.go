@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,6 +53,14 @@ func main() {
 	fixture, _ := json.Marshal(map[string]string{"code": claim.Code, "password": "FixtureOnly-" + hex.EncodeToString(password)})
 	js := strings.Replace(script, `"__FASED_FIXTURE__"`, string(fixture), 1)
 	options := window.Options(data)
+	delegate := options.AssetServer.Handler
+	options.AssetServer.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writer := &statusWriter{ResponseWriter: w, status: 200}
+		delegate.ServeHTTP(writer, r)
+		if strings.HasPrefix(r.URL.Path, "/api/v1/auth/") {
+			_ = json.NewEncoder(os.Stderr).Encode(map[string]any{"nativeRequest": r.Method, "path": r.URL.Path, "host": r.Host, "scheme": r.URL.Scheme, "origin": r.Header.Get("Origin"), "contentType": r.Header.Get("Content-Type"), "status": writer.status})
+		}
+	})
 	var mu sync.Mutex
 	result := map[string]any{"ok": false, "error": "native UI timed out"}
 	options.OnStartup = func(ctx context.Context) {
@@ -82,4 +91,14 @@ func main() {
 	if result["ok"] != true {
 		os.Exit(1)
 	}
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
 }
