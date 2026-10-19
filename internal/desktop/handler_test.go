@@ -77,7 +77,13 @@ func TestNativeTransportDoesNotSupplyAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimed := request("POST", "/api/v1/auth/claim", `{"code":"`+claim.Code+`","password":"fixture-native-password"}`, "http://wails.localhost", "", "")
+	// Actual WebKit/Wails requests retain the native host but omit scheme and
+	// Origin. This must work without relaxing the network HTTP handler.
+	claimRequest := httptest.NewRequest("POST", "http://wails/api/v1/auth/claim", strings.NewReader(`{"code":"`+claim.Code+`","password":"fixture-native-password"}`))
+	claimRequest.URL.Scheme = ""
+	claimRequest.Header.Set("Content-Type", "application/json")
+	claimed := httptest.NewRecorder()
+	h.ServeHTTP(claimed, claimRequest)
 	if claimed.Code != 200 {
 		t.Fatalf("claim status %d", claimed.Code)
 	}

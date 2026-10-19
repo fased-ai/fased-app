@@ -40,10 +40,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	origin := r.Header.Get("Origin")
-	// The custom WebKit scheme may have an opaque origin. This exception is
+	// WebKit's Wails adapter normalizes away the scheme and Origin. Its fixed
+	// native asset host identifies this transport; it is never a TCP listener.
+	// The custom WebKit scheme may also have an opaque origin. This exception is
 	// limited to the native asset handler, never the browser's HTTP listener.
 	// It supplies no credentials: bearer authentication and CSRF remain required.
-	opaque := r.URL.Scheme == "wails" && r.Host == "wails" && (origin == "null" || origin == "")
+	opaque := (r.URL.Scheme == "wails" || r.URL.Scheme == "") && r.Host == "wails" && (origin == "null" || origin == "")
 	if origin != "" && !nativeOrigin(origin) && !opaque || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
 		fail(w, 403, "unexpected desktop origin")
 		return
