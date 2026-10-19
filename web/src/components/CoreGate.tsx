@@ -5,6 +5,26 @@ export function CoreGate({ children }: { children: ReactNode }) {
   const core = useCore();
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
+  const [claimError, setClaimError] = useState("");
+  const native = ["wails", "wails.localhost"].includes(
+    window.location.hostname,
+  );
+  async function useLocalCode() {
+    setClaimError("");
+    try {
+      const response = await fetch("/api/v1/installation/claim-code", {
+        cache: "no-store",
+      });
+      const result = await response.json();
+      if (!response.ok || typeof result.code !== "string")
+        throw new Error(result.error || "Local claim code unavailable");
+      setCode(result.code);
+    } catch (error) {
+      setClaimError(
+        error instanceof Error ? error.message : "Local claim code unavailable",
+      );
+    }
+  }
   async function submit(event: FormEvent) {
     event.preventDefault();
     try {
@@ -74,6 +94,16 @@ export function CoreGate({ children }: { children: ReactNode }) {
                     Run <code>fased-app claim-code</code> as the instance owner
                     on this host. Codes expire after 15 minutes.
                   </p>
+                  {native && (
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => void useLocalCode()}
+                    >
+                      Use this computer’s setup code
+                    </button>
+                  )}
+                  {claimError && <p role="alert">{claimError}</p>}
                 </>
               )}
               <label htmlFor="owner-password">

@@ -162,7 +162,14 @@ try {
   report.error = String(error);
   throw error;
 } finally {
-  if (installed) {
+  let receiptRemains = false;
+  try {
+    const receipt = JSON.parse(
+      await readFile(join(app, "install.json"), "utf8"),
+    );
+    receiptRemains = receipt.root === app && receipt.data === state;
+  } catch {}
+  if (installed || receiptRemains) {
     try {
       cli(["uninstall", ...flags]);
     } catch (error) {
