@@ -29,10 +29,16 @@ func main() {
 }
 func run(args []string, in *os.File, out, errOut io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: fased-app serve|status|claim-code|claim|login|logout|setup|version [options]")
+		return errors.New("usage: fased-app install|service|open|access|recover|uninstall|serve|status|claim-code|claim|login|logout|setup|version [options]")
 	}
 	if args[0] == "install" || args[0] == "uninstall" || args[0] == "service" || args[0] == "open" {
 		return hostCommand(args, out, errOut)
+	}
+	if args[0] == "access" {
+		return accessCommand(args[1:], out, errOut)
+	}
+	if args[0] == "recover" {
+		return recoverCommand(args[1:], in, out, errOut)
 	}
 	if args[0] == "version" {
 		fmt.Fprintln(out, core.Version)

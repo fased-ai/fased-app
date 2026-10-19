@@ -4,17 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/fased-ai/fased-app/internal/core"
 )
 
 const unitName = "fased-app.service"
+const engineName = "fased-app"
+const desktopName = "fased-desktop"
+const definitionName = unitName
+
+func defaultRoot(home string) string { return filepath.Join(home, ".local", "share", "fased-app") }
 
 func supported() error {
 	if os.Geteuid() == 0 {
@@ -27,18 +29,8 @@ func quote(value string) string {
 	return "\"" + value + "\""
 }
 func definition(p Paths, o Options) ([]byte, error) {
-	host, _, err := net.SplitHostPort(o.Listen)
-	ip := net.ParseIP(host)
-	if err != nil || ip == nil || !ip.IsLoopback() {
-		return nil, errors.New("installed core must bind an explicit loopback IP")
-	}
-	if _, err = core.NewHTTPHandler(nil, "http://"+o.Listen, o.PublicOrigin, nil); err != nil {
+	if _, err := validateDefinition(p, o); err != nil {
 		return nil, err
-	}
-	for _, value := range []string{o.Listen, o.PublicOrigin} {
-		if strings.ContainsAny(value, "\x00\r\n") {
-			return nil, errors.New("invalid service option")
-		}
 	}
 	args := []string{quote(filepath.Join(p.Root, "fased-app")), "serve", "--data-dir", quote(p.Data), "--listen", quote(o.Listen)}
 	if o.PublicOrigin != "" {

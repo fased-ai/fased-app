@@ -70,6 +70,25 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev xvfb dbus-x11
       - run: go -C desktop mod verify
       - run: npm run build:desktop
+      - run: npm run build:core
+      - run: npm run package:native
+      - name: Prepare Ubuntu user service manager
+        if: runner.os == 'Linux'
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl start "user@$(id -u).service"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+      - name: Installed platform package journey
+        shell: bash
+        run: |
+          platform="${{ runner.os }}"
+          case "$platform" in
+            Linux) archive="$(find .evidence/packages -name '*.tar.gz')" ;;
+            Windows) archive="$(find .evidence/packages -name '*.zip')" ;;
+            macOS) archive="$(find .evidence/packages -name '*.zip')" ;;
+          esac
+          FASED_PACKAGE_ARCHIVE="$archive" npm run test:platform-install
       - name: Native Linux window and separate-core journey
         if: runner.os == 'Linux'
         run: |
@@ -81,7 +100,9 @@ jobs:
         with:
           name: desktop-failure-${{ matrix.os }}
           include-hidden-files: true
-          path: .evidence/*.json
+          path: |
+            .evidence/*.json
+            .evidence/*.log
           retention-days: 7
   prototype:
     if: always()

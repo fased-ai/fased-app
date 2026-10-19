@@ -126,3 +126,34 @@ func TestDefinitionRejectsExposureAndEscapesPaths(t *testing.T) {
 		t.Fatal("service quoting or hardening absent")
 	}
 }
+
+func TestNestedPathsAndInterruptedRemoval(t *testing.T) {
+	p, engine := installFixture(t)
+	for _, bad := range []Paths{{Root: filepath.Join(p.Data, "app"), Data: p.Data}, {Root: p.Root, Data: filepath.Join(p.Root, "state")}} {
+		if _, e := Install(t.Context(), bad, Options{Engine: engine}); e == nil {
+			t.Fatal("code/state containment accepted")
+		}
+	}
+	m, e := Install(t.Context(), p, Options{Engine: engine})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = os.WriteFile(filepath.Join(p.Data, "keep"), []byte("preserve owner data"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	// Unit fixture represents the durable point after external unregistration;
+	// it is not evidence of killing a real service transaction.
+	m.Phase = "removing"
+	if e = core.WritePrivateJSON(filepath.Join(p.Root, "install.json"), m); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.Remove(filepath.Join(p.Root, engineName)); e != nil {
+		t.Fatal(e)
+	}
+	if e = Uninstall(t.Context(), p); e != nil {
+		t.Fatal(e)
+	}
+	if b, e := os.ReadFile(filepath.Join(p.Data, "keep")); e != nil || string(b) != "preserve owner data" {
+		t.Fatal("state was removed")
+	}
+}

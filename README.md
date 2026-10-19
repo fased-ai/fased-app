@@ -1,8 +1,10 @@
 # Fased App
 
-A focused financial automation workspace. **P2 engineering foundation**: Go serves the production React interface, owns setup in SQLite, authenticates the instance owner, and exposes the same setup to the CLI. A thin native client and ordinary-user Linux installation are implemented. Retail packages, public installation, other OS service installers and their acceptance remain unfinished. Wallet signing, financial execution, AI connections and updates are later phases.
+A focused financial automation workspace. **P2 engineering foundation**: Go serves the production React interface, owns setup in SQLite, authenticates the instance owner, and exposes the same setup to the CLI. A thin native client, ordinary-user platform installers, private-access helpers and unsigned engineering packages are implemented. Public trust/signing, runtime prerequisite handling and supported-host acceptance remain unfinished. Wallet signing, financial execution, AI connections and updates are later phases.
 
 The interface includes shared navigation, resumable setup, wallet-mode and permission previews, agent profiles, scripted chat/action cards, scoped draft memory, a notification inbox, and four labelled terminal mockups. WEN Asset Mining and Loss Mining remain prototypes while their independent contracts are developed. Provider/wallet selections save preferences only; they create no account or authority.
+
+See [installation, private access and recovery](docs/install.md) for engineering package use and platform boundaries.
 
 ## Develop
 
@@ -85,7 +87,7 @@ Uninstall first verifies the installed inventory and service identity, then stop
 
 The user service uses the current OS identity, `NoNewPrivileges`, read-only system/home mounts, private temporary space and a writable exception for its private state. The service definition alone is not evidence of enforcement: the local acceptance runner tests actual write-open permissions through the process mount namespace. This is application containment, not the future isolated wallet-custody boundary.
 
-On a VPS, a user service alone does not guarantee operation after logout or boot. The private-access/host setup must verify the service manager and the owner's linger or system-service policy. This installer changes no login/linger policy automatically. Windows/macOS service installation is explicitly unavailable in this engineering command.
+On a VPS, a user service alone does not guarantee operation after logout or boot. The private-access/host setup must verify the service manager and the owner's linger or system-service policy. This installer changes no login/linger policy automatically. macOS uses a user LaunchAgent; Windows uses a limited interactive-user background task. These do not provide execution after OS logout.
 
 ## Native window source
 
@@ -115,7 +117,7 @@ State defaults to the OS user's configuration directory under `fased-app`; `--da
 
 In core mode, setup lives in SQLite. Custom profiles, draft notes and notifications remain browser demo data; chats are temporary and scripted. Settings → Reset prototype clears those demo preferences and preserves core setup. Do not enter secrets or real financial information in demo pages. The application makes no provider, RPC or financial requests.
 
-Remaining P2 work includes native OS service/installers beyond the Linux engineering path, retail shortcuts/prerequisites, guided private access, owner-controlled recovery guidance and supported-host acceptance. The Go wallet signer, its independent policy/recovery storage, and a restricted update helper follow in P3/P4. The signer status API reports unavailable and the health API explicitly disables financial/provider/update capabilities.
+Remaining P2 acceptance includes the platform package journeys, retail signing/trust and runtime prerequisites, and an authorized real Ubuntu VPS/private-access journey. Current engineering package/private-access/recovery instructions are in `docs/install.md`. The Go wallet signer, its independent policy/recovery storage, and a restricted update helper follow in P3/P4. The signer status API reports unavailable and the health API explicitly disables financial/provider/update capabilities.
 
 The controlling product/implementation/checkpoint documents are maintained in the separate `fased-ai/docs` repository under `fased/` (local workspace: `../docs/fased/`). Source commands and boundaries live in [AGENTS.md](AGENTS.md). The old Fased and network server are independent repositories, not runtime dependencies.
 

@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/privateaccess"
 )
 
 type Paths struct{ Root, Data string }
@@ -23,13 +24,15 @@ type Options struct {
 	Start, Autostart                      bool
 }
 type Manifest struct {
-	Schema    int               `json:"schema"`
-	Phase     string            `json:"phase"`
-	Version   string            `json:"version"`
-	Root      string            `json:"root"`
-	Data      string            `json:"data"`
-	Files     map[string]string `json:"files"`
-	Autostart bool              `json:"autostart"`
+	Schema       int               `json:"schema"`
+	Phase        string            `json:"phase"`
+	Version      string            `json:"version"`
+	Root         string            `json:"root"`
+	Data         string            `json:"data"`
+	Files        map[string]string `json:"files"`
+	Autostart    bool              `json:"autostart"`
+	Listen       string            `json:"listen,omitempty"`
+	PublicOrigin string            `json:"publicOrigin,omitempty"`
 }
 type State struct {
 	Installed bool   `json:"installed"`
@@ -47,7 +50,7 @@ func DefaultPaths() (Paths, error) {
 	if err != nil {
 		return Paths{}, err
 	}
-	return Paths{Root: filepath.Join(home, ".local", "share", "fased-app"), Data: data}, nil
+	return Paths{Root: defaultRoot(home), Data: data}, nil
 }
 func normalize(p Paths) (Paths, error) {
 	var err error
@@ -61,6 +64,12 @@ func normalize(p Paths) (Paths, error) {
 	}
 	if strings.ContainsAny(p.Root+p.Data, "\r\n\x00") || p.Root == string(filepath.Separator) || p.Root == p.Data {
 		return p, errors.New("installation and data must be separate explicit directories")
+	}
+	for _, pair := range [][2]string{{p.Root, p.Data}, {p.Data, p.Root}} {
+		rel, e := filepath.Rel(pair[0], pair[1])
+		if e == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return p, errors.New("application and data directories must not contain one another")
+		}
 	}
 	return p, nil
 }
@@ -94,15 +103,15 @@ func Load(paths Paths) (Manifest, error) {
 		return Manifest{}, err
 	}
 	var m Manifest
-	if json.Unmarshal(data, &m) != nil || m.Schema != 1 || m.Root != p.Root || m.Data != p.Data || (m.Phase != "preparing" && m.Phase != "ready") {
+	if json.Unmarshal(data, &m) != nil || m.Schema != 1 || m.Root != p.Root || m.Data != p.Data || (m.Phase != "preparing" && m.Phase != "ready" && m.Phase != "removing") {
 		return m, errors.New("unknown installation receipt; refusing mutation")
 	}
 	for name := range m.Files {
-		if name != "fased-app" && name != "fased-desktop" && name != "fased-app.service" {
+		if name != engineName && name != desktopName && name != definitionName && name != shortcutName {
 			return m, errors.New("unknown installation file in receipt")
 		}
 	}
-	if m.Files["fased-app"] == "" || m.Files["fased-app.service"] == "" {
+	if m.Files[engineName] == "" || m.Files[definitionName] == "" {
 		return m, errors.New("incomplete installation identity")
 	}
 	return m, nil
@@ -146,15 +155,21 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 	if err != nil {
 		return Manifest{}, err
 	}
-	files := map[string]string{"fased-app": engineHash, "fased-app.service": bytesDigest(unit)}
+	files := map[string]string{engineName: engineHash, definitionName: bytesDigest(unit)}
 	if options.Desktop != "" {
-		files["fased-desktop"], err = digest(options.Desktop)
+		files[desktopName], err = digest(options.Desktop)
 		if err != nil {
 			return Manifest{}, err
+		}
+		if b := shortcutDefinition(p); len(b) > 0 {
+			files[shortcutName] = bytesDigest(b)
 		}
 	}
 	m, loadErr := Load(p)
 	if loadErr == nil {
+		if m.Phase == "removing" {
+			return m, errors.New("unfinished uninstall; resume uninstall before installing")
+		}
 		if len(files) != len(m.Files) {
 			return m, errors.New("installation differs; a verified update or explicit uninstall is required")
 		}
@@ -176,7 +191,7 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 				return m, errors.New("installation directory contains unclassified files; refusing adoption")
 			}
 		}
-		m = Manifest{Schema: 1, Phase: "preparing", Version: core.Version, Root: p.Root, Data: p.Data, Files: files}
+		m = Manifest{Schema: 1, Phase: "preparing", Version: core.Version, Root: p.Root, Data: p.Data, Files: files, Listen: options.Listen, PublicOrigin: options.PublicOrigin}
 		if err = core.WritePrivateJSON(filepath.Join(p.Root, "install.json"), m); err != nil {
 			return m, err
 		}
@@ -192,11 +207,15 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return m, err
 			}
-			if name == "fased-app.service" {
-				err = writeNew(target, strings.NewReader(string(unit)), 0600)
+			if name == definitionName || name == shortcutName {
+				b := unit
+				if name == shortcutName {
+					b = shortcutDefinition(p)
+				}
+				err = writeNew(target, strings.NewReader(string(b)), 0600)
 			} else {
 				source := options.Engine
-				if name == "fased-desktop" {
+				if name == desktopName {
 					source = options.Desktop
 				}
 				var f *os.File
@@ -219,6 +238,9 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 		}
 	}
 	if err = verify(m); err != nil {
+		return m, err
+	}
+	if err = registerShortcut(m); err != nil {
 		return m, err
 	}
 	if options.Start || options.Autostart {
@@ -333,18 +355,43 @@ func Uninstall(ctx context.Context, paths Paths) error {
 		return err
 	}
 	defer lock.Close()
-	if err = verify(m); err != nil {
-		return err
-	}
-	if err = unregister(ctx, m); err != nil {
-		return err
+	if m.Phase != "removing" {
+		if err = verify(m); err != nil {
+			return err
+		}
+		if err = privateaccess.System().Remove(ctx, m.Root); err != nil {
+			return err
+		}
+		if err = removeShortcut(m); err != nil {
+			return err
+		}
+		if err = unregister(ctx, m); err != nil {
+			return err
+		}
+		m.Phase = "removing"
+		if err = core.WritePrivateJSON(filepath.Join(m.Root, "install.json"), m); err != nil {
+			return err
+		}
+	} else {
+		for name, want := range m.Files {
+			got, e := digest(filepath.Join(m.Root, name))
+			if errors.Is(e, os.ErrNotExist) {
+				continue
+			}
+			if e != nil || got != want {
+				return errors.New("remaining uninstall file differs; refusing removal")
+			}
+		}
 	}
 	// Only digest-verified application files are removed. The SQLite directory and
 	// unclassified files are deliberately outside this deletion inventory.
 	for name := range m.Files {
-		if err = os.Remove(filepath.Join(m.Root, name)); err != nil {
+		if err = os.Remove(filepath.Join(m.Root, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	}
 	return os.Remove(filepath.Join(m.Root, "install.json"))
 }
+
+func EngineName() string  { return engineName }
+func DesktopName() string { return desktopName }

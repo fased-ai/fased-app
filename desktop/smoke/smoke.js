@@ -31,10 +31,15 @@
   try {
     await wait(() => document.getElementById("owner-code"));
     phase = "owner claim";
-    input("owner-code", fixture.code);
+    const localCode = [...document.querySelectorAll("button")].find((button) =>
+      button.textContent.includes("Use this computer"),
+    );
+    if (!localCode) throw new Error("Native setup-code control missing");
+    localCode.click();
+    await wait(() => document.getElementById("owner-code").value.length === 43);
     input("owner-password", fixture.password);
     await pause(100);
-    document.querySelector(".core-auth form button").click();
+    document.querySelector(".core-auth form .primary").click();
     await wait(() =>
       document.body.innerText.includes("PRIVATE CORE · TERMINAL PROTOTYPES"),
     );

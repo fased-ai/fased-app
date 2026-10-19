@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,10 +12,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/bundle"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/localinstall"
+	"github.com/fased-ai/fased-app/internal/privateaccess"
+	"golang.org/x/term"
 )
 
 func hostCommand(args []string, out, errOut io.Writer) error {
@@ -42,6 +47,10 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	start := f.Bool("start", true, "start the user service after installation")
 	autostart := f.Bool("autostart", false, "explicitly enable the user service at login")
 	printOnly := f.Bool("print", false, "print the verified local UI URL without opening a window")
+	interactive := f.Bool("interactive", false, "guide installation in this terminal")
+	access := f.String("access", "local", "local, ssh or tailscale private access")
+	vps := f.Bool("vps", false, "require always-on Linux VPS readiness")
+	packageDir := f.String("bundle", "", "verify and install this platform package inventory")
 	if err = f.Parse(remaining); err != nil {
 		return err
 	}
@@ -53,9 +62,65 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	defer cancel()
 	switch command {
 	case "install":
+		if *interactive {
+			if !term.IsTerminal(int(os.Stdin.Fd())) {
+				return errors.New("interactive installation requires a terminal")
+			}
+			r := bufio.NewReader(os.Stdin)
+			fmt.Fprint(errOut, "Install on this computer or a VPS? [local/vps, default local]: ")
+			choice, _ := r.ReadString('\n')
+			choice = strings.TrimSpace(choice)
+			if choice != "" && choice != "local" && choice != "vps" {
+				return errors.New("choose local or vps")
+			}
+			*vps = choice == "vps"
+			if *vps {
+				fmt.Fprint(errOut, "Private access [tailscale/ssh, default tailscale]: ")
+				choice, _ = r.ReadString('\n')
+				*access = strings.TrimSpace(choice)
+				if *access == "" {
+					*access = "tailscale"
+				}
+			}
+			fmt.Fprint(errOut, "Enable background execution at login (VPS requires it)? [y/N]: ")
+			choice, _ = r.ReadString('\n')
+			*autostart = strings.EqualFold(strings.TrimSpace(choice), "y")
+		}
+		if *vps {
+			if runtime.GOOS != "linux" || !*autostart {
+				return errors.New("VPS installation requires Linux and explicit --autostart")
+			}
+			if err = checkLinger(ctx); err != nil {
+				return err
+			}
+		}
 		engine, err := os.Executable()
 		if err != nil {
 			return err
+		}
+		if *packageDir != "" {
+			inventory, e := bundle.Verify(*packageDir)
+			if e != nil {
+				return e
+			}
+			expected, _ := filepath.Abs(filepath.Join(*packageDir, localinstall.EngineName()))
+			actual, _ := filepath.EvalSymlinks(engine)
+			if actual != expected {
+				return errors.New("run the core from the selected verified package")
+			}
+			if inventory.Desktop {
+				*desktop = filepath.Join(*packageDir, localinstall.DesktopName())
+			}
+		}
+		plan, err := privateaccess.System().Plan(ctx, *access, *listen)
+		if err != nil {
+			return err
+		}
+		if *access == "tailscale" {
+			if *origin != "" && *origin != plan.Origin {
+				return errors.New("configured origin differs from this Tailscale device")
+			}
+			*origin = plan.Origin
 		}
 		m, err := localinstall.Install(ctx, paths, localinstall.Options{Engine: engine, Desktop: *desktop, Listen: *listen, PublicOrigin: *origin, Start: *start, Autostart: *autostart})
 		if err != nil {
@@ -67,8 +132,20 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			if err != nil {
 				return err
 			}
+			if *access == "tailscale" {
+				c, e := core.NewClient(ctx, *data)
+				if e != nil {
+					return e
+				}
+				id := c.Endpoint.InstanceID
+				c.Close()
+				if e = privateaccess.System().Enable(ctx, m.Root, plan, id); e != nil {
+					return e
+				}
+				url = plan.Origin
+			}
 		}
-		return json.NewEncoder(out).Encode(map[string]any{"installed": true, "application": filepath.Join(m.Root, "fased-app"), "data": m.Data, "autostart": m.Autostart, "url": url, "walletsConnected": false})
+		return json.NewEncoder(out).Encode(map[string]any{"installed": true, "application": filepath.Join(m.Root, localinstall.EngineName()), "data": m.Data, "autostart": m.Autostart, "url": url, "access": plan, "walletsConnected": false})
 	case "uninstall":
 		if err = localinstall.Uninstall(ctx, paths); err != nil {
 			return err
@@ -118,8 +195,8 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			return err
 		}
 		var process *exec.Cmd
-		if m.Files["fased-desktop"] != "" {
-			process = exec.Command(filepath.Join(m.Root, "fased-desktop"), "--data-dir", m.Data)
+		if m.Files[localinstall.DesktopName()] != "" {
+			process = exec.Command(filepath.Join(m.Root, localinstall.DesktopName()), "--data-dir", m.Data)
 		} else {
 			switch runtime.GOOS {
 			case "linux":

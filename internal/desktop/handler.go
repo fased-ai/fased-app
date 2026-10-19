@@ -9,8 +9,10 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/fased-ai/fased-app/internal/core"
 )
@@ -89,6 +91,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, 409, "instance identity changed; close the window and select the instance again")
 		return
 	}
+	if r.URL.Path == "/api/v1/installation/claim-code" {
+		var auth struct {
+			Claimed bool `json:"claimed"`
+		}
+		if err = client.Do(r.Context(), http.MethodGet, "/api/v1/auth/state", nil, &auth); err != nil || auth.Claimed {
+			fail(w, 409, "workspace is already claimed or unavailable")
+			return
+		}
+		data, e := core.ReadPrivateFile(filepath.Join(h.dir, "claim-code.json"))
+		var code core.ClaimCode
+		if e != nil || len(data) > 4096 || json.Unmarshal(data, &code) != nil || time.Now().After(code.ExpiresAt) {
+			fail(w, 409, "claim code expired; renew it from the OS owner's terminal")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(code)
+		return
+	}
 	response, err := forward(r.Context(), client, r, body)
 	if err != nil {
 		fail(w, 503, "Private core unavailable. Retry the connection.")
@@ -106,7 +126,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 func allowed(method, route string) bool {
 	switch route {
-	case "/api/v1/health", "/api/v1/auth/state", "/api/v1/signer/status":
+	case "/api/v1/health", "/api/v1/auth/state", "/api/v1/signer/status", "/api/v1/installation/claim-code":
 		return method == "GET"
 	case "/api/v1/setup":
 		return method == "GET" || method == "PUT"
