@@ -37,6 +37,7 @@ jobs:
         if: failure()
         with:
           name: core-failure-evidence
+          include-hidden-files: true
           path: |
             .evidence/*.json
             .evidence/*.png
@@ -79,6 +80,7 @@ jobs:
         if: failure()
         with:
           name: desktop-failure-${{ matrix.os }}
+          include-hidden-files: true
           path: .evidence/*.json
           retention-days: 7
   prototype:

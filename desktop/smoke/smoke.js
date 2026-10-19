@@ -1,5 +1,6 @@
 (async () => {
   const fixture = "__FASED_FIXTURE__";
+  let phase = "claim screen";
   const pause = (ms) => new Promise((done) => setTimeout(done, ms));
   const wait = async (check) => {
     for (let i = 0; i < 100; i++) {
@@ -19,6 +20,7 @@
   };
   try {
     await wait(() => document.getElementById("owner-code"));
+    phase = "owner claim";
     input("owner-code", fixture.code);
     input("owner-password", fixture.password);
     await pause(100);
@@ -26,6 +28,7 @@
     await wait(() =>
       document.body.innerText.includes("PRIVATE CORE · TERMINAL PROTOTYPES"),
     );
+    phase = "authenticated setup";
     const token = sessionStorage.getItem("fased.core.session.v1");
     if (!token) throw new Error("Native bearer session missing");
     const headers = { Authorization: `Bearer ${token}` };
@@ -59,9 +62,28 @@
       }),
     );
   } catch (error) {
+    let auth;
+    try {
+      const response = await fetch("/api/v1/auth/state");
+      auth = {
+        status: response.status,
+        contentType: response.headers.get("content-type"),
+        body: (await response.text()).slice(0, 300),
+      };
+    } catch (failure) {
+      auth = { error: failure.message };
+    }
     window.runtime.EventsEmit(
       "fased-native-smoke",
-      JSON.stringify({ ok: false, error: error.message }),
+      JSON.stringify({
+        ok: false,
+        phase,
+        error: error.message,
+        href: location.href,
+        origin: location.origin,
+        screen: document.body.innerText.slice(0, 300),
+        auth,
+      }),
     );
   }
 })();
