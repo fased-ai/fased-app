@@ -54,6 +54,11 @@ const cli = (args, input) =>
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 const report = { platform: process.platform, result: "FAIL", checks: {} };
 let installed = false;
+const freshFetch = (url, options = {}) =>
+  fetch(url, {
+    ...options,
+    headers: { Connection: "close", ...options.headers },
+  });
 async function hashes(dir) {
   const result = {};
   for (const n of await readdir(dir)) {
@@ -79,13 +84,13 @@ try {
   const result = JSON.parse(cli(args));
   installed = true;
   const url = result.url;
-  const health = await (await fetch(url + "/api/v1/health")).json();
+  const health = await (await freshFetch(url + "/api/v1/health")).json();
   assert.equal(health.capabilities.walletSigner, false);
   const password = "Generated-Fixture-" + randomBytes(24).toString("base64url");
   const code = JSON.parse(
     await readFile(join(state, "claim-code.json"), "utf8"),
   ).code;
-  const response = await fetch(url + "/api/v1/auth/claim", {
+  const response = await freshFetch(url + "/api/v1/auth/claim", {
     method: "POST",
     headers: { Origin: url, "Content-Type": "application/json" },
     body: JSON.stringify({ code, password }),
@@ -93,7 +98,7 @@ try {
   assert.equal(response.status, 200);
   const auth = await response.json();
   assert.ok(auth.sessionToken);
-  assert.equal((await fetch(url + "/api/v1/setup")).status, 401);
+  assert.equal((await freshFetch(url + "/api/v1/setup")).status, 401);
   cli(["login", "--data-dir", state, "--password-stdin"], password + "\n");
   cli(["setup", "--data-dir", state, "--host", "vps"]);
   const expected = JSON.parse(cli(["setup", "--data-dir", state]));
@@ -131,7 +136,7 @@ try {
     health.instanceId,
   );
   report.checks.restartOwnershipSettings = "PASS";
-  const replay = await fetch(url + "/api/v1/auth/claim", {
+  const replay = await freshFetch(url + "/api/v1/auth/claim", {
     method: "POST",
     headers: { Origin: url, "Content-Type": "application/json" },
     body: JSON.stringify({ code, password }),
