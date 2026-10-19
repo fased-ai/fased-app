@@ -1,0 +1,17 @@
+Required Notice: Copyright 2026 Fased AI contributors.
+
+Original Fased App source is provided under PolyForm Perimeter 1.0.0.
+The unmodified license text is in LICENSE.
+
+P1 was implemented as new source. No source files from the legacy Fased,
+OpenClaw, OpenBot or Hermes implementations have been copied into this tree.
+Design references do not imply affiliation or a license to their code.
+
+Third-party packages remain subject to their respective licenses and notices,
+including React/React DOM (MIT) and Lucide (ISC), and the development tools
+recorded in package-lock.json. Their installed packages contain their own
+license texts. These terms are not replaced by the application license.
+
+Before distributing built artifacts, include the required notices for all
+bundled dependencies. Any later extraction from legacy Fased must retain its
+applicable copyright/license notices and record the source revision.
