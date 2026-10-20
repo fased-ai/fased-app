@@ -243,3 +243,58 @@ func TestStrictJSONRejectsAmbiguity(t *testing.T) {
 		}
 	}
 }
+
+func TestCandidateMustKeepLifecycleEntrypoint(t *testing.T) {
+	m, inv, _, _ := fixture(t)
+	// Runtime/state compatibility alone cannot admit a core which lost its
+	// protected owner lifecycle entrypoint.
+	b := j(m)
+	var doc map[string]any
+	if e := json.Unmarshal(b, &doc); e != nil {
+		t.Fatal(e)
+	}
+	for _, raw := range doc["components"].([]any) {
+		c := raw.(map[string]any)["contract"].(map[string]any)
+		if c["component"] == "core" {
+			delete(c, "lifecycle")
+		}
+	}
+	m = update.Manifest{}
+	if e := json.Unmarshal(j(doc), &m); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := update.Compatible(m, sha([]byte("manifest")), inv); e == nil {
+		t.Fatal("candidate without lifecycle entrypoint accepted")
+	}
+}
+
+func TestLifecycleVersionsAndFeaturesAreIndependent(t *testing.T) {
+	for _, tc := range []string{"entrypoint", "stage-format", "features", "journal"} {
+		t.Run(tc, func(t *testing.T) {
+			m, inv, _, _ := fixture(t)
+			for n := range m.Components {
+				c := &m.Components[n].Contract
+				if c.Component == "core" {
+					switch tc {
+					case "entrypoint":
+						c.Lifecycle.Entrypoint = 2
+					case "stage-format":
+						c.Lifecycle.StageFormat = 2
+					case "features":
+						c.Lifecycle.Features = nil
+					}
+				}
+				if tc == "journal" && c.Component == "signer" {
+					for j := range c.State {
+						if c.State[j].Name == "operations" {
+							c.State[j].Features = c.State[j].Features[:len(c.State[j].Features)-1]
+						}
+					}
+				}
+			}
+			if _, e := update.Compatible(m, sha([]byte("manifest")), inv); e == nil {
+				t.Fatal("lifecycle downgrade accepted")
+			}
+		})
+	}
+}

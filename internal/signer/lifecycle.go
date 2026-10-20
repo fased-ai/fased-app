@@ -120,6 +120,12 @@ func (v *Vault) PrepareUpdate(r update.IntentRequest) (*update.Intent, error) {
 		return nil, e
 	}
 	i := update.Intent{Version: 1, ID: r.ID, Sequence: m.Sequence, ManifestSHA256: digest, Core: r.Core, Signer: s, CreatedAt: v.now().Unix(), State: "prepared"}
+	for _, c := range m.Components {
+		i.Artifacts = append(i.Artifacts, c.Artifact)
+		if c.Contract.Component == "core" {
+			i.Lifecycle = c.Contract.Lifecycle
+		}
+	}
 	v.lock() // Also remain locked if persistence has an uncertain outcome.
 	if e = l.append(v, journalRecord{Kind: "update-prepare", Update: &i, At: i.CreatedAt}); e != nil {
 		return nil, e

@@ -25,7 +25,7 @@ import (
 )
 
 func TestProtectedUpdateReviewCancelStalenessAndCommit(t *testing.T) {
-	for _, tc := range []string{"cancel", "changed-core", "changed-signer", "bad-artifact", "prepare"} {
+	for _, tc := range []string{"cancel", "changed-core", "changed-signer", "bad-artifact", "prepare", "stage", "stage-stale-core", "stage-bad-source"} {
 		t.Run(tc, func(t *testing.T) {
 			root := filepath.Join("..", "..", ".evidence", "p4-intents", "owner-fixtures")
 			if e := os.MkdirAll(root, 0700); e != nil {
@@ -98,6 +98,12 @@ func TestProtectedUpdateReviewCancelStalenessAndCommit(t *testing.T) {
 			}
 			call := func(_ context.Context, r signer.Request) (signer.Response, error) {
 				switch r.Action {
+				case "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish":
+					s, e := v.StageUpdate(r.Action, *r.Stage)
+					return signer.Response{Stage: s}, e
+				case "fixture-update-status":
+					i, e := v.UpdateIntent(r.IntentID)
+					return signer.Response{UpdateIntent: i}, e
 				case "fixture-update-inventory":
 					s, e := v.UpdateInventory(r.ProbeID)
 					return signer.Response{UpdateInventory: s}, e
@@ -123,8 +129,9 @@ func TestProtectedUpdateReviewCancelStalenessAndCommit(t *testing.T) {
 				return nil
 			}
 			var review, out bytes.Buffer
-			e = conductUpdate(t.Context(), update.NewProbe(), manifest, trust, artifactDir, probe, call, confirm, &review, &out)
-			if tc == "prepare" {
+			id := update.NewProbe()
+			e = conductUpdate(t.Context(), id, manifest, trust, artifactDir, probe, call, confirm, &review, &out)
+			if tc == "prepare" || strings.HasPrefix(tc, "stage") {
 				if e != nil || prepares != 1 || !v.Status().UpdateHeld || !v.Status().Locked {
 					t.Fatal("protected intent not persisted", e)
 				}
@@ -134,6 +141,34 @@ func TestProtectedUpdateReviewCancelStalenessAndCommit(t *testing.T) {
 				}
 				if e = json.Unmarshal(out.Bytes(), &result); e != nil || result.Intent == nil || result.InstallAllowed || result.ResumeAllowed || result.FinancialExecution {
 					t.Fatal("invalid intent receipt", e)
+				}
+
+				if strings.HasPrefix(tc, "stage") {
+					if tc == "stage-stale-core" {
+						probe = func(_ context.Context, p string) (update.CoreSnapshot, error) {
+							s, e := store.UpdateSnapshot(t.Context(), p)
+							s.BootID = update.NewProbe()
+							return s, e
+						}
+					}
+					if tc == "stage-bad-source" {
+						if e = os.WriteFile(filepath.Join(artifactDir, "core"), []byte("wrong"), 0600); e != nil {
+							t.Fatal(e)
+						}
+					}
+					out.Reset()
+					e = conductStage(t.Context(), id, artifactDir, probe, call, &out)
+					if tc == "stage" {
+						var result update.StageStatus
+						if e != nil || json.Unmarshal(out.Bytes(), &result) != nil || !result.Verified || result.InstallAllowed || result.ResumeAllowed {
+							t.Fatal("owner staging failed", e)
+						}
+					} else if e == nil || out.Len() != 0 {
+						t.Fatal("invalid/stale staging succeeded", e)
+					}
+					if !v.Status().Locked || !v.Status().UpdateHeld {
+						t.Fatal("staging released hold")
+					}
 				}
 			} else {
 				if e == nil || out.Len() != 0 || v.Status().UpdateHeld {

@@ -203,7 +203,7 @@ func (l *ledger) apply(r journalRecord) error {
 	if r.At < l.lastTime {
 		return errors.New("fixture clock moved backwards")
 	}
-	if l.activeUpdate != "" && r.Kind != "update-abort" {
+	if l.activeUpdate != "" && r.Kind != "update-abort" && r.Kind != "update-staged" {
 		return errors.New("exclusive update intent blocks financial mutation")
 	}
 	switch r.Kind {
@@ -215,9 +215,17 @@ func (l *ledger) apply(r journalRecord) error {
 		l.updates[i.ID] = clone(*i)
 		l.updateFloor = i.Sequence
 		l.activeUpdate = i.ID
+	case "update-staged":
+		i, ok := l.updates[r.ID]
+		if !ok || l.activeUpdate != r.ID || i.State != "prepared" || r.OriginalHash != update.StageDigest(i) || !update.Stageable(i) {
+			return errors.New("invalid durable staging receipt")
+		}
+		i.State = "staged"
+		i.StageSHA256 = r.OriginalHash
+		l.updates[r.ID] = i
 	case "update-abort":
 		i, ok := l.updates[r.ID]
-		if !ok || l.activeUpdate != r.ID || i.State != "prepared" {
+		if !ok || l.activeUpdate != r.ID || (i.State != "prepared" && i.State != "staged") {
 			return errors.New("no matching active update intent")
 		}
 		i.State = "aborted"

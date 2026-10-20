@@ -48,14 +48,17 @@ type SignerSnapshot struct {
 	ActiveIntentID  string  `json:"activeIntentId"`
 }
 type Intent struct {
-	Version        int            `json:"version"`
-	ID             string         `json:"id"`
-	Sequence       uint64         `json:"sequence,string"`
-	ManifestSHA256 string         `json:"manifestSha256"`
-	Core           CoreSnapshot   `json:"core"`
-	Signer         SignerSnapshot `json:"signer"`
-	CreatedAt      int64          `json:"createdAt"`
-	State          string         `json:"state"`
+	Artifacts      []Artifact         `json:"artifacts,omitempty"`
+	Lifecycle      *LifecycleContract `json:"lifecycle,omitempty"`
+	StageSHA256    string             `json:"stageSha256,omitempty"`
+	Version        int                `json:"version"`
+	ID             string             `json:"id"`
+	Sequence       uint64             `json:"sequence,string"`
+	ManifestSHA256 string             `json:"manifestSha256"`
+	Core           CoreSnapshot       `json:"core"`
+	Signer         SignerSnapshot     `json:"signer"`
+	CreatedAt      int64              `json:"createdAt"`
+	State          string             `json:"state"`
 }
 type IntentRequest struct {
 	ID       string         `json:"id"`
@@ -73,6 +76,9 @@ func JoinSnapshots(c CoreSnapshot, s SignerSnapshot, target Target) (Inventory, 
 	return Inventory{Version: 1, FixtureOnly: true, Target: target, SequenceFloor: s.SequenceFloor, States: states, Pending: s.Pending, Unknown: s.Unknown, RecoveryHold: s.RecoveryHold}, nil
 }
 func ValidateIntent(i Intent) error {
+	if i.StageSHA256 != "" || (len(i.Artifacts) > 0 || i.Lifecycle != nil) && !Stageable(i) {
+		return errors.New("invalid staged intent contract")
+	}
 	if i.Version != 1 || !IDOK(i.ID) || i.Sequence == 0 || !hashOK(i.ManifestSHA256) || i.CreatedAt <= 0 || i.State != "prepared" || i.Signer.ActiveIntentID != "" || i.Sequence <= i.Signer.SequenceFloor {
 		return errors.New("invalid update intent")
 	}
