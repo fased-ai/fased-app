@@ -4,6 +4,8 @@ package signer
 
 import "errors"
 
+func (*storage) checkpoint(string) error { return ErrUnavailable }
+
 var errAbsent = errors.New("absent")
 
 type storage struct{}
@@ -14,3 +16,10 @@ func openStorage(string) (*storage, error) {
 func (*storage) read() ([]byte, error) { return nil, ErrUnavailable }
 func (*storage) create([]byte) error   { return ErrUnavailable }
 func (*storage) close() error          { return nil }
+
+func (*storage) readJournal(string) (*journal, []journalRecord, error) {
+	return nil, nil, ErrUnavailable
+}
+func (*storage) appendJournal(*journal, journalRecord) error { return ErrUnavailable }
+func (*storage) failedState() bool                           { return true }
+func (*storage) poison()                                     {}

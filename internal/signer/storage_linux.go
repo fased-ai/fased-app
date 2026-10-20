@@ -103,6 +103,9 @@ func (s *storage) recoverPublication() error {
 	if err = e.validate("vault"); err != nil {
 		return err
 	}
+	if err = s.ensureInitialHistory(e); err != nil {
+		return err
+	}
 	current, err := s.readName("vault.json")
 	if errors.Is(err, os.ErrNotExist) {
 		if err = unix.Linkat(s.dir, "vault.pending", s.dir, "vault.json", 0); err != nil {
@@ -165,6 +168,13 @@ func (s *storage) create(data []byte) (result error) {
 	if err = s.checkpoint("staged"); err != nil {
 		return err
 	}
+	var e envelope
+	if err = decode(data, &e); err != nil {
+		return err
+	}
+	if err = s.ensureInitialHistory(e); err != nil {
+		return err
+	}
 	if err = unix.Linkat(s.dir, "vault.pending", s.dir, "vault.json", 0); err != nil {
 		return err
 	}
@@ -192,3 +202,6 @@ func (s *storage) close() error {
 	}
 	return err
 }
+
+func (s *storage) failedState() bool { return s.failed }
+func (s *storage) poison()           { s.failed = true }
