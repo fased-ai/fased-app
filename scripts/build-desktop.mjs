@@ -7,7 +7,11 @@ await mkdir(".evidence/bin", { recursive: true });
 const windows = process.platform === "win32";
 const output = resolve(`.evidence/bin/fased-desktop${windows ? ".exe" : ""}`);
 const tags =
-  process.platform === "linux" ? "production,webkit2_41" : "production";
+  process.platform === "linux"
+    ? "production,webkit2_41"
+    : windows
+      ? "production,wv2runtime.embed"
+      : "production";
 const environment = { ...process.env, CGO_ENABLED: windows ? "0" : "1" };
 // A direct Go build must declare the framework normally supplied by native
 // packaging. Wails' macOS frontend references UTType on current Apple SDKs.

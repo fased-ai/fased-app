@@ -51,6 +51,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	access := f.String("access", "local", "local, ssh or tailscale private access")
 	vps := f.Bool("vps", false, "require always-on Linux VPS readiness")
 	packageDir := f.String("bundle", "", "verify and install this platform package inventory")
+	installRuntime := f.Bool("install-runtime", false, "authorize Ubuntu 24.04's OS package manager to install missing desktop runtime libraries")
 	if err = f.Parse(remaining); err != nil {
 		return err
 	}
@@ -121,6 +122,9 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 				return errors.New("configured origin differs from this Tailscale device")
 			}
 			*origin = plan.Origin
+		}
+		if err = desktopRuntime(*desktop, *installRuntime, os.Stdin, errOut); err != nil {
+			return err
 		}
 		m, err := localinstall.Install(ctx, paths, localinstall.Options{Engine: engine, Desktop: *desktop, Listen: *listen, PublicOrigin: *origin, Start: *start, Autostart: *autostart})
 		if err != nil {

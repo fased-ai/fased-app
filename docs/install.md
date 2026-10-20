@@ -14,10 +14,15 @@ Fased checks this prerequisite; it does not change accounts or login policy.
 VPS sizing and a provider-specific public installation are still acceptance
 work, not a measured resource guarantee.
 
-The headless core has no WebView dependency. Linux desktop builds additionally
-need GTK3 and WebKitGTK 4.1 runtime libraries. Windows desktop builds use WebView2.
-The macOS app contains its native window and core. Development packages do not
-yet acquire runtime prerequisites or establish publisher trust automatically.
+The headless core has no WebView dependency. Linux desktop installation checks
+its GTK3/WebKitGTK 4.1 runtime before starting. On Ubuntu 24.04, explicit
+`install --install-runtime` authorizes the OS package manager to install missing
+runtime libraries; sudo handles its own terminal prompt and Fased stays
+unprivileged. Other distributions require their own OS packages. Windows desktop
+builds select Wails' pinned embedded WebView2 bootstrapper and ask before its
+installation. macOS uses OS frameworks. Missing-runtime installation needs its
+own fresh-host acceptance; a CI host with prerequisites already present does not
+prove that branch. Package publisher trust remains a separate release gate.
 
 ## Install
 
