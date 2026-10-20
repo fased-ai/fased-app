@@ -485,8 +485,8 @@ does not close either public P4-10/11 gate.
 
 ### Scope and authority
 
-This is a design contract, not an implemented command or installed RPC. The
-future fixture profile is `fased-app-owner-signer-admission-fixture:v1`, protocol
+The pure Go fixture model/store implements this contract; no command, socket or
+installed RPC exposes it. The fixture profile is `fased-app-owner-signer-admission-fixture:v1`, protocol
 1, mode `inspection-only`. Every message requires that profile, mode and the
 existing repository/development fixture binding. Real keys, financial execution,
 installed execution, automatic updates, production trust and P5 remain disabled.
@@ -531,8 +531,8 @@ together through one local CAS, immutable hash-named payload and durable head
 replacement. There are no separately committed trust/replay heads to reconcile.
 Reuse the existing private-file/locking/interruption primitives and opaque trust
 transitions, not the old store's literal whitelist or snapshot wire format. The
-new store/adapter is unimplemented; the existing `FixtureTrustStore` is not already
-an atomic handoff store. The harness injects two role-local
+new store/adapter is `HandoffFixtureStore`; the existing `FixtureTrustStore` keeps
+its separate wire format and 64 KiB limit. The harness injects two role-local
 clocks through configuration, never a request field; host time is unchanged.
 Each clock must be at least its own persisted last observation. Missing time
 confidence after a simulated restore, backward time, missing/corrupt state or an
@@ -695,8 +695,10 @@ those stores on behalf of either actor.
 
 ### Finite acceptance and future fixture plan
 
-These cases are specified, not executed by this design. All implementation and
-runtime predicates below are BLOCKED until their owning package exists and runs.
+HA-01–HA-15 have named model subtests in the six suites below. These exercise
+in-process actor capabilities, independently provisioned fixture inputs and real
+private-file CAS operations, not kernel peer authentication. HA-03's actual UID
+predicate and HA-16 remain BLOCKED until the separate transport harness runs.
 
 | ID    | Required falsifiable case                                                                                                                                                                                                              |
 | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -717,20 +719,20 @@ runtime predicates below are BLOCKED until their owning package exists and runs.
 | HA-15 | Production/installed paths, real artifacts, mutation flags and every install/resume/wallet/financial/automatic route are unreachable; canary trees remain byte-identical                                                               |
 | HA-16 | Disposable Ubuntu distinct-UID processes prove the peer/store boundary; ordinary-user local checks remain SUPPORTING for OS isolation; all generated resources are removed                                                             |
 
-First future code package: the typed model, deterministic identity tuples, two
-independent fixture-state adapters and recovery/replay logic in proposed
+The first code package implements the typed model, deterministic identity tuples,
+independent fixture-state adapters and recovery/replay logic in
 `internal/update/handoff.go`, `handoff_store.go`, `handoff_test.go` and
 `handoff_fixture_test.go`. The new combined checkpoint adapter accepts only opaque
 verifier transitions plus typed local replay deltas, compares the embedded prior
 trust bytes/head and fixture revision, and publishes one complete checkpoint.
 Restart reads only independently anchored private checkpoints, never app/RPC
 snapshots. Reuse the current TUF/admission verifiers and CAS primitives; do not modify
-installed signer/controller APIs. Start with these six required test entrypoints:
+installed signer/controller APIs. The six required test entrypoints are:
 `TestFixtureHandoffBindings`, `TestFixtureHandoffIndependentInputs`,
 `TestFixtureHandoffClockAndReplay`, `TestFixtureHandoffTrustProgress`,
 `TestFixtureHandoffCASAndRecovery` and `TestFixtureHandoffNoExecution`.
 
-The future ordinary-user completion command must first prevent a vacuous pass:
+The ordinary-user completion command first prevents a vacuous pass:
 
 ```bash
 set -eu
@@ -742,17 +744,46 @@ go test -race -json ./internal/update -run '^TestFixtureHandoff' \
   > .evidence/p4-handoff-fixture/tests.jsonl
 ```
 
-Those entrypoints do not exist yet; running a test filter alone is not evidence.
-The implementation must bind HA-01–HA-15 to named subtests and preserve failure
-logs/source hashes under a phase evidence root. HA-03's real kernel-UID predicate
-remains unproven by those model tests and is coupled to HA-16. A later, separately scoped
+`node scripts/check-update-handoff.mjs` enforces the six exact entrypoints, runs
+the race-tested model cases, verifies HA-01–HA-15 model coverage and source hashes,
+and retains a receipt/logs while checking generated fixture cleanup. Ubuntu 24.04
+CI runs this same model acceptance. This is not distinct-UID acceptance.
+HA-03's real kernel-UID predicate remains unproven and is coupled to HA-16. A later, separately scoped
 compiled fixture harness owns bounded challenge/request/status transport and
 HA-16 on Ubuntu 24.04: three disposable nonzero UIDs, protected role directories,
 fixed OS identity setup only, no installed services, real vaults or execution
-endpoint. Local subprocesses cannot close that UID gate. A CLI/CI addition,
+endpoint. Local subprocesses cannot close that UID gate. A transport CLI/CI addition,
 future lifecycle integration, production bootstrap/time/provenance and any
 installed mutation require their own explicit checkpoint; none is implemented
-or activated by this document. P4-10/11 and the other public gates stay BLOCKED.
+or activated by the model. P4-10/11 and the other public gates stay BLOCKED.
+
+### Model API and recovery limits
+
+`NewFixtureHandoffActor` requires explicit disposable configuration, an ordinary-user
+private store, independently pinned public inputs and role-local clock/inventory
+callbacks. Pins and material are copied; the request cannot replace them.
+`NewFixtureHandoffSession(owner, signer)` creates an opaque in-process channel
+capability. `Prepare` independently inspects the owner's inputs and invokes its
+trusted review callback; `Check` independently verifies signer inputs; `Finish`
+refreshes owner authorization before publishing an inspection-only result.
+`Status` returns audit JSON that cannot construct an opaque receipt. No API calls
+the installed signer, owner helper, financial ledger or lifecycle controller.
+
+The fixture inventory digest uses the same length-prefixed tuple algorithm over
+instance, authority/epoch digest, canary digest, installed floor, reserved floor
+and active intent, under the profile plus `:inventory`; revision is bound separately.
+On actor restart a new boot ID publishes without changing trust or financial
+canaries; unresolved verification remains held. This also fences an old actor
+that still holds a previous checkpoint anchor. Malformed/rejected requests consume
+their model session; a new session requires new review.
+
+`RetryPublication` can retry only an exact opaque in-memory checkpoint publication.
+After restart, externally anchored durable results support historical status and
+fresh review; an unknown pending verification cannot be cleared or converted from
+RPC JSON. Records are bounded including their complete envelope, not just body.
+The store preserves old immutable checkpoints and refuses exhaustion/foreign paths
+rather than garbage-collecting state. Root/administrator compromise and whole-store
+plus external-anchor rollback remain outside this fixture model.
 
 ## Development HTTPS acquisition and bootstrap trust
 
