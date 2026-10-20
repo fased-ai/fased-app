@@ -68,6 +68,9 @@ jobs:
       - name: Native Linux build prerequisites
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev xvfb dbus-x11
+      - name: Windows task encoding contracts
+        if: runner.os == 'Windows'
+        run: go test ./internal/localinstall
       - run: go -C desktop mod verify
       - run: npm run build:desktop
       - run: npm run build:core

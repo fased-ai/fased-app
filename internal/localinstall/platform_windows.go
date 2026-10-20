@@ -2,7 +2,6 @@ package localinstall
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -14,7 +13,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unicode/utf16"
 )
 
 const engineName = "fased-app.exe"
@@ -61,7 +59,7 @@ func definition(p Paths, o Options) ([]byte, error) {
 	if o.Autostart {
 		x = strings.Replace(x, "<Triggers></Triggers>", "<Triggers><LogonTrigger><Enabled>true</Enabled><UserId>"+escape(u.Uid)+"</UserId></LogonTrigger></Triggers>", 1)
 	}
-	return []byte(x), nil
+	return encodeTaskXML(x), nil
 }
 
 type taskXML struct {
@@ -78,9 +76,9 @@ type taskXML struct {
 }
 
 func scheduler(ctx context.Context, args ...string) ([]byte, error) {
-	b, e := exec.CommandContext(ctx, "schtasks.exe", args...).Output()
+	b, e := exec.CommandContext(ctx, "schtasks.exe", args...).CombinedOutput()
 	if e != nil {
-		return b, fmt.Errorf("user task scheduler refused %s", args[0])
+		return b, fmt.Errorf("user task scheduler refused %s: %.2048s", args[0], strings.TrimSpace(string(b)))
 	}
 	return b, nil
 }
@@ -94,14 +92,8 @@ func taskExists(ctx context.Context, m Manifest) (bool, error) {
 		return false, e
 	}
 	var a, w taskXML
-	if len(b) > 2 && b[0] == 255 && b[1] == 254 {
-		words := make([]uint16, (len(b)-2)/2)
-		for i := range words {
-			words[i] = binary.LittleEndian.Uint16(b[2+i*2:])
-		}
-		b = []byte(string(utf16.Decode(words)))
-		b = []byte(strings.Replace(string(b), "encoding=\"UTF-16\"", "encoding=\"UTF-8\"", 1))
-	}
+	b = decodeTaskXML(b)
+	want = decodeTaskXML(want)
 	if xml.Unmarshal(b, &a) != nil || xml.Unmarshal(want, &w) != nil || !reflect.DeepEqual(a, w) {
 		return false, errors.New("another scheduled task occupies this name or changed its identity")
 	}

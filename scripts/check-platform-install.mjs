@@ -8,6 +8,7 @@ import {
   rm,
   readdir,
   stat,
+  open,
 } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { resolve, join } from "node:path";
@@ -26,28 +27,6 @@ let binary = resolve(
 );
 let bundleDir;
 const archive = process.env.FASED_PACKAGE_ARCHIVE;
-if (archive) {
-  const unpack = join(root, "unpacked");
-  await mkdir(unpack, { mode: 0o700 });
-  execFileSync(
-    process.platform === "win32"
-      ? join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe")
-      : "tar",
-    ["-xf", resolve(archive), "-C", unpack],
-  );
-  const arch = process.arch === "x64" ? "amd64" : process.arch;
-  bundleDir =
-    process.platform === "darwin"
-      ? join(unpack, "Fased App.app", "Contents", "MacOS")
-      : join(
-          unpack,
-          `fased-app-${process.platform === "win32" ? "windows" : "linux"}-${arch}`,
-        );
-  binary = join(
-    bundleDir,
-    process.platform === "win32" ? "fased-app.exe" : "fased-app",
-  );
-}
 const flags = ["--prefix", app, "--data-dir", state];
 const cli = (args, input) =>
   execFileSync(binary, args, { input, encoding: "utf8", timeout: 40000 });
@@ -70,6 +49,28 @@ async function hashes(dir) {
   return result;
 }
 try {
+  if (archive) {
+    const unpack = join(root, "unpacked");
+    await mkdir(unpack, { mode: 0o700 });
+    execFileSync(
+      process.platform === "win32"
+        ? join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe")
+        : "tar",
+      ["-xf", resolve(archive), "-C", unpack],
+    );
+    const arch = process.arch === "x64" ? "amd64" : process.arch;
+    bundleDir =
+      process.platform === "darwin"
+        ? join(unpack, "Fased App.app", "Contents", "MacOS")
+        : join(
+            unpack,
+            `fased-app-${process.platform === "win32" ? "windows" : "linux"}-${arch}`,
+          );
+    binary = join(
+      bundleDir,
+      process.platform === "win32" ? "fased-app.exe" : "fased-app",
+    );
+  }
   const probe = createServer();
   await new Promise((r) => probe.listen(0, "127.0.0.1", r));
   const port = probe.address().port;
@@ -84,6 +85,44 @@ try {
   const result = JSON.parse(cli(args));
   installed = true;
   const url = result.url;
+  if (process.platform === "linux") {
+    const pid = Number(
+      execFileSync(
+        "systemctl",
+        [
+          "--user",
+          "show",
+          "fased-app.service",
+          "--property=MainPID",
+          "--value",
+        ],
+        { encoding: "utf8" },
+      ).trim(),
+    );
+    const info = await readFile(`/proc/${pid}/status`, "utf8");
+    assert.match(info, /^NoNewPrivs:\s+1$/m);
+    assert.match(info, new RegExp(`^Uid:\\s+${process.getuid()}\\s`, "m"));
+    let denied = false;
+    try {
+      const fd = await open(
+        `/proc/${pid}/root${join(app, "fased-app.service")}`,
+        "r+",
+      );
+      await fd.close();
+    } catch (error) {
+      if (error.code !== "EROFS") throw error;
+      denied = true;
+    }
+    assert.ok(denied, "kernel did not enforce read-only application files");
+    const fd = await open(
+      `/proc/${pid}/root${join(state, "core.sqlite")}`,
+      "r+",
+    );
+    await fd.close();
+    report.checks.kernelIsolation =
+      "PASS: ordinary UID, NoNewPrivs, read-only application definition and writable private state";
+  }
+
   const health = await (await freshFetch(url + "/api/v1/health")).json();
   assert.equal(health.capabilities.walletSigner, false);
   const password = "Generated-Fixture-" + randomBytes(24).toString("base64url");
