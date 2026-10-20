@@ -275,7 +275,9 @@ finally:
       "actualDeathAfterReaderCoreReplacement",
       terminal(core, "bootstrap", "approve", id, "core-replaced").interrupted,
     );
-    const manifest = JSON.parse(await readFile(root + "/install.json", "utf8"));
+    const installedManifest = JSON.parse(
+      await readFile(root + "/install.json", "utf8"),
+    );
     pass(
       "appCannotUseColdInventoryProbe",
       fails(
@@ -286,9 +288,9 @@ finally:
               "-n",
               "/usr/bin/setpriv",
               "--reuid",
-              String(manifest.app.uid),
+              String(installedManifest.app.uid),
               "--regid",
-              String(manifest.app.gid),
+              String(installedManifest.app.gid),
               "--clear-groups",
               "--no-new-privs",
               "--inh-caps=-all",
