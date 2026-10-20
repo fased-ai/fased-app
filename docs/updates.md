@@ -158,7 +158,7 @@ The signer's owner-only IPC computes vault/operations/mock-receipt anchors after
 checking actual disk bytes/heads against its running state. It binds current
 authority/epoch, boot/challenge, spent/held units, pending/unknown counts,
 recovery hold, reserved sequence floor and active intent. App identity cannot
-read these owner inventory/intent RPCs or prepare/abort an intent. Public status
+read these owner inventory/intent/staging RPCs or prepare/stage/abort an intent. Public status
 reports `updateHeld`; the core's existing signer bridge stays read-only.
 
 The owner helper verifies the signed manifest and complete artifact bytes before
@@ -209,3 +209,48 @@ against current durable state, UI/timer integration and cross-platform installed
 acceptance are later P4 packages. Public-path acceptance requires exact published
 artifacts and separate release authority. Until those gates pass, a valid plan
 always ends at inspection.
+
+## Recoverable disposable artifact staging
+
+After protected preparation, the same immutable owner helper can copy the exact
+reviewed pair without another permission prompt:
+
+```sh
+fased-app custody updates stage --disposable-fixture --prepare-host \
+  --intent-id <same-32-hex-id> --artifact-dir <complete-local-pair>
+```
+
+The core contract now contains a separate `lifecycle` contract: entrypoint 1,
+stage format 1 and explicit owner-review, signer-staging and no-install features.
+This is independent of runtime protocol 1 and SQLite schema 2. Candidates that
+omit or change it, or cannot replay `update-staging-v1`, are rejected. These are
+signed declarations; candidate code is never executed to discover its contract.
+Later installation must verify actual candidate behavior before activation.
+
+Preparation durably binds both artifact sizes/hashes and this lifecycle contract.
+The owner helper rereads complete stable source files, including their prefix on
+retry, and sends bounded 24 KiB chunks through owner-only signer IPC. The signer
+stores inert mode-0600 files in its private `update-<intent-id>` directory using
+FD-relative, no-symlink operations; it rejects foreign ownership, executable
+files, extra hard links, offset gaps, changed bindings and conflicting retries.
+Matching partial bytes are retained and extended, never truncated. Each chunk
+and newly created directory entry is synced before acknowledgement. An uncertain
+write holds the service until restart. Aborting leaves staged evidence intact.
+
+Completion independently rehashes both entire staged files, revalidates the
+active intent/digest/floor and financial state, and requires unchanged fresh core
+metadata/boot. One synced `update-staged` journal record binds the receipt to the
+intent. A lost response or signer restart reuses that receipt; repeated completion
+does not append again. Every completed staging-status request rehashes stored bytes. Abort clears
+only the exclusive slot and retains the floor, lock, financial originals,
+spending, held operations and recovery holds. Only the owner channel can write,
+inspect or finalize staging; app sessions cannot administer it.
+
+Staging never installs or executes files, replaces the immutable helper, pauses
+the app, migrates state, unlocks a key or resumes execution. Its receipt always
+reports installation, resume and financial execution false. Core metadata remains
+mutable after staging. A later installation transaction must first acquire an
+exclusive core pause and fresh snapshot, revalidate staged bytes and authority,
+and implement durable installation/health/recovery and installed-sequence commit.
+No timer/UI automatic updater or public signing trust is enabled. The Linux
+fixture must not be used with real wallets or funds.

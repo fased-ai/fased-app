@@ -48,6 +48,46 @@ func ReadDocument(path string) ([]byte, error) {
 	return b, nil
 }
 
+// StreamArtifact reads the entire stable source, including an already staged
+// prefix on retry. The signer independently compares that prefix and rehashes
+// its own files before creating a receipt. No artifact is executed.
+func StreamArtifact(dir string, a Artifact, send func(int64, []byte) error) error {
+	if !tokenOK(a.File) || a.File == "." || a.File == ".." || a.Size <= 0 || a.Size > MaxArtifact || !hashOK(a.SHA256) {
+		return errors.New("invalid source artifact")
+	}
+	f, e := openRegular(filepath.Join(dir, a.File))
+	if e != nil {
+		return e
+	}
+	defer f.Close()
+	st, e := f.Stat()
+	if e != nil {
+		return e
+	}
+	if st.Size() != a.Size {
+		return errors.New("source artifact size changed")
+	}
+	h := sha256.New()
+	b := make([]byte, StageChunk)
+	var offset int64
+	for offset < a.Size {
+		n, e := io.ReadFull(f, b[:min(int64(len(b)), a.Size-offset)])
+		if e != nil {
+			return e
+		}
+		h.Write(b[:n])
+		if e = send(offset, b[:n]); e != nil {
+			return e
+		}
+		offset += int64(n)
+	}
+	var extra [1]byte
+	if n, e := f.Read(extra[:]); n != 0 || e != io.EOF || hex.EncodeToString(h.Sum(nil)) != a.SHA256 {
+		return errors.New("source artifact changed or hash mismatch")
+	}
+	return nil
+}
+
 // Inspect performs no writes and never executes artifacts. Files are local;
 // interrupted downloads, directories and altered bytes cannot pass.
 func Inspect(manifest, trust, inventory []byte, artifactDir string, now int64) (Plan, error) {

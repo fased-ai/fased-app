@@ -23,7 +23,7 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 		return custodyUpdatesCommand(args[1:], in, out, errOut)
 	}
 	if len(args) == 0 {
-		return errors.New("usage: fased-app custody install|status|setup|recover|approve|accounts|login|remove --disposable-fixture [options]")
+		return errors.New("usage: fased-app custody install|status|setup|recover|approve|updates|accounts|login|remove --disposable-fixture [options]")
 	}
 	if runtime.GOOS != "linux" || os.Getuid() <= 0 || os.Getuid() != os.Geteuid() {
 		return errors.New("custody fixture requires an ordinary Linux owner; real wallets remain disabled")

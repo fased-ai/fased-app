@@ -26,7 +26,7 @@ export async function fixtureUpdateIntentJourney({
   env,
 }) {
   assert(process.getuid() > 0);
-  const evidence = path.resolve(".evidence/p4-intents");
+  const evidence = path.resolve(".evidence/p4-staging");
   await mkdir(evidence, { recursive: true });
   const checks = {};
   const pass = (name, value) => {
@@ -204,6 +204,34 @@ finally:
       "unlockDeniedWhileIntentActive",
       fails(() => ownerUnlock(walletPassword)),
     );
+    const stage = () =>
+      JSON.parse(
+        cli([
+          "updates",
+          "stage",
+          "--prepare-host",
+          "--intent-id",
+          id,
+          "--artifact-dir",
+          root,
+        ]),
+      );
+    const staged = stage();
+    pass(
+      "actualOwnerStagesCompleteArtifactBytes",
+      staged.verified &&
+        staged.state === "staged" &&
+        staged.files.every((f) => f.bytes === f.artifact.size),
+    );
+    pass(
+      "stagingCannotInstallResumeOrExecute",
+      !staged.installAllowed &&
+        !staged.resumeAllowed &&
+        !staged.financialExecution &&
+        ownerStatus().locked &&
+        ownerStatus().updateHeld,
+    );
+    report.staged = staged;
     await saveManifest(2);
     pass(
       "competingOwnerIntentDenied",
@@ -243,12 +271,23 @@ finally:
         current.signer.sequenceFloor === "1" &&
         ownerStatus().locked,
     );
+    const recovered = stage();
+    pass(
+      "stagedReceiptAndBytesSurviveSignerRestart",
+      recovered.verified &&
+        JSON.stringify(recovered.files) === JSON.stringify(staged.files) &&
+        recovered.sequence === "1",
+    );
     pass(
       "actualOwnerTTYAbortCancel",
       terminal("abort", "cancel").exitCode !== 0 &&
         inventory().signer.activeIntentId === id,
     );
     pass("actualOwnerTTYAbort", terminal("abort", "approve").exitCode === 0);
+    pass(
+      "abortedIntentCannotStage",
+      fails(() => stage(), /stale or inactive/),
+    );
     current = inventory();
     report.final = current;
     pass(
@@ -301,7 +340,7 @@ finally:
     report.cleanup =
       "public test inputs removed; private manifest key stayed in memory; managed parent removes generated services/accounts/state";
     await writeFile(
-      path.join(evidence, "managed-intent-result.json"),
+      path.join(evidence, "managed-staging-result.json"),
       JSON.stringify(report, null, 2) + "\n",
     );
   }

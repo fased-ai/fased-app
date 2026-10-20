@@ -20,14 +20,31 @@ type StateSupport struct {
 	Features []string `json:"features"`
 }
 
+// LifecycleContract versions the immutable owner helper independently from
+// runtime IPC and financial state. Candidate artifacts are never executed here.
+type LifecycleContract struct {
+	Version     int      `json:"version"`
+	Entrypoint  int      `json:"entrypoint"`
+	StageFormat int      `json:"stageFormat"`
+	Features    []string `json:"features"`
+}
+
+func CurrentLifecycle() *LifecycleContract {
+	return &LifecycleContract{Version: 1, Entrypoint: 1, StageFormat: 1, Features: []string{"owner-update-review-v1", "signer-owned-staging-v1", "no-install-v1"}}
+}
+func lifecycleOK(c *LifecycleContract) bool {
+	return c != nil && c.Version == 1 && c.Entrypoint == 1 && c.StageFormat == 1 && listOK(c.Features) && containsAll(c.Features, CurrentLifecycle().Features)
+}
+
 type Contract struct {
-	Version      int            `json:"version"`
-	Component    string         `json:"component"`
-	Protocol     int            `json:"protocol"`
-	PeerProtocol Range          `json:"peerProtocol"`
-	Features     []string       `json:"features"`
-	RequiresPeer []string       `json:"requiresPeer"`
-	State        []StateSupport `json:"state"`
+	Lifecycle    *LifecycleContract `json:"lifecycle,omitempty"`
+	Version      int                `json:"version"`
+	Component    string             `json:"component"`
+	Protocol     int                `json:"protocol"`
+	PeerProtocol Range              `json:"peerProtocol"`
+	Features     []string           `json:"features"`
+	RequiresPeer []string           `json:"requiresPeer"`
+	State        []StateSupport     `json:"state"`
 }
 
 type State struct {
@@ -77,7 +94,7 @@ var stateOwner = map[string]string{"core-db": "core", "vault": "signer", "operat
 var requiredStateFeatures = map[string][]string{
 	"core-db":       {"accounts-v1", "owner-sessions-v1", "setup-v1"},
 	"vault":         {"fixture-key-v1", "authority-epoch-v1"},
-	"operations":    {"policy-v1", "reservations-v1", "originals-v1", "authority-epoch-v1", "approvals-v1", "update-intents-v1"},
+	"operations":    {"policy-v1", "reservations-v1", "originals-v1", "authority-epoch-v1", "approvals-v1", "update-intents-v1", "update-staging-v1"},
 	"mock-receipts": {"mock-outcomes-v1"},
 }
 
@@ -141,6 +158,9 @@ func validateComponents(cs []Component) error {
 		}
 	}
 	core, signer := contracts["core"], contracts["signer"]
+	if !lifecycleOK(core.Lifecycle) {
+		return errors.New("incompatible or missing owner lifecycle entrypoint/staging format")
+	}
 	if !core.PeerProtocol.has(signer.Protocol) || !signer.PeerProtocol.has(core.Protocol) || !containsAll(signer.Features, core.RequiresPeer) || !containsAll(core.Features, signer.RequiresPeer) {
 		return errors.New("component protocol or peer feature mismatch")
 	}

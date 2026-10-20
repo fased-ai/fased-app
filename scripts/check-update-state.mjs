@@ -7,7 +7,9 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 assert(process.getuid?.() !== 0, "project code must not run as root");
-const root = path.resolve(".evidence/p4-intents");
+const root = path.resolve(
+  process.env.FASED_STATE_EVIDENCE ?? ".evidence/p4-intents",
+);
 const fixtures = path.join(root, "core-fixtures");
 await mkdir(fixtures, { recursive: true });
 const dir = await mkdtemp(path.join(fixtures, "core-"));

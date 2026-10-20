@@ -30,6 +30,7 @@ func (c Config) Validate() error {
 // Request is a closed set of owner and fixture operations. No real sign/submit.
 // Passwords are bytes so callers can clear their own buffers after use.
 type Request struct {
+	Stage         *update.StageRequest  `json:"stage,omitempty"`
 	Update        *update.IntentRequest `json:"update,omitempty"`
 	ProbeID       string                `json:"probeId,omitempty"`
 	IntentID      string                `json:"intentId,omitempty"`
@@ -41,6 +42,7 @@ type Request struct {
 	PublicInput
 }
 type Response struct {
+	Stage           *update.StageStatus    `json:"stage,omitempty"`
 	UpdateInventory *update.SignerSnapshot `json:"updateInventory,omitempty"`
 	UpdateIntent    *update.Intent         `json:"updateIntent,omitempty"`
 	Approvals       []ApprovalReceipt      `json:"approvals,omitempty"`
@@ -60,6 +62,17 @@ func execute(v *Vault, r Request, owner bool) Response {
 		return Response{Error: "owner administration denied"}
 	}
 	switch r.Action {
+	case "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish":
+		if r.Stage == nil {
+			return Response{Error: "bound staging request required"}
+		}
+		s, e := v.StageUpdate(r.Action, *r.Stage)
+		out := Response{Stage: s, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+
 	case "fixture-update-status":
 		i, e := v.UpdateIntent(r.IntentID)
 		out := Response{UpdateIntent: i, Status: v.Status()}

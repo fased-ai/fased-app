@@ -25,7 +25,7 @@ func intentFixture(t *testing.T, v *Vault, sequence uint64) update.IntentRequest
 	if e != nil {
 		t.Fatal(e)
 	}
-	core := update.Contract{Version: 1, Component: "core", Protocol: 1, PeerProtocol: update.Range{Min: 1, Max: 1}, Features: []string{"account-registry-v1", "fixture-proposals-v1"}, RequiresPeer: []string{"fixture-update-intents-v1"}, State: []update.StateSupport{{Name: "core-db", Versions: update.Range{Min: 2, Max: 2}, Features: []string{"accounts-v1", "owner-sessions-v1", "setup-v1"}}}}
+	core := update.Contract{Lifecycle: update.CurrentLifecycle(), Version: 1, Component: "core", Protocol: 1, PeerProtocol: update.Range{Min: 1, Max: 1}, Features: []string{"account-registry-v1", "fixture-proposals-v1"}, RequiresPeer: []string{"fixture-update-intents-v1"}, State: []update.StateSupport{{Name: "core-db", Versions: update.Range{Min: 2, Max: 2}, Features: []string{"accounts-v1", "owner-sessions-v1", "setup-v1"}}}}
 	c := update.CoreSnapshot{Version: 1, ProbeID: probe, BootID: update.NewProbe(), InstanceID: "disposable-core", State: update.State{Name: "core-db", Version: 2, Features: core.State[0].Features, Anchor: update.SnapshotDigest("core-fixture", probe)}}
 	pub, key, e := ed25519.GenerateKey(rand.Reader)
 	if e != nil {
