@@ -34,7 +34,7 @@ func (v *Vault) PreflightUpdate(r update.PreflightRequest) (*update.Preflight, e
 	if e != nil {
 		return nil, e
 	}
-	if i.State != "staged" || i.StageSHA256 != update.StageDigest(i) || (i.Lifecycle.Entrypoint != 2 && i.Lifecycle.Entrypoint != 3) {
+	if i.State != "staged" || i.StageSHA256 != update.StageDigest(i) || (i.Lifecycle.Entrypoint < 2 || i.Lifecycle.Entrypoint > 4) {
 		return nil, errors.New("compatible durable staged intent required")
 	}
 	if e = update.ValidatePaused(i, r.Pause, r.ProbeID); e != nil {

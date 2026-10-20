@@ -142,7 +142,7 @@ func TestPreflightRejectsStalePauseStateAndArtifactBytes(t *testing.T) {
 }
 
 func TestLegacyLifecycleStagingJournalRemainsReadable(t *testing.T) {
-	for _, entry := range []int{1, 2} {
+	for _, entry := range []int{1, 2, 3} {
 		t.Run(string(rune('0'+entry)), func(t *testing.T) {
 			dir := fixtureDir(t)
 			v, _, _ := configuredFixture(t, dir)
@@ -151,20 +151,25 @@ func TestLegacyLifecycleStagingJournalRemainsReadable(t *testing.T) {
 			c.Entrypoint = entry
 			if entry == 1 {
 				c.Features = c.Features[:3]
-			} else {
+			} else if entry == 2 {
 				c.Features = c.Features[:4]
+			} else {
+				c.Features = c.Features[:5]
 			}
 			i := update.Intent{Version: 1, ID: r.ID, Sequence: 1, ManifestSHA256: update.SnapshotDigest("legacy-manifest", 0), Core: r.Core, Signer: r.Signer, CreatedAt: time.Now().Unix(), State: "prepared", Lifecycle: c, Artifacts: []update.Artifact{{File: "core", Size: 1, SHA256: update.SnapshotDigest("old-core", 0)}, {File: "signer", Size: 1, SHA256: update.SnapshotDigest("old-signer", 0)}}}
 			for n := range i.Signer.States {
 				if i.Signer.States[n].Name == "operations" {
 					features := []string{}
 					for _, f := range i.Signer.States[n].Features {
-						if f != "install-controller-v1" && (entry == 2 || f != "lifecycle-v2-v1") {
+						if f != "install-completion-v1" && (entry >= 3 || f != "install-controller-v1") && (entry >= 2 || f != "lifecycle-v2-v1") {
 							features = append(features, f)
 						}
 					}
 					i.Signer.States[n].Features = features
 				}
+			}
+			if entry == 3 {
+				i.ManifestExpiresAt = i.CreatedAt + 600
 			}
 			if entry == 1 {
 				i.Core.State.Version = 2

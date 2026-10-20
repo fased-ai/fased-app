@@ -33,14 +33,16 @@ func (t InstallTransaction) valid() bool {
 }
 
 type installOps struct {
-	read       readHost
-	run        runHost
-	topology   func(Manifest) error
-	health     func(context.Context, Manifest) error
-	observe    func(context.Context, Manifest, update.InstallBinding) error
-	hold       func(context.Context, string, update.InstallBinding) (*update.Installation, error)
-	state      func(context.Context) (*update.Installation, error)
-	checkpoint func(string) error
+	read        readHost
+	run         runHost
+	topology    func(Manifest) error
+	health      func(context.Context, Manifest) error
+	observe     func(context.Context, Manifest, update.InstallBinding) error
+	hold        func(context.Context, string, update.InstallBinding) (*update.Installation, error)
+	state       func(context.Context) (*update.Installation, error)
+	release     func(context.Context, update.Installation) error
+	ownerRecord func(bool) error
+	checkpoint  func(string) error
 }
 type phaseRecord struct {
 	Version int    `json:"version"`
@@ -127,6 +129,9 @@ func runTransaction(ctx context.Context, t InstallTransaction, rollback bool, o 
 	}
 	if current == nil || !update.ValidInstallation(*current) || current.Digest != digest {
 		return nil, errors.New("current signer does not own this installation")
+	}
+	if current.InstalledSequenceCommitted {
+		return nil, errors.New("installed sequence committed; use complete for recovery, rollback is closed")
 	}
 	if current.Phase == "rolled-back-held" && !decision {
 		return nil, errors.New("rollback completion lacks its durable host decision")
@@ -254,7 +259,8 @@ func clearActive(ctx context.Context, t InstallTransaction, o installOps) error 
 	p := t.Base.Root + "/update-active.json"
 	f, e := o.read(p)
 	if errors.Is(e, os.ErrNotExist) {
-		return nil
+		_, e = o.run(ctx, nil, "/usr/bin/sync", "-f", t.Base.Root)
+		return e
 	}
 	if e != nil {
 		return e

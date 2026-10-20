@@ -19,6 +19,7 @@ export async function fixtureUpdateIntentJourney({
   ownerStatus,
   ownerUnlock,
   walletPassword,
+  stopServices,
   restartSigner,
   restartApp,
   backups,
@@ -27,7 +28,7 @@ export async function fixtureUpdateIntentJourney({
   env,
 }) {
   assert(process.getuid() > 0);
-  const evidence = path.resolve(".evidence/p4-install");
+  const evidence = path.resolve(".evidence/p4-complete");
   await mkdir(evidence, { recursive: true });
   const checks = {};
   const pass = (name, value) => {
@@ -37,7 +38,7 @@ export async function fixtureUpdateIntentJourney({
   const report = {
     result: "FAIL",
     class:
-      "actual managed Ubuntu owner/app/signer and PTY; no installation update",
+      "actual managed Ubuntu owner/app/signer and PTY; installed sequence and protected completion",
     fixtureOnly: true,
     financialExecution: false,
     checks,
@@ -127,7 +128,7 @@ if operation=='prepare':args+=['--manifest',manifest,'--trust-file',trust,'--art
 if operation=='install':args+=['--artifact-dir',artifacts]
 pid,fd=pty.fork()
 if pid==0:os.execv(binary,args)
-seen=b'';sent=False;done=0;interrupted=False;concurrentDenied=False;deadline=time.time()+(60 if operation in ('install','rollback') else 30)
+seen=b'';sent=choice=='resume-interrupt';done=0;interrupted=False;concurrentDenied=False;deadline=time.time()+(60 if operation in ('install','rollback') else 30)
 try:
  while time.time()<deadline:
   ready,_,_=select.select([fd],[],[],.05)
@@ -137,16 +138,16 @@ try:
    if not chunk:break
    seen+=chunk
   if not sent:
-   patterns={'prepare':rb'Type (PREPARE [0-9a-f]{64})','abort':rb'Type (ABORT [0-9a-f]{32} [0-9a-f]{64})','install':rb'Type (INSTALL [0-9a-f]{64})','rollback':rb'Type (ROLLBACK [0-9a-f]{64})'}
+   patterns={'prepare':rb'Type (PREPARE [0-9a-f]{64})','abort':rb'Type (ABORT [0-9a-f]{32} [0-9a-f]{64})','install':rb'Type (INSTALL [0-9a-f]{64})','rollback':rb'Type (ROLLBACK [0-9a-f]{64})','complete':rb'Type (COMPLETE [0-9a-f]{64})'}
    pattern=patterns[operation]
    match=re.search(pattern,seen)
    if match:
-    if operation=='install':
+    if operation in ('install','complete'):
      competitor=subprocess.run([binary,'custody','updates','install-status','--disposable-fixture','--prepare-host','--intent-id',ident],capture_output=True,text=True,timeout=15)
      concurrentDenied=competitor.returncode!=0 and 'already owns' in competitor.stderr
      assert concurrentDenied,'competing owner did not fail closed: '+competitor.stderr
     os.write(fd,(match[1] if choice in ('approve','interrupt','denied') else b'CANCEL')+b'\n');sent=True
-  if sent and choice=='interrupt' and not interrupted and (b'Installation boundary: core-replaced' if operation=='install' else b'Installation boundary: rollback-core-replaced') in seen:
+  if sent and choice in ('interrupt','resume-interrupt') and not interrupted and (b'Installation boundary: sequence-committed' if operation=='complete' and choice=='interrupt' else b'Installation boundary: core-released' if operation=='complete' else b'Installation boundary: core-replaced' if operation=='install' else b'Installation boundary: rollback-core-replaced') in seen:
    os.killpg(pid,signal.SIGKILL);interrupted=True
   done,status=os.waitpid(pid,os.WNOHANG)
   if done:break
@@ -642,7 +643,179 @@ finally:
         end.unknown === before.signer.unknown &&
         end.recoveryHold === before.signer.recoveryHold,
     );
-    report.finalAfterInstall = end;
+    // A third genuinely different pair exercises the successful commit path.
+    id = randomBytes(16).toString("hex");
+    for (const file of ["fased-app", "fased-signer"]) {
+      await writeFile(
+        path.join(candidates, file),
+        Buffer.concat([
+          await readFile(root + "/" + file),
+          Buffer.from("\nFased completion candidate\n"),
+        ]),
+        { mode: 0o700 },
+      );
+    }
+    for (const c of manifest.components) {
+      const bytes = await readFile(path.join(candidates, c.artifact.file));
+      c.artifact.size = bytes.length;
+      c.artifact.sha256 = sha(bytes);
+    }
+    await saveManifest(3);
+    pass(
+      "completionCandidateSeparateOwnerPrepare",
+      terminal("prepare", "approve").exitCode === 0,
+    );
+    stage();
+    pass(
+      "completionCandidateHealthyTrial",
+      terminal("install", "approve").exitCode === 0,
+    );
+    pass(
+      "completeCancelKeepsHoldAndInstalledFloor",
+      terminal("complete", "cancel").exitCode !== 0 &&
+        !inventory().signer.installedSequence &&
+        ownerStatus().updateHeld,
+    );
+    pass(
+      "actualDeathAfterInstalledSequenceCommit",
+      terminal("complete", "interrupt").interrupted,
+    );
+    const committed = inventory().signer;
+    pass(
+      "committedSequenceDurableButStillHeld",
+      committed.installedSequence === "3" &&
+        committed.sequenceFloor === "3" &&
+        committed.activeIntentId === id &&
+        ownerStatus().locked &&
+        ownerStatus().updateHeld,
+    );
+    pass(
+      "committedRollbackDenied",
+      terminal("rollback", "denied").exitCode !== 0,
+    );
+    stopServices();
+    pass(
+      "actualColdCompletionDeathAfterCoreRelease",
+      terminal("complete", "resume-interrupt").interrupted,
+    );
+    const complete = () =>
+      JSON.parse(
+        cli(["updates", "complete", "--prepare-host", "--intent-id", id]),
+      );
+    const completed = complete();
+    report.completed = completed;
+    pass(
+      "actualCompletionRetryConverges",
+      completed.phase === "completed" &&
+        completed.installedSequenceCommitted &&
+        !completed.resumeAllowed &&
+        !completed.financialExecution,
+    );
+    const operationsAfter = inventory().signer.states.find(
+      (s) => s.name === "operations",
+    ).anchor;
+    restartApp();
+    restartSigner();
+    let currentStatus;
+    for (let n = 0; n < 30; n++) {
+      try {
+        currentStatus = JSON.parse(
+          cli([
+            "updates",
+            "install-status",
+            "--prepare-host",
+            "--intent-id",
+            id,
+          ]),
+        );
+        break;
+      } catch (error) {
+        if (n === 29) throw error;
+        await delay(100);
+      }
+    }
+    pass(
+      "completedStatusSurvivesBothServiceRestarts",
+      currentStatus.installation.phase === "completed" &&
+        ownerStatus().locked &&
+        !ownerStatus().updateHeld,
+    );
+    pass(
+      "completedCurrentRetryDoesNotAppendJournal",
+      complete().phase === "completed" &&
+        inventory().signer.states.find((s) => s.name === "operations")
+          .anchor === operationsAfter,
+    );
+    const installedManifest = JSON.parse(
+      await readFile(root + "/install.json", "utf8"),
+    );
+    const rootIntent = JSON.parse(
+      await readFile(root + "/intent.json", "utf8"),
+    );
+    const ownerIntent = JSON.parse(
+      await readFile(
+        path.join(
+          env.XDG_CONFIG_HOME,
+          "fased-app-custody-installer",
+          "intent.json",
+        ),
+        "utf8",
+      ),
+    );
+    const readyRecord = JSON.parse(
+      await readFile(root + "/ready.json", "utf8"),
+    );
+    pass(
+      "installerRecordsConvergeToExactInstalledPair",
+      rootIntent.coreHash === installedManifest.coreHash &&
+        rootIntent.signerHash === installedManifest.signerHash &&
+        JSON.stringify(rootIntent) === JSON.stringify(ownerIntent) &&
+        readyRecord.manifest ===
+          sha(Buffer.from(JSON.stringify(installedManifest))),
+    );
+    record.revision = JSON.parse(app([])).record.revision;
+    pass(
+      "completedCoreMetadataWritable",
+      JSON.parse(app(["--request-stdin"], JSON.stringify(record))).record
+        .revision ===
+        record.revision + 1,
+    );
+    pass("completedRetryAfterMetadataWrite", complete().phase === "completed");
+    const final = inventory().signer;
+    report.finalAfterInstall = final;
+    pass(
+      "completionPreservesFinancialAuthorityAndUnknowns",
+      final.authoritySha256 === before.signer.authoritySha256 &&
+        final.spent === before.signer.spent &&
+        final.held === before.signer.held &&
+        final.pending === before.signer.pending &&
+        final.unknown === before.signer.unknown &&
+        final.recoveryHold === before.signer.recoveryHold &&
+        final.sequenceFloor === "3" &&
+        final.installedSequence === "3" &&
+        final.activeIntentId === "" &&
+        ownerStatus().locked,
+    );
+    pass(
+      "currentInstallerAcceptsUpdatedInventory",
+      JSON.parse(
+        execFileSync(
+          root + "/fased-app",
+          [
+            "custody",
+            "install",
+            "--disposable-fixture",
+            "--prepare-host",
+            "--signer-binary",
+            root + "/fased-signer",
+            "--listen",
+            installedManifest.listen,
+          ],
+          { encoding: "utf8", env, timeout: 30000 },
+        ),
+      ).manifest.coreHash === installedManifest.coreHash,
+    );
+
     report.result = "PASS";
   } catch (error) {
     report.error = error.message;
@@ -654,7 +827,7 @@ finally:
     report.cleanup =
       "public test inputs removed; private manifest key stayed in memory; managed parent removes generated services/accounts/state";
     await writeFile(
-      path.join(evidence, "managed-install-controller-result.json"),
+      path.join(evidence, "managed-completion-result.json"),
       JSON.stringify(report, null, 2) + "\n",
     );
   }

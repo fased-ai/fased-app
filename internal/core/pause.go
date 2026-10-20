@@ -92,6 +92,21 @@ func (s *Store) UpdatePause(ctx context.Context, c update.CorePauseCommand) (upd
 				return update.CorePauseReceipt{}, e
 			}
 		}
+	case "complete":
+		if c.Completed == nil || !update.ValidInstallation(*c.Completed) || c.Completed.Phase != "completed" || phase == "idle" {
+			return update.CorePauseReceipt{}, errors.New("exact completed signer receipt and existing fence required")
+		}
+		q := c.Completed.Binding.Index.Binding.Pause
+		if q.Request == nil || q.PauseID != r.PauseID || update.SnapshotDigest("pause-request", *q.Request) != update.SnapshotDigest("pause-request", r.Request) {
+			return update.CorePauseReceipt{}, errors.New("completion cannot release a different core pause")
+		}
+		if phase == "paused" && !update.SameCoreMetadata(current, r.Request.Expected) {
+			return update.CorePauseReceipt{}, errors.New("completion metadata changed while paused")
+		}
+		if _, e = tx.ExecContext(ctx, "UPDATE update_pause SET phase='released' WHERE id=1"); e != nil {
+			return update.CorePauseReceipt{}, e
+		}
+		phase = "released"
 	case "release":
 		// Metadata release is never signer authorization. The protected owner
 		// conductor obtains this exact aborted receipt from the signer first.

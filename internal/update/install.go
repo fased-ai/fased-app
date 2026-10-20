@@ -63,7 +63,7 @@ func ValidateInstallBinding(b InstallBinding) error {
 	return nil
 }
 func ValidInstallation(i Installation) bool {
-	return i.Version == 1 && ValidateInstallBinding(i.Binding) == nil && i.Digest == InstallDigest(i.Binding) && (i.Phase == "active" || i.Phase == "healthy-held" || i.Phase == "rolled-back-held") && !i.InstalledSequenceCommitted && !i.ResumeAllowed && !i.FinancialExecution
+	return i.Version == 1 && ValidateInstallBinding(i.Binding) == nil && i.Digest == InstallDigest(i.Binding) && (i.Phase == "active" || i.Phase == "healthy-held" || i.Phase == "rolled-back-held" || i.Phase == "committed-held" || i.Phase == "completed") && i.InstalledSequenceCommitted == (i.Phase == "committed-held" || i.Phase == "completed") && !i.ResumeAllowed && !i.FinancialExecution
 }
 
 // Only the operations head may advance while a signer-owned installation hold
@@ -87,5 +87,10 @@ func SameHeldState(a, b SignerSnapshot) bool {
 }
 func RecoveryMatches(i RecoveryIndex, p Preflight) bool {
 	b, e := BackupBinding(p)
+	// The installed counter advances only through the signer commit. Metadata
+	// evidence can still be revalidated while that exact sequence remains held.
+	if e == nil && b.Pause.Request != nil && b.Signer.InstalledSequence == b.Pause.Request.Sequence && i.Binding.Signer.InstalledSequence < b.Signer.InstalledSequence {
+		b.Signer.InstalledSequence = i.Binding.Signer.InstalledSequence
+	}
 	return e == nil && ValidRecoveryIndex(i, i.Binding) && SnapshotDigest("pause", i.Binding.Pause) == SnapshotDigest("pause", b.Pause) && SameHeldState(i.Binding.Signer, b.Signer) && SnapshotDigest("files", i.Binding.Files) == SnapshotDigest("files", b.Files)
 }

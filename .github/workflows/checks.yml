@@ -162,11 +162,11 @@ jobs:
         run: go build -trimpath -o .evidence/bin/fased-unhealthy-core ./internal/custodyinstall/testdata/unhealthy-core
       - name: Read-only signed development manifest and compatibility journey
         env:
-          FASED_UPDATE_EVIDENCE: .evidence/p4-install
+          FASED_UPDATE_EVIDENCE: .evidence/p4-complete
         run: node scripts/check-update-manifest.mjs
       - name: Compiled private core state inventory journey
         env:
-          FASED_STATE_EVIDENCE: .evidence/p4-install
+          FASED_STATE_EVIDENCE: .evidence/p4-complete
         run: node scripts/check-update-state.mjs
       - name: Managed account UI browser prerequisite
         run: npx playwright install --with-deps chromium
@@ -195,6 +195,11 @@ jobs:
             .evidence/p4-staging/manifest-cli.log
             .evidence/p4-staging/core-cli-result.json
             .evidence/p4-staging/core-cli.log
+            .evidence/p4-complete/managed-completion-result.json
+            .evidence/p4-complete/manifest-cli-result.json
+            .evidence/p4-complete/manifest-cli.log
+            .evidence/p4-complete/core-cli-result.json
+            .evidence/p4-complete/core-cli.log
             .evidence/p4-install/managed-install-controller-result.json
             .evidence/p4-install/manifest-cli-result.json
             .evidence/p4-install/manifest-cli.log

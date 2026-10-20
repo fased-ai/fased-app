@@ -19,10 +19,11 @@ type CorePauseReceipt struct {
 	Core    CoreSnapshot      `json:"core"`
 }
 type CorePauseCommand struct {
-	Action  string            `json:"action"`
-	ProbeID string            `json:"probeId"`
-	Request *CorePauseRequest `json:"request,omitempty"`
-	Aborted *Intent           `json:"aborted,omitempty"`
+	Action    string            `json:"action"`
+	ProbeID   string            `json:"probeId"`
+	Request   *CorePauseRequest `json:"request,omitempty"`
+	Completed *Installation     `json:"completed,omitempty"`
+	Aborted   *Intent           `json:"aborted,omitempty"`
 }
 type PreflightRequest struct {
 	IntentID       string           `json:"intentId"`

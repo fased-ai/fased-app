@@ -50,5 +50,5 @@ func StageDigest(i Intent) string {
 // Old stage records remain readable; admission of a new candidate separately
 // requires the current lifecycle contract. Never strand authoritative history.
 func stageContractReadable(c *LifecycleContract) bool {
-	return c != nil && c.Version == 1 && c.Entrypoint >= 1 && c.Entrypoint <= 3 && c.StageFormat == 1 && listOK(c.Features) && containsAll(c.Features, []string{"owner-update-review-v1", "signer-owned-staging-v1", "no-install-v1"})
+	return c != nil && c.Version == 1 && c.Entrypoint >= 1 && c.Entrypoint <= 4 && c.StageFormat == 1 && listOK(c.Features) && containsAll(c.Features, []string{"owner-update-review-v1", "signer-owned-staging-v1", "no-install-v1"})
 }

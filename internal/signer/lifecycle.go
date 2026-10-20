@@ -35,7 +35,7 @@ func (v *Vault) updateSnapshot(probe string) (update.SignerSnapshot, error) {
 	if e != nil {
 		return update.SignerSnapshot{}, e
 	}
-	s := update.SignerSnapshot{Version: 1, ProbeID: probe, BootID: v.bootID, AuthoritySHA256: update.SnapshotDigest("authority", []AccountRef{v.record.Ref, l.ref}), Spent: spent, Held: held, RecoveryHold: v.recoveryRequired(), SequenceFloor: l.updateFloor, ActiveIntentID: l.activeUpdate}
+	s := update.SignerSnapshot{Version: 1, ProbeID: probe, BootID: v.bootID, AuthoritySHA256: update.SnapshotDigest("authority", []AccountRef{v.record.Ref, l.ref}), Spent: spent, Held: held, RecoveryHold: v.recoveryRequired(), SequenceFloor: l.updateFloor, InstalledSequence: l.installedSequence, ActiveIntentID: l.activeUpdate}
 	c := UpdateContract()
 	for _, contract := range c.State {
 		anchor := update.SnapshotDigest("vault-bytes", b)

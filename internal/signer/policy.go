@@ -87,19 +87,20 @@ type PublicInput struct {
 }
 
 type ledger struct {
-	main, mock     *journal
-	ref            AccountRef
-	missingHistory bool
-	policy         *FixturePolicy
-	grants         map[string]FixtureGrant
-	ops            map[string]FixtureOperation
-	receipts       map[string]journalRecord
-	lastTime       int64
-	approvals      map[string]ApprovalReceipt
-	updates        map[string]update.Intent
-	updateFloor    uint64
-	activeUpdate   string
-	installations  map[string]update.Installation
+	main, mock        *journal
+	ref               AccountRef
+	missingHistory    bool
+	policy            *FixturePolicy
+	grants            map[string]FixtureGrant
+	ops               map[string]FixtureOperation
+	receipts          map[string]journalRecord
+	lastTime          int64
+	approvals         map[string]ApprovalReceipt
+	updates           map[string]update.Intent
+	installedSequence uint64
+	updateFloor       uint64
+	activeUpdate      string
+	installations     map[string]update.Installation
 }
 
 func newLedger() *ledger {

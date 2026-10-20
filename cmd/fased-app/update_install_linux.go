@@ -185,6 +185,16 @@ func ownerInstallation(action, id, config, artifacts string, automation bool, in
 		}
 	}
 	callbacks := custodyinstall.InstallationCallbacks{
+		Release: func(ctx context.Context, i update.Installation) error {
+			p, e := controlFor(t.Target)(ctx, update.CorePauseCommand{Action: "complete", ProbeID: update.NewProbe(), Completed: &i})
+			if e != nil {
+				return e
+			}
+			if p.State != "released" || p.Request == nil || p.PauseID != i.Binding.Index.Binding.Pause.PauseID || update.SnapshotDigest("pause-request", *p.Request) != update.SnapshotDigest("pause-request", *i.Binding.Index.Binding.Pause.Request) {
+				return errors.New("unbound core completion release")
+			}
+			return nil
+		},
 		State: func(ctx context.Context) (*update.Installation, error) {
 			r, e := call(ctx, signer.Request{Action: "fixture-install-controller", Install: &update.InstallRequest{Action: "status", IntentID: id}})
 			if e != nil {
@@ -214,6 +224,32 @@ func ownerInstallation(action, id, config, artifacts string, automation bool, in
 			}
 			return r.Installation, nil
 		},
+	}
+	if action == "complete" {
+		state, e := custodyinstall.CompletionState(ctx, t, system, callbacks.State)
+		if e != nil {
+			return e
+		}
+		if state == nil || !update.ValidInstallation(*state) || state.Digest != update.InstallDigest(t.Binding) {
+			return errors.New("actual bound installation receipt required")
+		}
+		if !state.InstalledSequenceCommitted {
+			if !automation && !term.IsTerminal(int(in.Fd())) {
+				return errors.New("completion requires the protected owner terminal")
+			}
+			want := "COMPLETE " + state.Digest
+			pretty, _ := json.MarshalIndent(state, "", "  ")
+			fmt.Fprintf(errOut, "Commit this exact installed pair and sequence. Executable rollback closes after commit; wallet stays locked and automation disabled.\n%s\nType %s, or anything else to cancel: ", pretty, want)
+			line, e := bufio.NewReader(in).ReadString('\n')
+			if e != nil || line != want+"\n" {
+				return errors.New("completion review cancelled")
+			}
+		}
+		i, e := custodyinstall.CompleteController(ctx, t, system, callbacks)
+		if e != nil {
+			return e
+		}
+		return json.NewEncoder(out).Encode(i)
 	}
 	if action == "install-status" {
 		return custodyinstall.InstallationStatus(ctx, t, system, callbacks, out)
