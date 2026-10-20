@@ -343,7 +343,7 @@ s=socket.socket(socket.AF_UNIX); s.connect(c['socketDir']+'/owner.sock'); result
 s=socket.socket(socket.AF_UNIX); s.connect(c['socketDir']+'/app.sock'); f=s.makefile('rwb'); hello=json.loads(f.readline())
 f.write((json.dumps({'version':1,'signerId':c['signerId'],'challenge':hello['challenge'],'request':{'action':'export-fixture-seed'}})+'\n').encode()); f.flush()
 r=json.loads(f.readline()); result['rawExportDenied']=bool(r.get('error')) and not r.get('document'); s.close()
-for action in ['fixture-policy','fixture-grant','fixture-revoke','fixture-recover-authority','fixture-approve-proposal']:
+for action in ['fixture-policy','fixture-grant','fixture-revoke','fixture-recover-authority','fixture-approve-proposal','fixture-update-inventory','fixture-update-status','fixture-update-prepare','fixture-update-abort']:
  s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/app.sock');f=s.makefile('rwb');h=json.loads(f.readline());f.write((json.dumps({'version':1,'signerId':c['signerId'],'challenge':h['challenge'],'request':{'action':action}})+'\n').encode());f.flush();v=json.loads(f.readline());result['raw:'+action]=v.get('error')=='owner administration denied';s.close()
 print(json.dumps(result))
 `;

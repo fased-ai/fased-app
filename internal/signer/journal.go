@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 type journal struct {
@@ -14,6 +16,7 @@ type journal struct {
 }
 
 type journalRecord struct {
+	Update         *update.Intent   `json:"update,omitempty"`
 	Proposal       *FixtureProposal `json:"proposal,omitempty"`
 	Version        int              `json:"version"`
 	Sequence       int              `json:"sequence"`

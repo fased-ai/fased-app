@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 type Config struct {
@@ -28,20 +30,25 @@ func (c Config) Validate() error {
 // Request is a closed set of owner and fixture operations. No real sign/submit.
 // Passwords are bytes so callers can clear their own buffers after use.
 type Request struct {
-	Action        string `json:"action"`
-	Password      []byte `json:"password,omitempty"`
-	NewPassword   []byte `json:"newPassword,omitempty"`
-	Document      []byte `json:"document,omitempty"`
-	UnlockSeconds int    `json:"unlockSeconds,omitempty"`
+	Update        *update.IntentRequest `json:"update,omitempty"`
+	ProbeID       string                `json:"probeId,omitempty"`
+	IntentID      string                `json:"intentId,omitempty"`
+	Action        string                `json:"action"`
+	Password      []byte                `json:"password,omitempty"`
+	NewPassword   []byte                `json:"newPassword,omitempty"`
+	Document      []byte                `json:"document,omitempty"`
+	UnlockSeconds int                   `json:"unlockSeconds,omitempty"`
 	PublicInput
 }
 type Response struct {
-	Approvals []ApprovalReceipt `json:"approvals,omitempty"`
-	Status    Status            `json:"status"`
-	Document  []byte            `json:"document,omitempty"`
-	Error     string            `json:"error,omitempty"`
-	Fixture   *FixtureSummary   `json:"fixture,omitempty"`
-	Operation *FixtureOperation `json:"operation,omitempty"`
+	UpdateInventory *update.SignerSnapshot `json:"updateInventory,omitempty"`
+	UpdateIntent    *update.Intent         `json:"updateIntent,omitempty"`
+	Approvals       []ApprovalReceipt      `json:"approvals,omitempty"`
+	Status          Status                 `json:"status"`
+	Document        []byte                 `json:"document,omitempty"`
+	Error           string                 `json:"error,omitempty"`
+	Fixture         *FixtureSummary        `json:"fixture,omitempty"`
+	Operation       *FixtureOperation      `json:"operation,omitempty"`
 }
 
 func execute(v *Vault, r Request, owner bool) Response {
@@ -53,6 +60,37 @@ func execute(v *Vault, r Request, owner bool) Response {
 		return Response{Error: "owner administration denied"}
 	}
 	switch r.Action {
+	case "fixture-update-status":
+		i, e := v.UpdateIntent(r.IntentID)
+		out := Response{UpdateIntent: i, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "fixture-update-inventory":
+		s, e := v.UpdateInventory(r.ProbeID)
+		out := Response{UpdateInventory: s, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "fixture-update-prepare":
+		if r.Update == nil {
+			return Response{Error: "reviewed update request required"}
+		}
+		i, e := v.PrepareUpdate(*r.Update)
+		out := Response{UpdateIntent: i, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "fixture-update-abort":
+		i, e := v.AbortUpdate(r.IntentID)
+		out := Response{UpdateIntent: i, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
 	case "status":
 	case "create":
 		err = v.Create(r.Password)

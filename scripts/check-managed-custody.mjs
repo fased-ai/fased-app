@@ -2,6 +2,7 @@
 // Root executes trusted OS tools; all Fased executables run under non-root UIDs.
 import assert from "node:assert/strict";
 import { fixtureAccountJourney } from "./fixture-account-journey.mjs";
+import { fixtureUpdateIntentJourney } from "./fixture-update-intent-journey.mjs";
 import {
   fixturePolicyJourney,
   fixtureRecoveryJourney,
@@ -477,7 +478,7 @@ try: os.open(c['stateDir']+'/vault.json',os.O_RDONLY);r['keyReadDenied']=False
 except PermissionError:r['keyReadDenied']=True
 s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/owner.sock');r['ownerChannelDenied']=s.recv(1)==b'';s.close()
 s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/app.sock');f=s.makefile('rwb');h=json.loads(f.readline());f.write((json.dumps({'version':1,'signerId':c['signerId'],'challenge':h['challenge'],'request':{'action':'verify-backup'}})+'\n').encode());f.flush();v=json.loads(f.readline());r['ownerActionDenied']=bool(v.get('error'))
-for action in ['fixture-policy','fixture-grant','fixture-revoke','fixture-recover-authority','fixture-approve-proposal']:
+for action in ['fixture-policy','fixture-grant','fixture-revoke','fixture-recover-authority','fixture-approve-proposal','fixture-update-inventory','fixture-update-status','fixture-update-prepare','fixture-update-abort']:
  s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/app.sock');f=s.makefile('rwb');h=json.loads(f.readline());f.write((json.dumps({'version':1,'signerId':c['signerId'],'challenge':h['challenge'],'request':{'action':action}})+'\n').encode());f.flush();v=json.loads(f.readline());r['raw:'+action]=v.get('error')=='owner administration denied';s.close()
 for name in ['operations.log','mock-receipts.log']:
  try: fd=os.open(c['stateDir']+'/'+name,os.O_RDONLY);os.close(fd);r['read:'+name]=False
@@ -769,6 +770,19 @@ print(json.dumps(r))
     walletPassword: replacement,
     backups,
     evidence,
+    env,
+  });
+  await fixtureUpdateIntentJourney({
+    engine,
+    root,
+    cli,
+    ownerStatus: secretStatus,
+    ownerUnlock: unlockFixture,
+    walletPassword: replacement,
+    restartSigner: () => osTool("/usr/bin/systemctl", ["restart", units[1]]),
+    backups,
+    check,
+    fails,
     env,
   });
   report.identities = {

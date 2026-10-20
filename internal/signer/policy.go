@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 const FixtureAsset = "fixture-credit:v1"
@@ -94,10 +96,13 @@ type ledger struct {
 	receipts       map[string]journalRecord
 	lastTime       int64
 	approvals      map[string]ApprovalReceipt
+	updates        map[string]update.Intent
+	updateFloor    uint64
+	activeUpdate   string
 }
 
 func newLedger() *ledger {
-	return &ledger{grants: map[string]FixtureGrant{}, ops: map[string]FixtureOperation{}, receipts: map[string]journalRecord{}, approvals: map[string]ApprovalReceipt{}}
+	return &ledger{grants: map[string]FixtureGrant{}, ops: map[string]FixtureOperation{}, receipts: map[string]journalRecord{}, approvals: map[string]ApprovalReceipt{}, updates: map[string]update.Intent{}}
 }
 
 func validRef(r AccountRef) bool {
@@ -198,7 +203,26 @@ func (l *ledger) apply(r journalRecord) error {
 	if r.At < l.lastTime {
 		return errors.New("fixture clock moved backwards")
 	}
+	if l.activeUpdate != "" && r.Kind != "update-abort" {
+		return errors.New("exclusive update intent blocks financial mutation")
+	}
 	switch r.Kind {
+	case "update-prepare":
+		i := r.Update
+		if i == nil || update.ValidateIntent(*i) != nil || i.CreatedAt != r.At || i.Sequence <= l.updateFloor || len(l.updates) >= 256 || l.updates[i.ID].ID != "" {
+			return errors.New("invalid durable update intent")
+		}
+		l.updates[i.ID] = clone(*i)
+		l.updateFloor = i.Sequence
+		l.activeUpdate = i.ID
+	case "update-abort":
+		i, ok := l.updates[r.ID]
+		if !ok || l.activeUpdate != r.ID || i.State != "prepared" {
+			return errors.New("no matching active update intent")
+		}
+		i.State = "aborted"
+		l.updates[r.ID] = i
+		l.activeUpdate = ""
 	case "init":
 		if l.ref.Version != 0 || r.Account == nil || !validRef(*r.Account) {
 			return errors.New("invalid journal identity")
@@ -338,6 +362,7 @@ func (l *ledger) append(v *Vault, r journalRecord) error {
 	next.grants = clone(l.grants)
 	next.approvals = clone(l.approvals)
 	next.ops = clone(l.ops)
+	next.updates = clone(l.updates)
 	if err := next.apply(r); err != nil {
 		return err
 	}
@@ -431,6 +456,9 @@ func (v *Vault) recoveryRequired() bool {
 func (v *Vault) fixtureReady(unlock bool) error {
 	if v.closed || v.store.failedState() || v.record == nil || v.ledger == nil {
 		return ErrUnavailable
+	}
+	if v.ledger.activeUpdate != "" {
+		return errors.New("exclusive update intent requires protected owner abort")
 	}
 	if v.recoveryRequired() {
 		return errors.New("wallet recovery hold requires retained history and mock reconciliation")

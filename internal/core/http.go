@@ -157,6 +157,22 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
+	case "/api/v1/updates/inventory":
+		if r.Method != http.MethodGet {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if len(r.URL.Query()) != 1 || len(r.URL.Query()["probe"]) != 1 {
+			writeError(w, 400, "one inventory challenge required")
+			return
+		}
+		v, e := h.store.UpdateSnapshot(r.Context(), r.URL.Query().Get("probe"))
+		if e != nil {
+			writeError(w, 400, "core inventory unavailable")
+			return
+		}
+		writeJSON(w, 200, v)
+		return
 	case "/api/v1/accounts":
 		if r.Method == http.MethodGet {
 			v, e := h.store.Accounts(r.Context())

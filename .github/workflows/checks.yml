@@ -159,7 +159,11 @@ jobs:
           npm run build
           go build -trimpath -o .evidence/bin/fased-app ./cmd/fased-app
       - name: Read-only signed development manifest and compatibility journey
+        env:
+          FASED_UPDATE_EVIDENCE: .evidence/p4-intents
         run: node scripts/check-update-manifest.mjs
+      - name: Compiled private core state inventory journey
+        run: node scripts/check-update-state.mjs
       - name: Managed account UI browser prerequisite
         run: npx playwright install --with-deps chromium
       - name: Installer-managed identities and protected owner recovery
@@ -177,6 +181,11 @@ jobs:
             .evidence/p3-managed/accounts-ui-*.png
             .evidence/p4-updates/manifest-cli-result.json
             .evidence/p4-updates/manifest-cli.log
+            .evidence/p4-intents/core-cli-result.json
+            .evidence/p4-intents/core-cli.log
+            .evidence/p4-intents/managed-intent-result.json
+            .evidence/p4-intents/manifest-cli-result.json
+            .evidence/p4-intents/manifest-cli.log
           retention-days: 7
   prototype:
     if: always()

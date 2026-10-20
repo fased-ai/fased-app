@@ -16,6 +16,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/fased-ai/fased-app/internal/update"
+
 	"golang.org/x/crypto/argon2"
 )
 
@@ -52,6 +54,7 @@ type envelope struct {
 }
 
 type Status struct {
+	UpdateHeld         bool        `json:"updateHeld"`
 	FixtureOnly        bool        `json:"fixtureOnly"`
 	WalletSigner       bool        `json:"walletSigner"`
 	FinancialExecution bool        `json:"financialExecution"`
@@ -73,6 +76,7 @@ type Vault struct {
 	timer    *time.Timer
 	now      func() time.Time
 	closed   bool
+	bootID   string
 }
 
 func validPassword(p []byte) bool { return utf8.Valid(p) && utf8.RuneCount(p) >= 12 && len(p) <= 1024 }
@@ -183,7 +187,7 @@ func Open(dir, signerID string) (*Vault, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := &Vault{store: s, signerID: signerID, now: time.Now}
+	v := &Vault{store: s, signerID: signerID, now: time.Now, bootID: update.NewProbe()}
 	b, err := s.read()
 	if err == nil {
 		var e envelope
@@ -238,7 +242,7 @@ func (v *Vault) unlocked() bool {
 func (v *Vault) Status() Status {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	s := Status{FixtureOnly: true, Locked: !v.unlocked(), UnlockUntil: v.until}
+	s := Status{FixtureOnly: true, Locked: !v.unlocked(), UnlockUntil: v.until, UpdateHeld: v.store.failedState() || v.ledger != nil && v.ledger.activeUpdate != ""}
 	if v.record != nil {
 		ref := v.record.Ref
 		s.Account = &ref
@@ -287,11 +291,18 @@ func (v *Vault) Create(password []byte) error {
 func (v *Vault) Unlock(password []byte, lifetime time.Duration) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	if v.ledger != nil && v.ledger.activeUpdate != "" {
+		v.lock()
+		return errors.New("exclusive update intent blocks unlock")
+	}
 	if v.closed {
 		return ErrUnavailable
 	}
 	// A failed unlock attempt also discards any previous in-memory credential.
 	v.lock()
+	if v.store.failedState() {
+		return ErrUnavailable
+	}
 	if lifetime <= 0 || lifetime > MaxUnlock {
 		return errors.New("manual unlock must be positive and at most one hour; unattended unlock is unavailable")
 	}
@@ -363,6 +374,9 @@ func (v *Vault) VerifyBackup(document, password []byte) error {
 func (v *Vault) Restore(backup, backupPassword, newPassword []byte) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	if v.ledger != nil && v.ledger.activeUpdate != "" {
+		return errors.New("exclusive update intent blocks key recovery")
+	}
 	if v.closed {
 		return ErrUnavailable
 	}
