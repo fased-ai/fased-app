@@ -112,6 +112,9 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           dbus-run-session -- npm run test:native-window
+      - name: Remove owned Ubuntu acceptance policy after native window
+        if: always() && runner.os == 'Linux'
+        run: node --input-type=module -e "const m = await import('./scripts/ubuntu-preparation.mjs'); await m.cleanupUbuntuPreparation();"
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

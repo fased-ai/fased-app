@@ -237,7 +237,7 @@ func preparePolicy(ctx context.Context, data string, policy []byte, read readHos
 	var r receipt
 	b, e := core.ReadPrivateFile(path)
 	if e == nil {
-		if len(b) > 4096 || json.Unmarshal(b, &r) != nil || r.Schema != 1 {
+		if len(b) > 4096 || json.Unmarshal(b, &r) != nil || validReceipt(r) != nil {
 			return errors.New("unknown host preparation receipt; preserving it")
 		}
 	} else if !errors.Is(e, os.ErrNotExist) {

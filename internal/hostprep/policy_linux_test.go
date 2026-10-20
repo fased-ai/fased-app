@@ -9,7 +9,35 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/fased-ai/fased-app/internal/core"
 )
+
+func TestIncompleteIntentDoesNotAuthorizePublication(t *testing.T) {
+	root, _ := filepath.Abs("../../.evidence/hostprep-fixtures")
+	if e := os.MkdirAll(root, 0700); e != nil {
+		t.Fatal(e)
+	}
+	d, e := os.MkdirTemp(root, "invalid-intent-")
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { os.RemoveAll(d) })
+	if e = core.WritePrivateJSON(filepath.Join(d, "host-preparation.json"), receipt{Schema: 1, Phase: "ready"}); e != nil {
+		t.Fatal(e)
+	}
+	policy, e := os.ReadFile("../../packaging/linux/apparmor/bwrap-userns-restrict")
+	if e != nil {
+		t.Fatal(e)
+	}
+	h := &fakeHost{files: map[string]hostFile{}}
+	if e = preparePolicy(t.Context(), d, policy, h.read, h.run, func() error { return errors.New("not ready") }); e == nil {
+		t.Fatal("incomplete intent was silently reinitialized")
+	}
+	if len(h.files) != 0 {
+		t.Fatal("invalid intent caused host-file publication")
+	}
+}
 
 func TestOSCopyAcceptsGoPipe(t *testing.T) {
 	root, _ := filepath.Abs("../../.evidence/hostprep-fixtures")

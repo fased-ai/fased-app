@@ -14,10 +14,7 @@ import {
 import { createHash, randomBytes } from "node:crypto";
 import { resolve, join } from "node:path";
 import { createServer } from "node:net";
-import {
-  checkUbuntuPreparation,
-  cleanupUbuntuPreparation,
-} from "./ubuntu-preparation.mjs";
+import { checkUbuntuPreparation } from "./ubuntu-preparation.mjs";
 const startedAt = Date.now();
 const root = resolve(".evidence/platform-install");
 const state = join(root, "state"),
@@ -283,13 +280,6 @@ try {
   if (installed || receiptRemains) {
     try {
       cli(["uninstall", ...flags]);
-    } catch (error) {
-      report.cleanupError = String(error);
-    }
-  }
-  if (process.env.FASED_TEST_HOST_PREPARE === "1" && !report.cleanupError) {
-    try {
-      await cleanupUbuntuPreparation();
     } catch (error) {
       report.cleanupError = String(error);
     }

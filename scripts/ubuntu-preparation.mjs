@@ -148,6 +148,22 @@ export async function checkUbuntuPreparation(binary, args, state, report) {
 }
 export async function cleanupUbuntuPreparation() {
   assert.equal(process.env.GITHUB_ACTIONS, "true");
+  const active = execFileSync(
+    "systemctl",
+    [
+      "--user",
+      "show",
+      "fased-app.service",
+      "--property=ActiveState",
+      "--value",
+    ],
+    { encoding: "utf8" },
+  ).trim();
+  assert.notEqual(
+    active,
+    "active",
+    "owned core must stop before sandbox-policy cleanup",
+  );
   let b;
   try {
     b = await readFile(target);
