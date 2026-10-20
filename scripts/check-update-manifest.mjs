@@ -68,7 +68,7 @@ try {
     "schemaPauseAndApprovalFeatures",
     contracts[0].state[0].versions.min === 3 &&
       contracts[0].state[0].features.includes("core-pause-v1") &&
-      contracts[0].lifecycle.entrypoint === 3 &&
+      contracts[0].lifecycle.entrypoint === 4 &&
       contracts[1].state
         .find((s) => s.name === "operations")
         .features.includes("approvals-v1") &&
@@ -77,7 +77,7 @@ try {
         .features.includes("lifecycle-v2-v1") &&
       contracts[1].state
         .find((s) => s.name === "operations")
-        .features.includes("install-controller-v1"),
+        .features.includes("install-completion-v1"),
   );
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const pub = publicKey.export({ type: "spki", format: "der" }).subarray(-32);

@@ -34,18 +34,19 @@ type CoreSnapshot struct {
 	State      State  `json:"state"`
 }
 type SignerSnapshot struct {
-	Version         int     `json:"version"`
-	ProbeID         string  `json:"probeId"`
-	BootID          string  `json:"bootId"`
-	AuthoritySHA256 string  `json:"authoritySha256"`
-	States          []State `json:"states"`
-	Spent           uint64  `json:"spent,string"`
-	Held            uint64  `json:"held,string"`
-	Pending         int     `json:"pending"`
-	Unknown         int     `json:"unknown"`
-	RecoveryHold    bool    `json:"recoveryHold"`
-	SequenceFloor   uint64  `json:"sequenceFloor,string"`
-	ActiveIntentID  string  `json:"activeIntentId"`
+	InstalledSequence uint64  `json:"installedSequence,string,omitempty"`
+	Version           int     `json:"version"`
+	ProbeID           string  `json:"probeId"`
+	BootID            string  `json:"bootId"`
+	AuthoritySHA256   string  `json:"authoritySha256"`
+	States            []State `json:"states"`
+	Spent             uint64  `json:"spent,string"`
+	Held              uint64  `json:"held,string"`
+	Pending           int     `json:"pending"`
+	Unknown           int     `json:"unknown"`
+	RecoveryHold      bool    `json:"recoveryHold"`
+	SequenceFloor     uint64  `json:"sequenceFloor,string"`
+	ActiveIntentID    string  `json:"activeIntentId"`
 }
 type Intent struct {
 	Contracts         []Contract         `json:"contracts,omitempty"`
@@ -78,7 +79,7 @@ func JoinSnapshots(c CoreSnapshot, s SignerSnapshot, target Target) (Inventory, 
 	return Inventory{Version: 1, FixtureOnly: true, Target: target, SequenceFloor: s.SequenceFloor, States: states, Pending: s.Pending, Unknown: s.Unknown, RecoveryHold: s.RecoveryHold}, nil
 }
 func ValidateIntent(i Intent) error {
-	if i.Lifecycle != nil && i.Lifecycle.Entrypoint == 3 && i.ManifestExpiresAt <= i.CreatedAt {
+	if i.Lifecycle != nil && i.Lifecycle.Entrypoint >= 3 && i.ManifestExpiresAt <= i.CreatedAt {
 		return errors.New("controller-aware intents require signed manifest expiry")
 	}
 	if i.StageSHA256 != "" || (len(i.Artifacts) > 0 || i.Lifecycle != nil) && !Stageable(i) {

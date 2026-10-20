@@ -215,7 +215,7 @@ func probeRollbackCompatibility(ctx context.Context, t InstallTransaction, s *Sy
 		}
 	}
 	for _, c := range []update.Contract{oldCore, newCore} {
-		if c.Lifecycle == nil || c.Lifecycle.Entrypoint != 3 {
+		if c.Lifecycle == nil || c.Lifecycle.Entrypoint != 4 {
 			return errors.New("both helpers must read installation-controller records")
 		}
 	}
@@ -224,7 +224,7 @@ func probeRollbackCompatibility(ctx context.Context, t InstallTransaction, s *Sy
 		for _, v := range c.State {
 			if v.Name == "operations" {
 				for _, f := range v.Features {
-					if f == "install-controller-v1" {
+					if f == "install-completion-v1" {
 						found = true
 					}
 				}
@@ -244,6 +244,7 @@ type InstallationCallbacks struct {
 	Observe func(context.Context, Manifest, update.InstallBinding) error
 	Hold    func(context.Context, string, update.InstallBinding) (*update.Installation, error)
 	State   func(context.Context) (*update.Installation, error)
+	Release func(context.Context, update.Installation) error
 }
 
 func ExecuteController(ctx context.Context, t InstallTransaction, rollback bool, s *System, c InstallationCallbacks) (*update.Installation, error) {
@@ -258,27 +259,7 @@ func ExecuteController(ctx context.Context, t InstallTransaction, rollback bool,
 		return nil, e
 	}
 	o := installOps{read: readRoot, run: s.Run, state: func(ctx context.Context) (*update.Installation, error) {
-		i, e := c.State(ctx)
-		if e == nil {
-			return i, nil
-		}
-		b, se := s.Run(ctx, nil, "/usr/bin/systemctl", "show", Unit(t.Base.Owner, "signer"), "--property=ActiveState,MainPID")
-		if se != nil {
-			return nil, se
-		}
-		if string(b) != "ActiveState=inactive\nMainPID=0\n" && string(b) != "MainPID=0\nActiveState=inactive\n" {
-			return nil, e
-		}
-		p := t.Base.Signer
-		b, se = s.Run(ctx, nil, "/usr/bin/setpriv", "--reuid", strconv.Itoa(p.UID), "--regid", strconv.Itoa(p.GID), "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--", t.dir()+"/previous-signer", "fixture-install-inspect", "--disposable-fixture", "--config", t.Base.Root+"/identity.json", "--intent-id", t.Binding.Index.Binding.Pause.Request.IntentID)
-		if se != nil {
-			return nil, se
-		}
-		var inspected update.Installation
-		if update.StrictJSON(b, &inspected) != nil || !update.ValidInstallation(inspected) {
-			return nil, errors.New("invalid cold signer hold receipt")
-		}
-		return &inspected, nil
+		return currentInstallation(ctx, t, s, c.State)
 	}, topology: func(m Manifest) error {
 		if e := verifyTopology(m); e != nil {
 			return e
@@ -310,10 +291,10 @@ func InstallationStatus(ctx context.Context, t InstallTransaction, s *System, c 
 	if e = waitReady(ctx, m, s); e != nil {
 		return e
 	}
-	if e = c.Observe(ctx, m, t.Binding); e != nil {
-		return e
+	i, e := c.State(ctx)
+	if e == nil && i != nil && i.Phase != "completed" {
+		e = c.Observe(ctx, m, t.Binding)
 	}
-	i, e := c.Hold(ctx, "status", t.Binding)
 	if e != nil {
 		return e
 	}
@@ -323,4 +304,30 @@ func InstallationStatus(ctx context.Context, t InstallTransaction, s *System, c 
 		FinancialExecution bool                 `json:"financialExecution"`
 		ResumeAllowed      bool                 `json:"resumeAllowed"`
 	}{Transaction: t, Installation: i})
+}
+
+// Cold inspection is allowed only while systemd proves the signer inactive.
+// The retained signer executes after a fixed drop to the configured signer UID.
+func currentInstallation(ctx context.Context, t InstallTransaction, s *System, state func(context.Context) (*update.Installation, error)) (*update.Installation, error) {
+	i, e := state(ctx)
+	if e == nil {
+		return i, nil
+	}
+	b, se := s.Run(ctx, nil, "/usr/bin/systemctl", "show", Unit(t.Base.Owner, "signer"), "--property=ActiveState,MainPID")
+	if se != nil {
+		return nil, se
+	}
+	if string(b) != "ActiveState=inactive\nMainPID=0\n" && string(b) != "MainPID=0\nActiveState=inactive\n" {
+		return nil, e
+	}
+	p := t.Base.Signer
+	b, se = s.Run(ctx, nil, "/usr/bin/setpriv", "--reuid", strconv.Itoa(p.UID), "--regid", strconv.Itoa(p.GID), "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--", t.dir()+"/previous-signer", "fixture-install-inspect", "--disposable-fixture", "--config", t.Base.Root+"/identity.json", "--intent-id", t.Binding.Index.Binding.Pause.Request.IntentID)
+	if se != nil {
+		return nil, se
+	}
+	var inspected update.Installation
+	if update.StrictJSON(b, &inspected) != nil || !update.ValidInstallation(inspected) {
+		return nil, errors.New("invalid cold signer hold receipt")
+	}
+	return &inspected, nil
 }

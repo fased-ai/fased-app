@@ -373,8 +373,8 @@ signed development manifest and the exact already staged `fased-app` /
 `fased-signer` pair. The helper verifies its actual contracts against the signed
 intent, requires unchanged supported state formats, and checks space for the
 candidate, previous pair and atomic replacement files. Both the previous and
-candidate binaries must understand lifecycle entrypoint 3 and
-`install-controller-v1` journal records. Earlier staging histories remain readable
+candidate binaries must understand lifecycle entrypoint 4 and
+`install-controller-v1` / `install-completion-v1` journal records. Lifecycle-1/2/3 staging histories remain readable
 and abortable; upgrading an older immutable helper is a separate bootstrap gate.
 
 Under the shared owner lifecycle lock, the helper retains an immutable previous
@@ -418,8 +418,41 @@ that update intent and its metadata fence. Spending, original submissions,
 unknown holds, key/authority identity and the reserved floor never rewind; no app
 metadata or financial database is restored. A failed rollback retains the hold.
 
+## Protected installed-sequence commit and completion
+
+After a verified `healthy-held` trial:
+
+```sh
+fased-app custody updates complete --disposable-fixture --prepare-host \
+  --intent-id <same-id>
+```
+
+The immutable owner helper displays the exact installation binding and requires
+`COMPLETE <installation-digest>`. This is the point of no executable rollback.
+Before commit it rechecks the exact installed pair/inventory, healthy services,
+private recovery image, original signed contracts, current signer authority and
+reserved floor. Foreign installer records are preserved and refused.
+
+The signer durably journals `committed-held` and advances its independent
+`installedSequence`; the reserved `sequenceFloor` never decreases. The financial
+hold remains until root installer intent, ready record and private owner intent
+converge to the target pair with synced publication. Then the signer journals
+`completed`, clears only that active intent and stays locked. Only an actual
+current signer receipt lets the protected owner conductor release the matching
+core pause. A different or newer pause cannot be released by an old receipt.
+The host active marker is removed last. No databases are restored.
+
+A lost reply or interrupted helper resumes with the same `complete` command and
+intent. After commit no repeat confirmation is needed: recovery only finishes the
+already approved installation. Health failure after commit retains state for
+explicit recovery rather than rewinding the installed sequence. `install-status`
+reports the current signer receipt, including after service restart. Exact current
+completion retries do not append signer records, including after later metadata
+writes. A higher reserved sequence, another active intent or changed authority
+rejects a historical receipt. Neither phase creates a financial grant, clears
+missing-history/unknown holds, resumes bots, nor unlocks a key.
+
 All paths are explicit disposable Ubuntu engineering operations. Public/bootstrap
-trust, updater/helper self-upgrade across unsupported readers, installed-sequence
-commit, final transaction completion, native/private-VPS acceptance and retail
-release remain open. Real wallets, on-chain execution and automatic updates stay
-disabled.
+trust, updater/helper self-upgrade across unsupported readers, native/private-VPS
+acceptance and retail release remain open. Real wallets, on-chain execution and
+automatic updates stay disabled.

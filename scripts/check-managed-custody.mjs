@@ -779,6 +779,7 @@ print(json.dumps(r))
     ownerStatus: secretStatus,
     ownerUnlock: unlockFixture,
     walletPassword: replacement,
+    stopServices: () => osTool("/usr/bin/systemctl", ["stop", ...units]),
     restartSigner: () => osTool("/usr/bin/systemctl", ["restart", units[1]]),
     restartApp: () => osTool("/usr/bin/systemctl", ["restart", units[0]]),
     backups,
