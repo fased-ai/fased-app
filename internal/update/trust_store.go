@@ -15,6 +15,7 @@ import (
 type FixtureTrustStore struct {
 	root  *os.Root
 	fault func(string) error // Package tests only; no CLI/configuration hook.
+	limit int                // Internal handoff adapter only; zero retains 64 KiB.
 }
 
 func OpenFixtureTrustStore(dir string) (*FixtureTrustStore, error) {
@@ -55,8 +56,12 @@ func (s *FixtureTrustStore) read(name string) ([]byte, error) {
 	if e != nil || !os.SameFile(st, a) {
 		return nil, errors.New("fixture file changed")
 	}
-	b, e := io.ReadAll(io.LimitReader(f, MaxDocument+1))
-	if e != nil || len(b) > MaxDocument {
+	limit := MaxDocument
+	if s.limit > 0 {
+		limit = s.limit
+	}
+	b, e := io.ReadAll(io.LimitReader(f, int64(limit)+1))
+	if e != nil || len(b) > limit {
 		return nil, errors.New("fixture state bound exceeded")
 	}
 	return b, nil

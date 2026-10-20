@@ -98,7 +98,11 @@ func tokenOK(s string) bool {
 // StrictJSON also rejects duplicate names (including escaped aliases), excessive
 // nesting, trailing values, invalid UTF-8 and unknown typed fields.
 func StrictJSON(b []byte, v any) error {
-	if len(b) == 0 || len(b) > MaxDocument || !utf8.Valid(b) {
+	return strictJSONBounded(b, v, MaxDocument)
+}
+
+func strictJSONBounded(b []byte, v any, limit int) error {
+	if len(b) == 0 || len(b) > limit || !utf8.Valid(b) {
 		return errors.New("invalid document size or encoding")
 	}
 	d := json.NewDecoder(bytes.NewReader(b))

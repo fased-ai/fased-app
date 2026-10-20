@@ -481,6 +481,310 @@ trust preservation; compiled ordinary-user read-only checks locally and on Ubunt
 installed production handoff remain disabled. RT-04 evidence/RT-06 fixture coverage
 does not close either public P4-10/11 gate.
 
+## Independent owner/signer fixture admission handoff design
+
+### Scope and authority
+
+The pure Go fixture model/store implements this contract; no command, socket or
+installed RPC exposes it. The fixture profile is `fased-app-owner-signer-admission-fixture:v1`, protocol
+1, mode `inspection-only`. Every message requires that profile, mode and the
+existing repository/development fixture binding. Real keys, financial execution,
+installed execution, automatic updates, production trust and P5 remain disabled.
+No `IntentRequest`, lifecycle-4 method, service or runtime capability changes here.
+
+The app may propose a unit digest and display progress. Its reports, files,
+`verified` booleans, inventory, clock, model output and public receipts confer no
+authority. Owner and signer share verifier code but independently load their own
+protected configuration, clock, trust checkpoint and fixture state, and independently
+verify metadata, provenance and all four inert subjects. Neither accepts the
+other's verification result as a substitute. Host-administrator compromise is
+outside this identity boundary, as in the existing signer model.
+
+| Participant     | Owns and verifies                                                                                                     | Cannot do in this profile                                                                                   |
+| --------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| App/UI          | Untrusted proposal and display only                                                                                   | Bootstrap trust, review as owner, call owner-only admission, choose verifier inputs or change either store  |
+| Owner verifier  | Separately provisioned seed/policy/transport pins, owner clock/checkpoint, local review and owner fixture snapshot    | Forward an app report as approval, unlock a wallet, reserve a release or invoke installed lifecycle actions |
+| Signer verifier | Independently provisioned pins, signer clock/checkpoint, private challenge/replay journal and signer fixture snapshot | Adopt owner/app trust state or time, infer consent from a session, mutate financial state or execute a unit |
+
+### Independent inputs, time and persistence
+
+The harness provisions identical public seed, admission policy and controlled
+HTTPS transport policy to each verifier through separate explicit configuration.
+Their SHA-256 pins are independently retained outside the app namespace. Neither
+peer can provision, replace or repair those pins over RPC. The transport policy
+binds the exact seed origin, fixture CA fingerprint and existing no-redirect,
+TLS/hostname/size/timeout rules. There is no production origin, downloaded trust
+fallback or TLS bypass. Evidence and the four inert artifact files are supplied
+in each verifier's private fixture input tree, outside request-controlled paths;
+each verifier rehashes them against its independently authenticated descriptor.
+No candidate executable or installed data path is accepted as fixture input.
+
+Owner and signer each have a distinct private fixture CAS store, external expected
+head and independent monotonic fixture-state revision. Sharing a directory, lock,
+head pointer or app-writable parent is refused. A proposed version-1
+`HandoffFixtureStore` has one atomic checkpoint containing the role/configuration
+binding, embedded trust snapshot and digest, last trusted clock observation,
+fixture snapshot revision and replay/inspection records. It is capped at 256 KiB
+and 32 records (each at most 4 KiB); exhaustion refuses new sessions without
+erasing history. Learned trust and the corresponding replay/result state publish
+together through one local CAS, immutable hash-named payload and durable head
+replacement. There are no separately committed trust/replay heads to reconcile.
+Reuse the existing private-file/locking/interruption primitives and opaque trust
+transitions, not the old store's literal whitelist or snapshot wire format. The
+new store/adapter is `HandoffFixtureStore`; the existing `FixtureTrustStore` keeps
+its separate wire format and 64 KiB limit. The harness injects two role-local
+clocks through configuration, never a request field; host time is unchanged.
+Each clock must be at least its own persisted last observation. Missing time
+confidence after a simulated restore, backward time, missing/corrupt state or an
+external-anchor mismatch blocks a new session. The peer's time and HTTP Date are
+not clock sources. Whole-store plus external-anchor rollback is still outside
+this model; the design does not claim production rollback-resistant storage/time.
+
+Each verifier checks all applicable metadata deadlines and policy `notAfter`
+strictly against its own clock at initial verification and final inspection.
+Owner review is at most one hour old. A challenge lasts at most 60 seconds and
+never outlives known local policy validity. Final inspection uses the earlier of
+that challenge deadline, both independently derived authorization/policy expiries
+and the review deadline; a receipt may shorten but never extend it. Owner/signer
+observation skew above 30 seconds refuses joint
+inspection; skew tolerance never extends any local expiry. Exactly-at-deadline
+is expired. A clock that cannot satisfy these rules yields recovery guidance,
+not a request override or a relaxed validity window. Trusted production clock
+and installed recovery remain separate unassigned obligations.
+
+Both stores persist authenticated root/role/observed-release progress before a
+later candidate failure is returned. Use opaque verifier transitions and the
+existing CAS/interruption rules; an RPC JSON snapshot cannot be reconstructed into
+a trusted transition. Keep installed/reserved fixture release floors, originals,
+counters, reservations, unknown operations and holds unchanged. Their canary
+snapshots are role-owned disposable records; this rehearsal never reads a real
+vault or financial journal. A unit sequence must exceed both installed/reserved
+fixture floors and must not conflict with either observed descriptor floor.
+Identical already-observed units may retry without reserving a sequence.
+
+### Exact identities and wire boundary
+
+`UnitID` is SHA-256 of the exact authenticated release-unit bytes. Define
+`HashTuple(domain, values)` as SHA-256 of UTF-8 domain, NUL, then, for each value,
+its unsigned 32-bit big-endian UTF-8 byte length followed by those bytes. Hashes
+use lowercase hex, integers canonical unsigned decimal, and values have the
+fixed order below. No JSON serialization or delimiter ambiguity defines identity.
+
+`AuthorizationID = HashTuple("fased-app-fixture-handoff-authorization:v1", ...)`
+binds, in order: seed digest, policy digest, transport-policy digest, repository,
+channel, target OS, target architecture, release sequence, final root digest,
+timestamp digest, snapshot digest, targets digest, descriptor digest, evidence
+digest and UnitID. Both verifiers must obtain the same AuthorizationID and UnitID
+from their own inputs. Distinct local checkpoint heads and root catch-up histories
+are allowed; the final authorized bytes must agree. A fresher independently
+observed authorization requires a fresh request and review, even for the same unit.
+
+Messages use strict bounded JSON, at most 64 KiB each; reject duplicate/unknown
+fields, unsupported versions, noncanonical IDs and extra capabilities. Metadata,
+artifact bytes, paths, seed/policy documents, trust snapshots, CA roots and clock
+overrides are not supplied through this request protocol. Fixed configuration owns
+those inputs. Bound observation/review/deadline timestamps are claims checked
+against each verifier's own clock, never clock overrides. All IDs/nonces are fresh
+cryptographically random 128-bit values.
+
+| Record                    | Required binding                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Challenge                 | Profile/mode/binding, challenge ID, signer boot ID, instance ID, signer authority/epoch digest, signer fixture snapshot digest/revision, signer checkpoint-head digest, required seed/policy/transport pins, supported handoff capability, signer observedAt and deadline                                                                                                                                                    |
+| Request                   | Challenge ID, request ID, owner boot ID, instance/authority binding, expected signer snapshot/head from challenge, owner snapshot digest/revision and checkpoint head, AuthorizationID, UnitID, target, sequence, owner observedAt and `reviewedAt`                                                                                                                                                                          |
+| RequestDigest             | `HashTuple("fased-app-fixture-handoff-request:v1", ...)` over profile, mode, repository, channel, challenge ID, request ID, both boot IDs, instance ID, authority/epoch digest, owner then signer snapshot digest/revision, owner then signer baseline checkpoint head, AuthorizationID, UnitID, OS, architecture, sequence, owner observedAt, signer challenge observedAt, reviewedAt and challenge deadline, in that order |
+| Signer inspection receipt | Exact RequestDigest and request/challenge IDs, AuthorizationID/UnitID, signer boot/authority, baseline and resulting signer checkpoint heads, signer snapshot revision, observed sequence, signer observedAt/deadline and outcome; every execution capability false                                                                                                                                                          |
+| Owner completion record   | Exact request and signer receipt digests, same-unit/authorization identities, owner baseline/resulting checkpoint heads, both fixture snapshot revisions, final local observation time and outcome; every execution capability false                                                                                                                                                                                         |
+
+Checkpoint heads identify complete role checkpoints, not a shared financial
+ledger or raw peer-supplied trust state. Publication-head wrappers are outside
+the hashed payload they identify: do not embed a checkpoint's own resulting head
+inside that checkpoint or create a self-referential receipt hash. A challenge
+record is persisted first; its returned wrapper supplies that resulting signer
+head for the request's expected-head check. Receipt payloads are likewise durable
+before their resulting-head wrappers are returned. Each verifier follows only
+its own protected CAS lineage; the peer's claimed lineage is not local authority.
+
+The fixture transport models the existing owner-only channel: the signer checks
+the configured owner kernel UID before issuing a challenge; the owner verifies
+the signer kernel UID before sending a request. The app UID is always denied.
+A fresh connection-bound challenge permits one bounded request. Neither a public
+receipt nor its hash is a bearer credential; it cannot authorize a later action.
+Same-UID in-process tests demonstrate protocol logic only, not this OS boundary.
+No wallet password, recovery secret or signing key enters the protocol.
+
+### Ordered inspection and recovery
+
+1. The owner verifier reads its own pinned configuration/checkpoint, refreshes
+   the TUF chain, verifies provenance and its inert files, and persists learned
+   trust. It obtains an authenticated signer challenge with signer-owned fixture
+   identity/snapshot/head. No app-provided inventory is adopted.
+2. The owner compares the fixture identities/pins, builds the immutable request,
+   and displays target, sequence, all four subjects, build/source/workflow,
+   AuthorizationID, limits and expiry in its trusted fixture terminal. A local
+   fixture acknowledgment binds the exact RequestDigest and reviewedAt. No
+   app-session acknowledgment or real wallet password substitutes for it.
+3. The signer authenticates the channel/challenge, rejects replay or stale
+   boot/epoch/snapshot/head, independently refreshes/verifies using its own clock,
+   pins, evidence and inert bytes, and recomputes both identities. Any mismatch
+   or change to the requested fixture inventory denies inspection. An active
+   held fixture intent permits status only; this protocol cannot bypass it.
+4. The signer persists learned trust and a replay/inspection record durably,
+   then returns `checked`, `progress-only`, `rejected` or `expired`. `checked`
+   means inert-unit inspection only. No financial journal, release reservation,
+   staging area, installed sequence, service or wallet is mutated.
+5. The owner verifies the authenticated receipt against its immutable request,
+   rechecks its own current authorization/time and fixture inventory, and
+   durably records `inspection-complete` only while the same authorization and
+   context are valid. A changed root/metadata/policy/unit/boot/epoch/inventory
+   requires fresh review. Unchanged authorization may acquire newer local clock
+   observations/checkpoint heads by CAS; those descendants do not rewrite the
+   reviewed request or extend its deadline. No automatic resume follows.
+
+Never hold one participant's store lock while waiting for network or the other
+participant. Each local write uses its own expected head/revision; a concurrent
+writer causes a conflict, not a merged or reset trust state. A fresh session is
+permitted only after the pending local outcome has been safely resolved.
+Before any fresh verification, atomically record `verification-pending` for the
+active attempt. Competing attempts refuse while that marker is active. A normal
+outcome atomically publishes its opaque learned-trust transition and resolves
+that marker. CAS failure never authorizes dropping learned progress: retain the
+pending hold and block new sessions until the protected local result is recovered.
+After a crash before that result was durable, the amount of newly learned trust
+is unknown; historical status is available, but replaying the old checkpoint
+against a possibly withholding server cannot clear the marker. A durable exact
+result can complete local publication; otherwise independent fixture recovery or
+a newly declared disposable experiment is required. No app acknowledgment or
+clock reset clears an interrupted-verification marker.
+There is no distributed financial commit to roll back. One verifier may learn
+newer trust while the peer fails: retain both local histories and converge forward
+through fresh independent verification. Never restore the newer store to the
+peer's older state just to make digests agree.
+
+Persist a consumed challenge plus exact request/result before sending a signer
+receipt. Loss of the reply permits an authenticated read-only status lookup of
+that exact record. Within the original connection/boot/deadline and unchanged
+context, retry returns the identical result without a second admission. After
+expiry or either process restart, historical status remains audit data; a fresh
+challenge and review are required. Interrupted local checkpoint writes use the
+existing matching-temp/CAS recovery; missing/corrupt published bytes or lost
+external anchors block new admission with independent fixture reprovisioning
+guidance. Reprovision only a newly declared disposable experiment, never reset an
+existing authority. Original keys/history/counters/holds are never reset or copied
+back from a snapshot. Actual pre/post-installed-commit recovery is outside this
+profile and remains held behind the separate lifecycle design.
+
+### Reader compatibility and implementation boundary
+
+The new fixture capability is `fixture-release-handoff-v1`; both peers must
+explicitly advertise and validate protocol 1 under the fixture profile. Unknown
+or newer readers and absent capabilities refuse. No downgrade to the current
+`IntentRequest{Manifest, Trust}`, owner password flow, lifecycle-3 bootstrap or
+lifecycle-4 install path is allowed. Existing profiles continue their current
+engineering behavior without gaining this capability. The inert unit's owner
+entrypoint value 4 describes a fixture subject; it cannot certify a new installed
+reader. Production lifecycle/schema numbering and the authenticated upgrade into
+that reader are UNASSIGNED/BLOCKED, not implicitly version 5 or a feature flag.
+
+Do not add a route into BeginIntent, reserve/stage/pause/backup/install/commit,
+unlock, signing, submission or automatic scheduling. Every request/result is
+fixture-only, read-only with respect to artifacts/financial/installed state, and
+has `installAllowed`, `resumeAllowed`, `updaterEnabled`, `walletSigner` and
+`financialExecution` false. Only explicit role-local fixture trust/replay stores
+may change. The existing release inspector remains read-only and cannot commit
+those stores on behalf of either actor.
+
+### Finite acceptance and future fixture plan
+
+HA-01–HA-15 have named model subtests in the six suites below. These exercise
+in-process actor capabilities, independently provisioned fixture inputs and real
+private-file CAS operations, not kernel peer authentication. HA-03's actual UID
+predicate and HA-16 remain BLOCKED until the separate transport harness runs.
+
+| ID    | Required falsifiable case                                                                                                                                                                                                              |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| HA-01 | Two independently provisioned verifiers inspect the identical complete inert pair/helper/installer; all execution capabilities remain false                                                                                            |
+| HA-02 | App-written verified report, receipt, inventory, clock, seed/policy replacement or shared/app-writable store cannot authorize inspection                                                                                               |
+| HA-03 | Wrong peer UID, app channel, forged server, missing capability, old/new profile, unknown field and oversized message refuse before candidate handling                                                                                  |
+| HA-04 | Changed unit/artifact/helper/installer/source/workflow/provenance or mismatched authorization bytes refuse independently at each verifier                                                                                              |
+| HA-05 | Clock rollback/untrusted restore, skew over 30 seconds, equality at expiry, stale review and expired challenge refuse without extending deadlines                                                                                      |
+| HA-06 | Learned root revocation/newer timestamp survives peer/artifact/provenance failure; withholding the successor or replaying older metadata cannot erase progress                                                                         |
+| HA-07 | Replayed nonce/request, changed request under an ID, cross-connection receipt and old boot/authority epoch refuse; audit lookup grants no new authority                                                                                |
+| HA-08 | Changed fixture identity/snapshot/revision or active held intent refuses; originals/counters/holds and installed/reserved floors stay unchanged                                                                                        |
+| HA-09 | Below-floor or same-sequence/different-descriptor unit refuses; identical observed unit can retry without consuming a financial release reservation                                                                                    |
+| HA-10 | Fresh metadata/policy change between review and response requires new review; both actors enforce their own current validity                                                                                                           |
+| HA-11 | Concurrent requests/CAS conflicts, mismatched partial writes, corrupt/missing heads and stale external anchors refuse; no lock is held across peer/network waits                                                                       |
+| HA-12 | Crash before/after trust write, replay-record publication, response delivery and owner completion recovers durable status without rewinding either store; unknown interrupted learning blocks new admission until independent recovery |
+| HA-13 | One participant advances trust while the other fails; forward convergence works without copying peer state or resetting newer knowledge                                                                                                |
+| HA-14 | Dropped response yields the identical durable result only under the original live context; after expiry/restart it is historical status only                                                                                           |
+| HA-15 | Production/installed paths, real artifacts, mutation flags and every install/resume/wallet/financial/automatic route are unreachable; canary trees remain byte-identical                                                               |
+| HA-16 | Disposable Ubuntu distinct-UID processes prove the peer/store boundary; ordinary-user local checks remain SUPPORTING for OS isolation; all generated resources are removed                                                             |
+
+The first code package implements the typed model, deterministic identity tuples,
+independent fixture-state adapters and recovery/replay logic in
+`internal/update/handoff.go`, `handoff_store.go`, `handoff_test.go` and
+`handoff_fixture_test.go`. The new combined checkpoint adapter accepts only opaque
+verifier transitions plus typed local replay deltas, compares the embedded prior
+trust bytes/head and fixture revision, and publishes one complete checkpoint.
+Restart reads only independently anchored private checkpoints, never app/RPC
+snapshots. Reuse the current TUF/admission verifiers and CAS primitives; do not modify
+installed signer/controller APIs. The six required test entrypoints are:
+`TestFixtureHandoffBindings`, `TestFixtureHandoffIndependentInputs`,
+`TestFixtureHandoffClockAndReplay`, `TestFixtureHandoffTrustProgress`,
+`TestFixtureHandoffCASAndRecovery` and `TestFixtureHandoffNoExecution`.
+
+The ordinary-user completion command first prevents a vacuous pass:
+
+```bash
+set -eu
+mkdir -p .evidence/p4-handoff-fixture
+go test ./internal/update -list '^TestFixtureHandoff' \
+  > .evidence/p4-handoff-fixture/test-list.txt
+test "$(rg -c '^TestFixtureHandoff' .evidence/p4-handoff-fixture/test-list.txt)" -eq 6
+go test -race -json ./internal/update -run '^TestFixtureHandoff' \
+  > .evidence/p4-handoff-fixture/tests.jsonl
+```
+
+`node scripts/check-update-handoff.mjs` enforces the six exact entrypoints, runs
+the race-tested model cases, verifies HA-01–HA-15 model coverage and source hashes,
+and retains a receipt/logs while checking generated fixture cleanup. Ubuntu 24.04
+CI runs this same model acceptance. This is not distinct-UID acceptance.
+HA-03's real kernel-UID predicate remains unproven and is coupled to HA-16. A later, separately scoped
+compiled fixture harness owns bounded challenge/request/status transport and
+HA-16 on Ubuntu 24.04: three disposable nonzero UIDs, protected role directories,
+fixed OS identity setup only, no installed services, real vaults or execution
+endpoint. Local subprocesses cannot close that UID gate. A transport CLI/CI addition,
+future lifecycle integration, production bootstrap/time/provenance and any
+installed mutation require their own explicit checkpoint; none is implemented
+or activated by the model. P4-10/11 and the other public gates stay BLOCKED.
+
+### Model API and recovery limits
+
+`NewFixtureHandoffActor` requires explicit disposable configuration, an ordinary-user
+private store, independently pinned public inputs and role-local clock/inventory
+callbacks. Pins and material are copied; the request cannot replace them.
+`NewFixtureHandoffSession(owner, signer)` creates an opaque in-process channel
+capability. `Prepare` independently inspects the owner's inputs and invokes its
+trusted review callback; `Check` independently verifies signer inputs; `Finish`
+refreshes owner authorization before publishing an inspection-only result.
+`Status` returns audit JSON that cannot construct an opaque receipt. No API calls
+the installed signer, owner helper, financial ledger or lifecycle controller.
+
+The fixture inventory digest uses the same length-prefixed tuple algorithm over
+instance, authority/epoch digest, canary digest, installed floor, reserved floor
+and active intent, under the profile plus `:inventory`; revision is bound separately.
+On actor restart a new boot ID publishes without changing trust or financial
+canaries; unresolved verification remains held. This also fences an old actor
+that still holds a previous checkpoint anchor. Malformed/rejected requests consume
+their model session; a new session requires new review.
+
+`RetryPublication` can retry only an exact opaque in-memory checkpoint publication.
+After restart, externally anchored durable results support historical status and
+fresh review; an unknown pending verification cannot be cleared or converted from
+RPC JSON. Records are bounded including their complete envelope, not just body.
+The store preserves old immutable checkpoints and refuses exhaustion/foreign paths
+rather than garbage-collecting state. Root/administrator compromise and whole-store
+plus external-anchor rollback remain outside this fixture model.
+
 ## Development HTTPS acquisition and bootstrap trust
 
 On Linux/macOS, an ordinary user can fetch a disposable signed development pair

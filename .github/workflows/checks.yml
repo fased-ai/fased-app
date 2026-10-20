@@ -255,9 +255,37 @@ jobs:
             .evidence/p4-preflight/core-cli-result.json
             .evidence/p4-preflight/core-cli.log
           retention-days: 7
+  handoff:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - name: Fixture owner/signer handshake and combined checkpoints
+        env:
+          FASED_HANDOFF_EVIDENCE: .evidence/p4-handoff-model
+        run: node scripts/check-update-handoff.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: handoff-model
+          include-hidden-files: true
+          path: |
+            .evidence/p4-handoff-model/handoff-model-result.json
+            .evidence/p4-handoff-model/handoff-tests.jsonl
+            .evidence/p4-handoff-model/handoff-stderr.log
+            .evidence/p4-handoff-model/handoff-test-list.log
+            .evidence/p4-handoff-model/handoff-source-inputs.json
+          retention-days: 7
   prototype:
     if: always()
-    needs: [core, desktop, signer]
+    needs: [core, desktop, signer, handoff]
     runs-on: ubuntu-latest
     steps:
       - name: Required aggregate check
@@ -265,4 +293,5 @@ jobs:
           CORE_RESULT: ${{ needs.core.result }}
           DESKTOP_RESULT: ${{ needs.desktop.result }}
           SIGNER_RESULT: ${{ needs.signer.result }}
-        run: test "$CORE_RESULT" = success && test "$DESKTOP_RESULT" = success && test "$SIGNER_RESULT" = success
+          HANDOFF_RESULT: ${{ needs.handoff.result }}
+        run: test "$CORE_RESULT" = success && test "$DESKTOP_RESULT" = success && test "$SIGNER_RESULT" = success && test "$HANDOFF_RESULT" = success
