@@ -35,3 +35,12 @@ func TestUpdateStatusRejectsMutationAndExtraInputs(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateAcquisitionRequiresExplicitInputs(t *testing.T) {
+	for _, args := range [][]string{{"updates", "acquire"}, {"updates", "acquire", "--development"}, {"updates", "acquire", "--automatic"}, {"updates", "acquire", "--development", "--insecure"}, {"updates", "acquire", "--development", "--channel", "stable"}} {
+		var b bytes.Buffer
+		if e := run(args, nil, &b, io.Discard); e == nil || b.Len() != 0 {
+			t.Fatal("acquisition accepted implicit trust or automatic authority", args, e)
+		}
+	}
+}

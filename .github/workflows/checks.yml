@@ -164,6 +164,8 @@ jobs:
         env:
           FASED_UPDATE_EVIDENCE: .evidence/p4-complete
         run: node scripts/check-update-manifest.mjs
+      - name: Development HTTPS acquisition and independently pinned bootstrap trust
+        run: node scripts/check-update-acquisition.mjs
       - name: Compiled private core state inventory journey
         env:
           FASED_STATE_EVIDENCE: .evidence/p4-complete
@@ -187,6 +189,8 @@ jobs:
           name: signer-isolation
           include-hidden-files: true
           path: |
+            .evidence/p4-acquisition/acquisition-cli-result.json
+            .evidence/p4-acquisition/acquisition-cli.log
             .evidence/p4-bootstrap/fixture-builds.json
             .evidence/p4-bootstrap/managed-bootstrap-result.json
             .evidence/p4-bootstrap/managed/managed-install-result.json

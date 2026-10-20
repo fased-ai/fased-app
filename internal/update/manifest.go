@@ -1,5 +1,6 @@
 // Package update verifies development update plans. It cannot install, migrate,
-// unlock, execute artifacts, fetch URLs, or authorize financial operation.
+// unlock, execute artifacts, or authorize financial operation. Acquisition is
+// explicit development-only HTTPS with independently pinned disposable trust.
 package update
 
 import (
