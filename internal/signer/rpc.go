@@ -25,7 +25,7 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// Request is a closed set of owner operations. It has no sign/submit method.
+// Request is a closed set of owner and fixture operations. No real sign/submit.
 // Passwords are bytes so callers can clear their own buffers after use.
 type Request struct {
 	Action        string `json:"action"`
@@ -33,11 +33,14 @@ type Request struct {
 	NewPassword   []byte `json:"newPassword,omitempty"`
 	Document      []byte `json:"document,omitempty"`
 	UnlockSeconds int    `json:"unlockSeconds,omitempty"`
+	PublicInput
 }
 type Response struct {
-	Status   Status `json:"status"`
-	Document []byte `json:"document,omitempty"`
-	Error    string `json:"error,omitempty"`
+	Status    Status            `json:"status"`
+	Document  []byte            `json:"document,omitempty"`
+	Error     string            `json:"error,omitempty"`
+	Fixture   *FixtureSummary   `json:"fixture,omitempty"`
+	Operation *FixtureOperation `json:"operation,omitempty"`
 }
 
 func execute(v *Vault, r Request, owner bool) Response {
@@ -45,7 +48,7 @@ func execute(v *Vault, r Request, owner bool) Response {
 	defer wipe(r.NewPassword)
 	var document []byte
 	var err error
-	if !owner && r.Action != "status" {
+	if !owner && !AppActionAllowed(r.Action) {
 		return Response{Error: "owner administration denied"}
 	}
 	switch r.Action {
@@ -68,6 +71,49 @@ func execute(v *Vault, r Request, owner bool) Response {
 		err = v.Restore(r.Document, r.Password, r.NewPassword)
 	case "export-fixture-seed":
 		document, err = v.ExportFixtureSeed()
+	case "fixture-state":
+		state, e := v.FixtureState()
+		return fixtureResponse(v, state, nil, e)
+	case "fixture-policy":
+		if r.Policy == nil {
+			err = errors.New("bounded policy required")
+		} else {
+			err = v.SetFixturePolicy(*r.Policy)
+		}
+	case "fixture-grant":
+		if r.Grant == nil {
+			err = errors.New("bounded grant required")
+		} else {
+			err = v.AddFixtureGrant(*r.Grant)
+		}
+	case "fixture-revoke":
+		if r.Account == nil {
+			err = errors.New("account reference required")
+		} else {
+			err = v.RevokeFixtureGrant(*r.Account, r.GrantID)
+		}
+	case "fixture-recover-authority":
+		if r.Account == nil {
+			err = errors.New("restored account reference required")
+		} else {
+			err = v.RecoverFixtureAuthority(*r.Account)
+		}
+	case "fixture-reserve":
+		if r.Intent == nil {
+			err = errors.New("typed fixture intent required")
+			break
+		}
+		op, e := v.ReserveFixture(*r.Intent)
+		return fixtureResponse(v, nil, op, e)
+	case "fixture-execute":
+		op, e := v.ExecuteFixture(r.OperationID)
+		return fixtureResponse(v, nil, op, e)
+	case "fixture-reconcile":
+		op, e := v.ReconcileFixture(r.OperationID)
+		return fixtureResponse(v, nil, op, e)
+	case "fixture-operation":
+		op, e := v.FixtureOperation(r.OperationID)
+		return fixtureResponse(v, nil, op, e)
 	default:
 		err = ErrUnavailable
 	}
@@ -76,6 +122,23 @@ func execute(v *Vault, r Request, owner bool) Response {
 		response.Error = err.Error()
 	}
 	return response
+}
+
+// AppActionAllowed is a client convenience. The server independently enforces
+// this allowlist after authenticating the actual kernel peer UID.
+func AppActionAllowed(action string) bool {
+	switch action {
+	case "status", "fixture-state", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation":
+		return true
+	}
+	return false
+}
+func fixtureResponse(v *Vault, state *FixtureSummary, op *FixtureOperation, err error) Response {
+	r := Response{Status: v.Status(), Fixture: state, Operation: op}
+	if err != nil {
+		r.Error = err.Error()
+	}
+	return r
 }
 
 type wireRequest struct {

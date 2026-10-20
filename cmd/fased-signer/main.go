@@ -37,10 +37,11 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	flags.SetOutput(errOut)
 	configPath := flags.String("config", "", "root-owned immutable fixture identity configuration")
 	fixture := flags.Bool("disposable-fixture", false, "confirm these are unfunded disposable test keys")
-	action := flags.String("action", "status", "owner: status, create, unlock, lock, backup, restore, export-fixture-seed; app: status only")
+	action := flags.String("action", "status", "owner administration or bounded fixture operation; app: status and fixture operations only")
 	passwordStdin := flags.Bool("password-stdin", false, "fixture automation only: password lines from private stdin")
 	documentPath := flags.String("file", "", "exclusive owner output or encrypted restore input")
 	lifetime := flags.Duration("unlock-for", 15*time.Minute, "manual unlock lifetime, at most one hour")
+	requestStdin := flags.Bool("request-stdin", false, "public typed fixture policy/intent JSON from stdin; no credentials")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -72,10 +73,23 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 			return err
 		}
 	}
-	if !owner && *action != "status" {
+	if !owner && !signer.AppActionAllowed(*action) {
 		return errors.New("owner administration denied")
 	}
 	r := signer.Request{Action: *action}
+	if *requestStdin {
+		if *passwordStdin || args[0] == "setup" || args[0] == "recover" {
+			return errors.New("public fixture input cannot carry credentials")
+		}
+		document, e := io.ReadAll(io.LimitReader(input, 16*1024+1))
+		if e != nil {
+			return e
+		}
+		r.PublicInput, err = signer.ParsePublicInput(document)
+		if err != nil {
+			return errors.New("invalid public fixture request")
+		}
+	}
 	reader := bufio.NewReader(io.LimitReader(input, 4096))
 	password := func(label string, confirm bool) ([]byte, error) {
 		read := func() ([]byte, error) {
@@ -114,6 +128,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	}
 	switch r.Action {
 	case "status", "lock":
+	case "fixture-state", "fixture-policy", "fixture-grant", "fixture-revoke", "fixture-recover-authority", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation":
 	case "create", "unlock", "backup":
 		r.Password, err = password("Fixture password", r.Action != "unlock")
 		if r.Action == "unlock" {
@@ -152,6 +167,9 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		if err = writeOwnerFile(*documentPath, response.Document); err != nil {
 			return err
 		}
+	}
+	if len(r.Action) >= 8 && r.Action[:8] == "fixture-" {
+		return json.NewEncoder(out).Encode(response)
 	}
 	return json.NewEncoder(out).Encode(response.Status)
 }

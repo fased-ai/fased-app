@@ -54,14 +54,19 @@ same disk is not protection against loss of that disk.
 
 Restore requires empty signer state, preserves the key/public identity, creates
 a fresh authority epoch, and leaves the account locked with a recovery hold.
-Backups contain no grants, counters or transaction journal. This phase offers no
-API to clear the hold or authorize spending. Reconciliation, revocation, bounded
-permissions and the original-before-send journal remain subsequent P3 work; a
-restored key must never regain an old spending allowance from a snapshot.
+Backups contain no grants, counters or operation journal. Key-only recovery
+stays held. With complete retained journals, the owner can explicitly reconcile
+the mock outcomes and rebind fixture authority; lifetime spending survives and
+all old grants are revoked. New bounded owner policy/grants are then required.
+This is a fixture recovery proof, not permission to clear real on-chain holds.
 
 Creation uses a private, fsynced pending file and exclusive publication. Restart
-recovers the same encrypted identity after an interrupted publication. Conflicting
-or damaged state is preserved and rejected. Existing state is never overwritten.
+recovers the same encrypted identity after an interrupted publication, including
+interruption while initializing its journals. The encrypted original precedes
+journal initialization; only that pending original can resume initialization.
+Missing history after publication fails closed. Conflicting or damaged state is
+preserved and rejected. Existing state is never overwritten. Earlier engineering
+vaults without these journals are not automatically migrated or enabled.
 
 Local package tests use disposable, reconstructible, nonauthoritative fixtures
 under `.evidence/p3-signer`. They establish cryptographic/storage/protocol behavior,
@@ -83,13 +88,85 @@ Ubuntu CI. Both refuse ordinary local execution. No local owner account, service
 sudo policy or default instance is modified by the unit tests.
 
 The fixture helper accepts `owner --action status|create|unlock|lock|backup|restore`
-and advanced `export-fixture-seed`; the app channel accepts `app --action status`.
+and advanced `export-fixture-seed`; the app can read `status` and request only the
+typed fixture operations described below.
 Every invocation requires `--config` and `--disposable-fixture`. Passwords are
 requested in the terminal, confirmed when creating one, and never accepted as
 arguments. `--password-stdin` is for scripted fixture checks only. Backup/export
 requires `--file` inside an existing private owner directory and refuses to
 overwrite any file; it never prints secret documents. Restore reads an encrypted
 backup from the selected private owner file and asks for a new unlock password.
+
+## Bounded mock operations
+
+This separate engineering interface models authorization and recovery. It has
+no RPC URL, arbitrary message, transaction bytes, real asset or chain name.
+Only `fixture-transfer`, `fixture-credit:v1` and the fixed destinations
+`fixture:treasury` (mock acceptance) / `fixture:reject` (mock rejection) exist.
+The wallet remains unable to sign real transactions. UI wallet/terminal content
+is still a prototype; this interface does not connect an account to the UI.
+
+The public `status.account` reference binds version, signer, wallet, authority
+epoch, fixture network and public key. Policy, grant and intent must use the exact
+reference. Amounts are unsigned integer units encoded as JSON strings, never
+floats. A wallet policy caps cumulative spent plus held budget across all bots;
+each immutable grant also caps one bot, asset, destinations, amount and expiry.
+Grant/bot IDs are 32 lowercase hex characters. IDs and history are never reused
+or pruned. A persona or an app database entry cannot grant authority. The app
+UID can impersonate its own bot labels, so independent wallet totals remain the
+security limit; these labels do not establish process isolation between bots.
+
+Owner-only actions are `fixture-policy`, `fixture-grant`, `fixture-revoke` and
+`fixture-recover-authority`. Policy/grant creation requires a manually unlocked
+vault. Revocation can stop new execution while locked, and does not release a
+pending reservation. Administration is over the authenticated owner socket;
+neither UI sessions nor the app channel can perform it. The new `--request-stdin`
+flag reads at most 16 KiB of public JSON with only these optional fields:
+`account`, `policy`, `grant`, `intent`, `grantId`, `operationId`. Unknown fields,
+credentials and non-integer amounts are rejected. It cannot be combined with
+the fixture password-input flag. Use the immutable helper printed in the managed
+inventory, as the owner; no shell command should impersonate a service UID.
+
+For example, after protected setup/unlock, use the exact inventory paths and a
+reviewed public policy request:
+
+```sh
+/var/lib/fased-app-custody-1000/fased-signer owner \
+  --config /var/lib/fased-app-custody-1000/identity.json \
+  --disposable-fixture --action fixture-policy --request-stdin < policy-request.json
+```
+
+The configured app UID can request `fixture-state`, `fixture-reserve`,
+`fixture-execute`, `fixture-operation` and `fixture-reconcile`. It supplies a
+typed intent for reservation and an operation ID for later steps. The signer
+atomically reserves both budgets, persists the exact canonical original and
+hash, persists `sending`, then calls its fixed synchronous local mock transport.
+The mock writes and syncs a separate receipt before acknowledging an outcome.
+Normal terminal states are `confirmed` or `rejected`. No real signature is made.
+
+A retry with the same ID/body reads the same operation. A changed body is
+rejected. Prepared/sending operations are held and never sent again. Restart
+locks the vault and retains reservations. Explicit reconciliation uses only
+the signer's durable mock receipts; callers cannot supply an outcome. A complete
+mock ledger can prove `not-submitted` when no receipt exists because it is
+synchronous, local, and has no surviving in-flight worker. **An absent real RPC
+transaction is not that proof.** Future adapters must supply venue-specific
+finality/reconciliation and cannot copy this absence rule.
+
+Signer-only `operations.log` and `mock-receipts.log` use bounded, hash-chained,
+fsynced append records. Torn, missing, conflicting, symlinked or hardlinked
+journals are preserved/refused; an uncertain write blocks further operations
+until restart. There is no automatic truncation, allowance reset or history
+pruning. The fixture caps history at 1024 operations, 256 grants and 8 MiB per
+journal. A hash chain is not protection from signer/root compromise or complete
+disk rollback. Back up the original encrypted key separately; this fixture does
+not provide an authoritative portable journal backup/import system.
+
+Local tests terminate actual non-root child processes at reservation,
+original-persistence and mock-send boundaries. They prove process crash behavior,
+not physical disk/power-loss durability. Controlled Ubuntu tests also exercise
+the installed service UIDs, raw app-channel administration denial, recovery,
+and journal preservation across removal/reinstallation.
 
 ## Explicit managed fixture installation
 

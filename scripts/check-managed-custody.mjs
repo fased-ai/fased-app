@@ -1,6 +1,10 @@
 // CI-only disposable installation proof. Never run this on an owner's host.
 // Root executes trusted OS tools; all Fased executables run under non-root UIDs.
 import assert from "node:assert/strict";
+import {
+  fixturePolicyJourney,
+  fixtureRecoveryJourney,
+} from "./fixture-policy-journey.mjs";
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
 import { watch } from "node:fs";
@@ -111,6 +115,53 @@ const as = (id, tool, args, input) =>
       ...args,
     ],
     { input },
+  );
+const fixtureOwner = (action, body = {}) =>
+  JSON.parse(
+    execFileSync(
+      root + "/fased-signer",
+      [
+        "owner",
+        "--config",
+        root + "/identity.json",
+        "--disposable-fixture",
+        "--action",
+        action,
+        "--request-stdin",
+      ],
+      { input: JSON.stringify(body), encoding: "utf8", timeout: 10000 },
+    ),
+  );
+const fixtureApp = (identity, action, body = {}) =>
+  JSON.parse(
+    as(
+      identity,
+      root + "/fased-signer",
+      [
+        "app",
+        "--config",
+        root + "/identity.json",
+        "--disposable-fixture",
+        "--action",
+        action,
+        "--request-stdin",
+      ],
+      JSON.stringify(body),
+    ),
+  );
+const unlockFixture = (password) =>
+  execFileSync(
+    root + "/fased-signer",
+    [
+      "owner",
+      "--config",
+      root + "/identity.json",
+      "--disposable-fixture",
+      "--action",
+      "unlock",
+      "--password-stdin",
+    ],
+    { input: password + "\n", encoding: "utf8", timeout: 10000 },
   );
 const secretStatus = () =>
   JSON.parse(
@@ -424,7 +475,13 @@ c=json.loads(sys.argv[1]);r={}
 try: os.open(c['stateDir']+'/vault.json',os.O_RDONLY);r['keyReadDenied']=False
 except PermissionError:r['keyReadDenied']=True
 s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/owner.sock');r['ownerChannelDenied']=s.recv(1)==b'';s.close()
-s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/app.sock');f=s.makefile('rwb');h=json.loads(f.readline());f.write((json.dumps({'version':1,'signerId':c['signerId'],'challenge':h['challenge'],'request':{'action':'verify-backup'}})+'\n').encode());f.flush();v=json.loads(f.readline());r['ownerActionDenied']=bool(v.get('error'));print(json.dumps(r))
+s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/app.sock');f=s.makefile('rwb');h=json.loads(f.readline());f.write((json.dumps({'version':1,'signerId':c['signerId'],'challenge':h['challenge'],'request':{'action':'verify-backup'}})+'\n').encode());f.flush();v=json.loads(f.readline());r['ownerActionDenied']=bool(v.get('error'))
+for action in ['fixture-policy','fixture-grant','fixture-revoke','fixture-recover-authority']:
+ s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/app.sock');f=s.makefile('rwb');h=json.loads(f.readline());f.write((json.dumps({'version':1,'signerId':c['signerId'],'challenge':h['challenge'],'request':{'action':action}})+'\n').encode());f.flush();v=json.loads(f.readline());r['raw:'+action]=v.get('error')=='owner administration denied';s.close()
+for name in ['operations.log','mock-receipts.log']:
+ try: fd=os.open(c['stateDir']+'/'+name,os.O_RDONLY);os.close(fd);r['read:'+name]=False
+ except PermissionError: r['read:'+name]=True
+print(json.dumps(r))
 `;
   const cfg = JSON.parse(await readFile(root + "/identity.json", "utf8"));
   for (const [name, v] of Object.entries(
@@ -475,6 +532,26 @@ s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/app.sock');f=s.makefi
     "signerRestartLocked",
     restartedSigner.locked &&
       restartedSigner.account.publicKey === initial.account.publicKey,
+  );
+  unlockFixture(unlock);
+  const policyJourney = fixturePolicyJourney({
+    account: initial.account,
+    check,
+    fails,
+    owner: fixtureOwner,
+    app: (action, body) => fixtureApp(manifest.app, action, body),
+  });
+  execFileSync(
+    root + "/fased-signer",
+    [
+      "owner",
+      "--config",
+      root + "/identity.json",
+      "--disposable-fixture",
+      "--action",
+      "lock",
+    ],
+    { encoding: "utf8" },
   );
   const keyHash = sha(
     osTool("/usr/bin/cat", [root + "/signer-state/vault.json"], {
@@ -571,6 +648,37 @@ s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/app.sock');f=s.makefi
   });
   assert.equal(newLogin.status, 200);
   check("appPasswordRecoveryUsesNewCredential", true);
+  unlockFixture(replacement);
+  fixtureRecoveryJourney({
+    account: recovered.status.account,
+    previous: policyJourney,
+    owner: fixtureOwner,
+    app: (action, body) => fixtureApp(manifest.app, action, body),
+    check,
+    fails,
+  });
+  execFileSync(
+    root + "/fased-signer",
+    [
+      "owner",
+      "--config",
+      root + "/identity.json",
+      "--disposable-fixture",
+      "--action",
+      "lock",
+    ],
+    { encoding: "utf8" },
+  );
+  const journalHashes = Object.fromEntries(
+    ["operations.log", "mock-receipts.log"].map((name) => [
+      name,
+      sha(
+        osTool("/usr/bin/cat", [root + "/signer-state/" + name], {
+          encoding: null,
+        }),
+      ),
+    ]),
+  );
   // A changed managed unit must abort removal without stopping either service.
   const appUnit = "/etc/systemd/system/" + units[0];
   const original = await readFile(appUnit);
@@ -621,11 +729,29 @@ s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/app.sock');f=s.makefi
   cli(["remove", "--prepare-host"]);
   const reinstated = JSON.parse(cli(installArgs));
   check(
-    "reinstallKeepsIdentityAndRecoveryHold",
+    "reinstallKeepsIdentityAndReconciledAuthority",
     reinstated.manifest.id === manifest.id &&
-      secretStatus().recoveryRequired &&
+      !secretStatus().recoveryRequired &&
       secretStatus().account.epoch === recovered.status.account.epoch &&
       (await healthy()).instanceId === health.instanceId,
+  );
+  check(
+    "fixture:removalAndReinstallPreserveJournals",
+    Object.entries(journalHashes).every(
+      ([name, hash]) =>
+        sha(
+          osTool("/usr/bin/cat", [root + "/signer-state/" + name], {
+            encoding: null,
+          }),
+        ) === hash,
+    ),
+  );
+  const preservedSummary = fixtureApp(manifest.app, "fixture-state").fixture;
+  check(
+    "fixture:reinstallPreservesSpentAndHeldBudget",
+    preservedSummary.spent === "70" &&
+      preservedSummary.held === "30" &&
+      secretStatus().locked,
   );
   report.identities = {
     owner: uid,

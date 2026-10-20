@@ -67,6 +67,7 @@ type Vault struct {
 	store    *storage
 	signerID string
 	record   *envelope
+	ledger   *ledger
 	seed     []byte
 	until    time.Time
 	timer    *time.Timer
@@ -200,6 +201,10 @@ func Open(dir, signerID string) (*Vault, error) {
 		s.close()
 		return nil, err
 	}
+	if err = v.openLedger(); err != nil {
+		s.close()
+		return nil, err
+	}
 	return v, nil
 }
 
@@ -237,7 +242,7 @@ func (v *Vault) Status() Status {
 	if v.record != nil {
 		ref := v.record.Ref
 		s.Account = &ref
-		s.RecoveryRequired = v.record.RecoveryRequired
+		s.RecoveryRequired = v.recoveryRequired()
 	}
 	return s
 }
@@ -251,6 +256,10 @@ func (v *Vault) save(e envelope) error {
 		return err
 	}
 	v.record = &e
+	if err = v.openLedger(); err != nil {
+		v.store.poison()
+		return err
+	}
 	return nil
 }
 
@@ -260,7 +269,7 @@ func (v *Vault) Create(password []byte) error {
 	if v.closed {
 		return ErrUnavailable
 	}
-	if v.record != nil {
+	if v.record != nil || v.ledger != nil {
 		return errors.New("fixture vault already exists; never overwrite wallet identity")
 	}
 	seed := randomBytes(ed25519.SeedSize)
@@ -349,8 +358,8 @@ func (v *Vault) VerifyBackup(document, password []byte) error {
 }
 
 // Restore imports only a key backup into an empty signer. It never restores
-// policies, journals or spending counters. Its fresh epoch and permanent recovery
-// hold cannot be cleared by this phase's API; P3 reconciliation must come first.
+// policies, journals or spending counters. Its fresh epoch and recovery
+// hold requires retained history and mock reconciliation; key-only recovery stays held.
 func (v *Vault) Restore(backup, backupPassword, newPassword []byte) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -369,6 +378,9 @@ func (v *Vault) Restore(backup, backupPassword, newPassword []byte) error {
 		return err
 	}
 	defer wipe(seed)
+	if v.ledger != nil && !sameWallet(v.ledger.ref, e.Ref) {
+		return errors.New("backup conflicts with retained wallet history")
+	}
 	e.Ref.SignerID = v.signerID
 	e.Ref.Epoch = randomID()
 	restored, err := seal(seed, newPassword, e.Ref, "vault", true)

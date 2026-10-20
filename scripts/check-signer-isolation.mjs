@@ -2,6 +2,7 @@
 // and copy fixed inputs. Every project executable runs AFTER setpriv drops UID,
 // groups and capabilities. Never run this fixture on an owner's machine.
 import assert from "node:assert/strict";
+import { fixturePolicyJourney } from "./fixture-policy-journey.mjs";
 import { spawn, execFileSync } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
 import { mkdir, readFile, writeFile, lstat } from "node:fs/promises";
@@ -335,13 +336,15 @@ try {
   const probe = String.raw`
 import os,socket,json,sys
 c=json.loads(sys.argv[1]); result={}
-for name,p in [('vault.json',c['stateDir']+'/vault.json'),('binary',os.path.dirname(c['stateDir'])+'/fased-signer'),('configuration',os.path.dirname(c['stateDir'])+'/identity.json')]:
+for name,p in [('operations.log',c['stateDir']+'/operations.log'),('mock-receipts.log',c['stateDir']+'/mock-receipts.log'),('vault.json',c['stateDir']+'/vault.json'),('binary',os.path.dirname(c['stateDir'])+'/fased-signer'),('configuration',os.path.dirname(c['stateDir'])+'/identity.json')]:
  try: fd=os.open(p,os.O_RDWR); os.close(fd); result[name]=False
  except PermissionError: result[name]=True
 s=socket.socket(socket.AF_UNIX); s.connect(c['socketDir']+'/owner.sock'); result['ownerChannelDenied']=s.recv(1)==b''; s.close()
 s=socket.socket(socket.AF_UNIX); s.connect(c['socketDir']+'/app.sock'); f=s.makefile('rwb'); hello=json.loads(f.readline())
 f.write((json.dumps({'version':1,'signerId':c['signerId'],'challenge':hello['challenge'],'request':{'action':'export-fixture-seed'}})+'\n').encode()); f.flush()
 r=json.loads(f.readline()); result['rawExportDenied']=bool(r.get('error')) and not r.get('document'); s.close()
+for action in ['fixture-policy','fixture-grant','fixture-revoke','fixture-recover-authority']:
+ s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/app.sock');f=s.makefile('rwb');h=json.loads(f.readline());f.write((json.dumps({'version':1,'signerId':c['signerId'],'challenge':h['challenge'],'request':{'action':action}})+'\n').encode());f.flush();v=json.loads(f.readline());result['raw:'+action]=v.get('error')=='owner administration denied';s.close()
 print(json.dumps(result))
 `;
   const denied = JSON.parse(
@@ -391,6 +394,19 @@ print(json.dumps(result))
     "exportNeverPrinted",
     !log.includes(unlock) && !log.includes(backupPassword),
   );
+  fixturePolicyJourney({
+    account: initial.account,
+    check,
+    fails,
+    owner: (action, body = {}) =>
+      invoke(owner, configPath, "owner", action, JSON.stringify(body), [
+        "--request-stdin",
+      ]),
+    app: (action, body = {}) =>
+      invoke(app, configPath, "app", action, JSON.stringify(body), [
+        "--request-stdin",
+      ]),
+  });
   await stop(server);
   server = await start(signer, configPath);
   const restarted = invoke(owner, configPath, "owner", "status");
@@ -399,6 +415,10 @@ print(json.dumps(result))
     restarted.locked &&
       restarted.account.walletId === initial.account.walletId &&
       restarted.account.epoch === initial.account.epoch,
+  );
+  check(
+    "fixture:restartPreservesLifetimeSpend",
+    invoke(app, configPath, "app", "fixture-state").fixture.spent === "70",
   );
   check(
     "lockedExportDenied",
