@@ -245,7 +245,7 @@ func (s *Store) UpdateAccounts(ctx context.Context, r AccountsRecord) (AccountsV
 	}
 	result, e := s.db.ExecContext(ctx, "UPDATE accounts SET document=?,revision=revision+1 WHERE id=1 AND revision=?", string(b), r.Revision)
 	if e != nil {
-		return AccountsView{}, e
+		return AccountsView{}, metadataWriteError(e)
 	}
 	n, e := result.RowsAffected()
 	if e != nil {

@@ -20,13 +20,14 @@ export async function fixtureUpdateIntentJourney({
   ownerUnlock,
   walletPassword,
   restartSigner,
+  restartApp,
   backups,
   check,
   fails,
   env,
 }) {
   assert(process.getuid() > 0);
-  const evidence = path.resolve(".evidence/p4-staging");
+  const evidence = path.resolve(".evidence/p4-preflight");
   await mkdir(evidence, { recursive: true });
   const checks = {};
   const pass = (name, value) => {
@@ -169,7 +170,7 @@ finally:
     report.initial = before;
     pass(
       "serviceInventoryHasActualCoreAndSigner",
-      before.core.state.version === 2 &&
+      before.core.state.version === 3 &&
         before.signer.sequenceFloor === "0" &&
         before.core.probeId === before.signer.probeId &&
         before.installAllowed === false &&
@@ -278,6 +279,65 @@ finally:
         JSON.stringify(recovered.files) === JSON.stringify(staged.files) &&
         recovered.sequence === "1",
     );
+    const preflight = () =>
+      JSON.parse(
+        cli(["updates", "preflight", "--prepare-host", "--intent-id", id]),
+      );
+    const ready = preflight();
+    pass(
+      "actualOwnerPreflightPausesCore",
+      ready.verified &&
+        ready.pause.state === "paused" &&
+        ready.pause.request.intentId === id &&
+        ready.signer.sequenceFloor === "1",
+    );
+    pass(
+      "preflightCannotInstallResumeOrUnlock",
+      !ready.installAllowed &&
+        !ready.resumeAllowed &&
+        !ready.financialExecution &&
+        ownerStatus().locked &&
+        ownerStatus().updateHeld,
+    );
+    const app = (args, input) =>
+      execFileSync(
+        engine,
+        [
+          "custody",
+          "accounts",
+          ...args,
+          "--disposable-fixture",
+          "--prepare-host",
+        ],
+        { encoding: "utf8", input, env, timeout: 15000 },
+      );
+    const record = JSON.parse(app([])).record;
+    pass(
+      "actualPausedAccountMutationDenied",
+      fails(
+        () => app(["--request-stdin"], JSON.stringify(record)),
+        /core metadata paused/,
+      ),
+    );
+    restartApp();
+    let next;
+    for (let n = 0; n < 20; n++) {
+      try {
+        next = preflight();
+        break;
+      } catch (e) {
+        if (n === 19) throw e;
+        await delay(100);
+      }
+    }
+    pass(
+      "actualCoreServiceRestartRetainsPause",
+      next.pause.pauseId === ready.pause.pauseId &&
+        next.pause.core.bootId !== ready.pause.core.bootId &&
+        next.pause.core.state.anchor === ready.pause.core.state.anchor &&
+        next.signer.authoritySha256 === ready.signer.authoritySha256,
+    );
+    report.preflight = next;
     pass(
       "actualOwnerTTYAbortCancel",
       terminal("abort", "cancel").exitCode !== 0 &&
@@ -287,6 +347,16 @@ finally:
     pass(
       "abortedIntentCannotStage",
       fails(() => stage(), /stale or inactive/),
+    );
+    pass(
+      "abortedIntentCannotPreflight",
+      fails(() => preflight(), /staged intent/),
+    );
+    pass(
+      "actualAbortReleasesOnlyMatchingMetadataFence",
+      JSON.parse(app(["--request-stdin"], JSON.stringify(record))).record
+        .revision ===
+        record.revision + 1 && ownerStatus().locked,
     );
     current = inventory();
     report.final = current;
@@ -340,7 +410,7 @@ finally:
     report.cleanup =
       "public test inputs removed; private manifest key stayed in memory; managed parent removes generated services/accounts/state";
     await writeFile(
-      path.join(evidence, "managed-staging-result.json"),
+      path.join(evidence, "managed-preflight-result.json"),
       JSON.stringify(report, null, 2) + "\n",
     );
   }

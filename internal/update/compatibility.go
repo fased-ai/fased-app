@@ -30,10 +30,10 @@ type LifecycleContract struct {
 }
 
 func CurrentLifecycle() *LifecycleContract {
-	return &LifecycleContract{Version: 1, Entrypoint: 1, StageFormat: 1, Features: []string{"owner-update-review-v1", "signer-owned-staging-v1", "no-install-v1"}}
+	return &LifecycleContract{Version: 1, Entrypoint: 2, StageFormat: 1, Features: []string{"owner-update-review-v1", "signer-owned-staging-v1", "no-install-v1", "owner-core-pause-v1"}}
 }
 func lifecycleOK(c *LifecycleContract) bool {
-	return c != nil && c.Version == 1 && c.Entrypoint == 1 && c.StageFormat == 1 && listOK(c.Features) && containsAll(c.Features, CurrentLifecycle().Features)
+	return c != nil && c.Version == 1 && c.Entrypoint == 2 && c.StageFormat == 1 && listOK(c.Features) && containsAll(c.Features, CurrentLifecycle().Features)
 }
 
 type Contract struct {
@@ -92,7 +92,7 @@ var stateOwner = map[string]string{"core-db": "core", "vault": "signer", "operat
 
 // These are format features, not claims of signing support or profitability.
 var requiredStateFeatures = map[string][]string{
-	"core-db":       {"accounts-v1", "owner-sessions-v1", "setup-v1"},
+	"core-db":       {"accounts-v1", "owner-sessions-v1", "setup-v1", "core-pause-v1"},
 	"vault":         {"fixture-key-v1", "authority-epoch-v1"},
 	"operations":    {"policy-v1", "reservations-v1", "originals-v1", "authority-epoch-v1", "approvals-v1", "update-intents-v1", "update-staging-v1"},
 	"mock-receipts": {"mock-outcomes-v1"},
@@ -166,7 +166,7 @@ func validateComponents(cs []Component) error {
 	}
 	// This package begins after schema 2/approval journals. An old protocol-1
 	// signer without approval support is not a compatible downgrade.
-	if !containsAll(core.Features, []string{"account-registry-v1", "fixture-proposals-v1"}) || !containsAll(signer.Features, []string{"fixture-public-status-v1", "fixture-approval-receipts-v1"}) {
+	if !containsAll(core.Features, []string{"account-registry-v1", "fixture-proposals-v1"}) || !containsAll(signer.Features, []string{"fixture-public-status-v1", "fixture-approval-receipts-v1", "fixture-update-preflight-v1"}) {
 		return errors.New("pre-approval component is unsupported")
 	}
 	return nil

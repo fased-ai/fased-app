@@ -80,7 +80,7 @@ func Start(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS, 
 		return nil, err
 	}
 	server.IPC = ipc
-	server.IPCServer = &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
+	server.IPCServer = &http.Server{Handler: privateIPCHandler(handler), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
 	if err = WritePrivateJSON(filepath.Join(dir, "endpoint.json"), Endpoint{URL: baseURL, InstanceID: store.instanceID, Network: network, Address: address}); err != nil {
 		listener.Close()
 		ipc.Close()

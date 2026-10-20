@@ -23,6 +23,7 @@ type Store struct {
 	db         *sql.DB
 	dir        string
 	instanceID string
+	pauseFault func(string) error // Test-only interruption injection, never configuration or IPC.
 	bootID     string
 	now        func() time.Time
 	authMu     sync.Mutex
@@ -53,7 +54,7 @@ func OpenStore(dir string) (_ *Store, resultErr error) {
 	db.SetMaxOpenConns(1)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err = db.ExecContext(ctx, `PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;`); err != nil {
+	if _, err = db.ExecContext(ctx, `PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL;`); err != nil {
 		return nil, err
 	}
 	var schema int
@@ -107,8 +108,24 @@ PRAGMA user_version=1;`)
 			return nil, e
 		}
 	}
+	if schema <= 2 {
+		tx, e := db.BeginTx(ctx, nil)
+		if e != nil {
+			return nil, e
+		}
+		defer tx.Rollback()
+		if _, e = tx.ExecContext(ctx, pauseMigration); e != nil {
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
 	store := &Store{db: db, dir: dir, now: time.Now, bootID: update.NewProbe()}
 	if err = db.QueryRowContext(ctx, "SELECT instance_id FROM instance WHERE id=1").Scan(&store.instanceID); err != nil {
+		return nil, err
+	}
+	if _, err = store.UpdatePause(ctx, update.CorePauseCommand{Action: "status", ProbeID: update.NewProbe()}); err != nil {
 		return nil, err
 	}
 	return store, nil
@@ -149,7 +166,7 @@ func (s *Store) UpdateSetup(ctx context.Context, expected int64, setup Setup) (S
 	}
 	result, err := s.db.ExecContext(ctx, "UPDATE instance SET setup=?,revision=revision+1 WHERE id=1 AND revision=?", string(bytes), expected)
 	if err != nil {
-		return SetupRecord{}, err
+		return SetupRecord{}, metadataWriteError(err)
 	}
 	count, err := result.RowsAffected()
 	if err != nil {

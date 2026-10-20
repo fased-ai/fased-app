@@ -65,8 +65,10 @@ try {
       compiled.updaterEnabled === false,
   );
   pass(
-    "schemaAndApprovalFeatures",
-    contracts[0].state[0].versions.min === 2 &&
+    "schemaPauseAndApprovalFeatures",
+    contracts[0].state[0].versions.min === 3 &&
+      contracts[0].state[0].features.includes("core-pause-v1") &&
+      contracts[0].lifecycle.entrypoint === 2 &&
       contracts[1].state
         .find((s) => s.name === "operations")
         .features.includes("approvals-v1"),

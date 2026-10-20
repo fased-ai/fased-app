@@ -5,6 +5,7 @@ package custodyinstall
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -141,7 +142,7 @@ func (s *System) AccountsHelper(ctx context.Context, m Manifest, login, request,
 	return s.appClient(ctx, m, action, flags, out)
 }
 func (s *System) appClient(ctx context.Context, m Manifest, action string, flags []string, out io.Writer) error {
-	if action != "claim-code" && action != "recover" && action != "accounts" && action != "login" && action != "update-inventory" {
+	if action != "claim-code" && action != "recover" && action != "accounts" && action != "login" && action != "update-inventory" && action != "update-pause" {
 		return errors.New("unsupported app helper action")
 	}
 	if e := Verify(m); e != nil {
@@ -172,6 +173,18 @@ func (s *System) UpdateInventory(ctx context.Context, m Manifest, probe string, 
 		return errors.New("invalid inventory challenge")
 	}
 	return s.appClient(ctx, m, "update-inventory", []string{"--probe-id", probe}, out)
+}
+
+// UpdatePause sends only typed public metadata over the immutable app-UID
+// helper's stdin. Wallet secrets and owner credentials never cross this bridge.
+func (s *System) UpdatePause(ctx context.Context, m Manifest, command update.CorePauseCommand, out io.Writer) error {
+	b, e := json.Marshal(command)
+	if e != nil {
+		return e
+	}
+	copy := *s
+	copy.In = bytes.NewReader(b)
+	return copy.appClient(ctx, m, "update-pause", []string{"--request-stdin"}, out)
 }
 
 func appArgs(m Manifest, action string) []string {

@@ -277,7 +277,7 @@ func TestLifecycleVersionsAndFeaturesAreIndependent(t *testing.T) {
 				if c.Component == "core" {
 					switch tc {
 					case "entrypoint":
-						c.Lifecycle.Entrypoint = 2
+						c.Lifecycle.Entrypoint = update.CurrentLifecycle().Entrypoint + 1
 					case "stage-format":
 						c.Lifecycle.StageFormat = 2
 					case "features":

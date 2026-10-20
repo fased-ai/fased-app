@@ -30,18 +30,20 @@ func (c Config) Validate() error {
 // Request is a closed set of owner and fixture operations. No real sign/submit.
 // Passwords are bytes so callers can clear their own buffers after use.
 type Request struct {
-	Stage         *update.StageRequest  `json:"stage,omitempty"`
-	Update        *update.IntentRequest `json:"update,omitempty"`
-	ProbeID       string                `json:"probeId,omitempty"`
-	IntentID      string                `json:"intentId,omitempty"`
-	Action        string                `json:"action"`
-	Password      []byte                `json:"password,omitempty"`
-	NewPassword   []byte                `json:"newPassword,omitempty"`
-	Document      []byte                `json:"document,omitempty"`
-	UnlockSeconds int                   `json:"unlockSeconds,omitempty"`
+	Preflight     *update.PreflightRequest `json:"preflight,omitempty"`
+	Stage         *update.StageRequest     `json:"stage,omitempty"`
+	Update        *update.IntentRequest    `json:"update,omitempty"`
+	ProbeID       string                   `json:"probeId,omitempty"`
+	IntentID      string                   `json:"intentId,omitempty"`
+	Action        string                   `json:"action"`
+	Password      []byte                   `json:"password,omitempty"`
+	NewPassword   []byte                   `json:"newPassword,omitempty"`
+	Document      []byte                   `json:"document,omitempty"`
+	UnlockSeconds int                      `json:"unlockSeconds,omitempty"`
 	PublicInput
 }
 type Response struct {
+	Preflight       *update.Preflight      `json:"preflight,omitempty"`
 	Stage           *update.StageStatus    `json:"stage,omitempty"`
 	UpdateInventory *update.SignerSnapshot `json:"updateInventory,omitempty"`
 	UpdateIntent    *update.Intent         `json:"updateIntent,omitempty"`
@@ -62,6 +64,17 @@ func execute(v *Vault, r Request, owner bool) Response {
 		return Response{Error: "owner administration denied"}
 	}
 	switch r.Action {
+	case "fixture-update-preflight":
+		if r.Preflight == nil {
+			return Response{Error: "bound preflight request required"}
+		}
+		p, e := v.PreflightUpdate(*r.Preflight)
+		out := Response{Preflight: p, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+
 	case "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish":
 		if r.Stage == nil {
 			return Response{Error: "bound staging request required"}

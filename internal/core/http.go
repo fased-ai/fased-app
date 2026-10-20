@@ -157,6 +157,9 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
+	case "/api/v1/updates/pause":
+		h.pauseAPI(w, r, token)
+		return
 	case "/api/v1/updates/inventory":
 		if r.Method != http.MethodGet {
 			writeError(w, 405, "method not allowed")
@@ -195,7 +198,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		v, e := h.store.UpdateAccounts(r.Context(), input)
-		if errors.Is(e, ErrConflict) {
+		if errors.Is(e, ErrConflict) || errors.Is(e, ErrCorePaused) {
 			writeError(w, 409, e.Error())
 			return
 		}
@@ -235,7 +238,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		record, err := h.store.UpdateSetup(r.Context(), request.Revision, request.Settings)
-		if errors.Is(err, ErrConflict) {
+		if errors.Is(err, ErrConflict) || errors.Is(err, ErrCorePaused) {
 			writeError(w, 409, err.Error())
 			return
 		}

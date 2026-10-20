@@ -5,6 +5,7 @@ package custodyinstall
 import (
 	"context"
 	"errors"
+	"github.com/fased-ai/fased-app/internal/update"
 	"io"
 )
 
@@ -30,5 +31,9 @@ func (*System) AccountsHelper(context.Context, Manifest, bool, bool, bool, io.Wr
 }
 
 func (*System) UpdateInventory(context.Context, Manifest, string, io.Writer) error {
+	return unsupported
+}
+
+func (*System) UpdatePause(context.Context, Manifest, update.CorePauseCommand, io.Writer) error {
 	return unsupported
 }

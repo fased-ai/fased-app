@@ -53,19 +53,8 @@ func (v *Vault) StageUpdate(action string, r update.StageRequest) (*update.Stage
 		if r.Core == nil || update.SnapshotDigest("core", *r.Core) != update.SnapshotDigest("core", i.Core) {
 			return nil, errors.New("core metadata/boot changed; abort and review a fresh intent")
 		}
-		s, e := v.updateSnapshot(i.Signer.ProbeID)
-		if e != nil {
+		if _, e = v.heldSnapshot(i, i.Signer.ProbeID); e != nil {
 			return nil, e
-		}
-		if s.AuthoritySHA256 != i.Signer.AuthoritySHA256 || s.Spent != i.Signer.Spent || s.Held != i.Signer.Held || s.Pending != i.Signer.Pending || s.Unknown != i.Signer.Unknown || s.RecoveryHold != i.Signer.RecoveryHold {
-			return nil, errors.New("financial authority changed during staging")
-		}
-		for _, old := range i.Signer.States {
-			for _, now := range s.States {
-				if old.Name == now.Name && old.Name != "operations" && update.SnapshotDigest("state", old) != update.SnapshotDigest("state", now) {
-					return nil, errors.New("signer durable state changed during staging")
-				}
-			}
 		}
 		if i.State != "staged" {
 			if e = v.ledger.append(v, journalRecord{Kind: "update-staged", ID: i.ID, OriginalHash: update.StageDigest(i)}); e != nil {
