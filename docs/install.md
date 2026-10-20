@@ -5,6 +5,11 @@ download command exists yet. Do not bypass Gatekeeper, SmartScreen or signature
 warnings to make a development build appear production-ready. The compiled app
 needs no Git, Go, npm, database server, RPC, AI or wallet account at runtime.
 
+P3's separate [disposable signer fixture](signer.md) is not installed or enabled
+by these packages. Wallet fields remain preferences/prototypes. The current
+owner-user app topology must acquire separate app/signer identities and pass the
+custody gates before real wallets can become available.
+
 ## First supported target
 
 Ubuntu 24.04 LTS, x86-64 is the first Linux/VPS engineering target. Run the app
