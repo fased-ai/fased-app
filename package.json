@@ -16,7 +16,7 @@
     "test:ui": "playwright test",
     "build:core": "node scripts/build-core.mjs",
     "build:desktop": "node scripts/build-desktop.mjs",
-    "test:core": "go test -race ./internal/... ./cmd/fased-app",
+    "test:core": "go test -race ./internal/... ./cmd/fased-app ./cmd/fased-signer",
     "test:core-ui": "playwright test --config playwright.core.config.ts",
     "test:native-window": "node scripts/check-native-window.mjs",
     "check": "npm run test && npm run build && npm run format:check",

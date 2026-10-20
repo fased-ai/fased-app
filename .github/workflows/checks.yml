@@ -138,13 +138,38 @@ jobs:
             .evidence/*.json
             .evidence/*.log
           retention-days: 7
+  signer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - run: mkdir -p .evidence/bin && go build -trimpath -o .evidence/bin/fased-signer ./cmd/fased-signer
+      - name: Disposable three-UID signer boundary and recovery
+        run: node scripts/check-signer-isolation.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: signer-isolation
+          include-hidden-files: true
+          path: |
+            .evidence/p3-signer/isolation-result.json
+            .evidence/p3-signer/isolation.log
+          retention-days: 7
   prototype:
     if: always()
-    needs: [core, desktop]
+    needs: [core, desktop, signer]
     runs-on: ubuntu-latest
     steps:
       - name: Required aggregate check
         env:
           CORE_RESULT: ${{ needs.core.result }}
           DESKTOP_RESULT: ${{ needs.desktop.result }}
-        run: test "$CORE_RESULT" = success && test "$DESKTOP_RESULT" = success
+          SIGNER_RESULT: ${{ needs.signer.result }}
+        run: test "$CORE_RESULT" = success && test "$DESKTOP_RESULT" = success && test "$SIGNER_RESULT" = success
