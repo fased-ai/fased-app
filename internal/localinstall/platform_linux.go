@@ -61,6 +61,11 @@ func CheckHostRuntime() error {
 	if owner, ok := info.Sys().(*syscall.Stat_t); !ok || owner.Uid != 0 || info.Mode().Perm()&0111 == 0 || info.Mode()&os.ModeSetuid != 0 {
 		return errors.New("/usr/bin/bwrap must be the ordinary, root-owned non-setuid OS executable")
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := exec.CommandContext(ctx, "/usr/bin/bwrap", "--unshare-user", "--disable-userns", "--cap-drop", "ALL", "--ro-bind", "/", "/", "--", "/usr/bin/true").Run(); err != nil {
+		return errors.New("Ubuntu sandbox prerequisite failed: the administrator must enable the reviewed restrictive Bubblewrap AppArmor profile; see docs/install.md; Fased will not change policy or start unprotected")
+	}
 	return nil
 }
 func linuxDefinition(p Paths, o Options, bubblewrap bool) ([]byte, error) {

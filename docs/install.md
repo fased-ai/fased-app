@@ -16,13 +16,36 @@ work, not a measured resource guarantee.
 
 The headless core has no WebView dependency. Ubuntu 24.04 requires its OS
 `bubblewrap` package for both headless and desktop installations. Its
-distribution-supplied AppArmor profile permits the private filesystem sandbox;
+reviewed restrictive AppArmor profile permits the private filesystem sandbox;
 Fased does not disable the system's namespace restrictions. The engine checks
 that its application files are actually read-only before opening state or a
 listener and refuses to start if protection was skipped. Other Linux builds use
 systemd's user-service sandbox with the same enforcement check.
 [Ubuntu's Bubblewrap manual](https://manpages.ubuntu.com/manpages/noble/man1/bwrap.1.html)
 describes the helper's namespace and read-only mount controls.
+
+Ubuntu 24.04 does not install that extra AppArmor profile by default. Before
+Fased installation, a host administrator must review the unmodified Ubuntu
+profile and license in `packaging/linux/apparmor/`, check for an existing
+Bubblewrap policy, then use trusted OS tools to install/load it. From a verified
+source checkout, with no existing profile of that name:
+
+```sh
+test ! -e /etc/apparmor.d/bwrap-userns-restrict && \
+sudo install -m 0644 packaging/linux/apparmor/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict && \
+sudo apparmor_parser -a /etc/apparmor.d/bwrap-userns-restrict
+```
+
+`-a` refuses an existing loaded identity; do not replace it with `-r` or overwrite
+an existing host policy to force installation. The profile applies to the OS
+Bubblewrap executable and its clients, not just Fased; administrator review is
+required. It denies payload capabilities rather than granting arbitrary child
+processes namespace capabilities. Fased probes the helper before installation,
+reports missing permission and never changes AppArmor policy itself. Automatic
+verified policy provisioning remains a public-installer acceptance gate.
+`--install-runtime` installs OS packages only; it does not authorize policy
+changes. [Ubuntu's AppArmor guide](https://ubuntu.com/server/docs/how-to/security/apparmor/)
+documents profile review and loading.
 
 Linux desktop installation checks
 its GTK3/WebKitGTK 4.1 runtime before starting. On Ubuntu 24.04, explicit

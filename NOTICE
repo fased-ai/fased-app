@@ -25,3 +25,8 @@ their required platform and third-party notices as well.
 Before distributing built artifacts, include the required notices for all
 bundled dependencies. Any later extraction from legacy Fased must retain its
 applicable copyright/license notices and record the source revision.
+Separate OS policy data in packaging/linux/apparmor/ is the unmodified Ubuntu
+AppArmor bwrap-userns-restrict profile from revision
+43ef5b6c962d324ffc58ca75843df26827026bfa, under GPL-2.0-or-later.
+Its original copyright record, full license and provenance are retained there.
+It is not linked into or embedded in Fased's original Go/TypeScript code.

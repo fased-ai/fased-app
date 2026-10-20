@@ -71,6 +71,13 @@ jobs:
       - name: Windows task encoding contracts
         if: runner.os == 'Windows'
         run: go test ./internal/localinstall
+      - name: Prepare reviewed Ubuntu sandbox policy
+        if: runner.os == 'Linux'
+        run: |
+          test ! -e /etc/apparmor.d/bwrap-userns-restrict
+          sudo install -m 0644 packaging/linux/apparmor/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -a /etc/apparmor.d/bwrap-userns-restrict
+          /usr/bin/bwrap --unshare-user --disable-userns --cap-drop ALL --ro-bind / / -- /usr/bin/true
       - run: go -C desktop mod verify
       - run: npm run build:desktop
       - run: npm run build:core
@@ -98,6 +105,7 @@ jobs:
           systemctl --user show fased-app.service --property=LoadState,ActiveState,FragmentPath,Result,ExecMainStatus || true
           sudo journalctl --no-pager _SYSTEMD_USER_UNIT=fased-app.service -n 40 || true
           sudo journalctl --no-pager -u "user@$(id -u).service" -n 40 || true
+          sudo journalctl --no-pager -k -g 'apparmor.*DENIED' -n 12 || true
       - name: Native Linux window and separate-core journey
         if: runner.os == 'Linux'
         run: |
