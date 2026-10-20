@@ -3,7 +3,9 @@
 This is an engineering fixture for disposable keys. It is separate from the
 installed app, has no chain/RPC adapter, and cannot sign transactions or arbitrary
 messages. Never fund its public keys. P2's installed app still reports wallet
-signing and financial execution unavailable. No signer is installed automatically.
+signing and financial execution unavailable. Ordinary packages never install a
+signer automatically. The explicit Ubuntu fixture installer below manages both
+services and their distinct identities.
 
 The Linux boundary has three different non-root UIDs: owner, application, and
 signer. The owner invokes a protected local helper (over SSH on a VPS). The
@@ -14,10 +16,13 @@ sockets, and the client verifies the signer UID before sending secrets. The
 signer directory is private to its UID. Root/host administrator compromise is
 outside this isolation boundary.
 
-P2's current desktop core runs as the owner. That topology is **not sufficient**
-for custody. A future installer must establish the separate app/signer identities
-and immutable executable/configuration ownership before enabling wallets. The
-browser must never receive private keys or unlock credentials through the app.
+P2's ordinary desktop core runs as the owner. The separate managed fixture runs
+the app and signer under installer-created locked system accounts. It uses a new
+instance and never migrates P2/legacy data. Root-owned binaries/configuration and
+systemd sandboxing protect both services; the core checks its actual UID,
+NoNewPrivs, read-only installation and writable private state before opening its
+database or listener. The browser must never receive private keys or unlock
+credentials through the app.
 Windows and macOS remain unavailable until their own identity/IPC proof passes.
 
 The fixture uses Go's Ed25519 key generation, AES-256-GCM and the already pinned
@@ -69,9 +74,10 @@ Run the locally executable checks from the source checkout:
 go test -race ./internal/signer ./cmd/fased-signer
 ```
 
-The separate identity check is `node scripts/check-signer-isolation.mjs` on its
-disposable Ubuntu CI job. It refuses ordinary local execution. No owner should
-create accounts or manually configure this fixture to use the app.
+The identity check is `node scripts/check-signer-isolation.mjs`; actual managed
+installation is tested by `node scripts/check-managed-custody.mjs` in disposable
+Ubuntu CI. Both refuse ordinary local execution. No local owner account, service,
+sudo policy or default instance is modified by the unit tests.
 
 The fixture helper accepts `owner --action status|create|unlock|lock|backup|restore`
 and advanced `export-fixture-seed`; the app channel accepts `app --action status`.
@@ -82,7 +88,65 @@ requires `--file` inside an existing private owner directory and refuses to
 overwrite any file; it never prints secret documents. Restore reads an encrypted
 backup from the selected private owner file and asks for a new unlock password.
 
-Installer-managed identities, the production owner-helper ceremony, public
-account registration, grants/revocation, typed mock operations and reconciliation
-are still P3 work. The engineering signer binary is deliberately excluded from
-the app's package inventory and first-launch flow.
+## Explicit managed fixture installation
+
+Ubuntu 24.04 and an ordinary owner with OS authorization are required. These are
+paired source-built engineering binaries, with no publisher authenticity claim.
+This command is not a public download or a wallet-enablement command:
+
+```sh
+./fased-app custody install --signer-binary ./fased-signer \
+  --disposable-fixture --prepare-host
+```
+
+One sudo authorization permits fixed OS tools to create dedicated no-login,
+password-locked accounts and root-owned inventory under
+`/var/lib/fased-app-custody-<owner-uid>`, then install and start two system services.
+No Fased executable or setup script runs as root. Services have separate private
+state, no capabilities, NoNewPrivileges, ProtectSystem=strict and explicit write
+exceptions. Signer sockets support only AF_UNIX. Unknown systemd overrides and
+changed units fail before activation. Autostart is off. The browser entry is
+`http://127.0.0.1:7332`; use an explicit unprivileged loopback `--listen` port if
+needed. No public listener or Tailscale/SSH/firewall policy is installed.
+
+Immutable input hashes and a private durable owner intent support same-command
+retry after interruption. Root staging/publication is exclusive; conflicting
+accounts, directories, files and units are preserved. Installed binaries are not
+updated in place. P4 must supply coordinated signed updates.
+
+Owner administration uses these entry points, including from an owner's SSH
+terminal. First create a private owner backup directory; select an off-machine
+backup destination where available. No backup is uploaded automatically.
+
+```sh
+./fased-app custody claim-code --disposable-fixture --prepare-host
+./fased-app custody setup --disposable-fixture --backup-file /private/owner/wallet.backup
+./fased-app custody recover --disposable-fixture --backup-file /private/owner/wallet.backup
+./fased-app custody reset-app-password --disposable-fixture --prepare-host
+./fased-app custody status --disposable-fixture
+./fased-app custody remove --disposable-fixture --prepare-host
+```
+
+The claim code establishes web app ownership and confers no wallet authority.
+Setup asks for a new unlock password and a backup password, writes an exclusive
+encrypted backup, verifies it against the unlocked key, then locks. Retrying an
+interrupted setup uses the existing key. Recovery accepts only an empty signer
+or an interrupted recovery hold; it verifies the recovered key and stays held
+and locked. Existing wallets/backups are never overwritten. Helper interruption
+leaves at most a 60-second manual unlock, and failure attempts an independent
+bounded lock request. No restart secret is saved.
+
+App-password recovery stops only the app, runs the existing password-reset helper
+as its app UID in the owner's terminal, revokes app sessions, then restarts it.
+The signer is preserved and no wallet is unlocked or recovered. Scripted
+`--password-stdin` is allowed only for disposable wallet checks, never app-password
+recovery. Neither administration route is an HTTP or model tool.
+
+Removal verifies inventory and stops/removes its service definitions. It retains
+all app/signer state, unknown files, immutable inventory and disabled OS accounts
+to prevent UID reuse over surviving data. Reinstallation with the same inputs
+restores the services with the same identity and locked/held state. There is no
+erase-wallet command. Physical-host/public/native-client custody acceptance and
+installer upgrades remain open; the managed engineering mode currently uses the
+browser and owner CLI. Public account registration, grants/revocation, typed mock
+operations and reconciliation remain P3 work. Real wallets remain disabled.

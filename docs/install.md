@@ -5,10 +5,11 @@ download command exists yet. Do not bypass Gatekeeper, SmartScreen or signature
 warnings to make a development build appear production-ready. The compiled app
 needs no Git, Go, npm, database server, RPC, AI or wallet account at runtime.
 
-P3's separate [disposable signer fixture](signer.md) is not installed or enabled
-by these packages. Wallet fields remain preferences/prototypes. The current
-owner-user app topology must acquire separate app/signer identities and pass the
-custody gates before real wallets can become available.
+P3's [managed disposable signer mode](signer.md#explicit-managed-fixture-installation)
+is a separate, explicit Ubuntu engineering installation. Ordinary packages do
+not enable it. It manages dedicated identities and protected owner setup/recovery
+while keeping real wallets disabled. Wallet fields remain preferences/prototypes;
+physical-host/native custody and later permission/reconciliation gates stay open.
 
 ## First supported target
 

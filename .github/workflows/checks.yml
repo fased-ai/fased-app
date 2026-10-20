@@ -153,6 +153,13 @@ jobs:
       - run: mkdir -p .evidence/bin && go build -trimpath -o .evidence/bin/fased-signer ./cmd/fased-signer
       - name: Disposable three-UID signer boundary and recovery
         run: node scripts/check-signer-isolation.mjs
+      - name: Build managed disposable core
+        run: |
+          npm ci
+          npm run build
+          go build -trimpath -o .evidence/bin/fased-app ./cmd/fased-app
+      - name: Installer-managed identities and protected owner recovery
+        run: node scripts/check-managed-custody.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -161,6 +168,8 @@ jobs:
           path: |
             .evidence/p3-signer/isolation-result.json
             .evidence/p3-signer/isolation.log
+            .evidence/p3-managed/managed-install-result.json
+            .evidence/p3-managed/managed-install.log
           retention-days: 7
   prototype:
     if: always()

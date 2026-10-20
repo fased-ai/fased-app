@@ -19,6 +19,7 @@ import (
 	fasedapp "github.com/fased-ai/fased-app"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/localinstall"
+	"github.com/fased-ai/fased-app/internal/signer"
 	"golang.org/x/term"
 )
 
@@ -29,8 +30,11 @@ func main() {
 	}
 }
 func run(args []string, in *os.File, out, errOut io.Writer) error {
+	if len(args) > 0 && args[0] == "custody" {
+		return custodyCommand(args[1:], in, out, errOut)
+	}
 	if len(args) == 0 {
-		return errors.New("usage: fased-app install|service|open|access|recover|uninstall|serve|status|claim-code|claim|login|logout|setup|version [options]")
+		return errors.New("usage: fased-app install|custody|service|open|access|recover|uninstall|serve|status|claim-code|claim|login|logout|setup|version [options]")
 	}
 	if args[0] == "install" || args[0] == "uninstall" || args[0] == "service" || args[0] == "open" {
 		return hostCommand(args, out, errOut)
@@ -56,6 +60,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	publicOrigin := flags.String("public-origin", "", "exact private HTTPS origin behind a trusted local proxy")
 	requireSandbox := flags.Bool("require-sandbox", false, "require installed Linux mount isolation before starting")
 	installationRoot := flags.String("installation-root", "", "immutable installed application directory")
+	custodyConfig := flags.String("custody-config", "", "root-owned managed fixture identity; never enables real wallets")
 	passwordStdin := flags.Bool("password-stdin", false, "read password from stdin instead of a terminal")
 	interactive := flags.Bool("interactive", false, "walk through setup in the terminal")
 	host := flags.String("host", "", "setup deployment preference: local or vps")
@@ -74,6 +79,14 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	ctx := context.Background()
 	switch args[0] {
 	case "serve":
+		if *custodyConfig != "" {
+			if !*requireSandbox {
+				return errors.New("managed custody core requires its installed sandbox")
+			}
+			if err = signer.CheckApplication(*custodyConfig, *installationRoot, *dir); err != nil {
+				return err
+			}
+		}
 		if *requireSandbox {
 			if err = localinstall.CheckSandbox(*installationRoot, *dir); err != nil {
 				return err
