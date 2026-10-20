@@ -485,8 +485,9 @@ does not close either public P4-10/11 gate.
 
 ### Scope and authority
 
-The pure Go fixture model/store implements this contract; no command, socket or
-installed RPC exposes it. The fixture profile is `fased-app-owner-signer-admission-fixture:v1`, protocol
+The pure Go fixture model/store implements this contract; no installed command or
+RPC exposes it. The separate compiled fixture transport below reuses actor-local
+verification, not shared session/receipt authority. The fixture profile is `fased-app-owner-signer-admission-fixture:v1`, protocol
 1, mode `inspection-only`. Every message requires that profile, mode and the
 existing repository/development fixture binding. Real keys, financial execution,
 installed execution, automatic updates, production trust and P5 remain disabled.
@@ -748,8 +749,7 @@ go test -race -json ./internal/update -run '^TestFixtureHandoff' \
 the race-tested model cases, verifies HA-01–HA-15 model coverage and source hashes,
 and retains a receipt/logs while checking generated fixture cleanup. Ubuntu 24.04
 CI runs this same model acceptance. This is not distinct-UID acceptance.
-HA-03's real kernel-UID predicate remains unproven and is coupled to HA-16. A later, separately scoped
-compiled fixture harness owns bounded challenge/request/status transport and
+HA-03's real kernel-UID predicate remains unproven and is coupled to HA-16. The separate compiled fixture harness below owns bounded transport and
 HA-16 on Ubuntu 24.04: three disposable nonzero UIDs, protected role directories,
 fixed OS identity setup only, no installed services, real vaults or execution
 endpoint. Local subprocesses cannot close that UID gate. A transport CLI/CI addition,
@@ -784,6 +784,308 @@ RPC JSON. Records are bounded including their complete envelope, not just body.
 The store preserves old immutable checkpoints and refuses exhaustion/foreign paths
 rather than garbage-collecting state. Root/administrator compromise and whole-store
 plus external-anchor rollback remain outside this fixture model.
+
+## Compiled owner/signer fixture transport and UID harness design
+
+### Frozen scope and process split
+
+This frozen contract is now implemented as a separate development-only fixture
+command, transport and finite harness. Local race tests use compiled test peers;
+HA-03/HA-16 require the actual three-UID Ubuntu runner receipt at the exact source.
+A local PASS cannot stand in for that receipt or for installed/retail proof.
+The existing model APIs and their coupled checks remain independent.
+Real wallets, financial execution, installed execution, AI, automatic updates,
+production trust and P5 remain disabled. Only disposable keys, controlled HTTPS,
+inert `.fixture` subjects and separately declared fixture stores are allowed.
+
+Use a separate development command, `cmd/fased-handoff-fixture`, excluded from
+packages, services and all installed app/signer dispatch. Its only roles are
+`owner inspect`, `owner status`, `signer serve` and adversarial `probe`; each requires
+`--disposable-fixture`, a private role configuration and its independently
+supplied `--config-sha256`. No RPC selects a role, UID, input path, clock, trust
+pin, review callback or expected local head. Non-Linux transport fails closed.
+There is no owner password, vault, wallet key or lifecycle controller dependency.
+
+| Proposed process-local API                   | Boundary                                                                                                                                                                                                                                                      |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NewFixtureOwnerClient` / `Inspect(ctx)`     | Takes only the owner actor/configuration, a fixed signer socket endpoint and local review function. Independently verifies before connecting, persists exact review, receives authenticated results and refreshes owner verification before local completion. |
+| `NewFixtureSignerServer` / `Serve(ctx)`      | Takes only the signer actor/configuration and its private listener. Owns challenges, live connection contexts, independent verification and durable results. It never receives an owner actor or accesses the owner's store.                                  |
+| `fixturePeer` / `authenticatedFixtureResult` | Unexported process-local capabilities constructed only after kernel peer checks and bounded reads on that same live socket. No public JSON decoder, report, digest or status lookup constructs them.                                                          |
+| `Audit(ctx, requestID, exchangeDigest)`      | Authenticated, bounded historical lookup. Returns audit data only; cannot complete an owner inspection or reopen a consumed challenge.                                                                                                                        |
+
+Refactor reusable actor-local inspection/publication logic from `handoff.go`;
+preserve the existing model APIs/tests. Do not serialize
+`FixtureHandoffSession`, its two actor pointers, its private reviewed request,
+`ownerExpiry` or `FixtureHandoffReceipt.session`. The current signer's
+`r == s.request` check becomes equality against its own issued challenge plus
+strict request validation on an authenticated owner connection. It recomputes
+authorization/unit identities independently. The owner alone checks its protected
+review record; the signer cannot inspect that record across UIDs. Owner UID
+authentication identifies the trusted owner process, not proof that an arbitrary
+program under that UID displayed a review. Compromise of either trusted role UID
+or the administrator remains outside this boundary.
+
+### Role provisioning, time and checkpoint anchors
+
+Provision two separate private input trees with public seed/policy/evidence,
+fixture CA, four inert artifacts, clock, inventory, configuration and anchor
+files. Owner and signer have different nonzero UIDs and separate directories;
+the app has a third nonzero UID and no write access to either tree or ancestors.
+Validate real/effective UID, exact role, all three distinct configured UIDs,
+canonical nonsymlink paths, ownership/modes and regular-file/size constraints
+before creating actors or connecting. Reject root, inherited alternative input
+sources, shared store inodes, app-writable ancestors and unknown options.
+
+Each role's configuration is strict bounded JSON, at most 64 KiB, pinned by the
+launcher independently of the app. It fixes the fixture binding, all UIDs,
+role-specific input/store/socket/clock/inventory/anchor paths, seed/policy/CA
+fingerprints and transport capability. Changes require a new declared experiment;
+neither RPC nor a fetched document updates configuration. Inputs/files are opened
+with the existing contained nofollow/nonblocking rules. Review is a role-local
+fixture acknowledgment of exact displayed identities, not an app-provided boolean.
+After the owner emits its review summary through an owner-only fixture channel,
+the trusted harness checks the expected unit/build/limits and publishes a private
+acknowledgment of that exact ExchangeDigest before the review deadline. This
+test acknowledgment is not retail consent; adversarial requests never select or
+overwrite it. A probe has only a harness-declared endpoint/case configuration;
+it cannot instantiate an actor or supply acknowledgment to the owner process.
+
+The clock adapter reads only its role's private `{now, confident}` fixture file;
+missing confidence, regression, restore mismatch or invalid bounds blocks new
+inspection. It is not an RPC timestamp or HTTP Date. Test mutations are made by
+the harness as that role, never by the app. Existing clock, 30-second skew,
+one-hour review and 60-second challenge bounds remain; no host-clock changes.
+
+Keep an independently provisioned role anchor outside the checkpoint directory,
+binding configuration fingerprint, experiment and expected head. Fresh bootstrap
+is explicit and refuses existing stores; transport never adopts a model-only
+store or searches for the newest snapshot. Publish the combined checkpoint first,
+then atomically advance the private anchor with the exact prior/new head.
+A crash between those publications causes anchor mismatch and BLOCKED inspection;
+only a retained exact local publication may retry, never arbitrary head adoption.
+After restart, missing anchors or unknown pending learning remain held. Fixture
+reprovisioning creates a new declared experiment and preserves failed evidence.
+Whole-store plus anchor rollback is still not production rollback protection.
+
+### Socket, framing and authenticated exchange
+
+Use Linux pathname Unix stream sockets only. A dedicated signer-owned socket
+directory is mode 0711 under a non-app-writable fixture prefix; socket mode 0666
+permits the deliberate app-connect denial test. Private role state stays 0700
+with files 0600. Directory traversal/connection permission never grants a role.
+Before consuming any frame or issuing any challenge, the server obtains
+`SO_PEERCRED` on the accepted connection and requires the configured owner UID.
+The owner verifies the configured signer UID on its connected socket before
+sending even `hello`. Reject missing/mismatched credentials; close unauthorized
+connections without a protocol reply or checkpoint change. Check socket/parent
+type, owner and inode; refuse foreign/live/stale sockets rather than unlinking
+them opportunistically. Explicit fixture cleanup removes only inventoried sockets.
+No TCP, abstract socket, inherited descriptor, proxy or same-UID fallback exists.
+
+One frame is a four-byte unsigned big-endian payload length followed by exactly
+that many UTF-8 JSON bytes. Reject zero or over-65,536 length before allocation;
+use exact bounded reads and existing strict JSON rules for duplicate/case-alias,
+unknown/trailing fields, depth and invalid UTF-8. Frame length includes the entire
+JSON envelope. Partial headers/bodies, unexpected states and extra frames fail
+closed. The envelope has version 1, transport profile
+`fased-app-owner-signer-transport-fixture:v1`, mode `inspection-only`, capability
+`fixture-release-transport-v1`, the development fixture binding, kind, channel ID
+and a kind-specific strict body. There is no generic method or arbitrary payload.
+
+1. After mutual kernel checks, `hello` binds a fresh client nonce, owner boot ID
+   and operation (`inspect` or `status`). The server checks the exact profile,
+   binding/capability and assigns a fresh random channel ID. A status connection
+   produces audit data only and never issues a challenge or changes trust.
+2. For inspection, the signer durably publishes its challenge before replying.
+   It retains that exact challenge, peer UID, both boot IDs, client nonce,
+   channel, baseline head/inventory and absolute deadline in its own context.
+   The challenge wrapper supplies the resulting head outside the hashed payload.
+   The owner checks pins/identity/time and uses only its own verification result.
+3. The owner constructs the existing immutable `FixtureHandoffRequest` plus
+   `ownerNotAfter` (its independently derived authorization expiry) and
+   `reviewDeadline = min(ownerNotAfter, challenge.deadline, reviewedAt + 3600)`.
+   Define `ExchangeDigest = HashTuple("fased-app-fixture-transport-exchange:v1",
+profile, capability, repository, channel, channelId, clientNonce, ownerUid,
+signerUid, SHA256(exact request JSON), ownerNotAfter, reviewDeadline)`.
+   IDs/hashes/integers follow the existing canonical rules. This binds fields
+   absent from the old model digest, including the full challenge and channel;
+   the legacy RequestDigest remains unchanged. The owner displays both digests,
+   unit/authorization, build/subjects, limits and expiry, and publishes the exact
+   review/exchange before sending `inspect`. Never change bytes after review.
+4. The signer recomputes both digests, compares the full issued challenge and
+   live peer/boot/context, checks review/deadline/skew/inventory, and independently
+   verifies its own inputs. Claimed owner expiry can only shorten validity;
+   signer metadata/policy expiry is independently enforced. The result deadline
+   is the minimum of challenge, ownerNotAfter, reviewDeadline and signer expiry.
+   Publish pending learning before HTTPS and atomically publish learned trust,
+   consumed challenge, exact exchange/result and resolved pending state before
+   replying. No store lock spans network I/O or peer waits.
+5. `result` binds both digests, context/boots, unit/authorization and the existing
+   outcome fields; all five execution flags are false. Its publication wrapper
+   contains the resulting signer head outside the persisted result payload.
+   The owner accepts it only from its authenticated live connection, checks all
+   bindings against its local review and refreshes its own verification/inventory.
+   Before completion the owner sends `confirm` on the same connection, binding
+   ExchangeDigest and SHA256(exact durable result payload). The signer checks its
+   own current boot/head/inventory/time, no pending hold and the unchanged result
+   context, then durably records and returns `confirmed` with its publication-head
+   wrapper. No fresh admission or deadline extension occurs. The fixture owner deliberately
+   rehearses one exact inspection retry and one exact confirmation retry;
+   `liveRetryVerified` is reported only after byte-identical responses. The owner checks this
+   response and its own unchanged refreshed context before local completion,
+   recording result/confirmation digests. This replaces the model's ability to
+   inspect the other actor's live private state. Peer heads remain binding/audit
+   claims, never local trust snapshots. Confirmation proves that point-in-time
+   observation; it does not atomically lock another process until owner commit or
+   authorize any later operation.
+
+Initial hello/status and writes have five-second wall deadlines; payload reads
+have five seconds after the bounded header. Waiting for a reviewed request may
+use the remaining challenge lifetime, never a renewed timeout. The entire
+inspection connection is bounded by 60 seconds of local monotonic wall time
+from challenge issuance as well as role-local fixture time. Each HTTPS inspection
+has a 30-second context ceiling further shortened by remaining validity.
+Maximum four accepted connections and one active inspection per signer boot;
+unavailable capacity refuses without issuing a challenge. Bound status lookups
+to one record and connection frames to hello/challenge, one inspection, one
+confirmation, at most two byte-identical retries of either and their replies.
+Keep the active inspection slot until close/completion, including final review;
+no competing inspection can reuse the checked context. Cancellation closes owned connections,
+stops work and preserves any unresolved pending publication.
+
+### Retry, restart and error semantics
+
+Use finite outcomes `checked`, `progress-only`, `rejected`, `expired`; bounded
+errors distinguish `unauthorized` (no wire reply), `unsupported`, `malformed`,
+`busy`, `conflict`, `held` and `unavailable`. Errors/status cannot carry executable
+paths, configuration, private file contents or credentials. `checked` never
+authorizes installation. Verification/publication errors retain learned trust
+and pending holds; do not turn an error into a successful empty response.
+
+Only a byte-identical inspection/confirmation retry on the original live connection,
+exchange/boots and deadline may return the identical durable result without
+another verification. A changed request consumes the channel. A dropped socket
+cannot be resumed using JSON, digests or a status result. A new authenticated
+connection may query that record as historical audit; it needs fresh challenge
+and review for inspection. Restart changes the local boot ID and fences old
+connections/results while preserving trust, floors, canaries and pending holds.
+One peer's failure never rewinds the other's learned state. New authorization,
+epoch, inventory or incompatible head requires fresh review; exact local
+publication retry follows the existing opaque store rules. No distributed
+financial commit, recovery reset, release reservation or automatic resume exists.
+
+Transport records retain the complete 4 KiB envelope bound, 32-record and
+256 KiB checkpoint limits; no transport payload silently enlarges the store.
+Transport stores use a separately declared namespace/configuration anchor;
+they are not a migration of model or installed stores. Both transport capability
+and existing handoff capability must be explicitly supported; no downgrade to
+legacy owner RPC, lifecycle-4, current opaque receipt JSON or a same-UID path.
+Production lifecycle/schema reader numbering remains UNASSIGNED/BLOCKED.
+
+### Finite compiled and Ubuntu UID acceptance
+
+The following twelve cases are the entire new transport inventory. Every case
+must retain input hashes, process identities, actual credentials/result, store
+before/after hashes and cleanup outcome. Existing HA-01–HA-15 model proof stays
+a distinct evidence class; no fixture result closes a public P4 gate.
+
+| Case  | Required proof / mapping                                                                                                                                                                                                    |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| UT-01 | Separately compiled owner and signer independently inspect the same inert unit and persist completion; all execution flags false, artifacts/canaries/floors unchanged. HA-01/15.                                            |
+| UT-02 | Actual app UID can connect but receives no challenge/reply, cannot inspect/status/write role trees; configured owner UID succeeds. HA-03/16.                                                                                |
+| UT-03 | Owner rejects a fake signer under app/owner UID before sending hello; root, wrong/equal/missing UIDs, foreign socket or shared/app-writable paths refuse. HA-02/03/16.                                                      |
+| UT-04 | Zero/oversized length, duplicate/unknown/case-alias JSON, truncation/slow frames, wrong profile/capability/version and state/order refuse with bounded resources. HA-03.                                                    |
+| UT-05 | Mutated request/expiry/exchange, wrong channel/client nonce, copied response/status or cross-connection replay never completes; identical live retry returns the same result once. HA-07/14.                                |
+| UT-06 | Independent input/pin/byte/provenance mismatch or owner review denial refuses; changing only one role's fixture inputs changes only its own verification result. HA-02/04.                                                  |
+| UT-07 | Role-local backward/uncertain time, skew, equal expiry, expired review and monotonic wall deadline refuse without extending validity. HA-05.                                                                                |
+| UT-08 | Restart either process fences old boots/results; final owner refresh and same-connection signer confirmation reject changed authorization/inventory or signer restart after result, preserving both histories. HA-07/08/10. |
+| UT-09 | Kill/drop after pending, result publication and before/after reply; exact durable status is historical, unknown learning/anchor gap holds, no financial/store rewind. HA-06/12/13/14.                                       |
+| UT-10 | Concurrent connection/CAS conflict, held intent, missing/corrupt anchor/checkpoint and exhausted caps fail closed; no reset, shared-lock wait or unbounded worker. HA-08/09/11.                                             |
+| UT-11 | Command rejects absent fixture/config pins and production/artifact/execution options; ordinary packages/services/core/signer expose no new route, unsupported platforms refuse. HA-15.                                      |
+| UT-12 | Three actual distinct nonzero UIDs on Ubuntu 24.04; project code never root; owned processes, sockets, generated keys/fixtures and identities cleaned, foreign resources preserved. HA-16.                                  |
+
+The local runner uses compiled Go test child processes with the current nonzero
+UID and a private `_test.go` same-UID constructor. It is SUPPORTING for transport
+logic and cannot assert UT-02/03's distinct-UID or UT-12 predicates. That override
+is private test construction only: the fixture command and UID runner never
+accept it as a configuration/CLI fallback.
+
+The UID runner is restricted to an explicitly opted-in disposable Ubuntu 24.04
+GitHub runner, not owner hosts/VPS. Start as the normal runner user, check
+`sudo -n true` once and stop if unavailable. Provision three new locked nonzero
+UIDs and a random inventoried scratch prefix; refuse collisions/adoption.
+Only fixed validated OS tools run privileged (identity/directory/file ownership
+setup and credential drop). Compile under the ordinary user, stage hash-verified
+read-only binaries in a non-role-writable prefix, then launch every project
+process only after `setpriv` drops real/effective/saved UID/GID, supplementary
+groups and capabilities with no-new-privileges. Child code asserts nonroot
+identity. No root shell, `sudo node/go`, service manager, installed vault,
+AppArmor/network policy, owner identity or real home/data mutation is allowed.
+Controlled HTTPS serves only loopback disposable fixtures; retain no key in logs.
+
+Register cleanup before creating resources, including failure/cancellation traps.
+Stop exact recorded child PIDs with start-identity checks, save small logs/receipts,
+then remove only inventoried scratch/resources and newly created identities after
+verifying UID/path ownership. Never recursively delete a supplied path or adopt
+an existing account/socket. Cleanup failure is FAIL, not HA-16 PASS. A hard runner
+loss remains BLOCKED until disposal is established. Preserve failure evidence;
+do not reinitialize a failed store in the same experiment to manufacture success.
+
+### Implemented files and completion commands
+
+The connected fixture package is in `internal/update/handoff_transport.go`,
+`handoff_transport_linux.go`, `handoff_transport_unsupported.go`,
+`handoff_transport_test.go`, `handoff_transport_linux_test.go`, with anchor hooks in
+`handoff.go` and the unchanged bounded combined-store primitives. It adds
+`cmd/fased-handoff-fixture/main.go` and `main_test.go`,
+`scripts/check-update-handoff-transport.mjs` and
+`scripts/check-update-handoff-uid.mjs`. `scripts/handoff-transport-evidence.mjs` shares only fingerprint/receipt helpers.
+`.github/workflows/checks.yml` owns a dedicated Ubuntu 24.04 UID job and aggregate dependency, without changing installed
+signer/model acceptance, permissions or existing timeouts. Keep documentation in
+this section and the existing Fased planning files. Do not touch installed command,
+RPC, packaging, service or controller dispatch to expose the fixture command.
+
+Six exact new test entrypoints are required:
+`TestFixtureTransportBindings`, `TestFixtureTransportFraming`,
+`TestFixtureTransportIndependentPeers`, `TestFixtureTransportReplayRecovery`,
+`TestFixtureTransportBounds` and `TestFixtureTransportNoExecution`.
+The ordinary-user runner enforces this exact list before a focused race run,
+compiles the fixture command once for rejection/argument checks and the race-test
+child binary once for local peers, checks absent installed routes and runs the
+finite local cases with their UID predicates explicitly SUPPORTING/BLOCKED.
+It preserves sources/receipts and cleans generated resources. The UID runner
+reuses its matching binary or compiles once in CI, independently proves all twelve
+cases and records the three UIDs/kernel credentials. No matching test is a failure.
+Freeze implementation inputs before running the coupled model/update/command
+checks once; retain the existing six model entrypoints and run portability compile
+checks for changed commands/stubs. Reuse unrelated UI/legacy evidence when valid.
+
+These development-only commands require explicit fixture opt-in. Their exact
+receipts and source identities, rather than this document, establish test results:
+
+```bash
+set -eu
+test -f scripts/check-update-handoff-transport.mjs
+test -f scripts/check-update-handoff-uid.mjs
+FASED_HANDOFF_TRANSPORT_FIXTURE=1 node scripts/check-update-handoff-transport.mjs
+```
+
+On the disposable Ubuntu CI runner only, after local checks:
+
+```bash
+set -eu
+test -f scripts/check-update-handoff-uid.mjs
+test "${GITHUB_ACTIONS:-}" = true
+test "${RUNNER_OS:-}" = Linux
+FASED_HANDOFF_UID_CI=1 node scripts/check-update-handoff-uid.mjs
+```
+
+Both scripts must self-enforce the stated flags/host/identity boundaries, finite
+cases and source/binary hashes. Completion receipts live in
+`.evidence/p4-handoff-transport/` and `.evidence/p4-handoff-uid/`, with exact
+source/tree, cases, OS/kernel UID proof, zero-execution and cleanup. Missing/failed receipts keep the corresponding compiled/UID predicate BLOCKED.
+Even future fixture PASS does not authorize installed integration, production
+bootstrap/time/provenance, real keys/funds, public updates or P5.
 
 ## Development HTTPS acquisition and bootstrap trust
 
