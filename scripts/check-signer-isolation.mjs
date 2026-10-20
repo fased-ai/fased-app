@@ -14,7 +14,7 @@ assert.notEqual(process.getuid(), 0);
 const evidence = resolve(".evidence/p3-signer");
 await mkdir(evidence, { recursive: true, mode: 0o700 });
 const token = randomBytes(6).toString("hex");
-const root = `/opt/fased-signer-fixture-${token}`;
+const root = `/etc/fased-signer-fixture-${token}`;
 const binary = `${root}/fased-signer`;
 const localBinary = resolve(".evidence/bin/fased-signer");
 const users = [],
@@ -79,11 +79,12 @@ const invoke = (user, config, role, action, input, extra = []) =>
       input,
     ),
   );
-const fails = (fn) => {
+const fails = (fn, expected) => {
   try {
     fn();
     return false;
-  } catch {
+  } catch (error) {
+    if (expected) assert.match(String(error.stderr || error.message), expected);
     return true;
   }
 };
@@ -170,6 +171,18 @@ async function stop(record) {
   }
 }
 try {
+  report.trustedAncestors = [];
+  for (const directory of ["/", "/etc"]) {
+    const info = await lstat(directory);
+    assert.equal(info.uid, 0);
+    assert.equal(info.isDirectory(), true);
+    assert.equal(info.mode & 0o022, 0);
+    report.trustedAncestors.push({
+      path: directory,
+      uid: info.uid,
+      mode: info.mode & 0o777,
+    });
+  }
   // Refuse adoption of a pre-existing path, even with a random fixture suffix.
   assert.equal(
     await lstat(root).then(
@@ -269,13 +282,15 @@ try {
   const configPath = await publishConfig("identity.json", config);
   check(
     "wrongDaemonUIDDenied",
-    fails(() =>
-      as(app, binary, [
-        "serve",
-        "--config",
-        configPath,
-        "--disposable-fixture",
-      ]),
+    fails(
+      () =>
+        as(app, binary, [
+          "serve",
+          "--config",
+          configPath,
+          "--disposable-fixture",
+        ]),
+      /daemon must run only as its configured unprivileged signer UID/,
     ),
   );
   const sameUID = await publishConfig("same-uid.json", {
@@ -284,13 +299,15 @@ try {
   });
   check(
     "sameUIDTopologyDenied",
-    fails(() =>
-      as(signer, binary, [
-        "serve",
-        "--config",
-        sameUID,
-        "--disposable-fixture",
-      ]),
+    fails(
+      () =>
+        as(signer, binary, [
+          "serve",
+          "--config",
+          sameUID,
+          "--disposable-fixture",
+        ]),
+      /three distinct non-root UIDs/,
     ),
   );
   let server = await start(signer, configPath);
@@ -478,7 +495,7 @@ print(json.dumps(result))
     }
   }
   if (createdRoot && !cleanupErrors.length) {
-    assert.match(root, /^\/opt\/fased-signer-fixture-[a-f0-9]{12}$/);
+    assert.match(root, /^\/etc\/fased-signer-fixture-[a-f0-9]{12}$/);
     try {
       privileged("/usr/bin/rm", ["-r", "--", root]);
     } catch (e) {
