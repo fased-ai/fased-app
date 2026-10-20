@@ -1,0 +1,32 @@
+.update-status h3 {
+  margin: 1.2rem 0 0.6rem;
+}
+.update-observations {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 0.7rem 1rem;
+  font-size: 0.85rem;
+}
+.update-observations dt {
+  color: var(--muted);
+}
+.update-observations dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.update-observations small {
+  display: block;
+  margin-top: 0.3rem;
+}
+.update-guidance {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+.update-guidance li {
+  margin: 0.8rem 0;
+}
+.update-guidance pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.75rem;
+}

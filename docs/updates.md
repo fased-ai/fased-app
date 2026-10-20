@@ -1,9 +1,64 @@
 # Development update verification
 
-P4 begins with a **read-only engineering verifier**. Automatic updates and
-installation remain disabled. There is no public signing key, release download,
+P4 provides a **development verifier and protected disposable installation flow**.
+Real wallets and automatic updates remain disabled. There is no public signing key, release download,
 bootstrap trust, key-rotation mechanism or updater service. Existing installation
 commands still refuse in-place binary replacement. Nothing here enables wallets.
+
+## Shared read-only status and recovery guidance
+
+Open **Settings → Updates & recovery** in the private UI, or use the same
+authenticated core contract from the CLI:
+
+```sh
+fased-app updates status --data-dir /absolute/instance/directory
+```
+
+Use the existing instance's CLI login first (`fased-app login --data-dir
+/absolute/instance/directory`). The command reads through private IPC. It does not
+open SQLite directly, create an intent, contact a release server or install anything.
+For the existing Linux managed disposable installation, use its verified immutable
+app helper and identity switch:
+
+```sh
+fased-app custody updates status --disposable-fixture --prepare-host
+```
+
+That command requires the existing owner OS authorization and managed CLI login
+(`fased-app custody login --disposable-fixture --prepare-host`). It does not take
+the owner update lock or use the signer's administrative channel. Status cannot
+repair an unavailable core: start/reconnect to the existing instance instead.
+
+`GET /api/v1/updates/status` requires an authenticated session, exact host/origin,
+and returns a noncacheable version-1 observation. UI and CLI consume this same
+response. It reports the validated core metadata fence (`idle`, `paused`,
+`released` or `unavailable`) and the signer's actual public connection, wallet
+lock, update/storage hold and recovery hold. Missing/unsupported signer replies
+produce unknown values, never an unlocked or cleared state. The UI removes its
+previous observation during refresh and on failure; timestamps label observations,
+and nothing polls or executes updates automatically. Prototype mode shows no live status.
+
+Core and signer observations can change independently. A core intent reference is
+app-owned metadata. A released fence or absent public hold does not prove an
+installed sequence, successful update, latest release or permission to trade.
+No owner inventory, sequence counter, authority anchor, key, credential, backup
+image or financial journal is exposed through this view.
+
+If paused, preserve the instance and recovery files. If the signer is unavailable,
+its lock and holds are unknown. If it reports recovery required, key-only recovery
+does not reconstruct financial history. On the installed owner's terminal, inspect
+the actual protected inventory:
+
+```sh
+fased-app custody updates inventory --disposable-fixture --prepare-host
+```
+
+Then use the existing protected review for the exact retained intent and operation
+documented below. The UI offers no apply, abort, release, restore, resume, approve
+or unlock control. Never delete the pause/host marker, restore old signer databases,
+rewind counters or clear unknown/recovery holds to make status look healthy.
+Public acquisition/trust, policy/scheduling UI, native custody, real VPS and portable
+financial-history recovery remain separate acceptance gates.
 
 The core exposes its compiled format/feature contract:
 

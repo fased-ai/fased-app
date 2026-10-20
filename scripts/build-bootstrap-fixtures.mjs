@@ -1,7 +1,16 @@
 // Ordinary-user compiler for reconstructible predecessor and bad-health fixtures.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, cp, writeFile, rm, readFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  cp,
+  writeFile,
+  rm,
+  readFile,
+  symlink,
+  readdir,
+} from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 assert(process.getuid() > 0);
@@ -29,28 +38,45 @@ try {
       maxBuffer: 64 << 20,
     });
     execFileSync("tar", ["-xf", "-", "-C", dir], { input: bytes });
-    await cp("dist", path.join(dir, "dist"), { recursive: true });
     return dir;
   };
   assert.equal(
     execFileSync(
       "git",
-      [
-        "diff",
-        prior,
-        "--",
-        "package.json",
-        "package-lock.json",
-        "web",
-        "ui.go",
-        "vite.config.ts",
-      ],
+      ["diff", prior, "--", "package.json", "package-lock.json"],
       { encoding: "utf8" },
     ),
     "",
-    "predecessor embedded UI inputs changed",
+    "predecessor dependencies changed; install a separately pinned dependency tree before building its UI",
   );
   const old = await archive(prior, "predecessor");
+  // UI changes must not silently put today's frontend in an older executable.
+  // Reuse only identical pinned dependencies, then compile the genuine old UI.
+  await symlink(
+    path.resolve("node_modules"),
+    path.join(old, "node_modules"),
+    "dir",
+  );
+  execFileSync("npm", ["run", "build"], { cwd: old, stdio: "pipe" });
+  const oldUI = {};
+  const hashUI = async (dir) => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory()) await hashUI(file);
+      else
+        oldUI[path.relative(old, file)] = createHash("sha256")
+          .update(await readFile(file))
+          .digest("hex");
+    }
+  };
+  await hashUI(path.join(old, "dist"));
+  report.predecessorUI = {
+    mode: "built-from-pinned-source",
+    dependencyLockSha256: createHash("sha256")
+      .update(await readFile(path.join(old, "package-lock.json")))
+      .digest("hex"),
+    outputs: oldUI,
+  };
   for (const command of ["fased-app", "fased-signer"]) {
     const file = path.join(root, command + "-lifecycle3");
     execFileSync(

@@ -146,11 +146,15 @@ func (s *System) appClient(ctx context.Context, m Manifest, action string, flags
 	return s.appClientInput(ctx, m, action, flags, s.In, out)
 }
 
+func (s *System) UpdateStatus(ctx context.Context, m Manifest, out io.Writer) error {
+	return s.appClientInput(ctx, m, "update-status", nil, nil, out)
+}
+
 // Authorize using the owner's original input. Only the final unprivileged
 // project child receives the payload reader; exec may drain readers even when
 // an authorization utility does not read its stdin.
 func (s *System) appClientInput(ctx context.Context, m Manifest, action string, flags []string, input io.Reader, out io.Writer) error {
-	if action != "claim-code" && action != "recover" && action != "accounts" && action != "login" && action != "update-inventory" && action != "update-pause" && action != "update-backup" && action != "update-recovery" {
+	if action != "claim-code" && action != "recover" && action != "accounts" && action != "login" && action != "update-inventory" && action != "update-pause" && action != "update-backup" && action != "update-recovery" && action != "update-status" {
 		return errors.New("unsupported app helper action")
 	}
 	if e := Verify(m); e != nil {

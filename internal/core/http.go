@@ -157,6 +157,13 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
+	case "/api/v1/updates/status":
+		if r.Method != http.MethodGet {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		writeJSON(w, 200, h.store.ReadUpdateStatus(r.Context()))
+		return
 	case "/api/v1/updates/backup", "/api/v1/updates/recovery":
 		h.backupAPI(w, r, token)
 		return

@@ -30,6 +30,9 @@ func main() {
 	}
 }
 func run(args []string, in *os.File, out, errOut io.Writer) error {
+	if len(args) > 0 && args[0] == "update-status" {
+		return updateStatusCommand(args[1:], out, errOut)
+	}
 	if len(args) > 0 && args[0] == "owner-bootstrap" {
 		return ownerBootstrapCommand(args[1:], in, out, errOut)
 	}

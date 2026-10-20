@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { once } from "node:events";
+import { createHash, randomBytes } from "node:crypto";
 
 const exec = promisify(execFile);
 const binary = resolve(
@@ -49,6 +50,207 @@ test.afterEach(async () => {
   } finally {
     if (dir) await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("update status shares UI and private CLI observations across pause, release and restart", async ({
+  page,
+}) => {
+  await expect(
+    exec(binary, ["updates", "status", "--data-dir", dir]),
+  ).rejects.toThrow();
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page.getByRole("button", { name: "Claim workspace" }).click();
+  await page.goto(url + "/#settings");
+  const panel = page.getByRole("region", { name: "Updates & recovery" });
+  await expect(
+    panel.getByRole("heading", { name: "Signer not configured" }),
+  ).toBeVisible();
+  await expect(panel.getByText("Unknown", { exact: true })).toHaveCount(3);
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const cli = async (args: string[], input?: unknown) => {
+    if (input === undefined)
+      return JSON.parse(
+        (await exec(binary, [...args, "--data-dir", dir])).stdout,
+      );
+    const child = spawn(binary, [...args, "--data-dir", dir]);
+    let output = "",
+      error = "";
+    child.stdout!.on("data", (b) => (output += b));
+    child.stderr!.on("data", (b) => (error += b));
+    child.stdin!.end(JSON.stringify(input));
+    expect((await once(child, "exit"))[0], error).toBe(0);
+    return JSON.parse(output);
+  };
+  const before = await cli(["updates", "status"]);
+  expect(before.core.phase).toBe("idle");
+  expect(before.automaticUpdates).toBe(false);
+  const probe = randomBytes(16).toString("hex");
+  const snapshot = await cli(["update-inventory", "--probe-id", probe]);
+  const request = {
+    version: 1,
+    intentId: randomBytes(16).toString("hex"),
+    sequence: "1",
+    manifestSha256: createHash("sha256")
+      .update("disposable browser fence; no signer authority")
+      .digest("hex"),
+    expected: snapshot,
+  };
+  await cli(["update-pause", "--request-stdin"], {
+    action: "pause",
+    probeId: probe,
+    request,
+  });
+  await panel.getByRole("button", { name: "Refresh update status" }).click();
+  await expect(
+    panel.getByRole("heading", { name: "Metadata paused", exact: true }),
+  ).toBeVisible();
+  await expect(
+    panel.getByText(request.intentId, { exact: true }),
+  ).toBeVisible();
+  const held = await cli(["updates", "status"]);
+  expect(held.core).toEqual({ phase: "paused", intentId: request.intentId });
+  expect(held.signer).toEqual(before.signer);
+  expect(held.guidance.some((g: { code: string }) => g.code === "paused")).toBe(
+    true,
+  );
+  await page.screenshot({
+    path: `.evidence/p4-status/paused-${test.info().project.name}.png`,
+    fullPage: true,
+  });
+  const token = await page.evaluate(() =>
+    sessionStorage.getItem("fased.core.session.v1"),
+  );
+  expect(
+    (
+      await page.request.post(`${url}/api/v1/updates/pause`, {
+        headers: { Authorization: "Bearer " + token, Origin: url },
+        data: {},
+      })
+    ).status(),
+  ).toBe(403);
+  expect(
+    (
+      await page.request.post(`${url}/api/v1/updates/status`, {
+        headers: { Authorization: "Bearer " + token },
+        data: {},
+      })
+    ).status(),
+  ).toBe(405);
+  await stop();
+  await start();
+  await page.goto(url + "/#settings");
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(
+    panel.getByRole("heading", { name: "Metadata paused", exact: true }),
+  ).toBeVisible();
+  await cli(["update-pause", "--request-stdin"], {
+    action: "release",
+    probeId: probe,
+    aborted: {
+      id: request.intentId,
+      sequence: "1",
+      manifestSha256: request.manifestSha256,
+      core: snapshot,
+      state: "aborted",
+    },
+  });
+  await panel.getByRole("button", { name: "Refresh update status" }).click();
+  await expect(
+    panel.getByRole("heading", { name: "Signer not configured", exact: true }),
+  ).toBeVisible();
+  await expect(panel.getByText("released", { exact: true })).toBeVisible();
+  expect((await cli(["updates", "status"])).core.phase).toBe("released");
+});
+
+test("update recovery view rejects unsupported or lost status without retaining a healthy observation (UI mock only)", async ({
+  page,
+}) => {
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page.getByRole("button", { name: "Claim workspace" }).click();
+  let fail = false,
+    unsupported = false;
+  const observation = {
+    version: 1,
+    observedAt: new Date().toISOString(),
+    readOnly: true,
+    state: "recovery-required",
+    core: { phase: "paused" },
+    signer: {
+      state: "available",
+      locked: true,
+      updateHeld: true,
+      recoveryRequired: true,
+    },
+    guidance: [
+      {
+        code: "recovery-required",
+        message: "Preserve keys, original records, counters and holds.",
+        command:
+          "fased-app custody updates inventory --disposable-fixture --prepare-host",
+      },
+    ],
+    walletSigner: false,
+    financialExecution: false,
+    automaticUpdates: false,
+  };
+  await page.route("**/api/v1/updates/status", async (route) => {
+    if (fail) return route.abort("failed");
+    await route.fulfill({
+      json: { ...observation, automaticUpdates: unsupported },
+    });
+  });
+  await page.goto(url + "/#settings");
+  const panel = page.getByRole("region", { name: "Updates & recovery" });
+  await expect(
+    panel.getByRole("heading", {
+      name: "Recovery review required",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(panel.getByLabel("Owner inventory command")).toContainText(
+    "custody updates inventory",
+  );
+  await expect(panel.getByText("Locked", { exact: true })).toBeVisible();
+  await expect(panel.getByRole("button")).toHaveCount(1);
+  await page.screenshot({
+    path: `.evidence/p4-status/recovery-mock-${test.info().project.name}.png`,
+    fullPage: true,
+  });
+  unsupported = true;
+  await panel.getByRole("button", { name: "Refresh update status" }).click();
+  await expect(panel.getByRole("alert")).toContainText(
+    "Update status unavailable",
+  );
+  await expect(
+    panel.getByText("Recovery review required", { exact: true }),
+  ).toHaveCount(0);
+  fail = true;
+  await panel.getByRole("button", { name: "Refresh update status" }).click();
+  await expect(panel.getByRole("alert")).toBeVisible();
+  fail = false;
+  unsupported = false;
+  await panel.getByRole("button", { name: "Refresh update status" }).click();
+  await expect(
+    panel.getByRole("heading", {
+      name: "Recovery review required",
+      exact: true,
+    }),
+  ).toBeVisible();
 });
 
 test("claim, UI/CLI setup, restart and logout use one private instance", async ({

@@ -251,6 +251,9 @@ func ownerUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) erro
 
 // Delegate to the immutable owner binary, retaining its terminal.
 func custodyUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) error {
+	if len(args) > 0 && args[0] == "status" {
+		return custodyCommand(append([]string{"update-status"}, args[1:]...), in, out, errOut)
+	}
 	if runtime.GOOS != "linux" || os.Getuid() <= 0 || len(args) == 0 {
 		return errors.New("managed disposable Linux owner required")
 	}
