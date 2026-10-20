@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -13,6 +14,26 @@ import (
 // CheckSandbox runs inside the installed engine's own namespace, before opening
 // its database or listener. Unit directives alone are not enforcement evidence.
 func CheckSandbox(root, data string) error {
+	return checkSandbox(root, data, definitionName)
+}
+
+// The managed topology's code belongs to root. Permission checks on root's
+// files can return EACCES before mount read-only checks. Use a non-policy marker
+// owned/writable by the service UID so only EROFS establishes this predicate.
+func CheckManagedSandbox(root, data string) error {
+	path := filepath.Join(root, "app-readonly-probe")
+	i, e := os.Lstat(path)
+	if e != nil {
+		return e
+	}
+	st, ok := i.Sys().(*syscall.Stat_t)
+	if !ok || !i.Mode().IsRegular() || int(st.Uid) != os.Geteuid() || i.Mode().Perm() != 0600 {
+		return errors.New("managed read-only marker must be private and writable by the app UID")
+	}
+	return checkSandbox(root, data, "app-readonly-probe")
+}
+
+func checkSandbox(root, data, probeName string) error {
 	if root == "" || data == "" {
 		return errors.New("installed sandbox paths are missing")
 	}
@@ -22,7 +43,7 @@ func CheckSandbox(root, data string) error {
 	}
 	// This write-open performs no write. Only EROFS proves the expected mount;
 	// ordinary file permissions are not accepted as isolation.
-	f, err := os.OpenFile(filepath.Join(root, definitionName), os.O_RDWR, 0)
+	f, err := os.OpenFile(filepath.Join(root, probeName), os.O_RDWR, 0)
 	if err == nil {
 		f.Close()
 		var st unix.Statfs_t

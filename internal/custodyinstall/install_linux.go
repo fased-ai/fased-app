@@ -256,6 +256,16 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 			}
 		}
 		files := definitions(m)
+		if _, pe := os.Lstat(stage + "/app-readonly-probe"); os.IsNotExist(pe) {
+			if _, e = s.Run(ctx, nil, "/usr/bin/install", "-m", "0600", "-o", strconv.Itoa(app.UID), "-g", strconv.Itoa(app.GID), "--", "/dev/null", stage+"/app-readonly-probe"); e != nil {
+				return m, e
+			}
+		} else if pe != nil {
+			return m, pe
+		}
+		if e = verifyProbe(stage+"/app-readonly-probe", app); e != nil {
+			return m, e
+		}
 		cfg, _ := json.Marshal(identityConfig(m))
 		manifest, _ := json.Marshal(m)
 		files["identity.json"] = cfg
@@ -322,6 +332,9 @@ func Verify(m Manifest) error {
 	if e := m.validate(); e != nil {
 		return e
 	}
+	if e := verifyProbe(m.Root+"/app-readonly-probe", m.App); e != nil {
+		return e
+	}
 	for _, pair := range []struct {
 		i    Identity
 		role string
@@ -370,6 +383,18 @@ func Verify(m Manifest) error {
 		if e != nil || !known(f, b, 0644) {
 			return errors.New("stored unit definition changed")
 		}
+	}
+	return nil
+}
+
+func verifyProbe(path string, app Identity) error {
+	i, e := os.Lstat(path)
+	if e != nil {
+		return e
+	}
+	st, ok := i.Sys().(*syscall.Stat_t)
+	if !ok || !i.Mode().IsRegular() || int(st.Uid) != app.UID || int(st.Gid) != app.GID || i.Mode().Perm() != 0600 {
+		return errors.New("foreign read-only marker; preserving it")
 	}
 	return nil
 }

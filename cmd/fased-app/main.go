@@ -88,7 +88,12 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 			}
 		}
 		if *requireSandbox {
-			if err = localinstall.CheckSandbox(*installationRoot, *dir); err != nil {
+			if *custodyConfig != "" {
+				err = localinstall.CheckManagedSandbox(*installationRoot, *dir)
+			} else {
+				err = localinstall.CheckSandbox(*installationRoot, *dir)
+			}
+			if err != nil {
 				return err
 			}
 		}

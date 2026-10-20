@@ -23,6 +23,9 @@ systemd sandboxing protect both services; the core checks its actual UID,
 NoNewPrivs, read-only installation and writable private state before opening its
 database or listener. The browser must never receive private keys or unlock
 credentials through the app.
+The read-only check uses a disposable, non-policy marker owned/writable by the
+app UID and still requires kernel EROFS; root-owned code/configuration is never
+made writable by the app. Permission denial on root's files is not mount proof.
 Windows and macOS remain unavailable until their own identity/IPC proof passes.
 
 The fixture uses Go's Ed25519 key generation, AES-256-GCM and the already pinned

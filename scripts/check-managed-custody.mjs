@@ -615,6 +615,24 @@ s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/app.sock');f=s.makefi
   throw error;
 } finally {
   const cleanup = [];
+  if (ownsInfrastructure && report.result !== "PASS") {
+    for (const unit of units) {
+      try {
+        log +=
+          "\n" +
+          osTool("/usr/bin/systemctl", [
+            "show",
+            unit,
+            "--property=ActiveState,MainPID,User,Group,FragmentPath,DropInPaths",
+          ]);
+        log +=
+          "\n" +
+          osTool("/usr/bin/journalctl", ["--no-pager", "-n", "35", "-u", unit]);
+      } catch (error) {
+        log += "\nservice diagnostics unavailable: " + error.message;
+      }
+    }
+  }
   if (transient && transient.exitCode === null && transient.signalCode === null)
     transient.kill("SIGKILL");
   // Every destination below was proven absent before this disposable CI test.
