@@ -20,7 +20,7 @@ import (
 
 func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result error) {
 	if len(args) == 0 {
-		return errors.New("usage: fased-app custody install|status|setup|recover|remove --disposable-fixture [options]")
+		return errors.New("usage: fased-app custody install|status|setup|recover|approve|accounts|login|remove --disposable-fixture [options]")
 	}
 	if runtime.GOOS != "linux" || os.Getuid() <= 0 || os.Getuid() != os.Geteuid() {
 		return errors.New("custody fixture requires an ordinary Linux owner; real wallets remain disabled")
@@ -32,6 +32,9 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 	key := f.String("signer-binary", "", "matching engineering fased-signer executable")
 	listen := f.String("listen", "127.0.0.1:7332", "managed private loopback listener")
 	file := f.String("backup-file", "", "owner-selected private encrypted backup file")
+	proposalFile := f.String("proposal-file", "", "owner-selected public proposal JSON")
+	approvalStdin := f.Bool("approval-stdin", false, "fixture CI only: approval challenge through stdin")
+	requestStdin := f.Bool("request-stdin", false, "public account record JSON from stdin")
 	passwordStdin := f.Bool("password-stdin", false, "scripted fixture passwords through private stdin only")
 	if e := f.Parse(args[1:]); e != nil {
 		return e
@@ -89,6 +92,27 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 		}
 		fmt.Fprintln(out, "Managed service definitions removed; disabled identities, instance data, signer keys and recovery state preserved at", m.Root)
 		return nil
+	case "accounts", "login":
+		if !*prepare {
+			return errors.New("managed CLI access requires explicit --prepare-host authorization for the OS identity switch")
+		}
+		return system.AccountsHelper(ctx, m, args[0] == "login", *requestStdin, *passwordStdin, out)
+	case "approve":
+		if *proposalFile == "" {
+			return errors.New("choose --proposal-file containing a public proposal")
+		}
+		command := []string{"approve", "--config", m.Root + "/identity.json", "--disposable-fixture", "--file", *proposalFile}
+		if *approvalStdin {
+			command = append(command, "--approval-stdin")
+		}
+		if *passwordStdin {
+			command = append(command, "--password-stdin")
+		}
+		child := exec.CommandContext(ctx, m.Root+"/fased-signer", command...)
+		child.Stdin = in
+		child.Stdout = out
+		child.Stderr = errOut
+		return child.Run()
 	case "setup", "recover":
 		if *file == "" {
 			return errors.New("choose --backup-file in a private owner directory")

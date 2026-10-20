@@ -30,11 +30,14 @@ func main() {
 	}
 }
 func run(args []string, in *os.File, out, errOut io.Writer) error {
+	if len(args) > 0 && args[0] == "accounts" {
+		return accountsCommand(args[1:], in, out, errOut)
+	}
 	if len(args) > 0 && args[0] == "custody" {
 		return custodyCommand(args[1:], in, out, errOut)
 	}
 	if len(args) == 0 {
-		return errors.New("usage: fased-app install|custody|service|open|access|recover|uninstall|serve|status|claim-code|claim|login|logout|setup|version [options]")
+		return errors.New("usage: fased-app accounts|install|custody|service|open|access|recover|uninstall|serve|status|claim-code|claim|login|logout|setup|version [options]")
 	}
 	if args[0] == "install" || args[0] == "uninstall" || args[0] == "service" || args[0] == "open" {
 		return hostCommand(args, out, errOut)
@@ -97,7 +100,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 				return err
 			}
 		}
-		return serve(*dir, *listen, *publicOrigin, out)
+		return serve(*dir, *listen, *publicOrigin, out, *custodyConfig)
 	case "claim-code":
 		store, err := core.OpenStore(*dir)
 		if err != nil {
@@ -227,8 +230,8 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 func defaultDir() (string, error) {
 	return core.DefaultDataDir()
 }
-func serve(dir, listen, publicOrigin string, out io.Writer) error {
-	server, err := core.Start(context.Background(), dir, listen, publicOrigin, fasedapp.UI())
+func serve(dir, listen, publicOrigin string, out io.Writer, custodyConfig ...string) error {
+	server, err := core.Start(context.Background(), dir, listen, publicOrigin, fasedapp.UI(), custodyConfig...)
 	if err != nil {
 		return err
 	}

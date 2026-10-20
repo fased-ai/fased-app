@@ -158,6 +158,8 @@ jobs:
           npm ci
           npm run build
           go build -trimpath -o .evidence/bin/fased-app ./cmd/fased-app
+      - name: Managed account UI browser prerequisite
+        run: npx playwright install --with-deps chromium
       - name: Installer-managed identities and protected owner recovery
         run: node scripts/check-managed-custody.mjs
       - uses: actions/upload-artifact@v4
@@ -170,6 +172,7 @@ jobs:
             .evidence/p3-signer/isolation.log
             .evidence/p3-managed/managed-install-result.json
             .evidence/p3-managed/managed-install.log
+            .evidence/p3-managed/accounts-ui-*.png
           retention-days: 7
   prototype:
     if: always()

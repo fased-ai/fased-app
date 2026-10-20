@@ -10,10 +10,16 @@ import {
   ShieldCheck,
   Wallet,
 } from "../icons";
+import { useCore } from "../core";
+import { AccountManagement } from "./AccountManagement";
 import { walletNames, type WalletMode } from "../state";
 import { Badge, SectionHead, Empty } from "../components/shared";
 import { useWorkspace } from "../workspace";
 export function Wallets() {
+  const core = useCore();
+  return core.mode === "ready" ? <AccountManagement /> : <WalletPreview />;
+}
+function WalletPreview() {
   const { state, dispatch, setSetupOpen, setActionOpen, tab, navigate } =
     useWorkspace();
   return (

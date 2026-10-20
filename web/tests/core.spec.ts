@@ -7,7 +7,9 @@ import { join, resolve } from "node:path";
 import { once } from "node:events";
 
 const exec = promisify(execFile);
-const binary = resolve(".evidence/bin/fased-app");
+const binary = resolve(
+  process.env.FASED_CORE_BINARY ?? ".evidence/bin/fased-app",
+);
 const fixturePassword = "generated-browser-fixture-password";
 let dir: string;
 let child: ChildProcess | undefined;
@@ -208,4 +210,104 @@ test("production UI fails closed when the core API is unavailable", async ({
   await expect(
     page.getByRole("button", { name: "Set up workspace" }),
   ).toHaveCount(0);
+});
+
+test("public account records share UI/CLI state without wallet authority", async ({
+  page,
+}) => {
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page.getByRole("button", { name: "Claim workspace" }).click();
+  await page.goto(url + "/#wallets/accounts");
+  await expect(
+    page.getByRole("heading", { name: "Public account records" }),
+  ).toBeVisible();
+  await page.getByLabel("Name", { exact: true }).fill("Disposable watch");
+  await page
+    .getByLabel("Disposable public key (64 lowercase hex)")
+    .fill("4".repeat(64));
+  await page
+    .getByRole("button", { name: "Save public account", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Disposable watch", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Record disposable signer", exact: true }),
+  ).toBeDisabled();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin.end(fixturePassword + "\n");
+  await once(login, "exit");
+  expect(login.exitCode).toBe(0);
+  let state = JSON.parse(
+    (await exec(binary, ["accounts", "--data-dir", dir])).stdout,
+  );
+  expect(state.record.accounts[0].name).toBe("Disposable watch");
+  expect(state.fixture.available).toBe(false);
+  const stale = structuredClone(state.record);
+  await page.getByRole("button", { name: "Rename", exact: true }).click();
+  await page.getByLabel("New account name").fill("Shared watch");
+  await page
+    .getByRole("button", { name: "Save account name", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Shared watch", exact: true }),
+  ).toBeVisible();
+  const rejected = spawn(binary, [
+    "accounts",
+    "--data-dir",
+    dir,
+    "--request-stdin",
+  ]);
+  rejected.stdin.end(JSON.stringify(stale));
+  await once(rejected, "exit");
+  expect(rejected.exitCode).not.toBe(0);
+  state = JSON.parse(
+    (await exec(binary, ["accounts", "--data-dir", dir])).stdout,
+  );
+  state.record.accounts.push({
+    version: 1,
+    id: "b".repeat(32),
+    name: "External manual fixture",
+    mode: "external",
+    network: "disposable-fixture:v1",
+    publicKey: "5".repeat(64),
+  });
+  const change = spawn(binary, [
+    "accounts",
+    "--data-dir",
+    dir,
+    "--request-stdin",
+  ]);
+  change.stdin.end(JSON.stringify(state.record));
+  await once(change, "exit");
+  expect(change.exitCode).toBe(0);
+  await page
+    .getByRole("button", { name: "Refresh accounts and approvals" })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "External manual fixture", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("REAL WALLETS DISABLED", { exact: true }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: `.evidence/p3-accounts/public-accounts-${test.info().project.name}.png`,
+    fullPage: true,
+  });
+  await page.evaluate(() => sessionStorage.removeItem("fased.core.session.v1"));
+  await stop();
+  await start();
+  await page.goto(url + "/#wallets/accounts");
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Shared watch", exact: true }),
+  ).toBeVisible();
 });

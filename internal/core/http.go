@@ -157,6 +157,38 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
+	case "/api/v1/accounts":
+		if r.Method == http.MethodGet {
+			v, e := h.store.Accounts(r.Context())
+			if e != nil {
+				writeError(w, 500, "accounts unavailable")
+				return
+			}
+			writeJSON(w, 200, v)
+			return
+		}
+		if r.Method != http.MethodPut {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.mutation(w, r) || !h.csrf(w, r, token) {
+			return
+		}
+		var input AccountsRecord
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		v, e := h.store.UpdateAccounts(r.Context(), input)
+		if errors.Is(e, ErrConflict) {
+			writeError(w, 409, e.Error())
+			return
+		}
+		if e != nil {
+			writeError(w, 400, e.Error())
+			return
+		}
+		writeJSON(w, 200, v)
+		return
 	case "/api/v1/setup":
 		if r.Method == http.MethodGet {
 			record, err := h.store.Setup(r.Context())
@@ -217,7 +249,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 405, "method not allowed")
 			return
 		}
-		writeJSON(w, 200, map[string]any{"available": false, "executionEnabled": false, "reason": "wallet signer is not implemented; no signing capability"})
+		writeJSON(w, 200, map[string]any{"available": false, "executionEnabled": false, "reason": "real wallets unavailable; public fixture references are managed through accounts"})
 		return
 	default:
 		writeError(w, 404, "unknown API operation")

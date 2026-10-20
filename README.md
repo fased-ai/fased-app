@@ -6,7 +6,7 @@ The interface includes shared navigation, resumable setup, wallet-mode and permi
 
 See [installation, private access and recovery](docs/install.md) for engineering package use and platform boundaries.
 
-P3's separate Linux [disposable signer](docs/signer.md) adds installer-managed identities, protected owner backup/recovery, independent bounded fixture grants, reservations and a durable mock-operation journal. It cannot sign real transactions, accepts no real wallet import, and is excluded from ordinary installation. UI wallet choices remain previews.
+P3's separate Linux [disposable signer](docs/signer.md) adds installer-managed identities, protected owner backup/recovery, independent bounded fixture grants, reservations and a durable mock-operation journal. It cannot sign real transactions, accepts no real wallet import, and is excluded from ordinary installation. The connected Wallets UI and `accounts` CLI share revision-checked disposable public account records and permission proposals. Protected owner terminal approval remains separate; balances, on-chain reads and real execution stay unavailable.
 
 ## Develop
 

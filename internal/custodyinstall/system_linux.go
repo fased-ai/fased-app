@@ -116,6 +116,32 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 // AppHelper elevates the OS credential switcher, which drops UID, groups and
 // capabilities before any Fased code reads interactive owner input.
 func (s *System) AppHelper(ctx context.Context, m Manifest, recoverPassword, passwordStdin bool, out io.Writer) error {
+	if recoverPassword && passwordStdin {
+		return errors.New("app recovery requires an owner terminal")
+	}
+	action := "claim-code"
+	if recoverPassword {
+		action = "recover"
+	}
+	return s.appClient(ctx, m, action, nil, out)
+}
+func (s *System) AccountsHelper(ctx context.Context, m Manifest, login, request, passwordStdin bool, out io.Writer) error {
+	action := "accounts"
+	flags := []string{}
+	if login {
+		action = "login"
+		if passwordStdin {
+			flags = append(flags, "--password-stdin")
+		}
+	} else if request {
+		flags = append(flags, "--request-stdin")
+	}
+	return s.appClient(ctx, m, action, flags, out)
+}
+func (s *System) appClient(ctx context.Context, m Manifest, action string, flags []string, out io.Writer) error {
+	if action != "claim-code" && action != "recover" && action != "accounts" && action != "login" {
+		return errors.New("unsupported app helper action")
+	}
 	if e := Verify(m); e != nil {
 		return e
 	}
@@ -125,21 +151,11 @@ func (s *System) AppHelper(ctx context.Context, m Manifest, recoverPassword, pas
 	if e := loadedUnit(m, "app"); e != nil {
 		return e
 	}
-	// The version-only OS call validates setpriv using the same trusted-tool and
-	// authorization checks as all installation operations; it runs no project code.
 	if _, e := s.Run(ctx, nil, "/usr/bin/setpriv", "--version"); e != nil {
 		return e
 	}
-	args := []string{"-n", "--", "/usr/bin/setpriv", "--reuid", strconv.Itoa(m.App.UID), "--regid", strconv.Itoa(m.App.GID), "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--", m.Root + "/fased-app"}
-	if recoverPassword {
-		args = append(args, "recover")
-	} else {
-		args = append(args, "claim-code")
-	}
-	args = append(args, "--data-dir", m.Root+"/app-state")
-	if recoverPassword && passwordStdin {
-		return errors.New("app recovery requires an owner terminal")
-	}
+	args := append([]string{"-n", "--"}, appArgs(m, action)...)
+	args = append(args, flags...)
 	c := exec.CommandContext(ctx, "/usr/bin/sudo", args...)
 	c.Stdin = s.In
 	c.Stdout = out
