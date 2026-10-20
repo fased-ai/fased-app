@@ -104,7 +104,7 @@ func mustJSON(v any) []byte {
 func ownerUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	f := flag.NewFlagSet("owner-updates", flag.ContinueOnError)
 	f.SetOutput(errOut)
-	action := f.String("action", "inventory", "inventory, prepare, stage, preflight or abort; no install transition")
+	action := f.String("action", "inventory", "inventory, prepare, stage, preflight, backup or abort; no install transition")
 	config := f.String("config", "", "root-owned managed fixture configuration")
 	fixture := f.Bool("disposable-fixture", false, "test-only custody")
 	prepare := f.Bool("prepare-host", false, "authorize fixed OS identity switch for private core read")
@@ -208,6 +208,17 @@ func ownerUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) erro
 		return conductStage(ctx, *id, *dir, probe, call, out)
 	case "preflight":
 		return conductPreflight(ctx, *id, control, call, out)
+	case "backup":
+		backup := func(ctx context.Context, p update.Preflight) (update.RecoveryIndex, error) {
+			var b bytes.Buffer
+			if e := system.UpdateBackup(ctx, m, p, &b); e != nil {
+				return update.RecoveryIndex{}, e
+			}
+			var i update.RecoveryIndex
+			e := update.StrictJSON(b.Bytes(), &i)
+			return i, e
+		}
+		return conductBackup(ctx, *id, control, backup, call, out)
 	case "abort":
 		if !update.IDOK(*id) {
 			return errors.New("exact intent ID required")

@@ -2,7 +2,15 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  writeFile,
+  rm,
+  stat,
+  rename,
+} from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -195,6 +203,175 @@ try {
       recovered.core.bootId !== paused.core.bootId &&
       recovered.core.state.anchor === paused.core.state.anchor,
   );
+  // Synthetic public preflight exercises app metadata only. It does not
+  // impersonate signer authority; the actual owner/signer proof runs on Ubuntu.
+  const digest = (kind, value) =>
+    createHash("sha256")
+      .update("fased-update-snapshot:v1:" + kind + "\0")
+      .update(JSON.stringify(value))
+      .digest("hex");
+  const proof = (pause) => {
+    const p = {
+      version: 1,
+      intentId: command.request.intentId,
+      sequence: "1",
+      manifestSha256: command.request.manifestSha256,
+      pause,
+      signer: {
+        version: 1,
+        probeId: probe,
+        bootId: probe,
+        authoritySha256: command.request.manifestSha256,
+        states: [
+          {
+            name: "vault",
+            version: 1,
+            features: [],
+            anchor: command.request.manifestSha256,
+          },
+          {
+            name: "operations",
+            version: 1,
+            features: [],
+            anchor: command.request.manifestSha256,
+          },
+          {
+            name: "mock-receipts",
+            version: 1,
+            features: [],
+            anchor: command.request.manifestSha256,
+          },
+        ],
+        spent: "0",
+        held: "0",
+        pending: 0,
+        unknown: 0,
+        recoveryHold: false,
+        sequenceFloor: "1",
+        activeIntentId: command.request.intentId,
+      },
+      files: ["app", "signer"].map((file) => ({
+        artifact: { file, size: 4, sha256: command.request.manifestSha256 },
+        bytes: 4,
+      })),
+      bindingSha256: "",
+      verified: true,
+      installAllowed: false,
+      resumeAllowed: false,
+      financialExecution: false,
+    };
+    p.bindingSha256 = digest("preflight:v1", p);
+    return p;
+  };
+  const backup = (p = proof(control({ action: "status", probeId: probe }))) =>
+    JSON.parse(run(["update-backup", "--request-stdin"], JSON.stringify(p)));
+  const blocked = await fetch(endpoint.url + "/api/v1/updates/backup", {
+    method: "POST",
+    headers: {
+      Origin: endpoint.url,
+      "Content-Type": "application/json",
+      Authorization: "Bearer " + session.sessionToken,
+      "X-CSRF-Token": session.csrfToken,
+    },
+    body: JSON.stringify(proof(recovered)),
+  });
+  check("browserCannotCreateMetadataBackup", blocked.status === 403);
+  const index = backup(),
+    backupDir = path.join(dir, "lifecycle", command.request.intentId);
+  const snapshotBytes = await readFile(path.join(backupDir, "metadata.sqlite"));
+  check(
+    "compiledBackupPublishesVerifiedSQLiteIndex",
+    index.phase === "metadata-backed-up" &&
+      index.snapshot.sha256 ===
+        createHash("sha256").update(snapshotBytes).digest("hex") &&
+      index.snapshot.size === snapshotBytes.length,
+  );
+  check(
+    "backupCannotInstallResumeOrExecute",
+    !index.installAllowed && !index.resumeAllowed && !index.financialExecution,
+  );
+  check(
+    "privateMetadataAndIndexModes",
+    (await stat(backupDir)).mode % 512 === 0o700 &&
+      (await stat(path.join(backupDir, "metadata.sqlite"))).mode % 512 ===
+        0o600 &&
+      (await stat(path.join(backupDir, "recovery.json"))).mode % 512 === 0o600,
+  );
+  check(
+    "publicReceiptContainsNoCredentials",
+    !JSON.stringify(index).includes(password) &&
+      !JSON.stringify(index).includes("passwordHash") &&
+      !JSON.stringify(index).includes("password_salt"),
+  );
+  // Reconstruct exact crash boundaries only in this declared disposable core.
+  await rename(
+    path.join(backupDir, "recovery.json"),
+    path.join(backupDir, "recovery.json.pending"),
+  );
+  check(
+    "compiledIndexPublicationRetry",
+    JSON.stringify(backup()) === JSON.stringify(index),
+  );
+  await rm(path.join(backupDir, "recovery.json"));
+  await rename(
+    path.join(backupDir, "metadata.sqlite"),
+    path.join(backupDir, "metadata.sqlite.pending"),
+  );
+  await writeFile(
+    path.join(backupDir, "metadata.sqlite.pending"),
+    snapshotBytes.subarray(0, 4096),
+    { mode: 0o600 },
+  );
+  await stop("SIGKILL");
+  await start();
+  check(
+    "compiledPartialSnapshotRecoversAcrossHardRestart",
+    JSON.stringify(backup()) === JSON.stringify(index),
+  );
+  let stale = false;
+  try {
+    backup(proof(recovered));
+  } catch {
+    stale = true;
+  }
+  check("compiledBackupRejectsStaleBoot", stale);
+  const outcomes = await Promise.all(
+    Array.from(
+      { length: 3 },
+      () =>
+        new Promise((resolve) => {
+          const c = spawn(
+            binary,
+            ["update-backup", "--data-dir", dir, "--request-stdin"],
+            { stdio: ["pipe", "pipe", "pipe"] },
+          );
+          let output = "";
+          c.stdout.on("data", (b) => (output += b));
+          c.on("error", () => resolve(false));
+          c.on("exit", (code) =>
+            resolve(
+              code === 0
+                ? JSON.stringify(JSON.parse(output)) === JSON.stringify(index)
+                : true,
+            ),
+          );
+          c.stdin.end(
+            JSON.stringify(
+              proof(control({ action: "status", probeId: probe })),
+            ),
+          );
+        }),
+    ),
+  );
+  check(
+    "concurrentCompiledRetriesPreserveOneIndex",
+    outcomes.every(Boolean) &&
+      JSON.stringify(backup()) === JSON.stringify(index),
+  );
+  report.metadataBackup = {
+    bindingSha256: index.bindingSha256,
+    snapshot: index.snapshot,
+  };
   const released = control({
     action: "release",
     probeId: probe,
@@ -233,6 +410,13 @@ try {
     denied = /cannot replay/.test(e.message);
   }
   check("releasedPauseCannotReplay", denied);
+  let releasedBackup = false;
+  try {
+    backup();
+  } catch {
+    releasedBackup = true;
+  }
+  check("releasedPauseCannotReacknowledgeBackup", releasedBackup);
   run(["setup", "--host", "local"]);
   check(
     "explicitMetadataReleaseRestoresSetupWrites",

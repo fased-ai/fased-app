@@ -157,6 +157,9 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
+	case "/api/v1/updates/backup":
+		h.backupAPI(w, r, token)
+		return
 	case "/api/v1/updates/pause":
 		h.pauseAPI(w, r, token)
 		return

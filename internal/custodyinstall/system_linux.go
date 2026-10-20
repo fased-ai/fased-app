@@ -149,7 +149,7 @@ func (s *System) appClient(ctx context.Context, m Manifest, action string, flags
 // project child receives the payload reader; exec may drain readers even when
 // an authorization utility does not read its stdin.
 func (s *System) appClientInput(ctx context.Context, m Manifest, action string, flags []string, input io.Reader, out io.Writer) error {
-	if action != "claim-code" && action != "recover" && action != "accounts" && action != "login" && action != "update-inventory" && action != "update-pause" {
+	if action != "claim-code" && action != "recover" && action != "accounts" && action != "login" && action != "update-inventory" && action != "update-pause" && action != "update-backup" {
 		return errors.New("unsupported app helper action")
 	}
 	if e := Verify(m); e != nil {
@@ -190,6 +190,14 @@ func (s *System) UpdatePause(ctx context.Context, m Manifest, command update.Cor
 		return e
 	}
 	return s.appClientInput(ctx, m, "update-pause", []string{"--request-stdin"}, bytes.NewReader(b), out)
+}
+
+func (s *System) UpdateBackup(ctx context.Context, m Manifest, p update.Preflight, out io.Writer) error {
+	b, e := json.Marshal(p)
+	if e != nil {
+		return e
+	}
+	return s.appClientInput(ctx, m, "update-backup", []string{"--request-stdin"}, bytes.NewReader(b), out)
 }
 
 func appArgs(m Manifest, action string) []string {

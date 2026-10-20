@@ -29,7 +29,11 @@ func (s *Store) UpdateSnapshot(ctx context.Context, probe string) (update.CoreSn
 	return result, nil
 }
 
-func (s *Store) snapshotTx(ctx context.Context, tx *sql.Tx, probe string) (update.CoreSnapshot, error) {
+type snapshotReader interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (s *Store) snapshotTx(ctx context.Context, tx snapshotReader, probe string) (update.CoreSnapshot, error) {
 	var e error
 	var v struct {
 		Schema                          int
