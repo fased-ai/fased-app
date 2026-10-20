@@ -118,7 +118,7 @@ func TestDefinitionRejectsExposureAndEscapesPaths(t *testing.T) {
 		t.Fatal("insecure proxy origin allowed")
 	}
 	p.Root += " space%$\""
-	unit, err := definition(p, Options{Listen: "127.0.0.1:7331"})
+	unit, err := linuxDefinition(p, Options{Listen: "127.0.0.1:7331"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,6 +127,33 @@ func TestDefinitionRejectsExposureAndEscapesPaths(t *testing.T) {
 	}
 	if !strings.Contains(string(unit), "PrivateUsers=yes") || !strings.Contains(string(unit), "--require-sandbox") {
 		t.Fatal("user namespace or enforcement check missing")
+	}
+	unit, err = linuxDefinition(p, Options{Listen: "127.0.0.1:7331"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"ExecStart=/usr/bin/bwrap --unshare-user --disable-userns --cap-drop ALL", "--ro-bind / / --bind " + quote(p.Data) + " " + quote(p.Data), "--unshare-pid", "--require-sandbox", "space%%$$\\\"", "NoNewPrivileges=yes"} {
+		if !strings.Contains(string(unit), required) {
+			t.Fatalf("Ubuntu sandbox lacks %q", required)
+		}
+	}
+	for _, forbidden := range []string{"PrivateUsers=", "PrivateTmp=", "ProtectSystem=", "ProtectHome=", "ProtectKernelTunables=", "ProtectControlGroups=", "ReadOnlyPaths=", "ReadWritePaths="} {
+		if strings.Contains(string(unit), forbidden) {
+			t.Fatalf("systemd would create a restricted parent namespace: %s", forbidden)
+		}
+	}
+}
+
+func TestUbuntuSandboxSelection(t *testing.T) {
+	for _, release := range []string{"ID=ubuntu\nVERSION_ID=24.04\n", "ID=\"ubuntu\"\nVERSION_ID=\"24.04\"\n"} {
+		if !ubuntu2404(release) {
+			t.Fatal("Ubuntu 24.04 did not select its profiled helper")
+		}
+	}
+	for _, release := range []string{"ID=fedora\nVERSION_ID=44\n", "ID=ubuntu\nVERSION_ID=22.04\n", "ID_LIKE=ubuntu\nVERSION_ID=24.04\n", ""} {
+		if ubuntu2404(release) {
+			t.Fatal("unsupported OS selected Ubuntu prerequisites")
+		}
 	}
 }
 

@@ -9,6 +9,7 @@ import {
   readdir,
   stat,
   open,
+  readlink,
 } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { resolve, join } from "node:path";
@@ -87,19 +88,41 @@ try {
   installed = true;
   const url = result.url;
   if (process.platform === "linux") {
-    const pid = Number(
-      execFileSync(
-        "systemctl",
-        [
-          "--user",
-          "show",
-          "fased-app.service",
-          "--property=MainPID",
-          "--value",
-        ],
-        { encoding: "utf8" },
-      ).trim(),
+    const group = execFileSync(
+      "systemctl",
+      [
+        "--user",
+        "show",
+        "fased-app.service",
+        "--property=ControlGroup",
+        "--value",
+      ],
+      { encoding: "utf8" },
+    ).trim();
+    assert.match(group, /^\/user.slice\//);
+    const candidates = (
+      await readFile(`/sys/fs/cgroup${group}/cgroup.procs`, "utf8")
+    )
+      .trim()
+      .split(/\s+/);
+    const engines = [];
+    for (const candidate of candidates) {
+      if (!/^\d+$/.test(candidate)) continue;
+      try {
+        if (
+          (await readlink(`/proc/${candidate}/exe`)) === join(app, "fased-app")
+        )
+          engines.push(Number(candidate));
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+    assert.equal(
+      engines.length,
+      1,
+      "expected one actual Go engine in the owned service cgroup",
     );
+    const pid = engines[0];
     const info = await readFile(`/proc/${pid}/status`, "utf8");
     assert.match(info, /^NoNewPrivs:\s+1$/m);
     assert.match(info, new RegExp(`^Uid:\\s+${process.getuid()}\\s`, "m"));

@@ -14,10 +14,20 @@ Fased checks this prerequisite; it does not change accounts or login policy.
 VPS sizing and a provider-specific public installation are still acceptance
 work, not a measured resource guarantee.
 
-The headless core has no WebView dependency. Linux desktop installation checks
+The headless core has no WebView dependency. Ubuntu 24.04 requires its OS
+`bubblewrap` package for both headless and desktop installations. Its
+distribution-supplied AppArmor profile permits the private filesystem sandbox;
+Fased does not disable the system's namespace restrictions. The engine checks
+that its application files are actually read-only before opening state or a
+listener and refuses to start if protection was skipped. Other Linux builds use
+systemd's user-service sandbox with the same enforcement check.
+[Ubuntu's Bubblewrap manual](https://manpages.ubuntu.com/manpages/noble/man1/bwrap.1.html)
+describes the helper's namespace and read-only mount controls.
+
+Linux desktop installation checks
 its GTK3/WebKitGTK 4.1 runtime before starting. On Ubuntu 24.04, explicit
 `install --install-runtime` authorizes the OS package manager to install missing
-runtime libraries; sudo handles its own terminal prompt and Fased stays
+runtime packages (including Bubblewrap); sudo handles its own terminal prompt and Fased stays
 unprivileged. Other distributions require their own OS packages. Windows desktop
 builds select Wails' pinned embedded WebView2 bootstrapper and ask before its
 installation. macOS uses OS frameworks. Missing-runtime installation needs its

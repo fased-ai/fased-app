@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -29,6 +30,40 @@ func quote(value string) string {
 	return "\"" + value + "\""
 }
 func definition(p Paths, o Options) ([]byte, error) {
+	return linuxDefinition(p, o, RequiresBubblewrap())
+}
+
+// Ubuntu 24.04's restricted unprivileged user namespaces can cause systemd
+// to skip its filesystem sandbox. Use the distribution's profiled helper;
+// never relax AppArmor globally or start an unsandboxed fallback.
+func RequiresBubblewrap() bool {
+	b, err := os.ReadFile("/etc/os-release")
+	return err == nil && ubuntu2404(string(b))
+}
+func ubuntu2404(release string) bool {
+	values := map[string]string{}
+	for _, line := range strings.Split(release, "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if ok {
+			values[k] = strings.Trim(v, "\"'")
+		}
+	}
+	return values["ID"] == "ubuntu" && values["VERSION_ID"] == "24.04"
+}
+func CheckHostRuntime() error {
+	if !RequiresBubblewrap() {
+		return nil
+	}
+	info, err := os.Stat("/usr/bin/bwrap")
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 {
+		return errors.New("Ubuntu 24.04 requires the OS bubblewrap package; rerun install --install-runtime or ask the administrator to install it")
+	}
+	if owner, ok := info.Sys().(*syscall.Stat_t); !ok || owner.Uid != 0 || info.Mode().Perm()&0111 == 0 || info.Mode()&os.ModeSetuid != 0 {
+		return errors.New("/usr/bin/bwrap must be the ordinary, root-owned non-setuid OS executable")
+	}
+	return nil
+}
+func linuxDefinition(p Paths, o Options, bubblewrap bool) ([]byte, error) {
 	if _, err := validateDefinition(p, o); err != nil {
 		return nil, err
 	}
@@ -36,7 +71,16 @@ func definition(p Paths, o Options) ([]byte, error) {
 	if o.PublicOrigin != "" {
 		args = append(args, "--public-origin", quote(o.PublicOrigin))
 	}
-	unit := "[Unit]\nDescription=Fased App private core\nAfter=network.target\n\n[Service]\nType=simple\nExecStart=" + strings.Join(args, " ") + "\nRestart=on-failure\nRestartSec=3\nTimeoutStopSec=15\nUMask=0077\nNoNewPrivileges=yes\nPrivateUsers=yes\nPrivateTmp=yes\nProtectSystem=strict\nProtectHome=read-only\nReadOnlyPaths=" + quote(p.Root) + "\nReadWritePaths=" + quote(p.Data) + "\nProtectControlGroups=yes\nProtectKernelTunables=yes\nRestrictSUIDSGID=yes\nLockPersonality=yes\n\n[Install]\nWantedBy=default.target\n"
+	protection := "PrivateUsers=yes\nPrivateTmp=yes\nProtectSystem=strict\nProtectHome=read-only\nReadOnlyPaths=" + quote(p.Root) + "\nReadWritePaths=" + quote(p.Data) + "\nProtectControlGroups=yes\nProtectKernelTunables=yes\n"
+	if bubblewrap {
+		// All host mounts are read-only; only private state is writable. The
+		// payload has no capabilities and cannot create nested user namespaces.
+		args = append([]string{"/usr/bin/bwrap", "--unshare-user", "--disable-userns", "--cap-drop", "ALL", "--unshare-pid", "--ro-bind", "/", "/", "--bind", quote(p.Data), quote(p.Data), "--proc", "/proc", "--remount-ro", "/proc", "--dev", "/dev", "--new-session", "--"}, args...)
+		// Do not create an AppArmor-restricted parent namespace in systemd
+		// before the OS helper can enter its distribution-supplied profile.
+		protection = ""
+	}
+	unit := "[Unit]\nDescription=Fased App private core\nAfter=network.target\n\n[Service]\nType=simple\nExecStart=" + strings.Join(args, " ") + "\nRestart=on-failure\nRestartSec=3\nTimeoutStopSec=15\nUMask=0077\nNoNewPrivileges=yes\n" + protection + "RestrictSUIDSGID=yes\nLockPersonality=yes\n\n[Install]\nWantedBy=default.target\n"
 	return []byte(unit), nil
 }
 func systemctl(ctx context.Context, args ...string) (string, error) {
@@ -73,6 +117,9 @@ func register(ctx context.Context, m Manifest) error {
 	if err := supported(); err != nil {
 		return err
 	}
+	if err := CheckHostRuntime(); err != nil {
+		return err
+	}
 	p, err := properties(ctx, m)
 	if err != nil {
 		return err
@@ -93,6 +140,9 @@ func enable(ctx context.Context, m Manifest) error {
 	return err
 }
 func start(ctx context.Context, m Manifest) error {
+	if err := CheckHostRuntime(); err != nil {
+		return err
+	}
 	if _, err := properties(ctx, m); err != nil {
 		return err
 	}
