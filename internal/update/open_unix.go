@@ -20,3 +20,9 @@ func openReadOnly(path string) (*os.File, error) {
 	}
 	return os.NewFile(uintptr(fd), path), nil
 }
+
+func openInertArtifact(root *os.Root, name string) (*os.File, error) {
+	// Keep containment and refuse final symlinks/FIFO blocking if an entry is
+	// replaced after Lstat. The caller still verifies the opened file identity.
+	return root.OpenFile(name, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+}

@@ -178,6 +178,14 @@ jobs:
         env:
           FASED_STATE_EVIDENCE: .evidence/p4-complete
         run: node scripts/check-update-state.mjs
+      - name: Inert release-unit and fixture provenance admission
+        env:
+          FASED_ADMISSION_CORE: ${{ github.workspace }}/.evidence/bin/fased-app
+          FASED_ADMISSION_EVIDENCE: ${{ github.workspace }}/.evidence/p4-release-admission
+        run: |
+          mkdir -p .evidence/p4-release-admission
+          go test -v ./internal/update -run '^TestReleaseAdmissionCompiledCLI$' > .evidence/p4-release-admission/admission-cli.log 2>&1
+          cat .evidence/p4-release-admission/admission-cli.log
       - name: Managed account UI browser prerequisite
         run: npx playwright install --with-deps chromium
       - name: Installer-managed identities and protected owner recovery
@@ -197,6 +205,8 @@ jobs:
           name: signer-isolation
           include-hidden-files: true
           path: |
+            .evidence/p4-release-admission/admission-cli-result.json
+            .evidence/p4-release-admission/admission-cli.log
             .evidence/p4-trust-rehearsal/trust-cli-result.json
             .evidence/p4-trust-rehearsal/trust-cli.log
             .evidence/p4-acquisition/acquisition-cli-result.json
