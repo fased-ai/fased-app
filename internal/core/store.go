@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/signer"
+	"github.com/fased-ai/fased-app/internal/update"
 	_ "modernc.org/sqlite"
 )
 
@@ -22,6 +23,7 @@ type Store struct {
 	db         *sql.DB
 	dir        string
 	instanceID string
+	bootID     string
 	now        func() time.Time
 	authMu     sync.Mutex
 	fixture    func(context.Context, signer.Request) (signer.Response, error)
@@ -105,7 +107,7 @@ PRAGMA user_version=1;`)
 			return nil, e
 		}
 	}
-	store := &Store{db: db, dir: dir, now: time.Now}
+	store := &Store{db: db, dir: dir, now: time.Now, bootID: update.NewProbe()}
 	if err = db.QueryRowContext(ctx, "SELECT instance_id FROM instance WHERE id=1").Scan(&store.instanceID); err != nil {
 		return nil, err
 	}

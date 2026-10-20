@@ -30,6 +30,12 @@ func main() {
 	}
 }
 func run(args []string, in *os.File, out, errOut io.Writer) error {
+	if len(args) > 0 && args[0] == "update-inventory" {
+		return updateInventoryCommand(args[1:], out, errOut)
+	}
+	if len(args) > 0 && args[0] == "owner-updates" {
+		return ownerUpdatesCommand(args[1:], in, out, errOut)
+	}
 	if len(args) > 0 && args[0] == "updates" {
 		return updatesCommand(args[1:], out, errOut)
 	}

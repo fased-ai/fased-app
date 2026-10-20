@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 type System struct {
@@ -139,7 +141,7 @@ func (s *System) AccountsHelper(ctx context.Context, m Manifest, login, request,
 	return s.appClient(ctx, m, action, flags, out)
 }
 func (s *System) appClient(ctx context.Context, m Manifest, action string, flags []string, out io.Writer) error {
-	if action != "claim-code" && action != "recover" && action != "accounts" && action != "login" {
+	if action != "claim-code" && action != "recover" && action != "accounts" && action != "login" && action != "update-inventory" {
 		return errors.New("unsupported app helper action")
 	}
 	if e := Verify(m); e != nil {
@@ -161,6 +163,15 @@ func (s *System) appClient(ctx context.Context, m Manifest, action string, flags
 	c.Stdout = out
 	c.Stderr = s.Out
 	return c.Run()
+}
+
+// UpdateInventory uses the installed immutable client as app UID over private
+// IPC. App metadata never supplies the signer's financial history or floor.
+func (s *System) UpdateInventory(ctx context.Context, m Manifest, probe string, out io.Writer) error {
+	if !update.IDOK(probe) {
+		return errors.New("invalid inventory challenge")
+	}
+	return s.appClient(ctx, m, "update-inventory", []string{"--probe-id", probe}, out)
 }
 
 func appArgs(m Manifest, action string) []string {

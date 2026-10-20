@@ -77,7 +77,7 @@ var stateOwner = map[string]string{"core-db": "core", "vault": "signer", "operat
 var requiredStateFeatures = map[string][]string{
 	"core-db":       {"accounts-v1", "owner-sessions-v1", "setup-v1"},
 	"vault":         {"fixture-key-v1", "authority-epoch-v1"},
-	"operations":    {"policy-v1", "reservations-v1", "originals-v1", "authority-epoch-v1", "approvals-v1"},
+	"operations":    {"policy-v1", "reservations-v1", "originals-v1", "authority-epoch-v1", "approvals-v1", "update-intents-v1"},
 	"mock-receipts": {"mock-outcomes-v1"},
 }
 

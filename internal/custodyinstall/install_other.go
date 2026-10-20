@@ -28,3 +28,7 @@ func OwnerLock() (io.Closer, error) { return nil, unsupported }
 func (*System) AccountsHelper(context.Context, Manifest, bool, bool, bool, io.Writer) error {
 	return unsupported
 }
+
+func (*System) UpdateInventory(context.Context, Manifest, string, io.Writer) error {
+	return unsupported
+}

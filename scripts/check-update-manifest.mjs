@@ -15,7 +15,9 @@ import path from "node:path";
 import assert from "node:assert/strict";
 
 if (process.getuid?.() === 0) throw new Error("never run project code as root");
-const root = path.resolve(".evidence/p4-updates");
+const root = path.resolve(
+  process.env.FASED_UPDATE_EVIDENCE ?? ".evidence/p4-updates",
+);
 await mkdir(root, { recursive: true });
 const fixtures = path.join(root, "cli-fixtures");
 await mkdir(fixtures, { recursive: true });
