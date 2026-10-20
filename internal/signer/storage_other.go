@@ -4,6 +4,8 @@ package signer
 
 import "errors"
 
+func (*storage) checkpoint(string) error { return ErrUnavailable }
+
 var errAbsent = errors.New("absent")
 
 type storage struct{}
