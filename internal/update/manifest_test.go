@@ -277,7 +277,7 @@ func TestLifecycleVersionsAndFeaturesAreIndependent(t *testing.T) {
 				if c.Component == "core" {
 					switch tc {
 					case "entrypoint":
-						c.Lifecycle.Entrypoint = 2
+						c.Lifecycle.Entrypoint = update.CurrentLifecycle().Entrypoint + 1
 					case "stage-format":
 						c.Lifecycle.StageFormat = 2
 					case "features":
@@ -296,5 +296,28 @@ func TestLifecycleVersionsAndFeaturesAreIndependent(t *testing.T) {
 				t.Fatal("lifecycle downgrade accepted")
 			}
 		})
+	}
+}
+
+func TestLifecycleTwoIntentsRequireJournalReadFeature(t *testing.T) {
+	m, inv, _, _ := fixture(t)
+	for n := range m.Components {
+		c := &m.Components[n].Contract
+		if c.Component == "signer" {
+			for j := range c.State {
+				if c.State[j].Name == "operations" {
+					var old []string
+					for _, f := range c.State[j].Features {
+						if f != "lifecycle-v2-v1" {
+							old = append(old, f)
+						}
+					}
+					c.State[j].Features = old
+				}
+			}
+		}
+	}
+	if _, e := update.Compatible(m, sha([]byte("manifest")), inv); e == nil {
+		t.Fatal("legacy journal reader can admit lifecycle-2 intent records")
 	}
 }

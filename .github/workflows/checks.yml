@@ -160,11 +160,11 @@ jobs:
           go build -trimpath -o .evidence/bin/fased-app ./cmd/fased-app
       - name: Read-only signed development manifest and compatibility journey
         env:
-          FASED_UPDATE_EVIDENCE: .evidence/p4-staging
+          FASED_UPDATE_EVIDENCE: .evidence/p4-preflight
         run: node scripts/check-update-manifest.mjs
       - name: Compiled private core state inventory journey
         env:
-          FASED_STATE_EVIDENCE: .evidence/p4-staging
+          FASED_STATE_EVIDENCE: .evidence/p4-preflight
         run: node scripts/check-update-state.mjs
       - name: Managed account UI browser prerequisite
         run: npx playwright install --with-deps chromium
@@ -193,6 +193,11 @@ jobs:
             .evidence/p4-staging/manifest-cli.log
             .evidence/p4-staging/core-cli-result.json
             .evidence/p4-staging/core-cli.log
+            .evidence/p4-preflight/managed-preflight-result.json
+            .evidence/p4-preflight/manifest-cli-result.json
+            .evidence/p4-preflight/manifest-cli.log
+            .evidence/p4-preflight/core-cli-result.json
+            .evidence/p4-preflight/core-cli.log
           retention-days: 7
   prototype:
     if: always()

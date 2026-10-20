@@ -69,7 +69,7 @@ func (s *Store) Claim(ctx context.Context, code, password string) (string, error
 	// Recheck the claim inside the conditional write; another process may claim first.
 	result, err := s.db.ExecContext(ctx, "UPDATE instance SET password_salt=?,password_hash=?,claim_hash=NULL,claim_expires=NULL WHERE id=1 AND password_hash IS NULL AND claim_hash=? AND claim_expires>?", salt, derived, hash, s.now().Unix())
 	if err != nil {
-		return "", err
+		return "", metadataWriteError(err)
 	}
 	count, err := result.RowsAffected()
 	if err != nil {

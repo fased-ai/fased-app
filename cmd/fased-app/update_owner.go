@@ -104,7 +104,7 @@ func mustJSON(v any) []byte {
 func ownerUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	f := flag.NewFlagSet("owner-updates", flag.ContinueOnError)
 	f.SetOutput(errOut)
-	action := f.String("action", "inventory", "inventory, prepare, stage or abort; no install transition")
+	action := f.String("action", "inventory", "inventory, prepare, stage, preflight or abort; no install transition")
 	config := f.String("config", "", "root-owned managed fixture configuration")
 	fixture := f.Bool("disposable-fixture", false, "test-only custody")
 	prepare := f.Bool("prepare-host", false, "authorize fixed OS identity switch for private core read")
@@ -150,6 +150,18 @@ func ownerUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) erro
 		}
 		return c, e
 	}
+	control := func(ctx context.Context, command update.CorePauseCommand) (update.CorePauseReceipt, error) {
+		var b bytes.Buffer
+		if e := system.UpdatePause(ctx, m, command, &b); e != nil {
+			return update.CorePauseReceipt{}, e
+		}
+		var p update.CorePauseReceipt
+		e := update.StrictJSON(b.Bytes(), &p)
+		if e == nil && p.Core.ProbeID != command.ProbeID {
+			e = errors.New("core pause challenge mismatch")
+		}
+		return p, e
+	}
 	call := func(ctx context.Context, r signer.Request) (signer.Response, error) {
 		return signer.Call(ctx, cfg, true, r)
 	}
@@ -194,6 +206,8 @@ func ownerUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) erro
 		return conductUpdate(ctx, *id, mb, tb, *dir, probe, call, confirm, errOut, out)
 	case "stage":
 		return conductStage(ctx, *id, *dir, probe, call, out)
+	case "preflight":
+		return conductPreflight(ctx, *id, control, call, out)
 	case "abort":
 		if !update.IDOK(*id) {
 			return errors.New("exact intent ID required")
@@ -210,11 +224,7 @@ func ownerUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) erro
 		if e = confirm("ABORT " + *id + " " + update.SnapshotDigest("abort-review", r.UpdateIntent)); e != nil {
 			return e
 		}
-		r, e = call(ctx, signer.Request{Action: "fixture-update-abort", IntentID: *id})
-		if e != nil {
-			return e
-		}
-		return json.NewEncoder(out).Encode(r)
+		return abortAndRelease(ctx, *id, control, call, out)
 	default:
 		return errors.New("unsupported owner update action")
 	}

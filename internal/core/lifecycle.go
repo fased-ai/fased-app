@@ -19,6 +19,18 @@ func (s *Store) UpdateSnapshot(ctx context.Context, probe string) (update.CoreSn
 		return update.CoreSnapshot{}, e
 	}
 	defer tx.Rollback()
+	result, e := s.snapshotTx(ctx, tx, probe)
+	if e != nil {
+		return update.CoreSnapshot{}, e
+	}
+	if e = tx.Commit(); e != nil {
+		return update.CoreSnapshot{}, e
+	}
+	return result, nil
+}
+
+func (s *Store) snapshotTx(ctx context.Context, tx *sql.Tx, probe string) (update.CoreSnapshot, error) {
+	var e error
 	var v struct {
 		Schema                          int
 		Instance, Setup, Accounts       string
@@ -35,9 +47,6 @@ func (s *Store) UpdateSnapshot(ctx context.Context, probe string) (update.CoreSn
 		return update.CoreSnapshot{}, e
 	}
 	if e = tx.QueryRowContext(ctx, "SELECT document,revision FROM accounts WHERE id=1").Scan(&v.Accounts, &v.AccountsRevision); e != nil {
-		return update.CoreSnapshot{}, e
-	}
-	if e = tx.Commit(); e != nil {
 		return update.CoreSnapshot{}, e
 	}
 	contract := UpdateContract()

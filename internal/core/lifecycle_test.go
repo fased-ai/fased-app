@@ -40,7 +40,7 @@ func TestLifecycleSnapshotRequiresAuthenticatedCore(t *testing.T) {
 		}
 		if loggedIn {
 			var v update.CoreSnapshot
-			if e := json.Unmarshal(w.Body.Bytes(), &v); e != nil || v.ProbeID != "11111111111111111111111111111111" || v.State.Version != 2 || strings.Contains(w.Body.String(), "password") {
+			if e := json.Unmarshal(w.Body.Bytes(), &v); e != nil || v.ProbeID != "11111111111111111111111111111111" || v.State.Version != StateSchema || strings.Contains(w.Body.String(), "password") {
 				t.Fatal("invalid or secret-bearing snapshot")
 			}
 		}

@@ -41,7 +41,7 @@ func RecoverPassword(ctx context.Context, dir, password string) error {
 	}
 	defer tx.Rollback()
 	if _, err = tx.ExecContext(ctx, "UPDATE instance SET password_salt=?,password_hash=? WHERE id=1", salt, hash); err != nil {
-		return err
+		return metadataWriteError(err)
 	}
 	if _, err = tx.ExecContext(ctx, "DELETE FROM sessions"); err != nil {
 		return err

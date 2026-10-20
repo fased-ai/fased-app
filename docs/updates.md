@@ -14,7 +14,7 @@ fased-signer fixture-compatibility
 
 These commands need no instance, wallet, password, service or network. Protocol
 v1 by itself cannot distinguish the earlier signer from approval-aware replay.
-The contracts explicitly include core schema 2, vault format 1, both journal
+The contracts explicitly include core schema 3, vault format 1, both journal
 formats at version 1, and the operations journal's `approvals-v1` feature. The
 core requires the signer's independent approval-receipt capability. Their format
 constants are shared with the actual store/vault/journal readers and writers.
@@ -202,13 +202,13 @@ identity/terminal acceptance runs only in disposable Ubuntu CI.
 
 ## Remaining P4 work
 
-The complete installation controller, paused/revalidated core inventory and
-installed-sequence commit, recoverable staging/backup, signed package/bootstrap trust, migrations,
-process interruption/disk-full handling, coherent service updates, rollback
-against current durable state, UI/timer integration and cross-platform installed
-acceptance are later P4 packages. Public-path acceptance requires exact published
+The installation transaction and installed-sequence commit, recoverable backup,
+signed package/bootstrap trust, installation migrations, coherent service
+replacement/rollback, UI/timer integration and cross-platform installed acceptance
+remain later P4 packages. Core pause/preflight and recoverable artifact staging
+are engineering features; they do not grant installation permission. Public-path acceptance requires exact published
 artifacts and separate release authority. Until those gates pass, a valid plan
-always ends at inspection.
+always denies installation and financial resumption.
 
 ## Recoverable disposable artifact staging
 
@@ -220,9 +220,9 @@ fased-app custody updates stage --disposable-fixture --prepare-host \
   --intent-id <same-32-hex-id> --artifact-dir <complete-local-pair>
 ```
 
-The core contract now contains a separate `lifecycle` contract: entrypoint 1,
+The core contract now contains a separate `lifecycle` contract: entrypoint 2,
 stage format 1 and explicit owner-review, signer-staging and no-install features.
-This is independent of runtime protocol 1 and SQLite schema 2. Candidates that
+This is independent of runtime protocol 1 and SQLite schema 3. Candidates that
 omit or change it, or cannot replay `update-staging-v1`, are rejected. These are
 signed declarations; candidate code is never executed to discover its contract.
 Later installation must verify actual candidate behavior before activation.
@@ -254,3 +254,57 @@ exclusive core pause and fresh snapshot, revalidate staged bytes and authority,
 and implement durable installation/health/recovery and installed-sequence commit.
 No timer/UI automatic updater or public signing trust is enabled. The Linux
 fixture must not be used with real wallets or funds.
+
+## Exclusive core pause and preflight
+
+```sh
+fased-app custody updates preflight --disposable-fixture --prepare-host \
+  --intent-id <same-staged-intent-id>
+```
+
+Preflight uses the already reviewed, staged intent without requesting another
+financial permission. The immutable owner helper obtains fresh signer inventory,
+then acquires the exact core pause through the existing fixed app-UID helper and
+authenticated private CLI IPC. Browser HTTP cannot invoke this route, even with
+an owner session. Private requests still require session authentication and CSRF. Authorization
+uses the owner terminal; the separate public payload stream is attached only to
+the final app-UID child, after authorization.
+The app bridge remains read-only toward the signer; only protected owner IPC can
+request signer preflight.
+
+Core schema 3 adds one durable pause record and SQL write guards for setup,
+account/proposal records and credentials, including OS-owner password recovery.
+Metadata schema-1/2 migration preserves owner credentials, sessions, setup and
+accounts; earlier schema-2 binaries refuse the new state. FULL synchronous WAL
+commit precedes acknowledgement. Login/logout, public reads and private recovery
+inspection remain available. The same pause identity survives helper death,
+process termination and core restart. First acquisition rejects an old core boot
+or changed metadata; retry after a durable pause accepts the new boot only while
+its original metadata/binding remain unchanged. No timer expires the fence.
+
+The signer independently rechecks the active staged intent/digest/floor, its
+fresh boot/history/authority, every stored artifact byte and all financial
+originals, spending, pending/unknown reservations and recovery holds. The owner
+rereads the core pause after the signer reply. The resulting nonce/boot/digest-
+bound proof is read-only, writes no financial journal record and grants no
+installation, resume or unlock permission. It is a point-in-time observation,
+not a lease: any future install transaction must revalidate both owning services
+and current staged bytes under its own exclusive controller.
+
+Protected `custody updates abort` first obtains the exact durable aborted signer
+receipt, then releases only its matching metadata fence. A durable tombstone
+prevents the same sequence from pausing again, including an abort that wins a
+race before initial pause. Interrupted release can be retried; missing signer
+proof or another pause leaves the core held. Wallet lock, original operations,
+spent/held amounts, recovery holds and the signer reserved floor never reset.
+Core pause records are app-owned metadata and cannot grant or revoke signer
+authority; the financial signer remains the independent authority boundary.
+
+Lifecycle entrypoint 2 advertises `owner-core-pause-v1`, and the signer advertises
+`fixture-update-preflight-v1`. The `lifecycle-v2-v1` operations-state feature
+explicitly requires readers of nested lifecycle-2 intent records. Existing
+entrypoint-1 staging journal records stay
+readable and abortable; new candidate admission still requires the current
+contract. No binaries/helpers are replaced or executed, no financial state is
+migrated, and no public trust, real wallets, automatic updates or execution resume
+is enabled by this package.

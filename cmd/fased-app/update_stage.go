@@ -23,6 +23,9 @@ func conductStage(ctx context.Context, id, dir string, probe coreProbe, call upd
 	if r.UpdateIntent == nil || !update.Stageable(*r.UpdateIntent) {
 		return errors.New("stageable durable intent required")
 	}
+	if r.UpdateIntent.State != "prepared" && r.UpdateIntent.State != "staged" {
+		return errors.New("stale or inactive staging intent")
+	}
 	i := *r.UpdateIntent
 	request := update.StageRequest{IntentID: i.ID, Sequence: i.Sequence, ManifestSHA256: i.ManifestSHA256}
 	checkCore := func() (*update.CoreSnapshot, error) {

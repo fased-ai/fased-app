@@ -46,7 +46,7 @@ const check = (name, condition) => {
   report.checks[name] = true;
   log += `PASS ${name}\n`;
 };
-const stop = async () => {
+const stop = async (signal = "SIGTERM") => {
   if (!child || child.exitCode !== null) return;
   const current = child;
   await new Promise((resolve, reject) => {
@@ -58,7 +58,7 @@ const stop = async () => {
       clearTimeout(timer);
       resolve();
     });
-    current.kill("SIGTERM");
+    current.kill(signal);
   });
 };
 const start = async () => {
@@ -99,6 +99,7 @@ try {
     body: JSON.stringify({ code, password }),
   });
   assert.equal(claimed.status, 200);
+  const session = await claimed.json();
   run(["login", "--password-stdin"], password + "\n");
   const snapshot = () =>
     JSON.parse(run(["update-inventory", "--probe-id", probe]));
@@ -109,7 +110,7 @@ try {
     a.version === 1 &&
       a.probeId === probe &&
       a.state.name === "core-db" &&
-      a.state.version === 2,
+      a.state.version === 3,
   );
   check("stableReadOnlySnapshot", JSON.stringify(a) === JSON.stringify(b));
   check(
@@ -140,6 +141,103 @@ try {
       restarted.state.anchor === changed.state.anchor &&
       restarted.instanceId === changed.instanceId,
   );
+  const command = {
+    action: "pause",
+    probeId: probe,
+    request: {
+      version: 1,
+      intentId: randomBytes(16).toString("hex"),
+      sequence: "1",
+      manifestSha256: createHash("sha256")
+        .update("disposable metadata fence, no signer authority")
+        .digest("hex"),
+      expected: restarted,
+    },
+  };
+  const control = (c) =>
+    JSON.parse(run(["update-pause", "--request-stdin"], JSON.stringify(c)));
+  const publicAttempt = await fetch(endpoint.url + "/api/v1/updates/pause", {
+    method: "POST",
+    headers: {
+      Origin: endpoint.url,
+      "Content-Type": "application/json",
+      Authorization: "Bearer " + session.sessionToken,
+      "X-CSRF-Token": session.csrfToken,
+    },
+    body: JSON.stringify(command),
+  });
+  check("browserCannotAdministerCorePause", publicAttempt.status === 403);
+  const paused = control(command);
+  check(
+    "privateCLICreatesExclusivePause",
+    paused.state === "paused" &&
+      paused.request.intentId === command.request.intentId,
+  );
+  let denied = false;
+  try {
+    run(["setup", "--host", "local"]);
+  } catch (e) {
+    denied = /core metadata paused/.test(e.message);
+  }
+  check("pausedSetupWriteDenied", denied);
+  run(["login", "--password-stdin"], password + "\n");
+  check(
+    "ownerLoginRemainsAvailableWhilePaused",
+    control({ action: "status", probeId: probe }).state === "paused",
+  );
+  await stop("SIGKILL");
+  await start();
+  const recovered = control(command);
+  check(
+    "actualHardRestartRetainsPause",
+    recovered.state === "paused" &&
+      recovered.pauseId === paused.pauseId &&
+      recovered.core.bootId !== paused.core.bootId &&
+      recovered.core.state.anchor === paused.core.state.anchor,
+  );
+  const released = control({
+    action: "release",
+    probeId: probe,
+    aborted: {
+      version: 1,
+      id: command.request.intentId,
+      sequence: "1",
+      manifestSha256: command.request.manifestSha256,
+      core: command.request.expected,
+      signer: {
+        version: 1,
+        probeId: probe,
+        bootId: probe,
+        authoritySha256: command.request.manifestSha256,
+        states: [],
+        spent: "0",
+        held: "0",
+        pending: 0,
+        unknown: 0,
+        recoveryHold: false,
+        sequenceFloor: "0",
+        activeIntentId: "",
+      },
+      createdAt: 1,
+      state: "aborted",
+    },
+  });
+  check(
+    "metadataReleaseRetainsPauseTombstone",
+    released.state === "released" && released.pauseId === paused.pauseId,
+  );
+  denied = false;
+  try {
+    control(command);
+  } catch (e) {
+    denied = /cannot replay/.test(e.message);
+  }
+  check("releasedPauseCannotReplay", denied);
+  run(["setup", "--host", "local"]);
+  check(
+    "explicitMetadataReleaseRestoresSetupWrites",
+    snapshot().state.anchor !== recovered.core.state.anchor,
+  );
   const health = JSON.parse(run(["status"]));
   check(
     "realCapabilitiesRemainDisabled",
@@ -156,6 +254,18 @@ try {
     "invalidProbeFailsWithoutSnapshot",
     bad.status !== 0 && bad.stdout === "",
   );
+  if (process.env.FASED_PREVIOUS_CORE) {
+    await stop();
+    const older = spawnSync(
+      path.resolve(process.env.FASED_PREVIOUS_CORE),
+      ["serve", "--data-dir", dir, "--listen", "127.0.0.1:0"],
+      { encoding: "utf8", timeout: 10000 },
+    );
+    check(
+      "previousSchemaTwoCoreRefusesDowngrade",
+      older.status !== 0 && /schema is newer/.test(older.stderr),
+    );
+  }
   report.result = "PASS";
 } catch (error) {
   report.error = error.message;

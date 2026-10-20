@@ -5,6 +5,7 @@ package custodyinstall
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -141,7 +142,14 @@ func (s *System) AccountsHelper(ctx context.Context, m Manifest, login, request,
 	return s.appClient(ctx, m, action, flags, out)
 }
 func (s *System) appClient(ctx context.Context, m Manifest, action string, flags []string, out io.Writer) error {
-	if action != "claim-code" && action != "recover" && action != "accounts" && action != "login" && action != "update-inventory" {
+	return s.appClientInput(ctx, m, action, flags, s.In, out)
+}
+
+// Authorize using the owner's original input. Only the final unprivileged
+// project child receives the payload reader; exec may drain readers even when
+// an authorization utility does not read its stdin.
+func (s *System) appClientInput(ctx context.Context, m Manifest, action string, flags []string, input io.Reader, out io.Writer) error {
+	if action != "claim-code" && action != "recover" && action != "accounts" && action != "login" && action != "update-inventory" && action != "update-pause" {
 		return errors.New("unsupported app helper action")
 	}
 	if e := Verify(m); e != nil {
@@ -159,7 +167,7 @@ func (s *System) appClient(ctx context.Context, m Manifest, action string, flags
 	args := append([]string{"-n", "--"}, appArgs(m, action)...)
 	args = append(args, flags...)
 	c := exec.CommandContext(ctx, "/usr/bin/sudo", args...)
-	c.Stdin = s.In
+	c.Stdin = input
 	c.Stdout = out
 	c.Stderr = s.Out
 	return c.Run()
@@ -172,6 +180,16 @@ func (s *System) UpdateInventory(ctx context.Context, m Manifest, probe string, 
 		return errors.New("invalid inventory challenge")
 	}
 	return s.appClient(ctx, m, "update-inventory", []string{"--probe-id", probe}, out)
+}
+
+// UpdatePause sends only typed public metadata over the immutable app-UID
+// helper's stdin. Wallet secrets and owner credentials never cross this bridge.
+func (s *System) UpdatePause(ctx context.Context, m Manifest, command update.CorePauseCommand, out io.Writer) error {
+	b, e := json.Marshal(command)
+	if e != nil {
+		return e
+	}
+	return s.appClientInput(ctx, m, "update-pause", []string{"--request-stdin"}, bytes.NewReader(b), out)
 }
 
 func appArgs(m Manifest, action string) []string {
