@@ -1,9 +1,73 @@
 # Development update verification
 
 P4 provides a **development verifier and protected disposable installation flow**.
-Real wallets and automatic updates remain disabled. There is no public signing key, release download,
-bootstrap trust, key-rotation mechanism or updater service. Existing installation
+Real wallets and automatic updates remain disabled. Explicit development-only HTTPS
+acquisition is available; there is no public signing key, public release feed,
+production bootstrap trust, key-rotation mechanism or updater service. Existing installation
 commands still refuse in-place binary replacement. Nothing here enables wallets.
+
+## Development HTTPS acquisition and bootstrap trust
+
+On Linux/macOS, an ordinary user can fetch a disposable signed development pair
+without an installed instance. First prepare a private directory and obtain the
+test public trust document and its SHA-256 fingerprint through an independent
+trusted channel. The fingerprint covers the **exact file bytes**, including whitespace.
+A fingerprint delivered by the same untrusted server does not establish authenticity.
+There is no built-in key, trust-on-first-use, downloaded trust fallback or production default.
+
+```sh
+mkdir -m 700 /absolute/private-development-downloads
+fased-app updates acquire --development \
+  --origin https://controlled-fixture.example \
+  --manifest-url https://controlled-fixture.example/release/manifest.json \
+  --trust-file /absolute/disposable-public-trust.json \
+  --trust-sha256 <independently-obtained-64-lowercase-hex-fingerprint> \
+  --inventory /absolute/disposable-inventory.json \
+  --output /absolute/private-development-downloads/new-pair
+```
+
+For controlled HTTPS fixtures only, `--tls-ca-file /absolute/fixture-ca.pem`
+replaces the TLS root set with that explicit CA. Certificate chain and hostname
+verification remain enabled. Without that option the system TLS roots apply.
+No insecure TLS flag, proxy environment, credentials, cookies or automatic
+decompression is accepted. The origin must be an exact HTTPS scheme/host/port
+without a path. The manifest URL must use the same origin and a clean file path;
+credentials, query strings, fragments, escapes and **all redirects** are refused.
+Artifact URLs use the signed filenames beside the manifest, on that same origin.
+
+The verifier authenticates the purpose-bound signature, validity, target,
+compatibility and caller-supplied sequence floor **before** fetching artifacts.
+It fetches exactly the complete core/signer pair, checks every size and SHA-256,
+then rechecks signature expiry and all local bytes. Manifest/CA/trust documents
+are limited to 64 KiB; each artifact is limited to 256 MiB. Header, connection,
+TLS and response deadlines are bounded, with a one-minute overall deadline.
+Only complete unencoded HTTP 200 responses pass; partial or altered downloads fail.
+
+The output must not exist, including as a symlink. Its parent must be a real
+0700 directory owned by this user. The new directory is 0700 and files are 0600,
+without executable bits. Existing output and foreign files are never adopted
+or overwritten. Failure removes this attempt's output; retry uses a fresh path.
+Successful output contains the two artifacts, `manifest.json`, `trust.json`,
+`inventory.json` and the last-written `acquisition.json` receipt. Crash leftovers
+have no authority: preserve/review them and reverify bytes with `updates inspect`.
+Windows acquisition refuses until its private-directory ACL boundary is verified;
+ordinary offline inspection and cross-compilation remain supported.
+
+The receipt binds both the exact envelope hash and signed payload hash, trust
+fingerprint, origin and disposable compatibility plan. Installation, execution,
+resume, wallet signing, financial execution and automatic updates remain disabled.
+No candidate is executed, no instance is opened and no owner/signer API is called.
+The inventory floor is disposable input, not a durable anti-rollback record;
+repeating a valid download with the same test floor can pass. Installed lifecycle
+review must still obtain authoritative inventory/floors and reverify bytes.
+
+There is no automatic key rotation: a new key is refused unless an independently
+approved replacement trust document and fingerprint are explicitly supplied.
+This does not establish production key custody, revocation, publisher authorization,
+provenance, public origin or release publication. P4-10/11 public gates remain open.
+Local and Ubuntu CI run `scripts/check-update-acquisition.mjs` with disposable TLS
+and Ed25519 keys; receipts/logs live in `.evidence/p4-acquisition/`, and the runner
+removes its generated keys/downloads in `finally`.
 
 ## Shared read-only status and recovery guidance
 
@@ -57,7 +121,7 @@ Then use the existing protected review for the exact retained intent and operati
 documented below. The UI offers no apply, abort, release, restore, resume, approve
 or unlock control. Never delete the pause/host marker, restore old signer databases,
 rewind counters or clear unknown/recovery holds to make status look healthy.
-Public acquisition/trust, policy/scheduling UI, native custody, real VPS and portable
+Public acquisition/trust, active scheduling, native custody, real VPS and portable
 financial-history recovery remain separate acceptance gates.
 
 ## Notify, pin, window and review-only proposals
