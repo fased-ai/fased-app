@@ -99,10 +99,11 @@ type ledger struct {
 	updates        map[string]update.Intent
 	updateFloor    uint64
 	activeUpdate   string
+	installations  map[string]update.Installation
 }
 
 func newLedger() *ledger {
-	return &ledger{grants: map[string]FixtureGrant{}, ops: map[string]FixtureOperation{}, receipts: map[string]journalRecord{}, approvals: map[string]ApprovalReceipt{}, updates: map[string]update.Intent{}}
+	return &ledger{grants: map[string]FixtureGrant{}, ops: map[string]FixtureOperation{}, receipts: map[string]journalRecord{}, approvals: map[string]ApprovalReceipt{}, updates: map[string]update.Intent{}, installations: map[string]update.Installation{}}
 }
 
 func validRef(r AccountRef) bool {
@@ -203,10 +204,14 @@ func (l *ledger) apply(r journalRecord) error {
 	if r.At < l.lastTime {
 		return errors.New("fixture clock moved backwards")
 	}
-	if l.activeUpdate != "" && r.Kind != "update-abort" && r.Kind != "update-staged" {
+	if l.activeUpdate != "" && r.Kind != "update-abort" && r.Kind != "update-staged" && r.Kind != "update-install" {
 		return errors.New("exclusive update intent blocks financial mutation")
 	}
 	switch r.Kind {
+	case "update-install":
+		if e := l.applyInstallation(r); e != nil {
+			return e
+		}
 	case "update-prepare":
 		i := r.Update
 		if i == nil || update.ValidateIntent(*i) != nil || i.CreatedAt != r.At || i.Sequence <= l.updateFloor || len(l.updates) >= 256 || l.updates[i.ID].ID != "" {
@@ -225,6 +230,9 @@ func (l *ledger) apply(r journalRecord) error {
 		l.updates[r.ID] = i
 	case "update-abort":
 		i, ok := l.updates[r.ID]
+		if install, ok := l.installations[r.ID]; ok && install.Phase != "rolled-back-held" {
+			return errors.New("installation must roll back and verify health before abort")
+		}
 		if !ok || l.activeUpdate != r.ID || (i.State != "prepared" && i.State != "staged") {
 			return errors.New("no matching active update intent")
 		}
@@ -371,6 +379,7 @@ func (l *ledger) append(v *Vault, r journalRecord) error {
 	next.approvals = clone(l.approvals)
 	next.ops = clone(l.ops)
 	next.updates = clone(l.updates)
+	next.installations = clone(l.installations)
 	if err := next.apply(r); err != nil {
 		return err
 	}

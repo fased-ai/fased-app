@@ -119,8 +119,9 @@ func (v *Vault) PrepareUpdate(r update.IntentRequest) (*update.Intent, error) {
 	if _, e = update.Compatible(m, digest, inv); e != nil {
 		return nil, e
 	}
-	i := update.Intent{Version: 1, ID: r.ID, Sequence: m.Sequence, ManifestSHA256: digest, Core: r.Core, Signer: s, CreatedAt: v.now().Unix(), State: "prepared"}
+	i := update.Intent{Version: 1, ID: r.ID, Sequence: m.Sequence, ManifestSHA256: digest, Core: r.Core, Signer: s, CreatedAt: v.now().Unix(), ManifestExpiresAt: m.ExpiresAt, State: "prepared"}
 	for _, c := range m.Components {
+		i.Contracts = append(i.Contracts, c.Contract)
 		i.Artifacts = append(i.Artifacts, c.Artifact)
 		if c.Contract.Component == "core" {
 			i.Lifecycle = c.Contract.Lifecycle

@@ -51,6 +51,19 @@ func (h *HTTPHandler) backupAPI(w http.ResponseWriter, r *http.Request, token st
 		return
 	}
 	var p update.Preflight
+	if r.URL.Path == "/api/v1/updates/recovery" {
+		var c update.RecoveryCheck
+		if !decodeJSON(w, r, &c) {
+			return
+		}
+		i, e := h.store.VerifyRecovery(r.Context(), c)
+		if e != nil {
+			writeError(w, 409, e.Error())
+			return
+		}
+		writeJSON(w, 200, i)
+		return
+	}
 	if !decodeJSON(w, r, &p) {
 		return
 	}

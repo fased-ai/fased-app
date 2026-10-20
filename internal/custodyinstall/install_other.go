@@ -41,3 +41,7 @@ func (*System) UpdatePause(context.Context, Manifest, update.CorePauseCommand, i
 func (*System) UpdateBackup(context.Context, Manifest, update.Preflight, io.Writer) error {
 	return unsupported
 }
+
+func (*System) UpdateRecovery(context.Context, Manifest, update.RecoveryCheck, io.Writer) error {
+	return unsupported
+}

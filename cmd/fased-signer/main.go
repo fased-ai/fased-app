@@ -46,6 +46,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	documentPath := flags.String("file", "", "exclusive owner output or encrypted restore input")
 	lifetime := flags.Duration("unlock-for", 15*time.Minute, "manual unlock lifetime, at most one hour")
 	requestStdin := flags.Bool("request-stdin", false, "public typed fixture policy/intent JSON from stdin; no credentials")
+	intentID := flags.String("intent-id", "", "exact disposable installation intent for cold inspection")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -55,6 +56,16 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	c, err := signer.LoadConfig(*configPath)
 	if err != nil {
 		return err
+	}
+	if args[0] == "fixture-install-inspect" {
+		if *passwordStdin || *requestStdin || *approvalStdin || *documentPath != "" {
+			return errors.New("cold inspection accepts no credentials or documents")
+		}
+		i, e := signer.InspectInstallation(c, *intentID)
+		if e != nil {
+			return e
+		}
+		return json.NewEncoder(out).Encode(i)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

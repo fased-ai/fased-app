@@ -174,18 +174,23 @@ func (s *Store) backupStep(step string) error {
 }
 
 func recoveryDirectory(base, id string) (int, error) {
+	return recoveryDirectoryMode(base, id, true)
+}
+func recoveryDirectoryMode(base, id string, create bool) (int, error) {
 	fd, e := unix.Open(base, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if e != nil {
 		return -1, e
 	}
 	for _, name := range []string{"lifecycle", id} {
-		if e = unix.Mkdirat(fd, name, 0700); e != nil && !errors.Is(e, unix.EEXIST) {
-			unix.Close(fd)
-			return -1, e
-		}
-		if e = unix.Fsync(fd); e != nil {
-			unix.Close(fd)
-			return -1, e
+		if create {
+			if e = unix.Mkdirat(fd, name, 0700); e != nil && !errors.Is(e, unix.EEXIST) {
+				unix.Close(fd)
+				return -1, e
+			}
+			if e = unix.Fsync(fd); e != nil {
+				unix.Close(fd)
+				return -1, e
+			}
 		}
 		next, err := unix.Openat(fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 		unix.Close(fd)
@@ -200,6 +205,49 @@ func recoveryDirectory(base, id string) (int, error) {
 		}
 	}
 	return fd, nil
+}
+
+// Revalidate the original snapshot after signer installation bookkeeping has
+// advanced its operations head. This creates no snapshot and exports no bytes.
+func (s *Store) VerifyRecovery(ctx context.Context, r update.RecoveryCheck) (update.RecoveryIndex, error) {
+	var zero update.RecoveryIndex
+	if !update.RecoveryMatches(r.Index, r.Preflight) {
+		return zero, errors.New("stale recovery binding")
+	}
+	p := r.Preflight
+	tx, e := s.db.BeginTx(ctx, nil)
+	if e != nil {
+		return zero, e
+	}
+	defer tx.Rollback()
+	phase, pause, e := readPause(ctx, tx)
+	if e != nil {
+		return zero, e
+	}
+	current, e := s.snapshotTx(ctx, tx, p.Pause.Core.ProbeID)
+	if e != nil {
+		return zero, e
+	}
+	if phase != "paused" || pause.PauseID != p.Pause.PauseID || update.SnapshotDigest("pause-request", pause.Request) != update.SnapshotDigest("pause-request", p.Pause.Request) || update.SnapshotDigest("core", current) != update.SnapshotDigest("core", p.Pause.Core) {
+		return zero, errors.New("stale recovery pause or core boot")
+	}
+	d, e := recoveryDirectoryMode(s.dir, p.IntentID, false)
+	if e != nil {
+		return zero, e
+	}
+	defer unix.Close(d)
+	b, e := recoveryRead(d, "recovery.json", 16384)
+	if e != nil {
+		return zero, e
+	}
+	var stored update.RecoveryIndex
+	if update.StrictJSON(b, &stored) != nil || update.SnapshotDigest("index", stored) != update.SnapshotDigest("index", r.Index) {
+		return zero, errors.New("stored recovery index changed")
+	}
+	if e = s.verifyMetadata(ctx, d, stored.Snapshot, p); e != nil {
+		return zero, e
+	}
+	return stored, nil
 }
 
 func recoveryFile(d int, name string, create bool) (*os.File, error) {

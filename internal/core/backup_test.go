@@ -349,3 +349,36 @@ func TestMetadataBackupRequiresPausedOwner(t *testing.T) {
 		t.Fatal("unpaused backup accepted")
 	}
 }
+
+func TestRecoveryRevalidatesOriginalImageAcrossInstallBookkeeping(t *testing.T) {
+	s := fixtureStore(t)
+	claimFixture(t, s)
+	p := pausedBackup(t, s)
+	index, e := s.BackupMetadata(t.Context(), p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	p.Signer.States = append([]update.State(nil), p.Signer.States...)
+	for n := range p.Signer.States {
+		if p.Signer.States[n].Name == "operations" {
+			p.Signer.States[n].Anchor = update.SnapshotDigest("installation-journal", 1)
+		}
+	}
+	p = rebindProof(p)
+	got, e := s.VerifyRecovery(t.Context(), update.RecoveryCheck{Preflight: p, Index: index})
+	if e != nil || got.Snapshot != index.Snapshot {
+		t.Fatal("metadata image lost after installation bookkeeping", e)
+	}
+	bad := p
+	bad.Signer.Spent++
+	bad = rebindProof(bad)
+	if _, e = s.VerifyRecovery(t.Context(), update.RecoveryCheck{Preflight: bad, Index: index}); e == nil {
+		t.Fatal("changed financial totals accepted")
+	}
+	bad = p
+	bad.Pause.Core.BootID = update.NewProbe()
+	bad = rebindProof(bad)
+	if _, e = s.VerifyRecovery(t.Context(), update.RecoveryCheck{Preflight: bad, Index: index}); e == nil {
+		t.Fatal("stale core accepted")
+	}
+}
