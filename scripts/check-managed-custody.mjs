@@ -376,11 +376,16 @@ try {
     body: JSON.stringify({ code, password: appPassword }),
   });
   assert.equal(claim.status, 200);
-  const cookie = claim.headers
-    .getSetCookie()
-    .map((s) => s.split(";")[0])
-    .join("; ");
-  check("ownerCanClaimUI", cookie.length > 0);
+  const claimed = await claim.json();
+  // Follow the actual UI contract: HTTP loopback uses origin-scoped bearer
+  // sessions; private HTTPS uses Secure cookies. Never weaken that distinction.
+  assert.equal(claimed.sessionMode, "bearer");
+  const session = claimed.sessionToken;
+  assert.equal(typeof session, "string");
+  const ownerState = await fetch("http://" + listen + "/api/v1/auth/state", {
+    headers: { Authorization: "Bearer " + session },
+  });
+  check("ownerCanClaimUI", (await ownerState.json()).authenticated === true);
   const backup = backups + "/wallet.backup";
   const setup = JSON.parse(
     cli(
@@ -521,7 +526,7 @@ s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/app.sock');f=s.makefi
   await ownerTerminal();
   await healthy();
   const revoked = await fetch("http://" + listen + "/api/v1/setup", {
-    headers: { Origin: "http://" + listen, Cookie: cookie },
+    headers: { Origin: "http://" + listen, Authorization: "Bearer " + session },
   });
   check("oldAppSessionRevoked", revoked.status === 401);
   check(
