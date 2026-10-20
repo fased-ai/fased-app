@@ -43,6 +43,14 @@ func ownerDirectory(path string) (int, error) {
 	return fd, nil
 }
 
+func preflightOwnerFile(path string) error {
+	fd, err := ownerDirectory(path)
+	if err != nil {
+		return err
+	}
+	return unix.Close(fd)
+}
+
 func writeOwnerFile(path string, data []byte) error {
 	dir, err := ownerDirectory(path)
 	if err != nil {

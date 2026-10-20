@@ -322,6 +322,32 @@ func (v *Vault) Backup(password []byte) ([]byte, error) {
 	return json.Marshal(e)
 }
 
+// VerifyBackup compares an authenticated backup to the currently unlocked key.
+// It never returns the seed or alters grants, epochs or recovery holds.
+func (v *Vault) VerifyBackup(document, password []byte) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.closed {
+		return ErrUnavailable
+	}
+	if !v.unlocked() {
+		return ErrLocked
+	}
+	var e envelope
+	if err := decode(document, &e); err != nil {
+		return err
+	}
+	seed, err := unseal(e, password, "backup")
+	if err != nil {
+		return err
+	}
+	defer wipe(seed)
+	if e.Ref.WalletID != v.record.Ref.WalletID || !bytes.Equal(seed, v.seed) {
+		return errors.New("backup belongs to another fixture wallet")
+	}
+	return nil
+}
+
 // Restore imports only a key backup into an empty signer. It never restores
 // policies, journals or spending counters. Its fresh epoch and permanent recovery
 // hold cannot be cleared by this phase's API; P3 reconciliation must come first.

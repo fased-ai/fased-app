@@ -27,6 +27,9 @@ func main() {
 }
 
 func run(args []string, input *os.File, out, errOut io.Writer) error {
+	if len(args) == 1 && args[0] == "fixture-version" {
+		return json.NewEncoder(out).Encode(map[string]any{"protocol": 1, "ownerFlow": 1, "mode": signer.FixtureNetwork, "walletSigner": false})
+	}
 	if len(args) == 0 {
 		return errors.New("usage: fased-signer serve|owner|app --config <root-owned-fixture.json> --disposable-fixture [options]")
 	}
@@ -60,10 +63,15 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		<-ctx.Done()
 		return nil
 	}
-	if args[0] != "owner" && args[0] != "app" {
+	if args[0] != "owner" && args[0] != "app" && args[0] != "setup" && args[0] != "recover" {
 		return errors.New("unsupported fixture command")
 	}
-	owner := args[0] == "owner"
+	owner := args[0] != "app"
+	if owner {
+		if err = signer.CheckOwner(c); err != nil {
+			return err
+		}
+	}
 	if !owner && *action != "status" {
 		return errors.New("owner administration denied")
 	}
@@ -100,6 +108,9 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 			}
 		}
 		return p, nil
+	}
+	if args[0] == "setup" || args[0] == "recover" {
+		return ownerFlow(ctx, c, args[0], *documentPath, password, out)
 	}
 	switch r.Action {
 	case "status", "lock":

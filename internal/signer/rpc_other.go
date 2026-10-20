@@ -7,8 +7,10 @@ import (
 	"errors"
 )
 
-func decodeWire([]byte, any) error { return ErrUnavailable }
-func VerifyExecutable() error      { return ErrUnavailable }
+func decodeWire([]byte, any) error                  { return ErrUnavailable }
+func VerifyExecutable() error                       { return ErrUnavailable }
+func CheckOwner(Config) error                       { return ErrUnavailable }
+func CheckApplication(string, string, string) error { return ErrUnavailable }
 func LoadConfig(string) (Config, error) {
 	return Config{}, errors.New("signer identity/IPC is unsupported on this OS")
 }

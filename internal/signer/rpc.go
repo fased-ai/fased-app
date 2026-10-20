@@ -62,6 +62,8 @@ func execute(v *Vault, r Request, owner bool) Response {
 		v.Lock()
 	case "backup":
 		document, err = v.Backup(r.Password)
+	case "verify-backup":
+		err = v.VerifyBackup(r.Document, r.Password)
 	case "restore":
 		err = v.Restore(r.Document, r.Password, r.NewPassword)
 	case "export-fixture-seed":

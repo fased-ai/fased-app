@@ -153,6 +153,34 @@ func VerifyExecutable() error {
 	return trustedPath(path)
 }
 
+func CheckOwner(c Config) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if err := VerifyExecutable(); err != nil {
+		return err
+	}
+	if os.Geteuid() != c.OwnerUID || os.Getuid() != c.OwnerUID {
+		return errors.New("owner administration denied for this OS identity")
+	}
+	return nil
+}
+
+// CheckApplication is called before opening any managed app state/listener.
+func CheckApplication(config, root, data string) error {
+	c, err := LoadConfig(config)
+	if err != nil {
+		return err
+	}
+	if err = VerifyExecutable(); err != nil {
+		return err
+	}
+	if os.Getuid() != c.AppUID || os.Geteuid() != c.AppUID || config != filepath.Join(root, "identity.json") || data != filepath.Join(root, "app-state") || c.StateDir != filepath.Join(root, "signer-state") || c.SocketDir != filepath.Join(root, "signer-ipc") {
+		return errors.New("managed core identity or paths do not match installed custody configuration")
+	}
+	return protectedDirectory(data, c.AppUID, 0700)
+}
+
 func Serve(ctx context.Context, c Config) (*Server, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
