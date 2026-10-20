@@ -3,7 +3,7 @@ import { providerNames } from "../state";
 import { Badge, SectionHead } from "../components/shared";
 import { useWorkspace } from "../workspace";
 export function Settings() {
-  const { state, dispatch, setSetupOpen, setResetOpen, notify } =
+  const { core, state, dispatch, setSetupOpen, setResetOpen, notify } =
     useWorkspace();
   return (
     <>
@@ -16,7 +16,9 @@ export function Settings() {
         <section className="panel">
           <div className="panel-heading">
             <h2>Instance</h2>
-            <Badge>SIMULATED</Badge>
+            <Badge>
+              {core.mode === "ready" ? "PRIVATE CORE" : "SIMULATED"}
+            </Badge>
           </div>
           <div className="settings-body">
             <label htmlFor="instance-host">Deployment preference</label>
@@ -34,8 +36,9 @@ export function Settings() {
               <option value="vps">Private VPS</option>
             </select>
             <p className="subtle">
-              This changes a prototype preference, not the machine or its
-              networking.
+              {core.mode === "ready"
+                ? "Saved to this instance. This preference does not change the machine or networking."
+                : "This changes a prototype preference, not the machine or its networking."}
             </p>
             <button className="secondary" onClick={() => setSetupOpen(true)}>
               Review setup <ArrowRight size={14} />
@@ -121,7 +124,9 @@ export function Settings() {
         </div>
         <div className="panel-footer">
           <p>
-            Setup choices, profiles, notes and inbox events are saved locally.
+            {core.mode === "ready"
+              ? "Profiles, notes and inbox events remain browser demo data. Setup is saved separately in your private core."
+              : "Setup choices, profiles, notes and inbox events are saved locally."}
             Chat messages are temporary. Do not enter sensitive information.
           </p>
           <button

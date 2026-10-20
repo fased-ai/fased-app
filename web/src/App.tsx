@@ -29,9 +29,12 @@ import { Wallets } from "./pages/Wallets";
 import { Agents } from "./pages/Agents";
 import { Terminals } from "./pages/Terminals";
 import { Settings } from "./pages/Settings";
+import { CoreProvider } from "./core";
+import { CoreGate } from "./components/CoreGate";
 function WorkspaceShell() {
   const {
     state,
+    core,
     dispatch,
     setNoticesOpen,
     setProfileOpen,
@@ -151,7 +154,9 @@ function WorkspaceShell() {
               <Settings2 size={17} /> Settings
             </button>
             <div className="sidebar-version">
-              <span className="dot" /> Design prototype <span>0.0.0</span>
+              <span className="dot" />
+              {core.mode === "ready" ? "Private core" : "Design prototype"}
+              <span>{core.mode === "ready" ? core.version : "0.0.0"}</span>
             </div>
           </div>
         </aside>
@@ -245,12 +250,36 @@ function WorkspaceShell() {
           </header>
           <div className="prototype-strip">
             <FlaskConical size={13} />
-            <strong>INTERACTIVE PROTOTYPE</strong>
+            <strong>
+              {core.mode === "ready"
+                ? "PRIVATE CORE · TERMINAL PROTOTYPES"
+                : "INTERACTIVE PROTOTYPE"}
+            </strong>
             <span>
               Illustrative data. No connected wallets, AI requests or real
               execution.
             </span>
           </div>
+          {core.mode === "ready" && (
+            <div className="core-status">
+              <span>
+                <ShieldCheck size={13} /> Core connected · setup saved to this
+                instance
+              </span>
+              <button
+                className="text-button"
+                disabled={core.saving}
+                onClick={() => void core.logout()}
+              >
+                Sign out
+              </button>
+            </div>
+          )}
+          {core.error && core.mode === "ready" && (
+            <div className="storage-warning" role="alert">
+              {core.error}
+            </div>
+          )}
           {storageError && (
             <div className="storage-warning" role="alert">
               Browser storage is unavailable. Changes last only until this page
@@ -369,8 +398,12 @@ function WorkspaceShell() {
 
 export default function App() {
   return (
-    <WorkspaceProvider>
-      <WorkspaceShell />
-    </WorkspaceProvider>
+    <CoreProvider>
+      <WorkspaceProvider>
+        <CoreGate>
+          <WorkspaceShell />
+        </CoreGate>
+      </WorkspaceProvider>
+    </CoreProvider>
   );
 }

@@ -9,6 +9,8 @@ import {
 } from "react";
 import { initialState, reducer, restoreState, STORAGE_KEY } from "./state";
 import { navigation, terminalData } from "./fixtures";
+import { useCore } from "./core";
+import type { Action } from "./state";
 function loadInitialState() {
   try {
     return restoreState(localStorage.getItem(STORAGE_KEY));
@@ -25,7 +27,23 @@ function getRoute() {
     : "overview";
 }
 function useWorkspaceState() {
-  const [state, dispatch] = useReducer(reducer, undefined, loadInitialState);
+  const [prototypeState, localDispatch] = useReducer(
+    reducer,
+    undefined,
+    loadInitialState,
+  );
+  const core = useCore();
+  const state =
+    core.mode === "ready" && core.setup
+      ? { ...prototypeState, setup: core.setup.settings }
+      : prototypeState;
+  function dispatch(action: Action) {
+    if (action.type === "setup" && core.mode === "ready") {
+      void core.updateSetup(action.patch);
+      return;
+    }
+    localDispatch(action);
+  }
   const [route, setRoute] = useState(getRoute);
   const [setupOpen, setSetupOpen] = useState(false);
   const [noticesOpen, setNoticesOpen] = useState(false);
@@ -57,12 +75,12 @@ function useWorkspaceState() {
   }, []);
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(prototypeState));
       setStorageError(false);
     } catch {
       setStorageError(true);
     }
-  }, [state]);
+  }, [prototypeState]);
   useEffect(() => {
     if (!toast) return;
     const id = setTimeout(() => setToast(""), 4500);
@@ -118,6 +136,7 @@ function useWorkspaceState() {
   ].filter((item) => item.title.toLowerCase().includes(query.toLowerCase()));
 
   return {
+    core,
     state,
     dispatch,
     route,

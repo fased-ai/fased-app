@@ -6,7 +6,7 @@ on:
 permissions:
   contents: read
 jobs:
-  prototype:
+  core:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -16,12 +16,135 @@ jobs:
           node-version: "24"
           cache: npm
       - run: npm ci
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - run: node scripts/source-evidence.mjs
       - run: npm run check
+      - run: go mod verify
+      - run: test -z "$(gofmt -l cmd internal desktop ui.go)"
+      - run: npm run test:core
+      - run: npm run build:core
+      - name: Headless Windows compilation
+        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o .evidence/bin/windows.exe ./cmd/fased-app
+      - name: Headless macOS compilation
+        run: GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o .evidence/bin/macos ./cmd/fased-app
       - run: npx playwright install --with-deps chromium
       - run: npm run test:ui
+      - run: npm run test:core-ui
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: prototype-failure-evidence
-          path: .evidence/
+          name: core-failure-evidence
+          include-hidden-files: true
+          path: |
+            .evidence/*.json
+            .evidence/*.png
+            .evidence/browser/
+            .evidence/core-browser/
           retention-days: 7
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache-dependency-path: |
+            go.sum
+            desktop/go.sum
+      - run: npm ci
+      - run: npm run build
+      - name: Native Linux build prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev xvfb dbus-x11 xterm xdotool scrot
+      - name: Windows task encoding contracts
+        if: runner.os == 'Windows'
+        run: go test ./internal/localinstall
+      - run: go -C desktop mod verify
+      - run: npm run build:desktop
+      - run: npm run build:core
+      - run: npm run package:native
+      - name: Prepare missing Ubuntu runtime acceptance
+        if: runner.os == 'Linux'
+        run: |
+          go -C desktop build -trimpath -tags production,webkit2_41 -o ../.evidence/bin/fased-native-smoke ./smoke
+          sudo apt-get remove -y --no-auto-remove bubblewrap libwebkit2gtk-4.1-0
+          echo "FASED_TEST_HOST_PREPARE=1" >> "$GITHUB_ENV"
+      - name: Prepare Ubuntu user service manager
+        if: runner.os == 'Linux'
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl start "user@$(id -u).service"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+      - name: Installed platform package journey
+        shell: bash
+        run: |
+          platform="${{ runner.os }}"
+          case "$platform" in
+            Linux) archive="$(find .evidence/packages -name '*.tar.gz')" ;;
+            Windows) archive="$(find .evidence/packages -name '*.zip')" ;;
+            macOS) archive="$(find .evidence/packages -name '*.zip')" ;;
+          esac
+          FASED_PACKAGE_ARCHIVE="$archive" npm run test:platform-install
+      - name: Windows setup executable journey
+        if: runner.os == 'Windows'
+        run: node scripts/check-windows-setup.mjs
+      - name: Linux service failure diagnostics
+        if: failure() && runner.os == 'Linux'
+        run: |
+          systemctl --user show fased-app.service --property=LoadState,ActiveState,FragmentPath,Result,ExecMainStatus || true
+          sudo journalctl --no-pager _SYSTEMD_USER_UNIT=fased-app.service -n 40 || true
+          sudo journalctl --no-pager -u "user@$(id -u).service" -n 40 || true
+          sudo journalctl --no-pager -k -g 'apparmor.*DENIED' -n 12 || true
+      - name: Native Linux window and separate-core journey
+        if: runner.os == 'Linux'
+        run: |
+          dbus-run-session -- npm run test:native-window
+      - name: Packaged Ubuntu desktop first-launch preparation
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node scripts/check-native-first-launch.mjs
+      - name: Remove owned Ubuntu acceptance policy after native window
+        if: always() && runner.os == 'Linux'
+        run: node --input-type=module -e "const m = await import('./scripts/ubuntu-preparation.mjs'); await m.cleanupUbuntuPreparation();"
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os == 'Linux'
+        with:
+          name: ubuntu-native-first-launch
+          include-hidden-files: true
+          path: |
+            .evidence/native-first-launch-result.json
+            .evidence/native-first-launch.png
+            .evidence/native-first-consent.png
+            .evidence/native-first-launch.log
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: desktop-failure-${{ matrix.os }}
+          include-hidden-files: true
+          path: |
+            .evidence/*.json
+            .evidence/*.log
+          retention-days: 7
+  prototype:
+    if: always()
+    needs: [core, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Required aggregate check
+        env:
+          CORE_RESULT: ${{ needs.core.result }}
+          DESKTOP_RESULT: ${{ needs.desktop.result }}
+        run: test "$CORE_RESULT" = success && test "$DESKTOP_RESULT" = success

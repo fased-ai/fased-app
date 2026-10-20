@@ -12,6 +12,21 @@ including React/React DOM (MIT) and Lucide (ISC), and the development tools
 recorded in package-lock.json. Their installed packages contain their own
 license texts. These terms are not replaced by the application license.
 
+The Go private core adds modernc.org/sqlite (BSD-3-Clause), golang.org/x/crypto,
+golang.org/x/sys and golang.org/x/term (BSD-3-Clause), Microsoft/go-winio (MIT),
+and the transitive modules pinned in go.sum. Module downloads include their
+license texts; artifact distribution must collect all required notices.
+
+The separate native-client module uses Wails v2 (MIT) and the modules pinned
+in desktop/go.sum, including the platform WebView integration. These are not
+dependencies of the headless core. Native release packaging must preserve
+their required platform and third-party notices as well.
+
 Before distributing built artifacts, include the required notices for all
 bundled dependencies. Any later extraction from legacy Fased must retain its
 applicable copyright/license notices and record the source revision.
+Separate OS policy data in packaging/linux/apparmor/ is the unmodified Ubuntu
+AppArmor bwrap-userns-restrict profile from revision
+43ef5b6c962d324ffc58ca75843df26827026bfa, under GPL-2.0-or-later.
+Its original copyright record, full license and provenance are retained there.
+It is not linked into or embedded in Fased's original Go/TypeScript code.

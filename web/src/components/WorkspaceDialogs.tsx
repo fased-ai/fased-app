@@ -21,6 +21,7 @@ import { useWorkspace } from "../workspace";
 export function WorkspaceDialogs() {
   const {
     state,
+    core,
     dispatch,
     setupOpen,
     setSetupOpen,
@@ -64,9 +65,16 @@ export function WorkspaceDialogs() {
           </div>
           <div className="setup-body">
             <p className="prototype-caption">
-              <FlaskConical size={14} /> Setup simulation · no services or
-              accounts are created
+              <FlaskConical size={14} />
+              {core.mode === "ready"
+                ? "Preferences are saved to your private core. Wallets and providers stay unconnected."
+                : "Setup simulation · no services or accounts are created"}
             </p>
+            {core.error && core.mode === "ready" && (
+              <p className="core-error" role="alert">
+                {core.error}
+              </p>
+            )}
             {state.setup.step === 0 && (
               <>
                 <h3>Where will your instance run?</h3>
@@ -244,6 +252,7 @@ export function WorkspaceDialogs() {
           <div className="dialog-footer">
             <button
               className="secondary"
+              disabled={core.saving}
               onClick={() =>
                 state.setup.step > 0
                   ? dispatch({
@@ -257,23 +266,32 @@ export function WorkspaceDialogs() {
             </button>
             <button
               className="primary"
-              onClick={() => {
+              disabled={core.saving}
+              onClick={async () => {
                 if (state.setup.step < 3)
                   dispatch({
                     type: "setup",
                     patch: { step: state.setup.step + 1 },
                   });
                 else {
-                  dispatch({ type: "setup", patch: { complete: true } });
+                  if (core.mode === "ready") {
+                    if (!(await core.updateSetup({ complete: true }))) return;
+                  } else dispatch({ type: "setup", patch: { complete: true } });
                   setSetupOpen(false);
                   notify(
                     "Setup preferences saved",
-                    "Only prototype preferences were saved. No wallet, AI connection or service was created.",
+                    core.mode === "ready"
+                      ? "Preferences saved to this instance. No wallet or AI connection was created."
+                      : "Only prototype preferences were saved. No wallet, AI connection or service was created.",
                   );
                 }
               }}
             >
-              {state.setup.step < 3 ? "Continue" : "Save prototype preferences"}
+              {state.setup.step < 3
+                ? "Continue"
+                : core.mode === "ready"
+                  ? "Save setup preferences"
+                  : "Save prototype preferences"}
               <ArrowRight size={15} />
             </button>
           </div>
@@ -428,6 +446,8 @@ export function WorkspaceDialogs() {
             <p>
               This removes this browser's demo setup, custom profiles, notes and
               inbox events. It affects no wallet, account or external service.
+              {core.mode === "ready" &&
+                " Your private core setup is preserved."}
             </p>
           </div>
           <div className="dialog-footer">
