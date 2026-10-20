@@ -20,14 +20,15 @@ import (
 )
 
 type Store struct {
-	db         *sql.DB
-	dir        string
-	instanceID string
-	pauseFault func(string) error // Test-only interruption injection, never configuration or IPC.
-	bootID     string
-	now        func() time.Time
-	authMu     sync.Mutex
-	fixture    func(context.Context, signer.Request) (signer.Response, error)
+	db          *sql.DB
+	dir         string
+	instanceID  string
+	pauseFault  func(string) error // Test-only interruption injection, never configuration or IPC.
+	backupFault func(string) error // Test-only partial write/crash injection.
+	bootID      string
+	now         func() time.Time
+	authMu      sync.Mutex
+	fixture     func(context.Context, signer.Request) (signer.Response, error)
 }
 
 func OpenStore(dir string) (_ *Store, resultErr error) {

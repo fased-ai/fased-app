@@ -30,6 +30,9 @@ func main() {
 	}
 }
 func run(args []string, in *os.File, out, errOut io.Writer) error {
+	if len(args) > 0 && args[0] == "update-backup" {
+		return updateBackupCommand(args[1:], in, out, errOut)
+	}
 	if len(args) > 0 && args[0] == "update-pause" {
 		return updatePauseCommand(args[1:], in, out, errOut)
 	}

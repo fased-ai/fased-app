@@ -308,3 +308,50 @@ readable and abortable; new candidate admission still requires the current
 contract. No binaries/helpers are replaced or executed, no financial state is
 migrated, and no public trust, real wallets, automatic updates or execution resume
 is enabled by this package.
+
+## Private recoverable app-metadata backup
+
+```sh
+fased-app custody updates backup --disposable-fixture --prepare-host \
+  --intent-id <same-staged-intent-id>
+```
+
+The immutable owner helper obtains fresh core/signer preflight, requests a backup
+through private authenticated app IPC, then independently revalidates the signer,
+reserved floor and complete staged hashes. No wallet secret or snapshot bytes
+cross that bridge. The browser cannot call this operation. No additional financial
+approval is created by the already reviewed development intent.
+
+On Linux the SQLite owner holds `BEGIN IMMEDIATE`, rechecks the actual pause and
+boot, and serializes its consistent WAL view. The bounded 64 MiB image preserves
+app metadata, hashed credentials, sessions and the durable pause. It is private
+plaintext at rest, protected by the app UID and directory/file modes 0700/0600;
+it is not an encrypted portable backup. Do not distribute it or include it in
+support bundles. Signer keys, policies, grants, originals, journals, spending,
+reservations, recovery holds and sequence floors are never copied or restored.
+
+Fixed paths under `app-state/lifecycle/<intent-id>/` contain a durable
+`request.json`, `metadata.sqlite` and final `recovery.json`. The index binds the
+pause/instance/metadata, signer authority and floor, staged identities, snapshot
+hash/size and a versioned recovery binding. It is app-owned evidence, not signer
+or installation authority. Boot/challenge values are refreshed for each request
+and excluded only from the durable identity. Original intent snapshots remain
+bound. Success still leaves core metadata paused and the wallet locked.
+
+Writes resume matching prefixes, sync file bytes, publish with Linux atomic
+no-replace rename and sync the directory. Completion rehashes the actual private
+file and reads it with SQLite `immutable=1` for integrity, metadata and pause
+verification; verification never migrates the image. Restart/reply-loss retries
+reuse the same complete image/index. Symlinks, hard links, broad permissions,
+conflicting prefixes, corrupt indices/images and stale service evidence refuse
+without replacing data. If an incomplete image's source bytes change (including
+a new ephemeral login), exact-byte regeneration is unavailable: preserve its
+request/partial bytes and stop. Completed images remain reusable after login.
+No cleanup/replacement or restore command is provided for such a conflict yet.
+
+This same-filesystem backup does not survive loss of that disk and provides no
+financial rollback. A successful receipt is a point-in-time observation; a future
+install controller must revalidate both services and staged bytes. Installation,
+helper replacement, financial restore/migration, installed-sequence commit,
+health/rollback, public signing trust and native custody remain open. Real wallets,
+network execution and automatic updates stay disabled.

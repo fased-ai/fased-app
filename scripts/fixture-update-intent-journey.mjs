@@ -27,7 +27,7 @@ export async function fixtureUpdateIntentJourney({
   env,
 }) {
   assert(process.getuid() > 0);
-  const evidence = path.resolve(".evidence/p4-preflight");
+  const evidence = path.resolve(".evidence/p4-backup");
   await mkdir(evidence, { recursive: true });
   const checks = {};
   const pass = (name, value) => {
@@ -299,6 +299,58 @@ finally:
         ownerStatus().locked &&
         ownerStatus().updateHeld,
     );
+    const backup = () =>
+      JSON.parse(
+        cli(["updates", "backup", "--prepare-host", "--intent-id", id]),
+      );
+    const beforeBackup = inventory().signer;
+    const index = backup();
+    report.recoveryIndex = index;
+    pass(
+      "actualOwnerPublishesBoundMetadataBackup",
+      index.version === 1 &&
+        index.phase === "metadata-backed-up" &&
+        index.binding.pause.pauseId === ready.pause.pauseId &&
+        index.binding.signer.activeIntentId === id &&
+        index.binding.signer.sequenceFloor === "1" &&
+        JSON.stringify(index.binding.files) === JSON.stringify(staged.files) &&
+        index.snapshot.file === "metadata.sqlite" &&
+        index.snapshot.size > 0 &&
+        /^[0-9a-f]{64}$/.test(index.snapshot.sha256),
+    );
+    pass(
+      "backupDoesNotInstallResumeOrUnlock",
+      !index.installAllowed &&
+        !index.resumeAllowed &&
+        !index.financialExecution &&
+        ownerStatus().locked &&
+        ownerStatus().updateHeld,
+    );
+    pass(
+      "ownerCannotReadPrivateAppSnapshotDirectly",
+      fails(() =>
+        execFileSync(
+          "/usr/bin/test",
+          ["-r", root + "/app-state/lifecycle/" + id + "/metadata.sqlite"],
+          { env, stdio: "ignore" },
+        ),
+      ),
+    );
+    pass(
+      "exactBackupRetryKeepsOneIndex",
+      JSON.stringify(backup()) === JSON.stringify(index),
+    );
+    const afterBackup = inventory().signer;
+    pass(
+      "backupLeavesSignerJournalsAndCountersUnchanged",
+      JSON.stringify(beforeBackup.states) ===
+        JSON.stringify(afterBackup.states) &&
+        beforeBackup.spent === afterBackup.spent &&
+        beforeBackup.held === afterBackup.held &&
+        beforeBackup.unknown === afterBackup.unknown &&
+        beforeBackup.authoritySha256 === afterBackup.authoritySha256 &&
+        afterBackup.sequenceFloor === "1",
+    );
     const app = (args, input) =>
       execFileSync(
         engine,
@@ -339,11 +391,36 @@ finally:
     );
     report.preflight = next;
     pass(
+      "actualCoreRestartRecoversSameBackupIndex",
+      JSON.stringify(backup()) === JSON.stringify(index),
+    );
+    restartSigner();
+    let afterSignerRestart;
+    for (let n = 0; n < 20; n++) {
+      try {
+        afterSignerRestart = backup();
+        break;
+      } catch (e) {
+        if (n === 19) throw e;
+        await delay(100);
+      }
+    }
+    pass(
+      "actualSignerRestartRevalidatesSameBackupIndex",
+      JSON.stringify(afterSignerRestart) === JSON.stringify(index) &&
+        ownerStatus().locked,
+    );
+
+    pass(
       "actualOwnerTTYAbortCancel",
       terminal("abort", "cancel").exitCode !== 0 &&
         inventory().signer.activeIntentId === id,
     );
     pass("actualOwnerTTYAbort", terminal("abort", "approve").exitCode === 0);
+    pass(
+      "abortedIntentCannotAcknowledgeBackup",
+      fails(() => backup(), /staged intent/),
+    );
     pass(
       "abortedIntentCannotStage",
       fails(() => stage(), /stale or inactive/),
@@ -410,7 +487,7 @@ finally:
     report.cleanup =
       "public test inputs removed; private manifest key stayed in memory; managed parent removes generated services/accounts/state";
     await writeFile(
-      path.join(evidence, "managed-preflight-result.json"),
+      path.join(evidence, "managed-backup-result.json"),
       JSON.stringify(report, null, 2) + "\n",
     );
   }

@@ -37,3 +37,27 @@ func (h *HTTPHandler) pauseAPI(w http.ResponseWriter, r *http.Request, token str
 	}
 	writeJSON(w, 200, p)
 }
+
+func (h *HTTPHandler) backupAPI(w http.ResponseWriter, r *http.Request, token string) {
+	if r.Context().Value(privateIPCKey{}) != true {
+		writeError(w, 403, "metadata backup requires private CLI IPC")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeError(w, 405, "method not allowed")
+		return
+	}
+	if !h.mutation(w, r) || !h.csrf(w, r, token) {
+		return
+	}
+	var p update.Preflight
+	if !decodeJSON(w, r, &p) {
+		return
+	}
+	i, e := h.store.BackupMetadata(r.Context(), p)
+	if e != nil {
+		writeError(w, 409, "metadata backup failed; state preserved: "+e.Error())
+		return
+	}
+	writeJSON(w, 200, i)
+}

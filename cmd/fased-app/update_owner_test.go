@@ -25,8 +25,9 @@ import (
 )
 
 func TestProtectedUpdateReviewCancelStalenessAndCommit(t *testing.T) {
-	for _, tc := range []string{"cancel", "changed-core", "changed-signer", "bad-artifact", "prepare", "stage", "stage-stale-core", "stage-bad-source", "preflight", "preflight-owner-interrupted", "preflight-corrupt-reply", "preflight-core-released", "preflight-abort-interrupted"} {
+	for _, tc := range []string{"cancel", "changed-core", "changed-signer", "bad-artifact", "prepare", "stage", "stage-stale-core", "stage-bad-source", "preflight", "preflight-owner-interrupted", "preflight-corrupt-reply", "preflight-core-released", "preflight-abort-interrupted", "backup", "backup-interrupted", "backup-corrupt-reply", "backup-signer-aborted", "backup-staged-corrupt"} {
 		t.Run(tc, func(t *testing.T) {
+			needsPreflight := strings.HasPrefix(tc, "preflight") || strings.HasPrefix(tc, "backup")
 			root := filepath.Join("..", "..", ".evidence", "p4-intents", "owner-fixtures")
 			if e := os.MkdirAll(root, 0700); e != nil {
 				t.Fatal(e)
@@ -146,7 +147,7 @@ func TestProtectedUpdateReviewCancelStalenessAndCommit(t *testing.T) {
 			var review, out bytes.Buffer
 			id := update.NewProbe()
 			e = conductUpdate(t.Context(), id, manifest, trust, artifactDir, probe, call, confirm, &review, &out)
-			if tc == "prepare" || strings.HasPrefix(tc, "stage") || strings.HasPrefix(tc, "preflight") {
+			if tc == "prepare" || strings.HasPrefix(tc, "stage") || needsPreflight {
 				if e != nil || prepares != 1 || !v.Status().UpdateHeld || !v.Status().Locked {
 					t.Fatal("protected intent not persisted", e)
 				}
@@ -158,7 +159,7 @@ func TestProtectedUpdateReviewCancelStalenessAndCommit(t *testing.T) {
 					t.Fatal("invalid intent receipt", e)
 				}
 
-				if strings.HasPrefix(tc, "stage") || strings.HasPrefix(tc, "preflight") {
+				if strings.HasPrefix(tc, "stage") || needsPreflight {
 					if tc == "stage-stale-core" {
 						probe = func(_ context.Context, p string) (update.CoreSnapshot, error) {
 							s, e := store.UpdateSnapshot(t.Context(), p)
@@ -173,7 +174,7 @@ func TestProtectedUpdateReviewCancelStalenessAndCommit(t *testing.T) {
 					}
 					out.Reset()
 					e = conductStage(t.Context(), id, artifactDir, probe, call, &out)
-					if tc == "stage" || strings.HasPrefix(tc, "preflight") {
+					if tc == "stage" || needsPreflight {
 						var result update.StageStatus
 						if e != nil || json.Unmarshal(out.Bytes(), &result) != nil || !result.Verified || result.InstallAllowed || result.ResumeAllowed {
 							t.Fatal("owner staging failed", e)
@@ -184,7 +185,7 @@ func TestProtectedUpdateReviewCancelStalenessAndCommit(t *testing.T) {
 					if !v.Status().Locked || !v.Status().UpdateHeld {
 						t.Fatal("staging released hold")
 					}
-					if strings.HasPrefix(tc, "preflight") {
+					if needsPreflight {
 						interrupted := false
 						control := func(ctx context.Context, c update.CorePauseCommand) (update.CorePauseReceipt, error) {
 							if tc == "preflight-core-released" && c.Action == "status" {
@@ -215,7 +216,7 @@ func TestProtectedUpdateReviewCancelStalenessAndCommit(t *testing.T) {
 							}
 							e = conductPreflight(t.Context(), id, control, call, &out)
 						}
-						if tc == "preflight" || tc == "preflight-owner-interrupted" || tc == "preflight-abort-interrupted" {
+						if tc == "preflight" || tc == "preflight-owner-interrupted" || tc == "preflight-abort-interrupted" || strings.HasPrefix(tc, "backup") {
 							var p update.Preflight
 							if e != nil || json.Unmarshal(out.Bytes(), &p) != nil || !p.Verified || p.InstallAllowed || p.ResumeAllowed {
 								t.Fatal("owner preflight failed", e)
@@ -225,6 +226,45 @@ func TestProtectedUpdateReviewCancelStalenessAndCommit(t *testing.T) {
 						}
 						if !v.Status().Locked || !v.Status().UpdateHeld {
 							t.Fatal("preflight released financial hold")
+						}
+						if strings.HasPrefix(tc, "backup") {
+							once := false
+							backup := func(ctx context.Context, p update.Preflight) (update.RecoveryIndex, error) {
+								i, e := store.BackupMetadata(ctx, p)
+								if e != nil {
+									return i, e
+								}
+								if tc == "backup-interrupted" && !once {
+									once = true
+									return i, errors.New("owner interrupted after durable index")
+								}
+								if tc == "backup-corrupt-reply" {
+									i.Snapshot.SHA256 = "corrupt"
+								}
+								if tc == "backup-signer-aborted" {
+									_, e = v.AbortUpdate(id)
+								}
+								if tc == "backup-staged-corrupt" {
+									e = os.WriteFile(filepath.Join(state, "update-"+id, "0.artifact"), []byte("bad"), 0600)
+								}
+								return i, e
+							}
+							out.Reset()
+							e = conductBackup(t.Context(), id, control, backup, call, &out)
+							if tc == "backup-interrupted" {
+								if e == nil || out.Len() != 0 {
+									t.Fatal("lost backup reply returned success")
+								}
+								e = conductBackup(t.Context(), id, control, backup, call, &out)
+							}
+							if tc == "backup" || tc == "backup-interrupted" {
+								var i update.RecoveryIndex
+								if e != nil || json.Unmarshal(out.Bytes(), &i) != nil || i.Phase != "metadata-backed-up" || i.InstallAllowed || i.ResumeAllowed || i.FinancialExecution {
+									t.Fatal("owner backup failed", e)
+								}
+							} else if e == nil || out.Len() != 0 {
+								t.Fatal("unbound/stale backup succeeded", e)
+							}
 						}
 						out.Reset()
 						if tc == "preflight-abort-interrupted" {

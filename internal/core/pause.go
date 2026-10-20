@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -32,7 +31,7 @@ type pauseRecord struct {
 	Request update.CorePauseRequest `json:"request"`
 }
 
-func readPause(ctx context.Context, tx *sql.Tx) (string, pauseRecord, error) {
+func readPause(ctx context.Context, tx snapshotReader) (string, pauseRecord, error) {
 	var phase, document string
 	var r pauseRecord
 	e := tx.QueryRowContext(ctx, "SELECT phase,document FROM update_pause WHERE id=1").Scan(&phase, &document)

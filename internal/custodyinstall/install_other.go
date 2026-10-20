@@ -37,3 +37,7 @@ func (*System) UpdateInventory(context.Context, Manifest, string, io.Writer) err
 func (*System) UpdatePause(context.Context, Manifest, update.CorePauseCommand, io.Writer) error {
 	return unsupported
 }
+
+func (*System) UpdateBackup(context.Context, Manifest, update.Preflight, io.Writer) error {
+	return unsupported
+}
