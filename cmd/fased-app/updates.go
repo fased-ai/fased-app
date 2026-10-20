@@ -13,6 +13,9 @@ import (
 )
 
 func updatesCommand(args []string, out, errOut io.Writer) error {
+	if len(args) > 0 && args[0] == "trust-inspect" {
+		return updateTrustCommand(args[1:], out, errOut)
+	}
 	if len(args) > 0 && args[0] == "acquire" {
 		return updateAcquireCommand(args[1:], out, errOut)
 	}
@@ -30,7 +33,7 @@ func updatesCommand(args []string, out, errOut io.Writer) error {
 		}{Version: 1, Target: update.Target{OS: runtime.GOOS, Arch: runtime.GOARCH}, Contract: core.UpdateContract()})
 	}
 	if len(args) == 0 || args[0] != "inspect" {
-		return errors.New("usage: fased-app updates status | preferences [--request-stdin] [--data-dir <directory>] | compatibility | inspect --development --manifest <file> --trust-file <file> --inventory <file> --artifact-dir <directory> | acquire --development --origin <https-origin> --manifest-url <https-url> --trust-file <file> --trust-sha256 <independent-pin> --inventory <file> --output <absent-private-directory>")
+		return errors.New("usage: fased-app updates status | preferences [--request-stdin] [--data-dir <directory>] | compatibility | inspect --development --manifest <file> --trust-file <file> --inventory <file> --artifact-dir <directory> | acquire --development --origin <https-origin> --manifest-url <https-url> --trust-file <file> --trust-sha256 <independent-pin> --inventory <file> --output <absent-private-directory> | trust-inspect --development --seed-file <file> --seed-sha256 <pin> --fixture-time <unix> (--initial | --state-file <file> --state-sha256 <pin>)")
 	}
 	f := flag.NewFlagSet("updates inspect", flag.ContinueOnError)
 	f.SetOutput(errOut)

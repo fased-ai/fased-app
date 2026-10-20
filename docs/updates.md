@@ -362,6 +362,69 @@ P4-10/11 stay BLOCKED until the chosen production bindings, implementation, rehe
 and explicitly authorized public readback pass. P4-12/13/15/16 remain independent.
 No approval in this document enables client automatic updates or real wallets.
 
+## Development-only TUF trust rehearsal
+
+### Frozen contract
+
+The next engineering slice is explicitly disposable and separate from the
+production proposal. Pin `github.com/theupdateframework/go-tuf/v2` v2.4.2
+(`f5edbde31e5507f46db2069402dc38903fe6d9d4`, Apache-2.0). Its metadata API advertises
+specification 1.0.31; this slice accepts that finite top-level subset, not a claim
+of full latest-specification interoperability. Use its trusted-metadata/signature
+verification, not its filesystem updater or default network fetcher.
+
+`updates trust-inspect --development --seed-file <file> --seed-sha256 <independent-hash>
+--fixture-time <unix-seconds>` requires either `--initial` or both `--state-file`
+and `--state-sha256`. It is read-only: it fetches controlled HTTPS metadata and one
+inert descriptor and returns a proposed fixture snapshot; no file/service/wallet
+is written, no binary is acquired or executed, and no production handoff exists.
+An optional `--tls-ca-file` supplies only controlled test CA roots; verification
+and the development fetcher's no-redirect/origin/timeout rules remain intact.
+
+The version-1 seed, snapshot and descriptor all require `fixtureOnly: true`,
+purpose `fased-app-tuf-rehearsal:v1`, repository fixture ID and channel `development`.
+The seed pins exact initial root bytes, HTTPS origin and opaque preservation
+anchors/installed/reserved fixture floors. Every signed role also carries this
+fixture binding. Only four top-level roles, distinct Ed25519 key sets (root/targets
+2-of-3, timestamp/snapshot 1-of-1), consistent snapshots and one fixed descriptor
+target are supported. Metadata is capped at 8 KiB each, the descriptor at 1 KiB,
+the combined snapshot at 64 KiB and root discovery at 32 successors. There is no
+delegation, artifact download, public GitHub redirect handling or provenance
+verification. Those remaining production obligations do not become PASS here.
+
+The injected clock never changes host time. Snapshots bind the seed, exact role
+bytes, descriptor, observed time and highest observed fixture release. Missing,
+corrupt, mismatched or backward-time snapshots refuse; a same-version metadata or
+release identity cannot change bytes. Root succession uses the library's dual
+quorum checks, including expired intermediate roots. Online-role key changes reset
+only online metadata cache comparisons; fixture installed/reserved/observed release
+floors and preservation anchors never rewind. A matching release may be re-observed
+without installation; a lower or conflicting same-sequence release refuses.
+
+An explicitly disposable Go snapshot store exercises real private-file locking,
+immutable hash-named snapshots, compare-and-swap publication and durable head
+replacement/retry. Only an opaque result from this verifier can be committed;
+the CLI cannot commit. External expected-head digests detect stale/replaced heads.
+Whole-store plus external-anchor rollback is outside this model: this is not
+installed owner/signer isolation or authoritative financial recovery. Faults and
+concurrent writers are rehearsed on generated fixtures, then cleaned. Partial
+matching temporary bytes resume; mismatched or published corrupt bytes refuse.
+The store is capped at 128 files and performs no automatic garbage collection. Production
+configuration/credentials, automatic updates and real wallets remain unavailable.
+
+Verified progress survives a later failure. A newly trusted root/timestamp/snapshot
+is proposed as a `complete: false` checkpoint even if subsequent metadata or the
+descriptor fails. The API returns both an opaque progress transition and the
+error. The read-only CLI then exits nonzero and prints a typed
+`trustProgressOnly: true` report with `metadataVerified: false`,
+`descriptorVerified: false` and every execution capability false. Such a checkpoint
+may retain older cached role bytes only as externally anchored rollback evidence;
+they never authorize a candidate under new keys. The fixture controller commits
+the opaque progress through CAS before retrying. Ignoring learned progress could
+reintroduce revoked keys or older metadata; it is not an allowed production design.
+Only a fresh complete chain produces `complete: true` and a verified descriptor.
+The actual installed owner/signer trust store and handoff remain unimplemented.
+
 ## Development HTTPS acquisition and bootstrap trust
 
 On Linux/macOS, an ordinary user can fetch a disposable signed development pair

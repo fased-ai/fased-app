@@ -17,6 +17,12 @@ golang.org/x/sys and golang.org/x/term (BSD-3-Clause), Microsoft/go-winio (MIT),
 and the transitive modules pinned in go.sum. Module downloads include their
 license texts; artifact distribution must collect all required notices.
 
+The development-only TUF rehearsal pins github.com/theupdateframework/go-tuf/v2
+v2.4.2 (Apache-2.0), including its metadata verification APIs. Its source revision
+is f5edbde31e5507f46db2069402dc38903fe6d9d4. Transitive crypto/signature modules
+retain their original terms as recorded in go.sum and their module license texts.
+No third-party implementation files were copied into the application source.
+
 The separate native-client module uses Wails v2 (MIT) and the modules pinned
 in desktop/go.sum, including the platform WebView integration. These are not
 dependencies of the headless core. Native release packaging must preserve

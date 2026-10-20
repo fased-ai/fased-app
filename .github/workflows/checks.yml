@@ -166,6 +166,14 @@ jobs:
         run: node scripts/check-update-manifest.mjs
       - name: Development HTTPS acquisition and independently pinned bootstrap trust
         run: node scripts/check-update-acquisition.mjs
+      - name: Disposable TUF trust and read-only CLI rehearsal
+        env:
+          FASED_TRUST_CORE: ${{ github.workspace }}/.evidence/bin/fased-app
+          FASED_TRUST_EVIDENCE: ${{ github.workspace }}/.evidence/p4-trust-rehearsal
+        run: |
+          mkdir -p .evidence/p4-trust-rehearsal
+          go test -v ./internal/update -run '^TestTrustRehearsalCompiledCLI$' > .evidence/p4-trust-rehearsal/trust-cli.log 2>&1
+          cat .evidence/p4-trust-rehearsal/trust-cli.log
       - name: Compiled private core state inventory journey
         env:
           FASED_STATE_EVIDENCE: .evidence/p4-complete
@@ -189,6 +197,8 @@ jobs:
           name: signer-isolation
           include-hidden-files: true
           path: |
+            .evidence/p4-trust-rehearsal/trust-cli-result.json
+            .evidence/p4-trust-rehearsal/trust-cli.log
             .evidence/p4-acquisition/acquisition-cli-result.json
             .evidence/p4-acquisition/acquisition-cli.log
             .evidence/p4-bootstrap/fixture-builds.json
