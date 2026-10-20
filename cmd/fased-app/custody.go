@@ -78,7 +78,7 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 	if e = custodyinstall.Verify(m); e != nil {
 		return e
 	}
-	if args[0] != "remove" && args[0] != "status" {
+	if args[0] != "remove" && args[0] != "status" && args[0] != "update-status" {
 		lock, le := custodyinstall.OwnerLock()
 		if le != nil {
 			return le
@@ -103,6 +103,11 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 			return errors.New("managed CLI access requires explicit --prepare-host authorization for the OS identity switch")
 		}
 		return system.AccountsHelper(ctx, m, args[0] == "login", *requestStdin, *passwordStdin, out)
+	case "update-status":
+		if !*prepare || *requestStdin || *passwordStdin {
+			return errors.New("read-only managed status requires --prepare-host for the OS identity switch; no input is accepted")
+		}
+		return system.UpdateStatus(ctx, m, out)
 	case "approve":
 		if *proposalFile == "" {
 			return errors.New("choose --proposal-file containing a public proposal")

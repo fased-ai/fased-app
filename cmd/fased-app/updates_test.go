@@ -26,3 +26,12 @@ func TestUpdateEntryPointRequiresExplicitDevelopmentTrust(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateStatusRejectsMutationAndExtraInputs(t *testing.T) {
+	for _, args := range [][]string{{"updates", "status", "apply"}, {"updates", "status", "--automatic"}, {"updates", "status", "--request-stdin"}, {"update-status", "--intent-id", "untrusted"}, {"custody", "updates", "status", "--disposable-fixture", "--prepare-host", "--request-stdin"}} {
+		var b bytes.Buffer
+		if e := run(args, nil, &b, io.Discard); e == nil || b.Len() != 0 {
+			t.Fatal("status accepted mutation input", args, e)
+		}
+	}
+}

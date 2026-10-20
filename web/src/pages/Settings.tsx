@@ -1,4 +1,5 @@
-import { ArrowRight, ChevronRight } from "../icons";
+import { ArrowRight } from "../icons";
+import { UpdateStatusPanel } from "../components/UpdateStatusPanel";
 import { providerNames } from "../state";
 import { Badge, SectionHead } from "../components/shared";
 import { useWorkspace } from "../workspace";
@@ -45,42 +46,7 @@ export function Settings() {
             </button>
           </div>
         </section>
-        <section className="panel">
-          <div className="panel-heading">
-            <h2>Updates</h2>
-            <Badge>PLANNED</Badge>
-          </div>
-          <div className="settings-body">
-            <p>
-              One verified update flow for desktop, CLI and scheduled
-              maintenance.
-            </p>
-            <div className="update-stages">
-              <span>Verify</span>
-              <ChevronRight size={13} />
-              <span>Prepare</span>
-              <ChevronRight size={13} />
-              <span>Reconcile</span>
-              <ChevronRight size={13} />
-              <span>Resume</span>
-            </div>
-            <p className="subtle">
-              The updater is not implemented. No files or services will be
-              installed by this prototype.
-            </p>
-            <button
-              className="secondary"
-              onClick={() =>
-                notify(
-                  "Update flow previewed",
-                  "No update check or installation occurred. This is a design preview.",
-                )
-              }
-            >
-              Preview update flow <ArrowRight size={14} />
-            </button>
-          </div>
-        </section>
+        <UpdateStatusPanel />
       </div>
       <section className="panel">
         <div className="panel-heading">

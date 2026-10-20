@@ -11,6 +11,7 @@ import {
 import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { chromium, expect } from "@playwright/test";
 
 export async function fixtureUpdateIntentJourney({
   engine,
@@ -26,6 +27,8 @@ export async function fixtureUpdateIntentJourney({
   check,
   fails,
   env,
+  url,
+  appPassword,
 }) {
   assert(process.getuid() > 0);
   const evidence = path.resolve(".evidence/p4-complete");
@@ -49,6 +52,79 @@ export async function fixtureUpdateIntentJourney({
   let id = randomBytes(16).toString("hex");
   const inventory = () =>
     JSON.parse(cli(["updates", "inventory", "--prepare-host"]));
+  // Actual public status through the existing app identity and authenticated
+  // browser, sampled while owner update administration remains separate.
+  const sharedStatus = () =>
+    JSON.parse(cli(["updates", "status", "--prepare-host"]));
+  const observe = async (label, phase) => {
+    const before = inventory().signer;
+    const status = sharedStatus(),
+      actual = ownerStatus();
+    pass(
+      label + "SharedCLIObservesPublicSigner",
+      status.version === 1 &&
+        status.readOnly &&
+        status.signer.state === "available" &&
+        status.signer.locked === actual.locked &&
+        status.signer.updateHeld === actual.updateHeld &&
+        status.signer.recoveryRequired === actual.recoveryRequired &&
+        !status.walletSigner &&
+        !status.financialExecution &&
+        !status.automaticUpdates &&
+        (!phase || status.core.phase === phase),
+    );
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const page = await browser.newPage({
+        viewport: { width: 1400, height: 1100 },
+      });
+      await page.goto(url + "/#settings");
+      await page
+        .getByLabel("Owner password", { exact: true })
+        .fill(appPassword);
+      await page.getByRole("button", { name: "Sign in", exact: true }).click();
+      const panel = page.getByRole("region", { name: "Updates & recovery" });
+      await expect(
+        panel.getByText(status.core.phase, { exact: true }),
+      ).toBeVisible();
+      await expect(
+        panel.getByText(
+          actual.locked ? "Locked" : "Unlocked (disposable fixture)",
+          { exact: true },
+        ),
+      ).toBeVisible();
+      await expect(panel.getByLabel("Owner inventory command")).toContainText(
+        "custody updates inventory",
+      );
+      if (actual.recoveryRequired)
+        await expect(
+          panel.getByRole("heading", {
+            name: "Recovery review required",
+            exact: true,
+          }),
+        ).toBeVisible();
+      await expect(panel.getByRole("button")).toHaveCount(1);
+      await page.screenshot({
+        path: path.join(evidence, "shared-status-" + label + ".png"),
+        fullPage: true,
+      });
+      pass(label + "ActualReadOnlyUI", true);
+    } finally {
+      await browser.close();
+    }
+    const after = inventory().signer;
+    pass(
+      label + "StatusPreservesFinancialHistory",
+      JSON.stringify(before.states) === JSON.stringify(after.states) &&
+        before.sequenceFloor === after.sequenceFloor &&
+        before.installedSequence === after.installedSequence &&
+        before.activeIntentId === after.activeIntentId &&
+        before.spent === after.spent &&
+        before.held === after.held &&
+        before.unknown === after.unknown &&
+        before.recoveryHold === after.recoveryHold,
+    );
+  };
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const pub = publicKey.export({ type: "spki", format: "der" }).subarray(-32),
     keyId = sha(pub),
@@ -306,7 +382,9 @@ finally:
       JSON.parse(
         cli(["updates", "preflight", "--prepare-host", "--intent-id", id]),
       );
+    await observe("staged");
     const ready = preflight();
+    await observe("paused", "paused");
     pass(
       "actualOwnerPreflightPausesCore",
       ready.verified &&
@@ -740,6 +818,7 @@ finally:
         ownerStatus().locked &&
         !ownerStatus().updateHeld,
     );
+    await observe("completed", "released");
     pass(
       "completedCurrentRetryDoesNotAppendJournal",
       complete().phase === "completed" &&
