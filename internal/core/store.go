@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/signer"
 	_ "modernc.org/sqlite"
 )
 
@@ -23,6 +24,7 @@ type Store struct {
 	instanceID string
 	now        func() time.Time
 	authMu     sync.Mutex
+	fixture    func(context.Context, signer.Request) (signer.Response, error)
 }
 
 func OpenStore(dir string) (_ *Store, resultErr error) {
@@ -56,7 +58,7 @@ func OpenStore(dir string) (_ *Store, resultErr error) {
 	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&schema); err != nil {
 		return nil, err
 	}
-	if schema > 1 {
+	if schema > 2 {
 		return nil, errors.New("core state schema is newer than this binary; refusing downgrade")
 	}
 	if schema == 0 {
@@ -81,6 +83,26 @@ PRAGMA user_version=1;`)
 		}
 		if err = tx.Commit(); err != nil {
 			return nil, err
+		}
+	}
+	if schema <= 1 {
+		tx, e := db.BeginTx(ctx, nil)
+		if e != nil {
+			return nil, e
+		}
+		defer tx.Rollback()
+		b, _ := json.Marshal(defaultAccounts())
+		if _, e = tx.ExecContext(ctx, `CREATE TABLE accounts(id INTEGER PRIMARY KEY CHECK(id=1),document TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0);`); e != nil {
+			return nil, e
+		}
+		if _, e = tx.ExecContext(ctx, "INSERT INTO accounts(id,document) VALUES(1,?)", string(b)); e != nil {
+			return nil, e
+		}
+		if _, e = tx.ExecContext(ctx, "PRAGMA user_version=2"); e != nil {
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
 		}
 	}
 	store := &Store{db: db, dir: dir, now: time.Now}

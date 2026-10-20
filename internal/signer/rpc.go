@@ -36,6 +36,7 @@ type Request struct {
 	PublicInput
 }
 type Response struct {
+	Approvals []ApprovalReceipt `json:"approvals,omitempty"`
 	Status    Status            `json:"status"`
 	Document  []byte            `json:"document,omitempty"`
 	Error     string            `json:"error,omitempty"`
@@ -71,6 +72,20 @@ func execute(v *Vault, r Request, owner bool) Response {
 		err = v.Restore(r.Document, r.Password, r.NewPassword)
 	case "export-fixture-seed":
 		document, err = v.ExportFixtureSeed()
+	case "fixture-approve-proposal":
+		if r.Proposal == nil {
+			err = errors.New("reviewed proposal required")
+			break
+		}
+		receipts, e := v.ApproveProposal(*r.Proposal)
+		result := fixtureResponse(v, nil, nil, e)
+		result.Approvals = receipts
+		return result
+	case "fixture-approvals":
+		receipts, e := v.ApprovalReceipts(r.ProposalIDs)
+		result := fixtureResponse(v, nil, nil, e)
+		result.Approvals = receipts
+		return result
 	case "fixture-state":
 		state, e := v.FixtureState()
 		return fixtureResponse(v, state, nil, e)
@@ -128,7 +143,7 @@ func execute(v *Vault, r Request, owner bool) Response {
 // this allowlist after authenticating the actual kernel peer UID.
 func AppActionAllowed(action string) bool {
 	switch action {
-	case "status", "fixture-state", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation":
+	case "status", "fixture-approvals", "fixture-state", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation":
 		return true
 	}
 	return false

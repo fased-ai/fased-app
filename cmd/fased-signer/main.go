@@ -31,13 +31,14 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		return json.NewEncoder(out).Encode(map[string]any{"protocol": 1, "ownerFlow": 1, "mode": signer.FixtureNetwork, "walletSigner": false})
 	}
 	if len(args) == 0 {
-		return errors.New("usage: fased-signer serve|owner|app --config <root-owned-fixture.json> --disposable-fixture [options]")
+		return errors.New("usage: fased-signer serve|owner|app|approve --config <root-owned-fixture.json> --disposable-fixture [options]")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(errOut)
 	configPath := flags.String("config", "", "root-owned immutable fixture identity configuration")
 	fixture := flags.Bool("disposable-fixture", false, "confirm these are unfunded disposable test keys")
 	action := flags.String("action", "status", "owner administration or bounded fixture operation; app: status and fixture operations only")
+	approvalStdin := flags.Bool("approval-stdin", false, "fixture CI only: approval challenge line from stdin")
 	passwordStdin := flags.Bool("password-stdin", false, "fixture automation only: password lines from private stdin")
 	documentPath := flags.String("file", "", "exclusive owner output or encrypted restore input")
 	lifetime := flags.Duration("unlock-for", 15*time.Minute, "manual unlock lifetime, at most one hour")
@@ -64,7 +65,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		<-ctx.Done()
 		return nil
 	}
-	if args[0] != "owner" && args[0] != "app" && args[0] != "setup" && args[0] != "recover" {
+	if args[0] != "owner" && args[0] != "app" && args[0] != "setup" && args[0] != "recover" && args[0] != "approve" {
 		return errors.New("unsupported fixture command")
 	}
 	owner := args[0] != "app"
@@ -123,12 +124,39 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		}
 		return p, nil
 	}
+	if args[0] == "approve" {
+		if *requestStdin {
+			return errors.New("choose an owner proposal file")
+		}
+		b, e := readPublicProposal(*documentPath)
+		if e != nil {
+			return e
+		}
+		p, e := signer.ParseProposal(b)
+		if e != nil {
+			return e
+		}
+		confirm := func(expected string) error {
+			if !*approvalStdin && !term.IsTerminal(int(input.Fd())) {
+				return errors.New("owner approval requires a terminal")
+			}
+			fmt.Fprintf(errOut, "Type %s to approve, or anything else to cancel: ", expected)
+			line, e := reader.ReadString('\n')
+			if e != nil || line != expected+"\n" {
+				return errors.New("approval cancelled; no permission granted")
+			}
+			return nil
+		}
+		return conductApproval(ctx, p, password, confirm, errOut, out, func(ctx context.Context, r signer.Request) (signer.Response, error) {
+			return signer.Call(ctx, c, true, r)
+		})
+	}
 	if args[0] == "setup" || args[0] == "recover" {
 		return ownerFlow(ctx, c, args[0], *documentPath, password, out)
 	}
 	switch r.Action {
 	case "status", "lock":
-	case "fixture-state", "fixture-policy", "fixture-grant", "fixture-revoke", "fixture-recover-authority", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation":
+	case "fixture-approvals", "fixture-state", "fixture-policy", "fixture-grant", "fixture-revoke", "fixture-recover-authority", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation":
 	case "create", "unlock", "backup":
 		r.Password, err = password("Fixture password", r.Action != "unlock")
 		if r.Action == "unlock" {

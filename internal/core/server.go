@@ -22,7 +22,7 @@ type Server struct {
 	dir       string
 }
 
-func Start(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS) (*Server, error) {
+func Start(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS, custodyConfig ...string) (*Server, error) {
 	host, _, err := net.SplitHostPort(listen)
 	if err != nil || !isLoopbackHost(host) {
 		return nil, errors.New("listen address must be an explicit loopback IP and port")
@@ -46,6 +46,14 @@ func Start(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS) 
 			lock.Close()
 		}
 	}()
+	if len(custodyConfig) > 1 {
+		return nil, errors.New("one signer configuration required")
+	}
+	if len(custodyConfig) == 1 {
+		if err = store.configureSigner(custodyConfig[0]); err != nil {
+			return nil, err
+		}
+	}
 	claimed, err := store.Claimed(ctx)
 	if err != nil {
 		return nil, err

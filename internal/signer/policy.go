@@ -74,12 +74,14 @@ type FixtureSummary struct {
 // PublicInput is the only JSON accepted by the helper's --request-stdin flag.
 // Credentials, encrypted backups and authority booleans have no fields here.
 type PublicInput struct {
-	Account     *AccountRef    `json:"account,omitempty"`
-	Policy      *FixturePolicy `json:"policy,omitempty"`
-	Grant       *FixtureGrant  `json:"grant,omitempty"`
-	Intent      *FixtureIntent `json:"intent,omitempty"`
-	GrantID     string         `json:"grantId,omitempty"`
-	OperationID string         `json:"operationId,omitempty"`
+	Account     *AccountRef      `json:"account,omitempty"`
+	Policy      *FixturePolicy   `json:"policy,omitempty"`
+	Grant       *FixtureGrant    `json:"grant,omitempty"`
+	Intent      *FixtureIntent   `json:"intent,omitempty"`
+	GrantID     string           `json:"grantId,omitempty"`
+	OperationID string           `json:"operationId,omitempty"`
+	Proposal    *FixtureProposal `json:"proposal,omitempty"`
+	ProposalIDs []string         `json:"proposalIds,omitempty"`
 }
 
 type ledger struct {
@@ -91,10 +93,11 @@ type ledger struct {
 	ops            map[string]FixtureOperation
 	receipts       map[string]journalRecord
 	lastTime       int64
+	approvals      map[string]ApprovalReceipt
 }
 
 func newLedger() *ledger {
-	return &ledger{grants: map[string]FixtureGrant{}, ops: map[string]FixtureOperation{}, receipts: map[string]journalRecord{}}
+	return &ledger{grants: map[string]FixtureGrant{}, ops: map[string]FixtureOperation{}, receipts: map[string]journalRecord{}, approvals: map[string]ApprovalReceipt{}}
 }
 
 func validRef(r AccountRef) bool {
@@ -287,6 +290,24 @@ func (l *ledger) apply(r journalRecord) error {
 			op.State = r.Outcome
 		}
 		l.ops[r.ID] = op
+	case "approval":
+		if r.Proposal == nil {
+			return errors.New("proposal required")
+		}
+		p := *r.Proposal
+		if err := p.Validate(r.At); err != nil {
+			return err
+		}
+		if _, ok := l.approvals[p.ID]; ok {
+			return errors.New("proposal identity already approved")
+		}
+		if err := l.apply(journalRecord{Kind: "policy", At: r.At, Policy: &p.Policy}); err != nil {
+			return err
+		}
+		if err := l.apply(journalRecord{Kind: "grant", At: r.At, Grant: &p.Grant}); err != nil {
+			return err
+		}
+		l.approvals[p.ID] = ApprovalReceipt{ProposalID: p.ID, Digest: ProposalDigest(p), Account: p.Policy.Account, ApprovedAt: r.At}
 	case "rebind":
 		if r.Account == nil || !validRef(*r.Account) || !sameWallet(*r.Account, l.ref) || r.Account.Epoch == l.ref.Epoch || l.missingHistory {
 			return errors.New("recovery requires retained wallet history")
@@ -315,6 +336,7 @@ func (l *ledger) append(v *Vault, r journalRecord) error {
 	next := *l
 	next.policy = clone(l.policy)
 	next.grants = clone(l.grants)
+	next.approvals = clone(l.approvals)
 	next.ops = clone(l.ops)
 	if err := next.apply(r); err != nil {
 		return err

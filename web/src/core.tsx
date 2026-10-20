@@ -208,6 +208,7 @@ function useCoreState() {
   }
   return {
     mode,
+    request,
     setup,
     error,
     saving: pending > 0,

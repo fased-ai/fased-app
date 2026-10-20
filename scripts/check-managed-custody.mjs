@@ -1,6 +1,7 @@
 // CI-only disposable installation proof. Never run this on an owner's host.
 // Root executes trusted OS tools; all Fased executables run under non-root UIDs.
 import assert from "node:assert/strict";
+import { fixtureAccountJourney } from "./fixture-account-journey.mjs";
 import {
   fixturePolicyJourney,
   fixtureRecoveryJourney,
@@ -476,7 +477,7 @@ try: os.open(c['stateDir']+'/vault.json',os.O_RDONLY);r['keyReadDenied']=False
 except PermissionError:r['keyReadDenied']=True
 s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/owner.sock');r['ownerChannelDenied']=s.recv(1)==b'';s.close()
 s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/app.sock');f=s.makefile('rwb');h=json.loads(f.readline());f.write((json.dumps({'version':1,'signerId':c['signerId'],'challenge':h['challenge'],'request':{'action':'verify-backup'}})+'\n').encode());f.flush();v=json.loads(f.readline());r['ownerActionDenied']=bool(v.get('error'))
-for action in ['fixture-policy','fixture-grant','fixture-revoke','fixture-recover-authority']:
+for action in ['fixture-policy','fixture-grant','fixture-revoke','fixture-recover-authority','fixture-approve-proposal']:
  s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/app.sock');f=s.makefile('rwb');h=json.loads(f.readline());f.write((json.dumps({'version':1,'signerId':c['signerId'],'challenge':h['challenge'],'request':{'action':action}})+'\n').encode());f.flush();v=json.loads(f.readline());r['raw:'+action]=v.get('error')=='owner administration denied';s.close()
 for name in ['operations.log','mock-receipts.log']:
  try: fd=os.open(c['stateDir']+'/'+name,os.O_RDONLY);os.close(fd);r['read:'+name]=False
@@ -753,6 +754,23 @@ print(json.dumps(r))
       preservedSummary.held === "30" &&
       secretStatus().locked,
   );
+  await fixtureAccountJourney({
+    url: "http://" + listen,
+    engine,
+    cli,
+    app: (action, body) => fixtureApp(manifest.app, action, body),
+    ownerUnlock: unlockFixture,
+    ownerLock: () => fixtureOwner("lock"),
+    ownerStatus: secretStatus,
+    check,
+    fails,
+    account: recovered.status.account,
+    appPassword: appPassword + " replacement",
+    walletPassword: replacement,
+    backups,
+    evidence,
+    env,
+  });
   report.identities = {
     owner: uid,
     app: manifest.app.uid,

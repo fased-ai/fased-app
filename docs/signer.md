@@ -230,3 +230,65 @@ erase-wallet command. Physical-host/public/native-client custody acceptance and
 installer upgrades remain open; the managed engineering mode currently uses the
 browser and owner CLI. Public account registration, grants/revocation, typed mock
 operations and reconciliation remain P3 work. Real wallets remain disabled.
+
+## Public accounts and protected approval
+
+The connected Wallets page now saves versioned public records in the app's SQLite
+registry. Watch-only and external/manual records have no RPC reads, balances,
+connected wallet or signing capability. Only disposable fixture network/public
+keys are accepted. The managed mode takes its exact public signer/wallet/epoch
+reference from the configured signer. Ordinary installation has no signer and
+cannot create a managed reference. Stale references remain visible and cannot
+propose new authority. Removing a public record never removes a key or revokes
+an existing signer grant.
+
+The authenticated UI and `fased-app accounts` CLI use the same revision-checked
+API. Read the returned `record`, edit its public fields and pass that record to
+`accounts --request-stdin`; stale revisions fail without retry. Up to eight
+accounts and eight proposals are retained. Names, modes and drafts never confer
+signer authority. Keys, credentials, balances and asserted approval flags are
+not fields in the registry. Schema 1 migrates transactionally to schema 2,
+preserving setup/owner sessions. A preceding binary refuses the newer schema;
+this is not a coordinated update or rollback system.
+
+For a managed Ubuntu instance, the owner can use the fixed CLI identity bridge:
+
+```sh
+./fased-app custody login --disposable-fixture --prepare-host
+./fased-app custody accounts --disposable-fixture --prepare-host
+./fased-app custody accounts --disposable-fixture --prepare-host --request-stdin < public-record.json
+```
+
+The OS credential switch happens before the immutable core runs as the app UID.
+This needs ordinary OS authorization, and does not let the owner read app/signer
+state directly. App login protects app access; wallet secrets are separate.
+
+In Wallets, record the disposable signer, draft explicit wallet/bot/per-operation
+caps and expiry, then download the public proposal. These proposals allow only
+the typed mock operation and expire within 24 hours. They are not strategy code
+or real transactions. Save the proposal in an owner-controlled directory (an
+ordinary Downloads directory is sufficient), then run on the instance host:
+
+```sh
+./fased-app custody approve --disposable-fixture --proposal-file /absolute/owner/path/proposal.json
+```
+
+The coordinator passes the owner's terminal directly to the root-owned signer
+helper running as the owner. The helper verifies the actual signer account,
+reads the public file once, displays every limit/binding plus its canonical
+digest, and requires `APPROVE <digest>` in the owner's terminal before asking
+for the wallet unlock password. It unlocks for at most 60 seconds and locks on
+completion/failure. Cancellation grants nothing. No secret reaches the app/UI.
+Public input refuses symlinks, hardlinks, foreign ownership and writable files or
+ancestors; secret backup/export privacy is unchanged. Explicit approval/password
+stdin flags exist only for disposable fixture automation; the ordinary flow
+requires the terminal. No root project executable is used.
+
+One signer-owned fsynced journal event atomically installs the reviewed policy
+and grant and records the proposal digest. A changed-body replay fails; retrying
+a revoked approval never reactivates it. The app bridge can request only public
+status/receipts, not policy changes, unlock, approval or execution. Refresh
+Wallets to read the independent signer receipt. `approved` records owner consent
+for that exact fixture mandate; it does not mean unlocked, unexpired allowance,
+live trading, unattended unlock or real wallet support. A digest mismatch,
+revocation, expiry, recovery hold or unavailable signer remains visible.

@@ -24,3 +24,7 @@ func Control(context.Context, Manifest, string, string, *System) error          
 func (*System) AppHelper(context.Context, Manifest, bool, bool, io.Writer) error { return unsupported }
 
 func OwnerLock() (io.Closer, error) { return nil, unsupported }
+
+func (*System) AccountsHelper(context.Context, Manifest, bool, bool, bool, io.Writer) error {
+	return unsupported
+}

@@ -13,7 +13,11 @@ import (
 
 // The helper's output directory is owner-selected, private and not reachable by
 // the app identity. No upload, overwrite or automatic recovery destination.
-func ownerDirectory(path string) (int, error) {
+func ownerDirectory(path string, private ...bool) (int, error) {
+	mask := uint32(0077)
+	if len(private) == 1 && !private[0] {
+		mask = 0022
+	}
 	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return -1, errors.New("select an absolute owner file path")
 	}
@@ -36,7 +40,7 @@ func ownerDirectory(path string) (int, error) {
 	}
 	var st unix.Stat_t
 	err = unix.Fstat(fd, &st)
-	if err != nil || int(st.Uid) != os.Geteuid() || st.Mode&0077 != 0 {
+	if err != nil || int(st.Uid) != os.Geteuid() || st.Mode&mask != 0 {
 		unix.Close(fd)
 		return -1, errors.New("backup/export directory must be private and owner-owned")
 	}
@@ -100,4 +104,32 @@ func readOwnerFile(path string) ([]byte, error) {
 		return nil, errors.New("oversized backup")
 	}
 	return b, err
+}
+
+// Public proposals may live in an ordinary owner Downloads directory. They
+// remain immutable to the app UID and are read once before digest/TTY review.
+func readPublicProposal(path string) ([]byte, error) {
+	dir, e := ownerDirectory(path, false)
+	if e != nil {
+		return nil, e
+	}
+	defer unix.Close(dir)
+	fd, e := unix.Openat(dir, filepath.Base(path), unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if e != nil {
+		return nil, e
+	}
+	f := os.NewFile(uintptr(fd), path)
+	defer f.Close()
+	var st unix.Stat_t
+	if e = unix.Fstat(fd, &st); e != nil {
+		return nil, e
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG || st.Mode&0022 != 0 || int(st.Uid) != os.Geteuid() || st.Nlink != 1 {
+		return nil, errors.New("unsafe public proposal file")
+	}
+	b, e := io.ReadAll(io.LimitReader(f, 16385))
+	if len(b) > 16384 {
+		return nil, errors.New("oversized proposal")
+	}
+	return b, e
 }
