@@ -5,10 +5,36 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestOSCopyAcceptsGoPipe(t *testing.T) {
+	root, _ := filepath.Abs("../../.evidence/hostprep-fixtures")
+	if e := os.MkdirAll(root, 0700); e != nil {
+		t.Fatal(e)
+	}
+	d, e := os.MkdirTemp(root, "pipe-")
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { os.RemoveAll(d) })
+	b, e := os.ReadFile("../../packaging/linux/apparmor/bwrap-userns-restrict")
+	if e != nil {
+		t.Fatal(e)
+	}
+	c := exec.Command("/usr/bin/install", "-m", "0644", "--", "/dev/stdin", filepath.Join(d, "policy"))
+	c.Stdin = bytes.NewReader(b)
+	if _, e = c.Output(); e != nil {
+		t.Fatal(e)
+	}
+	got, e := os.ReadFile(filepath.Join(d, "policy"))
+	if e != nil || !bytes.Equal(got, b) {
+		t.Fatal("Go pipe did not preserve policy bytes")
+	}
+}
 
 type fakeHost struct {
 	files  map[string]hostFile

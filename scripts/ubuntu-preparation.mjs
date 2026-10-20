@@ -24,7 +24,9 @@ export async function checkUbuntuPreparation(binary, args, state, report) {
   const foreign = Buffer.from(
     "# Fased acceptance fixture: foreign administrator policy\n",
   );
-  os(["/usr/bin/install", "-m", "0644", "--", "/dev/stdin", target], foreign);
+  // Node's spawnSync stdin is a socket on Linux: tee reads fd 0 directly,
+  // unlike reopening /dev/stdin. The Go product uses an actual os.Pipe.
+  os(["/usr/bin/tee", "--", target], foreign);
   try {
     let denied = false;
     try {
