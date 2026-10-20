@@ -108,7 +108,7 @@ func (e envelope) aad() []byte {
 }
 
 func (e envelope) validate(purpose string) error {
-	if e.Version != 1 || e.Purpose != purpose || e.KDF != "argon2id-m65536-t3-p2-aes256gcm-v1" ||
+	if e.Version != VaultFormat || e.Purpose != purpose || e.KDF != "argon2id-m65536-t3-p2-aes256gcm-v1" ||
 		e.Ref.Version != 1 || e.Ref.Network != FixtureNetwork || !validID(e.Ref.SignerID) || !validID(e.Ref.WalletID) || !validID(e.Ref.Epoch) ||
 		len(e.Salt) != 16 || len(e.Nonce) != 12 || len(e.Ciphertext) != ed25519.SeedSize+16 {
 		return errors.New("unsupported or damaged fixture document")
@@ -128,7 +128,7 @@ func seal(seed, password []byte, ref AccountRef, purpose string, recovery bool) 
 	if !validPassword(password) {
 		return envelope{}, errors.New("use 12 or more characters, at most 1024 bytes")
 	}
-	e := envelope{Version: 1, Purpose: purpose, KDF: "argon2id-m65536-t3-p2-aes256gcm-v1", Ref: ref, RecoveryRequired: recovery, Salt: randomBytes(16), Nonce: randomBytes(12)}
+	e := envelope{Version: VaultFormat, Purpose: purpose, KDF: "argon2id-m65536-t3-p2-aes256gcm-v1", Ref: ref, RecoveryRequired: recovery, Salt: randomBytes(16), Nonce: randomBytes(12)}
 	key := argon2.IDKey(password, e.Salt, 3, 64*1024, 2, 32)
 	defer wipe(key)
 	block, err := aes.NewCipher(key)
