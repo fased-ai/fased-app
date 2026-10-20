@@ -71,7 +71,10 @@ try {
       contracts[0].lifecycle.entrypoint === 2 &&
       contracts[1].state
         .find((s) => s.name === "operations")
-        .features.includes("approvals-v1"),
+        .features.includes("approvals-v1") &&
+      contracts[1].state
+        .find((s) => s.name === "operations")
+        .features.includes("lifecycle-v2-v1"),
   );
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const pub = publicKey.export({ type: "spki", format: "der" }).subarray(-32);

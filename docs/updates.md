@@ -266,7 +266,9 @@ Preflight uses the already reviewed, staged intent without requesting another
 financial permission. The immutable owner helper obtains fresh signer inventory,
 then acquires the exact core pause through the existing fixed app-UID helper and
 authenticated private CLI IPC. Browser HTTP cannot invoke this route, even with
-an owner session. Private requests still require session authentication and CSRF.
+an owner session. Private requests still require session authentication and CSRF. Authorization
+uses the owner terminal; the separate public payload stream is attached only to
+the final app-UID child, after authorization.
 The app bridge remains read-only toward the signer; only protected owner IPC can
 request signer preflight.
 
@@ -299,7 +301,9 @@ Core pause records are app-owned metadata and cannot grant or revoke signer
 authority; the financial signer remains the independent authority boundary.
 
 Lifecycle entrypoint 2 advertises `owner-core-pause-v1`, and the signer advertises
-`fixture-update-preflight-v1`. Existing entrypoint-1 staging journal records stay
+`fixture-update-preflight-v1`. The `lifecycle-v2-v1` operations-state feature
+explicitly requires readers of nested lifecycle-2 intent records. Existing
+entrypoint-1 staging journal records stay
 readable and abortable; new candidate admission still requires the current
 contract. No binaries/helpers are replaced or executed, no financial state is
 migrated, and no public trust, real wallets, automatic updates or execution resume
