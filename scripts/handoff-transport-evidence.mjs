@@ -29,3 +29,12 @@ export async function unchanged(before) {
 }
 export const save = (file, body) =>
   writeFile(file, JSON.stringify(body, null, 2) + "\n");
+
+// A previous fixture's marker cannot satisfy the next case's barrier.
+export function currentFixtureGate(expected, observed) {
+  return (
+    Number.isSafeInteger(expected) &&
+    expected > 0 &&
+    observed?.count === expected
+  );
+}

@@ -17,6 +17,7 @@ import {
   sha,
   sources,
   unchanged,
+  currentFixtureGate,
   save,
 } from "./handoff-transport-evidence.mjs";
 assert.equal(process.env.FASED_HANDOFF_UID_CI, "1");
@@ -774,21 +775,34 @@ try {
     await save(path.join(stage, "control.json"), {
       pauseTimestamp: count + offset,
     });
+    return count + offset;
   };
+  const waitForGate = (expected) =>
+    waitUntil(async () => {
+      if (!expected()) return false;
+      try {
+        const observed = JSON.parse(
+          await readFile(path.join(stage, "gate-hit.json"), "utf8"),
+        );
+        return currentFixtureGate(expected(), observed);
+      } catch (error) {
+        if (error.code === "ENOENT" || error instanceof SyntaxError)
+          return false;
+        throw error;
+      }
+    });
   await check("UT-08", async () => {
     const c = await newCase("signer restart after result before confirmation");
     await serve(c);
+    let expectedGate = 0;
     const p = await owner(c, {
       success: false,
       wait: false,
-      beforeAck: () => control(2),
+      beforeAck: async () => {
+        expectedGate = await control(2);
+      },
     });
-    await waitUntil(async () =>
-      lstat(path.join(stage, "gate-hit.json")).then(
-        () => true,
-        (e) => (e.code === "ENOENT" ? false : Promise.reject(e)),
-      ),
-    );
+    await waitForGate(() => expectedGate);
     const durable = checkpoint(c).value.records.find(
       (r) => r.kind === "checked" && r.body?.outcome?.requestId,
     );
@@ -813,17 +827,15 @@ try {
       "SIGKILL while independent signer learning pending",
     );
     await serve(c);
+    let expectedGate = 0;
     const p = await owner(c, {
       success: false,
       wait: false,
-      beforeAck: () => control(1),
+      beforeAck: async () => {
+        expectedGate = await control(1);
+      },
     });
-    await waitUntil(async () =>
-      lstat(path.join(stage, "gate-hit.json")).then(
-        () => true,
-        (e) => (e.code === "ENOENT" ? false : Promise.reject(e)),
-      ),
-    );
+    await waitForGate(() => expectedGate);
     const pending = checkpoint(c).value.pending;
     assert.ok(pending);
     await stop(c.server, "KILL");

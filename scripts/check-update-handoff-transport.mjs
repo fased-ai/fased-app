@@ -51,6 +51,23 @@ function go(args, log, timeout = 180000) {
   });
 }
 try {
+  const gate = spawnSync(
+    "node",
+    [
+      "--test",
+      "--test-isolation=none",
+      "--test-reporter=tap",
+      "scripts/handoff-transport-evidence.test.mjs",
+    ],
+    { encoding: "utf8" },
+  );
+  await writeFile(
+    path.join(root, "gate-tests.log"),
+    (gate.stdout ?? "") + (gate.stderr ?? ""),
+  );
+  assert.equal(gate.status, 0, "fixture gate regression failed");
+  assert.match(gate.stdout, /# tests 2/);
+  assert.match(gate.stdout, /# fail 0/);
   const list = await go(
     ["test", "./internal/update", "-list", "^TestFixtureTransport"],
     "transport-test-list.log",
