@@ -44,3 +44,12 @@ func TestUpdateAcquisitionRequiresExplicitInputs(t *testing.T) {
 		}
 	}
 }
+
+func TestTrustInspectionRejectsAuthorityAndImplicitInputs(t *testing.T) {
+	for _, args := range [][]string{{"updates", "trust-inspect"}, {"updates", "trust-inspect", "--development"}, {"updates", "trust-inspect", "--commit"}, {"updates", "trust-inspect", "--development", "--automatic"}, {"updates", "trust-inspect", "--development", "--production"}, {"updates", "trust-inspect", "--development", "--insecure"}} {
+		var b bytes.Buffer
+		if e := run(args, nil, &b, io.Discard); e == nil || b.Len() != 0 {
+			t.Fatal("trust rehearsal accepted implicit or mutation authority", args)
+		}
+	}
+}
