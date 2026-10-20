@@ -27,6 +27,9 @@ func main() {
 }
 
 func run(args []string, input *os.File, out, errOut io.Writer) error {
+	if len(args) == 1 && args[0] == "fixture-compatibility" {
+		return json.NewEncoder(out).Encode(signer.UpdateContract())
+	}
 	if len(args) == 1 && args[0] == "fixture-version" {
 		return json.NewEncoder(out).Encode(map[string]any{"protocol": 1, "ownerFlow": 1, "mode": signer.FixtureNetwork, "walletSigner": false})
 	}

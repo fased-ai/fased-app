@@ -39,7 +39,7 @@ func (s *storage) readJournal(name string) (*journal, []journalRecord, error) {
 	var records []journalRecord
 	for _, line := range bytes.Split(b[:len(b)-1], []byte{'\n'}) {
 		var r journalRecord
-		if len(records) >= 8192 || strictWire(line, &r) != nil || r.Version != 1 || r.Sequence != j.seq+1 || r.Previous != j.hash || r.Hash != recordHash(r) || r.At <= 0 {
+		if len(records) >= 8192 || strictWire(line, &r) != nil || r.Version != JournalFormat || r.Sequence != j.seq+1 || r.Previous != j.hash || r.Hash != recordHash(r) || r.At <= 0 {
 			return nil, nil, errors.New("invalid fixture journal chain; refusing rollback or repair")
 		}
 		j.seq, j.hash = r.Sequence, r.Hash
@@ -66,7 +66,7 @@ func (s *storage) appendJournal(j *journal, r journalRecord) (result error) {
 	if s.failed {
 		return errors.New("storage outcome uncertain; restart signer")
 	}
-	r.Version, r.Sequence, r.Previous = 1, j.seq+1, j.hash
+	r.Version, r.Sequence, r.Previous = JournalFormat, j.seq+1, j.hash
 	r.Hash = recordHash(r)
 	b, err := json.Marshal(r)
 	if err != nil {
