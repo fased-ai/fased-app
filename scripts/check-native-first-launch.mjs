@@ -29,7 +29,14 @@ const payload = join(
   ),
   core = join(payload, "fased-app"),
   gui = join(payload, "fased-desktop");
-const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: config };
+const env = {
+  ...process.env,
+  HOME: home,
+  XDG_CONFIG_HOME: config,
+  LANG: "C.UTF-8",
+  LC_ALL: "C.UTF-8",
+  WEBKIT_DISABLE_DMABUF_RENDERER: "1",
+};
 const cli = (args) =>
   execFileSync(core, args, { env, encoding: "utf8", timeout: 30000 });
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -93,8 +100,11 @@ try {
     await pause(100);
   }
   assert.ok(dialog, "native installation consent dialog missing: " + output);
+  execFileSync("scrot", [resolve(".evidence/native-first-consent.png")], {
+    env,
+  });
   execFileSync("xdotool", ["windowfocus", "--sync", dialog], { env });
-  execFileSync("xdotool", ["key", "--window", dialog, "Return"], { env });
+  execFileSync("xdotool", ["key", "--window", dialog, "alt+y"], { env });
   let status;
   for (let i = 0; i < 1800; i++) {
     try {
@@ -138,6 +148,21 @@ try {
   report.error = String(e);
   throw e;
 } finally {
+  if (report.result !== "PASS") {
+    try {
+      execFileSync("scrot", [resolve(".evidence/native-first-launch.png")], {
+        env,
+      });
+    } catch {}
+    for (const file of [
+      "host-preparation.json",
+      "../.local/share/fased-app/install.json",
+    ]) {
+      try {
+        report[file] = JSON.parse(await readFile(join(data, file), "utf8"));
+      } catch {}
+    }
+  }
   await stopClient();
   try {
     await stat(join(app, "install.json"));

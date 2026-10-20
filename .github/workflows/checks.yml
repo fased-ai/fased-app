@@ -126,6 +126,7 @@ jobs:
           path: |
             .evidence/native-first-launch-result.json
             .evidence/native-first-launch.png
+            .evidence/native-first-consent.png
             .evidence/native-first-launch.log
           retention-days: 7
       - uses: actions/upload-artifact@v4

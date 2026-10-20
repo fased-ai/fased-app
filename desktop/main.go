@@ -54,8 +54,10 @@ func main() {
 	options := window.Options(*state)
 	if firstPackage != "" {
 		options.OnStartup = func(ctx context.Context) {
-			answer, e := wailsruntime.MessageDialog(ctx, wailsruntime.MessageDialogOptions{Type: wailsruntime.QuestionDialog, Title: "Install Fased App", Message: "Install the private core for this OS user and start it in the background? No wallet, RPC or AI account is required. Closing the window leaves the engine running. Login autostart is off. This is an unsigned engineering package." + hostPreparationNotice(), Buttons: []string{"Install", "Cancel"}, DefaultButton: "Install", CancelButton: "Cancel"})
-			if e != nil || answer != "Install" {
+			// Linux and Windows question dialogs return Yes/No and ignore
+			// custom button labels; use those supported responses on all OSes.
+			answer, e := wailsruntime.MessageDialog(ctx, wailsruntime.MessageDialogOptions{Type: wailsruntime.QuestionDialog, Title: "Install Fased App", Message: "Install the private core for this OS user and start it in the background? No wallet, RPC or AI account is required. Closing the window leaves the engine running. Login autostart is off. This is an unsigned engineering package." + hostPreparationNotice(), Buttons: []string{"Yes", "No"}, DefaultButton: "No", CancelButton: "No"})
+			if e != nil || answer != "Yes" {
 				wailsruntime.Quit(ctx)
 				return
 			}
