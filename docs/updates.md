@@ -485,8 +485,9 @@ does not close either public P4-10/11 gate.
 
 ### Scope and authority
 
-The pure Go fixture model/store implements this contract; no command, socket or
-installed RPC exposes it. The fixture profile is `fased-app-owner-signer-admission-fixture:v1`, protocol
+The pure Go fixture model/store implements this contract; no installed command or
+RPC exposes it. The separate compiled fixture transport below reuses actor-local
+verification, not shared session/receipt authority. The fixture profile is `fased-app-owner-signer-admission-fixture:v1`, protocol
 1, mode `inspection-only`. Every message requires that profile, mode and the
 existing repository/development fixture binding. Real keys, financial execution,
 installed execution, automatic updates, production trust and P5 remain disabled.
@@ -748,8 +749,7 @@ go test -race -json ./internal/update -run '^TestFixtureHandoff' \
 the race-tested model cases, verifies HA-01–HA-15 model coverage and source hashes,
 and retains a receipt/logs while checking generated fixture cleanup. Ubuntu 24.04
 CI runs this same model acceptance. This is not distinct-UID acceptance.
-HA-03's real kernel-UID predicate remains unproven and is coupled to HA-16. A later, separately scoped
-compiled fixture harness owns bounded challenge/request/status transport and
+HA-03's real kernel-UID predicate remains unproven and is coupled to HA-16. The separate compiled fixture harness below owns bounded transport and
 HA-16 on Ubuntu 24.04: three disposable nonzero UIDs, protected role directories,
 fixed OS identity setup only, no installed services, real vaults or execution
 endpoint. Local subprocesses cannot close that UID gate. A transport CLI/CI addition,
@@ -789,9 +789,11 @@ plus external-anchor rollback remain outside this fixture model.
 
 ### Frozen scope and process split
 
-This section freezes the next implementation contract. It implements nothing:
-HA-03 kernel authentication and HA-16 distinct-UID transport remain BLOCKED.
-The existing 70-case model evidence is reusable only for unchanged model inputs.
+This frozen contract is now implemented as a separate development-only fixture
+command, transport and finite harness. Local race tests use compiled test peers;
+HA-03/HA-16 require the actual three-UID Ubuntu runner receipt at the exact source.
+A local PASS cannot stand in for that receipt or for installed/retail proof.
+The existing model APIs and their coupled checks remain independent.
 Real wallets, financial execution, installed execution, AI, automatic updates,
 production trust and P5 remain disabled. Only disposable keys, controlled HTTPS,
 inert `.fixture` subjects and separately declared fixture stores are allowed.
@@ -927,7 +929,9 @@ signerUid, SHA256(exact request JSON), ownerNotAfter, reviewDeadline)`.
    ExchangeDigest and SHA256(exact durable result payload). The signer checks its
    own current boot/head/inventory/time, no pending hold and the unchanged result
    context, then durably records and returns `confirmed` with its publication-head
-   wrapper. No fresh admission or deadline extension occurs. The owner checks this
+   wrapper. No fresh admission or deadline extension occurs. The fixture owner deliberately
+   rehearses one exact inspection retry and one exact confirmation retry;
+   `liveRetryVerified` is reported only after byte-identical responses. The owner checks this
    response and its own unchanged refreshed context before local completion,
    recording result/confirmation digests. This replaces the model's ability to
    inspect the other actor's live private state. Peer heads remain binding/audit
@@ -1027,16 +1031,16 @@ an existing account/socket. Cleanup failure is FAIL, not HA-16 PASS. A hard runn
 loss remains BLOCKED until disposal is established. Preserve failure evidence;
 do not reinitialize a failed store in the same experiment to manufacture success.
 
-### Next implementation files and completion commands
+### Implemented files and completion commands
 
-Implement one connected fixture package in `internal/update/handoff_transport.go`,
+The connected fixture package is in `internal/update/handoff_transport.go`,
 `handoff_transport_linux.go`, `handoff_transport_unsupported.go`,
-`handoff_transport_test.go`, `handoff_transport_linux_test.go`, narrowly refactoring
-`handoff.go`/`handoff_store.go` only for role-local reuse. Add
+`handoff_transport_test.go`, `handoff_transport_linux_test.go`, with anchor hooks in
+`handoff.go` and the unchanged bounded combined-store primitives. It adds
 `cmd/fased-handoff-fixture/main.go` and `main_test.go`,
 `scripts/check-update-handoff-transport.mjs` and
-`scripts/check-update-handoff-uid.mjs`. `.github/workflows/checks.yml` owns a
-dedicated Ubuntu 24.04 UID job and aggregate dependency, without changing installed
+`scripts/check-update-handoff-uid.mjs`. `scripts/handoff-transport-evidence.mjs` shares only fingerprint/receipt helpers.
+`.github/workflows/checks.yml` owns a dedicated Ubuntu 24.04 UID job and aggregate dependency, without changing installed
 signer/model acceptance, permissions or existing timeouts. Keep documentation in
 this section and the existing Fased planning files. Do not touch installed command,
 RPC, packaging, service or controller dispatch to expose the fixture command.
@@ -1056,7 +1060,8 @@ Freeze implementation inputs before running the coupled model/update/command
 checks once; retain the existing six model entrypoints and run portability compile
 checks for changed commands/stubs. Reuse unrelated UI/legacy evidence when valid.
 
-These are future commands, not executed or passing evidence for this design:
+These development-only commands require explicit fixture opt-in. Their exact
+receipts and source identities, rather than this document, establish test results:
 
 ```bash
 set -eu
@@ -1078,8 +1083,7 @@ FASED_HANDOFF_UID_CI=1 node scripts/check-update-handoff-uid.mjs
 Both scripts must self-enforce the stated flags/host/identity boundaries, finite
 cases and source/binary hashes. Completion receipts live in
 `.evidence/p4-handoff-transport/` and `.evidence/p4-handoff-uid/`, with exact
-source/tree, cases, OS/kernel UID proof, zero-execution and cleanup. Until those
-checks run against implemented code, compiled transport and HA-03/16 stay BLOCKED.
+source/tree, cases, OS/kernel UID proof, zero-execution and cleanup. Missing/failed receipts keep the corresponding compiled/UID predicate BLOCKED.
 Even future fixture PASS does not authorize installed integration, production
 bootstrap/time/provenance, real keys/funds, public updates or P5.
 

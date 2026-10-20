@@ -36,16 +36,18 @@ func (i FixtureHandoffInventory) valid() bool {
 // This models independent actors; it does not authenticate kernel UIDs or expose
 // an installed owner/signer API.
 type FixtureHandoffConfig struct {
-	Development  bool
-	Role         string
-	Store        *HandoffFixtureStore
-	Initial      bool
-	ExpectedHead string
-	Trust        TrustRehearsalOptions
-	Admission    ReleaseAdmissionOptions
-	Clock        func() (int64, bool)
-	Inventory    func() FixtureHandoffInventory
-	Review       func(FixtureHandoffReview) bool
+	Development   bool
+	Role          string
+	Store         *HandoffFixtureStore
+	Initial       bool
+	ExpectedHead  string
+	Trust         TrustRehearsalOptions
+	Admission     ReleaseAdmissionOptions
+	Clock         func() (int64, bool)
+	Inventory     func() FixtureHandoffInventory
+	Review        func(FixtureHandoffReview) bool
+	checkAnchor   func(string) error // Transport-owned, never configurable over RPC.
+	advanceAnchor func(string, string) error
 }
 
 type FixtureHandoffReview struct {
@@ -134,6 +136,9 @@ func NewFixtureHandoffActor(c FixtureHandoffConfig) (*FixtureHandoffActor, error
 			e = a.publish(state, nil)
 		}
 	}
+	if e == nil && c.Initial && c.advanceAnchor != nil {
+		e = c.advanceAnchor("", a.head)
+	}
 	if e != nil {
 		return nil, e
 	}
@@ -144,6 +149,11 @@ func (a *FixtureHandoffActor) Head() string { a.mu.Lock(); defer a.mu.Unlock(); 
 
 func (a *FixtureHandoffActor) load() ([]byte, handoffCheckpoint, error) {
 	var c handoffCheckpoint
+	if a.cfg.checkAnchor != nil {
+		if e := a.cfg.checkAnchor(a.head); e != nil {
+			return nil, c, e
+		}
+	}
 	b, e := a.cfg.Store.Load(a.configSHA, a.head)
 	if e != nil {
 		return nil, c, e
@@ -197,6 +207,9 @@ func (a *FixtureHandoffActor) publish(c handoffCheckpoint, proof *TrustTransitio
 	}
 	t := handoffPublication{previous: before, next: next, proof: proof}
 	head, e := a.cfg.Store.commit(t)
+	if e == nil && a.cfg.advanceAnchor != nil {
+		e = a.cfg.advanceAnchor(a.head, head)
+	}
 	if e != nil {
 		a.retry = &t
 		return e
@@ -214,6 +227,9 @@ func (a *FixtureHandoffActor) RetryPublication() error {
 		return errors.New("no opaque pending publication")
 	}
 	head, e := a.cfg.Store.commit(*a.retry)
+	if e == nil && a.cfg.advanceAnchor != nil {
+		e = a.cfg.advanceAnchor(a.head, head)
+	}
 	if e == nil {
 		a.head = head
 		a.retry = nil

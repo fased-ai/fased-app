@@ -283,9 +283,41 @@ jobs:
             .evidence/p4-handoff-model/handoff-test-list.log
             .evidence/p4-handoff-model/handoff-source-inputs.json
           retention-days: 7
+  handoff-uid:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - name: Compile and verify isolated local fixture peers
+        env:
+          FASED_HANDOFF_TRANSPORT_FIXTURE: "1"
+        run: node scripts/check-update-handoff-transport.mjs
+      - name: Disposable three-UID compiled transport and crash recovery
+        env:
+          FASED_HANDOFF_UID_CI: "1"
+        run: node scripts/check-update-handoff-uid.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: handoff-transport-uid
+          include-hidden-files: true
+          path: |
+            .evidence/p4-handoff-transport/*.json
+            .evidence/p4-handoff-transport/*.jsonl
+            .evidence/p4-handoff-transport/*.log
+            .evidence/p4-handoff-uid/*.json
+            .evidence/p4-handoff-uid/*.log
+          retention-days: 7
   prototype:
     if: always()
-    needs: [core, desktop, signer, handoff]
+    needs: [core, desktop, signer, handoff, handoff-uid]
     runs-on: ubuntu-latest
     steps:
       - name: Required aggregate check
@@ -294,4 +326,5 @@ jobs:
           DESKTOP_RESULT: ${{ needs.desktop.result }}
           SIGNER_RESULT: ${{ needs.signer.result }}
           HANDOFF_RESULT: ${{ needs.handoff.result }}
-        run: test "$CORE_RESULT" = success && test "$DESKTOP_RESULT" = success && test "$SIGNER_RESULT" = success && test "$HANDOFF_RESULT" = success
+          HANDOFF_UID_RESULT: ${{ needs.handoff-uid.result }}
+        run: test "$CORE_RESULT" = success && test "$DESKTOP_RESULT" = success && test "$SIGNER_RESULT" = success && test "$HANDOFF_RESULT" = success && test "$HANDOFF_UID_RESULT" = success
