@@ -13,6 +13,7 @@ import {
 import { createHash, randomBytes } from "node:crypto";
 import { resolve, join } from "node:path";
 import { createServer } from "node:net";
+const startedAt = Date.now();
 const root = resolve(".evidence/platform-install");
 const state = join(root, "state"),
   app = join(root, "app");
@@ -204,6 +205,39 @@ try {
   report.result = "PASS";
 } catch (error) {
   report.error = String(error);
+  if (process.platform === "linux") {
+    try {
+      const fragment = execFileSync(
+        "systemctl",
+        [
+          "--user",
+          "show",
+          "fased-app.service",
+          "--property=FragmentPath",
+          "--value",
+        ],
+        { encoding: "utf8" },
+      ).trim();
+      if (fragment === join(app, "fased-app.service")) {
+        report.serviceDiagnostic = execFileSync(
+          "journalctl",
+          [
+            "--user",
+            "-u",
+            "fased-app.service",
+            "--since",
+            `@${Math.floor(startedAt / 1000)}`,
+            "--no-pager",
+            "-n",
+            "30",
+          ],
+          { encoding: "utf8" },
+        );
+      }
+    } catch (diagnostic) {
+      report.diagnosticError = String(diagnostic);
+    }
+  }
   throw error;
 } finally {
   let receiptRemains = false;

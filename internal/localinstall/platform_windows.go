@@ -100,6 +100,14 @@ func taskExists(ctx context.Context, m Manifest) (bool, error) {
 	if err := xml.Unmarshal(want, &w); err != nil {
 		return false, fmt.Errorf("cannot decode installed task XML: %w", err)
 	}
+	// Task Scheduler omits its default least-privilege RunLevel on export.
+	// An explicit HighestAvailable value remains different and is refused.
+	if a.Principals.Principal.RunLevel == "" {
+		a.Principals.Principal.RunLevel = "LeastPrivilege"
+	}
+	if w.Principals.Principal.RunLevel == "" {
+		w.Principals.Principal.RunLevel = "LeastPrivilege"
+	}
 	if !reflect.DeepEqual(a, w) {
 		return false, fmt.Errorf("scheduled task identity differs: expected principal=%+v actions=%+v; observed principal=%+v actions=%+v", w.Principals, w.Actions, a.Principals, a.Actions)
 	}
