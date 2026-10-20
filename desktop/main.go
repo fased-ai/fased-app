@@ -54,14 +54,18 @@ func main() {
 	options := window.Options(*state)
 	if firstPackage != "" {
 		options.OnStartup = func(ctx context.Context) {
-			answer, e := wailsruntime.MessageDialog(ctx, wailsruntime.MessageDialogOptions{Type: wailsruntime.QuestionDialog, Title: "Install Fased App", Message: "Install the private core for this OS user and start it in the background? No wallet, RPC or AI account is required. Closing the window leaves the engine running. Login autostart is off. This is an unsigned engineering package.", Buttons: []string{"Install", "Cancel"}, DefaultButton: "Install", CancelButton: "Cancel"})
+			answer, e := wailsruntime.MessageDialog(ctx, wailsruntime.MessageDialogOptions{Type: wailsruntime.QuestionDialog, Title: "Install Fased App", Message: "Install the private core for this OS user and start it in the background? No wallet, RPC or AI account is required. Closing the window leaves the engine running. Login autostart is off. This is an unsigned engineering package." + hostPreparationNotice(), Buttons: []string{"Install", "Cancel"}, DefaultButton: "Install", CancelButton: "Cancel"})
 			if e != nil || answer != "Install" {
 				wailsruntime.Quit(ctx)
 				return
 			}
 			paths, e := localinstall.DefaultPaths()
+			terminal := false
 			if e == nil {
-				_, e = localinstall.Install(ctx, paths, localinstall.Options{Engine: filepath.Join(firstPackage, localinstall.EngineName()), Desktop: filepath.Join(firstPackage, localinstall.DesktopName()), Listen: "127.0.0.1:7331", Start: true})
+				terminal, e = prepareDesktopHost(ctx, firstPackage, paths)
+				if e == nil && !terminal {
+					_, e = localinstall.Install(ctx, paths, localinstall.Options{Engine: filepath.Join(firstPackage, localinstall.EngineName()), Desktop: filepath.Join(firstPackage, localinstall.DesktopName()), Listen: "127.0.0.1:7331", Start: true})
+				}
 			}
 			if e != nil {
 				_, _ = wailsruntime.MessageDialog(ctx, wailsruntime.MessageDialogOptions{Type: wailsruntime.ErrorDialog, Title: "Installation needs attention", Message: e.Error()})
@@ -69,7 +73,11 @@ func main() {
 				return
 			}
 			ready := false
-			for deadline := time.Now().Add(8 * time.Second); time.Now().Before(deadline); {
+			wait := 8 * time.Second
+			if terminal {
+				wait = 10 * time.Minute
+			}
+			for deadline := time.Now().Add(wait); time.Now().Before(deadline) && ctx.Err() == nil; {
 				c, err := core.NewClient(ctx, paths.Data)
 				if err == nil {
 					c.Close()

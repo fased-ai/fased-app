@@ -1,6 +1,6 @@
 # Fased App
 
-A focused financial automation workspace. **P2 engineering foundation**: Go serves the production React interface, owns setup in SQLite, authenticates the instance owner, and exposes the same setup to the CLI. A thin native client, ordinary-user platform installers, private-access helpers and unsigned engineering packages are implemented. Public trust/signing, runtime prerequisite handling and supported-host acceptance remain unfinished. Wallet signing, financial execution, AI connections and updates are later phases.
+A focused financial automation workspace. **P2 engineering foundation**: Go serves the production React interface, owns setup in SQLite, authenticates the instance owner, and exposes the same setup to the CLI. A thin native client, ordinary-user platform installers, private-access helpers and unsigned engineering packages are implemented. Ubuntu runtime and sandbox preparation use explicit OS authorization in the terminal wizard or `--prepare-host`. Public trust/signing and supported-host acceptance remain unfinished. Wallet signing, financial execution, AI connections and updates are later phases.
 
 The interface includes shared navigation, resumable setup, wallet-mode and permission previews, agent profiles, scripted chat/action cards, scoped draft memory, a notification inbox, and four labelled terminal mockups. WEN Asset Mining and Loss Mining remain prototypes while their independent contracts are developed. Provider/wallet selections save preferences only; they create no account or authority.
 

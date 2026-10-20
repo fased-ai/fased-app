@@ -2,8 +2,14 @@
 
 package main
 
-import "io"
+import (
+	"context"
+	"io"
+)
 
 // Native macOS uses OS frameworks. The Windows desktop build explicitly selects
 // Wails' pinned embedded WebView2 bootstrapper with an owner confirmation.
-func desktopRuntime(string, bool, io.Reader, io.Writer) error { return nil }
+func desktopRuntime(context.Context, string, string, string, bool, bool, io.Reader, io.Writer) error {
+	return nil
+}
+func needsHostPreparation(string) bool { return false }

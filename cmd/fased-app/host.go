@@ -52,6 +52,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	vps := f.Bool("vps", false, "require always-on Linux VPS readiness")
 	packageDir := f.String("bundle", "", "verify and install this platform package inventory")
 	installRuntime := f.Bool("install-runtime", false, "authorize Ubuntu 24.04's OS package manager to install missing desktop runtime libraries")
+	prepareHost := f.Bool("prepare-host", false, "authorize Ubuntu OS prerequisites and the verified restrictive sandbox policy")
 	if err = f.Parse(remaining); err != nil {
 		return err
 	}
@@ -59,15 +60,21 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		return errors.New("unexpected positional arguments")
 	}
 	paths = localinstall.Paths{Root: *root, Data: *data}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	budget := 30 * time.Second
+	if command == "install" {
+		budget = 15 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	switch command {
 	case "install":
+		var wizard *bufio.Reader
 		if *interactive {
 			if !term.IsTerminal(int(os.Stdin.Fd())) {
 				return errors.New("interactive installation requires a terminal")
 			}
 			r := bufio.NewReader(os.Stdin)
+			wizard = r
 			fmt.Fprint(errOut, "Install on this computer or a VPS? [local/vps, default local]: ")
 			choice, _ := r.ReadString('\n')
 			choice = strings.TrimSpace(choice)
@@ -123,7 +130,15 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			}
 			*origin = plan.Origin
 		}
-		if err = desktopRuntime(*desktop, *installRuntime, os.Stdin, errOut); err != nil {
+		if err = localinstall.Validate(paths, localinstall.Options{Listen: *listen, PublicOrigin: *origin}); err != nil {
+			return err
+		}
+		if *interactive && !*prepareHost && needsHostPreparation(*desktop) {
+			fmt.Fprint(errOut, "Ubuntu needs OS prerequisites and its restrictive Bubblewrap policy. Authorize automatic preparation with sudo? [y/N]: ")
+			choice, _ := wizard.ReadString('\n')
+			*prepareHost = strings.EqualFold(strings.TrimSpace(choice), "y")
+		}
+		if err = desktopRuntime(ctx, *desktop, *packageDir, *data, *installRuntime, *prepareHost, os.Stdin, errOut); err != nil {
 			return err
 		}
 		m, err := localinstall.Install(ctx, paths, localinstall.Options{Engine: engine, Desktop: *desktop, Listen: *listen, PublicOrigin: *origin, Start: *start, Autostart: *autostart})

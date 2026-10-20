@@ -57,6 +57,9 @@ func run() error {
 		}
 	}
 	files := map[string]string{en: *engine, "LICENSE": "LICENSE", "NOTICE": "NOTICE"}
+	for name, source := range bundle.PlatformFiles() {
+		files[name] = source
+	}
 	if *desktop != "" {
 		files[dn] = *desktop
 	}

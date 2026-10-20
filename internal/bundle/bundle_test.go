@@ -20,7 +20,11 @@ func TestBundleRejectsMixedOrUnexpectedFiles(t *testing.T) {
 	t.Cleanup(func() { os.RemoveAll(p) })
 	en, _ := Names()
 	m := Manifest{Schema: 1, Platform: runtime.GOOS, Arch: runtime.GOARCH, Version: "fixture", UnsignedEngineering: true, Files: map[string]File{}}
-	for _, n := range []string{en, "LICENSE", "NOTICE"} {
+	names := []string{en, "LICENSE", "NOTICE"}
+	for n := range PlatformFiles() {
+		names = append(names, n)
+	}
+	for _, n := range names {
 		if e = os.WriteFile(filepath.Join(p, n), []byte("fixture "+n), 0700); e != nil {
 			t.Fatal(e)
 		}

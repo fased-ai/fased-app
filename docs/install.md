@@ -24,38 +24,40 @@ systemd's user-service sandbox with the same enforcement check.
 [Ubuntu's Bubblewrap manual](https://manpages.ubuntu.com/manpages/noble/man1/bwrap.1.html)
 describes the helper's namespace and read-only mount controls.
 
-Ubuntu 24.04 does not install that extra AppArmor profile by default. Before
-Fased installation, a host administrator must review the unmodified Ubuntu
-profile and license in `packaging/linux/apparmor/`, check for an existing
-Bubblewrap policy, then use trusted OS tools to install/load it. From a verified
-source checkout, with no existing profile of that name:
+Ubuntu 24.04 does not install that extra AppArmor profile by default. The
+terminal wizard offers automatic preparation. For an explicit terminal command:
 
 ```sh
-test ! -e /etc/apparmor.d/bwrap-userns-restrict && \
-sudo install -m 0644 packaging/linux/apparmor/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict && \
-sudo apparmor_parser -a /etc/apparmor.d/bwrap-userns-restrict
+./fased-app install --bundle . --prepare-host
 ```
 
-`-a` refuses an existing loaded identity; do not replace it with `-r` or overwrite
-an existing host policy to force installation. The profile applies to the OS
-Bubblewrap executable and its clients, not just Fased; administrator review is
-required. It denies payload capabilities rather than granting arbitrary child
-processes namespace capabilities. Fased probes the helper before installation,
-reports missing permission and never changes AppArmor policy itself. Automatic
-verified policy provisioning remains a public-installer acceptance gate.
-`--install-runtime` installs OS packages only; it does not authorize policy
-changes. [Ubuntu's AppArmor guide](https://ubuntu.com/server/docs/how-to/security/apparmor/)
-documents profile review and loading.
+Fased verifies the package and checks the separate policy against a compiled
+reviewed digest before requesting sudo. One terminal authorization permits the
+fixed OS package operations and restrictive policy setup. No Fased executable or
+shell script runs as root; sudo handles its own password prompt. Desktop first
+launch opens the system terminal for this preparation when needed, then attaches
+to the installed core. A Linux desktop missing GTK/WebKit must start with the
+terminal installer so those libraries can be installed before opening a window.
 
-Linux desktop installation checks
-its GTK3/WebKitGTK 4.1 runtime before starting. On Ubuntu 24.04, explicit
-`install --install-runtime` authorizes the OS package manager to install missing
-runtime packages (including Bubblewrap); sudo handles its own terminal prompt and Fased stays
-unprivileged. Other distributions require their own OS packages. Windows desktop
-builds select Wails' pinned embedded WebView2 bootstrapper and ask before its
-installation. macOS uses OS frameworks. Missing-runtime installation needs its
-own fresh-host acceptance; a CI host with prerequisites already present does not
-prove that branch. Package publisher trust remains a separate release gate.
+The policy is published without overwriting `/etc/apparmor.d/fased-app-bwrap-v1`.
+Its bytes, root ownership and permissions are verified before loading. A private
+intent receipt supports interrupted staging/loading; retry uses the same
+command. A changed destination or conflicting loaded profile stops preparation
+for administrator inspection. Fased never replaces a loaded profile or disables
+global AppArmor restrictions. The profile applies to the OS Bubblewrap helper
+and therefore also affects its other clients; the wizard's authorization covers
+that host change. Its source, GPL license and provenance accompany Linux bundles.
+The host prerequisite is deliberately retained on app uninstall because other
+instances or Bubblewrap clients may depend on it. It is not wallet state.
+
+Linux desktop installation also checks GTK3/WebKitGTK 4.1. `--prepare-host`
+installs missing Ubuntu runtime packages. The existing `--install-runtime` flag
+remains package-only and does not authorize policy changes. Other distributions
+use their own OS packages. Windows selects Wails' pinned embedded WebView2
+bootstrapper with owner confirmation; macOS uses OS frameworks. Signed public
+acquisition and actual supported-host acceptance remain separate gates.
+[Ubuntu's AppArmor guide](https://ubuntu.com/server/docs/how-to/security/apparmor/)
+documents profile operation.
 
 ## Install
 

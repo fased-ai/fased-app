@@ -41,6 +41,16 @@ type State struct {
 	URL       string `json:"url,omitempty"`
 }
 
+// Validate rejects bad paths/listeners before an installer authorizes OS work.
+func Validate(p Paths, o Options) error {
+	p, e := normalize(p)
+	if e != nil {
+		return e
+	}
+	_, e = definition(p, o)
+	return e
+}
+
 func DefaultPaths() (Paths, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

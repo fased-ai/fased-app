@@ -21,9 +21,16 @@ Name: "{group}\Fased App"; Filename: "{app}\fased-desktop.exe"
 Name: "{group}\Uninstall Fased App"; Filename: "{uninstallexe}"
 [Run]
 Filename: "{app}\fased-desktop.exe"; Description: "Open Fased App"; Flags: postinstall nowait skipifsilent
-[UninstallRun]
-Filename: "{app}\fased-app.exe"; Parameters: "uninstall"; Flags: runhidden waituntilterminated
 [Code]
+function InitializeUninstall(): Boolean;
+var Code: Integer;
+begin
+  Result := Exec(ExpandConstant('{app}\fased-app.exe'), 'uninstall', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  if Result then Result := Code = 0;
+  if (not Result) and (not UninstallSilent) then
+    MsgBox('Fased core removal was refused. Application and instance data are preserved. Inspect the CLI uninstall error before retrying.', mbError, MB_OK);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var Code: Integer;
 begin

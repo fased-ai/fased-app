@@ -36,6 +36,14 @@ func Names() (string, string) {
 	}
 	return "fased-app", "fased-desktop"
 }
+
+// PlatformFiles keeps OS policy data separately licensed from the executable.
+func PlatformFiles() map[string]string {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+	return map[string]string{"bwrap-userns-restrict": "packaging/linux/apparmor/bwrap-userns-restrict", "APPARMOR-COPYING": "packaging/linux/apparmor/COPYING", "APPARMOR-COPYRIGHT": "packaging/linux/apparmor/ubuntu-copyright", "APPARMOR-SOURCE.md": "packaging/linux/apparmor/README.md"}
+}
 func Inspect(path string) (File, error) {
 	i, e := os.Lstat(path)
 	if e != nil {
@@ -82,6 +90,9 @@ func Verify(dir string) (Manifest, error) {
 	}
 	engine, desktop := Names()
 	allowed := map[string]bool{engine: true, "LICENSE": true, "NOTICE": true}
+	for name := range PlatformFiles() {
+		allowed[name] = true
+	}
 	if m.Desktop {
 		allowed[desktop] = true
 	}
