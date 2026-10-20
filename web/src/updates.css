@@ -30,3 +30,57 @@
   overflow-wrap: anywhere;
   font-size: 0.75rem;
 }
+.update-preferences h3 {
+  margin: 1.5rem 0 0.8rem;
+}
+.update-policy-fields {
+  min-width: 0;
+  margin: 1.2rem 0;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.update-policy-fields legend {
+  padding: 0 0.4rem;
+}
+.update-policy-fields label {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.8rem 0;
+}
+.update-policy-fields input[type="checkbox"] {
+  width: auto;
+  flex-shrink: 0;
+}
+.update-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 0 1rem;
+}
+.update-form-grid label {
+  flex-direction: column;
+  align-items: stretch;
+}
+.update-weekdays,
+.update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1rem;
+}
+.update-proposal {
+  padding: 1rem;
+  margin: 1rem 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.update-proposal h4 {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
+.update-proposal code {
+  word-break: break-all;
+}

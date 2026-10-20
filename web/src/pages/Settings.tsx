@@ -1,5 +1,6 @@
 import { ArrowRight } from "../icons";
 import { UpdateStatusPanel } from "../components/UpdateStatusPanel";
+import { UpdatePreferencesPanel } from "../components/UpdatePreferencesPanel";
 import { providerNames } from "../state";
 import { Badge, SectionHead } from "../components/shared";
 import { useWorkspace } from "../workspace";
@@ -48,6 +49,7 @@ export function Settings() {
         </section>
         <UpdateStatusPanel />
       </div>
+      <UpdatePreferencesPanel />
       <section className="panel">
         <div className="panel-heading">
           <h2>AI connections</h2>

@@ -24,6 +24,9 @@ func Remove(context.Context, Manifest, *System) error                           
 func Control(context.Context, Manifest, string, string, *System) error           { return unsupported }
 func (*System) AppHelper(context.Context, Manifest, bool, bool, io.Writer) error { return unsupported }
 func (*System) UpdateStatus(context.Context, Manifest, io.Writer) error          { return unsupported }
+func (*System) UpdatePreferences(context.Context, Manifest, bool, io.Writer) error {
+	return unsupported
+}
 
 func OwnerLock() (io.Closer, error) { return nil, unsupported }
 

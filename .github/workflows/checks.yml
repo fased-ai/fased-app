@@ -210,6 +210,7 @@ jobs:
             .evidence/p4-staging/core-cli.log
             .evidence/p4-complete/managed-completion-result.json
             .evidence/p4-complete/shared-status-*.png
+            .evidence/p4-complete/shared-policy-*.png
             .evidence/p4-complete/manifest-cli-result.json
             .evidence/p4-complete/manifest-cli.log
             .evidence/p4-complete/core-cli-result.json

@@ -56,6 +56,192 @@ export async function fixtureUpdateIntentJourney({
   // browser, sampled while owner update administration remains separate.
   const sharedStatus = () =>
     JSON.parse(cli(["updates", "status", "--prepare-host"]));
+  const preferences = (input) =>
+    JSON.parse(
+      cli(
+        [
+          "updates",
+          "preferences",
+          "--prepare-host",
+          ...(input ? ["--request-stdin"] : []),
+        ],
+        input ? JSON.stringify(input) : undefined,
+      ),
+    );
+  const policyJourney = async () => {
+    const financialBefore = inventory().signer;
+    let v = preferences();
+    pass(
+      "policyDefaultHasNoExecutionAuthority",
+      v.version === 1 &&
+        v.policy.notify &&
+        !v.installAllowed &&
+        !v.resumeAllowed &&
+        !v.automaticUpdates &&
+        !v.financialExecution,
+    );
+    const policy = {
+      notify: true,
+      pin: { sequence: "7", manifestSha256: "a".repeat(64) },
+      window: {
+        timeZone: "America/Chicago",
+        days: [1, 2, 3, 4, 5],
+        start: "23:00",
+        end: "01:00",
+      },
+    };
+    v = preferences({ revision: v.revision, action: "policy", policy });
+    pass(
+      "policyCLIWritePersists",
+      v.policy.window.timeZone === policy.window.timeZone &&
+        v.policy.pin.sequence === "7",
+    );
+    const candidate = {
+      release: "Disposable Ubuntu review",
+      sequence: "7",
+      manifestSha256: "a".repeat(64),
+      target: { os: "linux", arch: "amd64" },
+    };
+    v = preferences({ revision: v.revision, action: "propose", candidate });
+    pass(
+      "policyManualProposalUnverifiedNotice",
+      v.proposals.length === 1 &&
+        !v.proposals[0].verified &&
+        v.proposals[0].pinMatch &&
+        v.notifications.length === 1,
+    );
+    pass(
+      "policyDuplicateDoesNotCreateNotice",
+      preferences({ revision: v.revision, action: "propose", candidate })
+        .revision === v.revision,
+    );
+    pass(
+      "policyInvalidTimezoneDenied",
+      fails(() =>
+        preferences({
+          revision: v.revision,
+          action: "policy",
+          policy: {
+            ...policy,
+            window: { ...policy.window, timeZone: "Local" },
+          },
+        }),
+      ),
+    );
+    pass(
+      "policyPermissionFieldDenied",
+      fails(() =>
+        preferences({
+          revision: v.revision,
+          action: "policy",
+          policy: { ...policy, automaticUpdates: true },
+        }),
+      ),
+    );
+    pass(
+      "policyDifferentReviewDigestDenied",
+      fails(() =>
+        preferences({
+          revision: v.revision,
+          action: "review",
+          digest: "f".repeat(64),
+        }),
+      ),
+    );
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const page = await browser.newPage({
+        viewport: { width: 1400, height: 1100 },
+      });
+      await page.goto(url + "/#settings");
+      await page
+        .getByLabel("Owner password", { exact: true })
+        .fill(appPassword);
+      await page.getByRole("button", { name: "Sign in", exact: true }).click();
+      const panel = page.getByRole("region", {
+        name: "Update preferences & proposals",
+      });
+      const card = panel.getByRole("article", {
+        name: "Update proposal Disposable Ubuntu review",
+      });
+      await expect(card.getByText("UNVERIFIED", { exact: true })).toBeVisible();
+      await expect(panel.getByLabel("IANA timezone")).toHaveValue(
+        policy.window.timeZone,
+      );
+      pass("policyCLIWriteActualUIRead", true);
+      await card
+        .getByRole("button", { name: "Mark reviewed", exact: true })
+        .click();
+      await expect(card).toContainText("reviewed");
+      let current = preferences();
+      pass(
+        "policyUIReviewCannotGrantAuthority",
+        current.proposals[0].state === "reviewed" &&
+          !current.proposals[0].verified &&
+          current.notifications.length === 0 &&
+          !current.installAllowed &&
+          !current.resumeAllowed &&
+          !current.automaticUpdates,
+      );
+      pass(
+        "policyStaleMetadataDenied",
+        fails(() =>
+          preferences({ revision: v.revision, action: "policy", policy }),
+        ),
+      );
+      await panel.getByLabel("Show notices for pending proposals").uncheck();
+      await panel
+        .getByRole("button", { name: "Save update preferences", exact: true })
+        .click();
+      await expect(panel.getByRole("status")).toContainText(
+        "Saved app metadata only",
+      );
+      current = preferences();
+      pass(
+        "policyUIWriteCLIRead",
+        !current.policy.notify && current.policy.window.start === "23:00",
+      );
+      await page.screenshot({
+        path: path.join(evidence, "shared-policy-preferences.png"),
+        fullPage: true,
+      });
+      restartApp();
+      const deadline = Date.now() + 15000;
+      while (Date.now() < deadline) {
+        try {
+          if ((await fetch(url + "/api/v1/health")).ok) break;
+        } catch {}
+        await delay(100);
+      }
+      const restarted = preferences();
+      pass(
+        "policyRestartPreservesExactMetadata",
+        JSON.stringify(restarted.policy) === JSON.stringify(current.policy) &&
+          JSON.stringify(restarted.proposals) ===
+            JSON.stringify(current.proposals) &&
+          restarted.revision === current.revision,
+      );
+      report.policy = {
+        policy: restarted.policy,
+        proposal: restarted.proposals[0],
+        automaticUpdates: restarted.automaticUpdates,
+      };
+    } finally {
+      await browser.close();
+    }
+    const after = inventory().signer;
+    pass(
+      "policyFinancialHistoryUnchanged",
+      JSON.stringify(financialBefore.states) === JSON.stringify(after.states) &&
+        financialBefore.sequenceFloor === after.sequenceFloor &&
+        financialBefore.installedSequence === after.installedSequence &&
+        financialBefore.spent === after.spent &&
+        financialBefore.held === after.held &&
+        financialBefore.unknown === after.unknown &&
+        financialBefore.recoveryHold === after.recoveryHold &&
+        financialBefore.activeIntentId === after.activeIntentId,
+    );
+  };
   const observe = async (label, phase) => {
     const before = inventory().signer;
     const status = sharedStatus(),
@@ -247,6 +433,7 @@ finally:
       ),
     );
   try {
+    await policyJourney();
     await writeFile(
       tp,
       JSON.stringify({
@@ -385,6 +572,22 @@ finally:
     await observe("staged");
     const ready = preflight();
     await observe("paused", "paused");
+    const pausedPreferences = preferences();
+    pass(
+      "policyWritesDeniedWhileActualCorePaused",
+      fails(
+        () =>
+          preferences({
+            revision: pausedPreferences.revision,
+            action: "policy",
+            policy: {
+              ...pausedPreferences.policy,
+              notify: !pausedPreferences.policy.notify,
+            },
+          }),
+        /core metadata paused/,
+      ),
+    );
     pass(
       "actualOwnerPreflightPausesCore",
       ready.verified &&
@@ -819,6 +1022,17 @@ finally:
         !ownerStatus().updateHeld,
     );
     await observe("completed", "released");
+    const completedPreferences = preferences();
+    pass(
+      "policySurvivesInstalledCompletion",
+      JSON.stringify(completedPreferences.policy) ===
+        JSON.stringify(report.policy.policy) &&
+        completedPreferences.proposals[0].digest ===
+          report.policy.proposal.digest &&
+        completedPreferences.proposals[0].state === "reviewed" &&
+        !completedPreferences.automaticUpdates &&
+        !completedPreferences.installAllowed,
+    );
     pass(
       "completedCurrentRetryDoesNotAppendJournal",
       complete().phase === "completed" &&
