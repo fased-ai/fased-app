@@ -53,3 +53,12 @@ func TestTrustInspectionRejectsAuthorityAndImplicitInputs(t *testing.T) {
 		}
 	}
 }
+
+func TestReleaseInspectionRejectsAuthorityAndImplicitInputs(t *testing.T) {
+	for _, args := range [][]string{{"updates", "release-inspect"}, {"updates", "release-inspect", "--development"}, {"updates", "release-inspect", "--commit"}, {"updates", "release-inspect", "--development", "--automatic"}, {"updates", "release-inspect", "--development", "--production"}, {"updates", "release-inspect", "--development", "--insecure"}} {
+		var b bytes.Buffer
+		if e := run(args, nil, &b, io.Discard); e == nil || b.Len() != 0 {
+			t.Fatal("release admission accepted implicit or mutation authority", args)
+		}
+	}
+}

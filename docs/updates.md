@@ -425,6 +425,62 @@ reintroduce revoked keys or older metadata; it is not an allowed production desi
 Only a fresh complete chain produces `complete: true` and a verified descriptor.
 The actual installed owner/signer trust store and handoff remain unimplemented.
 
+## Development-only release-unit and provenance admission
+
+### Frozen fixture contract
+
+This additive, read-only slice consumes the existing TUF descriptor's exact
+`evidenceSha256`; it does not widen the TUF role/target policy. All records retain
+the seed's fixture binding and add profile `fased-app-release-admission-fixture:v1`.
+A separately SHA-256-pinned version-1 policy supplies an exact fixture build
+identity, target and disposable Ed25519 builder public key, valid for at most seven
+days. The identity binds fixture source repository, 40-character commit/tree,
+fixture workflow path/revision/run/attempt, fixture builder, toolchain and lock
+digests. These are synthetic identities, not verified GitHub/OIDC/Sigstore claims.
+
+The bounded evidence document contains exact base64 unit and provenance-envelope
+bytes. The unit binds descriptor sequence, platform, build identity, compatibility
+(core/signer protocol 1, owner entrypoint 4, installer format 1), and exactly four
+ordered, distinct subjects: `core`, `signer`, `owner-helper`, `installer`. Each
+subject binds its role, platform, source commit, fixed `<role>.fixture` filename,
+size and SHA-256. Both helper and installer are independently named required
+subjects; neither is inferred from the runtime pair. Unknown fields, mixed pairs,
+omitted/extra/reordered subjects, paths, archives and hooks refuse.
+
+The provenance envelope signs its exact payload bytes with Ed25519 over
+`fased-app-build-provenance-fixture:v1` plus NUL plus payload. The payload binds
+the unit digest, exact policy identity, all four subjects and a build time within
+the policy interval and no later than the injected observation clock. Key ID,
+signature, fixture binding, purpose and evidence digest must all match. This is a
+finite fixture attestation format, not a production provenance standard or proof
+that a builder honestly compiled source.
+
+`updates release-inspect` requires the same explicit development seed/state/clock
+flags as `trust-inspect`, plus `--policy-file`, `--policy-sha256`, `--evidence-file`
+and `--artifact-dir`. Policy/evidence are bounded by 64 KiB. The real, absolute
+nonsymlink artifact directory must contain exactly the four regular, nonexecutable
+files (each at most 64 KiB), beginning `FASED-INERT-ARTIFACT:v1` plus newline.
+Contained, stable opens and complete size/hash checks read these bytes; nothing is
+downloaded, unpacked, executed, installed or written. No installed defaults or
+owner/signer calls exist. All execution/automatic-update/wallet flags stay false.
+
+Successful admission returns an opaque fixture trust transition and an inspection
+report. A failure after trusted metadata is learned retains that knowledge as an
+opaque progress-only transition; the CLI prints that report and exits nonzero.
+Observed descriptor release floors may advance, but installed/reserved floors and
+preservation anchors remain unchanged. Retrying the identical descriptor can
+complete admission; older/conflicting metadata cannot erase learned revocation or
+version knowledge. The CLI cannot commit; only the existing fixture CAS store can
+persist the opaque transition. No financial or production authority follows.
+
+Acceptance requires malformed/mixed/omitted subjects, substituted evidence,
+builder/source/workflow/run identity, signature/time/policy, changed/truncated or
+executable artifacts and path/symlink/extra-file rejection; restart/progressive
+trust preservation; compiled ordinary-user read-only checks locally and on Ubuntu
+24.04. Real wallets, automatic updates, public publisher credentials/feeds and
+installed production handoff remain disabled. RT-04 evidence/RT-06 fixture coverage
+does not close either public P4-10/11 gate.
+
 ## Development HTTPS acquisition and bootstrap trust
 
 On Linux/macOS, an ordinary user can fetch a disposable signed development pair
