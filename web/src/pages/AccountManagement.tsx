@@ -362,6 +362,7 @@ export function AccountManagement() {
                 <label>
                   Capability mode
                   <select
+                    aria-label="Capability mode"
                     value={mode}
                     onChange={(e) => setMode(e.target.value as typeof mode)}
                   >
@@ -429,6 +430,7 @@ export function AccountManagement() {
               <label>
                 Fixture account
                 <select
+                  aria-label="Fixture account"
                   value={selected}
                   onChange={(e) => setSelected(e.target.value)}
                   required

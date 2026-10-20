@@ -311,3 +311,90 @@ test("public account records share UI/CLI state without wallet authority", async
     page.getByRole("heading", { name: "Shared watch", exact: true }),
   ).toBeVisible();
 });
+
+test("proposal form uses explicit fixture labels (UI mock only)", async ({
+  page,
+}) => {
+  const ref = {
+    version: 1,
+    signerId: "1".repeat(32),
+    walletId: "2".repeat(32),
+    epoch: "3".repeat(32),
+    network: "disposable-fixture:v1",
+    publicKey: "4".repeat(64),
+  };
+  let record = {
+    version: 1,
+    revision: 1,
+    accounts: [
+      {
+        version: 1,
+        id: "d".repeat(32),
+        name: "Mock disposable reference",
+        mode: "fixture-managed",
+        network: ref.network,
+        publicKey: ref.publicKey,
+        signer: ref,
+      },
+    ],
+    proposals: [] as {
+      accountId: string;
+      proposal: {
+        id: string;
+        policy: { budget: string };
+        grant: { budget: string; account: typeof ref };
+      };
+    }[],
+  };
+  await page.route("**/api/v1/accounts", async (route) => {
+    if (route.request().method() === "PUT") {
+      record = route.request().postDataJSON();
+      record.revision++;
+    }
+    await route.fulfill({
+      json: {
+        record,
+        fixture: {
+          available: true,
+          status: {
+            account: ref,
+            locked: true,
+            recoveryRequired: false,
+            walletSigner: false,
+            financialExecution: false,
+          },
+        },
+        accountStates: { [record.accounts[0].id]: "current-fixture" },
+        proposals: record.proposals.map((d) => ({
+          id: d.proposal.id,
+          digest: "c".repeat(64),
+          receipt: { digest: "", state: "not-approved" },
+        })),
+      },
+    });
+  });
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page.getByRole("button", { name: "Claim workspace" }).click();
+  await page.goto(url + "/#wallets/accounts");
+  await expect(page.getByLabel("Fixture account", { exact: true })).toBeVisible(
+    { timeout: 1000 },
+  );
+  await page
+    .getByLabel("Fixture account", { exact: true })
+    .selectOption("d".repeat(32));
+  await page
+    .getByRole("button", { name: "Create permission proposal", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Download public proposal", exact: true }),
+  ).toBeVisible();
+  expect(record.proposals[0].proposal.policy.budget).toBe("100");
+  expect(record.proposals[0].proposal.grant.budget).toBe("50");
+  expect(record.proposals[0].proposal.grant.account).toEqual(ref);
+  await expect(page.getByText("not-approved", { exact: true })).toBeVisible();
+});

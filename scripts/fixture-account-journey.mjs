@@ -24,11 +24,12 @@ export async function fixtureAccountJourney({
   env,
 }) {
   const browser = await chromium.launch({ headless: true });
+  let page;
   try {
     const context = await browser.newContext({
       viewport: { width: 1400, height: 1000 },
     });
-    const page = await context.newPage();
+    page = await context.newPage();
     await page.goto(url + "/#wallets/accounts");
     await page.getByLabel("Owner password", { exact: true }).fill(appPassword);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
@@ -242,6 +243,15 @@ finally:
       fullPage: true,
     });
     check("accounts:actualManagedUIResponsive", true);
+  } catch (error) {
+    if (page)
+      await page
+        .screenshot({
+          path: evidence + "/accounts-ui-failure.png",
+          fullPage: true,
+        })
+        .catch(() => {});
+    throw error;
   } finally {
     await browser.close();
   }
