@@ -60,6 +60,113 @@ rewind counters or clear unknown/recovery holds to make status look healthy.
 Public acquisition/trust, policy/scheduling UI, native custody, real VPS and portable
 financial-history recovery remain separate acceptance gates.
 
+## Notify, pin, window and review-only proposals
+
+**Settings → Update preferences & proposals** saves public app metadata through
+the same revision-checked core API used by these commands:
+
+```sh
+fased-app updates preferences --data-dir /absolute/instance/directory
+fased-app updates preferences --data-dir /absolute/instance/directory --request-stdin
+# Existing managed disposable installation; existing managed CLI login required:
+fased-app custody updates preferences --disposable-fixture --prepare-host
+fased-app custody updates preferences --disposable-fixture --prepare-host --request-stdin
+```
+
+`--request-stdin` accepts one public JSON request, never a key, credential, grant,
+signature approval or owner action. Both transports require the existing CLI
+session. The managed helper switches to the app UID using the verified immutable
+executable; it has no signer owner channel and does not take the owner update lock.
+
+Read the current `revision` before each change. For example, replacing `12` with
+that current revision:
+
+```json
+{
+  "revision": 12,
+  "action": "policy",
+  "policy": {
+    "notify": true,
+    "pin": {
+      "sequence": "7",
+      "manifestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "window": {
+      "timeZone": "America/Chicago",
+      "days": [1, 2, 3, 4, 5],
+      "start": "23:00",
+      "end": "01:00"
+    }
+  }
+}
+```
+
+Notify defaults to true and shows **in-app notices for saved pending proposals**.
+There is no release feed, periodic check, desktop push, external notification or
+active scheduler. Turning notices off hides them without deleting proposal history.
+Reviewing or dismissing the exact proposal removes its pending notice. Identical
+imports retain the same digest/state/timestamps/revision, including after restart;
+different claims for the same sequence/manifest digest are refused.
+
+A pin compares a claimed manifest SHA-256 and canonical positive decimal sequence
+string. Values never pass through a JavaScript number. A mismatch remains visible.
+The pin is a review preference, not release authentication or a restriction on the
+protected owner's separate manual decision. Omit `pin` to clear it explicitly.
+
+The optional weekly window uses `UTC` or an IANA region timezone from the embedded
+timezone database. `days` are unique ascending weekdays, Sunday=0 through
+Saturday=6, referring to the **start day**. Bounds are strict `HH:MM`, start inclusive
+and end exclusive, 15 minutes to 12 hours apart; overnight windows are supported.
+Both occurrences of a repeated DST minute qualify; skipped minutes never occur.
+The server evaluates open/closed/unrestricted only on a read/change. It schedules
+nothing and cannot install or resume when a window opens. Omit `window` to clear it.
+
+Public acquisition and publisher trust remain gated. To record a **manual,
+unverified** proposal for review, send:
+
+```json
+{
+  "revision": 13,
+  "action": "propose",
+  "candidate": {
+    "release": "0.0.0-disposable",
+    "sequence": "7",
+    "manifestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "target": { "os": "linux", "arch": "amd64" }
+  }
+}
+```
+
+The response supplies a domain-bound **review digest of this metadata**. That is
+distinct from its claimed manifest digest and from any signer intent or financial
+authority. Use `{"revision":14,"action":"review","digest":"<exact-review-digest>"}`
+to mark reviewed; `dismiss` hides its pending notice. Only dismissed entries may
+be `remove`d. Removal explicitly forgets that proposal and its notice history.
+At most eight proposals are stored. URL, arbitrary-command and asserted-permission
+fields are not accepted. Unknown/case-alias/duplicate fields and requests over
+16 KiB are refused.
+
+Every response reports `verified:false` for proposals and
+`installAllowed`, `resumeAllowed`, `financialExecution`, `automaticUpdates` as false.
+Marking reviewed acknowledges only the exact app-owned metadata; it cannot verify
+a signature, prepare an intent or approve installation. The protected owner flow
+must independently authenticate the actual signed envelope, complete artifact pair,
+platform/contracts, current core/signer state and monotonic floors.
+
+`GET/PUT /api/v1/updates/preferences` requires an authenticated session; writes also
+require exact Origin, JSON and CSRF. Preferences and proposals share the existing
+setup revision, snapshot anchor, SQL pause fence and private metadata backup.
+Stale clients must refresh and review again; they never silently overwrite or
+automatically retry. The UI discards the old view on errors and disables proposal
+actions while policy edits are unsaved.
+
+This is an optional version-1 extension of existing setup JSON in core schema 3;
+no financial format, schema conversion or updater compatibility rule changes.
+Saving it transactionally installs a preservation trigger. Current generic setup
+clients retain the extension, and genuine older writers that would discard it are
+refused by SQLite. Older interfaces do not manage this feature; use a capable
+binary. Key/history recovery and automatic execution remain disabled.
+
 The core exposes its compiled format/feature contract:
 
 ```sh

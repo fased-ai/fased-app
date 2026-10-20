@@ -27,7 +27,7 @@ func updatesCommand(args []string, out, errOut io.Writer) error {
 		}{Version: 1, Target: update.Target{OS: runtime.GOOS, Arch: runtime.GOARCH}, Contract: core.UpdateContract()})
 	}
 	if len(args) == 0 || args[0] != "inspect" {
-		return errors.New("usage: fased-app updates status [--data-dir <directory>] | compatibility | inspect --development --manifest <file> --trust-file <file> --inventory <file> --artifact-dir <directory>")
+		return errors.New("usage: fased-app updates status | preferences [--request-stdin] [--data-dir <directory>] | compatibility | inspect --development --manifest <file> --trust-file <file> --inventory <file> --artifact-dir <directory>")
 	}
 	f := flag.NewFlagSet("updates inspect", flag.ContinueOnError)
 	f.SetOutput(errOut)

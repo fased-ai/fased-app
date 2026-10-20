@@ -78,7 +78,7 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 	if e = custodyinstall.Verify(m); e != nil {
 		return e
 	}
-	if args[0] != "remove" && args[0] != "status" && args[0] != "update-status" {
+	if args[0] != "remove" && args[0] != "status" && args[0] != "update-status" && args[0] != "update-preferences" {
 		lock, le := custodyinstall.OwnerLock()
 		if le != nil {
 			return le
@@ -108,6 +108,11 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 			return errors.New("read-only managed status requires --prepare-host for the OS identity switch; no input is accepted")
 		}
 		return system.UpdateStatus(ctx, m, out)
+	case "update-preferences":
+		if !*prepare || *passwordStdin {
+			return errors.New("managed metadata requires --prepare-host for the OS identity switch; passwords are not accepted")
+		}
+		return system.UpdatePreferences(ctx, m, *requestStdin, out)
 	case "approve":
 		if *proposalFile == "" {
 			return errors.New("choose --proposal-file containing a public proposal")

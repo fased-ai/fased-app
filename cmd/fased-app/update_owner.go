@@ -251,6 +251,9 @@ func ownerUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) erro
 
 // Delegate to the immutable owner binary, retaining its terminal.
 func custodyUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) error {
+	if len(args) > 0 && args[0] == "preferences" {
+		return custodyCommand(append([]string{"update-preferences"}, args[1:]...), in, out, errOut)
+	}
 	if len(args) > 0 && args[0] == "status" {
 		return custodyCommand(append([]string{"update-status"}, args[1:]...), in, out, errOut)
 	}

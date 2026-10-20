@@ -157,6 +157,9 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
+	case "/api/v1/updates/preferences":
+		h.updatePreferencesAPI(w, r, token)
+		return
 	case "/api/v1/updates/status":
 		if r.Method != http.MethodGet {
 			writeError(w, 405, "method not allowed")

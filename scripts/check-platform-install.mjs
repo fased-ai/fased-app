@@ -231,6 +231,56 @@ try {
   report.result = "PASS";
 } catch (error) {
   report.error = String(error);
+  if (process.platform === "win32") {
+    // Keep the primary acceptance failure. Queries inspect only this generated
+    // task; the fresh direct process below is a diagnostic, never a fallback
+    // install or a reason to report PASS. Project code remains ordinary-user.
+    report.windowsDiagnostic = {};
+    try {
+      const bytes = await readFile(join(app, "fased-app.task.xml"));
+      const xml =
+        bytes[0] === 0xff && bytes[1] === 0xfe
+          ? bytes.subarray(2).toString("utf16le")
+          : bytes.toString("utf8");
+      const sid = xml.match(/<UserId>(S-[0-9-]+)<\/UserId>/)?.[1];
+      if (!sid) throw new Error("no declared fixture task principal");
+      report.windowsDiagnostic.task = execFileSync(
+        "schtasks.exe",
+        ["/Query", "/TN", "FasedApp-" + sid, "/V", "/FO", "LIST"],
+        { encoding: "utf8", timeout: 10000, maxBuffer: 64 * 1024 },
+      ).slice(0, 8192);
+    } catch (diagnostic) {
+      report.windowsDiagnostic.taskError = String(diagnostic);
+    }
+    // A separate generated data directory distinguishes a scheduler problem
+    // from a core initialization failure without touching the failed instance.
+    // execFileSync terminates this single foreground process at the deadline.
+    try {
+      report.windowsDiagnostic.directCore = execFileSync(
+        binary,
+        [
+          "serve",
+          "--data-dir",
+          join(root, "diagnostic-state"),
+          "--listen",
+          "127.0.0.1:0",
+        ],
+        { encoding: "utf8", timeout: 8000, maxBuffer: 64 * 1024 },
+      );
+    } catch (diagnostic) {
+      report.windowsDiagnostic.directCore = {
+        code: diagnostic.code,
+        status: diagnostic.status,
+        signal: diagnostic.signal,
+        stdout: String(diagnostic.stdout || "").slice(0, 8192),
+        stderr: String(diagnostic.stderr || "").slice(0, 8192),
+      };
+    }
+    console.error(
+      "WINDOWS FIXTURE DIAGNOSTIC",
+      JSON.stringify(report.windowsDiagnostic),
+    );
+  }
   if (process.platform === "linux") {
     try {
       const fragment = execFileSync(

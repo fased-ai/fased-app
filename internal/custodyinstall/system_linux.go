@@ -150,11 +150,18 @@ func (s *System) UpdateStatus(ctx context.Context, m Manifest, out io.Writer) er
 	return s.appClientInput(ctx, m, "update-status", nil, nil, out)
 }
 
+func (s *System) UpdatePreferences(ctx context.Context, m Manifest, request bool, out io.Writer) error {
+	if request {
+		return s.appClient(ctx, m, "update-preferences", []string{"--request-stdin"}, out)
+	}
+	return s.appClientInput(ctx, m, "update-preferences", nil, nil, out)
+}
+
 // Authorize using the owner's original input. Only the final unprivileged
 // project child receives the payload reader; exec may drain readers even when
 // an authorization utility does not read its stdin.
 func (s *System) appClientInput(ctx context.Context, m Manifest, action string, flags []string, input io.Reader, out io.Writer) error {
-	if action != "claim-code" && action != "recover" && action != "accounts" && action != "login" && action != "update-inventory" && action != "update-pause" && action != "update-backup" && action != "update-recovery" && action != "update-status" {
+	if action != "claim-code" && action != "recover" && action != "accounts" && action != "login" && action != "update-inventory" && action != "update-pause" && action != "update-backup" && action != "update-recovery" && action != "update-status" && action != "update-preferences" {
 		return errors.New("unsupported app helper action")
 	}
 	if e := Verify(m); e != nil {

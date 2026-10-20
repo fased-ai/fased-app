@@ -24,11 +24,12 @@ var ErrClaimed = errors.New("this instance is already claimed")
 var ErrRateLimited = errors.New("too many attempts; try again later")
 
 type Setup struct {
-	Step       int    `json:"step"`
-	Complete   bool   `json:"complete"`
-	Host       string `json:"host"`
-	WalletMode string `json:"walletMode"`
-	Provider   string `json:"provider"`
+	Step       int                `json:"step"`
+	Complete   bool               `json:"complete"`
+	Host       string             `json:"host"`
+	WalletMode string             `json:"walletMode"`
+	Provider   string             `json:"provider"`
+	Updates    *UpdatePreferences `json:"updates,omitempty"`
 }
 
 func DefaultSetup() Setup { return Setup{Host: "local", WalletMode: "skip", Provider: "none"} }

@@ -149,11 +149,17 @@ func (s *Store) Claimed(ctx context.Context) (bool, error) {
 	return claimed, err
 }
 func (s *Store) Setup(ctx context.Context) (SetupRecord, error) {
+	return readSetupRecord(ctx, s.db)
+}
+func readSetupRecord(ctx context.Context, reader snapshotReader) (SetupRecord, error) {
 	var result SetupRecord
 	var text string
-	err := s.db.QueryRowContext(ctx, "SELECT setup,revision FROM instance WHERE id=1").Scan(&text, &result.Revision)
+	err := reader.QueryRowContext(ctx, "SELECT setup,revision FROM instance WHERE id=1").Scan(&text, &result.Revision)
 	if err == nil {
 		err = json.Unmarshal([]byte(text), &result.Settings)
+	}
+	if err == nil && result.Settings.Updates != nil {
+		err = result.Settings.Updates.Validate()
 	}
 	return result, err
 }
@@ -161,11 +167,27 @@ func (s *Store) UpdateSetup(ctx context.Context, expected int64, setup Setup) (S
 	if err := setup.Validate(); err != nil {
 		return SetupRecord{}, err
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return SetupRecord{}, err
+	}
+	defer tx.Rollback()
+	current, err := readSetupRecord(ctx, tx)
+	if err != nil {
+		return SetupRecord{}, err
+	}
+	if current.Revision != expected {
+		return SetupRecord{}, ErrConflict
+	}
+	if setup.Updates != nil && update.SnapshotDigest("preferences", setup.Updates) != update.SnapshotDigest("preferences", current.Settings.Updates) {
+		return SetupRecord{}, errors.New("use the revision-checked update preferences API")
+	}
+	setup.Updates = current.Settings.Updates
 	bytes, err := json.Marshal(setup)
 	if err != nil {
 		return SetupRecord{}, err
 	}
-	result, err := s.db.ExecContext(ctx, "UPDATE instance SET setup=?,revision=revision+1 WHERE id=1 AND revision=?", string(bytes), expected)
+	result, err := tx.ExecContext(ctx, "UPDATE instance SET setup=?,revision=revision+1 WHERE id=1 AND revision=?", string(bytes), expected)
 	if err != nil {
 		return SetupRecord{}, metadataWriteError(err)
 	}
@@ -175,6 +197,9 @@ func (s *Store) UpdateSetup(ctx context.Context, expected int64, setup Setup) (S
 	}
 	if count != 1 {
 		return SetupRecord{}, ErrConflict
+	}
+	if err = tx.Commit(); err != nil {
+		return SetupRecord{}, err
 	}
 	return SetupRecord{Revision: expected + 1, Settings: setup}, nil
 }

@@ -30,6 +30,12 @@ func main() {
 	}
 }
 func run(args []string, in *os.File, out, errOut io.Writer) error {
+	if len(args) > 1 && args[0] == "updates" && args[1] == "preferences" {
+		return updatePreferencesCommand(args[2:], in, out, errOut)
+	}
+	if len(args) > 0 && args[0] == "update-preferences" {
+		return updatePreferencesCommand(args[1:], in, out, errOut)
+	}
 	if len(args) > 0 && args[0] == "update-status" {
 		return updateStatusCommand(args[1:], out, errOut)
 	}
