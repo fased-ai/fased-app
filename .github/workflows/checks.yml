@@ -172,12 +172,25 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Installer-managed identities and protected owner recovery
         run: node scripts/check-managed-custody.mjs
+      - name: Compile pinned predecessor and bad-health bootstrap fixtures
+        run: node scripts/build-bootstrap-fixtures.mjs
+      - name: Actual older-helper bootstrap and subsequent coordinated update
+        env:
+          FASED_BOOTSTRAP_ACCEPTANCE: "1"
+          FASED_MANAGED_CORE: .evidence/p4-bootstrap/fased-app-lifecycle3
+          FASED_MANAGED_SIGNER: .evidence/p4-bootstrap/fased-signer-lifecycle3
+          FASED_MANAGED_EVIDENCE: .evidence/p4-bootstrap/managed
+        run: node scripts/check-managed-custody.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: signer-isolation
           include-hidden-files: true
           path: |
+            .evidence/p4-bootstrap/fixture-builds.json
+            .evidence/p4-bootstrap/managed-bootstrap-result.json
+            .evidence/p4-bootstrap/managed/managed-install-result.json
+            .evidence/p4-bootstrap/managed/managed-install.log
             .evidence/p3-signer/isolation-result.json
             .evidence/p3-signer/isolation.log
             .evidence/p3-managed/managed-install-result.json

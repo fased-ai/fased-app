@@ -22,6 +22,9 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 	if len(args) > 0 && args[0] == "updates" {
 		return custodyUpdatesCommand(args[1:], in, out, errOut)
 	}
+	if len(args) > 0 && args[0] == "bootstrap" {
+		return bootstrapCommand(args[1:], in, out, errOut)
+	}
 	if len(args) == 0 {
 		return errors.New("usage: fased-app custody install|status|setup|recover|approve|updates|accounts|login|remove --disposable-fixture [options]")
 	}

@@ -12,6 +12,14 @@ import (
 // InspectInstallation is a closed cold-recovery probe. It runs only as the
 // configured signer UID, takes the real vault lock and never unlocks or signs.
 func InspectInstallation(c Config, id string) (*update.Installation, error) {
+	v, e := inspectVault(c)
+	if e != nil {
+		return nil, e
+	}
+	defer v.Close()
+	return v.Installation(update.InstallRequest{Action: "status", IntentID: id})
+}
+func inspectVault(c Config) (*Vault, error) {
 	if e := c.Validate(); e != nil {
 		return nil, e
 	}
@@ -34,6 +42,19 @@ func InspectInstallation(c Config, id string) (*update.Installation, error) {
 	if e != nil {
 		return nil, e
 	}
+	return v, nil
+}
+
+func InspectUpdate(c Config, id string) (Response, error) {
+	v, e := inspectVault(c)
+	if e != nil {
+		return Response{}, e
+	}
 	defer v.Close()
-	return v.Installation(update.InstallRequest{Action: "status", IntentID: id})
+	i, e := v.UpdateIntent(id)
+	if e != nil {
+		return Response{}, e
+	}
+	s, e := v.UpdateInventory(update.NewProbe())
+	return Response{UpdateIntent: i, UpdateInventory: s, Status: v.Status()}, e
 }

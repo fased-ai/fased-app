@@ -126,7 +126,8 @@ func containsAll(have, need []string) bool {
 	return true
 }
 
-func validateComponents(cs []Component) error {
+func validateComponents(cs []Component) error { return validateComponentsFor(cs, lifecycleOK) }
+func validateComponentsFor(cs []Component, lifecycle func(*LifecycleContract) bool) error {
 	if len(cs) != 2 {
 		return errors.New("complete core and signer pair required")
 	}
@@ -158,7 +159,7 @@ func validateComponents(cs []Component) error {
 		}
 	}
 	core, signer := contracts["core"], contracts["signer"]
-	if !lifecycleOK(core.Lifecycle) {
+	if !lifecycle(core.Lifecycle) {
 		return errors.New("incompatible or missing owner lifecycle entrypoint/staging format")
 	}
 	if !core.PeerProtocol.has(signer.Protocol) || !signer.PeerProtocol.has(core.Protocol) || !containsAll(signer.Features, core.RequiresPeer) || !containsAll(core.Features, signer.RequiresPeer) {
@@ -174,6 +175,9 @@ func validateComponents(cs []Component) error {
 
 func Compatible(m Manifest, sha string, inv Inventory) (Plan, error) {
 	p := Plan{}
+	if m.BootstrapFrom != "" {
+		return p, errors.New("bootstrap bundle requires protected reader handoff")
+	}
 	if err := validateComponents(m.Components); err != nil {
 		return p, err
 	}

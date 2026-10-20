@@ -57,9 +57,16 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if args[0] == "fixture-install-inspect" {
+	if args[0] == "fixture-install-inspect" || args[0] == "fixture-update-inspect" {
 		if *passwordStdin || *requestStdin || *approvalStdin || *documentPath != "" {
 			return errors.New("cold inspection accepts no credentials or documents")
+		}
+		if args[0] == "fixture-update-inspect" {
+			r, e := signer.InspectUpdate(c, *intentID)
+			if e != nil {
+				return e
+			}
+			return json.NewEncoder(out).Encode(r)
 		}
 		i, e := signer.InspectInstallation(c, *intentID)
 		if e != nil {

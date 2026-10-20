@@ -46,14 +46,15 @@ type Target struct {
 }
 
 type Manifest struct {
-	Version    int         `json:"version"`
-	Product    string      `json:"product"`
-	Channel    string      `json:"channel"`
-	Sequence   uint64      `json:"sequence,string"`
-	IssuedAt   int64       `json:"issuedAt"`
-	ExpiresAt  int64       `json:"expiresAt"`
-	Target     Target      `json:"target"`
-	Components []Component `json:"components"`
+	BootstrapFrom string      `json:"bootstrapFrom,omitempty"`
+	Version       int         `json:"version"`
+	Product       string      `json:"product"`
+	Channel       string      `json:"channel"`
+	Sequence      uint64      `json:"sequence,string"`
+	IssuedAt      int64       `json:"issuedAt"`
+	ExpiresAt     int64       `json:"expiresAt"`
+	Target        Target      `json:"target"`
+	Components    []Component `json:"components"`
 }
 
 type Artifact struct {
@@ -219,6 +220,9 @@ func ParseTrust(b []byte, now int64) (Trust, error) {
 // Authenticate signs the exact payload bytes, not a reserialized JSON object.
 // The returned digest is of those same bytes. No signing key is accepted here.
 func Authenticate(b []byte, trust Trust, now int64) (Manifest, string, error) {
+	return authenticate(b, trust, now, lifecycleOK)
+}
+func authenticate(b []byte, trust Trust, now int64, lifecycle func(*LifecycleContract) bool) (Manifest, string, error) {
 	var m Manifest
 	var e Envelope
 	if err := StrictJSON(b, &e); err != nil {
@@ -254,7 +258,7 @@ func Authenticate(b []byte, trust Trust, now int64) (Manifest, string, error) {
 	if m.IssuedAt <= 0 || m.IssuedAt > now || m.IssuedAt < key.NotBefore || m.ExpiresAt <= now || m.ExpiresAt <= m.IssuedAt || m.ExpiresAt-m.IssuedAt > 7*86400 || m.ExpiresAt > key.NotAfter {
 		return m, "", errors.New("stale or invalid manifest validity")
 	}
-	if err = validateComponents(m.Components); err != nil {
+	if err = validateComponentsFor(m.Components, lifecycle); err != nil {
 		return m, "", fmt.Errorf("manifest: %w", err)
 	}
 	return m, digest(e.Payload), nil

@@ -456,3 +456,55 @@ All paths are explicit disposable Ubuntu engineering operations. Public/bootstra
 trust, updater/helper self-upgrade across unsupported readers, native/private-VPS
 acceptance and retail release remain open. Real wallets, on-chain execution and
 automatic updates stay disabled.
+
+## Older-helper reader bootstrap (Linux disposable fixture)
+
+Lifecycle 3 cannot admit the lifecycle-4 helper it needs for completed updates.
+Run the exact signed **target** core with a signed reader-bridge bundle:
+
+```sh
+./fased-app custody bootstrap --disposable-fixture --prepare-host \
+  --intent-id <32-hex-id> --bundle <bridge.json> \
+  --trust-file <development-public-trust.json> --artifact-dir <target-pair>
+```
+
+The owner reviews `BOOTSTRAP <full-digest>` in the terminal. The bundle contains
+base64-encoded exact signed maintenance and target envelopes. Both signatures use
+the same explicitly trusted development key, sequence, target and validity; the
+target's `bootstrapFrom` binds the maintenance payload hash. The maintenance
+manifest describes the exact **installed predecessor** pair. The target describes
+the replacement pair. Ordinary release admission refuses a bootstrap target.
+Only lifecycle 3 → 4 with the known completion-reader feature is supported; state
+formats, protocol, identities and paths cannot migrate. Lifecycle 1/2 and other
+reader changes stop unchanged.
+
+The predecessor reserves a maintenance sequence, locks the wallet, stages its own
+unchanged pair, pauses metadata and captures a recoverable private image. The new
+verified helper lives in a fixed root-owned path and runs as the owner. Only fixed
+trusted OS utilities run privileged. Before a cold switch or rollback, only the
+new signer reader inspects state as the signer UID. Any unexpected operations
+head, authority, counter, unknown outcome, recovery hold or floor prevents the
+switch. A cached host receipt cannot establish that authority.
+
+A healthy reader pair converges installer records, durably chooses forward-only
+completion, then aborts just the predecessor-readable maintenance intent and
+releases its matching core pause. Failed initial health restores compatible old
+executables, verifies current history and aborts only that maintenance intent.
+There is no financial database restore, installed-release commit or automatic
+unlock. The reserved floor stays consumed. A subsequent ordinary signed update
+must use a higher sequence and the normal INSTALL/COMPLETE flow.
+
+Retry with only the same identity; retained verified envelopes/readers make the
+original input files unnecessary, even after expiry or partial replacement:
+
+```sh
+./fased-app custody bootstrap --disposable-fixture --prepare-host \
+  --intent-id <same-id>
+```
+
+`reader-upgraded` means the helper handoff succeeded, not that a release sequence
+was installed. Exact current retry returns `alreadyCurrent` without signer writes.
+Superseding state refuses historical replay. Unknown files and foreign records
+are preserved. Public acquisition trust, signing-key operations, native custody,
+real VPS acceptance and automatic updates remain separate gates; this command is
+not a public installer.

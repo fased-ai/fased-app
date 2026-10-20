@@ -2,6 +2,7 @@
 // Root executes trusted OS tools; all Fased executables run under non-root UIDs.
 import assert from "node:assert/strict";
 import { fixtureAccountJourney } from "./fixture-account-journey.mjs";
+import { fixtureBootstrapJourney } from "./fixture-bootstrap-journey.mjs";
 import { fixtureUpdateIntentJourney } from "./fixture-update-intent-journey.mjs";
 import {
   fixturePolicyJourney,
@@ -26,15 +27,21 @@ assert.equal(process.platform, "linux");
 assert.match(await readFile("/etc/os-release", "utf8"), /VERSION_ID="24\.04"/);
 const uid = process.getuid();
 assert.ok(uid > 0);
-const evidence = resolve(".evidence/p3-managed");
+const evidence = resolve(
+  process.env.FASED_MANAGED_EVIDENCE ?? ".evidence/p3-managed",
+);
 await mkdir(evidence, { recursive: true, mode: 0o700 });
 const home = resolve(evidence, "owner-config"),
   backups = resolve(evidence, "backups");
 await mkdir(home, { mode: 0o700 });
 await mkdir(backups, { mode: 0o700 });
 const env = { ...process.env, XDG_CONFIG_HOME: home };
-const engine = resolve(".evidence/bin/fased-app"),
-  signer = resolve(".evidence/bin/fased-signer");
+const engine = resolve(
+    process.env.FASED_MANAGED_CORE ?? ".evidence/bin/fased-app",
+  ),
+  signer = resolve(
+    process.env.FASED_MANAGED_SIGNER ?? ".evidence/bin/fased-signer",
+  );
 const root = `/var/lib/fased-app-custody-${uid}`;
 const userNames = [`fased-fx-${uid}-app`, `fased-fx-${uid}-signer`];
 const units = [
@@ -772,7 +779,11 @@ print(json.dumps(r))
     evidence,
     env,
   });
-  await fixtureUpdateIntentJourney({
+  const updateJourney =
+    process.env.FASED_BOOTSTRAP_ACCEPTANCE === "1"
+      ? fixtureBootstrapJourney
+      : fixtureUpdateIntentJourney;
+  await updateJourney({
     engine,
     root,
     cli,
