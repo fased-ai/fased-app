@@ -218,7 +218,11 @@ try {
         ],
         { encoding: "utf8" },
       ).trim();
-      if (fragment === join(app, "fased-app.service")) {
+      report.serviceFragment = fragment;
+      if (
+        fragment === join(app, "fased-app.service") ||
+        String(error).includes("core did not become ready")
+      ) {
         report.serviceDiagnostic = execFileSync(
           "journalctl",
           [

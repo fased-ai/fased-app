@@ -92,6 +92,12 @@ jobs:
             macOS) archive="$(find .evidence/packages -name '*.zip')" ;;
           esac
           FASED_PACKAGE_ARCHIVE="$archive" npm run test:platform-install
+      - name: Linux service failure diagnostics
+        if: failure() && runner.os == 'Linux'
+        run: |
+          systemctl --user show fased-app.service --property=LoadState,ActiveState,FragmentPath,Result,ExecMainStatus || true
+          sudo journalctl --no-pager _SYSTEMD_USER_UNIT=fased-app.service -n 40 || true
+          sudo journalctl --no-pager -u "user@$(id -u).service" -n 40 || true
       - name: Native Linux window and separate-core journey
         if: runner.os == 'Linux'
         run: |
