@@ -18,6 +18,7 @@ import (
 
 	fasedapp "github.com/fased-ai/fased-app"
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/localinstall"
 	"golang.org/x/term"
 )
 
@@ -53,6 +54,8 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	dir := flags.String("data-dir", dirDefault, "private instance state directory")
 	listen := flags.String("listen", "127.0.0.1:7331", "loopback listener")
 	publicOrigin := flags.String("public-origin", "", "exact private HTTPS origin behind a trusted local proxy")
+	requireSandbox := flags.Bool("require-sandbox", false, "require installed Linux mount isolation before starting")
+	installationRoot := flags.String("installation-root", "", "immutable installed application directory")
 	passwordStdin := flags.Bool("password-stdin", false, "read password from stdin instead of a terminal")
 	interactive := flags.Bool("interactive", false, "walk through setup in the terminal")
 	host := flags.String("host", "", "setup deployment preference: local or vps")
@@ -71,6 +74,11 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	ctx := context.Background()
 	switch args[0] {
 	case "serve":
+		if *requireSandbox {
+			if err = localinstall.CheckSandbox(*installationRoot, *dir); err != nil {
+				return err
+			}
+		}
 		return serve(*dir, *listen, *publicOrigin, out)
 	case "claim-code":
 		store, err := core.OpenStore(*dir)

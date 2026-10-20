@@ -94,8 +94,14 @@ func taskExists(ctx context.Context, m Manifest) (bool, error) {
 	var a, w taskXML
 	b = decodeTaskXML(b)
 	want = decodeTaskXML(want)
-	if xml.Unmarshal(b, &a) != nil || xml.Unmarshal(want, &w) != nil || !reflect.DeepEqual(a, w) {
-		return false, errors.New("another scheduled task occupies this name or changed its identity")
+	if err := xml.Unmarshal(b, &a); err != nil {
+		return false, fmt.Errorf("cannot decode observed task XML (prefix %.32x): %w", b, err)
+	}
+	if err := xml.Unmarshal(want, &w); err != nil {
+		return false, fmt.Errorf("cannot decode installed task XML: %w", err)
+	}
+	if !reflect.DeepEqual(a, w) {
+		return false, fmt.Errorf("scheduled task identity differs: expected principal=%+v actions=%+v; observed principal=%+v actions=%+v", w.Principals, w.Actions, a.Principals, a.Actions)
 	}
 	return true, nil
 }

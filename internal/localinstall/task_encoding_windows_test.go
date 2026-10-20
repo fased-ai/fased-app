@@ -15,7 +15,7 @@ func TestWindowsTaskEncodingAndQueryIdentity(t *testing.T) {
 	if encoded[0] != 255 || encoded[1] != 254 {
 		t.Fatal("missing Unicode byte-order mark")
 	}
-	for _, b := range [][]byte{encoded, []byte(`<?xml version="1.0" encoding="UTF-16"?>` + x[len(`<?xml version="1.0" encoding="UTF-8"?>`):])} {
+	for _, b := range [][]byte{encoded, encoded[2:], []byte(`<?xml version="1.0" encoding="UTF-16"?>` + x[len(`<?xml version="1.0" encoding="UTF-8"?>`):])} {
 		var got taskXML
 		if e := xml.Unmarshal(decodeTaskXML(b), &got); e != nil {
 			t.Fatal(e)

@@ -125,6 +125,9 @@ func TestDefinitionRejectsExposureAndEscapesPaths(t *testing.T) {
 	if !strings.Contains(string(unit), "space%%$$\\\"") || !strings.Contains(string(unit), "NoNewPrivileges=yes") || !strings.Contains(string(unit), "ProtectHome=read-only") || !strings.Contains(string(unit), "ReadWritePaths=") {
 		t.Fatal("service quoting or hardening absent")
 	}
+	if !strings.Contains(string(unit), "PrivateUsers=yes") || !strings.Contains(string(unit), "--require-sandbox") {
+		t.Fatal("user namespace or enforcement check missing")
+	}
 }
 
 func TestNestedPathsAndInterruptedRemoval(t *testing.T) {
@@ -155,5 +158,17 @@ func TestNestedPathsAndInterruptedRemoval(t *testing.T) {
 	}
 	if b, e := os.ReadFile(filepath.Join(p.Data, "keep")); e != nil || string(b) != "preserve owner data" {
 		t.Fatal("state was removed")
+	}
+}
+
+func TestInstalledSandboxRefusesOrdinaryWritableProcess(t *testing.T) {
+	p, _ := installFixture(t)
+	for _, dir := range []string{p.Root, p.Data} {
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := CheckSandbox(p.Root, p.Data); err == nil {
+		t.Fatal("writable ordinary process passed installed enforcement")
 	}
 }

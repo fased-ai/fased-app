@@ -32,11 +32,11 @@ func definition(p Paths, o Options) ([]byte, error) {
 	if _, err := validateDefinition(p, o); err != nil {
 		return nil, err
 	}
-	args := []string{quote(filepath.Join(p.Root, "fased-app")), "serve", "--data-dir", quote(p.Data), "--listen", quote(o.Listen)}
+	args := []string{quote(filepath.Join(p.Root, "fased-app")), "serve", "--data-dir", quote(p.Data), "--listen", quote(o.Listen), "--require-sandbox", "--installation-root", quote(p.Root)}
 	if o.PublicOrigin != "" {
 		args = append(args, "--public-origin", quote(o.PublicOrigin))
 	}
-	unit := "[Unit]\nDescription=Fased App private core\nAfter=network.target\n\n[Service]\nType=simple\nExecStart=" + strings.Join(args, " ") + "\nRestart=on-failure\nRestartSec=3\nTimeoutStopSec=15\nUMask=0077\nNoNewPrivileges=yes\nPrivateTmp=yes\nProtectSystem=strict\nProtectHome=read-only\nReadWritePaths=" + quote(p.Data) + "\nProtectControlGroups=yes\nProtectKernelTunables=yes\nRestrictSUIDSGID=yes\nLockPersonality=yes\n\n[Install]\nWantedBy=default.target\n"
+	unit := "[Unit]\nDescription=Fased App private core\nAfter=network.target\n\n[Service]\nType=simple\nExecStart=" + strings.Join(args, " ") + "\nRestart=on-failure\nRestartSec=3\nTimeoutStopSec=15\nUMask=0077\nNoNewPrivileges=yes\nPrivateUsers=yes\nPrivateTmp=yes\nProtectSystem=strict\nProtectHome=read-only\nReadOnlyPaths=" + quote(p.Root) + "\nReadWritePaths=" + quote(p.Data) + "\nProtectControlGroups=yes\nProtectKernelTunables=yes\nRestrictSUIDSGID=yes\nLockPersonality=yes\n\n[Install]\nWantedBy=default.target\n"
 	return []byte(unit), nil
 }
 func systemctl(ctx context.Context, args ...string) (string, error) {
