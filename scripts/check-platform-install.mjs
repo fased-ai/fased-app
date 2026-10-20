@@ -29,12 +29,12 @@ const archive = process.env.FASED_PACKAGE_ARCHIVE;
 if (archive) {
   const unpack = join(root, "unpacked");
   await mkdir(unpack, { mode: 0o700 });
-  execFileSync(process.platform === "win32" ? "tar.exe" : "tar", [
-    "-xf",
-    resolve(archive),
-    "-C",
-    unpack,
-  ]);
+  execFileSync(
+    process.platform === "win32"
+      ? join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe")
+      : "tar",
+    ["-xf", resolve(archive), "-C", unpack],
+  );
   const arch = process.arch === "x64" ? "amd64" : process.arch;
   bundleDir =
     process.platform === "darwin"

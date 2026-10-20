@@ -35,7 +35,10 @@ if (windows) {
       output,
       `fased-app-windows-${process.arch === "x64" ? "amd64" : process.arch}.zip`,
     );
-    execFileSync("tar.exe", ["-xf", archive, "-C", fixture]);
+    execFileSync(
+      join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe"),
+      ["-xf", archive, "-C", fixture],
+    );
     const payload = join(
       fixture,
       `fased-app-windows-${process.arch === "x64" ? "amd64" : process.arch}`,
