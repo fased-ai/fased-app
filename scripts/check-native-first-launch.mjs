@@ -40,7 +40,19 @@ const report = {
   checks: {},
 };
 let child,
+  childExited,
+  childDone = false,
   output = "";
+async function stopClient() {
+  if (!child || childDone) return;
+  child.kill("SIGTERM");
+  const timer = setTimeout(() => child.kill("SIGKILL"), 5000);
+  try {
+    await childExited;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 function windows(name) {
   try {
     return execFileSync(
@@ -60,14 +72,24 @@ try {
   // remove only that check's verified owned profile to force GUI preparation.
   await cleanupUbuntuPreparation();
   child = spawn(gui, [], { env, stdio: ["ignore", "pipe", "pipe"] });
+  childExited = new Promise((resolve) => {
+    child.once("exit", () => {
+      childDone = true;
+      resolve();
+    });
+    child.once("error", (e) => {
+      childDone = true;
+      output += String(e);
+      resolve();
+    });
+  });
   child.stdout.on("data", (b) => (output += String(b)));
   child.stderr.on("data", (b) => (output += String(b)));
   let dialog;
   for (let i = 0; i < 150; i++) {
     dialog = windows("Install Fased App")[0];
     if (dialog) break;
-    if (child.exitCode !== null)
-      throw new Error("desktop exited before consent: " + output);
+    if (childDone) throw new Error("desktop exited before consent: " + output);
     await pause(100);
   }
   assert.ok(dialog, "native installation consent dialog missing: " + output);
@@ -79,7 +101,7 @@ try {
       status = JSON.parse(cli(["status", "--data-dir", data]));
       break;
     } catch {}
-    if (child.exitCode !== null)
+    if (childDone)
       throw new Error("desktop exited during preparation: " + output);
     await pause(100);
   }
@@ -99,8 +121,7 @@ try {
   execFileSync("scrot", [resolve(".evidence/native-first-launch.png")], {
     env,
   });
-  child.kill("SIGTERM");
-  await new Promise((r) => child.once("exit", r));
+  await stopClient();
   assert.equal(
     JSON.parse(cli(["status", "--data-dir", data])).instanceId,
     status.instanceId,
@@ -117,10 +138,7 @@ try {
   report.error = String(e);
   throw e;
 } finally {
-  if (child && child.exitCode === null) {
-    child.kill("SIGTERM");
-    await new Promise((r) => child.once("exit", r));
-  }
+  await stopClient();
   try {
     await stat(join(app, "install.json"));
     cli(["uninstall", "--prefix", app, "--data-dir", data]);
