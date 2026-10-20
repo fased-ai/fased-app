@@ -15,6 +15,12 @@ import (
 )
 
 func updateBackupCommand(args []string, in *os.File, out, errOut io.Writer) error {
+	return updateMetadataCommand(args, in, out, errOut, false)
+}
+func updateRecoveryCommand(args []string, in *os.File, out, errOut io.Writer) error {
+	return updateMetadataCommand(args, in, out, errOut, true)
+}
+func updateMetadataCommand(args []string, in *os.File, out, errOut io.Writer, recovery bool) error {
 	f := flag.NewFlagSet("update-backup", flag.ContinueOnError)
 	f.SetOutput(errOut)
 	base, e := defaultDir()
@@ -34,7 +40,14 @@ func updateBackupCommand(args []string, in *os.File, out, errOut io.Writer) erro
 		return e
 	}
 	var p update.Preflight
-	if len(b) > 16384 || update.StrictJSON(b, &p) != nil {
+	var check update.RecoveryCheck
+	var request any = &p
+	route := "/api/v1/updates/backup"
+	if recovery {
+		request = &check
+		route = "/api/v1/updates/recovery"
+	}
+	if len(b) > 16384 || update.StrictJSON(b, request) != nil {
 		return errors.New("invalid backup request")
 	}
 	ctx := context.Background()
@@ -47,7 +60,7 @@ func updateBackupCommand(args []string, in *os.File, out, errOut io.Writer) erro
 		return e
 	}
 	var index update.RecoveryIndex
-	if e = c.Do(ctx, http.MethodPost, "/api/v1/updates/backup", p, &index); e != nil {
+	if e = c.Do(ctx, http.MethodPost, route, request, &index); e != nil {
 		return e
 	}
 	return json.NewEncoder(out).Encode(index)

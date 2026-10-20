@@ -142,34 +142,50 @@ func TestPreflightRejectsStalePauseStateAndArtifactBytes(t *testing.T) {
 }
 
 func TestLegacyLifecycleStagingJournalRemainsReadable(t *testing.T) {
-	dir := fixtureDir(t)
-	v, _, _ := configuredFixture(t, dir)
-	r := intentFixture(t, v, 1)
-	c := update.CurrentLifecycle()
-	c.Entrypoint = 1
-	c.Features = c.Features[:3]
-	i := update.Intent{Version: 1, ID: r.ID, Sequence: 1, ManifestSHA256: update.SnapshotDigest("legacy-manifest", 0), Core: r.Core, Signer: r.Signer, CreatedAt: time.Now().Unix(), State: "prepared", Lifecycle: c, Artifacts: []update.Artifact{{File: "core", Size: 1, SHA256: update.SnapshotDigest("old-core", 0)}, {File: "signer", Size: 1, SHA256: update.SnapshotDigest("old-signer", 0)}}}
-	for n := range i.Signer.States {
-		if i.Signer.States[n].Name == "operations" {
-			features := i.Signer.States[n].Features
-			i.Signer.States[n].Features = features[:len(features)-1]
-		}
-	}
-	i.Core.State.Version = 2
-	i.Core.State.Features = i.Core.State.Features[:3]
-	if e := v.ledger.append(v, journalRecord{Kind: "update-prepare", Update: &i, At: i.CreatedAt}); e != nil {
-		t.Fatal(e)
-	}
-	if e := v.ledger.append(v, journalRecord{Kind: "update-staged", ID: i.ID, OriginalHash: update.StageDigest(i)}); e != nil {
-		t.Fatal(e)
-	}
-	v.Close()
-	v = openFixture(t, dir)
-	got, e := v.UpdateIntent(i.ID)
-	if e != nil || got.State != "staged" || got.Sequence != 1 {
-		t.Fatal("legacy history stranded", e)
-	}
-	if _, e = v.AbortUpdate(i.ID); e != nil || !v.Status().Locked {
-		t.Fatal("legacy intent cannot safely abort", e)
+	for _, entry := range []int{1, 2} {
+		t.Run(string(rune('0'+entry)), func(t *testing.T) {
+			dir := fixtureDir(t)
+			v, _, _ := configuredFixture(t, dir)
+			r := intentFixture(t, v, 1)
+			c := update.CurrentLifecycle()
+			c.Entrypoint = entry
+			if entry == 1 {
+				c.Features = c.Features[:3]
+			} else {
+				c.Features = c.Features[:4]
+			}
+			i := update.Intent{Version: 1, ID: r.ID, Sequence: 1, ManifestSHA256: update.SnapshotDigest("legacy-manifest", 0), Core: r.Core, Signer: r.Signer, CreatedAt: time.Now().Unix(), State: "prepared", Lifecycle: c, Artifacts: []update.Artifact{{File: "core", Size: 1, SHA256: update.SnapshotDigest("old-core", 0)}, {File: "signer", Size: 1, SHA256: update.SnapshotDigest("old-signer", 0)}}}
+			for n := range i.Signer.States {
+				if i.Signer.States[n].Name == "operations" {
+					features := []string{}
+					for _, f := range i.Signer.States[n].Features {
+						if f != "install-controller-v1" && (entry == 2 || f != "lifecycle-v2-v1") {
+							features = append(features, f)
+						}
+					}
+					i.Signer.States[n].Features = features
+				}
+			}
+			if entry == 1 {
+				i.Core.State.Version = 2
+				i.Core.State.Features = i.Core.State.Features[:3]
+			}
+			if e := v.ledger.append(v, journalRecord{Kind: "update-prepare", Update: &i, At: i.CreatedAt}); e != nil {
+				t.Fatal(e)
+			}
+			if e := v.ledger.append(v, journalRecord{Kind: "update-staged", ID: i.ID, OriginalHash: update.StageDigest(i)}); e != nil {
+				t.Fatal(e)
+			}
+			v.Close()
+			v = openFixture(t, dir)
+			got, e := v.UpdateIntent(i.ID)
+			if e != nil || got.State != "staged" || got.Sequence != 1 {
+				t.Fatal("legacy history stranded", e)
+			}
+			if _, e = v.AbortUpdate(i.ID); e != nil || !v.Status().Locked {
+				t.Fatal("legacy intent cannot safely abort", e)
+			}
+
+		})
 	}
 }

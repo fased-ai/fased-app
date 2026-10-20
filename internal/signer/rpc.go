@@ -30,6 +30,7 @@ func (c Config) Validate() error {
 // Request is a closed set of owner and fixture operations. No real sign/submit.
 // Passwords are bytes so callers can clear their own buffers after use.
 type Request struct {
+	Install       *update.InstallRequest   `json:"install,omitempty"`
 	Preflight     *update.PreflightRequest `json:"preflight,omitempty"`
 	Stage         *update.StageRequest     `json:"stage,omitempty"`
 	Update        *update.IntentRequest    `json:"update,omitempty"`
@@ -43,6 +44,7 @@ type Request struct {
 	PublicInput
 }
 type Response struct {
+	Installation    *update.Installation   `json:"installation,omitempty"`
 	Preflight       *update.Preflight      `json:"preflight,omitempty"`
 	Stage           *update.StageStatus    `json:"stage,omitempty"`
 	UpdateInventory *update.SignerSnapshot `json:"updateInventory,omitempty"`
@@ -64,6 +66,16 @@ func execute(v *Vault, r Request, owner bool) Response {
 		return Response{Error: "owner administration denied"}
 	}
 	switch r.Action {
+	case "fixture-install-controller":
+		if r.Install == nil {
+			return Response{Error: "bound installation command required"}
+		}
+		i, e := v.Installation(*r.Install)
+		out := Response{Installation: i, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
 	case "fixture-update-preflight":
 		if r.Preflight == nil {
 			return Response{Error: "bound preflight request required"}

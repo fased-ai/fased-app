@@ -27,7 +27,7 @@ export async function fixtureUpdateIntentJourney({
   env,
 }) {
   assert(process.getuid() > 0);
-  const evidence = path.resolve(".evidence/p4-backup");
+  const evidence = path.resolve(".evidence/p4-install");
   await mkdir(evidence, { recursive: true });
   const checks = {};
   const pass = (name, value) => {
@@ -45,13 +45,25 @@ export async function fixtureUpdateIntentJourney({
   const sha = (b) => createHash("sha256").update(b).digest("hex");
   const mp = path.join(backups, "development-update-manifest.json"),
     tp = path.join(backups, "development-update-trust.json");
-  const id = randomBytes(16).toString("hex");
+  let id = randomBytes(16).toString("hex");
   const inventory = () =>
     JSON.parse(cli(["updates", "inventory", "--prepare-host"]));
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const pub = publicKey.export({ type: "spki", format: "der" }).subarray(-32),
     keyId = sha(pub),
     now = Math.floor(Date.now() / 1000);
+  const candidates = path.join(backups, "controller-candidates");
+  await mkdir(candidates, { mode: 0o700 });
+  for (const file of ["fased-app", "fased-signer"]) {
+    await writeFile(
+      path.join(candidates, file),
+      Buffer.concat([
+        await readFile(root + "/" + file),
+        Buffer.from("\nFased disposable candidate marker\n"),
+      ]),
+      { mode: 0o700 },
+    );
+  }
   const contracts = [
     JSON.parse(
       execFileSync(root + "/fased-app", ["updates", "compatibility"], {
@@ -78,7 +90,7 @@ export async function fixtureUpdateIntentJourney({
   };
   for (const c of contracts) {
     const file = "fased-" + (c.component === "core" ? "app" : "signer"),
-      b = await readFile(root + "/" + file);
+      b = await readFile(path.join(candidates, file));
     manifest.components.push({
       version: "0.0.0-development.1",
       artifact: { file, size: b.length, sha256: sha(b) },
@@ -107,14 +119,15 @@ export async function fixtureUpdateIntentJourney({
     );
   };
   const tty = String.raw`
-import os,pty,select,sys,time,re,signal,json
+import os,pty,select,sys,time,re,signal,json,subprocess
 assert os.geteuid()!=0
 binary,operation,choice,ident,manifest,trust,artifacts=sys.argv[1:]
 args=[binary,'custody','updates',operation,'--disposable-fixture','--prepare-host','--intent-id',ident]
 if operation=='prepare':args+=['--manifest',manifest,'--trust-file',trust,'--artifact-dir',artifacts]
+if operation=='install':args+=['--artifact-dir',artifacts]
 pid,fd=pty.fork()
 if pid==0:os.execv(binary,args)
-seen=b'';sent=False;done=0;deadline=time.time()+30
+seen=b'';sent=False;done=0;interrupted=False;concurrentDenied=False;deadline=time.time()+(60 if operation in ('install','rollback') else 30)
 try:
  while time.time()<deadline:
   ready,_,_=select.select([fd],[],[],.05)
@@ -124,9 +137,17 @@ try:
    if not chunk:break
    seen+=chunk
   if not sent:
-   pattern=rb'Type (PREPARE [0-9a-f]{64})' if operation=='prepare' else rb'Type (ABORT [0-9a-f]{32} [0-9a-f]{64})'
+   patterns={'prepare':rb'Type (PREPARE [0-9a-f]{64})','abort':rb'Type (ABORT [0-9a-f]{32} [0-9a-f]{64})','install':rb'Type (INSTALL [0-9a-f]{64})','rollback':rb'Type (ROLLBACK [0-9a-f]{64})'}
+   pattern=patterns[operation]
    match=re.search(pattern,seen)
-   if match:os.write(fd,(match[1] if choice=='approve' else b'CANCEL')+b'\n');sent=True
+   if match:
+    if operation=='install':
+     competitor=subprocess.run([binary,'custody','updates','install-status','--disposable-fixture','--prepare-host','--intent-id',ident],capture_output=True,text=True,timeout=15)
+     concurrentDenied=competitor.returncode!=0 and 'already owns' in competitor.stderr
+     assert concurrentDenied,'competing owner did not fail closed: '+competitor.stderr
+    os.write(fd,(match[1] if choice in ('approve','interrupt','denied') else b'CANCEL')+b'\n');sent=True
+  if sent and choice=='interrupt' and not interrupted and (b'Installation boundary: core-replaced' if operation=='install' else b'Installation boundary: rollback-core-replaced') in seen:
+   os.killpg(pid,signal.SIGKILL);interrupted=True
   done,status=os.waitpid(pid,os.WNOHANG)
   if done:break
  else:raise Exception('owner update terminal timeout')
@@ -135,7 +156,7 @@ try:
  assert sent,'no protected terminal review: '+seen.decode(errors='replace')
  assert (code==0)==(choice=='approve'),'unexpected exit: '+seen.decode(errors='replace')
  if operation=='prepare':assert b'No installation or resume is authorized' in seen and b'"sha256"' in seen and b'"spent"' in seen and b'"held"' in seen,'incomplete review'
- print(json.dumps({'terminal':True,'operation':operation,'choice':choice,'exitCode':code,'completeReview':True}))
+ print(json.dumps({'terminal':True,'operation':operation,'choice':choice,'exitCode':code,'completeReview':True,'interrupted':interrupted,'concurrentDenied':concurrentDenied}))
 finally:
  os.close(fd)
  if not done:os.killpg(pid,signal.SIGKILL);os.waitpid(pid,0)
@@ -144,8 +165,8 @@ finally:
     JSON.parse(
       execFileSync(
         "/usr/bin/python3",
-        ["-c", tty, engine, operation, choice, id, mp, tp, root],
-        { env, encoding: "utf8", timeout: 35000 },
+        ["-c", tty, engine, operation, choice, id, mp, tp, candidates],
+        { env, encoding: "utf8", timeout: 70000 },
       ),
     );
   try {
@@ -168,6 +189,7 @@ finally:
     await saveManifest(1);
     const before = inventory();
     report.initial = before;
+    const baselineCoreHash = sha(await readFile(root + "/fased-app"));
     pass(
       "serviceInventoryHasActualCoreAndSigner",
       before.core.state.version === 3 &&
@@ -214,7 +236,7 @@ finally:
           "--intent-id",
           id,
           "--artifact-dir",
-          root,
+          candidates,
         ]),
       );
     const staged = stage();
@@ -412,11 +434,96 @@ finally:
     );
 
     pass(
+      "actualInstallReviewCancel",
+      terminal("install", "cancel").exitCode !== 0,
+    );
+    pass(
+      "actualControllerProcessKilledAfterCoreReplacement",
+      terminal("install", "interrupt").interrupted === true,
+    );
+    const installed = JSON.parse(
+      cli(["updates", "install", "--prepare-host", "--intent-id", id]),
+    );
+    report.installation = installed;
+    pass(
+      "actualMixedPairColdResumeReachesHealthyHeld",
+      installed.phase === "healthy-held" &&
+        !installed.installedSequenceCommitted &&
+        !installed.resumeAllowed &&
+        !installed.financialExecution,
+    );
+    const currentManifest = JSON.parse(
+      execFileSync(engine, ["custody", "status", "--disposable-fixture"], {
+        encoding: "utf8",
+        env,
+      }),
+    ).manifest;
+    pass(
+      "actualInstalledPairMatchesSignedCandidate",
+      currentManifest.coreHash === manifest.components[0].artifact.sha256 &&
+        currentManifest.signerHash === manifest.components[1].artifact.sha256 &&
+        currentManifest.coreHash !== baselineCoreHash &&
+        ownerStatus().locked,
+    );
+    pass(
+      "activeControllerBlocksUninstall",
+      fails(
+        () => cli(["remove", "--prepare-host"]),
+        /recoverable installation/,
+      ),
+    );
+    pass(
+      "actualOwnerCannotAbortInstalledTrial",
+      terminal("abort", "denied").exitCode !== 0,
+    );
+    const beforeRepeat = inventory().signer;
+    const repeated = JSON.parse(
+      cli(["updates", "install", "--prepare-host", "--intent-id", id]),
+    );
+    const afterRepeat = inventory().signer;
+    pass(
+      "healthyTrialRetryDoesNotRewriteSignerJournal",
+      repeated.phase === "healthy-held" &&
+        JSON.stringify(beforeRepeat.states) ===
+          JSON.stringify(afterRepeat.states),
+    );
+    pass(
+      "actualRollbackProcessKilledAfterCoreReplacement",
+      terminal("rollback", "interrupt").interrupted === true,
+    );
+    const rolledBack = JSON.parse(
+      cli(["updates", "install", "--prepare-host", "--intent-id", id]),
+    );
+    report.rollback = rolledBack;
+    pass(
+      "durableRollbackDecisionSurvivesColdResume",
+      rolledBack.phase === "rolled-back-held" && ownerStatus().locked,
+    );
+    const restored = JSON.parse(
+      execFileSync(engine, ["custody", "status", "--disposable-fixture"], {
+        encoding: "utf8",
+        env,
+      }),
+    ).manifest;
+    pass(
+      "rollbackRestoresOnlyPreviousExecutablePair",
+      restored.coreHash === installed.binding.previousCore &&
+        restored.signerHash === installed.binding.previousSigner &&
+        inventory().signer.sequenceFloor === "1",
+    );
+    pass(
       "actualOwnerTTYAbortCancel",
       terminal("abort", "cancel").exitCode !== 0 &&
         inventory().signer.activeIntentId === id,
     );
     pass("actualOwnerTTYAbort", terminal("abort", "approve").exitCode === 0);
+    pass(
+      "abortedControllerCannotReplayFromRetainedHostReceipt",
+      fails(
+        () => cli(["updates", "install", "--prepare-host", "--intent-id", id]),
+        /hold|inactive/,
+      ),
+    );
     pass(
       "abortedIntentCannotAcknowledgeBackup",
       fails(() => backup(), /staged intent/),
@@ -477,6 +584,65 @@ finally:
         /sequence floor/,
       ),
     );
+    // A separately compiled, signed disposable candidate reports the same
+    // reader contract but intentionally cannot serve. This drives real systemd
+    // health failure and executable-only rollback without a product fault flag.
+    id = randomBytes(16).toString("hex");
+    await writeFile(
+      path.join(candidates, "fased-app"),
+      await readFile(path.resolve(".evidence/bin/fased-unhealthy-core")),
+      { mode: 0o700 },
+    );
+    for (const c of manifest.components) {
+      const bytes = await readFile(path.join(candidates, c.artifact.file));
+      c.artifact.size = bytes.length;
+      c.artifact.sha256 = sha(bytes);
+    }
+    await saveManifest(2);
+    pass(
+      "unhealthyCandidateGetsSeparateOwnerReview",
+      terminal("prepare", "approve").exitCode === 0,
+    );
+    stage();
+    pass(
+      "actualUnhealthyTrialCompletesControlledRollback",
+      terminal("install", "approve").exitCode === 0,
+    );
+    const unhealthyState = JSON.parse(
+      cli(["updates", "install-status", "--prepare-host", "--intent-id", id]),
+    );
+    report.unhealthy = unhealthyState;
+    const oldAgain = JSON.parse(
+      execFileSync(engine, ["custody", "status", "--disposable-fixture"], {
+        encoding: "utf8",
+        env,
+      }),
+    ).manifest;
+    pass(
+      "failedHealthRestoresPreviousPairAndKeepsFloor",
+      unhealthyState.installation.phase === "rolled-back-held" &&
+        oldAgain.coreHash === restored.coreHash &&
+        oldAgain.signerHash === restored.signerHash &&
+        inventory().signer.sequenceFloor === "2" &&
+        ownerStatus().locked &&
+        ownerStatus().updateHeld,
+    );
+    pass(
+      "failedHealthRollbackRequiresProtectedAbort",
+      terminal("abort", "approve").exitCode === 0 &&
+        inventory().signer.sequenceFloor === "2",
+    );
+    const end = inventory().signer;
+    pass(
+      "bothTrialsPreserveFinancialAuthorityAndUnknowns",
+      end.authoritySha256 === before.signer.authoritySha256 &&
+        end.spent === before.signer.spent &&
+        end.held === before.signer.held &&
+        end.pending === before.signer.pending &&
+        end.unknown === before.signer.unknown &&
+        end.recoveryHold === before.signer.recoveryHold,
+    );
+    report.finalAfterInstall = end;
     report.result = "PASS";
   } catch (error) {
     report.error = error.message;
@@ -484,10 +650,11 @@ finally:
   } finally {
     await rm(mp, { force: true });
     await rm(tp, { force: true });
+    await rm(candidates, { recursive: true, force: true });
     report.cleanup =
       "public test inputs removed; private manifest key stayed in memory; managed parent removes generated services/accounts/state";
     await writeFile(
-      path.join(evidence, "managed-backup-result.json"),
+      path.join(evidence, "managed-install-controller-result.json"),
       JSON.stringify(report, null, 2) + "\n",
     );
   }

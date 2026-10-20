@@ -30,10 +30,10 @@ type LifecycleContract struct {
 }
 
 func CurrentLifecycle() *LifecycleContract {
-	return &LifecycleContract{Version: 1, Entrypoint: 2, StageFormat: 1, Features: []string{"owner-update-review-v1", "signer-owned-staging-v1", "no-install-v1", "owner-core-pause-v1"}}
+	return &LifecycleContract{Version: 1, Entrypoint: 3, StageFormat: 1, Features: []string{"owner-update-review-v1", "signer-owned-staging-v1", "no-install-v1", "owner-core-pause-v1", "owner-compatible-install-v1"}}
 }
 func lifecycleOK(c *LifecycleContract) bool {
-	return c != nil && c.Version == 1 && c.Entrypoint == 2 && c.StageFormat == 1 && listOK(c.Features) && containsAll(c.Features, CurrentLifecycle().Features)
+	return c != nil && c.Version == 1 && c.Entrypoint == 3 && c.StageFormat == 1 && listOK(c.Features) && containsAll(c.Features, CurrentLifecycle().Features)
 }
 
 type Contract struct {
@@ -94,7 +94,7 @@ var stateOwner = map[string]string{"core-db": "core", "vault": "signer", "operat
 var requiredStateFeatures = map[string][]string{
 	"core-db":       {"accounts-v1", "owner-sessions-v1", "setup-v1", "core-pause-v1"},
 	"vault":         {"fixture-key-v1", "authority-epoch-v1"},
-	"operations":    {"policy-v1", "reservations-v1", "originals-v1", "authority-epoch-v1", "approvals-v1", "update-intents-v1", "update-staging-v1", "lifecycle-v2-v1"},
+	"operations":    {"policy-v1", "reservations-v1", "originals-v1", "authority-epoch-v1", "approvals-v1", "update-intents-v1", "update-staging-v1", "lifecycle-v2-v1", "install-controller-v1"},
 	"mock-receipts": {"mock-outcomes-v1"},
 }
 

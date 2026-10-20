@@ -19,9 +19,10 @@ import (
 )
 
 type System struct {
-	In         io.Reader
-	Out        io.Writer
-	authorized bool
+	In           io.Reader
+	Out          io.Writer
+	authorized   bool
+	installFault func(string) error // Tests only; never configuration/IPC.
 }
 type hostFile struct {
 	Data    []byte
@@ -149,7 +150,7 @@ func (s *System) appClient(ctx context.Context, m Manifest, action string, flags
 // project child receives the payload reader; exec may drain readers even when
 // an authorization utility does not read its stdin.
 func (s *System) appClientInput(ctx context.Context, m Manifest, action string, flags []string, input io.Reader, out io.Writer) error {
-	if action != "claim-code" && action != "recover" && action != "accounts" && action != "login" && action != "update-inventory" && action != "update-pause" && action != "update-backup" {
+	if action != "claim-code" && action != "recover" && action != "accounts" && action != "login" && action != "update-inventory" && action != "update-pause" && action != "update-backup" && action != "update-recovery" {
 		return errors.New("unsupported app helper action")
 	}
 	if e := Verify(m); e != nil {
@@ -171,6 +172,14 @@ func (s *System) appClientInput(ctx context.Context, m Manifest, action string, 
 	c.Stdout = out
 	c.Stderr = s.Out
 	return c.Run()
+}
+
+func (s *System) UpdateRecovery(ctx context.Context, m Manifest, r update.RecoveryCheck, out io.Writer) error {
+	b, e := json.Marshal(r)
+	if e != nil {
+		return e
+	}
+	return s.appClientInput(ctx, m, "update-recovery", []string{"--request-stdin"}, bytes.NewReader(b), out)
 }
 
 // UpdateInventory uses the installed immutable client as app UID over private

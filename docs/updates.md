@@ -355,3 +355,71 @@ install controller must revalidate both services and staged bytes. Installation,
 helper replacement, financial restore/migration, installed-sequence commit,
 health/rollback, public signing trust and native custody remain open. Real wallets,
 network execution and automatic updates stay disabled.
+
+## Recoverable compatible trial installation (Linux disposable fixture)
+
+```sh
+fased-app custody updates install --disposable-fixture --prepare-host \
+  --intent-id <staged-id> --artifact-dir <verified-pair-directory>
+fased-app custody updates install-status --disposable-fixture --prepare-host \
+  --intent-id <same-id>
+fased-app custody updates rollback --disposable-fixture --prepare-host \
+  --intent-id <same-id>
+```
+
+`PREPARE` grants no installation. A separate protected owner terminal review
+requires `INSTALL <full-review-digest>`. Initial installation needs an unexpired
+signed development manifest and the exact already staged `fased-app` /
+`fased-signer` pair. The helper verifies its actual contracts against the signed
+intent, requires unchanged supported state formats, and checks space for the
+candidate, previous pair and atomic replacement files. Both the previous and
+candidate binaries must understand lifecycle entrypoint 3 and
+`install-controller-v1` journal records. Earlier staging histories remain readable
+and abortable; upgrading an older immutable helper is a separate bootstrap gate.
+
+Under the shared owner lifecycle lock, the helper retains an immutable previous
+runner and signer plus the verified candidate in fixed root-owned
+`updates/<intent-id>/` paths. The signer journals an exclusive installation hold
+bound to the recovery index, installation identity, original and candidate hashes,
+signed contracts and reserved sequence floor. Keys stay locked. This hold blocks
+ordinary abort until executable rollback has passed health checks. Filesystem
+phase receipts and the active-instance marker describe host progress; they cannot
+authorize financial work. Install/remove/service writers cannot compete.
+
+The controller stops both managed processes, verifies they are inactive, replaces
+the known executable pair and inventory with synced atomic file operations, then
+starts and checks both services. Every project executable, including compatibility
+probes and cold recovery inspection, runs only after a fixed OS utility drops root,
+groups and capabilities. The signer and core remain separate identities. Unknown
+files, altered generations, unsafe parents and foreign units are preserved and
+refused. No code, database or helper is executed as root.
+
+A retry uses the retained verified runner even when the live pair is mixed. It
+revalidates the actual live signer hold, or runs the previous immutable signer as
+the configured signer UID against the locked state while that daemon is stopped.
+A retained host receipt cannot replay an aborted or superseded signer intent.
+Fresh private core recovery verification rereads the original snapshot without
+creating another image when installation bookkeeping advances the journal head.
+Signed expiry prevents new admission, but cannot strand an already held recovery.
+
+Success reports `healthy-held`: the candidate is running and verified, but the
+installed release sequence is **not committed**, metadata remains paused, and the
+wallet remains locked. It is a trial outcome, not a completed production update.
+A second identical call revalidates that state. Closing the terminal or losing a
+reply does not clear the hold or change the candidate identity.
+
+A failed candidate health/recovery check durably chooses executable rollback.
+Explicit rollback requires `ROLLBACK <installation-digest>`. Both routes restore
+only the previous compatible pair and inventory, verify old service health and
+financial authority, then report `rolled-back-held`. A same-input retry follows a
+persisted rollback decision. This outcome means the candidate failed or was
+withdrawn; it never means installed. A separate protected `abort` can then release
+that update intent and its metadata fence. Spending, original submissions,
+unknown holds, key/authority identity and the reserved floor never rewind; no app
+metadata or financial database is restored. A failed rollback retains the hold.
+
+All paths are explicit disposable Ubuntu engineering operations. Public/bootstrap
+trust, updater/helper self-upgrade across unsupported readers, installed-sequence
+commit, final transaction completion, native/private-VPS acceptance and retail
+release remain open. Real wallets, on-chain execution and automatic updates stay
+disabled.

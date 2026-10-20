@@ -183,6 +183,11 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 	j := journal{Version: 1, Owner: uid, CoreHash: sum(coreBytes), SignerHash: sum(signerBytes), Listen: o.Listen}
 	haveIntent := false
 	existing, loadErr := Load(uid)
+	if loadErr == nil {
+		if e = noActiveController(existing); e != nil {
+			return m, e
+		}
+	}
 	if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
 		return m, loadErr
 	}
@@ -329,6 +334,21 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 
 func Verify(m Manifest) error {
+	if e := verifyTopology(m); e != nil {
+		return e
+	}
+	for _, pair := range []struct{ name, hash string }{{"fased-app", m.CoreHash}, {"fased-signer", m.SignerHash}} {
+		f, e := readRoot(m.Root + "/" + pair.name)
+		if e != nil {
+			return e
+		}
+		if sum(f.Data) != pair.hash || f.Mode != 0755 {
+			return errors.New("installed executable changed")
+		}
+	}
+	return nil
+}
+func verifyTopology(m Manifest) error {
 	if e := m.validate(); e != nil {
 		return e
 	}
@@ -360,15 +380,6 @@ func Verify(m Manifest) error {
 		st, ok := i.Sys().(*syscall.Stat_t)
 		if !ok || !i.IsDir() || i.Mode()&os.ModeSymlink != 0 || int(st.Uid) != d.i.UID || int(st.Gid) != d.i.GID || i.Mode().Perm() != d.mode {
 			return errors.New("managed state ownership changed; preserving it")
-		}
-	}
-	for _, pair := range []struct{ name, hash string }{{"fased-app", m.CoreHash}, {"fased-signer", m.SignerHash}} {
-		f, e := readRoot(m.Root + "/" + pair.name)
-		if e != nil {
-			return e
-		}
-		if sum(f.Data) != pair.hash || f.Mode != 0755 {
-			return errors.New("installed executable changed")
 		}
 	}
 	cfg, e := signer.LoadConfig(m.Root + "/identity.json")
@@ -428,7 +439,7 @@ func waitReady(ctx context.Context, m Manifest, system *System) error {
 				var h core.Health
 				de := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&h)
 				r.Body.Close()
-				if de == nil && r.StatusCode == 200 && h.Status == "ok" && h.InstanceID == private.InstanceID && h.APIVersion == core.APIVersion && len(h.Capabilities) > 0 && !h.Capabilities["walletSigner"] && !h.Capabilities["financialExecution"] {
+				if de == nil && r.StatusCode == 200 && h.Status == "ok" && h.InstanceID == private.InstanceID && h.APIVersion == core.APIVersion && len(h.Capabilities) > 0 && !h.Capabilities["walletSigner"] && !h.Capabilities["financialExecution"] && !h.Capabilities["updater"] {
 					// Type=simple/active precedes socket readiness. Authenticate the
 					// signer's actual owner RPC before declaring both services ready.
 					b, se := exec.CommandContext(ctx, m.Root+"/fased-signer", "owner", "--config", m.Root+"/identity.json", "--disposable-fixture").Output()
@@ -514,6 +525,9 @@ func loadedUnit(m Manifest, role string) error {
 }
 
 func Control(ctx context.Context, m Manifest, role, action string, s *System) error {
+	if e := noActiveController(m); e != nil {
+		return e
+	}
 	if (role != "app" && role != "signer") || (action != "stop" && action != "start") || m.Owner != os.Getuid() {
 		return errors.New("unsupported owner service operation")
 	}
@@ -530,6 +544,9 @@ func Control(ctx context.Context, m Manifest, role, action string, s *System) er
 // Remove stops verified units and removes their definitions, preserving the
 // root inventory, disabled identities and ALL app/signer/recovery data.
 func Remove(ctx context.Context, m Manifest, s *System) error {
+	if e := noActiveController(m); e != nil {
+		return e
+	}
 	if m.Owner != os.Getuid() || os.Geteuid() != os.Getuid() || os.Getuid() <= 0 {
 		return errors.New("ordinary installation owner required")
 	}

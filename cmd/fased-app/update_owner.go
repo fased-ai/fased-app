@@ -104,7 +104,7 @@ func mustJSON(v any) []byte {
 func ownerUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	f := flag.NewFlagSet("owner-updates", flag.ContinueOnError)
 	f.SetOutput(errOut)
-	action := f.String("action", "inventory", "inventory, prepare, stage, preflight, backup or abort; no install transition")
+	action := f.String("action", "inventory", "inventory, prepare, stage, preflight, backup, install, install-status, rollback or abort; disposable custody only")
 	config := f.String("config", "", "root-owned managed fixture configuration")
 	fixture := f.Bool("disposable-fixture", false, "test-only custody")
 	prepare := f.Bool("prepare-host", false, "authorize fixed OS identity switch for private core read")
@@ -119,6 +119,14 @@ func ownerUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) erro
 	if f.NArg() != 0 || !*fixture || !*prepare {
 		return errors.New("explicit disposable fixture and OS helper consent required")
 	}
+	if *action == "install" || *action == "install-status" || *action == "rollback" {
+		return ownerInstallation(*action, *id, *config, *dir, *approvalStdin, in, out, errOut)
+	}
+	ownerLock, e := custodyinstall.OwnerLock()
+	if e != nil {
+		return e
+	}
+	defer ownerLock.Close()
 	cfg, e := signer.LoadConfig(*config)
 	if e != nil {
 		return e
@@ -245,6 +253,9 @@ func ownerUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) erro
 func custodyUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	if runtime.GOOS != "linux" || os.Getuid() <= 0 || len(args) == 0 {
 		return errors.New("managed disposable Linux owner required")
+	}
+	if args[0] == "install" || args[0] == "install-status" || args[0] == "rollback" {
+		return delegateInstallation(args, in, out, errOut)
 	}
 	m, e := custodyinstall.Load(os.Getuid())
 	if e != nil {
