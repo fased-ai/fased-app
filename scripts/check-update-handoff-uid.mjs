@@ -478,7 +478,7 @@ async function cleanupCase(c) {
   record.after = canaries(c);
   record.finalHead = state.head;
   record.pending = state.value.pending;
-  record.recordKinds = state.value.records.map((x) => x.kind);
+  record.recordKinds = (state.value.records ?? []).map((x) => x.kind);
 }
 try {
   // One privilege prerequisite check. No owner-host use or interactive password.
@@ -861,6 +861,9 @@ try {
     assert.equal(localProof.automaticUpdates, false);
   });
   await unchanged(inputs);
+} catch (error) {
+  report.failure = { message: String(error), stack: error.stack };
+  throw error;
 } finally {
   const errors = [];
   for (const p of processes.toReversed()) {
@@ -882,10 +885,14 @@ try {
   if (createdRoot && !errors.length) {
     try {
       for (const p of createdPaths) {
-        const st = await lstat(p.path);
-        assert.equal(st.uid, p.uid);
-        assert.ok(st.isDirectory());
-        assert.ok(!st.isSymbolicLink());
+        // The ordinary harness must not traverse another UID's 0700 state.
+        // Read only inode metadata through a fixed trusted OS tool; preserve modes.
+        const identity = sudo("/usr/bin/stat", [
+          "--format=%u:%F",
+          "--",
+          owned(p.path),
+        ]).trim();
+        assert.equal(identity, `${p.uid}:directory`);
       }
       assert.equal((await lstat(root)).uid, 0);
       sudo("/usr/bin/rm", ["-r", "--", owned(root)]);
@@ -932,7 +939,9 @@ try {
   await writeFile(path.join(evidence, "uid.log"), log);
   await save(path.join(evidence, "uid-result.json"), report);
   if (errors.length)
-    throw Error(`UID fixture cleanup failed: ${errors.join("; ")}`);
+    throw Error(
+      `UID fixture cleanup failed: ${errors.join("; ")}; primary: ${report.failure?.message ?? "none"}`,
+    );
 }
 assert.equal(report.result, "PASS");
 console.log(
