@@ -55,11 +55,6 @@ func bootstrapCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	return c.Run()
 }
 func prepareBootstrapCommand(id, bundlePath, trustPath, artifacts string, automation bool, in *os.File, review io.Writer) (string, error) {
-	lock, e := custodyinstall.OwnerLock()
-	if e != nil {
-		return "", e
-	}
-	defer lock.Close()
 	var bundle update.BootstrapBundle
 	b, e := update.ReadDocument(bundlePath)
 	if e != nil {
@@ -110,32 +105,36 @@ func prepareBootstrapCommand(id, bundlePath, trustPath, artifacts string, automa
 	if fileSHA(self) != targetCoreHash {
 		return "", errors.New("run the exact signed target core to bootstrap an older helper")
 	}
-	cfg, e := signer.LoadConfig(m.Root + "/identity.json")
+
+	// An owner-downloaded verifier cannot use the signer socket. The installed,
+	// immutable predecessor owns that read; its executable/UID checks stay intact.
+	var output bytes.Buffer
+	command := exec.Command(m.Root+"/fased-app", "owner-updates", "--action", "inventory", "--config", m.Root+"/identity.json", "--disposable-fixture", "--prepare-host")
+	command.Stdin = in
+	command.Stdout = &output
+	command.Stderr = review
+	if e = command.Run(); e != nil {
+		return "", e
+	}
+	core, snapshot, e := decodeBootstrapInventory(output.Bytes())
 	if e != nil {
 		return "", e
 	}
-	if e = signer.CheckOwner(cfg); e != nil {
+	lock, e := custodyinstall.OwnerLock()
+	if e != nil {
 		return "", e
+	}
+	defer lock.Close()
+	current, e := custodyinstall.Load(os.Getuid())
+	if e != nil {
+		return "", e
+	}
+	if current != m || custodyinstall.Verify(m) != nil {
+		return "", errors.New("predecessor changed before bootstrap review")
 	}
 	system := &custodyinstall.System{In: in, Out: review}
 	ctx := context.Background()
-	probe := update.NewProbe()
-	var output bytes.Buffer
-	if e = system.UpdateInventory(ctx, m, probe, &output); e != nil {
-		return "", e
-	}
-	var core update.CoreSnapshot
-	if update.StrictJSON(output.Bytes(), &core) != nil {
-		return "", errors.New("actual predecessor core unavailable")
-	}
-	r, e := signer.Call(ctx, cfg, true, signer.Request{Action: "fixture-update-inventory", ProbeID: probe})
-	if e != nil {
-		return "", e
-	}
-	if r.UpdateInventory == nil {
-		return "", errors.New("actual predecessor signer unavailable")
-	}
-	tx := custodyinstall.BootstrapTransaction{Version: 1, ID: id, Base: m, Target: m, Bundle: bundle, Trust: trust, ReviewedAt: now, Core: core, Signer: *r.UpdateInventory}
+	tx := custodyinstall.BootstrapTransaction{Version: 1, ID: id, Base: m, Target: m, Bundle: bundle, Trust: trust, ReviewedAt: now, Core: core, Signer: snapshot}
 	for _, c := range plan.Target.Components {
 		if c.Contract.Component == "core" {
 			tx.Target.CoreHash = c.Artifact.SHA256
@@ -403,3 +402,17 @@ func ownerBootstrapCommand(args []string, in *os.File, out, errOut io.Writer) er
 }
 
 func fileSHA(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
+
+func decodeBootstrapInventory(b []byte) (update.CoreSnapshot, update.SignerSnapshot, error) {
+	var r struct {
+		Core               update.CoreSnapshot    `json:"core"`
+		Signer             *update.SignerSnapshot `json:"signer"`
+		InstallAllowed     bool                   `json:"installAllowed"`
+		FinancialExecution bool                   `json:"financialExecution"`
+	}
+	if update.StrictJSON(b, &r) != nil || r.Signer == nil || r.InstallAllowed || r.FinancialExecution || r.Core.ProbeID != r.Signer.ProbeID {
+		return r.Core, update.SignerSnapshot{}, errors.New("invalid immutable predecessor inventory")
+	}
+	_, e := update.JoinSnapshots(r.Core, *r.Signer, update.Target{OS: "linux", Arch: "amd64"})
+	return r.Core, *r.Signer, e
+}
