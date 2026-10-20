@@ -120,6 +120,23 @@ const secretStatus = () =>
       { encoding: "utf8", timeout: 10000 },
     ),
   );
+async function readySigner() {
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    try {
+      return secretStatus();
+    } catch (error) {
+      if (
+        !/dial unix.*(no such file|connection refused)/s.test(
+          String(error.stderr || error.message),
+        )
+      )
+        throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  throw new Error("signer owner RPC did not become ready after restart");
+}
 const installArgs = ["install", "--signer-binary", signer, "--prepare-host"];
 let listen;
 async function freePort() {
@@ -453,10 +470,11 @@ s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/app.sock');f=s.makefi
     ),
   );
   osTool("/usr/bin/systemctl", ["restart", units[1]]);
+  const restartedSigner = await readySigner();
   check(
     "signerRestartLocked",
-    secretStatus().locked &&
-      secretStatus().account.publicKey === initial.account.publicKey,
+    restartedSigner.locked &&
+      restartedSigner.account.publicKey === initial.account.publicKey,
   );
   const keyHash = sha(
     osTool("/usr/bin/cat", [root + "/signer-state/vault.json"], {
@@ -491,6 +509,7 @@ s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/app.sock');f=s.makefi
     root + "/signer-state/vault.lock",
   ]);
   osTool("/usr/bin/systemctl", ["start", units[1]]);
+  await readySigner();
   check(
     "wrongRecoveryCredentialDenied",
     fails(

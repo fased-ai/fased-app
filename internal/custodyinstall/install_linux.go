@@ -429,7 +429,13 @@ func waitReady(ctx context.Context, m Manifest, system *System) error {
 				de := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&h)
 				r.Body.Close()
 				if de == nil && r.StatusCode == 200 && h.Status == "ok" && h.InstanceID == private.InstanceID && h.APIVersion == core.APIVersion && len(h.Capabilities) > 0 && !h.Capabilities["walletSigner"] && !h.Capabilities["financialExecution"] {
-					return nil
+					// Type=simple/active precedes socket readiness. Authenticate the
+					// signer's actual owner RPC before declaring both services ready.
+					b, se := exec.CommandContext(ctx, m.Root+"/fased-signer", "owner", "--config", m.Root+"/identity.json", "--disposable-fixture").Output()
+					var status signer.Status
+					if se == nil && json.Unmarshal(b, &status) == nil && status.FixtureOnly && !status.WalletSigner && !status.FinancialExecution {
+						return nil
+					}
 				}
 			}
 		}
