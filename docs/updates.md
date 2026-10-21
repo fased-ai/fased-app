@@ -2398,8 +2398,8 @@ tools without installing or starting services. Such proof remains primitive
 engineering evidence; FA installed/reboot gates stay BLOCKED. Review this design
 before allocating even its disposable profile values in code.
 
-Future completion command for that non-activated input/verifier package, **not run
-or implemented here**:
+The command below was future at design time; its implementation is now recorded
+under [the non-activated round trip](#implemented-non-activated-inputoffline-round-trip):
 
 ```sh
 # Maintainer checks only, from fased_app as the ordinary user.
@@ -2437,3 +2437,52 @@ bounded group deadlines and streamed persistent logs. Never initialize an
 installed identity, start a service, call a controller or contact a production
 origin from this runner. Actual installed/VM FA acceptance needs separate future
 authority and prerequisites; this design authorizes none of those operations.
+
+### Implemented non-activated input/offline round trip
+
+`internal/update/inspection_fixture*` now implements the first IFP primitive
+package. All entrypoints are package-private, disposable engineering helpers.
+Nothing calls them from an installed command, signer, service, UI or updater.
+The inspection profile/capability above is allocated only for these fixtures;
+financial protocol 1, lifecycle 4 and existing packages remain unchanged.
+
+A pinned closed catalog binds installation/provisioning identities, three distinct
+logical UIDs, per-role public seed/policy/index pins, reader capabilities and
+before/candidate image and unit hashes. The fixture loader checks exact real
+paths, modes, ownership, single-link regular files and complete hashes. The
+publisher retries only an exact prefix and uses atomic no-replace publication.
+These ordinary-user ownership substitutions are SUPPORTING, not proof of
+root-owned installed inputs, kernel UID isolation or authenticated reader images.
+
+Each role independently copies a closed bounded offline index and file set,
+including sequential root successors, exactly one active metadata set, provenance
+and four inert subjects. Its source digest binds the seeded HTTPS origin, fetch
+policy pin and index. It reuses the existing TUF/provenance verification code;
+there is no fetch callback or network fallback. Tests close the controlled HTTPS
+fixture before verification. Both sealed inputs and the role clock are reread
+before completion. Controlled clocks are fixture inputs, not production time.
+
+Each role has separate private checkpoint and expected-head anchor directories.
+A bounded combined checkpoint records trust progress, clock high-water, pending
+verification and historical outcome. OS-locked CAS publishes the synced snapshot,
+checkpoint head, then anchor. Gaps hold; only the exact unexpired in-memory
+publication can retry. Pending restart, missing/corrupt anchors, unknown state,
+clock regression and exhausted history refuse initialization or new verification.
+Status is historical data and conveys no install, resume, wallet or update right.
+Same-disk anchors cannot detect a coordinated whole-store/host rollback.
+
+Run the complete ordinary-user Linux engineering check with:
+
+```sh
+FASED_INSPECTION_FIXTURE_INPUTS=1 node scripts/check-inspection-fixture-inputs.mjs
+```
+
+It requires the six exact families and all eight IFP cases, records source hashes
+and streamed logs under `.evidence/p4-inspection-fixture-inputs/`, checks actual
+financial-canary/floor preservation and disposable cleanup, and rejects zero,
+missing or skipped tests and every enabled execution capability. Existing Ubuntu
+core CI runs these Go tests through its unfiltered internal-package race suite.
+This adds no CI job, installed route/socket/service, reader bridge or controller
+call. FA-01–FA-16, actual installed/VM acceptance and production provisioning,
+seed/time/credentials/feed remain BLOCKED. Real wallets, installed execution,
+automatic updates and P5 remain disabled; public P4 stays ten PASS/six BLOCKED.

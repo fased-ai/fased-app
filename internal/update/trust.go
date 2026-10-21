@@ -370,7 +370,12 @@ func trustProposal(s TrustFixtureSnapshot, previous []byte, seedSHA string, rese
 // RehearseTrust is read-only. A later failure returns an error and, when new
 // trusted metadata was learned, an opaque progress checkpoint. Ignoring that
 // progress can lose revocations/rollback floors; it is never candidate approval.
-func RehearseTrust(ctx context.Context, o TrustRehearsalOptions) (out TrustTransition, err error) {
+func RehearseTrust(ctx context.Context, o TrustRehearsalOptions) (TrustTransition, error) {
+	return rehearseTrust(ctx, o, nil)
+}
+
+// Only the sealed, package-private fixture source can bypass HTTPS acquisition.
+func rehearseTrust(ctx context.Context, o TrustRehearsalOptions, offline *inspectionOfflineSource) (out TrustTransition, err error) {
 	if !o.Development || !hashOK(o.SeedSHA256) || digest(o.Seed) != o.SeedSHA256 || o.Now <= 0 || o.Now > 4102444800 {
 		return out, errors.New("explicit pinned fixture seed and injected clock required")
 	}
@@ -437,35 +442,40 @@ func RehearseTrust(ctx context.Context, o TrustRehearsalOptions) (out TrustTrans
 			err = errors.Join(err, pe)
 		}
 	}()
-	client, transport, e := acquisitionClient(o.TLSCA)
-	if e != nil {
-		return out, e
-	}
-	defer transport.CloseIdleConnections()
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	get := func(name string, optional bool, limit int64) ([]byte, error) {
-		r, e := http.NewRequestWithContext(ctx, http.MethodGet, seed.Origin+"/tuf/"+name, nil)
+	var get func(string, bool, int64) ([]byte, error)
+	if offline != nil {
+		get = offline.get
+	} else {
+		client, transport, e := acquisitionClient(o.TLSCA)
 		if e != nil {
-			return nil, e
+			return out, e
 		}
-		r.Header.Set("Accept-Encoding", "identity")
-		resp, e := client.Do(r)
-		if e != nil {
-			return nil, errors.New("controlled HTTPS metadata transport refused")
+		defer transport.CloseIdleConnections()
+		ctx, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		get = func(name string, optional bool, limit int64) ([]byte, error) {
+			r, e := http.NewRequestWithContext(ctx, http.MethodGet, seed.Origin+"/tuf/"+name, nil)
+			if e != nil {
+				return nil, e
+			}
+			r.Header.Set("Accept-Encoding", "identity")
+			resp, e := client.Do(r)
+			if e != nil {
+				return nil, errors.New("controlled HTTPS metadata transport refused")
+			}
+			defer resp.Body.Close()
+			if optional && resp.StatusCode == 404 {
+				return nil, nil
+			}
+			if resp.StatusCode != 200 || resp.Header.Get("Content-Encoding") != "" || resp.Header.Get("Content-Range") != "" || resp.ContentLength > limit {
+				return nil, errors.New("complete bounded fixture response required")
+			}
+			b, e := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+			if e != nil || len(b) == 0 || int64(len(b)) > limit {
+				return nil, errors.New("incomplete/oversized fixture response")
+			}
+			return b, nil
 		}
-		defer resp.Body.Close()
-		if optional && resp.StatusCode == 404 {
-			return nil, nil
-		}
-		if resp.StatusCode != 200 || resp.Header.Get("Content-Encoding") != "" || resp.Header.Get("Content-Range") != "" || resp.ContentLength > limit {
-			return nil, errors.New("complete bounded fixture response required")
-		}
-		b, e := io.ReadAll(io.LimitReader(resp.Body, limit+1))
-		if e != nil || len(b) == 0 || int64(len(b)) > limit {
-			return nil, errors.New("incomplete/oversized fixture response")
-		}
-		return b, nil
 	}
 	chain, e := trustedmetadata.New(s.Root)
 	if e != nil {
