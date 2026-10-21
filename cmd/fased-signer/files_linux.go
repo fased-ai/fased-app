@@ -81,6 +81,10 @@ func writeOwnerFile(path string, data []byte) error {
 }
 
 func readOwnerFile(path string) ([]byte, error) {
+	return readPrivateBoundedFile(path, 16384)
+}
+
+func readPrivateBoundedFile(path string, limit int64) ([]byte, error) {
 	dir, err := ownerDirectory(path)
 	if err != nil {
 		return nil, err
@@ -99,8 +103,8 @@ func readOwnerFile(path string) ([]byte, error) {
 	if st.Mode&unix.S_IFMT != unix.S_IFREG || st.Mode&0077 != 0 || int(st.Uid) != os.Geteuid() || st.Nlink != 1 {
 		return nil, errors.New("unsafe owner backup file")
 	}
-	b, err := io.ReadAll(io.LimitReader(f, 16385))
-	if len(b) > 16384 {
+	b, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if int64(len(b)) > limit {
 		return nil, errors.New("oversized backup")
 	}
 	return b, err

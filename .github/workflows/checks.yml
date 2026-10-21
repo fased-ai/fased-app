@@ -160,6 +160,8 @@ jobs:
           go build -trimpath -o .evidence/bin/fased-app ./cmd/fased-app
       - name: Build deliberately unhealthy disposable candidate
         run: go build -trimpath -o .evidence/bin/fased-unhealthy-core ./internal/custodyinstall/testdata/unhealthy-core
+      - name: Portable encrypted history and quarantined recovery checks
+        run: node scripts/check-portable-recovery.mjs
       - name: Read-only signed development manifest and compatibility journey
         env:
           FASED_UPDATE_EVIDENCE: .evidence/p4-complete
@@ -189,6 +191,8 @@ jobs:
       - name: Managed account UI browser prerequisite
         run: npx playwright install --with-deps chromium
       - name: Installer-managed identities and protected owner recovery
+        env:
+          FASED_PORTABLE_ACCEPTANCE: "1"
         run: node scripts/check-managed-custody.mjs
       - name: Compile pinned predecessor and bad-health bootstrap fixtures
         run: node scripts/build-bootstrap-fixtures.mjs
@@ -217,6 +221,12 @@ jobs:
             .evidence/p4-bootstrap/managed/managed-install.log
             .evidence/p3-signer/isolation-result.json
             .evidence/p3-signer/isolation.log
+            .evidence/p4-portable-recovery/local-result.json
+            .evidence/p4-portable-recovery/tests.jsonl
+            .evidence/p4-portable-recovery/stderr.log
+            .evidence/p4-portable-recovery/source-inputs.json
+            .evidence/p4-portable-recovery/installed-result.json
+            .evidence/p4-portable-recovery/target-config.json
             .evidence/p3-managed/managed-install-result.json
             .evidence/p3-managed/managed-install.log
             .evidence/p3-managed/accounts-ui-*.png
