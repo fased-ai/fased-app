@@ -55,7 +55,11 @@ func TestPublicAccountsRevisionRestartAndMigration(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer func() { s.Close() }()
+	defer func() {
+		if s != nil {
+			s.Close()
+		}
+	}()
 	token := claimFixture(t, s)
 	setup, e := s.Setup(t.Context())
 	if e != nil {
@@ -66,7 +70,7 @@ func TestPublicAccountsRevisionRestartAndMigration(t *testing.T) {
 		t.Fatal(e)
 	}
 	// A typed disposable schema-1 DB with the exact preceding tables/data.
-	if _, e = s.db.Exec("DROP TRIGGER update_pause_instance; DROP TABLE update_pause; DROP TABLE accounts; PRAGMA user_version=1;"); e != nil {
+	if _, e = s.db.Exec("DROP TABLE agent_workspace; DROP TRIGGER update_pause_instance; DROP TABLE update_pause; DROP TABLE accounts; PRAGMA user_version=1;"); e != nil {
 		t.Fatal(e)
 	}
 	s.Close()

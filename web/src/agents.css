@@ -1,0 +1,105 @@
+.local-agents {
+  display: grid;
+  gap: 20px;
+}
+.agent-record-body {
+  padding: 24px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  gap: 20px;
+}
+.agent-record-body form {
+  display: grid;
+  gap: 16px;
+}
+.agent-record-body label {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.agent-record-body input,
+.agent-record-body textarea,
+.agent-record-body select {
+  width: 100%;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: #e8eae5;
+  font: inherit;
+}
+.agent-record-body textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+.agent-record-body button {
+  justify-self: start;
+}
+.agent-record-body p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.agent-inline,
+form.agent-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+}
+.agent-inline label {
+  flex: 1;
+  min-width: 180px;
+}
+.agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+}
+.agent-session-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.local-messages {
+  display: grid;
+  gap: 16px;
+  max-height: 460px;
+  overflow-y: auto;
+}
+.local-messages article {
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+.local-messages p {
+  margin: 10px 0 0;
+  line-height: 1.6;
+}
+.local-agents details {
+  margin-top: 12px;
+}
+.local-agents small {
+  overflow-wrap: anywhere;
+}
+.local-agents .memory-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  padding: 18px 0;
+}
+.local-agents .memory-card p {
+  margin: 0;
+}
+.local-agents .panel,
+.agent-record-body form,
+.agent-record-body label {
+  min-width: 0;
+}
+.local-profile-picker > button > span {
+  display: grid;
+  gap: 5px;
+}

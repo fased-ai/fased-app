@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -12,14 +13,16 @@ import (
 )
 
 type Server struct {
-	Store     *Store
-	HTTP      *http.Server
-	Listener  net.Listener
-	IPC       net.Listener
-	IPCServer *http.Server
-	Lock      *InstanceLock
-	URL       string
-	dir       string
+	Store      *Store
+	HTTP       *http.Server
+	Listener   net.Listener
+	IPC        net.Listener
+	IPCServer  *http.Server
+	Lock       *InstanceLock
+	URL        string
+	dir        string
+	taskCancel context.CancelFunc
+	taskDone   chan struct{}
 }
 
 func Start(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS, custodyConfig ...string) (*Server, error) {
@@ -86,8 +89,38 @@ func Start(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS, 
 		ipc.Close()
 		return nil, err
 	}
+	server.startAgentTasks()
 	failed = false
 	return server, nil
+}
+func (s *Server) startAgentTasks() {
+	ctx, cancel := context.WithCancel(context.Background())
+	s.taskCancel = cancel
+	s.taskDone = make(chan struct{})
+	go func() {
+		defer close(s.taskDone)
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		lastError := ""
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				c, stop := context.WithTimeout(ctx, 5*time.Second)
+				e := s.Store.RunAgentTasks(c)
+				stop()
+				message := ""
+				if e != nil && !errors.Is(e, ErrCorePaused) && !errors.Is(e, context.Canceled) {
+					message = "local task scheduler held; inspect workspace capacity and core state"
+				}
+				if message != "" && message != lastError {
+					log.Print(message)
+				}
+				lastError = message
+			}
+		}
+	}()
 }
 func (s *Server) Serve() error {
 	errorsC := make(chan error, 2)
@@ -100,6 +133,10 @@ func (s *Server) Serve() error {
 	return err
 }
 func (s *Server) Close(ctx context.Context) error {
+	if s.taskCancel != nil {
+		s.taskCancel()
+		<-s.taskDone
+	}
 	err := errors.Join(s.HTTP.Shutdown(ctx), s.IPCServer.Shutdown(ctx))
 	if err != nil {
 		_ = s.HTTP.Close()

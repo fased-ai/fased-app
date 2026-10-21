@@ -66,7 +66,9 @@ try {
   );
   pass(
     "schemaPauseAndApprovalFeatures",
-    contracts[0].state[0].versions.min === 3 &&
+    contracts[0].state[0].versions.min === 4 &&
+      contracts[0].state[0].versions.max === 4 &&
+      contracts[0].state[0].features.includes("agents-local-v1") &&
       contracts[0].state[0].features.includes("core-pause-v1") &&
       contracts[0].lifecycle.entrypoint === 4 &&
       contracts[1].state
@@ -218,6 +220,21 @@ try {
     pass(name, r.status !== 0 && r.stdout === "");
   };
   for (const [name, edit] of [
+    [
+      "schema3CoreReaderDenied",
+      (m) => {
+        m.components[0].contract.state[0].versions = { min: 3, max: 3 };
+      },
+    ],
+    [
+      "agentStorageFeatureErasureDenied",
+      (m) => {
+        m.components[0].contract.state[0].features =
+          m.components[0].contract.state[0].features.filter(
+            (f) => f !== "agents-local-v1",
+          );
+      },
+    ],
     [
       "expiredManifestDenied",
       (m) => {

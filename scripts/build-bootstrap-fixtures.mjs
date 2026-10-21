@@ -1,5 +1,6 @@
 // Ordinary-user compiler for reconstructible predecessor and bad-health fixtures.
 import assert from "node:assert/strict";
+import { currentStorageFixture } from "./fixture-core-storage.mjs";
 import { execFileSync } from "node:child_process";
 import {
   mkdir,
@@ -14,7 +15,9 @@ import {
 import { createHash } from "node:crypto";
 import path from "node:path";
 assert(process.getuid() > 0);
-const root = path.resolve(".evidence/p4-bootstrap");
+const root = path.resolve(
+  process.env.FASED_BOOTSTRAP_EVIDENCE ?? ".evidence/p4-bootstrap",
+);
 await mkdir(root, { recursive: true });
 const scratch = await mkdtemp(path.join(root, "build-fixture-"));
 const prior = "d2f1fb22149a3c5190eb97d1e2ba58a9a3a0eb2a";
@@ -77,6 +80,9 @@ try {
       .digest("hex"),
     outputs: oldUI,
   };
+  // Preserve the historical entrypoint/protocol and UI, but use the current
+  // storage shape. An untouched schema-3 binary is an incompatible reader.
+  report.predecessorComposition = await currentStorageFixture(old);
   for (const command of ["fased-app", "fased-signer"]) {
     const file = path.join(root, command + "-lifecycle3");
     execFileSync(
