@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { mkdir, cp, readFile, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { sha } from "./handoff-transport-evidence.mjs";
+import { currentStorageFixture } from "./fixture-core-storage.mjs";
 assert.ok(
   process.env.GITHUB_ACTIONS === "true" ||
     process.env.FASED_DISPOSABLE_VM_BUILD === "1",
@@ -33,26 +34,7 @@ try {
   // runtime cannot read schema 4. Backport only current storage/migration/anchor
   // code; keep the historical command dispatch without inspection admission or
   // the P5 HTTP surface/scheduler. Never claim this is the untouched old binary.
-  const storage = {};
-  for (const file of ["agents.go", "update.go", "lifecycle.go"]) {
-    const bytes = await readFile("internal/core/" + file);
-    await writeFile(path.join(scratch, "internal/core", file), bytes);
-    storage[file] = sha(bytes);
-  }
-  const storeFile = path.join(scratch, "internal/core/store.go");
-  const beforeStore = await readFile(storeFile, "utf8");
-  const marker =
-    "\tstore := &Store{db: db, dir: dir, now: time.Now, bootID: update.NewProbe()}";
-  assert.equal(beforeStore.split(marker).length, 2);
-  await writeFile(
-    storeFile,
-    beforeStore.replace(
-      marker,
-      "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }\n" +
-        marker,
-    ),
-  );
-  storage["store.go"] = sha(await readFile(storeFile));
+  const { storage } = await currentStorageFixture(scratch);
   // UI is inert in this predecessor journey; the current bundle can be reused.
   // Its hash is recorded independently; no historical UI equivalence is claimed.
   assert.equal(
