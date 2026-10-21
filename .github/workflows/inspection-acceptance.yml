@@ -45,7 +45,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-system-x86 qemu-utils xorriso acl
-          if test -e /dev/kvm; then sudo setfacl -m "u:$(id -un):rw" /dev/kvm; fi
+          if test -e /dev/kvm; then
+            fased_vm_owner="$(id -un)"
+            printf 'KERNEL=="kvm", OWNER="%s", MODE="0600"\n' "$fased_vm_owner" > .evidence/p4-fault-reboot/99-fased-fixture-kvm.rules
+            sudo install -o root -g root -m 0644 .evidence/p4-fault-reboot/99-fased-fixture-kvm.rules /etc/udev/rules.d/99-fased-fixture-kvm.rules
+            sudo udevadm control --reload-rules
+            sudo udevadm trigger --name-match=kvm
+          fi
       - uses: actions/cache@v4
         with:
           path: |
@@ -56,6 +62,13 @@ jobs:
         env:
           FASED_DISPOSABLE_VM_ACCEPTANCE: "1"
         run: python3 scripts/check-inspection-vm.py --full
+      - name: Remove only the owned CI KVM rule
+        if: always()
+        run: |
+          if test -f .evidence/p4-fault-reboot/99-fased-fixture-kvm.rules && sudo cmp -s .evidence/p4-fault-reboot/99-fased-fixture-kvm.rules /etc/udev/rules.d/99-fased-fixture-kvm.rules; then
+            sudo rm -- /etc/udev/rules.d/99-fased-fixture-kvm.rules
+            sudo udevadm control --reload-rules
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
