@@ -5,6 +5,7 @@ import { useWorkspace } from "../workspace";
 import { providerNames, type Provider } from "../state";
 import type { AgentView } from "../agents";
 import "../agents.css";
+import { AgentAIReview } from "./AgentAIReview";
 
 const date = (at: number) =>
   at ? new Date(at * 1000).toLocaleString() : "No expiry";
@@ -245,6 +246,7 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                     Save message
                   </button>
                 </form>
+                <AgentAIReview view={v} sessionId={activeSession.id} />
               </>
             )}
           </div>

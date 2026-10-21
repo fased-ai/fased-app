@@ -20,13 +20,14 @@ import (
 const sessionCookie = "fased_session"
 
 type HTTPHandler struct {
-	store      *Store
-	origins    map[string]bool
-	hosts      map[string]bool
-	publicHost string
-	assets     fs.FS
-	authSlots  chan struct{}
-	limiter    struct {
+	agentFixture bool
+	store        *Store
+	origins      map[string]bool
+	hosts        map[string]bool
+	publicHost   string
+	assets       fs.FS
+	authSlots    chan struct{}
+	limiter      struct {
 		sync.Mutex
 		start    time.Time
 		attempts int

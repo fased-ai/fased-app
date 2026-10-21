@@ -8,7 +8,12 @@ export async function currentStorageFixture(archivedRoot) {
   assert.ok(process.getuid() > 0);
   const storage = {};
   const sha = (b) => createHash("sha256").update(b).digest("hex");
-  for (const file of ["agents.go", "update.go", "lifecycle.go"]) {
+  for (const file of [
+    "agents.go",
+    "agent_ai.go",
+    "update.go",
+    "lifecycle.go",
+  ]) {
     const bytes = await readFile("internal/core/" + file);
     await writeFile(path.join(archivedRoot, "internal/core", file), bytes);
     storage[file] = sha(bytes);
@@ -23,7 +28,7 @@ export async function currentStorageFixture(archivedRoot) {
     store,
     before.replace(
       marker,
-      "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }\n" +
+      "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }\n" +
         marker,
     ),
   );

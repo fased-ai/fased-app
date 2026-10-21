@@ -103,3 +103,46 @@ form.agent-inline {
   display: grid;
   gap: 5px;
 }
+
+.ai-review {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  min-width: 0;
+}
+.ai-request,
+.ai-action-card {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ai-review pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  max-height: 260px;
+  overflow: auto;
+}
+.ai-review .ai-consent {
+  display: flex;
+  align-items: start;
+  gap: 10px;
+  margin: 16px 0;
+}
+.ai-review .ai-consent input {
+  width: auto;
+  margin-top: 3px;
+}
+.ai-request > button {
+  margin: 8px 8px 0 0;
+}
+
+.ai-review .agent-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  min-width: 0;
+}

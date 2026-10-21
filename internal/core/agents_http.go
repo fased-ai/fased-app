@@ -18,6 +18,7 @@ func (h *HTTPHandler) agentsAPI(w http.ResponseWriter, r *http.Request, token st
 			writeError(w, 400, "agent workspace unavailable; verify profile and preserve state")
 			return
 		}
+		v.AIFixtureAvailable = h.agentFixture
 		writeJSON(w, 200, v)
 		return
 	}
@@ -36,7 +37,7 @@ func (h *HTTPHandler) agentsAPI(w http.ResponseWriter, r *http.Request, token st
 	if !decodeJSON(w, r, &c) {
 		return
 	}
-	v, e := h.store.ChangeAgents(r.Context(), c)
+	v, e := h.store.changeAgents(r.Context(), c, h.agentFixture)
 	if errors.Is(e, ErrConflict) || errors.Is(e, ErrCorePaused) {
 		writeError(w, 409, e.Error())
 		return
@@ -45,5 +46,6 @@ func (h *HTTPHandler) agentsAPI(w http.ResponseWriter, r *http.Request, token st
 		writeError(w, 400, e.Error())
 		return
 	}
+	v.AIFixtureAvailable = h.agentFixture
 	writeJSON(w, 200, v)
 }

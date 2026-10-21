@@ -13,19 +13,28 @@ import (
 )
 
 type Server struct {
-	Store      *Store
-	HTTP       *http.Server
-	Listener   net.Listener
-	IPC        net.Listener
-	IPCServer  *http.Server
-	Lock       *InstanceLock
-	URL        string
-	dir        string
-	taskCancel context.CancelFunc
-	taskDone   chan struct{}
+	Store        *Store
+	HTTP         *http.Server
+	Listener     net.Listener
+	IPC          net.Listener
+	IPCServer    *http.Server
+	Lock         *InstanceLock
+	URL          string
+	agentFixture bool
+	dir          string
+	taskCancel   context.CancelFunc
+	taskDone     chan struct{}
 }
 
 func Start(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS, custodyConfig ...string) (*Server, error) {
+	return start(ctx, dir, listen, publicOrigin, assets, false, custodyConfig...)
+}
+
+// StartAgentFixture enables only compiled, in-process model fixtures, never API credentials.
+func StartAgentFixture(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS) (*Server, error) {
+	return start(ctx, dir, listen, publicOrigin, assets, true)
+}
+func start(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS, fixture bool, custodyConfig ...string) (*Server, error) {
 	host, _, err := net.SplitHostPort(listen)
 	if err != nil || !isLoopbackHost(host) {
 		return nil, errors.New("listen address must be an explicit loopback IP and port")
@@ -89,6 +98,8 @@ func Start(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS, 
 		ipc.Close()
 		return nil, err
 	}
+	handler.agentFixture = fixture
+	server.agentFixture = fixture
 	server.startAgentTasks()
 	failed = false
 	return server, nil
@@ -109,6 +120,9 @@ func (s *Server) startAgentTasks() {
 			case <-ticker.C:
 				c, stop := context.WithTimeout(ctx, 5*time.Second)
 				e := s.Store.RunAgentTasks(c)
+				if e == nil {
+					e = s.Store.advanceAgentAI(c, fixtureAITransport{}, s.agentFixture)
+				}
 				stop()
 				message := ""
 				if e != nil && !errors.Is(e, ErrCorePaused) && !errors.Is(e, context.Canceled) {

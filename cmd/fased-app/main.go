@@ -104,12 +104,16 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	installationRoot := flags.String("installation-root", "", "immutable installed application directory")
 	custodyConfig := flags.String("custody-config", "", "root-owned managed fixture identity; never enables real wallets")
 	passwordStdin := flags.Bool("password-stdin", false, "read password from stdin instead of a terminal")
+	aiFixture := flags.Bool("ai-fixture", false, "development-only in-process provider fixtures; no API or credentials")
 	interactive := flags.Bool("interactive", false, "walk through setup in the terminal")
 	host := flags.String("host", "", "setup deployment preference: local or vps")
 	wallet := flags.String("wallet-mode", "", "setup wallet preference: skip, watch, external, automation")
 	provider := flags.String("provider", "", "setup AI preference: none, openai, anthropic, xai")
 	if err = flags.Parse(args[1:]); err != nil {
 		return err
+	}
+	if *aiFixture && args[0] != "serve" {
+		return errors.New("AI fixture is a serve-only development option")
 	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
@@ -138,6 +142,12 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 			if err != nil {
 				return err
 			}
+		}
+		if *aiFixture {
+			if *custodyConfig != "" || *requireSandbox || *publicOrigin != "" {
+				return errors.New("AI fixture requires a standalone local development core")
+			}
+			return serveAgentFixture(*dir, *listen, out)
 		}
 		return serve(*dir, *listen, *publicOrigin, out, *custodyConfig)
 	case "claim-code":
@@ -274,6 +284,16 @@ func serve(dir, listen, publicOrigin string, out io.Writer, custodyConfig ...str
 	if err != nil {
 		return err
 	}
+	return serveStarted(server, out)
+}
+func serveAgentFixture(dir, listen string, out io.Writer) error {
+	server, err := core.StartAgentFixture(context.Background(), dir, listen, "", fasedapp.UI())
+	if err != nil {
+		return err
+	}
+	return serveStarted(server, out)
+}
+func serveStarted(server *core.Server, out io.Writer) error {
 	stopCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	// Closing a client window does not reach this process or its shutdown signal.
