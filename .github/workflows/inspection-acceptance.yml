@@ -11,11 +11,15 @@ on:
       - "cmd/fased-app/bootstrap_linux.go"
       - "cmd/fased-signer/inspection_*"
       - "scripts/*inspection*"
+      - "scripts/fixture-core-storage.mjs"
       - "scripts/fixture-vm-guest.mjs"
       - "scripts/fixture-development-envelope.mjs"
       - ".github/workflows/inspection-acceptance.yml"
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   inspection-vm:
     runs-on: ubuntu-24.04
