@@ -4,7 +4,10 @@ import { execFileSync } from "node:child_process";
 import { mkdir, cp, readFile, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { sha } from "./handoff-transport-evidence.mjs";
-assert.equal(process.env.GITHUB_ACTIONS, "true");
+assert.ok(
+  process.env.GITHUB_ACTIONS === "true" ||
+    process.env.FASED_DISPOSABLE_VM_BUILD === "1",
+);
 assert.ok(process.getuid() > 0);
 const ref = "6c53e34eca22486dcef856cb701f3cd72e30eaa4",
   root = path.resolve(".evidence/p4-installed-inspection"),

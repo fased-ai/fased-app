@@ -632,3 +632,11 @@ func sortedInspectionFiles(m map[string][]byte) []inspectionFile {
 	}
 	return files
 }
+
+// Peer observation tolerance never extends either role's independent expiry.
+func inspectionClocksAgree(owner, signer inspectionClock) bool {
+	valid := func(c inspectionClock, role string) bool {
+		return c.Version == 1 && c.Profile == inspectionProfile && c.Role == role && IDOK(c.Provision) && IDOK(c.Epoch) && c.Revision > 0 && c.UTC > 0 && c.UTC <= 4102444800 && c.Confident
+	}
+	return valid(owner, "owner") && valid(signer, "signer") && owner.Provision == signer.Provision && owner.UTC-signer.UTC <= 30 && signer.UTC-owner.UTC <= 30
+}

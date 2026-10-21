@@ -2546,3 +2546,43 @@ FA cases are credited only by their recorded actual predicates. Hosted CI servic
 restart cannot close the VM/reboot portions of FA-12/FA-16. Production seed/time,
 credentials/feed, public acquisition and retail wallet/update activation remain
 BLOCKED; P4 acceptance must not be inferred from this fixture implementation.
+
+### Development fault and reboot acceptance
+
+`scripts/check-inspection-vm.py --full` boots a checksum-pinned Ubuntu 24.04
+cloud image under QEMU. It requires `FASED_DISPOSABLE_VM_ACCEPTANCE=1` and an
+ordinary host user. It changes no host installation, service, UID or firewall.
+The guest uses a private loopback SSH forward, locked passwords and a limited
+trusted-OS-tool sudo policy. Every Fased executable runs under a nonzero UID;
+credential switching clears groups/capabilities and enables no-new-privileges.
+This is disposable VM evidence, not owner-host or production acceptance.
+
+The fixture establishes a real nonzero installed sequence with the existing
+protected prepare/stage/preflight/backup/install/complete flow. It then reviews
+one separate reader capsule. A compiled **Go test executable** stops the actual
+immutable controller at named boundaries; no stop environment variable is
+compiled into ordinary builds. Published images, each stored/actual unit,
+manager reload, both installer records, role initialization and completion have
+separate cut points. The VM's kernel is rebooted, boot IDs must change, and the
+exact pinned recovery runner must preserve installed history, authority and
+counters with the fixture wallet locked. A positive pre-fence rollback is tested
+separately from forward-only recovery. The staged maintenance snapshot is reused
+across cuts; it never supplies a fresh inspection approval.
+
+Additional probes use the actual inspection socket, kernel app/foreign UIDs,
+exact one-time replay, wrong exchange/cross-connection refusal, historical-only
+status, concurrency bounds and elapsed body/review deadlines. Independent role
+clock mutations cover regression, uncertainty, epoch mismatch, equality at
+expiry and skew beyond 30 seconds, without changing any system clock. Separate
+Go tests kill disposable child processes during pending/result checkpoint and
+anchor publication; these are private-filesystem evidence, distinct from the
+installed UID and VM reboot receipts.
+
+Evidence belongs in `.evidence/p4-fault-reboot/`. `vm-inputs.json` binds uploaded
+reader/script bytes; `vm-progress.json` preserves completed cases before the
+next disposable snapshot restore; `vm-result.json` records result and cleanup.
+On a failed local run, `--keep-failed-vm` may retain the exact owned baseline for
+`--resume`; remove it after diagnosis and retained receipts. Success removes the
+VM disk, seed, ephemeral SSH key and process. CI always uploads only small
+receipts/logs, never VM disks or keys. Production trust, real wallets, financial
+execution, automatic updates and public releases remain disabled.

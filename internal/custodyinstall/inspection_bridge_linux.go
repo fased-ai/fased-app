@@ -313,15 +313,18 @@ func RunInspectionBridge(ctx context.Context, t InspectionBridge, s *System, c B
 	}
 	o := installOps{read: readRoot, run: s.Run}
 	base := t.Base.Root + "/fixture-inspection-v1"
-	mark := func(phase string) error {
-		if e := publish(ctx, t.Dir()+"/"+phase+".json", t.ID, mustJSON(phaseRecord{1, t.Digest(), phase}), 0644, readRoot, s.Run); e != nil {
-			return e
-		}
+	boundary := func(phase string) error {
 		fmt.Fprintln(s.Out, "Inspection bridge boundary:", phase)
 		if s.installFault != nil {
 			return s.installFault(phase)
 		}
 		return nil
+	}
+	mark := func(phase string) error {
+		if e := publish(ctx, t.Dir()+"/"+phase+".json", t.ID, mustJSON(phaseRecord{1, t.Digest(), phase}), 0644, readRoot, s.Run); e != nil {
+			return e
+		}
+		return boundary(phase)
 	}
 	has := func(phase string) (bool, error) {
 		f, e := readRoot(t.Dir() + "/" + phase + ".json")
@@ -357,6 +360,9 @@ func RunInspectionBridge(ctx context.Context, t InspectionBridge, s *System, c B
 	if done, e := has("reader-ready"); e != nil {
 		return out, e
 	} else if done {
+		if _, e = update.VerifyInstalledInspectionGuard(t.Base.Root, "owner"); e != nil {
+			return out, e
+		}
 		if e = Verify(t.Target); e != nil {
 			return out, e
 		}
@@ -367,16 +373,18 @@ func RunInspectionBridge(ctx context.Context, t InspectionBridge, s *System, c B
 		out.Phase = "reader-ready"
 		return out, nil
 	}
+	// A reboot can leave guarded readers failed/auto-restarting. Classify all
+	// owned fragments before stopping, then inspect only after both are inactive.
+	if e = inspectionBridgeUnitFiles(t, readRoot); e != nil {
+		return out, e
+	}
+	if e = inspectionStopServices(ctx, t.Base, s.Run); e != nil {
+		return out, e
+	}
 	if e = c.Observe(ctx, carrier, index, false, true); e != nil {
 		return out, e
 	}
 	if e = mark("maintenance-held"); e != nil {
-		return out, e
-	}
-	if _, e = s.Run(ctx, nil, "/usr/bin/systemctl", "stop", "--", Unit(t.Base.Owner, "app"), Unit(t.Base.Owner, "signer")); e != nil {
-		return out, e
-	}
-	if e = servicesStopped(ctx, t.Base, s.Run); e != nil {
 		return out, e
 	}
 	if e = mark("stopped"); e != nil {
@@ -390,7 +398,7 @@ func RunInspectionBridge(ctx context.Context, t InspectionBridge, s *System, c B
 		final := fixtureUnits(t.Target, false)
 		for _, role := range []string{"app", "signer"} {
 			name := "fased-" + role + ".service"
-			for _, p := range []string{t.Base.Root + "/" + name, "/etc/systemd/system/" + Unit(t.Base.Owner, role)} {
+			for slot, p := range []string{t.Base.Root + "/" + name, "/etc/systemd/system/" + Unit(t.Base.Owner, role)} {
 				f, e := readRoot(p)
 				if e != nil || (!known(f, old[name], 0644) && !known(f, guard[name], 0644) && !known(f, final[name], 0644)) {
 					return errors.New("foreign service policy; held")
@@ -398,10 +406,24 @@ func RunInspectionBridge(ctx context.Context, t InspectionBridge, s *System, c B
 				if e = replaceRecord(ctx, p, t.ID, wanted[name], o); e != nil {
 					return e
 				}
+				variant := "final"
+				if candidate {
+					variant = "guarded"
+				}
+				if e = boundary(fmt.Sprintf("%s-%s-unit-%d", variant, role, slot)); e != nil {
+					return e
+				}
 			}
 		}
 		_, e := s.Run(ctx, nil, "/usr/bin/systemctl", "daemon-reload")
 		if e != nil {
+			return e
+		}
+		variant := "final"
+		if candidate {
+			variant = "guarded"
+		}
+		if e = boundary(variant + "-manager-reloaded"); e != nil {
 			return e
 		}
 		for _, role := range []string{"app", "signer"} {
@@ -423,10 +445,12 @@ func RunInspectionBridge(ctx context.Context, t InspectionBridge, s *System, c B
 	if fe == nil && !known(forward, mustJSON(fence), 0644) {
 		return out, errors.New("foreign forward fence")
 	}
+	// Also normalize torn final-unit publication on post-fence recovery. No
+	// private role initialization can run with a mixed, unrecognized pair.
+	if e = installUnits(true); e != nil {
+		return out, e
+	}
 	if os.IsNotExist(fe) {
-		if e = installUnits(true); e != nil {
-			return out, e
-		}
 		if e = mark("guarded-units"); e != nil {
 			return out, e
 		}
@@ -476,6 +500,9 @@ func RunInspectionBridge(ctx context.Context, t InspectionBridge, s *System, c B
 	if e = replaceRecord(ctx, t.Base.Root+"/install.json", t.ID, mustJSON(t.Target), o); e != nil {
 		return out, e
 	}
+	if e = boundary("root-install-record"); e != nil {
+		return out, e
+	}
 	// Init uses the authenticated candidate and each independent private UID.
 	for _, v := range []struct {
 		role, path string
@@ -494,7 +521,13 @@ func RunInspectionBridge(ctx context.Context, t InspectionBridge, s *System, c B
 	if e = ownerCompletionRecord(InstallTransaction{Base: t.Base, Target: t.Target}, true); e != nil {
 		return out, e
 	}
+	if e = boundary("owner-install-record"); e != nil {
+		return out, e
+	}
 	if e = replaceRecord(ctx, t.Base.Root+"/ready.json", t.ID, readyRecord(t.Target), o); e != nil {
+		return out, e
+	}
+	if e = boundary("ready-record"); e != nil {
 		return out, e
 	}
 	if _, e = s.Run(ctx, nil, "/usr/bin/systemctl", "start", "--", Unit(t.Base.Owner, "signer"), Unit(t.Base.Owner, "app")); e != nil {
@@ -541,10 +574,7 @@ func RollbackInspectionBridge(ctx context.Context, t InspectionBridge, s *System
 	if e != nil || strict(f.Data, &index) != nil || !update.ValidRecoveryIndex(index, index.Binding) {
 		return out, errors.New("verified maintenance recovery required")
 	}
-	if _, e = s.Run(ctx, nil, "/usr/bin/systemctl", "stop", "--", Unit(t.Base.Owner, "app"), Unit(t.Base.Owner, "signer")); e != nil {
-		return out, e
-	}
-	if e = servicesStopped(ctx, t.Base, s.Run); e != nil {
+	if e = inspectionStopServices(ctx, t.Base, s.Run); e != nil {
 		return out, e
 	}
 	if e = c.Observe(ctx, carrier, index, false, false); e != nil {
@@ -607,4 +637,43 @@ func RollbackInspectionBridge(ctx context.Context, t InspectionBridge, s *System
 	}
 	out.Phase = "rolled-back"
 	return out, nil
+}
+
+// Read-only classification precedes any service mutation. A known fragment is
+// required independently at every stored/actual role path; no foreign adoption.
+func inspectionBridgeUnitFiles(t InspectionBridge, read readHost) error {
+	old, guard, final := definitions(t.Base), fixtureUnits(t.Target, true), fixtureUnits(t.Target, false)
+	for _, role := range []string{"app", "signer"} {
+		name := "fased-" + role + ".service"
+		for _, path := range []string{t.Base.Root + "/" + name, "/etc/systemd/system/" + Unit(t.Base.Owner, role)} {
+			f, e := read(path)
+			if e != nil || (!known(f, old[name], 0644) && !known(f, guard[name], 0644) && !known(f, final[name], 0644)) {
+				return errors.New("foreign service policy; preserving it before stop")
+			}
+		}
+	}
+	return nil
+}
+
+// systemctl stop can leave a start-limited unit failed with no process. Clear
+// only that finite failure state; never accept a nonzero PID or unknown state.
+func inspectionStopServices(ctx context.Context, m Manifest, run runHost) error {
+	if _, e := run(ctx, nil, "/usr/bin/systemctl", "stop", "--", Unit(m.Owner, "app"), Unit(m.Owner, "signer")); e != nil {
+		return e
+	}
+	for _, role := range []string{"app", "signer"} {
+		unit := Unit(m.Owner, role)
+		b, e := run(ctx, nil, "/usr/bin/systemctl", "show", unit, "--property=ActiveState,MainPID")
+		if e != nil {
+			return e
+		}
+		if string(b) == "ActiveState=failed\nMainPID=0\n" || string(b) == "MainPID=0\nActiveState=failed\n" {
+			if _, e = run(ctx, nil, "/usr/bin/systemctl", "reset-failed", "--", unit); e != nil {
+				return e
+			}
+		} else if string(b) != "ActiveState=inactive\nMainPID=0\n" && string(b) != "MainPID=0\nActiveState=inactive\n" {
+			return fmt.Errorf("managed reader not stopped: %s %q", unit, b)
+		}
+	}
+	return servicesStopped(ctx, m, run)
 }

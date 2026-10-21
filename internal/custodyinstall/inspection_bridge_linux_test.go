@@ -3,8 +3,11 @@
 package custodyinstall
 
 import (
+	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/signer"
@@ -131,5 +134,119 @@ func TestInspectionBridgeGeneratorDigest(t *testing.T) {
 	want := update.SnapshotDigest("fixture-unit-pair:v1", []string{"first\nline", "second=policy"})
 	if string(got) != want {
 		t.Fatalf("generator digest disagrees with Go: %s != %s", got, want)
+	}
+}
+
+func TestInspectionBridgeFixtureEnvelope(t *testing.T) {
+	tx := inspectionBridgePlanFixture(t)
+	var original update.Envelope
+	if update.StrictJSON(tx.Maintenance, &original) != nil {
+		t.Fatal("manifest fixture")
+	}
+	c := exec.Command("node", "--input-type=module", "-e", `import{fixtureDevelopmentEnvelope}from './scripts/fixture-development-envelope.mjs';import{generateKeyPairSync,createHash}from 'node:crypto';import{readFileSync}from 'node:fs';const payload=JSON.parse(readFileSync(0,'utf8')), {publicKey,privateKey}=generateKeyPairSync('ed25519'),pub=publicKey.export({type:'spki',format:'der'}).subarray(-32),id=createHash('sha256').update(pub).digest('hex'),now=payload.issuedAt;process.stdout.write(JSON.stringify({envelope:Buffer.from(fixtureDevelopmentEnvelope(payload,id,privateKey)).toString('base64'),trust:{version:1,purpose:'fased-app-update-development:v1',keys:[{id,publicKey:pub.toString('base64'),notBefore:now-60,notAfter:now+600}]}}));`)
+	c.Dir = "../.."
+	c.Stdin = bytes.NewReader(original.Payload)
+	out, e := c.Output()
+	if e != nil {
+		t.Fatal(e)
+	}
+	var fixture struct {
+		Envelope []byte          `json:"envelope"`
+		Trust    json.RawMessage `json:"trust"`
+	}
+	if e = update.StrictJSON(out, &fixture); e != nil {
+		t.Fatal(e)
+	}
+	trust, e := update.ParseTrust(fixture.Trust, tx.ReviewedAt)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, _, e = update.Authenticate(fixture.Envelope, trust, tx.ReviewedAt); e != nil {
+		t.Fatal("Node producer must authenticate in Go", e)
+	}
+	var pretty bytes.Buffer
+	if json.Indent(&pretty, fixture.Envelope, "", "  ") != nil {
+		t.Fatal("pretty fixture")
+	}
+	if _, _, e = update.Authenticate(pretty.Bytes(), trust, tx.ReviewedAt); e == nil {
+		t.Fatal("payload reformatting must invalidate signature")
+	}
+}
+
+func TestInspectionBridgeUnitClassification(t *testing.T) {
+	tx := inspectionBridgePlanFixture(t)
+	for _, variant := range []string{"old", "guarded", "final", "mixed", "foreign", "uid", "mode"} {
+		t.Run(variant, func(t *testing.T) {
+			files := map[string]hostFile{}
+			for i, role := range []string{"app", "signer"} {
+				name := "fased-" + role + ".service"
+				u := definitions(tx.Base)
+				switch variant {
+				case "guarded":
+					u = fixtureUnits(tx.Target, true)
+				case "final":
+					u = fixtureUnits(tx.Target, false)
+				case "mixed":
+					if i == 0 {
+						u = fixtureUnits(tx.Target, true)
+					}
+				}
+				for _, p := range []string{tx.Base.Root + "/" + name, "/etc/systemd/system/" + Unit(tx.Base.Owner, role)} {
+					files[p] = hostFile{Data: u[name], UID: 0, Mode: 0644, Regular: true}
+				}
+			}
+			p := tx.Base.Root + "/fased-app.service"
+			f := files[p]
+			switch variant {
+			case "foreign":
+				f.Data = []byte("foreign")
+			case "uid":
+				f.UID = 1000
+			case "mode":
+				f.Mode = 0666
+			}
+			files[p] = f
+			e := inspectionBridgeUnitFiles(tx, func(p string) (hostFile, error) { return files[p], nil })
+			wanted := variant != "foreign" && variant != "uid" && variant != "mode"
+			if (e == nil) != wanted {
+				t.Fatal("classification", variant, e)
+			}
+		})
+	}
+}
+
+func TestInspectionBridgeStoppedFailure(t *testing.T) {
+	for _, state := range []string{"inactive", "failed", "active", "activating", "failed-live"} {
+		t.Run(state, func(t *testing.T) {
+			m := fixtureManifest()
+			reset := 0
+			run := func(_ context.Context, _ []byte, args ...string) ([]byte, error) {
+				if args[1] == "reset-failed" {
+					reset++
+					return nil, nil
+				}
+				if args[1] != "show" {
+					return nil, nil
+				}
+				status, pid := state, "0"
+				if state == "failed-live" {
+					status, pid = "failed", "99"
+				}
+				if state == "active" {
+					pid = "99"
+				}
+				if reset > 0 {
+					status = "inactive"
+				}
+				return []byte("ActiveState=" + status + "\nMainPID=" + pid + "\n"), nil
+			}
+			e := inspectionStopServices(context.Background(), m, run)
+			if (e == nil) != (state == "inactive" || state == "failed") {
+				t.Fatal(state, e)
+			}
+			if state != "failed" && reset != 0 {
+				t.Fatal("reset a live or unknown unit")
+			}
+		})
 	}
 }
