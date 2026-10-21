@@ -285,6 +285,7 @@ print(json.dumps({'exitCode':done,'interrupted':interrupted,'output':seen.decode
       signer: before.signer,
     };
     await save(txpath, tx);
+    await save(path.join(evidence, "public-capsule.json"), tx);
     await mkdir(candidate, { mode: 0o700 });
     for (const role of ["app", "signer"])
       await writeFile(
@@ -293,6 +294,7 @@ print(json.dumps({'exitCode':done,'interrupted':interrupted,'output':seen.decode
         { mode: 0o700 },
       );
     const cancelled = terminal("provision", "cancel");
+    await save(path.join(evidence, "review-cancellation.json"), cancelled);
     pass(
       "protectedCancellationLeavesNoProvision",
       cancelled.exitCode !== 0 &&

@@ -65,8 +65,29 @@ func (t InspectionBridge) Plan() (update.BootstrapPlan, error) {
 		if c.Contract.Component == "signer" {
 			want = t.Base.SignerHash
 		}
-		if c.Artifact.SHA256 != want || c.Contract.Lifecycle == nil || c.Contract.Lifecycle.Entrypoint != 4 {
-			return p, errors.New("exact unchanged lifecycle-4 maintenance pair required")
+
+		if c.Artifact.SHA256 != want {
+			return p, errors.New("exact unchanged maintenance image required")
+		}
+		if c.Contract.Component == "core" {
+			if c.Contract.Lifecycle == nil || c.Contract.Lifecycle.Entrypoint != 4 {
+				return p, errors.New("exact lifecycle-4 owner/core required")
+			}
+		} else {
+			// Signer contracts carry protocol/state support, not an owner lifecycle.
+			completion := false
+			for _, state := range c.Contract.State {
+				if state.Name == "operations" {
+					for _, feature := range state.Features {
+						if feature == "install-completion-v1" {
+							completion = true
+						}
+					}
+				}
+			}
+			if c.Contract.Lifecycle != nil || !completion {
+				return p, errors.New("exact completion-capable signer format required")
+			}
 		}
 	}
 	if _, e = update.JoinSnapshots(t.Core, t.Signer, m.Target); e != nil {
