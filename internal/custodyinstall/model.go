@@ -22,16 +22,17 @@ type Identity struct {
 	GID  int    `json:"gid"`
 }
 type Manifest struct {
-	Version    int      `json:"version"`
-	Mode       string   `json:"mode"`
-	ID         string   `json:"id"`
-	Owner      int      `json:"owner"`
-	Root       string   `json:"root"`
-	Listen     string   `json:"listen"`
-	CoreHash   string   `json:"coreHash"`
-	SignerHash string   `json:"signerHash"`
-	App        Identity `json:"app"`
-	Signer     Identity `json:"signer"`
+	InspectionBridge string   `json:"inspectionBridge,omitempty"`
+	Version          int      `json:"version"`
+	Mode             string   `json:"mode"`
+	ID               string   `json:"id"`
+	Owner            int      `json:"owner"`
+	Root             string   `json:"root"`
+	Listen           string   `json:"listen"`
+	CoreHash         string   `json:"coreHash"`
+	SignerHash       string   `json:"signerHash"`
+	App              Identity `json:"app"`
+	Signer           Identity `json:"signer"`
 }
 type journal struct {
 	Version    int    `json:"version"`
@@ -59,6 +60,9 @@ func validListen(s string) bool {
 	return e == nil && n >= 1024 && n <= 65535 && strconv.Itoa(n) == p
 }
 func (m Manifest) validate() error {
+	if m.InspectionBridge != "" && !validHex(m.InspectionBridge, 16) {
+		return errors.New("invalid fixture reader bridge")
+	}
 	if m.Version != 1 || m.Mode != "disposable-fixture:v1" || m.Owner <= 0 || m.Root != Root(m.Owner) || !validHex(m.ID, 16) || !validHex(m.CoreHash, 32) || !validHex(m.SignerHash, 32) || !validListen(m.Listen) {
 		return errors.New("invalid managed fixture manifest")
 	}
@@ -100,6 +104,9 @@ func parseAccount(line, name, comment string) (Identity, error) {
 
 // Numeric identities and fixed canonical paths avoid shell/unit interpolation.
 func definitions(m Manifest) map[string][]byte {
+	if m.InspectionBridge != "" {
+		return fixtureUnits(m, false)
+	}
 	shared := "\nRestart=on-failure\nRestartSec=2\nTimeoutStopSec=15\nUMask=0077\nNoNewPrivileges=yes\nProtectSystem=strict\nProtectHome=yes\nPrivateTmp=yes\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectControlGroups=yes\nRestrictSUIDSGID=yes\nCapabilityBoundingSet=\nAmbientCapabilities=\nWorkingDirectory=/\nEnvironment=HOME=/nonexistent\n"
 	unit := func(i Identity, exec, write, addresses string) []byte {
 		return []byte(fmt.Sprintf("[Unit]\nDescription=Fased disposable custody fixture\n\n[Service]\nType=simple\nUser=%d\nGroup=%d\nExecStart=%s%sReadWritePaths=%s\nRestrictAddressFamilies=%s\n\n[Install]\nWantedBy=multi-user.target\n", i.UID, i.GID, exec, shared, write, addresses))

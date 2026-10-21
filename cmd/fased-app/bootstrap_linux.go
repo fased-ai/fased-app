@@ -191,6 +191,33 @@ func ownerBootstrapCommand(args []string, in *os.File, out, errOut io.Writer) er
 	}
 	system := &custodyinstall.System{In: in, Out: errOut}
 	ctx := context.Background()
+	callbacks := maintenanceCallbacks(tx, system, cfg, tx.Dir(), tx.Plan, tx.AdmissionCurrent)
+	receipt, e := custodyinstall.RunBootstrap(ctx, tx, system, callbacks)
+	if e != nil {
+		return e
+	}
+	return json.NewEncoder(out).Encode(receipt)
+}
+
+func fileSHA(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
+
+func decodeBootstrapInventory(b []byte) (update.CoreSnapshot, update.SignerSnapshot, error) {
+	var r struct {
+		Core               update.CoreSnapshot    `json:"core"`
+		Signer             *update.SignerSnapshot `json:"signer"`
+		InstallAllowed     bool                   `json:"installAllowed"`
+		FinancialExecution bool                   `json:"financialExecution"`
+	}
+	if update.StrictJSON(b, &r) != nil || r.Signer == nil || r.InstallAllowed || r.FinancialExecution || r.Core.ProbeID != r.Signer.ProbeID {
+		return r.Core, update.SignerSnapshot{}, errors.New("invalid immutable predecessor inventory")
+	}
+	_, e := update.JoinSnapshots(r.Core, *r.Signer, update.Target{OS: "linux", Arch: "amd64"})
+	return r.Core, *r.Signer, e
+}
+
+// Shared predecessor-readable maintenance orchestration. Callers supply a
+// locally authenticated finite plan; no callback or plan is decoded from RPC.
+func maintenanceCallbacks(tx custodyinstall.BootstrapTransaction, system *custodyinstall.System, cfg signer.Config, directory string, plan func() (update.BootstrapPlan, error), current func() bool) custodyinstall.BootstrapCallbacks {
 	call := func(ctx context.Context, r signer.Request) (signer.Response, error) {
 		return signer.Call(ctx, cfg, true, r)
 	}
@@ -239,7 +266,12 @@ func ownerBootstrapCommand(args []string, in *os.File, out, errOut io.Writer) er
 			return r, e
 		}
 		identity := tx.Base.Signer
-		b, se = system.Run(ctx, nil, "/usr/bin/setpriv", "--reuid", strconv.Itoa(identity.UID), "--regid", strconv.Itoa(identity.GID), "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--", tx.Dir()+"/candidate/fased-signer", "fixture-update-inspect", "--config", tx.Base.Root+"/identity.json", "--disposable-fixture", "--intent-id", tx.ID)
+		coldArgs := []string{"fixture-update-inspect", "--config", tx.Base.Root + "/identity.json", "--disposable-fixture", "--intent-id", tx.ID}
+		if tx.Target.InspectionBridge != "" {
+			coldArgs = []string{"fixture-inspection-cold", "--owner", strconv.Itoa(tx.Base.Owner), "--disposable-fixture", "--intent-id", tx.ID}
+		}
+		args := []string{"/usr/bin/setpriv", "--reuid", strconv.Itoa(identity.UID), "--regid", strconv.Itoa(identity.GID), "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--", directory + "/candidate/fased-signer"}
+		b, se = system.Run(ctx, nil, append(args, coldArgs...)...)
 		if se != nil {
 			return r, se
 		}
@@ -249,7 +281,7 @@ func ownerBootstrapCommand(args []string, in *os.File, out, errOut io.Writer) er
 		return r, nil
 	}
 	validateIntent := func(i *update.Intent) error {
-		p, e := tx.Plan()
+		p, e := plan()
 		if e != nil {
 			return e
 		}
@@ -270,7 +302,7 @@ func ownerBootstrapCommand(args []string, in *os.File, out, errOut io.Writer) er
 			if !strings.Contains(e.Error(), "unknown update intent") {
 				return update.RecoveryIndex{}, e
 			}
-			if !t.AdmissionCurrent() {
+			if !current() {
 				return update.RecoveryIndex{}, errors.New("expired bootstrap admission")
 			}
 			p := update.NewProbe()
@@ -318,7 +350,7 @@ func ownerBootstrapCommand(args []string, in *os.File, out, errOut io.Writer) er
 			}
 			return i.Core, nil
 		}
-		if e = conductStage(ctx, t.ID, t.Dir()+"/previous", stageProbe, call, io.Discard); e != nil {
+		if e = conductStage(ctx, t.ID, directory+"/previous", stageProbe, call, io.Discard); e != nil {
 			return update.RecoveryIndex{}, e
 		}
 		backup := func(ctx context.Context, p update.Preflight) (update.RecoveryIndex, error) {
@@ -394,25 +426,6 @@ func ownerBootstrapCommand(args []string, in *os.File, out, errOut io.Writer) er
 		}
 		return callbacks.Observe(ctx, t, index, false, true)
 	}
-	receipt, e := custodyinstall.RunBootstrap(ctx, tx, system, callbacks)
-	if e != nil {
-		return e
-	}
-	return json.NewEncoder(out).Encode(receipt)
-}
 
-func fileSHA(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
-
-func decodeBootstrapInventory(b []byte) (update.CoreSnapshot, update.SignerSnapshot, error) {
-	var r struct {
-		Core               update.CoreSnapshot    `json:"core"`
-		Signer             *update.SignerSnapshot `json:"signer"`
-		InstallAllowed     bool                   `json:"installAllowed"`
-		FinancialExecution bool                   `json:"financialExecution"`
-	}
-	if update.StrictJSON(b, &r) != nil || r.Signer == nil || r.InstallAllowed || r.FinancialExecution || r.Core.ProbeID != r.Signer.ProbeID {
-		return r.Core, update.SignerSnapshot{}, errors.New("invalid immutable predecessor inventory")
-	}
-	_, e := update.JoinSnapshots(r.Core, *r.Signer, update.Target{OS: "linux", Arch: "amd64"})
-	return r.Core, *r.Signer, e
+	return callbacks
 }

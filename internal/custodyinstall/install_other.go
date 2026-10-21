@@ -49,3 +49,5 @@ func (*System) UpdateBackup(context.Context, Manifest, update.Preflight, io.Writ
 func (*System) UpdateRecovery(context.Context, Manifest, update.RecoveryCheck, io.Writer) error {
 	return unsupported
 }
+
+func fixtureUnits(Manifest, bool) map[string][]byte { return nil }

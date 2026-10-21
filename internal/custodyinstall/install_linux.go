@@ -496,11 +496,14 @@ func Runtime(m Manifest) error {
 }
 
 func loadedUnit(m Manifest, role string) error {
+	return loadedUnitPolicy(m, role, definitions(m)["fased-"+role+".service"], m.Root+"/fased-"+role)
+}
+func loadedUnitPolicy(m Manifest, role string, wanted []byte, image string) error {
 	f, e := readRoot("/etc/systemd/system/" + Unit(m.Owner, role))
 	if e != nil {
 		return e
 	}
-	if !known(f, definitions(m)["fased-"+role+".service"], 0644) {
+	if !known(f, wanted, 0644) {
 		return errors.New("installed system unit changed; preserving it")
 	}
 	b, e := exec.Command("/usr/bin/systemctl", "show", Unit(m.Owner, role), "--property=FragmentPath,DropInPaths,User,Group,NoNewPrivileges,ProtectSystem,ExecStart").Output()
@@ -518,7 +521,7 @@ func loadedUnit(m Manifest, role string) error {
 			fields[p[0]] = p[1]
 		}
 	}
-	if fields["FragmentPath"] != "/etc/systemd/system/"+Unit(m.Owner, role) || fields["DropInPaths"] != "" || fields["User"] != strconv.Itoa(i.UID) || fields["Group"] != strconv.Itoa(i.GID) || fields["NoNewPrivileges"] != "yes" || fields["ProtectSystem"] != "strict" || !strings.Contains(fields["ExecStart"], "path="+m.Root+"/fased-"+role+" ;") {
+	if fields["FragmentPath"] != "/etc/systemd/system/"+Unit(m.Owner, role) || fields["DropInPaths"] != "" || fields["User"] != strconv.Itoa(i.UID) || fields["Group"] != strconv.Itoa(i.GID) || fields["NoNewPrivileges"] != "yes" || fields["ProtectSystem"] != "strict" || !strings.Contains(fields["ExecStart"], "path="+image+" ;") {
 		return errors.New("unexpected systemd identity/override; refusing project code under a different policy")
 	}
 	return nil

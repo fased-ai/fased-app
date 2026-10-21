@@ -179,11 +179,18 @@ func unseal(e envelope, password []byte, purpose string) ([]byte, error) {
 
 // Open requires an existing private directory. Installed role validation belongs
 // to the Linux transport; same-UID unit fixtures do not establish OS isolation.
-func Open(dir, signerID string) (*Vault, error) {
+func Open(dir, signerID string) (*Vault, error) { return openVault(dir, signerID, false) }
+func openVault(dir, signerID string, readOnly bool) (*Vault, error) {
 	if !validID(signerID) {
 		return nil, errors.New("invalid signer identity")
 	}
-	s, err := openStorage(dir)
+	var s *storage
+	var err error
+	if readOnly {
+		s, err = openStorageReadonly(dir)
+	} else {
+		s, err = openStorage(dir)
+	}
 	if err != nil {
 		return nil, err
 	}
