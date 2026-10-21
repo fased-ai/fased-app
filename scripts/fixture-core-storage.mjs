@@ -11,6 +11,7 @@ export async function currentStorageFixture(archivedRoot) {
   for (const file of [
     "agents.go",
     "agent_ai.go",
+    "agent_ai_tasks.go",
     "update.go",
     "lifecycle.go",
   ]) {
@@ -28,7 +29,7 @@ export async function currentStorageFixture(archivedRoot) {
     store,
     before.replace(
       marker,
-      "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }\n" +
+      "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }\n" +
         marker,
     ),
   );

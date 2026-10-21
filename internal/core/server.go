@@ -119,7 +119,7 @@ func (s *Server) startAgentTasks() {
 				return
 			case <-ticker.C:
 				c, stop := context.WithTimeout(ctx, 5*time.Second)
-				e := s.Store.RunAgentTasks(c)
+				e := s.Store.runAgentTasks(c, s.agentFixture)
 				if e == nil {
 					e = s.Store.advanceAgentAI(c, fixtureAITransport{}, s.agentFixture)
 				}

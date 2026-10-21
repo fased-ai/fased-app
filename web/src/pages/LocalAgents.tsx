@@ -5,6 +5,7 @@ import { useWorkspace } from "../workspace";
 import { providerNames, type Provider } from "../state";
 import type { AgentView } from "../agents";
 import "../agents.css";
+import { ScheduledAITasks } from "./ScheduledAITasks";
 import { AgentAIReview } from "./AgentAIReview";
 
 const date = (at: number) =>
@@ -565,41 +566,45 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                 Missed intervals coalesce into one evaluation. Pause prevents
                 new evaluations; resume schedules the next interval.
               </p>
-              {v.tasks.map((t) => (
-                <article className="memory-card" key={t.id}>
-                  <strong>{t.name}</strong>
-                  <p>
-                    {t.state} · {t.runs}/{t.maxRuns} evaluations ·{" "}
-                    {t.state === "scheduled"
-                      ? `Next ${date(t.nextAt)}`
-                      : "No evaluation scheduled"}
-                  </p>
-                  <div className="agent-inline">
-                    <button
-                      className="secondary"
-                      disabled={agents.busy || t.state !== "scheduled"}
-                      onClick={() =>
-                        void agents.change({ action: "task-run", id: t.id })
-                      }
-                    >
-                      Run now: {t.name}
-                    </button>
-                    <button
-                      className="text-button"
-                      disabled={agents.busy || t.state === "completed"}
-                      onClick={() =>
-                        void agents.change({
-                          action:
-                            t.state === "paused" ? "task-resume" : "task-pause",
-                          id: t.id,
-                        })
-                      }
-                    >
-                      {t.state === "paused" ? "Resume" : "Pause"}: {t.name}
-                    </button>
-                  </div>
-                </article>
-              ))}
+              {v.tasks
+                .filter((t) => !t.ai)
+                .map((t) => (
+                  <article className="memory-card" key={t.id}>
+                    <strong>{t.name}</strong>
+                    <p>
+                      {t.state} · {t.runs}/{t.maxRuns} evaluations ·{" "}
+                      {t.state === "scheduled"
+                        ? `Next ${date(t.nextAt)}`
+                        : "No evaluation scheduled"}
+                    </p>
+                    <div className="agent-inline">
+                      <button
+                        className="secondary"
+                        disabled={agents.busy || t.state !== "scheduled"}
+                        onClick={() =>
+                          void agents.change({ action: "task-run", id: t.id })
+                        }
+                      >
+                        Run now: {t.name}
+                      </button>
+                      <button
+                        className="text-button"
+                        disabled={agents.busy || t.state === "completed"}
+                        onClick={() =>
+                          void agents.change({
+                            action:
+                              t.state === "paused"
+                                ? "task-resume"
+                                : "task-pause",
+                            id: t.id,
+                          })
+                        }
+                      >
+                        {t.state === "paused" ? "Resume" : "Pause"}: {t.name}
+                      </button>
+                    </div>
+                  </article>
+                ))}
               <form
                 onSubmit={submit(async () => {
                   if (
@@ -679,6 +684,7 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
               </form>
             </div>
           </section>
+          <ScheduledAITasks view={v} />
           <section className="panel">
             <div className="panel-heading">
               <h2>Execution journal</h2>

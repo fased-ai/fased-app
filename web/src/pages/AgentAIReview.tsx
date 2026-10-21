@@ -17,7 +17,9 @@ export function AgentAIReview({
   const [deadline, setDeadline] = useState(3);
   const [budget, setBudget] = useState(30000);
   const [consent, setConsent] = useState("");
-  const requests = view.aiRequests.filter((q) => q.sessionId === sessionId);
+  const requests = view.aiRequests.filter(
+    (q) => q.sessionId === sessionId && !q.taskId,
+  );
   return (
     <section className="ai-review" aria-label="Optional AI request review">
       <h3>Optional AI step</h3>

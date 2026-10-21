@@ -36,6 +36,8 @@ type AIActionCard struct {
 	Review string `json:"review"`
 }
 type AgentAIRequest struct {
+	TaskID        string         `json:"taskId,omitempty"`
+	TaskDigest    string         `json:"taskDigest,omitempty"`
 	ID            string         `json:"id"`
 	ProfileID     string         `json:"profileId"`
 	SessionID     string         `json:"sessionId"`
@@ -112,7 +114,7 @@ func aiContext(d agentDocument, profile, session, prompt string, now int64) (str
 		}
 	}
 	for _, q := range d.AIRequests {
-		if q.ProfileID == profile && q.SessionID == session && q.State == "completed" {
+		if q.ProfileID == profile && q.SessionID == session && q.State == "completed" && q.TaskID == "" {
 			data.Messages = append(data.Messages, message{"user", q.Prompt}, message{"assistant", q.Answer})
 		}
 	}
@@ -133,17 +135,17 @@ func aiContext(d agentDocument, profile, session, prompt string, now int64) (str
 func aiDigest(q AgentAIRequest) string {
 	wire, _ := aiWire(q)
 	b, _ := json.Marshal(struct {
-		ID, Profile, Session, Wire string
-		CreatedAt                  int64
-		Limits                     AILimits
-	}{q.ID, q.ProfileID, q.SessionID, string(wire), q.CreatedAt, q.Limits})
+		ID, Profile, Session, Wire, TaskID, TaskDigest string
+		CreatedAt                                      int64
+		Limits                                         AILimits
+	}{q.ID, q.ProfileID, q.SessionID, string(wire), q.TaskID, q.TaskDigest, q.CreatedAt, q.Limits})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
 func aiReservation(l AILimits) int64 { return l.MaxInputTokens + 4*l.MaxOutputTokens }
 func changeAgentAI(d *agentDocument, c AgentCommand, profile, id string, now int64, fixture bool) error {
 	if c.Action == "ai-prepare" {
-		if c.Limits == nil || len(d.AIRequests) >= 10 {
+		if c.Limits == nil || taskAIRequestSlots(*d) >= 10 {
 			return errors.New("explicit request limits required; maximum ten retained AI requests")
 		}
 		l := *c.Limits
@@ -222,7 +224,7 @@ func changeAgentAI(d *agentDocument, c AgentCommand, profile, id string, now int
 			}
 			q.State = "cancelled"
 			q.Failure = "Cancelled locally. A dispatched request may still consume its reserved budget."
-			return nil
+			return settleTaskAI(d, q.TaskID, now)
 		}
 	}
 	return errors.New("profile request or review card not found")
@@ -342,13 +344,29 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 			q.State = "unknown"
 			q.Failure = "Engine restarted after dispatch; usage is unknown. Reservation retained; no retry."
 			changed = true
+			if e = settleTaskAI(&d, q.TaskID, s.now().Unix()); e != nil {
+				return e
+			}
+		}
+		if !enabled && q.TaskID != "" && q.State == "queued" {
+			q.State = "cancelled"
+			q.HeldMicrousd = 0
+			q.Failure = "Development fixture disabled before dispatch."
+			if e = settleTaskAI(&d, q.TaskID, s.now().Unix()); e != nil {
+				return e
+			}
+			changed = true
+			continue
 		}
 		if dispatch == nil && enabled && q.State == "queued" {
 			current, e := aiContext(d, q.ProfileID, q.SessionID, q.Prompt, s.now().Unix())
-			if e != nil || current != q.Context || aiDigest(*q) != q.Digest || s.now().Unix() < q.CreatedAt || s.now().Unix()-q.CreatedAt > 600 {
+			if e != nil || current != q.Context || aiDigest(*q) != q.Digest || s.now().Unix() < q.CreatedAt || s.now().Unix()-q.CreatedAt > 600 || taskAIRequestValid(d, *q, s.now().Unix()) != nil {
 				q.State = "cancelled"
 				q.HeldMicrousd = 0
-				q.Failure = "Undispatched request expired; prepare a fresh review."
+				q.Failure = "Undispatched request changed, expired or stopped; prepare a fresh review."
+				if e = settleTaskAI(&d, q.TaskID, s.now().Unix()); e != nil {
+					return e
+				}
 				changed = true
 				continue
 			}
@@ -429,6 +447,9 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 				q = result
 			}
 			d.AIRequests[i] = q
+			if e = settleTaskAI(&d, q.TaskID, s.now().Unix()); e != nil {
+				return e
+			}
 			if e = saveAgents(finish, tx, d, r); e != nil {
 				return e
 			}

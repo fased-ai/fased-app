@@ -66,8 +66,8 @@ try {
   );
   pass(
     "schemaPauseAndApprovalFeatures",
-    contracts[0].state[0].versions.min === 5 &&
-      contracts[0].state[0].versions.max === 5 &&
+    contracts[0].state[0].versions.min === 6 &&
+      contracts[0].state[0].versions.max === 6 &&
       contracts[0].state[0].features.includes("agents-local-v1") &&
       contracts[0].state[0].features.includes("core-pause-v1") &&
       contracts[0].lifecycle.entrypoint === 4 &&
@@ -221,17 +221,17 @@ try {
   };
   for (const [name, edit] of [
     [
-      "schema4CoreReaderDenied",
+      "schema5CoreReaderDenied",
       (m) => {
-        m.components[0].contract.state[0].versions = { min: 4, max: 4 };
+        m.components[0].contract.state[0].versions = { min: 5, max: 5 };
       },
     ],
     [
-      "agentAIStorageFeatureErasureDenied",
+      "agentAITaskFeatureErasureDenied",
       (m) => {
         m.components[0].contract.state[0].features =
           m.components[0].contract.state[0].features.filter(
-            (f) => f !== "agents-ai-review-v1",
+            (f) => f !== "agents-ai-tasks-v1",
           );
       },
     ],

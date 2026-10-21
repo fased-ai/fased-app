@@ -42,7 +42,21 @@ export type PaperBot = {
   budgetCents: number;
   spentCents: number;
 };
+export type TaskAIStep = {
+  sessionId: string;
+  context: string;
+  disclosure: string;
+  limits: AILimits;
+  budgetMicrousd: number;
+  createdAt: number;
+  expiresAt: number;
+  digest: string;
+  authorized: boolean;
+  pendingId: string;
+  bot?: PaperBot;
+};
 export type AgentTask = {
+  ai?: TaskAIStep;
   id: string;
   profileId: string;
   name: string;
@@ -55,6 +69,8 @@ export type AgentTask = {
   state: string;
 };
 export type AgentRun = {
+  aiRequestId?: string;
+  aiDigest?: string;
   id: string;
   profileId: string;
   taskId: string;
@@ -82,6 +98,8 @@ export type AILimits = {
   budgetMicrousd: number;
 };
 export type AgentAIRequest = {
+  taskId?: string;
+  taskDigest?: string;
   id: string;
   profileId: string;
   sessionId: string;
@@ -142,6 +160,8 @@ export type AgentCommand = {
   budgetCents?: number;
   limits?: AILimits;
   consentDigest?: string;
+  totalBudgetMicrousd?: number;
+  authorizationSeconds?: number;
 };
 
 export function useAgents(core: ReturnType<typeof useCore>) {

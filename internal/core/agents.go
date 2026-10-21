@@ -68,18 +68,21 @@ type PaperBot struct {
 	SpentCents  int64  `json:"spentCents"`
 }
 type AgentTask struct {
-	ID              string `json:"id"`
-	ProfileID       string `json:"profileId"`
-	Name            string `json:"name"`
-	Text            string `json:"text"`
-	BotID           string `json:"botId"`
-	IntervalSeconds int64  `json:"intervalSeconds"`
-	MaxRuns         int    `json:"maxRuns"`
-	Runs            int    `json:"runs"`
-	NextAt          int64  `json:"nextAt"`
-	State           string `json:"state"`
+	AI              *TaskAIStep `json:"ai,omitempty"`
+	ID              string      `json:"id"`
+	ProfileID       string      `json:"profileId"`
+	Name            string      `json:"name"`
+	Text            string      `json:"text"`
+	BotID           string      `json:"botId"`
+	IntervalSeconds int64       `json:"intervalSeconds"`
+	MaxRuns         int         `json:"maxRuns"`
+	Runs            int         `json:"runs"`
+	NextAt          int64       `json:"nextAt"`
+	State           string      `json:"state"`
 }
 type AgentRun struct {
+	AIRequestID  string `json:"aiRequestId,omitempty"`
+	AIDigest     string `json:"aiDigest,omitempty"`
 	ID           string `json:"id"`
 	ProfileID    string `json:"profileId"`
 	TaskID       string `json:"taskId"`
@@ -131,24 +134,26 @@ type AgentView struct {
 // Optional fields are inert data for a fixed action; unknown fields/actions are
 // rejected. No arbitrary callback, URL, model tool or shell can be submitted.
 type AgentCommand struct {
-	Revision        int64     `json:"revision"`
-	Action          string    `json:"action"`
-	ProfileID       string    `json:"profileId,omitempty"`
-	ID              string    `json:"id,omitempty"`
-	Name            string    `json:"name,omitempty"`
-	Text            string    `json:"text,omitempty"`
-	Source          string    `json:"source,omitempty"`
-	ExpiresAt       int64     `json:"expiresAt,omitempty"`
-	Provider        string    `json:"provider,omitempty"`
-	Model           string    `json:"model,omitempty"`
-	BotID           string    `json:"botId,omitempty"`
-	IntervalSeconds int64     `json:"intervalSeconds,omitempty"`
-	MaxRuns         int       `json:"maxRuns,omitempty"`
-	Quantity        int64     `json:"quantity,omitempty"`
-	PriceCents      int64     `json:"priceCents,omitempty"`
-	BudgetCents     int64     `json:"budgetCents,omitempty"`
-	Limits          *AILimits `json:"limits,omitempty"`
-	ConsentDigest   string    `json:"consentDigest,omitempty"`
+	Revision             int64     `json:"revision"`
+	Action               string    `json:"action"`
+	ProfileID            string    `json:"profileId,omitempty"`
+	ID                   string    `json:"id,omitempty"`
+	Name                 string    `json:"name,omitempty"`
+	Text                 string    `json:"text,omitempty"`
+	Source               string    `json:"source,omitempty"`
+	ExpiresAt            int64     `json:"expiresAt,omitempty"`
+	Provider             string    `json:"provider,omitempty"`
+	Model                string    `json:"model,omitempty"`
+	BotID                string    `json:"botId,omitempty"`
+	IntervalSeconds      int64     `json:"intervalSeconds,omitempty"`
+	MaxRuns              int       `json:"maxRuns,omitempty"`
+	Quantity             int64     `json:"quantity,omitempty"`
+	PriceCents           int64     `json:"priceCents,omitempty"`
+	BudgetCents          int64     `json:"budgetCents,omitempty"`
+	Limits               *AILimits `json:"limits,omitempty"`
+	ConsentDigest        string    `json:"consentDigest,omitempty"`
+	TotalBudgetMicrousd  int64     `json:"totalBudgetMicrousd,omitempty"`
+	AuthorizationSeconds int64     `json:"authorizationSeconds,omitempty"`
 }
 
 func initialAgents() agentDocument {
@@ -291,10 +296,13 @@ func saveAgents(ctx context.Context, tx *sql.Tx, d agentDocument, revision int64
 	if e != nil {
 		return e
 	}
-	reserved := 0
+	reserved := taskAIFutureStorage(d)
 	for _, q := range d.AIRequests {
 		if q.State == "prepared" || q.State == "queued" || q.State == "running" {
 			reserved += agentAIResultReserve
+			if q.TaskID != "" {
+				reserved += taskAICompletionReserve
+			}
 		}
 	}
 	if len(b)+reserved > agentDocumentLimit {
@@ -345,6 +353,10 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 	switch c.Action {
 	case "ai-prepare", "ai-start", "ai-cancel", "ai-card-keep", "ai-card-dismiss":
 		if e = changeAgentAI(&d, c, profile, id, now, fixture); e != nil {
+			return AgentView{}, e
+		}
+	case "task-ai-prepare", "task-ai-authorize", "task-ai-cancel":
+		if e = changeTaskAI(&d, c, profile, id, now, fixture); e != nil {
 			return AgentView{}, e
 		}
 	case "profile-create":
@@ -452,20 +464,32 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 				continue
 			}
 			found = true
+			if t.AI != nil && (t.State == "review" || t.State == "held" || t.State == "cancelled") {
+				return AgentView{}, errors.New("AI task needs a fresh reviewed plan")
+			}
 			if t.State == "completed" {
 				return AgentView{}, errors.New("task is completed")
 			}
 			switch c.Action {
 			case "task-pause":
-				d.Tasks[i].State = "paused"
+				if t.AI != nil && t.AI.PendingID != "" {
+					if e = cancelTaskAI(&d, i, now); e != nil {
+						return AgentView{}, e
+					}
+				} else {
+					d.Tasks[i].State = "paused"
+				}
 			case "task-resume":
+				if t.AI != nil && (t.State != "paused" || !fixture || validateTaskAI(d, t, now) != nil) {
+					return AgentView{}, errors.New("AI task requires active fixture and unchanged unexpired consent")
+				}
 				d.Tasks[i].State = "scheduled"
 				d.Tasks[i].NextAt = now + t.IntervalSeconds
 			case "task-run":
 				if t.State != "scheduled" {
 					return AgentView{}, errors.New("resume the paused task first")
 				}
-				if e = runAgentTask(&d, i, now); e != nil {
+				if e = evaluateAgentTask(&d, i, now, fixture); e != nil {
 					return AgentView{}, e
 				}
 			}
@@ -540,7 +564,8 @@ func runAgentTask(d *agentDocument, i int, now int64) error {
 
 // Due work coalesces missed intervals into one evaluation; it never catches up
 // with a burst. Concurrent ticks/restarts serialize on the SQLite transaction.
-func (s *Store) RunAgentTasks(ctx context.Context) error {
+func (s *Store) RunAgentTasks(ctx context.Context) error { return s.runAgentTasks(ctx, false) }
+func (s *Store) runAgentTasks(ctx context.Context, fixture bool) error {
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
 		return e
@@ -561,7 +586,7 @@ func (s *Store) RunAgentTasks(ctx context.Context) error {
 	now := s.now().Unix()
 	for i, t := range d.Tasks {
 		if t.State == "scheduled" && t.Runs < t.MaxRuns && t.NextAt <= now {
-			if e = runAgentTask(&d, i, now); e != nil {
+			if e = evaluateAgentTask(&d, i, now, fixture); e != nil {
 				return e
 			}
 			changed = true

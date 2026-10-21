@@ -1034,3 +1034,132 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
     fullPage: true,
   });
 });
+
+test("bounded AI schedules share consent and execution with CLI, survive restart and keep paper inputs fixed", async ({
+  page,
+}) => {
+  await stop();
+  await start(true);
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page.getByRole("button", { name: "Claim workspace" }).click();
+  await expect(
+    page.getByText("PRIVATE CORE · TERMINAL PROTOTYPES", { exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  await page.goto(url + "/#agents/chat");
+  await page.getByLabel("Conversation name").fill("Scheduled context");
+  await page.getByRole("button", { name: "Create conversation" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Scheduled context", exact: true }),
+  ).toBeVisible();
+  let v = await privateCLI(["agents"]);
+  v = await privateCLI(["agents", "--request-stdin"], {
+    revision: v.revision,
+    profileId: v.profileId,
+    action: "bot-create",
+    name: "Fixed task paper",
+    quantity: 2,
+    priceCents: 5,
+    budgetCents: 20,
+  });
+  const bot = v.bots[0].id;
+  await page.goto(url + "/#agents/tasks");
+  const region = page.getByRole("region", {
+    name: "Scheduled AI steps",
+    exact: true,
+  });
+  await expect(
+    region.getByLabel("Step after validated AI response").getByRole("option", {
+      name: "Fixed paper evaluation · Fixed task paper",
+    }),
+  ).toHaveCount(1);
+  await region.getByLabel("AI task title").fill("Two bounded AI evaluations");
+  await region
+    .getByLabel("AI analysis prompt")
+    .fill("Compare fixed paper inputs");
+  await region.getByLabel("Step after validated AI response").selectOption(bot);
+  await region.getByRole("button", { name: "Prepare AI task review" }).click();
+  const task = region.getByRole("article", {
+    name: "AI task Two bounded AI evaluations",
+  });
+  await expect(task.getByText("review", { exact: true })).toBeVisible();
+  const authorize = task.getByRole("button", {
+    name: "Authorize fixture schedule",
+  });
+  await expect(authorize).toBeDisabled();
+  await task.getByText("Review AI task disclosure").click();
+  await expect(task.locator("pre")).toContainText('"store":false');
+  await task
+    .getByLabel("Allow this frozen context, schedule and limits")
+    .check();
+  await authorize.click();
+  await expect(task.getByText("scheduled", { exact: true })).toBeVisible();
+  await task.getByRole("button", { name: "Evaluate now" }).click();
+  await page.goto(url + "/#overview");
+  await expect
+    .poll(async () => {
+      v = await privateCLI(["agents"]);
+      return v.tasks[0].runs;
+    })
+    .toBe(1);
+  expect(v.bots[0].spentCents).toBe(10);
+  expect(v.aiRequests).toHaveLength(1);
+  const taskId = v.tasks[0].id;
+  await stop();
+  await start(true);
+  v = await privateCLI(["agents"]);
+  await privateCLI(["agents", "--request-stdin"], {
+    revision: v.revision,
+    profileId: v.profileId,
+    action: "task-run",
+    id: taskId,
+  });
+  await expect
+    .poll(async () => {
+      v = await privateCLI(["agents"]);
+      return v.tasks[0].state;
+    })
+    .toBe("completed");
+  expect(v.bots[0].spentCents).toBe(20);
+  expect(v.runs).toHaveLength(2);
+  expect(v.aiRequests).toHaveLength(2);
+  expect(v.aiRequests[0].id).not.toBe(v.aiRequests[1].id);
+  expect(v.tasks).toHaveLength(1);
+  expect(v.providerCallsEnabled).toBe(false);
+  await page.goto(url);
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.goto(url + "/#agents/tasks");
+  await expect(task.getByText("completed", { exact: true })).toBeVisible();
+  await expect(task).toContainText("2/2 evaluations");
+  await expect(task).toContainText(
+    "No model, market feed or wallet was contacted.",
+  );
+  await region.getByLabel("AI task title").fill("Cancelled schedule");
+  await region.getByLabel("AI analysis prompt").fill("No call needed");
+  await region.getByRole("button", { name: "Prepare AI task review" }).click();
+  const cancelled = region.getByRole("article", {
+    name: "AI task Cancelled schedule",
+  });
+  await cancelled.getByRole("button", { name: "Cancel AI schedule" }).click();
+  await expect(cancelled.getByText("cancelled", { exact: true })).toBeVisible();
+  await mkdir(".evidence/p5-ai-tasks", { recursive: true });
+  await page.screenshot({
+    path: `.evidence/p5-ai-tasks/tasks-${test.info().project.name}.png`,
+    fullPage: true,
+  });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+});

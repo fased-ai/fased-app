@@ -211,3 +211,23 @@ The fixture follows the [Responses API](https://developers.openai.com/api/refere
 and [per-run spending example](https://developers.openai.com/cookbook/articles/per_run_spending_controller_responses_api).
 Real API credentials, verified model/tokenizer/pricing, subscription runners,
 scheduled AI-dependent decisions and financial execution remain later work.
+
+Agents → Tasks also supports bounded **development fixture AI schedules**. Create
+a conversation, choose a reminder or existing fixed paper bot, prepare the task,
+then review the frozen context, cadence, evaluation count, consent expiry,
+per-call limits and total example-cost budget. Only an explicitly started
+standalone `--ai-fixture` core can authorize and run it. This is fixed-context
+prototype automation; fresh messages, memory corrections/expiry or changed paper
+inputs require a new review. It does not fetch news or connect a real provider.
+
+Each evaluation reserves a stable request identity and budget before dispatch.
+A validated response allows only the reviewed deterministic step; the model cannot
+change quantities/prices/budgets or apply its cards. Completion commits the request,
+usage, dependent paper/reminder result, journal, inbox and next schedule together.
+Failure, expiry, cancellation or uncertain dispatch holds that task; independent
+no-AI tasks continue. A held task cannot resume silently. Pending cancellation
+retains any dispatched reservation; restart never retries a dispatched request.
+Starting without the fixture flag stops queued AI dependencies without running
+them. Schema 6 protects these records; paused predecessor recovery must finish
+before migration. Local storage reserves future request/result capacity, with a
+shared ceiling of ten retained or planned AI requests and no silent pruning.

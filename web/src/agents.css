@@ -119,20 +119,23 @@ form.agent-inline {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.ai-review pre {
+.ai-review pre,
+.scheduled-ai pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-size: 12px;
   max-height: 260px;
   overflow: auto;
 }
-.ai-review .ai-consent {
+.ai-review .ai-consent,
+.scheduled-ai .ai-consent {
   display: flex;
   align-items: start;
   gap: 10px;
   margin: 16px 0;
 }
-.ai-review .ai-consent input {
+.ai-review .ai-consent input,
+.scheduled-ai .ai-consent input {
   width: auto;
   margin-top: 3px;
 }
