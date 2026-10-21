@@ -404,14 +404,33 @@ type FixtureHandoffSession struct {
 
 // This constructor models an authenticated channel with opaque actor references.
 // It makes no claim about kernel peer credentials; there is no socket/CLI route.
-func NewFixtureHandoffSession(owner, signer *FixtureHandoffActor) (*FixtureHandoffSession, error) {
+func matchingFixtureHandoffActors(owner, signer *FixtureHandoffActor) error {
 	if owner == nil || signer == nil || owner == signer || owner.cfg.Role != "owner" || signer.cfg.Role != "signer" {
-		return nil, errors.New("independent owner/signer model actors required")
+		return errors.New("independent owner/signer model actors required")
 	}
 	a, e := owner.cfg.Store.fs.root.Stat(".")
 	b, be := signer.cfg.Store.fs.root.Stat(".")
 	if e != nil || be != nil || os.SameFile(a, b) || owner.binding != signer.binding || owner.cfg.Trust.SeedSHA256 != signer.cfg.Trust.SeedSHA256 || owner.cfg.Admission.PolicySHA256 != signer.cfg.Admission.PolicySHA256 || owner.transportSHA != signer.transportSHA {
-		return nil, errors.New("independent matching pinned fixture stores required")
+		return errors.New("independent matching pinned fixture stores required")
+	}
+	return nil
+}
+func NewFixtureHandoffSession(owner, signer *FixtureHandoffActor) (*FixtureHandoffSession, error) {
+	if e := matchingFixtureHandoffActors(owner, signer); e != nil {
+		return nil, e
+	}
+	for _, a := range []*FixtureHandoffActor{owner, signer} {
+		a.mu.Lock()
+		_, cp, e := a.load()
+		a.mu.Unlock()
+		if e != nil {
+			return nil, e
+		}
+		for _, r := range cp.Records {
+			if r.Kind == "installed-admission-model" {
+				return nil, errors.New("non-installed admission model namespace cannot become a legacy handoff session")
+			}
+		}
 	}
 	return &FixtureHandoffSession{owner: owner, signer: signer, id: NewProbe(), ownerBoot: owner.boot, signerBoot: signer.boot}, nil
 }

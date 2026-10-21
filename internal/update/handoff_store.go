@@ -101,6 +101,10 @@ func parseHandoffCheckpoint(b []byte) (handoffCheckpoint, error) {
 			if c.Pending != r.ID || c.Active != r.Channel {
 				return c, errors.New("pending learning identity mismatch")
 			}
+		case "installed-admission-model":
+			if !validInstalledAdmissionModelRecord(r.Body, r.ID, r.Channel) {
+				return c, errors.New("invalid non-installed admission model record")
+			}
 		case "verified", "rejected", "challenge", "reviewed", "checked", "inspection-complete":
 		default:
 			return c, errors.New("unsupported fixture replay outcome")
