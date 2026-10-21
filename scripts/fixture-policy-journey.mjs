@@ -175,4 +175,5 @@ export function fixtureRecoveryJourney({
     held.operation.state === "reserved" &&
       app("fixture-state").fixture.held === "30",
   );
+  return { operationId: fresh.operationId };
 }

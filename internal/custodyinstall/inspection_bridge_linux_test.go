@@ -28,7 +28,7 @@ func TestInspectionGuardedUnitsBeforeFence(t *testing.T) {
 			t.Fatal("predecessor accepts guarded units")
 		}
 	}
-	for _, n := range []string{"../escape", "bundle/../foreign", "bundle/a/b", "owner-private.json", "bundle/.."} {
+	for _, n := range []string{"../escape", "bundle/../foreign", "bundle/a/b", "owner-private.json", "bundle/..", "bundle/arbitrary.exe", "bundle/unknown.json"} {
 		if inspectionInputName(n) {
 			t.Fatal("unbounded publisher", n)
 		}

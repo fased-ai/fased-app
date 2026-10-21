@@ -42,3 +42,23 @@ type InstalledInspectionStatus struct {
 	FinancialExecution bool                   `json:"financialExecution"`
 	UpdaterEnabled     bool                   `json:"updaterEnabled"`
 }
+
+// FixtureInspectionInputName is the closed publisher grammar, not a path grant.
+func FixtureInspectionInputName(n string) bool {
+	if n == "catalog.json" {
+		return true
+	}
+	for _, role := range []string{"owner", "signer"} {
+		for _, suffix := range []string{".json", "-seed.json", "-policy.json", "-clock.json"} {
+			if n == role+suffix {
+				return true
+			}
+		}
+	}
+	const prefix = "bundle/"
+	if len(n) <= len(prefix) || n[:len(prefix)] != prefix {
+		return false
+	}
+	name := n[len(prefix):]
+	return name == "index.json" || inspectionNameLimit(name) > 0
+}

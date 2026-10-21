@@ -265,19 +265,8 @@ func PrepareInspectionBridge(ctx context.Context, t InspectionBridge, inputs, ca
 	}
 	return publish(ctx, t.Dir()+"/transaction.json", t.ID, mustJSON(t), 0644, readRoot, s.Run)
 }
-func inspectionInputName(n string) bool {
-	if n == "catalog.json" {
-		return true
-	}
-	for _, r := range []string{"owner", "signer"} {
-		for _, tail := range []string{".json", "-seed.json", "-policy.json", "-clock.json"} {
-			if n == r+tail {
-				return true
-			}
-		}
-	}
-	return strings.HasPrefix(n, "bundle/") && filepath.Base(n) == strings.TrimPrefix(n, "bundle/") && len(n) < 120 && n != "bundle/." && n != "bundle/.."
-}
+func inspectionInputName(n string) bool { return update.FixtureInspectionInputName(n) }
+
 func runAs(ctx context.Context, s *System, path string, id Identity, args ...string) ([]byte, error) {
 	cmd := []string{"/usr/bin/setpriv", "--reuid", strconv.Itoa(id.UID), "--regid", strconv.Itoa(id.GID), "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--", path}
 	return s.Run(ctx, nil, append(cmd, args...)...)

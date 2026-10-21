@@ -166,6 +166,9 @@ try:
   if p:done=os.waitstatus_to_exitcode(status);break
 finally:
  if done is None:
+  if time.time()>=deadline:
+   try:os.killpg(pid,signal.SIGKILL)
+   except ProcessLookupError:pass
   try:_,status=os.waitpid(pid,0);done=os.waitstatus_to_exitcode(status)
   except ChildProcessError:done=-1
  os.close(fd)
@@ -289,9 +292,12 @@ print(json.dumps({'exitCode':done,'interrupted':interrupted,'output':seen.decode
         await readFile(role === "app" ? core : signer),
         { mode: 0o700 },
       );
+    const cancelled = terminal("provision", "cancel");
     pass(
       "protectedCancellationLeavesNoProvision",
-      terminal("provision", "cancel").exitCode !== 0 &&
+      cancelled.exitCode !== 0 &&
+        cancelled.output.includes("BRIDGE FIXTURE ") &&
+        cancelled.output.includes("bridge review cancelled") &&
         (await readFile(root + "/install.json", "utf8").then(
           (s) => !s.includes("inspectionBridge"),
         )),
@@ -324,7 +330,12 @@ print(json.dumps({'exitCode':done,'interrupted':interrupted,'output':seen.decode
     );
     pass(
       "inspectionCancellationDeniesCompletion",
-      terminal("inspect", "cancel").exitCode !== 0,
+      ((cancel) =>
+        cancel.exitCode !== 0 &&
+        cancel.output.includes("INSPECT FIXTURE ") &&
+        cancel.output.includes("inspection cancelled"))(
+        terminal("inspect", "cancel"),
+      ),
     );
     const history = JSON.parse(
       run(core, [

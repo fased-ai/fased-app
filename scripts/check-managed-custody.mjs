@@ -659,7 +659,7 @@ print(json.dumps(r))
   assert.equal(newLogin.status, 200);
   check("appPasswordRecoveryUsesNewCredential", true);
   unlockFixture(replacement);
-  fixtureRecoveryJourney({
+  const recoveredReservation = fixtureRecoveryJourney({
     account: recovered.status.account,
     previous: policyJourney,
     owner: fixtureOwner,
@@ -801,7 +801,15 @@ print(json.dumps(r))
     url: "http://" + listen,
     appPassword: appPassword + " replacement",
   });
-  if (process.env.FASED_INSPECTION_ACCEPTANCE === "1")
+  if (process.env.FASED_INSPECTION_ACCEPTANCE === "1") {
+    const reconciled = fixtureApp(manifest.app, "fixture-reconcile", {
+      operationId: recoveredReservation.operationId,
+    });
+    check(
+      "inspection:knownUnsubmittedFixtureReservationReconciled",
+      reconciled.operation.state === "not-submitted" &&
+        fixtureApp(manifest.app, "fixture-state").fixture.held === "0",
+    );
     await fixtureInspectionJourney({
       root,
       env,
@@ -810,6 +818,7 @@ print(json.dumps(r))
       restartSigner: () => osTool("/usr/bin/systemctl", ["restart", units[1]]),
       restartApp: () => osTool("/usr/bin/systemctl", ["restart", units[0]]),
     });
+  }
   report.identities = {
     owner: uid,
     app: manifest.app.uid,
