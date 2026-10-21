@@ -35,6 +35,8 @@ jobs:
           go-version: "1.26.x"
           cache: true
       - run: npm ci && npm run build
+      - name: Bounded status reconnect regression
+        run: python3 scripts/test-fixture-inspection-probes.py
       - name: Focused fault/time and coupled bridge checks
         run: |
           mkdir -p .evidence/p4-fault-reboot

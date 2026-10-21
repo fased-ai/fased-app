@@ -77,7 +77,7 @@ def historical_status():
     n=os.urandom(16).hex();send(s,frame('status',{'nonce':n}));out=read(s);r=out['body'];assert out['kind']=='status-result' and out['channel']==n
     assert r['historical'] and r['fixtureOnly'] and r['profile']==profile and not any(r.get(k) for k in ['exchange','review','proposal','installAllowed','resumeAllowed','walletSigner','financialExecution','updaterEnabled'])
     return
-  except (EOFError,ConnectionResetError):
+  except (EOFError,ConnectionResetError,BrokenPipeError):
    if time.monotonic()>=end:raise
    time.sleep(.02)
 historical_status()
