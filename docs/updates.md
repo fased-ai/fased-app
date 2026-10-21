@@ -1815,3 +1815,251 @@ Superseding state refuses historical replay. Unknown files and foreign records
 are preserved. Public acquisition trust, signing-key operations, native custody,
 real VPS acceptance and automatic updates remain separate gates; this command is
 not a public installer.
+
+## Installed release-admission and reader-bootstrap compatibility design
+
+**P4 design contract, revision 1, 2026-10-20.** Design-only: no installed RPC,
+reader conversion, configuration, service or acquisition route is added here.
+Real wallets, financial execution, installed execution and automatic updates stay
+disabled. The compiled fixture transport is reusable engineering evidence, not an
+installed authority. Public P4 remains ten PASS/six BLOCKED; P5 is not authorized.
+
+This section connects the [production operations proposal](#production-release-trust-operations-specification),
+[independent handoff](#independent-ownersigner-fixture-admission-handoff-design) and
+[compiled fixture transport](#compiled-ownersigner-fixture-transport-and-uid-harness-design)
+to the existing immutable Linux helpers. It freezes the compatibility and safety
+requirements below. Production profile/capability strings, lifecycle entrypoint,
+wire version and trust/replay schema numbers remain **UNASSIGNED/BLOCKED** until
+review of the implementation contract. Neither the fixture's version 1 nor
+lifecycle 4 is an implicit allocation. No production dependency, seed, credential,
+feed, publisher or activation is created or authorized.
+
+### Current entrypoints and authority boundary
+
+Paths below are relative to the source repository. `root` means the verified
+managed installation root, never a caller-selected replacement path.
+
+| Current surface                                                                                           | Verified existing behavior                                                                                                                                                                                                                                                                          | Future compatible seam / refusal                                                                                                                                                                                                                                                                                   |
+| --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `internal/update/compatibility.go:CurrentLifecycle`, `internal/signer/update.go:UpdateContract`           | Core lifecycle entrypoint 4/stage format 1; signer protocol 1 and explicit operation-reader features. These describe disposable development installation.                                                                                                                                           | Add separately reviewed admission and bridge capabilities on both readers; changing a feature list or treating lifecycle 4 as production support is forbidden.                                                                                                                                                     |
+| `cmd/fased-app/update_owner.go:ownerUpdatesCommand`, `conductUpdate`                                      | Immutable helper checks owner UID, root-owned config/executable, installed manifest and shared owner lock. PREPARE reviews a development envelope and current snapshots.                                                                                                                            | Independent release inspection must precede any future prepare; `IntentRequest{Manifest, Trust}` cannot carry production approval. Existing PREPARE is not a conversion/admission fallback.                                                                                                                        |
+| `internal/signer/rpc_linux.go:LoadConfig`, `CheckOwner`, `call`, `accept`                                 | Root-owned no-symlink config topology; client executable must have a protected root-owned path. Kernel peer UID is checked in both directions before the challenge/request; owner/app channels are separate. Server authentication currently establishes UID, not an attested peer executable hash. | Preserve all checks. Bind the installation ID, root/config digest and locally verified immutable helper/signer inventory as well as kernel UID; no app proxy or downloaded verifier gets direct owner-channel access. Exact helper provenance is a local immutable-file check, not a new remote-attestation claim. |
+| `cmd/fased-app/update_install_linux.go:delegateInstallation`, `ownerInstallation`                         | Current helper or fixed verified controller selected by exact intent; separate INSTALL/COMPLETE reviews and live/cold preflight.                                                                                                                                                                    | Admission completion is inspection only. A later, separately authorized controller integration must revalidate it against the exact intent, current services, recovery index and financial holds. No controller calls in this design or its first model package.                                                   |
+| `internal/custodyinstall/{transaction,completion}_linux.go`                                               | Durable controller phases, compatible executable rollback, independent installed-sequence commit and current-state verification.                                                                                                                                                                    | Preserve authoritative financial history, consumed reservation floor and committed installed floor. Release trust cannot repair, restore or overwrite these records.                                                                                                                                               |
+| `cmd/fased-app/bootstrap_linux.go:prepareBootstrapCommand`                                                | Exact development-signed target runs as owner; inventory is delegated through installed immutable predecessor. New helper is published only after protected BOOTSTRAP review.                                                                                                                       | This is not independent authentication of a public downloaded verifier/root. A future conversion requires an independently authenticated verifier/seed before its execution; same-origin hashes or a candidate's own envelope are insufficient.                                                                    |
+| `internal/update/bootstrap.go:VerifyBootstrap`, `internal/custodyinstall/bootstrap_linux.go:runBootstrap` | Exact lifecycle 3 → 4 and known completion-reader feature only; predecessor-readable maintenance, no schema/protocol/topology migration, new-reader cold checks, no installed-release commit.                                                                                                       | Keep this finite bridge unchanged. It cannot admit lifecycle 4 → a future admission reader. Define and review a separate finite bridge before any new reader runs; never broaden the existing predicate generically.                                                                                               |
+| `updates status` and shared UI/CLI proposals                                                              | Read-only reports and review-only preferences; app metadata has no signing or update consent.                                                                                                                                                                                                       | Show unsupported reader, trust/time/anchor hold and exact recovery action. A displayed receipt, chat action, notification, policy window or password sent via core cannot authorize inspection or installation.                                                                                                    |
+| `cmd/fased-handoff-fixture`, `internal/update/handoff_transport*.go`                                      | Standalone disposable profile, inert artifacts, private role inputs and bounded compiled transport; excluded from installed dispatch/packages.                                                                                                                                                      | Do not route its flags/configuration/ack files into installed custody. Reuse protocol invariants through separate typed adapters; fixture mode can never promote stored state to production.                                                                                                                       |
+
+The threat boundary remains a compromised app UID/network/input versus separate
+owner and signer identities. The ordinary owner account and host kernel/root are
+trusted. UID checks and immutable files do not defend against a compromised
+owner account, kernel or root. Never run project code as root. Only fixed trusted
+OS utilities may publish verified immutable files in a later authorized bridge.
+
+### Independently owned inputs and durable records
+
+Each role loads its own inputs before any exchange. Public bytes may be identical;
+trust decisions and mutable stores must be independent. An untrusted locator can
+name bounded evidence but cannot supply trust, paths, executable instructions or
+time confidence. App-owned SQLite, Downloads files, UI sessions and peer JSON
+cannot provision or reset any authority below.
+
+| Input / record                         | Owner helper                                                                                                                           | Signer                                                                                                   | Binding and failure rule                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Installation identity and capabilities | Verify root-owned installation/config, running helper hash and supported contract; acquire existing owner lock.                        | Verify root-owned config, own running signer hash, own UID and operation-reader contract.                | Exact installation ID/UIDs/root/config digest and both running-reader hashes; reject foreign, mixed, unknown or missing capabilities before evidence or secret exchange. A pinned root-owned executable remains required in addition to transport UID.                                                                                                                                                                                                                                            |
+| Bootstrap seed                         | Independently authenticated installer/verifier provisions a protected public seed descriptor.                                          | Independently load the provisioned signer seed descriptor; never accept the owner's request as its seed. | Pin exact root bytes/digest, repository immutable identity, channel, minimum checkpoint and transport policy. Initial authentication mechanism/distribution remains production BLOCKED; no trust-on-first-use or development promotion.                                                                                                                                                                                                                                                           |
+| Release/provenance policy              | Locally load immutable reviewed policy and its digest.                                                                                 | Locally load its separately provisioned copy.                                                            | Exact repository/channel/source/workflow/builder/attestation identity, target, complete unit and artifact bounds. Pin changes require a distinct reviewed trust migration, never ordinary release consent.                                                                                                                                                                                                                                                                                        |
+| Transport/evidence/artifacts           | Fetch and verify metadata/provenance and exact bytes against local pins.                                                               | Independently fetch/read and verify the same unit against its pins; no owner verdict forwarding.         | Use the existing production-spec transport limits/redirect rules once implemented. Four explicit roles: core, signer, owner helper, installer. If helper and core share bytes, bind both roles explicitly; never silently omit installer/helper or execute candidate bytes to inspect them. No fixture artifact limit becomes a production artifact policy.                                                                                                                                       |
+| Time and freshness                     | Local clock policy, persisted UTC high-water mark and monotonic live deadline.                                                         | Separate reads, persisted high-water mark and monotonic deadline under signer control.                   | Use each role's own confidence result and earliest applicable metadata/policy/review expiry; equality is expired. Peer timestamps cannot establish confidence or extend expiry. Both roles share a host clock, so this is not two independent time authorities. Regression, uncertain boot/restore or unavailable trusted freshness holds admission. Production confidence/rescue source is UNASSIGNED, not solved by `time.Now()` or an OS sync flag. Controlled clocks are model evidence only. |
+| Combined trust/replay checkpoint       | Owner-private 0700 namespace, 0600 bounded records; root/role versions, observed sequence, pending/result/review and local completion. | Separate signer-private equivalent; never share the owner store/lock.                                    | Strict CAS, fsync/rename and exact versioned records. Trust learned before later failure is retained, including a peer failure. Observed release sequence is separate from financial reserved/installed floors. No latest-snapshot adoption, JSON import or empty-store reset.                                                                                                                                                                                                                    |
+| External expected-head anchor          | Owner-private anchor outside the checkpoint store, bound to installation/role/seed/policy/profile.                                     | Signer-private independent anchor outside its checkpoint store.                                          | Verify on every load, advance only after durable checkpoint publication. Missing/corrupt/mismatched/gapped anchor holds; only an exact live retained publication may retry. Same-disk anchors protect against partial/store-only rollback, not rollback of the entire host or disk loss; P4-15 stays BLOCKED.                                                                                                                                                                                     |
+| Inventory and authorization            | Fresh private core probe plus signer-authenticated challenge/state, protected local terminal review.                                   | Fresh signer-owned authority epoch, financial state/holds, boot ID, inventory and challenge.             | Bind actual snapshots and revisions, active intent, unknown outcomes, reserved/installed floors and recovery holds. Cached controller receipts/app reports cannot certify current state. Any concurrent transition invalidates the reviewed exchange.                                                                                                                                                                                                                                             |
+
+Root-owned seed/policy files are public trust inputs, not wallet secrets. Mutable
+role checkpoints/anchors must be writable only by their own ordinary role; they
+are not root-written on every inspection. Provisioned directory names, schema
+IDs and seed/policy activation records need reviewed migration rules before
+installed implementation. They are not new paths accepted by existing commands.
+Use separate namespaces for model, compiled fixture and future installed state;
+no in-place adoption. A lost trust store requires an independently authorized
+trust-recovery procedure while retaining financial history and holds; wallet
+recovery or an app-password reset cannot recreate admission authority.
+
+### Exact-unit review and final confirmation
+
+A future installed exchange must be an explicitly negotiated inspection protocol,
+with the compiled transport's bounded framing, exact retry, role separation and
+kernel checks. Its symbolic profile/capability/version must refuse until allocated
+by review. Legacy owner RPC cannot tunnel new frames or infer support from
+protocol 1. The signer must reject unknown actions before any trust-state write.
+No owner password, wallet secret or review authorization is forwarded by core.
+
+1. Under the owner lock, both roles independently validate their configured
+   identity, pins, time and anchors. Negotiate both explicit capabilities and
+   reader contracts on an authenticated connection; a signer boot ID and fresh
+   one-use challenge fence prior exchanges. Missing support stops before network
+   acquisition, pause, reservation or maintenance mutation.
+2. Each role independently verifies release metadata, source/build provenance and
+   all four artifact roles. Persist a pending-verification record before an
+   operation that may learn trust; persist every known outcome/learned state
+   atomically with its replay head. Never discard trust learned because artifacts,
+   provenance, a peer or owner consent later fail.
+3. The immutable owner helper shows a complete local action card in the trusted
+   terminal: inspection-only effect, repository/channel, source/build identity,
+   authorization/unit digests, sequence/target, four role hashes/sizes/contracts,
+   current reader/financial snapshot bindings and exact deadline. Explicit local
+   consent binds the full exchange digest. UI may display a copy but cannot
+   approve. Fixture ack files and `--approval-stdin` are test-only, never installed
+   consent. INSTALL and COMPLETE remain separate later reviews.
+4. Bind the domain/profile/capability, installation/config, both reader hashes and
+   contracts, seed/policy/transport pins, both boot IDs/nonces, challenge/request,
+   authorization/unit/provenance identities, platform/sequence, both baseline
+   checkpoint heads, authority epoch, snapshot revisions, review digest and
+   earliest expiry into the canonical exchange. The future schema must list exact
+   field order/encoding and resource caps before a wire number is assigned;
+   canonical JSON/status alone cannot mint a typed live authorization.
+5. The signer independently rechecks its inputs and records its result durably.
+   The owner independently refreshes its own evidence/time/inventory, then requests
+   final confirmation on the same live connection. The signer confirms unchanged
+   boot/challenge/authority/inventory/heads and unexpired review, recording its
+   confirmation before reply. Owner completion binds that exact response. Exact
+   live retries are idempotent within original bindings/deadline, never new
+   approval or extra validity. Fresh-connection status is historical only.
+6. Return inspection-only completion, with install/reserve/pause/unlock/resume,
+   financial execution and automatic update authority all false. This is a
+   point-in-time result, not a cross-process financial commit or enduring lease.
+   Any later installation must recheck current pins, freshness, reviewed unit and
+   authoritative financial state through a separately reviewed adapter. No such
+   installed adapter is authorized or implemented here.
+
+### Finite reader compatibility map
+
+| Case  | Installed readers / state                                                                                | Admission and conversion decision                                                                                                                                                                                                  |
+| ----- | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| RC-01 | Lifecycle 1/2 or unknown/unsupported schemas                                                             | Refuse unchanged. No generic bootstrap, forced feature addition or financial snapshot restore.                                                                                                                                     |
+| RC-02 | Supported lifecycle 3, exact known predecessor state                                                     | Existing disposable 3 → 4 bridge only. Its engineering proof is reused at the recorded source; production admission remains unsupported afterward.                                                                                 |
+| RC-03 | Current lifecycle 4, old development protocol/features                                                   | Existing disposable lifecycle operations remain as documented; new admission refuses. No fallback to `fixture-update-prepare` or to fixture CLI.                                                                                   |
+| RC-04 | Lifecycle 4 → proposed admission-capable reader                                                          | New bridge profile/numbering, independently authenticated seed/verifier and explicit predecessor/target contract are required. All remain BLOCKED for installed execution; current `VerifyBootstrap` cannot be reused as approval. |
+| RC-05 | One new reader and one old/mismatched reader                                                             | No admission, no new journal records and no financial actions. Recover through the exact recorded bridge with cold validation; never try an unreviewed protocol downgrade.                                                         |
+| RC-06 | Both future readers, explicitly reviewed matching capabilities and readable histories                    | Permit inspection only after all independent bindings pass. This row defines a future predicate, not current support or installation consent.                                                                                      |
+| RC-07 | Active update/bootstrap, pending unknown verification, recovery hold or inconsistent financial inventory | No new admission/conversion. Report the exact existing recovery identity and preserve its exclusive slot/holds. Recovery may inspect durable status without creating approval.                                                     |
+| RC-08 | macOS/Windows/native custody or unsupported architecture/topology                                        | Refuse installed admission/conversion until that platform's identity, signing, service and recovery contracts have acceptance. Cross-compilation and ordinary desktop proof do not close this row.                                 |
+
+A future RC-04 bridge must be a separate transaction from release admission. It
+binds exact predecessor bytes/contract, target reader bytes/contract, provisioned
+seed/policy identities and one maintenance intent. For the first bridge, preserve
+financial formats, protocol/topology, all originals/history/counters/authority,
+reserved and installed floors; require no active financial/update intent or
+unknown outcome. Unlike today's narrow prototype, do not assume installed
+sequence zero: nonzero committed history must be cold-verified or refused by the
+explicit support matrix, never reset to zero.
+
+Before changing readers, use only predecessor-readable maintenance records and
+an exclusive metadata pause/recoverable app backup. The new authenticated reader
+alone performs cold history validation under the signer UID; no old reader is
+restarted on an unproven history. Do not append new admission records into the
+financial operations journal. Seed/store provisioning and new-format publication
+need a durable forward-only boundary with old-reader service start fenced.
+After that boundary, recovery uses the new reader; never roll back trust learned
+by either role. Before it, only a positively verified predecessor-compatible
+executable rollback is permitted. Reject a bridge that cannot prove this boundary.
+A healthy bridge converges immutable installer records and aborts only its exact
+maintenance intent, leaving the consumed reservation floor and wallet lock.
+It creates neither an installed release nor an admission result. A later release
+needs fresh exact-unit inspection and separate protected installation reviews.
+
+### Recovery and crash compatibility
+
+| Durable / observed state                                                | Required disposition                                                                                                                                                                                                    |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No pending record or known clean denial                                 | New inspection requires a fresh authenticated challenge/review; no mutation on unsupported negotiation.                                                                                                                 |
+| Pending before acquisition; outcome unknown after death/disconnect      | Retain pending and learned-state uncertainty as a hold. No older checkpoint replay, automatic reset or guessed failure/success. Only separately reviewed recovery can resolve uncertainty.                              |
+| Known result/checkpoint written, anchor not advanced                    | Preserve both files. Only the exact still-live publication can retry its CAS/anchor advance; after restart, require recovery rather than adopting the newest snapshot.                                                  |
+| Signer result/confirmation durable, reply lost                          | Exact original live retry may recover the identical reply within its deadline. After restart/connection loss, status proves history only; fresh review cannot clear an unresolved hold.                                 |
+| Owner completion missing or peers disagree                              | Neither peer overwrites the other's history. Completed inspection is not financial authority; reconcile exact stored identities or hold before a new challenge.                                                         |
+| Evidence expires/revokes, clock regresses, epoch/inventory/head changes | Preserve learning/results and refuse new completion; no extension based on reviewed-at time, status or maintenance retry. Existing exact controller recovery is a different authority, not fresh release admission.     |
+| Mixed binaries or interrupted reader bridge                             | Select only the immutable recorded runner; stop both services, cold-validate with the new reader, then follow the durable pre-boundary rollback or forward-only decision. Preserve foreign files and unknown histories. |
+| Installed commit already durable or later financial history exists      | Never restore old financial state, clear holds or reduce installed/reserved floors. Trust recovery and executable recovery cannot undo a committed release or authoritative history.                                    |
+
+This is bounded single-host coordination, not distributed atomicity. No peer holds
+its mutable store lock while waiting on network/owner input or another role.
+Production record sizes, retention/exhaustion handling and wall-clock bounds must
+be explicitly assigned and tested with the wire/schema contract; the first
+non-installed model retains the existing 256 KiB/32-record/4 KiB envelope fixture
+limits and refuses exhaustion rather than pruning uncertainty. Its 64 KiB frames
+and controlled clocks do not implicitly define installed storage/time policy.
+
+### Finite acceptance and file ownership
+
+All IA rows below are **BLOCKED** for runtime in this design package. The first
+implementation can close only their non-installed model predicates. Existing
+UT/HA results remain fixture engineering proof; no IA row can close public
+P4-10/11, native/VPS, portable-recovery or retail gates by inference.
+
+| Case  | Falsifiable predicate / eventual evidence                                                                                                                                                                                       |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| IA-01 | RC-01–RC-08 classification is total; unsupported/missing capability or equal role UIDs refuse before any acquisition or state mutation.                                                                                         |
+| IA-02 | Substituted verifier/seed, same-origin checksum, development promotion, foreign instance/config/helper or mixed reader hashes cannot establish trust.                                                                           |
+| IA-03 | Each role independently loads pins/time/evidence; mismatch in just one role prevents joined completion and preserves the other's learning.                                                                                      |
+| IA-04 | Missing/mutated any of four artifact roles, provenance/source/builder or platform/sequence binding refuses without executing candidate bytes.                                                                                   |
+| IA-05 | App UI/status/legacy request, copied JSON, fixture config/ack or owner-password forwarding cannot create exact terminal consent or a live authorization.                                                                        |
+| IA-06 | Full exchange mutation, wrong boot/nonce/epoch/inventory/head, cross-connection replay and old capability downgrade refuse; actual Linux UIDs required later.                                                                   |
+| IA-07 | Independent expiry/equality, backward/uncertain clock, boot/restore and delayed owner review refuse; peer time never extends validity.                                                                                          |
+| IA-08 | Pending-before-learning kill/disconnect holds; known rejection retains learned root/role/observed floors; no reset/import/latest-snapshot recovery.                                                                             |
+| IA-09 | Checkpoint/anchor publication cuts, CAS conflict, corrupt/missing anchor and store exhaustion hold; only exact live retry is idempotent.                                                                                        |
+| IA-10 | Signer result/confirmation lost reply and owner death/restart cannot convert historical status into fresh approval or installation.                                                                                             |
+| IA-11 | RC-04 bridge rejects changed financial/protocol/topology contracts and unknown histories; nonzero installed sequence is preserved or explicitly refused.                                                                        |
+| IA-12 | Every bridge cut before/after forward-only boundary and each mixed pair preserves records; only compatible pre-boundary rollback, no old-reader start afterward.                                                                |
+| IA-13 | Maintenance abort consumes floor without installed commit/admission, unlock or resume; later release requires fresh inspection and higher valid reservation.                                                                    |
+| IA-14 | Active intent, unknown outcome, portable-recovery gap or committed release cannot be bypassed by admission/trust/reader recovery.                                                                                               |
+| IA-15 | Installed dispatch, services, packaging, public trust and financial controller remain unchanged in the first model; all execution flags false.                                                                                  |
+| IA-16 | Future installed/Ubuntu proof uses actual immutable helpers and separate nonzero UIDs; no project root code, owner-host mutation or retained disposable key/process/resource; failure evidence and foreign resources preserved. |
+
+One coordinator owns this connected compatibility contract; no parallel ownership
+is selected. Future source ownership is finite:
+
+- First, `internal/update/installed_admission_model.go` and
+  `installed_admission_model_test.go`: typed compatibility/authority/bridge/recovery
+  model only, not transport, installed I/O or production schema allocation.
+  `scripts/check-update-installed-admission-model.mjs` owns the guarded model
+  runner and source/case/canary/disabled-capability evidence under
+  `.evidence/p4-installed-admission-model/`. Six exact test families:
+  `TestInstalledAdmissionCompatibilityModel`, `AuthorityModel`, `ReviewModel`,
+  `RecoveryModel`, `BridgeModel`, `NoExecutionModel` (each suffix after the first
+  expands with the `TestInstalledAdmission` prefix). Require all sixteen IA case
+  IDs and eight RC decisions in the model report; IA-16 remains BLOCKED for real
+  installed proof even when its no-root/cleanup model assertions pass.
+- Later, separately reviewed installed adapters would own
+  `cmd/fased-app/update_owner.go`, `bootstrap_linux.go`, `update_install_linux.go`,
+  `internal/signer/{rpc_linux.go,update.go}` and new role-local admission adapters,
+  `internal/update/compatibility.go`, `internal/custodyinstall/{bootstrap,transaction,completion}_linux.go`.
+  Assign profile/version/seed/time/storage/bridge contracts before editing these;
+  no generic RPC exposure, old reader widening or financial journal migration.
+- A later dedicated installed-admission acceptance runner and Ubuntu job must bind
+  actual helper hashes/contracts, immutable config, peer UIDs, role state and
+  every bridge crash cut. It is separate from today's fixture UID job. No workflow,
+  package, service or owner host changes belong to this design or first model.
+
+Future completion commands for the **non-installed model only**, not run here:
+
+```sh
+# Run from fased_app, as the ordinary user; missing runner/tests must fail.
+test "${FASED_INSTALLED_ADMISSION_MODEL:-}" = 1 || exit 2
+for file in internal/update/installed_admission_model.go \
+  internal/update/installed_admission_model_test.go \
+  scripts/check-update-installed-admission-model.mjs; do
+  test -f "$file" || exit 2
+done
+node scripts/check-update-installed-admission-model.mjs
+```
+
+That runner must reject missing opt-in or execution as root, absent/zero selected tests, missing
+IA/RC evidence, changed financial canaries/floors or any enabled capability. It
+runs the six exact families under Go race detection plus directly coupled
+update-model checks once, using disposable keys/inert artifacts/controlled HTTPS
+only if those existing fixtures are needed. No network production origin, installed
+RPC, system service, identity provisioning or controller invocation. Required
+installed/Ubuntu acceptance remains BLOCKED until separately authorized adapters
+and their prerequisites exist. The command above is a completion contract, not
+an authorization to leave design-only scope now.
