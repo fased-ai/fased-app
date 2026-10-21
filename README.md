@@ -183,3 +183,31 @@ The controlling product/implementation/checkpoint documents are maintained in th
 ## License
 
 Original Fased App code is under [PolyForm Perimeter 1.0.0](LICENSE). It is source-available with restrictions on providing competing products/services; it is not described as permissive or OSI open source. See [NOTICE](NOTICE) for attribution and dependency boundaries. License selection does not change third-party terms.
+
+Optional AI request review is a development fixture, not a connected provider.
+Create a conversation in Agents → Chat, prepare a request, inspect its complete
+wire disclosure and limits, then consent to that exact digest. Ordinary cores can
+prepare and cancel reviews but cannot execute them. A standalone disposable
+`fased-app serve --ai-fixture --listen 127.0.0.1:0 --data-dir <disposable-directory>`
+can run the compiled in-process Responses fixture. It accepts no API credentials,
+never contacts OpenAI and cannot be combined with a managed custody/sandbox or
+public-origin option. The fixture uses invented prices; a ChatGPT subscription
+is not connected and no billing assurance for real API use is implied.
+
+Requests allow one call, zero tools, no retries/fallback, up to 5 seconds and
+explicit input/output/cost limits. Current-profile/session context and unexpired
+notes are frozen for review; changed or ten-minute-old disclosure must be prepared
+again. Cancellation after dispatch, uncertain usage and restart preserve the
+reservation and block further calls for that profile. Verified usage settles even
+when output is refused, incomplete or invalid. Returned reminder/paper-strategy
+cards are drafts: keep/dismiss records review without creating a task, bot,
+permission or trade. Schema 5 protects these records and update snapshots; paused
+schema-3/4 instances must finish their existing recovery before migration. There
+are at most ten retained requests, with bounded context/output and reserved result
+space; records are never silently pruned.
+
+The fixture follows the [Responses API](https://developers.openai.com/api/reference/resources/responses/methods/create),
+[Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
+and [per-run spending example](https://developers.openai.com/cookbook/articles/per_run_spending_controller_responses_api).
+Real API credentials, verified model/tokenizer/pricing, subscription runners,
+scheduled AI-dependent decisions and financial execution remain later work.

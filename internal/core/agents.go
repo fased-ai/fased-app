@@ -101,49 +101,54 @@ type AgentNotice struct {
 	Read      bool   `json:"read"`
 }
 type agentDocument struct {
-	Profiles []AgentProfile `json:"profiles"`
-	Sessions []AgentSession `json:"sessions"`
-	Messages []AgentMessage `json:"messages"`
-	Memories []AgentMemory  `json:"memories"`
-	Bots     []PaperBot     `json:"bots"`
-	Tasks    []AgentTask    `json:"tasks"`
-	Runs     []AgentRun     `json:"runs"`
-	Notices  []AgentNotice  `json:"notices"`
+	Profiles   []AgentProfile   `json:"profiles"`
+	Sessions   []AgentSession   `json:"sessions"`
+	Messages   []AgentMessage   `json:"messages"`
+	Memories   []AgentMemory    `json:"memories"`
+	Bots       []PaperBot       `json:"bots"`
+	Tasks      []AgentTask      `json:"tasks"`
+	Runs       []AgentRun       `json:"runs"`
+	Notices    []AgentNotice    `json:"notices"`
+	AIRequests []AgentAIRequest `json:"aiRequests"`
 }
 type AgentView struct {
-	Revision             int64          `json:"revision"`
-	ProfileID            string         `json:"profileId"`
-	Profiles             []AgentProfile `json:"profiles"`
-	Sessions             []AgentSession `json:"sessions"`
-	Messages             []AgentMessage `json:"messages"`
-	Memories             []AgentMemory  `json:"memories"`
-	Bots                 []PaperBot     `json:"bots"`
-	Tasks                []AgentTask    `json:"tasks"`
-	Runs                 []AgentRun     `json:"runs"`
-	Notices              []AgentNotice  `json:"notices"`
-	ProviderCallsEnabled bool           `json:"providerCallsEnabled"`
-	FinancialExecution   bool           `json:"financialExecution"`
+	AIRequests           []AgentAIRequest `json:"aiRequests"`
+	AIFixtureAvailable   bool             `json:"aiFixtureAvailable"`
+	Revision             int64            `json:"revision"`
+	ProfileID            string           `json:"profileId"`
+	Profiles             []AgentProfile   `json:"profiles"`
+	Sessions             []AgentSession   `json:"sessions"`
+	Messages             []AgentMessage   `json:"messages"`
+	Memories             []AgentMemory    `json:"memories"`
+	Bots                 []PaperBot       `json:"bots"`
+	Tasks                []AgentTask      `json:"tasks"`
+	Runs                 []AgentRun       `json:"runs"`
+	Notices              []AgentNotice    `json:"notices"`
+	ProviderCallsEnabled bool             `json:"providerCallsEnabled"`
+	FinancialExecution   bool             `json:"financialExecution"`
 }
 
 // Optional fields are inert data for a fixed action; unknown fields/actions are
 // rejected. No arbitrary callback, URL, model tool or shell can be submitted.
 type AgentCommand struct {
-	Revision        int64  `json:"revision"`
-	Action          string `json:"action"`
-	ProfileID       string `json:"profileId,omitempty"`
-	ID              string `json:"id,omitempty"`
-	Name            string `json:"name,omitempty"`
-	Text            string `json:"text,omitempty"`
-	Source          string `json:"source,omitempty"`
-	ExpiresAt       int64  `json:"expiresAt,omitempty"`
-	Provider        string `json:"provider,omitempty"`
-	Model           string `json:"model,omitempty"`
-	BotID           string `json:"botId,omitempty"`
-	IntervalSeconds int64  `json:"intervalSeconds,omitempty"`
-	MaxRuns         int    `json:"maxRuns,omitempty"`
-	Quantity        int64  `json:"quantity,omitempty"`
-	PriceCents      int64  `json:"priceCents,omitempty"`
-	BudgetCents     int64  `json:"budgetCents,omitempty"`
+	Revision        int64     `json:"revision"`
+	Action          string    `json:"action"`
+	ProfileID       string    `json:"profileId,omitempty"`
+	ID              string    `json:"id,omitempty"`
+	Name            string    `json:"name,omitempty"`
+	Text            string    `json:"text,omitempty"`
+	Source          string    `json:"source,omitempty"`
+	ExpiresAt       int64     `json:"expiresAt,omitempty"`
+	Provider        string    `json:"provider,omitempty"`
+	Model           string    `json:"model,omitempty"`
+	BotID           string    `json:"botId,omitempty"`
+	IntervalSeconds int64     `json:"intervalSeconds,omitempty"`
+	MaxRuns         int       `json:"maxRuns,omitempty"`
+	Quantity        int64     `json:"quantity,omitempty"`
+	PriceCents      int64     `json:"priceCents,omitempty"`
+	BudgetCents     int64     `json:"budgetCents,omitempty"`
+	Limits          *AILimits `json:"limits,omitempty"`
+	ConsentDigest   string    `json:"consentDigest,omitempty"`
 }
 
 func initialAgents() agentDocument {
@@ -151,7 +156,7 @@ func initialAgents() agentDocument {
 		{ID: "wen-operator", Name: "WEN Operator", Persona: "Explain WEN prototypes. Financial execution is unavailable.", Provider: "none"},
 		{ID: "trading-analyst", Name: "Trading Analyst", Persona: "Research and compare bounded paper strategies.", Provider: "none"},
 		{ID: "news-researcher", Name: "News Researcher", Persona: "Keep sourced research separate from instructions and financial facts.", Provider: "none"},
-	}, Sessions: []AgentSession{}, Messages: []AgentMessage{}, Memories: []AgentMemory{}, Bots: []PaperBot{}, Tasks: []AgentTask{}, Runs: []AgentRun{}, Notices: []AgentNotice{}}
+	}, Sessions: []AgentSession{}, Messages: []AgentMessage{}, Memories: []AgentMemory{}, Bots: []PaperBot{}, Tasks: []AgentTask{}, Runs: []AgentRun{}, Notices: []AgentNotice{}, AIRequests: []AgentAIRequest{}}
 }
 func migrateAgents(ctx context.Context, db *sql.DB) error {
 	tx, e := db.BeginTx(ctx, nil)
@@ -210,7 +215,12 @@ func agentView(d agentDocument, revision int64, profile, query string, now int64
 	if agentProfile(d, profile) < 0 {
 		return AgentView{}, errors.New("profile not found")
 	}
-	v := AgentView{Revision: revision, ProfileID: profile, Profiles: d.Profiles, Sessions: []AgentSession{}, Messages: []AgentMessage{}, Memories: []AgentMemory{}, Bots: []PaperBot{}, Tasks: []AgentTask{}, Runs: []AgentRun{}, Notices: []AgentNotice{}}
+	v := AgentView{Revision: revision, ProfileID: profile, Profiles: d.Profiles, Sessions: []AgentSession{}, Messages: []AgentMessage{}, Memories: []AgentMemory{}, Bots: []PaperBot{}, Tasks: []AgentTask{}, Runs: []AgentRun{}, Notices: []AgentNotice{}, AIRequests: []AgentAIRequest{}}
+	for _, q := range d.AIRequests {
+		if q.ProfileID == profile {
+			v.AIRequests = append(v.AIRequests, q)
+		}
+	}
 	query = strings.ToLower(query)
 	sessions := map[string]bool{}
 	for _, s := range d.Sessions {
@@ -281,7 +291,13 @@ func saveAgents(ctx context.Context, tx *sql.Tx, d agentDocument, revision int64
 	if e != nil {
 		return e
 	}
-	if len(b) > agentDocumentLimit {
+	reserved := 0
+	for _, q := range d.AIRequests {
+		if q.State == "prepared" || q.State == "queued" || q.State == "running" {
+			reserved += agentAIResultReserve
+		}
+	}
+	if len(b)+reserved > agentDocumentLimit {
 		return errors.New("local prototype capacity reached; preserve records before further work")
 	}
 	result, e := tx.ExecContext(ctx, "UPDATE agent_workspace SET document=?,revision=revision+1 WHERE id=1 AND revision=?", string(b), revision)
@@ -295,6 +311,9 @@ func saveAgents(ctx context.Context, tx *sql.Tx, d agentDocument, revision int64
 	return e
 }
 func (s *Store) ChangeAgents(ctx context.Context, c AgentCommand) (AgentView, error) {
+	return s.changeAgents(ctx, c, false)
+}
+func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) (AgentView, error) {
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
 		return AgentView{}, e
@@ -324,6 +343,10 @@ func (s *Store) ChangeAgents(ctx context.Context, c AgentCommand) (AgentView, er
 	}
 	now := s.now().Unix()
 	switch c.Action {
+	case "ai-prepare", "ai-start", "ai-cancel", "ai-card-keep", "ai-card-dismiss":
+		if e = changeAgentAI(&d, c, profile, id, now, fixture); e != nil {
+			return AgentView{}, e
+		}
 	case "profile-create":
 		if !validAgentText(c.Name, 80, true) || len(d.Profiles) >= 30 {
 			return AgentView{}, errors.New("profile name required or profile limit reached")

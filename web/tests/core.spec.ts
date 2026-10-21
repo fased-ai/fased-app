@@ -17,10 +17,11 @@ let child: ChildProcess | undefined;
 let url: string;
 let output = "";
 
-async function start() {
+async function start(aiFixture = false) {
   output = "";
   child = spawn(binary, [
     "serve",
+    ...(aiFixture ? ["--ai-fixture"] : []),
     "--listen",
     "127.0.0.1:0",
     "--data-dir",
@@ -933,6 +934,103 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
     path: resolve(
       ".evidence/p5-local-agents/chat-" + test.info().project.name + ".png",
     ),
+    fullPage: true,
+  });
+});
+
+test("optional provider fixture requires scoped disclosure and budgets, preserves review and never creates a task", async ({
+  page,
+}) => {
+  await stop();
+  await start(true);
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page.getByRole("button", { name: "Claim workspace" }).click();
+  await expect(
+    page.getByText("PRIVATE CORE · TERMINAL PROTOTYPES", { exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  await page.goto(url + "/#agents/chat");
+  await page
+    .getByLabel("Conversation name")
+    .fill("Provider fixture conversation");
+  await page.getByRole("button", { name: "Create conversation" }).click();
+  await expect(
+    page.getByRole("heading", {
+      name: "Provider fixture conversation",
+      exact: true,
+    }),
+  ).toBeVisible();
+  const panel = page.getByRole("region", {
+    name: "Optional AI request review",
+  });
+  await panel
+    .getByLabel("AI request", { exact: true })
+    .fill("Compare a bounded paper strategy");
+  await panel.getByRole("button", { name: "Prepare disclosure" }).click();
+  await expect(panel.getByText("prepared", { exact: true })).toBeVisible();
+  const run = panel.getByRole("button", { name: "Run development fixture" });
+  await expect(run).toBeDisabled();
+  await panel.getByText("Exact context disclosure", { exact: true }).click();
+  await expect(panel.locator("pre")).toContainText('"store":false');
+  await panel
+    .getByLabel("I reviewed this context and these fixture limits")
+    .check();
+  await run.click();
+  await expect(panel.getByText("completed", { exact: true })).toBeVisible({
+    timeout: 12000,
+  });
+  const card = panel.getByRole("region", { name: "Review paper journal" });
+  await card.getByRole("button", { name: "Keep draft" }).click();
+  await expect(card).toContainText("kept");
+  const view = await privateCLI(["agents"]);
+  expect(view.aiRequests).toHaveLength(1);
+  expect(view.tasks).toHaveLength(0);
+  expect(view.aiRequests[0].heldMicrousd).toBe(0);
+  expect(view.providerCallsEnabled).toBe(false);
+  const request = {
+    revision: view.revision,
+    action: "ai-prepare",
+    profileId: view.profileId,
+    id: view.sessions[0].id,
+    text: "Cancelled preview",
+    limits: {
+      maxInputTokens: 24000,
+      maxOutputTokens: 1024,
+      deadlineSeconds: 3,
+      budgetMicrousd: 30000,
+    },
+  };
+  const next = await privateCLI(["agents", "--request-stdin"], request);
+  await privateCLI(["agents", "--request-stdin"], {
+    revision: next.revision,
+    action: "ai-cancel",
+    profileId: view.profileId,
+    id: next.aiRequests[1].id,
+  });
+  await stop();
+  await start();
+  await page.goto(url);
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.goto(url + "/#agents/chat");
+  await expect(page.getByText("completed", { exact: true })).toBeVisible();
+  await expect(page.getByText("cancelled", { exact: true })).toBeVisible();
+  const saved = await privateCLI(["agents"]);
+  expect(saved.aiFixtureAvailable).toBe(false);
+  expect(saved.aiRequests[0].cards[0].review).toBe("kept");
+  expect(saved.tasks).toHaveLength(0);
+  await mkdir(".evidence/p5-provider-review", { recursive: true });
+  await page.screenshot({
+    path: `.evidence/p5-provider-review/provider-${test.info().project.name}.png`,
     fullPage: true,
   });
 });

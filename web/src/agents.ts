@@ -75,7 +75,41 @@ export type AgentNotice = {
   at: number;
   read: boolean;
 };
+export type AILimits = {
+  maxInputTokens: number;
+  maxOutputTokens: number;
+  deadlineSeconds: number;
+  budgetMicrousd: number;
+};
+export type AgentAIRequest = {
+  id: string;
+  profileId: string;
+  sessionId: string;
+  prompt: string;
+  model: string;
+  context: string;
+  disclosure: string;
+  digest: string;
+  limits: AILimits;
+  state: string;
+  createdAt: number;
+  heldMicrousd: number;
+  spentMicrousd: number;
+  inputTokens: number;
+  outputTokens: number;
+  answer: string;
+  failure: string;
+  cards: {
+    id: string;
+    kind: string;
+    title: string;
+    text: string;
+    review: string;
+  }[];
+};
 export type AgentView = {
+  aiRequests: AgentAIRequest[];
+  aiFixtureAvailable: boolean;
   revision: number;
   profileId: string;
   profiles: AgentProfile[];
@@ -106,6 +140,8 @@ export type AgentCommand = {
   quantity?: number;
   priceCents?: number;
   budgetCents?: number;
+  limits?: AILimits;
+  consentDigest?: string;
 };
 
 export function useAgents(core: ReturnType<typeof useCore>) {
