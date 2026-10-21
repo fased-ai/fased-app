@@ -1,13 +1,59 @@
 // Called only inside the existing disposable managed Ubuntu identity fixture.
 import assert from "node:assert/strict";
+import { fixtureDevelopmentEnvelope } from "./fixture-development-envelope.mjs";
 import { spawn, execFileSync } from "node:child_process";
-import { randomBytes, generateKeyPairSync, sign } from "node:crypto";
+import { randomBytes, generateKeyPairSync } from "node:crypto";
 import { readFile, writeFile, mkdir, readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { sha, save } from "./handoff-transport-evidence.mjs";
 export const fixtureInspectionDigest = (domain, obj) =>
   sha("fased-update-snapshot:v1:" + domain + "\0" + JSON.stringify(obj));
+export const fixtureInspectionPTY = String.raw`import os,pty,select,sys,time,re,json,signal,hashlib
+binary,op,ident,tx,inputs,artifacts,choice,boundary=sys.argv[1:]
+if op=='provision':args=[binary,'custody','fixture-inspection','provision','--transaction',tx,'--input-dir',inputs,'--artifact-dir',artifacts]
+else:args=[binary,'custody','fixture-inspection',op,'--bridge-id',ident]
+args+=['--disposable-fixture','--prepare-host']
+pid,fd=pty.fork()
+if pid==0:os.execv(binary,args)
+seen=b'';sent=False;interrupted=False;deadline=time.time()+85;done=None
+try:
+ while time.time()<deadline:
+  ready,_,_=select.select([fd],[],[],.05)
+  if ready:
+   try:b=os.read(fd,65536)
+   except OSError:break
+   if not b:break
+   seen+=b
+   prompt=re.search(rb'Type ((?:BRIDGE FIXTURE|INSPECT FIXTURE) [a-f0-9]{64}):',seen)
+   if prompt and not sent:
+    os.write(fd,(prompt.group(1) if choice=='approve' else b'CANCEL')+b'\n');sent=True
+   if boundary and ('Fixture acceptance stopped: ').encode() in seen:
+    stopped=re.search(rb"Fixture acceptance stopped: ([0-9]+) "+boundary.encode()+rb"\r?\n",seen)
+    if stopped:
+     actual=int(stopped.group(1));until=time.monotonic()+1
+     while time.monotonic()<until:
+      status=open("/proc/%d/status"%actual).read()
+      if "State:\tT" in status:break
+      time.sleep(.005)
+     assert "State:\tT" in status,status
+     assert hashlib.sha256(open("/proc/%d/exe"%actual,"rb").read()).digest()==hashlib.sha256(open(binary,"rb").read()).digest()
+     assert os.stat("/proc/%d"%actual).st_uid==os.getuid()
+     os.kill(actual,signal.SIGKILL)
+     try:os.killpg(pid,signal.SIGKILL)
+     except ProcessLookupError:pass
+     interrupted=True;break
+  p,status=os.waitpid(pid,os.WNOHANG)
+  if p:done=os.waitstatus_to_exitcode(status);break
+finally:
+ if done is None:
+  if time.time()>=deadline:
+   try:os.killpg(pid,signal.SIGKILL)
+   except ProcessLookupError:pass
+  try:_,status=os.waitpid(pid,0);done=os.waitstatus_to_exitcode(status)
+  except ChildProcessError:done=-1
+ os.close(fd)
+print(json.dumps({'exitCode':done,'interrupted':interrupted,'output':seen.decode(errors='replace')}))`;
 export async function fixtureInspectionJourney({
   root,
   env,
@@ -15,10 +61,16 @@ export async function fixtureInspectionJourney({
   ownerStatus,
   restartApp,
   restartSigner,
+  stopAt = "",
 }) {
-  assert.equal(process.env.GITHUB_ACTIONS, "true");
+  assert.ok(
+    process.env.GITHUB_ACTIONS === "true" ||
+      process.env.FASED_DISPOSABLE_VM === "1",
+  );
   assert.ok(process.getuid() > 0);
-  const evidence = path.resolve(".evidence/p4-installed-inspection"),
+  const evidence = path.resolve(
+      env.FASED_INSPECTION_EVIDENCE_ROOT ?? ".evidence/p4-installed-inspection",
+    ),
     work = path.join(evidence, "public-fixture"),
     core = path.resolve(".evidence/bin/fased-app"),
     signer = path.resolve(".evidence/bin/fased-signer");
@@ -120,22 +172,30 @@ export async function fixtureInspectionJourney({
     signer: before.signer,
   });
   const exporter = spawn(
-    "go",
-    [
-      "test",
-      "-count=1",
-      "-run",
-      "^TestInstalledInspectionFixtureExport$",
-      "-timeout",
-      "110s",
-      "./internal/update",
-    ],
+    env.FASED_INSPECTION_EXPORTER ?? "go",
+    env.FASED_INSPECTION_EXPORTER
+      ? [
+          "-test.run=^TestInstalledInspectionFixtureExport$",
+          "-test.timeout=110s",
+        ]
+      : [
+          "test",
+          "-count=1",
+          "-run",
+          "^TestInstalledInspectionFixtureExport$",
+          "-timeout",
+          "110s",
+          "./internal/update",
+        ],
     {
       env: { ...env, FASED_INSTALLED_INSPECTION_EXPORT: work },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
   let exportLog = "";
+  exporter.on("error", (error) => {
+    exportLog += error.message;
+  });
   exporter.stdout.on("data", (b) => {
     exportLog += b;
   });
@@ -143,38 +203,7 @@ export async function fixtureInspectionJourney({
     exportLog += b;
   });
   const exportDone = new Promise((resolve) => exporter.once("close", resolve));
-  const tty = String.raw`import os,pty,select,sys,time,re,json,signal
-binary,op,ident,tx,inputs,artifacts,choice,boundary=sys.argv[1:]
-if op=='provision':args=[binary,'custody','fixture-inspection','provision','--transaction',tx,'--input-dir',inputs,'--artifact-dir',artifacts]
-else:args=[binary,'custody','fixture-inspection',op,'--bridge-id',ident]
-args+=['--disposable-fixture','--prepare-host']
-pid,fd=pty.fork()
-if pid==0:os.execv(binary,args)
-seen=b'';sent=False;interrupted=False;deadline=time.time()+85;done=None
-try:
- while time.time()<deadline:
-  ready,_,_=select.select([fd],[],[],.05)
-  if ready:
-   try:b=os.read(fd,65536)
-   except OSError:break
-   if not b:break
-   seen+=b
-   prompt=re.search(rb'Type ((?:BRIDGE FIXTURE|INSPECT FIXTURE) [a-f0-9]{64}):',seen)
-   if prompt and not sent:
-    os.write(fd,(prompt.group(1) if choice=='approve' else b'CANCEL')+b'\n');sent=True
-   if boundary and ('Inspection bridge boundary: '+boundary).encode() in seen:
-    os.kill(pid,signal.SIGKILL);interrupted=True;break
-  p,status=os.waitpid(pid,os.WNOHANG)
-  if p:done=os.waitstatus_to_exitcode(status);break
-finally:
- if done is None:
-  if time.time()>=deadline:
-   try:os.killpg(pid,signal.SIGKILL)
-   except ProcessLookupError:pass
-  try:_,status=os.waitpid(pid,0);done=os.waitstatus_to_exitcode(status)
-  except ChildProcessError:done=-1
- os.close(fd)
-print(json.dumps({'exitCode':done,'interrupted':interrupted,'output':seen.decode(errors='replace')}))`;
+  const tty = fixtureInspectionPTY;
   const txpath = path.join(work, "transaction.json"),
     candidate = path.join(work, "candidate"),
     inputDir = path.join(work, "inputs");
@@ -199,6 +228,8 @@ print(json.dumps({'exitCode':done,'interrupted':interrupted,'output':seen.decode
         await readFile(path.join(work, "export-ready"));
         break;
       } catch {
+        if (exporter.exitCode !== null)
+          throw Error("fixture exporter failed: " + exportLog);
         if (n === 149) throw Error("fixture exporter did not become ready");
         await delay(100);
       }
@@ -244,31 +275,21 @@ print(json.dumps({'exitCode':done,'interrupted':interrupted,'output':seen.decode
         contract: role === "app" ? contract.contract : contract,
       });
     }
+    const lifetime = Number(env.FASED_FIXTURE_MAINTENANCE_TTL ?? 600);
+    assert.ok(
+      Number.isSafeInteger(lifetime) && lifetime >= 30 && lifetime <= 600,
+    );
     const maintenance = {
       version: 1,
       product: "fased-app",
       channel: "development",
       sequence: String(sequence),
       issuedAt: now - 1,
-      expiresAt: now + 600,
+      expiresAt: now + lifetime,
       target: { os: "linux", arch: "amd64" },
       components,
     };
-    // Match the existing development signature domain and raw JSON payload form.
-    const payload = JSON.stringify(maintenance),
-      envelope = {
-        version: 1,
-        keyId,
-        payload: maintenance,
-        signature: sign(
-          null,
-          Buffer.concat([
-            Buffer.from("fased-app-update-development:v1\0"),
-            Buffer.from(payload),
-          ]),
-          privateKey,
-        ).toString("base64"),
-      };
+    const envelope = fixtureDevelopmentEnvelope(maintenance, keyId, privateKey);
     const tx = {
       tlsCa: (await readFile(path.join(work, "fixture-ca.pem"))).toString(
         "base64",
@@ -280,7 +301,7 @@ print(json.dumps({'exitCode':done,'interrupted':interrupted,'output':seen.decode
       target,
       catalogSha256: inputs["catalog.json"],
       inputs,
-      maintenance: Buffer.from(JSON.stringify(envelope)).toString("base64"),
+      maintenance: Buffer.from(envelope).toString("base64"),
       trust: Buffer.from(JSON.stringify(trust)).toString("base64"),
       reviewedAt: now,
       core: before.core,
@@ -306,8 +327,20 @@ print(json.dumps({'exitCode':done,'interrupted':interrupted,'output':seen.decode
           (s) => !s.includes("inspectionBridge"),
         )),
     );
-    const result = terminal("provision");
+    if (stopAt) env.FASED_TEST_BRIDGE_STOP = stopAt;
+    const result = terminal("provision", "approve", stopAt);
+    delete env.FASED_TEST_BRIDGE_STOP;
     await save(path.join(evidence, "bridge-terminal.json"), result);
+    if (stopAt) {
+      pass(
+        "actualControllerStoppedAtExactCut",
+        result.interrupted && result.exitCode !== 0,
+      );
+      report.cut = stopAt;
+      report.bridgeId = id;
+      report.result = "CUT";
+      return report;
+    }
     pass("guardedBridgeCompletes", result.exitCode === 0);
     const after = snapshot();
     report.after = after;

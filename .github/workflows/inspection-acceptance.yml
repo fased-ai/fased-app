@@ -1,0 +1,82 @@
+name: P4 fixture fault and reboot acceptance
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "internal/update/**"
+      - "internal/custodyinstall/**"
+      - "internal/signer/**"
+      - "internal/core/**"
+      - "cmd/fased-app/inspection_*"
+      - "cmd/fased-app/bootstrap_linux.go"
+      - "cmd/fased-signer/inspection_*"
+      - "scripts/*inspection*"
+      - "scripts/fixture-vm-guest.mjs"
+      - "scripts/fixture-development-envelope.mjs"
+      - ".github/workflows/inspection-acceptance.yml"
+permissions:
+  contents: read
+jobs:
+  inspection-vm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - run: npm ci && npm run build
+      - name: Focused fault/time and coupled bridge checks
+        run: |
+          mkdir -p .evidence/p4-fault-reboot
+          go test -race -json -count=1 ./internal/update ./internal/custodyinstall ./cmd/fased-app -run '^(TestInspection|TestInstalledInspection|TestBootstrap)' > .evidence/p4-fault-reboot/focused.jsonl
+      - name: Build test-only immutable readers and public exporter
+        run: |
+          go test -c -o .evidence/p4-fault-reboot/fased-app ./cmd/fased-app
+          go test -c -o .evidence/p4-fault-reboot/update-tests ./internal/update
+          go build -o .evidence/bin/fased-signer ./cmd/fased-signer
+          node scripts/build-inspection-predecessor.mjs
+      - name: Disposable VM prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils xorriso acl
+          if test -e /dev/kvm; then
+            fased_vm_owner="$(id -un)"
+            printf 'KERNEL=="kvm", OWNER="%s", MODE="0600"\n' "$fased_vm_owner" > .evidence/p4-fault-reboot/99-fased-fixture-kvm.rules
+            sudo install -o root -g root -m 0644 .evidence/p4-fault-reboot/99-fased-fixture-kvm.rules /etc/udev/rules.d/99-fased-fixture-kvm.rules
+            sudo udevadm control --reload-rules
+            sudo udevadm trigger --name-match=kvm
+          fi
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .evidence/p4-fault-reboot/ubuntu.img
+            .evidence/p4-fault-reboot/node-v24.10.0-linux-x64.tar.xz
+          key: ubuntu-noble-b3296484e362ba2e-node24.10.0
+      - name: Actual interruption, kernel reboot and protected recovery
+        env:
+          FASED_DISPOSABLE_VM_ACCEPTANCE: "1"
+        run: python3 scripts/check-inspection-vm.py --full
+      - name: Remove only the owned CI KVM rule
+        if: always()
+        run: |
+          if test -f .evidence/p4-fault-reboot/99-fased-fixture-kvm.rules && sudo cmp -s .evidence/p4-fault-reboot/99-fased-fixture-kvm.rules /etc/udev/rules.d/99-fased-fixture-kvm.rules; then
+            sudo rm -- /etc/udev/rules.d/99-fased-fixture-kvm.rules
+            sudo udevadm control --reload-rules
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: inspection-fault-reboot
+          include-hidden-files: true
+          path: |
+            .evidence/p4-fault-reboot/*.json
+            .evidence/p4-fault-reboot/*.jsonl
+            .evidence/p4-fault-reboot/*.log
+            .evidence/p4-fault-reboot/*.stderr
+          retention-days: 7

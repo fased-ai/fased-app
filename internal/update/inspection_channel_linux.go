@@ -264,7 +264,7 @@ func (s *InstalledInspectionServer) handle(ctx context.Context, c *net.UnixConn,
 		return
 	}
 	clock, e := in.clock()
-	if e != nil {
+	if e != nil || !inspectionClocksAgree(hello.Clock, clock) {
 		return
 	}
 	challenge := inspectionChallenge{NewProbe(), s.role.boot, s.role.head(), in.source.digest, sign, own.Admission.UnitSHA256, clock}
@@ -370,7 +370,7 @@ func InspectInstalledFixture(ctx context.Context, role *InstalledInspectionRole,
 	if e = inspectionReadFrame(c, in, nonce, "challenge", &challenge, deadline); e != nil {
 		return out, e
 	}
-	if !IDOK(challenge.ID) || !IDOK(challenge.Boot) || !hashOK(challenge.Head) || !hashOK(challenge.Source) || challenge.Unit != hello.Unit || !inspectionSafeSigner(challenge.Signer) {
+	if !inspectionClocksAgree(clock, challenge.Clock) || !IDOK(challenge.ID) || !IDOK(challenge.Boot) || !hashOK(challenge.Head) || !hashOK(challenge.Source) || challenge.Unit != hello.Unit || !inspectionSafeSigner(challenge.Signer) {
 		return out, errors.New("invalid independent signer challenge")
 	}
 	if _, e = JoinSnapshots(core, challenge.Signer, Target{"linux", "amd64"}); e != nil {
