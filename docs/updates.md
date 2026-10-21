@@ -1818,8 +1818,9 @@ not a public installer.
 
 ## Installed release-admission and reader-bootstrap compatibility design
 
-**P4 design contract, revision 1, 2026-10-20.** Design-only: no installed RPC,
-reader conversion, configuration, service or acquisition route is added here.
+**P4 design contract, revision 1, 2026-10-20.** The non-installed model below
+rehearses this contract. No installed RPC, reader conversion, configuration,
+service or acquisition route is added here.
 Real wallets, financial execution, installed execution and automatic updates stay
 disabled. The compiled fixture transport is reusable engineering evidence, not an
 installed authority. Public P4 remains ten PASS/six BLOCKED; P5 is not authorized.
@@ -1992,8 +1993,8 @@ and controlled clocks do not implicitly define installed storage/time policy.
 
 ### Finite acceptance and file ownership
 
-All IA rows below are **BLOCKED** for runtime in this design package. The first
-implementation can close only their non-installed model predicates. Existing
+All IA rows below remain **BLOCKED** for installed runtime. The implementation
+below closes only their non-installed model predicates. Existing
 UT/HA results remain fixture engineering proof; no IA row can close public
 P4-10/11, native/VPS, portable-recovery or retail gates by inference.
 
@@ -2063,3 +2064,47 @@ RPC, system service, identity provisioning or controller invocation. Required
 installed/Ubuntu acceptance remains BLOCKED until separately authorized adapters
 and their prerequisites exist. The command above is a completion contract, not
 an authorization to leave design-only scope now.
+
+### Implemented non-installed model
+
+`internal/update/installed_admission_model.go` and its tests implement private,
+fixture-only reader decisions, independently pinned model roles, exact review,
+opaque live receipts, final owner refresh/signer confirmation and recovery.
+They have no installed dispatch or controller consumer. The symbolic proposed
+reader has no allocated lifecycle number. Existing protocol/financial-format 1
+and an exact topology digest are explicit preservation inputs, not new production
+wire/schema assignments. A changed protocol, format, topology or unreadable
+history refuses bridge creation before mutation. Nonzero installed history is
+preserved in the copied bridge state.
+
+Each role uses a separate fresh fixture checkpoint namespace and the existing
+real disposable TUF/provenance/inert-artifact verifier. The bounded combined
+store gains one strictly validated model record kind, binding its exchange to the
+outer ID/channel, profile, identity, finite phase and request digest. Narrow
+factoring of `handoff.go` preserves pair checks and prevents a model namespace
+from becoming a legacy handoff session. Model re-open is historical only; JSON,
+old status and restarted actors cannot mint a live receipt. Unknown pending
+learning and anchor/publication failures remain held. Bridge checkpoints model
+exact expected-head recovery and forward-only fencing; they do not perform OS
+file publication, cold process execution or financial installation.
+
+`scripts/check-update-installed-admission-model.mjs` requires explicit opt-in,
+Linux and a nonzero current UID, six exact model families, all sixteen IA IDs and
+eight RC decisions. It also runs the six directly coupled handoff families.
+Each race group has its own two-minute test deadline; logs stream to persistent
+files before process completion. Unique per-attempt private fixtures prevent an
+interrupted attempt from supplying later evidence. Successful cleanup, actual
+before/after financial canary/floor comparisons, unchanged source fingerprints
+and disabled capability assertions are mandatory. Disposable private keys remain
+in memory. The guard rejects missing/zero/skipped tests and absent coverage.
+
+Run the guarded command above (or
+`FASED_INSTALLED_ADMISSION_MODEL=1 node scripts/check-update-installed-admission-model.mjs`)
+from the source root as the ordinary user. Existing Ubuntu core CI already runs
+these tests through `go test -race ./internal/...`; no workflow or service changes
+are required. Exact local/Ubuntu results, head/tree, corrections and cleanup are
+recorded in the Fased execution checkpoint. Model UIDs, immutable-file identity,
+seed authentication and cold-reader facts are trusted fixture inputs, not actual
+OS/production proof. IA-16 installed helper/UID acceptance and every public P4
+gate remain separate; real wallets, installed execution and automatic updates
+remain disabled.
