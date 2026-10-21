@@ -10,6 +10,7 @@ import {
 import { initialState, reducer, restoreState, STORAGE_KEY } from "./state";
 import { navigation, terminalData } from "./fixtures";
 import { useCore } from "./core";
+import { useAgents } from "./agents";
 import type { Action } from "./state";
 function loadInitialState() {
   try {
@@ -33,11 +34,64 @@ function useWorkspaceState() {
     loadInitialState,
   );
   const core = useCore();
+  const agents = useAgents(core);
+  const activeAgents = core.mode === "ready" ? agents.view : null;
   const state =
     core.mode === "ready" && core.setup
-      ? { ...prototypeState, setup: core.setup.settings }
+      ? {
+          ...prototypeState,
+          setup: core.setup.settings,
+          ...(activeAgents
+            ? {
+                profiles: activeAgents.profiles.map((p) => ({
+                  id: p.id,
+                  name: p.name,
+                  role: p.persona,
+                  initials: p.name
+                    .split(" ")
+                    .map((x) => x[0])
+                    .join("")
+                    .slice(0, 2),
+                  color: "lime",
+                  provider: p.provider,
+                })),
+                selectedProfile: activeAgents.profileId,
+                memories: activeAgents.memories.map((m) => ({
+                  id: m.id,
+                  profileId: m.profileId,
+                  text: m.text,
+                  source: m.source,
+                  verified: new Date(m.updatedAt * 1000).toLocaleDateString(),
+                })),
+                notices: activeAgents.notices.map((n) => ({
+                  id: n.id,
+                  title: n.text,
+                  detail:
+                    "Saved by the local task engine. No financial execution.",
+                  read: n.read,
+                  tone: "info" as const,
+                })),
+              }
+            : {}),
+        }
       : prototypeState;
   function dispatch(action: Action) {
+    if (core.mode === "ready" && action.type === "profile") {
+      void agents.select(action.id);
+      return;
+    }
+    if (core.mode === "ready" && action.type === "read-notices") {
+      void (async () => {
+        for (const n of agents.view?.notices ?? []) {
+          if (
+            !n.read &&
+            !(await agents.change({ action: "notice-read", id: n.id }))
+          )
+            break;
+        }
+      })();
+      return;
+    }
     if (action.type === "setup" && core.mode === "ready") {
       void core.updateSetup(action.patch);
       return;
@@ -137,6 +191,7 @@ function useWorkspaceState() {
 
   return {
     core,
+    agents,
     state,
     dispatch,
     route,

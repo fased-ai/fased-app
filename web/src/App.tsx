@@ -27,6 +27,7 @@ import { WorkspaceDialogs } from "./components/WorkspaceDialogs";
 import { Overview } from "./pages/Overview";
 import { Wallets } from "./pages/Wallets";
 import { Agents } from "./pages/Agents";
+import { LocalAgents } from "./pages/LocalAgents";
 import { Terminals } from "./pages/Terminals";
 import { Settings } from "./pages/Settings";
 import { CoreProvider } from "./core";
@@ -292,7 +293,11 @@ function WorkspaceShell() {
             ) : section === "wallets" ? (
               <Wallets />
             ) : section === "agents" ? (
-              <Agents />
+              core.mode === "ready" ? (
+                <LocalAgents />
+              ) : (
+                <Agents />
+              )
             ) : section === "terminals" ? (
               <Terminals />
             ) : section === "settings" ? (
@@ -327,8 +332,10 @@ function WorkspaceShell() {
           </main>
           <footer className="app-footer">
             <span>
-              <LockKeyhole size={12} /> Prototype preferences stay in this
-              browser.
+              <LockKeyhole size={12} />{" "}
+              {core.mode === "ready"
+                ? "Agent records stay on this instance."
+                : "Prototype preferences stay in this browser."}
             </span>
             <span>Foundation before execution.</span>
           </footer>

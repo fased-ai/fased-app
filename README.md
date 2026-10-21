@@ -2,7 +2,7 @@
 
 A focused financial automation workspace. **P2 engineering foundation**: Go serves the production React interface, owns setup in SQLite, authenticates the instance owner, and exposes the same setup to the CLI. A thin native client, ordinary-user platform installers, private-access helpers and unsigned engineering packages are implemented. Ubuntu runtime and sandbox preparation use explicit OS authorization in the terminal wizard or `--prepare-host`. Public trust/signing and supported-host acceptance remain unfinished. Wallet signing, financial execution, AI connections and updates are later phases.
 
-The interface includes shared navigation, resumable setup, wallet-mode and permission previews, agent profiles, scripted chat/action cards, scoped draft memory, a notification inbox, and four labelled terminal mockups. WEN Asset Mining and Loss Mining remain prototypes while their independent contracts are developed. Provider/wallet selections save preferences only; they create no account or authority.
+The interface includes shared navigation, resumable setup, wallet-mode and permission previews, persistent local agent profiles/conversations, scoped memory with corrections/expiry, bounded tasks, a durable notification inbox, paper examples, and four labelled terminal mockups. WEN Asset Mining and Loss Mining remain prototypes while their independent contracts are developed. Provider/wallet selections save preferences only; they create no account or authority.
 
 See [installation, private access and recovery](docs/install.md) for engineering package use and platform boundaries.
 
@@ -121,7 +121,60 @@ State defaults to the OS user's configuration directory under `fased-app`; `--da
 
 ## Data and scope
 
-In core mode, setup lives in SQLite. Custom profiles, draft notes and notifications remain browser demo data; chats are temporary and scripted. Settings → Reset prototype clears those demo preferences and preserves core setup. Do not enter secrets or real financial information in demo pages. The application makes no provider, RPC or financial requests.
+In core mode, setup and the local agent workspace live in private SQLite. Profiles,
+named conversations, messages, memory corrections/expiry, tasks, fixed-input paper
+bots, their evaluation journal and inbox survive core restart. Provider/model
+choices are preferences only. Chat saves local notes with an explicit system
+acknowledgement; it never fabricates a model response. No provider credentials,
+model calls, RPC requests, wallet access or financial orders are available.
+Browser-only design mode retains its separate illustrative data. Reset prototype
+preserves the core's setup and agent records.
+
+Tasks run in the existing core with the UI closed. Reminders and the versioned
+`fixed-paper-buy-v1` strategy are the only task kinds. Each task has a 60-second to
+seven-day interval and 1–20 evaluations; missed intervals coalesce into one run.
+Each paper evaluation records its actual fixed inputs and available fixture
+budget. Budget failures spend nothing. Results, budgets, inbox and next schedule
+commit in one transaction, so restart/retry cannot repeat a completed evaluation.
+Pausing a task stops future evaluations; resuming starts a new interval. Update
+pause fences all agent writes and scheduling. There is no background OS service
+per profile or task.
+
+The CLI uses the same authenticated API and profile scope as the UI:
+
+```sh
+fased-app agents --profile trading-analyst
+fased-app agents --profile trading-analyst --search thesis
+fased-app agents --request-stdin < local-command.json
+```
+
+A command includes the revision returned by the previous read. For example:
+
+```json
+{
+  "revision": 0,
+  "action": "session-create",
+  "profileId": "trading-analyst",
+  "name": "My thesis"
+}
+```
+
+Stale commands fail with a conflict; they are never replayed automatically.
+Supported actions: `profile-create`, `profile-update`, `session-create`,
+`message-add`, `memory-put`, `memory-delete`, `bot-create`, `task-create`,
+`task-pause`, `task-resume`, `task-run`, `notice-read`. Profile/session/memory/task
+IDs are scoped by the server. Personas and stored text grant no tools or wallet
+permissions. Every memory has owner-entered evidence/source, timestamp, optional
+expiry and up to eight previous revisions. Memory deletion leaves task/paper
+journals intact.
+
+This bounded prototype holds at most 30 profiles, 100 sessions, 200 messages,
+100 memories, 30 paper bots, 100 tasks and 200 total scheduled evaluations, within
+a 512 KiB document. Capacity failures preserve existing records; no automatic
+pruning removes history. Schema 4 adds this workspace and includes it in update
+snapshot/backup identity. Schema-3 instances migrate only outside an update hold;
+older binaries refuse schema 4. This is not a supported public upgrade/downgrade
+path. Existing P4 production/native/VPS/retail/recovery blockers remain open.
 
 Remaining P2 acceptance includes the platform package journeys, retail signing/trust and runtime prerequisites, and an authorized real Ubuntu VPS/private-access journey. Current engineering package/private-access/recovery instructions are in `docs/install.md`. The Go wallet signer, its independent policy/recovery storage, and a restricted update helper follow in P3/P4. The signer status API reports unavailable and the health API explicitly disables financial/provider/update capabilities.
 

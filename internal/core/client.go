@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -97,7 +98,11 @@ func (c *Client) Do(ctx context.Context, method, route string, input, output any
 		return fmt.Errorf("core request failed (%d): %s", response.StatusCode, message.Error)
 	}
 	if output != nil {
-		if err = json.NewDecoder(io.LimitReader(response.Body, 32*1024)).Decode(output); err != nil {
+		limit := int64(32 * 1024)
+		if route == "/api/v1/agents" || strings.HasPrefix(route, "/api/v1/agents?") {
+			limit = agentDocumentLimit + 32*1024
+		}
+		if err = json.NewDecoder(io.LimitReader(response.Body, limit)).Decode(output); err != nil {
 			return errors.New("invalid core response")
 		}
 	}

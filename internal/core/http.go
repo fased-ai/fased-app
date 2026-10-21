@@ -157,6 +157,9 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
+	case "/api/v1/agents":
+		h.agentsAPI(w, r, token)
+		return
 	case "/api/v1/updates/preferences":
 		h.updatePreferencesAPI(w, r, token)
 		return

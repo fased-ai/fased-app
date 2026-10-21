@@ -279,7 +279,7 @@ func TestCorePauseSchemaTwoMigrationPreservesOwnerMetadata(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if _, e = s.db.Exec(`DROP TRIGGER update_pause_instance; DROP TRIGGER update_pause_accounts; DROP TABLE update_pause; PRAGMA user_version=2;`); e != nil {
+	if _, e = s.db.Exec(`DROP TABLE agent_workspace; DROP TRIGGER update_pause_instance; DROP TRIGGER update_pause_accounts; DROP TABLE update_pause; PRAGMA user_version=2;`); e != nil {
 		t.Fatal(e)
 	}
 	s.Close()
@@ -293,7 +293,7 @@ func TestCorePauseSchemaTwoMigrationPreservesOwnerMetadata(t *testing.T) {
 		t.Fatal("schema-2 owner/account data changed", e)
 	}
 	p, e := s.UpdatePause(t.Context(), update.CorePauseCommand{Action: "status", ProbeID: update.NewProbe()})
-	if e != nil || p.State != "idle" || p.Core.State.Version != 3 {
+	if e != nil || p.State != "idle" || p.Core.State.Version != StateSchema {
 		t.Fatal("schema-2 pause initialization", e)
 	}
 }

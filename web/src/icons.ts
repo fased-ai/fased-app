@@ -31,6 +31,7 @@ export {
   Play,
   Plus,
   Radio,
+  RefreshCw,
   Search,
   Server,
   Settings2,

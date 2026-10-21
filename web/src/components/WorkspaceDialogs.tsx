@@ -22,6 +22,7 @@ export function WorkspaceDialogs() {
   const {
     state,
     core,
+    agents,
     dispatch,
     setupOpen,
     setSetupOpen,
@@ -386,9 +387,23 @@ export function WorkspaceDialogs() {
           onClose={() => setProfileOpen(false)}
         >
           <form
-            onSubmit={(e) => {
+            onSubmit={async (e) => {
               e.preventDefault();
               if (!profileName.trim()) return;
+              if (core.mode === "ready") {
+                if (
+                  await agents.change({
+                    action: "profile-create",
+                    name: profileName,
+                    text: "Custom research profile",
+                  })
+                ) {
+                  setProfileName("");
+                  setProfileOpen(false);
+                  navigate("agents/chat");
+                }
+                return;
+              }
               dispatch({
                 type: "add-profile",
                 name: profileName,
@@ -415,6 +430,7 @@ export function WorkspaceDialogs() {
                 placeholder="e.g. Portfolio Researcher"
               />
               <p className="subtle">
+                {agents.error && <span role="alert">{agents.error}</span>}
                 Profiles hold their own context and model preference. They do
                 not need a separate service or wallet.
               </p>
@@ -429,7 +445,12 @@ export function WorkspaceDialogs() {
               </button>
               <button
                 className="primary"
-                disabled={!profileName.trim() || state.profiles.length >= 30}
+                disabled={
+                  !profileName.trim() ||
+                  state.profiles.length >= 30 ||
+                  agents.busy ||
+                  (core.mode === "ready" && !agents.view)
+                }
               >
                 Create profile <Plus size={14} />
               </button>

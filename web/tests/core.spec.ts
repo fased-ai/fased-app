@@ -751,6 +751,9 @@ test("proposal form uses explicit fixture labels (UI mock only)", async ({
   await page.getByLabel("One-use claim code").fill(claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
+  await expect(
+    page.getByText("PRIVATE CORE · TERMINAL PROTOTYPES", { exact: true }),
+  ).toBeVisible();
   await page.goto(url + "/#wallets/accounts");
   await expect(page.getByLabel("Fixture account", { exact: true })).toBeVisible(
     { timeout: 1000 },
@@ -768,4 +771,168 @@ test("proposal form uses explicit fixture labels (UI mock only)", async ({
   expect(record.proposals[0].proposal.grant.budget).toBe("50");
   expect(record.proposals[0].proposal.grant.account).toEqual(ref);
   await expect(page.getByText("not-approved", { exact: true })).toBeVisible();
+});
+
+test("local agents share UI and CLI records, isolate profiles and survive core restart", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page.getByRole("button", { name: "Claim workspace" }).click();
+  await expect(
+    page.getByText("PRIVATE CORE · TERMINAL PROTOTYPES", { exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  await page.goto(url + "/#agents/chat");
+  await page.getByRole("button", { name: "New profile", exact: true }).click();
+  await page
+    .getByLabel("Profile name", { exact: true })
+    .fill("Local acceptance researcher");
+  await page
+    .getByRole("button", { name: "Create profile", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", {
+      name: "Local acceptance researcher · Conversations",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page.getByLabel("Conversation name").fill("Saved thesis");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Our local thesis survives restart");
+  await page.getByRole("button", { name: "Save message", exact: true }).click();
+  await expect(
+    page.getByText("Our local thesis survives restart", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Saved locally. No AI provider was called.", {
+      exact: false,
+    }),
+  ).toBeVisible();
+  let view = await privateCLI(["agents"]);
+  const p = view.profiles.find(
+    (x: { name: string }) => x.name === "Local acceptance researcher",
+  ).id;
+  view = await privateCLI(["agents", "--profile", p]);
+  expect(view.messages).toHaveLength(2);
+  const localCommand = async (command: object) => {
+    const prior = await privateCLI(["agents", "--profile", p]);
+    return privateCLI(["agents", "--request-stdin"], {
+      revision: prior.revision,
+      profileId: p,
+      ...command,
+    });
+  };
+  view = await localCommand({
+    action: "memory-put",
+    text: "Concise answers",
+    source: "Owner preference",
+  });
+  const memoryID = view.memories[0].id;
+  await page.getByRole("button", { name: "memory", exact: true }).click();
+  await expect(
+    page.getByText("Concise answers", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Correct note", exact: true }).click();
+  await page.getByLabel("Memory note").fill("Detailed answers");
+  await page
+    .getByLabel("Evidence or source")
+    .fill("Corrected owner preference");
+  await page
+    .getByRole("button", { name: "Save correction", exact: true })
+    .click();
+  await expect(
+    page.getByText("Detailed answers", { exact: true }),
+  ).toBeVisible();
+  view = await privateCLI(["agents", "--profile", p]);
+  expect(view.memories[0].id).toBe(memoryID);
+  expect(view.memories[0].history[0].text).toBe("Concise answers");
+  await page.getByRole("button", { name: "settings", exact: true }).click();
+  await page.getByLabel("Provider preference").selectOption("openai");
+  await page.getByLabel("Model preference").fill("reference-only");
+  await page.getByRole("button", { name: "Save profile", exact: true }).click();
+  await expect
+    .poll(
+      async () =>
+        (await privateCLI(["agents", "--profile", p])).profiles.find(
+          (x: { id: string }) => x.id === p,
+        ).provider,
+    )
+    .toBe("openai");
+  await page.getByRole("button", { name: "bots", exact: true }).click();
+  await page.getByLabel("Paper bot name").fill("Fixed example");
+  await page
+    .getByRole("button", { name: "Create paper bot", exact: true })
+    .click();
+  await expect(page.getByText("Fixed example", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "tasks", exact: true }).click();
+  await page
+    .getByLabel("Task name", { exact: true })
+    .fill("One paper evaluation");
+  view = await privateCLI(["agents", "--profile", p]);
+  await page.getByLabel("Task kind").selectOption(view.bots[0].id);
+  await page.getByRole("button", { name: "Create task", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Run now: One paper evaluation", exact: true })
+    .click();
+  await expect(page.getByText("paper-filled", { exact: true })).toBeVisible();
+  view = await privateCLI(["agents", "--profile", p]);
+  expect(view.runs).toHaveLength(1);
+  expect(view.bots[0].spentCents).toBe(100);
+  expect(view.financialExecution).toBe(false);
+  expect(view.providerCallsEnabled).toBe(false);
+  const other = await privateCLI(["agents", "--profile", "news-researcher"]);
+  expect(other.messages).toHaveLength(0);
+  expect(other.memories).toHaveLength(0);
+  expect(other.runs).toHaveLength(0);
+  expect(
+    await page
+      .locator(".local-agents .memory-card")
+      .first()
+      .locator("p")
+      .evaluate((e) => e.getBoundingClientRect().width),
+  ).toBeGreaterThan(150);
+  await page.getByRole("button", { name: "Refresh", exact: true }).focus();
+  await page.screenshot({
+    path: resolve(
+      ".evidence/p5-local-agents/tasks-" + test.info().project.name + ".png",
+    ),
+    fullPage: true,
+  });
+  await stop();
+  await start();
+  await page.goto(url + "/#agents/chat");
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page
+    .locator(".agent-picker")
+    .getByRole("button", { name: "Local acceptance researcher", exact: false })
+    .click();
+  await expect(
+    page.getByText("Our local thesis survives restart", { exact: true }),
+  ).toBeVisible();
+  view = await privateCLI(["agents", "--profile", p, "--search", "thesis"]);
+  expect(view.messages).toHaveLength(2);
+  expect(view.runs).toHaveLength(1);
+  expect(view.notices).toHaveLength(1);
+  expect(view.memories[0].text).toBe("Detailed answers");
+  await page.screenshot({
+    path: resolve(
+      ".evidence/p5-local-agents/chat-" + test.info().project.name + ".png",
+    ),
+    fullPage: true,
+  });
 });

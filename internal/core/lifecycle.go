@@ -40,6 +40,8 @@ func (s *Store) snapshotTx(ctx context.Context, tx snapshotReader, probe string)
 		Instance, Setup, Accounts       string
 		SetupRevision, AccountsRevision int64
 		PasswordSalt, PasswordHash      []byte
+		Agents                          string
+		AgentsRevision                  int64
 	}
 	if e = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v.Schema); e != nil {
 		return update.CoreSnapshot{}, e
@@ -51,6 +53,9 @@ func (s *Store) snapshotTx(ctx context.Context, tx snapshotReader, probe string)
 		return update.CoreSnapshot{}, e
 	}
 	if e = tx.QueryRowContext(ctx, "SELECT document,revision FROM accounts WHERE id=1").Scan(&v.Accounts, &v.AccountsRevision); e != nil {
+		return update.CoreSnapshot{}, e
+	}
+	if e = tx.QueryRowContext(ctx, "SELECT document,revision FROM agent_workspace WHERE id=1").Scan(&v.Agents, &v.AgentsRevision); e != nil {
 		return update.CoreSnapshot{}, e
 	}
 	contract := UpdateContract()
