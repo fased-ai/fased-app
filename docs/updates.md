@@ -357,10 +357,67 @@ Inject fixture clocks; do not change the owner's system clock or trust settings.
 | RT-11 | Public readback matches approved immutable source/artifacts/metadata/provenance; failed promotion retains evidence and never reuses a sequence for other bytes  |
 | RT-12 | Lost quorum/store and publisher outage produce actionable independent recovery without an unsigned/force path, automatic unlock or bot resume                   |
 
-These are a specification and future test obligations, **not newly passing tests**.
+These remain production acceptance obligations. Fixture engineering tests below
+do not authenticate production bindings or close public acceptance.
 P4-10/11 stay BLOCKED until the chosen production bindings, implementation, rehearsal
 and explicitly authorized public readback pass. P4-12/13/15/16 remain independent.
 No approval in this document enables client automatic updates or real wallets.
+
+## Development release operations readiness
+
+The executable rehearsal in `internal/releaseops` supplies the remaining bounded
+asset-transport and immutable publisher-ledger engineering checks for RT-05/11.
+It is separate from installed readers and deliberately limited to three exact
+`.invalid` fixture hosts. Nothing in the application, signer, installer or ordinary
+package calls this transport or ledger. No publication API or production switch exists.
+
+Run as the ordinary user, from the source checkout:
+
+```sh
+node scripts/check-release-readiness.mjs
+go run ./cmd/fased-release-fixture readiness --disposable-fixture
+```
+
+The first command runs controlled real HTTPS, disposable signatures and inert
+artifacts. It freezes source hashes, checks actual compiled command refusals and
+retains small results in `.evidence/p4-production-readiness/`. Keys remain in memory;
+readback directories and the task binary are removed. The second command is a
+read-only capability report: `BLOCKED`, with all activation/wallet/update flags
+false and eight independent production-binding groups. It accepts no approval,
+credential, publication or production option and is excluded from packages.
+
+The transport pins an exact repository/asset API route, permits one redirect to
+one exact CDN host/path, verifies TLS hostnames and requires complete unencoded
+200 responses with exact lengths/hashes. It has no proxy, cookie jar, forwarded
+authorization, range or referer. DNS answers must all pass special-address checks;
+the checked IP is dialed directly. Header, URL, response, file and total refresh
+limits are finite. CDN query tokens are transient; failures expose no request URL
+or Location. Tests use simulated DNS answers and a pinned loopback dial under real
+TLS: this proves the filtering/dial logic, not public DNS or GitHub delivery.
+
+The fixture ledger reserves an exact sequence/unit/asset set before readback,
+using a private contained directory, nonblocking OS lock and exclusive synced
+records. Failed readback leaves the reservation, and other bytes cannot reuse it.
+Exact retries finish file/directory durability; torn, corrupt or foreign records
+remain held without overwrite. Only readback of all ten frozen objects followed
+by the existing real TUF/release-unit/provenance verifier can mark completion.
+The verifier must match the unit, sequence and unchanged preservation/floor
+bindings. Nothing extracts or executes artifacts, opens financial state or invokes
+an installed controller. The accompanying untouched financial sentinel is local
+supporting evidence; prior installed VM evidence remains a separate class.
+
+This closes the testable fixture transport/readback package, not the production
+RT gates. Fixture public IDs/locators are frozen rehearsal inputs; a production
+descriptor still needs authenticated repository/release/asset bindings. Synthetic
+builder signatures do not establish production OIDC/attestation policy. Whole
+ledger rollback/deletion cannot be detected without an independently retained
+anchor, and this ledger cannot restore installed trust or financial authority.
+Initial authentication, named custody/operations, real origins and signed locator
+policy, production provenance, trusted time/state and compatible independent
+admission, incident rescue and platform/retail acceptance remain independently
+UNASSIGNED/BLOCKED. These records cannot be supplied by promoting fixture receipts.
+No production credentials, public activation, real wallets or automatic updates
+are created. P4 remains ten PASS/six BLOCKED; this report cannot change those gates.
 
 ## Development-only TUF trust rehearsal
 
