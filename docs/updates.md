@@ -2108,3 +2108,381 @@ seed authentication and cold-reader facts are trusted fixture inputs, not actual
 OS/production proof. IA-16 installed helper/UID acceptance and every public P4
 gate remain separate; real wallets, installed execution and automatic updates
 remain disabled.
+
+## Fixture-installed inspection, provisioning and reader-bridge adapter design
+
+**P4 design contract, revision 1, 2026-10-20.** Documentation only. No loader,
+profile, command, socket, service, reader conversion or installation is activated
+by this package. Real wallets, financial execution, installed execution and
+automatic updates remain disabled. P4 remains ten PASS/six BLOCKED; no P5.
+
+This specializes the [installed compatibility contract](#installed-release-admission-and-reader-bootstrap-compatibility-design)
+and [non-installed model](#implemented-non-installed-model) into a proposed Linux
+amd64/Ubuntu 24.04 **disposable engineering** adapter. Its fixture values below
+are a reviewable contract, not production allocations. Production bootstrap,
+seed/time confidence, profile/wire/lifecycle/schema, credentials and public feed
+remain **UNASSIGNED/BLOCKED**. Existing model/UT evidence cannot close the future
+actual-helper acceptance rows below.
+
+### Separate capability axes and current seams
+
+Use proposed purpose/profile `fased-app-installed-inspection-fixture:v1`, capability
+`fixture-installed-inspection-v1`, and purpose-qualified descriptor/reader/wire
+format 1. The separate bridge purpose is `fased-app-fixture-reader-bridge:v1`.
+These identifiers never match the compiled transport, in-process model or a
+production profile. Every descriptor/result requires `fixtureOnly: true`.
+
+Financial readers retain the existing protocol 1, lifecycle entrypoint 4,
+stage format 1 and known vault/operations formats/features. A separate
+`FixtureReaderContract` must explicitly advertise the inspection profile,
+capability, descriptor/store/source formats and supported bridge predecessor.
+Both readers must support it. Existing lifecycle 4 alone cannot negotiate it;
+there is no implicit lifecycle 5, feature-string widening or legacy RPC fallback.
+The model's proposed-reader marker maps to this extra axis; its lifecycle zero
+is a symbolic unallocated value, never a runnable installed contract.
+
+| Current implementation                                                    | Proposed adapter responsibility                                                                                                                                                           | Boundary                                                                                                                                                                      |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `custodyinstall.Load/Verify`, immutable `ownerUpdatesCommand`, owner lock | Derive the fixed installation identity and root, rehash the executing helper against the active fixture catalog, then enter an explicitly selected fixture inspection handler.            | Owner UID/session alone cannot supply pins. No path/seed/time overrides from app/UI/CLI request JSON.                                                                         |
+| `signer.LoadConfig/CheckOwner/VerifyExecutable`, `rpc_linux.go`           | Preserve root-owned no-symlink config and client checks; load signer-side fixture pins independently. Authenticate both socket peers before protocol data.                                | Existing peer check establishes UID, not remote executable attestation. Each process checks its own exact allowed image; the owner account/kernel/root remain trusted.        |
+| Existing `owner.sock`/`app.sock`, strict one-request newline protocol     | Keep legacy parsing/actions unchanged. A future `inspection.sock` in the existing signer IPC directory uses its own purpose-qualified, length-framed protocol in the same signer process. | No tunnel through `Request`, app channel, current `IntentRequest`, password forwarding or new background daemon.                                                              |
+| `custodyinstall.definitions` and actual/stored unit verification          | Add a finite fixture-profile unit variant only during the separately reviewed bridge; bind exact before/guarded/final unit bytes in its immutable transaction.                            | Core privileges unchanged. Signer retains `AF_UNIX`, empty capabilities, strict filesystem/home protection and no new Internet access.                                        |
+| `FixtureTransportRole`, `FixtureHandoffActor` and combined store          | Factor shared bounded verification/publication/framing primitives into typed adapters, with a distinct installed-fixture namespace and strict root-owned descriptor loader.               | Do not relax the current role-owned config loader, import a model store or use injected model `AuthenticatedSeed`, inventory, UID or cold-reader booleans as installed facts. |
+| `VerifyBootstrap` / current `runBootstrap`                                | Preserve exact 3 → 4 support. A separate fixture bridge handles exactly the pinned lifecycle-4 pair → capability-bearing fixture pair.                                                    | No generic schema migration, no production release admission and no shortcut around independently authenticated initial reader bytes.                                         |
+| Existing cold-inspection and controller patterns                          | Reuse stopped-service verification and fixed `setpriv` credential-drop patterns; obtain current history directly under signer UID through a read-only candidate reader.                   | Reusing a pattern does not authorize any controller operation or old financial database restore. New cold entrypoint must prove no repair/write side effects.                 |
+
+### Immutable provisioning and independently owned inputs
+
+Let `R` be the existing verified `custodyinstall.Root(ownerUID)`, never an incoming
+path. Proposed paths below live under `R/fixture-inspection-v1/`; they do not extend
+`identity.json` or the version-1 install manifest with unknown fields. The sidecar
+catalog binds their bytes to the existing installation ID, owner/app/signer
+UIDs/GIDs, root/config/install-manifest digests and exact reader/unit contracts.
+It also records the finite candidate/final executable paths and exact before/target
+root/owner installer-record digests allowed in each bridge phase. The catalog and
+role descriptors stay immutable; known phase files under the catalog's exact
+BridgeID record progress. They never select a latest store or replace pins.
+Owner alone verifies its private installer record; signer verifies its own local
+identity/financial state and the independently pinned root phase records. A peer's
+hash claim never establishes local identity.
+
+| Path / input                                                                           | Ownership / allowed write                                                                                                                      | Required binding and refusal                                                                                                                                                                                                                                                                                                                                |
+| -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `catalog.json`, `inputs/owner.json`, `inputs/signer.json`, seed/policy/public-CA bytes | Root-owned regular files 0644; immutable parents 0755, no group/other write or symlink. Only fixed trusted OS publication tools.               | Purpose, experiment/provisioning ID, installation/config IDs and both local reader hashes, repository/channel/source/transport pins, role UID/GID, supported formats and allowed fixed paths. Each role loads its own file and rechecks every digest; foreign/missing/partial input is preserved and refused.                                               |
+| `capsules/<BridgeID>/`                                                                 | Root-owned immutable bootstrap capsule and exact current/candidate core+signer images, 0755 for images.                                        | Disposable harness authenticates exact source/build/output hashes through independently retained fixture pins before any candidate runs. This is an engineering bootstrap assumption, not public OIDC/distribution authentication. Actual reader images are bounded separately at 64 MiB each; they never pass through the inert release-artifact verifier. |
+| `evidence/<BundleID>/`                                                                 | Root-owned immutable public evidence tree, non-executable regular files.                                                                       | BundleID hashes a canonical index of fixed metadata/subject names, hashes and sizes. No caller-selected filename, extraction, compression, hardlink, symlink, inherited FD or executable subject. Index/directory mismatch refuses.                                                                                                                         |
+| `owner/state/`, `owner/anchor/`                                                        | Root-owned parent, owner-UID private subdirectories 0700; files 0600, writable only by owner.                                                  | Separate strict combined checkpoint and expected-head anchor bound to purpose/provisioning/config; never app SQLite or a shared peer store.                                                                                                                                                                                                                 |
+| `signer/state/`, `signer/anchor/`                                                      | Root-owned parent, signer-UID private subdirectories 0700; files 0600, writable only by signer.                                                | Same invariants independently. Future signer unit grants write access only to these two exact directories in addition to its existing state/IPC paths. Clock, catalog and evidence stay read-only.                                                                                                                                                          |
+| `clocks/owner.json`, `clocks/signer.json`                                              | Root-owned controlled fixture inputs, immutable to both roles/app; changed only by inventoried trusted OS tools in a disposable CI experiment. | Purpose, provisioning ID, role, clock epoch/revision, UTC sample and explicit confidence. Each role keeps its own persisted high-water mark and monotonic live deadline. Backward/equal-expiry/uncertain/mismatched epoch refuses; peer time cannot supply confidence. Never change host time or treat fixture confidence as production time.               |
+| Authoritative inventory                                                                | Fresh private core probe plus signer-owned live/cold snapshot; no inventory file supplied by the app.                                          | Bind authority epoch, actual boot/revision, history/originals/counters, pending/unknown/recovery holds, active intent and reserved/installed floors. Owner uses the authenticated signer reply; signer reads its own authority.                                                                                                                             |
+
+The existing signer unit has `RestrictAddressFamilies=AF_UNIX`. Preserve it by
+using a closed **offline fixture metadata source** for signer verification. The
+owner may acquire the public bundle from the controlled loopback HTTPS fixture;
+a fixed OS publisher stages it immutably and rehashes the published bytes. Both
+roles independently verify the complete TUF chain, provenance and four inert
+artifact roles using their own pins, trusted state and time. The signer trusts
+neither the downloader's verdict nor its cache head. Withholding a newer valid
+bundle can still delay discovery within metadata validity; expiry/local floors
+remain the bound, not a claim of instantaneous offline revocation.
+
+Proposed offline-source bounds: at most 64 fixed files/1 MiB total, 64 KiB index
+and evidence documents, existing 8 KiB metadata/1 KiB descriptor limits, at most
+32 sequential root successors and four non-executable inert subjects of at most
+64 KiB each. Root/role continuity and existing fixture origin/channel bindings
+remain required. Derive a new source digest from the seeded origin/fetch-policy
+pins and exact offline index hash; never claim the old live-HTTPS source digest
+for this adapter. Reuse the existing signature/client verification logic through
+a sealed source adapter; do not introduce a general fetch callback or widen the
+current inert-artifact restrictions to admit reader binaries.
+
+Provisioning has four durable states, all still inactive:
+
+| State                 | Publication / retry rule                                                                                                                                                                                                              |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| IP-00 inventoried     | Verify exact current fixture installation, no active bootstrap/update, ordinary owner and three distinct nonzero UIDs; record original bytes and all planned resources. Refuse foreign resources.                                     |
+| IP-01 staged          | Authenticate fixture bootstrap capsule, root-publish exclusive temporary files, verify complete hashes/modes and sync before naming them final. Retain prefix-safe retry identity; source paths are not authority.                    |
+| IP-02 sealed          | Publish catalog and separate role descriptors; create inventoried empty private state/anchor directories and fixture clocks. No role checkpoint/root learning or socket starts yet.                                                   |
+| IP-03 bridge-eligible | Re-read actual published identities and exact predecessor/target capability contracts. Only the linked bridge can activate them; arbitrary `--initial`, descriptor replacement, mode promotion or partial-directory adoption refuses. |
+
+Only an explicitly marked, still-empty namespace may initialize after the
+forward fence. Once any role head/anchor exists, missing/corrupt/gapped state
+holds; retry cannot return to initial mode. Partial role initialization or
+unknown pending verification never erases the other role's learned state.
+Same-disk anchors do not solve whole-host rollback or portable financial recovery.
+
+### Inspection authority, transport and protected review
+
+Proposed handler boundaries are `custody fixture-inspection` → the exact immutable
+`owner-fixture-inspection` helper, and `signer.NewFixtureInspectionServer` within
+the existing signer process. These are future names, absent today. Ordinary
+startup/packages do not opt in. The active fixture catalog, explicit disposable
+mode, both reader capabilities and exact executing-image hashes are mandatory.
+The signer channel checks configured owner UID before any reply; the owner checks
+signer UID before sending anything. No same-UID test bypass exists in public
+configuration. The existing app can receive only a public historical status copy.
+
+Use separate profile/version negotiation and strict 64 KiB length-framed messages.
+The envelope fields are version, profile, capability, provisioning ID, channel ID,
+kind and bounded typed body; unknown/duplicate/case-alias fields refuse. The closed
+kind set is hello, challenge, inspect, result, confirm, confirmed, status,
+status-result and error. Historical status uses a fresh authenticated channel and
+cannot create a challenge or result handle. Retain the existing fixture limits of four accepted connections/one
+active inspection, 5s frame deadlines and a 60s monotonic connection/review ceiling.
+Store limits remain 256 KiB, 32 replay records, 4 KiB per complete record and the
+existing 256-file cap. Exhaustion holds without pruning uncertainty. No trust-store
+lock is held while waiting for owner input or a peer. Namespace/profile mismatches
+must refuse before acquisition, reservation or any financial-state change.
+
+The exact canonical exchange binds, in order: profile/capability/wire version,
+provisioning ID, installation ID, catalog/owner-descriptor/signer-descriptor/source
+digests, owner/signer reader-contract and executable digests, channel/client nonce,
+challenge ID and both boot IDs, both baseline checkpoint heads, authority epoch,
+owner/signer snapshot digests/revisions, BundleID, AuthorizationID, UnitID,
+provenance digest, OS/architecture/release sequence, both observations/clock epochs,
+and the earliest deadline. Compute `ProposalDigest` under
+`fased-app-installed-inspection-fixture-proposal:v1` over that ordered tuple,
+excluding any review or final-exchange digest. Compute `ReviewDigest` under
+`fased-app-installed-inspection-fixture-review:v1` from ProposalDigest, the
+protected reviewed-at observation and exact consent. Then compute the final ExchangeDigest under
+`fased-app-installed-inspection-fixture-exchange:v1` from ProposalDigest and
+ReviewDigest using the existing length-prefixed tuple encoding. This avoids a
+self-referential hash. Both roles revalidate every bound local value. Requests
+carry digest observations, never paths, seed/policy/CA bytes, clock/expected-anchor
+overrides, passwords or approval flags. A peer's baseline-head observation is an
+exchange claim, not the local expected anchor or provisioning authority.
+
+The immutable owner terminal displays an inspection-only action card with those
+identities, exact four artifact hashes/sizes/contracts, source/build provenance,
+current holds/floors and expiry. Consent is exactly `INSPECT FIXTURE <ProposalDigest>`; the final exchange also
+binds the resulting ReviewDigest.
+No UI/chat/session, private ack file or production `--approval-stdin` can approve.
+Fixture input automation is a private test callback, not an installed CLI flag.
+After independent signer verification/result publication, owner refreshes its
+verification and obtains same-live-connection signer confirmation before local
+completion. Exact live retries preserve original expiry/result; fresh connection
+or reboot status is historical only. Every reserve/install/pause/unlock/resume,
+wallet/financial execution and automatic-update field in the inspection result
+is false. Reader maintenance uses a different review and authority below.
+
+### Reader bridge and reboot-safe forward boundary
+
+The existing 3 → 4 bootstrap and normal financial install controller stay finite
+and unchanged. The new fixture bridge accepts only the exact pinned lifecycle-4
+pair → inspection-capable fixture pair on Linux amd64. Both sides preserve protocol,
+vault/operations formats/features, identity/config and financial topology.
+`FinancialTopologySHA` covers existing UIDs/GIDs, financial/core/IPC paths, listener
+and service identities; exact before/guarded/final executable and service-policy
+digests separately bind the declared reader and private-inspection-path additions.
+These additions cannot masquerade as a permitted financial topology migration.
+
+A bootstrap capsule binds independent fixture pins, current/target reader bytes
+and contracts, role-input/source identities, exact unit-policy variants, matching
+maintenance manifest and its sequence, plus initial authoritative snapshots.
+Before the fence, it authenticates only a fixed known bootstrap checkpoint/reader
+capsule: no TUF root discovery, admission, pending verification or mutable
+trust-store learning. Cold financial checking is read-only. Any operation that
+might learn/update admission trust occurs only after the durable forward fence.
+
+| Phase                     | Required operation / crash disposition                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| RB-00 reviewed            | Existing immutable predecessor supplies inventory. Protected owner reviews `BRIDGE FIXTURE <full-digest>` for the complete capsule and exact maintenance effect; no admission/install consent follows. Lifecycle 1/2/3/unknown, active/unknown history or unsupported nonzero installed history refuses.                                                                                |
+| RB-01 maintenance-held    | Predecessor reserves a strictly higher sequence using its signed unchanged-pair lifecycle-4 maintenance manifest, stages only its own pair, locks the fixture wallet, pauses matching core metadata and captures the verified private recovery index. Installed sequence is unchanged.                                                                                                  |
+| RB-02 stopped             | Stop both existing services; verify inactive/MainPID zero and all immutable files. Only fixed OS tools are privileged. New candidate cold inspection runs after dropping UID/GID/groups/capabilities to the signer UID with no-new-privileges.                                                                                                                                          |
+| RB-03 guarded-units       | While stopped, publish exact stored and actual guarded unit variants and reload the manager. ExecStart names the immutable **new candidate**, entering a new bridge-guard handler before normal startup/state opening. With no forward fence it refuses activation without writes. Old Verify/Runtime unit checks must fail. A reboot cannot start old readers from old unit fragments. |
+| RB-04 cold-verified       | New candidate validates current financial history, originals/counters/authority, maintenance head and reserved/installed floors, metadata pause/index and protocol/format/topology. It performs no repair, migration or admission trust learning. Before-fence rollback remains possible only on positive predecessor-readability proof.                                                |
+| RB-05 forward-only        | Durably publish and sync the exact root-owned forward fence before creating any new role checkpoint/anchor or admitting new-format state. Re-read fence and guarded actual/stored units. From here, old-reader restart/rollback is forbidden even when health, time or trust initialization fails.                                                                                      |
+| RB-06 new-readers-held    | Replace only the pinned fixed core/signer images and manifest hash fields; guarded units can still use the identical pinned candidate copies. Initialize each sealed private namespace once and verify its own offline evidence. Partial/pending/gapped initialization remains held. Future ordinary paths still cannot authorize installation or financial execution.                  |
+| RB-07 converged-held      | Verify health and all current histories with the new pair. Converge root/owner installer records, catalog-bound phase files and final guarded units pointing to fixed new paths; stop/restart only new readers when needed and re-probe boots. Both guarded/final variants require the fence/catalog before state access. No copied host receipt certifies current state.               |
+| RB-08 maintenance-aborted | Only after current cold/live health, actual pair/policy/record convergence and preserved histories, abort exactly the predecessor-readable maintenance intent and release only its matching core pause from the current signer receipt. Reserved floor remains consumed, installed floor unchanged and wallet locked.                                                                   |
+| RB-09 reader-ready        | Record the completed bridge and retain the forward fence/capsule. Inspection needs a new challenge/review and unexpired independent verification; this phase itself creates no admission result or installed release.                                                                                                                                                                   |
+
+Pre-fence rollback first proves **no** role trust namespace was initialized and
+no unknown/new financial history appeared. Restore only exact predecessor
+executables and stored/actual units, reload while stopped, verify compatible
+cold history/health, then abort only maintenance. Foreign bytes or any uncertainty
+leave services held. Nonzero installed sequence is explicitly supported only when
+both cold readers verify it exactly; never coerce it to zero. After RB-05 use only
+the authenticated new recovery runner, preserving all learned state and holds.
+
+The guarded-unit step is mandatory, not a marker-file convention unknown to old
+binaries. Future Ubuntu acceptance must actually reboot/recreate manager startup
+conditions at each boundary and invoke the exact compiled predecessor commands.
+If managed old startup remains possible, the bridge is unsupported. No guarantee
+is made against a trusted owner/root deliberately running historical binaries
+outside managed entrypoints.
+
+Every phase record binds the immutable capsule/transaction digest. Retry requires
+that exact ID and classifies actual bytes, units, service state and role anchors;
+it never guesses success, follows latest files or restores a financial database.
+Immutable accepted bridge recovery may converge/hold after its original capsule
+expires; it cannot start a new inspection, extend trust validity, discover a new
+root or substitute a target. Pending unknown learning remains blocked for a
+separate reviewed rescue procedure. Disk preflight counts all actual current,
+previous and candidate copies, evidence and private metadata backup requirements;
+it cannot reclaim owner state or assume same-disk backup is disaster recovery.
+
+### Finite compatibility and actual acceptance
+
+| Case  | Supported/refused state                                                                                                                                 |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| FC-01 | Lifecycle 1/2/unknown contract, unreadable history or changed protocol/format/topology: refuse without new state.                                       |
+| FC-02 | Lifecycle 3: existing disposable 3 → 4 bridge only; still no inspection capability.                                                                     |
+| FC-03 | Plain lifecycle 4: maintenance/recovery only; no inspection or legacy fallback.                                                                         |
+| FC-04 | Exact lifecycle-4 predecessor → pinned fixture-capable pair: separate bridge/capsule and guarded-unit phases required.                                  |
+| FC-05 | Mixed readers, torn unit/catalog publication or foreign bytes: held; exact recorded new runner only, no inferred downgrade.                             |
+| FC-06 | Both capable readers, active sealed profile, current anchors/time/inventory: inspection only.                                                           |
+| FC-07 | Active intent, unknown outcome, pending learning, recovery hold, expired/uncertain trust or anchor gap: status/held recovery only; no fresh completion. |
+| FC-08 | Other OS/architecture or production configuration: refuse; cross-compilation/model evidence cannot supply support.                                      |
+
+All sixteen FA rows are **BLOCKED** for actual installed-fixture acceptance now.
+They refine IA-01–IA-16; neither designs nor partial primitive tests close them.
+
+| Case  | Required falsifiable proof on disposable Ubuntu                                                                                                                                                                                                                           |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| FA-01 | Three distinct nonzero UIDs; actual root-owned descriptor/current-image/config pin validation; app and foreign owner inputs refused before protocol or mutation. IA-01/02/16.                                                                                             |
+| FA-02 | Exclusive/prefix-safe provisioning across IP-00–03, missing/foreign/torn files and changed public producer bytes; independently rehash published bytes and preserve foreign resources. IA-02/09.                                                                          |
+| FA-03 | Separate private state/anchors, one-time initialization, missing/corrupt/whole-store-only rollback and no model/legacy namespace adoption. IA-03/08/09.                                                                                                                   |
+| FA-04 | Controlled HTTPS owner acquisition and immutable offline signer verification of four inert roles/TUF/provenance; stale roots, source/index mismatch, altered/missing subjects and cap exhaustion refuse. IA-03/04.                                                        |
+| FA-05 | Actual signer sandbox keeps AF_UNIX and existing hardening; writes succeed only in declared private paths. App cannot read/write them; inode ownership alone never substitutes for peer UID. IA-01/06/16.                                                                 |
+| FA-06 | Real helper review/cancellation, app/status/JSON/ack-file/legacy channel denial; no secret forwarding and no public automation bypass. IA-05.                                                                                                                             |
+| FA-07 | Strict framed profile negotiation, exact exchange/context bindings, wrong peer, replay, cross-connection status and downgrade refusal; bounded resources/deadlines. IA-01/06/10.                                                                                          |
+| FA-08 | Independently controlled role clocks/high-water marks, equal expiry, regression, uncertain epoch, review delay and actual monotonic timeout refuse without host-time changes. IA-07.                                                                                      |
+| FA-09 | Kill/drop across pending/result/anchor/confirmation cuts; exact live retry once, historical-only reconnect/restart, retained learning/unknown hold and no reset. IA-08/09/10.                                                                                             |
+| FA-10 | Fixed capsule authenticates actual executable readers separately from inert targets; substituted reader/hash/capability/schema/source/seed refuses before execution. IA-02/04/11.                                                                                         |
+| FA-11 | Actual nonzero installed history, unchanged protocol/format/topology/originals/authority/floors and no cold-inspection repair/write; changed or unknown history blocks conversion. IA-11/14.                                                                              |
+| FA-12 | Every RB-00–09 cut, including each image/unit/installer-record publication and manager reload/reboot; old compiled managed entrypoints cannot start readers against post-fence state. IA-12.                                                                              |
+| FA-13 | Positive pre-fence compatible rollback/maintenance abort; post-fence health/init failure holds on new readers and never restores old financial state. IA-12/14.                                                                                                           |
+| FA-14 | Exact completed bridge retry, expiry-safe held recovery, superseding intent/floor refusal and later fresh inspection; no installed-release commit, auto unlock/resume or reused review. IA-10/13/14.                                                                      |
+| FA-15 | No production capability/seed/feed/time authority, installed/financial execution, ordinary package opt-in, automatic updater, new networked signer or third daemon. IA-15.                                                                                                |
+| FA-16 | Cleanup succeeds on success/failure/cancellation: exact owned processes/units/UIDs/files only, hash-bound evidence retained and foreign/owner resources preserved. Project code never root; actual VM-reboot proof cannot be replaced with a container simulation. IA-16. |
+
+### File ownership and executable completion path
+
+One coordinator owns this package; no parallel agent work is selected. Proposed
+source ownership is finite and follows the existing dependency direction:
+
+- `internal/update/inspection_fixture.go`, `_source.go`, `_files_linux.go`,
+  `_files_unsupported.go` and their tests: purpose-qualified schemas, strict
+  descriptors, sealed offline-source verification, role-owned checkpoint/anchor
+  adapters and bounded typed results. This package must not import signer or
+  custodyinstall; no model constructor/boolean is an installed trust factory.
+  Narrow source factoring in existing `trust.go`/`admission.go` is permitted only
+  to reuse verification; existing live fixture behavior and limits stay intact.
+- Later, `internal/signer/inspection_fixture_linux.go`/tests and narrow
+  `rpc_linux.go` lifecycle hooks: same-process separate listener, actual local
+  authority reader and cold inspection. `cmd/fased-signer/main.go` owns guarded
+  candidate startup, explicit fixture opt-in and unsupported-platform refusal.
+- Later, `internal/custodyinstall/inspection_fixture_linux.go` and
+  `inspection_bridge_linux.go`/tests own fixed provisioning/bridge publication;
+  narrow `model.go`, `install_linux.go`, `system_linux.go` variants verify exact
+  catalog/unit/installer records without widening generic privileged operations.
+- Later, `cmd/fased-app/inspection_fixture_linux.go`, `_other.go` and tests own
+  immutable owner review/dispatch/recovery; existing main/custody dispatch gets
+  only explicit fixture branches. No web/desktop/agent authorization path.
+- `scripts/check-inspection-fixture-inputs.mjs` owns the next non-activated
+  input/verifier round trip. A later `scripts/check-installed-inspection-fixture.mjs`
+  owns the connected FA inventory; a dedicated Ubuntu job/aggregate dependency
+  may be added only with that later implementation, retaining all existing jobs.
+  Reboot cuts require an explicitly disposable VM runner or equivalent real
+  boot-capable fixture. Ordinary hosted CI/service restart alone is SUPPORTING.
+
+**Next bounded implementation:** sealed input/catalog + offline verifier + private
+checkpoint round trip, with no installed command/socket/service/bridge activation.
+Own the first update files/tests and input runner above. Cover descriptor/profile
+and actor identity refusal, immutable evidence verification, pending/anchor
+failure/retry, complete before/after canary/floor preservation and disabled
+capabilities. Local tests use controlled ordinary-user fixtures; a later requested
+Ubuntu file/UID harness can exercise root-owned fixture files through fixed OS
+tools without installing or starting services. Such proof remains primitive
+engineering evidence; FA installed/reboot gates stay BLOCKED. Review this design
+before allocating even its disposable profile values in code.
+
+The command below was future at design time; its implementation is now recorded
+under [the non-activated round trip](#implemented-non-activated-inputoffline-round-trip):
+
+```sh
+# Maintainer checks only, from fased_app as the ordinary user.
+test "${FASED_INSPECTION_FIXTURE_INPUTS:-}" = 1 || exit 2
+for file in internal/update/inspection_fixture.go \
+  internal/update/inspection_fixture_source.go \
+  internal/update/inspection_fixture_files_linux.go \
+  internal/update/inspection_fixture_test.go \
+  scripts/check-inspection-fixture-inputs.mjs; do
+  test -f "$file" || exit 2
+done
+node scripts/check-inspection-fixture-inputs.mjs
+```
+
+The runner must require six nonzero exact test families:
+`TestInspectionFixtureDescriptors`, `OfflineSource`, `RoleInputs`, `Publication`,
+`Recovery`, `NoExecution` (expand the latter names with `TestInspectionFixture`).
+Its finite input/verifier inventory is:
+
+| Case   | Non-activated primitive predicate                                                                                  |
+| ------ | ------------------------------------------------------------------------------------------------------------------ |
+| IFP-01 | Descriptor identity/profile/capabilities, typed inputs and unsupported reader/OS refusal.                          |
+| IFP-02 | Fixed immutable file/path/mode/hash validation, foreign/symlink/hardlink/prefix preservation.                      |
+| IFP-03 | Complete bounded offline TUF/provenance/four inert subject verification; source/index/continuity mismatch refuses. |
+| IFP-04 | Independent role pins/time, changed/uncertain clock epoch and deadline refusal.                                    |
+| IFP-05 | Separate checkpoint/anchor CAS, strict record namespace, exhaustion and one-time initialization.                   |
+| IFP-06 | Pending/expiry/restart/publication-gap hold, exact retry and historical-only status.                               |
+| IFP-07 | Actual disposable before/after financial canary and reserved/installed floor preservation.                         |
+| IFP-08 | All execution flags false, no installed dispatch/service/controller and verified success/failure cleanup.          |
+
+Retain source hashes, per-case outcomes and actual cleanup; reject
+missing/skipped/zero tests. Run the
+smallest coupled verifier/store cases once after inputs freeze, with separate
+bounded group deadlines and streamed persistent logs. Never initialize an
+installed identity, start a service, call a controller or contact a production
+origin from this runner. Actual installed/VM FA acceptance needs separate future
+authority and prerequisites; this design authorizes none of those operations.
+
+### Implemented non-activated input/offline round trip
+
+`internal/update/inspection_fixture*` now implements the first IFP primitive
+package. All entrypoints are package-private, disposable engineering helpers.
+Nothing calls them from an installed command, signer, service, UI or updater.
+The inspection profile/capability above is allocated only for these fixtures;
+financial protocol 1, lifecycle 4 and existing packages remain unchanged.
+
+A pinned closed catalog binds installation/provisioning identities, three distinct
+logical UIDs, per-role public seed/policy/index pins, reader capabilities and
+before/candidate image and unit hashes. The fixture loader checks exact real
+paths, modes, ownership, single-link regular files and complete hashes. The
+publisher retries only an exact prefix and uses atomic no-replace publication.
+These ordinary-user ownership substitutions are SUPPORTING, not proof of
+root-owned installed inputs, kernel UID isolation or authenticated reader images.
+
+Each role independently copies a closed bounded offline index and file set,
+including sequential root successors, exactly one active metadata set, provenance
+and four inert subjects. Its source digest binds the seeded HTTPS origin, fetch
+policy pin and index. It reuses the existing TUF/provenance verification code;
+there is no fetch callback or network fallback. Tests close the controlled HTTPS
+fixture before verification. Both sealed inputs and the role clock are reread
+before completion. Controlled clocks are fixture inputs, not production time.
+
+Each role has separate private checkpoint and expected-head anchor directories.
+A bounded combined checkpoint records trust progress, clock high-water, pending
+verification and historical outcome. OS-locked CAS publishes the synced snapshot,
+checkpoint head, then anchor. Gaps hold; only the exact unexpired in-memory
+publication can retry. Pending restart, missing/corrupt anchors, unknown state,
+clock regression and exhausted history refuse initialization or new verification.
+Status is historical data and conveys no install, resume, wallet or update right.
+Same-disk anchors cannot detect a coordinated whole-store/host rollback.
+
+Run the complete ordinary-user Linux engineering check with:
+
+```sh
+FASED_INSPECTION_FIXTURE_INPUTS=1 node scripts/check-inspection-fixture-inputs.mjs
+```
+
+It requires the six exact families and all eight IFP cases, records source hashes
+and streamed logs under `.evidence/p4-inspection-fixture-inputs/`, checks actual
+financial-canary/floor preservation and disposable cleanup, and rejects zero,
+missing or skipped tests and every enabled execution capability. Existing Ubuntu
+core CI runs these Go tests through its unfiltered internal-package race suite.
+This adds no CI job, installed route/socket/service, reader bridge or controller
+call. FA-01–FA-16, actual installed/VM acceptance and production provisioning,
+seed/time/credentials/feed remain BLOCKED. Real wallets, installed execution,
+automatic updates and P5 remain disabled; public P4 stays ten PASS/six BLOCKED.

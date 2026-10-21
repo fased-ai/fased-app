@@ -222,7 +222,11 @@ func inspectInertArtifacts(dir string, subjects []FixtureReleaseSubject) error {
 // AdmitFixtureRelease adds no installed authority. Failed artifact/provenance
 // admission preserves observed trust progress through the existing opaque CAS
 // transition; observed descriptor floors are not installed/reserved release floors.
-func AdmitFixtureRelease(ctx context.Context, trust TrustRehearsalOptions, o ReleaseAdmissionOptions) (transition TrustTransition, report ReleaseAdmissionReport, err error) {
+func AdmitFixtureRelease(ctx context.Context, trust TrustRehearsalOptions, o ReleaseAdmissionOptions) (TrustTransition, ReleaseAdmissionReport, error) {
+	return admitFixtureRelease(ctx, trust, o, nil)
+}
+
+func admitFixtureRelease(ctx context.Context, trust TrustRehearsalOptions, o ReleaseAdmissionOptions, offline *inspectionOfflineSource) (transition TrustTransition, report ReleaseAdmissionReport, err error) {
 	if !trust.Development {
 		return transition, report, errors.New("explicit disposable development mode required")
 	}
@@ -230,7 +234,7 @@ func AdmitFixtureRelease(ctx context.Context, trust TrustRehearsalOptions, o Rel
 	if err != nil {
 		return transition, report, err
 	}
-	transition, err = RehearseTrust(ctx, trust)
+	transition, err = rehearseTrust(ctx, trust, offline)
 	report.TrustRehearsalReport = transition.Report()
 	report.PolicySHA256, report.EvidenceSHA256 = o.PolicySHA256, digest(o.Evidence)
 	if err != nil {
@@ -253,7 +257,12 @@ func AdmitFixtureRelease(ctx context.Context, trust TrustRehearsalOptions, o Rel
 	if err != nil {
 		return transition, report, err
 	}
-	if err = inspectInertArtifacts(o.ArtifactDir, u.Subjects); err != nil {
+	if offline == nil {
+		err = inspectInertArtifacts(o.ArtifactDir, u.Subjects)
+	} else {
+		err = offline.inspect(u.Subjects)
+	}
+	if err != nil {
 		return transition, report, err
 	}
 	var ev FixtureReleaseEvidence
