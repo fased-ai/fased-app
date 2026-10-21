@@ -115,15 +115,27 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
   }, [tab]);
   const activeSession =
     v.sessions.find((s) => s.id === session) ?? v.sessions.at(-1);
+  const query = search.toLowerCase();
   const matching = v.sessions.filter(
     (s) =>
-      !search ||
-      s.name.toLowerCase().includes(search.toLowerCase()) ||
-      v.messages.some(
-        (m) =>
-          m.sessionId === s.id &&
-          m.text.toLowerCase().includes(search.toLowerCase()),
-      ),
+      s.profileId === v.profileId &&
+      (!query ||
+        s.name.toLowerCase().includes(query) ||
+        v.messages.some(
+          (m) =>
+            m.profileId === v.profileId &&
+            m.sessionId === s.id &&
+            m.text.toLowerCase().includes(query),
+        ) ||
+        v.aiRequests.some(
+          (q) =>
+            q.profileId === v.profileId &&
+            q.sessionId === s.id &&
+            q.state === "completed" &&
+            !q.taskId &&
+            (q.prompt.toLowerCase().includes(query) ||
+              q.answer.toLowerCase().includes(query)),
+        )),
   );
   function resetMemory() {
     setMemoryID("");
@@ -179,7 +191,7 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                 type="search"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Title or saved message"
+                placeholder="Title, message or completed AI question/answer"
               />
             </label>
             <div className="agent-session-list">

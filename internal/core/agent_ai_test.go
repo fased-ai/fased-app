@@ -465,3 +465,71 @@ func TestAgentAIRequiredFieldsAndEscapedResultCapacity(t *testing.T) {
 		}
 	})
 }
+
+func TestAgentAISearchHistorySurvivesProviderChangesAndRestart(t *testing.T) {
+	s := fixtureStore(t)
+	v := aiStart(t, s, aiPrepare(t, s))
+	profile, session := v.ProfileID, v.AIRequests[0].SessionID
+	if e := s.advanceAgentAI(t.Context(), fixtureAITransport{}, true); e != nil {
+		t.Fatal(e)
+	}
+	v = agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: profile, Name: "Ordinary history"})
+	ordinary := v.Sessions[len(v.Sessions)-1].ID
+	agentApply(t, s, AgentCommand{Action: "message-add", ProfileID: profile, ID: ordinary, Text: "ordinary-search-control"})
+	check := func(store *Store) {
+		t.Helper()
+		for query, id := range map[string]string{"COMPARE A PAPER STRATEGY": session, "NO MODEL, MARKET FEED OR WALLET WAS CONTACTED.": session, "ordinary-search-control": ordinary, "ORDINARY HISTORY": ordinary} {
+			got, e := store.Agents(t.Context(), profile, query)
+			if e != nil || len(got.Sessions) != 1 || got.Sessions[0].ID != id || got.ProviderCallsEnabled || got.FinancialExecution {
+				t.Fatalf("query %q lost scoped history: sessions=%v error=%v", query, got.Sessions, e)
+			}
+			other, e := store.Agents(t.Context(), "news-researcher", query)
+			if e != nil || len(other.Sessions) != 0 || len(other.Messages) != 0 || len(other.AIRequests) != 0 {
+				t.Fatal("cross-profile search disclosure", query, e)
+			}
+		}
+	}
+	check(s)
+	for _, provider := range []string{"openai", "anthropic", "xai"} {
+		agentApply(t, s, AgentCommand{Action: "profile-update", ProfileID: profile, Name: "Trading Analyst", Text: "Paper research", Provider: provider, Model: "preference-only"})
+		check(s)
+	}
+	if e := s.Close(); e != nil {
+		t.Fatal(e)
+	}
+	reopened, e := OpenStore(s.dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer reopened.Close()
+	check(reopened)
+}
+
+func TestAgentAISearchScopeAndCompletedManualHistory(t *testing.T) {
+	d := initialAgents()
+	d.Sessions = []AgentSession{{ID: "own", ProfileID: "trading-analyst", Name: "Own"}, {ID: "other", ProfileID: "news-researcher", Name: "Other"}}
+	d.AIRequests = []AgentAIRequest{
+		{ID: "complete", ProfileID: "trading-analyst", SessionID: "own", State: "completed", Prompt: "question-only", Answer: "answer-only", Disclosure: "disclosure-only", Context: "context-only"},
+		{ID: "foreign", ProfileID: "news-researcher", SessionID: "other", State: "completed", Prompt: "foreign-only"},
+		{ID: "foreign-link", ProfileID: "news-researcher", SessionID: "own", State: "completed", Prompt: "foreign-link-only"},
+		{ID: "task", ProfileID: "trading-analyst", SessionID: "own", TaskID: "task-1", State: "completed", Prompt: "task-only"},
+	}
+	for _, state := range []string{"prepared", "queued", "running", "cancelled", "failed", "unknown"} {
+		d.AIRequests = append(d.AIRequests, AgentAIRequest{ID: state, ProfileID: "trading-analyst", SessionID: "own", State: state, Prompt: state + "-only", Answer: state + "-answer"})
+	}
+	for _, query := range []string{"question-only", "answer-only", "foreign-only", "foreign-link-only", "task-only", "context-only", "disclosure-only", "prepared-only", "queued-only", "running-only", "cancelled-only", "failed-only", "unknown-only", "unknown-answer", "missing"} {
+		t.Run(query, func(t *testing.T) {
+			v, e := agentView(d, 1, "trading-analyst", query, 1)
+			if e != nil {
+				t.Fatal(e)
+			}
+			want := 0
+			if query == "question-only" || query == "answer-only" {
+				want = 1
+			}
+			if len(v.Sessions) != want {
+				t.Fatalf("query %q matched %d sessions, want %d", query, len(v.Sessions), want)
+			}
+		})
+	}
+}

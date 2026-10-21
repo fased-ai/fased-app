@@ -941,6 +941,7 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
 test("optional provider fixture requires scoped disclosure and budgets, preserves review and never creates a task", async ({
   page,
 }) => {
+  test.setTimeout(60000);
   await stop();
   await start(true);
   await page.goto(url);
@@ -1028,9 +1029,82 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
   expect(saved.aiFixtureAvailable).toBe(false);
   expect(saved.aiRequests[0].cards[0].review).toBe("kept");
   expect(saved.tasks).toHaveLength(0);
-  await mkdir(".evidence/p5-provider-review", { recursive: true });
+  const profileName = saved.profiles.find(
+    (p: { id: string }) => p.id === saved.profileId,
+  ).name;
+  const sessionName = "Provider fixture conversation";
+  const question = saved.aiRequests[0].prompt;
+  const answer = "No model, market feed or wallet was contacted.";
+  const checkSearch = async () => {
+    for (const query of [question.toUpperCase(), answer.toUpperCase()]) {
+      await page.getByLabel("Search conversations").fill(query);
+      await expect(
+        page.locator(".agent-session-list").getByRole("button", {
+          name: sessionName,
+          exact: true,
+        }),
+      ).toBeVisible();
+      const hit = await privateCLI([
+        "agents",
+        "--profile",
+        saved.profileId,
+        "--search",
+        query,
+      ]);
+      expect(hit.sessions.map((s: { id: string }) => s.id)).toEqual([
+        saved.aiRequests[0].sessionId,
+      ]);
+      const other = await privateCLI([
+        "agents",
+        "--profile",
+        "news-researcher",
+        "--search",
+        query,
+      ]);
+      expect(other.sessions).toHaveLength(0);
+      expect(other.aiRequests).toHaveLength(0);
+      expect(hit.providerCallsEnabled).toBe(false);
+    }
+  };
+  await checkSearch();
+  await page
+    .locator(".local-profile-picker")
+    .getByRole("button", {
+      name: /News Researcher/,
+    })
+    .click();
+  await page.getByLabel("Search conversations").fill(answer);
+  await expect(page.locator(".agent-session-list button")).toHaveCount(0);
+  await page
+    .locator(".local-profile-picker")
+    .getByRole("button", {
+      name: new RegExp(profileName),
+    })
+    .click();
+  await page.getByRole("button", { name: "settings", exact: true }).click();
+  await page.getByLabel("Provider preference").selectOption("anthropic");
+  await page.getByLabel("Model preference").fill("preference-only");
+  await page.getByRole("button", { name: "Save profile", exact: true }).click();
+  await expect
+    .poll(async () => {
+      const current = await privateCLI([
+        "agents",
+        "--profile",
+        saved.profileId,
+      ]);
+      return current.profiles.find(
+        (p: { id: string }) => p.id === saved.profileId,
+      ).provider;
+    })
+    .toBe("anthropic");
+  await page.getByRole("button", { name: "chat", exact: true }).click();
+  await checkSearch();
+  await page.getByLabel("Search conversations").fill("no-such-phrase");
+  await expect(page.locator(".agent-session-list button")).toHaveCount(0);
+  await page.getByLabel("Search conversations").fill("");
+  await mkdir(".evidence/p5-ai-search", { recursive: true });
   await page.screenshot({
-    path: `.evidence/p5-provider-review/provider-${test.info().project.name}.png`,
+    path: `.evidence/p5-ai-search/search-${test.info().project.name}.png`,
     fullPage: true,
   });
 });

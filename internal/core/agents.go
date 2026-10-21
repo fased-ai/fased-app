@@ -239,6 +239,14 @@ func agentView(d agentDocument, revision int64, profile, query string, now int64
 					}
 				}
 			}
+			if !match {
+				for _, q := range d.AIRequests {
+					if q.ProfileID == profile && q.SessionID == s.ID && q.State == "completed" && q.TaskID == "" && (strings.Contains(strings.ToLower(q.Prompt), query) || strings.Contains(strings.ToLower(q.Answer), query)) {
+						match = true
+						break
+					}
+				}
+			}
 			if match {
 				v.Sessions = append(v.Sessions, s)
 				sessions[s.ID] = true
