@@ -63,6 +63,9 @@ func journalFD(fd int) error {
 }
 
 func (s *storage) appendJournal(j *journal, r journalRecord) (result error) {
+	if s.readOnly {
+		return errors.New("cold inspection cannot append or repair")
+	}
 	if s.failed {
 		return errors.New("storage outcome uncertain; restart signer")
 	}

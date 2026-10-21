@@ -2486,3 +2486,63 @@ This adds no CI job, installed route/socket/service, reader bridge or controller
 call. FA-01–FA-16, actual installed/VM acceptance and production provisioning,
 seed/time/credentials/feed remain BLOCKED. Real wallets, installed execution,
 automatic updates and P5 remain disabled; public P4 stays ten PASS/six BLOCKED.
+
+### Installed fixture adapter and guarded reader bridge
+
+The disposable Linux amd64 adapter is now implemented across the existing owner
+helper, signer and installer. Ordinary packages and first launch never opt in.
+Real wallets, real signing and automatic updates remain disabled. The fixture
+inspection capability is separate from financial protocol 1/lifecycle 4.
+
+`custody fixture-inspection provision` accepts a bounded public bootstrap capsule,
+public input directory and exact reader pair, requires a protected terminal and
+`BRIDGE FIXTURE <digest>`, then publishes through the existing fixed OS tools.
+The authenticated candidate is copied before it is run. Its financial contract
+must remain identical to the predecessor; its separate inspection capability
+must match. Owner acquisition is bounded, pinned, controlled loopback HTTPS;
+the signer independently verifies the immutable offline bundle without widening
+its AF_UNIX sandbox. Fixture producer keys exist only in test-process memory.
+
+The bridge reserves/stages only its signed unchanged predecessor pair, pauses
+metadata and retains the existing private recovery index. It stops both readers,
+publishes candidate guard units and verifies the loaded manager policy, then
+cold-checks the actual signer history and read-only SQLite snapshot/pause. Cold
+signer storage cannot create, repair a pending publication or append a journal;
+cold SQLite uses immutable read-only access and refuses an outstanding WAL.
+The synced root-owned forward fence precedes role checkpoint initialization.
+Subsequent failure holds on the new readers. The controller replaces only the
+pinned pair and bound installer metadata, converges final guarded units, verifies
+health and aborts only the matching maintenance intent. Installed sequence and
+financial history remain unchanged; the reserved maintenance sequence stays
+consumed and the fixture wallet stays locked. Exact bridge retry remains
+historical. Explicit pre-fence rollback requires empty role namespaces and
+positive predecessor readability; post-fence rollback is refused.
+
+The existing signer process owns `inspection.sock`; there is no extra daemon.
+Kernel peer UID checks precede protocol data. The separate bounded framed channel
+binds both role inputs/heads/boots, actual core/signer snapshots, verified unit,
+source and clocks. The immutable owner helper displays the complete unit and
+provenance card and requires `INSPECT FIXTURE <ProposalDigest>`. It refreshes
+before same-connection confirmation. One exact result replay retains the original
+exchange/deadline. A fresh status channel reports historical data without a
+review, challenge or execution right. No stdin approval flag or app/UI forwarding
+exists for this flow. Missing/gapped/pending stores hold; initialization never
+resets learned trust. The ordinary financial RPC grammar remains unchanged.
+
+Maintainer completion command (local checks are SUPPORTING; installed execution
+is confined to the disposable Ubuntu CI job):
+
+```sh
+FASED_INSTALLED_INSPECTION_FIXTURE=1 node scripts/check-installed-inspection-fixture.mjs
+```
+
+The existing managed Ubuntu fixture supplies real root-owned files, three UIDs,
+PTY consent, systemd and nonzero history. The dedicated CI job compiles the exact
+plain lifecycle-4 predecessor `6c53e34`, reuses unchanged built UI/shared caches,
+and exercises the connected installed journey. Evidence is retained under
+`.evidence/p4-installed-inspection/`; only inventoried disposable resources are
+cleaned. This is engineering evidence, not production trust or real reboot proof.
+FA cases are credited only by their recorded actual predicates. Hosted CI service
+restart cannot close the VM/reboot portions of FA-12/FA-16. Production seed/time,
+credentials/feed, public acquisition and retail wallet/update activation remain
+BLOCKED; P4 acceptance must not be inferred from this fixture implementation.

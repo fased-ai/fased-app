@@ -23,3 +23,5 @@ func (*storage) readJournal(string) (*journal, []journalRecord, error) {
 func (*storage) appendJournal(*journal, journalRecord) error { return ErrUnavailable }
 func (*storage) failedState() bool                           { return true }
 func (*storage) poison()                                     {}
+
+func openStorageReadonly(string) (*storage, error) { return nil, ErrUnavailable }

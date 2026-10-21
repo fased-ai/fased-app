@@ -315,9 +315,48 @@ jobs:
             .evidence/p4-handoff-uid/*.json
             .evidence/p4-handoff-uid/*.log
           retention-days: 7
+  inspection-installed:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - run: npm ci
+      - run: npm run build && npm run build:core
+      - run: go build -o .evidence/bin/fased-signer ./cmd/fased-signer
+      - run: go build -o .evidence/bin/fased-unhealthy-core ./internal/custodyinstall/testdata/unhealthy-core
+      - run: node scripts/build-inspection-predecessor.mjs
+      - run: npx playwright install --with-deps chromium
+      - name: Actual disposable installed inspection and guarded bridge
+        env:
+          FASED_INSTALLED_INSPECTION_FIXTURE: "1"
+          FASED_INSPECTION_ACCEPTANCE: "1"
+          FASED_MANAGED_CORE: .evidence/p4-installed-inspection/predecessor-app
+          FASED_MANAGED_SIGNER: .evidence/p4-installed-inspection/predecessor-signer
+          FASED_MANAGED_EVIDENCE: .evidence/p4-installed-inspection/managed
+        run: node scripts/check-installed-inspection-fixture.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installed-inspection-fixture
+          include-hidden-files: true
+          path: |
+            .evidence/p4-installed-inspection/*.json
+            .evidence/p4-installed-inspection/*.stdout
+            .evidence/p4-installed-inspection/*.stderr
+            .evidence/p4-installed-inspection/*.log
+            .evidence/p4-installed-inspection/managed/**
+          retention-days: 7
   prototype:
     if: always()
-    needs: [core, desktop, signer, handoff, handoff-uid]
+    needs: [core, desktop, signer, handoff, handoff-uid, inspection-installed]
     runs-on: ubuntu-latest
     steps:
       - name: Required aggregate check
@@ -327,4 +366,5 @@ jobs:
           SIGNER_RESULT: ${{ needs.signer.result }}
           HANDOFF_RESULT: ${{ needs.handoff.result }}
           HANDOFF_UID_RESULT: ${{ needs.handoff-uid.result }}
-        run: test "$CORE_RESULT" = success && test "$DESKTOP_RESULT" = success && test "$SIGNER_RESULT" = success && test "$HANDOFF_RESULT" = success && test "$HANDOFF_UID_RESULT" = success
+          INSPECTION_RESULT: ${{ needs.inspection-installed.result }}
+        run: test "$CORE_RESULT" = success && test "$DESKTOP_RESULT" = success && test "$SIGNER_RESULT" = success && test "$HANDOFF_RESULT" = success && test "$HANDOFF_UID_RESULT" = success && test "$INSPECTION_RESULT" = success

@@ -14,18 +14,21 @@ import (
 var errAbsent = os.ErrNotExist
 
 type storage struct {
-	dir    int
-	lock   int
-	failed bool
-	crash  func(string) error // Set only by package tests, never an RPC option.
+	dir      int
+	lock     int
+	readOnly bool
+	failed   bool
+	crash    func(string) error // Set only by package tests, never an RPC option.
 }
 
-func openStorage(dir string) (*storage, error) {
+func openStorage(dir string) (*storage, error)         { return openStorageMode(dir, false) }
+func openStorageReadonly(dir string) (*storage, error) { return openStorageMode(dir, true) }
+func openStorageMode(dir string, readOnly bool) (*storage, error) {
 	fd, err := unix.Open(dir, unix.O_DIRECTORY|unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
-	s := &storage{dir: fd, lock: -1}
+	s := &storage{dir: fd, lock: -1, readOnly: readOnly}
 	ok := false
 	defer func() {
 		if !ok {
@@ -39,7 +42,11 @@ func openStorage(dir string) (*storage, error) {
 	if int(st.Uid) != os.Geteuid() || st.Mode&0077 != 0 {
 		return nil, errors.New("signer directory must be owned by this identity and private")
 	}
-	lock, err := unix.Openat(fd, "vault.lock", unix.O_CREAT|unix.O_RDWR|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
+	flags := unix.O_CREAT | unix.O_RDWR
+	if readOnly {
+		flags = unix.O_RDONLY
+	}
+	lock, err := unix.Openat(fd, "vault.lock", flags|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +57,11 @@ func openStorage(dir string) (*storage, error) {
 	if err = unix.Flock(lock, unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		return nil, errors.New("signer state is already locked")
 	}
-	if err = s.recoverPublication(); err != nil {
+	if readOnly {
+		if _, e := s.readName("vault.pending"); !errors.Is(e, os.ErrNotExist) {
+			return nil, errors.New("cold reader refuses pending publication")
+		}
+	} else if err = s.recoverPublication(); err != nil {
 		return nil, err
 	}
 	ok = true
@@ -133,6 +144,9 @@ func (s *storage) checkpoint(phase string) error {
 }
 
 func (s *storage) create(data []byte) (result error) {
+	if s.readOnly {
+		return errors.New("cold inspection cannot write")
+	}
 	if s.failed {
 		return errors.New("storage outcome uncertain; restart signer before continuing")
 	}

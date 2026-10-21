@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/update"
 	"golang.org/x/sys/unix"
 )
 
@@ -135,14 +136,15 @@ func readWire(conn net.Conn, v any) error {
 }
 
 type Server struct {
-	listeners   []*net.UnixListener
-	vault       *Vault
-	wg          sync.WaitGroup
-	mu          sync.Mutex
-	connections map[*net.UnixConn]bool
-	closed      bool
-	done        chan struct{}
-	closeErr    error
+	listeners       []*net.UnixListener
+	vault           *Vault
+	wg              sync.WaitGroup
+	mu              sync.Mutex
+	connections     map[*net.UnixConn]bool
+	closed          bool
+	done            chan struct{}
+	inspectionClose func()
+	closeErr        error
 }
 
 func VerifyExecutable() error {
@@ -178,10 +180,19 @@ func CheckApplication(config, root, data string) error {
 	if os.Getuid() != c.AppUID || os.Geteuid() != c.AppUID || config != filepath.Join(root, "identity.json") || data != filepath.Join(root, "app-state") || c.StateDir != filepath.Join(root, "signer-state") || c.SocketDir != filepath.Join(root, "signer-ipc") {
 		return errors.New("managed core identity or paths do not match installed custody configuration")
 	}
+	if _, e := os.Lstat(root + "/fixture-inspection-v1/forward.json"); !os.IsNotExist(e) {
+		if _, e = update.VerifyInstalledInspectionGuard(root, "core"); e != nil {
+			return e
+		}
+	}
 	return protectedDirectory(data, c.AppUID, 0700)
 }
 
-func Serve(ctx context.Context, c Config) (*Server, error) {
+func Serve(ctx context.Context, c Config) (*Server, error) { return serveMode(ctx, c, false) }
+func serveMode(ctx context.Context, c Config, guarded bool) (*Server, error) {
+	if _, e := os.Lstat(filepath.Dir(c.StateDir) + "/fixture-inspection-v1/forward.json"); !os.IsNotExist(e) && !guarded {
+		return nil, errors.New("guarded fixture startup required before state access")
+	}
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
@@ -246,6 +257,26 @@ func serveListeners(ctx context.Context, c Config, v *Vault) (*Server, error) {
 		}
 		s.wg.Add(1)
 		go s.accept(listener, c, uid, owner)
+	}
+	if _, e := os.Lstat(filepath.Dir(c.StateDir) + "/fixture-inspection-v1/forward.json"); e == nil {
+		role, e := update.OpenInstalledInspectionFixture(filepath.Dir(c.StateDir), "signer")
+		if e != nil {
+			s.Close()
+			return nil, e
+		}
+		channel, e := update.NewInstalledInspectionServer(ctx, role, func(p string) (update.SignerSnapshot, error) {
+			v, e := s.vault.UpdateInventory(p)
+			if e != nil {
+				return update.SignerSnapshot{}, e
+			}
+			return *v, nil
+		})
+		if e != nil {
+			role.Close()
+			s.Close()
+			return nil, e
+		}
+		s.inspectionClose = channel.Close
 	}
 	go func() {
 		select {
@@ -340,6 +371,9 @@ func (s *Server) Close() error {
 	}
 	s.mu.Unlock()
 	s.wg.Wait()
+	if s.inspectionClose != nil {
+		s.inspectionClose()
+	}
 	s.closeErr = s.vault.Close()
 	close(s.done)
 	return s.closeErr

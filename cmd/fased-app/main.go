@@ -30,6 +30,12 @@ func main() {
 	}
 }
 func run(args []string, in *os.File, out, errOut io.Writer) error {
+	if len(args) > 1 && args[0] == "custody" && args[1] == "fixture-inspection" {
+		return inspectionFixtureCommand(args[2:], in, out, errOut)
+	}
+	if len(args) > 0 && (args[0] == "owner-fixture-inspection" || args[0] == "fixture-reader-guard" || args[0] == "fixture-inspection-empty" || args[0] == "fixture-inspection-init" || args[0] == "fixture-inspection-cold" || args[0] == "fixture-inspection-compatibility") {
+		return inspectionFixtureCommand(args, in, out, errOut)
+	}
 	if len(args) > 1 && args[0] == "updates" && args[1] == "preferences" {
 		return updatePreferencesCommand(args[2:], in, out, errOut)
 	}
