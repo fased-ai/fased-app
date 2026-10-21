@@ -1,0 +1,46 @@
+name: P4 release trust readiness
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "internal/releaseops/**"
+      - "cmd/fased-release-fixture/**"
+      - "internal/update/trust*.go"
+      - "internal/update/admission*.go"
+      - "scripts/check-release-readiness.mjs"
+      - ".github/workflows/release-readiness.yml"
+      - "go.mod"
+      - "go.sum"
+permissions:
+  contents: read
+jobs:
+  release-readiness:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - name: Disposable transport, signed readback and monotonic ledger
+        run: node scripts/check-release-readiness.mjs
+      - name: Focused static checks
+        run: |
+          test -z "$(gofmt -l internal/releaseops cmd/fased-release-fixture)"
+          go vet ./internal/releaseops ./cmd/fased-release-fixture
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p4-release-readiness
+          include-hidden-files: true
+          retention-days: 7
+          path: |
+            .evidence/p4-production-readiness/source-inputs.json
+            .evidence/p4-production-readiness/tests.jsonl
+            .evidence/p4-production-readiness/stderr.log
+            .evidence/p4-production-readiness/readiness.json
+            .evidence/p4-production-readiness/result.json
