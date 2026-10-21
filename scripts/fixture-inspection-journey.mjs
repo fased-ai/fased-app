@@ -6,6 +6,8 @@ import { readFile, writeFile, mkdir, readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { sha, save } from "./handoff-transport-evidence.mjs";
+export const fixtureInspectionDigest = (domain, obj) =>
+  sha("fased-update-snapshot:v1:" + domain + "\0" + JSON.stringify(obj));
 export async function fixtureInspectionJourney({
   root,
   env,
@@ -85,7 +87,7 @@ export async function fixtureInspectionJourney({
         );
       return s;
     });
-  const digest = (domain, obj) => sha(domain + "\0" + JSON.stringify(obj));
+  const digest = fixtureInspectionDigest;
   const catalog = {
     version: 1,
     profile: "fased-app-installed-inspection-fixture:v1",

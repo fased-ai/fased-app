@@ -9,6 +9,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -118,4 +119,17 @@ func TestInspectionBridgeFiniteLifecycleContracts(t *testing.T) {
 			t.Fatal("signer without completion format accepted")
 		}
 	})
+}
+
+func TestInspectionBridgeGeneratorDigest(t *testing.T) {
+	c := exec.Command("node", "--input-type=module", "-e", `import{fixtureInspectionDigest as digest}from './scripts/fixture-inspection-journey.mjs';process.stdout.write(digest('fixture-unit-pair:v1',['first\nline','second=policy']));`)
+	c.Dir = "../.."
+	got, e := c.Output()
+	if e != nil {
+		t.Fatal(e)
+	}
+	want := update.SnapshotDigest("fixture-unit-pair:v1", []string{"first\nline", "second=policy"})
+	if string(got) != want {
+		t.Fatalf("generator digest disagrees with Go: %s != %s", got, want)
+	}
 }
