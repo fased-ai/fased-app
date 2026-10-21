@@ -76,6 +76,10 @@ func TestAgentAIConsentContextRoundTripAndReview(t *testing.T) {
 	if calls != 1 || q.State != "completed" || q.HeldMicrousd != 0 || q.SpentMicrousd <= 0 || q.Answer == "" || len(q.Cards) != 1 || len(v.Tasks) != 0 {
 		t.Fatal("completion", q, calls)
 	}
+	v = agentApply(t, s, AgentCommand{Action: "ai-prepare", ProfileID: v.ProfileID, ID: q.SessionID, Text: "Follow up", Limits: &q.Limits})
+	if !strings.Contains(v.AIRequests[1].Context, q.Prompt) || !strings.Contains(v.AIRequests[1].Context, q.Answer) {
+		t.Fatal("prior AI question/answer missing from context")
+	}
 	v = agentApply(t, s, AgentCommand{Action: "ai-card-keep", ProfileID: v.ProfileID, ID: q.Cards[0].ID})
 	if v.AIRequests[0].Cards[0].Review != "kept" || len(v.Tasks) != 0 || len(v.Bots) != 0 {
 		t.Fatal("card executed")
@@ -383,4 +387,81 @@ func TestAgentAISnapshotDispatchFreshnessAndRestart(t *testing.T) {
 	if e = saveAgents(t.Context(), tx, d, r); e == nil {
 		t.Fatal("writes consumed result capacity")
 	}
+}
+
+func TestAgentAIRequiredFieldsAndEscapedResultCapacity(t *testing.T) {
+	for _, mode := range []string{"missing-input-usage", "null-output-usage", "missing-cards", "null-cards"} {
+		t.Run(mode, func(t *testing.T) {
+			s := fixtureStore(t)
+			v := aiStart(t, s, aiPrepare(t, s))
+			rt := aiTestTransport(func(r *http.Request) (*http.Response, error) {
+				res, e := (fixtureAITransport{}).RoundTrip(r)
+				if e != nil {
+					return nil, e
+				}
+				defer res.Body.Close()
+				b, _ := io.ReadAll(res.Body)
+				var j map[string]any
+				_ = json.Unmarshal(b, &j)
+				switch mode {
+				case "missing-input-usage":
+					u := j["usage"].(map[string]any)
+					delete(u, "input_tokens")
+					u["total_tokens"] = u["output_tokens"]
+				case "null-output-usage":
+					u := j["usage"].(map[string]any)
+					u["output_tokens"] = nil
+					u["total_tokens"] = u["input_tokens"]
+				default:
+					out := `{"answer":"review only"}`
+					if mode == "null-cards" {
+						out = `{"answer":"review only","cards":null}`
+					}
+					j["output"] = []any{map[string]any{"type": "message", "role": "assistant", "status": "completed", "content": []any{map[string]string{"type": "output_text", "text": out}}}}
+				}
+				b, _ = json.Marshal(j)
+				res.Body = io.NopCloser(strings.NewReader(string(b)))
+				return res, nil
+			})
+			if e := s.advanceAgentAI(t.Context(), rt, true); e != nil {
+				t.Fatal(e)
+			}
+			v, _ = s.Agents(t.Context(), v.ProfileID, "")
+			q := v.AIRequests[0]
+			if strings.Contains(mode, "usage") {
+				if q.State != "unknown" || q.HeldMicrousd == 0 {
+					t.Fatal("missing/null usage accepted")
+				}
+			} else if q.State != "failed" || q.Answer != "" || q.SpentMicrousd == 0 {
+				t.Fatal("required cards array accepted as absent/null")
+			}
+		})
+	}
+	t.Run("escaped-result-capacity", func(t *testing.T) {
+		s := fixtureStore(t)
+		v := aiPrepare(t, s)
+		tx, e := s.db.BeginTx(t.Context(), nil)
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer tx.Rollback()
+		d, r, e := readAgents(t.Context(), tx)
+		if e != nil {
+			t.Fatal(e)
+		}
+		q := d.AIRequests[0]
+		before, _ := json.Marshal(q)
+		q.State = "completed"
+		q.Answer = strings.Repeat("a", 2000)
+		for n := 0; n < 3; n++ {
+			q.Cards = append(q.Cards, AIActionCard{ID: q.ID + string(rune('1'+n)), Kind: "reminder-draft", Title: strings.Repeat("t", 80), Text: strings.Repeat("\x01", 500) + strings.Repeat("b", 500), Review: "unreviewed"})
+		}
+		after, _ := json.Marshal(q)
+		growth := len(after) - len(before)
+		b, _ := json.Marshal(d)
+		d.Profiles[0].Persona = strings.Repeat("p", agentDocumentLimit-len(b)-growth+100)
+		if e = saveAgents(t.Context(), tx, d, r); e == nil {
+			t.Fatal("metadata consumed space needed for an admissible escaped result", v.ProfileID, growth)
+		}
+	})
 }

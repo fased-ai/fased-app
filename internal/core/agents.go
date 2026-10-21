@@ -294,7 +294,7 @@ func saveAgents(ctx context.Context, tx *sql.Tx, d agentDocument, revision int64
 	reserved := 0
 	for _, q := range d.AIRequests {
 		if q.State == "prepared" || q.State == "queued" || q.State == "running" {
-			reserved += 12000
+			reserved += agentAIResultReserve
 		}
 	}
 	if len(b)+reserved > agentDocumentLimit {
