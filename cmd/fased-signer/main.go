@@ -27,6 +27,9 @@ func main() {
 }
 
 func run(args []string, input *os.File, out, errOut io.Writer) error {
+	if len(args) > 0 && (args[0] == "fixture-portable-export" || args[0] == "fixture-portable-recover") {
+		return portableCommand(args, input, out, errOut)
+	}
 	if len(args) > 0 && (args[0] == "fixture-inspection-compatibility" || args[0] == "fixture-reader-guard" || args[0] == "fixture-inspection-empty" || args[0] == "fixture-inspection-init" || args[0] == "fixture-inspection-cold") {
 		return inspectionFixtureCommand(args, input, out, errOut)
 	}

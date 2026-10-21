@@ -159,8 +159,9 @@ journals are preserved/refused; an uncertain write blocks further operations
 until restart. There is no automatic truncation, allowance reset or history
 pruning. The fixture caps history at 1024 operations, 256 grants and 8 MiB per
 journal. A hash chain is not protection from signer/root compromise or complete
-disk rollback. Back up the original encrypted key separately; this fixture does
-not provide an authoritative portable journal backup/import system.
+disk rollback. Back up the original encrypted key separately. The cold portable
+archive below now preserves complete history in a private read-only quarantine;
+it does not import live authority or clear a recovery hold.
 
 Local tests terminate actual non-root child processes at reservation,
 original-persistence and mock-send boundaries. They prove process crash behavior,
@@ -292,3 +293,74 @@ Wallets to read the independent signer receipt. `approved` records owner consent
 for that exact fixture mandate; it does not mean unlocked, unexpired allowance,
 live trading, unattended unlock or real wallet support. A digest mismatch,
 revocation, expiry, recovery hold or unavailable signer remains visible.
+
+## Cold encrypted history capture and quarantined recovery
+
+P4 now implements a bounded Linux-only portable evidence archive. It contains the
+exact encrypted vault, complete operation journal and complete mock receipt
+journal, including originals, lifetime spending, unresolved reservations and
+installed/reserved update floors. The whole archive uses a fresh salt/nonce with
+Argon2id (64 MiB, three iterations, two lanes) and AES-256-GCM. The original vault
+inside remains encrypted by its original unlock password. Losing that password
+is not repaired by the archive password.
+
+This is offline maintenance under the configured **signer UID**, with a root-owned
+immutable executable/configuration. The source daemon must be stopped: the actual
+exclusive signer lock refuses capture while it is running. The source vault password authenticates the encrypted key without unlocking the
+wallet; a wrong password or damaged key refuses capture. Cold reads create or
+repair nothing. Active update intents refuse capture because they require their
+original controller/core recovery context. The app and owner UIDs cannot call
+these commands; there is no HTTP, app/owner RPC or UI route. All keys remain
+explicit disposable fixtures, and unsupported platforms refuse.
+
+```sh
+# Maintainer commands, already running under the configured non-root signer UID.
+# Choose an existing private directory owned by that UID. No upload occurs.
+fased-signer fixture-portable-export --disposable-fixture   --config /root-owned/identity.json --file /private/history.enc
+
+# Keep the returned archiveSha256 independently, off the source disk.
+# On recovery, the private quarantine parent exists; the destination is absent.
+fased-signer fixture-portable-recover --disposable-fixture   --config /root-owned/recovery-identity.json --file /private/history.enc   --snapshot-sha256 <independently-retained-fingerprint>   --directory /private/recovered-history
+```
+
+Source-vault and archive passwords are read from a protected terminal, never command arguments or receipts.
+Explicit `--password-stdin` is available only for disposable fixture automation.
+Archives and recovered files are private, exclusive and never printed. Receipt
+output contains the capture time, public source identity, exact file hashes and
+replayed counters/floors. Corrupt/truncated/oversized input, a wrong password,
+missing/substituted fingerprint, foreign state and unsupported reader contracts
+refuse without modifying the destination. The fingerprint binds exact archive
+bytes; it is not proof that the backup is the latest financial authority.
+
+Recovery authenticates/decrypts the fixed archive frame and reuses the actual cold
+vault/journal replay before publication. Output contains only `intent.json`,
+`receipt.json`, `vault.json.snapshot`, `operations.log.snapshot` and
+`mock-receipts.log.snapshot`. Those names are deliberately not live signer input.
+A fresh target configuration can inspect the source history without importing
+its signer ID, authority epoch, grants or permissions. Every receipt is historical,
+read-only, locked and recovery-required, with install/resume/wallet/financial and
+automatic-update flags false. No restored file is executed or automatically
+adopted by a service.
+
+A private pending directory and synced immutable prefix make interrupted imports
+recoverable. Exact retry rehashes existing files and finishes durability;
+conflicting, partial, linked or foreign files remain preserved/refused. An empty
+pre-existing pending directory is also preserved: without a matching durable
+intent it is not assumed to belong to this import. Final publication uses a
+no-replace directory rename; completion retry remains a historical result.
+
+This supplies off-disk **evidence preservation and inspection**, not authoritative
+live financial recovery. A stale backup plus its own stale checksum cannot prove
+latest spending, source retirement or venue finality. A real live recovery path
+still requires independent current history/anchor and venue reconciliation,
+while preserving unknown holds and requiring fresh bounded owner permissions.
+Those P3/P6 dependencies keep public P4-15 BLOCKED. No mock absence proof, archive
+receipt, filesystem restore or copied counter is permitted to clear that gate.
+The existing key-only backup/recovery and live signer formats are unchanged.
+
+`node scripts/check-portable-recovery.mjs` runs the local/Ubuntu race-enabled
+archive, tamper, prefix, conflict and coupled-history checks. The installed Ubuntu
+journey additionally exercises the immutable executable, real signer/app/owner
+UIDs, a fresh empty target configuration, source-byte preservation, restart and
+read-only recovery. Its evidence remains separate from public/native/VPS or
+physical disk-loss acceptance.
