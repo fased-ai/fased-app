@@ -383,7 +383,7 @@ func maintenanceCallbacks(tx custodyinstall.BootstrapTransaction, system *custod
 			return e
 		}
 		aborted := r.UpdateIntent.State == "aborted"
-		if r.UpdateInventory == nil || !r.Status.Locked || (r.UpdateIntent.State != "staged" && !(allowAborted && aborted)) || !update.BootstrapHeld(index.Binding.Signer, *r.UpdateInventory, aborted) {
+		if r.UpdateInventory == nil || !r.Status.Locked || (r.UpdateIntent.State != "staged" && !(allowAborted && aborted)) || !maintenanceHistoryHeld(tx, index.Binding.Signer, *r.UpdateInventory, aborted) {
 			return errors.New("bootstrap financial authority, history, hold or floor changed")
 		}
 		if !requireCore || aborted {
@@ -428,4 +428,11 @@ func maintenanceCallbacks(tx custodyinstall.BootstrapTransaction, system *custod
 	}
 
 	return callbacks
+}
+
+func maintenanceHistoryHeld(tx custodyinstall.BootstrapTransaction, before, now update.SignerSnapshot, aborted bool) bool {
+	if tx.Target.InspectionBridge != "" {
+		return update.InspectionFixtureHeld(before, now, aborted)
+	}
+	return update.BootstrapHeld(before, now, aborted)
 }

@@ -566,7 +566,7 @@ func RollbackInspectionBridge(ctx context.Context, t InspectionBridge, s *System
 	// Actual predecessor cold parsing must succeed, independently of the new probe.
 	b, e := runAs(ctx, s, t.Dir()+"/previous/fased-signer", t.Base.Signer, "fixture-update-inspect", "--config", t.Base.Root+"/identity.json", "--disposable-fixture", "--intent-id", t.ID)
 	var previous signer.Response
-	if e != nil || update.StrictJSON(b, &previous) != nil || previous.UpdateInventory == nil || !update.BootstrapHeld(index.Binding.Signer, *previous.UpdateInventory, false) {
+	if e != nil || update.StrictJSON(b, &previous) != nil || previous.UpdateInventory == nil || !update.InspectionFixtureHeld(index.Binding.Signer, *previous.UpdateInventory, false) {
 		return out, errors.New("predecessor cannot read exact financial history")
 	}
 	if e = allowedInstallation(InstallTransaction{Base: t.Base, Target: t.Base}, readRoot); e != nil {

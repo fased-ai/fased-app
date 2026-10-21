@@ -81,7 +81,7 @@ try {
       "./cmd/fased-app",
       "./cmd/fased-signer",
       "-run",
-      "^(TestInstalledInspection(FrameRefusal|GuardBeforeState|ReviewDeadline)|TestInspection(GuardedUnitsBeforeFence|BridgeFiniteLifecycleContracts|BridgeGeneratorDigest|ColdMetadataNoMigration)|TestColdInspection.*|TestBootstrap.*)$",
+      "^(TestInstalledInspection(FrameRefusal|GuardBeforeState|ReviewDeadline)|TestInspection(GuardedUnitsBeforeFence|BridgeFiniteLifecycleContracts|BridgeGeneratorDigest|ColdMetadataNoMigration|UnchangedFinancialHistory)|TestColdInspection.*|TestBootstrap.*)$",
     ],
     "focused",
     180000,

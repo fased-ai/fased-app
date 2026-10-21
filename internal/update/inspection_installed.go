@@ -62,3 +62,25 @@ func FixtureInspectionInputName(n string) bool {
 	name := n[len(prefix):]
 	return name == "index.json" || inspectionNameLimit(name) > 0
 }
+
+// InspectionFixtureHeld compares an unchanged financial reader pair. Unlike the
+// older 3->4 bridge it must retain every completion feature on both sides.
+func InspectionFixtureHeld(before, now SignerSnapshot, aborted bool) bool {
+	before.BootID, before.ProbeID, now.BootID, now.ProbeID = "", "", "", ""
+	if aborted {
+		before.ActiveIntentID = ""
+		before.States = append([]State(nil), before.States...)
+		now.States = append([]State(nil), now.States...)
+		for i := range before.States {
+			if before.States[i].Name == "operations" {
+				before.States[i].Anchor = ""
+			}
+		}
+		for i := range now.States {
+			if now.States[i].Name == "operations" {
+				now.States[i].Anchor = ""
+			}
+		}
+	}
+	return SnapshotDigest("inspection-fixture-held:v1", before) == SnapshotDigest("inspection-fixture-held:v1", now)
+}
