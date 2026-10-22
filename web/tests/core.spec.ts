@@ -1881,3 +1881,179 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
     fullPage: true,
   });
 });
+
+test("WEN paper context hands off UI and CLI to frozen same-profile chat with optional consented fixture AI", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(60000);
+  await stop();
+  await start(true);
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page.getByRole("button", { name: "Claim workspace" }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+  });
+  const command = async (c: object) => {
+    const v = await privateCLI(["agents"]);
+    return privateCLI(["agents", "--request-stdin"], {
+      revision: v.revision,
+      ...c,
+    });
+  };
+  let v = await command({
+    action: "wen-paper-prepare",
+    name: "UI explained entry",
+    wen: { budgetSOL: "0.25", selection: "2", validForSeconds: 300 },
+  });
+  const task = v.tasks[0];
+  await command({
+    action: "wen-paper-approve",
+    id: task.id,
+    consentDigest: task.wen.digest,
+  });
+  v = await command({ action: "task-run", id: task.id });
+  const receiptHash = v.runs[0].wen.receiptSha256;
+  await page.goto(url + "/#terminals/satcoin");
+  await page
+    .getByRole("button", {
+      name: "Explain this paper entry: UI explained entry",
+      exact: true,
+    })
+    .click();
+  await expect(page).toHaveURL(/#agents\/chat$/);
+  const snapshot = page
+    .locator(".local-messages article")
+    .filter({ hasText: "Frozen WEN paper context v1" });
+  await expect(snapshot).toContainText(receiptHash);
+  await expect(snapshot).toContainText("not current state");
+  v = await privateCLI(["agents"]);
+  const originalText = v.messages[0].text;
+  expect(await snapshot.locator("p").textContent()).toBe(originalText);
+  expect(v.aiRequests).toHaveLength(0);
+  expect(v.tasks[0].state).toBe("completed");
+  expect(v.runs).toHaveLength(1);
+  const review = page.getByRole("region", {
+    name: "Optional AI request review",
+  });
+  await review
+    .getByLabel("AI request", { exact: true })
+    .fill("Explain these frozen paper facts and their limitations");
+  await review.getByRole("button", { name: /Prepare/ }).click();
+  let request = review.locator(".ai-request").last();
+  await request.locator("summary").first().click();
+  await expect(request.locator("pre")).toContainText(task.wen.digest);
+  await expect(
+    request.getByRole("button", {
+      name: "Run development fixture",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  await request
+    .getByRole("button", { name: "Cancel request", exact: true })
+    .click();
+  v = await privateCLI(["agents"]);
+  expect(v.aiRequests[0].state).toBe("cancelled");
+  await review
+    .getByLabel("AI request", { exact: true })
+    .fill(
+      "Explain the captured range and pending receipt, without predicted rewards",
+    );
+  await review.getByRole("button", { name: /Prepare/ }).click();
+  request = review.locator(".ai-request").last();
+  await request
+    .getByLabel("I reviewed this context and these fixture limits")
+    .check();
+  await request
+    .getByRole("button", { name: "Run development fixture", exact: true })
+    .click();
+  await expect
+    .poll(async () => {
+      v = await privateCLI(["agents"]);
+      return v.aiRequests.at(-1)?.state;
+    })
+    .toBe("completed");
+  expect(v.messages[0].text).toBe(originalText);
+  expect(v.runs).toHaveLength(1);
+  expect(v.bots).toHaveLength(0);
+  expect(v.tasks[0].wen.approved).toBe(true);
+  v = await command({
+    action: "wen-paper-prepare",
+    name: "CLI explained entry",
+    wen: { budgetSOL: "0.02", selection: "0", validForSeconds: 300 },
+  });
+  const pending = v.tasks[1];
+  const stale = v.revision;
+  v = await command({ action: "wen-paper-explain", id: pending.id });
+  const cliText = v.messages.at(-2).text;
+  await expect(
+    privateCLI(["agents", "--request-stdin"], {
+      revision: stale,
+      action: "wen-paper-explain",
+      id: pending.id,
+    }),
+  ).rejects.toThrow();
+  await expect(
+    command({
+      action: "wen-paper-explain",
+      id: pending.id,
+      profileId: "news-researcher",
+    }),
+  ).rejects.toThrow();
+  await command({ action: "wen-paper-cancel", id: pending.id });
+  await command({
+    action: "profile-update",
+    name: "WEN snapshot operator",
+    text: "Keep scoped history",
+    provider: "xai",
+    model: "preference-only",
+  });
+  await stop();
+  await start(true);
+  await page.goto(url + "/#agents/chat");
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(snapshot).toContainText("Captured task state: review");
+  expect(await snapshot.locator("p").textContent()).toBe(cliText);
+  v = await privateCLI(["agents"]);
+  expect(v.tasks[1].state).toBe("cancelled");
+  expect(v.messages[0].text).toBe(originalText);
+  expect(v.aiRequests).toHaveLength(2);
+  expect(v.runs).toHaveLength(1);
+  expect(v.notices).toHaveLength(1);
+  expect(v.providerCallsEnabled).toBe(false);
+  expect(v.financialExecution).toBe(false);
+  const other = await privateCLI(["agents", "--profile", "news-researcher"]);
+  expect(other.messages).toHaveLength(0);
+  expect(other.sessions).toHaveLength(0);
+  expect(
+    await snapshot
+      .locator("p")
+      .evaluate((e) => e.getBoundingClientRect().width),
+  ).toBeGreaterThan(160);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  expect(external).toEqual([]);
+  await mkdir(".evidence/wen-paper-chat", { recursive: true });
+  await page.screenshot({
+    path: `.evidence/wen-paper-chat/${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+});

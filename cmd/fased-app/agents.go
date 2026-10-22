@@ -25,7 +25,7 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	dir := flags.String("data-dir", base, "private instance directory")
 	profile := flags.String("profile", "", "profile ID for scoped reading")
 	search := flags.String("search", "", "search this profile's conversations, messages and completed AI questions/answers")
-	change := flags.Bool("request-stdin", false, "read one revision-checked local agent command JSON (including wen-paper-prepare/approve/cancel); no credentials")
+	change := flags.Bool("request-stdin", false, "read one revision-checked local agent command JSON (including wen-paper-prepare/approve/cancel/explain); no credentials")
 	if e = flags.Parse(args); e != nil {
 		return e
 	}

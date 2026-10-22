@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/fased-ai/fased-app/internal/wenpm1"
 )
@@ -88,9 +89,9 @@ func wenPlanDigest(t AgentTask) string {
 	}{t.ID, t.ProfileID, t.Name, t.IntervalSeconds, t.MaxRuns, p})
 	return wenHash(b)
 }
-func validateWEN(t AgentTask, now int64, approved bool) error {
+func validateWENPlan(t AgentTask) error {
 	p := t.WEN
-	if p == nil || p.Version != wenPaperVersion || p.FixtureSource != wenpm1.FixtureSource || p.FixtureSHA256 != wenpm1.FixtureSHA256 || p.Digest != wenPlanDigest(t) || (approved && !p.Approved) || p.ExpiresAt <= now || p.ValidForSeconds < 300 || p.ValidForSeconds > 1800 || t.IntervalSeconds != 60 || t.MaxRuns != 1 || t.AI != nil || t.News != nil || t.BotID != "" {
+	if p == nil || p.Version != wenPaperVersion || p.FixtureSource != wenpm1.FixtureSource || p.FixtureSHA256 != wenpm1.FixtureSHA256 || p.Digest != wenPlanDigest(t) || p.ValidForSeconds < 300 || p.ValidForSeconds > 1800 || t.IntervalSeconds != 60 || t.MaxRuns != 1 || t.AI != nil || t.News != nil || t.BotID != "" {
 		return errors.New("paper plan changed, expired or unapproved; prepare a fresh review")
 	}
 	if _, e := wenAmount(p.BudgetSOL); e != nil {
@@ -101,6 +102,90 @@ func validateWEN(t AgentTask, now int64, approved bool) error {
 	}
 	return nil
 }
+func validateWEN(t AgentTask, now int64, approved bool) error {
+	if err := validateWENPlan(t); err != nil {
+		return err
+	}
+	if t.WEN.ExpiresAt <= now || (approved && !t.WEN.Approved) {
+		return errors.New("paper plan expired or unapproved; prepare a fresh review")
+	}
+	return nil
+}
+
+// Save a historical, owner-selected context message. This is plain conversation
+// data understood by existing readers, never a mandate, live lookup or AI call.
+// The existing transaction/revision and document capacity gates cover the whole
+// session/message capture; no task, journal or approval is modified.
+func captureWENPaperContext(d *agentDocument, profile, taskID, id string, revision, now int64) error {
+	if len(d.Sessions) >= 100 || len(d.Messages) >= 198 {
+		return errors.New("conversation capacity reached; no paper context captured")
+	}
+	for _, t := range d.Tasks {
+		if t.ID != taskID || t.ProfileID != profile || t.WEN == nil {
+			continue
+		}
+		if err := validateWENPlan(t); err != nil {
+			return err
+		}
+		var run *AgentRun
+		for i := range d.Runs {
+			r := &d.Runs[i]
+			if r.TaskID != t.ID || r.ProfileID != profile {
+				continue
+			}
+			if run != nil || r.ID != t.ID+":1" || r.Strategy != wenPaperVersion {
+				return errors.New("ambiguous paper journal; no context captured")
+			}
+			run = r
+		}
+		count := 0
+		if run != nil {
+			count = 1
+		}
+		if t.Runs != count {
+			return errors.New("paper journal missing; no context captured")
+		}
+		var body strings.Builder
+		fmt.Fprintf(&body, "Frozen WEN paper context v1\nRead-only historical fixture data, not current state. Later task or provider changes do not refresh this snapshot. No AI was called.\n")
+		fmt.Fprintf(&body, "Captured: %s; workspace revision: %d\nProfile: %q\nTask: %q\nEntry: %q\n", time.Unix(now, 0).UTC().Format(time.RFC3339), revision, profile, t.ID, t.Name)
+		fmt.Fprintf(&body, "Template: %s\nPaper budget: %s SOL; BTC range %c (index %s)\nCaptured task state: %s; evaluations: %d/%d; paper approval: %t\n", t.WEN.Version, t.WEN.BudgetSOL, 'A'+rune(t.WEN.Selection[0]-'0'), t.WEN.Selection, t.State, t.Runs, t.MaxRuns, t.WEN.Approved)
+		validity := "unexpired"
+		if now >= t.WEN.ExpiresAt {
+			validity = "expired"
+		}
+		fmt.Fprintf(&body, "Local review expiry: %s (%s at capture; not a live WEN cutoff)\n", time.Unix(t.WEN.ExpiresAt, 0).UTC().Format(time.RFC3339), validity)
+		if run == nil {
+			body.WriteString("Journal: no paper evaluation recorded. No receipt exists.\n")
+		} else {
+			fmt.Fprintf(&body, "Journal: %q; outcome: %q; evaluated: %s\n", run.ID, run.Outcome, time.Unix(run.At, 0).UTC().Format(time.RFC3339))
+			if run.WEN == nil {
+				if run.Outcome != "paper-held" {
+					return errors.New("paper result missing; no context captured")
+				}
+				body.WriteString("Receipt: none; the paper evaluation was held.\n")
+			} else {
+				r := run.WEN
+				amount, _ := wenAmount(t.WEN.BudgetSOL)
+				receiptBytes, err := wenpm1.EncodeReceipt(r.Receipt)
+				if err != nil || r.PlanDigest != t.WEN.Digest || r.FixtureSource != t.WEN.FixtureSource || r.FixtureSHA256 != t.WEN.FixtureSHA256 || wenHash(receiptBytes) != r.ReceiptSHA256 || r.Receipt.Amount != amount || r.Receipt.Selection == nil || *r.Receipt.Selection != t.WEN.Selection[0]-'0' || r.Receipt.Settled || r.Receipt.Outcome != nil || run.Outcome != "paper-pending" {
+					return errors.New("paper receipt does not match the reviewed fixture; no context captured")
+				}
+				fmt.Fprintf(&body, "Receipt: unsigned and unsettled; %d lamports\nReceipt SHA-256: %s\n", r.Receipt.Amount, r.ReceiptSHA256)
+			}
+		}
+		fmt.Fprintf(&body, "Canonical fixture source: %s\nFixture SHA-256: %s\nPaper review digest: %s\n", t.WEN.FixtureSource, t.WEN.FixtureSHA256, t.WEN.Digest)
+		body.WriteString("No live BTC observation, settlement, payout, P&L or claim is simulated. No funds are reserved/spent and nothing is signed/submitted. This context cannot authorize or alter a task, wallet or approval. Optional AI requires a separate review, consent and limits.\n")
+		text := body.String() + "Snapshot SHA-256: " + wenHash([]byte(body.String()))
+		if len(text) > 4000 {
+			return errors.New("paper context exceeds the conversation bound")
+		}
+		d.Sessions = append(d.Sessions, AgentSession{ID: id, ProfileID: profile, Name: "WEN paper · " + t.WEN.BudgetSOL + " SOL · range " + t.WEN.Selection, CreatedAt: now})
+		d.Messages = append(d.Messages, AgentMessage{ID: id + "-context", ProfileID: profile, SessionID: id, Role: "user", Text: text, CreatedAt: now}, AgentMessage{ID: id + "-local", ProfileID: profile, SessionID: id, Role: "system", Text: "Read-only WEN snapshot saved locally. No AI was called; paper execution and approvals are unchanged. Use the separate AI review only if you want a bounded fixture explanation.", CreatedAt: now})
+		return nil
+	}
+	return errors.New("profile paper task not found")
+}
+
 func changeWEN(d *agentDocument, c AgentCommand, profile, id string, now int64) error {
 	if c.Action == "wen-paper-prepare" {
 		if c.WEN == nil || !validAgentText(c.Name, 80, true) || len(d.Tasks) >= 100 || c.BotID != "" || c.NewsSourceID != "" || c.Limits != nil || c.ConnectionRef != "" {

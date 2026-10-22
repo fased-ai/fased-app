@@ -71,3 +71,38 @@ in update snapshots/backups. Paused schema-9 state must finish recovery before
 migration. Wallet/owner mandates remain entirely separate and disabled for live
 use; paper approval never authorizes finance. No automatic/public update or
 real AI/wallet operation is enabled.
+
+## Explain a saved paper entry
+
+Select **Explain this paper entry** on a Satcoin paper card. The core creates a
+new conversation in the same profile with a bounded, read-only snapshot of the
+retained plan and optional journal/receipt. It captures the task state, budget,
+range, review expiry, source/fixture and review/receipt digests, timestamp and
+workspace revision, plus a SHA-256 of the snapshot text. The snapshot is plain
+saved conversation data, not a wallet mandate or an executable instruction.
+
+Captured facts stay frozen after task, profile or provider-preference changes and
+restart. They describe historical fixture state, not current status, a live BTC
+observation, payout, P&L or claim. Expired, cancelled and held entries may still be
+explained when their retained plan/journal evidence is consistent. A changed plan,
+missing/inconsistent receipt, stale revision, foreign profile or full conversation
+storage refuses capture without changing the paper task or partially saving chat.
+
+CLI uses the existing command endpoint; supply the latest revision and same-profile
+task ID, then read the returned new session and its context message:
+
+```json
+{
+  "revision": 2,
+  "profileId": "wen-operator",
+  "action": "wen-paper-explain",
+  "id": "RETURNED_TASK_ID"
+}
+```
+
+No AI runs when context is captured. Read the facts directly, or use the normal
+optional AI request form with explicit disclosure, limits and consent. Ordinary
+cores still refuse execution; only the standalone compiled development fixture
+can explain. Cancellation and budget/context checks remain unchanged. Neither
+capture nor an AI answer approves, resumes, executes or cancels the paper task.
+No live provider, wallet, RPC, public update or new service is enabled.

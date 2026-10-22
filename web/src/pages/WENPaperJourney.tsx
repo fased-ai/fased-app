@@ -10,7 +10,7 @@ const ranges = [
   "E · +0.20% or above",
 ];
 export function WENPaperJourney() {
-  const { core, agents } = useWorkspace();
+  const { core, agents, navigate } = useWorkspace();
   const [name, setName] = useState("Range rehearsal");
   const [budget, setBudget] = useState("0.01");
   const [selection, setSelection] = useState("2");
@@ -154,6 +154,19 @@ export function WENPaperJourney() {
                       </p>
                     </details>
                     <div className="agent-inline">
+                      <button
+                        className="secondary"
+                        disabled={agents.busy}
+                        onClick={() =>
+                          void agents
+                            .change({ action: "wen-paper-explain", id: t.id })
+                            .then((ok) => {
+                              if (ok) navigate("agents/chat");
+                            })
+                        }
+                      >
+                        Explain this paper entry: {t.name}
+                      </button>
                       {t.state === "review" && (
                         <button
                           className="primary"

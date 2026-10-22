@@ -404,6 +404,10 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		}
 	}
 	switch c.Action {
+	case "wen-paper-explain":
+		if e = captureWENPaperContext(&d, profile, c.ID, id, revision, now); e != nil {
+			return AgentView{}, e
+		}
 	case "wen-paper-prepare", "wen-paper-approve", "wen-paper-cancel":
 		if e = changeWEN(&d, c, profile, id, now); e != nil {
 			return AgentView{}, e
