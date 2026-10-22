@@ -193,7 +193,8 @@ jobs:
           go test -v ./internal/update -run '^TestReleaseAdmissionCompiledCLI$' > .evidence/p4-release-admission/admission-cli.log 2>&1
           cat .evidence/p4-release-admission/admission-cli.log
       - name: Managed account UI browser prerequisite
-        run: npx playwright install --with-deps chromium
+        # The Ubuntu runner supplies the shared libraries; actual browser launch checks them.
+        run: npx playwright install --only-shell chromium
       - name: Installer-managed identities and protected owner recovery
         env:
           FASED_PORTABLE_ACCEPTANCE: "1"
