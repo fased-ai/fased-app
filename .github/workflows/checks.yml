@@ -149,6 +149,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+          cache: npm
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.x"
@@ -158,7 +159,7 @@ jobs:
         run: node scripts/check-signer-isolation.mjs
       - name: Build managed disposable core
         run: |
-          npm ci
+          npm ci --prefer-offline --no-audit --no-fund
           npm run build
           go build -trimpath -o .evidence/bin/fased-app ./cmd/fased-app
       - name: Build deliberately unhealthy disposable candidate
