@@ -1,0 +1,40 @@
+name: Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  documentation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Verify documentation validator failure cases
+        run: node --test --test-isolation=none scripts/check-docs.test.mjs
+      - name: Validate tracked foundation and documentation
+        run: node scripts/check-docs.mjs
+      - name: Check whitespace
+        run: git show --format= --check HEAD
+
+  prototype:
+    if: always()
+    needs: [documentation]
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Require the actual documentation check
+        env:
+          DOCUMENTATION_RESULT: ${{ needs.documentation.result }}
+        run: test "$DOCUMENTATION_RESULT" = success
