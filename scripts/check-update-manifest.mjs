@@ -66,9 +66,10 @@ try {
   );
   pass(
     "schemaPauseAndApprovalFeatures",
-    contracts[0].state[0].versions.min === 9 &&
-      contracts[0].state[0].versions.max === 9 &&
+    contracts[0].state[0].versions.min === 10 &&
+      contracts[0].state[0].versions.max === 10 &&
       contracts[0].state[0].features.includes("agents-local-v1") &&
+      contracts[0].state[0].features.includes("agents-wen-paper-v1") &&
       contracts[0].state[0].features.includes("core-pause-v1") &&
       contracts[0].lifecycle.entrypoint === 4 &&
       contracts[1].state
@@ -224,6 +225,21 @@ try {
       "schema6CoreReaderDenied",
       (m) => {
         m.components[0].contract.state[0].versions = { min: 6, max: 6 };
+      },
+    ],
+    [
+      "schema9CoreReaderDenied",
+      (m) => {
+        m.components[0].contract.state[0].versions = { min: 9, max: 9 };
+      },
+    ],
+    [
+      "wenPaperFeatureErasureDenied",
+      (m) => {
+        m.components[0].contract.state[0].features =
+          m.components[0].contract.state[0].features.filter(
+            (f) => f !== "agents-wen-paper-v1",
+          );
       },
     ],
     [
