@@ -1739,3 +1739,145 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
     fullPage: true,
   });
 });
+
+test("WEN paper journey shares UI and CLI review, cancel and restart receipts without live authority", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(60000);
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page.getByRole("button", { name: "Claim workspace" }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+  });
+  await page.goto(url + "/#terminals/satcoin");
+  const journey = page.getByRole("region", { name: "WEN paper journey" });
+  await journey.getByLabel("Paper entry name").fill("UI range C");
+  await journey.getByLabel("Paper SOL budget").fill("0.25");
+  await journey
+    .getByRole("button", { name: "Prepare paper review", exact: true })
+    .click();
+  const card = journey.getByRole("article", { name: "Paper entry UI range C" });
+  await expect(card).toContainText("review · 0.25 SOL");
+  let v = await privateCLI(["agents"]);
+  expect(v.tasks).toHaveLength(1);
+  expect(v.runs).toHaveLength(0);
+  expect(v.tasks[0].wen.budgetSOL).toBe("0.25");
+  expect(v.providerCallsEnabled).toBe(false);
+  expect(v.financialExecution).toBe(false);
+  const command = async (c: object) => {
+    const prior = await privateCLI(["agents"]);
+    return privateCLI(["agents", "--request-stdin"], {
+      revision: prior.revision,
+      ...c,
+    });
+  };
+  const task = v.tasks[0];
+  v = await command({
+    action: "wen-paper-approve",
+    id: task.id,
+    consentDigest: task.wen.digest,
+  });
+  v = await command({ action: "task-pause", id: task.id });
+  expect(v.tasks[0].state).toBe("paused");
+  await stop();
+  await start();
+  await page.goto(url + "/#terminals/satcoin");
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(card).toContainText("paused · 0.25 SOL");
+  await card
+    .getByRole("button", { name: "Resume paper: UI range C", exact: true })
+    .click();
+  await card
+    .getByRole("button", { name: "Run paper once: UI range C", exact: true })
+    .click();
+  await expect(card).toContainText("completed · 0.25 SOL");
+  const receipt = journey.getByRole("article", { name: "WEN paper receipt" });
+  await expect(receipt).toContainText("Paper pending · unsettled");
+  await receipt.getByText("Receipt evidence", { exact: true }).click();
+  v = await privateCLI(["agents"]);
+  expect(v.runs).toHaveLength(1);
+  expect(v.notices).toHaveLength(1);
+  const result = v.runs[0].wen;
+  expect(result.receipt.amount).toBe("250000000");
+  expect(result.receipt.settled).toBe(false);
+  expect(result.receipt.sat).toBe("0");
+  expect(result.receipt.principal).toBe("0");
+  expect(result.receipt.outcome).toBeNull();
+  expect(result.planDigest).toBe(task.wen.digest);
+  expect(
+    result.instructions.map((i: { operation: string }) => i.operation),
+  ).toEqual(["open", "commit", "reveal"]);
+  await expect(receipt).toContainText(result.receiptSha256);
+  v = await command({
+    action: "wen-paper-prepare",
+    name: "CLI cancel",
+    wen: { budgetSOL: "0.01", selection: "0", validForSeconds: 300 },
+  });
+  await page.reload();
+  await journey
+    .getByRole("button", { name: "Cancel paper: CLI cancel", exact: true })
+    .click();
+  await expect(
+    journey.getByRole("article", { name: "Paper entry CLI cancel" }),
+  ).toContainText("cancelled");
+  await journey
+    .getByLabel("Paper agent profile")
+    .selectOption("news-researcher");
+  await expect(receipt).toHaveCount(0);
+  await expect(card).toHaveCount(0);
+  const other = await privateCLI(["agents", "--profile", "news-researcher"]);
+  expect(other.tasks).toHaveLength(0);
+  expect(other.runs).toHaveLength(0);
+  await journey.getByLabel("Paper agent profile").selectOption("wen-operator");
+  await expect(card).toBeVisible();
+  await stop();
+  await start();
+  await page.goto(url + "/#terminals/satcoin");
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(
+    journey.getByRole("article", { name: "Paper entry CLI cancel" }),
+  ).toContainText("cancelled");
+  await expect(receipt).toHaveCount(1);
+  v = await privateCLI(["agents"]);
+  expect(v.runs).toHaveLength(1);
+  expect(v.runs[0].wen.receiptSha256).toBe(result.receiptSha256);
+  await expect(
+    page.getByRole("button", { name: "Execution unavailable", exact: true }),
+  ).toBeDisabled();
+  expect(
+    await card
+      .locator("p")
+      .first()
+      .evaluate((e) => e.getBoundingClientRect().width),
+  ).toBeGreaterThan(180);
+  expect(external).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await mkdir(".evidence/wen-paper", { recursive: true });
+  await page.screenshot({
+    path: `.evidence/wen-paper/${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+});

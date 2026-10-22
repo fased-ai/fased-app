@@ -9,6 +9,7 @@ import {
 import { Badge, SectionHead, Empty, DemoChart } from "../components/shared";
 import { terminalData } from "../fixtures";
 import { useWorkspace } from "../workspace";
+import { WENPaperJourney } from "./WENPaperJourney";
 export function Terminals() {
   const { tab, navigate } = useWorkspace();
   const active = terminalData.find((t) => t.id === tab);
@@ -75,12 +76,13 @@ export function Terminals() {
               <strong>{active.name} is a design prototype.</strong>
               <span>
                 {mining
-                  ? "WEN integration is deferred until its independent contract and acceptance are ready."
+                  ? "The local paper journey uses public fixtures. Live WEN integration awaits independent contract acceptance."
                   : "Venue integration, market data and financial execution have not been implemented."}{" "}
                 All values below are illustrative.
               </span>
             </div>
           </div>
+          {mining && <WENPaperJourney />}
           <div className="terminal-workspace">
             <section className="panel">
               <div className="panel-heading">

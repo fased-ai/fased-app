@@ -94,6 +94,9 @@ func queueTaskNews(d *agentDocument, i int, now int64) error {
 }
 func evaluateAgentTask(d *agentDocument, i int, now int64, fixture bool) error {
 	t := d.Tasks[i]
+	if t.WEN != nil {
+		return runWENPaper(d, i, now)
+	}
 	if t.AI != nil {
 		if !fixture {
 			return taskAIHeld(d, i, "", "ai-disabled", now)

@@ -1,5 +1,5 @@
 // Package wenpm1 implements only WEN's pinned disposable PM1 v1 wire profile.
-// It has no RPC, signer, wallet, or application execution integration.
+// It has no RPC, signer, wallet, or financial execution integration.
 package wenpm1
 
 const SchemaHash = "cd27e05b6e8f6106ffca75e5bd967caa185ad8a137ffcc972c2c8ebbc48c8ec1"

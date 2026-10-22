@@ -586,8 +586,14 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                 Missed intervals coalesce into one evaluation. Pause prevents
                 new evaluations; resume schedules the next interval.
               </p>
+              {v.tasks.some((t) => t.wen) && (
+                <p>
+                  WEN paper tasks are managed in the{" "}
+                  <a href="#terminals/satcoin">Satcoin Mining terminal</a>.
+                </p>
+              )}
               {v.tasks
-                .filter((t) => !t.ai)
+                .filter((t) => !t.ai && !t.wen)
                 .map((t) => (
                   <article className="memory-card" key={t.id}>
                     <strong>{t.name}</strong>
@@ -745,6 +751,15 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                       <p>
                         {r.strategy} · {date(r.at)}
                       </p>
+                      {r.wen && (
+                        <p>
+                          Unsigned WEN paper receipt · unsettled · no rewards or
+                          claims. Receipt SHA-256:{" "}
+                          <code className="wrap-anywhere">
+                            {r.wen.receiptSha256}
+                          </code>
+                        </p>
+                      )}
                       {r.botId && (
                         <p>
                           Inputs: quantity {r.quantity}, fixed price{" "}

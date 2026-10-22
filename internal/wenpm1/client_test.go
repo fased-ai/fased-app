@@ -453,3 +453,18 @@ func TestCanonicalSourcePins(t *testing.T) {
 		t.Fatal("golden/schema mismatch")
 	}
 }
+
+func TestCanonicalFixtureCopy(t *testing.T) {
+	ledger, receipt, err := CanonicalFixture()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ledger.Binding != golden(t).Binding || receipt.Amount != math.MaxUint64 {
+		t.Fatal("not canonical")
+	}
+	ledger.Rounds[0].Entries[0].Amount = 1
+	again, _, err := CanonicalFixture()
+	if err != nil || again.Rounds[0].Entries[0].Amount != math.MaxUint64 {
+		t.Fatal("shared fixture mutation", err)
+	}
+}

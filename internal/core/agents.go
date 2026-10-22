@@ -68,6 +68,7 @@ type PaperBot struct {
 	SpentCents  int64  `json:"spentCents"`
 }
 type AgentTask struct {
+	WEN             *WENPaperPlan  `json:"wen,omitempty"`
 	News            *TaskNewsInput `json:"news,omitempty"`
 	AI              *TaskAIStep    `json:"ai,omitempty"`
 	ID              string         `json:"id"`
@@ -82,20 +83,21 @@ type AgentTask struct {
 	State           string         `json:"state"`
 }
 type AgentRun struct {
-	News         *NewsEvidence `json:"news,omitempty"`
-	AIRequestID  string        `json:"aiRequestId,omitempty"`
-	AIDigest     string        `json:"aiDigest,omitempty"`
-	ID           string        `json:"id"`
-	ProfileID    string        `json:"profileId"`
-	TaskID       string        `json:"taskId"`
-	BotID        string        `json:"botId"`
-	Strategy     string        `json:"strategy"`
-	At           int64         `json:"at"`
-	Outcome      string        `json:"outcome"`
-	Quantity     int64         `json:"quantity"`
-	PriceCents   int64         `json:"priceCents"`
-	CostCents    int64         `json:"costCents"`
-	BudgetBefore int64         `json:"budgetBefore"`
+	WEN          *WENPaperResult `json:"wen,omitempty"`
+	News         *NewsEvidence   `json:"news,omitempty"`
+	AIRequestID  string          `json:"aiRequestId,omitempty"`
+	AIDigest     string          `json:"aiDigest,omitempty"`
+	ID           string          `json:"id"`
+	ProfileID    string          `json:"profileId"`
+	TaskID       string          `json:"taskId"`
+	BotID        string          `json:"botId"`
+	Strategy     string          `json:"strategy"`
+	At           int64           `json:"at"`
+	Outcome      string          `json:"outcome"`
+	Quantity     int64           `json:"quantity"`
+	PriceCents   int64           `json:"priceCents"`
+	CostCents    int64           `json:"costCents"`
+	BudgetBefore int64           `json:"budgetBefore"`
 }
 type AgentNotice struct {
 	ID        string `json:"id"`
@@ -140,29 +142,30 @@ type AgentView struct {
 // Optional fields are inert data for a fixed action; unknown fields/actions are
 // rejected. No arbitrary callback, URL, model tool or shell can be submitted.
 type AgentCommand struct {
-	NewsSourceID         string    `json:"newsSourceId,omitempty"`
-	NewsMaxAgeSeconds    int64     `json:"newsMaxAgeSeconds,omitempty"`
-	ConnectionRef        string    `json:"connectionRef,omitempty"`
-	Revision             int64     `json:"revision"`
-	Action               string    `json:"action"`
-	ProfileID            string    `json:"profileId,omitempty"`
-	ID                   string    `json:"id,omitempty"`
-	Name                 string    `json:"name,omitempty"`
-	Text                 string    `json:"text,omitempty"`
-	Source               string    `json:"source,omitempty"`
-	ExpiresAt            int64     `json:"expiresAt,omitempty"`
-	Provider             string    `json:"provider,omitempty"`
-	Model                string    `json:"model,omitempty"`
-	BotID                string    `json:"botId,omitempty"`
-	IntervalSeconds      int64     `json:"intervalSeconds,omitempty"`
-	MaxRuns              int       `json:"maxRuns,omitempty"`
-	Quantity             int64     `json:"quantity,omitempty"`
-	PriceCents           int64     `json:"priceCents,omitempty"`
-	BudgetCents          int64     `json:"budgetCents,omitempty"`
-	Limits               *AILimits `json:"limits,omitempty"`
-	ConsentDigest        string    `json:"consentDigest,omitempty"`
-	TotalBudgetMicrousd  int64     `json:"totalBudgetMicrousd,omitempty"`
-	AuthorizationSeconds int64     `json:"authorizationSeconds,omitempty"`
+	WEN                  *WENPaperInput `json:"wen,omitempty"`
+	NewsSourceID         string         `json:"newsSourceId,omitempty"`
+	NewsMaxAgeSeconds    int64          `json:"newsMaxAgeSeconds,omitempty"`
+	ConnectionRef        string         `json:"connectionRef,omitempty"`
+	Revision             int64          `json:"revision"`
+	Action               string         `json:"action"`
+	ProfileID            string         `json:"profileId,omitempty"`
+	ID                   string         `json:"id,omitempty"`
+	Name                 string         `json:"name,omitempty"`
+	Text                 string         `json:"text,omitempty"`
+	Source               string         `json:"source,omitempty"`
+	ExpiresAt            int64          `json:"expiresAt,omitempty"`
+	Provider             string         `json:"provider,omitempty"`
+	Model                string         `json:"model,omitempty"`
+	BotID                string         `json:"botId,omitempty"`
+	IntervalSeconds      int64          `json:"intervalSeconds,omitempty"`
+	MaxRuns              int            `json:"maxRuns,omitempty"`
+	Quantity             int64          `json:"quantity,omitempty"`
+	PriceCents           int64          `json:"priceCents,omitempty"`
+	BudgetCents          int64          `json:"budgetCents,omitempty"`
+	Limits               *AILimits      `json:"limits,omitempty"`
+	ConsentDigest        string         `json:"consentDigest,omitempty"`
+	TotalBudgetMicrousd  int64          `json:"totalBudgetMicrousd,omitempty"`
+	AuthorizationSeconds int64          `json:"authorizationSeconds,omitempty"`
 }
 
 func initialAgents() agentDocument {
@@ -325,7 +328,11 @@ func saveAgents(ctx context.Context, tx *sql.Tx, d agentDocument, revision int64
 	if e != nil {
 		return e
 	}
-	reserved := taskAIFutureStorage(d) + newsStorage(d)
+	wenReserved, err := wenPaperStorage(d)
+	if err != nil {
+		return err
+	}
+	reserved := taskAIFutureStorage(d) + newsStorage(d) + wenReserved
 	for _, q := range d.AIRequests {
 		if q.State == "prepared" || q.State == "queued" || q.State == "running" {
 			reserved += agentAIResultReserve
@@ -397,6 +404,10 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		}
 	}
 	switch c.Action {
+	case "wen-paper-prepare", "wen-paper-approve", "wen-paper-cancel":
+		if e = changeWEN(&d, c, profile, id, now); e != nil {
+			return AgentView{}, e
+		}
 	case "news-source-add", "news-source-disable", "news-fetch", "news-cancel":
 		if e = changeNews(&d, c, profile, id, now); e != nil {
 			return AgentView{}, e
@@ -529,6 +540,11 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 				continue
 			}
 			found = true
+			if t.WEN != nil {
+				if (t.State != "scheduled" && t.State != "paused") || (c.Action == "task-resume" && (t.State != "paused" || validateWEN(t, now, true) != nil)) {
+					return AgentView{}, errors.New("paper task needs an unchanged unexpired review")
+				}
+			}
 			if t.AI != nil && (t.State == "review" || t.State == "held" || t.State == "cancelled") {
 				return AgentView{}, errors.New("AI task needs a fresh reviewed plan")
 			}

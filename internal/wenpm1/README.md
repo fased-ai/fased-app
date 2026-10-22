@@ -1,10 +1,12 @@
 # PM1 disposable fixture client
 
 This pure Go package implements WEN's **fixture-only minimal PM1 v1** profile.
-It is not imported by the core, UI, CLI, signer, scheduler or installer. It adds
+The core now consumes it for the shared UI/CLI [paper journey](../../docs/wen-paper.md). It adds
 no RPC, transport, private-key access, signing, sending, policy grant or live
 execution. WEN's complete PM1 and deployment/admission gates remain open. The
-Satcoin Mining UI remains an inert prototype.
+Satcoin Mining live controls remain disabled; the local journey only validates unsigned
+templates and a synthetic unsettled receipt. `CanonicalFixture` embeds the pinned
+golden bytes, verifies their SHA-256, and returns independent decoded copies.
 
 `testdata/source.json` pins the copied canonical descriptor and unmodified
 Rust-produced golden vectors to Satcoin revision

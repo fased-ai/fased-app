@@ -129,7 +129,45 @@ export type TaskAIStep = {
   pendingId: string;
   bot?: PaperBot;
 };
+export type WENPaperInput = {
+  budgetSOL: string;
+  selection: string;
+  validForSeconds: number;
+};
+export type WENPaperPlan = WENPaperInput & {
+  version: string;
+  fixtureSource: string;
+  fixtureSha256: string;
+  expiresAt: number;
+  digest: string;
+  approved: boolean;
+};
+export type WENPaperResult = {
+  planDigest: string;
+  fixtureSource: string;
+  fixtureSha256: string;
+  commitment: string;
+  instructions: {
+    operation: string;
+    requestSha256: string;
+    templateSha256: string;
+  }[];
+  accountSha256: string;
+  receiptSha256: string;
+  receipt: {
+    amount: string;
+    nonce: string;
+    slot: string;
+    settled: boolean;
+    outcome: number | null;
+    principal: string;
+    sat: string;
+    miner_input: string;
+    selection: number | null;
+  };
+};
 export type AgentTask = {
+  wen?: WENPaperPlan;
   news?: TaskNewsInput;
   ai?: TaskAIStep;
   id: string;
@@ -144,6 +182,7 @@ export type AgentTask = {
   state: string;
 };
 export type AgentRun = {
+  wen?: WENPaperResult;
   news?: NewsEvidence;
   aiRequestId?: string;
   aiDigest?: string;
@@ -226,6 +265,7 @@ export type AgentView = {
   financialExecution: false;
 };
 export type AgentCommand = {
+  wen?: WENPaperInput;
   newsSourceId?: string;
   newsMaxAgeSeconds?: number;
   connectionRef?: string;

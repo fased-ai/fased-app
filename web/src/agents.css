@@ -85,13 +85,15 @@ form.agent-inline {
 .local-agents small {
   overflow-wrap: anywhere;
 }
-.local-agents .memory-card {
+.local-agents .memory-card,
+.wen-paper .memory-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   padding: 18px 0;
 }
-.local-agents .memory-card p {
+.local-agents .memory-card p,
+.wen-paper .memory-card p {
   margin: 0;
 }
 .local-agents .panel,
