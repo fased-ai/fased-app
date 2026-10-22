@@ -1,0 +1,15 @@
+{
+  "repository": "https://github.com/satcoin-org/sat",
+  "commit": "55a4dc562c2516a48f500047df85cb81fabf8084",
+  "profile": "fixture-only-minimal-PM1",
+  "files": {
+    "golden.json": {
+      "path": "wen-genesis/satcoin-mining/fixtures/pm1-v1.json",
+      "sha256": "45de61cdfadd383080158fb6786639af26f4c366ae967d0a545643cb036cbdff"
+    },
+    "schema.fixture": {
+      "path": "wen-genesis/satcoin-mining/interface/pm1-v1.json",
+      "sha256": "cd27e05b6e8f6106ffca75e5bd967caa185ad8a137ffcc972c2c8ebbc48c8ec1"
+    }
+  }
+}
