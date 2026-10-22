@@ -1,3 +1,4 @@
+import { ReminderDraftReview } from "./ReminderDraftReview";
 import { NewsSourcePicker } from "./NewsInputs";
 import {
   AIModelPicker,
@@ -251,6 +252,14 @@ export function AgentAIReview({
                 Keeping this draft records your review. It creates no task, bot,
                 permission or trade.
               </p>
+              {card.kind === "reminder-draft" &&
+                card.review !== "dismissed" && (
+                  <ReminderDraftReview
+                    key={`${view.profileId}:${card.id}`}
+                    view={view}
+                    card={card}
+                  />
+                )}
               {card.review === "unreviewed" && (
                 <div className="agent-inline">
                   <button

@@ -121,6 +121,7 @@ type agentDocument struct {
 	AIRequests  []AgentAIRequest `json:"aiRequests"`
 }
 type AgentView struct {
+	ReminderReview       *ReminderReview  `json:"reminderReview,omitempty"`
 	NewsSources          []NewsSource     `json:"newsSources"`
 	NewsFetches          []NewsFetch      `json:"newsFetches"`
 	AIRequests           []AgentAIRequest `json:"aiRequests"`
@@ -508,35 +509,28 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 			return AgentView{}, errors.New("bounded paper inputs and bot name required")
 		}
 		d.Bots = append(d.Bots, PaperBot{ID: id, ProfileID: profile, Name: c.Name, Strategy: "fixed-paper-buy-v1", Quantity: c.Quantity, PriceCents: c.PriceCents, BudgetCents: c.BudgetCents})
+	case "ai-reminder-review", "ai-reminder-create":
+		review, card, err := reviewChatReminder(&d, c, profile, revision, now)
+		if err != nil {
+			return AgentView{}, err
+		}
+		if c.Action == "ai-reminder-review" {
+			v, err := agentView(d, revision, profile, "", now)
+			v.ReminderReview = review
+			return v, err
+		}
+		if c.ConsentDigest != review.Digest {
+			return AgentView{}, errors.New("reminder review changed; review again")
+		}
+		plain := AgentCommand{Name: review.Name, Text: review.Text, IntervalSeconds: review.IntervalSeconds, MaxRuns: review.MaxRuns}
+		if err = appendAgentTask(&d, plain, profile, review.TaskID, now); err != nil {
+			return AgentView{}, err
+		}
+		card.Review = "kept"
 	case "task-create":
-		if !validAgentText(c.Name, 80, true) || len(d.Tasks) >= 100 || c.IntervalSeconds < 60 || c.IntervalSeconds > 604800 || c.MaxRuns < 1 || c.MaxRuns > 20 {
-			return AgentView{}, errors.New("task requires name, interval 60–604800 seconds and 1–20 runs")
-		}
-		if c.BotID != "" {
-			found := false
-			for _, b := range d.Bots {
-				if b.ID == c.BotID && b.ProfileID == profile {
-					found = true
-				}
-			}
-			if !found {
-				return AgentView{}, errors.New("profile paper bot not found")
-			}
-		} else if !validAgentText(c.Text, 4000, true) {
-			return AgentView{}, errors.New("reminder text required")
-		}
-		reserved := c.MaxRuns
-		for _, t := range d.Tasks {
-			reserved += t.MaxRuns
-		}
-		if reserved > 200 {
-			return AgentView{}, errors.New("local prototype allows 200 total scheduled evaluations")
-		}
-		news, e := taskNewsPolicy(d, c, profile)
-		if e != nil {
+		if e = appendAgentTask(&d, c, profile, id, now); e != nil {
 			return AgentView{}, e
 		}
-		d.Tasks = append(d.Tasks, AgentTask{News: news, ID: id, ProfileID: profile, Name: c.Name, Text: c.Text, BotID: c.BotID, IntervalSeconds: c.IntervalSeconds, MaxRuns: c.MaxRuns, NextAt: now + c.IntervalSeconds, State: "scheduled"})
 	case "task-pause", "task-resume", "task-run":
 		found := false
 		for i, t := range d.Tasks {

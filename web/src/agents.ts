@@ -246,7 +246,25 @@ export type AgentAIRequest = {
     review: string;
   }[];
 };
+export type ReminderReview = {
+  version: string;
+  profileId: string;
+  cardId: string;
+  requestId: string;
+  sessionId: string;
+  taskId: string;
+  sourceTitle: string;
+  sourceText: string;
+  name: string;
+  text: string;
+  intervalSeconds: number;
+  maxRuns: number;
+  revision: number;
+  expiresAt: number;
+  digest: string;
+};
 export type AgentView = {
+  reminderReview?: ReminderReview;
   newsSources: NewsSource[];
   newsFetches: NewsFetch[];
   aiRequests: AgentAIRequest[];

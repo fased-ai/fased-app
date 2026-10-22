@@ -10,6 +10,7 @@ export async function currentStorageFixture(archivedRoot) {
   const sha = (b) => createHash("sha256").update(b).digest("hex");
   for (const file of [
     "agents.go",
+    "agent_reminders.go",
     "wen_paper.go",
     "agent_ai.go",
     "agent_ai_tasks.go",

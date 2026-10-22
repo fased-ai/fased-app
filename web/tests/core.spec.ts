@@ -2057,3 +2057,256 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
     fullPage: true,
   });
 });
+
+test("chat reminder drafts require shared UI and CLI review before scheduling and survive restart without AI", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(90000);
+  await stop();
+  await start(true);
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page.getByRole("button", { name: "Claim workspace" }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const profileId = "trading-analyst";
+  const read = () => privateCLI(["agents", "--profile", profileId]);
+  const command = async (c: object) => {
+    const v = await read();
+    return privateCLI(["agents", "--request-stdin"], {
+      profileId,
+      revision: v.revision,
+      ...c,
+    });
+  };
+  let v = await command({
+    action: "session-create",
+    name: "Reminder planning",
+  });
+  const sessionId = v.sessions[0].id;
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+  });
+  await page.goto(url + "/#agents/chat");
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  const ai = page.getByRole("region", { name: "Optional AI request review" });
+  await ai
+    .getByLabel("AI request", { exact: true })
+    .fill("Draft a reminder to review saved research");
+  await ai.getByRole("button", { name: /Prepare/ }).click();
+  const request = ai.locator(".ai-request").last();
+  await request
+    .getByLabel("I reviewed this context and these fixture limits")
+    .check();
+  await request
+    .getByRole("button", { name: "Run development fixture", exact: true })
+    .click();
+  await expect
+    .poll(async () => (await read()).aiRequests[0]?.state)
+    .toBe("completed");
+  const card = request.locator(".ai-action-card");
+  await card.getByRole("button", { name: "Keep draft", exact: true }).click();
+  expect((await read()).tasks).toHaveLength(0);
+  await card
+    .getByRole("button", { name: "Review reminder task", exact: true })
+    .click();
+  const review = card.getByRole("region", { name: /Reminder task review:/ });
+  await review
+    .getByLabel("Reminder task name", { exact: true })
+    .fill("Review my research");
+  await review
+    .getByLabel("Reminder text", { exact: true })
+    .fill("Read the saved headlines and my notes");
+  await review.getByLabel("Repeat every (seconds)").fill("3600");
+  await review.getByLabel("Maximum reminder runs").fill("2");
+  await review
+    .getByRole("button", { name: "Review reminder schedule", exact: true })
+    .click();
+  const create = review.getByRole("button", {
+    name: "Create reviewed reminder",
+    exact: true,
+  });
+  await expect(create).toBeDisabled();
+  await expect(review).toContainText("No task has been created");
+  expect((await read()).tasks).toHaveLength(0);
+  await review
+    .getByRole("button", { name: "Cancel reminder review", exact: true })
+    .click();
+  expect((await read()).tasks).toHaveLength(0);
+  await card
+    .getByRole("button", { name: "Review reminder task", exact: true })
+    .click();
+  await review
+    .getByRole("button", { name: "Review reminder schedule", exact: true })
+    .click();
+  await expect(review).toContainText("No task has been created");
+  await command({
+    action: "memory-put",
+    text: "An unrelated owner note",
+    source: "owner",
+  });
+  await expect(review).toContainText("Workspace changed or review expired");
+  await expect(create).toBeDisabled();
+  await review
+    .getByRole("button", { name: "Review reminder schedule", exact: true })
+    .click();
+  await review.getByLabel("I reviewed this reminder text and schedule").check();
+  await review
+    .getByLabel("Reminder text", { exact: true })
+    .fill("Edited: read saved research, no external actions");
+  await expect(create).toHaveCount(0);
+  await review
+    .getByRole("button", { name: "Review reminder schedule", exact: true })
+    .click();
+  await review.getByLabel("I reviewed this reminder text and schedule").check();
+  await create.click();
+  await expect(card.getByRole("status")).toContainText(
+    "Reminder task created: Review my research",
+  );
+  v = await read();
+  expect(v.tasks).toHaveLength(1);
+  expect(v.runs).toHaveLength(0);
+  const first = v.tasks[0];
+  expect(first.text).toBe("Edited: read saved research, no external actions");
+  expect(first.intervalSeconds).toBe(3600);
+  expect(first.maxRuns).toBe(2);
+  expect(first.botId).toBe("");
+  expect(first.ai).toBeUndefined();
+  expect(first.news).toBeUndefined();
+  expect(first.wen).toBeUndefined();
+  await command({ action: "task-pause", id: first.id });
+  await page.goto(url + "/#agents/tasks");
+  await expect(
+    page.getByRole("button", {
+      name: "Resume: Review my research",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Resume: Review my research", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Run now: Review my research", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).runs.length).toBe(1);
+  v = await command({ action: "task-pause", id: first.id });
+  expect(v.notices).toHaveLength(1);
+  expect(v.aiRequests).toHaveLength(1);
+  v = await command({
+    action: "ai-prepare",
+    id: sessionId,
+    text: "Draft another reminder",
+    limits: {
+      maxInputTokens: 24000,
+      maxOutputTokens: 1024,
+      deadlineSeconds: 3,
+      budgetMicrousd: 30000,
+    },
+  });
+  const secondRequest = v.aiRequests.at(-1);
+  await command({
+    action: "ai-start",
+    id: secondRequest.id,
+    consentDigest: secondRequest.digest,
+  });
+  await expect
+    .poll(async () => (await read()).aiRequests.at(-1)?.state)
+    .toBe("completed");
+  v = await read();
+  const source = v.aiRequests.at(-1).cards[0];
+  const stale = v.revision;
+  await command({
+    action: "profile-update",
+    name: "Trading Analyst",
+    text: "Scoped research",
+    provider: "xai",
+    model: "preference-only",
+  });
+  await stop();
+  await start(false);
+  await page.goto(url + "/#agents/chat");
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  const proposal = {
+    action: "ai-reminder-review",
+    id: source.id,
+    name: "CLI reviewed reminder",
+    text: "Follow up on saved notes",
+    intervalSeconds: 600,
+    maxRuns: 1,
+  };
+  await expect(
+    privateCLI(["agents", "--request-stdin"], {
+      ...proposal,
+      profileId,
+      revision: stale,
+    }),
+  ).rejects.toThrow();
+  await expect(
+    command({ ...proposal, profileId: "news-researcher" }),
+  ).rejects.toThrow();
+  const before = await read();
+  v = await command(proposal);
+  expect(v.revision).toBe(before.revision);
+  expect(v.tasks).toHaveLength(1);
+  const reviewed = v.reminderReview;
+  const creation = {
+    ...proposal,
+    action: "ai-reminder-create",
+    expiresAt: reviewed.expiresAt,
+    consentDigest: reviewed.digest,
+  };
+  await expect(
+    command({ ...creation, text: "unreviewed edit" }),
+  ).rejects.toThrow();
+  v = await command(creation);
+  expect(v.tasks).toHaveLength(2);
+  await expect(command(creation)).rejects.toThrow(/already created/);
+  expect(v.tasks[1].state).toBe("scheduled");
+  expect(v.tasks[1].text).toBe(proposal.text);
+  await expect(
+    page.getByText(
+      "Reminder task created: CLI reviewed reminder. Manage it in Tasks.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await command({ action: "task-run", id: v.tasks[1].id });
+  await expect(
+    command({ action: "task-run", id: v.tasks[1].id }),
+  ).rejects.toThrow();
+  v = await read();
+  expect(v.runs).toHaveLength(2);
+  expect(v.notices).toHaveLength(2);
+  expect(v.aiRequests).toHaveLength(2);
+  expect(v.aiFixtureAvailable).toBe(false);
+  expect(v.providerCallsEnabled).toBe(false);
+  expect(v.financialExecution).toBe(false);
+  expect(v.bots).toHaveLength(0);
+  const other = await privateCLI(["agents", "--profile", "news-researcher"]);
+  expect(other.tasks).toHaveLength(0);
+  expect(other.aiRequests).toHaveLength(0);
+  expect(external).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await mkdir(".evidence/chat-reminders", { recursive: true });
+  await page.screenshot({
+    path: `.evidence/chat-reminders/${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+});
