@@ -565,6 +565,71 @@ test("claim, UI/CLI setup, restart and logout use one private instance", async (
   expect((await page.request.get(`${url}/api/v1/setup`)).status()).toBe(401);
 });
 
+test("Satcoin prototype preserves legacy links and disabled authority across core restart", async ({
+  page,
+  isMobile,
+}) => {
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page.getByRole("button", { name: "Claim workspace" }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const before = await (await page.request.get(`${url}/api/v1/health`)).json();
+  const external: string[] = [];
+  const mutations: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).origin !== new URL(url).origin)
+      external.push(request.url());
+    if (!["GET", "HEAD"].includes(request.method()))
+      mutations.push(request.url());
+  });
+  for (const route of ["asset", "loss", "satcoin"]) {
+    await page.goto(`${url}/#terminals/${route}`);
+    await expect(page).toHaveURL(/#terminals\/satcoin$/);
+    await expect(
+      page.getByRole("heading", { name: "WEN Satcoin Mining", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Execution unavailable" }),
+    ).toBeDisabled();
+    await expect(page.getByText("Not loaded", { exact: true })).toBeVisible();
+    await expect(page.locator("main")).not.toContainText(
+      /Asset Mining|Loss Mining|district|arena/i,
+    );
+    if (isMobile)
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+      ).toBe(true);
+  }
+  expect(external).toEqual([]);
+  expect(mutations).toEqual([]);
+  await stop();
+  await start();
+  await page.goto(`${url}/#terminals/loss`);
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page).toHaveURL(/#terminals\/satcoin$/);
+  await expect(
+    page.getByRole("heading", { name: "WEN Satcoin Mining", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Execution unavailable" }),
+  ).toBeDisabled();
+  const after = await (await page.request.get(`${url}/api/v1/health`)).json();
+  expect(after.instanceId).toBe(before.instanceId);
+  expect(after.capabilities.walletSigner).toBe(false);
+  expect(after.capabilities.financialExecution).toBe(false);
+});
+
 test("production UI fails closed when the core API is unavailable", async ({
   page,
 }) => {
