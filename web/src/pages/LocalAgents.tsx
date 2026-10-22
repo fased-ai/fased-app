@@ -158,7 +158,16 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
   }
   return (
     <div className="local-agents">
-      {tab === "news" && <NewsInputs view={v} />}
+      {tab === "news" && (
+        <NewsInputs
+          view={v}
+          onDiscuss={() => {
+            setSession("");
+            setSearch("");
+            navigate("agents/chat");
+          }}
+        />
+      )}
       {tab === "settings" && <AIConnectionSettings />}
       {tab === "chat" && (
         <section className="panel">

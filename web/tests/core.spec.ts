@@ -2759,3 +2759,258 @@ test("task run chat shares historical UI and CLI capture, explicit fixture expla
     fullPage: true,
   });
 });
+
+test("news chat shares saved headline UI and CLI capture, reviewed memory, explicit fixture explanation and restart", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(90000);
+  await stop();
+  await start(true);
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = async () => {
+    const c = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+    c.stdin!.end(fixturePassword + "\n");
+    expect((await once(c, "exit"))[0]).toBe(0);
+  };
+  await login();
+  const profileId = "trading-analyst";
+  const read = () => privateCLI(["agents", "--profile", profileId]);
+  const command = async (c: object) =>
+    privateCLI(["agents", "--request-stdin"], {
+      profileId,
+      revision: (await read()).revision,
+      ...c,
+    });
+  await command({ action: "session-create", name: "Older conversation" });
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+  });
+  await page.goto(url + "/#agents/chat");
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await page
+    .getByRole("button", { name: "Older conversation", exact: true })
+    .click();
+  await page
+    .getByRole("searchbox", { name: "Search conversations", exact: true })
+    .fill("old filter");
+  await page.getByRole("button", { name: "news", exact: true }).click();
+  const panel = page.getByRole("region", { name: "News inputs", exact: true });
+  await panel
+    .getByLabel("News source name", { exact: true })
+    .fill("Controlled headline source");
+  await panel
+    .getByLabel("Public RSS URL", { exact: true })
+    .fill("https://news.fased.invalid/headlines.xml");
+  await panel
+    .getByLabel("Source freshness limit (seconds)", { exact: true })
+    .fill("600");
+  await panel
+    .getByRole("button", { name: "Add news source", exact: true })
+    .click();
+  const source = panel.getByRole("article", {
+    name: "News source Controlled headline source",
+    exact: true,
+  });
+  await source
+    .getByRole("button", { name: "Fetch headlines", exact: true })
+    .click();
+  await expect
+    .poll(async () => (await read()).newsFetches[0]?.state)
+    .toBe("completed");
+  await panel
+    .getByRole("button", { name: "Refresh news records", exact: true })
+    .click();
+  let v = await read();
+  const fetch = v.newsFetches[0],
+    item = fetch.items[0];
+  const retained = {
+    sources: v.newsSources,
+    fetches: v.newsFetches,
+    tasks: v.tasks,
+    runs: v.runs,
+    notices: v.notices,
+    ai: v.aiRequests,
+  };
+  await source
+    .locator(".memory-record")
+    .filter({ hasText: item.title })
+    .getByRole("button", { name: "Discuss headline", exact: true })
+    .click();
+  await expect(page.locator(".local-messages")).toContainText(
+    "Historical news headline",
+  );
+  await expect(
+    page.getByRole("searchbox", { name: "Search conversations", exact: true }),
+  ).toHaveValue("");
+  v = await read();
+  expect({
+    sources: v.newsSources,
+    fetches: v.newsFetches,
+    tasks: v.tasks,
+    runs: v.runs,
+    notices: v.notices,
+    ai: v.aiRequests,
+  }).toEqual(retained);
+  const initial = v.messages.at(-1);
+  const [body, hash] = initial.text.split("\nSnapshot SHA-256: ");
+  expect(hash).toBe(createHash("sha256").update(body).digest("hex"));
+  const snapshot = JSON.parse(body.slice(body.indexOf("\n") + 1));
+  expect(snapshot.Headline).toEqual(item);
+  expect(snapshot.Evidence.fetchId).toBe(fetch.id);
+  expect(snapshot.Evidence.bodySha256).toBe(fetch.bodySha256);
+  expect(snapshot.FreshAtCapture).toBe(true);
+  expect(snapshot.RetrievalAgeSecondsAtCapture).toBeGreaterThanOrEqual(0);
+  expect(snapshot.PublicationAgeSecondsAtCapture).toBeGreaterThanOrEqual(60);
+  expect(v.aiRequests).toHaveLength(0);
+  await expect(
+    privateCLI(["agents", "--request-stdin"], {
+      action: "news-item-explain",
+      profileId,
+      revision: v.revision - 1,
+      id: fetch.id,
+      source: item.id,
+    }),
+  ).rejects.toThrow();
+  await expect(
+    command({
+      action: "news-item-explain",
+      profileId: "news-researcher",
+      id: fetch.id,
+      source: item.id,
+    }),
+  ).rejects.toThrow();
+  expect((await read()).messages).toHaveLength(1);
+  // Disabling a source cannot erase the ability to discuss its saved history.
+  v = await command({ action: "news-source-disable", id: fetch.sourceId });
+  const disabled = {
+    sources: v.newsSources,
+    fetches: v.newsFetches,
+    tasks: v.tasks,
+    runs: v.runs,
+    notices: v.notices,
+  };
+  v = await command({
+    action: "news-item-explain",
+    id: fetch.id,
+    source: item.id,
+  });
+  const captured = v.messages.at(-1);
+  const historical = JSON.parse(
+    captured.text
+      .split("\nSnapshot SHA-256: ")[0]
+      .split("\n")
+      .slice(1)
+      .join("\n"),
+  );
+  expect(historical.FreshAtCapture).toBe(false);
+  expect(historical.SourceDisabledAtCapture).toBe(true);
+  expect({
+    sources: v.newsSources,
+    fetches: v.newsFetches,
+    tasks: v.tasks,
+    runs: v.runs,
+    notices: v.notices,
+  }).toEqual(disabled);
+  await page.reload();
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await expect(page.locator(".local-messages")).toContainText(captured.text);
+  await page
+    .locator(".local-messages")
+    .getByRole("button", { name: "Remember this", exact: true })
+    .click();
+  const review = page.getByRole("region", { name: "Chat memory review" });
+  expect((await read()).memories).toHaveLength(0);
+  await review
+    .getByLabel("Reviewed memory note", { exact: true })
+    .fill(
+      "Check the recorded age and original source before interpreting news",
+    );
+  await review
+    .getByRole("button", { name: "Save reviewed memory", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).memories.length).toBe(1);
+  v = await command({
+    action: "ai-prepare",
+    id: captured.sessionId,
+    text: "Explain this historical headline",
+    limits: {
+      maxInputTokens: 24000,
+      maxOutputTokens: 1024,
+      deadlineSeconds: 3,
+      budgetMicrousd: 30000,
+    },
+  });
+  const q = v.aiRequests.at(-1);
+  expect(q.state).toBe("prepared");
+  expect(q.context).toContain("Historical news headline");
+  expect(q.news).toBeUndefined();
+  await command({ action: "ai-start", id: q.id, consentDigest: q.digest });
+  await expect
+    .poll(async () => (await read()).aiRequests.at(-1)?.state)
+    .toBe("completed");
+  v = await command({
+    action: "profile-update",
+    name: "Trading Analyst",
+    text: "Changed persona",
+    provider: "xai",
+    model: "preference-only",
+  });
+  const requests = v.aiRequests;
+  expect({
+    sources: v.newsSources,
+    fetches: v.newsFetches,
+    tasks: v.tasks,
+    runs: v.runs,
+    notices: v.notices,
+  }).toEqual(disabled);
+  await stop();
+  await start();
+  await login();
+  await page.goto(url + "/#agents/chat");
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await expect(page.locator(".local-messages")).toContainText(captured.text);
+  v = await read();
+  expect(v.messages.at(-1)).toEqual(captured);
+  expect(v.messages[0]).toEqual(initial);
+  expect(v.aiRequests).toEqual(requests);
+  expect({
+    sources: v.newsSources,
+    fetches: v.newsFetches,
+    tasks: v.tasks,
+    runs: v.runs,
+    notices: v.notices,
+  }).toEqual(disabled);
+  expect(v.providerCallsEnabled).toBe(false);
+  expect(v.financialExecution).toBe(false);
+  const other = await privateCLI(["agents", "--profile", "news-researcher"]);
+  expect(other.messages).toHaveLength(0);
+  expect(other.memories).toHaveLength(0);
+  expect(other.newsFetches).toHaveLength(0);
+  expect(external).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth + 1,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: `.evidence/news-chat/${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+});

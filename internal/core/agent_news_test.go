@@ -4,17 +4,231 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func newsChatFixture(t *testing.T) (*Store, AgentView, *atomic.Int32) {
+	t.Helper()
+	s := newsTestStore(t)
+	v := newsAdd(t, s, "trading-analyst")
+	v = agentApply(t, s, AgentCommand{Action: "news-fetch", ProfileID: v.ProfileID, ID: v.NewsSources[0].ID})
+	calls := new(atomic.Int32)
+	if err := s.advanceAgentNews(t.Context(), newsHTTPS(t, rssHandler(newsRSS(s.now().Unix()), calls)), false); err != nil {
+		t.Fatal(err)
+	}
+	v, err := s.Agents(t.Context(), v.ProfileID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, v, calls
+}
+
+func TestNewsChatCaptureHistoryRestartAndMemory(t *testing.T) {
+	s, v, calls := newsChatFixture(t)
+	f := v.NewsFetches[0]
+	before, _, _ := readAgents(t.Context(), s.db)
+	v = agentApply(t, s, AgentCommand{Action: "news-item-explain", ProfileID: v.ProfileID, ID: f.ID, Source: f.Items[0].ID})
+	message := v.Messages[0]
+	parts := strings.Split(message.Text, "\nSnapshot SHA-256: ")
+	if len(parts) != 2 || parts[1] != newsHash([]byte(parts[0])) || !strings.HasPrefix(parts[0], "Historical news headline") || !strings.Contains(parts[0], f.Items[0].Title) || message.Role != "user" {
+		t.Fatal("missing historical facts/hash")
+	}
+	var snapshot struct {
+		Headline                                                     NewsItem
+		Evidence                                                     NewsEvidence
+		RetrievalAgeSecondsAtCapture, PublicationAgeSecondsAtCapture int64
+		FreshAtCapture                                               bool
+	}
+	_, body, ok := strings.Cut(parts[0], "\n")
+	if !ok || json.Unmarshal([]byte(body), &snapshot) != nil || snapshot.Headline != f.Items[0] || snapshot.Evidence != *newsEvidence(f) || !snapshot.FreshAtCapture || snapshot.RetrievalAgeSecondsAtCapture != 0 || snapshot.PublicationAgeSecondsAtCapture != 60 {
+		t.Fatal("incorrect captured provenance/freshness", snapshot)
+	}
+	after, _, _ := readAgents(t.Context(), s.db)
+	after.Sessions, after.Messages = before.Sessions, before.Messages
+	if !reflect.DeepEqual(before, after) || calls.Load() != 1 {
+		t.Fatal("capture changed source or fetched")
+	}
+	// A later failure and disabled source do not erase an older historical item.
+	rewriteReminderFixture(t, s, func(d *agentDocument) {
+		d.NewsSources[0].Disabled = true
+		d.NewsFetches = append(d.NewsFetches, NewsFetch{ID: "later-failure", ProfileID: v.ProfileID, SourceID: f.SourceID, URL: f.URL, State: "failed", Failure: "PRIVATE-FAILURE-BODY"})
+	})
+	later := s.now().Add(time.Hour)
+	s.now = func() time.Time { return later }
+	v = agentApply(t, s, AgentCommand{Action: "news-item-explain", ProfileID: v.ProfileID, ID: f.ID, Source: f.Items[0].ID})
+	stale := v.Messages[len(v.Messages)-1]
+	_, body, _ = strings.Cut(strings.Split(stale.Text, "\nSnapshot SHA-256: ")[0], "\n")
+	if json.Unmarshal([]byte(body), &snapshot) != nil || snapshot.FreshAtCapture || snapshot.RetrievalAgeSecondsAtCapture != 3600 || snapshot.PublicationAgeSecondsAtCapture != 3660 || strings.Contains(stale.Text, "PRIVATE-FAILURE-BODY") || calls.Load() != 1 {
+		t.Fatal("historical snapshot promoted to fresh or fetched")
+	}
+	v = agentApply(t, s, AgentCommand{Action: "memory-chat-save", ProfileID: v.ProfileID, Source: "message", ID: stale.ID, Text: "Check the recorded age before interpreting headlines"})
+	if len(v.Memories) != 1 {
+		t.Fatal("existing reviewed memory not reused")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	n, err := OpenStore(s.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.Close()
+	v = agentApply(t, n, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Trading Analyst", Provider: "xai", Model: "preference-only"})
+	if len(v.Messages) != 2 || v.Messages[0] != message || v.Messages[1] != stale || len(v.AIRequests) != 0 {
+		t.Fatal("restart/provider change lost history or called AI")
+	}
+	foreign, err := n.Agents(t.Context(), "news-researcher", "Historical news headline")
+	if err != nil || len(foreign.Messages) != 0 || len(foreign.Sessions) != 0 {
+		t.Fatal("cross-profile history")
+	}
+}
+
+func TestNewsChatRefusals(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  func(*agentDocument)
+		cmd  func(*AgentCommand)
+	}{
+		{"missing-fetch", nil, func(c *AgentCommand) { c.ID = "missing" }},
+		{"foreign-fetch", nil, func(c *AgentCommand) { c.ProfileID = "news-researcher" }},
+		{"ambiguous-fetch", func(d *agentDocument) { d.NewsFetches = append(d.NewsFetches, d.NewsFetches[0]) }, nil},
+		{"missing-item", nil, func(c *AgentCommand) { c.Source = "missing" }},
+		{"ambiguous-item", func(d *agentDocument) {
+			d.NewsFetches[0].Items = append(d.NewsFetches[0].Items, d.NewsFetches[0].Items[0])
+		}, nil},
+		{"changed-title", func(d *agentDocument) { d.NewsFetches[0].Items[0].Title = "changed" }, nil},
+		{"changed-link", func(d *agentDocument) { d.NewsFetches[0].Items[0].URL = "https://example.com/changed" }, nil},
+		{"changed-publication", func(d *agentDocument) { d.NewsFetches[0].Items[0].PublishedAt-- }, nil},
+		{"missing-source", func(d *agentDocument) { d.NewsSources = nil }, nil},
+		{"foreign-source", func(d *agentDocument) { d.NewsSources[0].ProfileID = "news-researcher" }, nil},
+		{"ambiguous-source", func(d *agentDocument) { d.NewsSources = append(d.NewsSources, d.NewsSources[0]) }, nil},
+		{"changed-source-url", func(d *agentDocument) { d.NewsSources[0].URL = "https://example.com/other.xml" }, nil},
+		{"changed-source-policy", func(d *agentDocument) { d.NewsSources[0].MaxAgeSeconds++ }, nil},
+		{"invalid-body-hash", func(d *agentDocument) { d.NewsFetches[0].BodySHA256 = strings.Repeat("z", 64) }, nil},
+		{"missing-body-hash", func(d *agentDocument) { d.NewsFetches[0].BodySHA256 = "" }, nil},
+		{"future-retrieval", func(d *agentDocument) { d.NewsFetches[0].FetchedAt++ }, nil},
+		{"missing-retrieval", func(d *agentDocument) { d.NewsFetches[0].FetchedAt = 0 }, nil},
+		{"future-publication", func(d *agentDocument) { d.NewsFetches[0].Items[0].PublishedAt = d.NewsFetches[0].FetchedAt + 1 }, nil},
+		{"private-item-url", func(d *agentDocument) { d.NewsFetches[0].Items[0].URL = "https://localhost/story" }, nil},
+		{"oversized-title", func(d *agentDocument) { d.NewsFetches[0].Items[0].Title = strings.Repeat("界", 81) }, nil},
+		{"size", func(d *agentDocument) { d.NewsFetches[0].ID = strings.Repeat("f", 5000) }, func(c *AgentCommand) { c.ID = strings.Repeat("f", 5000) }},
+		{"session-capacity", func(d *agentDocument) {
+			for range 100 {
+				d.Sessions = append(d.Sessions, AgentSession{})
+			}
+		}, nil},
+		{"message-capacity", func(d *agentDocument) {
+			for range 200 {
+				d.Messages = append(d.Messages, AgentMessage{})
+			}
+		}, nil},
+		{"stale", nil, nil}, {"paused", nil, nil},
+	}
+	for _, state := range []string{"queued", "fetching", "failed", "unknown", "cancelled"} {
+		cases = append(cases, struct {
+			name string
+			doc  func(*agentDocument)
+			cmd  func(*AgentCommand)
+		}{state, func(d *agentDocument) { d.NewsFetches[0].State = state }, nil})
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			s, v, calls := newsChatFixture(t)
+			f := v.NewsFetches[0]
+			if tt.doc != nil {
+				rewriteReminderFixture(t, s, tt.doc)
+			}
+			_, rev, _ := readAgents(t.Context(), s.db)
+			c := AgentCommand{Action: "news-item-explain", ProfileID: v.ProfileID, Revision: rev, ID: f.ID, Source: f.Items[0].ID}
+			if tt.cmd != nil {
+				tt.cmd(&c)
+			}
+			if tt.name == "stale" {
+				c.Revision--
+			}
+			if tt.name == "paused" {
+				if _, err := s.db.Exec("UPDATE update_pause SET phase='paused'"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, rev, _ := readAgents(t.Context(), s.db)
+			if _, err := s.ChangeAgents(t.Context(), c); err == nil {
+				t.Fatal("invalid headline capture accepted")
+			}
+			after, next, _ := readAgents(t.Context(), s.db)
+			if rev != next || !reflect.DeepEqual(before, after) || calls.Load() != 1 {
+				t.Fatal("refusal changed source state or fetched")
+			}
+		})
+	}
+}
+
+func TestNewsChatFreshnessAtCapture(t *testing.T) {
+	for _, offset := range []int64{0, 540, 541, 601} {
+		t.Run(fmt.Sprint(offset), func(t *testing.T) {
+			s, v, calls := newsChatFixture(t)
+			f := v.NewsFetches[0]
+			now := s.now().Add(time.Duration(offset) * time.Second)
+			s.now = func() time.Time { return now }
+			v = agentApply(t, s, AgentCommand{Action: "news-item-explain", ProfileID: v.ProfileID, ID: f.ID, Source: f.Items[0].ID})
+			_, body, _ := strings.Cut(strings.Split(v.Messages[0].Text, "\nSnapshot SHA-256: ")[0], "\n")
+			var got struct {
+				FreshAtCapture                                               bool
+				RetrievalAgeSecondsAtCapture, PublicationAgeSecondsAtCapture int64
+			}
+			if json.Unmarshal([]byte(body), &got) != nil || got.FreshAtCapture != (offset <= 540) || got.RetrievalAgeSecondsAtCapture != offset || got.PublicationAgeSecondsAtCapture != offset+60 || calls.Load() != 1 {
+				t.Fatal("incorrect capture-time age/freshness", got)
+			}
+		})
+	}
+}
+
+func TestNewsChatExplicitFixtureExplanation(t *testing.T) {
+	s, v, calls := newsChatFixture(t)
+	f := v.NewsFetches[0]
+	rewriteReminderFixture(t, s, func(d *agentDocument) { d.NewsFetches[0].Failure = "PRIVATE-RAW-BODY" })
+	v = agentApply(t, s, AgentCommand{Action: "news-item-explain", ProfileID: v.ProfileID, ID: f.ID, Source: f.Items[0].ID})
+	m := v.Messages[0]
+	if len(v.AIRequests) != 0 || strings.Contains(m.Text, "PRIVATE-RAW-BODY") {
+		t.Fatal("capture disclosed raw body or called AI")
+	}
+	before, _, _ := readAgents(t.Context(), s.db)
+	v = agentApply(t, s, AgentCommand{Action: "ai-prepare", ProfileID: v.ProfileID, ID: m.SessionID, Text: "Explain this historical headline", Limits: &AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024, DeadlineSeconds: 3, BudgetMicrousd: 30000}})
+	q := v.AIRequests[0]
+	if q.State != "prepared" || !strings.Contains(q.Context, "Historical news headline") || !strings.Contains(q.Context, f.Items[0].Title) || q.News != nil {
+		t.Fatal("disclosure omitted history or rebound fresh news")
+	}
+	if _, err := s.ChangeAgents(t.Context(), AgentCommand{Action: "ai-start", ProfileID: v.ProfileID, Revision: v.Revision, ID: q.ID, ConsentDigest: q.Digest}); err == nil {
+		t.Fatal("ordinary core enabled AI")
+	}
+	if _, err := s.changeAgents(t.Context(), AgentCommand{Action: "ai-start", ProfileID: v.ProfileID, Revision: v.Revision, ID: q.ID, ConsentDigest: "wrong"}, true); err == nil {
+		t.Fatal("unreviewed fixture dispatch")
+	}
+	v = aiStart(t, s, v)
+	if err := s.advanceAgentAI(t.Context(), fixtureAITransport{}, true); err != nil {
+		t.Fatal(err)
+	}
+	v, _ = s.Agents(t.Context(), v.ProfileID, "")
+	if v.AIRequests[0].State != "completed" || calls.Load() != 1 {
+		t.Fatal("explicit fixture explanation failed or refetched")
+	}
+	after, _, _ := readAgents(t.Context(), s.db)
+	after.AIRequests = before.AIRequests
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("manual explanation changed source records")
+	}
+}
 
 func TestNewsFreshnessAndProvenance(t *testing.T) {
 	now := int64(1800000000)

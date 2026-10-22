@@ -55,7 +55,13 @@ export function NewsSourcePicker({
     </div>
   );
 }
-export function NewsInputs({ view: v }: { view: AgentView }) {
+export function NewsInputs({
+  view: v,
+  onDiscuss,
+}: {
+  view: AgentView;
+  onDiscuss: () => void;
+}) {
   const { agents } = useWorkspace();
   const [name, setName] = useState("");
   const [url, setURL] = useState("");
@@ -208,6 +214,24 @@ export function NewsInputs({ view: v }: { view: AgentView }) {
                       <p>
                         Published {at(item.publishedAt)} · item {item.id}
                       </p>
+                      {f.state === "completed" && (
+                        <button
+                          className="secondary"
+                          disabled={agents.busy}
+                          onClick={async () => {
+                            if (
+                              await agents.change({
+                                action: "news-item-explain",
+                                id: f.id,
+                                source: item.id,
+                              })
+                            )
+                              onDiscuss();
+                          }}
+                        >
+                          Discuss headline
+                        </button>
+                      )}
                     </div>
                   ))}
                   {(f.state === "queued" || f.state === "fetching") && (

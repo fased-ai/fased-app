@@ -173,6 +173,38 @@ permissions. Every memory has evidence/source, timestamp, optional
 expiry and up to eight previous revisions. Memory deletion leaves task/paper
 journals intact.
 
+### Discuss a saved headline
+
+In Agents → News, choose **Discuss headline** on one item in a completed saved
+fetch. It opens a new Chat conversation with a bounded historical snapshot and
+SHA-256. The message retains the title, item URL/publication time, source/fetch
+identities, retrieval time and content/evidence digests. Retrieval/publication
+ages and freshness are observations at capture; they grant no permission to use
+the item as a fresh task input. The headline remains untrusted data.
+
+CLI: read `agents --profile trading-analyst`, select a completed `newsFetches`
+entry and one of its `items`, then submit through `agents --request-stdin`:
+
+```json
+{
+  "action": "news-item-explain",
+  "profileId": "trading-analyst",
+  "revision": 12,
+  "id": "selected-saved-fetch-id",
+  "source": "selected-item-id"
+}
+```
+
+Both interfaces resolve the same-profile source/fetch/item on the server. Missing,
+ambiguous, foreign, changed, unfinished or invalid references and revision/pause/
+capacity/size failures refuse atomically. An older completed item remains
+discussable after a later failure or source disablement, labelled historical.
+Capture never refetches, follows URLs, changes source/task/results/inbox or calls
+AI. Raw article/provider bodies and private connection data are excluded. Optional
+explanation still needs separate manual disclosure/consent with compiled fixtures;
+**Remember this** reuses reviewed memory. No schema/stored type/dependency change,
+real AI/wallet authority or automatic/public update is introduced.
+
 ### Discuss a saved reminder run
 
 In Agents → Tasks, choose **Discuss run** on a saved reminder result. This opens
