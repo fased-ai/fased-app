@@ -349,7 +349,8 @@ jobs:
       - run: go build -o .evidence/bin/fased-signer ./cmd/fased-signer
       - run: go build -o .evidence/bin/fased-unhealthy-core ./internal/custodyinstall/testdata/unhealthy-core
       - run: node scripts/build-inspection-predecessor.mjs
-      - run: npx playwright install --with-deps chromium
+      # Reuse the headless browser/runtime proven by the core job.
+      - run: npx playwright install --only-shell chromium
       - name: Actual disposable installed inspection and guarded bridge
         env:
           FASED_INSTALLED_INSPECTION_FIXTURE: "1"
