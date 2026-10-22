@@ -166,12 +166,49 @@ A command includes the revision returned by the previous read. For example:
 
 Stale commands fail with a conflict; they are never replayed automatically.
 Supported actions: `profile-create`, `profile-update`, `session-create`,
-`message-add`, `memory-put`, `memory-delete`, `bot-create`, `task-create`,
+`message-add`, `memory-put`, `memory-delete`, `memory-chat-save`, `bot-create`, `task-create`,
 `task-pause`, `task-resume`, `task-run`, `notice-read`. Profile/session/memory/task
 IDs are scoped by the server. Personas and stored text grant no tools or wallet
-permissions. Every memory has owner-entered evidence/source, timestamp, optional
+permissions. Every memory has evidence/source, timestamp, optional
 expiry and up to eight previous revisions. Memory deletion leaves task/paper
 journals intact.
+
+### Reviewed chat memory
+
+In Agents → Chat, select **Remember this** on a saved user message or a completed
+manual answer. Review the retained source, edit the note and optional expiry,
+then choose **Save reviewed memory**. Opening/cancelling the form saves nothing.
+A changed workspace requires selecting the source again. Notes are owner-reviewed
+interpretations; source text is not independently verified and grants no authority.
+Agents → Memory provides correction history and deletion. Current unexpired notes
+are included in later explicit AI disclosure; expiry/deletion affect future context,
+not retained requests or chat history. This is memory, not model training.
+
+The shared CLI action uses the latest workspace revision and the ID returned by
+`agents --profile trading-analyst`. Inspect `messages` or completed manual
+`aiRequests` first; `source` selects `message` or `answer`, not arbitrary evidence:
+
+```json
+{
+  "action": "memory-chat-save",
+  "profileId": "trading-analyst",
+  "revision": 12,
+  "id": "selected-retained-message-id",
+  "source": "message",
+  "text": "My reviewed preference",
+  "expiresAt": 0
+}
+```
+
+Submit that reviewed JSON with `agents --request-stdin`. The server resolves one
+same-profile source/conversation and records its kind, identities and SHA-256 in
+the existing memory source field, separately from the edited note. It rejects
+missing/ambiguous/foreign/system/incomplete/scheduled-AI sources, stale revisions,
+expired new notes and capacity/size failures atomically. Each explicit save creates
+a note; correct an existing note through `memory-put` with its memory ID. Expiry 0
+means no expiry. Saving works in the ordinary core with AI disabled and never
+calls AI, schedules a task or enables wallets, mining or updates. Schema 10 and
+existing stored types are unchanged.
 
 This bounded prototype holds at most 30 profiles, 100 sessions, 200 messages,
 100 memories, 30 paper bots, 100 tasks and 200 total scheduled evaluations, within

@@ -1,3 +1,4 @@
+import { ChatMemoryReview } from "./ChatMemoryReview";
 import { NewsInputs, NewsSourcePicker } from "./NewsInputs";
 import { AIConnectionSettings } from "./AIConnection";
 import { useEffect, useRef, useState, type FormEvent } from "react";
@@ -231,6 +232,16 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                           {date(m.createdAt)}
                         </small>
                         <p>{m.text}</p>
+                        {m.role === "user" && (
+                          <ChatMemoryReview
+                            key={`${v.profileId}:${m.id}`}
+                            view={v}
+                            sourceId={m.id}
+                            sourceKind="message"
+                            sourceText={m.text}
+                            sessionId={m.sessionId}
+                          />
+                        )}
                       </article>
                     ))}
                 </div>

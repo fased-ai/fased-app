@@ -1,3 +1,4 @@
+import { ChatMemoryReview } from "./ChatMemoryReview";
 import { ReminderDraftReview } from "./ReminderDraftReview";
 import { NewsSourcePicker } from "./NewsInputs";
 import {
@@ -237,6 +238,16 @@ export function AgentAIReview({
             </button>
           )}
           {q.answer && <p className="ai-answer">{q.answer}</p>}
+          {q.state === "completed" && q.answer && (
+            <ChatMemoryReview
+              key={`${view.profileId}:${q.id}`}
+              view={view}
+              sourceId={q.id}
+              sourceKind="answer"
+              sourceText={q.answer}
+              sessionId={q.sessionId}
+            />
+          )}
           {q.cards.map((card) => (
             <section
               className="ai-action-card"

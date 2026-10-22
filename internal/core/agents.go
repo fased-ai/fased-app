@@ -5,6 +5,7 @@ package core
 // result, paper ledger entry, inbox notification and next schedule atomic.
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -464,33 +465,12 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		}
 		d.Messages = append(d.Messages, AgentMessage{ID: id, ProfileID: profile, SessionID: c.ID, Role: "user", Text: c.Text, CreatedAt: now}, AgentMessage{ID: id + "-local", ProfileID: profile, SessionID: c.ID, Role: "system", Text: "Saved locally. No AI provider was called. Use Tasks for bounded reminders or paper examples.", CreatedAt: now})
 	case "memory-put":
-		if !validAgentText(c.Text, 4000, true) || !validAgentText(c.Source, 300, true) {
-			return AgentView{}, errors.New("memory text and evidence/source required")
+		if e = putAgentMemory(&d, c, profile, id, now); e != nil {
+			return AgentView{}, e
 		}
-		if c.ID == "" {
-			if len(d.Memories) >= 100 {
-				return AgentView{}, errors.New("memory limit reached")
-			}
-			d.Memories = append(d.Memories, AgentMemory{ID: id, ProfileID: profile, Text: c.Text, Source: c.Source, UpdatedAt: now, ExpiresAt: c.ExpiresAt, History: []MemoryRevision{}})
-		} else {
-			found := false
-			for i, m := range d.Memories {
-				if m.ID == c.ID && m.ProfileID == profile {
-					found = true
-					if len(m.History) >= 8 {
-						return AgentView{}, errors.New("memory correction history limit reached")
-					}
-					m.History = append(m.History, MemoryRevision{Text: m.Text, Source: m.Source, At: m.UpdatedAt, ExpiresAt: m.ExpiresAt})
-					m.Text = c.Text
-					m.Source = c.Source
-					m.UpdatedAt = now
-					m.ExpiresAt = c.ExpiresAt
-					d.Memories[i] = m
-				}
-			}
-			if !found {
-				return AgentView{}, errors.New("profile memory not found")
-			}
+	case "memory-chat-save":
+		if e = saveChatMemory(&d, c, profile, id, now); e != nil {
+			return AgentView{}, e
 		}
 	case "memory-delete":
 		found := false
@@ -697,4 +677,86 @@ func (s *Store) runAgentTasks(ctx context.Context, fixture bool) error {
 		return e
 	}
 	return tx.Commit()
+}
+
+func putAgentMemory(d *agentDocument, c AgentCommand, profile, id string, now int64) error {
+	if !validAgentText(c.Text, 4000, true) || !validAgentText(c.Source, 300, true) {
+		return errors.New("memory text and evidence/source required")
+	}
+	if c.ID == "" {
+		if len(d.Memories) >= 100 {
+			return errors.New("memory limit reached")
+		}
+		d.Memories = append(d.Memories, AgentMemory{ID: id, ProfileID: profile, Text: c.Text, Source: c.Source, UpdatedAt: now, ExpiresAt: c.ExpiresAt, History: []MemoryRevision{}})
+	} else {
+		found := false
+		for i, m := range d.Memories {
+			if m.ID == c.ID && m.ProfileID == profile {
+				found = true
+				if len(m.History) >= 8 {
+					return errors.New("memory correction history limit reached")
+				}
+				m.History = append(m.History, MemoryRevision{Text: m.Text, Source: m.Source, At: m.UpdatedAt, ExpiresAt: m.ExpiresAt})
+				m.Text = c.Text
+				m.Source = c.Source
+				m.UpdatedAt = now
+				m.ExpiresAt = c.ExpiresAt
+				d.Memories[i] = m
+			}
+		}
+		if !found {
+			return errors.New("profile memory not found")
+		}
+	}
+
+	return nil
+}
+
+// Source text is retained in chat; only the owner-edited note and a bounded,
+// server-resolved reference are stored in the existing memory fields.
+func saveChatMemory(d *agentDocument, c AgentCommand, profile, id string, now int64) error {
+	if c.ExpiresAt != 0 && c.ExpiresAt <= now {
+		return errors.New("choose a future memory expiry or no expiry")
+	}
+	var session, text string
+	matches := 0
+	switch c.Source {
+	case "message":
+		for _, m := range d.Messages {
+			if m.ID == c.ID && m.ProfileID == profile {
+				matches++
+				if m.Role != "user" {
+					return errors.New("only retained user messages can become memory")
+				}
+				session, text = m.SessionID, m.Text
+			}
+		}
+	case "answer":
+		for _, q := range d.AIRequests {
+			if q.ID == c.ID && q.ProfileID == profile {
+				matches++
+				if q.State != "completed" || q.TaskID != "" {
+					return errors.New("only completed manual chat answers can become memory")
+				}
+				session, text = q.SessionID, q.Answer
+			}
+		}
+	default:
+		return errors.New("select a chat message or answer; source evidence is server-resolved")
+	}
+	if matches != 1 || !validAgentText(text, 4000, true) {
+		return errors.New("same-profile retained chat source unavailable or ambiguous")
+	}
+	sessions := 0
+	for _, s := range d.Sessions {
+		if s.ID == session && s.ProfileID == profile {
+			sessions++
+		}
+	}
+	if sessions != 1 {
+		return errors.New("source conversation unavailable or ambiguous")
+	}
+	digest := sha256.Sum256([]byte(text))
+	source := fmt.Sprintf("chat-memory-v1 kind=%s profile=%s session=%s id=%s sha256=%x", c.Source, profile, session, c.ID, digest)
+	return putAgentMemory(d, AgentCommand{Text: c.Text, Source: source, ExpiresAt: c.ExpiresAt}, profile, id, now)
 }

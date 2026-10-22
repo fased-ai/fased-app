@@ -2310,3 +2310,239 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
     fullPage: true,
   });
 });
+
+test("chat memory requires explicit source-backed UI and CLI save and survives restart without AI", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(90000);
+  await stop();
+  await start(true);
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page.getByRole("button", { name: "Claim workspace" }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = async () => {
+    const c = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+    c.stdin!.end(fixturePassword + "\n");
+    expect((await once(c, "exit"))[0]).toBe(0);
+  };
+  await login();
+  const profileId = "trading-analyst";
+  const read = () => privateCLI(["agents", "--profile", profileId]);
+  const command = async (c: object) =>
+    privateCLI(["agents", "--request-stdin"], {
+      profileId,
+      revision: (await read()).revision,
+      ...c,
+    });
+  let v = await command({ action: "session-create", name: "Memory review" });
+  const sessionId = v.sessions[0].id;
+  v = await command({
+    action: "message-add",
+    id: sessionId,
+    text: "Original preference: compare sources before decisions",
+  });
+  const message = v.messages[0];
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+  });
+  await page.goto(url + "/#agents/chat");
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  const source = page
+    .locator(".local-messages article")
+    .filter({ hasText: message.text });
+  await source
+    .getByRole("button", { name: "Remember this", exact: true })
+    .click();
+  const review = source.getByRole("region", { name: "Chat memory review" });
+  await expect(
+    review.getByLabel("Reviewed memory note", { exact: true }),
+  ).toHaveValue(message.text);
+  await review
+    .getByLabel("Reviewed memory note", { exact: true })
+    .fill("Cancelled draft");
+  expect((await read()).memories).toHaveLength(0);
+  await review
+    .getByRole("button", { name: "Cancel memory", exact: true })
+    .click();
+  expect((await read()).memories).toHaveLength(0);
+  await source
+    .getByRole("button", { name: "Remember this", exact: true })
+    .click();
+  await command({
+    action: "memory-put",
+    text: "Concurrent owner note",
+    source: "owner",
+  });
+  await expect(
+    review.getByText(
+      "Workspace changed. Cancel and select the source again before saving.",
+    ),
+  ).toBeVisible({ timeout: 12000 });
+  await expect(
+    review.getByRole("button", { name: "Save reviewed memory", exact: true }),
+  ).toBeDisabled();
+  await review
+    .getByRole("button", { name: "Cancel memory", exact: true })
+    .click();
+  await source
+    .getByRole("button", { name: "Remember this", exact: true })
+    .click();
+  await review
+    .getByLabel("Reviewed memory note", { exact: true })
+    .fill("Owner-reviewed preference: concise sourced answers");
+  const expiry = new Date(Date.now() + 3600000).toISOString().slice(0, 16);
+  await review
+    .getByLabel("Memory expiry (optional)", { exact: true })
+    .fill(expiry);
+  await review
+    .getByRole("button", { name: "Save reviewed memory", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).memories.length).toBe(2);
+  v = await read();
+  const note = v.memories.find(
+    (m: { text: string }) =>
+      m.text === "Owner-reviewed preference: concise sourced answers",
+  );
+  expect(note.source).toContain(`id=${message.id}`);
+  expect(note.source).toContain(
+    `sha256=${createHash("sha256").update(message.text).digest("hex")}`,
+  );
+  expect(note.expiresAt).toBeGreaterThan(0);
+  v = await command({
+    action: "ai-prepare",
+    id: sessionId,
+    text: "Explain my preferences",
+    limits: {
+      maxInputTokens: 24000,
+      maxOutputTokens: 1024,
+      deadlineSeconds: 3,
+      budgetMicrousd: 30000,
+    },
+  });
+  let q = v.aiRequests.at(-1);
+  expect(JSON.parse(q.context).memories).toBeDefined();
+  expect(q.context).toContain(note.text);
+  await command({ action: "ai-start", id: q.id, consentDigest: q.digest });
+  await expect
+    .poll(async () => (await read()).aiRequests.at(-1)?.state)
+    .toBe("completed");
+  await page.reload();
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  const request = page.locator(".ai-request").last();
+  await request
+    .getByRole("button", { name: "Remember this", exact: true })
+    .click();
+  const answerReview = request.getByRole("region", {
+    name: "Chat memory review",
+  });
+  await answerReview
+    .getByLabel("Reviewed memory note", { exact: true })
+    .fill("Owner interpretation of the fixture answer");
+  await answerReview
+    .getByRole("button", { name: "Save reviewed memory", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).memories.length).toBe(3);
+  v = await read();
+  q = v.aiRequests.at(-1);
+  expect(v.memories.at(-1).source).toContain("kind=answer");
+  expect(v.memories.at(-1).source).toContain(
+    `sha256=${createHash("sha256").update(q.answer).digest("hex")}`,
+  );
+  await command({ action: "memory-delete", id: v.memories[0].id });
+  await stop();
+  await start();
+  await login();
+  await command({
+    action: "profile-update",
+    name: "Trading Analyst",
+    provider: "xai",
+    model: "preference-only",
+    text: "Research",
+  });
+  v = await read();
+  const revision = v.revision;
+  await expect(
+    privateCLI(["agents", "--request-stdin"], {
+      action: "memory-chat-save",
+      profileId: "news-researcher",
+      revision,
+      id: message.id,
+      source: "message",
+      text: "Foreign attempt",
+    }),
+  ).rejects.toThrow();
+  expect((await read()).revision).toBe(revision);
+  await expect(
+    privateCLI(["agents", "--request-stdin"], {
+      action: "memory-chat-save",
+      profileId,
+      revision: revision - 1,
+      id: message.id,
+      source: "message",
+      text: "Stale attempt",
+    }),
+  ).rejects.toThrow();
+  v = await command({
+    action: "memory-chat-save",
+    id: message.id,
+    source: "message",
+    text: "CLI-reviewed preference",
+  });
+  expect(v.memories.at(-1).source).toBe(note.source);
+  v = await command({
+    action: "memory-put",
+    id: note.id,
+    text: "Corrected owner preference",
+    source: note.source,
+    expiresAt: note.expiresAt,
+  });
+  expect(
+    v.memories.find((m: { id: string }) => m.id === note.id).history[0].text,
+  ).toBe(note.text);
+  await page.goto(url + "/#agents/memory");
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await expect(
+    page.getByText("Corrected owner preference", { exact: true }),
+  ).toBeVisible();
+  const memory = page
+    .locator(".memory-card")
+    .filter({ hasText: "CLI-reviewed preference" });
+  await memory
+    .getByRole("button", { name: "Delete note", exact: true })
+    .click();
+  await expect(memory).toHaveCount(0);
+  v = await read();
+  expect(v.messages[0]).toEqual(message);
+  expect(v.aiRequests).toHaveLength(1);
+  expect(v.tasks).toHaveLength(0);
+  expect(v.runs).toHaveLength(0);
+  expect(v.notices).toHaveLength(0);
+  expect(v.providerCallsEnabled).toBe(false);
+  expect(v.financialExecution).toBe(false);
+  expect(v.aiFixtureAvailable).toBe(false);
+  const other = await privateCLI(["agents", "--profile", "news-researcher"]);
+  expect(other.memories).toHaveLength(0);
+  expect(external).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth + 1,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: `.evidence/chat-memory/${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+});

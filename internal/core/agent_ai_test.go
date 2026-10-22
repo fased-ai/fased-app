@@ -534,3 +534,69 @@ func TestAgentAISearchScopeAndCompletedManualHistory(t *testing.T) {
 		})
 	}
 }
+
+func TestChatMemoryFixtureContextCorrectionExpiryAndDeletion(t *testing.T) {
+	s := fixtureStore(t)
+	now := time.Unix(1800000000, 0)
+	s.now = func() time.Time { return now }
+	v := reminderFixture(t, s)
+	source := v.AIRequests[0]
+	v = agentApply(t, s, AgentCommand{Action: "memory-chat-save", ProfileID: v.ProfileID, ID: source.ID, Source: "answer", Text: "Owner preference: concise answers", ExpiresAt: now.Unix() + 60})
+	note := v.Memories[0]
+	prepare := func() AgentView {
+		return agentApply(t, s, AgentCommand{Action: "ai-prepare", ProfileID: v.ProfileID, ID: source.SessionID, Text: "Use my preferences", Limits: &AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024, DeadlineSeconds: 3, BudgetMicrousd: 30000}})
+	}
+	memories := func(v AgentView) []struct{ Text, Source string } {
+		t.Helper()
+		var context struct {
+			Memories []struct{ Text, Source string }
+		}
+		if err := json.Unmarshal([]byte(v.AIRequests[len(v.AIRequests)-1].Context), &context); err != nil {
+			t.Fatal(err)
+		}
+		return context.Memories
+	}
+	v = prepare()
+	m := memories(v)
+	if len(m) != 1 || m[0].Text != note.Text || m[0].Source != note.Source {
+		t.Fatal("review omitted memory source", m)
+	}
+	q := v.AIRequests[len(v.AIRequests)-1]
+	if _, err := s.ChangeAgents(t.Context(), AgentCommand{Action: "ai-start", ProfileID: v.ProfileID, Revision: v.Revision, ID: q.ID, ConsentDigest: q.Digest}); err == nil {
+		t.Fatal("memory enabled real execution")
+	}
+	v = aiStart(t, s, v)
+	calls := 0
+	transport := aiTestTransport(func(r *http.Request) (*http.Response, error) {
+		calls++
+		b, _ := io.ReadAll(r.Body)
+		var wire map[string]any
+		if json.Unmarshal(b, &wire) != nil || wire["instructions"] != aiInstructions || !strings.Contains(string(b), note.Source) || !strings.Contains(string(b), note.Text) {
+			t.Fatal("wire lost untrusted source-backed context")
+		}
+		r.Body = io.NopCloser(strings.NewReader(string(b)))
+		return (fixtureAITransport{}).RoundTrip(r)
+	})
+	if err := s.advanceAgentAI(t.Context(), transport, true); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatal(calls)
+	}
+	v = agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, ID: note.ID, Text: "Owner corrected preference", Source: note.Source, ExpiresAt: note.ExpiresAt})
+	v = prepare()
+	m = memories(v)
+	if len(m) != 1 || m[0].Text != "Owner corrected preference" {
+		t.Fatal("correction not effective", m)
+	}
+	now = now.Add(61 * time.Second)
+	v = prepare()
+	if len(memories(v)) != 0 {
+		t.Fatal("expired note disclosed")
+	}
+	v = agentApply(t, s, AgentCommand{Action: "memory-delete", ProfileID: v.ProfileID, ID: note.ID})
+	v = prepare()
+	if len(memories(v)) != 0 {
+		t.Fatal("deleted note disclosed")
+	}
+}

@@ -93,6 +93,7 @@ export type AgentMessage = {
   text: string;
   createdAt: number;
 };
+export type ChatMemorySource = "message" | "answer";
 export type AgentMemory = {
   id: string;
   profileId: string;
