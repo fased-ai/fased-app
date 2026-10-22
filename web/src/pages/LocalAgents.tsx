@@ -83,7 +83,7 @@ export function LocalAgents() {
   );
 }
 function LocalAgentEditor({ view: v }: { view: AgentView }) {
-  const { agents, tab } = useWorkspace();
+  const { agents, tab, navigate } = useWorkspace();
   const [newsSourceId, setNewsSourceId] = useState("");
   const [newsAge, setNewsAge] = useState(3600);
   const profile = v.profiles.find((p) => p.id === v.profileId)!;
@@ -786,6 +786,32 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                         </p>
                       )}
                       <small>Run {r.id}</small>
+                      {!r.wen &&
+                        !r.botId &&
+                        [
+                          "reminder-v1",
+                          "ai-step-v1/reminder-v1",
+                          "ai-step-v1",
+                        ].includes(r.strategy) && (
+                          <button
+                            className="secondary"
+                            disabled={agents.busy}
+                            onClick={async () => {
+                              if (
+                                await agents.change({
+                                  action: "task-run-explain",
+                                  id: r.id,
+                                })
+                              ) {
+                                setSession("");
+                                setSearch("");
+                                navigate("agents/chat");
+                              }
+                            }}
+                          >
+                            Discuss run
+                          </button>
+                        )}
                     </article>
                   ))
               )}

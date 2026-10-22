@@ -2546,3 +2546,216 @@ test("chat memory requires explicit source-backed UI and CLI save and survives r
     fullPage: true,
   });
 });
+
+test("task run chat shares historical UI and CLI capture, explicit fixture explanation and restart", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(90000);
+  await stop();
+  await start(true);
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page.getByRole("button", { name: "Claim workspace" }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = async () => {
+    const c = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+    c.stdin!.end(fixturePassword + "\n");
+    expect((await once(c, "exit"))[0]).toBe(0);
+  };
+  await login();
+  const profileId = "trading-analyst";
+  const read = () => privateCLI(["agents", "--profile", profileId]);
+  const command = async (c: object) =>
+    privateCLI(["agents", "--request-stdin"], {
+      profileId,
+      revision: (await read()).revision,
+      ...c,
+    });
+  let v = await command({
+    action: "task-create",
+    name: "Journal review",
+    text: "Compare retained sources",
+    intervalSeconds: 60,
+    maxRuns: 1,
+  });
+  v = await command({ action: "task-run", id: v.tasks[0].id });
+  const plain = v.runs[0];
+  const source = {
+    tasks: v.tasks,
+    runs: v.runs,
+    notices: v.notices,
+    aiRequests: v.aiRequests,
+  };
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+  });
+  await page.goto(url + "/#agents/tasks");
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await page
+    .locator(".memory-card")
+    .filter({ hasText: `Run ${plain.id}` })
+    .getByRole("button", { name: "Discuss run", exact: true })
+    .click();
+  await expect(page.locator(".local-messages")).toContainText(
+    "Historical reminder run",
+  );
+  v = await read();
+  expect({
+    tasks: v.tasks,
+    runs: v.runs,
+    notices: v.notices,
+    aiRequests: v.aiRequests,
+  }).toEqual(source);
+  const snapshot = v.messages.at(-1);
+  const [body, hash] = snapshot.text.split("\nSnapshot SHA-256: ");
+  expect(hash).toBe(createHash("sha256").update(body).digest("hex"));
+  expect(snapshot.text).toContain(plain.id);
+  expect(snapshot.text).toContain("Compare retained sources");
+  expect(v.aiRequests).toHaveLength(0);
+  const stale = {
+    action: "task-run-explain",
+    profileId,
+    revision: v.revision - 1,
+    id: plain.id,
+  };
+  await expect(
+    privateCLI(["agents", "--request-stdin"], stale),
+  ).rejects.toThrow();
+  await expect(
+    command({
+      action: "task-run-explain",
+      profileId: "news-researcher",
+      id: plain.id,
+    }),
+  ).rejects.toThrow();
+  expect((await read()).messages).toHaveLength(1);
+  // The new ordinary message reuses reviewed memory; opening alone saves nothing.
+  await page
+    .getByRole("button", { name: "Remember this", exact: true })
+    .click();
+  const review = page.getByRole("region", { name: "Chat memory review" });
+  expect((await read()).memories).toHaveLength(0);
+  await review
+    .getByLabel("Reviewed memory note", { exact: true })
+    .fill("Review saved reminder outcomes before planning");
+  await review
+    .getByRole("button", { name: "Save reviewed memory", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).memories.length).toBe(1);
+  // Prepare disclosure is inert; consent is a separate command.
+  v = await command({
+    action: "ai-prepare",
+    id: snapshot.sessionId,
+    text: "Explain this historical run",
+    limits: {
+      maxInputTokens: 24000,
+      maxOutputTokens: 1024,
+      deadlineSeconds: 3,
+      budgetMicrousd: 30000,
+    },
+  });
+  const explanation = v.aiRequests.at(-1);
+  expect(explanation.state).toBe("prepared");
+  expect(explanation.context).toContain("Historical reminder run");
+  await command({
+    action: "ai-start",
+    id: explanation.id,
+    consentDigest: explanation.digest,
+  });
+  await expect
+    .poll(async () => (await read()).aiRequests.at(-1)?.state)
+    .toBe("completed");
+  // A completed fixture-AI reminder also has a discussable saved result.
+  v = await command({
+    action: "task-ai-prepare",
+    id: snapshot.sessionId,
+    name: "Fixture reminder",
+    text: "Review the recorded journal",
+    intervalSeconds: 60,
+    maxRuns: 1,
+    limits: {
+      maxInputTokens: 24000,
+      maxOutputTokens: 1024,
+      deadlineSeconds: 3,
+      budgetMicrousd: 30000,
+    },
+    totalBudgetMicrousd: 30000,
+    authorizationSeconds: 3600,
+  });
+  const task = v.tasks.at(-1);
+  await command({
+    action: "task-ai-authorize",
+    id: task.id,
+    consentDigest: task.ai.digest,
+  });
+  await command({ action: "task-run", id: task.id });
+  await expect.poll(async () => (await read()).runs.length).toBe(2);
+  v = await read();
+  const run = v.runs.at(-1);
+  const retained = {
+    tasks: v.tasks,
+    runs: v.runs,
+    notices: v.notices,
+    aiRequests: v.aiRequests,
+  };
+  v = await command({ action: "task-run-explain", id: run.id });
+  const captured = v.messages.at(-1);
+  expect(captured.text).toContain(run.aiRequestId);
+  expect(captured.text).toContain("Limits");
+  expect(captured.text).not.toContain("ConnectionRef");
+  expect(captured.text).not.toContain("Disclosure");
+  expect({
+    tasks: v.tasks,
+    runs: v.runs,
+    notices: v.notices,
+    aiRequests: v.aiRequests,
+  }).toEqual(retained);
+  await command({
+    action: "profile-update",
+    name: "Trading Analyst",
+    text: "Changed persona",
+    provider: "xai",
+    model: "preference-only",
+  });
+  await stop();
+  await start();
+  await login();
+  await page.goto(url + "/#agents/chat");
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await expect(page.locator(".local-messages")).toContainText(captured.text);
+  v = await read();
+  expect(v.messages.at(-1)).toEqual(captured);
+  expect({
+    tasks: v.tasks,
+    runs: v.runs,
+    notices: v.notices,
+    aiRequests: v.aiRequests,
+  }).toEqual(retained);
+  expect(v.providerCallsEnabled).toBe(false);
+  expect(v.financialExecution).toBe(false);
+  const other = await privateCLI(["agents", "--profile", "news-researcher"]);
+  expect(other.messages).toHaveLength(0);
+  expect(other.sessions).toHaveLength(0);
+  expect(external).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth + 1,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: `.evidence/discuss-run/${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+});

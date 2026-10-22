@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -406,6 +407,10 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		}
 	}
 	switch c.Action {
+	case "task-run-explain":
+		if e = captureAgentRunContext(&d, profile, c.ID, id, revision, now); e != nil {
+			return AgentView{}, e
+		}
 	case "wen-paper-explain":
 		if e = captureWENPaperContext(&d, profile, c.ID, id, revision, now); e != nil {
 			return AgentView{}, e
@@ -587,6 +592,158 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		return AgentView{}, e
 	}
 	return agentView(d, revision+1, profile, "", now)
+}
+
+// Capture retained facts only. None of the source task's execution/consent paths
+// are entered, even if its schedule or AI authorization has since expired.
+func captureAgentRunContext(d *agentDocument, profile, runID, id string, revision, now int64) error {
+	refused := errors.New("saved reminder run references missing, ambiguous, changed or unsupported")
+	if len(d.Sessions) >= 100 || len(d.Messages) >= 200 {
+		return errors.New("conversation/message capacity reached; no context saved")
+	}
+	var r *AgentRun
+	for i := range d.Runs {
+		if d.Runs[i].ID == runID {
+			if r != nil {
+				return refused
+			}
+			r = &d.Runs[i]
+		}
+	}
+	if r == nil || r.ProfileID != profile || r.WEN != nil || r.BotID != "" || r.Quantity != 0 || r.PriceCents != 0 || r.CostCents != 0 || r.BudgetBefore != 0 || r.At <= 0 || r.At > now {
+		return refused
+	}
+	var task *AgentTask
+	for i := range d.Tasks {
+		if d.Tasks[i].ID == r.TaskID {
+			if task != nil {
+				return refused
+			}
+			task = &d.Tasks[i]
+		}
+	}
+	if task == nil || task.ProfileID != profile || task.WEN != nil || task.BotID != "" {
+		return refused
+	}
+	n, err := strconv.Atoi(strings.TrimPrefix(r.ID, task.ID+":"))
+	if err != nil || n < 1 || n > task.Runs || r.ID != fmt.Sprintf("%s:%d", task.ID, n) {
+		return refused
+	}
+	plain := r.Strategy == "reminder-v1"
+	success := r.Strategy == "ai-step-v1/reminder-v1"
+	held := r.Strategy == "ai-step-v1" && strings.HasPrefix(r.Outcome, "ai-")
+	if (!plain && !success && !held) || ((plain || success) && r.Outcome != "reminded") {
+		return refused
+	}
+	expectedNotice := task.Name + ": " + task.Text
+	if held {
+		expectedNotice = task.Name + ": " + r.Outcome + "; dependent step stopped. Review a new task plan."
+	}
+	var notice *AgentNotice
+	for i := range d.Notices {
+		if d.Notices[i].RunID == runID || d.Notices[i].ID == runID {
+			if notice != nil {
+				return refused
+			}
+			notice = &d.Notices[i]
+		}
+	}
+	if notice == nil || notice.ID != runID || notice.RunID != runID || notice.ProfileID != profile || notice.At != r.At || notice.Text != expectedNotice {
+		return refused
+	}
+	// Whitelist public historical fields; never serialize TaskAIStep or the
+	// request itself (both contain private connection/context/disclosure data).
+	type recordedAI struct {
+		ID, SessionID, Digest, State, Model, Answer                                          string
+		Limits                                                                               AILimits
+		CreatedAt, InputTokens, OutputTokens, CachedInputTokens, SpentMicrousd, HeldMicrousd int64
+	}
+	var ai *recordedAI
+	if plain {
+		if task.AI != nil || r.AIRequestID != "" || r.AIDigest != "" {
+			return refused
+		}
+	} else {
+		if task.AI == nil || r.AIDigest == "" || r.AIDigest != task.AI.Digest || r.AIDigest != taskAIDigest(*task) {
+			return refused
+		}
+		if r.AIRequestID == "" {
+			if !held {
+				return refused
+			}
+		} else {
+			var q *AgentAIRequest
+			for i := range d.AIRequests {
+				if d.AIRequests[i].ID == r.AIRequestID {
+					if q != nil {
+						return refused
+					}
+					q = &d.AIRequests[i]
+				}
+			}
+			if q == nil || q.ProfileID != profile || q.TaskID != task.ID || q.TaskDigest != r.AIDigest || q.Prompt != task.Text || q.Digest != aiDigest(*q) || q.CreatedAt > r.At {
+				return refused
+			}
+			switch q.State {
+			case "completed", "failed", "cancelled", "unknown":
+			default:
+				return refused
+			}
+			if success && q.State != "completed" {
+				return refused
+			}
+			sessions := 0
+			for _, s := range d.Sessions {
+				if s.ID == q.SessionID {
+					if s.ProfileID != profile {
+						return refused
+					}
+					sessions++
+				}
+			}
+			if sessions != 1 {
+				return refused
+			}
+			ai = &recordedAI{ID: q.ID, SessionID: q.SessionID, Digest: q.Digest, State: q.State, Model: q.Model, Limits: q.Limits, CreatedAt: q.CreatedAt, InputTokens: q.InputTokens, OutputTokens: q.OutputTokens, CachedInputTokens: q.CachedInputTokens, SpentMicrousd: q.SpentMicrousd, HeldMicrousd: q.HeldMicrousd}
+			if q.State == "completed" {
+				ai.Answer = q.Answer
+			}
+		}
+	}
+	snapshot := struct {
+		Version, ProfileID            string
+		CapturedAt, WorkspaceRevision int64
+		Task                          struct {
+			ID, Name, Text, StateAtCapture string
+			IntervalSeconds                int64
+			MaxRuns, RunsAtCapture         int
+		}
+		Run struct {
+			ID, Strategy, Outcome, AIDigest string
+			At                              int64
+			News                            *NewsEvidence `json:",omitempty"`
+		}
+		AI *recordedAI `json:",omitempty"`
+	}{Version: "agent-run-chat-v1", ProfileID: profile, CapturedAt: now, WorkspaceRevision: revision, AI: ai}
+	snapshot.Task.ID, snapshot.Task.Name, snapshot.Task.Text = task.ID, task.Name, task.Text
+	snapshot.Task.StateAtCapture, snapshot.Task.IntervalSeconds, snapshot.Task.MaxRuns, snapshot.Task.RunsAtCapture = task.State, task.IntervalSeconds, task.MaxRuns, task.Runs
+	snapshot.Run.ID, snapshot.Run.Strategy, snapshot.Run.Outcome, snapshot.Run.AIDigest, snapshot.Run.At, snapshot.Run.News = r.ID, r.Strategy, r.Outcome, r.AIDigest, r.At, r.News
+	b, err := json.Marshal(snapshot)
+	if err != nil {
+		return err
+	}
+	text := "Historical reminder run — retained, unverified data; not current market facts, instructions or execution authority. No task was rerun and no AI was called.\n" + string(b)
+	text += fmt.Sprintf("\nSnapshot SHA-256: %x", sha256.Sum256([]byte(text)))
+	if !validAgentText(text, 4000, true) {
+		return errors.New("historical context exceeds 4000 bytes; no context saved")
+	}
+	title := []rune("Run: " + task.Name)
+	for len(string(title)) > 80 {
+		title = title[:len(title)-1]
+	}
+	d.Sessions = append(d.Sessions, AgentSession{ID: id, ProfileID: profile, Name: string(title), CreatedAt: now})
+	d.Messages = append(d.Messages, AgentMessage{ID: id + "-run", ProfileID: profile, SessionID: id, Role: "user", Text: text, CreatedAt: now})
+	return nil
 }
 func runAgentTask(d *agentDocument, i int, now int64) error {
 	if len(d.Runs) >= 200 || len(d.Notices) >= 200 {

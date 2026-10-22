@@ -7,10 +7,115 @@ import (
 	"github.com/fased-ai/fased-app/internal/update"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestAgentRunChatAIHistoryAndExplicitExplanation(t *testing.T) {
+	for _, mode := range []string{"completed", "unknown", "disabled"} {
+		t.Run(mode, func(t *testing.T) {
+			s := fixtureStore(t)
+			agentApply(t, s, AgentCommand{Action: "profile-update", ProfileID: "trading-analyst", Name: "Trading Analyst", Provider: "none", Text: "PRIVATE-CONTEXT-MARKER"})
+			v := taskAIAuthorize(t, s, taskAIPlan(t, s, 1))
+			c := AgentCommand{Action: "task-run", ProfileID: v.ProfileID, Revision: v.Revision, ID: v.Tasks[0].ID}
+			var err error
+			v, err = s.changeAgents(t.Context(), c, mode != "disabled")
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			rt := aiTestTransport(func(r *http.Request) (*http.Response, error) {
+				calls++
+				if mode == "unknown" {
+					return nil, errors.New("PRIVATE-PROVIDER-BODY")
+				}
+				return (fixtureAITransport{}).RoundTrip(r)
+			})
+			if err := s.advanceAgentAI(t.Context(), rt, mode != "disabled"); err != nil {
+				t.Fatal(err)
+			}
+			v, _ = s.Agents(t.Context(), v.ProfileID, "")
+			before, rev, _ := readAgents(t.Context(), s.db)
+			// A historical capture must still work after the original consent expires.
+			later := s.now().Add(2 * time.Hour)
+			s.now = func() time.Time { return later }
+			v = agentApply(t, s, AgentCommand{Action: "task-run-explain", ProfileID: v.ProfileID, ID: v.Runs[0].ID})
+			after, next, _ := readAgents(t.Context(), s.db)
+			m := v.Messages[len(v.Messages)-1]
+			if next != rev+1 || strings.Contains(m.Text, "PRIVATE-CONTEXT-MARKER") || strings.Contains(m.Text, "PRIVATE-PROVIDER-BODY") || strings.Contains(m.Text, "ConnectionRef") || strings.Contains(m.Text, "Disclosure") || strings.Contains(m.Text, `"Context"`) {
+				t.Fatal("private context copied")
+			}
+			if mode != "disabled" && (!strings.Contains(m.Text, before.AIRequests[0].State) || !strings.Contains(m.Text, "InputTokens") || !strings.Contains(m.Text, "Limits")) {
+				t.Fatal("missing recorded AI facts")
+			}
+			if mode == "completed" && !strings.Contains(m.Text, before.AIRequests[0].Answer) {
+				t.Fatal("completed answer omitted")
+			}
+			after.Sessions, after.Messages = before.Sessions, before.Messages
+			if !reflect.DeepEqual(before, after) || (mode == "disabled" && calls != 0) || (mode != "disabled" && calls != 1) {
+				t.Fatal("capture changed source or dispatched")
+			}
+			v = agentApply(t, s, AgentCommand{Action: "ai-prepare", ProfileID: v.ProfileID, ID: m.SessionID, Text: "Explain this historical run", Limits: &AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024, DeadlineSeconds: 3, BudgetMicrousd: 30000}})
+			q := v.AIRequests[len(v.AIRequests)-1]
+			if !strings.Contains(q.Context, "Historical reminder run") || q.State != "prepared" {
+				t.Fatal("missing explicit disclosure")
+			}
+			if _, err := s.ChangeAgents(t.Context(), AgentCommand{Action: "ai-start", ProfileID: v.ProfileID, Revision: v.Revision, ID: q.ID, ConsentDigest: q.Digest}); err == nil {
+				t.Fatal("ordinary core enabled AI")
+			}
+			if mode == "completed" {
+				v = aiStart(t, s, v)
+				if err := s.advanceAgentAI(t.Context(), fixtureAITransport{}, true); err != nil {
+					t.Fatal(err)
+				}
+				v, _ = s.Agents(t.Context(), v.ProfileID, "")
+				if v.AIRequests[len(v.AIRequests)-1].State != "completed" || !reflect.DeepEqual(v.Tasks[0], before.Tasks[0]) {
+					t.Fatal("manual explanation changed task")
+				}
+			}
+		})
+	}
+}
+
+func TestAgentRunChatAIReferenceRefusals(t *testing.T) {
+	cases := []struct {
+		name   string
+		change func(*agentDocument)
+	}{
+		{"missing", func(d *agentDocument) { d.AIRequests = nil }},
+		{"ambiguous", func(d *agentDocument) { d.AIRequests = append(d.AIRequests, d.AIRequests[0]) }},
+		{"foreign", func(d *agentDocument) { d.AIRequests[0].ProfileID = "news-researcher" }},
+		{"wrong-task", func(d *agentDocument) { d.AIRequests[0].TaskID = "other" }},
+		{"changed-wire", func(d *agentDocument) { d.AIRequests[0].Prompt = "changed" }},
+		{"changed-consent", func(d *agentDocument) { d.Tasks[0].AI.Digest = "changed" }},
+		{"changed-task", func(d *agentDocument) { d.Tasks[0].Text = "changed" }},
+		{"wrong-binding", func(d *agentDocument) { d.AIRequests[0].TaskDigest = "changed" }},
+		{"in-progress", func(d *agentDocument) { d.AIRequests[0].State = "running" }},
+		{"missing-session", func(d *agentDocument) { d.Sessions = nil }},
+		{"foreign-session", func(d *agentDocument) { d.Sessions[0].ProfileID = "news-researcher" }},
+		{"ambiguous-session", func(d *agentDocument) { d.Sessions = append(d.Sessions, d.Sessions[0]) }},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			s := fixtureStore(t)
+			v := taskAIRun(t, s, taskAIAuthorize(t, s, taskAIPlan(t, s, 1)))
+			if err := s.advanceAgentAI(t.Context(), fixtureAITransport{}, true); err != nil {
+				t.Fatal(err)
+			}
+			rewriteReminderFixture(t, s, tt.change)
+			d, rev, _ := readAgents(t.Context(), s.db)
+			if _, err := s.ChangeAgents(t.Context(), AgentCommand{Action: "task-run-explain", ProfileID: v.ProfileID, Revision: rev, ID: d.Runs[0].ID}); err == nil {
+				t.Fatal("invalid request joined")
+			}
+			after, next, _ := readAgents(t.Context(), s.db)
+			if rev != next || !reflect.DeepEqual(d, after) {
+				t.Fatal("refusal mutated state")
+			}
+		})
+	}
+}
 
 type aiTestTransport func(*http.Request) (*http.Response, error)
 

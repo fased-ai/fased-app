@@ -17,6 +17,123 @@ import (
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
+func agentRunChatFixture(t *testing.T, s *Store) AgentView {
+	t.Helper()
+	v := agentApply(t, s, AgentCommand{Action: "task-create", ProfileID: "trading-analyst", Name: "Daily review", Text: "Compare retained sources", IntervalSeconds: 60, MaxRuns: 1})
+	return agentApply(t, s, AgentCommand{Action: "task-run", ProfileID: v.ProfileID, ID: v.Tasks[0].ID})
+}
+
+func TestAgentRunChatCaptureRestartAndMemory(t *testing.T) {
+	s := fixtureStore(t)
+	v := agentRunChatFixture(t, s)
+	before, rev, err := readAgents(t.Context(), s.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v = agentApply(t, s, AgentCommand{Action: "task-run-explain", ProfileID: v.ProfileID, ID: v.Runs[0].ID})
+	after, next, _ := readAgents(t.Context(), s.db)
+	if next != rev+1 || len(after.Sessions) != 1 || len(after.Messages) != 1 {
+		t.Fatal("missing atomic conversation")
+	}
+	m := after.Messages[0]
+	parts := strings.Split(m.Text, "\nSnapshot SHA-256: ")
+	if len(parts) != 2 || parts[1] != fmt.Sprintf("%x", sha256.Sum256([]byte(parts[0]))) || !strings.Contains(parts[0], "Historical reminder run") || !strings.Contains(parts[0], v.Runs[0].ID) || !strings.Contains(parts[0], "Compare retained sources") || m.Role != "user" {
+		t.Fatal("missing labelled hashed source", m)
+	}
+	after.Sessions, after.Messages = before.Sessions, before.Messages
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("capture changed source records")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	n, err := OpenStore(s.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.Close()
+	v = agentApply(t, n, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Trading Analyst", Provider: "xai", Model: "preference-only"})
+	if len(v.Messages) != 1 || v.Messages[0] != m || len(v.AIRequests) != 0 {
+		t.Fatal("restart/provider change lost snapshot or called AI")
+	}
+	v = agentApply(t, n, AgentCommand{Action: "memory-chat-save", ProfileID: v.ProfileID, Source: "message", ID: m.ID, Text: "Review the daily journal"})
+	if len(v.Memories) != 1 || !strings.Contains(v.Memories[0].Source, "sha256=") {
+		t.Fatal("existing reviewed memory did not accept captured message")
+	}
+	foreign, err := n.Agents(t.Context(), "news-researcher", "Historical reminder run")
+	if err != nil || len(foreign.Messages) != 0 || len(foreign.Sessions) != 0 {
+		t.Fatal("profile leak")
+	}
+}
+
+func TestAgentRunChatRefusals(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  func(*agentDocument)
+		cmd  func(*AgentCommand)
+	}{
+		{"missing-run", nil, func(c *AgentCommand) { c.ID = "missing" }},
+		{"foreign-run", nil, func(c *AgentCommand) { c.ProfileID = "news-researcher" }},
+		{"ambiguous-run", func(d *agentDocument) { d.Runs = append(d.Runs, d.Runs[0]) }, nil},
+		{"missing-task", func(d *agentDocument) { d.Tasks = nil }, nil},
+		{"foreign-task", func(d *agentDocument) { d.Tasks[0].ProfileID = "news-researcher" }, nil},
+		{"ambiguous-task", func(d *agentDocument) { d.Tasks = append(d.Tasks, d.Tasks[0]) }, nil},
+		{"changed-task", func(d *agentDocument) { d.Tasks[0].Text = "Changed after run" }, nil},
+		{"changed-run", func(d *agentDocument) { d.Runs[0].At++ }, nil},
+		{"missing-notice", func(d *agentDocument) { d.Notices = nil }, nil},
+		{"ambiguous-notice", func(d *agentDocument) { d.Notices = append(d.Notices, d.Notices[0]) }, nil},
+		{"bot", func(d *agentDocument) { d.Tasks[0].BotID = "paper" }, nil},
+		{"financial", func(d *agentDocument) { d.Runs[0].CostCents = 1 }, nil},
+		{"wen", func(d *agentDocument) { d.Tasks[0].WEN = &WENPaperPlan{} }, nil},
+		{"unsupported", func(d *agentDocument) { d.Runs[0].Strategy = "paper-v1" }, nil},
+		{"session-capacity", func(d *agentDocument) {
+			for range 100 {
+				d.Sessions = append(d.Sessions, AgentSession{})
+			}
+		}, nil},
+		{"message-capacity", func(d *agentDocument) {
+			for range 200 {
+				d.Messages = append(d.Messages, AgentMessage{})
+			}
+		}, nil},
+		{"size", func(d *agentDocument) {
+			d.Tasks[0].Text = strings.Repeat("x", 3800)
+			d.Notices[0].Text = d.Tasks[0].Name + ": " + d.Tasks[0].Text
+		}, nil},
+		{"stale", nil, nil}, {"paused", nil, nil},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			s := fixtureStore(t)
+			v := agentRunChatFixture(t, s)
+			if tt.doc != nil {
+				rewriteReminderFixture(t, s, tt.doc)
+			}
+			v, _ = s.Agents(t.Context(), v.ProfileID, "")
+			c := AgentCommand{Action: "task-run-explain", ProfileID: v.ProfileID, Revision: v.Revision, ID: v.Runs[0].ID}
+			if tt.cmd != nil {
+				tt.cmd(&c)
+			}
+			if tt.name == "stale" {
+				c.Revision--
+			}
+			if tt.name == "paused" {
+				if _, err := s.db.Exec("UPDATE update_pause SET phase='paused'"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, revision, _ := readAgents(t.Context(), s.db)
+			if _, err := s.ChangeAgents(t.Context(), c); err == nil {
+				t.Fatal("unsafe capture accepted")
+			}
+			after, next, _ := readAgents(t.Context(), s.db)
+			if revision != next || !reflect.DeepEqual(before, after) {
+				t.Fatal("refusal changed retained state")
+			}
+		})
+	}
+}
+
 func agentApply(t *testing.T, s *Store, c AgentCommand) AgentView {
 	t.Helper()
 	v, e := s.Agents(t.Context(), c.ProfileID, "")

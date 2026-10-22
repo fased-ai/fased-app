@@ -173,6 +173,37 @@ permissions. Every memory has evidence/source, timestamp, optional
 expiry and up to eight previous revisions. Memory deletion leaves task/paper
 journals intact.
 
+### Discuss a saved reminder run
+
+In Agents → Tasks, choose **Discuss run** on a saved reminder result. This opens
+a new Chat conversation containing a bounded historical snapshot and SHA-256.
+It records the task/run identities, outcome/time and available AI result/usage
+with recorded limits. Task state/counters are labelled as observed at capture.
+Missing output stays missing; an unknown result is not a successful result.
+Private connection/context/disclosure data and raw provider bodies are excluded.
+
+CLI: read `agents --profile trading-analyst`, select a retained `runs` ID and
+submit through `agents --request-stdin`:
+
+```json
+{
+  "action": "task-run-explain",
+  "profileId": "trading-analyst",
+  "revision": 12,
+  "id": "selected-saved-run-id"
+}
+```
+
+Both interfaces resolve same-profile saved plain/fixture-AI reminder records on
+the server under the latest revision. Missing, ambiguous, changed or unsupported
+references and capacity/size/paused writes refuse atomically. Financial/paper-bot
+and WEN runs are excluded. Capture never runs/resumes/retries a task, changes
+its result/inbox, fetches news or calls AI. Historical authorization need not be
+current because capture grants none. Optional explanation still requires a new
+manual disclosure/consent and only uses compiled fixtures; **Remember this** can
+save an edited note through existing reviewed memory. No schema or stored type
+changes, real AI, wallet authority or automatic/public updates are introduced.
+
 ### Reviewed chat memory
 
 In Agents → Chat, select **Remember this** on a saved user message or a completed
