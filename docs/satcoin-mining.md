@@ -2,7 +2,7 @@
 
 **Mine Satcoin. Compete for BTC.** WEN's primary experience is its own app. Fased adds optional research and bounded strategies under the same rules. This is a planned integration, not live support.
 
-Satcoin is the asset name; WENSAT is its ticker. Participants commit SOL across BTC price ranges in ten-minute rounds. BTC's measured movement determines accuracy. Capital × accuracy determines shares of released fresh BTC and unlocked SAT. More capital increases the share at equal accuracy; it does not change the likelihood of BTC reaching a range.
+Satcoin is the asset name; SAT is the shorthand used for quantities. Participants commit SOL across BTC price ranges in ten-minute rounds. BTC's measured movement determines accuracy. Capital × accuracy determines shares of released fresh BTC and unlocked SAT. More capital increases the share at equal accuracy; it does not change the likelihood of BTC reaching a range.
 
 ## Show the complete round
 
@@ -20,6 +20,6 @@ A strategy may allocate to one or several ranges over multiple rounds. It must r
 
 Claims, staking, selling SAT and reinvestment are separate permissions. Manual, CLI and agent requests must use the same supported typed execution boundary. There is no Fased reward multiplier, privileged allocation, automatic loss-recovery top-up or guarantee of a successful strategy.
 
-**Mine** participates in rounds. **Trade SAT** buys or sells existing tokens. **Stake** receives eligible activity-funded BTC without minting SAT. **Daily competition** ranks the published net round result for wallets/teams, with cooperation allowed. Existing legacy positions retain their own original settlement and recovery rights; they are not silently converted into this model.
+**Mine** participates in rounds. **Trade SAT** buys or sells existing tokens. **Stake** receives eligible activity-funded BTC without minting SAT. **Daily competition** ranks the published net round result for wallets/teams, with cooperation allowed.
 
 Use the [WEN documentation](https://docs.wen.network), [Satcoin documentation](https://docs.satcoin.app) and [existing Fased WEN guide](https://docs.fased.ai/wen) for the corresponding product rules and availability. The new terminal must consume verified protocol bindings before financial actions can be enabled.
