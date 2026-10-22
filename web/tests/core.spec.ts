@@ -2277,6 +2277,8 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
   await expect(command(creation)).rejects.toThrow(/already created/);
   expect(v.tasks[1].state).toBe("scheduled");
   expect(v.tasks[1].text).toBe(proposal.text);
+  // Synchronize the external CLI write through the existing profile refresh.
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
   await expect(
     page.getByText(
       "Reminder task created: CLI reviewed reminder. Manage it in Tasks.",
