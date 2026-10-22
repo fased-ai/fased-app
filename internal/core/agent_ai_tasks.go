@@ -13,18 +13,20 @@ import (
 const taskAICompletionReserve = 8192
 
 type TaskAIStep struct {
-	ConnectionRef  string    `json:"connectionRef,omitempty"`
-	SessionID      string    `json:"sessionId"`
-	Context        string    `json:"context"`
-	Disclosure     string    `json:"disclosure"`
-	Limits         AILimits  `json:"limits"`
-	BudgetMicrousd int64     `json:"budgetMicrousd"`
-	CreatedAt      int64     `json:"createdAt"`
-	ExpiresAt      int64     `json:"expiresAt"`
-	Digest         string    `json:"digest"`
-	Authorized     bool      `json:"authorized"`
-	PendingID      string    `json:"pendingId"`
-	Bot            *PaperBot `json:"bot,omitempty"`
+	Model          string             `json:"model,omitempty"`
+	Policy         *OpenAIModelPolicy `json:"policy,omitempty"`
+	ConnectionRef  string             `json:"connectionRef,omitempty"`
+	SessionID      string             `json:"sessionId"`
+	Context        string             `json:"context"`
+	Disclosure     string             `json:"disclosure"`
+	Limits         AILimits           `json:"limits"`
+	BudgetMicrousd int64              `json:"budgetMicrousd"`
+	CreatedAt      int64              `json:"createdAt"`
+	ExpiresAt      int64              `json:"expiresAt"`
+	Digest         string             `json:"digest"`
+	Authorized     bool               `json:"authorized"`
+	PendingID      string             `json:"pendingId"`
+	Bot            *PaperBot          `json:"bot,omitempty"`
 }
 
 func migrateTaskAI(ctx context.Context, db *sql.DB) error {
@@ -70,7 +72,12 @@ func taskAIRequestSlots(d agentDocument) int {
 }
 func taskAIRequest(t AgentTask, now int64) AgentAIRequest {
 	a := t.AI
-	q := AgentAIRequest{ConnectionRef: a.ConnectionRef, ID: fmt.Sprintf("%s:%d-ai", t.ID, t.Runs+1), TaskID: t.ID, TaskDigest: a.Digest, ProfileID: t.ProfileID, SessionID: a.SessionID, Prompt: t.Text, Model: fixtureAIModel, Context: a.Context, Disclosure: a.Disclosure, Limits: a.Limits, CreatedAt: now, State: "queued", HeldMicrousd: aiReservation(a.Limits), Cards: []AIActionCard{}}
+	model := a.Model
+	if model == "" {
+		model = fixtureAIModel
+	}
+	q := AgentAIRequest{Policy: a.Policy, ConnectionRef: a.ConnectionRef, ID: fmt.Sprintf("%s:%d-ai", t.ID, t.Runs+1), TaskID: t.ID, TaskDigest: a.Digest, ProfileID: t.ProfileID, SessionID: a.SessionID, Prompt: t.Text, Model: model, Context: a.Context, Disclosure: a.Disclosure, Limits: a.Limits, CreatedAt: now, State: "queued", Cards: []AIActionCard{}}
+	q.HeldMicrousd = aiRequestReservation(q)
 	q.Digest = aiDigest(q)
 	return q
 }
@@ -101,7 +108,7 @@ func taskAIDigest(t AgentTask) string {
 	return hex.EncodeToString(h[:])
 }
 func validateTaskAI(d agentDocument, t AgentTask, now int64) error {
-	if t.AI == nil || !t.AI.Authorized || t.AI.Digest != taskAIDigest(t) || now < t.AI.CreatedAt || now >= t.AI.ExpiresAt {
+	if t.AI == nil || validateAIModelPolicy(taskAIRequest(t, now), now) != nil || !t.AI.Authorized || t.AI.Digest != taskAIDigest(t) || now < t.AI.CreatedAt || now >= t.AI.ExpiresAt {
 		return errors.New("task consent missing, changed or expired")
 	}
 	wire, e := aiWire(taskAIRequest(t, now))
@@ -155,11 +162,11 @@ func changeTaskAI(d *agentDocument, c AgentCommand, profile, id string, now int6
 		// all future request slots rather than publishing a disposable preview request.
 		copy := *d
 		copy.AIRequests = append([]AgentAIRequest{}, d.AIRequests...)
-		if e := changeAgentAI(&copy, AgentCommand{ConnectionRef: c.ConnectionRef, Action: "ai-prepare", ID: c.ID, Text: c.Text, Limits: c.Limits}, profile, id, now, false); e != nil {
+		if e := changeAgentAI(&copy, AgentCommand{Model: c.Model, ConnectionRef: c.ConnectionRef, Action: "ai-prepare", ID: c.ID, Text: c.Text, Limits: c.Limits}, profile, id, now, false); e != nil {
 			return e
 		}
 		q := copy.AIRequests[len(copy.AIRequests)-1]
-		if aiReservation(q.Limits)*int64(c.MaxRuns) > c.TotalBudgetMicrousd || taskAIRequestSlots(*d)+c.MaxRuns > 10 {
+		if aiRequestReservation(q)*int64(c.MaxRuns) > c.TotalBudgetMicrousd || taskAIRequestSlots(*d)+c.MaxRuns > 10 {
 			return errors.New("total AI budget or reserved request capacity insufficient")
 		}
 		runs := c.MaxRuns
@@ -169,7 +176,7 @@ func changeTaskAI(d *agentDocument, c AgentCommand, profile, id string, now int6
 		if runs > 200 {
 			return errors.New("local scheduled evaluation capacity reached")
 		}
-		a := &TaskAIStep{ConnectionRef: c.ConnectionRef, SessionID: c.ID, Context: q.Context, Disclosure: q.Disclosure, Limits: q.Limits, BudgetMicrousd: c.TotalBudgetMicrousd, CreatedAt: now, ExpiresAt: now + c.AuthorizationSeconds}
+		a := &TaskAIStep{Model: q.Model, Policy: q.Policy, ConnectionRef: c.ConnectionRef, SessionID: c.ID, Context: q.Context, Disclosure: q.Disclosure, Limits: q.Limits, BudgetMicrousd: c.TotalBudgetMicrousd, CreatedAt: now, ExpiresAt: now + c.AuthorizationSeconds}
 		if c.BotID != "" {
 			for _, bot := range d.Bots {
 				if bot.ID == c.BotID && bot.ProfileID == profile {
@@ -261,7 +268,7 @@ func evaluateTaskAfterNews(d *agentDocument, i int, now int64, fixture bool) err
 			return taskAIHeld(d, i, "", "ai-profile-held", now)
 		}
 	}
-	if used+aiReservation(t.AI.Limits) > t.AI.BudgetMicrousd || len(d.AIRequests) >= 10 {
+	if used+aiRequestReservation(taskAIRequest(t, now)) > t.AI.BudgetMicrousd || len(d.AIRequests) >= 10 {
 		return taskAIHeld(d, i, "", "ai-budget-blocked", now)
 	}
 	q := taskAIRequest(t, now)

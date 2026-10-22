@@ -1,5 +1,9 @@
 import { NewsSourcePicker } from "./NewsInputs";
-import { ConnectionPicker } from "./AIConnection";
+import {
+  AIModelPicker,
+  AIAdmissionReview,
+  ConnectionPicker,
+} from "./AIConnection";
 import { useState } from "react";
 import { useWorkspace } from "../workspace";
 import type { AgentView } from "../agents";
@@ -11,6 +15,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
   const [newsSourceId, setNewsSourceId] = useState("");
   const [newsAge, setNewsAge] = useState(3600);
   const [connectionRef, setConnectionRef] = useState("");
+  const [model, setModel] = useState("");
   const [session, setSession] = useState("");
   const [bot, setBot] = useState("");
   const [interval, setInterval] = useState(60);
@@ -91,10 +96,18 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                     Per call: {a.limits.maxInputTokens} input /{" "}
                     {a.limits.maxOutputTokens} output tokens ·{" "}
                     {a.limits.deadlineSeconds}s ·{" "}
-                    {money(a.limits.budgetMicrousd)} cap. Invented rates: 1
-                    micro USD per input token, 4 per output token. No provider,
-                    API key, subscription or real charge.
+                    {money(a.limits.budgetMicrousd)} cap.{" "}
+                    {a.policy ? (
+                      "Use the snapshot tariff disclosed below; all calls remain simulated."
+                    ) : (
+                      <>
+                        Invented rates: 1 micro USD per input token, 4 per
+                        output token. No provider, API key, subscription or real
+                        charge.
+                      </>
+                    )}
                   </p>
+                  <AIAdmissionReview policy={a.policy} />
                   <p>Task SHA-256: {a.digest}</p>
                 </details>
                 {t.state === "review" && (
@@ -192,6 +205,10 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                     <small>
                       Request {q.id} · {q.state}
                     </small>
+                    <AIAdmissionReview
+                      policy={q.policy}
+                      admission={q.admission}
+                    />
                     <p>
                       {q.answer ||
                         q.failure ||
@@ -238,6 +255,11 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
             );
           })}
         <ConnectionPicker value={connectionRef} onChange={setConnectionRef} />
+        <AIModelPicker
+          value={model}
+          onChange={setModel}
+          connectionRef={connectionRef}
+        />
         <NewsSourcePicker
           view={v}
           value={newsSourceId}
@@ -252,6 +274,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
               .change({
                 action: "task-ai-prepare",
                 connectionRef,
+                model,
                 newsSourceId,
                 newsMaxAgeSeconds: newsSourceId ? newsAge : undefined,
                 name,

@@ -31,15 +31,16 @@ type AIConnectionCommand struct {
 	Passphrase string `json:"passphrase,omitempty"`
 }
 type AIConnectionView struct {
-	Ref                    string `json:"ref"`
-	Provider               string `json:"provider"`
-	Model                  string `json:"model"`
-	Locked                 bool   `json:"locked"`
-	UnlockExpires          int64  `json:"unlockExpires"`
-	TestOnly               bool   `json:"testOnly"`
-	LiveCallsEnabled       bool   `json:"liveCallsEnabled"`
-	InputMicrousdPerToken  int64  `json:"inputMicrousdPerToken"`
-	OutputMicrousdPerToken int64  `json:"outputMicrousdPerToken"`
+	AdmissionPolicy        OpenAIModelPolicy `json:"admissionPolicy"`
+	Ref                    string            `json:"ref"`
+	Provider               string            `json:"provider"`
+	Model                  string            `json:"model"`
+	Locked                 bool              `json:"locked"`
+	UnlockExpires          int64             `json:"unlockExpires"`
+	TestOnly               bool              `json:"testOnly"`
+	LiveCallsEnabled       bool              `json:"liveCallsEnabled"`
+	InputMicrousdPerToken  int64             `json:"inputMicrousdPerToken"`
+	OutputMicrousdPerToken int64             `json:"outputMicrousdPerToken"`
 }
 type aiVaultEnvelope struct {
 	Version    int    `json:"version"`
@@ -91,7 +92,7 @@ func (s *Store) lockAIConnection() {
 	s.clearAIConnectionLocked()
 }
 func (s *Store) aiConnectionLocked() (AIConnectionView, error) {
-	v := AIConnectionView{Provider: "openai", Model: fixtureAIModel, Locked: true, TestOnly: true, InputMicrousdPerToken: 1, OutputMicrousdPerToken: 4}
+	v := AIConnectionView{AdmissionPolicy: openAIModelPolicy(), Provider: "openai", Model: fixtureAIModel, Locked: true, TestOnly: true, InputMicrousdPerToken: 1, OutputMicrousdPerToken: 4}
 	env, e := s.readAIVault()
 	if errors.Is(e, os.ErrNotExist) {
 		s.clearAIConnectionLocked()
@@ -234,7 +235,7 @@ type openAIHTTPSFixture struct {
 }
 
 func (f *openAIHTTPSFixture) RoundTrip(r *http.Request) (*http.Response, error) {
-	if r.URL.String() != "https://api.openai.com/v1/responses" || r.Method != http.MethodPost || !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer fased-test-") {
+	if !openAIRequestAllowed(r) || !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer fased-test-") {
 		return nil, errors.New("unreviewed fixture request refused")
 	}
 	copy := r.Clone(r.Context())
@@ -265,7 +266,7 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 	key := append([]byte(nil), a.store.provider.key...)
 	a.store.provider.mu.Unlock()
 	defer clear(key)
-	if r.URL.String() != "https://api.openai.com/v1/responses" || r.Method != http.MethodPost {
+	if !openAIRequestAllowed(r) {
 		return nil, errors.New("provider origin refused")
 	}
 	copy := r.Clone(r.Context())

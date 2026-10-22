@@ -13,6 +13,7 @@ export async function currentStorageFixture(archivedRoot) {
     "agent_ai.go",
     "agent_ai_tasks.go",
     "agent_news.go",
+    "ai_admission.go",
     "agent_news_tasks.go",
     "ai_connection.go",
     "update.go",
@@ -33,11 +34,11 @@ export async function currentStorageFixture(archivedRoot) {
     before
       .replace(
         "type Store struct {",
-        "type Store struct {\n\tnewsMu sync.Mutex\n\tprovider providerState",
+        "type Store struct {\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState",
       )
       .replace(
         marker,
-        "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }; if schema <= 6 { if err = migrateAIConnections(ctx, db); err != nil { return nil, err } }; if schema <= 7 { if err = migrateAgentNews(ctx, db); err != nil { return nil, err } }\n" +
+        "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }; if schema <= 6 { if err = migrateAIConnections(ctx, db); err != nil { return nil, err } }; if schema <= 7 { if err = migrateAgentNews(ctx, db); err != nil { return nil, err } }; if schema <= 8 { if err = migrateAIAdmission(ctx, db); err != nil { return nil, err } }\n" +
           marker,
       ),
   );

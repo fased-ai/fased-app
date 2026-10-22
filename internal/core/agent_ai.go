@@ -35,29 +35,33 @@ type AIActionCard struct {
 	Review string `json:"review"`
 }
 type AgentAIRequest struct {
-	News          *NewsEvidence  `json:"news,omitempty"`
-	ConnectionRef string         `json:"connectionRef,omitempty"`
-	TaskID        string         `json:"taskId,omitempty"`
-	TaskDigest    string         `json:"taskDigest,omitempty"`
-	ID            string         `json:"id"`
-	ProfileID     string         `json:"profileId"`
-	SessionID     string         `json:"sessionId"`
-	Prompt        string         `json:"prompt"`
-	Model         string         `json:"model"`
-	Context       string         `json:"context"`
-	Disclosure    string         `json:"disclosure"`
-	Digest        string         `json:"digest"`
-	Limits        AILimits       `json:"limits"`
-	State         string         `json:"state"`
-	CreatedAt     int64          `json:"createdAt"`
-	DispatchBoot  string         `json:"dispatchBoot"`
-	HeldMicrousd  int64          `json:"heldMicrousd"`
-	SpentMicrousd int64          `json:"spentMicrousd"`
-	InputTokens   int64          `json:"inputTokens"`
-	OutputTokens  int64          `json:"outputTokens"`
-	Answer        string         `json:"answer"`
-	Cards         []AIActionCard `json:"cards"`
-	Failure       string         `json:"failure"`
+	CachedInputTokens int64              `json:"cachedInputTokens,omitempty"`
+	CostBasis         string             `json:"costBasis,omitempty"`
+	Policy            *OpenAIModelPolicy `json:"policy,omitempty"`
+	Admission         *OpenAIAdmission   `json:"admission,omitempty"`
+	News              *NewsEvidence      `json:"news,omitempty"`
+	ConnectionRef     string             `json:"connectionRef,omitempty"`
+	TaskID            string             `json:"taskId,omitempty"`
+	TaskDigest        string             `json:"taskDigest,omitempty"`
+	ID                string             `json:"id"`
+	ProfileID         string             `json:"profileId"`
+	SessionID         string             `json:"sessionId"`
+	Prompt            string             `json:"prompt"`
+	Model             string             `json:"model"`
+	Context           string             `json:"context"`
+	Disclosure        string             `json:"disclosure"`
+	Digest            string             `json:"digest"`
+	Limits            AILimits           `json:"limits"`
+	State             string             `json:"state"`
+	CreatedAt         int64              `json:"createdAt"`
+	DispatchBoot      string             `json:"dispatchBoot"`
+	HeldMicrousd      int64              `json:"heldMicrousd"`
+	SpentMicrousd     int64              `json:"spentMicrousd"`
+	InputTokens       int64              `json:"inputTokens"`
+	OutputTokens      int64              `json:"outputTokens"`
+	Answer            string             `json:"answer"`
+	Cards             []AIActionCard     `json:"cards"`
+	Failure           string             `json:"failure"`
 }
 
 // Schema 5 protects new request/reservation records from schema-4 readers that
@@ -136,10 +140,11 @@ func aiContext(d agentDocument, profile, session, prompt string, now int64) (str
 func aiDigest(q AgentAIRequest) string {
 	wire, _ := aiWire(q)
 	b, _ := json.Marshal(struct {
+		Policy                                                        *OpenAIModelPolicy `json:"Policy,omitempty"`
 		ID, Profile, Session, Wire, TaskID, TaskDigest, ConnectionRef string
 		CreatedAt                                                     int64
 		Limits                                                        AILimits
-	}{q.ID, q.ProfileID, q.SessionID, string(wire), q.TaskID, q.TaskDigest, q.ConnectionRef, q.CreatedAt, q.Limits})
+	}{q.Policy, q.ID, q.ProfileID, q.SessionID, string(wire), q.TaskID, q.TaskDigest, q.ConnectionRef, q.CreatedAt, q.Limits})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
@@ -150,7 +155,7 @@ func changeAgentAI(d *agentDocument, c AgentCommand, profile, id string, now int
 			return errors.New("explicit request limits required; maximum ten retained AI requests")
 		}
 		l := *c.Limits
-		if l.MaxInputTokens < 1000 || l.MaxInputTokens > 32000 || l.MaxOutputTokens < 128 || l.MaxOutputTokens > 1024 || l.DeadlineSeconds < 1 || l.DeadlineSeconds > 5 || l.BudgetMicrousd < 1 || l.BudgetMicrousd > 1000000 || aiReservation(l) > l.BudgetMicrousd {
+		if l.MaxInputTokens < 1000 || l.MaxInputTokens > 32000 || l.MaxOutputTokens < 128 || l.MaxOutputTokens > 1024 || l.DeadlineSeconds < 1 || l.DeadlineSeconds > 5 || l.BudgetMicrousd < 1 || l.BudgetMicrousd > 1000000 {
 			return errors.New("invalid token/time limits or insufficient fixture budget")
 		}
 		context, e := aiContext(*d, profile, c.ID, c.Text, now)
@@ -158,10 +163,20 @@ func changeAgentAI(d *agentDocument, c AgentCommand, profile, id string, now int
 			return e
 		}
 		q := AgentAIRequest{ConnectionRef: c.ConnectionRef, ID: id, ProfileID: profile, SessionID: c.ID, Prompt: c.Text, Model: fixtureAIModel, Context: context, Limits: l, State: "prepared", CreatedAt: now, Cards: []AIActionCard{}}
+		if c.Model != "" && c.Model != fixtureAIModel {
+			p := openAIModelPolicy()
+			q.Model, q.Policy = c.Model, &p
+		}
+		if e := validateAIModelPolicy(q, now); e != nil {
+			return e
+		}
+		if aiRequestReservation(q) > l.BudgetMicrousd {
+			return errors.New("insufficient reviewed tariff budget")
+		}
 		// Byte count is an intentionally conservative fixture bound, not a tokenizer
 		// or a production billing guarantee. Include instructions and output schema.
 		wire, e := aiWire(q)
-		if e != nil || int64(len(wire)) > l.MaxInputTokens {
+		if e != nil || !aiWireWithinBound(q, wire) {
 			return errors.New("complete request exceeds the fixture input-token bound")
 		}
 		q.Disclosure = string(wire)
@@ -201,6 +216,9 @@ func changeAgentAI(d *agentDocument, c AgentCommand, profile, id string, now int
 			if q.State != "prepared" || c.ConsentDigest != q.Digest || aiDigest(*q) != q.Digest {
 				return errors.New("unexecuted preview and exact disclosure digest required")
 			}
+			if e := validateAIModelPolicy(*q, now); e != nil {
+				return e
+			}
 			context, e := aiRequestContext(*d, *q, now)
 			if e != nil || context != q.Context || now < q.CreatedAt || now-q.CreatedAt > 600 {
 				return errors.New("disclosure changed or expired; prepare and review a fresh request")
@@ -213,7 +231,7 @@ func changeAgentAI(d *agentDocument, c AgentCommand, profile, id string, now int
 				}
 			}
 			q.State = "queued"
-			q.HeldMicrousd = aiReservation(q.Limits)
+			q.HeldMicrousd = aiRequestReservation(*q)
 			return nil
 		case "ai-cancel":
 			switch q.State {
@@ -233,12 +251,30 @@ func changeAgentAI(d *agentDocument, c AgentCommand, profile, id string, now int
 func aiWire(q AgentAIRequest) ([]byte, error) {
 	card := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"kind": map[string]any{"type": "string", "enum": []string{"reminder-draft", "paper-strategy-draft"}}, "title": map[string]any{"type": "string"}, "text": map[string]any{"type": "string"}}, "required": []string{"kind", "title", "text"}}
 	schema := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"answer": map[string]any{"type": "string"}, "cards": map[string]any{"type": "array", "items": card}}, "required": []string{"answer", "cards"}}
-	return json.Marshal(map[string]any{"model": q.Model, "instructions": aiInstructions, "input": q.Context, "store": false, "background": false, "service_tier": "default", "tools": []any{}, "tool_choice": "none", "max_output_tokens": q.Limits.MaxOutputTokens, "text": map[string]any{"format": map[string]any{"type": "json_schema", "name": "fased_review", "strict": true, "schema": schema}}})
+	wire := map[string]any{"model": q.Model, "instructions": aiInstructions, "input": q.Context, "store": false, "background": false, "service_tier": "default", "tools": []any{}, "tool_choice": "none", "max_output_tokens": q.Limits.MaxOutputTokens, "text": map[string]any{"format": map[string]any{"type": "json_schema", "name": "fased_review", "strict": true, "schema": schema}}}
+	if q.Policy != nil {
+		wire["truncation"] = "disabled"
+	}
+	return json.Marshal(wire)
 }
 
 // No default network transport, retries or provider fallback. The caller supplies
 // an in-process fixture or the controlled HTTPS fixture with bound test credentials.
 func callAgentAI(ctx context.Context, q AgentAIRequest, rt http.RoundTripper) (AgentAIRequest, error) {
+	return callAgentAIAt(ctx, q, rt, time.Now)
+}
+func callAgentAIAt(ctx context.Context, q AgentAIRequest, rt http.RoundTripper, now func() time.Time) (AgentAIRequest, error) {
+	if validateAIModelPolicy(q, now().Unix()) != nil {
+		return q, errors.New("model admission unavailable")
+	}
+	if q.Policy != nil {
+		bounded, stop := context.WithTimeout(ctx, time.Duration(q.Limits.DeadlineSeconds)*time.Second)
+		defer stop()
+		ctx = bounded
+		if !admitOpenAI(ctx, &q, rt, now) {
+			return q, nil
+		}
+	}
 	b, e := aiWire(q)
 	if e != nil || rt == nil {
 		return q, errors.New("fixture unavailable")
@@ -258,14 +294,20 @@ func callAgentAI(ctx context.Context, q AgentAIRequest, rt http.RoundTripper) (A
 	if e != nil || len(b) > 16384 || res.StatusCode != 200 {
 		return q, errors.New("provider response refused; reservation retained")
 	}
+	if q.Policy != nil && !uniqueAIJSON(b) {
+		return q, errors.New("ambiguous provider JSON; reservation retained")
+	}
 	var wire struct {
 		Model       string `json:"model"`
 		Status      string `json:"status"`
 		ServiceTier string `json:"service_tier"`
 		Usage       *struct {
-			Input  *int64 `json:"input_tokens"`
-			Output *int64 `json:"output_tokens"`
-			Total  *int64 `json:"total_tokens"`
+			Input        *int64 `json:"input_tokens"`
+			Output       *int64 `json:"output_tokens"`
+			Total        *int64 `json:"total_tokens"`
+			InputDetails *struct {
+				Cached *int64 `json:"cached_tokens"`
+			} `json:"input_tokens_details"`
 		} `json:"usage"`
 		Output []struct {
 			Type    string `json:"type"`
@@ -288,9 +330,25 @@ func callAgentAI(ctx context.Context, q AgentAIRequest, rt http.RoundTripper) (A
 	if input < 0 || output < 0 || input > q.Limits.MaxInputTokens || output > q.Limits.MaxOutputTokens || total != input+output {
 		return q, errors.New("provider usage outside reviewed limits; reservation retained")
 	}
+	cached := int64(0)
+	if q.Policy != nil {
+		if q.Admission == nil || input != q.Admission.InputTokens {
+			return q, errors.New("usage differs from admitted token count; reservation retained")
+		}
+		if u.InputDetails != nil {
+			if u.InputDetails.Cached == nil || *u.InputDetails.Cached < 0 || *u.InputDetails.Cached > input {
+				return q, errors.New("cache usage unverified; reservation retained")
+			}
+			cached = *u.InputDetails.Cached
+			q.CostBasis = "reported-cache-standard-tariff"
+		} else {
+			q.CostBasis = "uncached-standard-tariff-ceiling"
+		}
+	}
+	q.CachedInputTokens = cached
 	q.InputTokens = input
 	q.OutputTokens = output
-	q.SpentMicrousd = input + 4*output
+	q.SpentMicrousd = aiUsageCost(q, input, cached, output)
 	q.HeldMicrousd = 0
 	q.State = "failed"
 	q.Failure = "Response was incomplete, refused or failed validation. No action was executed."
@@ -328,6 +386,10 @@ func callAgentAI(ctx context.Context, q AgentAIRequest, rt http.RoundTripper) (A
 	return q, nil
 }
 func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enabled bool) error {
+	if !s.aiMu.TryLock() {
+		return nil
+	}
+	defer s.aiMu.Unlock()
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
 		return e
@@ -341,9 +403,9 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 	var dispatch *AgentAIRequest
 	for i := range d.AIRequests {
 		q := &d.AIRequests[i]
-		if q.State == "running" && q.DispatchBoot != s.bootID {
+		if q.State == "running" {
 			q.State = "unknown"
-			q.Failure = "Engine restarted after dispatch; usage is unknown. Reservation retained; no retry."
+			q.Failure = "Dispatch was interrupted; usage is unknown. Reservation retained; no retry."
 			changed = true
 			if e = settleTaskAI(&d, q.TaskID, s.now().Unix()); e != nil {
 				return e
@@ -361,7 +423,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 		}
 		if dispatch == nil && enabled && q.State == "queued" {
 			current, e := aiRequestContext(d, *q, s.now().Unix())
-			if e != nil || current != q.Context || aiDigest(*q) != q.Digest || s.now().Unix() < q.CreatedAt || s.now().Unix()-q.CreatedAt > 600 || taskAIRequestValid(d, *q, s.now().Unix()) != nil || !s.aiConnectionValid(q.ConnectionRef) {
+			if e != nil || validateAIModelPolicy(*q, s.now().Unix()) != nil || current != q.Context || aiDigest(*q) != q.Digest || s.now().Unix() < q.CreatedAt || s.now().Unix()-q.CreatedAt > 600 || taskAIRequestValid(d, *q, s.now().Unix()) != nil || !s.aiConnectionValid(q.ConnectionRef) {
 				q.State = "cancelled"
 				q.HeldMicrousd = 0
 				q.Failure = "Undispatched request changed, expired or stopped; prepare a fresh review."
@@ -422,7 +484,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 						active = false
 					}
 				}
-				if !active || !s.aiConnectionValid(dispatch.ConnectionRef) {
+				if !active || validateAIModelPolicy(*dispatch, s.now().Unix()) != nil || !s.aiConnectionValid(dispatch.ConnectionRef) {
 					cancel()
 					return
 				}
@@ -432,7 +494,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 	if dispatch.ConnectionRef != "" {
 		rt = authenticatedAITransport{store: s, ref: dispatch.ConnectionRef, next: rt}
 	}
-	result, callErr := callAgentAI(callCtx, *dispatch, rt)
+	result, callErr := callAgentAIAt(callCtx, *dispatch, rt, s.now)
 	cancel()
 	<-monitorDone
 	// Shutdown/timeout must not erase the dispatched reservation. Persist with a
@@ -451,10 +513,14 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 	for i, q := range d.AIRequests {
 		if q.ID == dispatch.ID && q.State == "running" && q.DispatchBoot == dispatch.DispatchBoot {
 			if callErr != nil {
+				q.Admission = result.Admission
 				q.State = "unknown"
 				q.Failure = "Provider result unavailable or unverified; reservation retained. No retry or fallback."
 			} else {
 				q = result
+				if validateAIModelPolicy(q, s.now().Unix()) != nil {
+					q.State, q.Failure = "failed", "Model/tariff admission expired before completion; dependent work stopped."
+				}
 				if q.News != nil {
 					current, err := aiRequestContext(d, q, s.now().Unix())
 					if err != nil || current != q.Context {
@@ -482,12 +548,28 @@ func (fixtureAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if e := r.Context().Err(); e != nil {
 		return nil, e
 	}
-	b, e := io.ReadAll(io.LimitReader(r.Body, 32001))
-	if e != nil || len(b) > 32000 {
+	if r.Method == "GET" && r.URL.String() == "https://api.openai.com/v1/models/"+admittedOpenAIModel {
+		return fixtureAdmissionResponse(r, map[string]any{"id": admittedOpenAIModel, "object": "model", "owned_by": "openai", "created": 1744588800}), nil
+	}
+	b, e := io.ReadAll(io.LimitReader(r.Body, 65537))
+	if e != nil || len(b) > 65536 {
 		return nil, errors.New("fixture input bound")
 	}
+	var request struct {
+		Model string `json:"model"`
+	}
+	if json.Unmarshal(b, &request) != nil || !openAIRequestAllowed(r) || (request.Model != fixtureAIModel && request.Model != admittedOpenAIModel) {
+		return nil, errors.New("compiled fixture request refused")
+	}
+	if r.URL.Path == "/v1/responses/input_tokens" {
+		return fixtureAdmissionResponse(r, map[string]any{"object": "response.input_tokens", "input_tokens": 256}), nil
+	}
+	inputTokens := len(b)
+	if request.Model == admittedOpenAIModel {
+		inputTokens = 256
+	}
 	output, _ := json.Marshal(map[string]any{"answer": "Development fixture response. Compare the fixed paper inputs and inspect the journal before changing a strategy. No model, market feed or wallet was contacted.", "cards": []any{map[string]string{"kind": "reminder-draft", "title": "Review paper journal", "text": "Draft only: review the recorded paper outcomes. Create any task separately after checking its limits."}}})
-	body, _ := json.Marshal(map[string]any{"id": "fixture-response", "model": fixtureAIModel, "status": "completed", "service_tier": "default", "usage": map[string]int{"input_tokens": len(b), "output_tokens": 128, "total_tokens": len(b) + 128}, "output": []any{map[string]any{"type": "message", "role": "assistant", "status": "completed", "content": []any{map[string]string{"type": "output_text", "text": string(output)}}}}})
+	body, _ := json.Marshal(map[string]any{"id": "fixture-response", "model": request.Model, "status": "completed", "service_tier": "default", "usage": map[string]int{"input_tokens": inputTokens, "output_tokens": 128, "total_tokens": inputTokens + 128}, "output": []any{map[string]any{"type": "message", "role": "assistant", "status": "completed", "content": []any{map[string]string{"type": "output_text", "text": string(output)}}}}})
 	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(bytes.NewReader(body)), Request: r}, nil
 }
 
@@ -509,4 +591,9 @@ func migrateAIConnections(ctx context.Context, db *sql.DB) error {
 		return e
 	}
 	return tx.Commit()
+}
+
+func fixtureAdmissionResponse(r *http.Request, value any) *http.Response {
+	b, _ := json.Marshal(value)
+	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(bytes.NewReader(b)), Request: r}
 }

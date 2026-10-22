@@ -20,6 +20,7 @@ import (
 )
 
 type Store struct {
+	aiMu        sync.Mutex
 	newsMu      sync.Mutex
 	provider    providerState
 	db          *sql.DB
@@ -146,6 +147,11 @@ PRAGMA user_version=1;`)
 	}
 	if schema <= 7 {
 		if err = migrateAgentNews(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if schema <= 8 {
+		if err = migrateAIAdmission(ctx, db); err != nil {
 			return nil, err
 		}
 	}

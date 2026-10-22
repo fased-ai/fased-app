@@ -175,7 +175,11 @@ func TestAIConnectionHTTPSConsentAndNoReplay(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer "+testAPIKey || r.URL.Path != "/v1/responses" || r.Method != "POST" {
 			t.Error("auth or origin")
 		}
-		res, e := (fixtureAITransport{}).RoundTrip(r)
+		canonical := r.Clone(r.Context())
+		target := *r.URL
+		target.Scheme, target.Host = "https", "api.openai.com"
+		canonical.URL = &target
+		res, e := (fixtureAITransport{}).RoundTrip(canonical)
 		if e != nil {
 			t.Error(e)
 			return
@@ -374,7 +378,11 @@ func TestAIConnectionBoundTaskAndActiveCancellation(t *testing.T) {
 			if r.Header.Get("Authorization") != "Bearer "+testAPIKey {
 				t.Error("task auth")
 			}
-			res, e := (fixtureAITransport{}).RoundTrip(r)
+			canonical := r.Clone(r.Context())
+			target := *r.URL
+			target.Scheme, target.Host = "https", "api.openai.com"
+			canonical.URL = &target
+			res, e := (fixtureAITransport{}).RoundTrip(canonical)
 			if e != nil {
 				t.Error(e)
 				return

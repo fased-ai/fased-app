@@ -1,3 +1,28 @@
+export type OpenAIModelPolicy = {
+  id: string;
+  model: string;
+  reviewedAt: number;
+  expiresAt: number;
+  inputMicrousdPerMillion: number;
+  cachedMicrousdPerMillion: number;
+  outputMicrousdPerMillion: number;
+  contextTokens: number;
+  outputTokens: number;
+  modelSource: string;
+  tariffSource: string;
+  tokenSource: string;
+};
+export type OpenAIAdmission = {
+  state: string;
+  wireSha256: string;
+  accessAt: number;
+  countedAt: number;
+  inputTokens: number;
+  modelRecordSha256: string;
+  countPayloadSha256: string;
+  countResponseSha256: string;
+  generationAttempted: boolean;
+};
 export type NewsSource = {
   id: string;
   profileId: string;
@@ -89,6 +114,8 @@ export type PaperBot = {
   spentCents: number;
 };
 export type TaskAIStep = {
+  model?: string;
+  policy?: OpenAIModelPolicy;
   connectionRef?: string;
   sessionId: string;
   context: string;
@@ -147,6 +174,10 @@ export type AILimits = {
   budgetMicrousd: number;
 };
 export type AgentAIRequest = {
+  policy?: OpenAIModelPolicy;
+  admission?: OpenAIAdmission;
+  cachedInputTokens?: number;
+  costBasis?: string;
   news?: NewsEvidence;
   connectionRef?: string;
   taskId?: string;

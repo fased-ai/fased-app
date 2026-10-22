@@ -1526,3 +1526,151 @@ test("bounded AI schedules share consent and execution with CLI, survive restart
     ),
   ).toBe(true);
 });
+
+test("OpenAI model admission binds token and tariff evidence across UI CLI tasks and restart", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  await stop();
+  await start(true);
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page.getByRole("button", { name: "Claim workspace" }).click();
+  await expect(
+    page.getByText("PRIVATE CORE · TERMINAL PROTOTYPES", { exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const connection = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "save",
+    key: "fased-test-model-admission-browser-key",
+    passphrase: "disposable-admission-vault-passphrase",
+  });
+  expect(connection.testOnly).toBe(true);
+  expect(connection.liveCallsEnabled).toBe(false);
+  await page.goto(url + "/#agents/chat");
+  await page.getByLabel("Conversation name").fill("Admitted model review");
+  await page.getByRole("button", { name: "Create conversation" }).click();
+  const review = page.getByRole("region", {
+    name: "Optional AI request review",
+  });
+  await review
+    .getByRole("combobox", { name: "AI connection", exact: true })
+    .selectOption(connection.ref);
+  await review
+    .getByRole("combobox", { name: "AI model", exact: true })
+    .selectOption(connection.admissionPolicy.model);
+  await review
+    .getByLabel("AI request", { exact: true })
+    .fill("Review the admitted model using controlled data");
+  await review.getByRole("button", { name: "Prepare disclosure" }).click();
+  // An intentionally expired compiled tariff must refuse, including on future CI dates.
+  if (Date.now() >= connection.admissionPolicy.expiresAt * 1000) {
+    await expect(
+      page.getByText(/model, token or tariff policy unavailable/),
+    ).toBeVisible();
+    expect((await privateCLI(["agents"])).aiRequests).toHaveLength(0);
+    return;
+  }
+  await review.getByText("Model and tariff admission", { exact: true }).click();
+  await expect(review).toContainText(
+    "input $0.40, cached input $0.10, output $1.60",
+  );
+  await expect(review).toContainText("All three API operations are simulated");
+  await review
+    .getByLabel("I reviewed this context and these fixture limits")
+    .check();
+  await review.getByRole("button", { name: "Run development fixture" }).click();
+  await expect(review.getByText("completed", { exact: true })).toBeVisible({
+    timeout: 12000,
+  });
+  let view = await privateCLI(["agents"]);
+  const manual = view.aiRequests[0];
+  expect(manual.model).toBe(connection.admissionPolicy.model);
+  expect(manual.admission.inputTokens).toBe(256);
+  expect(manual.admission.generationAttempted).toBe(true);
+  expect(manual.admission.wireSha256).toMatch(/^[a-f0-9]{64}$/);
+  expect(manual.spentMicrousd).toBe(308);
+  expect(manual.heldMicrousd).toBe(0);
+  expect(
+    (await privateCLI(["agents", "--profile", "news-researcher"])).aiRequests,
+  ).toHaveLength(0);
+  await page.goto(url + "/#agents/tasks");
+  const scheduled = page.getByRole("region", {
+    name: "Scheduled AI steps",
+    exact: true,
+  });
+  await scheduled
+    .getByRole("combobox", { name: "AI connection", exact: true })
+    .selectOption(connection.ref);
+  await scheduled
+    .getByRole("combobox", { name: "AI model", exact: true })
+    .selectOption(connection.admissionPolicy.model);
+  await scheduled
+    .getByLabel("AI task title", { exact: true })
+    .fill("Admitted UI task");
+  await scheduled
+    .getByLabel("AI analysis prompt", { exact: true })
+    .fill("Review the frozen controlled context");
+  await scheduled.getByLabel("AI run count", { exact: true }).fill("1");
+  await scheduled
+    .getByRole("button", { name: "Prepare AI task review" })
+    .click();
+  const task = page.getByRole("article", {
+    name: "AI task Admitted UI task",
+    exact: true,
+  });
+  await expect(task).toBeVisible();
+  await task.getByText("Review AI task disclosure", { exact: true }).click();
+  await expect(task).toContainText(connection.admissionPolicy.model);
+  await task
+    .getByLabel("Allow this frozen context, schedule and limits")
+    .check();
+  await task
+    .getByRole("button", { name: "Authorize fixture schedule" })
+    .click();
+  await task.getByRole("button", { name: "Evaluate now" }).click();
+  await expect
+    .poll(async () => (await privateCLI(["agents"])).tasks[0].state)
+    .toBe("completed");
+  view = await privateCLI(["agents"]);
+  expect(view.aiRequests).toHaveLength(2);
+  expect(view.aiRequests[1].admission.state).toBe("admitted");
+  expect(view.runs[0].aiRequestId).toBe(view.aiRequests[1].id);
+  await stop();
+  await start();
+  await page.goto(url);
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  view = await privateCLI(["agents"]);
+  expect(view.aiRequests[0].admission).toEqual(manual.admission);
+  expect(view.aiRequests[0].policy).toEqual(manual.policy);
+  expect((await privateCLI(["ai-connection"])).locked).toBe(true);
+  expect(view.providerCallsEnabled).toBe(false);
+  expect(view.financialExecution).toBe(false);
+  await page.goto(url + "/#agents/chat");
+  await page
+    .getByText("Model and tariff admission", { exact: true })
+    .first()
+    .click();
+  await expect(
+    page.getByRole("region", { name: "Optional AI request review" }),
+  ).toContainText("Counted 256 input tokens");
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth + 1,
+    ),
+  ).toBe(true);
+  await mkdir(resolve(".evidence/p5-admission"), { recursive: true });
+  await page.screenshot({
+    path: resolve(".evidence/p5-admission", test.info().project.name + ".png"),
+    fullPage: true,
+  });
+});

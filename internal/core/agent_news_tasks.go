@@ -189,7 +189,7 @@ func attachAINews(d agentDocument, q *AgentAIRequest, n *TaskNewsInput, now int6
 		return e
 	}
 	wire, e := aiWire(*q)
-	if e != nil || int64(len(wire)) > q.Limits.MaxInputTokens {
+	if e != nil || !aiWireWithinBound(*q, wire) {
 		return errors.New("news exceeds reviewed input limit")
 	}
 	q.Disclosure = string(wire)

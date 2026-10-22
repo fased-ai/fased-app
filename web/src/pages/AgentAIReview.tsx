@@ -1,5 +1,9 @@
 import { NewsSourcePicker } from "./NewsInputs";
-import { ConnectionPicker } from "./AIConnection";
+import {
+  AIModelPicker,
+  AIAdmissionReview,
+  ConnectionPicker,
+} from "./AIConnection";
 import { useState } from "react";
 import type { AgentView } from "../agents";
 import { useWorkspace } from "../workspace";
@@ -17,6 +21,7 @@ export function AgentAIReview({
   const [newsSourceId, setNewsSourceId] = useState("");
   const [newsAge, setNewsAge] = useState(3600);
   const [connectionRef, setConnectionRef] = useState("");
+  const [model, setModel] = useState("");
   const [input, setInput] = useState(24000);
   const [output, setOutput] = useState(1024);
   const [deadline, setDeadline] = useState(3);
@@ -40,6 +45,7 @@ export function AgentAIReview({
             .change({
               action: "ai-prepare",
               connectionRef,
+              model,
               newsSourceId,
               newsMaxAgeSeconds: newsSourceId ? newsAge : undefined,
               id: sessionId,
@@ -60,6 +66,11 @@ export function AgentAIReview({
         }}
       >
         <ConnectionPicker value={connectionRef} onChange={setConnectionRef} />
+        <AIModelPicker
+          value={model}
+          onChange={setModel}
+          connectionRef={connectionRef}
+        />
         <NewsSourcePicker
           view={view}
           value={newsSourceId}
@@ -123,10 +134,16 @@ export function AgentAIReview({
           </label>
         </div>
         <p className="subtle">
-          One request, zero tools, no retries or fallback. Example tariff: 1
-          micro USD per input token and 4 per output token. These are invented
-          fixture prices. Input uses a conservative byte bound including
-          instructions and schema; no production cost guarantee.
+          {model ? (
+            "Selected snapshot uses its disclosed standard tariff and provider token-count preflight. Development fixtures only."
+          ) : (
+            <>
+              One request, zero tools, no retries or fallback. Example tariff: 1
+              micro USD per input token and 4 per output token. These are
+              invented fixture prices. Input uses a conservative byte bound
+              including instructions and schema; no production cost guarantee.
+            </>
+          )}
         </p>
         <button className="secondary" disabled={agents.busy}>
           Prepare disclosure
@@ -138,6 +155,7 @@ export function AgentAIReview({
       {requests.map((q) => (
         <article className="ai-request" key={q.id}>
           <h4>{q.prompt}</h4>
+          <AIAdmissionReview policy={q.policy} admission={q.admission} />
           <p>
             <strong>{q.state}</strong> · {q.model} · Held{" "}
             {money(q.heldMicrousd)} · Spent {money(q.spentMicrousd)} (fixture

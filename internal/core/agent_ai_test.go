@@ -63,6 +63,7 @@ func TestAgentAIConsentContextRoundTripAndReview(t *testing.T) {
 		if r.URL.String() != "https://api.openai.com/v1/responses" || r.Header.Get("Authorization") != "" || wire["store"] != false || wire["tool_choice"] != "none" || wire["max_output_tokens"] != float64(1024) {
 			t.Fatal("unsafe wire")
 		}
+		r.Body = io.NopCloser(strings.NewReader(string(b)))
 		return (fixtureAITransport{}).RoundTrip(r)
 	})
 	if e := s.advanceAgentAI(t.Context(), rt, true); e != nil {
