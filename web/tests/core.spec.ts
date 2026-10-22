@@ -938,6 +938,177 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
   });
 });
 
+test("bounded news inputs retain provenance across UI CLI and restart, hold dependent failures and isolate profiles", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  await stop();
+  await start(true);
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByText("PRIVATE CORE · TERMINAL PROTOTYPES", { exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  await page.goto(url + "/#agents/news");
+  const panel = page.getByRole("region", { name: "News inputs", exact: true });
+  await panel
+    .getByLabel("News source name", { exact: true })
+    .fill("Controlled headlines");
+  await panel
+    .getByLabel("Public RSS URL", { exact: true })
+    .fill("https://news.fased.invalid/headlines.xml");
+  await panel
+    .getByLabel("Source freshness limit (seconds)", { exact: true })
+    .fill("600");
+  await panel
+    .getByRole("button", { name: "Add news source", exact: true })
+    .click();
+  const source = panel.getByRole("article", {
+    name: "News source Controlled headlines",
+    exact: true,
+  });
+  await source
+    .getByRole("button", { name: "Fetch headlines", exact: true })
+    .click();
+  await expect
+    .poll(async () => (await privateCLI(["agents"])).newsFetches[0]?.state)
+    .toBe("completed");
+  await panel
+    .getByRole("button", { name: "Refresh news records", exact: true })
+    .click();
+  await expect(source).toContainText("Controlled paper-news headline");
+  let v = await privateCLI(["agents"]);
+  const sourceID = v.newsSources[0].id;
+  const first = v.newsFetches[0];
+  expect(first.bodySha256).toMatch(/^[a-f0-9]{64}$/);
+  expect(first.items).toHaveLength(1);
+  expect(first.fetchedAt).toBeGreaterThanOrEqual(first.items[0].publishedAt);
+  expect(
+    (await privateCLI(["agents", "--profile", "trading-analyst"])).newsFetches,
+  ).toHaveLength(0);
+  await page.goto(url + "/#agents/tasks");
+  await page
+    .getByRole("combobox", { name: "News input", exact: true })
+    .first()
+    .selectOption(sourceID);
+  await page
+    .getByLabel("Task name", { exact: true })
+    .fill("Sourced UI reminder");
+  await page
+    .getByLabel("Reminder text", { exact: true })
+    .fill("Review the retained headlines");
+  await page.getByLabel("Maximum evaluations", { exact: true }).fill("1");
+  await page.getByRole("button", { name: "Create task", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Run now: Sourced UI reminder", exact: true })
+    .click();
+  await expect
+    .poll(async () => (await privateCLI(["agents"])).tasks[0]?.state)
+    .toBe("completed");
+  v = await privateCLI(["agents"]);
+  expect(v.runs[0].news.sourceId).toBe(sourceID);
+  expect(v.runs[0].news.fetchId).not.toBe(first.id);
+  expect(v.aiRequests).toHaveLength(0);
+  await page.goto(url + "/#agents/news");
+  await panel
+    .getByRole("button", { name: "Refresh news records", exact: true })
+    .click();
+  await panel
+    .getByLabel("News source name", { exact: true })
+    .fill("Unavailable headlines");
+  await panel
+    .getByLabel("Public RSS URL", { exact: true })
+    .fill("https://news.fased.invalid/unavailable.xml");
+  await panel
+    .getByRole("button", { name: "Add news source", exact: true })
+    .click();
+  await expect(
+    panel.getByRole("article", {
+      name: "News source Unavailable headlines",
+      exact: true,
+    }),
+  ).toBeVisible();
+  v = await privateCLI(["agents"]);
+  const bad = v.newsSources.find(
+    (s: { name: string }) => s.name === "Unavailable headlines",
+  );
+  v = await privateCLI(["agents", "--request-stdin"], {
+    revision: v.revision,
+    action: "task-create",
+    name: "Dependent failure",
+    text: "Hold this reminder",
+    intervalSeconds: 60,
+    maxRuns: 1,
+    newsSourceId: bad.id,
+    newsMaxAgeSeconds: 300,
+  });
+  v = await privateCLI(["agents", "--request-stdin"], {
+    revision: v.revision,
+    action: "task-run",
+    id: v.tasks[1].id,
+  });
+  await expect
+    .poll(async () => (await privateCLI(["agents"])).tasks[1]?.state)
+    .toBe("held");
+  v = await privateCLI(["agents"]);
+  v = await privateCLI(["agents", "--request-stdin"], {
+    revision: v.revision,
+    action: "task-create",
+    name: "Independent success",
+    text: "No news needed",
+    intervalSeconds: 60,
+    maxRuns: 1,
+  });
+  await privateCLI(["agents", "--request-stdin"], {
+    revision: v.revision,
+    action: "task-run",
+    id: v.tasks[2].id,
+  });
+  await stop();
+  await start();
+  await page.goto(url);
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.goto(url + "/#agents/news");
+  await expect(source).toContainText(first.bodySha256);
+  await expect(
+    panel.getByRole("article", {
+      name: "News source Unavailable headlines",
+      exact: true,
+    }),
+  ).toContainText("failed");
+  v = await privateCLI(["agents"]);
+  expect(v.tasks.map((t: { state: string }) => t.state)).toEqual([
+    "completed",
+    "held",
+    "completed",
+  ]);
+  expect(v.newsFetches[0].bodySha256).toBe(first.bodySha256);
+  expect(v.providerCallsEnabled).toBe(false);
+  expect(v.financialExecution).toBe(false);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth + 1,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: `.evidence/p5-news/${test.info().project.name}.png`,
+    fullPage: true,
+  });
+});
+
 test("OpenAI test connection shares encrypted storage, bound consent and restart lock across UI and CLI", async ({
   page,
 }) => {

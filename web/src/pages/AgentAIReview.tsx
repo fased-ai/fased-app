@@ -1,3 +1,4 @@
+import { NewsSourcePicker } from "./NewsInputs";
 import { ConnectionPicker } from "./AIConnection";
 import { useState } from "react";
 import type { AgentView } from "../agents";
@@ -13,6 +14,8 @@ export function AgentAIReview({
 }) {
   const { agents } = useWorkspace();
   const [prompt, setPrompt] = useState("");
+  const [newsSourceId, setNewsSourceId] = useState("");
+  const [newsAge, setNewsAge] = useState(3600);
   const [connectionRef, setConnectionRef] = useState("");
   const [input, setInput] = useState(24000);
   const [output, setOutput] = useState(1024);
@@ -37,6 +40,8 @@ export function AgentAIReview({
             .change({
               action: "ai-prepare",
               connectionRef,
+              newsSourceId,
+              newsMaxAgeSeconds: newsSourceId ? newsAge : undefined,
               id: sessionId,
               text: prompt,
               limits: {
@@ -55,6 +60,13 @@ export function AgentAIReview({
         }}
       >
         <ConnectionPicker value={connectionRef} onChange={setConnectionRef} />
+        <NewsSourcePicker
+          view={view}
+          value={newsSourceId}
+          onChange={setNewsSourceId}
+          age={newsAge}
+          onAge={setNewsAge}
+        />
         <label>
           AI request
           <textarea
@@ -139,6 +151,13 @@ export function AgentAIReview({
           <details>
             <summary>Exact context disclosure</summary>
             <p>Connection: {q.connectionRef || "no credential"}</p>
+            {q.news && (
+              <p>
+                News snapshot: {q.news.fetchId} · source {q.news.url} ·
+                freshness {q.news.maxAgeSeconds}s · content hash{" "}
+                {q.news.bodySha256}
+              </p>
+            )}
             <pre>{q.disclosure}</pre>
             <p>
               Also included: fixed instructions treating this context as

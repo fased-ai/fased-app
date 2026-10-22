@@ -35,6 +35,7 @@ type AIActionCard struct {
 	Review string `json:"review"`
 }
 type AgentAIRequest struct {
+	News          *NewsEvidence  `json:"news,omitempty"`
 	ConnectionRef string         `json:"connectionRef,omitempty"`
 	TaskID        string         `json:"taskId,omitempty"`
 	TaskDigest    string         `json:"taskDigest,omitempty"`
@@ -200,7 +201,7 @@ func changeAgentAI(d *agentDocument, c AgentCommand, profile, id string, now int
 			if q.State != "prepared" || c.ConsentDigest != q.Digest || aiDigest(*q) != q.Digest {
 				return errors.New("unexecuted preview and exact disclosure digest required")
 			}
-			context, e := aiContext(*d, profile, q.SessionID, q.Prompt, now)
+			context, e := aiRequestContext(*d, *q, now)
 			if e != nil || context != q.Context || now < q.CreatedAt || now-q.CreatedAt > 600 {
 				return errors.New("disclosure changed or expired; prepare and review a fresh request")
 			}
@@ -359,7 +360,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 			continue
 		}
 		if dispatch == nil && enabled && q.State == "queued" {
-			current, e := aiContext(d, q.ProfileID, q.SessionID, q.Prompt, s.now().Unix())
+			current, e := aiRequestContext(d, *q, s.now().Unix())
 			if e != nil || current != q.Context || aiDigest(*q) != q.Digest || s.now().Unix() < q.CreatedAt || s.now().Unix()-q.CreatedAt > 600 || taskAIRequestValid(d, *q, s.now().Unix()) != nil || !s.aiConnectionValid(q.ConnectionRef) {
 				q.State = "cancelled"
 				q.HeldMicrousd = 0
@@ -415,6 +416,12 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 				if s.db.QueryRowContext(callCtx, "SELECT phase FROM update_pause WHERE id=1").Scan(&phase) != nil || phase == "paused" {
 					active = false
 				}
+				if dispatch.News != nil {
+					current, e := aiRequestContext(current, *dispatch, s.now().Unix())
+					if e != nil || current != dispatch.Context {
+						active = false
+					}
+				}
 				if !active || !s.aiConnectionValid(dispatch.ConnectionRef) {
 					cancel()
 					return
@@ -448,6 +455,13 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 				q.Failure = "Provider result unavailable or unverified; reservation retained. No retry or fallback."
 			} else {
 				q = result
+				if q.News != nil {
+					current, err := aiRequestContext(d, q, s.now().Unix())
+					if err != nil || current != q.Context {
+						q.State = "failed"
+						q.Failure = "News evidence expired or changed before completion; dependent work stopped."
+					}
+				}
 			}
 			d.AIRequests[i] = q
 			if e = settleTaskAI(&d, q.TaskID, s.now().Unix()); e != nil {

@@ -21,7 +21,7 @@ function loadInitialState() {
 }
 function getRoute() {
   const route = window.location.hash.slice(1);
-  return /^(overview|activity|settings|terminals(\/(asset|loss|hyperliquid|jupiter))?|agents\/(chat|bots|tasks|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
+  return /^(overview|activity|settings|terminals(\/(asset|loss|hyperliquid|jupiter))?|agents\/(chat|bots|tasks|news|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
     route,
   )
     ? route

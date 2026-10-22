@@ -66,8 +66,8 @@ try {
   );
   pass(
     "schemaPauseAndApprovalFeatures",
-    contracts[0].state[0].versions.min === 7 &&
-      contracts[0].state[0].versions.max === 7 &&
+    contracts[0].state[0].versions.min === 8 &&
+      contracts[0].state[0].versions.max === 8 &&
       contracts[0].state[0].features.includes("agents-local-v1") &&
       contracts[0].state[0].features.includes("core-pause-v1") &&
       contracts[0].lifecycle.entrypoint === 4 &&
@@ -224,6 +224,21 @@ try {
       "schema6CoreReaderDenied",
       (m) => {
         m.components[0].contract.state[0].versions = { min: 6, max: 6 };
+      },
+    ],
+    [
+      "schema7CoreReaderDenied",
+      (m) => {
+        m.components[0].contract.state[0].versions = { min: 7, max: 7 };
+      },
+    ],
+    [
+      "agentNewsFeatureErasureDenied",
+      (m) => {
+        m.components[0].contract.state[0].features =
+          m.components[0].contract.state[0].features.filter(
+            (f) => f !== "agents-news-v1",
+          );
       },
     ],
     [

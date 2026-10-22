@@ -149,3 +149,10 @@ form.agent-inline {
   gap: 12px;
   min-width: 0;
 }
+
+.news-inputs p,
+.news-inputs strong,
+.news-inputs summary,
+.news-provenance {
+  overflow-wrap: anywhere;
+}

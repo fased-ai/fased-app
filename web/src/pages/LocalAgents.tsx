@@ -1,3 +1,4 @@
+import { NewsInputs, NewsSourcePicker } from "./NewsInputs";
 import { AIConnectionSettings } from "./AIConnection";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Plus, RefreshCw } from "../icons";
@@ -61,16 +62,18 @@ export function LocalAgents() {
             ))}
           </div>
           <div className="tabs" aria-label="Agent sections">
-            {["chat", "bots", "tasks", "memory", "settings"].map((t) => (
-              <button
-                key={t}
-                className={tab === t ? "active" : ""}
-                aria-current={tab === t ? "page" : undefined}
-                onClick={() => navigate(`agents/${t}`)}
-              >
-                {t}
-              </button>
-            ))}
+            {["chat", "bots", "tasks", "news", "memory", "settings"].map(
+              (t) => (
+                <button
+                  key={t}
+                  className={tab === t ? "active" : ""}
+                  aria-current={tab === t ? "page" : undefined}
+                  onClick={() => navigate(`agents/${t}`)}
+                >
+                  {t}
+                </button>
+              ),
+            )}
           </div>
           <LocalAgentEditor key={agents.view.profileId} view={agents.view} />
         </>
@@ -80,6 +83,8 @@ export function LocalAgents() {
 }
 function LocalAgentEditor({ view: v }: { view: AgentView }) {
   const { agents, tab } = useWorkspace();
+  const [newsSourceId, setNewsSourceId] = useState("");
+  const [newsAge, setNewsAge] = useState(3600);
   const profile = v.profiles.find((p) => p.id === v.profileId)!;
   const [session, setSession] = useState("");
   const [sessionName, setSessionName] = useState("");
@@ -152,6 +157,7 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
   }
   return (
     <div className="local-agents">
+      {tab === "news" && <NewsInputs view={v} />}
       {tab === "settings" && <AIConnectionSettings />}
       {tab === "chat" && (
         <section className="panel">
@@ -585,6 +591,12 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                 .map((t) => (
                   <article className="memory-card" key={t.id}>
                     <strong>{t.name}</strong>
+                    {t.news && (
+                      <p>
+                        News input: {t.news.url} · maximum age{" "}
+                        {t.news.maxAgeSeconds}s. Failure holds this task.
+                      </p>
+                    )}
                     <p>
                       {t.state} · {t.runs}/{t.maxRuns} evaluations ·{" "}
                       {t.state === "scheduled"
@@ -603,18 +615,25 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                       </button>
                       <button
                         className="text-button"
-                        disabled={agents.busy || t.state === "completed"}
+                        disabled={
+                          agents.busy ||
+                          t.state === "completed" ||
+                          t.runs >= t.maxRuns
+                        }
                         onClick={() =>
                           void agents.change({
                             action:
-                              t.state === "paused"
+                              t.state === "paused" || t.state === "held"
                                 ? "task-resume"
                                 : "task-pause",
                             id: t.id,
                           })
                         }
                       >
-                        {t.state === "paused" ? "Resume" : "Pause"}: {t.name}
+                        {t.state === "paused" || t.state === "held"
+                          ? "Resume"
+                          : "Pause"}
+                        : {t.name}
                       </button>
                     </div>
                   </article>
@@ -624,6 +643,8 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                   if (
                     await agents.change({
                       action: "task-create",
+                      newsSourceId,
+                      newsMaxAgeSeconds: newsSourceId ? newsAge : undefined,
                       name: taskName,
                       text: taskText,
                       botId: bot,
@@ -637,6 +658,13 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                 })}
               >
                 <h3>Create a task</h3>
+                <NewsSourcePicker
+                  view={v}
+                  value={newsSourceId}
+                  onChange={setNewsSourceId}
+                  age={newsAge}
+                  onAge={setNewsAge}
+                />
                 <label>
                   Task name
                   <input
@@ -722,6 +750,13 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                           Inputs: quantity {r.quantity}, fixed price{" "}
                           {r.priceCents}, cost {r.costCents}, budget before{" "}
                           {r.budgetBefore}
+                        </p>
+                      )}
+                      {r.news && (
+                        <p className="news-provenance">
+                          News snapshot {r.news.fetchId} · source {r.news.url} ·
+                          retrieved {date(r.news.fetchedAt)} · content{" "}
+                          {r.news.bodySha256}
                         </p>
                       )}
                       <small>Run {r.id}</small>

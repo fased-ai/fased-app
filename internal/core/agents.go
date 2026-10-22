@@ -68,32 +68,34 @@ type PaperBot struct {
 	SpentCents  int64  `json:"spentCents"`
 }
 type AgentTask struct {
-	AI              *TaskAIStep `json:"ai,omitempty"`
-	ID              string      `json:"id"`
-	ProfileID       string      `json:"profileId"`
-	Name            string      `json:"name"`
-	Text            string      `json:"text"`
-	BotID           string      `json:"botId"`
-	IntervalSeconds int64       `json:"intervalSeconds"`
-	MaxRuns         int         `json:"maxRuns"`
-	Runs            int         `json:"runs"`
-	NextAt          int64       `json:"nextAt"`
-	State           string      `json:"state"`
+	News            *TaskNewsInput `json:"news,omitempty"`
+	AI              *TaskAIStep    `json:"ai,omitempty"`
+	ID              string         `json:"id"`
+	ProfileID       string         `json:"profileId"`
+	Name            string         `json:"name"`
+	Text            string         `json:"text"`
+	BotID           string         `json:"botId"`
+	IntervalSeconds int64          `json:"intervalSeconds"`
+	MaxRuns         int            `json:"maxRuns"`
+	Runs            int            `json:"runs"`
+	NextAt          int64          `json:"nextAt"`
+	State           string         `json:"state"`
 }
 type AgentRun struct {
-	AIRequestID  string `json:"aiRequestId,omitempty"`
-	AIDigest     string `json:"aiDigest,omitempty"`
-	ID           string `json:"id"`
-	ProfileID    string `json:"profileId"`
-	TaskID       string `json:"taskId"`
-	BotID        string `json:"botId"`
-	Strategy     string `json:"strategy"`
-	At           int64  `json:"at"`
-	Outcome      string `json:"outcome"`
-	Quantity     int64  `json:"quantity"`
-	PriceCents   int64  `json:"priceCents"`
-	CostCents    int64  `json:"costCents"`
-	BudgetBefore int64  `json:"budgetBefore"`
+	News         *NewsEvidence `json:"news,omitempty"`
+	AIRequestID  string        `json:"aiRequestId,omitempty"`
+	AIDigest     string        `json:"aiDigest,omitempty"`
+	ID           string        `json:"id"`
+	ProfileID    string        `json:"profileId"`
+	TaskID       string        `json:"taskId"`
+	BotID        string        `json:"botId"`
+	Strategy     string        `json:"strategy"`
+	At           int64         `json:"at"`
+	Outcome      string        `json:"outcome"`
+	Quantity     int64         `json:"quantity"`
+	PriceCents   int64         `json:"priceCents"`
+	CostCents    int64         `json:"costCents"`
+	BudgetBefore int64         `json:"budgetBefore"`
 }
 type AgentNotice struct {
 	ID        string `json:"id"`
@@ -104,17 +106,21 @@ type AgentNotice struct {
 	Read      bool   `json:"read"`
 }
 type agentDocument struct {
-	Profiles   []AgentProfile   `json:"profiles"`
-	Sessions   []AgentSession   `json:"sessions"`
-	Messages   []AgentMessage   `json:"messages"`
-	Memories   []AgentMemory    `json:"memories"`
-	Bots       []PaperBot       `json:"bots"`
-	Tasks      []AgentTask      `json:"tasks"`
-	Runs       []AgentRun       `json:"runs"`
-	Notices    []AgentNotice    `json:"notices"`
-	AIRequests []AgentAIRequest `json:"aiRequests"`
+	NewsSources []NewsSource     `json:"newsSources"`
+	NewsFetches []NewsFetch      `json:"newsFetches"`
+	Profiles    []AgentProfile   `json:"profiles"`
+	Sessions    []AgentSession   `json:"sessions"`
+	Messages    []AgentMessage   `json:"messages"`
+	Memories    []AgentMemory    `json:"memories"`
+	Bots        []PaperBot       `json:"bots"`
+	Tasks       []AgentTask      `json:"tasks"`
+	Runs        []AgentRun       `json:"runs"`
+	Notices     []AgentNotice    `json:"notices"`
+	AIRequests  []AgentAIRequest `json:"aiRequests"`
 }
 type AgentView struct {
+	NewsSources          []NewsSource     `json:"newsSources"`
+	NewsFetches          []NewsFetch      `json:"newsFetches"`
 	AIRequests           []AgentAIRequest `json:"aiRequests"`
 	AIFixtureAvailable   bool             `json:"aiFixtureAvailable"`
 	Revision             int64            `json:"revision"`
@@ -134,6 +140,8 @@ type AgentView struct {
 // Optional fields are inert data for a fixed action; unknown fields/actions are
 // rejected. No arbitrary callback, URL, model tool or shell can be submitted.
 type AgentCommand struct {
+	NewsSourceID         string    `json:"newsSourceId,omitempty"`
+	NewsMaxAgeSeconds    int64     `json:"newsMaxAgeSeconds,omitempty"`
 	ConnectionRef        string    `json:"connectionRef,omitempty"`
 	Revision             int64     `json:"revision"`
 	Action               string    `json:"action"`
@@ -158,7 +166,7 @@ type AgentCommand struct {
 }
 
 func initialAgents() agentDocument {
-	return agentDocument{Profiles: []AgentProfile{
+	return agentDocument{NewsSources: []NewsSource{}, NewsFetches: []NewsFetch{}, Profiles: []AgentProfile{
 		{ID: "wen-operator", Name: "WEN Operator", Persona: "Explain WEN prototypes. Financial execution is unavailable.", Provider: "none"},
 		{ID: "trading-analyst", Name: "Trading Analyst", Persona: "Research and compare bounded paper strategies.", Provider: "none"},
 		{ID: "news-researcher", Name: "News Researcher", Persona: "Keep sourced research separate from instructions and financial facts.", Provider: "none"},
@@ -221,7 +229,19 @@ func agentView(d agentDocument, revision int64, profile, query string, now int64
 	if agentProfile(d, profile) < 0 {
 		return AgentView{}, errors.New("profile not found")
 	}
-	v := AgentView{Revision: revision, ProfileID: profile, Profiles: d.Profiles, Sessions: []AgentSession{}, Messages: []AgentMessage{}, Memories: []AgentMemory{}, Bots: []PaperBot{}, Tasks: []AgentTask{}, Runs: []AgentRun{}, Notices: []AgentNotice{}, AIRequests: []AgentAIRequest{}}
+	v := AgentView{NewsSources: []NewsSource{}, NewsFetches: []NewsFetch{}, Revision: revision, ProfileID: profile, Profiles: d.Profiles, Sessions: []AgentSession{}, Messages: []AgentMessage{}, Memories: []AgentMemory{}, Bots: []PaperBot{}, Tasks: []AgentTask{}, Runs: []AgentRun{}, Notices: []AgentNotice{}, AIRequests: []AgentAIRequest{}}
+	for _, s := range d.NewsSources {
+		if s.ProfileID == profile {
+			v.NewsSources = append(v.NewsSources, s)
+		}
+	}
+	for _, f := range d.NewsFetches {
+		if f.ProfileID == profile {
+			_, e := freshNews(d, profile, &TaskNewsInput{SourceID: f.SourceID, URL: f.URL, MaxAgeSeconds: f.MaxAgeSeconds, FetchID: f.ID}, now)
+			f.Fresh = e == nil
+			v.NewsFetches = append(v.NewsFetches, f)
+		}
+	}
 	for _, q := range d.AIRequests {
 		if q.ProfileID == profile {
 			v.AIRequests = append(v.AIRequests, q)
@@ -305,7 +325,7 @@ func saveAgents(ctx context.Context, tx *sql.Tx, d agentDocument, revision int64
 	if e != nil {
 		return e
 	}
-	reserved := taskAIFutureStorage(d)
+	reserved := taskAIFutureStorage(d) + newsStorage(d)
 	for _, q := range d.AIRequests {
 		if q.State == "prepared" || q.State == "queued" || q.State == "running" {
 			reserved += agentAIResultReserve
@@ -377,9 +397,24 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		}
 	}
 	switch c.Action {
+	case "news-source-add", "news-source-disable", "news-fetch", "news-cancel":
+		if e = changeNews(&d, c, profile, id, now); e != nil {
+			return AgentView{}, e
+		}
 	case "ai-prepare", "ai-start", "ai-cancel", "ai-card-keep", "ai-card-dismiss":
 		if e = changeAgentAI(&d, c, profile, id, now, fixture); e != nil {
 			return AgentView{}, e
+		}
+		if c.Action == "ai-prepare" {
+			n, err := taskNewsPolicy(d, c, profile)
+			if err != nil {
+				return AgentView{}, err
+			}
+			if n != nil {
+				if err = attachAINews(d, &d.AIRequests[len(d.AIRequests)-1], n, now); err != nil {
+					return AgentView{}, err
+				}
+			}
 		}
 	case "task-ai-prepare", "task-ai-authorize", "task-ai-cancel":
 		if e = changeTaskAI(&d, c, profile, id, now, fixture); e != nil {
@@ -482,7 +517,11 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		if reserved > 200 {
 			return AgentView{}, errors.New("local prototype allows 200 total scheduled evaluations")
 		}
-		d.Tasks = append(d.Tasks, AgentTask{ID: id, ProfileID: profile, Name: c.Name, Text: c.Text, BotID: c.BotID, IntervalSeconds: c.IntervalSeconds, MaxRuns: c.MaxRuns, NextAt: now + c.IntervalSeconds, State: "scheduled"})
+		news, e := taskNewsPolicy(d, c, profile)
+		if e != nil {
+			return AgentView{}, e
+		}
+		d.Tasks = append(d.Tasks, AgentTask{News: news, ID: id, ProfileID: profile, Name: c.Name, Text: c.Text, BotID: c.BotID, IntervalSeconds: c.IntervalSeconds, MaxRuns: c.MaxRuns, NextAt: now + c.IntervalSeconds, State: "scheduled"})
 	case "task-pause", "task-resume", "task-run":
 		found := false
 		for i, t := range d.Tasks {
@@ -493,11 +532,17 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 			if t.AI != nil && (t.State == "review" || t.State == "held" || t.State == "cancelled") {
 				return AgentView{}, errors.New("AI task needs a fresh reviewed plan")
 			}
-			if t.State == "completed" {
-				return AgentView{}, errors.New("task is completed")
+			if t.State == "completed" || t.Runs >= t.MaxRuns {
+				return AgentView{}, errors.New("task evaluation limit reached; create a new bounded task")
 			}
 			switch c.Action {
 			case "task-pause":
+				if t.News != nil && t.News.PendingID != "" {
+					if e = cancelNewsTask(&d, i, now); e != nil {
+						return AgentView{}, e
+					}
+					break
+				}
 				if t.AI != nil && t.AI.PendingID != "" {
 					if e = cancelTaskAI(&d, i, now); e != nil {
 						return AgentView{}, e
@@ -538,6 +583,9 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 	default:
 		return AgentView{}, errors.New("unsupported local agent action")
 	}
+	if newsSlots(d) > newsFetchLimit {
+		return AgentView{}, errors.New("news fetch capacity must cover the complete schedule; retained records are preserved")
+	}
 	if e = saveAgents(ctx, tx, d, revision); e != nil {
 		return AgentView{}, e
 	}
@@ -552,6 +600,13 @@ func runAgentTask(d *agentDocument, i int, now int64) error {
 	}
 	t := &d.Tasks[i]
 	run := AgentRun{ID: fmt.Sprintf("%s:%d", t.ID, t.Runs+1), ProfileID: t.ProfileID, TaskID: t.ID, BotID: t.BotID, Strategy: "reminder-v1", At: now, Outcome: "reminded"}
+	if t.News != nil {
+		f, e := freshNews(*d, t.ProfileID, t.News, now)
+		if e != nil {
+			return holdNewsTask(d, i, NewsFetch{State: "stale"}, now)
+		}
+		run.News = newsEvidence(f)
+	}
 	text := t.Name + ": " + t.Text
 	if t.BotID != "" {
 		found := false
@@ -581,6 +636,9 @@ func runAgentTask(d *agentDocument, i int, now int64) error {
 	d.Runs = append(d.Runs, run)
 	d.Notices = append(d.Notices, AgentNotice{ID: run.ID, ProfileID: t.ProfileID, Text: text, RunID: run.ID, At: now})
 	t.Runs++
+	if t.News != nil {
+		t.News.FetchID = ""
+	}
 	t.NextAt = now + t.IntervalSeconds
 	if t.Runs >= t.MaxRuns {
 		t.State = "completed"

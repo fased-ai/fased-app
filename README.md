@@ -6,6 +6,11 @@ The interface includes shared navigation, resumable setup, wallet-mode and permi
 
 See [installation, private access and recovery](docs/install.md) for engineering package use and platform boundaries.
 
+P5 [bounded news inputs](docs/news-inputs.md) add owner-selected public HTTPS RSS,
+retained provenance and freshness checks to the same profiles and tasks.
+Unavailable/stale input holds dependent work without cached fallback or stopping
+independent tasks. All acceptance uses controlled HTTPS fixtures.
+
 P3's separate Linux [disposable signer](docs/signer.md) adds installer-managed identities, protected owner backup/recovery, independent bounded fixture grants, reservations and a durable mock-operation journal. It cannot sign real transactions, accepts no real wallet import, and is excluded from ordinary installation. The connected Wallets UI and `accounts` CLI share revision-checked disposable public account records and permission proposals. Protected owner terminal approval remains separate; balances, on-chain reads and real execution stay unavailable.
 
 P4 starts with [signed development manifest and compatibility inspection](docs/updates.md). It checks explicit test trust, complete local binary hashes, protocol/features and state formats, including approval journals. The read-only plan never authorizes installation, resume or real wallets; automatic updates remain disabled.

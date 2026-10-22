@@ -94,8 +94,9 @@ func taskAIDigest(t AgentTask) string {
 		ID, Profile, Name, Text, BotID string
 		Interval                       int64
 		MaxRuns                        int
+		News                           *TaskNewsInput
 		AI                             TaskAIStep
-	}{t.ID, t.ProfileID, t.Name, t.Text, t.BotID, t.IntervalSeconds, t.MaxRuns, a})
+	}{t.ID, t.ProfileID, t.Name, t.Text, t.BotID, t.IntervalSeconds, t.MaxRuns, newsPolicyForDigest(t.News), a})
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
@@ -134,6 +135,12 @@ func taskAIRequestValid(d agentDocument, q AgentAIRequest, now int64) error {
 	}
 	for _, t := range d.Tasks {
 		if t.ID == q.TaskID && t.ProfileID == q.ProfileID && t.AI != nil && t.State == "waiting-ai" && t.AI.PendingID == q.ID && t.AI.Digest == q.TaskDigest {
+			if t.News != nil {
+				f, e := freshNews(d, t.ProfileID, t.News, now)
+				if e != nil || q.News == nil || *q.News != *newsEvidence(f) {
+					return errors.New("task news evidence changed or stale")
+				}
+			}
 			return validateTaskAI(d, t, now)
 		}
 	}
@@ -174,7 +181,11 @@ func changeTaskAI(d *agentDocument, c AgentCommand, profile, id string, now int6
 				return errors.New("profile paper bot not found")
 			}
 		}
-		t := AgentTask{ID: id, ProfileID: profile, Name: c.Name, Text: c.Text, BotID: c.BotID, IntervalSeconds: c.IntervalSeconds, MaxRuns: c.MaxRuns, State: "review", AI: a}
+		news, e := taskNewsPolicy(*d, c, profile)
+		if e != nil {
+			return e
+		}
+		t := AgentTask{News: news, ID: id, ProfileID: profile, Name: c.Name, Text: c.Text, BotID: c.BotID, IntervalSeconds: c.IntervalSeconds, MaxRuns: c.MaxRuns, State: "review", AI: a}
 		a.Digest = taskAIDigest(t)
 		d.Tasks = append(d.Tasks, t)
 		return nil
@@ -200,6 +211,13 @@ func changeTaskAI(d *agentDocument, c AgentCommand, profile, id string, now int6
 			d.Tasks[i].NextAt = now + t.IntervalSeconds
 			return nil
 		case "task-ai-cancel":
+			if t.News != nil && t.News.PendingID != "" {
+				if e := cancelNewsTask(d, i, now); e != nil {
+					return e
+				}
+				d.Tasks[i].State = "cancelled"
+				return nil
+			}
 			return cancelTaskAI(d, i, now)
 		}
 	}
@@ -219,7 +237,7 @@ func taskAIHeld(d *agentDocument, i int, requestID, outcome string, now int64) e
 	t.AI.PendingID = ""
 	return nil
 }
-func evaluateAgentTask(d *agentDocument, i int, now int64, fixture bool) error {
+func evaluateTaskAfterNews(d *agentDocument, i int, now int64, fixture bool) error {
 	t := d.Tasks[i]
 	if t.AI == nil {
 		return runAgentTask(d, i, now)
@@ -247,6 +265,11 @@ func evaluateAgentTask(d *agentDocument, i int, now int64, fixture bool) error {
 		return taskAIHeld(d, i, "", "ai-budget-blocked", now)
 	}
 	q := taskAIRequest(t, now)
+	if t.News != nil {
+		if e := attachAINews(*d, &q, t.News, now); e != nil {
+			return holdNewsTask(d, i, NewsFetch{State: "stale"}, now)
+		}
+	}
 	for _, old := range d.AIRequests {
 		if old.ID == q.ID {
 			return errors.New("task request identity already exists; preserve history")
@@ -286,7 +309,7 @@ func settleTaskAI(d *agentDocument, taskID string, now int64) error {
 			d.Runs[n].AIDigest = t.AI.Digest
 			d.Runs[n].Strategy = "ai-step-v1/" + d.Runs[n].Strategy
 			d.Tasks[i].AI.PendingID = ""
-			if d.Tasks[i].Runs < d.Tasks[i].MaxRuns {
+			if d.Tasks[i].Runs < d.Tasks[i].MaxRuns && d.Tasks[i].State != "held" {
 				d.Tasks[i].State = "scheduled"
 			}
 			return nil

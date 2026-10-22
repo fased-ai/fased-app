@@ -114,6 +114,10 @@ func (s *Server) startAgentTasks() {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		lastError := ""
+		var newsRT http.RoundTripper = newPublicNewsTransport()
+		if s.agentFixture {
+			newsRT = fixtureNewsTransport{now: s.Store.now}
+		}
 		for {
 			select {
 			case <-ctx.Done():
@@ -122,7 +126,12 @@ func (s *Server) startAgentTasks() {
 				c, stop := context.WithTimeout(ctx, 5*time.Second)
 				e := s.Store.runAgentTasks(c, s.agentFixture)
 				if e == nil {
-					e = s.Store.advanceAgentAI(c, fixtureAITransport{}, s.agentFixture)
+					e = s.Store.advanceAgentNews(c, newsRT, s.agentFixture)
+					stop()
+					c, stop = context.WithTimeout(ctx, 5*time.Second)
+					if e == nil {
+						e = s.Store.advanceAgentAI(c, fixtureAITransport{}, s.agentFixture)
+					}
 				}
 				stop()
 				message := ""

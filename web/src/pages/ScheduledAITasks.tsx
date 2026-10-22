@@ -1,3 +1,4 @@
+import { NewsSourcePicker } from "./NewsInputs";
 import { ConnectionPicker } from "./AIConnection";
 import { useState } from "react";
 import { useWorkspace } from "../workspace";
@@ -7,6 +8,8 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
   const { agents } = useWorkspace();
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [newsSourceId, setNewsSourceId] = useState("");
+  const [newsAge, setNewsAge] = useState(3600);
   const [connectionRef, setConnectionRef] = useState("");
   const [session, setSession] = useState("");
   const [bot, setBot] = useState("");
@@ -75,6 +78,14 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                 <details>
                   <summary>Review AI task disclosure</summary>
                   <p>Connection: {a.connectionRef || "no credential"}</p>
+                  {t.news && (
+                    <p>
+                      Each run fetches up to five untrusted headlines from{" "}
+                      {t.news.url}, with publication/retrieval age at most{" "}
+                      {t.news.maxAgeSeconds}s. New evidence is recorded per
+                      request. Failure holds only this task.
+                    </p>
+                  )}
                   <pre>{a.disclosure}</pre>
                   <p>
                     Per call: {a.limits.maxInputTokens} input /{" "}
@@ -227,6 +238,13 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
             );
           })}
         <ConnectionPicker value={connectionRef} onChange={setConnectionRef} />
+        <NewsSourcePicker
+          view={v}
+          value={newsSourceId}
+          onChange={setNewsSourceId}
+          age={newsAge}
+          onAge={setNewsAge}
+        />
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -234,6 +252,8 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
               .change({
                 action: "task-ai-prepare",
                 connectionRef,
+                newsSourceId,
+                newsMaxAgeSeconds: newsSourceId ? newsAge : undefined,
                 name,
                 text: prompt,
                 id: sessionID,

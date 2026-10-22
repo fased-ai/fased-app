@@ -1,3 +1,49 @@
+export type NewsSource = {
+  id: string;
+  profileId: string;
+  name: string;
+  url: string;
+  maxAgeSeconds: number;
+  disabled: boolean;
+};
+export type NewsItem = {
+  id: string;
+  title: string;
+  url: string;
+  publishedAt: number;
+};
+export type NewsFetch = {
+  fresh: boolean;
+  id: string;
+  profileId: string;
+  sourceId: string;
+  taskId?: string;
+  url: string;
+  maxAgeSeconds: number;
+  createdAt: number;
+  fetchedAt: number;
+  state: string;
+  bodySha256: string;
+  bytes: number;
+  items: NewsItem[];
+  failure: string;
+};
+export type NewsEvidence = {
+  sourceId: string;
+  fetchId: string;
+  url: string;
+  maxAgeSeconds: number;
+  fetchedAt: number;
+  bodySha256: string;
+  digest: string;
+};
+export type TaskNewsInput = {
+  sourceId: string;
+  url: string;
+  maxAgeSeconds: number;
+  pendingId: string;
+  fetchId: string;
+};
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { useCore } from "./core";
 import type { Provider } from "./state";
@@ -57,6 +103,7 @@ export type TaskAIStep = {
   bot?: PaperBot;
 };
 export type AgentTask = {
+  news?: TaskNewsInput;
   ai?: TaskAIStep;
   id: string;
   profileId: string;
@@ -70,6 +117,7 @@ export type AgentTask = {
   state: string;
 };
 export type AgentRun = {
+  news?: NewsEvidence;
   aiRequestId?: string;
   aiDigest?: string;
   id: string;
@@ -99,6 +147,7 @@ export type AILimits = {
   budgetMicrousd: number;
 };
 export type AgentAIRequest = {
+  news?: NewsEvidence;
   connectionRef?: string;
   taskId?: string;
   taskDigest?: string;
@@ -128,6 +177,8 @@ export type AgentAIRequest = {
   }[];
 };
 export type AgentView = {
+  newsSources: NewsSource[];
+  newsFetches: NewsFetch[];
   aiRequests: AgentAIRequest[];
   aiFixtureAvailable: boolean;
   revision: number;
@@ -144,6 +195,8 @@ export type AgentView = {
   financialExecution: false;
 };
 export type AgentCommand = {
+  newsSourceId?: string;
+  newsMaxAgeSeconds?: number;
   connectionRef?: string;
   revision?: number;
   action: string;
