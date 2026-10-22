@@ -938,6 +938,124 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
   });
 });
 
+test("OpenAI test connection shares encrypted storage, bound consent and restart lock across UI and CLI", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  await stop();
+  await start(true);
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page.getByRole("button", { name: "Claim workspace" }).click();
+  await expect(
+    page.getByText("PRIVATE CORE · TERMINAL PROTOTYPES", { exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  await page.goto(url + "/#agents/settings");
+  const panel = page.getByRole("region", {
+    name: "OpenAI connection",
+    exact: true,
+  });
+  await expect(panel.getByRole("status")).toHaveText("No connection saved");
+  const key = "fased-test-browser-disposable-key";
+  const passphrase = "disposable-browser-vault-passphrase";
+  await panel.getByLabel("Disposable API key").fill(key);
+  await panel.getByLabel("Vault passphrase").fill(passphrase);
+  await panel.getByRole("button", { name: "Save test connection" }).click();
+  await expect(panel.getByRole("status")).toContainText("Unlocked");
+  await expect(panel.getByLabel("Disposable API key")).toHaveValue("");
+  await expect(panel.getByLabel("Vault passphrase")).toHaveValue("");
+  let connection = await privateCLI(["ai-connection"]);
+  expect(connection.locked).toBe(false);
+  expect(connection.liveCallsEnabled).toBe(false);
+  const firstRef = connection.ref;
+  const ciphertext = await readFile(join(dir, "ai-credentials.json"), "utf8");
+  expect(ciphertext).not.toContain(key);
+  expect(ciphertext).not.toContain(passphrase);
+  await page.goto(url + "/#agents/chat");
+  await page.getByLabel("Conversation name").fill("Connected fixture review");
+  await page.getByRole("button", { name: "Create conversation" }).click();
+  const review = page.getByRole("region", {
+    name: "Optional AI request review",
+  });
+  await review
+    .getByRole("combobox", { name: "AI connection", exact: true })
+    .selectOption(firstRef);
+  await review
+    .getByLabel("AI request", { exact: true })
+    .fill("Analyze fixed paper inputs using the test connection");
+  await review.getByRole("button", { name: "Prepare disclosure" }).click();
+  await review.getByText("Exact context disclosure", { exact: true }).click();
+  await expect(review).toContainText(firstRef);
+  await review
+    .getByLabel("I reviewed this context and these fixture limits")
+    .check();
+  await review.getByRole("button", { name: "Run development fixture" }).click();
+  await expect(review.getByText("completed", { exact: true })).toBeVisible({
+    timeout: 12000,
+  });
+  let agents = await privateCLI(["agents"]);
+  expect(agents.aiRequests[0].connectionRef).toBe(firstRef);
+  expect(agents.aiRequests[0].heldMicrousd).toBe(0);
+  expect(JSON.stringify(agents)).not.toContain(key);
+  expect(
+    await page.evaluate(() => JSON.stringify([localStorage, sessionStorage])),
+  ).not.toContain(key);
+  await stop();
+  await start();
+  await page.goto(url);
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.goto(url + "/#agents/settings");
+  await expect(panel.getByRole("status")).toContainText("Locked");
+  connection = await privateCLI(["ai-connection"]);
+  expect(connection.ref).toBe(firstRef);
+  expect(connection.locked).toBe(true);
+  connection = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "unlock",
+    ref: firstRef,
+    passphrase,
+  });
+  expect(connection.locked).toBe(false);
+  await page.reload();
+  await expect(panel.getByRole("status")).toContainText("Unlocked");
+  await panel
+    .getByRole("button", { name: "Lock connection", exact: true })
+    .click();
+  await expect(panel.getByRole("status")).toContainText("Locked");
+  expect((await privateCLI(["ai-connection"])).locked).toBe(true);
+  connection = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "save",
+    ref: firstRef,
+    key: key + "-replacement",
+    passphrase,
+  });
+  expect(connection.ref).not.toBe(firstRef);
+  await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "remove",
+    ref: connection.ref,
+    passphrase,
+  });
+  await page.reload();
+  await expect(panel.getByRole("status")).toHaveText("No connection saved");
+  agents = await privateCLI(["agents"]);
+  expect(agents.aiRequests[0].state).toBe("completed");
+  expect(agents.providerCallsEnabled).toBe(false);
+  expect(output).not.toContain(key);
+  await page.screenshot({
+    path: `.evidence/p5-openai-connection/${test.info().project.name}.png`,
+    fullPage: true,
+  });
+});
+
 test("optional provider fixture requires scoped disclosure and budgets, preserves review and never creates a task", async ({
   page,
 }) => {

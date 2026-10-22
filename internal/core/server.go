@@ -30,7 +30,8 @@ func Start(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS, 
 	return start(ctx, dir, listen, publicOrigin, assets, false, custodyConfig...)
 }
 
-// StartAgentFixture enables only compiled, in-process model fixtures, never API credentials.
+// StartAgentFixture enables only compiled, in-process model fixtures; bound
+// disposable credentials may exercise authentication without contacting OpenAI.
 func StartAgentFixture(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS) (*Server, error) {
 	return start(ctx, dir, listen, publicOrigin, assets, true)
 }

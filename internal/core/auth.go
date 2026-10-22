@@ -115,6 +115,7 @@ func (s *Store) Session(ctx context.Context, token string) bool {
 	return err == nil && valid
 }
 func (s *Store) Logout(ctx context.Context, token string) error {
+	s.lockAIConnection()
 	_, err := s.db.ExecContext(ctx, "DELETE FROM sessions WHERE token_hash=?", tokenHash(token))
 	return err
 }

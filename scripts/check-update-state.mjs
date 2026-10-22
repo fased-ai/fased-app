@@ -118,7 +118,7 @@ try {
     a.version === 1 &&
       a.probeId === probe &&
       a.state.name === "core-db" &&
-      a.state.version === 6 &&
+      a.state.version === 7 &&
       a.state.features.includes("agents-local-v1"),
   );
   check("stableReadOnlySnapshot", JSON.stringify(a) === JSON.stringify(b));

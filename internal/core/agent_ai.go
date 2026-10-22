@@ -1,7 +1,6 @@
 package core
 
-// This development step has no API credentials or network transport. The fixed
-// Responses API wire contract is exercised through an in-process HTTP fixture.
+// Provider execution remains development-only; credentials never enter context.
 import (
 	"bytes"
 	"context"
@@ -36,6 +35,7 @@ type AIActionCard struct {
 	Review string `json:"review"`
 }
 type AgentAIRequest struct {
+	ConnectionRef string         `json:"connectionRef,omitempty"`
 	TaskID        string         `json:"taskId,omitempty"`
 	TaskDigest    string         `json:"taskDigest,omitempty"`
 	ID            string         `json:"id"`
@@ -135,10 +135,10 @@ func aiContext(d agentDocument, profile, session, prompt string, now int64) (str
 func aiDigest(q AgentAIRequest) string {
 	wire, _ := aiWire(q)
 	b, _ := json.Marshal(struct {
-		ID, Profile, Session, Wire, TaskID, TaskDigest string
-		CreatedAt                                      int64
-		Limits                                         AILimits
-	}{q.ID, q.ProfileID, q.SessionID, string(wire), q.TaskID, q.TaskDigest, q.CreatedAt, q.Limits})
+		ID, Profile, Session, Wire, TaskID, TaskDigest, ConnectionRef string
+		CreatedAt                                                     int64
+		Limits                                                        AILimits
+	}{q.ID, q.ProfileID, q.SessionID, string(wire), q.TaskID, q.TaskDigest, q.ConnectionRef, q.CreatedAt, q.Limits})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
@@ -156,7 +156,7 @@ func changeAgentAI(d *agentDocument, c AgentCommand, profile, id string, now int
 		if e != nil {
 			return e
 		}
-		q := AgentAIRequest{ID: id, ProfileID: profile, SessionID: c.ID, Prompt: c.Text, Model: fixtureAIModel, Context: context, Limits: l, State: "prepared", CreatedAt: now, Cards: []AIActionCard{}}
+		q := AgentAIRequest{ConnectionRef: c.ConnectionRef, ID: id, ProfileID: profile, SessionID: c.ID, Prompt: c.Text, Model: fixtureAIModel, Context: context, Limits: l, State: "prepared", CreatedAt: now, Cards: []AIActionCard{}}
 		// Byte count is an intentionally conservative fixture bound, not a tokenizer
 		// or a production billing guarantee. Include instructions and output schema.
 		wire, e := aiWire(q)
@@ -235,8 +235,8 @@ func aiWire(q AgentAIRequest) ([]byte, error) {
 	return json.Marshal(map[string]any{"model": q.Model, "instructions": aiInstructions, "input": q.Context, "store": false, "background": false, "service_tier": "default", "tools": []any{}, "tool_choice": "none", "max_output_tokens": q.Limits.MaxOutputTokens, "text": map[string]any{"format": map[string]any{"type": "json_schema", "name": "fased_review", "strict": true, "schema": schema}}})
 }
 
-// No default HTTP transport, URL, credential loader, retry or provider fallback
-// exists here. Only the scheduler's compiled fixture and tests supply a transport.
+// No default network transport, retries or provider fallback. The caller supplies
+// an in-process fixture or the controlled HTTPS fixture with bound test credentials.
 func callAgentAI(ctx context.Context, q AgentAIRequest, rt http.RoundTripper) (AgentAIRequest, error) {
 	b, e := aiWire(q)
 	if e != nil || rt == nil {
@@ -360,7 +360,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 		}
 		if dispatch == nil && enabled && q.State == "queued" {
 			current, e := aiContext(d, q.ProfileID, q.SessionID, q.Prompt, s.now().Unix())
-			if e != nil || current != q.Context || aiDigest(*q) != q.Digest || s.now().Unix() < q.CreatedAt || s.now().Unix()-q.CreatedAt > 600 || taskAIRequestValid(d, *q, s.now().Unix()) != nil {
+			if e != nil || current != q.Context || aiDigest(*q) != q.Digest || s.now().Unix() < q.CreatedAt || s.now().Unix()-q.CreatedAt > 600 || taskAIRequestValid(d, *q, s.now().Unix()) != nil || !s.aiConnectionValid(q.ConnectionRef) {
 				q.State = "cancelled"
 				q.HeldMicrousd = 0
 				q.Failure = "Undispatched request changed, expired or stopped; prepare a fresh review."
@@ -415,13 +415,16 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 				if s.db.QueryRowContext(callCtx, "SELECT phase FROM update_pause WHERE id=1").Scan(&phase) != nil || phase == "paused" {
 					active = false
 				}
-				if !active {
+				if !active || !s.aiConnectionValid(dispatch.ConnectionRef) {
 					cancel()
 					return
 				}
 			}
 		}
 	}()
+	if dispatch.ConnectionRef != "" {
+		rt = authenticatedAITransport{store: s, ref: dispatch.ConnectionRef, next: rt}
+	}
 	result, callErr := callAgentAI(callCtx, *dispatch, rt)
 	cancel()
 	<-monitorDone
@@ -472,4 +475,24 @@ func (fixtureAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	output, _ := json.Marshal(map[string]any{"answer": "Development fixture response. Compare the fixed paper inputs and inspect the journal before changing a strategy. No model, market feed or wallet was contacted.", "cards": []any{map[string]string{"kind": "reminder-draft", "title": "Review paper journal", "text": "Draft only: review the recorded paper outcomes. Create any task separately after checking its limits."}}})
 	body, _ := json.Marshal(map[string]any{"id": "fixture-response", "model": fixtureAIModel, "status": "completed", "service_tier": "default", "usage": map[string]int{"input_tokens": len(b), "output_tokens": 128, "total_tokens": len(b) + 128}, "output": []any{map[string]any{"type": "message", "role": "assistant", "status": "completed", "content": []any{map[string]string{"type": "output_text", "text": string(output)}}}}})
 	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(bytes.NewReader(body)), Request: r}, nil
+}
+
+// Schema 7 prevents older writers from discarding credential bindings.
+func migrateAIConnections(ctx context.Context, db *sql.DB) error {
+	tx, e := db.BeginTx(ctx, nil)
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	var phase string
+	if e = tx.QueryRowContext(ctx, "SELECT phase FROM update_pause WHERE id=1").Scan(&phase); e != nil {
+		return e
+	}
+	if phase == "paused" {
+		return errors.New("core metadata paused; finish recovery before connection migration")
+	}
+	if _, e = tx.ExecContext(ctx, "PRAGMA user_version=7"); e != nil {
+		return e
+	}
+	return tx.Commit()
 }

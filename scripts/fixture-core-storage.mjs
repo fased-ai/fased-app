@@ -12,6 +12,7 @@ export async function currentStorageFixture(archivedRoot) {
     "agents.go",
     "agent_ai.go",
     "agent_ai_tasks.go",
+    "ai_connection.go",
     "update.go",
     "lifecycle.go",
   ]) {
@@ -27,11 +28,16 @@ export async function currentStorageFixture(archivedRoot) {
   assert.ok(!before.includes("migrateAgents(ctx, db)"));
   await writeFile(
     store,
-    before.replace(
-      marker,
-      "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }\n" +
+    before
+      .replace(
+        "type Store struct {",
+        "type Store struct {\n\tprovider providerState",
+      )
+      .replace(
         marker,
-    ),
+        "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }; if schema <= 6 { if err = migrateAIConnections(ctx, db); err != nil { return nil, err } }\n" +
+          marker,
+      ),
   );
   storage["store.go"] = sha(await readFile(store));
   return { fixtureOnly: true, exactHistoricalBinary: false, storage };

@@ -1,3 +1,4 @@
+import { ConnectionPicker } from "./AIConnection";
 import { useState } from "react";
 import { useWorkspace } from "../workspace";
 import type { AgentView } from "../agents";
@@ -6,6 +7,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
   const { agents } = useWorkspace();
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [connectionRef, setConnectionRef] = useState("");
   const [session, setSession] = useState("");
   const [bot, setBot] = useState("");
   const [interval, setInterval] = useState(60);
@@ -72,6 +74,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                 )}
                 <details>
                   <summary>Review AI task disclosure</summary>
+                  <p>Connection: {a.connectionRef || "no credential"}</p>
                   <pre>{a.disclosure}</pre>
                   <p>
                     Per call: {a.limits.maxInputTokens} input /{" "}
@@ -223,12 +226,14 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
               </article>
             );
           })}
+        <ConnectionPicker value={connectionRef} onChange={setConnectionRef} />
         <form
           onSubmit={(e) => {
             e.preventDefault();
             void agents
               .change({
                 action: "task-ai-prepare",
+                connectionRef,
                 name,
                 text: prompt,
                 id: sessionID,

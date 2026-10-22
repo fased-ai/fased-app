@@ -20,6 +20,7 @@ import (
 )
 
 type Store struct {
+	provider    providerState
 	db          *sql.DB
 	dir         string
 	instanceID  string
@@ -137,6 +138,11 @@ PRAGMA user_version=1;`)
 			return nil, err
 		}
 	}
+	if schema <= 6 {
+		if err = migrateAIConnections(ctx, db); err != nil {
+			return nil, err
+		}
+	}
 	store := &Store{db: db, dir: dir, now: time.Now, bootID: update.NewProbe()}
 	if err = db.QueryRowContext(ctx, "SELECT instance_id FROM instance WHERE id=1").Scan(&store.instanceID); err != nil {
 		return nil, err
@@ -146,7 +152,7 @@ PRAGMA user_version=1;`)
 	}
 	return store, nil
 }
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error { s.lockAIConnection(); return s.db.Close() }
 func randomToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {

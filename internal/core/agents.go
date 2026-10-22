@@ -134,6 +134,7 @@ type AgentView struct {
 // Optional fields are inert data for a fixed action; unknown fields/actions are
 // rejected. No arbitrary callback, URL, model tool or shell can be submitted.
 type AgentCommand struct {
+	ConnectionRef        string    `json:"connectionRef,omitempty"`
 	Revision             int64     `json:"revision"`
 	Action               string    `json:"action"`
 	ProfileID            string    `json:"profileId,omitempty"`
@@ -358,6 +359,23 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		return AgentView{}, e
 	}
 	now := s.now().Unix()
+	if c.Action == "ai-prepare" || c.Action == "task-ai-prepare" {
+		if c.ConnectionRef != "" && !s.aiConnectionValid(c.ConnectionRef) {
+			return AgentView{}, errors.New("unlock the selected connection first")
+		}
+	}
+	if c.Action == "ai-start" || c.Action == "task-ai-authorize" {
+		for _, q := range d.AIRequests {
+			if q.ID == c.ID && q.ProfileID == profile && !s.aiConnectionValid(q.ConnectionRef) {
+				return AgentView{}, errors.New("connection changed or locked; review a fresh request")
+			}
+		}
+		for _, t := range d.Tasks {
+			if t.ID == c.ID && t.ProfileID == profile && t.AI != nil && !s.aiConnectionValid(t.AI.ConnectionRef) {
+				return AgentView{}, errors.New("connection changed or locked; review a fresh task")
+			}
+		}
+	}
 	switch c.Action {
 	case "ai-prepare", "ai-start", "ai-cancel", "ai-card-keep", "ai-card-dismiss":
 		if e = changeAgentAI(&d, c, profile, id, now, fixture); e != nil {

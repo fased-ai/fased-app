@@ -13,6 +13,7 @@ import (
 const taskAICompletionReserve = 8192
 
 type TaskAIStep struct {
+	ConnectionRef  string    `json:"connectionRef,omitempty"`
 	SessionID      string    `json:"sessionId"`
 	Context        string    `json:"context"`
 	Disclosure     string    `json:"disclosure"`
@@ -69,7 +70,7 @@ func taskAIRequestSlots(d agentDocument) int {
 }
 func taskAIRequest(t AgentTask, now int64) AgentAIRequest {
 	a := t.AI
-	q := AgentAIRequest{ID: fmt.Sprintf("%s:%d-ai", t.ID, t.Runs+1), TaskID: t.ID, TaskDigest: a.Digest, ProfileID: t.ProfileID, SessionID: a.SessionID, Prompt: t.Text, Model: fixtureAIModel, Context: a.Context, Disclosure: a.Disclosure, Limits: a.Limits, CreatedAt: now, State: "queued", HeldMicrousd: aiReservation(a.Limits), Cards: []AIActionCard{}}
+	q := AgentAIRequest{ConnectionRef: a.ConnectionRef, ID: fmt.Sprintf("%s:%d-ai", t.ID, t.Runs+1), TaskID: t.ID, TaskDigest: a.Digest, ProfileID: t.ProfileID, SessionID: a.SessionID, Prompt: t.Text, Model: fixtureAIModel, Context: a.Context, Disclosure: a.Disclosure, Limits: a.Limits, CreatedAt: now, State: "queued", HeldMicrousd: aiReservation(a.Limits), Cards: []AIActionCard{}}
 	q.Digest = aiDigest(q)
 	return q
 }
@@ -147,7 +148,7 @@ func changeTaskAI(d *agentDocument, c AgentCommand, profile, id string, now int6
 		// all future request slots rather than publishing a disposable preview request.
 		copy := *d
 		copy.AIRequests = append([]AgentAIRequest{}, d.AIRequests...)
-		if e := changeAgentAI(&copy, AgentCommand{Action: "ai-prepare", ID: c.ID, Text: c.Text, Limits: c.Limits}, profile, id, now, false); e != nil {
+		if e := changeAgentAI(&copy, AgentCommand{ConnectionRef: c.ConnectionRef, Action: "ai-prepare", ID: c.ID, Text: c.Text, Limits: c.Limits}, profile, id, now, false); e != nil {
 			return e
 		}
 		q := copy.AIRequests[len(copy.AIRequests)-1]
@@ -161,7 +162,7 @@ func changeTaskAI(d *agentDocument, c AgentCommand, profile, id string, now int6
 		if runs > 200 {
 			return errors.New("local scheduled evaluation capacity reached")
 		}
-		a := &TaskAIStep{SessionID: c.ID, Context: q.Context, Disclosure: q.Disclosure, Limits: q.Limits, BudgetMicrousd: c.TotalBudgetMicrousd, CreatedAt: now, ExpiresAt: now + c.AuthorizationSeconds}
+		a := &TaskAIStep{ConnectionRef: c.ConnectionRef, SessionID: c.ID, Context: q.Context, Disclosure: q.Disclosure, Limits: q.Limits, BudgetMicrousd: c.TotalBudgetMicrousd, CreatedAt: now, ExpiresAt: now + c.AuthorizationSeconds}
 		if c.BotID != "" {
 			for _, bot := range d.Bots {
 				if bot.ID == c.BotID && bot.ProfileID == profile {

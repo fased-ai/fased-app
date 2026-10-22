@@ -1,3 +1,4 @@
+import { ConnectionPicker } from "./AIConnection";
 import { useState } from "react";
 import type { AgentView } from "../agents";
 import { useWorkspace } from "../workspace";
@@ -12,6 +13,7 @@ export function AgentAIReview({
 }) {
   const { agents } = useWorkspace();
   const [prompt, setPrompt] = useState("");
+  const [connectionRef, setConnectionRef] = useState("");
   const [input, setInput] = useState(24000);
   const [output, setOutput] = useState(1024);
   const [deadline, setDeadline] = useState(3);
@@ -24,8 +26,9 @@ export function AgentAIReview({
     <section className="ai-review" aria-label="Optional AI request review">
       <h3>Optional AI step</h3>
       <p>
-        Development fixture only. No OpenAI connection, API key, subscription or
-        charge. Your saved provider preference does not enable execution.
+        Development fixture only. Optionally select an unlocked test connection.
+        No OpenAI account, subscription or charge. Your saved provider
+        preference does not enable execution.
       </p>
       <form
         onSubmit={(e) => {
@@ -33,6 +36,7 @@ export function AgentAIReview({
           void agents
             .change({
               action: "ai-prepare",
+              connectionRef,
               id: sessionId,
               text: prompt,
               limits: {
@@ -50,6 +54,7 @@ export function AgentAIReview({
             });
         }}
       >
+        <ConnectionPicker value={connectionRef} onChange={setConnectionRef} />
         <label>
           AI request
           <textarea
@@ -133,6 +138,7 @@ export function AgentAIReview({
           </p>
           <details>
             <summary>Exact context disclosure</summary>
+            <p>Connection: {q.connectionRef || "no credential"}</p>
             <pre>{q.disclosure}</pre>
             <p>
               Also included: fixed instructions treating this context as

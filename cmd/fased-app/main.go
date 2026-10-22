@@ -66,6 +66,9 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	if len(args) > 0 && args[0] == "updates" {
 		return updatesCommand(args[1:], out, errOut)
 	}
+	if len(args) > 0 && args[0] == "ai-connection" {
+		return aiConnectionCommand(args[1:], in, out, errOut)
+	}
 	if len(args) > 0 && args[0] == "agents" {
 		return agentsCommand(args[1:], in, out, errOut)
 	}
@@ -104,7 +107,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	installationRoot := flags.String("installation-root", "", "immutable installed application directory")
 	custodyConfig := flags.String("custody-config", "", "root-owned managed fixture identity; never enables real wallets")
 	passwordStdin := flags.Bool("password-stdin", false, "read password from stdin instead of a terminal")
-	aiFixture := flags.Bool("ai-fixture", false, "development-only in-process provider fixtures; no API or credentials")
+	aiFixture := flags.Bool("ai-fixture", false, "development-only in-process provider fixtures; test credentials only, no live API")
 	interactive := flags.Bool("interactive", false, "walk through setup in the terminal")
 	host := flags.String("host", "", "setup deployment preference: local or vps")
 	wallet := flags.String("wallet-mode", "", "setup wallet preference: skip, watch, external, automation")

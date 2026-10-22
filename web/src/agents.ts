@@ -43,6 +43,7 @@ export type PaperBot = {
   spentCents: number;
 };
 export type TaskAIStep = {
+  connectionRef?: string;
   sessionId: string;
   context: string;
   disclosure: string;
@@ -98,6 +99,7 @@ export type AILimits = {
   budgetMicrousd: number;
 };
 export type AgentAIRequest = {
+  connectionRef?: string;
   taskId?: string;
   taskDigest?: string;
   id: string;
@@ -142,6 +144,7 @@ export type AgentView = {
   financialExecution: false;
 };
 export type AgentCommand = {
+  connectionRef?: string;
   revision?: number;
   action: string;
   profileId?: string;

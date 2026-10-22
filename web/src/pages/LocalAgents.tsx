@@ -1,3 +1,4 @@
+import { AIConnectionSettings } from "./AIConnection";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Plus, RefreshCw } from "../icons";
 import { Badge, SectionHead } from "../components/shared";
@@ -151,6 +152,7 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
   }
   return (
     <div className="local-agents">
+      {tab === "settings" && <AIConnectionSettings />}
       {tab === "chat" && (
         <section className="panel">
           <div className="panel-heading">
