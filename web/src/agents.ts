@@ -419,6 +419,8 @@ export function useAgents(core: ReturnType<typeof useCore>) {
   const [view, setView] = useState<AgentView | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [unavailable, setUnavailable] = useState(false);
+  const disconnected = useRef(false);
   const current = useRef<AgentView | null>(null);
   const generation = useRef(0);
   const writing = useRef(false);
@@ -431,10 +433,24 @@ export function useAgents(core: ReturnType<typeof useCore>) {
   const refresh = useCallback(
     async (profile?: string) => {
       const epoch = generation.current;
-      const v = await core.request<AgentView>(
-        `agents?profile=${encodeURIComponent(profile ?? current.current?.profileId ?? "")}`,
-      );
-      if (epoch === generation.current) accept(v);
+      try {
+        const v = await core.request<AgentView>(
+          `agents?profile=${encodeURIComponent(profile ?? current.current?.profileId ?? "")}`,
+        );
+        if (epoch === generation.current) {
+          accept(v);
+          if (disconnected.current) setError("");
+          disconnected.current = false;
+          setUnavailable(false);
+        }
+      } catch (e) {
+        if (epoch === generation.current) {
+          disconnected.current = true;
+          setUnavailable(true);
+          setError(e instanceof Error ? e.message : "Workspace unavailable");
+        }
+        throw e;
+      }
     },
     [core.request, accept],
   );
@@ -443,17 +459,13 @@ export function useAgents(core: ReturnType<typeof useCore>) {
     current.current = null;
     setView(null);
     setError("");
+    disconnected.current = false;
+    setUnavailable(false);
     if (core.mode !== "ready") return;
-    let active = true;
-    const load = () =>
-      refresh().catch((e) => {
-        if (active)
-          setError(e instanceof Error ? e.message : "Workspace unavailable");
-      });
+    const load = () => refresh().catch(() => {});
     void load();
     const timer = setInterval(() => void load(), 5000);
     return () => {
-      active = false;
       generation.current++;
       clearInterval(timer);
     };
@@ -461,14 +473,11 @@ export function useAgents(core: ReturnType<typeof useCore>) {
   async function select(profile: string) {
     generation.current++;
     setError("");
-    try {
-      await refresh(profile);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Profile unavailable");
-    }
+    await refresh(profile).catch(() => {});
   }
   async function change(command: AgentCommand) {
-    if (!current.current || writing.current) return false;
+    if (!current.current || writing.current || disconnected.current)
+      return false;
     writing.current = true;
     const epoch = generation.current;
     setBusy(true);
@@ -495,5 +504,5 @@ export function useAgents(core: ReturnType<typeof useCore>) {
       setBusy(false);
     }
   }
-  return { view, error, busy, refresh, select, change };
+  return { view, error, busy: busy || unavailable, refresh, select, change };
 }

@@ -81,6 +81,477 @@ test.afterEach(async () => {
   }
 });
 
+test("joined agent workspace preserves news chat reminder run memory and reviewed AI across UI CLI and restart", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(90000);
+  await stop();
+  await start(true);
+  const origins = new Set([new URL(url).origin]);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (!origins.has(new URL(r.url()).origin)) external.push(r.url());
+  });
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = async () => {
+    const p = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+    p.stdin!.end(fixturePassword + "\n");
+    expect((await once(p, "exit"))[0]).toBe(0);
+  };
+  await login();
+  const profileId = "trading-analyst";
+  const read = () => privateCLI(["agents", "--profile", profileId]);
+  const command = async (c: Record<string, unknown>) =>
+    privateCLI(["agents", "--request-stdin"], {
+      profileId,
+      revision: (await read()).revision,
+      ...c,
+    });
+  const open = async (tab: string) => {
+    await page.getByRole("button", { name: tab, exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: /^Trading Analyst / }),
+    ).toHaveAttribute("aria-pressed", "true");
+  };
+  await page.goto(url + "/#agents/news");
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  const news = page.getByRole("region", { name: "News inputs", exact: true });
+  await news
+    .getByLabel("News source name", { exact: true })
+    .fill("Joined controlled news");
+  await news
+    .getByLabel("Public RSS URL", { exact: true })
+    .fill("https://news.fased.invalid/headlines.xml");
+  await news
+    .getByLabel("Source freshness limit (seconds)", { exact: true })
+    .fill("600");
+  await news
+    .getByRole("button", { name: "Add news source", exact: true })
+    .click();
+  const source = news.getByRole("article", {
+    name: "News source Joined controlled news",
+    exact: true,
+  });
+  await source
+    .getByRole("button", { name: "Fetch headlines", exact: true })
+    .click();
+  await expect
+    .poll(async () => (await read()).newsFetches[0]?.state)
+    .toBe("completed");
+  await news
+    .getByRole("button", { name: "Refresh news records", exact: true })
+    .click();
+  const fetched = await read();
+  const fetch = fetched.newsFetches[0],
+    item = fetch.items[0];
+  await source
+    .locator(".memory-record")
+    .filter({ hasText: item.title })
+    .getByRole("button", { name: "Discuss headline", exact: true })
+    .click();
+  await expect(page.locator(".local-messages")).toContainText(
+    "Historical news headline",
+  );
+  let v = await read();
+  const headlineMessage = v.messages.at(-1);
+  const headlineSession = v.sessions.find(
+    (s: any) => s.id === headlineMessage.sessionId,
+  );
+  const [body, hash] = headlineMessage.text.split("\nSnapshot SHA-256: ");
+  expect(hash).toBe(createHash("sha256").update(body).digest("hex"));
+  expect(JSON.parse(body.slice(body.indexOf("\n") + 1)).Evidence.fetchId).toBe(
+    fetch.id,
+  );
+  expect(v.tasks).toHaveLength(0);
+  expect(v.aiRequests).toHaveLength(0);
+  expect(v.newsFetches).toEqual(fetched.newsFetches);
+
+  // Optional fixture AI is a separate reviewed branch, never a prerequisite grant.
+  const review = page.getByRole("region", {
+    name: "Optional AI request review",
+    exact: true,
+  });
+  const prompt = "Draft a reminder to review this saved headline";
+  await review.getByLabel("AI request", { exact: true }).fill(prompt);
+  await review
+    .getByRole("button", { name: "Prepare disclosure", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).aiRequests.length).toBe(1);
+  const prepared = (await read()).aiRequests[0];
+  expect(prepared.state).toBe("prepared");
+  expect(JSON.parse(prepared.context).context.messages).toEqual([
+    { role: "user", text: headlineMessage.text },
+  ]);
+  expect(prepared.context).toContain(fetch.id);
+  expect((await read()).tasks).toHaveLength(0);
+  const request = review.locator(".ai-request").last();
+  const runFixture = request.getByRole("button", {
+    name: "Run development fixture",
+    exact: true,
+  });
+  await expect(runFixture).toBeDisabled();
+  await request
+    .getByLabel("I reviewed this context and these fixture limits")
+    .check();
+  await runFixture.click();
+  await expect
+    .poll(async () => (await read()).aiRequests[0]?.state)
+    .toBe("completed");
+  const card = request
+    .locator(".ai-action-card")
+    .filter({ hasText: "reminder" })
+    .first();
+  await card.getByRole("button", { name: "Keep draft", exact: true }).click();
+  await card
+    .getByRole("button", { name: "Review reminder task", exact: true })
+    .click();
+  const reminder = card.getByRole("region", { name: /Reminder task review:/ });
+  const reminderName = "Joined saved headline review";
+  await reminder
+    .getByLabel("Reminder task name", { exact: true })
+    .fill(reminderName);
+  await reminder
+    .getByLabel("Reminder text", { exact: true })
+    .fill(`Review saved headline: ${item.title}`);
+  await reminder.getByLabel("Repeat every (seconds)").fill("60");
+  await reminder.getByLabel("Maximum reminder runs").fill("1");
+  await reminder
+    .getByRole("button", { name: "Review reminder schedule", exact: true })
+    .click();
+  const create = reminder.getByRole("button", {
+    name: "Create reviewed reminder",
+    exact: true,
+  });
+  await expect(create).toBeDisabled();
+  expect((await read()).tasks).toHaveLength(0);
+  await reminder
+    .getByLabel("I reviewed this reminder text and schedule")
+    .check();
+  await create.click();
+  await expect(card.getByRole("status")).toContainText(
+    `Reminder task created: ${reminderName}`,
+  );
+  v = await read();
+  expect(v.tasks).toHaveLength(1);
+  expect(v.runs).toHaveLength(0);
+  const task = v.tasks[0];
+  expect(task.text).toContain(item.title);
+  expect(task.maxRuns).toBe(1);
+  expect(task.ai).toBeUndefined();
+  expect(task.news).toBeUndefined();
+  expect(task.wen).toBeUndefined();
+  await open("tasks");
+  await page
+    .getByRole("button", { name: `Run now: ${reminderName}`, exact: true })
+    .click();
+  await expect.poll(async () => (await read()).runs.length).toBe(1);
+  v = await read();
+  const run = v.runs[0];
+  const outcomes = {
+    tasks: v.tasks,
+    runs: v.runs,
+    notices: v.notices,
+    aiRequests: v.aiRequests,
+  };
+  await page
+    .locator(".memory-card")
+    .filter({ hasText: `Run ${run.id}` })
+    .getByRole("button", { name: "Discuss run", exact: true })
+    .click();
+  await expect(page.locator(".local-messages")).toContainText(
+    "Historical reminder run",
+  );
+  v = await read();
+  const runMessage = v.messages.at(-1);
+  expect(runMessage.text).toContain(run.id);
+  expect(runMessage.text).toContain(item.title);
+  expect({
+    tasks: v.tasks,
+    runs: v.runs,
+    notices: v.notices,
+    aiRequests: v.aiRequests,
+  }).toEqual(outcomes);
+  const runArticle = page
+    .locator(".local-messages article")
+    .filter({ hasText: runMessage.text });
+  await runArticle
+    .getByRole("button", { name: "Remember this", exact: true })
+    .click();
+  const memoryReview = runArticle.getByRole("region", {
+    name: "Chat memory review",
+    exact: true,
+  });
+  const noteText =
+    "Review retained headline provenance before planning the next reminder";
+  await memoryReview
+    .getByLabel("Reviewed memory note", { exact: true })
+    .fill(noteText);
+  expect((await read()).memories).toHaveLength(0);
+  await memoryReview
+    .getByRole("button", { name: "Save reviewed memory", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).memories.length).toBe(1);
+  v = await read();
+  const note = v.memories[0];
+  expect(note.text).toBe(noteText);
+  expect(note.source).toContain(`id=${runMessage.id}`);
+  expect(note.source).toContain(
+    `sha256=${createHash("sha256").update(runMessage.text).digest("hex")}`,
+  );
+  const recall = await privateCLI([
+    "agents",
+    "--profile",
+    profileId,
+    "--memory-search",
+    "HEADLINE PROVENANCE",
+    "--memory-source",
+    note.id,
+  ]);
+  expect(recall.memories.map((m: any) => m.id)).toEqual([note.id]);
+  await open("memory");
+  await page
+    .getByRole("searchbox", { name: "Search memories", exact: true })
+    .fill("HEADLINE PROVENANCE");
+  await page
+    .getByRole("button", { name: "Search memory", exact: true })
+    .click();
+  await expect(
+    page.getByRole("article", { name: `Memory ${note.id}`, exact: true }),
+  ).toContainText(noteText);
+
+  const retained = await read();
+  const other = await privateCLI(["agents", "--profile", "news-researcher"]);
+  expect(other.memories).toHaveLength(0);
+  expect(other.tasks).toHaveLength(0);
+  expect(other.newsFetches).toHaveLength(0);
+  for (const c of [
+    { action: "task-run-explain", id: run.id },
+    { action: "news-item-explain", id: fetch.id, source: item.id },
+    {
+      action: "memory-chat-save",
+      id: runMessage.id,
+      source: "message",
+      text: "Foreign source refused",
+    },
+    { action: "task-run", id: task.id },
+  ])
+    await expect(
+      command({ ...c, profileId: "news-researcher" }),
+    ).rejects.toThrow();
+  await expect(command({ action: "task-run", id: task.id })).rejects.toThrow();
+  expect(await read()).toEqual(retained);
+  await page.getByRole("button", { name: /^News Researcher / }).click();
+  await expect(
+    page.getByRole("article", { name: `Memory ${note.id}`, exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await command({
+    action: "profile-update",
+    name: "Trading Analyst",
+    text: "Review saved sources",
+    provider: "xai",
+    model: "preference-only",
+  });
+  const frozen = await read();
+  await stop();
+  await start();
+  origins.add(new URL(url).origin);
+  await login();
+  await page.goto(url + "/#agents/chat");
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  const restarted = await read();
+  for (const key of [
+    "sessions",
+    "messages",
+    "memories",
+    "tasks",
+    "runs",
+    "newsSources",
+    "newsFetches",
+    "notices",
+    "aiRequests",
+  ])
+    expect(restarted[key]).toEqual(frozen[key]);
+  expect(restarted.profiles.find((p: any) => p.id === profileId).provider).toBe(
+    "xai",
+  );
+  expect(restarted.aiFixtureAvailable).toBe(false);
+  expect(restarted.providerCallsEnabled).toBe(false);
+  expect(restarted.financialExecution).toBe(false);
+  for (const query of [
+    prompt.toUpperCase(),
+    "NO MODEL, MARKET FEED OR WALLET WAS CONTACTED.",
+  ]) {
+    await page
+      .getByRole("searchbox", { name: "Search conversations", exact: true })
+      .fill(query);
+    await expect(
+      page
+        .locator(".agent-session-list")
+        .getByRole("button", { name: headlineSession.name, exact: true }),
+    ).toBeVisible();
+    const found = await privateCLI([
+      "agents",
+      "--profile",
+      profileId,
+      "--search",
+      query,
+    ]);
+    expect(found.sessions.map((s: any) => s.id)).toEqual([headlineSession.id]);
+    const isolated = await privateCLI([
+      "agents",
+      "--profile",
+      "news-researcher",
+      "--search",
+      query,
+    ]);
+    expect(isolated.sessions).toHaveLength(0);
+    expect(isolated.aiRequests).toHaveLength(0);
+  }
+  await page
+    .getByRole("searchbox", { name: "Search conversations", exact: true })
+    .fill("");
+  await page
+    .getByRole("button", { name: headlineSession.name, exact: true })
+    .click();
+  await expect(page.locator(".local-messages")).toContainText(
+    headlineMessage.text,
+  );
+  await expect(review.locator(".ai-request")).toContainText(prepared.prompt);
+  await expect(
+    review.getByRole("button", {
+      name: "Run development fixture",
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  expect(await read()).toEqual(restarted);
+  expect(external).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth + 1,
+    ),
+  ).toBe(true);
+  await mkdir(".evidence/joined-agent", { recursive: true });
+  await page.screenshot({
+    path: `.evidence/joined-agent/${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+  await open("news");
+  const agentsRead = "**/api/v1/agents?*";
+  let captured!: () => void, release!: () => void, delivered!: () => void;
+  const olderCaptured = new Promise<void>((r) => (captured = r));
+  const releaseOlder = new Promise<void>((r) => (release = r));
+  const olderDelivered = new Promise<void>((r) => (delivered = r));
+  let reads = 0;
+  // A response captured before the failed read cannot restore connectivity.
+  await page.route(agentsRead, async (route) => {
+    if (reads++ === 0) {
+      const response = await route.fetch();
+      captured();
+      await releaseOlder;
+      await route.fulfill({ response });
+      delivered();
+    } else
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "Controlled agent read unavailable" }),
+      });
+  });
+  await page
+    .getByRole("button", { name: "Refresh news records", exact: true })
+    .click();
+  await olderCaptured;
+  await page
+    .getByRole("button", { name: "Refresh news records", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Controlled agent read unavailable",
+  );
+  await expect(
+    page.getByRole("button", { name: "Fetch headlines", exact: true }),
+  ).toBeDisabled();
+  release();
+  await olderDelivered;
+  await page.evaluate(
+    () =>
+      new Promise<void>((r) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => r())),
+      ),
+  );
+  await expect(page.getByRole("alert")).toContainText(
+    "Controlled agent read unavailable",
+  );
+  await expect(
+    page.getByRole("button", { name: "Fetch headlines", exact: true }),
+  ).toBeDisabled();
+  await page.unroute(agentsRead);
+  await page
+    .getByRole("button", { name: "Refresh records", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Fetch headlines", exact: true }),
+  ).toBeEnabled();
+  expect(await read()).toEqual(restarted);
+  // Keep the app loaded while the real fixture core disappears.
+  await stop();
+  await page
+    .getByRole("button", { name: "Refresh news records", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Fetch headlines", exact: true }),
+  ).toBeDisabled();
+  await writeFile(
+    `.evidence/joined-agent/${isMobile ? "mobile" : "desktop"}.json`,
+    JSON.stringify(
+      {
+        result: "PASS",
+        fixtureOnly: true,
+        profileId,
+        sourceId: fetch.sourceId,
+        fetchId: fetch.id,
+        headlineId: item.id,
+        headlineMessageId: headlineMessage.id,
+        requestId: prepared.id,
+        taskId: task.id,
+        runId: run.id,
+        runMessageId: runMessage.id,
+        memoryId: note.id,
+        headlineSnapshotSHA256: hash,
+        sourceBackedMemory: true,
+        distinctTasks: restarted.tasks.length,
+        distinctRuns: restarted.runs.length,
+        restartProviderSearchIsolation: true,
+        externalBrowserRequests: external,
+        realAI: false,
+        wallets: false,
+        automaticPublicUpdates: false,
+        disconnectedCore: true,
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+});
+
 test("update preferences and review-only proposals share revisions, survive restart and obey the metadata pause", async ({
   page,
 }) => {
