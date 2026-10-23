@@ -8,6 +8,25 @@ import (
 func (h *HTTPHandler) agentsAPI(w http.ResponseWriter, r *http.Request, token string) {
 	if r.Method == http.MethodGet {
 		q := r.URL.Query()
+		if q.Has("evidence") || q.Has("evidence-id") || q.Has("evidence-item") {
+			for key, values := range q {
+				if (key != "profile" && key != "evidence" && key != "evidence-id" && key != "evidence-item") || len(values) != 1 {
+					writeError(w, 400, "one profile, evidence kind/source and optional headline item expected")
+					return
+				}
+			}
+			if q.Has("evidence-item") && q.Get("evidence") != "headline" {
+				writeError(w, 400, "item identity is only for a headline")
+				return
+			}
+			v, err := h.store.AgentEvidence(r.Context(), q.Get("profile"), q.Get("evidence"), q.Get("evidence-id"), q.Get("evidence-item"))
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			writeJSON(w, 200, v)
+			return
+		}
 		if q.Has("ai-draft") {
 			for key, values := range q {
 				if (key != "profile" && key != "ai-draft") || len(values) != 1 {

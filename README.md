@@ -386,3 +386,17 @@ fased-app agents --profile trading-analyst --ai-draft REQUEST_ID
 ```
 
 The result contains preparation fields and scope/revision metadata only. To prepare, explicitly map `sessionId` to command `id`, `prompt` to `text`, and pass the other editable fields to `ai-prepare` with the current revision via `agents --request-stdin`. Omit `memorySelection` for legacy input; do not turn omission into `all`. This creates a new request/disclosure/digest using current context and admission policy. Review it and separately consent to fixture execution. Old consent/results/state/reservations are never copied, and pending or uncertain holds still block another call. Scheduled, foreign, ambiguous, damaged or unsupported saved requests refuse. Mining, real AI/wallets and automatic/public updates remain disabled.
+
+### Inspect saved agent evidence
+
+In an agent’s Chat, use **Saved evidence** to choose a memory note, saved headline or plain reminder run, then **Inspect evidence**. The read-only result shows the selected source, provenance, content hash, record/inspection times and freshness. **Cancel inspection** only closes the local preview. Inspection creates no message, task, model call or source fetch. Existing explicit Discuss, Save memory and AI disclosure/consent remain separate actions.
+
+The same private authenticated CLI projection is available:
+
+```sh
+fased-app agents --profile trading-analyst --evidence memory --evidence-id MEMORY_ID
+fased-app agents --profile trading-analyst --evidence headline --evidence-id FETCH_ID --evidence-item ITEM_ID
+fased-app agents --profile trading-analyst --evidence reminder-run --evidence-id RUN_ID
+```
+
+Each response uses `agent-evidence-v1`, identifies one same-profile record and includes a hash of its allowlisted source data and identity. The hash is evidence, not authorization. Memory is the current retained note (including an explicit expired status); headlines/runs remain historical even when a headline is recent. Disabled/stale sources never refresh on inspection. Missing, changed, ambiguous, foreign, unsupported or oversized sources refuse without substitution/truncation. The complete encoded response, including its trailing newline, is at most 16 KiB. Private AI context/credentials, memory revision history and scheduling/financial authority are excluded. AI/news-bound or financial runs are outside this plain reminder inspector. A changed workspace requires reinspection. No schema, service, provider or model-tool execution is added; mining, real AI/wallets and automatic/public updates remain disabled.

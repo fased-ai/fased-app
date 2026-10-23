@@ -320,6 +320,48 @@ export type AgentAIRequestDraft = {
   newsMaxAgeSeconds?: number;
   memorySelection?: AIMemorySelection;
 };
+export type AgentEvidenceKind = "memory" | "headline" | "reminder-run";
+export type AgentEvidenceView = {
+  version: "agent-evidence-v1";
+  revision: number;
+  profileId: string;
+  id: string;
+  itemId?: string;
+  sha256: string;
+  observedAt: number;
+  recordedAt: number;
+  historical: boolean;
+  untrusted: true;
+  freshness: "active" | "expired" | "fresh" | "stale" | "disabled" | "recorded";
+} & (
+  | {
+      kind: "memory";
+      data: {
+        id: string;
+        text: string;
+        source: string;
+        updatedAt: number;
+        expiresAt: number;
+        provenance: AgentMemoryEvidence;
+      };
+    }
+  | {
+      kind: "headline";
+      data: {
+        sourceName: string;
+        sourceDisabled: boolean;
+        headline: NewsItem;
+        evidence: NewsEvidence;
+      };
+    }
+  | {
+      kind: "reminder-run";
+      data: {
+        task: { id: string; name: string; text: string };
+        run: { id: string; at: number; strategy: string; outcome: string };
+      };
+    }
+);
 export type AgentCommand = {
   memorySelection?: AIMemorySelection;
   wen?: WENPaperInput;

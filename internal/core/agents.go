@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 )
 
@@ -605,118 +604,12 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 // Capture retained facts only. None of the source task's execution/consent paths
 // are entered, even if its schedule or AI authorization has since expired.
 func captureAgentRunContext(d *agentDocument, profile, runID, id string, revision, now int64) error {
-	refused := errors.New("saved reminder run references missing, ambiguous, changed or unsupported")
 	if len(d.Sessions) >= 100 || len(d.Messages) >= 200 {
 		return errors.New("conversation/message capacity reached; no context saved")
 	}
-	var r *AgentRun
-	for i := range d.Runs {
-		if d.Runs[i].ID == runID {
-			if r != nil {
-				return refused
-			}
-			r = &d.Runs[i]
-		}
-	}
-	if r == nil || r.ProfileID != profile || r.WEN != nil || r.BotID != "" || r.Quantity != 0 || r.PriceCents != 0 || r.CostCents != 0 || r.BudgetBefore != 0 || r.At <= 0 || r.At > now {
-		return refused
-	}
-	var task *AgentTask
-	for i := range d.Tasks {
-		if d.Tasks[i].ID == r.TaskID {
-			if task != nil {
-				return refused
-			}
-			task = &d.Tasks[i]
-		}
-	}
-	if task == nil || task.ProfileID != profile || task.WEN != nil || task.BotID != "" {
-		return refused
-	}
-	n, err := strconv.Atoi(strings.TrimPrefix(r.ID, task.ID+":"))
-	if err != nil || n < 1 || n > task.Runs || r.ID != fmt.Sprintf("%s:%d", task.ID, n) {
-		return refused
-	}
-	plain := r.Strategy == "reminder-v1"
-	success := r.Strategy == "ai-step-v1/reminder-v1"
-	held := r.Strategy == "ai-step-v1" && strings.HasPrefix(r.Outcome, "ai-")
-	if (!plain && !success && !held) || ((plain || success) && r.Outcome != "reminded") {
-		return refused
-	}
-	expectedNotice := task.Name + ": " + task.Text
-	if held {
-		expectedNotice = task.Name + ": " + r.Outcome + "; dependent step stopped. Review a new task plan."
-	}
-	var notice *AgentNotice
-	for i := range d.Notices {
-		if d.Notices[i].RunID == runID || d.Notices[i].ID == runID {
-			if notice != nil {
-				return refused
-			}
-			notice = &d.Notices[i]
-		}
-	}
-	if notice == nil || notice.ID != runID || notice.RunID != runID || notice.ProfileID != profile || notice.At != r.At || notice.Text != expectedNotice {
-		return refused
-	}
-	// Whitelist public historical fields; never serialize TaskAIStep or the
-	// request itself (both contain private connection/context/disclosure data).
-	type recordedAI struct {
-		ID, SessionID, Digest, State, Model, Answer                                          string
-		Limits                                                                               AILimits
-		CreatedAt, InputTokens, OutputTokens, CachedInputTokens, SpentMicrousd, HeldMicrousd int64
-	}
-	var ai *recordedAI
-	if plain {
-		if task.AI != nil || r.AIRequestID != "" || r.AIDigest != "" {
-			return refused
-		}
-	} else {
-		if task.AI == nil || r.AIDigest == "" || r.AIDigest != task.AI.Digest || r.AIDigest != taskAIDigest(*task) {
-			return refused
-		}
-		if r.AIRequestID == "" {
-			if !held {
-				return refused
-			}
-		} else {
-			var q *AgentAIRequest
-			for i := range d.AIRequests {
-				if d.AIRequests[i].ID == r.AIRequestID {
-					if q != nil {
-						return refused
-					}
-					q = &d.AIRequests[i]
-				}
-			}
-			if q == nil || q.ProfileID != profile || q.TaskID != task.ID || q.TaskDigest != r.AIDigest || q.Prompt != task.Text || q.Digest != aiDigest(*q) || q.CreatedAt > r.At {
-				return refused
-			}
-			switch q.State {
-			case "completed", "failed", "cancelled", "unknown":
-			default:
-				return refused
-			}
-			if success && q.State != "completed" {
-				return refused
-			}
-			sessions := 0
-			for _, s := range d.Sessions {
-				if s.ID == q.SessionID {
-					if s.ProfileID != profile {
-						return refused
-					}
-					sessions++
-				}
-			}
-			if sessions != 1 {
-				return refused
-			}
-			ai = &recordedAI{ID: q.ID, SessionID: q.SessionID, Digest: q.Digest, State: q.State, Model: q.Model, Limits: q.Limits, CreatedAt: q.CreatedAt, InputTokens: q.InputTokens, OutputTokens: q.OutputTokens, CachedInputTokens: q.CachedInputTokens, SpentMicrousd: q.SpentMicrousd, HeldMicrousd: q.HeldMicrousd}
-			if q.State == "completed" {
-				ai.Answer = q.Answer
-			}
-		}
+	r, task, ai, err := retainedAgentRun(*d, profile, runID, now)
+	if err != nil {
+		return err
 	}
 	snapshot := struct {
 		Version, ProfileID            string
@@ -731,7 +624,7 @@ func captureAgentRunContext(d *agentDocument, profile, runID, id string, revisio
 			At                              int64
 			News                            *NewsEvidence `json:",omitempty"`
 		}
-		AI *recordedAI `json:",omitempty"`
+		AI *recordedAgentAI `json:",omitempty"`
 	}{Version: "agent-run-chat-v1", ProfileID: profile, CapturedAt: now, WorkspaceRevision: revision, AI: ai}
 	snapshot.Task.ID, snapshot.Task.Name, snapshot.Task.Text = task.ID, task.Name, task.Text
 	snapshot.Task.StateAtCapture, snapshot.Task.IntervalSeconds, snapshot.Task.MaxRuns, snapshot.Task.RunsAtCapture = task.State, task.IntervalSeconds, task.MaxRuns, task.Runs
@@ -757,65 +650,12 @@ func captureAgentRunContext(d *agentDocument, profile, runID, id string, revisio
 // A selected retained headline is historical data, never a fresh input binding.
 // Resolve it directly rather than using latestNews/freshNews or any fetch path.
 func captureNewsItemContext(d *agentDocument, profile, fetchID, itemID, id string, revision, now int64) error {
-	refused := errors.New("saved news references missing, ambiguous, changed, unfinished or invalid")
 	if len(d.Sessions) >= 100 || len(d.Messages) >= 200 {
 		return errors.New("conversation/message capacity reached; no context saved")
 	}
-	var f *NewsFetch
-	for i := range d.NewsFetches {
-		if d.NewsFetches[i].ID == fetchID {
-			if f != nil {
-				return refused
-			}
-			f = &d.NewsFetches[i]
-		}
-	}
-	if f == nil || f.ProfileID != profile || f.State != "completed" || f.FetchedAt <= 0 || f.FetchedAt > now || f.CreatedAt > f.FetchedAt || f.MaxAgeSeconds < 60 || f.MaxAgeSeconds > 86400 || f.Bytes < 1 || f.Bytes > 65536 || len(f.BodySHA256) != 64 {
-		return refused
-	}
-	for _, c := range f.BodySHA256 {
-		if !strings.ContainsRune("0123456789abcdef", c) {
-			return refused
-		}
-	}
-	var source *NewsSource
-	for i := range d.NewsSources {
-		if d.NewsSources[i].ID == f.SourceID {
-			if source != nil {
-				return refused
-			}
-			source = &d.NewsSources[i]
-		}
-	}
-	if source == nil || source.ProfileID != profile || source.URL != f.URL || source.MaxAgeSeconds != f.MaxAgeSeconds || !validAgentText(source.Name, 80, true) {
-		return refused
-	}
-	if _, err := newsURL(f.URL); err != nil {
-		return refused
-	} // syntax only; no DNS or network
-	var item *NewsItem
-	for i := range f.Items {
-		if f.Items[i].ID == itemID {
-			if item != nil {
-				return refused
-			}
-			item = &f.Items[i]
-		}
-	}
-	if item == nil || !validAgentText(item.Title, 240, true) || item.PublishedAt <= 0 || item.PublishedAt > f.FetchedAt {
-		return refused
-	}
-	if _, err := newsURL(item.URL); err != nil {
-		return refused
-	}
-	original := *item
-	original.ID = ""
-	b, err := json.Marshal(original)
+	f, source, item, err := retainedNewsItem(*d, profile, fetchID, itemID, now)
 	if err != nil {
 		return err
-	}
-	if item.ID != newsHash(append([]byte(f.SourceID+":"), b...)) {
-		return refused
 	}
 	snapshot := struct {
 		Version, ProfileID, SourceNameAtCapture                                                     string
@@ -824,7 +664,7 @@ func captureNewsItemContext(d *agentDocument, profile, fetchID, itemID, id strin
 		Headline                                                                                    NewsItem
 		Evidence                                                                                    *NewsEvidence
 	}{Version: "news-item-chat-v1", ProfileID: profile, SourceNameAtCapture: source.Name, CapturedAt: now, WorkspaceRevision: revision, RetrievalAgeSecondsAtCapture: now - f.FetchedAt, PublicationAgeSecondsAtCapture: now - item.PublishedAt, SourceDisabledAtCapture: source.Disabled, FreshAtCapture: !source.Disabled && now-f.FetchedAt <= f.MaxAgeSeconds && now-item.PublishedAt <= f.MaxAgeSeconds, Headline: *item, Evidence: newsEvidence(*f)}
-	b, err = json.Marshal(snapshot)
+	b, err := json.Marshal(snapshot)
 	if err != nil {
 		return err
 	}
