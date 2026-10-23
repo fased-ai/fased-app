@@ -176,6 +176,11 @@ PRAGMA user_version=1;`)
 			return nil, err
 		}
 	}
+	if schema <= 13 {
+		if err = migrateWENSessions(ctx, db); err != nil {
+			return nil, err
+		}
+	}
 	if _, _, err = readAgents(ctx, db); err != nil {
 		return nil, err
 	}
@@ -184,6 +189,9 @@ PRAGMA user_version=1;`)
 		return nil, err
 	}
 	if _, err = store.UpdatePause(ctx, update.CorePauseCommand{Action: "status", ProbeID: update.NewProbe()}); err != nil {
+		return nil, err
+	}
+	if err = store.recoverWENSessions(ctx); err != nil {
 		return nil, err
 	}
 	return store, nil

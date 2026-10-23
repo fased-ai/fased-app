@@ -134,8 +134,8 @@ func (s *Store) ChangeWENResearch(ctx context.Context, c WENResearchCommand) (WE
 		if e != nil {
 			return v, e
 		}
-		if a.Document.Execution.MandateID != nil || a.Document.Execution.Mode != "review" {
-			return v, errors.New("review-only strategy without mandate required")
+		if a.Document.Execution.MandateID != nil || (a.Document.Execution.Mode != "review" && a.Document.Execution.Mode != "notify") {
+			return v, errors.New("Notify/Review strategy without mandate required")
 		}
 		for _, old := range v.Versions {
 			if old.Digest == a.Digest {

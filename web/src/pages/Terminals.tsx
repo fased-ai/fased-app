@@ -10,6 +10,7 @@ import { Badge, SectionHead, Empty, DemoChart } from "../components/shared";
 import { terminalData } from "../fixtures";
 import { useWorkspace } from "../workspace";
 import { WENPaperJourney } from "./WENPaperJourney";
+import { WENSessionRehearsal } from "./WENSessionRehearsal";
 export function Terminals() {
   const { tab, navigate } = useWorkspace();
   const active = terminalData.find((t) => t.id === tab);
@@ -83,6 +84,7 @@ export function Terminals() {
             </div>
           </div>
           {mining && <WENPaperJourney />}
+          {mining && <WENSessionRehearsal />}
           <div className="terminal-workspace">
             <section className="panel">
               <div className="panel-heading">

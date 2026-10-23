@@ -75,6 +75,9 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	if len(args) > 0 && args[0] == "wen-research" {
 		return wenResearchCommand(args[1:], in, out, errOut)
 	}
+	if len(args) > 0 && args[0] == "wen-session" {
+		return wenSessionCommand(args[1:], in, out, errOut)
+	}
 	if len(args) > 0 && args[0] == "agents" {
 		return agentsCommand(args[1:], in, out, errOut)
 	}
@@ -85,7 +88,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 		return custodyCommand(args[1:], in, out, errOut)
 	}
 	if len(args) == 0 {
-		return errors.New("usage: fased-app agents|updates|accounts|install|custody|service|open|access|recover|uninstall|serve|status|claim-code|claim|login|logout|setup|version [options]")
+		return errors.New("usage: fased-app wen-session|wen-research|wen-market-data|agents|updates|accounts|install|custody|service|open|access|recover|uninstall|serve|status|claim-code|claim|login|logout|setup|version [options]")
 	}
 	if args[0] == "install" || args[0] == "uninstall" || args[0] == "service" || args[0] == "open" {
 		return hostCommand(args, out, errOut)

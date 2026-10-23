@@ -66,13 +66,14 @@ try {
   );
   pass(
     "schemaPauseAndApprovalFeatures",
-    contracts[0].state[0].versions.min === 13 &&
-      contracts[0].state[0].versions.max === 13 &&
+    contracts[0].state[0].versions.min === 14 &&
+      contracts[0].state[0].versions.max === 14 &&
       contracts[0].state[0].features.includes("agents-local-v1") &&
       contracts[0].state[0].features.includes("agents-wen-paper-v1") &&
       contracts[0].state[0].features.includes("wen-research-v1") &&
       contracts[0].state[0].features.includes("wen-research-turn-v1") &&
       contracts[0].state[0].features.includes("wen-research-continuation-v2") &&
+      contracts[0].state[0].features.includes("wen-session-rehearsal-v1") &&
       contracts[0].state[0].features.includes("core-pause-v1") &&
       contracts[0].lifecycle.entrypoint === 4 &&
       contracts[1].state
@@ -228,6 +229,21 @@ try {
       "schema6CoreReaderDenied",
       (m) => {
         m.components[0].contract.state[0].versions = { min: 6, max: 6 };
+      },
+    ],
+    [
+      "schema13CoreReaderDenied",
+      (m) => {
+        m.components[0].contract.state[0].versions = { min: 13, max: 13 };
+      },
+    ],
+    [
+      "wenSessionRehearsalFeatureErasureDenied",
+      (m) => {
+        m.components[0].contract.state[0].features =
+          m.components[0].contract.state[0].features.filter(
+            (f) => f !== "wen-session-rehearsal-v1",
+          );
       },
     ],
     [

@@ -110,18 +110,19 @@ type AgentNotice struct {
 	Read      bool   `json:"read"`
 }
 type agentDocument struct {
-	NewsSources   []NewsSource      `json:"newsSources"`
-	NewsFetches   []NewsFetch       `json:"newsFetches"`
-	Profiles      []AgentProfile    `json:"profiles"`
-	Sessions      []AgentSession    `json:"sessions"`
-	Messages      []AgentMessage    `json:"messages"`
-	Memories      []AgentMemory     `json:"memories"`
-	Bots          []PaperBot        `json:"bots"`
-	Tasks         []AgentTask       `json:"tasks"`
-	Runs          []AgentRun        `json:"runs"`
-	Notices       []AgentNotice     `json:"notices"`
-	AIRequests    []AgentAIRequest  `json:"aiRequests"`
-	ResearchTurns []WENResearchTurn `json:"researchTurns"`
+	NewsSources   []NewsSource         `json:"newsSources"`
+	NewsFetches   []NewsFetch          `json:"newsFetches"`
+	Profiles      []AgentProfile       `json:"profiles"`
+	Sessions      []AgentSession       `json:"sessions"`
+	Messages      []AgentMessage       `json:"messages"`
+	Memories      []AgentMemory        `json:"memories"`
+	Bots          []PaperBot           `json:"bots"`
+	Tasks         []AgentTask          `json:"tasks"`
+	Runs          []AgentRun           `json:"runs"`
+	Notices       []AgentNotice        `json:"notices"`
+	AIRequests    []AgentAIRequest     `json:"aiRequests"`
+	ResearchTurns []WENResearchTurn    `json:"researchTurns"`
+	WENRehearsal  *wenSessionWorkspace `json:"wenRehearsal,omitempty"`
 }
 type AgentView struct {
 	ReminderReview       *ReminderReview  `json:"reminderReview,omitempty"`
@@ -222,6 +223,9 @@ func readAgents(ctx context.Context, r snapshotReader) (agentDocument, int64, er
 			}
 			if e == nil {
 				e = validateResearchStorage([]byte(b), d)
+			}
+			if e == nil {
+				_, e = wenSessionStorage(d)
 			}
 		}
 	}
@@ -333,7 +337,7 @@ func (s *Store) Agents(ctx context.Context, profile, query string) (AgentView, e
 func validAgentText(v string, max int, required bool) bool {
 	return (!required || strings.TrimSpace(v) != "") && len(v) <= max && !strings.ContainsRune(v, 0)
 }
-func saveAgents(ctx context.Context, tx *sql.Tx, d agentDocument, revision int64) error {
+func agentCapacity(d agentDocument) error {
 	b, e := json.Marshal(d)
 	if e != nil {
 		return e
@@ -345,7 +349,11 @@ func saveAgents(ctx context.Context, tx *sql.Tx, d agentDocument, revision int64
 	if err != nil {
 		return err
 	}
-	reserved := taskAIFutureStorage(d) + newsStorage(d) + wenReserved + researchStorage(d)
+	sessionReserved, err := wenSessionStorage(d)
+	if err != nil {
+		return err
+	}
+	reserved := taskAIFutureStorage(d) + newsStorage(d) + wenReserved + researchStorage(d) + sessionReserved
 	for _, q := range d.AIRequests {
 		if q.State == "prepared" || q.State == "queued" || q.State == "running" {
 			reserved += agentAIResultReserve
@@ -356,6 +364,16 @@ func saveAgents(ctx context.Context, tx *sql.Tx, d agentDocument, revision int64
 	}
 	if len(b)+reserved > agentDocumentLimit {
 		return errors.New("local prototype capacity reached; preserve records before further work")
+	}
+	return nil
+}
+func saveAgents(ctx context.Context, tx *sql.Tx, d agentDocument, revision int64) error {
+	if e := agentCapacity(d); e != nil {
+		return e
+	}
+	b, e := json.Marshal(d)
+	if e != nil {
+		return e
 	}
 	result, e := tx.ExecContext(ctx, "UPDATE agent_workspace SET document=?,revision=revision+1 WHERE id=1 AND revision=?", string(b), revision)
 	if e != nil {

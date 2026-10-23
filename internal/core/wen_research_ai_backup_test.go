@@ -91,7 +91,7 @@ func TestWENResearchLoopSnapshotBackup(t *testing.T) {
 	if e != nil || rev != r.Revision || len(d.ResearchTurns[0].Models) != 2 || len(d.ResearchTurns[0].Tools) != 1 || d.ResearchTurns[0].CurrentChildID != r.Request.ID {
 		t.Fatal("v2 backup missing", e)
 	}
-	if before.State.Version != 13 {
+	if before.State.Version != StateSchema {
 		t.Fatal("schema boundary not advertised", before.State.Version)
 	}
 }

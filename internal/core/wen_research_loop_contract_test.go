@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"reflect"
@@ -544,14 +545,16 @@ func TestWENResearchLoopCompatibility(t *testing.T) {
 				defer n.Close()
 				var schema int
 				n.db.QueryRow("PRAGMA user_version").Scan(&schema)
-				if schema != 13 || before != retainedRevisionState(t, n) {
+				if schema != StateSchema || before != retainedRevisionState(t, n) {
 					t.Fatal("12->13 rewrote v1 document/revision/hold")
 				}
 				return
 			}
 			r := loopPrepared(t, s, c, 2, 2)
 			if mode == "unsupported" {
-				s.db.Exec("PRAGMA user_version=14")
+				if _, e := s.db.Exec(fmt.Sprintf("PRAGMA user_version=%d", StateSchema+1)); e != nil {
+					t.Fatal(e)
+				}
 			} else if mode == "v2-record-discriminator" {
 				injectRevisionAgents(t, s, func(d *agentDocument) { d.ResearchTurns[0].Schema = "wen-research-turn/3" })
 			} else {

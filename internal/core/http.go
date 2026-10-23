@@ -164,6 +164,12 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
+	case "/api/v1/wen/sessions":
+		h.wenSessionsAPI(w, r, token, "view")
+		return
+	case "/api/v1/wen/sessions/review", "/api/v1/wen/sessions/create", "/api/v1/wen/sessions/step", "/api/v1/wen/sessions/action-review", "/api/v1/wen/sessions/control":
+		h.wenSessionsAPI(w, r, token, strings.TrimPrefix(r.URL.Path, "/api/v1/wen/sessions/"))
+		return
 	case "/api/v1/wen/research/ai-prepare-next":
 		h.wenResearchAIAPI(w, r, token, "next")
 		return

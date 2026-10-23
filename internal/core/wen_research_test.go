@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/fased-ai/fased-app/internal/update"
 
 	"os"
@@ -102,7 +103,7 @@ func TestWENResearchSchema10MigrationAndNewerRefusal(t *testing.T) {
 	if schema != StateSchema {
 		t.Fatal(schema)
 	}
-	n.db.Exec("PRAGMA user_version=14")
+	n.db.Exec(fmt.Sprintf("PRAGMA user_version=%d", StateSchema+1))
 	n.Close()
 	if old, e := OpenStore(dir); e == nil {
 		old.Close()

@@ -448,3 +448,11 @@ Single request remains the default. In a development `serve --ai-fixture` core, 
 The original turn allows at most three model attempts, eight sequential cached reads and 90 seconds, within its reviewed cost and storage limits. Cancellation retains known costs and uncertain holds. Restart never replays queued consent, provider attempts or interrupted reads. Inputs remain historical; no live provider, market or wallet is contacted.
 
 CLI uses `wen-research --ai-prepare-stdin` with `wen-research-ai-prepare/2`, `--ai-start-stdin` with `wen-research-ai-start/2`, and `--ai-prepare-next-stdin` with `wen-research-ai-next/1`. Inspect/cancel use `wen-research-ai-selection/2`. Use the exact turn, step, child, revision and digest returned by the previous review. Ordinary cores and generic research dispatch continue to refuse execution.
+
+## Notify/Review fixture sessions
+
+Open Terminals → Satcoin → Session rehearsals, select a saved version and a compiled scenario, then review and create the fixture session. Use Step fixture to process the next pinned event. Notify records an opportunity without reserving capital. Review requires separate proposal inspection and Simulate acceptance; it reserves only the shared hypothetical wallet pool.
+
+The same owner-authenticated operations are available through `wen-session --profile wen-operator` and `--review-stdin`, `--create-stdin`, `--step-stdin`, `--action-review-stdin` or `--control-stdin`. Each write uses the displayed workspace/pool revision and complete source-bound review. Pause, stop, restart and expiry preserve unresolved simulated obligations; continuation requires explicit review or resume. Creating a session starts no timer, task or background runner.
+
+Schema 14 protects rehearsal history, shared-pool reservations and inbox records. Mining, actual wallets/AI, automatic execution and public updates remain disabled. BTC/SAT payouts and actual execution costs remain unavailable. Local browser acceptance may supply `FASED_PREVIOUS_CORE` pointing to the compiled canonical schema-13 engineering reader; absence is recorded as N/A for that separate refusal proof, never PASS.
