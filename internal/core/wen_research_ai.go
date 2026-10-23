@@ -341,7 +341,7 @@ func migrateWENResearchAI(ctx context.Context, db *sql.DB) error {
 	if len(b) > agentDocumentLimit {
 		return errors.New("research migration exceeds local capacity")
 	}
-	if _, err = tx.ExecContext(ctx, "UPDATE agent_workspace SET document=?,revision=revision+1 WHERE id=1", string(b)); err != nil {
+	if _, err = tx.ExecContext(ctx, "UPDATE agent_workspace SET document=? WHERE id=1", string(b)); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, "PRAGMA user_version=12"); err != nil {
