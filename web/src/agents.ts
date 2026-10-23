@@ -421,6 +421,7 @@ export function useAgents(core: ReturnType<typeof useCore>) {
   const [busy, setBusy] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const disconnected = useRef(false);
+  const readSequence = useRef(0);
   const current = useRef<AgentView | null>(null);
   const generation = useRef(0);
   const writing = useRef(false);
@@ -433,18 +434,21 @@ export function useAgents(core: ReturnType<typeof useCore>) {
   const refresh = useCallback(
     async (profile?: string) => {
       const epoch = generation.current;
+      const sequence = ++readSequence.current;
       try {
         const v = await core.request<AgentView>(
           `agents?profile=${encodeURIComponent(profile ?? current.current?.profileId ?? "")}`,
         );
         if (epoch === generation.current) {
           accept(v);
-          if (disconnected.current) setError("");
-          disconnected.current = false;
-          setUnavailable(false);
+          if (sequence === readSequence.current) {
+            if (disconnected.current) setError("");
+            disconnected.current = false;
+            setUnavailable(false);
+          }
         }
       } catch (e) {
-        if (epoch === generation.current) {
+        if (epoch === generation.current && sequence === readSequence.current) {
           disconnected.current = true;
           setUnavailable(true);
           setError(e instanceof Error ? e.message : "Workspace unavailable");

@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Request } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -86,6 +86,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   isMobile,
 }) => {
   test.setTimeout(90000);
+  page.setDefaultTimeout(10000);
   await stop();
   await start(true);
   const origins = new Set([new URL(url).origin]);
@@ -454,19 +455,24 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   });
   await open("news");
   const agentsRead = "**/api/v1/agents?*";
-  let captured!: () => void, release!: () => void, delivered!: () => void;
-  const olderCaptured = new Promise<void>((r) => (captured = r));
+  let captured = false,
+    release!: () => void;
+  let olderRequest: Request | undefined;
   const releaseOlder = new Promise<void>((r) => (release = r));
-  const olderDelivered = new Promise<void>((r) => (delivered = r));
+  const olderResponse = page.waitForResponse(
+    (r) => r.request() === olderRequest,
+    { timeout: 15000 },
+  );
+  void olderResponse.catch(() => {});
   let reads = 0;
   // A response captured before the failed read cannot restore connectivity.
   await page.route(agentsRead, async (route) => {
     if (reads++ === 0) {
+      olderRequest = route.request();
       const response = await route.fetch();
-      captured();
+      captured = true;
       await releaseOlder;
       await route.fulfill({ response });
-      delivered();
     } else
       await route.fulfill({
         status: 503,
@@ -474,21 +480,24 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
         body: JSON.stringify({ error: "Controlled agent read unavailable" }),
       });
   });
-  await page
-    .getByRole("button", { name: "Refresh news records", exact: true })
-    .click();
-  await olderCaptured;
-  await page
-    .getByRole("button", { name: "Refresh news records", exact: true })
-    .click();
-  await expect(page.getByRole("alert")).toContainText(
-    "Controlled agent read unavailable",
-  );
-  await expect(
-    page.getByRole("button", { name: "Fetch headlines", exact: true }),
-  ).toBeDisabled();
-  release();
-  await olderDelivered;
+  try {
+    await page
+      .getByRole("button", { name: "Refresh news records", exact: true })
+      .click();
+    await expect.poll(() => captured).toBe(true);
+    // The existing five-second poll supplies the newer failed read. A second
+    // click could instead wait forever on the now-disabled refresh control.
+    await expect(page.getByRole("alert")).toContainText(
+      "Controlled agent read unavailable",
+      { timeout: 8000 },
+    );
+    await expect(
+      page.getByRole("button", { name: "Fetch headlines", exact: true }),
+    ).toBeDisabled();
+  } finally {
+    release();
+  }
+  await (await olderResponse).finished();
   await page.evaluate(
     () =>
       new Promise<void>((r) =>
@@ -497,6 +506,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   );
   await expect(page.getByRole("alert")).toContainText(
     "Controlled agent read unavailable",
+    { timeout: 1000 },
   );
   await expect(
     page.getByRole("button", { name: "Fetch headlines", exact: true }),
