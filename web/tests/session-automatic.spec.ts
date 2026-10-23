@@ -29,6 +29,7 @@ for (const variant of ["consent", "unknown"] as const) {
     const external: string[] = [];
     let maximumConcurrentFixtureReads = 0;
     let reviewedPauseConflicts = 0;
+    let reviewedStopConflicts = 0;
     context.on("request", (r) => {
       if (!["127.0.0.1", "localhost"].includes(new URL(r.url()).hostname))
         external.push(r.url());
@@ -454,9 +455,39 @@ for (const variant of ["consent", "unknown"] as const) {
         ).toBeDisabled();
       }
       if (!(await read()).runs[0].stopRequested) {
-        await card()
-          .getByRole("button", { name: "Stop fixture run", exact: true })
-          .click();
+        let stoppedByOwner = false;
+        for (let review = 0; review < 3; review++) {
+          // Each click follows a visible reload and inspection. A conflicting
+          // stop is refused, never silently replayed with its old revisions.
+          await panel()
+            .getByRole("button", { name: "Reload fixture runs", exact: true })
+            .click();
+          const observed = await read();
+          expect(observed.runs[0].record.sessionId).toBe(id);
+          expect(observed.runs[0].source.digest).toBe(reviewed.source.digest);
+          expect(observed.runs[0].deadline).toBe(originalDeadline);
+          const reply = page.waitForResponse(
+            (r) =>
+              r.url().endsWith("/wen/session-runs/control") &&
+              r.request().method() === "POST" &&
+              r.request().postDataJSON()?.action === "stop",
+          );
+          await card()
+            .getByRole("button", { name: "Stop fixture run", exact: true })
+            .click();
+          const response = await reply;
+          if (response.ok()) {
+            stoppedByOwner = true;
+            break;
+          }
+          expect(response.status()).toBe(409);
+          expect((await response.json()).error).toContain("reload and review");
+          reviewedStopConflicts++;
+        }
+        expect(
+          stoppedByOwner,
+          "owner's bounded fresh stop reviews failed",
+        ).toBe(true);
       }
       await expect
         .poll(async () => (await read()).runs[0].stopRequested)
@@ -543,6 +574,7 @@ for (const variant of ["consent", "unknown"] as const) {
             applicationTabClosedWhileCoreAdvanced: variant === "consent",
             maximumConcurrentFixtureReads,
             reviewedPauseConflicts,
+            reviewedStopConflicts,
             fixtureOnly: true,
           },
           null,

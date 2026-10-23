@@ -1512,6 +1512,9 @@ test("bounded AI schedules share consent and execution with CLI, survive restart
   });
   const bot = v.bots[0].id;
   await page.goto(url + "/#agents/tasks");
+  // Hash navigation preserves the UI's cache. Reload after this external CLI
+  // write so the task review uses the same current records.
+  await page.reload();
   const region = page.getByRole("region", {
     name: "Scheduled AI steps",
     exact: true,
