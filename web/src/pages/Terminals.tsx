@@ -11,6 +11,7 @@ import { terminalData } from "../fixtures";
 import { useWorkspace } from "../workspace";
 import { WENPaperJourney } from "./WENPaperJourney";
 import { WENSessionRehearsal } from "./WENSessionRehearsal";
+import { WENSessionAutomatic } from "./WENSessionAutomatic";
 export function Terminals() {
   const { tab, navigate } = useWorkspace();
   const active = terminalData.find((t) => t.id === tab);
@@ -85,6 +86,7 @@ export function Terminals() {
           </div>
           {mining && <WENPaperJourney />}
           {mining && <WENSessionRehearsal />}
+          {mining && <WENSessionAutomatic />}
           <div className="terminal-workspace">
             <section className="panel">
               <div className="panel-heading">

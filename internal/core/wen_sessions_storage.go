@@ -217,7 +217,7 @@ func wenSessionStorage(d agentDocument) (int, error) {
 	if w == nil {
 		return 0, nil
 	}
-	if len(w.Sessions) > 8 || len(w.Pools) > 2 {
+	if len(w.Sessions)+len(w.Runs) > 8 || len(w.Pools) > 2 {
 		return 0, errors.New("rehearsal capacity exceeded; preserve state")
 	}
 	reserved, active := 0, 0
@@ -298,6 +298,12 @@ func wenSessionStorage(d agentDocument) (int, error) {
 			}
 		}
 	}
+	runReserved, runActive, e := wenRunStorage(w, seen, poolIDs)
+	if e != nil {
+		return 0, e
+	}
+	reserved += runReserved
+	active += runActive
 	if active > 4 {
 		return 0, errors.New("four nonterminal rehearsals allowed")
 	}

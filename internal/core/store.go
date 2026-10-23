@@ -20,19 +20,20 @@ import (
 )
 
 type Store struct {
-	aiMu         sync.Mutex
-	newsMu       sync.Mutex
-	provider     providerState
-	db           *sql.DB
-	dir          string
-	instanceID   string
-	pauseFault   func(string) error // Test-only interruption injection, never configuration or IPC.
-	backupFault  func(string) error // Test-only partial write/crash injection.
-	bootID       string
-	now          func() time.Time
-	authMu       sync.Mutex
-	fixture      func(context.Context, signer.Request) (signer.Response, error)
-	researchRead func(context.Context, researchFactResult) (json.RawMessage, error) // Test-only local projection fault; never configuration/IPC.
+	sessionFixture bool
+	aiMu           sync.Mutex
+	newsMu         sync.Mutex
+	provider       providerState
+	db             *sql.DB
+	dir            string
+	instanceID     string
+	pauseFault     func(string) error // Test-only interruption injection, never configuration or IPC.
+	backupFault    func(string) error // Test-only partial write/crash injection.
+	bootID         string
+	now            func() time.Time
+	authMu         sync.Mutex
+	fixture        func(context.Context, signer.Request) (signer.Response, error)
+	researchRead   func(context.Context, researchFactResult) (json.RawMessage, error) // Test-only local projection fault; never configuration/IPC.
 }
 
 func OpenStore(dir string) (_ *Store, resultErr error) {
@@ -181,6 +182,11 @@ PRAGMA user_version=1;`)
 			return nil, err
 		}
 	}
+	if schema <= 14 {
+		if err = migrateWENFixtureRuns(ctx, db); err != nil {
+			return nil, err
+		}
+	}
 	if _, _, err = readAgents(ctx, db); err != nil {
 		return nil, err
 	}
@@ -192,6 +198,9 @@ PRAGMA user_version=1;`)
 		return nil, err
 	}
 	if err = store.recoverWENSessions(ctx); err != nil {
+		return nil, err
+	}
+	if err = store.recoverWENFixtureRuns(ctx); err != nil {
 		return nil, err
 	}
 	return store, nil

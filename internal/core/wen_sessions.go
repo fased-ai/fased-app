@@ -90,7 +90,7 @@ func (h *HTTPHandler) prepareWENSession(ctx context.Context, r snapshotReader, i
 		return out, e
 	}
 	w := wenSessionData(&trial)
-	if len(w.Sessions) >= 8 || len(d.Notices) >= 200 {
+	if len(w.Sessions)+len(w.Runs) >= 8 || len(d.Notices) >= 200 {
 		return out, errors.New("rehearsal/inbox capacity reached; preserve records")
 	}
 	pool := wenPool(in.FixtureWalletID)

@@ -22,7 +22,7 @@ func TestWENSessionRehearsalAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Run("storage-protection", func(t *testing.T) {
-		if StateSchema != 14 {
+		if StateSchema < 14 {
 			t.Fatal("rehearsal writes require schema 14")
 		}
 	})

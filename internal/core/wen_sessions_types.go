@@ -83,6 +83,7 @@ type WENSession struct {
 	CreateHash           string                    `json:"createHash"`
 }
 type wenSessionWorkspace struct {
+	Runs     []WENFixtureRun  `json:"runs,omitempty"`
 	Sessions []WENSession     `json:"sessions"`
 	Pools    []WENSessionPool `json:"pools"`
 }

@@ -8,6 +8,7 @@ export default defineConfig({
     "research-fixture.spec.ts",
     "research-loop.spec.ts",
     "session-rehearsal.spec.ts",
+    "session-automatic.spec.ts",
   ],
   outputDir: ".evidence/core-browser",
   reporter: [

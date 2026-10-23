@@ -167,6 +167,10 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 	case "/api/v1/wen/sessions":
 		h.wenSessionsAPI(w, r, token, "view")
 		return
+	case "/api/v1/wen/session-runs":
+		h.wenFixtureRunsAPI(w, r, token, "view")
+	case "/api/v1/wen/session-runs/review", "/api/v1/wen/session-runs/start", "/api/v1/wen/session-runs/control", "/api/v1/wen/session-runs/reconcile":
+		h.wenFixtureRunsAPI(w, r, token, strings.TrimPrefix(r.URL.Path, "/api/v1/wen/session-runs/"))
 	case "/api/v1/wen/sessions/review", "/api/v1/wen/sessions/create", "/api/v1/wen/sessions/step", "/api/v1/wen/sessions/action-review", "/api/v1/wen/sessions/control":
 		h.wenSessionsAPI(w, r, token, strings.TrimPrefix(r.URL.Path, "/api/v1/wen/sessions/"))
 		return

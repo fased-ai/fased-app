@@ -118,12 +118,16 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	custodyConfig := flags.String("custody-config", "", "root-owned managed fixture identity; never enables real wallets")
 	passwordStdin := flags.Bool("password-stdin", false, "read password from stdin instead of a terminal")
 	aiFixture := flags.Bool("ai-fixture", false, "development-only in-process provider fixtures; test credentials only, no live API")
+	sessionFixture := flags.Bool("session-fixture", false, "development-only bounded shadow session fixtures; no model, market or wallet")
 	interactive := flags.Bool("interactive", false, "walk through setup in the terminal")
 	host := flags.String("host", "", "setup deployment preference: local or vps")
 	wallet := flags.String("wallet-mode", "", "setup wallet preference: skip, watch, external, automation")
 	provider := flags.String("provider", "", "setup AI preference: none, openai, anthropic, xai")
 	if err = flags.Parse(args[1:]); err != nil {
 		return err
+	}
+	if *sessionFixture && (args[0] != "serve" || *aiFixture || *custodyConfig != "" || *requireSandbox || *publicOrigin != "" || *researchOrigin != "") {
+		return errors.New("session fixture is a standalone serve-only option; no AI, signer or external research")
 	}
 	if *researchOrigin != "" && (args[0] != "serve" || *aiFixture || *requireSandbox || *custodyConfig != "") {
 		return errors.New("research service is a standalone serve-only read option")
@@ -158,6 +162,13 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 			if err != nil {
 				return err
 			}
+		}
+		if *sessionFixture {
+			server, e := core.StartSessionFixture(context.Background(), *dir, *listen, fasedapp.UI())
+			if e != nil {
+				return e
+			}
+			return serveStarted(server, out)
 		}
 		if *aiFixture {
 			if *custodyConfig != "" || *requireSandbox || *publicOrigin != "" {
