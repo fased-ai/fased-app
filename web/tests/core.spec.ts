@@ -318,6 +318,133 @@ test("reminder task draft shares inert inspection edited review and bounded crea
   expect((await read()).tasks).toEqual(v.tasks);
 });
 
+test("conversation search follows matching records and closes hidden conversation actions", async ({
+  page,
+  isMobile,
+}) => {
+  page.setDefaultTimeout(10000);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+  });
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  await page.goto(url + "/#agents/chat");
+  const profile = page
+    .locator(".local-profile-picker")
+    .getByRole("button", { name: /^Trading Analyst / });
+  await profile.click();
+  await expect(profile).toHaveAttribute("aria-pressed", "true");
+  const create = async (name: string, text: string) => {
+    await page
+      .getByRole("textbox", { name: "Conversation name", exact: true })
+      .fill(name);
+    await page
+      .getByRole("button", { name: "Create conversation", exact: true })
+      .click();
+    await expect(
+      page.getByRole("heading", { name, exact: true }),
+    ).toBeVisible();
+    await page
+      .getByRole("textbox", { name: "Message", exact: true })
+      .fill(text);
+    await page
+      .getByRole("button", { name: "Save message", exact: true })
+      .click();
+    await expect(page.locator(".local-messages")).toContainText(text);
+  };
+  await create(
+    "Older saved research",
+    "Orchid evidence belongs to the older conversation",
+  );
+  await create(
+    "Recent separate notes",
+    "Recent context must not remain open for an unrelated match",
+  );
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const read = () => privateCLI(["agents", "--profile", "trading-analyst"]);
+  const snapshot = await read();
+  const search = page.getByRole("searchbox", {
+    name: "Search conversations",
+    exact: true,
+  });
+  for (const query of ["older saved", "ORCHID EVIDENCE"]) {
+    await search.fill(query);
+    await expect(
+      page.locator(".agent-session-list").getByRole("button"),
+    ).toHaveCount(1);
+    await expect(
+      page.getByRole("heading", { name: "Older saved research", exact: true }),
+    ).toBeVisible();
+    await expect(page.locator(".local-messages")).toContainText(
+      "Orchid evidence",
+    );
+    await expect(page.locator(".local-messages")).not.toContainText(
+      "Recent context",
+    );
+  }
+  await search.fill("no-such-local-conversation");
+  await expect(
+    page.getByText("No matching conversations.", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("textbox", { name: "Message", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("region", {
+      name: "Optional AI request review",
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  await expect(page.locator(".local-messages")).toHaveCount(0);
+  await search.fill("");
+  await expect(
+    page.getByRole("heading", { name: "Recent separate notes", exact: true }),
+  ).toBeVisible();
+  expect(await read()).toEqual(snapshot);
+  const cli = await privateCLI([
+    "agents",
+    "--profile",
+    "trading-analyst",
+    "--search",
+    "ORCHID EVIDENCE",
+  ]);
+  expect(cli.sessions.map((s: { name: string }) => s.name)).toEqual([
+    "Older saved research",
+  ]);
+  const foreign = await privateCLI([
+    "agents",
+    "--profile",
+    "news-researcher",
+    "--search",
+    "ORCHID EVIDENCE",
+  ]);
+  expect(foreign.sessions).toHaveLength(0);
+  expect(external).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth + 1,
+    ),
+  ).toBe(true);
+  await mkdir(".evidence/usability", { recursive: true });
+  await page.screenshot({
+    path: `.evidence/usability/search-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+});
+
 test("joined agent workspace preserves news chat reminder run memory and reviewed AI across UI CLI and restart", async ({
   page,
   isMobile,

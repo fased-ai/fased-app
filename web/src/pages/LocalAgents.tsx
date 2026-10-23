@@ -129,9 +129,6 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
   useEffect(() => {
     if (tab === "settings") reloadProfile();
   }, [tab]);
-  const activeSession =
-    v.sessions.find((s) => s.id === session) ?? v.sessions.at(-1);
-  useEffect(() => {}, [activeSession?.id]);
   const query = search.toLowerCase();
   const matching = v.sessions.filter(
     (s) =>
@@ -154,6 +151,8 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
               q.answer.toLowerCase().includes(query)),
         )),
   );
+  const activeSession =
+    matching.find((s) => s.id === session) ?? matching.at(-1);
   function resetMemory() {
     setMemoryID("");
     setMemory("");
