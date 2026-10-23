@@ -200,7 +200,19 @@ func attachAINews(d agentDocument, q *AgentAIRequest, n *TaskNewsInput, now int6
 	return nil
 }
 func aiRequestContext(d agentDocument, q AgentAIRequest, now int64) (string, error) {
-	base, e := aiContext(d, q.ProfileID, q.SessionID, q.Prompt, now)
+	var envelope struct {
+		Version   string             `json:"version"`
+		Selection *AIMemorySelection `json:"memorySelection"`
+	}
+	if json.Unmarshal([]byte(q.Context), &envelope) != nil {
+		return "", errors.New("invalid retained AI context")
+	}
+	if envelope.Version != "" || envelope.Selection != nil {
+		if envelope.Version != aiMemoryContextVersion || envelope.Selection == nil || q.TaskID != "" {
+			return "", errors.New("unsupported manual AI memory context; prepare a fresh review")
+		}
+	}
+	base, e := aiContextWithMemory(d, q.ProfileID, q.SessionID, q.Prompt, now, envelope.Selection)
 	if e != nil || q.News == nil {
 		return base, e
 	}

@@ -145,30 +145,31 @@ type AgentView struct {
 // Optional fields are inert data for a fixed action; unknown fields/actions are
 // rejected. No arbitrary callback, URL, model tool or shell can be submitted.
 type AgentCommand struct {
-	WEN                  *WENPaperInput `json:"wen,omitempty"`
-	NewsSourceID         string         `json:"newsSourceId,omitempty"`
-	NewsMaxAgeSeconds    int64          `json:"newsMaxAgeSeconds,omitempty"`
-	ConnectionRef        string         `json:"connectionRef,omitempty"`
-	Revision             int64          `json:"revision"`
-	Action               string         `json:"action"`
-	ProfileID            string         `json:"profileId,omitempty"`
-	ID                   string         `json:"id,omitempty"`
-	Name                 string         `json:"name,omitempty"`
-	Text                 string         `json:"text,omitempty"`
-	Source               string         `json:"source,omitempty"`
-	ExpiresAt            int64          `json:"expiresAt,omitempty"`
-	Provider             string         `json:"provider,omitempty"`
-	Model                string         `json:"model,omitempty"`
-	BotID                string         `json:"botId,omitempty"`
-	IntervalSeconds      int64          `json:"intervalSeconds,omitempty"`
-	MaxRuns              int            `json:"maxRuns,omitempty"`
-	Quantity             int64          `json:"quantity,omitempty"`
-	PriceCents           int64          `json:"priceCents,omitempty"`
-	BudgetCents          int64          `json:"budgetCents,omitempty"`
-	Limits               *AILimits      `json:"limits,omitempty"`
-	ConsentDigest        string         `json:"consentDigest,omitempty"`
-	TotalBudgetMicrousd  int64          `json:"totalBudgetMicrousd,omitempty"`
-	AuthorizationSeconds int64          `json:"authorizationSeconds,omitempty"`
+	MemorySelection      *AIMemorySelection `json:"memorySelection,omitempty"`
+	WEN                  *WENPaperInput     `json:"wen,omitempty"`
+	NewsSourceID         string             `json:"newsSourceId,omitempty"`
+	NewsMaxAgeSeconds    int64              `json:"newsMaxAgeSeconds,omitempty"`
+	ConnectionRef        string             `json:"connectionRef,omitempty"`
+	Revision             int64              `json:"revision"`
+	Action               string             `json:"action"`
+	ProfileID            string             `json:"profileId,omitempty"`
+	ID                   string             `json:"id,omitempty"`
+	Name                 string             `json:"name,omitempty"`
+	Text                 string             `json:"text,omitempty"`
+	Source               string             `json:"source,omitempty"`
+	ExpiresAt            int64              `json:"expiresAt,omitempty"`
+	Provider             string             `json:"provider,omitempty"`
+	Model                string             `json:"model,omitempty"`
+	BotID                string             `json:"botId,omitempty"`
+	IntervalSeconds      int64              `json:"intervalSeconds,omitempty"`
+	MaxRuns              int                `json:"maxRuns,omitempty"`
+	Quantity             int64              `json:"quantity,omitempty"`
+	PriceCents           int64              `json:"priceCents,omitempty"`
+	BudgetCents          int64              `json:"budgetCents,omitempty"`
+	Limits               *AILimits          `json:"limits,omitempty"`
+	ConsentDigest        string             `json:"consentDigest,omitempty"`
+	TotalBudgetMicrousd  int64              `json:"totalBudgetMicrousd,omitempty"`
+	AuthorizationSeconds int64              `json:"authorizationSeconds,omitempty"`
 }
 
 func initialAgents() agentDocument {
@@ -361,6 +362,9 @@ func (s *Store) ChangeAgents(ctx context.Context, c AgentCommand) (AgentView, er
 	return s.changeAgents(ctx, c, false)
 }
 func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) (AgentView, error) {
+	if c.MemorySelection != nil && c.Action != "ai-prepare" {
+		return AgentView{}, errors.New("memory selection is only supported for a manual AI review")
+	}
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
 		return AgentView{}, e

@@ -3334,3 +3334,326 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
     ),
   ).toBe(true);
 });
+
+test("manual AI memory selection shares exact UI/CLI disclosure, consent and restart isolation", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(90000);
+  page.setDefaultTimeout(10000);
+  await stop();
+  await start(true);
+  const origins = new Set([new URL(url).origin]);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (!origins.has(new URL(r.url()).origin)) external.push(r.url());
+  });
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = async () => {
+    const proc = spawn(binary, [
+      "login",
+      "--data-dir",
+      dir,
+      "--password-stdin",
+    ]);
+    let error = "";
+    proc.stderr!.on("data", (b) => (error += b));
+    proc.stdin!.end(fixturePassword + "\n");
+    const [code] = await once(proc, "exit");
+    expect(code, error).toBe(0);
+  };
+  await login();
+  const profileId = "trading-analyst";
+  const read = () => privateCLI(["agents", "--profile", profileId]);
+  const command = async (c: Record<string, unknown>) =>
+    privateCLI(["agents", "--request-stdin"], {
+      profileId,
+      revision: (await read()).revision,
+      ...c,
+    });
+  let v = await command({
+    action: "session-create",
+    name: "Selection conversation",
+  });
+  const sessionId = v.sessions[0].id;
+  v = await command({
+    action: "message-add",
+    id: sessionId,
+    text: "Conversation remains disclosed",
+  });
+  v = await command({
+    action: "memory-put",
+    text: "Use concise answers",
+    source: "owner-source-one",
+    expiresAt: Math.floor(Date.now() / 1000) + 3600,
+  });
+  const note = v.memories[0];
+  v = await command({
+    action: "memory-put",
+    text: "Private second preference",
+    source: "owner-source-two",
+  });
+  const second = v.memories[1];
+  await command({
+    action: "memory-put",
+    text: "Expired note",
+    source: "expired",
+    expiresAt: 1,
+  });
+  await command({
+    action: "memory-put",
+    profileId: "news-researcher",
+    text: "Foreign private preference",
+    source: "foreign",
+  });
+  await page.goto(url + "/#agents/chat");
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await page
+    .getByRole("button", { name: "Selection conversation", exact: true })
+    .click();
+  const review = page.getByRole("region", {
+    name: "Optional AI request review",
+    exact: true,
+  });
+  const prepare = async (mode: string, prompt: string) => {
+    await review
+      .getByRole("combobox", { name: "Memory", exact: true })
+      .selectOption(mode);
+    await review.getByLabel("AI request", { exact: true }).fill(prompt);
+    await review
+      .getByRole("button", { name: "Prepare disclosure", exact: true })
+      .click();
+    await expect
+      .poll(async () =>
+        (await read()).aiRequests.some(
+          (q: { prompt: string }) => q.prompt === prompt,
+        ),
+      )
+      .toBe(true);
+    const q = (await read()).aiRequests.find(
+      (q: { prompt: string }) => q.prompt === prompt,
+    );
+    expect(q.state).toBe("prepared");
+    expect(q.heldMicrousd).toBe(0);
+    const card = review.locator("article.ai-request").filter({
+      has: page.getByRole("heading", { name: prompt, exact: true }),
+    });
+    await card.getByText("Exact context disclosure", { exact: true }).click();
+    await expect(card.locator("pre").first()).toHaveText(q.disclosure);
+    const wire = JSON.parse(q.disclosure);
+    expect(q.disclosure).toContain("Conversation remains disclosed");
+    expect(wire).toBeTruthy();
+    return { q, card, context: JSON.parse(q.context) };
+  };
+  const all = await prepare("all", "Review every active note");
+  expect(all.context.version).toBe("manual-ai-memory-v1");
+  expect(
+    all.context.context.memories.map((m: { id: string }) => m.id).sort(),
+  ).toEqual([note.id, second.id].sort());
+  expect(all.q.context).not.toContain("Expired note");
+  expect(all.q.context).not.toContain("Foreign private preference");
+  const none = await prepare("none", "Review without saved notes");
+  expect(none.context.context.memories).toEqual([]);
+  expect(none.q.context).not.toContain(note.text);
+  expect(none.q.context).not.toContain(second.text);
+  await review
+    .getByRole("combobox", { name: "Memory", exact: true })
+    .selectOption("selected");
+  await expect(
+    review.getByRole("button", { name: "Prepare disclosure", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    review.getByRole("checkbox", {
+      name: "Expired note (expired)",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  await expect(
+    review.getByText("Foreign private preference", { exact: true }),
+  ).toHaveCount(0);
+  await review.getByRole("checkbox", { name: note.text, exact: true }).check();
+  const selected = await prepare("selected", "Review only concise preference");
+  expect(selected.context.memorySelection).toEqual({
+    mode: "selected",
+    ids: [note.id],
+  });
+  expect(selected.context.context.memories).toEqual([
+    {
+      id: note.id,
+      text: note.text,
+      source: note.source,
+      updatedAt: note.updatedAt,
+      expiresAt: note.expiresAt,
+    },
+  ]);
+  expect(selected.q.context).not.toContain(second.text);
+  await expect(
+    selected.card.getByRole("button", {
+      name: "Run development fixture",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  const beforeConsent = await read();
+  expect(
+    beforeConsent.aiRequests.every(
+      (q: { state: string }) => q.state === "prepared",
+    ),
+  ).toBe(true);
+  // CLI uses the same resolver and canonical ordering, not a separate UI policy.
+  v = await command({
+    action: "ai-prepare",
+    id: sessionId,
+    text: selected.q.prompt,
+    memorySelection: { mode: "selected", ids: [note.id] },
+    limits: selected.q.limits,
+  });
+  expect(v.aiRequests.at(-1).context).toBe(selected.q.context);
+  expect(v.aiRequests.at(-1).disclosure).toBe(selected.q.disclosure);
+  const stable = await read();
+  await expect(
+    command({
+      action: "ai-prepare",
+      id: sessionId,
+      text: "Foreign selection",
+      memorySelection: {
+        mode: "selected",
+        ids: [
+          (await privateCLI(["agents", "--profile", "news-researcher"]))
+            .memories[0].id,
+        ],
+      },
+      limits: selected.q.limits,
+    }),
+  ).rejects.toThrow();
+  expect(await read()).toEqual(stable);
+  // Correct a selected note through CLI. Frozen disclosure stays unchanged;
+  // stale consent refuses atomically rather than silently sending the correction.
+  await command({
+    action: "memory-put",
+    id: note.id,
+    text: "Owner corrected concise preference",
+    source: note.source,
+    expiresAt: note.expiresAt,
+  });
+  const corrected = await read();
+  await expect(
+    command({
+      action: "ai-start",
+      id: selected.q.id,
+      consentDigest: selected.q.digest,
+    }),
+  ).rejects.toThrow();
+  expect(await read()).toEqual(corrected);
+  // A fresh explicit UI consent is the only execution in this journey.
+  await expect(
+    review.getByRole("checkbox", {
+      name: "Owner corrected concise preference",
+      exact: true,
+    }),
+  ).toBeVisible();
+  const fresh = await prepare("selected", "Review corrected selection");
+  expect(fresh.context.context.memories[0].text).toBe(
+    "Owner corrected concise preference",
+  );
+  await fresh.card
+    .getByRole("checkbox", {
+      name: "I reviewed this context and these fixture limits",
+      exact: true,
+    })
+    .check();
+  await fresh.card
+    .getByRole("button", { name: "Run development fixture", exact: true })
+    .click();
+  await expect
+    .poll(
+      async () =>
+        (await read()).aiRequests.find(
+          (q: { id: string }) => q.id === fresh.q.id,
+        ).state,
+    )
+    .toBe("completed");
+  v = await read();
+  const beforeRestart = v.aiRequests;
+  await command({
+    action: "profile-update",
+    name: "Trading Analyst",
+    text: v.profiles.find((p: { id: string }) => p.id === profileId).persona,
+    provider: "openai",
+  });
+  await stop();
+  await start();
+  origins.add(new URL(url).origin);
+  await login();
+  await page.goto(url + "/#agents/chat");
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await page
+    .getByRole("button", { name: "Selection conversation", exact: true })
+    .click();
+  expect((await read()).aiRequests).toEqual(beforeRestart);
+  expect((await read()).providerCallsEnabled).toBe(false);
+  expect((await read()).financialExecution).toBe(false);
+  await expect(
+    review.getByRole("combobox", { name: "Memory", exact: true }),
+  ).toHaveValue("all");
+  await expect(
+    command({
+      action: "ai-start",
+      id: none.q.id,
+      consentDigest: none.q.digest,
+    }),
+  ).rejects.toThrow();
+  await review
+    .getByRole("combobox", { name: "Memory", exact: true })
+    .selectOption("selected");
+  await review
+    .getByRole("checkbox", {
+      name: "Owner corrected concise preference",
+      exact: true,
+    })
+    .check();
+  await page.getByRole("button", { name: /^News Researcher / }).click();
+  await expect(
+    review.getByRole("combobox", { name: "Memory", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await page
+    .getByRole("button", { name: "Selection conversation", exact: true })
+    .click();
+  await expect(
+    review.getByRole("combobox", { name: "Memory", exact: true }),
+  ).toHaveValue("all");
+  await review
+    .getByRole("combobox", { name: "Memory", exact: true })
+    .selectOption("selected");
+  await expect(
+    review.getByRole("checkbox", {
+      name: "Owner corrected concise preference",
+      exact: true,
+    }),
+  ).not.toBeChecked();
+  await page.screenshot({
+    path: `.evidence/ai-memory-selection/${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+  expect(external).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth + 1,
+    ),
+  ).toBe(true);
+});

@@ -349,3 +349,28 @@ Starting without the fixture flag stops queued AI dependencies without running
 them. Schema 6 protects these records; paused predecessor recovery must finish
 before migration. Local storage reserves future request/result capacity, with a
 shared ceiling of ten retained or planned AI requests and no silent pruning.
+
+### Select memory for one AI review
+
+In Chat → Optional AI step, choose **All active notes**, **None**, or **Selected notes** before preparing the disclosure. Review the exact note IDs, text, sources and expiry in **Exact context disclosure**, then consent separately to a development fixture. These choices affect saved notes only: the same profile persona and conversation history remain in the disclosure. Preparation never runs AI. Mining and real AI/wallet execution remain disabled.
+
+The shared CLI command accepts `memorySelection` only with `ai-prepare`:
+
+```json
+{
+  "action": "ai-prepare",
+  "profileId": "trading-analyst",
+  "revision": 42,
+  "id": "CONVERSATION_ID",
+  "text": "Compare these inputs",
+  "memorySelection": { "mode": "selected", "ids": ["MEMORY_ID"] },
+  "limits": {
+    "maxInputTokens": 24000,
+    "maxOutputTokens": 1024,
+    "deadlineSeconds": 3,
+    "budgetMicrousd": 30000
+  }
+}
+```
+
+Read the current revision and note IDs with `fased-app agents --profile trading-analyst`, then send the command to `fased-app agents --request-stdin`. Use `{"mode":"none"}` or `{"mode":"all"}` without IDs for the other choices. Omitting `memorySelection` preserves the legacy all-active-note context. No notes are silently dropped or truncated; missing, expired, foreign or ambiguous IDs and context/token/budget limits refuse preparation. Changing a selected note invalidates the frozen review. Scheduled AI tasks keep their existing all-active-note consent and reject manual selection input.

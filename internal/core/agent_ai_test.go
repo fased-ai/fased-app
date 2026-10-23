@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/fased-ai/fased-app/internal/update"
 	"io"
 	"net/http"
@@ -704,4 +705,391 @@ func TestChatMemoryFixtureContextCorrectionExpiryAndDeletion(t *testing.T) {
 	if len(memories(v)) != 0 {
 		t.Fatal("deleted note disclosed")
 	}
+}
+
+// This is a command fixture, not a credential or model transport.
+func memorySelectionCommand(t *testing.T, session string, selection any) AgentCommand {
+	t.Helper()
+	b, err := json.Marshal(map[string]any{"action": "ai-prepare", "profileId": "trading-analyst", "id": session, "text": "Review selected context", "memorySelection": selection, "limits": AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024, DeadlineSeconds: 3, BudgetMicrousd: 30000}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c AgentCommand
+	if err = json.Unmarshal(b, &c); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+func TestAgentAIMemorySelectionDisclosure(t *testing.T) {
+	for _, mode := range []string{"all", "none", "selected"} {
+		t.Run(mode, func(t *testing.T) {
+			s := fixtureStore(t)
+			v := agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: "trading-analyst", Name: "Selection"})
+			session := v.Sessions[0].ID
+			v = agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, Text: "selected-private-note", Source: "owner-reference", ExpiresAt: s.now().Unix() + 300})
+			note := v.Memories[0]
+			agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, Text: "unselected-private-note", Source: "other-reference"})
+			agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: "news-researcher", Text: "foreign-private-note", Source: "foreign"})
+			agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, Text: "expired-private-note", Source: "expired", ExpiresAt: 1})
+			selection := map[string]any{"mode": mode}
+			if mode == "selected" {
+				selection["ids"] = []string{note.ID}
+			}
+			v = agentApply(t, s, memorySelectionCommand(t, session, selection))
+			q := v.AIRequests[0]
+			var envelope struct {
+				Version   string `json:"version"`
+				Selection struct {
+					Mode string
+					IDs  []string
+				} `json:"memorySelection"`
+				Context struct {
+					Memories []struct {
+						ID, Text, Source     string
+						UpdatedAt, ExpiresAt int64
+					}
+				} `json:"context"`
+			}
+			if err := json.Unmarshal([]byte(q.Context), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if mode == "all" {
+				want = 2
+			}
+			if mode == "none" {
+				want = 0
+			}
+			if envelope.Version != "manual-ai-memory-v1" || envelope.Selection.Mode != mode || len(envelope.Context.Memories) != want {
+				t.Fatal("selection not frozen", q.Context)
+			}
+			if want > 0 {
+				m := envelope.Context.Memories[0]
+				for _, candidate := range envelope.Context.Memories {
+					if candidate.ID == note.ID {
+						m = candidate
+					}
+				}
+				if m.ID != note.ID || m.Text != note.Text || m.Source != note.Source || m.UpdatedAt != note.UpdatedAt || m.ExpiresAt != note.ExpiresAt {
+					t.Fatal("inexact note", m)
+				}
+			}
+			if strings.Contains(q.Context, "foreign-private-note") || strings.Contains(q.Context, "expired-private-note") || (mode != "all" && strings.Contains(q.Context, "unselected-private-note")) || (mode == "none" && strings.Contains(q.Context, note.Text)) {
+				t.Fatal("disclosure broadened")
+			}
+			wire, _ := aiWire(q)
+			if q.Disclosure != string(wire) || q.Digest != aiDigest(q) || q.State != "prepared" || q.HeldMicrousd != 0 || v.ProviderCallsEnabled {
+				t.Fatal("inert review/digest")
+			}
+			d, _, _ := readAgents(t.Context(), s.db)
+			current, err := aiRequestContext(d, q, s.now().Unix())
+			if err != nil || current != q.Context {
+				t.Fatal("context does not round trip", err)
+			}
+			legacy, err := aiContext(d, q.ProfileID, q.SessionID, q.Prompt, s.now().Unix())
+			if err != nil || legacy == q.Context || strings.Contains(legacy, "manual-ai-memory-v1") {
+				t.Fatal("older-reader refusal or legacy shape")
+			}
+		})
+	}
+}
+
+func selectionFixture(t *testing.T, s *Store, mode string) (AgentView, AgentMemory) {
+	t.Helper()
+	v := agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: "trading-analyst", Name: "Selection boundary"})
+	session := v.Sessions[0].ID
+	v = agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, Text: "selected evidence", Source: "owner", ExpiresAt: s.now().Unix() + 300})
+	note := v.Memories[0]
+	agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, Text: "undisclosed evidence", Source: "private"})
+	choice := map[string]any{"mode": mode}
+	if mode == "selected" {
+		choice["ids"] = []string{note.ID}
+	}
+	return agentApply(t, s, memorySelectionCommand(t, session, choice)), note
+}
+func selectionRefused(t *testing.T, s *Store, c AgentCommand, fixture bool) {
+	t.Helper()
+	before, rev, err := readAgents(t.Context(), s.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Revision = rev
+	if _, err = s.changeAgents(t.Context(), c, fixture); err == nil {
+		t.Fatal("selection should refuse", c.Action)
+	}
+	after, next, err := readAgents(t.Context(), s.db)
+	if err != nil || next != rev || !reflect.DeepEqual(before, after) {
+		t.Fatal("refusal changed metadata", err)
+	}
+}
+func TestAgentAIMemorySelectionRefusals(t *testing.T) {
+	cases := []struct {
+		name    string
+		choice  func(string, string) any
+		corrupt bool
+	}{
+		{"empty mode", func(a, b string) any { return map[string]any{} }, false},
+		{"unknown mode", func(a, b string) any { return map[string]any{"mode": "search"} }, false},
+		{"empty subset", func(a, b string) any { return map[string]any{"mode": "selected", "ids": []string{}} }, false},
+		{"all with IDs", func(a, b string) any { return map[string]any{"mode": "all", "ids": []string{a}} }, false},
+		{"none with IDs", func(a, b string) any { return map[string]any{"mode": "none", "ids": []string{a}} }, false},
+		{"missing", func(a, b string) any { return map[string]any{"mode": "selected", "ids": []string{"missing"}} }, false},
+		{"foreign", func(a, b string) any { return map[string]any{"mode": "selected", "ids": []string{b}} }, false},
+		{"duplicate input", func(a, b string) any { return map[string]any{"mode": "selected", "ids": []string{a, a}} }, false},
+		{"ambiguous retained", func(a, b string) any { return map[string]any{"mode": "selected", "ids": []string{a}} }, true},
+		{"ambiguous all", func(a, b string) any { return map[string]any{"mode": "all"} }, true},
+		{"oversized IDs", func(a, b string) any {
+			ids := make([]string, 101)
+			return map[string]any{"mode": "selected", "ids": ids}
+		}, false},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			s := fixtureStore(t)
+			v, note := selectionFixture(t, s, "none")
+			other := agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: "news-researcher", Text: "other profile", Source: "private"}).Memories[0]
+			if tt.corrupt {
+				rewriteReminderFixture(t, s, func(d *agentDocument) {
+					copy := d.Memories[0]
+					copy.ProfileID = "news-researcher"
+					d.Memories = append(d.Memories, copy)
+				})
+			}
+			selectionRefused(t, s, memorySelectionCommand(t, v.Sessions[0].ID, tt.choice(note.ID, other.ID)), false)
+		})
+	}
+}
+func TestAgentAIMemorySelectionRevalidation(t *testing.T) {
+	mutations := []struct {
+		name   string
+		change func(*agentDocument)
+	}{
+		{"text", func(d *agentDocument) { d.Memories[0].Text = "corrected" }},
+		{"source", func(d *agentDocument) { d.Memories[0].Source = "corrected source" }},
+		{"expiry", func(d *agentDocument) { d.Memories[0].ExpiresAt++ }},
+		{"expired", func(d *agentDocument) { d.Memories[0].ExpiresAt = 1 }},
+		{"updated", func(d *agentDocument) { d.Memories[0].UpdatedAt++ }},
+		{"deleted", func(d *agentDocument) { d.Memories = d.Memories[1:] }},
+		{"foreign", func(d *agentDocument) { d.Memories[0].ProfileID = "news-researcher" }},
+		{"ambiguous", func(d *agentDocument) { d.Memories = append(d.Memories, d.Memories[0]) }},
+	}
+	for _, stage := range []string{"consent", "dispatch"} {
+		for _, tt := range mutations {
+			t.Run(stage+"/"+tt.name, func(t *testing.T) {
+				s := fixtureStore(t)
+				v, _ := selectionFixture(t, s, "selected")
+				q := v.AIRequests[0]
+				if stage == "dispatch" {
+					v = aiStart(t, s, v)
+				}
+				rewriteReminderFixture(t, s, tt.change)
+				if stage == "consent" {
+					selectionRefused(t, s, AgentCommand{Action: "ai-start", ProfileID: v.ProfileID, ID: q.ID, ConsentDigest: q.Digest}, true)
+					return
+				}
+				calls := 0
+				rt := aiTestTransport(func(r *http.Request) (*http.Response, error) { calls++; return (fixtureAITransport{}).RoundTrip(r) })
+				if err := s.advanceAgentAI(t.Context(), rt, true); err != nil {
+					t.Fatal(err)
+				}
+				v, _ = s.Agents(t.Context(), v.ProfileID, "")
+				if calls != 0 || v.AIRequests[0].State != "cancelled" || v.AIRequests[0].HeldMicrousd != 0 {
+					t.Fatal("stale memory dispatched", calls, v.AIRequests[0].State)
+				}
+			})
+		}
+	}
+	t.Run("clock expiry", func(t *testing.T) {
+		s := fixtureStore(t)
+		now := s.now()
+		s.now = func() time.Time { return now }
+		v, _ := selectionFixture(t, s, "selected")
+		q := v.AIRequests[0]
+		now = now.Add(300 * time.Second)
+		selectionRefused(t, s, AgentCommand{Action: "ai-start", ProfileID: v.ProfileID, ID: q.ID, ConsentDigest: q.Digest}, true)
+	})
+}
+func TestAgentAIMemorySelectionPrivacyRestartAndProvider(t *testing.T) {
+	for _, mode := range []string{"none", "selected"} {
+		t.Run(mode, func(t *testing.T) {
+			s := fixtureStore(t)
+			v, note := selectionFixture(t, s, mode)
+			q := v.AIRequests[0]
+			// Unselected memory changes must neither broaden nor invalidate disclosure.
+			for _, m := range v.Memories {
+				if mode == "none" || m.ID != note.ID {
+					agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, ID: m.ID, Text: "NEVER-DISCLOSE-THIS", Source: "changed private"})
+				}
+			}
+			agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: "news-researcher", Text: "FOREIGN-SECRET", Source: "private"})
+			d, _, _ := readAgents(t.Context(), s.db)
+			profile := d.Profiles[agentProfile(d, v.ProfileID)]
+			agentApply(t, s, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: profile.Name, Text: profile.Persona, Provider: "openai"})
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			n, err := OpenStore(s.dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer n.Close()
+			v, _ = n.Agents(t.Context(), v.ProfileID, "")
+			if v.AIRequests[0].Context != q.Context || v.AIRequests[0].Digest != q.Digest || v.ProviderCallsEnabled {
+				t.Fatal("restart changed review or enabled AI")
+			}
+			selectionRefused(t, n, AgentCommand{Action: "ai-start", ProfileID: "news-researcher", ID: q.ID, ConsentDigest: q.Digest}, true)
+			selectionRefused(t, n, AgentCommand{Action: "ai-start", ProfileID: v.ProfileID, ID: q.ID, ConsentDigest: q.Digest}, false)
+			v = aiStart(t, n, v)
+			calls := 0
+			rt := aiTestTransport(func(r *http.Request) (*http.Response, error) {
+				calls++
+				b, _ := io.ReadAll(r.Body)
+				if strings.Contains(string(b), "NEVER-DISCLOSE-THIS") || strings.Contains(string(b), "FOREIGN-SECRET") || (mode == "none" && strings.Contains(string(b), note.Text)) {
+					t.Fatal("undisclosed memory sent")
+				}
+				r.Body = io.NopCloser(strings.NewReader(string(b)))
+				return (fixtureAITransport{}).RoundTrip(r)
+			})
+			if err = n.advanceAgentAI(t.Context(), rt, true); err != nil {
+				t.Fatal(err)
+			}
+			v, _ = n.Agents(t.Context(), v.ProfileID, "")
+			if calls != 1 || v.AIRequests[0].State != "completed" {
+				t.Fatal("fixture completion", calls, v.AIRequests[0].State)
+			}
+		})
+	}
+}
+func TestAgentAIMemorySelectionLegacyBoundsAndUnsupported(t *testing.T) {
+	s := fixtureStore(t)
+	v, note := selectionFixture(t, s, "selected")
+	q := v.AIRequests[0]
+	d, _, _ := readAgents(t.Context(), s.db)
+	legacy, err := aiContext(d, v.ProfileID, q.SessionID, q.Prompt, s.now().Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Pin the old field order/shape, including no identity/history metadata.
+	expected := `{"persona":"Research and compare bounded paper strategies.","messages":[],"memories":[{"text":"selected evidence","source":"owner","expiresAt":` + fmt.Sprint(note.ExpiresAt) + `},{"text":"undisclosed evidence","source":"private","expiresAt":0}],"prompt":"Review selected context"}`
+	if legacy != expected {
+		t.Fatal("legacy context bytes changed", legacy)
+	}
+	c := memorySelectionCommand(t, q.SessionID, nil)
+	c.MemorySelection = nil
+	v = agentApply(t, s, c)
+	if v.AIRequests[1].Context != legacy {
+		t.Fatal("omitted selection changed legacy context")
+	}
+	for _, version := range []string{"manual-ai-memory-v2", ""} {
+		changed := q
+		changed.Context = strings.Replace(q.Context, aiMemoryContextVersion, version, 1)
+		if _, err := aiRequestContext(d, changed, s.now().Unix()); err == nil {
+			t.Fatal("unsupported context accepted")
+		}
+	}
+	changed := q
+	changed.TaskID = "scheduled"
+	if _, err := aiRequestContext(d, changed, s.now().Unix()); err == nil {
+		t.Fatal("scheduled manual selection accepted")
+	}
+	// The same 8 KB and token/cost checks apply to explicit selections.
+	for _, m := range v.Memories {
+		agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, ID: m.ID, Text: strings.Repeat("x", 4000), Source: m.Source})
+	}
+	selectionRefused(t, s, memorySelectionCommand(t, q.SessionID, map[string]any{"mode": "all"}), false)
+	v = agentApply(t, s, memorySelectionCommand(t, q.SessionID, map[string]any{"mode": "none"}))
+	if strings.Contains(v.AIRequests[len(v.AIRequests)-1].Context, strings.Repeat("x", 100)) {
+		t.Fatal("none disclosed oversized notes")
+	}
+	c = memorySelectionCommand(t, q.SessionID, map[string]any{"mode": "selected", "ids": []string{note.ID}})
+	c.Limits.MaxInputTokens = 1000
+	selectionRefused(t, s, c, false)
+	c = memorySelectionCommand(t, q.SessionID, map[string]any{"mode": "none"})
+	c.Limits.BudgetMicrousd = 1
+	selectionRefused(t, s, c, false)
+}
+
+func TestAgentAIMemorySelectionAdmissionAndCompletion(t *testing.T) {
+	for _, boundary := range []string{"access", "count", "create", "inflight"} {
+		t.Run(boundary, func(t *testing.T) {
+			s, connection := admissionStore(t)
+			v, note := selectionFixture(t, s, "selected")
+			c := memorySelectionCommand(t, v.Sessions[0].ID, map[string]any{"mode": "selected", "ids": []string{note.ID}})
+			c.Model = admittedOpenAIModel
+			c.ConnectionRef = connection.Ref
+			v = agentApply(t, s, c)
+			q := v.AIRequests[len(v.AIRequests)-1]
+			v = aiStart(t, s, v)
+			calls := 0
+			rt := aiTestTransport(func(r *http.Request) (*http.Response, error) {
+				calls++
+				res, err := (fixtureAITransport{}).RoundTrip(r)
+				mutate := (boundary == "access" && r.Method == "GET") || (boundary == "count" && strings.HasSuffix(r.URL.Path, "input_tokens")) || ((boundary == "create" || boundary == "inflight") && r.URL.Path == "/v1/responses")
+				if mutate {
+					agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, ID: note.ID, Text: "changed during provider operation", Source: note.Source, ExpiresAt: note.ExpiresAt})
+					if boundary == "inflight" {
+						select {
+						case <-r.Context().Done():
+						case <-time.After(2 * time.Second):
+							t.Fatal("changed selected context did not cancel in-flight operation")
+						}
+						return nil, r.Context().Err()
+					}
+				}
+				return res, err
+			})
+			if err := s.advanceAgentAI(t.Context(), rt, true); err != nil {
+				t.Fatal(err)
+			}
+			v, _ = s.Agents(t.Context(), v.ProfileID, "")
+			result := v.AIRequests[len(v.AIRequests)-1]
+			want := map[string]int{"access": 1, "count": 2, "create": 3, "inflight": 3}[boundary]
+			if calls != want || result.State == "completed" || result.Answer != "" || len(result.Cards) != 0 {
+				t.Fatal("stale selection crossed boundary", boundary, calls, result.State)
+			}
+			if result.ID != q.ID || len(v.Tasks) != 0 {
+				t.Fatal("request identity or authority changed")
+			}
+			if err := s.advanceAgentAI(t.Context(), rt, true); err != nil || calls != want {
+				t.Fatal("failed admission replayed", err)
+			}
+		})
+	}
+}
+
+func TestAgentAIMemorySelectionNewsRoundTrip(t *testing.T) {
+	s := newsTestStore(t)
+	v := newsAdd(t, s, "trading-analyst")
+	source := v.NewsSources[0]
+	v = agentApply(t, s, AgentCommand{Action: "news-fetch", ProfileID: v.ProfileID, ID: source.ID})
+	rt := newsHTTPS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		io.WriteString(w, newsRSS(s.now().Unix()))
+	})
+	if err := s.advanceAgentNews(t.Context(), rt, false); err != nil {
+		t.Fatal(err)
+	}
+	v, note := selectionFixture(t, s, "selected")
+	c := memorySelectionCommand(t, v.Sessions[0].ID, map[string]any{"mode": "selected", "ids": []string{note.ID}})
+	c.NewsSourceID = source.ID
+	c.NewsMaxAgeSeconds = 300
+	v = agentApply(t, s, c)
+	q := v.AIRequests[len(v.AIRequests)-1]
+	d, _, _ := readAgents(t.Context(), s.db)
+	current, err := aiRequestContext(d, q, s.now().Unix())
+	if err != nil || q.News == nil || current != q.Context || !strings.Contains(current, `"untrusted":true`) || strings.Contains(current, "undisclosed evidence") {
+		t.Fatal("selected/news context did not round trip", err)
+	}
+	v = aiStart(t, s, v)
+	if err = s.advanceAgentAI(t.Context(), fixtureAITransport{}, true); err != nil {
+		t.Fatal(err)
+	}
+	v, _ = s.Agents(t.Context(), v.ProfileID, "")
+	if v.AIRequests[len(v.AIRequests)-1].State != "completed" {
+		t.Fatal("news/selected fixture failed")
+	}
+	v = agentApply(t, s, c)
+	q = v.AIRequests[len(v.AIRequests)-1]
+	agentApply(t, s, AgentCommand{Action: "news-source-disable", ProfileID: v.ProfileID, ID: source.ID})
+	selectionRefused(t, s, AgentCommand{Action: "ai-start", ProfileID: v.ProfileID, ID: q.ID, ConsentDigest: q.Digest}, true)
 }

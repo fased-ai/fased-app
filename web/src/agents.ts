@@ -304,7 +304,12 @@ export type AgentMemoryView = {
   memories: AgentMemory[];
   source?: AgentMemoryEvidence;
 };
+export type AIMemorySelection = {
+  mode: "all" | "none" | "selected";
+  ids?: string[];
+};
 export type AgentCommand = {
+  memorySelection?: AIMemorySelection;
   wen?: WENPaperInput;
   newsSourceId?: string;
   newsMaxAgeSeconds?: number;

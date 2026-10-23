@@ -480,3 +480,30 @@ func TestTaskAIProfileContentionDefersWithoutNewDispatch(t *testing.T) {
 		t.Fatal("deferred task did not continue")
 	}
 }
+
+func TestAgentAIMemorySelectionScheduledRefusal(t *testing.T) {
+	s := fixtureStore(t)
+	v := taskAIPlan(t, s, 1)
+	q := v.Tasks[0]
+	c := memorySelectionCommand(t, q.AI.SessionID, map[string]any{"mode": "none"})
+	c.Action = "task-ai-prepare"
+	c.Name = "Manual selection must not schedule"
+	c.IntervalSeconds = 60
+	c.MaxRuns = 1
+	c.AuthorizationSeconds = 3600
+	c.TotalBudgetMicrousd = 30000
+	selectionRefused(t, s, c, false)
+	d, _, _ := readAgents(t.Context(), s.db)
+	legacy, err := aiContext(d, q.ProfileID, q.AI.SessionID, q.Text, s.now().Unix())
+	if err != nil || legacy != q.AI.Context || strings.Contains(q.AI.Context, "memorySelection") {
+		t.Fatal("scheduled memory policy changed", err)
+	}
+	v = taskAIRun(t, s, taskAIAuthorize(t, s, v))
+	if err = s.advanceAgentAI(t.Context(), fixtureAITransport{}, true); err != nil {
+		t.Fatal(err)
+	}
+	v, _ = s.Agents(t.Context(), q.ProfileID, "")
+	if v.Tasks[0].State != "completed" || v.AIRequests[0].State != "completed" {
+		t.Fatal("legacy scheduled consent failed")
+	}
+}

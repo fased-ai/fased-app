@@ -27,7 +27,7 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	search := flags.String("search", "", "search this profile's conversations, messages and completed AI questions/answers")
 	memorySearch := flags.String("memory-search", "", "read-only search of current profile memory text and source (200 bytes maximum)")
 	memorySource := flags.String("memory-source", "", "inspect one profile memory's retained chat evidence without writing or fetching")
-	change := flags.Bool("request-stdin", false, "read one revision-checked local agent command JSON (including news-item-explain, task-run-explain, memory-chat-save and ai-reminder-review/create); no credentials")
+	change := flags.Bool("request-stdin", false, "read one revision-checked local agent command JSON (including ai-prepare memorySelection (all/none/selected IDs), news-item-explain, task-run-explain, memory-chat-save and ai-reminder-review/create); no credentials")
 	if e = flags.Parse(args); e != nil {
 		return e
 	}

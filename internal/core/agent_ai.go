@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -84,7 +85,68 @@ func migrateAgentAI(ctx context.Context, db *sql.DB) error {
 	}
 	return tx.Commit()
 }
+
+// AIMemorySelection is transient command input. Resolved notes stay in the
+// existing Context string; no profile or scheduled-task preference is changed.
+type AIMemorySelection struct {
+	Mode string   `json:"mode"`
+	IDs  []string `json:"ids,omitempty"`
+}
+
+const aiMemoryContextVersion = "manual-ai-memory-v1"
+
+type aiSelectedMemory struct {
+	ID        string `json:"id"`
+	Text      string `json:"text"`
+	Source    string `json:"source"`
+	UpdatedAt int64  `json:"updatedAt"`
+	ExpiresAt int64  `json:"expiresAt"`
+}
+
+func selectedAIMemories(d agentDocument, profile string, choice AIMemorySelection, now int64) (AIMemorySelection, []aiSelectedMemory, error) {
+	if (choice.Mode != "all" && choice.Mode != "none" && choice.Mode != "selected") ||
+		(choice.Mode != "selected" && len(choice.IDs) != 0) ||
+		(choice.Mode == "selected" && (len(choice.IDs) == 0 || len(choice.IDs) > 100)) {
+		return choice, nil, errors.New("choose all, none, or 1–100 unique current memory IDs")
+	}
+	ids := append([]string(nil), choice.IDs...)
+	if choice.Mode == "all" {
+		for _, m := range d.Memories {
+			if m.ProfileID == profile && (m.ExpiresAt == 0 || m.ExpiresAt > now) {
+				ids = append(ids, m.ID)
+			}
+		}
+	}
+	if len(ids) > 100 {
+		return choice, nil, errors.New("memory selection exceeds 100 notes")
+	}
+	sort.Strings(ids)
+	notes := make([]aiSelectedMemory, 0, len(ids))
+	for i, id := range ids {
+		if !validAgentText(id, 200, true) || (i > 0 && id == ids[i-1]) {
+			return choice, nil, errors.New("memory selection contains an invalid or duplicate ID")
+		}
+		var note AgentMemory
+		matches := 0
+		for _, m := range d.Memories {
+			if m.ID == id {
+				note, matches = m, matches+1
+			}
+		}
+		if matches != 1 || note.ProfileID != profile || (note.ExpiresAt != 0 && note.ExpiresAt <= now) {
+			return choice, nil, errors.New("selected memory is missing, expired, foreign or ambiguous; review current notes")
+		}
+		notes = append(notes, aiSelectedMemory{note.ID, note.Text, note.Source, note.UpdatedAt, note.ExpiresAt})
+	}
+	if choice.Mode == "selected" {
+		choice.IDs = ids
+	}
+	return choice, notes, nil
+}
 func aiContext(d agentDocument, profile, session, prompt string, now int64) (string, error) {
+	return aiContextWithMemory(d, profile, session, prompt, now, nil)
+}
+func aiContextWithMemory(d agentDocument, profile, session, prompt string, now int64, selection *AIMemorySelection) (string, error) {
 	pi := agentProfile(d, profile)
 	if pi < 0 {
 		return "", errors.New("profile not found")
@@ -110,7 +172,7 @@ func aiContext(d agentDocument, profile, session, prompt string, now int64) (str
 	data := struct {
 		Persona  string    `json:"persona"`
 		Messages []message `json:"messages"`
-		Memories []note    `json:"memories"`
+		Memories any       `json:"memories"`
 		Prompt   string    `json:"prompt"`
 	}{Persona: d.Profiles[pi].Persona, Messages: []message{}, Memories: []note{}, Prompt: prompt}
 	for _, m := range d.Messages {
@@ -123,12 +185,29 @@ func aiContext(d agentDocument, profile, session, prompt string, now int64) (str
 			data.Messages = append(data.Messages, message{"user", q.Prompt}, message{"assistant", q.Answer})
 		}
 	}
-	for _, m := range d.Memories {
-		if m.ProfileID == profile && (m.ExpiresAt == 0 || m.ExpiresAt > now) {
-			data.Memories = append(data.Memories, note{m.Text, m.Source, m.ExpiresAt})
+	var payload any = data
+	if selection == nil {
+		notes := []note{}
+		for _, m := range d.Memories {
+			if m.ProfileID == profile && (m.ExpiresAt == 0 || m.ExpiresAt > now) {
+				notes = append(notes, note{m.Text, m.Source, m.ExpiresAt})
+			}
 		}
+		data.Memories = notes
+		payload = data
+	} else {
+		choice, notes, err := selectedAIMemories(d, profile, *selection, now)
+		if err != nil {
+			return "", err
+		}
+		data.Memories = notes
+		payload = struct {
+			Version   string            `json:"version"`
+			Selection AIMemorySelection `json:"memorySelection"`
+			Context   any               `json:"context"`
+		}{aiMemoryContextVersion, choice, data}
 	}
-	b, e := json.Marshal(data)
+	b, e := json.Marshal(payload)
 	if e != nil {
 		return "", e
 	}
@@ -158,7 +237,7 @@ func changeAgentAI(d *agentDocument, c AgentCommand, profile, id string, now int
 		if l.MaxInputTokens < 1000 || l.MaxInputTokens > 32000 || l.MaxOutputTokens < 128 || l.MaxOutputTokens > 1024 || l.DeadlineSeconds < 1 || l.DeadlineSeconds > 5 || l.BudgetMicrousd < 1 || l.BudgetMicrousd > 1000000 {
 			return errors.New("invalid token/time limits or insufficient fixture budget")
 		}
-		context, e := aiContext(*d, profile, c.ID, c.Text, now)
+		context, e := aiContextWithMemory(*d, profile, c.ID, c.Text, now, c.MemorySelection)
 		if e != nil {
 			return e
 		}
@@ -385,6 +464,33 @@ func callAgentAIAt(ctx context.Context, q AgentAIRequest, rt http.RoundTripper, 
 	q.Failure = ""
 	return q, nil
 }
+func aiUsesMemorySelection(q AgentAIRequest) bool {
+	var envelope struct {
+		Selection json.RawMessage `json:"memorySelection"`
+	}
+	_ = json.Unmarshal([]byte(q.Context), &envelope)
+	return len(envelope.Selection) > 0
+}
+
+// Recheck selected notes before each admission/count/create operation, as well
+// as the existing consent, worker, in-flight and completion checks.
+type aiMemoryReviewTransport struct {
+	store   *Store
+	request AgentAIRequest
+	next    http.RoundTripper
+}
+
+func (rt aiMemoryReviewTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	d, _, err := readAgents(r.Context(), rt.store.db)
+	if err != nil {
+		return nil, err
+	}
+	current, err := aiRequestContext(d, rt.request, rt.store.now().Unix())
+	if err != nil || current != rt.request.Context {
+		return nil, errors.New("reviewed memory changed before provider operation")
+	}
+	return rt.next.RoundTrip(r)
+}
 func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enabled bool) error {
 	if !s.aiMu.TryLock() {
 		return nil
@@ -478,7 +584,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 				if s.db.QueryRowContext(callCtx, "SELECT phase FROM update_pause WHERE id=1").Scan(&phase) != nil || phase == "paused" {
 					active = false
 				}
-				if dispatch.News != nil {
+				if dispatch.News != nil || aiUsesMemorySelection(*dispatch) {
 					current, e := aiRequestContext(current, *dispatch, s.now().Unix())
 					if e != nil || current != dispatch.Context {
 						active = false
@@ -493,6 +599,9 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 	}()
 	if dispatch.ConnectionRef != "" {
 		rt = authenticatedAITransport{store: s, ref: dispatch.ConnectionRef, next: rt}
+	}
+	if aiUsesMemorySelection(*dispatch) {
+		rt = aiMemoryReviewTransport{store: s, request: *dispatch, next: rt}
 	}
 	result, callErr := callAgentAIAt(callCtx, *dispatch, rt, s.now)
 	cancel()
@@ -521,11 +630,12 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 				if validateAIModelPolicy(q, s.now().Unix()) != nil {
 					q.State, q.Failure = "failed", "Model/tariff admission expired before completion; dependent work stopped."
 				}
-				if q.News != nil {
+				if q.News != nil || aiUsesMemorySelection(q) {
 					current, err := aiRequestContext(d, q, s.now().Unix())
 					if err != nil || current != q.Context {
 						q.State = "failed"
-						q.Failure = "News evidence expired or changed before completion; dependent work stopped."
+						q.Failure = "Reviewed context expired or changed before completion; dependent work stopped."
+						q.Answer, q.Cards = "", []AIActionCard{}
 					}
 				}
 			}

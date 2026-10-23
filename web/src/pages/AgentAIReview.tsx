@@ -7,7 +7,7 @@ import {
   ConnectionPicker,
 } from "./AIConnection";
 import { useState } from "react";
-import type { AgentView } from "../agents";
+import type { AgentView, AIMemorySelection } from "../agents";
 import { useWorkspace } from "../workspace";
 
 const money = (n: number) => `$${(n / 1_000_000).toFixed(6)}`;
@@ -29,6 +29,13 @@ export function AgentAIReview({
   const [deadline, setDeadline] = useState(3);
   const [budget, setBudget] = useState(30000);
   const [consent, setConsent] = useState("");
+  const [memoryMode, setMemoryMode] =
+    useState<AIMemorySelection["mode"]>("all");
+  const [memoryIds, setMemoryIds] = useState<string[]>([]);
+  const toggleMemory = (id: string, checked: boolean) =>
+    setMemoryIds((ids) =>
+      checked ? [...ids, id] : ids.filter((n) => n !== id),
+    );
   const requests = view.aiRequests.filter(
     (q) => q.sessionId === sessionId && !q.taskId,
   );
@@ -46,6 +53,10 @@ export function AgentAIReview({
           void agents
             .change({
               action: "ai-prepare",
+              memorySelection: {
+                mode: memoryMode,
+                ...(memoryMode === "selected" ? { ids: memoryIds } : {}),
+              },
               connectionRef,
               model,
               newsSourceId,
@@ -80,6 +91,48 @@ export function AgentAIReview({
           age={newsAge}
           onAge={setNewsAge}
         />
+        <label>
+          Memory
+          <select
+            value={memoryMode}
+            onChange={(e) =>
+              setMemoryMode(e.target.value as AIMemorySelection["mode"])
+            }
+          >
+            <option value="all">All active notes</option>
+            <option value="none">None</option>
+            <option value="selected">Selected notes</option>
+          </select>
+        </label>
+        {memoryMode === "selected" && (
+          <fieldset aria-label="AI memory selection">
+            <legend>Selected notes</legend>
+            {view.memories.map((m) => (
+              <label key={m.id}>
+                <input
+                  type="checkbox"
+                  checked={memoryIds.includes(m.id)}
+                  disabled={m.expired && !memoryIds.includes(m.id)}
+                  onChange={(e) => toggleMemory(m.id, e.target.checked)}
+                />
+                {m.text}
+                {m.expired ? " (expired)" : ""}
+              </label>
+            ))}
+            {memoryIds
+              .filter((id) => !view.memories.some((m) => m.id === id))
+              .map((id) => (
+                <label key={id}>
+                  <input
+                    type="checkbox"
+                    checked
+                    onChange={() => toggleMemory(id, false)}
+                  />
+                  Unavailable note: {id}
+                </label>
+              ))}
+          </fieldset>
+        )}
         <label>
           AI request
           <textarea
@@ -147,7 +200,12 @@ export function AgentAIReview({
             </>
           )}
         </p>
-        <button className="secondary" disabled={agents.busy}>
+        <button
+          className="secondary"
+          disabled={
+            agents.busy || (memoryMode === "selected" && memoryIds.length === 0)
+          }
+        >
           Prepare disclosure
         </button>
       </form>
