@@ -28,6 +28,7 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	memorySearch := flags.String("memory-search", "", "read-only search of current profile memory text and source (200 bytes maximum)")
 	memorySource := flags.String("memory-source", "", "inspect one profile memory's retained chat evidence without writing or fetching")
 	draft := flags.String("ai-draft", "", "read a saved manual AI request as editable settings; no write, consent or execution")
+	reminderDraft := flags.String("reminder-draft", "", "inspect a saved plain reminder as a transient editable draft; no task or run is created")
 	evidence := flags.String("evidence", "", "read-only inspection: memory, headline or reminder-run")
 	evidenceID := flags.String("evidence-id", "", "one saved source identity")
 	evidenceItem := flags.String("evidence-item", "", "item identity for headline inspection only")
@@ -36,6 +37,7 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 		return e
 	}
 	memoryMode, sourceSet, chatSearchSet, draftSet := false, false, false, false
+	reminderDraftSet := false
 	evidenceMode, evidenceItemSet := false, false
 	flags.Visit(func(f *flag.Flag) {
 		if f.Name == "memory-search" || f.Name == "memory-source" {
@@ -44,9 +46,13 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 		evidenceMode = evidenceMode || f.Name == "evidence" || f.Name == "evidence-id" || f.Name == "evidence-item"
 		evidenceItemSet = evidenceItemSet || f.Name == "evidence-item"
 		draftSet = draftSet || f.Name == "ai-draft"
+		reminderDraftSet = reminderDraftSet || f.Name == "reminder-draft"
 		sourceSet = sourceSet || f.Name == "memory-source"
 		chatSearchSet = chatSearchSet || f.Name == "search"
 	})
+	if reminderDraftSet && (*profile == "" || *reminderDraft == "" || *change || evidenceMode || memoryMode || draftSet || chatSearchSet) {
+		return errors.New("use --profile PROFILE --reminder-draft TASK_ID without other read modes or writes")
+	}
 	if evidenceMode && (*profile == "" || *evidenceID == "" || (*evidence != "memory" && *evidence != "headline" && *evidence != "reminder-run") || (*evidence == "headline" && *evidenceItem == "") || (*evidence != "headline" && evidenceItemSet) || *change || memoryMode || draftSet || chatSearchSet) {
 		return errors.New("use --profile PROFILE --evidence memory|headline|reminder-run --evidence-id ID; --evidence-item is required only for headline; no search/draft/write flags")
 	}
@@ -68,6 +74,14 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	defer c.Close()
 	if e = c.LoadSession(ctx, *dir); e != nil {
 		return e
+	}
+	if reminderDraftSet {
+		q := url.Values{"profile": {*profile}, "reminder-draft": {*reminderDraft}}
+		var v core.TaskReminderReview
+		if e = c.Do(ctx, http.MethodGet, "/api/v1/agents?"+q.Encode(), nil, &v); e != nil {
+			return e
+		}
+		return json.NewEncoder(out).Encode(v)
 	}
 	if evidenceMode {
 		q := url.Values{"profile": {*profile}, "evidence": {*evidence}, "evidence-id": {*evidenceID}}

@@ -81,6 +81,243 @@ test.afterEach(async () => {
   }
 });
 
+test("reminder task draft shares inert inspection edited review and bounded creation across UI CLI and restart", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(90000);
+  page.setDefaultTimeout(10000);
+  const origins = new Set([new URL(url).origin]);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (!origins.has(new URL(r.url()).origin)) external.push(r.url());
+  });
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = async () => {
+    const child = spawn(binary, [
+      "login",
+      "--data-dir",
+      dir,
+      "--password-stdin",
+    ]);
+    child.stdin!.end(fixturePassword + "\n");
+    expect((await once(child, "exit"))[0]).toBe(0);
+  };
+  await login();
+  const profileId = "trading-analyst";
+  const read = () => privateCLI(["agents", "--profile", profileId]);
+  const command = async (c: Record<string, unknown>) =>
+    privateCLI(["agents", "--request-stdin"], {
+      profileId,
+      revision: (await read()).revision,
+      ...c,
+    });
+  let v = await command({
+    action: "task-create",
+    name: "Saved daily review",
+    text: "Read retained results",
+    intervalSeconds: 60,
+    maxRuns: 1,
+  });
+  v = await command({ action: "task-run", id: v.tasks[0].id });
+  const original = v.tasks[0];
+  const snapshot = await privateCLI([
+    "agents",
+    "--profile",
+    profileId,
+    "--reminder-draft",
+    original.id,
+  ]);
+  expect(snapshot.source).toEqual(original);
+  expect(snapshot.sourceSha256).toBe(
+    createHash("sha256").update(JSON.stringify(original)).digest("hex"),
+  );
+  expect(await read()).toEqual(v);
+  await page.goto(url + "/#agents/tasks");
+  const picker = page.locator(".local-profile-picker");
+  const profile = picker.getByRole("button", { name: /Trading Analyst/ });
+  await profile.click();
+  await expect(profile).toHaveAttribute("aria-pressed", "true");
+  const reuse = page.getByRole("button", {
+    name: "Reuse: Saved daily review",
+    exact: true,
+  });
+  await reuse.click();
+  const panel = page.getByRole("region", {
+    name: "Reuse reminder",
+    exact: true,
+  });
+  await expect(
+    panel.getByRole("textbox", { name: "Reminder name", exact: true }),
+  ).toHaveValue(original.name);
+  await panel.getByText("Saved reminder source", { exact: true }).click();
+  await expect(panel.locator("pre")).toContainText(snapshot.sourceSha256);
+  await panel.getByRole("button", { name: "Discard reminder draft" }).click();
+  expect(await read()).toEqual(v);
+  await reuse.click();
+  await panel
+    .getByRole("textbox", { name: "Reminder name", exact: true })
+    .fill("Reused saved review");
+  await panel
+    .getByRole("textbox", { name: "Reminder text", exact: true })
+    .fill("Review the saved journal again");
+  await panel
+    .getByRole("button", { name: "Review new reminder", exact: true })
+    .click();
+  await expect(
+    panel.getByRole("button", {
+      name: "Create reviewed reminder",
+      exact: true,
+    }),
+  ).toBeVisible();
+  expect(await read()).toEqual(v);
+  await panel
+    .getByRole("textbox", { name: "Reminder text", exact: true })
+    .fill("Edited after the first review");
+  await expect(
+    panel.getByRole("button", { name: "Create reviewed reminder" }),
+  ).toHaveCount(0);
+  await panel
+    .getByRole("button", { name: "Review new reminder", exact: true })
+    .click();
+  await expect(
+    panel.getByRole("button", { name: "Create reviewed reminder" }),
+  ).toBeVisible();
+  v = await command({
+    action: "profile-update",
+    name: "Trading Analyst",
+    provider: "xai",
+    model: "preference-only",
+  });
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(panel.getByRole("alert")).toHaveText(
+    "Records changed. Reload the reminder to review again.",
+  );
+  await expect(
+    panel.getByRole("button", { name: "Create reviewed reminder" }),
+  ).toHaveCount(0);
+  await panel
+    .getByRole("button", { name: "Reload reminder", exact: true })
+    .click();
+  await expect(
+    panel.getByRole("textbox", { name: "Reminder name", exact: true }),
+  ).toHaveValue(original.name);
+  await panel
+    .getByRole("textbox", { name: "Reminder name", exact: true })
+    .fill("Reused saved review");
+  await panel
+    .getByRole("textbox", { name: "Reminder text", exact: true })
+    .fill("Review the saved journal again");
+  await panel
+    .getByRole("spinbutton", { name: "Interval in seconds", exact: true })
+    .fill("120");
+  await panel
+    .getByRole("spinbutton", { name: "Maximum evaluations", exact: true })
+    .fill("1");
+  await panel
+    .getByRole("button", { name: "Review new reminder", exact: true })
+    .click();
+  await expect(
+    panel.getByRole("button", { name: "Create reviewed reminder" }),
+  ).toBeVisible();
+  expect(await read()).toEqual(v);
+  await panel
+    .getByRole("button", { name: "Create reviewed reminder", exact: true })
+    .click();
+  await expect(panel).toHaveCount(0);
+  v = await read();
+  expect(v.tasks).toHaveLength(2);
+  expect(v.tasks[0]).toEqual(original);
+  const copy = v.tasks[1];
+  expect(copy).toMatchObject({
+    name: "Reused saved review",
+    text: "Review the saved journal again",
+    intervalSeconds: 120,
+    maxRuns: 1,
+    runs: 0,
+    state: "scheduled",
+    botId: "",
+  });
+  expect(copy.ai).toBeUndefined();
+  expect(copy.news).toBeUndefined();
+  expect(copy.wen).toBeUndefined();
+  expect(v.runs).toHaveLength(1);
+  await page
+    .getByRole("button", { name: "Run now: Reused saved review", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).runs.length).toBe(2);
+  v = await read();
+  expect(v.tasks[0]).toEqual(original);
+  expect(v.tasks[1]).toMatchObject({ state: "completed", runs: 1, maxRuns: 1 });
+  const foreign = picker.getByRole("button", { name: /News Researcher/ });
+  await foreign.click();
+  await expect(foreign).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByRole("button", { name: "Reuse: Saved daily review" }),
+  ).toHaveCount(0);
+  await expect(
+    privateCLI([
+      "agents",
+      "--profile",
+      "news-researcher",
+      "--reminder-draft",
+      original.id,
+    ]),
+  ).rejects.toThrow();
+  await stop();
+  await start();
+  origins.add(new URL(url).origin);
+  await page.goto(url + "/#agents/tasks");
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await login();
+  const reopened = await read();
+  for (const field of ["tasks", "runs", "notices", "aiRequests"])
+    expect(reopened[field]).toEqual(v[field]);
+  expect(reopened.aiRequests).toHaveLength(0);
+  expect(reopened.providerCallsEnabled).toBe(false);
+  expect(reopened.financialExecution).toBe(false);
+  await picker.getByRole("button", { name: /Trading Analyst/ }).click();
+  await expect(
+    picker.getByRole("button", { name: /Trading Analyst/ }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await page
+    .getByRole("button", { name: "Reuse: Reused saved review", exact: true })
+    .click();
+  await expect(
+    panel.getByRole("textbox", { name: "Reminder name", exact: true }),
+  ).toHaveValue(copy.name);
+  await expect(
+    panel.getByRole("button", { name: "Create reviewed reminder" }),
+  ).toHaveCount(0);
+  await panel.getByText("Saved reminder source", { exact: true }).click();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: `.evidence/reminder-task-draft-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+  await panel.getByRole("button", { name: "Discard reminder draft" }).click();
+  expect(external).toEqual([]);
+  expect((await read()).tasks).toEqual(v.tasks);
+});
+
 test("joined agent workspace preserves news chat reminder run memory and reviewed AI across UI CLI and restart", async ({
   page,
   isMobile,

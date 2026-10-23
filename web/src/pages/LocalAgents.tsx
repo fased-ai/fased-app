@@ -12,6 +12,7 @@ import { providerNames, type Provider } from "../state";
 import type { AgentView } from "../agents";
 import "../agents.css";
 import { ScheduledAITasks } from "./ScheduledAITasks";
+import { SavedReminderDraft } from "./SavedReminderDraft";
 import { AgentAIReview } from "./AgentAIReview";
 
 const date = (at: number) =>
@@ -111,6 +112,7 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
   const [bot, setBot] = useState("");
   const [interval, setInterval] = useState(60);
   const [maxRuns, setMaxRuns] = useState(1);
+  const [reminderSource, setReminderSource] = useState("");
   const [botName, setBotName] = useState("");
   const [quantity, setQuantity] = useState(1);
   const [price, setPrice] = useState(100);
@@ -634,6 +636,15 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                         : "No evaluation scheduled"}
                     </p>
                     <div className="agent-inline">
+                      {!t.news && !t.botId && (
+                        <button
+                          className="secondary"
+                          disabled={agents.busy}
+                          onClick={() => setReminderSource(t.id)}
+                        >
+                          Reuse: {t.name}
+                        </button>
+                      )}
                       <button
                         className="secondary"
                         disabled={agents.busy || t.state !== "scheduled"}
@@ -668,6 +679,14 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                     </div>
                   </article>
                 ))}
+              {reminderSource && (
+                <SavedReminderDraft
+                  key={reminderSource}
+                  view={v}
+                  sourceID={reminderSource}
+                  close={() => setReminderSource("")}
+                />
+              )}
               <form
                 onSubmit={submit(async () => {
                   if (

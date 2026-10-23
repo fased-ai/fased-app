@@ -281,7 +281,21 @@ export type ReminderReview = {
   expiresAt: number;
   digest: string;
 };
+export type TaskReminderReview = {
+  version: "saved-reminder-v1";
+  profileId: string;
+  source: AgentTask;
+  sourceSha256: string;
+  name: string;
+  text: string;
+  intervalSeconds: number;
+  maxRuns: number;
+  revision: number;
+  expiresAt: number;
+  digest: string;
+};
 export type AgentView = {
+  taskReminderReview?: TaskReminderReview;
   reminderReview?: ReminderReview;
   newsSources: NewsSource[];
   newsFetches: NewsFetch[];

@@ -8,6 +8,21 @@ import (
 func (h *HTTPHandler) agentsAPI(w http.ResponseWriter, r *http.Request, token string) {
 	if r.Method == http.MethodGet {
 		q := r.URL.Query()
+		if q.Has("reminder-draft") {
+			for key, values := range q {
+				if (key != "profile" && key != "reminder-draft") || len(values) != 1 {
+					writeError(w, 400, "one profile and saved plain reminder expected")
+					return
+				}
+			}
+			v, err := h.store.AgentReminderDraft(r.Context(), q.Get("profile"), q.Get("reminder-draft"))
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			writeJSON(w, 200, v)
+			return
+		}
 		if q.Has("evidence") || q.Has("evidence-id") || q.Has("evidence-item") {
 			for key, values := range q {
 				if (key != "profile" && key != "evidence" && key != "evidence-id" && key != "evidence-item") || len(values) != 1 {

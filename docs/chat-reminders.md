@@ -52,3 +52,30 @@ partial creation; inspect and review again after a conflict.
 The new task ID is returned in `tasks`. Existing `task-pause`, `task-resume` and
 `task-run` commands use that ID and the latest revision. These are ordinary reminder
 controls, not renewed AI consent. No live provider or financial authority is enabled.
+
+## Reuse a saved plain reminder
+
+In Agents → Tasks, choose **Reuse** on a plain reminder. Inspect **Saved reminder
+source**, edit the name, text, interval and maximum evaluations, then choose
+**Review new reminder**. Only **Create reviewed reminder** creates a new task.
+Discard leaves all saved records unchanged. The new reminder starts with zero
+runs and its first evaluation one interval after creation; the original task,
+counters, schedule and journal remain intact. Completed reminders can be reused.
+AI, news, WEN and bot-backed tasks cannot be reused through this flow.
+
+The CLI reads the same transient source and settings:
+
+```sh
+fased-app agents --profile trading-analyst --reminder-draft SAVED_TASK_ID
+```
+
+Use its `revision` and `source.id` in a strict command through the existing
+`agents --request-stdin` path. Send `task-reminder-review` with the edited `name`,
+`text`, `intervalSeconds` and `maxRuns`, then inspect `taskReminderReview`.
+To create, send exactly those inputs with action `task-reminder-create`, its
+`consentDigest` and `expiresAt`. Preparation and review do not write records or
+reserve a run. A changed workspace, changed input or ten-minute expiry requires
+another review. A repeated confirmation cannot duplicate creation; another copy
+requires a fresh explicit review. Restart grants no execution or renewed consent.
+Existing per-task and aggregate limits and update pause still apply. No AI,
+credential, wallet, new storage format or service is involved.

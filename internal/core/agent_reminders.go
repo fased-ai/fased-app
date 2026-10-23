@@ -29,8 +29,8 @@ type ReminderReview struct {
 
 func reviewChatReminder(d *agentDocument, c AgentCommand, profile string, revision, now int64) (*ReminderReview, *AIActionCard, error) {
 	// Only a plain reminder can be proposed. Execution bindings are explicitly rejected.
-	if c.BotID != "" || c.WEN != nil || c.NewsSourceID != "" || c.NewsMaxAgeSeconds != 0 || c.ConnectionRef != "" || c.Limits != nil || c.TotalBudgetMicrousd != 0 || c.AuthorizationSeconds != 0 || c.Provider != "" || c.Model != "" || c.Quantity != 0 || c.PriceCents != 0 || c.BudgetCents != 0 || c.Source != "" {
-		return nil, nil, errors.New("chat reminders cannot attach AI, news, bots or financial operations")
+	if err := plainReminderBindings(c); err != nil {
+		return nil, nil, err
 	}
 	var source *AIActionCard
 	var request *AgentAIRequest

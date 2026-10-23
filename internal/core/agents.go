@@ -125,23 +125,24 @@ type agentDocument struct {
 	WENRehearsal  *wenSessionWorkspace `json:"wenRehearsal,omitempty"`
 }
 type AgentView struct {
-	ReminderReview       *ReminderReview  `json:"reminderReview,omitempty"`
-	NewsSources          []NewsSource     `json:"newsSources"`
-	NewsFetches          []NewsFetch      `json:"newsFetches"`
-	AIRequests           []AgentAIRequest `json:"aiRequests"`
-	AIFixtureAvailable   bool             `json:"aiFixtureAvailable"`
-	Revision             int64            `json:"revision"`
-	ProfileID            string           `json:"profileId"`
-	Profiles             []AgentProfile   `json:"profiles"`
-	Sessions             []AgentSession   `json:"sessions"`
-	Messages             []AgentMessage   `json:"messages"`
-	Memories             []AgentMemory    `json:"memories"`
-	Bots                 []PaperBot       `json:"bots"`
-	Tasks                []AgentTask      `json:"tasks"`
-	Runs                 []AgentRun       `json:"runs"`
-	Notices              []AgentNotice    `json:"notices"`
-	ProviderCallsEnabled bool             `json:"providerCallsEnabled"`
-	FinancialExecution   bool             `json:"financialExecution"`
+	TaskReminderReview   *TaskReminderReview `json:"taskReminderReview,omitempty"`
+	ReminderReview       *ReminderReview     `json:"reminderReview,omitempty"`
+	NewsSources          []NewsSource        `json:"newsSources"`
+	NewsFetches          []NewsFetch         `json:"newsFetches"`
+	AIRequests           []AgentAIRequest    `json:"aiRequests"`
+	AIFixtureAvailable   bool                `json:"aiFixtureAvailable"`
+	Revision             int64               `json:"revision"`
+	ProfileID            string              `json:"profileId"`
+	Profiles             []AgentProfile      `json:"profiles"`
+	Sessions             []AgentSession      `json:"sessions"`
+	Messages             []AgentMessage      `json:"messages"`
+	Memories             []AgentMemory       `json:"memories"`
+	Bots                 []PaperBot          `json:"bots"`
+	Tasks                []AgentTask         `json:"tasks"`
+	Runs                 []AgentRun          `json:"runs"`
+	Notices              []AgentNotice       `json:"notices"`
+	ProviderCallsEnabled bool                `json:"providerCallsEnabled"`
+	FinancialExecution   bool                `json:"financialExecution"`
 }
 
 // Optional fields are inert data for a fixed action; unknown fields/actions are
@@ -559,6 +560,29 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 			return AgentView{}, err
 		}
 		card.Review = "kept"
+	case "task-reminder-review", "task-reminder-create":
+		review, err := reviewTaskReminder(d, c, profile, revision, now)
+		if err != nil {
+			return AgentView{}, err
+		}
+		if c.Action == "task-reminder-review" {
+			v, err := agentView(d, revision, profile, "", now)
+			v.TaskReminderReview = review
+			return v, err
+		}
+		if c.ConsentDigest != review.Digest {
+			return AgentView{}, errors.New("reminder review changed; review again")
+		}
+		id = "reminder-copy:" + review.Digest
+		for _, task := range d.Tasks {
+			if task.ID == id {
+				return AgentView{}, errors.New("this review already created a reminder")
+			}
+		}
+		plain := AgentCommand{Name: review.Name, Text: review.Text, IntervalSeconds: review.IntervalSeconds, MaxRuns: review.MaxRuns}
+		if err = appendAgentTask(&d, plain, profile, id, now); err != nil {
+			return AgentView{}, err
+		}
 	case "task-create":
 		if e = appendAgentTask(&d, c, profile, id, now); e != nil {
 			return AgentView{}, e
