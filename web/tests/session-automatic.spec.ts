@@ -28,6 +28,7 @@ for (const variant of ["consent", "unknown"] as const) {
       url = "";
     const external: string[] = [];
     let maximumConcurrentFixtureReads = 0;
+    let reviewedPauseConflicts = 0;
     context.on("request", (r) => {
       if (!["127.0.0.1", "localhost"].includes(new URL(r.url()).hostname))
         external.push(r.url());
@@ -81,6 +82,7 @@ for (const variant of ["consent", "unknown"] as const) {
       flag: string,
       body: object,
       ok = true,
+      allowPauseConflict = false,
     ) => {
       const p = spawn(binary, [name, "--data-dir", dir, flag]);
       let out = "",
@@ -96,6 +98,16 @@ for (const variant of ["consent", "unknown"] as const) {
       if (!ok) {
         expect(status).not.toBe(0);
         return error;
+      }
+      if (
+        allowPauseConflict &&
+        status !== 0 &&
+        error.includes("core request failed (409)")
+      ) {
+        expect(name).toBe("wen-session");
+        expect(flag).toBe("--auto-control-stdin");
+        expect((body as { action: string }).action).toBe("pause");
+        return { pauseConflict: error };
       }
       expect(status, error).toBe(0);
       return JSON.parse(out);
@@ -236,16 +248,45 @@ for (const variant of ["consent", "unknown"] as const) {
         await expect
           .poll(async () => (await read()).runs[0].cursor)
           .toBeGreaterThan(cursor);
-        v = await read();
-        await command("wen-session", "--auto-control-stdin", {
-          schema: "wen-fixture-run-control/1",
-          profile: v.profile,
-          revision: v.revision,
-          poolRevision: v.pools[0].revision,
-          runId: id,
-          action: "pause",
-          decisionId: null,
-        });
+        const pause = (observed: any, allowConflict = false) =>
+          command(
+            "wen-session",
+            "--auto-control-stdin",
+            {
+              schema: "wen-fixture-run-control/1",
+              profile: observed.profile,
+              revision: observed.revision,
+              poolRevision: observed.pools[0].revision,
+              runId: id,
+              action: "pause",
+              decisionId: null,
+            },
+            true,
+            allowConflict,
+          );
+        // The closed tab's observation is deliberately stale. Refusal is a
+        // required result, not permission to reuse that command or its revision.
+        const stalePause = await pause(v, true);
+        expect(stalePause.pauseConflict).toContain("reload and review");
+        reviewedPauseConflicts++;
+        let pausedByOwner = false;
+        for (let review = 0; review < 3; review++) {
+          const observed = await read();
+          expect(observed.runs[0].record.sessionId).toBe(id);
+          expect(observed.runs[0].source.digest).toBe(reviewed.source.digest);
+          expect(observed.runs[0].deadline).toBe(originalDeadline);
+          expect(observed.runs[0].consentHistory).toHaveLength(1);
+          const result = await pause(observed, true);
+          if (!result.pauseConflict) {
+            pausedByOwner = true;
+            break;
+          }
+          reviewedPauseConflicts++;
+        }
+        expect(
+          pausedByOwner,
+          "owner's bounded fresh pause reviews failed",
+        ).toBe(true);
         const paused = await read();
         await new Promise((r) => setTimeout(r, 1100));
         expect(await read()).toEqual(paused);
@@ -501,6 +542,7 @@ for (const variant of ["consent", "unknown"] as const) {
             priorReader,
             applicationTabClosedWhileCoreAdvanced: variant === "consent",
             maximumConcurrentFixtureReads,
+            reviewedPauseConflicts,
             fixtureOnly: true,
           },
           null,

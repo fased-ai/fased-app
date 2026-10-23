@@ -42,7 +42,19 @@ def hello():
  nonce=os.urandom(16).hex();core=dict(inv['core']);core['probeId']=nonce
  return {'nonce':nonce,'boot':os.urandom(16).hex(),'head':h('owner fixture history'),'source':h('independent owner fixture source'),'core':core,'unit':unit,'clock':clock}
 def begin():
- s=connect();hh=hello();send(s,frame('hello',hh));cf=read(s);assert cf['kind']=='challenge';cc=cf['body'];nonce=hh['nonce']
+ # Closing the previous client does not synchronously release the server's one
+ # active channel. Retry only a pre-challenge hello, with a fresh nonce each
+ # time. Never replay inspect/confirm or retry hello after this ceiling.
+ end=time.monotonic()+2
+ while True:
+  s=connect();hh=hello()
+  try:send(s,frame('hello',hh));cf=read(s)
+  except (EOFError,ConnectionResetError,BrokenPipeError):
+   s.close()
+   if time.monotonic()>=end:raise
+   time.sleep(.02);continue
+  break
+ assert cf['kind']=='challenge';cc=cf['body'];nonce=hh['nonce']
  pp=tup('fased-app-installed-inspection-fixture-proposal:v1',profile,capability,'1',c['provision'],c['installation'],h((root/'fixture-inspection-v1/inputs/catalog.json').read_bytes()),*c['roles'],j(c['reader']),*c['candidateImages'],nonce,j(hh),j(cc))
  text='INSPECT FIXTURE '+pp;consent={'proposal':pp,'reviewedAt':clock['utc'],'consent':text,'review':tup('fased-app-installed-inspection-fixture-review:v1',pp,str(clock['utc']),text)}
  return s,nonce,consent
