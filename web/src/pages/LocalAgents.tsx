@@ -1,3 +1,4 @@
+import { MemoryRecall } from "./MemoryRecall";
 import { ChatMemoryReview } from "./ChatMemoryReview";
 import { NewsInputs, NewsSourcePicker } from "./NewsInputs";
 import { AIConnectionSettings } from "./AIConnection";
@@ -382,62 +383,31 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
               Owner-authored notes with evidence and expiry. These are not
               trading facts, permissions or model training.
             </p>
-            {v.memories.map((m) => (
-              <article className="memory-card" key={m.id}>
-                <p>{m.text}</p>
-                <small>
-                  {m.source} · Updated {date(m.updatedAt)} ·{" "}
-                  {m.expired ? "Expired" : date(m.expiresAt)}
-                </small>
-                <div className="agent-inline">
-                  <button
-                    className="text-button"
-                    disabled={agents.busy}
-                    onClick={() => {
-                      memoryRevision.current = v.revision;
-                      setMemoryID(m.id);
-                      setMemory(m.text);
-                      setSource(m.source);
-                      setExpiry(
-                        m.expiresAt
-                          ? new Date(
-                              m.expiresAt * 1000 -
-                                new Date(
-                                  m.expiresAt * 1000,
-                                ).getTimezoneOffset() *
-                                  60000,
-                            )
-                              .toISOString()
-                              .slice(0, 16)
-                          : "",
-                      );
-                    }}
-                  >
-                    Correct note
-                  </button>
-                  <button
-                    className="text-button"
-                    disabled={agents.busy}
-                    onClick={() =>
-                      void agents.change({ action: "memory-delete", id: m.id })
-                    }
-                  >
-                    Delete note
-                  </button>
-                </div>
-                {m.history.length > 0 && (
-                  <details>
-                    <summary>{m.history.length} previous revision(s)</summary>
-                    {m.history.map((h, i) => (
-                      <p key={i}>
-                        {h.text} · {h.source} · {date(h.at)}
-                      </p>
-                    ))}
-                  </details>
-                )}
-              </article>
-            ))}
-            {v.memories.length === 0 && <p>No notes in this profile.</p>}
+            <MemoryRecall
+              view={v}
+              onOpen={(source) => {
+                setSession(source.sessionId!);
+                setSearch("");
+                navigate("agents/chat");
+              }}
+              onCorrect={(m) => {
+                memoryRevision.current = v.revision;
+                setMemoryID(m.id);
+                setMemory(m.text);
+                setSource(m.source);
+                setExpiry(
+                  m.expiresAt
+                    ? new Date(
+                        m.expiresAt * 1000 -
+                          new Date(m.expiresAt * 1000).getTimezoneOffset() *
+                            60000,
+                      )
+                        .toISOString()
+                        .slice(0, 16)
+                    : "",
+                );
+              }}
+            />
             <form
               onSubmit={submit(async () => {
                 if (

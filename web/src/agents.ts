@@ -283,6 +283,27 @@ export type AgentView = {
   providerCallsEnabled: false;
   financialExecution: false;
 };
+export type AgentMemoryEvidence = {
+  memoryId: string;
+  status:
+    | "matched"
+    | "free-form"
+    | "invalid"
+    | "unavailable"
+    | "ambiguous"
+    | "changed";
+  kind?: "message" | "answer";
+  sessionId?: string;
+  id?: string;
+  sha256?: string;
+  text?: string;
+};
+export type AgentMemoryView = {
+  revision: number;
+  profileId: string;
+  memories: AgentMemory[];
+  source?: AgentMemoryEvidence;
+};
 export type AgentCommand = {
   wen?: WENPaperInput;
   newsSourceId?: string;

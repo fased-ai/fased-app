@@ -7,6 +7,26 @@ import (
 
 func (h *HTTPHandler) agentsAPI(w http.ResponseWriter, r *http.Request, token string) {
 	if r.Method == http.MethodGet {
+		q := r.URL.Query()
+		if q.Has("memory-search") || q.Has("memory-source") {
+			for key, values := range q {
+				if (key != "profile" && key != "memory-search" && key != "memory-source") || len(values) != 1 {
+					writeError(w, 400, "one profile, memory search and optional memory identity expected")
+					return
+				}
+			}
+			if q.Has("memory-source") && q.Get("memory-source") == "" {
+				writeError(w, 400, "select one memory identity")
+				return
+			}
+			v, err := h.store.AgentMemories(r.Context(), q.Get("profile"), q.Get("memory-search"), q.Get("memory-source"))
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			writeJSON(w, 200, v)
+			return
+		}
 		for k, v := range r.URL.Query() {
 			if (k != "profile" && k != "q") || len(v) != 1 {
 				writeError(w, 400, "one profile and optional session search expected")

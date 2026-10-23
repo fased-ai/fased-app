@@ -3016,3 +3016,321 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
     fullPage: true,
   });
 });
+
+test("profile memory recall shares read-only UI and CLI search, source inspection and restart", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(90000);
+  await stop();
+  await start(true);
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page.getByRole("button", { name: "Claim workspace" }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = async () => {
+    const c = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+    c.stdin!.end(fixturePassword + "\n");
+    expect((await once(c, "exit"))[0]).toBe(0);
+  };
+  await login();
+  const profileId = "trading-analyst";
+  const read = () => privateCLI(["agents", "--profile", profileId]);
+  const command = async (c: object) =>
+    privateCLI(["agents", "--request-stdin"], {
+      profileId,
+      revision: (await read()).revision,
+      ...c,
+    });
+  const recall = (query = "", id?: string) =>
+    privateCLI([
+      "agents",
+      "--profile",
+      profileId,
+      "--memory-search",
+      query,
+      ...(id ? ["--memory-source", id] : []),
+    ]);
+  let v = await command({
+    action: "session-create",
+    name: "Source conversation",
+  });
+  const sessionId = v.sessions[0].id;
+  v = await command({
+    action: "message-add",
+    id: sessionId,
+    text: "Original retained claim, still unverified",
+  });
+  const message = v.messages[0];
+  v = await command({
+    action: "memory-chat-save",
+    id: message.id,
+    source: "message",
+    text: "Edited concise preference",
+  });
+  const note = v.memories[0];
+  v = await command({
+    action: "ai-prepare",
+    id: sessionId,
+    text: "Explain the retained claim",
+    limits: {
+      maxInputTokens: 24000,
+      maxOutputTokens: 1024,
+      deadlineSeconds: 3,
+      budgetMicrousd: 30000,
+    },
+  });
+  const request = v.aiRequests[0];
+  await command({
+    action: "ai-start",
+    id: request.id,
+    consentDigest: request.digest,
+  });
+  await expect
+    .poll(async () => (await read()).aiRequests[0]?.state)
+    .toBe("completed");
+  const answer = (await read()).aiRequests[0];
+  v = await command({
+    action: "memory-chat-save",
+    id: answer.id,
+    source: "answer",
+    text: "Answer evidence preference",
+  });
+  const answerNote = v.memories[1];
+  await command({
+    action: "memory-put",
+    text: "Expired calendar preference",
+    source: "https://never-fetch.invalid/calendar",
+    expiresAt: 1,
+  });
+  await command({
+    action: "memory-put",
+    text: "Invalid reference note",
+    source: "chat-memory-v1 bogus",
+  });
+  await command({
+    action: "memory-put",
+    text: "Changed reference note",
+    source: note.source.replace(
+      /sha256=[0-9a-f]{64}/,
+      "sha256=" + "0".repeat(64),
+    ),
+  });
+  await command({ action: "session-create", name: "Other conversation" });
+  const external: string[] = [];
+  const fixtureOrigins = new Set([new URL(url).origin]);
+  page.on("request", (r) => {
+    if (!fixtureOrigins.has(new URL(r.url()).origin)) external.push(r.url());
+  });
+  await page.goto(url + "/#agents/chat");
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await page
+    .getByRole("button", { name: "Other conversation", exact: true })
+    .click();
+  await page
+    .getByRole("searchbox", { name: "Search conversations", exact: true })
+    .fill("stale selection");
+  await page.getByRole("button", { name: "memory", exact: true }).click();
+  const search = async (q: string) => {
+    await page
+      .getByRole("searchbox", { name: "Search memories", exact: true })
+      .fill(q);
+    await page
+      .getByRole("button", { name: "Search memory", exact: true })
+      .click();
+    const result = await recall(q);
+    await expect(page.locator("article[aria-label^='Memory ']")).toHaveCount(
+      result.memories.length,
+    );
+    return result;
+  };
+  const stable = await read();
+  const result = await search("  CONCISE  ");
+  expect(result.memories.map((m: { id: string }) => m.id)).toEqual([note.id]);
+  await page
+    .getByRole("button", { name: "Inspect source", exact: true })
+    .click();
+  const inspection = page.getByRole("region", {
+    name: "Memory source",
+    exact: true,
+  });
+  await expect(inspection).toContainText(
+    "Matched retained text · Claims unverified",
+  );
+  await expect(inspection).toContainText(message.text);
+  const source = (await recall("", note.id)).source;
+  expect(source.sha256).toBe(
+    createHash("sha256").update(message.text).digest("hex"),
+  );
+  expect(source.text).toBe(message.text);
+  expect(source.kind).toBe("message");
+  await inspection
+    .getByRole("button", { name: "Open conversation", exact: true })
+    .click();
+  await expect(
+    page.getByRole("searchbox", { name: "Search conversations", exact: true }),
+  ).toHaveValue("");
+  await expect(
+    page.getByRole("heading", { name: "Source conversation", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".local-messages")).toContainText(message.text);
+  expect(await read()).toEqual(stable);
+  await expect(
+    privateCLI([
+      "agents",
+      "--profile",
+      "news-researcher",
+      "--memory-source",
+      note.id,
+    ]),
+  ).rejects.toThrow();
+  await expect(
+    privateCLI([
+      "agents",
+      "--profile",
+      profileId,
+      "--memory-search",
+      "x",
+      "--search",
+      "y",
+    ]),
+  ).rejects.toThrow();
+  await expect(recall("x".repeat(201))).rejects.toThrow();
+  await page.getByRole("button", { name: "memory", exact: true }).click();
+  await search("Edited concise preference");
+  v = await command({
+    action: "memory-put",
+    id: note.id,
+    text: "Corrected source preference",
+    source: note.source,
+  });
+  await search("Edited concise preference");
+  await expect(
+    page.getByText("No matching memories.", { exact: true }),
+  ).toBeVisible();
+  await search("Corrected source preference");
+  await page.getByText("1 previous revision(s)", { exact: true }).click();
+  await expect(page.locator("article[aria-label^='Memory ']")).toContainText(
+    "Edited concise preference",
+  );
+  await page
+    .getByRole("button", { name: "Inspect source", exact: true })
+    .click();
+  await expect(inspection).toContainText(message.text);
+  expect((await recall("", note.id)).source).toEqual(source);
+  for (const [query, status] of [
+    ["Expired calendar", "Free-form source"],
+    ["Invalid reference", "Invalid source reference"],
+    ["Changed reference", "Recorded source text changed"],
+  ]) {
+    await search(query);
+    await page
+      .getByRole("button", { name: "Inspect source", exact: true })
+      .click();
+    await expect(inspection).toContainText(status);
+    await expect(
+      inspection.getByRole("button", {
+        name: "Open conversation",
+        exact: true,
+      }),
+    ).toHaveCount(0);
+    if (query.startsWith("Expired"))
+      await expect(
+        page.locator("article[aria-label^='Memory ']"),
+      ).toContainText("Expired");
+  }
+  await search("Answer evidence");
+  await page
+    .getByRole("button", { name: "Inspect source", exact: true })
+    .click();
+  await expect(inspection).toContainText(answer.answer);
+  expect((await recall("", answerNote.id)).source.kind).toBe("answer");
+  const beforeRestart = await command({
+    action: "profile-update",
+    name: "Trading Analyst",
+    text: "Updated persona",
+    provider: "xai",
+    model: "preference-only",
+  });
+  await stop();
+  await start();
+  fixtureOrigins.add(new URL(url).origin);
+  await login();
+  await page.goto(url + "/#agents/memory");
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await search("Answer evidence");
+  await page
+    .getByRole("button", { name: "Inspect source", exact: true })
+    .click();
+  await expect(inspection).toContainText(answer.answer);
+  expect((await recall("", note.id)).source).toEqual(source);
+  expect((await read()).aiRequests).toEqual(beforeRestart.aiRequests);
+  expect((await read()).providerCallsEnabled).toBe(false);
+  expect((await read()).financialExecution).toBe(false);
+  await page.screenshot({
+    path: `.evidence/memory-recall/${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+  await search("Corrected source preference");
+  let release!: () => void, began!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const requested = new Promise<void>((resolve) => {
+    began = resolve;
+  });
+  const intercept = async (route: import("@playwright/test").Route) => {
+    if (
+      new URL(route.request().url()).searchParams.get("memory-source") !==
+      note.id
+    )
+      return route.continue();
+    const response = await route.fetch();
+    began();
+    await held;
+    await route.fulfill({ response });
+  };
+  await page.route("**/api/v1/agents?**", intercept);
+  try {
+    await page
+      .getByRole("button", { name: "Inspect source", exact: true })
+      .click();
+    await requested;
+    await page.getByRole("button", { name: /^News Researcher / }).click();
+    await expect(
+      page.getByRole("searchbox", { name: "Search memories", exact: true }),
+    ).toHaveValue("");
+    release();
+    await expect(
+      page.getByText("No notes in this profile.", { exact: true }),
+    ).toBeVisible();
+    await expect(inspection).toHaveCount(0);
+    await expect(page.locator("article[aria-label^='Memory ']")).toHaveCount(0);
+  } finally {
+    release();
+    await page.unroute("**/api/v1/agents?**", intercept);
+  }
+  v = await command({ action: "memory-delete", id: note.id });
+  expect((await recall("Corrected source preference")).memories).toHaveLength(
+    0,
+  );
+  await expect(recall("", note.id)).rejects.toThrow();
+  expect(v.messages[0]).toEqual(message);
+  expect(v.aiRequests).toEqual(beforeRestart.aiRequests);
+  expect(external).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth + 1,
+    ),
+  ).toBe(true);
+});

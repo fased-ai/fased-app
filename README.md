@@ -173,6 +173,19 @@ permissions. Every memory has evidence/source, timestamp, optional
 expiry and up to eight previous revisions. Memory deletion leaves task/paper
 journals intact.
 
+### Find a memory and inspect its source
+
+In **Agents → Memory**, search current note text or source within the selected profile. Matching is case-insensitive and bounded to 200 UTF-8 bytes; previous correction text does not match current-note search. Expired notes stay visible and labelled. **Inspect source** resolves a recorded chat message or completed manual answer and compares its retained text with the recorded SHA-256. **Open conversation** opens that existing conversation with the chat filter cleared. These reads do not change the workspace revision, create a conversation, fetch a URL, call AI, alter disclosed AI context or grant execution authority.
+
+Use the same authenticated read path in the CLI:
+
+```sh
+fased-app agents --profile trading-analyst --memory-search "preference"
+fased-app agents --profile trading-analyst --memory-source MEMORY_ID
+```
+
+An empty `--memory-search ""` lists the profile's notes. Search and inspection can be combined; chat `--search` and `--request-stdin` cannot be mixed with these reads. Results include the workspace revision, scoped notes/corrections/expiry and optional source inspection. A matched reference includes only retained message/answer text, kind, identities and hash. Free-form, malformed, missing, ambiguous or changed evidence is reported without source text or an opening action. Deleted or foreign memory identities refuse. Source references are owner-editable untrusted data: a matching hash establishes a text match, not the truth of a claim or immutable authorship. Original conversations and existing separately reviewed memory edits remain unchanged.
+
 ### Discuss a saved headline
 
 In Agents → News, choose **Discuss headline** on one item in a completed saved

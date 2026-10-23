@@ -25,9 +25,22 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	dir := flags.String("data-dir", base, "private instance directory")
 	profile := flags.String("profile", "", "profile ID for scoped reading")
 	search := flags.String("search", "", "search this profile's conversations, messages and completed AI questions/answers")
+	memorySearch := flags.String("memory-search", "", "read-only search of current profile memory text and source (200 bytes maximum)")
+	memorySource := flags.String("memory-source", "", "inspect one profile memory's retained chat evidence without writing or fetching")
 	change := flags.Bool("request-stdin", false, "read one revision-checked local agent command JSON (including news-item-explain, task-run-explain, memory-chat-save and ai-reminder-review/create); no credentials")
 	if e = flags.Parse(args); e != nil {
 		return e
+	}
+	memoryMode, sourceSet, chatSearchSet := false, false, false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "memory-search" || f.Name == "memory-source" {
+			memoryMode = true
+		}
+		sourceSet = sourceSet || f.Name == "memory-source"
+		chatSearchSet = chatSearchSet || f.Name == "search"
+	})
+	if memoryMode && (*change || *profile == "" || chatSearchSet || (sourceSet && *memorySource == "")) {
+		return errors.New("use --profile with --memory-search and/or a nonempty --memory-source; do not combine with chat search or writes")
 	}
 	if flags.NArg() != 0 || (*change && (*profile != "" || *search != "")) {
 		return errors.New("use scoped reading or one command from stdin")
@@ -41,6 +54,17 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	defer c.Close()
 	if e = c.LoadSession(ctx, *dir); e != nil {
 		return e
+	}
+	if memoryMode {
+		q := url.Values{"profile": {*profile}, "memory-search": {*memorySearch}}
+		if sourceSet {
+			q.Set("memory-source", *memorySource)
+		}
+		var v core.AgentMemoryView
+		if e = c.Do(ctx, http.MethodGet, "/api/v1/agents?"+q.Encode(), nil, &v); e != nil {
+			return e
+		}
+		return json.NewEncoder(out).Encode(v)
 	}
 	var v core.AgentView
 	if *change {
