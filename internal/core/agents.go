@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -853,4 +854,180 @@ func saveChatMemory(d *agentDocument, c AgentCommand, profile, id string, now in
 	digest := sha256.Sum256([]byte(text))
 	source := fmt.Sprintf("chat-memory-v1 kind=%s profile=%s session=%s id=%s sha256=%x", c.Source, profile, session, c.ID, digest)
 	return putAgentMemory(d, AgentCommand{Text: c.Text, Source: source, ExpiresAt: c.ExpiresAt}, profile, id, now)
+}
+
+type recordedAgentAI struct {
+	ID, SessionID, Digest, State, Model, Answer                                          string
+	Limits                                                                               AILimits
+	CreatedAt, InputTokens, OutputTokens, CachedInputTokens, SpentMicrousd, HeldMicrousd int64
+}
+
+func retainedAgentRun(d agentDocument, profile, runID string, now int64) (*AgentRun, *AgentTask, *recordedAgentAI, error) {
+	refused := errors.New("saved reminder run references missing, ambiguous, changed or unsupported")
+	var r *AgentRun
+	for i := range d.Runs {
+		if d.Runs[i].ID == runID {
+			if r != nil {
+				return nil, nil, nil, refused
+			}
+			r = &d.Runs[i]
+		}
+	}
+	if r == nil || r.ProfileID != profile || r.WEN != nil || r.BotID != "" || r.Quantity != 0 || r.PriceCents != 0 || r.CostCents != 0 || r.BudgetBefore != 0 || r.At <= 0 || r.At > now {
+		return nil, nil, nil, refused
+	}
+	var task *AgentTask
+	for i := range d.Tasks {
+		if d.Tasks[i].ID == r.TaskID {
+			if task != nil {
+				return nil, nil, nil, refused
+			}
+			task = &d.Tasks[i]
+		}
+	}
+	if task == nil || task.ProfileID != profile || task.WEN != nil || task.BotID != "" {
+		return nil, nil, nil, refused
+	}
+	n, err := strconv.Atoi(strings.TrimPrefix(r.ID, task.ID+":"))
+	if err != nil || n < 1 || n > task.Runs || r.ID != fmt.Sprintf("%s:%d", task.ID, n) {
+		return nil, nil, nil, refused
+	}
+	plain := r.Strategy == "reminder-v1"
+	success := r.Strategy == "ai-step-v1/reminder-v1"
+	held := r.Strategy == "ai-step-v1" && strings.HasPrefix(r.Outcome, "ai-")
+	if (!plain && !success && !held) || ((plain || success) && r.Outcome != "reminded") {
+		return nil, nil, nil, refused
+	}
+	expectedNotice := task.Name + ": " + task.Text
+	if held {
+		expectedNotice = task.Name + ": " + r.Outcome + "; dependent step stopped. Review a new task plan."
+	}
+	var notice *AgentNotice
+	for i := range d.Notices {
+		if d.Notices[i].RunID == runID || d.Notices[i].ID == runID {
+			if notice != nil {
+				return nil, nil, nil, refused
+			}
+			notice = &d.Notices[i]
+		}
+	}
+	if notice == nil || notice.ID != runID || notice.RunID != runID || notice.ProfileID != profile || notice.At != r.At || notice.Text != expectedNotice {
+		return nil, nil, nil, refused
+	}
+	// Whitelist public historical fields; never serialize TaskAIStep or the
+	// request itself (both contain private connection/context/disclosure data).
+	var ai *recordedAgentAI
+	if plain {
+		if task.AI != nil || r.AIRequestID != "" || r.AIDigest != "" {
+			return nil, nil, nil, refused
+		}
+	} else {
+		if task.AI == nil || r.AIDigest == "" || r.AIDigest != task.AI.Digest || r.AIDigest != taskAIDigest(*task) {
+			return nil, nil, nil, refused
+		}
+		if r.AIRequestID == "" {
+			if !held {
+				return nil, nil, nil, refused
+			}
+		} else {
+			var q *AgentAIRequest
+			for i := range d.AIRequests {
+				if d.AIRequests[i].ID == r.AIRequestID {
+					if q != nil {
+						return nil, nil, nil, refused
+					}
+					q = &d.AIRequests[i]
+				}
+			}
+			if q == nil || q.ProfileID != profile || q.TaskID != task.ID || q.TaskDigest != r.AIDigest || q.Prompt != task.Text || q.Digest != aiDigest(*q) || q.CreatedAt > r.At {
+				return nil, nil, nil, refused
+			}
+			switch q.State {
+			case "completed", "failed", "cancelled", "unknown":
+			default:
+				return nil, nil, nil, refused
+			}
+			if success && q.State != "completed" {
+				return nil, nil, nil, refused
+			}
+			sessions := 0
+			for _, s := range d.Sessions {
+				if s.ID == q.SessionID {
+					if s.ProfileID != profile {
+						return nil, nil, nil, refused
+					}
+					sessions++
+				}
+			}
+			if sessions != 1 {
+				return nil, nil, nil, refused
+			}
+			ai = &recordedAgentAI{ID: q.ID, SessionID: q.SessionID, Digest: q.Digest, State: q.State, Model: q.Model, Limits: q.Limits, CreatedAt: q.CreatedAt, InputTokens: q.InputTokens, OutputTokens: q.OutputTokens, CachedInputTokens: q.CachedInputTokens, SpentMicrousd: q.SpentMicrousd, HeldMicrousd: q.HeldMicrousd}
+			if q.State == "completed" {
+				ai.Answer = q.Answer
+			}
+		}
+	}
+	return r, task, ai, nil
+}
+
+func retainedNewsItem(d agentDocument, profile, fetchID, itemID string, now int64) (*NewsFetch, *NewsSource, *NewsItem, error) {
+	refused := errors.New("saved news references missing, ambiguous, changed, unfinished or invalid")
+	var f *NewsFetch
+	for i := range d.NewsFetches {
+		if d.NewsFetches[i].ID == fetchID {
+			if f != nil {
+				return nil, nil, nil, refused
+			}
+			f = &d.NewsFetches[i]
+		}
+	}
+	if f == nil || f.ProfileID != profile || f.State != "completed" || f.FetchedAt <= 0 || f.FetchedAt > now || f.CreatedAt > f.FetchedAt || f.MaxAgeSeconds < 60 || f.MaxAgeSeconds > 86400 || f.Bytes < 1 || f.Bytes > 65536 || len(f.BodySHA256) != 64 {
+		return nil, nil, nil, refused
+	}
+	for _, c := range f.BodySHA256 {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			return nil, nil, nil, refused
+		}
+	}
+	var source *NewsSource
+	for i := range d.NewsSources {
+		if d.NewsSources[i].ID == f.SourceID {
+			if source != nil {
+				return nil, nil, nil, refused
+			}
+			source = &d.NewsSources[i]
+		}
+	}
+	if source == nil || source.ProfileID != profile || source.URL != f.URL || source.MaxAgeSeconds != f.MaxAgeSeconds || !validAgentText(source.Name, 80, true) {
+		return nil, nil, nil, refused
+	}
+	if _, err := newsURL(f.URL); err != nil {
+		return nil, nil, nil, refused
+	} // syntax only; no DNS or network
+	var item *NewsItem
+	for i := range f.Items {
+		if f.Items[i].ID == itemID {
+			if item != nil {
+				return nil, nil, nil, refused
+			}
+			item = &f.Items[i]
+		}
+	}
+	if item == nil || !validAgentText(item.Title, 240, true) || item.PublishedAt <= 0 || item.PublishedAt > f.FetchedAt {
+		return nil, nil, nil, refused
+	}
+	if _, err := newsURL(item.URL); err != nil {
+		return nil, nil, nil, refused
+	}
+	original := *item
+	original.ID = ""
+	b, err := json.Marshal(original)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if item.ID != newsHash(append([]byte(f.SourceID+":"), b...)) {
+		return nil, nil, nil, refused
+	}
+	return f, source, item, nil
 }
