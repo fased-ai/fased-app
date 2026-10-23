@@ -120,6 +120,11 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
       revision: (await read()).revision,
       ...c,
     });
+  const chooseProfile = async (name: RegExp) => {
+    const profile = page.getByRole("button", { name });
+    await profile.click();
+    await expect(profile).toHaveAttribute("aria-pressed", "true");
+  };
   const open = async (tab: string) => {
     await page.getByRole("button", { name: tab, exact: true }).click();
     await expect(
@@ -127,7 +132,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     ).toHaveAttribute("aria-pressed", "true");
   };
   await page.goto(url + "/#agents/news");
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await chooseProfile(/^Trading Analyst /);
   const news = page.getByRole("region", { name: "News inputs", exact: true });
   await news
     .getByLabel("News source name", { exact: true })
@@ -145,6 +150,10 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     name: "News source Joined controlled news",
     exact: true,
   });
+  await expect(source).toBeVisible();
+  expect(
+    (await read()).newsSources.map((s: { name: string }) => s.name),
+  ).toEqual(["Joined controlled news"]);
   await source
     .getByRole("button", { name: "Fetch headlines", exact: true })
     .click();
@@ -353,11 +362,11 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     ).rejects.toThrow();
   await expect(command({ action: "task-run", id: task.id })).rejects.toThrow();
   expect(await read()).toEqual(retained);
-  await page.getByRole("button", { name: /^News Researcher / }).click();
+  await chooseProfile(/^News Researcher /);
   await expect(
     page.getByRole("article", { name: `Memory ${note.id}`, exact: true }),
   ).toHaveCount(0);
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await chooseProfile(/^Trading Analyst /);
   await command({
     action: "profile-update",
     name: "Trading Analyst",
@@ -375,7 +384,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await chooseProfile(/^Trading Analyst /);
   const restarted = await read();
   for (const key of [
     "sessions",
