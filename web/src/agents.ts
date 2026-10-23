@@ -214,6 +214,8 @@ export type AILimits = {
   budgetMicrousd: number;
 };
 export type AgentAIRequest = {
+  researchTurnId?: string;
+  researchStep?: number;
   policy?: OpenAIModelPolicy;
   admission?: OpenAIAdmission;
   cachedInputTokens?: number;

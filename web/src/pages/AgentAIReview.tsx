@@ -1,4 +1,6 @@
 import { AgentEvidenceInspector } from "./AgentEvidence";
+import { ResearchTurnReview } from "./ResearchTurnReview";
+import type { ResearchSelection } from "./ResearchReadPanel";
 import { ChatMemoryReview } from "./ChatMemoryReview";
 import { ReminderDraftReview } from "./ReminderDraftReview";
 import { NewsSourcePicker } from "./NewsInputs";
@@ -21,24 +23,39 @@ const money = (n: number) => `$${(n / 1_000_000).toFixed(6)}`;
 export function AgentAIReview({
   view,
   sessionId,
+  onReviewStrategy,
+  researchSelection,
+  onClearResearch,
 }: {
   view: AgentView;
   sessionId: string;
+  onReviewStrategy?: (requestId: string, cardId: string) => void;
+  researchSelection?: ResearchSelection;
+  onClearResearch?: () => void;
 }) {
   return (
     <AgentAIForm
       key={`${view.profileId}:${sessionId}`}
       view={view}
       sessionId={sessionId}
+      onReviewStrategy={onReviewStrategy}
+      researchSelection={researchSelection}
+      onClearResearch={onClearResearch}
     />
   );
 }
 function AgentAIForm({
   view,
   sessionId,
+  onReviewStrategy,
+  researchSelection,
+  onClearResearch,
 }: {
   view: AgentView;
   sessionId: string;
+  onReviewStrategy?: (requestId: string, cardId: string) => void;
+  researchSelection?: ResearchSelection;
+  onClearResearch?: () => void;
 }) {
   const { core, agents } = useWorkspace();
   const [prompt, setPrompt] = useState("");
@@ -50,6 +67,11 @@ function AgentAIForm({
   const [output, setOutput] = useState(1024);
   const [deadline, setDeadline] = useState(3);
   const [budget, setBudget] = useState(30000);
+  const [modelAttempts, setModelAttempts] = useState(3);
+  const [toolAttempts, setToolAttempts] = useState(8);
+  const [turnSeconds, setTurnSeconds] = useState(90);
+  const [turnBudget, setTurnBudget] = useState(90000);
+  const [researchPreparing, setResearchPreparing] = useState(false);
   const [consent, setConsent] = useState("");
   const [memoryMode, setMemoryMode] = useState<
     AIMemorySelection["mode"] | "legacy"
@@ -65,6 +87,20 @@ function AgentAIForm({
     useState<AgentEvidenceView | null>(null);
   const questionRef = useRef<HTMLTextAreaElement>(null);
   const generation = useRef(0);
+  useEffect(() => {
+    generation.current++;
+    setResearchPreparing(false);
+    setConsent("");
+    if (researchSelection) {
+      setNewsSourceId("");
+      setEvidenceSelection(undefined);
+      setEvidencePreview(null);
+      setLegacyDraft(false);
+      setMemoryMode("all");
+      setDraftSource("");
+      questionRef.current?.focus();
+    }
+  }, [researchSelection]);
   useEffect(
     () => () => {
       generation.current++;
@@ -93,6 +129,7 @@ function AgentAIForm({
     setConsent("");
   }
   async function useDraft(id: string) {
+    onClearResearch?.();
     const epoch = ++generation.current;
     setDraftBusy(true);
     setDraftError("");
@@ -164,25 +201,27 @@ function AgentAIForm({
   }
   return (
     <>
-      <AgentEvidenceInspector
-        view={view}
-        sessionId={sessionId}
-        onUse={(e) => {
-          generation.current++;
-          setDraftBusy(false);
-          setDraftError("");
-          setDraftSource("");
-          setEvidenceSelection({
-            kind: e.kind,
-            id: e.id,
-            ...(e.itemId ? { itemId: e.itemId } : {}),
-            sha256: e.sha256,
-          });
-          setEvidencePreview(e);
-          setConsent("");
-          questionRef.current?.focus();
-        }}
-      />
+      {!researchSelection && (
+        <AgentEvidenceInspector
+          view={view}
+          sessionId={sessionId}
+          onUse={(e) => {
+            generation.current++;
+            setDraftBusy(false);
+            setDraftError("");
+            setDraftSource("");
+            setEvidenceSelection({
+              kind: e.kind,
+              id: e.id,
+              ...(e.itemId ? { itemId: e.itemId } : {}),
+              sha256: e.sha256,
+            });
+            setEvidencePreview(e);
+            setConsent("");
+            questionRef.current?.focus();
+          }}
+        />
+      )}
       <section className="ai-review" aria-label="Optional AI request review">
         <h3>Optional AI step</h3>
         <p>
@@ -202,6 +241,50 @@ function AgentAIForm({
         <form
           onSubmit={(e) => {
             e.preventDefault();
+            if (researchSelection) {
+              if (researchPreparing) return;
+              const epoch = generation.current;
+              setResearchPreparing(true);
+              setDraftError("");
+              void core
+                .request("wen/research/ai-prepare", "POST", {
+                  schema: "wen-research-ai-prepare/1",
+                  selection: { ...researchSelection, revision: view.revision },
+                  prompt,
+                  model: model || "fixture-openai-v1",
+                  ...(connectionRef ? { connectionRef } : {}),
+                  memorySelection: {
+                    mode: memoryMode,
+                    ...(memoryMode === "selected" ? { ids: memoryIds } : {}),
+                  },
+                  limits: {
+                    maxInputTokens: input,
+                    maxOutputTokens: output,
+                    deadlineSeconds: deadline,
+                    budgetMicrousd: budget,
+                  },
+                  bounds: {
+                    maxModelAttempts: modelAttempts,
+                    maxToolAttempts: toolAttempts,
+                    wallSeconds: turnSeconds,
+                    budgetMicrousd: turnBudget,
+                  },
+                })
+                .then(() => {
+                  if (epoch === generation.current) {
+                    onClearResearch?.();
+                    setPrompt("");
+                  }
+                  void agents.refresh().catch(() => {});
+                })
+                .catch((err: Error) => {
+                  if (epoch === generation.current) setDraftError(err.message);
+                })
+                .finally(() => {
+                  if (epoch === generation.current) setResearchPreparing(false);
+                });
+              return;
+            }
             void agents
               .change({
                 action: "ai-prepare",
@@ -240,6 +323,20 @@ function AgentAIForm({
               });
           }}
         >
+          {researchSelection && (
+            <fieldset aria-label="Selected research for AI">
+              <legend>Selected research</legend>
+              <pre>{JSON.stringify(researchSelection, null, 2)}</pre>
+              <button
+                type="button"
+                className="secondary"
+                disabled={researchPreparing}
+                onClick={onClearResearch}
+              >
+                Remove research
+              </button>
+            </fieldset>
+          )}
           {evidenceSelection && (
             <fieldset aria-label="AI evidence selection">
               <legend>Selected evidence</legend>
@@ -270,13 +367,15 @@ function AgentAIForm({
             onChange={setModel}
             connectionRef={connectionRef}
           />
-          <NewsSourcePicker
-            view={view}
-            value={newsSourceId}
-            onChange={setNewsSourceId}
-            age={newsAge}
-            onAge={setNewsAge}
-          />
+          {!researchSelection && (
+            <NewsSourcePicker
+              view={view}
+              value={newsSourceId}
+              onChange={setNewsSourceId}
+              age={newsAge}
+              onAge={setNewsAge}
+            />
+          )}
           <label>
             Memory
             <select
@@ -380,6 +479,58 @@ function AgentAIForm({
               />
             </label>
           </div>
+          {researchSelection && (
+            <fieldset
+              className="agent-form-grid"
+              aria-label="Research turn limits"
+            >
+              <legend>Research turn limits</legend>
+              <label>
+                Model attempts
+                <input
+                  type="number"
+                  min={1}
+                  max={3}
+                  required
+                  value={modelAttempts}
+                  onChange={(e) => setModelAttempts(e.target.valueAsNumber)}
+                />
+              </label>
+              <label>
+                Read attempts
+                <input
+                  type="number"
+                  min={1}
+                  max={8}
+                  required
+                  value={toolAttempts}
+                  onChange={(e) => setToolAttempts(e.target.valueAsNumber)}
+                />
+              </label>
+              <label>
+                Research deadline (seconds)
+                <input
+                  type="number"
+                  min={1}
+                  max={90}
+                  required
+                  value={turnSeconds}
+                  onChange={(e) => setTurnSeconds(e.target.valueAsNumber)}
+                />
+              </label>
+              <label>
+                Turn budget (micro USD)
+                <input
+                  type="number"
+                  min={1}
+                  max={3000000}
+                  required
+                  value={turnBudget}
+                  onChange={(e) => setTurnBudget(e.target.valueAsNumber)}
+                />
+              </label>
+            </fieldset>
+          )}
           <p className="subtle">
             {model ? (
               "Selected snapshot uses its disclosed standard tariff and provider token-count preflight. Development fixtures only."
@@ -396,11 +547,14 @@ function AgentAIForm({
             className="secondary"
             disabled={
               agents.busy ||
+              researchPreparing ||
               draftBusy ||
               (memoryMode === "selected" && memoryIds.length === 0)
             }
           >
-            Prepare disclosure
+            {researchSelection
+              ? "Prepare research disclosure"
+              : "Prepare disclosure"}
           </button>
         </form>
         {requests.length === 0 && (
@@ -409,14 +563,24 @@ function AgentAIForm({
         {requests.map((q) => (
           <article className="ai-request" key={q.id}>
             <h4>{q.prompt}</h4>
-            <button
-              type="button"
-              className="secondary"
-              disabled={agents.busy || draftBusy}
-              onClick={() => void useDraft(q.id)}
-            >
-              Use as draft
-            </button>
+            {!q.researchTurnId && (
+              <button
+                type="button"
+                className="secondary"
+                disabled={agents.busy || draftBusy}
+                onClick={() => void useDraft(q.id)}
+              >
+                Use as draft
+              </button>
+            )}
+            {q.researchTurnId && (
+              <ResearchTurnReview
+                request={q}
+                revision={view.revision}
+                fixtureAvailable={view.aiFixtureAvailable}
+                onChanged={() => agents.refresh()}
+              />
+            )}
             <AIAdmissionReview policy={q.policy} admission={q.admission} />
             <p>
               <strong>{q.state}</strong> · {q.model} · Held{" "}
@@ -448,7 +612,7 @@ function AgentAIForm({
               <p className="subtle">Disclosure SHA-256: {q.digest}</p>
             </details>
             {q.failure && <p role="status">{q.failure}</p>}
-            {q.state === "prepared" && (
+            {q.state === "prepared" && !q.researchTurnId && (
               <>
                 <label className="ai-consent">
                   <input
@@ -526,6 +690,18 @@ function AgentAIForm({
                   Keeping this draft records your review. It creates no task,
                   bot, permission or trade.
                 </p>
+                {q.state === "completed" &&
+                  card.kind === "paper-strategy-draft" &&
+                  card.review !== "dismissed" &&
+                  onReviewStrategy && (
+                    <button
+                      className="secondary"
+                      disabled={agents.busy}
+                      onClick={() => onReviewStrategy(q.id, card.id)}
+                    >
+                      Review WEN revision
+                    </button>
+                  )}
                 {card.kind === "reminder-draft" &&
                   card.review !== "dismissed" && (
                     <ReminderDraftReview

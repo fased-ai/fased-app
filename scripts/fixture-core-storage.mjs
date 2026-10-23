@@ -22,11 +22,47 @@ export async function currentStorageFixture(archivedRoot) {
     "ai_connection.go",
     "update.go",
     "lifecycle.go",
+    ...(await readdir("internal/core")).filter(
+      (name) =>
+        name.startsWith("wen_") &&
+        name.endsWith(".go") &&
+        !name.endsWith("_test.go") &&
+        name !== "wen_paper.go",
+    ),
   ]) {
     const bytes = await readFile("internal/core/" + file);
     await writeFile(path.join(archivedRoot, "internal/core", file), bytes);
     storage[file] = sha(bytes);
   }
+  const strategyRoot = path.join(archivedRoot, "internal/wenstrategy");
+  await mkdir(path.join(strategyRoot, "testdata"), { recursive: true });
+  for (const file of [
+    ...(await readdir("internal/wenstrategy")).filter(
+      (name) => name.endsWith(".go") && !name.endsWith("_test.go"),
+    ),
+    ...(await readdir("internal/wenstrategy/testdata")).map(
+      (name) => "testdata/" + name,
+    ),
+  ]) {
+    const bytes = await readFile(path.join("internal/wenstrategy", file));
+    await writeFile(path.join(strategyRoot, file), bytes);
+    storage["wenstrategy/" + file] = sha(bytes);
+  }
+  // Storage projections compile their private reader helpers, but the archived
+  // router/command dispatch remain unchanged. These zero-value fields do not
+  // expose a research endpoint or enable fixture execution in the predecessor.
+  const http = path.join(archivedRoot, "internal/core/http.go");
+  const httpBefore = await readFile(http, "utf8");
+  assert.ok(!httpBefore.includes("/api/v1/wen/"));
+  assert.equal(httpBefore.split("type HTTPHandler struct {").length, 2);
+  await writeFile(
+    http,
+    httpBefore.replace(
+      "type HTTPHandler struct {",
+      "type HTTPHandler struct {\n\twenResearchKey []byte\n\twenResearchOrigin string\n\tagentFixture bool",
+    ),
+  );
+  storage["http.go"] = sha(await readFile(http));
   const pm1Root = path.join(archivedRoot, "internal/wenpm1");
   await mkdir(path.join(pm1Root, "testdata"), { recursive: true });
   for (const file of [
@@ -54,7 +90,7 @@ export async function currentStorageFixture(archivedRoot) {
       )
       .replace(
         marker,
-        "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }; if schema <= 6 { if err = migrateAIConnections(ctx, db); err != nil { return nil, err } }; if schema <= 7 { if err = migrateAgentNews(ctx, db); err != nil { return nil, err } }; if schema <= 8 { if err = migrateAIAdmission(ctx, db); err != nil { return nil, err } }; if schema <= 9 { if err = migrateWENPaper(ctx, db); err != nil { return nil, err } }\n" +
+        "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }; if schema <= 6 { if err = migrateAIConnections(ctx, db); err != nil { return nil, err } }; if schema <= 7 { if err = migrateAgentNews(ctx, db); err != nil { return nil, err } }; if schema <= 8 { if err = migrateAIAdmission(ctx, db); err != nil { return nil, err } }; if schema <= 9 { if err = migrateWENPaper(ctx, db); err != nil { return nil, err } }; if schema <= 10 { if err = migrateWENResearch(ctx, db); err != nil { return nil, err } }; if schema <= 11 { if err = migrateWENResearchAI(ctx, db); err != nil { return nil, err } }\n" +
           marker,
       ),
   );

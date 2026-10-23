@@ -91,6 +91,12 @@ func (h *HTTPHandler) agentsAPI(w http.ResponseWriter, r *http.Request, token st
 	if !decodeJSON(w, r, &c) {
 		return
 	}
+	if c.Action == "wen-research-chat" {
+		if err := h.authorizeResearchChat(&c); err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+	}
 	v, e := h.store.changeAgents(r.Context(), c, h.agentFixture)
 	if errors.Is(e, ErrConflict) || errors.Is(e, ErrCorePaused) {
 		writeError(w, 409, e.Error())

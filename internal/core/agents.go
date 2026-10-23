@@ -110,17 +110,18 @@ type AgentNotice struct {
 	Read      bool   `json:"read"`
 }
 type agentDocument struct {
-	NewsSources []NewsSource     `json:"newsSources"`
-	NewsFetches []NewsFetch      `json:"newsFetches"`
-	Profiles    []AgentProfile   `json:"profiles"`
-	Sessions    []AgentSession   `json:"sessions"`
-	Messages    []AgentMessage   `json:"messages"`
-	Memories    []AgentMemory    `json:"memories"`
-	Bots        []PaperBot       `json:"bots"`
-	Tasks       []AgentTask      `json:"tasks"`
-	Runs        []AgentRun       `json:"runs"`
-	Notices     []AgentNotice    `json:"notices"`
-	AIRequests  []AgentAIRequest `json:"aiRequests"`
+	NewsSources   []NewsSource      `json:"newsSources"`
+	NewsFetches   []NewsFetch       `json:"newsFetches"`
+	Profiles      []AgentProfile    `json:"profiles"`
+	Sessions      []AgentSession    `json:"sessions"`
+	Messages      []AgentMessage    `json:"messages"`
+	Memories      []AgentMemory     `json:"memories"`
+	Bots          []PaperBot        `json:"bots"`
+	Tasks         []AgentTask       `json:"tasks"`
+	Runs          []AgentRun        `json:"runs"`
+	Notices       []AgentNotice     `json:"notices"`
+	AIRequests    []AgentAIRequest  `json:"aiRequests"`
+	ResearchTurns []WENResearchTurn `json:"researchTurns"`
 }
 type AgentView struct {
 	ReminderReview       *ReminderReview  `json:"reminderReview,omitempty"`
@@ -147,30 +148,31 @@ type AgentView struct {
 type AgentCommand struct {
 	EvidenceSelection    *AIEvidenceSelection `json:"evidenceSelection,omitempty"`
 	MemorySelection      *AIMemorySelection   `json:"memorySelection,omitempty"`
-	WEN                  *WENPaperInput       `json:"wen,omitempty"`
-	NewsSourceID         string               `json:"newsSourceId,omitempty"`
-	NewsMaxAgeSeconds    int64                `json:"newsMaxAgeSeconds,omitempty"`
-	ConnectionRef        string               `json:"connectionRef,omitempty"`
-	Revision             int64                `json:"revision"`
-	Action               string               `json:"action"`
-	ProfileID            string               `json:"profileId,omitempty"`
-	ID                   string               `json:"id,omitempty"`
-	Name                 string               `json:"name,omitempty"`
-	Text                 string               `json:"text,omitempty"`
-	Source               string               `json:"source,omitempty"`
-	ExpiresAt            int64                `json:"expiresAt,omitempty"`
-	Provider             string               `json:"provider,omitempty"`
-	Model                string               `json:"model,omitempty"`
-	BotID                string               `json:"botId,omitempty"`
-	IntervalSeconds      int64                `json:"intervalSeconds,omitempty"`
-	MaxRuns              int                  `json:"maxRuns,omitempty"`
-	Quantity             int64                `json:"quantity,omitempty"`
-	PriceCents           int64                `json:"priceCents,omitempty"`
-	BudgetCents          int64                `json:"budgetCents,omitempty"`
-	Limits               *AILimits            `json:"limits,omitempty"`
-	ConsentDigest        string               `json:"consentDigest,omitempty"`
-	TotalBudgetMicrousd  int64                `json:"totalBudgetMicrousd,omitempty"`
-	AuthorizationSeconds int64                `json:"authorizationSeconds,omitempty"`
+	wenResearchValidated bool
+	WEN                  *WENPaperInput `json:"wen,omitempty"`
+	NewsSourceID         string         `json:"newsSourceId,omitempty"`
+	NewsMaxAgeSeconds    int64          `json:"newsMaxAgeSeconds,omitempty"`
+	ConnectionRef        string         `json:"connectionRef,omitempty"`
+	Revision             int64          `json:"revision"`
+	Action               string         `json:"action"`
+	ProfileID            string         `json:"profileId,omitempty"`
+	ID                   string         `json:"id,omitempty"`
+	Name                 string         `json:"name,omitempty"`
+	Text                 string         `json:"text,omitempty"`
+	Source               string         `json:"source,omitempty"`
+	ExpiresAt            int64          `json:"expiresAt,omitempty"`
+	Provider             string         `json:"provider,omitempty"`
+	Model                string         `json:"model,omitempty"`
+	BotID                string         `json:"botId,omitempty"`
+	IntervalSeconds      int64          `json:"intervalSeconds,omitempty"`
+	MaxRuns              int            `json:"maxRuns,omitempty"`
+	Quantity             int64          `json:"quantity,omitempty"`
+	PriceCents           int64          `json:"priceCents,omitempty"`
+	BudgetCents          int64          `json:"budgetCents,omitempty"`
+	Limits               *AILimits      `json:"limits,omitempty"`
+	ConsentDigest        string         `json:"consentDigest,omitempty"`
+	TotalBudgetMicrousd  int64          `json:"totalBudgetMicrousd,omitempty"`
+	AuthorizationSeconds int64          `json:"authorizationSeconds,omitempty"`
 }
 
 func initialAgents() agentDocument {
@@ -178,7 +180,7 @@ func initialAgents() agentDocument {
 		{ID: "wen-operator", Name: "WEN Operator", Persona: "Explain WEN prototypes. Financial execution is unavailable.", Provider: "none"},
 		{ID: "trading-analyst", Name: "Trading Analyst", Persona: "Research and compare bounded paper strategies.", Provider: "none"},
 		{ID: "news-researcher", Name: "News Researcher", Persona: "Keep sourced research separate from instructions and financial facts.", Provider: "none"},
-	}, Sessions: []AgentSession{}, Messages: []AgentMessage{}, Memories: []AgentMemory{}, Bots: []PaperBot{}, Tasks: []AgentTask{}, Runs: []AgentRun{}, Notices: []AgentNotice{}, AIRequests: []AgentAIRequest{}}
+	}, Sessions: []AgentSession{}, Messages: []AgentMessage{}, Memories: []AgentMemory{}, Bots: []PaperBot{}, Tasks: []AgentTask{}, Runs: []AgentRun{}, Notices: []AgentNotice{}, AIRequests: []AgentAIRequest{}, ResearchTurns: []WENResearchTurn{}}
 }
 func migrateAgents(ctx context.Context, db *sql.DB) error {
 	tx, e := db.BeginTx(ctx, nil)
@@ -217,6 +219,9 @@ func readAgents(ctx context.Context, r snapshotReader) (agentDocument, int64, er
 			e = json.Unmarshal([]byte(b), &d)
 			if e == nil && len(d.Profiles) == 0 {
 				e = errors.New("missing agent profiles; preserve state")
+			}
+			if e == nil {
+				e = validateResearchStorage([]byte(b), d)
 			}
 		}
 	}
@@ -333,11 +338,14 @@ func saveAgents(ctx context.Context, tx *sql.Tx, d agentDocument, revision int64
 	if e != nil {
 		return e
 	}
+	if e = validateResearchStorage(b, d); e != nil {
+		return e
+	}
 	wenReserved, err := wenPaperStorage(d)
 	if err != nil {
 		return err
 	}
-	reserved := taskAIFutureStorage(d) + newsStorage(d) + wenReserved
+	reserved := taskAIFutureStorage(d) + newsStorage(d) + wenReserved + researchStorage(d)
 	for _, q := range d.AIRequests {
 		if q.State == "prepared" || q.State == "queued" || q.State == "running" {
 			reserved += agentAIResultReserve
@@ -415,6 +423,10 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		}
 	}
 	switch c.Action {
+	case "wen-research-chat":
+		if e = s.captureWENResearchContext(ctx, tx, &d, c, profile, id, now); e != nil {
+			return AgentView{}, e
+		}
 	case "news-item-explain":
 		if e = captureNewsItemContext(&d, profile, c.ID, c.Source, id, revision, now); e != nil {
 			return AgentView{}, e

@@ -160,6 +160,19 @@ PRAGMA user_version=1;`)
 			return nil, err
 		}
 	}
+	if schema <= 10 {
+		if err = migrateWENResearch(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if schema <= 11 {
+		if err = migrateWENResearchAI(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if _, _, err = readAgents(ctx, db); err != nil {
+		return nil, err
+	}
 	store := &Store{db: db, dir: dir, now: time.Now, bootID: update.NewProbe()}
 	if err = db.QueryRowContext(ctx, "SELECT instance_id FROM instance WHERE id=1").Scan(&store.instanceID); err != nil {
 		return nil, err

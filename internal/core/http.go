@@ -1,6 +1,7 @@
 package core
 
 import (
+	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -20,14 +21,16 @@ import (
 const sessionCookie = "fased_session"
 
 type HTTPHandler struct {
-	agentFixture bool
-	store        *Store
-	origins      map[string]bool
-	hosts        map[string]bool
-	publicHost   string
-	assets       fs.FS
-	authSlots    chan struct{}
-	limiter      struct {
+	wenResearchOrigin string
+	wenResearchKey    [32]byte
+	agentFixture      bool
+	store             *Store
+	origins           map[string]bool
+	hosts             map[string]bool
+	publicHost        string
+	assets            fs.FS
+	authSlots         chan struct{}
+	limiter           struct {
 		sync.Mutex
 		start    time.Time
 		attempts int
@@ -36,6 +39,9 @@ type HTTPHandler struct {
 
 func NewHTTPHandler(store *Store, baseURL, publicOrigin string, assets fs.FS) (*HTTPHandler, error) {
 	h := &HTTPHandler{store: store, origins: map[string]bool{}, hosts: map[string]bool{}, assets: assets, authSlots: make(chan struct{}, 2)}
+	if _, err := rand.Read(h.wenResearchKey[:]); err != nil {
+		return nil, err
+	}
 	base, err := url.Parse(baseURL)
 	if err != nil || base.Scheme != "http" || !isLoopbackHost(base.Hostname()) {
 		return nil, errors.New("core listener must use an explicit loopback address")
@@ -158,8 +164,44 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
+	case "/api/v1/wen/research/ai-start":
+		h.wenResearchAIAPI(w, r, token, "start")
+		return
+	case "/api/v1/wen/research/ai-prepare":
+		h.wenResearchAIAPI(w, r, token, "prepare")
+		return
+	case "/api/v1/wen/research/ai-inspect":
+		h.wenResearchAIAPI(w, r, token, "inspect")
+		return
+	case "/api/v1/wen/research/ai-cancel":
+		h.wenResearchAIAPI(w, r, token, "cancel")
+		return
+	case "/api/v1/wen/research/read":
+		h.wenResearchReadAPI(w, r, token)
+		return
+	case "/api/v1/wen/research/proposal-review":
+		h.wenRevisionAPI(w, r, token, false, true)
+		return
+	case "/api/v1/wen/research/proposal-save":
+		h.wenRevisionAPI(w, r, token, true, true)
+		return
+	case "/api/v1/wen/research/revision-review":
+		h.wenStrategyRevisionAPI(w, r, token, false)
+		return
+	case "/api/v1/wen/research/revision-save":
+		h.wenStrategyRevisionAPI(w, r, token, true)
+		return
+	case "/api/v1/wen/research/chat-review":
+		h.wenSavedChatReviewAPI(w, r, token)
+		return
 	case "/api/v1/ai/connection":
 		h.aiConnectionAPI(w, r, token)
+		return
+	case "/api/v1/wen/market-data":
+		h.wenMarketDataAPI(w, r)
+		return
+	case "/api/v1/wen/research":
+		h.wenResearchAPI(w, r, token)
 		return
 	case "/api/v1/agents":
 		h.agentsAPI(w, r, token)

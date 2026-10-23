@@ -68,6 +68,9 @@ func taskAIRequestSlots(d agentDocument) int {
 	for _, t := range d.Tasks {
 		n += taskAIFuture(t)
 	}
+	for _, t := range d.ResearchTurns {
+		n += researchFutureSlots(t)
+	}
 	return n
 }
 func taskAIRequest(t AgentTask, now int64) AgentAIRequest {

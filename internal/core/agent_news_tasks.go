@@ -200,6 +200,9 @@ func attachAINews(d agentDocument, q *AgentAIRequest, n *TaskNewsInput, now int6
 	return nil
 }
 func aiRequestContext(d agentDocument, q AgentAIRequest, now int64) (string, error) {
+	if isResearchAI(q) {
+		return "", errors.New("research context has no execution admission; inspect or cancel its turn")
+	}
 	if aiHasEvidence(q) {
 		return aiEvidenceRequestContext(d, q, now)
 	}

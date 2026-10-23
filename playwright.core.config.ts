@@ -2,7 +2,11 @@ import { defineConfig } from "@playwright/test";
 import prototype from "./playwright.config";
 export default defineConfig({
   ...prototype,
-  testMatch: "core.spec.ts",
+  testMatch: [
+    "core.spec.ts",
+    "research-ai.spec.ts",
+    "research-fixture.spec.ts",
+  ],
   outputDir: ".evidence/core-browser",
   reporter: [
     ["list"],

@@ -69,6 +69,12 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	if len(args) > 0 && args[0] == "ai-connection" {
 		return aiConnectionCommand(args[1:], in, out, errOut)
 	}
+	if len(args) > 0 && args[0] == "wen-market-data" {
+		return wenMarketDataCommand(args[1:], out, errOut)
+	}
+	if len(args) > 0 && args[0] == "wen-research" {
+		return wenResearchCommand(args[1:], in, out, errOut)
+	}
 	if len(args) > 0 && args[0] == "agents" {
 		return agentsCommand(args[1:], in, out, errOut)
 	}
@@ -102,6 +108,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	}
 	dir := flags.String("data-dir", dirDefault, "private instance state directory")
 	listen := flags.String("listen", "127.0.0.1:7331", "loopback listener")
+	researchOrigin := flags.String("wen-research-origin", "", "optional local read-only Kraken research service")
 	publicOrigin := flags.String("public-origin", "", "exact private HTTPS origin behind a trusted local proxy")
 	requireSandbox := flags.Bool("require-sandbox", false, "require installed Linux mount isolation before starting")
 	installationRoot := flags.String("installation-root", "", "immutable installed application directory")
@@ -114,6 +121,9 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	provider := flags.String("provider", "", "setup AI preference: none, openai, anthropic, xai")
 	if err = flags.Parse(args[1:]); err != nil {
 		return err
+	}
+	if *researchOrigin != "" && (args[0] != "serve" || *aiFixture || *requireSandbox || *custodyConfig != "") {
+		return errors.New("research service is a standalone serve-only read option")
 	}
 	if *aiFixture && args[0] != "serve" {
 		return errors.New("AI fixture is a serve-only development option")
@@ -152,7 +162,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 			}
 			return serveAgentFixture(*dir, *listen, out)
 		}
-		return serve(*dir, *listen, *publicOrigin, out, *custodyConfig)
+		return serveWithResearch(*dir, *listen, *publicOrigin, *researchOrigin, out, *custodyConfig)
 	case "claim-code":
 		store, err := core.OpenStore(*dir)
 		if err != nil {
@@ -283,8 +293,15 @@ func defaultDir() (string, error) {
 	return core.DefaultDataDir()
 }
 func serve(dir, listen, publicOrigin string, out io.Writer, custodyConfig ...string) error {
+	return serveWithResearch(dir, listen, publicOrigin, "", out, custodyConfig...)
+}
+func serveWithResearch(dir, listen, publicOrigin, researchOrigin string, out io.Writer, custodyConfig ...string) error {
 	server, err := core.Start(context.Background(), dir, listen, publicOrigin, fasedapp.UI(), custodyConfig...)
 	if err != nil {
+		return err
+	}
+	if err = server.ConfigureWENResearch(researchOrigin); err != nil {
+		_ = server.Close(context.Background())
 		return err
 	}
 	return serveStarted(server, out)

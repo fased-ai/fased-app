@@ -4,3 +4,8 @@ dist/
 LICENSE
 NOTICE
 package-lock.json
+# Imported canonical WEN fixture bytes are checked by their source hashes.
+internal/core/testdata/wen-research-strategy.json
+internal/core/testdata/wen-saved-history.json
+internal/wenstrategy/testdata/conformance.json
+internal/wenstrategy/testdata/preview-strategy.json

@@ -33,7 +33,12 @@ function useCoreState() {
   const generation = useRef(0);
   const queue = useRef<Promise<void>>(Promise.resolve());
   const request = useCallback(
-    async <T,>(route: string, method = "GET", body?: unknown): Promise<T> => {
+    async <T,>(
+      route: string,
+      method = "GET",
+      body?: unknown,
+      signal?: AbortSignal,
+    ): Promise<T> => {
       const headers: Record<string, string> = {};
       if (token.current) headers.Authorization = `Bearer ${token.current}`;
       if (method !== "GET") {
@@ -42,6 +47,7 @@ function useCoreState() {
       }
       const response = await fetch(`/api/v1/${route}`, {
         method,
+        signal,
         headers,
         credentials: "same-origin",
         cache: "no-store",
