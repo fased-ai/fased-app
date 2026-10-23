@@ -11,6 +11,7 @@ export async function currentStorageFixture(archivedRoot) {
   for (const file of [
     "agents.go",
     "agent_reminders.go",
+    "agent_task_drafts.go",
     "wen_paper.go",
     "agent_ai.go",
     "agent_evidence.go",
