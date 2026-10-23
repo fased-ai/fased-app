@@ -27,18 +27,23 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	search := flags.String("search", "", "search this profile's conversations, messages and completed AI questions/answers")
 	memorySearch := flags.String("memory-search", "", "read-only search of current profile memory text and source (200 bytes maximum)")
 	memorySource := flags.String("memory-source", "", "inspect one profile memory's retained chat evidence without writing or fetching")
+	draft := flags.String("ai-draft", "", "read a saved manual AI request as editable settings; no write, consent or execution")
 	change := flags.Bool("request-stdin", false, "read one revision-checked local agent command JSON (including ai-prepare memorySelection (all/none/selected IDs), news-item-explain, task-run-explain, memory-chat-save and ai-reminder-review/create); no credentials")
 	if e = flags.Parse(args); e != nil {
 		return e
 	}
-	memoryMode, sourceSet, chatSearchSet := false, false, false
+	memoryMode, sourceSet, chatSearchSet, draftSet := false, false, false, false
 	flags.Visit(func(f *flag.Flag) {
 		if f.Name == "memory-search" || f.Name == "memory-source" {
 			memoryMode = true
 		}
+		draftSet = draftSet || f.Name == "ai-draft"
 		sourceSet = sourceSet || f.Name == "memory-source"
 		chatSearchSet = chatSearchSet || f.Name == "search"
 	})
+	if draftSet && (*draft == "" || *profile == "" || *change || memoryMode || chatSearchSet) {
+		return errors.New("use --profile PROFILE --ai-draft REQUEST_ID without search or writes")
+	}
 	if memoryMode && (*change || *profile == "" || chatSearchSet || (sourceSet && *memorySource == "")) {
 		return errors.New("use --profile with --memory-search and/or a nonempty --memory-source; do not combine with chat search or writes")
 	}
@@ -54,6 +59,14 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	defer c.Close()
 	if e = c.LoadSession(ctx, *dir); e != nil {
 		return e
+	}
+	if draftSet {
+		q := url.Values{"profile": {*profile}, "ai-draft": {*draft}}
+		var v core.AgentAIRequestDraft
+		if e = c.Do(ctx, http.MethodGet, "/api/v1/agents?"+q.Encode(), nil, &v); e != nil {
+			return e
+		}
+		return json.NewEncoder(out).Encode(v)
 	}
 	if memoryMode {
 		q := url.Values{"profile": {*profile}, "memory-search": {*memorySearch}}

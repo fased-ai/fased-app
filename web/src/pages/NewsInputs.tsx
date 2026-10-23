@@ -31,6 +31,11 @@ export function NewsSourcePicker({
           }}
         >
           <option value="">None</option>
+          {value && !view.newsSources.some((s) => s.id === value) && (
+            <option value={value} disabled>
+              Unavailable news source: {value}
+            </option>
+          )}
           {view.newsSources.map((s) => (
             <option key={s.id} value={s.id} disabled={s.disabled}>
               {s.name}

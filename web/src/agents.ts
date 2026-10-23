@@ -308,6 +308,18 @@ export type AIMemorySelection = {
   mode: "all" | "none" | "selected";
   ids?: string[];
 };
+export type AgentAIRequestDraft = {
+  revision: number;
+  profileId: string;
+  sessionId: string;
+  prompt: string;
+  model: string;
+  connectionRef?: string;
+  limits: AILimits;
+  newsSourceId?: string;
+  newsMaxAgeSeconds?: number;
+  memorySelection?: AIMemorySelection;
+};
 export type AgentCommand = {
   memorySelection?: AIMemorySelection;
   wen?: WENPaperInput;

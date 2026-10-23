@@ -6,8 +6,12 @@ import {
   AIAdmissionReview,
   ConnectionPicker,
 } from "./AIConnection";
-import { useState } from "react";
-import type { AgentView, AIMemorySelection } from "../agents";
+import { useEffect, useRef, useState } from "react";
+import type {
+  AgentView,
+  AIMemorySelection,
+  AgentAIRequestDraft,
+} from "../agents";
 import { useWorkspace } from "../workspace";
 
 const money = (n: number) => `$${(n / 1_000_000).toFixed(6)}`;
@@ -18,7 +22,22 @@ export function AgentAIReview({
   view: AgentView;
   sessionId: string;
 }) {
-  const { agents } = useWorkspace();
+  return (
+    <AgentAIForm
+      key={`${view.profileId}:${sessionId}`}
+      view={view}
+      sessionId={sessionId}
+    />
+  );
+}
+function AgentAIForm({
+  view,
+  sessionId,
+}: {
+  view: AgentView;
+  sessionId: string;
+}) {
+  const { core, agents } = useWorkspace();
   const [prompt, setPrompt] = useState("");
   const [newsSourceId, setNewsSourceId] = useState("");
   const [newsAge, setNewsAge] = useState(3600);
@@ -29,9 +48,75 @@ export function AgentAIReview({
   const [deadline, setDeadline] = useState(3);
   const [budget, setBudget] = useState(30000);
   const [consent, setConsent] = useState("");
-  const [memoryMode, setMemoryMode] =
-    useState<AIMemorySelection["mode"]>("all");
+  const [memoryMode, setMemoryMode] = useState<
+    AIMemorySelection["mode"] | "legacy"
+  >("all");
   const [memoryIds, setMemoryIds] = useState<string[]>([]);
+  const [draftSource, setDraftSource] = useState("");
+  const [legacyDraft, setLegacyDraft] = useState(false);
+  const [draftBusy, setDraftBusy] = useState(false);
+  const [draftError, setDraftError] = useState("");
+  const generation = useRef(0);
+  useEffect(
+    () => () => {
+      generation.current++;
+    },
+    [],
+  );
+  function cancelDraft() {
+    generation.current++;
+    setDraftBusy(false);
+    setDraftSource("");
+    setDraftError("");
+    setLegacyDraft(false);
+    setPrompt("");
+    setNewsSourceId("");
+    setNewsAge(3600);
+    setConnectionRef("");
+    setModel("");
+    setInput(24000);
+    setOutput(1024);
+    setDeadline(3);
+    setBudget(30000);
+    setMemoryMode("all");
+    setMemoryIds([]);
+    setConsent("");
+  }
+  async function useDraft(id: string) {
+    const epoch = ++generation.current;
+    setDraftBusy(true);
+    setDraftError("");
+    setConsent("");
+    try {
+      const d = await core.request<AgentAIRequestDraft>(
+        `agents?profile=${encodeURIComponent(view.profileId)}&ai-draft=${encodeURIComponent(id)}`,
+      );
+      if (epoch !== generation.current) return;
+      if (d.profileId !== view.profileId || d.sessionId !== sessionId)
+        throw new Error("Saved request belongs to another conversation");
+      setPrompt(d.prompt);
+      setNewsSourceId(d.newsSourceId ?? "");
+      setNewsAge(d.newsMaxAgeSeconds ?? 3600);
+      setConnectionRef(d.connectionRef ?? "");
+      setModel(d.model === "fixture-openai-v1" ? "" : d.model);
+      setInput(d.limits.maxInputTokens);
+      setOutput(d.limits.maxOutputTokens);
+      setDeadline(d.limits.deadlineSeconds);
+      setBudget(d.limits.budgetMicrousd);
+      setMemoryMode(d.memorySelection?.mode ?? "legacy");
+      setMemoryIds(d.memorySelection?.ids ?? []);
+      setLegacyDraft(!d.memorySelection);
+      setDraftSource(id);
+      if (d.revision !== view.revision) void agents.refresh().catch(() => {});
+    } catch (e) {
+      if (epoch === generation.current)
+        setDraftError(
+          e instanceof Error ? e.message : "Saved request unavailable",
+        );
+    } finally {
+      if (epoch === generation.current) setDraftBusy(false);
+    }
+  }
   const toggleMemory = (id: string, checked: boolean) =>
     setMemoryIds((ids) =>
       checked ? [...ids, id] : ids.filter((n) => n !== id),
@@ -47,16 +132,29 @@ export function AgentAIReview({
         No OpenAI account, subscription or charge. Your saved provider
         preference does not enable execution.
       </p>
+      {draftError && <p role="alert">{draftError}</p>}
+      {(draftSource || draftBusy) && (
+        <div className="agent-inline">
+          <h4>{draftBusy ? "Loading request draft…" : "Request draft"}</h4>
+          <button type="button" className="secondary" onClick={cancelDraft}>
+            Cancel draft
+          </button>
+        </div>
+      )}
       <form
         onSubmit={(e) => {
           e.preventDefault();
           void agents
             .change({
               action: "ai-prepare",
-              memorySelection: {
-                mode: memoryMode,
-                ...(memoryMode === "selected" ? { ids: memoryIds } : {}),
-              },
+              ...(memoryMode === "legacy"
+                ? {}
+                : {
+                    memorySelection: {
+                      mode: memoryMode,
+                      ...(memoryMode === "selected" ? { ids: memoryIds } : {}),
+                    },
+                  }),
               connectionRef,
               model,
               newsSourceId,
@@ -74,6 +172,7 @@ export function AgentAIReview({
               if (ok) {
                 setPrompt("");
                 setConsent("");
+                setDraftSource("");
               }
             });
         }}
@@ -96,9 +195,12 @@ export function AgentAIReview({
           <select
             value={memoryMode}
             onChange={(e) =>
-              setMemoryMode(e.target.value as AIMemorySelection["mode"])
+              setMemoryMode(
+                e.target.value as AIMemorySelection["mode"] | "legacy",
+              )
             }
           >
+            {legacyDraft && <option value="legacy">Legacy active notes</option>}
             <option value="all">All active notes</option>
             <option value="none">None</option>
             <option value="selected">Selected notes</option>
@@ -203,7 +305,9 @@ export function AgentAIReview({
         <button
           className="secondary"
           disabled={
-            agents.busy || (memoryMode === "selected" && memoryIds.length === 0)
+            agents.busy ||
+            draftBusy ||
+            (memoryMode === "selected" && memoryIds.length === 0)
           }
         >
           Prepare disclosure
@@ -215,6 +319,14 @@ export function AgentAIReview({
       {requests.map((q) => (
         <article className="ai-request" key={q.id}>
           <h4>{q.prompt}</h4>
+          <button
+            type="button"
+            className="secondary"
+            disabled={agents.busy || draftBusy}
+            onClick={() => void useDraft(q.id)}
+          >
+            Use as draft
+          </button>
           <AIAdmissionReview policy={q.policy} admission={q.admission} />
           <p>
             <strong>{q.state}</strong> · {q.model} · Held{" "}

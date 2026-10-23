@@ -8,6 +8,21 @@ import (
 func (h *HTTPHandler) agentsAPI(w http.ResponseWriter, r *http.Request, token string) {
 	if r.Method == http.MethodGet {
 		q := r.URL.Query()
+		if q.Has("ai-draft") {
+			for key, values := range q {
+				if (key != "profile" && key != "ai-draft") || len(values) != 1 {
+					writeError(w, 400, "one profile and saved manual request expected")
+					return
+				}
+			}
+			v, err := h.store.AgentAIRequestDraft(r.Context(), q.Get("profile"), q.Get("ai-draft"))
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			writeJSON(w, 200, v)
+			return
+		}
 		if q.Has("memory-search") || q.Has("memory-source") {
 			for key, values := range q {
 				if (key != "profile" && key != "memory-search" && key != "memory-source") || len(values) != 1 {

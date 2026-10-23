@@ -3660,3 +3660,392 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
     ),
   ).toBe(true);
 });
+
+test("saved AI request draft shares editable UI/CLI settings, fresh consent and restart isolation", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(90000);
+  page.setDefaultTimeout(10000);
+  await stop();
+  await start(true);
+  const origins = new Set([new URL(url).origin]);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (!origins.has(new URL(r.url()).origin)) external.push(r.url());
+  });
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = async () => {
+    const p = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+    p.stdin!.end(fixturePassword + "\n");
+    expect((await once(p, "exit"))[0]).toBe(0);
+  };
+  await login();
+  const profileId = "trading-analyst";
+  const read = () => privateCLI(["agents", "--profile", profileId]);
+  const command = async (c: Record<string, unknown>) =>
+    privateCLI(["agents", "--request-stdin"], {
+      profileId,
+      revision: (await read()).revision,
+      ...c,
+    });
+  let v = await command({
+    action: "session-create",
+    name: "Saved draft conversation",
+  });
+  const sessionId = v.sessions[0].id;
+  const limits = {
+    maxInputTokens: 24000,
+    maxOutputTokens: 512,
+    deadlineSeconds: 4,
+    budgetMicrousd: 28000,
+  };
+  v = await command({
+    action: "ai-prepare",
+    id: sessionId,
+    text: "Saved legacy question",
+    limits,
+  });
+  const legacy = v.aiRequests[0];
+  v = await command({
+    action: "memory-put",
+    text: "Original selected preference",
+    source: "owner",
+  });
+  const note = v.memories[0];
+  v = await command({
+    action: "news-source-add",
+    name: "Draft fixture news",
+    source: "https://news.fased.invalid/headlines.xml",
+    newsMaxAgeSeconds: 600,
+  });
+  const source = v.newsSources[0];
+  await command({ action: "news-fetch", id: source.id });
+  await expect
+    .poll(async () => (await read()).newsFetches[0].state)
+    .toBe("completed");
+  v = await command({
+    action: "ai-prepare",
+    id: sessionId,
+    text: "Saved original question",
+    memorySelection: { mode: "selected", ids: [note.id] },
+    newsSourceId: source.id,
+    newsMaxAgeSeconds: 300,
+    limits,
+  });
+  const original = v.aiRequests.at(-1);
+  await command({ action: "session-create", name: "Other draft conversation" });
+  await command({ action: "memory-delete", id: note.id });
+  await command({ action: "news-source-disable", id: source.id });
+  await page.goto(url + "/#agents/chat");
+  const profile = page.getByRole("button", { name: /^Trading Analyst / });
+  await profile.click();
+  await expect(profile).toHaveAttribute("aria-pressed", "true");
+  await page
+    .getByRole("button", { name: "Saved draft conversation", exact: true })
+    .click();
+  const review = page.getByRole("region", {
+    name: "Optional AI request review",
+    exact: true,
+  });
+  const card = (prompt: string) =>
+    review.locator("article.ai-request").filter({
+      has: page.getByRole("heading", { name: prompt, exact: true }),
+    });
+  const sourceCard = card(original.prompt);
+  await sourceCard.getByRole("checkbox").check();
+  const baseline = await read();
+  const response = page.waitForResponse((r) => r.url().includes("&ai-draft="));
+  await sourceCard
+    .getByRole("button", { name: "Use as draft", exact: true })
+    .click();
+  const shared = await (await response).json();
+  expect(
+    await privateCLI([
+      "agents",
+      "--profile",
+      profileId,
+      "--ai-draft",
+      original.id,
+    ]),
+  ).toEqual(shared);
+  expect(shared.memorySelection).toEqual({ mode: "selected", ids: [note.id] });
+  expect(shared.newsSourceId).toBe(source.id);
+  expect(shared.newsMaxAgeSeconds).toBe(300);
+  for (const name of [
+    "digest",
+    "context",
+    "disclosure",
+    "state",
+    "answer",
+    "cards",
+    "policy",
+    "admission",
+    "heldMicrousd",
+  ])
+    expect(shared).not.toHaveProperty(name);
+  await expect(
+    review.getByRole("textbox", { name: "AI request", exact: true }),
+  ).toHaveValue(original.prompt);
+  await expect(
+    review.getByLabel("Maximum output tokens", { exact: true }),
+  ).toHaveValue("512");
+  await expect(
+    review.getByRole("combobox", { name: "Memory", exact: true }),
+  ).toHaveValue("selected");
+  await expect(
+    review.getByRole("checkbox", {
+      name: `Unavailable note: ${note.id}`,
+      exact: true,
+    }),
+  ).toBeChecked();
+  await expect(
+    review.getByRole("combobox", { name: "News input", exact: true }),
+  ).toHaveValue(source.id);
+  await expect(
+    review.getByRole("option", {
+      name: "Draft fixture news · disabled",
+      exact: true,
+    }),
+  ).toHaveAttribute("disabled", "");
+  await expect(sourceCard.getByRole("checkbox")).not.toBeChecked();
+  await review
+    .getByRole("textbox", { name: "AI request", exact: true })
+    .fill("Transient edit only");
+  await review
+    .getByRole("button", { name: "Prepare disclosure", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toContainText(
+    "selected memory is missing",
+  );
+  expect(await read()).toEqual(baseline);
+  await review
+    .getByRole("button", { name: "Cancel draft", exact: true })
+    .click();
+  await expect(
+    review.getByRole("textbox", { name: "AI request", exact: true }),
+  ).toHaveValue("");
+  expect(await read()).toEqual(baseline);
+  await sourceCard
+    .getByRole("button", { name: "Use as draft", exact: true })
+    .click();
+  await expect(
+    review.getByRole("textbox", { name: "AI request", exact: true }),
+  ).toHaveValue(original.prompt);
+  await review
+    .getByRole("combobox", { name: "Memory", exact: true })
+    .selectOption("none");
+  await review
+    .getByRole("combobox", { name: "News input", exact: true })
+    .selectOption("");
+  await review
+    .getByRole("textbox", { name: "AI request", exact: true })
+    .fill("New corrected draft question");
+  await review
+    .getByLabel("Maximum input tokens", { exact: true })
+    .fill("12000");
+  await review.getByLabel("Maximum output tokens", { exact: true }).fill("256");
+  await review
+    .getByLabel("Request deadline (seconds)", { exact: true })
+    .fill("2");
+  await review
+    .getByLabel("Fixture budget (micro USD)", { exact: true })
+    .fill("15000");
+  await review
+    .getByRole("button", { name: "Prepare disclosure", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).aiRequests.length).toBe(3);
+  v = await read();
+  const fresh = v.aiRequests.at(-1);
+  expect(fresh.id).not.toBe(original.id);
+  expect(fresh.digest).not.toBe(original.digest);
+  expect(fresh.state).toBe("prepared");
+  expect(fresh.heldMicrousd).toBe(0);
+  expect(fresh.answer).toBe("");
+  expect(fresh.limits).toEqual({
+    maxInputTokens: 12000,
+    maxOutputTokens: 256,
+    deadlineSeconds: 2,
+    budgetMicrousd: 15000,
+  });
+  expect(JSON.parse(fresh.context).memorySelection).toEqual({ mode: "none" });
+  expect(
+    v.aiRequests.find((q: { id: string }) => q.id === original.id),
+  ).toEqual(original);
+  const freshCard = card(fresh.prompt);
+  await freshCard
+    .getByText("Exact context disclosure", { exact: true })
+    .click();
+  await expect(freshCard.locator("pre").first()).toHaveText(fresh.disclosure);
+  await expect(
+    freshCard.getByRole("button", {
+      name: "Run development fixture",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  await freshCard.getByRole("checkbox").check();
+  await freshCard
+    .getByRole("button", { name: "Run development fixture", exact: true })
+    .click();
+  await expect
+    .poll(async () => (await read()).aiRequests.at(-1).state)
+    .toBe("completed");
+  await card(legacy.prompt)
+    .getByRole("button", { name: "Use as draft", exact: true })
+    .click();
+  await expect(
+    review.getByRole("combobox", { name: "Memory", exact: true }),
+  ).toHaveValue("legacy");
+  await review
+    .getByRole("textbox", { name: "AI request", exact: true })
+    .fill("Fresh legacy draft question");
+  await review
+    .getByRole("button", { name: "Prepare disclosure", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).aiRequests.length).toBe(4);
+  const freshLegacy = (await read()).aiRequests.at(-1);
+  expect(JSON.parse(freshLegacy.context)).not.toHaveProperty("version");
+  expect(JSON.parse(freshLegacy.context)).not.toHaveProperty("memorySelection");
+  const stable = await read();
+  // A completed read may arrive after its component/session has disappeared.
+  async function delayedRead(switchScope: () => Promise<void>) {
+    let release!: () => void, arrive!: () => void;
+    const gate = new Promise<void>((r) => (release = r)),
+      arrived = new Promise<void>((r) => (arrive = r));
+    const pattern = "**/api/v1/agents?*ai-draft=*";
+    await page.route(
+      pattern,
+      async (route) => {
+        const r = await route.fetch();
+        arrive();
+        await gate;
+        await route.fulfill({ response: r });
+      },
+      { times: 1 },
+    );
+    const finished = page.waitForResponse((r) =>
+      r.url().includes("&ai-draft="),
+    );
+    try {
+      await card(legacy.prompt)
+        .getByRole("button", { name: "Use as draft", exact: true })
+        .click();
+      await arrived;
+      await switchScope();
+    } finally {
+      release();
+    }
+    await finished;
+  }
+  await delayedRead(async () => {
+    await review
+      .getByRole("button", { name: "Cancel draft", exact: true })
+      .click();
+  });
+  await expect(
+    review.getByRole("textbox", { name: "AI request", exact: true }),
+  ).toHaveValue("");
+  await expect(
+    review.getByRole("heading", { name: "Request draft", exact: true }),
+  ).toHaveCount(0);
+  await delayedRead(async () => {
+    await page
+      .getByRole("button", { name: "Other draft conversation", exact: true })
+      .click();
+    await expect(
+      page.getByRole("heading", {
+        name: "Other draft conversation",
+        exact: true,
+      }),
+    ).toBeVisible();
+  });
+  await expect(
+    review.getByRole("textbox", { name: "AI request", exact: true }),
+  ).toHaveValue("");
+  await expect(
+    review.getByRole("heading", { name: "Request draft", exact: true }),
+  ).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "Saved draft conversation", exact: true })
+    .click();
+  await delayedRead(async () => {
+    const other = page.getByRole("button", { name: /^News Researcher / });
+    await other.click();
+    await expect(other).toHaveAttribute("aria-pressed", "true");
+  });
+  await profile.click();
+  await expect(profile).toHaveAttribute("aria-pressed", "true");
+  await page
+    .getByRole("button", { name: "Saved draft conversation", exact: true })
+    .click();
+  await expect(
+    review.getByRole("textbox", { name: "AI request", exact: true }),
+  ).toHaveValue("");
+  expect(await read()).toEqual(stable);
+  const p = stable.profiles.find((p: { id: string }) => p.id === profileId);
+  await command({
+    action: "profile-update",
+    name: p.name,
+    text: p.persona,
+    provider: "openai",
+  });
+  await stop();
+  await start();
+  origins.add(new URL(url).origin);
+  await login();
+  await page.goto(url + "/#agents/chat");
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await profile.click();
+  await expect(profile).toHaveAttribute("aria-pressed", "true");
+  await page
+    .getByRole("button", { name: "Saved draft conversation", exact: true })
+    .click();
+  await sourceCard
+    .getByRole("button", { name: "Use as draft", exact: true })
+    .click();
+  await expect(
+    review.getByRole("textbox", { name: "AI request", exact: true }),
+  ).toHaveValue(original.prompt);
+  const restored = await privateCLI([
+    "agents",
+    "--profile",
+    profileId,
+    "--ai-draft",
+    original.id,
+  ]);
+  expect({ ...restored, revision: shared.revision }).toEqual(shared);
+  await expect(
+    sourceCard.getByRole("button", {
+      name: "Run development fixture",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  expect((await read()).providerCallsEnabled).toBe(false);
+  expect((await read()).financialExecution).toBe(false);
+  await page.screenshot({
+    path: resolve(
+      `.evidence/ai-request-draft/${isMobile ? "mobile" : "desktop"}.png`,
+    ),
+    fullPage: true,
+  });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth + 1,
+    ),
+  ).toBe(true);
+  expect(external).toEqual([]);
+});

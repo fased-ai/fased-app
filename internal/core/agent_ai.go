@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const fixtureAIModel = "fixture-openai-v1"
@@ -706,4 +707,175 @@ func migrateAIConnections(ctx context.Context, db *sql.DB) error {
 func fixtureAdmissionResponse(r *http.Request, value any) *http.Response {
 	b, _ := json.Marshal(value)
 	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(bytes.NewReader(b)), Request: r}
+}
+
+// AgentAIRequestDraft is a read projection, never a stored request or consent.
+// Omitted MemorySelection preserves the original legacy preparation semantics.
+type AgentAIRequestDraft struct {
+	Revision          int64              `json:"revision"`
+	ProfileID         string             `json:"profileId"`
+	SessionID         string             `json:"sessionId"`
+	Prompt            string             `json:"prompt"`
+	Model             string             `json:"model"`
+	ConnectionRef     string             `json:"connectionRef,omitempty"`
+	Limits            AILimits           `json:"limits"`
+	NewsSourceID      string             `json:"newsSourceId,omitempty"`
+	NewsMaxAgeSeconds int64              `json:"newsMaxAgeSeconds,omitempty"`
+	MemorySelection   *AIMemorySelection `json:"memorySelection,omitempty"`
+}
+
+func (s *Store) AgentAIRequestDraft(ctx context.Context, profile, id string) (AgentAIRequestDraft, error) {
+	var v AgentAIRequestDraft
+	if !validAgentText(profile, 80, true) || !validAgentText(id, 80, true) || !utf8.ValidString(profile+id) {
+		return v, errors.New("select one profile and saved manual request")
+	}
+	d, revision, err := readAgents(ctx, s.db)
+	if err != nil {
+		return v, err
+	}
+	profiles, requests, sessions := 0, 0, 0
+	var q AgentAIRequest
+	for _, p := range d.Profiles {
+		if p.ID == profile {
+			profiles++
+		}
+	}
+	for _, r := range d.AIRequests {
+		if r.ID == id {
+			q = r
+			requests++
+		}
+	}
+	for _, session := range d.Sessions {
+		if session.ID == q.SessionID {
+			sessions++
+			if session.ProfileID != profile {
+				return v, errors.New("saved request conversation unavailable")
+			}
+		}
+	}
+	if profiles != 1 || requests != 1 || sessions != 1 || q.ProfileID != profile || q.TaskID != "" || q.TaskDigest != "" {
+		return v, errors.New("saved manual request unavailable or ambiguous")
+	}
+	wire, err := aiWire(q)
+	l := q.Limits
+	if err != nil || string(wire) != q.Disclosure || aiDigest(q) != q.Digest || !aiWireWithinBound(q, wire) ||
+		!validAgentText(q.Prompt, 2000, true) || !validAgentText(q.Model, 200, true) || !validAgentText(q.ConnectionRef, 200, false) ||
+		l.MaxInputTokens < 1000 || l.MaxInputTokens > 32000 || l.MaxOutputTokens < 128 || l.MaxOutputTokens > 1024 || l.DeadlineSeconds < 1 || l.DeadlineSeconds > 5 || l.BudgetMicrousd < 1 || l.BudgetMicrousd > 1000000 {
+		return v, errors.New("saved request integrity invalid; preserve the original")
+	}
+	selection, err := draftMemorySelection(q)
+	if err != nil {
+		return v, err
+	}
+	v = AgentAIRequestDraft{Revision: revision, ProfileID: profile, SessionID: q.SessionID, Prompt: q.Prompt, Model: q.Model, ConnectionRef: q.ConnectionRef, Limits: l, MemorySelection: selection}
+	if q.News != nil {
+		v.NewsSourceID = q.News.SourceID
+		v.NewsMaxAgeSeconds = q.News.MaxAgeSeconds
+	}
+	return v, nil
+}
+
+// Validate the frozen grammar, not today's context: stale settings must remain
+// visible for editing. Exact re-encoding refuses unknown/duplicate fields and
+// unsupported versions, including partial envelopes that could widen memory.
+func draftMemorySelection(q AgentAIRequest) (*AIMemorySelection, error) {
+	bad := errors.New("saved context is malformed or unsupported; prepare a new request explicitly")
+	if len(q.Context) > 16000 || !utf8.ValidString(q.Context) {
+		return nil, bad
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal([]byte(q.Context), &fields) != nil || fields == nil {
+		return nil, bad
+	}
+	type message struct {
+		Role string `json:"role"`
+		Text string `json:"text"`
+	}
+	type frozenContext struct {
+		Persona  string          `json:"persona"`
+		Messages []message       `json:"messages"`
+		Memories json.RawMessage `json:"memories"`
+		Prompt   string          `json:"prompt"`
+	}
+	var base frozenContext
+	var selection *AIMemorySelection
+	if _, versioned := fields["version"]; versioned || fields["memorySelection"] != nil || fields["context"] != nil {
+		var version string
+		if json.Unmarshal(fields["version"], &version) != nil || version != aiMemoryContextVersion || json.Unmarshal(fields["memorySelection"], &selection) != nil || selection == nil || json.Unmarshal(fields["context"], &base) != nil {
+			return nil, bad
+		}
+		choice := *selection
+		if (choice.Mode != "all" && choice.Mode != "none" && choice.Mode != "selected") || (choice.Mode != "selected" && len(choice.IDs) != 0) || (choice.Mode == "selected" && (len(choice.IDs) == 0 || len(choice.IDs) > 100)) {
+			return nil, bad
+		}
+		for i, id := range choice.IDs {
+			if !validAgentText(id, 200, true) || !utf8.ValidString(id) || (i > 0 && choice.IDs[i-1] >= id) {
+				return nil, bad
+			}
+		}
+		var notes []aiSelectedMemory
+		if json.Unmarshal(base.Memories, &notes) != nil || notes == nil || len(notes) > 100 || (choice.Mode == "none" && len(notes) != 0) || (choice.Mode == "selected" && len(notes) != len(choice.IDs)) {
+			return nil, bad
+		}
+		for i, n := range notes {
+			if !validAgentText(n.ID, 200, true) || (i > 0 && notes[i-1].ID >= n.ID) || (choice.Mode == "selected" && n.ID != choice.IDs[i]) {
+				return nil, bad
+			}
+		}
+		base.Memories, _ = json.Marshal(notes)
+	} else {
+		if json.Unmarshal([]byte(q.Context), &base) != nil {
+			return nil, bad
+		}
+		var notes []struct {
+			Text      string `json:"text"`
+			Source    string `json:"source"`
+			ExpiresAt int64  `json:"expiresAt"`
+		}
+		if json.Unmarshal(base.Memories, &notes) != nil || notes == nil || len(notes) > 100 {
+			return nil, bad
+		}
+		base.Memories, _ = json.Marshal(notes)
+	}
+	if base.Prompt != q.Prompt || base.Messages == nil {
+		return nil, bad
+	}
+	for _, m := range base.Messages {
+		if m.Role != "user" && m.Role != "assistant" {
+			return nil, bad
+		}
+	}
+	var frozen any = base
+	if selection != nil {
+		frozen = struct {
+			Version   string             `json:"version"`
+			Selection *AIMemorySelection `json:"memorySelection"`
+			Context   frozenContext      `json:"context"`
+		}{aiMemoryContextVersion, selection, base}
+	}
+	expected, err := json.Marshal(frozen)
+	if err != nil || len(expected) > 8000 {
+		return nil, bad
+	}
+	if q.News != nil {
+		var news struct {
+			Evidence  *NewsEvidence `json:"evidence"`
+			Items     []NewsItem    `json:"headlines"`
+			Untrusted bool          `json:"untrusted"`
+		}
+		if json.Unmarshal(fields["news"], &news) != nil || news.Evidence == nil || *news.Evidence != *q.News || !news.Untrusted || news.Items == nil || !validAgentText(q.News.SourceID, 80, true) || q.News.MaxAgeSeconds < 60 || q.News.MaxAgeSeconds > 86400 {
+			return nil, bad
+		}
+		var data map[string]any
+		if json.Unmarshal(expected, &data) != nil {
+			return nil, bad
+		}
+		data["news"] = news
+		expected, err = json.Marshal(data)
+	}
+	if err != nil || string(expected) != q.Context {
+		return nil, bad
+	}
+	return selection, nil
 }

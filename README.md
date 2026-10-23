@@ -374,3 +374,15 @@ The shared CLI command accepts `memorySelection` only with `ai-prepare`:
 ```
 
 Read the current revision and note IDs with `fased-app agents --profile trading-analyst`, then send the command to `fased-app agents --request-stdin`. Use `{"mode":"none"}` or `{"mode":"all"}` without IDs for the other choices. Omitting `memorySelection` preserves the legacy all-active-note context. No notes are silently dropped or truncated; missing, expired, foreign or ambiguous IDs and context/token/budget limits refuse preparation. Changing a selected note invalidates the frozen review. Scheduled AI tasks keep their existing all-active-note consent and reject manual selection input.
+
+### Reuse a saved AI request
+
+In Chat, choose **Use as draft** on a saved manual request. Edit its prompt, model, connection, limits, news policy and memory choice, then **Prepare disclosure**. Opening, editing or **Cancel draft** saves nothing and makes no provider/source call. Legacy requests retain **Legacy active notes** until you explicitly select another memory policy. Missing/expired selected notes, disabled news and unavailable models/connections remain visible; correct them explicitly before preparing.
+
+Read the same settings through private authenticated CLI access:
+
+```sh
+fased-app agents --profile trading-analyst --ai-draft REQUEST_ID
+```
+
+The result contains preparation fields and scope/revision metadata only. To prepare, explicitly map `sessionId` to command `id`, `prompt` to `text`, and pass the other editable fields to `ai-prepare` with the current revision via `agents --request-stdin`. Omit `memorySelection` for legacy input; do not turn omission into `all`. This creates a new request/disclosure/digest using current context and admission policy. Review it and separately consent to fixture execution. Old consent/results/state/reservations are never copied, and pending or uncertain holds still block another call. Scheduled, foreign, ambiguous, damaged or unsupported saved requests refuse. Mining, real AI/wallets and automatic/public updates remain disabled.

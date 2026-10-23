@@ -202,6 +202,11 @@ export function AIModelPicker({
         onChange={(e) => onChange(e.target.value)}
       >
         <option value="">Fixture model · invented tariff</option>
+        {value && value !== view?.admissionPolicy?.model && (
+          <option value={value} disabled>
+            Unavailable model: {value}
+          </option>
+        )}
         {view?.admissionPolicy && (
           <option
             value={view.admissionPolicy.model}

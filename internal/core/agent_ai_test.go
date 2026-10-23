@@ -8,6 +8,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/update"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -1092,4 +1093,323 @@ func TestAgentAIMemorySelectionNewsRoundTrip(t *testing.T) {
 	q = v.AIRequests[len(v.AIRequests)-1]
 	agentApply(t, s, AgentCommand{Action: "news-source-disable", ProfileID: v.ProfileID, ID: source.ID})
 	selectionRefused(t, s, AgentCommand{Action: "ai-start", ProfileID: v.ProfileID, ID: q.ID, ConsentDigest: q.Digest}, true)
+}
+
+func TestAgentAIRequestDraftHTTPReadOnly(t *testing.T) {
+	s := fixtureStore(t)
+	token := claimFixture(t, s)
+	v := aiPrepare(t, s)
+	before, rev, _ := readAgents(t.Context(), s.db)
+	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("GET", "http://127.0.0.1:7331/api/v1/agents?profile="+v.ProfileID+"&ai-draft="+v.AIRequests[0].ID, nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("draft read got %d: %s", w.Code, w.Body)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &fields); err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"digest", "disclosure", "context", "state", "answer", "cards", "admission", "policy", "heldMicrousd", "spentMicrousd"} {
+		if _, ok := fields[forbidden]; ok {
+			t.Fatal("draft carries authority/history", forbidden)
+		}
+	}
+	after, next, _ := readAgents(t.Context(), s.db)
+	if next != rev || !reflect.DeepEqual(before, after) {
+		t.Fatal("draft read wrote state")
+	}
+}
+
+func draftCommand(v AgentAIRequestDraft) AgentCommand {
+	return AgentCommand{Action: "ai-prepare", ProfileID: v.ProfileID, ID: v.SessionID, Text: v.Prompt, Model: v.Model, ConnectionRef: v.ConnectionRef, Limits: &v.Limits, MemorySelection: v.MemorySelection, NewsSourceID: v.NewsSourceID, NewsMaxAgeSeconds: v.NewsMaxAgeSeconds}
+}
+func TestAgentAIRequestDraftModesFreshReviewAndReadOnly(t *testing.T) {
+	for _, mode := range []string{"legacy", "all", "none", "selected"} {
+		t.Run(mode, func(t *testing.T) {
+			s := fixtureStore(t)
+			var v AgentView
+			if mode == "legacy" {
+				v = aiPrepare(t, s)
+			} else {
+				v, _ = selectionFixture(t, s, mode)
+			}
+			q := v.AIRequests[0]
+			before, rev, _ := readAgents(t.Context(), s.db)
+			draft, err := s.AgentAIRequestDraft(t.Context(), v.ProfileID, q.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if draft.Revision != rev || draft.ProfileID != q.ProfileID || draft.SessionID != q.SessionID || draft.Prompt != q.Prompt || draft.Model != q.Model || draft.Limits != q.Limits || draft.ConnectionRef != q.ConnectionRef {
+				t.Fatal("settings differ", draft)
+			}
+			if mode == "legacy" {
+				if draft.MemorySelection != nil {
+					t.Fatal("legacy broadened")
+				}
+			} else if draft.MemorySelection == nil || draft.MemorySelection.Mode != mode {
+				t.Fatal("selection lost")
+			}
+			after, next, _ := readAgents(t.Context(), s.db)
+			if next != rev || !reflect.DeepEqual(before, after) {
+				t.Fatal("read wrote document")
+			}
+			// Edits/cancel are caller-owned values; neither can write the source.
+			draft.Prompt = "Edited fresh request"
+			draft.Limits.MaxOutputTokens = 256
+			if draft.MemorySelection != nil && mode == "selected" {
+				draft.MemorySelection.IDs[0] = "local-only-edit"
+			}
+			draft, err = s.AgentAIRequestDraft(t.Context(), v.ProfileID, q.ID)
+			if err != nil || draft.Prompt != q.Prompt {
+				t.Fatal("draft edits mutated source", err)
+			}
+			draft.Prompt = "Explicit new question"
+			draft.Limits.MaxOutputTokens = 256
+			fresh := agentApply(t, s, draftCommand(draft))
+			newQ := fresh.AIRequests[1]
+			if newQ.ID == q.ID || newQ.Digest == q.Digest || newQ.State != "prepared" || newQ.HeldMicrousd != 0 || newQ.Answer != "" || len(newQ.Cards) != 0 || !reflect.DeepEqual(fresh.AIRequests[0], q) {
+				t.Fatal("fresh preparation inherited authority or changed source")
+			}
+			selectionRefused(t, s, AgentCommand{Action: "ai-start", ProfileID: v.ProfileID, ID: newQ.ID, ConsentDigest: q.Digest}, true)
+			selectionRefused(t, s, AgentCommand{Action: "ai-start", ProfileID: v.ProfileID, ID: newQ.ID, ConsentDigest: newQ.Digest}, false)
+			fresh = aiStart(t, s, fresh)
+			if err = s.advanceAgentAI(t.Context(), fixtureAITransport{}, true); err != nil {
+				t.Fatal(err)
+			}
+			fresh, _ = s.Agents(t.Context(), v.ProfileID, "")
+			if fresh.AIRequests[1].State != "completed" {
+				t.Fatal("separate fixture consent failed")
+			}
+		})
+	}
+}
+
+func TestAgentAIRequestDraftIntegrityAndIsolation(t *testing.T) {
+	cases := []struct {
+		name   string
+		change func(*agentDocument)
+		resign bool
+	}{
+		{"missing", func(d *agentDocument) { d.AIRequests = nil }, false},
+		{"duplicate", func(d *agentDocument) { d.AIRequests = append(d.AIRequests, d.AIRequests[0]) }, false},
+		{"foreign", func(d *agentDocument) { d.AIRequests[0].ProfileID = "news-researcher" }, true},
+		{"scheduled", func(d *agentDocument) { d.AIRequests[0].TaskID = "task" }, true},
+		{"task-digest", func(d *agentDocument) { d.AIRequests[0].TaskDigest = "task-consent" }, true},
+		{"missing-session", func(d *agentDocument) { d.Sessions = nil }, false},
+		{"duplicate-session", func(d *agentDocument) { d.Sessions = append(d.Sessions, d.Sessions[0]) }, false},
+		{"foreign-session", func(d *agentDocument) { d.Sessions[0].ProfileID = "news-researcher" }, false},
+		{"duplicate-profile", func(d *agentDocument) {
+			d.Profiles = append(d.Profiles, d.Profiles[agentProfile(*d, "trading-analyst")])
+		}, false},
+		{"wire", func(d *agentDocument) { d.AIRequests[0].Disclosure += " " }, false},
+		{"digest", func(d *agentDocument) { d.AIRequests[0].Digest = "changed" }, false},
+		{"prompt", func(d *agentDocument) { d.AIRequests[0].Prompt = "Changed prompt" }, true},
+		{"malformed", func(d *agentDocument) { d.AIRequests[0].Context = "{" }, true},
+		{"unknown-version", func(d *agentDocument) {
+			d.AIRequests[0].Context = strings.Replace(d.AIRequests[0].Context, aiMemoryContextVersion, "future-context-v2", 1)
+		}, true},
+		{"missing-version", func(d *agentDocument) {
+			d.AIRequests[0].Context = strings.Replace(d.AIRequests[0].Context, `"version":"manual-ai-memory-v1",`, "", 1)
+		}, true},
+		{"unknown-mode", func(d *agentDocument) {
+			d.AIRequests[0].Context = strings.Replace(d.AIRequests[0].Context, `"mode":"selected"`, `"mode":"future"`, 1)
+		}, true},
+		{"selection-mismatch", func(d *agentDocument) {
+			d.AIRequests[0].Context = strings.Replace(d.AIRequests[0].Context, `"mode":"selected"`, `"mode":"none"`, 1)
+		}, true},
+		{"unknown-field", func(d *agentDocument) {
+			d.AIRequests[0].Context = strings.Replace(d.AIRequests[0].Context, `"version":`, `"unrecognized":true,"version":`, 1)
+		}, true},
+		{"duplicate-key", func(d *agentDocument) {
+			d.AIRequests[0].Context = strings.Replace(d.AIRequests[0].Context, `"mode":"selected"`, `"mode":"none","mode":"selected"`, 1)
+		}, true},
+		{"limits", func(d *agentDocument) { d.AIRequests[0].Limits.DeadlineSeconds = 99 }, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := fixtureStore(t)
+			v, _ := selectionFixture(t, s, "selected")
+			id := v.AIRequests[0].ID
+			rewriteReminderFixture(t, s, func(d *agentDocument) {
+				tc.change(d)
+				if tc.resign && len(d.AIRequests) > 0 {
+					q := &d.AIRequests[0]
+					wire, _ := aiWire(*q)
+					q.Disclosure = string(wire)
+					q.Digest = aiDigest(*q)
+				}
+			})
+			before, rev, _ := readAgents(t.Context(), s.db)
+			if _, err := s.AgentAIRequestDraft(t.Context(), v.ProfileID, id); err == nil {
+				t.Fatal("invalid source accepted")
+			}
+			after, next, _ := readAgents(t.Context(), s.db)
+			if rev != next || !reflect.DeepEqual(before, after) {
+				t.Fatal("refusal wrote state")
+			}
+		})
+	}
+}
+
+func TestAgentAIRequestDraftStaleMemoryAndHolds(t *testing.T) {
+	for _, kind := range []string{"deleted", "expired", "foreign", "ambiguous"} {
+		t.Run(kind, func(t *testing.T) {
+			s := fixtureStore(t)
+			v, note := selectionFixture(t, s, "selected")
+			q := v.AIRequests[0]
+			rewriteReminderFixture(t, s, func(d *agentDocument) {
+				for i, m := range d.Memories {
+					if m.ID != note.ID {
+						continue
+					}
+					switch kind {
+					case "deleted":
+						d.Memories = append(d.Memories[:i], d.Memories[i+1:]...)
+					case "expired":
+						d.Memories[i].ExpiresAt = 1
+					case "foreign":
+						d.Memories[i].ProfileID = "news-researcher"
+					case "ambiguous":
+						d.Memories = append(d.Memories, m)
+					}
+					break
+				}
+			})
+			before, rev, _ := readAgents(t.Context(), s.db)
+			draft, err := s.AgentAIRequestDraft(t.Context(), v.ProfileID, q.ID)
+			if err != nil || draft.MemorySelection == nil || len(draft.MemorySelection.IDs) != 1 || draft.MemorySelection.IDs[0] != note.ID {
+				t.Fatal("stale ID silently removed", draft, err)
+			}
+			after, next, _ := readAgents(t.Context(), s.db)
+			if next != rev || !reflect.DeepEqual(before, after) {
+				t.Fatal("stale read changed data")
+			}
+			selectionRefused(t, s, draftCommand(draft), false)
+			draft.MemorySelection = &AIMemorySelection{Mode: "none"}
+			agentApply(t, s, draftCommand(draft))
+		})
+	}
+	for _, state := range []string{"queued", "running", "unknown", "cancelled", "completed", "failed"} {
+		t.Run(state, func(t *testing.T) {
+			s := fixtureStore(t)
+			v := aiPrepare(t, s)
+			q := v.AIRequests[0]
+			rewriteReminderFixture(t, s, func(d *agentDocument) {
+				d.AIRequests[0].State = state
+				d.AIRequests[0].HeldMicrousd = 123
+				d.AIRequests[0].Answer = "PRIVATE-ANSWER"
+			})
+			before, _, _ := readAgents(t.Context(), s.db)
+			draft, err := s.AgentAIRequestDraft(t.Context(), v.ProfileID, q.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fresh := agentApply(t, s, draftCommand(draft))
+			newQ := fresh.AIRequests[1]
+			if !reflect.DeepEqual(fresh.AIRequests[0], before.AIRequests[0]) || newQ.HeldMicrousd != 0 || newQ.Answer != "" {
+				t.Fatal("draft cleared hold/copied result")
+			}
+			selectionRefused(t, s, AgentCommand{Action: "ai-start", ProfileID: v.ProfileID, ID: newQ.ID, ConsentDigest: newQ.Digest}, true)
+		})
+	}
+}
+
+func TestAgentAIRequestDraftNewsConnectionAndRestart(t *testing.T) {
+	s, conn := admissionStore(t)
+	v := newsAdd(t, s, "trading-analyst")
+	source := v.NewsSources[0]
+	agentApply(t, s, AgentCommand{Action: "news-fetch", ProfileID: v.ProfileID, ID: source.ID})
+	calls := 0
+	if err := s.advanceAgentNews(t.Context(), newsHTTPS(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/rss+xml")
+		io.WriteString(w, newsRSS(s.now().Unix()))
+	}), false); err != nil {
+		t.Fatal(err)
+	}
+	v = agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: v.ProfileID, Name: "Saved connected request"})
+	v = agentApply(t, s, AgentCommand{Action: "ai-prepare", ProfileID: v.ProfileID, ID: v.Sessions[0].ID, Text: "Keep my saved choices", ConnectionRef: conn.Ref, Model: openAIModelPolicy().Model, NewsSourceID: source.ID, NewsMaxAgeSeconds: 300, MemorySelection: &AIMemorySelection{Mode: "none"}, Limits: &AILimits{MaxInputTokens: 24000, MaxOutputTokens: 512, DeadlineSeconds: 3, BudgetMicrousd: 30000}})
+	q := v.AIRequests[0]
+	agentApply(t, s, AgentCommand{Action: "news-source-disable", ProfileID: v.ProfileID, ID: source.ID})
+	profile := v.Profiles[agentProfile(agentDocument{Profiles: v.Profiles}, v.ProfileID)]
+	agentApply(t, s, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: profile.Name, Text: profile.Persona, Provider: "openai"})
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	n, err := OpenStore(s.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.Close()
+	before, rev, _ := readAgents(t.Context(), n.db)
+	draft, err := n.AgentAIRequestDraft(t.Context(), v.ProfileID, q.ID)
+	if err != nil || draft.NewsSourceID != source.ID || draft.NewsMaxAgeSeconds != 300 || draft.ConnectionRef != conn.Ref || draft.Model != q.Model || draft.MemorySelection.Mode != "none" {
+		t.Fatal("saved settings changed", draft, err)
+	}
+	after, next, _ := readAgents(t.Context(), n.db)
+	if rev != next || !reflect.DeepEqual(before, after) || calls != 1 {
+		t.Fatal("read fetched or wrote")
+	}
+	selectionRefused(t, n, draftCommand(draft), false) // locked connection never substituted
+	draft.ConnectionRef = ""
+	draft.Model = fixtureAIModel
+	selectionRefused(t, n, draftCommand(draft), false) // disabled source never dropped/refetched
+	draft.NewsSourceID = ""
+	draft.NewsMaxAgeSeconds = 0
+	agentApply(t, n, draftCommand(draft))
+	if _, err = n.AgentAIRequestDraft(t.Context(), "news-researcher", q.ID); err == nil {
+		t.Fatal("foreign source exposed")
+	}
+	// Historical tariff/model may be unavailable today: retain it visibly, never substitute.
+	rewriteReminderFixture(t, n, func(d *agentDocument) {
+		r := &d.AIRequests[0]
+		r.Model = "retired-snapshot"
+		r.Policy.Model = r.Model
+		wire, _ := aiWire(*r)
+		r.Disclosure = string(wire)
+		r.Digest = aiDigest(*r)
+	})
+	draft, err = n.AgentAIRequestDraft(t.Context(), v.ProfileID, q.ID)
+	if err != nil || draft.Model != "retired-snapshot" {
+		t.Fatal("unavailable model lost", err)
+	}
+	draft.ConnectionRef = ""
+	draft.NewsSourceID = ""
+	draft.NewsMaxAgeSeconds = 0
+	selectionRefused(t, n, draftCommand(draft), false)
+}
+
+func TestAgentAIRequestDraftHTTPStrict(t *testing.T) {
+	s := fixtureStore(t)
+	v := aiPrepare(t, s)
+	token := claimFixture(t, s)
+	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := "profile=" + v.ProfileID + "&ai-draft=" + v.AIRequests[0].ID
+	for _, tc := range []struct {
+		query, token, method string
+		status               int
+	}{
+		{good, token, "GET", 200}, {good, "", "GET", 401}, {"profile=news-researcher&ai-draft=" + v.AIRequests[0].ID, token, "GET", 400},
+		{"ai-draft=" + v.AIRequests[0].ID, token, "GET", 400}, {"profile=trading-analyst&ai-draft=", token, "GET", 400},
+		{good + "&profile=news-researcher", token, "GET", 400}, {good + "&ai-draft=other", token, "GET", 400},
+		{good + "&q=search", token, "GET", 400}, {good + "&memory-search=", token, "GET", 400}, {good + "&unknown=true", token, "GET", 400},
+		{good, token, "POST", 400}, {"profile=%ff&ai-draft=foo", token, "GET", 400},
+	} {
+		r := httptest.NewRequest(tc.method, "http://127.0.0.1:7331/api/v1/agents?"+tc.query, nil)
+		r.Header.Set("Authorization", "Bearer "+tc.token)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != tc.status {
+			t.Fatalf("%s %s got %d want %d: %s", tc.method, tc.query, w.Code, tc.status, w.Body)
+		}
+	}
 }
