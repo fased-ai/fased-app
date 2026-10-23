@@ -344,6 +344,10 @@ func TestWENResearchAIMigration(t *testing.T) {
 	t.Run("schema-11-records-preserved", func(t *testing.T) {
 		s, _, _, _ := readBatchFixture(t)
 		var raw string
+		var beforeRevision int64
+		if err := s.db.QueryRow("SELECT revision FROM agent_workspace WHERE id=1").Scan(&beforeRevision); err != nil {
+			t.Fatal(err)
+		}
 		s.db.QueryRow("SELECT document FROM agent_workspace WHERE id=1").Scan(&raw)
 		var fields map[string]json.RawMessage
 		json.Unmarshal([]byte(raw), &fields)
@@ -351,10 +355,6 @@ func TestWENResearchAIMigration(t *testing.T) {
 		legacy, _ := json.Marshal(fields)
 		s.db.Exec("UPDATE agent_workspace SET document=? WHERE id=1", string(legacy))
 		s.db.Exec("PRAGMA user_version=11")
-		var beforeRevision int64
-		if err := s.db.QueryRow("SELECT revision FROM agent_workspace WHERE id=1").Scan(&beforeRevision); err != nil {
-			t.Fatal(err)
-		}
 		n, e := OpenStore(s.dir)
 		if e != nil {
 			t.Fatal(e)
@@ -362,12 +362,12 @@ func TestWENResearchAIMigration(t *testing.T) {
 		defer n.Close()
 		var schema int
 		n.db.QueryRow("PRAGMA user_version").Scan(&schema)
-		if schema != 12 {
+		if schema != StateSchema {
 			t.Fatal(schema)
 		}
 		var afterRevision int64
 		if err := n.db.QueryRow("SELECT revision FROM agent_workspace WHERE id=1").Scan(&afterRevision); err != nil || afterRevision != beforeRevision {
-			t.Fatalf("migration changed workspace revision: before=%d after=%d error=%v", beforeRevision, afterRevision, err)
+			t.Fatalf("format-only migration changed workspace revision: before=%d after=%d error=%v", beforeRevision, afterRevision, err)
 		}
 		var after string
 		n.db.QueryRow("SELECT document FROM agent_workspace WHERE id=1").Scan(&after)

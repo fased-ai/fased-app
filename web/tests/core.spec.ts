@@ -2,8 +2,9 @@ import { expect, test } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { basename, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { once } from "node:events";
 import { createHash, randomBytes } from "node:crypto";
 
@@ -29,7 +30,18 @@ async function start(aiFixture = false) {
   ]);
   child.stdout!.on("data", (data) => (output += String(data)));
   child.stderr!.on("data", (data) => (output += String(data)));
-  await expect.poll(() => output.includes('"event":"listening"')).toBe(true);
+  try {
+    await expect.poll(() => output.includes('"event":"listening"')).toBe(true);
+  } catch (error) {
+    await writeFile(
+      resolve(
+        ".evidence/core-browser-fixtures",
+        `${basename(dir)}-startup.log`,
+      ),
+      output,
+    );
+    throw Error(`Fixture core startup failed:\n${output}\n${String(error)}`);
+  }
   url = JSON.parse(output.trim().split("\n")[0]).url;
 }
 async function stop() {
@@ -57,7 +69,8 @@ async function privateCLI(args: string[], input?: unknown) {
 test.beforeEach(async () => {
   const root = resolve(".evidence/core-browser-fixtures");
   await mkdir(root, { recursive: true, mode: 0o700 });
-  dir = await mkdtemp(join(root, "f-"));
+  // Disposable, reconstructible state; keep IPC independent of checkout length.
+  dir = await mkdtemp(join(tmpdir(), "fcu-"));
   await start();
 });
 test.afterEach(async () => {

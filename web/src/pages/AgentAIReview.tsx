@@ -72,6 +72,7 @@ function AgentAIForm({
   const [turnSeconds, setTurnSeconds] = useState(90);
   const [turnBudget, setTurnBudget] = useState(90000);
   const [researchPreparing, setResearchPreparing] = useState(false);
+  const [researchMode, setResearchMode] = useState("single");
   const [consent, setConsent] = useState("");
   const [memoryMode, setMemoryMode] = useState<
     AIMemorySelection["mode"] | "legacy"
@@ -248,7 +249,10 @@ function AgentAIForm({
               setDraftError("");
               void core
                 .request("wen/research/ai-prepare", "POST", {
-                  schema: "wen-research-ai-prepare/1",
+                  schema:
+                    researchMode === "loop"
+                      ? "wen-research-ai-prepare/2"
+                      : "wen-research-ai-prepare/1",
                   selection: { ...researchSelection, revision: view.revision },
                   prompt,
                   model: model || "fixture-openai-v1",
@@ -326,6 +330,17 @@ function AgentAIForm({
           {researchSelection && (
             <fieldset aria-label="Selected research for AI">
               <legend>Selected research</legend>
+              <label>
+                Research mode
+                <select
+                  value={researchMode}
+                  disabled={researchPreparing}
+                  onChange={(e) => setResearchMode(e.target.value)}
+                >
+                  <option value="single">Single request</option>
+                  <option value="loop">Reviewed continuations</option>
+                </select>
+              </label>
               <pre>{JSON.stringify(researchSelection, null, 2)}</pre>
               <button
                 type="button"
@@ -573,14 +588,19 @@ function AgentAIForm({
                 Use as draft
               </button>
             )}
-            {q.researchTurnId && (
-              <ResearchTurnReview
-                request={q}
-                revision={view.revision}
-                fixtureAvailable={view.aiFixtureAvailable}
-                onChanged={() => agents.refresh()}
-              />
-            )}
+            {q.researchTurnId &&
+              !requests.some(
+                (other) =>
+                  other.researchTurnId === q.researchTurnId &&
+                  (other.researchStep ?? 0) > (q.researchStep ?? 0),
+              ) && (
+                <ResearchTurnReview
+                  request={q}
+                  revision={view.revision}
+                  fixtureAvailable={view.aiFixtureAvailable}
+                  onChanged={() => agents.refresh()}
+                />
+              )}
             <AIAdmissionReview policy={q.policy} admission={q.admission} />
             <p>
               <strong>{q.state}</strong> · {q.model} · Held{" "}

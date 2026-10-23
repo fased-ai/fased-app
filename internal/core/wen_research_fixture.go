@@ -14,6 +14,7 @@ type WENResearchAIStartInput struct {
 	Revision      int64  `json:"revision"`
 	RequestID     string `json:"requestId"`
 	ConsentDigest string `json:"consentDigest"`
+	Step          int    `json:"step,omitempty"`
 }
 
 func researchSourceState(ctx context.Context, r snapshotReader, d agentDocument, rev int64, t WENResearchTurn, q AgentAIRequest, now int64) string {
@@ -36,8 +37,12 @@ func researchSourceState(ctx context.Context, r snapshotReader, d agentDocument,
 	root, e3 := researchBase(d, t.Profile, t.SessionID, q.Prompt, t.Root.MemorySelection, now)
 	if err == nil && e2 == nil && e3 == nil {
 		root.FactsSHA256 = researchHash(facts)
+		if t.Schema == researchLoopTurn {
+			root.Schema = "wen-research-root/2"
+			root.CallsSHA256 = researchHash(t.Selection.Calls)
+		}
 	}
-	if err != nil || e2 != nil || e3 != nil || researchHash(root) != t.RootSHA256 || q.Context != researchContext(t) {
+	if err != nil || e2 != nil || e3 != nil || researchHash(root) != t.RootSHA256 || q.Context != researchRequestContext(t, q) {
 		return "source_changed"
 	}
 	return "unchanged"
@@ -64,7 +69,7 @@ func (s *Store) StartWENResearchAI(ctx context.Context, c WENResearchAIStartInpu
 	if !fixture {
 		return out, errors.New("research execution disabled; an explicitly started development fixture is required")
 	}
-	if c.Schema != "wen-research-ai-start/1" || !readRefValid(c.Profile) || !readRefValid(c.ID) || !readRefValid(c.RequestID) || c.Revision < 0 {
+	if (c.Schema != "wen-research-ai-start/1" && c.Schema != "wen-research-ai-start/2") || !readRefValid(c.Profile) || !readRefValid(c.ID) || !readRefValid(c.RequestID) || c.Revision < 0 {
 		return out, errors.New("exact research turn, request and consent required")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -84,9 +89,13 @@ func (s *Store) StartWENResearchAI(ctx context.Context, c WENResearchAIStartInpu
 		return out, errors.New("research turn unavailable")
 	}
 	t := &d.ResearchTurns[ti]
-	if t.State != "prepared" || t.StartedAt != 0 || t.CurrentChildID != c.RequestID || t.Models[0].Attempted {
+	if (t.Schema == researchLoopTurn) != (c.Schema == "wen-research-ai-start/2") || (t.Schema == researchLoopTurn && c.Step != t.CurrentStep) || (t.Schema != researchLoopTurn && c.Step != 0) {
+		return out, errors.New("exact research version and step required")
+	}
+	if t.State != "prepared" || t.CurrentChildID != c.RequestID || t.Models[t.CurrentStep-1].Attempted {
 		return out, errors.New("research turn already started or stopped; no replay")
 	}
+
 	for _, q := range d.AIRequests {
 		if q.ProfileID == c.Profile && q.HeldMicrousd > 0 {
 			return out, errors.New("profile has a pending or uncertain request; no additional call allowed")
@@ -116,7 +125,7 @@ func (s *Store) StartWENResearchAI(ctx context.Context, c WENResearchAIStartInpu
 		if err = tx.Commit(); err != nil {
 			return out, err
 		}
-		return WENResearchAIReview{"wen-research-ai-review/1", rev + 1, *t, *q, "unchanged", true}, nil
+		return WENResearchAIReview{researchReviewSchema(*t), rev + 1, *t, *q, "unchanged", true}, nil
 	}
 	return out, errors.New("research child unavailable")
 }
@@ -127,6 +136,10 @@ func settleResearchAI(d *agentDocument, q AgentAIRequest, now int64) {
 		return
 	}
 	t := &d.ResearchTurns[i]
+	if t.Schema == researchLoopTurn {
+		settleLoopAI(t, q, now)
+		return
+	}
 	t.State, t.StopReason = q.State, q.Failure
 	if q.State == "unknown" {
 		t.State = "held"
@@ -175,10 +188,7 @@ func validResearchLifecycle(t WENResearchTurn, q AgentAIRequest) bool {
 			return false
 		}
 		if t.State == "queued" {
-			return readRefValid(t.ConsentBoot) && q.State == "queued" && q.DispatchBoot == "" && q.HeldMicrousd == aiRequestReservation(q) && q.SpentMicrousd == 0
-		}
-		if t.State == "prepared" && t.ConsentBoot != "" {
-			return false
+			return q.State == "queued" && q.DispatchBoot == "" && q.HeldMicrousd == aiRequestReservation(q) && q.SpentMicrousd == 0
 		}
 		return t.State == "prepared" || t.State == "held" || t.State == "cancelled"
 	}

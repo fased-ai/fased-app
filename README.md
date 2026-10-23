@@ -440,3 +440,11 @@ In a development core started with `serve --ai-fixture`, Chat can inspect select
 CLI uses the same protected core with `wen-research --ai-start-stdin`. Its strict JSON contains `schema: "wen-research-ai-start/1"`, `profile`, turn `id`, current `revision`, `requestId` and the reviewed `consentDigest`. Use `--ai-inspect-stdin` and `--ai-cancel-stdin` with `wen-research-ai-selection/1` for the retained turn. Opening or inspecting creates no provider request.
 
 The attempt, original deadline and cost hold commit before provider operations. Each operation and completion revalidates selected sources and the exact wire. Cancellation reconciles verified usage and retains uncertain cost. Queued consent belongs to its approving core boot: a restart before dispatch cancels that unsent child and releases its unused reservation. Interrupted submitted work stays held without replay. A fresh review is required for another attempt. Real AI, wallets, mining and automatic/public updates remain disabled.
+
+### Reviewed fixture research continuations
+
+Single request remains the default. In a development `serve --ai-fixture` core, select **Reviewed continuations** before preparing a research turn. Inspect its complete wire and separately approve each child. A fixture may finish after one child or request only the previously selected frozen local reads. Inspect their complete results/transcript, choose **Prepare next research request**, inspect the new wire, and consent again. Nothing automatically starts another model request.
+
+The original turn allows at most three model attempts, eight sequential cached reads and 90 seconds, within its reviewed cost and storage limits. Cancellation retains known costs and uncertain holds. Restart never replays queued consent, provider attempts or interrupted reads. Inputs remain historical; no live provider, market or wallet is contacted.
+
+CLI uses `wen-research --ai-prepare-stdin` with `wen-research-ai-prepare/2`, `--ai-start-stdin` with `wen-research-ai-start/2`, and `--ai-prepare-next-stdin` with `wen-research-ai-next/1`. Inspect/cancel use `wen-research-ai-selection/2`. Use the exact turn, step, child, revision and digest returned by the previous review. Ordinary cores and generic research dispatch continue to refuse execution.

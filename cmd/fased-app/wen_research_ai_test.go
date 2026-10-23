@@ -10,6 +10,8 @@ import (
 func TestWENResearchAICommandModes(t *testing.T) {
 	for _, flags := range [][]string{
 		{"--ai-prepare-stdin", "--ai-inspect-stdin"},
+		{"--ai-prepare-next-stdin", "--ai-start-stdin"},
+		{"--ai-prepare-next-stdin", "--profile", "wen-operator"},
 		{"--ai-start-stdin", "--ai-inspect-stdin"},
 		{"--ai-start-stdin", "--profile", "wen-operator"},
 		{"--ai-cancel-stdin", "--read-stdin"},

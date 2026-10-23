@@ -249,6 +249,21 @@ export type AgentAIRequest = {
     review: string;
   }[];
 };
+export type ResearchAIReview = {
+  schema: "wen-research-ai-review/1" | "wen-research-ai-review/2";
+  revision: number;
+  sourceState: string;
+  dispatchEnabled: false;
+  request: AgentAIRequest;
+  turn: {
+    schema: "wen-research-turn/1" | "wen-research-turn/2";
+    id: string;
+    state: string;
+    currentChildId: string;
+    currentStep: number;
+    models: { id: string; step: number; frameSHA256?: string }[];
+  };
+};
 export type ReminderReview = {
   version: string;
   profileId: string;

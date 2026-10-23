@@ -164,6 +164,9 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
+	case "/api/v1/wen/research/ai-prepare-next":
+		h.wenResearchAIAPI(w, r, token, "next")
+		return
 	case "/api/v1/wen/research/ai-start":
 		h.wenResearchAIAPI(w, r, token, "start")
 		return

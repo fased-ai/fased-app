@@ -90,7 +90,7 @@ func fixtureResearchConsent(t *testing.T, s *Store, r WENResearchAIReview) WENRe
 	if err != nil {
 		t.Fatal(err)
 	}
-	return WENResearchAIStartInput{"wen-research-ai-start/1", r.Turn.Profile, r.Turn.ID, rev, r.Request.ID, r.Request.Digest}
+	return WENResearchAIStartInput{Schema: "wen-research-ai-start/1", Profile: r.Turn.Profile, ID: r.Turn.ID, Revision: rev, RequestID: r.Request.ID, ConsentDigest: r.Request.Digest}
 }
 func startFixtureResearch(t *testing.T, s *Store, r WENResearchAIReview) WENResearchAIReview {
 	t.Helper()

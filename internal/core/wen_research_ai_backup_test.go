@@ -61,3 +61,37 @@ func TestWENResearchAILegacyHolds(t *testing.T) {
 		t.Fatal("legacy liability or disclosure changed", e)
 	}
 }
+
+func TestWENResearchLoopSnapshotBackup(t *testing.T) {
+	s, _, _, c := readBatchFixture(t)
+	r := loopPrepared(t, s, c, 2, 3)
+	r = loopAdvance(t, s, r, fixtureAITransport{})
+	r = loopNext(t, s, r)
+	before, e := s.UpdateSnapshot(t.Context(), update.NewProbe())
+	if e != nil {
+		t.Fatal(e)
+	}
+	proof := pausedBackup(t, s)
+	if _, e = s.BackupMetadata(t.Context(), proof); e != nil {
+		t.Fatal(e)
+	}
+	image := filepath.Join(s.dir, "lifecycle", proof.IntentID, "metadata.sqlite")
+	db, e := sql.Open("sqlite", "file:"+image+"?mode=ro&immutable=1")
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer db.Close()
+	var live, saved string
+	s.db.QueryRow("SELECT document || ':' || revision FROM agent_workspace WHERE id=1").Scan(&live)
+	db.QueryRow("SELECT document || ':' || revision FROM agent_workspace WHERE id=1").Scan(&saved)
+	if live != saved {
+		t.Fatal("backup rewrote transcript or prepared child")
+	}
+	d, rev, e := readAgents(t.Context(), db)
+	if e != nil || rev != r.Revision || len(d.ResearchTurns[0].Models) != 2 || len(d.ResearchTurns[0].Tools) != 1 || d.ResearchTurns[0].CurrentChildID != r.Request.ID {
+		t.Fatal("v2 backup missing", e)
+	}
+	if before.State.Version != 13 {
+		t.Fatal("schema boundary not advertised", before.State.Version)
+	}
+}

@@ -24,6 +24,7 @@ func wenResearchCommand(args []string, in *os.File, out, errOut io.Writer) error
 	dir := f.String("data-dir", base, "private core directory")
 	profile := f.String("profile", "", "profile for read")
 	read := f.Bool("read-stdin", false, "inspect one selected research batch without writing or calling a model")
+	aiNext := f.Bool("ai-prepare-next-stdin", false, "prepare one exact reviewed research continuation without starting it")
 	aiStart := f.Bool("ai-start-stdin", false, "consent to one exact reviewed fixture research child")
 	aiPrepare := f.Bool("ai-prepare-stdin", false, "prepare one inert source-bound research turn")
 	aiInspect := f.Bool("ai-inspect-stdin", false, "inspect one retained research turn without writing")
@@ -38,7 +39,7 @@ func wenResearchCommand(args []string, in *os.File, out, errOut io.Writer) error
 		return e
 	}
 	modes := 0
-	for _, selected := range []bool{*read, *aiStart, *aiPrepare, *aiInspect, *aiCancel, *change, *review, *revisionReview, *revisionSave, *proposalReview, *proposalSave, *profile != ""} {
+	for _, selected := range []bool{*read, *aiNext, *aiStart, *aiPrepare, *aiInspect, *aiCancel, *change, *review, *revisionReview, *revisionSave, *proposalReview, *proposalSave, *profile != ""} {
 		if selected {
 			modes++
 		}
@@ -47,7 +48,7 @@ func wenResearchCommand(args []string, in *os.File, out, errOut io.Writer) error
 		return errors.New("select exactly one research read, prepare, inspect, cancel, profile, save or review mode")
 	}
 	timeout := 10 * time.Second
-	if *read || *aiPrepare || *aiInspect {
+	if *read || *aiPrepare || *aiInspect || *aiNext {
 		timeout = 95 * time.Second
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -60,14 +61,20 @@ func wenResearchCommand(args []string, in *os.File, out, errOut io.Writer) error
 	if e = c.LoadSession(ctx, *dir); e != nil {
 		return e
 	}
-	if *aiPrepare || *aiInspect || *aiCancel || *aiStart {
+	if *aiPrepare || *aiInspect || *aiCancel || *aiStart || *aiNext {
 		c.HTTP.Timeout = timeout
 		raw, err := io.ReadAll(io.LimitReader(in, update.MaxDocument+1))
 		if err != nil || len(raw) > update.MaxDocument {
 			return errors.New("complete research command exceeds 64 KiB")
 		}
 		action := "ai-prepare"
-		if *aiStart {
+		if *aiNext {
+			var next core.WENResearchAINextInput
+			if err = update.StrictJSON(raw, &next); err != nil {
+				return err
+			}
+			action = "ai-prepare-next"
+		} else if *aiStart {
 			var consent core.WENResearchAIStartInput
 			if err = update.StrictJSON(raw, &consent); err != nil {
 				return err

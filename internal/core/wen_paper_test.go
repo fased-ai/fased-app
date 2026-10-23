@@ -220,7 +220,7 @@ func TestWENPaperSnapshotBindsReviewAndReceipt(t *testing.T) {
 	if b.State.Anchor == c.State.Anchor {
 		t.Fatal("receipt missing from snapshot")
 	}
-	if StateSchema != 12 {
+	if StateSchema != 13 {
 		t.Fatal("reader compatibility boundary missing")
 	}
 }

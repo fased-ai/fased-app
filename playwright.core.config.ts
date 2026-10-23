@@ -6,6 +6,7 @@ export default defineConfig({
     "core.spec.ts",
     "research-ai.spec.ts",
     "research-fixture.spec.ts",
+    "research-loop.spec.ts",
   ],
   outputDir: ".evidence/core-browser",
   reporter: [

@@ -38,6 +38,7 @@ type AIActionCard struct {
 	Review string `json:"review"`
 }
 type AgentAIRequest struct {
+	researchFrame     *researchLoopFrame // transient parsed result, persisted only in the turn ledger
 	ResearchTurnID    string             `json:"researchTurnId,omitempty"`
 	ResearchStep      int                `json:"researchStep,omitempty"`
 	CachedInputTokens int64              `json:"cachedInputTokens,omitempty"`
@@ -341,6 +342,11 @@ func aiWire(q AgentAIRequest) ([]byte, error) {
 	card := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"kind": map[string]any{"type": "string", "enum": []string{"reminder-draft", "paper-strategy-draft"}}, "title": map[string]any{"type": "string"}, "text": map[string]any{"type": "string"}}, "required": []string{"kind", "title", "text"}}
 	schema := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"answer": map[string]any{"type": "string"}, "cards": map[string]any{"type": "array", "items": card}}, "required": []string{"answer", "cards"}}
 	wire := map[string]any{"model": q.Model, "instructions": aiInstructions, "input": q.Context, "store": false, "background": false, "service_tier": "default", "tools": []any{}, "tool_choice": "none", "max_output_tokens": q.Limits.MaxOutputTokens, "text": map[string]any{"format": map[string]any{"type": "json_schema", "name": "fased_review", "strict": true, "schema": schema}}}
+	if isResearchLoop(q) {
+		wire["instructions"] = researchLoopInstructions
+		wire["text"] = map[string]any{"format": map[string]any{"type": "json_schema", "name": "fased_research_step_v1", "strict": true, "schema": loopOutputSchema()}}
+	}
+
 	if q.Policy != nil {
 		wire["truncation"] = "disabled"
 	}
@@ -456,6 +462,20 @@ func callReviewedAgentAIAt(ctx context.Context, q AgentAIRequest, rt http.RoundT
 	if o.Type != "message" || o.Role != "assistant" || o.Status != "completed" || len(o.Content) != 1 || o.Content[0].Type != "output_text" {
 		return q, nil
 	}
+	if isResearchLoop(q) {
+		f, e := loopFrame(q, []byte(o.Content[0].Text))
+		if e != nil {
+			q.Failure = e.Error()
+			return q, nil
+		}
+		q.researchFrame = f
+		q.State, q.Answer, q.Failure = "completed", f.Answer, ""
+		q.Cards = []AIActionCard{}
+		for _, c := range f.Cards {
+			q.Cards = append(q.Cards, AIActionCard{ID: q.ID + ":" + string(rune('1'+len(q.Cards))), Kind: c.Kind, Title: c.Title, Text: c.Text, Review: "unreviewed"})
+		}
+		return q, nil
+	}
 	var out struct {
 		Answer string `json:"answer"`
 		Cards  []struct {
@@ -536,14 +556,14 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 	if e != nil {
 		return e
 	}
-	changed := false
+	changed := recoverLoopReads(&d, s.now().Unix())
 	var dispatch *AgentAIRequest
 	for i := range d.AIRequests {
 		q := &d.AIRequests[i]
 		if isResearchAI(*q) {
 			ti := researchTurnIndex(d, q.ProfileID, q.ResearchTurnID)
-			if q.State == "queued" && ti >= 0 && d.ResearchTurns[ti].ConsentBoot != s.bootID {
-				q.State, q.HeldMicrousd, q.Failure = "cancelled", 0, "Research restarted before dispatch; prepare a fresh review."
+			if q.State == "queued" && q.DispatchBoot == "" && (ti < 0 || d.ResearchTurns[ti].ConsentBoot != s.bootID) {
+				q.State, q.Failure, q.HeldMicrousd = "cancelled", "Research approval does not cross core restart; prepare a fresh review.", 0
 				settleResearchAI(&d, *q, s.now().Unix())
 				changed = true
 				continue
@@ -581,7 +601,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 		}
 		if dispatch == nil && enabled && q.State == "queued" {
 			current, e := reviewedAIContext(ctx, tx, d, r, *q, s.now().Unix())
-			if e != nil || validateAIModelPolicy(*q, s.now().Unix()) != nil || current != q.Context || aiDigest(*q) != q.Digest || s.now().Unix() < q.CreatedAt || s.now().Unix()-q.CreatedAt > 600 || taskAIRequestValid(d, *q, s.now().Unix()) != nil || !s.aiConnectionValid(q.ConnectionRef) {
+			if e != nil || validateAIModelPolicy(*q, s.now().Unix()) != nil || current != q.Context || aiDigest(*q) != q.Digest || s.now().Unix() < q.CreatedAt || s.now().Unix()-q.CreatedAt > 600 || taskAIRequestValid(d, *q, s.now().Unix()) != nil || !s.aiConnectionValid(q.ConnectionRef) || (isResearchLoop(*q) && !loopFit(d.ResearchTurns[researchTurnIndex(d, q.ProfileID, q.ResearchTurnID)], researchFrameLimit)) {
 				q.State = "cancelled"
 				q.HeldMicrousd = 0
 				q.Failure = "Undispatched request changed, expired or stopped; prepare a fresh review."
@@ -598,8 +618,11 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 			q.DispatchBoot = s.bootID
 			if isResearchAI(*q) {
 				t := &d.ResearchTurns[researchTurnIndex(d, q.ProfileID, q.ResearchTurnID)]
-				t.State, t.Models[0].Attempted, t.StartedAt, t.LastObservedAt = "running", true, s.now().Unix(), s.now().Unix()
-				t.DeadlineAt = t.StartedAt + t.Bounds.WallSeconds
+				t.State, t.Models[q.ResearchStep-1].Attempted, t.LastObservedAt = "running", true, s.now().Unix()
+				if t.StartedAt == 0 {
+					t.StartedAt = s.now().Unix()
+					t.DeadlineAt = t.StartedAt + t.Bounds.WallSeconds
+				}
 			}
 			copy := *q
 			dispatch = &copy
@@ -729,7 +752,13 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 			if e = saveAgents(finish, tx, d, r); e != nil {
 				return e
 			}
-			return tx.Commit()
+			if e = tx.Commit(); e != nil {
+				return e
+			}
+			if isResearchLoop(q) && q.State == "completed" {
+				return s.runLoopReadsLocked(ctx, q.ResearchTurnID)
+			}
+			return nil
 		}
 	}
 	return nil
@@ -750,6 +779,7 @@ func (fixtureAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	var request struct {
 		Model string `json:"model"`
+		Input string `json:"input"`
 	}
 	if json.Unmarshal(b, &request) != nil || !openAIRequestAllowed(r) || (request.Model != fixtureAIModel && request.Model != admittedOpenAIModel) {
 		return nil, errors.New("compiled fixture request refused")
@@ -762,6 +792,10 @@ func (fixtureAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		inputTokens = 256
 	}
 	output, _ := json.Marshal(map[string]any{"answer": "Development fixture response. Compare the fixed paper inputs and inspect the journal before changing a strategy. No model, market feed or wallet was contacted.", "cards": []any{map[string]string{"kind": "reminder-draft", "title": "Review paper journal", "text": "Draft only: review the recorded paper outcomes. Create any task separately after checking its limits."}}})
+	var loop researchLoopEnvelope
+	if json.Unmarshal([]byte(request.Input), &loop) == nil && loop.Version == researchLoopContext {
+		output, _ = json.Marshal(fixtureResearchLoop(loop))
+	}
 	body, _ := json.Marshal(map[string]any{"id": "fixture-response", "model": request.Model, "status": "completed", "service_tier": "default", "usage": map[string]int{"input_tokens": inputTokens, "output_tokens": 128, "total_tokens": inputTokens + 128}, "output": []any{map[string]any{"type": "message", "role": "assistant", "status": "completed", "content": []any{map[string]string{"type": "output_text", "text": string(output)}}}}})
 	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(bytes.NewReader(body)), Request: r}, nil
 }

@@ -11,7 +11,10 @@ test("one consented research fixture shares UI/CLI accounting and survives resta
   test.setTimeout(90000);
   page.setDefaultTimeout(10000);
   const binary = resolve(".evidence/bin/fased-app");
-  const root = resolve(".evidence/f3-research-fixture");
+  const root = resolve(
+    process.env.FASED_RESEARCH_FIXTURE_EVIDENCE ??
+      ".evidence/f3-research-fixture",
+  );
   await mkdir(root, { recursive: true });
   // Reconstructible test state is temporary; project-owned inputs/results remain.
   // Keep Unix IPC paths independent of checkout length. The finally block removes it.
@@ -324,9 +327,7 @@ test("one consented research fixture shares UI/CLI accounting and survives resta
       prior.stderr!.on("data", (b) => (priorOutput += b));
       const priorCode = (await once(prior, "exit"))[0];
       expect(priorCode, priorOutput).not.toBe(0);
-      expect(priorOutput).toContain(
-        "unsupported or inconsistent research state",
-      );
+      expect(priorOutput).toContain("state schema is newer");
       await writeFile(
         join(root, `${info.project.name}-older-reader.json`),
         JSON.stringify({ code: priorCode, output: priorOutput }),

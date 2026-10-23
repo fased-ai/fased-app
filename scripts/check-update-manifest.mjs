@@ -66,12 +66,13 @@ try {
   );
   pass(
     "schemaPauseAndApprovalFeatures",
-    contracts[0].state[0].versions.min === 12 &&
-      contracts[0].state[0].versions.max === 12 &&
+    contracts[0].state[0].versions.min === 13 &&
+      contracts[0].state[0].versions.max === 13 &&
       contracts[0].state[0].features.includes("agents-local-v1") &&
       contracts[0].state[0].features.includes("agents-wen-paper-v1") &&
       contracts[0].state[0].features.includes("wen-research-v1") &&
       contracts[0].state[0].features.includes("wen-research-turn-v1") &&
+      contracts[0].state[0].features.includes("wen-research-continuation-v2") &&
       contracts[0].state[0].features.includes("core-pause-v1") &&
       contracts[0].lifecycle.entrypoint === 4 &&
       contracts[1].state
@@ -227,6 +228,21 @@ try {
       "schema6CoreReaderDenied",
       (m) => {
         m.components[0].contract.state[0].versions = { min: 6, max: 6 };
+      },
+    ],
+    [
+      "schema12CoreReaderDenied",
+      (m) => {
+        m.components[0].contract.state[0].versions = { min: 12, max: 12 };
+      },
+    ],
+    [
+      "wenResearchContinuationFeatureErasureDenied",
+      (m) => {
+        m.components[0].contract.state[0].features =
+          m.components[0].contract.state[0].features.filter(
+            (f) => f !== "wen-research-continuation-v2",
+          );
       },
     ],
     [

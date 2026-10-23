@@ -69,22 +69,18 @@ type researchRoot struct {
 	Context         json.RawMessage      `json:"context"`
 	BaseSources     []researchBaseSource `json:"baseSources"`
 	FactsSHA256     string               `json:"factsSHA256"`
+	CallsSHA256     string               `json:"callsSHA256,omitempty"`
 }
 type researchModelRecord struct {
-	ID        string `json:"id"`
-	Step      int    `json:"step"`
-	Digest    string `json:"digest"`
-	Attempted bool   `json:"attempted"`
-}
-type researchToolRecord struct {
-	ID        string          `json:"id"`
-	Call      WENReadCall     `json:"call"`
-	StartedAt int64           `json:"startedAt"`
-	EndedAt   int64           `json:"endedAt"`
-	Result    json.RawMessage `json:"result"`
-	SHA256    string          `json:"sha256"`
+	ID          string             `json:"id"`
+	Step        int                `json:"step"`
+	Digest      string             `json:"digest"`
+	Attempted   bool               `json:"attempted"`
+	Frame       *researchLoopFrame `json:"frame,omitempty"`
+	FrameSHA256 string             `json:"frameSHA256,omitempty"`
 }
 type WENResearchTurn struct {
+	ConsentBoot     string                `json:"consentBoot,omitempty"`
 	Schema          string                `json:"schema"`
 	ID              string                `json:"id"`
 	Profile         string                `json:"profile"`
@@ -100,7 +96,6 @@ type WENResearchTurn struct {
 	StartedAt       int64                 `json:"startedAt"`
 	DeadlineAt      int64                 `json:"deadlineAt"`
 	LastObservedAt  int64                 `json:"lastObservedAt"`
-	ConsentBoot     string                `json:"consentBoot,omitempty"`
 	CurrentChildID  string                `json:"currentChildId"`
 	CurrentStep     int                   `json:"currentStep"`
 	StopReason      string                `json:"stopReason"`
@@ -128,7 +123,7 @@ func isResearchAI(q AgentAIRequest) bool {
 	return q.ResearchTurnID != "" || q.ResearchStep != 0 || strings.HasPrefix(v.Version, "manual-ai-research")
 }
 func researchFutureSlots(t WENResearchTurn) int {
-	if t.State == "prepared" || t.State == "queued" || t.State == "running" {
+	if researchActive(t) {
 		return t.Bounds.MaxModelAttempts - len(t.Models)
 	}
 	return 0
@@ -136,7 +131,7 @@ func researchFutureSlots(t WENResearchTurn) int {
 func researchStorage(d agentDocument) int {
 	n := 0
 	for _, t := range d.ResearchTurns {
-		if t.State == "prepared" || t.State == "queued" || t.State == "running" {
+		if researchActive(t) {
 			b, _ := json.Marshal(t)
 			// Reserve the whole bounded turn (including future tool records) and
 			// worst-case encoded context/wire/metadata plus result for future children.
@@ -263,6 +258,16 @@ func validateResearchStorage(raw []byte, d agentDocument) error {
 	}
 	seen := map[string]bool{}
 	for _, t := range d.ResearchTurns {
+		if seen[t.ID] {
+			return bad
+		}
+		if t.Schema == researchLoopTurn {
+			if validateLoopStorage(t, d) != nil {
+				return bad
+			}
+			seen[t.ID] = true
+			continue
+		}
 		b, _ := json.Marshal(t)
 		if t.Schema != "wen-research-turn/1" || !readRefValid(t.ID) || seen[t.ID] || !validResearchBounds(t.Bounds) || len(b) > wenReadLimit || t.RootSHA256 != researchHash(t.Root) || t.Root.FactsSHA256 != researchHash(t.Facts) || t.Root.Schema != "wen-research-root/1" || t.Facts.Schema != "wen-research-facts/1" || t.Profile != t.Root.Profile || t.SessionID != t.Root.SessionID || t.Profile != t.Facts.Profile || t.SessionID != t.Facts.SessionID || len(t.Models) != 1 || len(t.Tools) != 0 || t.CurrentStep != 1 || t.CreatedAt <= 0 || t.ReviewExpiresAt < t.CreatedAt || t.LastObservedAt < t.CreatedAt {
 			return bad
@@ -272,7 +277,7 @@ func validateResearchStorage(raw []byte, d agentDocument) error {
 		}
 		seen[t.ID] = true
 		m := t.Models[0]
-		if m.ID != t.CurrentChildID || m.Step != 1 {
+		if m.ID != t.CurrentChildID || m.Step != 1 || m.Frame != nil || m.FrameSHA256 != "" || t.Root.CallsSHA256 != "" {
 			return bad
 		}
 		found := 0
@@ -290,7 +295,20 @@ func validateResearchStorage(raw []byte, d agentDocument) error {
 		}
 	}
 	for _, q := range d.AIRequests {
-		if isResearchAI(q) && (!seen[q.ResearchTurnID] || q.ResearchStep != 1) {
+		if !isResearchAI(q) {
+			continue
+		}
+		i := researchTurnIndex(d, q.ProfileID, q.ResearchTurnID)
+		if !seen[q.ResearchTurnID] || i < 0 {
+			return bad
+		}
+		found := false
+		for _, m := range d.ResearchTurns[i].Models {
+			if m.ID == q.ID && m.Step == q.ResearchStep {
+				found = true
+			}
+		}
+		if !found {
 			return bad
 		}
 	}
@@ -352,7 +370,7 @@ func migrateWENResearchAI(ctx context.Context, db *sql.DB) error {
 
 func DecodeWENResearchAIPrepare(raw []byte) (WENResearchAIPrepareInput, error) {
 	var c WENResearchAIPrepareInput
-	if len(raw) > wenReadLimit || update.StrictJSON(raw, &c) != nil || c.Schema != "wen-research-ai-prepare/1" || !validWENRead(c.Selection) || !validAgentText(c.Prompt, 2000, true) || !validAgentText(c.Model, 120, true) || !validAgentText(c.ConnectionRef, 200, false) || !validResearchBounds(c.Bounds) || c.MemorySelection.Mode == "" {
+	if len(raw) > wenReadLimit || update.StrictJSON(raw, &c) != nil || (c.Schema != "wen-research-ai-prepare/1" && c.Schema != "wen-research-ai-prepare/2") || !validWENRead(c.Selection) || !validAgentText(c.Prompt, 2000, true) || !validAgentText(c.Model, 120, true) || !validAgentText(c.ConnectionRef, 200, false) || !validResearchBounds(c.Bounds) || c.MemorySelection.Mode == "" {
 		return c, errors.New("invalid explicit research preparation")
 	}
 	var fields map[string]json.RawMessage
@@ -408,11 +426,20 @@ func (s *Store) PrepareWENResearchAI(ctx context.Context, c WENResearchAIPrepare
 		return out, err
 	}
 	t := WENResearchTurn{Schema: "wen-research-turn/1", ID: id, Profile: c.Selection.Profile, SessionID: c.Selection.SessionID, CreatedAt: now, ReviewExpiresAt: now + 600, LastObservedAt: now, RootSHA256: researchHash(root), Root: root, Facts: facts, Selection: c.Selection, Bounds: c.Bounds, State: "prepared", CurrentChildID: child, CurrentStep: 1, Models: []researchModelRecord{}, Tools: []researchToolRecord{}}
+	if c.Schema == "wen-research-ai-prepare/2" {
+		t.Schema = researchLoopTurn
+		t.Root.Schema = "wen-research-root/2"
+		t.Root.CallsSHA256 = researchHash(t.Selection.Calls)
+		t.RootSHA256 = researchHash(t.Root)
+	}
 	l := c.Limits
 	if l.MaxInputTokens < 1000 || l.MaxInputTokens > 32000 || l.MaxOutputTokens < 128 || l.MaxOutputTokens > 1024 || l.DeadlineSeconds < 1 || l.DeadlineSeconds > 5 || l.BudgetMicrousd < 1 || l.BudgetMicrousd > 1000000 {
 		return out, errors.New("invalid explicit request limits")
 	}
 	q := AgentAIRequest{ID: child, ResearchTurnID: id, ResearchStep: 1, ProfileID: t.Profile, SessionID: t.SessionID, Prompt: c.Prompt, Model: c.Model, ConnectionRef: c.ConnectionRef, Context: researchContext(t), Limits: l, State: "prepared", CreatedAt: now, Cards: []AIActionCard{}}
+	if t.Schema == researchLoopTurn {
+		q.Context = loopContext(t, 1, loopRemaining(t, d, 1, now))
+	}
 	if c.Model != fixtureAIModel {
 		p := openAIModelPolicy()
 		q.Policy = &p
@@ -441,7 +468,7 @@ func (s *Store) PrepareWENResearchAI(ctx context.Context, c WENResearchAIPrepare
 	if err = tx.Commit(); err != nil {
 		return out, err
 	}
-	return WENResearchAIReview{"wen-research-ai-review/1", rev + 1, t, q, "unchanged", false}, nil
+	return WENResearchAIReview{researchReviewSchema(t), rev + 1, t, q, "unchanged", false}, nil
 }
 
 func researchTurnIndex(d agentDocument, profile, id string) int {
@@ -461,9 +488,18 @@ func cancelResearch(d *agentDocument, profile, id string, now int64) error {
 	if t.State == "cancelled" {
 		return errors.New("research turn already cancelled")
 	}
+	if t.Schema == researchLoopTurn && (t.State == "completed" || t.State == "failed" || t.State == "expired") {
+		return errors.New("research turn already terminal")
+	}
 	for i := range d.AIRequests {
 		q := &d.AIRequests[i]
 		if q.ID == t.CurrentChildID {
+			if t.Schema == researchLoopTurn && q.State == "completed" {
+				// Keep the settled model and its known usage intact. Cancel only
+				// the remaining local batch/continuation, never replay that child.
+				loopNotRun(t, "cancelled")
+				continue
+			}
 			if q.State != "prepared" && q.State != "queued" && q.State != "running" && q.State != "unknown" {
 				return errors.New("research request already terminal")
 			}
@@ -483,7 +519,7 @@ func cancelResearch(d *agentDocument, profile, id string, now int64) error {
 }
 func (s *Store) WENResearchAI(ctx context.Context, c WENResearchAISelection, cancel bool) (WENResearchAIReview, error) {
 	var out WENResearchAIReview
-	if c.Schema != "wen-research-ai-selection/1" || !readRefValid(c.Profile) || !readRefValid(c.ID) || c.Revision < 0 {
+	if (c.Schema != "wen-research-ai-selection/1" && c.Schema != "wen-research-ai-selection/2") || !readRefValid(c.Profile) || !readRefValid(c.ID) || c.Revision < 0 {
 		return out, errors.New("select one research turn")
 	}
 	ctx, stop := context.WithTimeout(ctx, 90*time.Second)
@@ -500,6 +536,9 @@ func (s *Store) WENResearchAI(ctx context.Context, c WENResearchAISelection, can
 	i := researchTurnIndex(d, c.Profile, c.ID)
 	if i < 0 {
 		return out, errors.New("research turn unavailable")
+	}
+	if (d.ResearchTurns[i].Schema == researchLoopTurn) != (c.Schema == "wen-research-ai-selection/2") {
+		return out, errors.New("select the exact research version")
 	}
 	if cancel {
 		if c.Revision != rev {
@@ -526,7 +565,7 @@ func (s *Store) WENResearchAI(ctx context.Context, c WENResearchAISelection, can
 			return out, err
 		}
 	}
-	return WENResearchAIReview{"wen-research-ai-review/1", rev, t, q, state, false}, nil
+	return WENResearchAIReview{researchReviewSchema(t), rev, t, q, state, false}, nil
 }
 
 func (h *HTTPHandler) wenResearchAIAPI(w http.ResponseWriter, r *http.Request, token string, action string) {
@@ -549,7 +588,13 @@ func (h *HTTPHandler) wenResearchAIAPI(w http.ResponseWriter, r *http.Request, t
 		return
 	}
 	var result WENResearchAIReview
-	if action == "start" {
+	if action == "next" {
+		var c WENResearchAINextInput
+		err = update.StrictJSON(raw, &c)
+		if err == nil {
+			result, err = h.store.PrepareNextWENResearchAI(r.Context(), c)
+		}
+	} else if action == "start" {
 		var c WENResearchAIStartInput
 		err = update.StrictJSON(raw, &c)
 		if err == nil {

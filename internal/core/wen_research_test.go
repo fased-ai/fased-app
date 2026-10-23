@@ -102,7 +102,7 @@ func TestWENResearchSchema10MigrationAndNewerRefusal(t *testing.T) {
 	if schema != StateSchema {
 		t.Fatal(schema)
 	}
-	n.db.Exec("PRAGMA user_version=13")
+	n.db.Exec("PRAGMA user_version=14")
 	n.Close()
 	if old, e := OpenStore(dir); e == nil {
 		old.Close()
