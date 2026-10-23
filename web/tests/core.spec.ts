@@ -3138,6 +3138,9 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
     .fill("stale selection");
   await page.getByRole("button", { name: "memory", exact: true }).click();
   const search = async (q: string) => {
+    await expect(
+      page.getByRole("button", { name: /^Trading Analyst / }),
+    ).toHaveAttribute("aria-pressed", "true");
     await page
       .getByRole("searchbox", { name: "Search memories", exact: true })
       .fill(q);
