@@ -200,6 +200,9 @@ func attachAINews(d agentDocument, q *AgentAIRequest, n *TaskNewsInput, now int6
 	return nil
 }
 func aiRequestContext(d agentDocument, q AgentAIRequest, now int64) (string, error) {
+	if aiHasEvidence(q) {
+		return aiEvidenceRequestContext(d, q, now)
+	}
 	var envelope struct {
 		Version   string             `json:"version"`
 		Selection *AIMemorySelection `json:"memorySelection"`

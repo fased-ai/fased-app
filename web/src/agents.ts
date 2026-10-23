@@ -308,6 +308,12 @@ export type AIMemorySelection = {
   mode: "all" | "none" | "selected";
   ids?: string[];
 };
+export type AIEvidenceSelection = {
+  kind: AgentEvidenceKind;
+  id: string;
+  itemId?: string;
+  sha256: string;
+};
 export type AgentAIRequestDraft = {
   revision: number;
   profileId: string;
@@ -319,6 +325,7 @@ export type AgentAIRequestDraft = {
   newsSourceId?: string;
   newsMaxAgeSeconds?: number;
   memorySelection?: AIMemorySelection;
+  evidenceSelection?: AIEvidenceSelection;
 };
 export type AgentEvidenceKind = "memory" | "headline" | "reminder-run";
 export type AgentEvidenceView = {
@@ -364,6 +371,7 @@ export type AgentEvidenceView = {
 );
 export type AgentCommand = {
   memorySelection?: AIMemorySelection;
+  evidenceSelection?: AIEvidenceSelection;
   wen?: WENPaperInput;
   newsSourceId?: string;
   newsMaxAgeSeconds?: number;

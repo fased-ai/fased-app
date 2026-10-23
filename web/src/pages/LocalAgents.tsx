@@ -1,4 +1,3 @@
-import { AgentEvidenceInspector } from "./AgentEvidence";
 import { MemoryRecall } from "./MemoryRecall";
 import { ChatMemoryReview } from "./ChatMemoryReview";
 import { NewsInputs, NewsSourcePicker } from "./NewsInputs";
@@ -289,7 +288,6 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                     Save message
                   </button>
                 </form>
-                <AgentEvidenceInspector view={v} sessionId={activeSession.id} />
                 <AgentAIReview view={v} sessionId={activeSession.id} />
               </>
             )}

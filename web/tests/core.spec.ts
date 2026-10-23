@@ -4428,3 +4428,450 @@ test("local agent evidence inspection shares UI/CLI sources, inert reads and res
   ).toBe(true);
   expect(external).toEqual([]);
 });
+
+test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped draft recovery", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(90000);
+  page.setDefaultTimeout(10000);
+  await stop();
+  await start(true);
+  const origins = new Set([new URL(url).origin]);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (!origins.has(new URL(r.url()).origin)) external.push(r.url());
+  });
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = async () => {
+    const p = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+    p.stdin!.end(fixturePassword + "\n");
+    expect((await once(p, "exit"))[0]).toBe(0);
+  };
+  await login();
+  const profileId = "trading-analyst";
+  const read = () => privateCLI(["agents", "--profile", profileId]);
+  const command = async (c: Record<string, unknown>) =>
+    privateCLI(["agents", "--request-stdin"], {
+      profileId,
+      revision: (await read()).revision,
+      ...c,
+    });
+  let v = await command({
+    action: "session-create",
+    name: "Evidence review chat",
+  });
+  const sessionId = v.sessions.find(
+    (s: any) => s.name === "Evidence review chat",
+  ).id;
+  await command({ action: "session-create", name: "Other review chat" });
+  v = await command({
+    action: "memory-put",
+    text: "Reviewed source preference",
+    source: "owner",
+  });
+  const note = v.memories.find(
+    (m: any) => m.text === "Reviewed source preference",
+  );
+  v = await command({
+    action: "task-create",
+    name: "Saved evidence reminder",
+    text: "Inspect this completed reminder",
+    intervalSeconds: 60,
+    maxRuns: 1,
+  });
+  v = await command({
+    action: "task-run",
+    id: v.tasks.find((t: any) => t.name === "Saved evidence reminder").id,
+  });
+  const run = v.runs[0];
+  v = await command({
+    action: "news-source-add",
+    name: "Saved evidence news",
+    source: "https://news.fased.invalid/headlines.xml",
+    newsMaxAgeSeconds: 600,
+  });
+  const source = v.newsSources[0];
+  await command({ action: "news-fetch", id: source.id });
+  await expect
+    .poll(async () => (await read()).newsFetches[0].state)
+    .toBe("completed");
+  const fetch = (await read()).newsFetches[0];
+  const item = fetch.items[0];
+  await command({ action: "news-source-disable", id: source.id });
+  await command({
+    action: "memory-put",
+    profileId: "news-researcher",
+    text: "FOREIGN-EVIDENCE-PRIVATE",
+    source: "foreign",
+  });
+  const openChat = async (signIn = false) => {
+    await page.goto(url + "/#agents/chat");
+    if (signIn) {
+      await page
+        .getByLabel("Owner password", { exact: true })
+        .fill(fixturePassword);
+      await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    }
+    await expect(
+      page.getByRole("button", { name: "Sign out", exact: true }),
+    ).toBeVisible();
+    const profile = page.getByRole("button", { name: /^Trading Analyst / });
+    await profile.click();
+    await expect(profile).toHaveAttribute("aria-pressed", "true");
+    await page
+      .getByRole("button", { name: "Evidence review chat", exact: true })
+      .click();
+  };
+  await openChat();
+  const inspector = page.getByRole("region", {
+    name: "Local agent evidence inspection",
+    exact: true,
+  });
+  const review = page.getByRole("region", {
+    name: "Optional AI request review",
+    exact: true,
+  });
+  const selected = review.getByRole("group", {
+    name: "AI evidence selection",
+    exact: true,
+  });
+  const choose = async (kind: string, id: string, itemId = "") => {
+    await inspector
+      .getByRole("combobox", { name: "Evidence type", exact: true })
+      .selectOption(kind);
+    await inspector
+      .getByRole("combobox", { name: "Saved record", exact: true })
+      .selectOption(JSON.stringify([id, itemId]));
+    const response = page.waitForResponse((r) =>
+      r.url().includes("&evidence="),
+    );
+    await inspector
+      .getByRole("button", { name: "Inspect evidence", exact: true })
+      .click();
+    return (await response).json();
+  };
+  const prepareUI = async () => {
+    const response = page.waitForResponse(
+      (r) =>
+        r.request().method() === "POST" &&
+        r.url().includes("/api/v1/agents") &&
+        r.request().postDataJSON()?.action === "ai-prepare",
+    );
+    await review
+      .getByRole("button", { name: "Prepare disclosure", exact: true })
+      .click();
+    const r = await response;
+    expect(r.status()).toBe(200);
+    return r.json();
+  };
+  const sourcesBefore = await read();
+  const original: any[] = [];
+  for (const q of [
+    { kind: "memory", id: note.id, itemId: "" },
+    { kind: "headline", id: fetch.id, itemId: item.id },
+    { kind: "reminder-run", id: run.id, itemId: "" },
+  ]) {
+    const baseline = await read();
+    const data = await choose(q.kind, q.id, q.itemId);
+    await inspector
+      .getByRole("button", { name: "Use in AI review", exact: true })
+      .click();
+    await expect(selected).toContainText(data.sha256);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth + 1,
+      ),
+    ).toBe(true);
+    if (q.kind === "memory")
+      await page.screenshot({
+        path: resolve(
+          `.evidence/ai-evidence/${isMobile ? "mobile" : "desktop"}-selected.png`,
+        ),
+        fullPage: true,
+      });
+    await expect(
+      review.getByRole("textbox", { name: "AI request", exact: true }),
+    ).toBeFocused();
+    await review
+      .getByRole("combobox", { name: "Memory", exact: true })
+      .selectOption("none");
+    await review
+      .getByRole("textbox", { name: "AI request", exact: true })
+      .fill("Transient inspected question");
+    expect(await read()).toEqual(baseline);
+    await selected
+      .getByRole("button", { name: "Remove evidence", exact: true })
+      .click();
+    await expect(selected).toHaveCount(0);
+    expect(await read()).toEqual(baseline);
+    await inspector
+      .getByRole("button", { name: "Use in AI review", exact: true })
+      .click();
+    const prompt = "UI evidence " + q.kind;
+    await review
+      .getByRole("textbox", { name: "AI request", exact: true })
+      .fill(prompt);
+    const prepared = await prepareUI();
+    const request = prepared.aiRequests.find((r: any) => r.prompt === prompt);
+    original.push(request);
+    const context = JSON.parse(request.context);
+    expect(context.version).toBe("manual-ai-evidence-v1");
+    expect(context.evidence.data).toEqual(data.data);
+    expect(context.evidence.sha256).toBe(data.sha256);
+    expect(context.evidence.historical).toBe(q.kind !== "memory");
+    expect(context.evidence.untrusted).toBe(true);
+    expect(context.evidence.observedAt).toBe(request.createdAt);
+    expect(Buffer.byteLength(request.context)).toBeLessThanOrEqual(8000);
+    expect(context.context.memorySelection.mode).toBe("none");
+    expect(request.news).toBeUndefined();
+    expect(request.context).not.toContain("FOREIGN-EVIDENCE-PRIVATE");
+    const wire = JSON.parse(request.disclosure);
+    expect(wire.tools).toEqual([]);
+    expect(wire.tool_choice).toBe("none");
+    expect(wire.input).toBe(request.context);
+    expect(
+      createHash("sha256").update(request.disclosure).digest("hex"),
+    ).toHaveLength(64);
+    const card = review.getByRole("article").filter({
+      has: page.getByRole("heading", { name: prompt, exact: true }),
+    });
+    await card.getByText("Exact context disclosure", { exact: true }).click();
+    await expect(card.locator("pre")).toHaveText(request.disclosure);
+    await expect(
+      card.getByRole("button", {
+        name: "Run development fixture",
+        exact: true,
+      }),
+    ).toBeDisabled();
+    expect(
+      (await read()).aiRequests.find((r: any) => r.id === request.id).state,
+    ).toBe("prepared");
+    await card
+      .getByRole("checkbox", {
+        name: "I reviewed this context and these fixture limits",
+        exact: true,
+      })
+      .check();
+    await card
+      .getByRole("button", { name: "Run development fixture", exact: true })
+      .click();
+    await expect
+      .poll(
+        async () =>
+          (await read()).aiRequests.find((r: any) => r.id === request.id).state,
+      )
+      .toBe("completed");
+    const cli = await command({
+      action: "ai-prepare",
+      id: sessionId,
+      text: "CLI evidence " + q.kind,
+      evidenceSelection: context.evidenceSelection,
+      memorySelection: { mode: "none" },
+      limits: request.limits,
+    });
+    const cliRequest = cli.aiRequests.find(
+      (r: any) => r.prompt === "CLI evidence " + q.kind,
+    );
+    const cliContext = JSON.parse(cliRequest.context);
+    expect(cliContext.evidenceSelection).toEqual(context.evidenceSelection);
+    expect(cliContext.evidence.data).toEqual(context.evidence.data);
+    expect(cliContext.evidence.sha256).toBe(context.evidence.sha256);
+    await page.reload();
+    await openChat();
+  }
+  const after = await read();
+  expect(after.tasks).toEqual(sourcesBefore.tasks);
+  expect(after.runs).toEqual(sourcesBefore.runs);
+  expect(after.memories).toEqual(sourcesBefore.memories);
+  expect(after.newsFetches).toEqual(sourcesBefore.newsFetches);
+  const memoryRequest = original[0];
+  // A later source correction is not silently substituted into a saved draft.
+  await command({
+    action: "memory-put",
+    id: note.id,
+    text: "Owner corrected evidence",
+    source: "owner",
+  });
+  await command({
+    action: "profile-update",
+    name: "Trading Analyst",
+    text: after.profiles.find((p: any) => p.id === profileId).persona,
+    provider: "anthropic",
+    model: "preference-only",
+  });
+  await stop();
+  await start();
+  origins.add(new URL(url).origin);
+  await login();
+  await openChat(true);
+  const memoryCard = () =>
+    review.getByRole("article").filter({
+      has: page.getByRole("heading", {
+        name: memoryRequest.prompt,
+        exact: true,
+      }),
+    });
+  const baseline = await read();
+  await memoryCard()
+    .getByRole("button", { name: "Use as draft", exact: true })
+    .click();
+  await expect(selected).toContainText(
+    JSON.parse(memoryRequest.context).evidenceSelection.sha256,
+  );
+  await review
+    .getByRole("button", { name: "Prepare disclosure", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toContainText(
+    "inspected evidence changed",
+  );
+  expect(await read()).toEqual(baseline);
+  await review
+    .getByRole("button", { name: "Cancel draft", exact: true })
+    .click();
+  await expect(selected).toHaveCount(0);
+  expect(await read()).toEqual(baseline);
+  const pattern = /\/api\/v1\/agents\?.*ai-draft=/;
+  for (const mode of ["cancel", "session", "profile"]) {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let started!: () => void;
+    const seen = new Promise<void>((r) => (started = r));
+    let finished!: () => void;
+    const delivered = new Promise<void>((r) => (finished = r));
+    await page.route(pattern, async (route) => {
+      const response = await route.fetch();
+      started();
+      await gate;
+      await route.fulfill({ response });
+      finished();
+    });
+    await memoryCard()
+      .getByRole("button", { name: "Use as draft", exact: true })
+      .click();
+    await seen;
+    if (mode === "cancel")
+      await review
+        .getByRole("button", { name: "Cancel draft", exact: true })
+        .click();
+    else if (mode === "session")
+      await page
+        .getByRole("button", { name: "Other review chat", exact: true })
+        .click();
+    else {
+      const profile = page.getByRole("button", { name: /^News Researcher / });
+      await profile.click();
+      await expect(profile).toHaveAttribute("aria-pressed", "true");
+    }
+    release();
+    await delivered;
+    await page.unroute(pattern);
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
+    await expect(selected).toHaveCount(0);
+    await openChat();
+    await expect(
+      review.getByRole("textbox", { name: "AI request", exact: true }),
+    ).toHaveValue("");
+    await expect(selected).toHaveCount(0);
+    expect(await read()).toEqual(baseline);
+  }
+  const current = await choose("memory", note.id);
+  expect(current.sha256).not.toBe(
+    JSON.parse(memoryRequest.context).evidenceSelection.sha256,
+  );
+  await inspector
+    .getByRole("button", { name: "Use in AI review", exact: true })
+    .click();
+  await review
+    .getByRole("combobox", { name: "Memory", exact: true })
+    .selectOption("none");
+  await review
+    .getByRole("textbox", { name: "AI request", exact: true })
+    .fill("Reviewed correction");
+  const corrected = await prepareUI();
+  const correctedRequest = corrected.aiRequests.find(
+    (r: any) => r.prompt === "Reviewed correction",
+  );
+  expect(JSON.parse(correctedRequest.context).evidence.sha256).toBe(
+    current.sha256,
+  );
+  const correctedCard = review.getByRole("article").filter({
+    has: page.getByRole("heading", {
+      name: "Reviewed correction",
+      exact: true,
+    }),
+  });
+  await expect(
+    correctedCard.getByRole("button", {
+      name: "Run development fixture",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  // The 16 KiB inspector is not additional AI context capacity.
+  const largeText = "<".repeat(1400);
+  v = await command({ action: "memory-put", text: largeText, source: "owner" });
+  const large = v.memories.find((m: any) => m.text === largeText);
+  await page.reload();
+  await openChat();
+  const oversized = await choose("memory", large.id);
+  expect(Buffer.byteLength(JSON.stringify(oversized))).toBeLessThan(16384);
+  await inspector
+    .getByRole("button", { name: "Use in AI review", exact: true })
+    .click();
+  await review
+    .getByRole("combobox", { name: "Memory", exact: true })
+    .selectOption("none");
+  await review
+    .getByRole("textbox", { name: "AI request", exact: true })
+    .fill("Too much complete evidence");
+  const beforeOversize = await read();
+  await review
+    .getByRole("button", { name: "Prepare disclosure", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toContainText("exceed 8000 bytes");
+  expect(await read()).toEqual(beforeOversize);
+  await selected
+    .getByRole("button", { name: "Remove evidence", exact: true })
+    .click();
+  await inspector
+    .getByRole("button", { name: "Cancel inspection", exact: true })
+    .click();
+  await command({ action: "memory-delete", id: large.id });
+  await page.reload();
+  await openChat();
+  const final = await read();
+  const retained = final.aiRequests.find((r: any) => r.id === memoryRequest.id);
+  expect(retained.context).toBe(memoryRequest.context);
+  expect(retained.disclosure).toBe(memoryRequest.disclosure);
+  expect(final.tasks).toEqual(sourcesBefore.tasks);
+  expect(final.runs).toEqual(sourcesBefore.runs);
+  expect(final.newsFetches).toEqual(sourcesBefore.newsFetches);
+  await page.screenshot({
+    path: resolve(
+      `.evidence/ai-evidence/${isMobile ? "mobile" : "desktop"}.png`,
+    ),
+    fullPage: true,
+  });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth + 1,
+    ),
+  ).toBe(true);
+  expect(external).toEqual([]);
+});

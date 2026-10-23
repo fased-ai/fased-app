@@ -13,6 +13,8 @@ export async function currentStorageFixture(archivedRoot) {
     "agent_reminders.go",
     "wen_paper.go",
     "agent_ai.go",
+    "agent_evidence.go",
+    "agent_memory.go",
     "agent_ai_tasks.go",
     "agent_news.go",
     "ai_admission.go",

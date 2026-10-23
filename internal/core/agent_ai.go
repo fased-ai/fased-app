@@ -465,15 +465,17 @@ func callAgentAIAt(ctx context.Context, q AgentAIRequest, rt http.RoundTripper, 
 	q.Failure = ""
 	return q, nil
 }
-func aiUsesMemorySelection(q AgentAIRequest) bool {
+func aiUsesReviewedContext(q AgentAIRequest) bool {
 	var envelope struct {
 		Selection json.RawMessage `json:"memorySelection"`
+		Evidence  json.RawMessage `json:"evidenceSelection"`
+		Version   string          `json:"version"`
 	}
 	_ = json.Unmarshal([]byte(q.Context), &envelope)
-	return len(envelope.Selection) > 0
+	return len(envelope.Selection) > 0 || len(envelope.Evidence) > 0 || envelope.Version != ""
 }
 
-// Recheck selected notes before each admission/count/create operation, as well
+// Recheck selected notes/evidence before each admission/count/create operation, as well
 // as the existing consent, worker, in-flight and completion checks.
 type aiMemoryReviewTransport struct {
 	store   *Store
@@ -488,7 +490,7 @@ func (rt aiMemoryReviewTransport) RoundTrip(r *http.Request) (*http.Response, er
 	}
 	current, err := aiRequestContext(d, rt.request, rt.store.now().Unix())
 	if err != nil || current != rt.request.Context {
-		return nil, errors.New("reviewed memory changed before provider operation")
+		return nil, errors.New("reviewed context changed before provider operation")
 	}
 	return rt.next.RoundTrip(r)
 }
@@ -585,7 +587,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 				if s.db.QueryRowContext(callCtx, "SELECT phase FROM update_pause WHERE id=1").Scan(&phase) != nil || phase == "paused" {
 					active = false
 				}
-				if dispatch.News != nil || aiUsesMemorySelection(*dispatch) {
+				if dispatch.News != nil || aiUsesReviewedContext(*dispatch) {
 					current, e := aiRequestContext(current, *dispatch, s.now().Unix())
 					if e != nil || current != dispatch.Context {
 						active = false
@@ -601,7 +603,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 	if dispatch.ConnectionRef != "" {
 		rt = authenticatedAITransport{store: s, ref: dispatch.ConnectionRef, next: rt}
 	}
-	if aiUsesMemorySelection(*dispatch) {
+	if aiUsesReviewedContext(*dispatch) {
 		rt = aiMemoryReviewTransport{store: s, request: *dispatch, next: rt}
 	}
 	result, callErr := callAgentAIAt(callCtx, *dispatch, rt, s.now)
@@ -631,7 +633,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 				if validateAIModelPolicy(q, s.now().Unix()) != nil {
 					q.State, q.Failure = "failed", "Model/tariff admission expired before completion; dependent work stopped."
 				}
-				if q.News != nil || aiUsesMemorySelection(q) {
+				if q.News != nil || aiUsesReviewedContext(q) {
 					current, err := aiRequestContext(d, q, s.now().Unix())
 					if err != nil || current != q.Context {
 						q.State = "failed"
@@ -712,16 +714,17 @@ func fixtureAdmissionResponse(r *http.Request, value any) *http.Response {
 // AgentAIRequestDraft is a read projection, never a stored request or consent.
 // Omitted MemorySelection preserves the original legacy preparation semantics.
 type AgentAIRequestDraft struct {
-	Revision          int64              `json:"revision"`
-	ProfileID         string             `json:"profileId"`
-	SessionID         string             `json:"sessionId"`
-	Prompt            string             `json:"prompt"`
-	Model             string             `json:"model"`
-	ConnectionRef     string             `json:"connectionRef,omitempty"`
-	Limits            AILimits           `json:"limits"`
-	NewsSourceID      string             `json:"newsSourceId,omitempty"`
-	NewsMaxAgeSeconds int64              `json:"newsMaxAgeSeconds,omitempty"`
-	MemorySelection   *AIMemorySelection `json:"memorySelection,omitempty"`
+	Revision          int64                `json:"revision"`
+	ProfileID         string               `json:"profileId"`
+	SessionID         string               `json:"sessionId"`
+	Prompt            string               `json:"prompt"`
+	Model             string               `json:"model"`
+	ConnectionRef     string               `json:"connectionRef,omitempty"`
+	Limits            AILimits             `json:"limits"`
+	NewsSourceID      string               `json:"newsSourceId,omitempty"`
+	NewsMaxAgeSeconds int64                `json:"newsMaxAgeSeconds,omitempty"`
+	MemorySelection   *AIMemorySelection   `json:"memorySelection,omitempty"`
+	EvidenceSelection *AIEvidenceSelection `json:"evidenceSelection,omitempty"`
 }
 
 func (s *Store) AgentAIRequestDraft(ctx context.Context, profile, id string) (AgentAIRequestDraft, error) {
@@ -769,6 +772,13 @@ func (s *Store) AgentAIRequestDraft(ctx context.Context, profile, id string) (Ag
 		return v, err
 	}
 	v = AgentAIRequestDraft{Revision: revision, ProfileID: profile, SessionID: q.SessionID, Prompt: q.Prompt, Model: q.Model, ConnectionRef: q.ConnectionRef, Limits: l, MemorySelection: selection}
+	if aiHasEvidence(q) {
+		e, err := frozenAIEvidence(q)
+		if err != nil {
+			return v, err
+		}
+		v.EvidenceSelection = &e.Selection
+	}
 	if q.News != nil {
 		v.NewsSourceID = q.News.SourceID
 		v.NewsMaxAgeSeconds = q.News.MaxAgeSeconds
@@ -780,6 +790,14 @@ func (s *Store) AgentAIRequestDraft(ctx context.Context, profile, id string) (Ag
 // visible for editing. Exact re-encoding refuses unknown/duplicate fields and
 // unsupported versions, including partial envelopes that could widen memory.
 func draftMemorySelection(q AgentAIRequest) (*AIMemorySelection, error) {
+	if aiHasEvidence(q) {
+		e, err := frozenAIEvidence(q)
+		if err != nil {
+			return nil, err
+		}
+		q.Context = string(e.Context)
+		return draftMemorySelection(q)
+	}
 	bad := errors.New("saved context is malformed or unsupported; prepare a new request explicitly")
 	if len(q.Context) > 16000 || !utf8.ValidString(q.Context) {
 		return nil, bad
@@ -878,4 +896,209 @@ func draftMemorySelection(q AgentAIRequest) (*AIMemorySelection, error) {
 		return nil, bad
 	}
 	return selection, nil
+}
+
+// AIEvidenceSelection is a transient reference. The core resolves the complete
+// source itself; a hash is a stale-selection check, never permission or consent.
+type AIEvidenceSelection struct {
+	Kind   string `json:"kind"`
+	ID     string `json:"id"`
+	ItemID string `json:"itemId,omitempty"`
+	SHA256 string `json:"sha256"`
+}
+
+const aiEvidenceContextVersion = "manual-ai-evidence-v1"
+
+type aiEvidenceContext struct {
+	Version   string              `json:"version"`
+	Selection AIEvidenceSelection `json:"evidenceSelection"`
+	Evidence  AgentEvidenceView   `json:"evidence"`
+	Context   json.RawMessage     `json:"context"`
+}
+
+func aiHasEvidence(q AgentAIRequest) bool {
+	var h struct {
+		Version   string          `json:"version"`
+		Selection json.RawMessage `json:"evidenceSelection"`
+		Evidence  json.RawMessage `json:"evidence"`
+	}
+	_ = json.Unmarshal([]byte(q.Context), &h)
+	return len(h.Selection) > 0 || len(h.Evidence) > 0 || strings.HasPrefix(h.Version, "manual-ai-evidence-")
+}
+func validAIEvidenceSelection(r AIEvidenceSelection) bool {
+	if len(r.SHA256) != 64 {
+		return false
+	}
+	for _, c := range r.SHA256 {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			return false
+		}
+	}
+	return (r.Kind == "memory" || r.Kind == "headline" || r.Kind == "reminder-run") && validAgentText(r.ID, 200, true) && utf8.ValidString(r.ID+r.ItemID) && ((r.Kind == "headline" && validAgentText(r.ItemID, 200, true)) || (r.Kind != "headline" && r.ItemID == ""))
+}
+func resolveAIEvidence(d agentDocument, q AgentAIRequest, r AIEvidenceSelection, revision, now int64) (AgentEvidenceView, error) {
+	var empty AgentEvidenceView
+	if !validAIEvidenceSelection(r) {
+		return empty, errors.New("one inspected evidence reference and exact content hash required")
+	}
+	sessions := 0
+	for _, s := range d.Sessions {
+		if s.ID == q.SessionID {
+			if s.ProfileID != q.ProfileID {
+				return empty, errors.New("evidence conversation unavailable")
+			}
+			sessions++
+		}
+	}
+	if sessions != 1 {
+		return empty, errors.New("evidence conversation missing or ambiguous")
+	}
+	v, err := inspectAgentEvidence(d, revision, q.ProfileID, r.Kind, r.ID, r.ItemID, now)
+	if err != nil {
+		return empty, err
+	}
+	if v.SHA256 != r.SHA256 || (v.Kind == "memory" && v.Freshness != "active") {
+		return empty, errors.New("inspected evidence changed or expired; inspect and review again")
+	}
+	return v, nil
+}
+func encodeAIEvidence(e aiEvidenceContext) (string, error) {
+	b, err := json.Marshal(e)
+	if err != nil {
+		return "", err
+	}
+	if len(b) > 8000 {
+		return "", errors.New("complete evidence and context exceed 8000 bytes; narrow the reviewed inputs; nothing clipped or dropped")
+	}
+	return string(b), nil
+}
+func attachAIEvidence(d agentDocument, q *AgentAIRequest, r AIEvidenceSelection, revision, now int64) error {
+	if q.TaskID != "" || q.TaskDigest != "" || aiHasEvidence(*q) {
+		return errors.New("evidence is supported only on one manual AI preparation")
+	}
+	v, err := resolveAIEvidence(d, *q, r, revision, now)
+	if err != nil {
+		return err
+	}
+	q.Context, err = encodeAIEvidence(aiEvidenceContext{aiEvidenceContextVersion, r, v, json.RawMessage(q.Context)})
+	if err != nil {
+		return err
+	}
+	wire, err := aiWire(*q)
+	if err != nil || !aiWireWithinBound(*q, wire) {
+		return errors.New("complete evidence request exceeds reviewed input limit")
+	}
+	q.Disclosure = string(wire)
+	q.Digest = aiDigest(*q)
+	return nil
+}
+func canonicalAIJSON(b []byte, v any) bool {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if dec.Decode(v) != nil || dec.Decode(new(any)) != io.EOF {
+		return false
+	}
+	encoded, err := json.Marshal(v)
+	return err == nil && bytes.Equal(b, encoded)
+}
+
+// Validate retained bytes without resolving today's source: saved drafts must
+// keep unavailable references visible. Execution resolves/rechecks separately.
+func frozenAIEvidence(q AgentAIRequest) (aiEvidenceContext, error) {
+	var e aiEvidenceContext
+	bad := errors.New("saved evidence context malformed or unsupported; prepare a fresh review")
+	if q.TaskID != "" || q.TaskDigest != "" || len(q.Context) > 8000 || !utf8.ValidString(q.Context) || !canonicalAIJSON([]byte(q.Context), &e) || e.Version != aiEvidenceContextVersion || !validAIEvidenceSelection(e.Selection) {
+		return e, bad
+	}
+	v := e.Evidence
+	r := e.Selection
+	if v.Version != "agent-evidence-v1" || v.ProfileID != q.ProfileID || v.Kind != r.Kind || v.ID != r.ID || v.ItemID != r.ItemID || v.SHA256 != r.SHA256 || !v.Untrusted || v.Revision < 0 || v.ObservedAt != q.CreatedAt || v.RecordedAt <= 0 || v.RecordedAt > v.ObservedAt {
+		return e, bad
+	}
+	hashed, err := finishAgentEvidence(v)
+	if err != nil || hashed.SHA256 != r.SHA256 || !frozenAIEvidenceData(v) {
+		return e, bad
+	}
+	inner := q
+	inner.Context = string(e.Context)
+	if aiHasEvidence(inner) {
+		return e, bad
+	} // exactly one source, no nesting
+	if _, err := draftMemorySelection(inner); err != nil {
+		return e, bad
+	}
+	return e, nil
+}
+func frozenAIEvidenceData(v AgentEvidenceView) bool {
+	switch v.Kind {
+	case "memory":
+		var d struct {
+			ID         string              `json:"id"`
+			Text       string              `json:"text"`
+			Source     string              `json:"source"`
+			UpdatedAt  int64               `json:"updatedAt"`
+			ExpiresAt  int64               `json:"expiresAt"`
+			Provenance AgentMemoryEvidence `json:"provenance"`
+		}
+		return canonicalAIJSON(v.Data, &d) && !v.Historical && v.Freshness == "active" && d.ID == v.ID && d.UpdatedAt == v.RecordedAt && d.ExpiresAt >= 0 && (d.ExpiresAt == 0 || d.ExpiresAt > v.ObservedAt) && validAgentText(d.Text, 4000, true) && validAgentText(d.Source, 300, true) && (d.Provenance.Status == "free-form" || d.Provenance.Status == "matched")
+	case "headline":
+		var d struct {
+			SourceName     string        `json:"sourceName"`
+			SourceDisabled bool          `json:"sourceDisabled"`
+			Headline       NewsItem      `json:"headline"`
+			Evidence       *NewsEvidence `json:"evidence"`
+		}
+		if !canonicalAIJSON(v.Data, &d) || !v.Historical || d.Evidence == nil || d.Evidence.FetchID != v.ID || d.Headline.ID != v.ItemID || d.Evidence.FetchedAt != v.RecordedAt || d.Headline.PublishedAt <= 0 || d.Headline.PublishedAt > v.RecordedAt || !validAgentText(d.SourceName, 80, true) || !validAgentText(d.Headline.Title, 240, true) {
+			return false
+		}
+		freshness := "fresh"
+		if d.SourceDisabled {
+			freshness = "disabled"
+		} else if v.ObservedAt-d.Evidence.FetchedAt > d.Evidence.MaxAgeSeconds || v.ObservedAt-d.Headline.PublishedAt > d.Evidence.MaxAgeSeconds {
+			freshness = "stale"
+		}
+		return freshness == v.Freshness
+	case "reminder-run":
+		var d struct {
+			Task struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+				Text string `json:"text"`
+			} `json:"task"`
+			Run struct {
+				ID       string `json:"id"`
+				At       int64  `json:"at"`
+				Strategy string `json:"strategy"`
+				Outcome  string `json:"outcome"`
+			} `json:"run"`
+		}
+		return canonicalAIJSON(v.Data, &d) && v.Historical && v.Freshness == "recorded" && d.Run.ID == v.ID && d.Run.At == v.RecordedAt && d.Run.Strategy == "reminder-v1" && d.Run.Outcome == "reminded" && strings.HasPrefix(d.Run.ID, d.Task.ID+":") && validAgentText(d.Task.ID, 200, true) && validAgentText(d.Task.Name, 80, true) && validAgentText(d.Task.Text, 4000, true)
+	}
+	return false
+}
+func aiEvidenceRequestContext(d agentDocument, q AgentAIRequest, now int64) (string, error) {
+	e, err := frozenAIEvidence(q)
+	if err != nil {
+		return "", err
+	}
+	if now < e.Evidence.ObservedAt {
+		return "", errors.New("reviewed evidence clock moved backward")
+	}
+	base := q
+	base.Context = string(e.Context)
+	context, err := aiRequestContext(d, base, now)
+	if err != nil {
+		return "", err
+	}
+	current, err := resolveAIEvidence(d, q, e.Selection, e.Evidence.Revision, now)
+	if err != nil {
+		return "", err
+	}
+	// Stable source facts/eligibility are checked now; observation and freshness
+	// labels describe the original disclosed snapshot, never a refetch or renewal.
+	current.ObservedAt = e.Evidence.ObservedAt
+	current.Freshness = e.Evidence.Freshness
+	e.Evidence = current
+	e.Context = json.RawMessage(context)
+	return encodeAIEvidence(e)
 }

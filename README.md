@@ -400,3 +400,35 @@ fased-app agents --profile trading-analyst --evidence reminder-run --evidence-id
 ```
 
 Each response uses `agent-evidence-v1`, identifies one same-profile record and includes a hash of its allowlisted source data and identity. The hash is evidence, not authorization. Memory is the current retained note (including an explicit expired status); headlines/runs remain historical even when a headline is recent. Disabled/stale sources never refresh on inspection. Missing, changed, ambiguous, foreign, unsupported or oversized sources refuse without substitution/truncation. The complete encoded response, including its trailing newline, is at most 16 KiB. Private AI context/credentials, memory revision history and scheduling/financial authority are excluded. AI/news-bound or financial runs are outside this plain reminder inspector. A changed workspace requires reinspection. No schema, service, provider or model-tool execution is added; mining, real AI/wallets and automatic/public updates remain disabled.
+
+### Use inspected evidence in AI review
+
+In Chat, inspect one saved record and select **Use in AI review**. Edit the question, model, limits and memory choices, then select **Prepare disclosure**. Selection, editing, removal and cancellation save nothing. Inspect the complete source facts/hash/times in the disclosure before separately consenting to a development fixture. Normal instances keep provider execution disabled.
+
+CLI uses the existing authenticated `agents --request-stdin` command with `action: "ai-prepare"` and one `evidenceSelection` reference from `agents --profile PROFILE --evidence KIND --evidence-id ID [--evidence-item ITEM_ID]`:
+
+```json
+{
+  "action": "ai-prepare",
+  "profileId": "PROFILE",
+  "revision": 0,
+  "id": "CONVERSATION_ID",
+  "text": "Explain this selected record",
+  "memorySelection": { "mode": "none" },
+  "evidenceSelection": {
+    "kind": "memory",
+    "id": "MEMORY_ID",
+    "sha256": "INSPECTED_SHA256"
+  },
+  "limits": {
+    "maxInputTokens": 24000,
+    "maxOutputTokens": 256,
+    "deadlineSeconds": 3,
+    "budgetMicrousd": 30000
+  }
+}
+```
+
+Replace the example identities, hash and revision with current private instance values. A headline additionally requires `itemId`; supported kinds are `memory`, `headline` and `reminder-run`. Only the server's allowlisted saved facts are attached. Complete context, including the record, remains limited to 8,000 bytes; an inspectable record up to 16 KiB can still be too large for AI preparation. Nothing is clipped or silently omitted. Expired memory refuses; explicitly selected historical news remains historical and cannot satisfy a fresh-news dependency.
+
+Consent, dispatch, access/count/create, in-flight work and completion recheck source identity/content and eligibility. Changed evidence requires inspecting and preparing a new review. Saved-request drafts preserve unavailable references for explicit correction. Source timestamps remain frozen; unrelated workspace revisions do not renew consent. Existing request/usage/uncertain holds remain intact. No model tools, automatic source fetch, scheduled evidence or live execution is added.

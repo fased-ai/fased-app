@@ -10,13 +10,27 @@ const at = (n: number) => new Date(n * 1000).toLocaleString();
 export function AgentEvidenceInspector({
   view,
   sessionId,
+  onUse,
 }: {
   view: AgentView;
   sessionId: string;
+  onUse?: (evidence: AgentEvidenceView) => void;
 }) {
-  return <EvidenceForm key={`${view.profileId}:${sessionId}`} view={view} />;
+  return (
+    <EvidenceForm
+      key={`${view.profileId}:${sessionId}`}
+      view={view}
+      onUse={onUse}
+    />
+  );
 }
-function EvidenceForm({ view }: { view: AgentView }) {
+function EvidenceForm({
+  view,
+  onUse,
+}: {
+  view: AgentView;
+  onUse?: (evidence: AgentEvidenceView) => void;
+}) {
   const { core, agents } = useWorkspace();
   const [kind, setKind] = useState<AgentEvidenceKind>("memory");
   const [selection, setSelection] = useState("");
@@ -173,6 +187,19 @@ function EvidenceForm({ view }: { view: AgentView }) {
           <p>
             Recorded {at(result.recordedAt)} · Inspected {at(result.observedAt)}
           </p>
+          {onUse && (
+            <button
+              type="button"
+              className="secondary"
+              disabled={
+                agents.busy ||
+                (result.kind === "memory" && result.freshness === "expired")
+              }
+              onClick={() => onUse(result)}
+            >
+              Use in AI review
+            </button>
+          )}
           <details>
             <summary>Complete evidence response</summary>
             <pre>{JSON.stringify(result, null, 2)}</pre>

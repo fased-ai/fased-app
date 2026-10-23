@@ -1,3 +1,4 @@
+import { AgentEvidenceInspector } from "./AgentEvidence";
 import { ChatMemoryReview } from "./ChatMemoryReview";
 import { ReminderDraftReview } from "./ReminderDraftReview";
 import { NewsSourcePicker } from "./NewsInputs";
@@ -11,6 +12,8 @@ import type {
   AgentView,
   AIMemorySelection,
   AgentAIRequestDraft,
+  AIEvidenceSelection,
+  AgentEvidenceView,
 } from "../agents";
 import { useWorkspace } from "../workspace";
 
@@ -56,6 +59,11 @@ function AgentAIForm({
   const [legacyDraft, setLegacyDraft] = useState(false);
   const [draftBusy, setDraftBusy] = useState(false);
   const [draftError, setDraftError] = useState("");
+  const [evidenceSelection, setEvidenceSelection] =
+    useState<AIEvidenceSelection>();
+  const [evidencePreview, setEvidencePreview] =
+    useState<AgentEvidenceView | null>(null);
+  const questionRef = useRef<HTMLTextAreaElement>(null);
   const generation = useRef(0);
   useEffect(
     () => () => {
@@ -69,6 +77,8 @@ function AgentAIForm({
     setDraftSource("");
     setDraftError("");
     setLegacyDraft(false);
+    setEvidenceSelection(undefined);
+    setEvidencePreview(null);
     setPrompt("");
     setNewsSourceId("");
     setNewsAge(3600);
@@ -106,6 +116,8 @@ function AgentAIForm({
       setMemoryMode(d.memorySelection?.mode ?? "legacy");
       setMemoryIds(d.memorySelection?.ids ?? []);
       setLegacyDraft(!d.memorySelection);
+      setEvidenceSelection(d.evidenceSelection);
+      setEvidencePreview(null);
       setDraftSource(id);
       if (d.revision !== view.revision) void agents.refresh().catch(() => {});
     } catch (e) {
@@ -124,355 +136,437 @@ function AgentAIForm({
   const requests = view.aiRequests.filter(
     (q) => q.sessionId === sessionId && !q.taskId,
   );
+  const evidenceAvailable =
+    !evidenceSelection ||
+    (evidenceSelection.kind === "memory"
+      ? view.memories.some((m) => m.id === evidenceSelection.id && !m.expired)
+      : evidenceSelection.kind === "headline"
+        ? view.newsFetches.some(
+            (f) =>
+              f.id === evidenceSelection.id &&
+              f.state === "completed" &&
+              f.items.some((i) => i.id === evidenceSelection.itemId),
+          )
+        : view.runs.some(
+            (r) =>
+              r.id === evidenceSelection.id &&
+              r.strategy === "reminder-v1" &&
+              !r.news &&
+              !r.botId &&
+              !r.wen,
+          ));
+  function removeEvidence() {
+    generation.current++;
+    setDraftBusy(false);
+    setEvidenceSelection(undefined);
+    setEvidencePreview(null);
+    setConsent("");
+  }
   return (
-    <section className="ai-review" aria-label="Optional AI request review">
-      <h3>Optional AI step</h3>
-      <p>
-        Development fixture only. Optionally select an unlocked test connection.
-        No OpenAI account, subscription or charge. Your saved provider
-        preference does not enable execution.
-      </p>
-      {draftError && <p role="alert">{draftError}</p>}
-      {(draftSource || draftBusy) && (
-        <div className="agent-inline">
-          <h4>{draftBusy ? "Loading request draft…" : "Request draft"}</h4>
-          <button type="button" className="secondary" onClick={cancelDraft}>
-            Cancel draft
-          </button>
-        </div>
-      )}
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          void agents
-            .change({
-              action: "ai-prepare",
-              ...(memoryMode === "legacy"
-                ? {}
-                : {
-                    memorySelection: {
-                      mode: memoryMode,
-                      ...(memoryMode === "selected" ? { ids: memoryIds } : {}),
-                    },
-                  }),
-              connectionRef,
-              model,
-              newsSourceId,
-              newsMaxAgeSeconds: newsSourceId ? newsAge : undefined,
-              id: sessionId,
-              text: prompt,
-              limits: {
-                maxInputTokens: input,
-                maxOutputTokens: output,
-                deadlineSeconds: deadline,
-                budgetMicrousd: budget,
-              },
-            })
-            .then((ok) => {
-              if (ok) {
-                setPrompt("");
-                setConsent("");
-                setDraftSource("");
-              }
-            });
+    <>
+      <AgentEvidenceInspector
+        view={view}
+        sessionId={sessionId}
+        onUse={(e) => {
+          generation.current++;
+          setDraftBusy(false);
+          setDraftError("");
+          setDraftSource("");
+          setEvidenceSelection({
+            kind: e.kind,
+            id: e.id,
+            ...(e.itemId ? { itemId: e.itemId } : {}),
+            sha256: e.sha256,
+          });
+          setEvidencePreview(e);
+          setConsent("");
+          questionRef.current?.focus();
         }}
-      >
-        <ConnectionPicker value={connectionRef} onChange={setConnectionRef} />
-        <AIModelPicker
-          value={model}
-          onChange={setModel}
-          connectionRef={connectionRef}
-        />
-        <NewsSourcePicker
-          view={view}
-          value={newsSourceId}
-          onChange={setNewsSourceId}
-          age={newsAge}
-          onAge={setNewsAge}
-        />
-        <label>
-          Memory
-          <select
-            value={memoryMode}
-            onChange={(e) =>
-              setMemoryMode(
-                e.target.value as AIMemorySelection["mode"] | "legacy",
-              )
-            }
-          >
-            {legacyDraft && <option value="legacy">Legacy active notes</option>}
-            <option value="all">All active notes</option>
-            <option value="none">None</option>
-            <option value="selected">Selected notes</option>
-          </select>
-        </label>
-        {memoryMode === "selected" && (
-          <fieldset aria-label="AI memory selection">
-            <legend>Selected notes</legend>
-            {view.memories.map((m) => (
-              <label key={m.id}>
-                <input
-                  type="checkbox"
-                  checked={memoryIds.includes(m.id)}
-                  disabled={m.expired && !memoryIds.includes(m.id)}
-                  onChange={(e) => toggleMemory(m.id, e.target.checked)}
-                />
-                {m.text}
-                {m.expired ? " (expired)" : ""}
-              </label>
-            ))}
-            {memoryIds
-              .filter((id) => !view.memories.some((m) => m.id === id))
-              .map((id) => (
-                <label key={id}>
-                  <input
-                    type="checkbox"
-                    checked
-                    onChange={() => toggleMemory(id, false)}
-                  />
-                  Unavailable note: {id}
-                </label>
-              ))}
-          </fieldset>
-        )}
-        <label>
-          AI request
-          <textarea
-            required
-            maxLength={2000}
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-          />
-        </label>
-        <div className="agent-form-grid">
-          <label>
-            Maximum input tokens
-            <input
-              type="number"
-              min={1000}
-              max={32000}
-              required
-              value={input}
-              onChange={(e) => setInput(e.target.valueAsNumber)}
-            />
-          </label>
-          <label>
-            Maximum output tokens
-            <input
-              type="number"
-              min={128}
-              max={1024}
-              required
-              value={output}
-              onChange={(e) => setOutput(e.target.valueAsNumber)}
-            />
-          </label>
-          <label>
-            Request deadline (seconds)
-            <input
-              type="number"
-              min={1}
-              max={5}
-              required
-              value={deadline}
-              onChange={(e) => setDeadline(e.target.valueAsNumber)}
-            />
-          </label>
-          <label>
-            Fixture budget (micro USD)
-            <input
-              type="number"
-              min={1}
-              max={1000000}
-              required
-              value={budget}
-              onChange={(e) => setBudget(e.target.valueAsNumber)}
-            />
-          </label>
-        </div>
-        <p className="subtle">
-          {model ? (
-            "Selected snapshot uses its disclosed standard tariff and provider token-count preflight. Development fixtures only."
-          ) : (
-            <>
-              One request, zero tools, no retries or fallback. Example tariff: 1
-              micro USD per input token and 4 per output token. These are
-              invented fixture prices. Input uses a conservative byte bound
-              including instructions and schema; no production cost guarantee.
-            </>
-          )}
+      />
+      <section className="ai-review" aria-label="Optional AI request review">
+        <h3>Optional AI step</h3>
+        <p>
+          Development fixture only. Optionally select an unlocked test
+          connection. No OpenAI account, subscription or charge. Your saved
+          provider preference does not enable execution.
         </p>
-        <button
-          className="secondary"
-          disabled={
-            agents.busy ||
-            draftBusy ||
-            (memoryMode === "selected" && memoryIds.length === 0)
-          }
-        >
-          Prepare disclosure
-        </button>
-      </form>
-      {requests.length === 0 && (
-        <p>No prepared requests for this conversation.</p>
-      )}
-      {requests.map((q) => (
-        <article className="ai-request" key={q.id}>
-          <h4>{q.prompt}</h4>
-          <button
-            type="button"
-            className="secondary"
-            disabled={agents.busy || draftBusy}
-            onClick={() => void useDraft(q.id)}
-          >
-            Use as draft
-          </button>
-          <AIAdmissionReview policy={q.policy} admission={q.admission} />
-          <p>
-            <strong>{q.state}</strong> · {q.model} · Held{" "}
-            {money(q.heldMicrousd)} · Spent {money(q.spentMicrousd)} (fixture
-            only)
-          </p>
-          <p>
-            Limits: {q.limits.maxInputTokens} input / {q.limits.maxOutputTokens}{" "}
-            output tokens · {q.limits.deadlineSeconds}s · Budget{" "}
-            {money(q.limits.budgetMicrousd)} · No tools
-          </p>
-          <details>
-            <summary>Exact context disclosure</summary>
-            <p>Connection: {q.connectionRef || "no credential"}</p>
-            {q.news && (
-              <p>
-                News snapshot: {q.news.fetchId} · source {q.news.url} ·
-                freshness {q.news.maxAgeSeconds}s · content hash{" "}
-                {q.news.bodySha256}
-              </p>
-            )}
-            <pre>{q.disclosure}</pre>
-            <p>
-              Also included: fixed instructions treating this context as
-              untrusted data, and the review-only output schema. No other
-              profiles, expired notes, credentials or wallet records.
-            </p>
-            <p className="subtle">Disclosure SHA-256: {q.digest}</p>
-          </details>
-          {q.failure && <p role="status">{q.failure}</p>}
-          {q.state === "prepared" && (
-            <>
-              <label className="ai-consent">
-                <input
-                  type="checkbox"
-                  checked={consent === q.digest}
-                  onChange={(e) => setConsent(e.target.checked ? q.digest : "")}
-                />
-                I reviewed this context and these fixture limits
-              </label>
-              <button
-                className="primary"
-                disabled={
-                  agents.busy ||
-                  consent !== q.digest ||
-                  !view.aiFixtureAvailable
+        {draftError && <p role="alert">{draftError}</p>}
+        {(draftSource || draftBusy) && (
+          <div className="agent-inline">
+            <h4>{draftBusy ? "Loading request draft…" : "Request draft"}</h4>
+            <button type="button" className="secondary" onClick={cancelDraft}>
+              Cancel draft
+            </button>
+          </div>
+        )}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void agents
+              .change({
+                action: "ai-prepare",
+                evidenceSelection,
+                ...(memoryMode === "legacy"
+                  ? {}
+                  : {
+                      memorySelection: {
+                        mode: memoryMode,
+                        ...(memoryMode === "selected"
+                          ? { ids: memoryIds }
+                          : {}),
+                      },
+                    }),
+                connectionRef,
+                model,
+                newsSourceId,
+                newsMaxAgeSeconds: newsSourceId ? newsAge : undefined,
+                id: sessionId,
+                text: prompt,
+                limits: {
+                  maxInputTokens: input,
+                  maxOutputTokens: output,
+                  deadlineSeconds: deadline,
+                  budgetMicrousd: budget,
+                },
+              })
+              .then((ok) => {
+                if (ok) {
+                  setPrompt("");
+                  setConsent("");
+                  setDraftSource("");
+                  setEvidenceSelection(undefined);
+                  setEvidencePreview(null);
                 }
-                onClick={() => {
-                  void agents
-                    .change({
-                      action: "ai-start",
-                      id: q.id,
-                      consentDigest: q.digest,
-                    })
-                    .then((ok) => {
-                      if (ok) setConsent("");
-                    });
-                }}
-              >
-                Run development fixture
-              </button>
-              {!view.aiFixtureAvailable && (
-                <p className="subtle">
-                  Execution is disabled in this core. Only an explicitly started
-                  local development fixture can run.
+              });
+          }}
+        >
+          {evidenceSelection && (
+            <fieldset aria-label="AI evidence selection">
+              <legend>Selected evidence</legend>
+              <pre>{JSON.stringify(evidenceSelection, null, 2)}</pre>
+              {!evidenceAvailable && (
+                <p role="status">
+                  Selected evidence unavailable. Inspect again.
                 </p>
               )}
-            </>
+              {evidencePreview && (
+                <details>
+                  <summary>Inspected record</summary>
+                  <pre>{JSON.stringify(evidencePreview, null, 2)}</pre>
+                </details>
+              )}
+              <button
+                type="button"
+                className="secondary"
+                onClick={removeEvidence}
+              >
+                Remove evidence
+              </button>
+            </fieldset>
           )}
-          {["prepared", "queued", "running"].includes(q.state) && (
-            <button
-              className="secondary"
-              disabled={agents.busy}
-              onClick={() =>
-                void agents.change({ action: "ai-cancel", id: q.id })
+          <ConnectionPicker value={connectionRef} onChange={setConnectionRef} />
+          <AIModelPicker
+            value={model}
+            onChange={setModel}
+            connectionRef={connectionRef}
+          />
+          <NewsSourcePicker
+            view={view}
+            value={newsSourceId}
+            onChange={setNewsSourceId}
+            age={newsAge}
+            onAge={setNewsAge}
+          />
+          <label>
+            Memory
+            <select
+              value={memoryMode}
+              onChange={(e) =>
+                setMemoryMode(
+                  e.target.value as AIMemorySelection["mode"] | "legacy",
+                )
               }
             >
-              Cancel request
-            </button>
-          )}
-          {q.answer && <p className="ai-answer">{q.answer}</p>}
-          {q.state === "completed" && q.answer && (
-            <ChatMemoryReview
-              key={`${view.profileId}:${q.id}`}
-              view={view}
-              sourceId={q.id}
-              sourceKind="answer"
-              sourceText={q.answer}
-              sessionId={q.sessionId}
-            />
-          )}
-          {q.cards.map((card) => (
-            <section
-              className="ai-action-card"
-              key={card.id}
-              aria-label={card.title}
-            >
-              <small>
-                {card.kind} · {card.review} · REVIEW ONLY
-              </small>
-              <h4>{card.title}</h4>
-              <p>{card.text}</p>
-              <p className="subtle">
-                Keeping this draft records your review. It creates no task, bot,
-                permission or trade.
-              </p>
-              {card.kind === "reminder-draft" &&
-                card.review !== "dismissed" && (
-                  <ReminderDraftReview
-                    key={`${view.profileId}:${card.id}`}
-                    view={view}
-                    card={card}
-                  />
-                )}
-              {card.review === "unreviewed" && (
-                <div className="agent-inline">
-                  <button
-                    className="secondary"
-                    disabled={agents.busy}
-                    onClick={() =>
-                      void agents.change({
-                        action: "ai-card-keep",
-                        id: card.id,
-                      })
-                    }
-                  >
-                    Keep draft
-                  </button>
-                  <button
-                    className="text-button"
-                    disabled={agents.busy}
-                    onClick={() =>
-                      void agents.change({
-                        action: "ai-card-dismiss",
-                        id: card.id,
-                      })
-                    }
-                  >
-                    Dismiss draft
-                  </button>
-                </div>
+              {legacyDraft && (
+                <option value="legacy">Legacy active notes</option>
               )}
-            </section>
-          ))}
-        </article>
-      ))}
-    </section>
+              <option value="all">All active notes</option>
+              <option value="none">None</option>
+              <option value="selected">Selected notes</option>
+            </select>
+          </label>
+          {memoryMode === "selected" && (
+            <fieldset aria-label="AI memory selection">
+              <legend>Selected notes</legend>
+              {view.memories.map((m) => (
+                <label key={m.id}>
+                  <input
+                    type="checkbox"
+                    checked={memoryIds.includes(m.id)}
+                    disabled={m.expired && !memoryIds.includes(m.id)}
+                    onChange={(e) => toggleMemory(m.id, e.target.checked)}
+                  />
+                  {m.text}
+                  {m.expired ? " (expired)" : ""}
+                </label>
+              ))}
+              {memoryIds
+                .filter((id) => !view.memories.some((m) => m.id === id))
+                .map((id) => (
+                  <label key={id}>
+                    <input
+                      type="checkbox"
+                      checked
+                      onChange={() => toggleMemory(id, false)}
+                    />
+                    Unavailable note: {id}
+                  </label>
+                ))}
+            </fieldset>
+          )}
+          <label>
+            AI request
+            <textarea
+              ref={questionRef}
+              required
+              maxLength={2000}
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+            />
+          </label>
+          <div className="agent-form-grid">
+            <label>
+              Maximum input tokens
+              <input
+                type="number"
+                min={1000}
+                max={32000}
+                required
+                value={input}
+                onChange={(e) => setInput(e.target.valueAsNumber)}
+              />
+            </label>
+            <label>
+              Maximum output tokens
+              <input
+                type="number"
+                min={128}
+                max={1024}
+                required
+                value={output}
+                onChange={(e) => setOutput(e.target.valueAsNumber)}
+              />
+            </label>
+            <label>
+              Request deadline (seconds)
+              <input
+                type="number"
+                min={1}
+                max={5}
+                required
+                value={deadline}
+                onChange={(e) => setDeadline(e.target.valueAsNumber)}
+              />
+            </label>
+            <label>
+              Fixture budget (micro USD)
+              <input
+                type="number"
+                min={1}
+                max={1000000}
+                required
+                value={budget}
+                onChange={(e) => setBudget(e.target.valueAsNumber)}
+              />
+            </label>
+          </div>
+          <p className="subtle">
+            {model ? (
+              "Selected snapshot uses its disclosed standard tariff and provider token-count preflight. Development fixtures only."
+            ) : (
+              <>
+                One request, zero tools, no retries or fallback. Example tariff:
+                1 micro USD per input token and 4 per output token. These are
+                invented fixture prices. Input uses a conservative byte bound
+                including instructions and schema; no production cost guarantee.
+              </>
+            )}
+          </p>
+          <button
+            className="secondary"
+            disabled={
+              agents.busy ||
+              draftBusy ||
+              (memoryMode === "selected" && memoryIds.length === 0)
+            }
+          >
+            Prepare disclosure
+          </button>
+        </form>
+        {requests.length === 0 && (
+          <p>No prepared requests for this conversation.</p>
+        )}
+        {requests.map((q) => (
+          <article className="ai-request" key={q.id}>
+            <h4>{q.prompt}</h4>
+            <button
+              type="button"
+              className="secondary"
+              disabled={agents.busy || draftBusy}
+              onClick={() => void useDraft(q.id)}
+            >
+              Use as draft
+            </button>
+            <AIAdmissionReview policy={q.policy} admission={q.admission} />
+            <p>
+              <strong>{q.state}</strong> · {q.model} · Held{" "}
+              {money(q.heldMicrousd)} · Spent {money(q.spentMicrousd)} (fixture
+              only)
+            </p>
+            <p>
+              Limits: {q.limits.maxInputTokens} input /{" "}
+              {q.limits.maxOutputTokens} output tokens ·{" "}
+              {q.limits.deadlineSeconds}s · Budget{" "}
+              {money(q.limits.budgetMicrousd)} · No tools
+            </p>
+            <details>
+              <summary>Exact context disclosure</summary>
+              <p>Connection: {q.connectionRef || "no credential"}</p>
+              {q.news && (
+                <p>
+                  News snapshot: {q.news.fetchId} · source {q.news.url} ·
+                  freshness {q.news.maxAgeSeconds}s · content hash{" "}
+                  {q.news.bodySha256}
+                </p>
+              )}
+              <pre>{q.disclosure}</pre>
+              <p>
+                Also included: fixed instructions treating this context as
+                untrusted data, and the review-only output schema. No other
+                profiles, expired notes, credentials or wallet records.
+              </p>
+              <p className="subtle">Disclosure SHA-256: {q.digest}</p>
+            </details>
+            {q.failure && <p role="status">{q.failure}</p>}
+            {q.state === "prepared" && (
+              <>
+                <label className="ai-consent">
+                  <input
+                    type="checkbox"
+                    checked={consent === q.digest}
+                    onChange={(e) =>
+                      setConsent(e.target.checked ? q.digest : "")
+                    }
+                  />
+                  I reviewed this context and these fixture limits
+                </label>
+                <button
+                  className="primary"
+                  disabled={
+                    agents.busy ||
+                    consent !== q.digest ||
+                    !view.aiFixtureAvailable
+                  }
+                  onClick={() => {
+                    void agents
+                      .change({
+                        action: "ai-start",
+                        id: q.id,
+                        consentDigest: q.digest,
+                      })
+                      .then((ok) => {
+                        if (ok) setConsent("");
+                      });
+                  }}
+                >
+                  Run development fixture
+                </button>
+                {!view.aiFixtureAvailable && (
+                  <p className="subtle">
+                    Execution is disabled in this core. Only an explicitly
+                    started local development fixture can run.
+                  </p>
+                )}
+              </>
+            )}
+            {["prepared", "queued", "running"].includes(q.state) && (
+              <button
+                className="secondary"
+                disabled={agents.busy}
+                onClick={() =>
+                  void agents.change({ action: "ai-cancel", id: q.id })
+                }
+              >
+                Cancel request
+              </button>
+            )}
+            {q.answer && <p className="ai-answer">{q.answer}</p>}
+            {q.state === "completed" && q.answer && (
+              <ChatMemoryReview
+                key={`${view.profileId}:${q.id}`}
+                view={view}
+                sourceId={q.id}
+                sourceKind="answer"
+                sourceText={q.answer}
+                sessionId={q.sessionId}
+              />
+            )}
+            {q.cards.map((card) => (
+              <section
+                className="ai-action-card"
+                key={card.id}
+                aria-label={card.title}
+              >
+                <small>
+                  {card.kind} · {card.review} · REVIEW ONLY
+                </small>
+                <h4>{card.title}</h4>
+                <p>{card.text}</p>
+                <p className="subtle">
+                  Keeping this draft records your review. It creates no task,
+                  bot, permission or trade.
+                </p>
+                {card.kind === "reminder-draft" &&
+                  card.review !== "dismissed" && (
+                    <ReminderDraftReview
+                      key={`${view.profileId}:${card.id}`}
+                      view={view}
+                      card={card}
+                    />
+                  )}
+                {card.review === "unreviewed" && (
+                  <div className="agent-inline">
+                    <button
+                      className="secondary"
+                      disabled={agents.busy}
+                      onClick={() =>
+                        void agents.change({
+                          action: "ai-card-keep",
+                          id: card.id,
+                        })
+                      }
+                    >
+                      Keep draft
+                    </button>
+                    <button
+                      className="text-button"
+                      disabled={agents.busy}
+                      onClick={() =>
+                        void agents.change({
+                          action: "ai-card-dismiss",
+                          id: card.id,
+                        })
+                      }
+                    >
+                      Dismiss draft
+                    </button>
+                  </div>
+                )}
+              </section>
+            ))}
+          </article>
+        ))}
+      </section>
+    </>
   );
 }
