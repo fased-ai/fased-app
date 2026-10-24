@@ -946,7 +946,7 @@ test("update preferences and review-only proposals share revisions, survive rest
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
   await expect(
-    page.getByText("PRIVATE CORE · TERMINAL PROTOTYPES", { exact: true }),
+    page.getByText("FIXTURE WORKSPACE", { exact: true }),
   ).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
@@ -1308,7 +1308,7 @@ test("claim, UI/CLI setup, restart and logout use one private instance", async (
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
   await expect(
-    page.getByText("PRIVATE CORE · TERMINAL PROTOTYPES", { exact: true }),
+    page.getByText("FIXTURE WORKSPACE", { exact: true }),
   ).toBeVisible();
   const health = await (await page.request.get(`${url}/api/v1/health`)).json();
   expect(health.capabilities.walletSigner).toBe(false);
@@ -1685,7 +1685,7 @@ test("proposal form uses explicit fixture labels (UI mock only)", async ({
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
   await expect(
-    page.getByText("PRIVATE CORE · TERMINAL PROTOTYPES", { exact: true }),
+    page.getByText("FIXTURE WORKSPACE", { exact: true }),
   ).toBeVisible();
   await page.goto(url + "/#wallets/accounts");
   await expect(page.getByLabel("Fixture account", { exact: true })).toBeVisible(
@@ -1718,7 +1718,7 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
   await expect(
-    page.getByText("PRIVATE CORE · TERMINAL PROTOTYPES", { exact: true }),
+    page.getByText("FIXTURE WORKSPACE", { exact: true }),
   ).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
@@ -1886,7 +1886,7 @@ test("bounded news inputs retain provenance across UI CLI and restart, hold depe
     .getByRole("button", { name: "Claim workspace", exact: true })
     .click();
   await expect(
-    page.getByText("PRIVATE CORE · TERMINAL PROTOTYPES", { exact: true }),
+    page.getByText("FIXTURE WORKSPACE", { exact: true }),
   ).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
@@ -2055,7 +2055,7 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
   await expect(
-    page.getByText("PRIVATE CORE · TERMINAL PROTOTYPES", { exact: true }),
+    page.getByText("FIXTURE WORKSPACE", { exact: true }),
   ).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
@@ -2173,7 +2173,7 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
   await expect(
-    page.getByText("PRIVATE CORE · TERMINAL PROTOTYPES", { exact: true }),
+    page.getByText("FIXTURE WORKSPACE", { exact: true }),
   ).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
@@ -2343,7 +2343,7 @@ test("bounded AI schedules share consent and execution with CLI, survive restart
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
   await expect(
-    page.getByText("PRIVATE CORE · TERMINAL PROTOTYPES", { exact: true }),
+    page.getByText("FIXTURE WORKSPACE", { exact: true }),
   ).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
@@ -2369,6 +2369,7 @@ test("bounded AI schedules share consent and execution with CLI, survive restart
   // Hash navigation preserves the UI's cache. Reload after this external CLI
   // write so the task review uses the same current records.
   await page.reload();
+  await page.getByText("Scheduled AI · fixtures", { exact: true }).click();
   const region = page.getByRole("region", {
     name: "Scheduled AI steps",
     exact: true,
@@ -2476,7 +2477,7 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
   await expect(
-    page.getByText("PRIVATE CORE · TERMINAL PROTOTYPES", { exact: true }),
+    page.getByText("FIXTURE WORKSPACE", { exact: true }),
   ).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
@@ -2536,6 +2537,7 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
     (await privateCLI(["agents", "--profile", "news-researcher"])).aiRequests,
   ).toHaveLength(0);
   await page.goto(url + "/#agents/tasks");
+  await page.getByText("Scheduled AI · fixtures", { exact: true }).click();
   const scheduled = page.getByRole("region", {
     name: "Scheduled AI steps",
     exact: true,
@@ -5744,4 +5746,131 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
     ),
   ).toBe(true);
   expect(external).toEqual([]);
+});
+
+test("shared WEN app shell and agent panes retain bounded local controls", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(90000);
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator("html")).toHaveCSS(
+    "background-color",
+    "rgb(21, 20, 28)",
+  );
+  await expect(page.locator(".brand")).toHaveText("Fased");
+  await expect(page.locator(".brand-mark")).toHaveCount(0);
+  if (!isMobile) {
+    const header = (await page.locator(".sidebar").boundingBox())!;
+    const brand = (await page.locator(".brand").boundingBox())!;
+    const nav = (await page
+      .getByRole("navigation", { name: "Main navigation" })
+      .boundingBox())!;
+    expect(header.height).toBe(64);
+    expect(brand.x).toBeLessThan(100);
+    expect(nav.y).toBeGreaterThanOrEqual(header.y);
+    expect(nav.y + nav.height).toBeLessThanOrEqual(header.y + header.height);
+  }
+  const screenshot = async (name: string) => {
+    await page.getByRole("heading", { name: "Agents", exact: true }).click();
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.screenshot({ path: `.evidence/${name}.png`, fullPage: true });
+  };
+  await page.goto(url + "/#agents/chat");
+  await page
+    .locator(".local-profile-picker")
+    .getByRole("button", { name: /^Trading Analyst / })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Design fixture chat");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Review the local fixture result before scheduling.");
+  await page.getByRole("button", { name: "Save message", exact: true }).click();
+  await expect(page.locator(".local-messages")).toContainText(
+    "Review the local fixture result",
+  );
+  await expect(page.locator(".chat-review")).toBeVisible();
+  if (isMobile) {
+    expect(
+      await page
+        .locator(".local-profile-picker button")
+        .evaluateAll((buttons) =>
+          buttons.every((button) => button.scrollWidth <= button.clientWidth),
+        ),
+    ).toBe(true);
+  }
+  if (!isMobile) {
+    const rail = (await page.locator(".conversation-rail").boundingBox())!;
+    const thread = (await page.locator(".chat-thread").boundingBox())!;
+    const review = (await page.locator(".chat-review").boundingBox())!;
+    expect(rail.x + rail.width).toBeLessThanOrEqual(thread.x + 1);
+    expect(thread.x + thread.width).toBeLessThanOrEqual(review.x + 1);
+  }
+  await screenshot(`v1-chat-${test.info().project.name}`);
+  await page.getByRole("button", { name: "memory", exact: true }).click();
+  const editor = page.locator(".memory-editor");
+  await editor
+    .getByLabel("Memory note", { exact: true })
+    .fill("Design fixture note: review each schedule.");
+  await editor
+    .getByLabel("Evidence or source", { exact: true })
+    .fill("Disposable local design fixture");
+  await editor
+    .getByRole("button", { name: "Save memory", exact: true })
+    .click();
+  await expect(page.locator(".memory-library")).toContainText(
+    "Design fixture note",
+  );
+  await screenshot(`v1-memory-${test.info().project.name}`);
+  await page.getByRole("button", { name: "tasks", exact: true }).click();
+  await page
+    .getByLabel("Task name", { exact: true })
+    .fill("Design fixture reminder");
+  await page
+    .getByLabel("Reminder text", { exact: true })
+    .fill("Review the saved fixture note.");
+  await page.getByLabel("Interval in seconds", { exact: true }).fill("3600");
+  await page.getByRole("button", { name: "Create task", exact: true }).click();
+  const run = page.getByRole("button", {
+    name: "Run now: Design fixture reminder",
+    exact: true,
+  });
+  await run.click();
+  await expect(run).toBeDisabled();
+  await expect(page.locator(".task-list")).toContainText("1/1 evaluations");
+  await screenshot(`v1-tasks-${test.info().project.name}`);
+  if (!isMobile) {
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await screenshot("v1-tasks-tablet");
+  }
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  const primary = page.locator(".task-composer .primary");
+  await expect(primary).toHaveCSS("background-color", "rgb(255, 100, 124)");
+  await expect(primary).toHaveCSS("border-radius", "8px");
+  const bounds = (await primary.boundingBox())!;
+  expect(bounds.height).toBeGreaterThanOrEqual(isMobile ? 44 : 36);
+  await page.keyboard.press("Tab");
+  await primary.focus();
+  await expect(primary).toBeFocused();
+  await expect(primary).toHaveCSS("outline-style", "solid");
 });

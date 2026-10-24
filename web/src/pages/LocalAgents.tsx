@@ -22,19 +22,35 @@ export function LocalAgents() {
   return (
     <>
       <SectionHead
-        eyebrow="YOUR LOCAL WORKSPACE"
         title="Agents"
-        description="Profiles, conversations and bounded tasks saved to this instance."
         action={
-          <button className="secondary" onClick={() => setProfileOpen(true)}>
-            <Plus size={16} /> New profile
-          </button>
+          <div className="agent-header-actions">
+            {agents.view && (
+              <div className="agent-picker local-profile-picker">
+                {agents.view.profiles.map((p) => (
+                  <button
+                    key={p.id}
+                    disabled={agents.busy}
+                    className={
+                      p.id === agents.view!.profileId ? "selected" : ""
+                    }
+                    aria-pressed={p.id === agents.view!.profileId}
+                    onClick={() => void agents.select(p.id)}
+                  >
+                    <span>
+                      <strong>{p.name}</strong>
+                      <small>{providerNames[p.provider]}</small>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <button className="secondary" onClick={() => setProfileOpen(true)}>
+              <Plus size={16} /> New profile
+            </button>
+          </div>
         }
       />
-      <p className="prototype-caption">
-        Local prototype · AI providers are not connected · Paper results use
-        fixed example prices · Real wallets remain disabled.
-      </p>
       {agents.error && (
         <p className="storage-warning" role="alert">
           {agents.error}{" "}
@@ -50,22 +66,6 @@ export function LocalAgents() {
         <p role="status">Loading local agent records…</p>
       ) : (
         <>
-          <div className="agent-picker local-profile-picker">
-            {agents.view.profiles.map((p) => (
-              <button
-                key={p.id}
-                disabled={agents.busy}
-                className={p.id === agents.view!.profileId ? "selected" : ""}
-                aria-pressed={p.id === agents.view!.profileId}
-                onClick={() => void agents.select(p.id)}
-              >
-                <span>
-                  <strong>{p.name}</strong>
-                  <small>{providerNames[p.provider]}</small>
-                </span>
-              </button>
-            ))}
-          </div>
           <div className="tabs" aria-label="Agent sections">
             {["chat", "bots", "tasks", "news", "memory", "settings"].map(
               (t) => (
@@ -179,12 +179,9 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
       )}
       {tab === "settings" && <AIConnectionSettings />}
       {tab === "chat" && (
-        <section className="panel">
-          <div className="panel-heading">
+        <section className="panel agent-chat" aria-label="Agent chat workspace">
+          <aside className="conversation-rail" aria-label="Conversations">
             <h2>{profile.name} · Conversations</h2>
-            <Badge>LOCAL NOTES</Badge>
-          </div>
-          <div className="agent-record-body">
             <form
               className="agent-inline"
               onSubmit={submit(async () => {
@@ -237,94 +234,105 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
               ))}
               {matching.length === 0 && <p>No matching conversations.</p>}
             </div>
-            {activeSession && (
+          </aside>
+          <div className="agent-record-body chat-workspace">
+            {activeSession ? (
               <>
-                <h3>{activeSession.name}</h3>
-                {core.mode === "ready" && (
-                  <button
-                    className="secondary"
-                    onClick={() => setResearchOpen(true)}
+                <div className="chat-thread">
+                  <h3>{activeSession.name}</h3>
+                  <div className="local-messages" aria-live="polite">
+                    {v.messages
+                      .filter((m) => m.sessionId === activeSession.id)
+                      .map((m) => (
+                        <article key={m.id}>
+                          <small>
+                            {m.role === "user" ? "You" : "Local system"} ·{" "}
+                            {date(m.createdAt)}
+                          </small>
+                          <p>{m.text}</p>
+                          {m.role === "user" && (
+                            <ChatMemoryReview
+                              key={`${v.profileId}:${m.id}`}
+                              view={v}
+                              sourceId={m.id}
+                              sourceKind="message"
+                              sourceText={m.text}
+                              sessionId={m.sessionId}
+                            />
+                          )}
+                        </article>
+                      ))}
+                  </div>
+                  <form
+                    className="chat-message-form"
+                    onSubmit={submit(async () => {
+                      if (
+                        await agents.change({
+                          action: "message-add",
+                          id: activeSession.id,
+                          text: message,
+                        })
+                      )
+                        setMessage("");
+                    })}
                   >
-                    Inspect research
-                  </button>
-                )}
-                {researchOpen && core.mode === "ready" && (
-                  <ResearchReadPanel
-                    key={`research:${v.profileId}:${activeSession.id}`}
+                    <label>
+                      Message
+                      <textarea
+                        required
+                        maxLength={4000}
+                        value={message}
+                        onChange={(e) => setMessage(e.target.value)}
+                        placeholder="Save context for this profile"
+                      />
+                    </label>
+                    <button
+                      className="primary"
+                      disabled={agents.busy || !message.trim()}
+                    >
+                      Save message
+                    </button>
+                  </form>
+                </div>
+                <aside
+                  className="chat-review"
+                  aria-label="AI and evidence review"
+                >
+                  {core.mode === "ready" && (
+                    <button
+                      className="secondary"
+                      onClick={() => setResearchOpen(true)}
+                    >
+                      Inspect research
+                    </button>
+                  )}
+                  {researchOpen && core.mode === "ready" && (
+                    <ResearchReadPanel
+                      key={`research:${v.profileId}:${activeSession.id}`}
+                      view={v}
+                      sessionId={activeSession.id}
+                      onClose={() => setResearchOpen(false)}
+                      onUseAI={setResearchSelection}
+                    />
+                  )}
+                  <AgentAIReview
                     view={v}
                     sessionId={activeSession.id}
-                    onClose={() => setResearchOpen(false)}
-                    onUseAI={setResearchSelection}
+                    researchSelection={
+                      researchSelection?.profile === v.profileId &&
+                      researchSelection?.sessionId === activeSession.id
+                        ? researchSelection
+                        : undefined
+                    }
+                    onClearResearch={() => setResearchSelection(undefined)}
                   />
-                )}
-                <div className="local-messages" aria-live="polite">
-                  {v.messages
-                    .filter((m) => m.sessionId === activeSession.id)
-                    .map((m) => (
-                      <article key={m.id}>
-                        <small>
-                          {m.role === "user" ? "You" : "Local system"} ·{" "}
-                          {date(m.createdAt)}
-                        </small>
-                        <p>{m.text}</p>
-                        {m.role === "user" && (
-                          <ChatMemoryReview
-                            key={`${v.profileId}:${m.id}`}
-                            view={v}
-                            sourceId={m.id}
-                            sourceKind="message"
-                            sourceText={m.text}
-                            sessionId={m.sessionId}
-                          />
-                        )}
-                      </article>
-                    ))}
-                </div>
-                <form
-                  onSubmit={submit(async () => {
-                    if (
-                      await agents.change({
-                        action: "message-add",
-                        id: activeSession.id,
-                        text: message,
-                      })
-                    )
-                      setMessage("");
-                  })}
-                >
-                  <label>
-                    Message
-                    <textarea
-                      required
-                      maxLength={4000}
-                      value={message}
-                      onChange={(e) => setMessage(e.target.value)}
-                      placeholder="Save context for this profile"
-                    />
-                  </label>
-                  <p className="subtle">
-                    Saved to your core. No model response is generated or
-                    billed.
-                  </p>
-                  <button
-                    className="primary"
-                    disabled={agents.busy || !message.trim()}
-                  >
-                    Save message
-                  </button>
-                </form>
-                <AgentAIReview
-                  view={v}
-                  sessionId={activeSession.id}
-                  researchSelection={
-                    researchSelection?.profile === v.profileId &&
-                    researchSelection?.sessionId === activeSession.id
-                      ? researchSelection
-                      : undefined
-                  }
-                  onClearResearch={() => setResearchSelection(undefined)}
-                />
+                </aside>
               </>
+            ) : (
+              <div className="chat-empty">
+                <h3>No conversation selected</h3>
+                <p>Create a conversation to start.</p>
+              </div>
             )}
           </div>
         </section>
@@ -413,37 +421,36 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
             <h2>Memory and corrections</h2>
             <Badge>PROFILE ONLY</Badge>
           </div>
-          <div className="agent-record-body">
-            <p className="subtle">
-              Owner-authored notes with evidence and expiry. These are not
-              trading facts, permissions or model training.
-            </p>
-            <MemoryRecall
-              view={v}
-              onOpen={(source) => {
-                setSession(source.sessionId!);
-                setSearch("");
-                navigate("agents/chat");
-              }}
-              onCorrect={(m) => {
-                memoryRevision.current = v.revision;
-                setMemoryID(m.id);
-                setMemory(m.text);
-                setSource(m.source);
-                setExpiry(
-                  m.expiresAt
-                    ? new Date(
-                        m.expiresAt * 1000 -
-                          new Date(m.expiresAt * 1000).getTimezoneOffset() *
-                            60000,
-                      )
-                        .toISOString()
-                        .slice(0, 16)
-                    : "",
-                );
-              }}
-            />
+          <div className="agent-record-body memory-workspace">
+            <div className="memory-library">
+              <MemoryRecall
+                view={v}
+                onOpen={(source) => {
+                  setSession(source.sessionId!);
+                  setSearch("");
+                  navigate("agents/chat");
+                }}
+                onCorrect={(m) => {
+                  memoryRevision.current = v.revision;
+                  setMemoryID(m.id);
+                  setMemory(m.text);
+                  setSource(m.source);
+                  setExpiry(
+                    m.expiresAt
+                      ? new Date(
+                          m.expiresAt * 1000 -
+                            new Date(m.expiresAt * 1000).getTimezoneOffset() *
+                              60000,
+                        )
+                          .toISOString()
+                          .slice(0, 16)
+                      : "",
+                  );
+                }}
+              />
+            </div>
             <form
+              className="memory-editor"
               onSubmit={submit(async () => {
                 if (
                   await agents.change({
@@ -595,7 +602,7 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
       )}
       {tab === "tasks" && (
         <>
-          <section className="panel">
+          <section className="panel task-board">
             <div className="panel-heading">
               <h2>Bounded tasks</h2>
               <button
@@ -605,88 +612,98 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                 <RefreshCw size={14} /> Refresh
               </button>
             </div>
-            <div className="agent-record-body">
-              <p className="subtle">
-                Runs while this core is running, even with the browser closed.
-                Missed intervals coalesce into one evaluation. Pause prevents
-                new evaluations; resume schedules the next interval.
-              </p>
-              {v.tasks.some((t) => t.wen) && (
-                <p>
-                  WEN paper tasks are managed in the{" "}
-                  <a href="#terminals/satcoin">Satcoin Mining terminal</a>.
-                </p>
-              )}
-              {v.tasks
-                .filter((t) => !t.ai && !t.wen)
-                .map((t) => (
-                  <article className="memory-card" key={t.id}>
-                    <strong>{t.name}</strong>
-                    {t.news && (
+            <div className="agent-record-body task-workspace">
+              <div className="task-list">
+                <details className="schedule-behavior">
+                  <summary>Schedule behavior</summary>
+                  <p>
+                    Runs while this core is running, even with the browser
+                    closed. Missed intervals coalesce into one evaluation. Pause
+                    prevents new evaluations; resume schedules the next
+                    interval.
+                  </p>
+                </details>
+                {!v.tasks.some((t) => !t.ai && !t.wen) && (
+                  <p>No reminder tasks.</p>
+                )}
+                {v.tasks.some((t) => t.wen) && (
+                  <p>
+                    WEN paper tasks are managed in the{" "}
+                    <a href="#terminals/satcoin">Satcoin Mining terminal</a>.
+                  </p>
+                )}
+                {v.tasks
+                  .filter((t) => !t.ai && !t.wen)
+                  .map((t) => (
+                    <article className="memory-card" key={t.id}>
+                      <strong>{t.name}</strong>
+                      {t.news && (
+                        <p>
+                          News input: {t.news.url} · maximum age{" "}
+                          {t.news.maxAgeSeconds}s. Failure holds this task.
+                        </p>
+                      )}
                       <p>
-                        News input: {t.news.url} · maximum age{" "}
-                        {t.news.maxAgeSeconds}s. Failure holds this task.
+                        {t.state} · {t.runs}/{t.maxRuns} evaluations ·{" "}
+                        {t.state === "scheduled"
+                          ? `Next ${date(t.nextAt)}`
+                          : "No evaluation scheduled"}
                       </p>
-                    )}
-                    <p>
-                      {t.state} · {t.runs}/{t.maxRuns} evaluations ·{" "}
-                      {t.state === "scheduled"
-                        ? `Next ${date(t.nextAt)}`
-                        : "No evaluation scheduled"}
-                    </p>
-                    <div className="agent-inline">
-                      {!t.news && !t.botId && (
+                      <div className="agent-inline">
+                        {!t.news && !t.botId && (
+                          <button
+                            className="secondary"
+                            disabled={agents.busy}
+                            onClick={() => setReminderSource(t.id)}
+                          >
+                            Reuse: {t.name}
+                          </button>
+                        )}
                         <button
                           className="secondary"
-                          disabled={agents.busy}
-                          onClick={() => setReminderSource(t.id)}
+                          disabled={agents.busy || t.state !== "scheduled"}
+                          onClick={() =>
+                            void agents.change({ action: "task-run", id: t.id })
+                          }
                         >
-                          Reuse: {t.name}
+                          Run now: {t.name}
                         </button>
-                      )}
-                      <button
-                        className="secondary"
-                        disabled={agents.busy || t.state !== "scheduled"}
-                        onClick={() =>
-                          void agents.change({ action: "task-run", id: t.id })
-                        }
-                      >
-                        Run now: {t.name}
-                      </button>
-                      <button
-                        className="text-button"
-                        disabled={
-                          agents.busy ||
-                          t.state === "completed" ||
-                          t.runs >= t.maxRuns
-                        }
-                        onClick={() =>
-                          void agents.change({
-                            action:
-                              t.state === "paused" || t.state === "held"
-                                ? "task-resume"
-                                : "task-pause",
-                            id: t.id,
-                          })
-                        }
-                      >
-                        {t.state === "paused" || t.state === "held"
-                          ? "Resume"
-                          : "Pause"}
-                        : {t.name}
-                      </button>
-                    </div>
-                  </article>
-                ))}
-              {reminderSource && (
-                <SavedReminderDraft
-                  key={reminderSource}
-                  view={v}
-                  sourceID={reminderSource}
-                  close={() => setReminderSource("")}
-                />
-              )}
+                        <button
+                          className="text-button"
+                          disabled={
+                            agents.busy ||
+                            t.state === "completed" ||
+                            t.runs >= t.maxRuns
+                          }
+                          onClick={() =>
+                            void agents.change({
+                              action:
+                                t.state === "paused" || t.state === "held"
+                                  ? "task-resume"
+                                  : "task-pause",
+                              id: t.id,
+                            })
+                          }
+                        >
+                          {t.state === "paused" || t.state === "held"
+                            ? "Resume"
+                            : "Pause"}
+                          : {t.name}
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                {reminderSource && (
+                  <SavedReminderDraft
+                    key={reminderSource}
+                    view={v}
+                    sourceID={reminderSource}
+                    close={() => setReminderSource("")}
+                  />
+                )}
+              </div>
               <form
+                className="task-composer"
                 onSubmit={submit(async () => {
                   if (
                     await agents.change({
@@ -774,117 +791,125 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
               </form>
             </div>
           </section>
-          <ScheduledAITasks view={v} />
-          <section className="panel">
-            <div className="panel-heading">
-              <h2>Execution journal</h2>
-              <Badge>PAPER / REMINDERS</Badge>
-            </div>
-            <div className="agent-record-body">
-              {v.runs.length === 0 ? (
-                <p>No evaluations yet.</p>
-              ) : (
-                v.runs
-                  .slice()
-                  .reverse()
-                  .map((r) => (
-                    <article className="memory-card" key={r.id}>
-                      <strong>{r.outcome}</strong>
-                      <p>
-                        {r.strategy} · {date(r.at)}
-                      </p>
-                      {r.wen && (
+          <div className="task-results">
+            <section className="panel">
+              <div className="panel-heading">
+                <h2>Execution journal</h2>
+                <Badge>PAPER / REMINDERS</Badge>
+              </div>
+              <div className="agent-record-body">
+                {v.runs.length === 0 ? (
+                  <p>No evaluations yet.</p>
+                ) : (
+                  v.runs
+                    .slice()
+                    .reverse()
+                    .map((r) => (
+                      <article className="memory-card" key={r.id}>
+                        <strong>{r.outcome}</strong>
                         <p>
-                          Unsigned WEN paper receipt · unsettled · no rewards or
-                          claims. Receipt SHA-256:{" "}
-                          <code className="wrap-anywhere">
-                            {r.wen.receiptSha256}
-                          </code>
+                          {r.strategy} · {date(r.at)}
                         </p>
-                      )}
-                      {r.botId && (
-                        <p>
-                          Inputs: quantity {r.quantity}, fixed price{" "}
-                          {r.priceCents}, cost {r.costCents}, budget before{" "}
-                          {r.budgetBefore}
-                        </p>
-                      )}
-                      {r.news && (
-                        <p className="news-provenance">
-                          News snapshot {r.news.fetchId} · source {r.news.url} ·
-                          retrieved {date(r.news.fetchedAt)} · content{" "}
-                          {r.news.bodySha256}
-                        </p>
-                      )}
-                      <small>Run {r.id}</small>
-                      {!r.wen &&
-                        !r.botId &&
-                        [
-                          "reminder-v1",
-                          "ai-step-v1/reminder-v1",
-                          "ai-step-v1",
-                        ].includes(r.strategy) && (
-                          <button
-                            className="secondary"
-                            disabled={agents.busy}
-                            onClick={async () => {
-                              if (
-                                await agents.change({
-                                  action: "task-run-explain",
-                                  id: r.id,
-                                })
-                              ) {
-                                setSession("");
-                                setSearch("");
-                                navigate("agents/chat");
-                              }
-                            }}
-                          >
-                            Discuss run
-                          </button>
+                        {r.wen && (
+                          <p>
+                            Unsigned WEN paper receipt · unsettled · no rewards
+                            or claims. Receipt SHA-256:{" "}
+                            <code className="wrap-anywhere">
+                              {r.wen.receiptSha256}
+                            </code>
+                          </p>
                         )}
-                    </article>
-                  ))
-              )}
-            </div>
-          </section>
-          <section className="panel">
-            <div className="panel-heading">
-              <h2>Task inbox</h2>
-              <Badge>DURABLE</Badge>
-            </div>
-            <div className="agent-record-body">
-              {v.notices.length === 0 ? (
-                <p>No task notifications.</p>
-              ) : (
-                v.notices
-                  .slice()
-                  .reverse()
-                  .map((n) => (
-                    <article className="memory-card" key={n.id}>
-                      <p>{n.text}</p>
-                      <small>{date(n.at)}</small>
-                      {!n.read ? (
-                        <button
-                          className="text-button"
-                          disabled={agents.busy}
-                          onClick={() =>
-                            void agents.change({
-                              action: "notice-read",
-                              id: n.id,
-                            })
-                          }
-                        >
-                          Mark read
-                        </button>
-                      ) : (
-                        <small>Read</small>
-                      )}
-                    </article>
-                  ))
-              )}
-            </div>
-          </section>
+                        {r.botId && (
+                          <p>
+                            Inputs: quantity {r.quantity}, fixed price{" "}
+                            {r.priceCents}, cost {r.costCents}, budget before{" "}
+                            {r.budgetBefore}
+                          </p>
+                        )}
+                        {r.news && (
+                          <p className="news-provenance">
+                            News snapshot {r.news.fetchId} · source {r.news.url}{" "}
+                            · retrieved {date(r.news.fetchedAt)} · content{" "}
+                            {r.news.bodySha256}
+                          </p>
+                        )}
+                        <small>Run {r.id}</small>
+                        {!r.wen &&
+                          !r.botId &&
+                          [
+                            "reminder-v1",
+                            "ai-step-v1/reminder-v1",
+                            "ai-step-v1",
+                          ].includes(r.strategy) && (
+                            <button
+                              className="secondary"
+                              disabled={agents.busy}
+                              onClick={async () => {
+                                if (
+                                  await agents.change({
+                                    action: "task-run-explain",
+                                    id: r.id,
+                                  })
+                                ) {
+                                  setSession("");
+                                  setSearch("");
+                                  navigate("agents/chat");
+                                }
+                              }}
+                            >
+                              Discuss run
+                            </button>
+                          )}
+                      </article>
+                    ))
+                )}
+              </div>
+            </section>
+            <section className="panel">
+              <div className="panel-heading">
+                <h2>Task inbox</h2>
+                <Badge>DURABLE</Badge>
+              </div>
+              <div className="agent-record-body">
+                {v.notices.length === 0 ? (
+                  <p>No task notifications.</p>
+                ) : (
+                  v.notices
+                    .slice()
+                    .reverse()
+                    .map((n) => (
+                      <article className="memory-card" key={n.id}>
+                        <p>{n.text}</p>
+                        <small>{date(n.at)}</small>
+                        {!n.read ? (
+                          <button
+                            className="text-button"
+                            disabled={agents.busy}
+                            onClick={() =>
+                              void agents.change({
+                                action: "notice-read",
+                                id: n.id,
+                              })
+                            }
+                          >
+                            Mark read
+                          </button>
+                        ) : (
+                          <small>Read</small>
+                        )}
+                      </article>
+                    ))
+                )}
+              </div>
+            </section>
+          </div>
+          <details
+            className="scheduled-ai-disclosure"
+            open={v.tasks.some((t) => t.ai)}
+          >
+            <summary>Scheduled AI · fixtures</summary>
+            <ScheduledAITasks view={v} />
+          </details>
         </>
       )}
     </div>

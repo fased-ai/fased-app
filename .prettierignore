@@ -9,3 +9,6 @@ internal/core/testdata/wen-research-strategy.json
 internal/core/testdata/wen-saved-history.json
 internal/wenstrategy/testdata/conformance.json
 internal/wenstrategy/testdata/preview-strategy.json
+
+# Exact, content-pinned shared WEN presentation artifact.
+web/src/vendor/wen-design/style.css
