@@ -66,8 +66,9 @@ try {
   );
   pass(
     "schemaPauseAndApprovalFeatures",
-    contracts[0].state[0].versions.min === 15 &&
-      contracts[0].state[0].versions.max === 15 &&
+    contracts[0].state[0].versions.min === 16 &&
+      contracts[0].state[0].versions.max === 16 &&
+      contracts[0].state[0].features.includes("agents-playbooks-v1") &&
       contracts[0].state[0].features.includes("agents-local-v1") &&
       contracts[0].state[0].features.includes("agents-wen-paper-v1") &&
       contracts[0].state[0].features.includes("wen-research-v1") &&

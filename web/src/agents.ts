@@ -178,6 +178,7 @@ export type WENPaperResult = {
   };
 };
 export type AgentTask = {
+  playbook?: { id: string; version: number; sha256: string };
   wen?: WENPaperPlan;
   news?: TaskNewsInput;
   ai?: TaskAIStep;
@@ -304,7 +305,42 @@ export type TaskReminderReview = {
   expiresAt: number;
   digest: string;
 };
+export type PlaybookVersion = {
+  version: number;
+  name: string;
+  text: string;
+  newsSourceId: string;
+  newsMaxAgeSeconds: number;
+  limits: AILimits;
+  createdAt: number;
+};
+export type AgentPlaybook = {
+  id: string;
+  profileId: string;
+  kind: string;
+  versions: PlaybookVersion[];
+};
+export type AgentPlaybookDraft = {
+  profileId: string;
+  revision: number;
+  selected: PlaybookVersion;
+  source: NewsSource;
+  command: AgentCommand;
+};
+export type PlaybookReview = {
+  version: string;
+  profileId: string;
+  revision: number;
+  bootId: string;
+  expiresAt: number;
+  task: AgentTask;
+  news: NewsFetch;
+  digest: string;
+  command: AgentCommand;
+};
 export type AgentView = {
+  playbooks?: AgentPlaybook[];
+  playbookReview?: PlaybookReview;
   taskReminderReview?: TaskReminderReview;
   reminderReview?: ReminderReview;
   newsSources: NewsSource[];
@@ -411,6 +447,8 @@ export type AgentEvidenceView = {
     }
 );
 export type AgentCommand = {
+  playbookVersion?: number;
+  sessionId?: string;
   memorySelection?: AIMemorySelection;
   evidenceSelection?: AIEvidenceSelection;
   wen?: WENPaperInput;

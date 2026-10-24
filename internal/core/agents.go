@@ -70,19 +70,20 @@ type PaperBot struct {
 	SpentCents  int64  `json:"spentCents"`
 }
 type AgentTask struct {
-	WEN             *WENPaperPlan  `json:"wen,omitempty"`
-	News            *TaskNewsInput `json:"news,omitempty"`
-	AI              *TaskAIStep    `json:"ai,omitempty"`
-	ID              string         `json:"id"`
-	ProfileID       string         `json:"profileId"`
-	Name            string         `json:"name"`
-	Text            string         `json:"text"`
-	BotID           string         `json:"botId"`
-	IntervalSeconds int64          `json:"intervalSeconds"`
-	MaxRuns         int            `json:"maxRuns"`
-	Runs            int            `json:"runs"`
-	NextAt          int64          `json:"nextAt"`
-	State           string         `json:"state"`
+	Playbook        *PlaybookOrigin `json:"playbook,omitempty"`
+	WEN             *WENPaperPlan   `json:"wen,omitempty"`
+	News            *TaskNewsInput  `json:"news,omitempty"`
+	AI              *TaskAIStep     `json:"ai,omitempty"`
+	ID              string          `json:"id"`
+	ProfileID       string          `json:"profileId"`
+	Name            string          `json:"name"`
+	Text            string          `json:"text"`
+	BotID           string          `json:"botId"`
+	IntervalSeconds int64           `json:"intervalSeconds"`
+	MaxRuns         int             `json:"maxRuns"`
+	Runs            int             `json:"runs"`
+	NextAt          int64           `json:"nextAt"`
+	State           string          `json:"state"`
 }
 type AgentRun struct {
 	WEN          *WENPaperResult `json:"wen,omitempty"`
@@ -110,6 +111,7 @@ type AgentNotice struct {
 	Read      bool   `json:"read"`
 }
 type agentDocument struct {
+	Playbooks     []AgentPlaybook      `json:"playbooks,omitempty"`
 	NewsSources   []NewsSource         `json:"newsSources"`
 	NewsFetches   []NewsFetch          `json:"newsFetches"`
 	Profiles      []AgentProfile       `json:"profiles"`
@@ -125,6 +127,8 @@ type agentDocument struct {
 	WENRehearsal  *wenSessionWorkspace `json:"wenRehearsal,omitempty"`
 }
 type AgentView struct {
+	Playbooks            []AgentPlaybook     `json:"playbooks"`
+	PlaybookReview       *PlaybookReview     `json:"playbookReview,omitempty"`
 	TaskReminderReview   *TaskReminderReview `json:"taskReminderReview,omitempty"`
 	ReminderReview       *ReminderReview     `json:"reminderReview,omitempty"`
 	NewsSources          []NewsSource        `json:"newsSources"`
@@ -148,6 +152,8 @@ type AgentView struct {
 // Optional fields are inert data for a fixed action; unknown fields/actions are
 // rejected. No arbitrary callback, URL, model tool or shell can be submitted.
 type AgentCommand struct {
+	PlaybookVersion      int                  `json:"playbookVersion,omitempty"`
+	SessionID            string               `json:"sessionId,omitempty"`
 	EvidenceSelection    *AIEvidenceSelection `json:"evidenceSelection,omitempty"`
 	MemorySelection      *AIMemorySelection   `json:"memorySelection,omitempty"`
 	wenResearchValidated bool
@@ -227,6 +233,9 @@ func readAgents(ctx context.Context, r snapshotReader) (agentDocument, int64, er
 			}
 			if e == nil {
 				_, e = wenSessionStorage(d)
+				if e == nil {
+					e = validatePlaybookStorage([]byte(b), d)
+				}
 			}
 		}
 	}
@@ -248,6 +257,12 @@ func agentView(d agentDocument, revision int64, profile, query string, now int64
 		return AgentView{}, errors.New("profile not found")
 	}
 	v := AgentView{NewsSources: []NewsSource{}, NewsFetches: []NewsFetch{}, Revision: revision, ProfileID: profile, Profiles: d.Profiles, Sessions: []AgentSession{}, Messages: []AgentMessage{}, Memories: []AgentMemory{}, Bots: []PaperBot{}, Tasks: []AgentTask{}, Runs: []AgentRun{}, Notices: []AgentNotice{}, AIRequests: []AgentAIRequest{}}
+	v.Playbooks = []AgentPlaybook{}
+	for _, p := range d.Playbooks {
+		if p.ProfileID == profile {
+			v.Playbooks = append(v.Playbooks, p)
+		}
+	}
 	for _, s := range d.NewsSources {
 		if s.ProfileID == profile {
 			v.NewsSources = append(v.NewsSources, s)
@@ -339,6 +354,9 @@ func validAgentText(v string, max int, required bool) bool {
 	return (!required || strings.TrimSpace(v) != "") && len(v) <= max && !strings.ContainsRune(v, 0)
 }
 func agentCapacity(d agentDocument) error {
+	if e := validatePlaybooks(d); e != nil {
+		return e
+	}
 	b, e := json.Marshal(d)
 	if e != nil {
 		return e
@@ -390,6 +408,9 @@ func (s *Store) ChangeAgents(ctx context.Context, c AgentCommand) (AgentView, er
 	return s.changeAgents(ctx, c, false)
 }
 func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) (AgentView, error) {
+	if (c.PlaybookVersion != 0 || c.SessionID != "") && !strings.HasPrefix(c.Action, "playbook-") {
+		return AgentView{}, errors.New("playbook selectors require a playbook action")
+	}
 	if c.EvidenceSelection != nil && c.Action != "ai-prepare" {
 		return AgentView{}, errors.New("evidence selection is only supported for a manual AI review")
 	}
@@ -442,6 +463,22 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		}
 	}
 	switch c.Action {
+	case "playbook-save":
+		if e = savePlaybook(&d, c, profile, id, now); e != nil {
+			return AgentView{}, e
+		}
+	case "playbook-run-review":
+		r, err := s.reviewPlaybook(d, c, profile, revision, now)
+		if err != nil {
+			return AgentView{}, err
+		}
+		v, err := agentView(d, revision, profile, "", now)
+		v.PlaybookReview = &r
+		return v, err
+	case "playbook-run-create":
+		if e = s.createPlaybookRun(&d, c, profile, revision, now, fixture); e != nil {
+			return AgentView{}, e
+		}
 	case "wen-research-chat":
 		if e = s.captureWENResearchContext(ctx, tx, &d, c, profile, id, now); e != nil {
 			return AgentView{}, e

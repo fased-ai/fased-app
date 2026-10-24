@@ -81,6 +81,298 @@ test.afterEach(async () => {
   }
 });
 
+test("reviewed playbooks keep versions and fresh consent through one fixture digest, CLI, restart and memory", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(90000);
+  page.setDefaultTimeout(12000);
+  await stop();
+  await start(true);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+  });
+  await page.goto(url + "/#agents/tasks");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const profileId = "news-researcher";
+  const read = () => privateCLI(["agents", "--profile", profileId]);
+  const command = async (c: object) =>
+    privateCLI(["agents", "--request-stdin"], {
+      profileId,
+      revision: (await read()).revision,
+      ...c,
+    });
+  await page
+    .locator(".local-profile-picker")
+    .getByRole("button", { name: /News Researcher/ })
+    .click();
+  const panel = page.getByRole("region", {
+    name: "Agent playbooks",
+    exact: true,
+  });
+  await panel
+    .getByRole("button", { name: "Add fixture news source", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).newsSources.length).toBe(1);
+  await panel
+    .getByRole("button", { name: "Fetch fixture headlines", exact: true })
+    .click();
+  await expect
+    .poll(async () => (await read()).newsFetches[0]?.state)
+    .toBe("completed");
+  await expect(
+    panel.getByRole("button", { name: "Fetch fixture headlines", exact: true }),
+  ).toBeEnabled();
+  let v = await read();
+  await panel
+    .getByRole("button", { name: "New playbook", exact: true })
+    .click();
+  await panel
+    .getByRole("textbox", { name: "Playbook name", exact: true })
+    .fill("Fixture morning digest");
+  await panel
+    .getByRole("button", { name: "Save playbook", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).playbooks.length).toBe(1);
+  v = await read();
+  const id = v.playbooks[0].id;
+  const original = v.playbooks[0].versions[0];
+  expect(v.tasks).toHaveLength(0);
+  expect(v.aiRequests).toHaveLength(0);
+  expect(v.newsFetches).toHaveLength(1);
+  await panel
+    .getByRole("button", { name: "Edit: Fixture morning digest", exact: true })
+    .click();
+  await panel
+    .getByRole("textbox", { name: "Digest prompt", exact: true })
+    .fill(
+      "Summarize the fixture headlines and explain uncertainty without trading advice.",
+    );
+  await panel
+    .getByRole("button", { name: "Save new version", exact: true })
+    .click();
+  await expect
+    .poll(async () => (await read()).playbooks[0].versions.length)
+    .toBe(2);
+  v = await read();
+  expect(v.playbooks[0].versions[0]).toEqual(original);
+  const d = await privateCLI([
+    "agents",
+    "--profile",
+    profileId,
+    "--playbook-draft",
+    id,
+    "--playbook-version",
+    "1",
+  ]);
+  expect(d.selected).toEqual(original);
+  expect(d.command.action).toBe("playbook-run-review");
+  await expect(
+    privateCLI([
+      "agents",
+      "--profile",
+      "trading-analyst",
+      "--playbook-draft",
+      id,
+      "--playbook-version",
+      "1",
+    ]),
+  ).rejects.toThrow();
+  await expect(
+    privateCLI([
+      "agents",
+      "--profile",
+      profileId,
+      "--playbook-draft",
+      id,
+      "--playbook-version",
+      "1",
+      "--search",
+      "",
+    ]),
+  ).rejects.toThrow();
+  const beforeRestart = await read();
+  const listen = new URL(url).host;
+  await stop();
+  await start(true, listen);
+  await page.reload();
+  await expect(
+    panel.getByRole("button", {
+      name: "Review: Fixture morning digest",
+      exact: true,
+    }),
+  ).toBeVisible();
+  expect((await read()).playbooks).toEqual(beforeRestart.playbooks);
+  await panel
+    .getByRole("button", {
+      name: "Review: Fixture morning digest",
+      exact: true,
+    })
+    .click();
+  await panel
+    .getByRole("button", { name: "Create digest conversation", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).sessions.length).toBe(1);
+  const sessionId = (await read()).sessions[0].id;
+  await panel
+    .getByRole("combobox", { name: "Digest conversation", exact: true })
+    .selectOption(sessionId);
+  const beforeReview = await read();
+  await panel
+    .getByRole("button", { name: "Prepare run review", exact: true })
+    .click();
+  await expect(
+    panel.getByText("Controlled paper-news headline", { exact: true }),
+  ).toBeVisible();
+  const consent = panel.getByRole("checkbox", {
+    name: "Approve this context, source policy and one fixture run",
+    exact: true,
+  });
+  const runButton = panel.getByRole("button", {
+    name: "Run fixture digest once",
+    exact: true,
+  });
+  await expect(runButton).toBeDisabled();
+  expect(await read()).toEqual(beforeReview);
+  await panel
+    .getByRole("button", { name: "Cancel run review", exact: true })
+    .click();
+  expect(await read()).toEqual(beforeReview);
+  await panel
+    .getByRole("button", {
+      name: "Review: Fixture morning digest",
+      exact: true,
+    })
+    .click();
+  await panel
+    .getByRole("combobox", { name: "Digest conversation", exact: true })
+    .selectOption(sessionId);
+  await panel
+    .getByRole("button", { name: "Prepare run review", exact: true })
+    .click();
+  await expect(consent).toBeVisible();
+  await command({
+    action: "memory-put",
+    text: "Fixture context correction",
+    source: "owner",
+  });
+  await expect(panel.getByRole("alert")).toContainText("records changed");
+  await expect(runButton).toBeDisabled();
+  await panel
+    .getByRole("button", { name: "Prepare run review", exact: true })
+    .click();
+  await expect(panel.getByRole("alert")).toHaveCount(0);
+  await consent.check();
+  await expect(runButton).toBeEnabled();
+  await page.screenshot({
+    path: resolve(
+      `.evidence/playbook-review-${isMobile ? "mobile" : "desktop"}.png`,
+    ),
+    fullPage: true,
+  });
+  await runButton.click();
+  await expect
+    .poll(async () => (await read()).tasks[0]?.state)
+    .toBe("completed");
+  const result = panel.getByRole("article", {
+    name: "Digest run Fixture morning digest",
+    exact: true,
+  });
+  await expect(result).toContainText("completed · 1/1 runs");
+  await expect(result).toContainText("Development fixture response");
+  v = await read();
+  expect(v.tasks).toHaveLength(1);
+  expect(v.tasks[0].playbook).toMatchObject({ id, version: 2 });
+  expect(v.runs).toHaveLength(1);
+  expect(v.notices).toHaveLength(1);
+  expect(v.aiRequests).toHaveLength(1);
+  expect(v.aiRequests[0].context).toContain("Controlled paper-news headline");
+  expect(v.aiRequests[0].news.fetchId).not.toBe(v.newsFetches[0].id);
+  await expect(
+    command({ action: "task-run", id: v.tasks[0].id }),
+  ).rejects.toThrow();
+  const savedResult = {
+    tasks: v.tasks,
+    runs: v.runs,
+    notices: v.notices,
+    aiRequests: v.aiRequests,
+  };
+  await result
+    .getByRole("button", { name: "Discuss digest", exact: true })
+    .click();
+  await expect(page).toHaveURL(/#agents\/chat$/);
+  v = await read();
+  const message = v.messages.at(-1);
+  expect(message.text).toContain(savedResult.runs[0].news.fetchId);
+  const article = page
+    .locator(".local-messages article")
+    .filter({ hasText: message.text });
+  await article
+    .getByRole("button", { name: "Remember this", exact: true })
+    .click();
+  const memory = article.getByRole("region", {
+    name: "Chat memory review",
+    exact: true,
+  });
+  await memory
+    .getByRole("textbox", { name: "Reviewed memory note", exact: true })
+    .fill("Fixture digest sources must be checked before reuse.");
+  expect((await read()).memories).toHaveLength(1);
+  await memory
+    .getByRole("button", { name: "Save reviewed memory", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).memories.length).toBe(2);
+  v = await read();
+  expect({
+    tasks: v.tasks,
+    runs: v.runs,
+    notices: v.notices,
+    aiRequests: v.aiRequests,
+  }).toEqual(savedResult);
+  const foreign = await privateCLI(["agents", "--profile", "trading-analyst"]);
+  expect(foreign.playbooks).toHaveLength(0);
+  expect(foreign.runs).toHaveLength(0);
+  await page.goto(url + "/#agents/tasks");
+  await stop();
+  await start(false, listen);
+  await page.reload();
+  await panel
+    .getByRole("button", {
+      name: "Review: Fixture morning digest",
+      exact: true,
+    })
+    .click();
+  await panel
+    .getByRole("combobox", { name: "Digest conversation", exact: true })
+    .selectOption(sessionId);
+  await panel
+    .getByRole("button", { name: "Prepare run review", exact: true })
+    .click();
+  await expect(consent).toBeDisabled();
+  await expect(runButton).toBeDisabled();
+  expect((await read()).runs).toHaveLength(1);
+  expect(external).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+});
+
 test("reviewed memory restoration shares inert UI CLI drafts, expiry, current-only context and restart", async ({
   page,
   isMobile,

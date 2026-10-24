@@ -173,7 +173,7 @@ func TestWENFixtureRunMigration(t *testing.T) {
 			}
 			var version int
 			n.db.QueryRow("PRAGMA user_version").Scan(&version)
-			if version != 15 {
+			if version != StateSchema {
 				t.Fatal("automatic storage unprotected")
 			}
 		})

@@ -9,6 +9,26 @@ import (
 func (h *HTTPHandler) agentsAPI(w http.ResponseWriter, r *http.Request, token string) {
 	if r.Method == http.MethodGet {
 		q := r.URL.Query()
+		if q.Has("playbook-draft") || q.Has("playbook-version") {
+			for key, values := range q {
+				if (key != "profile" && key != "playbook-draft" && key != "playbook-version") || len(values) != 1 {
+					writeError(w, 400, "one profile, playbook and version expected")
+					return
+				}
+			}
+			n, err := strconv.Atoi(q.Get("playbook-version"))
+			if err != nil || strconv.Itoa(n) != q.Get("playbook-version") {
+				writeError(w, 400, "select a saved playbook version")
+				return
+			}
+			v, err := h.store.AgentPlaybookDraft(r.Context(), q.Get("profile"), q.Get("playbook-draft"), n)
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			writeJSON(w, 200, v)
+			return
+		}
 		if q.Has("memory-restore-draft") || q.Has("memory-revision") {
 			for key, values := range q {
 				if (key != "profile" && key != "memory-restore-draft" && key != "memory-revision") || len(values) != 1 {

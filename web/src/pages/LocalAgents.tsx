@@ -15,6 +15,7 @@ import type {
   AgentView,
 } from "../agents";
 import "../agents.css";
+import { AgentPlaybooks } from "./AgentPlaybooks";
 import { ScheduledAITasks } from "./ScheduledAITasks";
 import { SavedReminderDraft } from "./SavedReminderDraft";
 import { AgentAIReview } from "./AgentAIReview";
@@ -726,6 +727,7 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
       )}
       {tab === "tasks" && (
         <>
+          <AgentPlaybooks key={v.profileId} view={v} />
           <section className="panel task-board">
             <div className="panel-heading">
               <h2>Bounded tasks</h2>

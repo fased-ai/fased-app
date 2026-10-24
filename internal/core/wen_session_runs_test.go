@@ -13,7 +13,7 @@ func TestWENFixtureRunAdmission(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("fixture-run inspect: %d %s", w.Code, w.Body.String())
 	}
-	if StateSchema != 15 {
+	if StateSchema < 15 {
 		t.Fatal("run consent requires schema15 protection")
 	}
 }

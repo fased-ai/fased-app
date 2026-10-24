@@ -104,9 +104,10 @@ func taskAIDigest(t AgentTask) string {
 		ID, Profile, Name, Text, BotID string
 		Interval                       int64
 		MaxRuns                        int
+		Playbook                       *PlaybookOrigin `json:",omitempty"`
 		News                           *TaskNewsInput
 		AI                             TaskAIStep
-	}{t.ID, t.ProfileID, t.Name, t.Text, t.BotID, t.IntervalSeconds, t.MaxRuns, newsPolicyForDigest(t.News), a})
+	}{t.ID, t.ProfileID, t.Name, t.Text, t.BotID, t.IntervalSeconds, t.MaxRuns, t.Playbook, newsPolicyForDigest(t.News), a})
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
