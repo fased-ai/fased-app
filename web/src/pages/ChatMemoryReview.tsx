@@ -15,23 +15,39 @@ export function ChatMemoryReview({
   sourceText: string;
   sessionId: string;
 }) {
-  const { agents } = useWorkspace();
+  const { agents, navigate } = useWorkspace();
   const [revision, setRevision] = useState<number>();
+  const [saved, setSaved] = useState(false);
   const [text, setText] = useState(sourceText);
   const [expiry, setExpiry] = useState("");
   if (revision === undefined)
     return (
-      <button
-        className="text-button"
-        disabled={agents.busy}
-        onClick={() => {
-          setText(sourceText);
-          setExpiry("");
-          setRevision(view.revision);
-        }}
-      >
-        Remember this
-      </button>
+      <>
+        {saved && (
+          <div className="agent-inline">
+            <p role="status">Memory saved.</p>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => navigate("agents/memory")}
+            >
+              Open Memory
+            </button>
+          </div>
+        )}
+        <button
+          className="text-button"
+          disabled={agents.busy}
+          onClick={() => {
+            setSaved(false);
+            setText(sourceText);
+            setExpiry("");
+            setRevision(view.revision);
+          }}
+        >
+          Remember this
+        </button>
+      </>
     );
   const stale = revision !== view.revision;
   return (
@@ -68,7 +84,10 @@ export function ChatMemoryReview({
                 : 0,
             })
             .then((ok) => {
-              if (ok) setRevision(undefined);
+              if (ok) {
+                setSaved(true);
+                setRevision(undefined);
+              }
             });
         }}
       >

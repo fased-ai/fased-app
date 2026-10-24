@@ -626,7 +626,9 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   expect(task.ai).toBeUndefined();
   expect(task.news).toBeUndefined();
   expect(task.wen).toBeUndefined();
-  await open("tasks");
+  await card.getByRole("button", { name: "Open Tasks", exact: true }).click();
+  await expect(page).toHaveURL(/#agents\/tasks$/);
+  expect((await read()).runs).toHaveLength(0);
   await page
     .getByRole("button", { name: `Run now: ${reminderName}`, exact: true })
     .click();
@@ -677,6 +679,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     .getByRole("button", { name: "Save reviewed memory", exact: true })
     .click();
   await expect.poll(async () => (await read()).memories.length).toBe(1);
+  await expect(runArticle.getByRole("status")).toHaveText("Memory saved.");
   v = await read();
   const note = v.memories[0];
   expect(note.text).toBe(noteText);
@@ -694,7 +697,11 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     note.id,
   ]);
   expect(recall.memories.map((m: any) => m.id)).toEqual([note.id]);
-  await open("memory");
+  await runArticle
+    .getByRole("button", { name: "Open Memory", exact: true })
+    .click();
+  await expect(page).toHaveURL(/#agents\/memory$/);
+  expect((await read()).memories).toHaveLength(1);
   await page
     .getByRole("searchbox", { name: "Search memories", exact: true })
     .fill("HEADLINE PROVENANCE");
@@ -3168,10 +3175,9 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
   // Synchronize the external CLI write through the existing profile refresh.
   await page.getByRole("button", { name: /^Trading Analyst / }).click();
   await expect(
-    page.getByText(
-      "Reminder task created: CLI reviewed reminder. Manage it in Tasks.",
-      { exact: true },
-    ),
+    page.getByText("Reminder task created: CLI reviewed reminder.", {
+      exact: true,
+    }),
   ).toBeVisible();
   await command({ action: "task-run", id: v.tasks[1].id });
   await expect(

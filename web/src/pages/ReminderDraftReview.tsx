@@ -9,7 +9,7 @@ export function ReminderDraftReview({
   view: AgentView;
   card: AgentAIRequest["cards"][number];
 }) {
-  const { agents } = useWorkspace();
+  const { agents, navigate } = useWorkspace();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(card.title);
   const [text, setText] = useState(card.text);
@@ -23,9 +23,16 @@ export function ReminderDraftReview({
   const created = view.tasks.find((t) => t.id === `chat-reminder:${card.id}`);
   if (created)
     return (
-      <p role="status">
-        Reminder task created: {created.name}. Manage it in Tasks.
-      </p>
+      <div className="agent-inline">
+        <p role="status">Reminder task created: {created.name}.</p>
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => navigate("agents/tasks")}
+        >
+          Open Tasks
+        </button>
+      </div>
     );
   if (!open)
     return (
