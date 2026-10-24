@@ -98,7 +98,7 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
   const [session, setSession] = useState("");
   const [sessionName, setSessionName] = useState("");
   const [search, setSearch] = useState("");
-  const [message, setMessage] = useState("");
+  const [messageDrafts, setMessageDrafts] = useState(new Map<string, string>());
   const [memoryID, setMemoryID] = useState("");
   const [memory, setMemory] = useState("");
   const [source, setSource] = useState("");
@@ -159,6 +159,17 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
   );
   const activeSession =
     matching.find((s) => s.id === session) ?? matching.at(-1);
+  const message = activeSession
+    ? (messageDrafts.get(activeSession.id) ?? "")
+    : "";
+  function updateMessage(sessionId: string, text: string) {
+    setMessageDrafts((drafts) => {
+      const next = new Map(drafts);
+      if (text) next.set(sessionId, text);
+      else next.delete(sessionId);
+      return next;
+    });
+  }
   function resetMemory() {
     setMemoryID("");
     setMemory("");
@@ -278,7 +289,7 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                           text: message,
                         })
                       )
-                        setMessage("");
+                        updateMessage(activeSession.id, "");
                     })}
                   >
                     <label>
@@ -287,7 +298,9 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                         required
                         maxLength={4000}
                         value={message}
-                        onChange={(e) => setMessage(e.target.value)}
+                        onChange={(e) =>
+                          updateMessage(activeSession.id, e.target.value)
+                        }
                         placeholder="Save context for this profile"
                       />
                     </label>

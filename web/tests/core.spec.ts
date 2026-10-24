@@ -81,6 +81,181 @@ test.afterEach(async () => {
   }
 });
 
+test("chat drafts stay with their conversation through search switching and a pending save", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(60000);
+  const external: string[] = [];
+  const writes: Record<string, unknown>[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (new URL(r.url()).pathname === "/api/v1/agents" && r.method() === "POST")
+      writes.push(r.postDataJSON());
+  });
+  await page.goto(url + "/#agents/chat");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const read = (id: string) => privateCLI(["agents", "--profile", id]);
+  const profiles = ["trading-analyst", "news-researcher", "wen-operator"];
+  const readAll = () => Promise.all(profiles.map(read));
+  const seed = async (profileId: string, name: string) => {
+    const v = await privateCLI(["agents", "--request-stdin"], {
+      action: "session-create",
+      profileId,
+      name,
+      revision: (await read(profileId)).revision,
+    });
+    return v.sessions.at(-1).id as string;
+  };
+  await seed("trading-analyst", "Earlier thread");
+  const laterId = await seed("trading-analyst", "Later thread");
+  await seed("news-researcher", "News thread");
+  const baseline = await readAll();
+  await page
+    .locator(".local-profile-picker")
+    .getByRole("button", { name: /^Trading Analyst / })
+    .click();
+  const threads = page.locator(".agent-session-list");
+  const message = page.getByRole("textbox", { name: "Message", exact: true });
+  const search = page.getByLabel("Search conversations", { exact: true });
+  const earlierDraft = "Unsent fixture context for the earlier thread.";
+  const laterDraft = "Fixture context saved only in the later thread.";
+  const earlierEdited = earlierDraft + " Edited while another thread saves.";
+  await threads
+    .getByRole("button", { name: "Earlier thread", exact: true })
+    .click();
+  await message.fill(earlierDraft);
+  await threads
+    .getByRole("button", { name: "Later thread", exact: true })
+    .click();
+  await expect(message).toHaveValue("");
+  await message.fill(laterDraft);
+  await threads
+    .getByRole("button", { name: "Earlier thread", exact: true })
+    .click();
+  await expect(message).toHaveValue(earlierDraft);
+  await search.fill("Later thread");
+  await expect(
+    page.getByRole("heading", { name: "Later thread", exact: true }),
+  ).toBeVisible();
+  await expect(message).toHaveValue(laterDraft);
+  expect(await readAll()).toEqual(baseline);
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let saving = false;
+  const routeURL = url + "/api/v1/agents";
+  await page.route(routeURL, async (route) => {
+    if (
+      route.request().method() === "POST" &&
+      route.request().postDataJSON().action === "message-add"
+    ) {
+      saving = true;
+      await gate;
+    }
+    await route.continue();
+  });
+  try {
+    await page
+      .getByRole("button", { name: "Save message", exact: true })
+      .click();
+    await expect.poll(() => saving).toBe(true);
+    await search.fill("Earlier thread");
+    await expect(message).toHaveValue(earlierDraft);
+    await message.fill(earlierEdited);
+    release();
+    await expect(
+      page.getByRole("button", { name: "Save message", exact: true }),
+    ).toBeEnabled();
+    await expect(message).toHaveValue(earlierEdited);
+  } finally {
+    release();
+    await page.unroute(routeURL);
+  }
+  await search.fill("");
+  await threads
+    .getByRole("button", { name: "Later thread", exact: true })
+    .click();
+  await expect(message).toHaveValue("");
+  await expect(
+    page.locator(".local-messages").getByText(laterDraft, { exact: true }),
+  ).toBeVisible();
+  await threads
+    .getByRole("button", { name: "Earlier thread", exact: true })
+    .click();
+  await expect(message).toHaveValue(earlierEdited);
+  await expect(
+    page.locator(".local-messages").getByText(laterDraft, { exact: true }),
+  ).toHaveCount(0);
+  await page
+    .locator(".local-profile-picker")
+    .getByRole("button", { name: /^News Researcher / })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "News thread", exact: true }),
+  ).toBeVisible();
+  await expect(message).toHaveValue("");
+  const after = await readAll();
+  expect(after[0].messages).toEqual([
+    expect.objectContaining({
+      profileId: "trading-analyst",
+      sessionId: laterId,
+      role: "user",
+      text: laterDraft,
+    }),
+    expect.objectContaining({
+      profileId: "trading-analyst",
+      sessionId: laterId,
+      role: "system",
+    }),
+  ]);
+  for (let i = 0; i < after.length; i++) {
+    if (i > 0) expect(after[i].messages).toEqual(baseline[i].messages);
+    for (const field of [
+      "profiles",
+      "sessions",
+      "memories",
+      "tasks",
+      "runs",
+      "notices",
+      "aiRequests",
+    ])
+      expect(after[i][field]).toEqual(baseline[i][field]);
+  }
+  expect(writes).toEqual([
+    expect.objectContaining({
+      action: "message-add",
+      profileId: "trading-analyst",
+      id: laterId,
+      text: laterDraft,
+    }),
+  ]);
+  expect(external).toEqual([]);
+  const preferences = await page.evaluate(() =>
+    Object.values(localStorage).join("\n"),
+  );
+  expect(preferences).not.toContain(earlierDraft);
+  expect(preferences).not.toContain(laterDraft);
+  await page.screenshot({
+    path: `.evidence/chat-drafts-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+});
+
 test("agent selection survives reload and core restart with scoped preference fallback", async ({
   page,
   isMobile,
