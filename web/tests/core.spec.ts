@@ -81,6 +81,117 @@ test.afterEach(async () => {
   }
 });
 
+test("periodic refresh follows the requested profile while a selection is pending", async ({
+  page,
+}) => {
+  test.setTimeout(45000);
+  const writes: string[] = [];
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (new URL(r.url()).pathname === "/api/v1/agents" && r.method() !== "GET")
+      writes.push(r.method());
+  });
+  await page.goto(url + "/#agents/chat");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const readAll = () =>
+    Promise.all(
+      ["wen-operator", "trading-analyst", "news-researcher"].map((id) =>
+        privateCLI(["agents", "--profile", id]),
+      ),
+    );
+  const before = await readAll();
+  const profile = (name: string) =>
+    page
+      .locator(".local-profile-picker")
+      .getByRole("button", { name: new RegExp(`^${name} `) });
+  await profile("Trading Analyst").click();
+  await expect(profile("Trading Analyst")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  let releaseSelection = () => {};
+  let releasePoll = () => {};
+  const selectionGate = new Promise<void>((resolve) => {
+    releaseSelection = resolve;
+  });
+  const pollGate = new Promise<void>((resolve) => {
+    releasePoll = resolve;
+  });
+  let selecting = false;
+  let pollRequest: Request | undefined;
+  const routeURL = "**/api/v1/agents?**";
+  await page.route(routeURL, async (route) => {
+    const request = route.request();
+    const selected = new URL(request.url()).searchParams.get("profile");
+    if (!selecting && selected === "news-researcher") {
+      selecting = true;
+      await selectionGate;
+    } else if (selecting && !pollRequest) {
+      pollRequest = request;
+      await pollGate;
+    }
+    await route.continue();
+  });
+  try {
+    await profile("News Researcher").click();
+    await expect.poll(() => selecting).toBe(true);
+    await expect.poll(() => !!pollRequest, { timeout: 12000 }).toBe(true);
+    const pollProfile = new URL(pollRequest!.url()).searchParams.get("profile");
+    releaseSelection();
+    await expect(profile("News Researcher")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    const response = pollRequest!.response();
+    releasePoll();
+    await (await response)!.finished();
+    // Retain the visible regression as well as its incorrect request identity.
+    if (pollProfile === "trading-analyst")
+      await expect(profile("Trading Analyst")).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    expect(pollProfile).toBe("news-researcher");
+    await expect(profile("News Researcher")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  } finally {
+    releaseSelection();
+    releasePoll();
+    await page.unroute(routeURL);
+  }
+  await page.reload();
+  await expect(profile("News Researcher")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(await readAll()).toEqual(before);
+  expect(writes).toEqual([]);
+  expect(external).toEqual([]);
+  const health = await (await page.request.get(url + "/api/v1/health")).json();
+  expect(
+    await page.evaluate(
+      (key) => localStorage.getItem(key),
+      `fased.agent-profile.v1:${health.instanceId}`,
+    ),
+  ).toBe("news-researcher");
+});
+
 test("chat drafts stay with their conversation through search switching and a pending save", async ({
   page,
   isMobile,

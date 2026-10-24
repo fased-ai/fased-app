@@ -437,6 +437,7 @@ export function useAgents(core: ReturnType<typeof useCore>) {
   const disconnected = useRef(false);
   const readSequence = useRef(0);
   const current = useRef<AgentView | null>(null);
+  const requestedProfile = useRef("");
   const generation = useRef(0);
   const writing = useRef(false);
   const preferenceKey = core.instanceId
@@ -461,7 +462,9 @@ export function useAgents(core: ReturnType<typeof useCore>) {
       const epoch = generation.current;
       const sequence = ++readSequence.current;
       try {
-        const selected = profile ?? current.current?.profileId ?? "";
+        const selected =
+          profile ??
+          (requestedProfile.current || current.current?.profileId || "");
         let v = await core.request<AgentView>(
           `agents?profile=${encodeURIComponent(selected)}`,
         );
@@ -504,6 +507,7 @@ export function useAgents(core: ReturnType<typeof useCore>) {
   useEffect(() => {
     generation.current++;
     current.current = null;
+    requestedProfile.current = "";
     setView(null);
     setError("");
     disconnected.current = false;
@@ -518,6 +522,7 @@ export function useAgents(core: ReturnType<typeof useCore>) {
     };
   }, [core.mode, core.instanceId, refresh]);
   async function select(profile: string) {
+    requestedProfile.current = profile;
     generation.current++;
     setError("");
     await refresh(profile).catch(() => {});
