@@ -11,13 +11,13 @@ import (
 )
 
 func setupWizard(in *bufio.Reader, out io.Writer, settings *core.Setup) error {
-	fmt.Fprintln(out, "Private core setup. These are preferences; no account or wallet is connected.")
+	fmt.Fprintln(out, "Fased preferences. Installation and the active connection are managed separately.")
 	for _, field := range []struct {
 		label   string
 		value   *string
 		choices string
 	}{
-		{"Run on", &settings.Host, "local/vps"},
+		{"Saved deployment preference", &settings.Host, "local/vps"},
 		{"Wallet preference", &settings.WalletMode, "skip/watch/external/automation"},
 		{"AI preference", &settings.Provider, "none/openai/anthropic/xai"},
 	} {

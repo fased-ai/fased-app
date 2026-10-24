@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 
-it("preserves the pinned WEN artifact while applying the approved R1 workspace tokens", () => {
+it("preserves the pinned WEN artifact while using the approved reference palette", () => {
   const root = new URL("./vendor/wen-design/", import.meta.url);
   const manifest = JSON.parse(
     readFileSync(new URL("manifest.json", root), "utf8"),
@@ -29,19 +29,9 @@ it("preserves the pinned WEN artifact while applying the approved R1 workspace t
     expect(css.toString()).toContain(`--wt-${key}:${value}`);
   }
   const host = readFileSync(new URL("./wen-app.css", import.meta.url), "utf8");
-  const workspaceTokens = {
-    bg: "#101016",
-    surface: "#191923",
-    raised: "#22222e",
-    border: "#2b2b38",
-    text: "#e8e7ed",
-    muted: "#93929f",
-    coral: "#ff682f",
-    cyan: "#3ec8bc",
-    violet: "#9a82ed",
-  };
-  for (const [key, value] of Object.entries(workspaceTokens))
-    expect(host).toMatch(new RegExp(`--wt-${key}:\\s*${value}`));
+  expect(host).not.toMatch(
+    /--wt-(?:bg|surface|raised|border|text|muted|coral|cyan|violet):/,
+  );
   expect(css.toString()).toContain("prefers-reduced-motion");
   expect(
     readFileSync(new URL("./styles.css", import.meta.url), "utf8"),

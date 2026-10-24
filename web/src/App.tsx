@@ -158,12 +158,18 @@ function WorkspaceShell() {
                 </button>
               )}
               <div className="instance-pill" aria-label="Instance location">
-                {state.setup.host === "local" ? (
+                {core.connection?.location !== "remote" ? (
                   <Monitor size={13} />
                 ) : (
                   <Server size={13} />
                 )}
-                <span>{state.setup.host === "local" ? "Local" : "Remote"}</span>
+                <span>
+                  {core.connection
+                    ? core.connection.location === "local"
+                      ? "Local"
+                      : "Remote"
+                    : "Preview"}
+                </span>
                 <span className="dot" />
               </div>
               <div className="search-wrap">

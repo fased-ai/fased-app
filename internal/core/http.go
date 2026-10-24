@@ -28,6 +28,7 @@ type HTTPHandler struct {
 	origins           map[string]bool
 	hosts             map[string]bool
 	publicHost        string
+	instanceLocation  string
 	assets            fs.FS
 	authSlots         chan struct{}
 	limiter           struct {
@@ -38,7 +39,7 @@ type HTTPHandler struct {
 }
 
 func NewHTTPHandler(store *Store, baseURL, publicOrigin string, assets fs.FS) (*HTTPHandler, error) {
-	h := &HTTPHandler{store: store, origins: map[string]bool{}, hosts: map[string]bool{}, assets: assets, authSlots: make(chan struct{}, 2)}
+	h := &HTTPHandler{store: store, origins: map[string]bool{}, hosts: map[string]bool{}, assets: assets, authSlots: make(chan struct{}, 2), instanceLocation: "local"}
 	if _, err := rand.Read(h.wenResearchKey[:]); err != nil {
 		return nil, err
 	}
@@ -97,7 +98,13 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 405, "method not allowed")
 			return
 		}
-		writeJSON(w, 200, h.store.Health())
+		health := h.store.Health()
+		location, transport := h.instanceLocation, "loopback"
+		if h.publicHost != "" && r.Host == h.publicHost {
+			location, transport = "remote", "private-https"
+		}
+		health.Connection = &ConnectionInfo{Location: location, Transport: transport}
+		writeJSON(w, 200, health)
 		return
 	case "/api/v1/auth/state":
 		if r.Method != http.MethodGet {

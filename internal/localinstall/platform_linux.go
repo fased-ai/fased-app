@@ -82,6 +82,9 @@ func linuxDefinition(p Paths, o Options, bubblewrap bool) ([]byte, error) {
 		return nil, err
 	}
 	args := []string{quote(filepath.Join(p.Root, "fased-app")), "serve", "--data-dir", quote(p.Data), "--listen", quote(o.Listen), "--require-sandbox", "--installation-root", quote(p.Root)}
+	if o.Location != "" {
+		args = append(args, "--instance-location", quote(o.Location))
+	}
 	if o.PublicOrigin != "" {
 		args = append(args, "--public-origin", quote(o.PublicOrigin))
 	}

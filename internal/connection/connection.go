@@ -1,0 +1,95 @@
+// Package connection verifies an explicitly chosen Fased browser destination.
+// It has no installation, credential, signer or service-manager authority.
+package connection
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"github.com/fased-ai/fased-app/internal/core"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+)
+
+var identity = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
+
+func Origin(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if len(value) > 2048 || strings.ContainsAny(value, "\\\r\n\t\x00") {
+		return "", errors.New("enter an HTTPS instance address, or HTTP loopback for an SSH tunnel")
+	}
+	u, e := url.Parse(value)
+	if e != nil || u.Host == "" || u.User != nil || u.Opaque != "" || (u.Path != "" && u.Path != "/") || u.RawPath != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return "", errors.New("use an instance origin without credentials, path, query or fragment")
+	}
+	host := strings.ToLower(u.Hostname())
+	ip := net.ParseIP(host)
+	if u.Scheme != "https" && !(u.Scheme == "http" && (host == "localhost" || ip != nil && ip.IsLoopback())) {
+		return "", errors.New("Remote requires HTTPS; HTTP is allowed only for a loopback SSH tunnel")
+	}
+	if strings.HasSuffix(u.Host, ":") {
+		return "", errors.New("invalid instance port")
+	}
+	if u.Port() != "" {
+		if n, e := strconv.Atoi(u.Port()); e != nil || n < 1 || n > 65535 {
+			return "", errors.New("invalid instance port")
+		}
+	}
+	u.Host = strings.ToLower(u.Host)
+	return strings.TrimSuffix(u.String(), "/"), nil
+}
+
+type Result struct {
+	URL                 string `json:"url"`
+	InstanceID          string `json:"instanceId"`
+	Location            string `json:"location"`
+	Transport           string `json:"transport"`
+	InstallationCreated bool   `json:"installationCreated"`
+}
+
+func Probe(ctx context.Context, value, expected string) (Result, error) {
+	transport := &http.Transport{Proxy: nil, TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 3 * time.Second, DisableCompression: true}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("instance redirects are refused") }}
+	return probe(ctx, value, expected, client)
+}
+func probe(ctx context.Context, value, expected string, client *http.Client) (Result, error) {
+	origin, e := Origin(value)
+	if e != nil {
+		return Result{}, e
+	}
+	if expected != "" && !identity.MatchString(expected) {
+		return Result{}, errors.New("invalid expected instance identity")
+	}
+	req, e := http.NewRequestWithContext(ctx, "GET", origin+"/api/v1/health", nil)
+	if e != nil {
+		return Result{}, e
+	}
+	req.Header.Set("Accept", "application/json")
+	response, e := client.Do(req)
+	if e != nil {
+		return Result{}, errors.New("cannot verify this Fased instance; check its address, private access and TLS")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != 200 || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/json") {
+		return Result{}, errors.New("destination is not a compatible Fased instance")
+	}
+	b, e := io.ReadAll(io.LimitReader(response.Body, 16*1024+1))
+	if e != nil || len(b) > 16*1024 {
+		return Result{}, errors.New("invalid instance response")
+	}
+	var h core.Health
+	if json.Unmarshal(b, &h) != nil || h.Status != "ok" || h.APIVersion != core.APIVersion || !identity.MatchString(h.InstanceID) || h.Connection == nil || (h.Connection.Location != "local" && h.Connection.Location != "remote") || (h.Connection.Transport != "loopback" && h.Connection.Transport != "private-https") {
+		return Result{}, errors.New("destination is not a compatible Fased instance")
+	}
+	if expected != "" && h.InstanceID != expected {
+		return Result{}, errors.New("instance identity changed; no connection opened")
+	}
+	return Result{URL: origin, InstanceID: h.InstanceID, Location: h.Connection.Location, Transport: h.Connection.Transport}, nil
+}

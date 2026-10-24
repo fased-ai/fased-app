@@ -94,7 +94,7 @@ try {
   child.stderr.on("data", (b) => (output += String(b)));
   let dialog;
   for (let i = 0; i < 150; i++) {
-    dialog = windows("Install Fased App")[0];
+    dialog = windows("Set up Fased")[0];
     if (dialog) break;
     if (childDone) throw new Error("desktop exited before consent: " + output);
     await pause(100);

@@ -36,6 +36,9 @@ func definition(p Paths, o Options) ([]byte, error) {
 		return nil, err
 	}
 	args := []string{filepath.Join(p.Root, engineName), "serve", "--data-dir", p.Data, "--listen", o.Listen}
+	if o.Location != "" {
+		args = append(args, "--instance-location", o.Location)
+	}
 	if o.PublicOrigin != "" {
 		args = append(args, "--public-origin", o.PublicOrigin)
 	}

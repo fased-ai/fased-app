@@ -192,3 +192,13 @@ func (s *Server) Close(ctx context.Context) error {
 	_ = os.Remove(filepath.Join(s.dir, "endpoint.json"))
 	return errors.Join(err, s.Store.Close(), s.Lock.Close())
 }
+
+// ConfigureConnection is called before Serve using the installed service's host
+// profile. A browser preference can never change this runtime descriptor.
+func (s *Server) ConfigureConnection(location string) error {
+	if location != "local" && location != "remote" {
+		return errors.New("instance location must be local or remote")
+	}
+	s.HTTP.Handler.(*HTTPHandler).instanceLocation = location
+	return nil
+}

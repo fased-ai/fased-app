@@ -37,6 +37,9 @@ func escape(s string) string {
 }
 func taskArgs(p Paths, o Options) string {
 	args := []string{"serve", "--data-dir", p.Data, "--listen", o.Listen}
+	if o.Location != "" {
+		args = append(args, "--instance-location", o.Location)
+	}
 	if o.PublicOrigin != "" {
 		args = append(args, "--public-origin", o.PublicOrigin)
 	}

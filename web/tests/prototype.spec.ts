@@ -252,7 +252,7 @@ test("shared WEN Activity distinguishes browser demo notices", async ({
   await expect(event).toBeVisible();
   await expect(event.getByText("DEMO", { exact: true })).toBeVisible();
   await expect(activity.getByText("LOCAL ONLY", { exact: true })).toBeVisible();
-  await expect(activity).toHaveCSS("background-color", "rgb(25, 25, 35)");
+  await expect(activity).toHaveCSS("background-color", "rgb(30, 29, 41)");
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

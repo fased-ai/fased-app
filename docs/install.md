@@ -65,6 +65,22 @@ acquisition and actual supported-host acceptance remain separate gates.
 [Ubuntu's AppArmor guide](https://ubuntu.com/server/docs/how-to/security/apparmor/)
 documents profile operation.
 
+## Choose Local or Remote
+
+The terminal installer offers **Local** (install on this computer), **Remote** (install on this server) and **Connect** (open an existing instance). Connect verifies the selected Fased API/instance and opens its browser UI; it never installs or starts a local engine. Remote installation retains the `--vps` CLI alias and requires Linux autostart plus explicit SSH or Tailscale access. Tailscale enrollment, HTTPS and operator permissions remain owner prerequisites; no tailnet, SSH or firewall policy is reset.
+
+For an existing instance:
+
+```sh
+fased-app connect --url https://your-instance.ts.net
+```
+
+Use `--print` to verify/print without opening a browser, and optional `--instance-id ID` to require an already known identity. Native clients accept `fased-desktop --connect URL`; choosing **No** in first-launch Local installation also leaves the Remote connection screen available without creating an engine. Remote opens in the system browser. The native connection operation is a fixed, origin-checked verify/open action, not a network credential proxy or a remote service installer.
+
+HTTPS is required for network destinations. HTTP is admitted only for explicit loopback/localhost SSH-forwarding addresses. Credentials, paths, query strings, fragments, redirects, incompatible APIs/identities, oversized responses and untrusted TLS fail before connection. CLI/native opening carries the verified public instance ID to the destination UI; the UI checks health before showing owner setup/sign-in or sending a password. Public health discovery omits credentials. Browser-to-browser connection opens the selected origin in a separate tab with no opener or copied session; its UI verifies its own runtime before sign-in. No local credential, conversation or setup preference is forwarded.
+
+The connection row shows the connected runtime profile, transport and public instance ID. Private HTTPS is displayed as Remote; a server installed as Remote also reports Remote through an SSH loopback connection. The stored deployment preference remains compatible metadata and is inspectable only in Diagnostics. Changing it does not move the runtime or change connection state. Existing owner data and authentication are reused across same-instance restart; connecting elsewhere leaves them on the original instance.
+
 ## Install
 
 Extract an acquired package into its own directory. On Linux, from the extracted
@@ -74,7 +90,7 @@ directory, run:
 ./fased-app install --bundle . --interactive
 ```
 
-The wizard chooses local/VPS, private access and login autostart. It verifies the
+The wizard chooses Local/Remote installation or an existing Remote connection, private access and login autostart. It verifies the
 package's platform and file inventory before installation. This detects mixed
 or corrupt package files; a checksum in the package is **not** independent proof
 of who published it. Public bootstrap trust is a separate release requirement.

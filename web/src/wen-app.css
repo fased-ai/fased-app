@@ -1,15 +1,6 @@
 /* Fased workspace: compact adjoining panes, shared semantic tokens and controls.
    Product pages retain their records and permission boundaries. */
 :root.wt {
-  --wt-bg: #101016;
-  --wt-surface: #191923;
-  --wt-raised: #22222e;
-  --wt-border: #2b2b38;
-  --wt-text: #e8e7ed;
-  --wt-muted: #93929f;
-  --wt-coral: #ff682f;
-  --wt-violet: #9a82ed;
-  --wt-cyan: #3ec8bc;
   --bg: var(--wt-bg);
   --panel: var(--wt-surface);
   --line: var(--wt-border);
@@ -376,6 +367,70 @@
   border-radius: 4px;
   background: var(--panel);
   box-shadow: none;
+  min-width: 0;
+}
+/* Instance/setup rows share one aligned layout. */
+.wt .workspace-metrics {
+  display: flex;
+  gap: 0;
+  margin: 12px 0;
+  border-block: 1px solid var(--line);
+}
+.wt .workspace-metrics > div {
+  flex: 1;
+  padding: 12px 16px;
+}
+.wt .workspace-metrics > div + div {
+  border-left: 1px solid var(--line);
+}
+.wt .workspace-metrics dt {
+  font-size: 12px;
+  color: var(--wt-muted);
+}
+.wt .workspace-metrics dd {
+  margin: 5px 0 0;
+  font-size: 16px;
+}
+.wt .workspace-rows {
+  display: flex;
+  flex-direction: column;
+}
+.wt .workspace-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--wt-text);
+}
+.wt .workspace-row + .workspace-row {
+  border-top: 1px solid var(--line);
+}
+.wt .workspace-row:hover {
+  background: var(--wt-raised);
+}
+.wt .workspace-row-copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+.wt .workspace-row-copy > span {
+  color: var(--wt-muted);
+  font-size: 12px;
+}
+.wt .workspace-row > .badge {
+  flex: none;
+}
+.wt .workspace-terminals {
+  grid-column: 1/-1;
+}
+.wt .settings-primary {
   min-width: 0;
 }
 .wt .overview-workspace,

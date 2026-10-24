@@ -4,7 +4,7 @@ import { terminalData } from "../fixtures";
 import { useWorkspace } from "../workspace";
 
 export function Overview() {
-  const { state, dispatch, setSetupOpen, navigate } = useWorkspace();
+  const { state, core, dispatch, setSetupOpen, navigate } = useWorkspace();
   const steps = [
     {
       title: state.setup.complete ? "Review setup" : "Set up workspace",
@@ -38,8 +38,14 @@ export function Overview() {
           <dd>{state.profiles.length}</dd>
         </div>
         <div>
-          <dt>Deployment preference</dt>
-          <dd>{state.setup.host === "vps" ? "Remote" : "Local"}</dd>
+          <dt>Connection</dt>
+          <dd>
+            {core.connection
+              ? core.connection.location === "remote"
+                ? "Remote"
+                : "Local"
+              : "Preview"}
+          </dd>
         </div>
         <div>
           <dt>Financial execution</dt>

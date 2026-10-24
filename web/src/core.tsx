@@ -9,6 +9,21 @@ import {
 } from "react";
 import type { PrototypeState } from "./state";
 export type CoreSetup = { revision: number; settings: PrototypeState["setup"] };
+export type InstanceConnection = {
+  instanceId: string;
+  location: "local" | "remote";
+  transport: "loopback" | "private-https";
+};
+type Health = {
+  status: string;
+  apiVersion: string;
+  instanceId: string;
+  version: string;
+  connection: {
+    location: "local" | "remote";
+    transport: "loopback" | "private-https";
+  };
+};
 type Mode =
   "loading" | "prototype" | "unclaimed" | "locked" | "ready" | "error";
 const sessionKey = "fased.core.session.v1";
@@ -27,6 +42,10 @@ function useCoreState() {
   const [pending, setPending] = useState({ generation: 0, count: 0 });
   const [instanceId, setInstanceId] = useState("");
   const [version, setVersion] = useState("");
+  const [connection, setConnection] = useState<InstanceConnection | null>(null);
+  const connectedID = useRef(
+    new URL(location.href).searchParams.get("instance") ?? "",
+  );
   const record = useRef<CoreSetup | null>(null);
   const csrf = useRef("");
   const token = useRef("");
@@ -71,7 +90,8 @@ function useCoreState() {
     ): Promise<T> => {
       const epoch = authGeneration.current;
       const headers: Record<string, string> = {};
-      if (token.current) headers.Authorization = `Bearer ${token.current}`;
+      if (token.current && route !== "health")
+        headers.Authorization = `Bearer ${token.current}`;
       if (method !== "GET") {
         headers["Content-Type"] = "application/json";
         if (csrf.current) headers["X-CSRF-Token"] = csrf.current;
@@ -80,7 +100,7 @@ function useCoreState() {
         method,
         signal,
         headers,
-        credentials: "same-origin",
+        credentials: route === "health" ? "omit" : "same-origin",
         cache: "no-store",
         body: body === undefined ? undefined : JSON.stringify(body),
       });
@@ -107,9 +127,28 @@ function useCoreState() {
     },
     [lock],
   );
+  const inspect = useCallback(async () => {
+    const health = await request<Health>("health");
+    if (
+      health.status !== "ok" ||
+      health.apiVersion !== "1" ||
+      !/^[A-Za-z0-9_-]{16,128}$/.test(health.instanceId) ||
+      !health.connection ||
+      !["local", "remote"].includes(health.connection.location) ||
+      !["loopback", "private-https"].includes(health.connection.transport)
+    )
+      throw new Error("This address is not a compatible Fased instance.");
+    if (connectedID.current && connectedID.current !== health.instanceId)
+      throw new Error(
+        "Instance identity changed. Reopen Fased to choose this instance.",
+      );
+    connectedID.current = health.instanceId;
+    return health;
+  }, [request]);
   const refresh = useCallback(async () => {
     const epoch = authGeneration.current;
     try {
+      const health = await inspect();
       const auth = await request<{
         claimed: boolean;
         authenticated: boolean;
@@ -117,20 +156,20 @@ function useCoreState() {
       }>("auth/state");
       if (epoch !== authGeneration.current) return;
       if (!auth.claimed) {
+        setConnection({ instanceId: health.instanceId, ...health.connection });
         setMode("unclaimed");
         return;
       }
       if (!auth.authenticated) {
         lock();
+        setConnection({ instanceId: health.instanceId, ...health.connection });
         return;
       }
       csrf.current = auth.csrfToken ?? "";
-      const [current, health] = await Promise.all([
-        request<CoreSetup>("setup"),
-        request<{ instanceId: string; version: string }>("health"),
-      ]);
+      const current = await request<CoreSetup>("setup");
       if (epoch !== authGeneration.current) return;
       record.current = current;
+      setConnection({ instanceId: health.instanceId, ...health.connection });
       setSetup(current);
       setInstanceId(health.instanceId);
       setVersion(health.version);
@@ -138,7 +177,7 @@ function useCoreState() {
     } catch (e) {
       if (epoch === authGeneration.current) throw e;
     }
-  }, [request, lock]);
+  }, [request, lock, inspect]);
   useEffect(() => {
     let active = true;
     try {
@@ -166,6 +205,7 @@ function useCoreState() {
     setError("");
     changePending(epoch, 1);
     try {
+      await inspect();
       const session = await request<{
         csrfToken: string;
         sessionToken: string;
@@ -258,6 +298,7 @@ function useCoreState() {
     saving: pending.generation === authGeneration.current && pending.count > 0,
     instanceId,
     version,
+    connection,
     authenticate,
     updateSetup,
     logout,

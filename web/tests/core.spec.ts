@@ -90,11 +90,16 @@ let child: ChildProcess | undefined;
 let url: string;
 let output = "";
 
-async function start(aiFixture = false, listen = "127.0.0.1:0") {
+async function start(
+  aiFixture = false,
+  listen = "127.0.0.1:0",
+  location = "local",
+) {
   output = "";
   child = spawn(binary, [
     "serve",
     ...(aiFixture ? ["--ai-fixture"] : []),
+    ...(location === "remote" ? ["--instance-location", "remote"] : []),
     "--listen",
     listen,
     "--data-dir",
@@ -941,15 +946,22 @@ test("expired owner access returns to sign-in without replay or stale-session re
   });
   try {
     await page.goto(url + "/#settings");
-    await revealControl(page, page.getByLabel("Deployment preference"), "");
-    await page.getByLabel("Deployment preference").selectOption("vps");
+    await page.getByRole("button", { name: "Setup", exact: true }).click();
+    await page
+      .getByRole("dialog", { name: "Instance", exact: true })
+      .getByRole("button", { name: "Open Chat", exact: true })
+      .click();
     await expect.poll(() => setupHeld).toBe(true);
-    await exec(binary, ["setup", "--data-dir", dir, "--host", "local"]);
+    await page.keyboard.press("Escape");
+    await expect(
+      page.getByRole("dialog", { name: "Instance", exact: true }),
+    ).toHaveCount(0);
+    await exec(binary, ["setup", "--data-dir", dir, "--host", "vps"]);
     const current = await page.request.get(setupURL, {
       headers: await headers(),
     });
     const currentSetup = await current.json();
-    expect(currentSetup.settings.host).toBe("local");
+    expect(currentSetup.settings.host).toBe("vps");
     await page.goto(url + "/#agents/tasks");
     await page.route(agentsURL, async (route) => {
       if (oldReadStarted) return route.continue();
@@ -971,7 +983,10 @@ test("expired owner access returns to sign-in without replay or stale-session re
     await expect(signIn).toBeEnabled();
     await enter();
     await page.goto(url + "/#settings");
-    await expect(page.getByLabel("Deployment preference")).toHaveValue("local");
+    await page.getByText("Diagnostics", { exact: true }).click();
+    await expect(page.getByTestId("saved-deployment-preference")).toHaveText(
+      "Remote",
+    );
     releaseOldRead();
     releaseSetup();
     await expect.poll(() => setupDelivered && oldReadDelivered).toBe(true);
@@ -983,7 +998,9 @@ test("expired owner access returns to sign-in without replay or stale-session re
     );
     await expect(signOut).toBeEnabled();
     await expect(password).toHaveCount(0);
-    await expect(page.getByLabel("Deployment preference")).toHaveValue("local");
+    await expect(page.getByTestId("saved-deployment-preference")).toHaveText(
+      "Remote",
+    );
     const after = await page.request.get(setupURL, {
       headers: await headers(),
     });
@@ -8515,11 +8532,11 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
     await expect(layout).toBeVisible();
     await expect(page.locator("html")).toHaveCSS(
       "background-color",
-      "rgb(16, 16, 22)",
+      "rgb(21, 20, 28)",
     );
     await expect(layout.locator(".panel").first()).toHaveCSS(
       "background-color",
-      "rgb(25, 25, 35)",
+      "rgb(30, 29, 41)",
     );
     expect(
       await page.evaluate(
@@ -8587,7 +8604,7 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
   ).toBeDisabled();
   await expect(page.locator(".account-safety")).toHaveCSS(
     "background-color",
-    "rgb(25, 25, 35)",
+    "rgb(30, 29, 41)",
   );
   await checkLayout("wallets", ".account-columns");
   await page.goto(url + "/#settings");
@@ -8670,7 +8687,7 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
     ).toBe(isMobile ? 1 : 2);
     await expect(page.locator("html")).toHaveCSS(
       "background-color",
-      "rgb(16, 16, 22)",
+      "rgb(21, 20, 28)",
     );
     expect(
       await page.evaluate(
@@ -8858,4 +8875,213 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
     activity.getByRole("list", { name: "Activity events", exact: true }),
   ).toHaveCount(0);
   await expect(activity).not.toContainText("V3 activity reminder");
+});
+
+test("installation connection uses runtime identity and opens Remote without changing Local data", async ({
+  page,
+  isMobile,
+}) => {
+  await page.goto(url + "/#overview");
+  await expect(page.getByText("Local", { exact: true })).toBeVisible();
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Overview", exact: true }),
+  ).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  const rows = page.locator(".workspace-row-copy");
+  await expect(rows.first()).toHaveCSS("display", "flex");
+  const name = await rows.first().locator("strong").boundingBox();
+  const role = await rows.first().locator("span").boundingBox();
+  expect(name!.y + name!.height).toBeLessThanOrEqual(role!.y);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  const mutatePreference = await page.evaluate(async () => {
+    const headers: Record<string, string> = {
+      Authorization:
+        "Bearer " + sessionStorage.getItem("fased.core.session.v1"),
+    };
+    const auth = await (await fetch("/api/v1/auth/state", { headers })).json();
+    const setup = await (await fetch("/api/v1/setup", { headers })).json();
+    const response = await fetch("/api/v1/setup", {
+      method: "PUT",
+      headers: {
+        ...headers,
+        "Content-Type": "application/json",
+        "X-CSRF-Token": auth.csrfToken,
+      },
+      body: JSON.stringify({
+        ...setup,
+        settings: { ...setup.settings, host: "vps" },
+      }),
+    });
+    return response.status;
+  });
+  expect(mutatePreference).toBe(200);
+  await page.reload();
+  await expect(page.getByLabel("Instance location")).toHaveText("Local");
+  const before = await page.evaluate(async () => {
+    const headers = {
+      Authorization:
+        "Bearer " + sessionStorage.getItem("fased.core.session.v1"),
+    };
+    return (await fetch("/api/v1/setup", { headers })).json();
+  });
+  await page.goto(url + "/#settings");
+  await page.getByRole("button", { name: "Setup", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Instance", exact: true });
+  await expect(dialog.getByText("Local", { exact: true })).toBeVisible();
+  await expect(dialog.getByLabel("Wallet preference")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Open Chat", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: /^chat$/i, exact: true }),
+  ).toBeVisible();
+  await page.goto(url + "/#settings");
+  await page.getByText("Connect to Remote", { exact: true }).click();
+  await page.getByLabel("Instance URL").fill("http://untrusted.example");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("HTTPS");
+  // A second ordinary process is a disposable remote-topology fixture, not a VPS.
+  const remoteDir = await mkdtemp(join(tmpdir(), "fcr-"));
+  let remoteOutput = "";
+  const remote = spawn(binary, [
+    "serve",
+    "--instance-location",
+    "remote",
+    "--listen",
+    "127.0.0.1:0",
+    "--data-dir",
+    remoteDir,
+  ]);
+  remote.stdout!.on("data", (data) => (remoteOutput += String(data)));
+  remote.stderr!.on("data", (data) => (remoteOutput += String(data)));
+  let popup: import("@playwright/test").Page | undefined;
+  try {
+    await expect
+      .poll(() => remoteOutput.includes('"event":"listening"'))
+      .toBe(true);
+    const remoteURL = JSON.parse(
+      remoteOutput
+        .trim()
+        .split("\n")
+        .find((line) => line.includes('"event":"listening"'))!,
+    ).url;
+    const health = await (
+      await page.request.get(remoteURL + "/api/v1/health")
+    ).json();
+    const inspected = JSON.parse(
+      (
+        await exec(binary, [
+          "connect",
+          "--url",
+          remoteURL,
+          "--instance-id",
+          health.instanceId,
+          "--print",
+        ])
+      ).stdout,
+    );
+    expect(inspected.installationCreated).toBe(false);
+    expect(inspected.instanceId).toBe(health.instanceId);
+    expect(inspected.location).toBe("remote");
+    await page.getByLabel("Instance URL").fill(remoteURL);
+    const opened = page.context().waitForEvent("page");
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    popup = await opened;
+    await expect(popup.getByText("Remote", { exact: true })).toBeVisible();
+    await popup.getByText("Instance details", { exact: true }).click();
+    await expect(
+      popup.getByText(health.instanceId, { exact: true }),
+    ).toBeVisible();
+    expect(
+      await popup.evaluate(() =>
+        sessionStorage.getItem("fased.core.session.v1"),
+      ),
+    ).toBeNull();
+    await expect(
+      popup.getByRole("heading", { name: "Claim this workspace", exact: true }),
+    ).toBeVisible();
+    await popup.screenshot({
+      path: `.evidence/installation-remote-${isMobile ? "mobile" : "desktop"}.png`,
+      fullPage: true,
+    });
+    const after = await page.evaluate(async () => {
+      const headers = {
+        Authorization:
+          "Bearer " + sessionStorage.getItem("fased.core.session.v1"),
+      };
+      return (await fetch("/api/v1/setup", { headers })).json();
+    });
+    expect(after.settings.host).toBe(before.settings.host);
+    expect(after.settings.walletMode).toBe(before.settings.walletMode);
+    expect(after.settings.provider).toBe(before.settings.provider);
+    await expect(page.getByLabel("Instance location")).toHaveText("Local");
+    await page.screenshot({
+      path: `.evidence/installation-local-${isMobile ? "mobile" : "desktop"}.png`,
+      fullPage: true,
+    });
+    for (const name of [
+      "aiConnections",
+      "financialExecution",
+      "walletSigner",
+      "updater",
+    ])
+      expect(health.capabilities[name]).toBe(false);
+  } finally {
+    await popup?.close();
+    if (remote.exitCode === null) {
+      const done = once(remote, "exit");
+      remote.kill("SIGTERM");
+      await done;
+    }
+    await rm(remoteDir, { recursive: true, force: true });
+  }
+  await stop();
+  await start(false, "127.0.0.1:0", "remote");
+  await page.goto(url);
+  await expect(page.getByText("Remote", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Owner password")).toBeVisible();
+});
+
+test("installation connection refuses changed identity before sending an owner password", async ({
+  page,
+}) => {
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Sign in", exact: true }),
+  ).toBeVisible();
+  let sent = 0;
+  page.on("request", (r) => {
+    if (r.url().endsWith("/auth/login") && r.method() === "POST") sent++;
+  });
+  await page.route("**/api/v1/health", async (route) => {
+    expect(route.request().headers()["authorization"]).toBeUndefined();
+    expect(route.request().headers()["cookie"]).toBeUndefined();
+    const response = await route.fetch();
+    const h = await response.json();
+    h.instanceId = "x".repeat(43);
+    await route.fulfill({ response, json: h });
+  });
+  await page.getByLabel("Owner password").fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("identity changed");
+  expect(sent).toBe(0);
 });

@@ -14,18 +14,20 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
 )
 
 type Handler struct {
-	dir      string
-	assets   http.Handler
-	mu       sync.Mutex
-	instance string
+	openBrowser func(string, string) error
+	dir         string
+	assets      http.Handler
+	mu          sync.Mutex
+	instance    string
 }
 
 func NewHandler(dir string, assets fs.FS) *Handler {
-	return &Handler{dir: dir, assets: http.FileServer(http.FS(assets))}
+	return &Handler{dir: dir, assets: http.FileServer(http.FS(assets)), openBrowser: func(url, id string) error { return connection.OpenBrowser(url, id) }}
 }
 
 // Wails v2 uses these fixed local origins on its supported platforms. No network
@@ -73,6 +75,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 16*1024+1))
 	if err != nil || len(body) > 16*1024 {
 		fail(w, 413, "request too large")
+		return
+	}
+	if r.URL.Path == "/api/v1/installation/connect" {
+		var target struct {
+			URL        string `json:"url"`
+			InstanceID string `json:"instanceId"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(body))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&target) != nil || decoder.Decode(new(any)) != io.EOF {
+			fail(w, 400, "choose one instance address")
+			return
+		}
+		result, e := connection.Probe(r.Context(), target.URL, target.InstanceID)
+		if e != nil {
+			fail(w, 400, e.Error())
+			return
+		}
+		if e = h.openBrowser(result.URL, result.InstanceID); e != nil {
+			fail(w, 503, "cannot open the browser; use fased-app connect --url with this address")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(result)
 		return
 	}
 	client, err := core.NewClient(r.Context(), h.dir)
@@ -128,6 +154,8 @@ func allowed(method, route string) bool {
 	switch route {
 	case "/api/v1/health", "/api/v1/auth/state", "/api/v1/signer/status", "/api/v1/installation/claim-code":
 		return method == "GET"
+	case "/api/v1/installation/connect":
+		return method == "POST"
 	case "/api/v1/setup":
 		return method == "GET" || method == "PUT"
 	case "/api/v1/auth/claim", "/api/v1/auth/login", "/api/v1/auth/logout":

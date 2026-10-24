@@ -9,6 +9,9 @@ import (
 )
 
 func validateDefinition(p Paths, o Options) (string, error) {
+	if o.Location != "" && o.Location != "local" && o.Location != "remote" {
+		return "", errors.New("installation location must be local or remote")
+	}
 	host, port, err := net.SplitHostPort(o.Listen)
 	ip := net.ParseIP(host)
 	n, parseErr := strconv.Atoi(port)

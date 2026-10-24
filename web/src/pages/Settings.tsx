@@ -1,3 +1,7 @@
+import {
+  InstanceSummary,
+  RemoteConnection,
+} from "../components/InstanceConnection";
 import { ArrowRight } from "../icons";
 import { UpdateStatusPanel } from "../components/UpdateStatusPanel";
 import { UpdatePreferencesPanel } from "../components/UpdatePreferencesPanel";
@@ -5,15 +9,8 @@ import { providerNames } from "../state";
 import { Badge, SectionHead } from "../components/shared";
 import { useWorkspace } from "../workspace";
 export function Settings() {
-  const {
-    core,
-    state,
-    dispatch,
-    setSetupOpen,
-    setResetOpen,
-    notify,
-    navigate,
-  } = useWorkspace();
+  const { core, state, setSetupOpen, setResetOpen, notify, navigate } =
+    useWorkspace();
   return (
     <>
       <SectionHead title="Settings" />
@@ -25,27 +22,22 @@ export function Settings() {
               <Badge>{core.mode === "ready" ? "CONNECTED" : "SIMULATED"}</Badge>
             </div>
             <div className="settings-body">
-              <label htmlFor="instance-host">Deployment preference</label>
-              <select
-                id="instance-host"
-                value={state.setup.host}
-                onChange={(e) =>
-                  dispatch({
-                    type: "setup",
-                    patch: { host: e.target.value as "local" | "vps" },
-                  })
-                }
-              >
-                <option value="local">Local</option>
-                <option value="vps">Remote</option>
-              </select>
-              <p className="subtle">
-                {core.mode === "ready"
-                  ? "Saved to this instance. This preference does not change the machine or networking."
-                  : "This changes a prototype preference, not the machine or its networking."}
-              </p>
+              <InstanceSummary />
+              <RemoteConnection />
+              {core.mode === "ready" && (
+                <details className="instance-diagnostics">
+                  <summary>Diagnostics</summary>
+                  <dl>
+                    <dt>Saved deployment preference</dt>
+                    <dd data-testid="saved-deployment-preference">
+                      {state.setup.host === "vps" ? "Remote" : "Local"}
+                    </dd>
+                  </dl>
+                </details>
+              )}
               <button className="secondary" onClick={() => setSetupOpen(true)}>
-                Review setup <ArrowRight size={14} />
+                {core.mode === "ready" ? "Setup" : "Review setup"}{" "}
+                <ArrowRight size={14} />
               </button>
             </div>
           </section>

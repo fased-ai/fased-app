@@ -61,7 +61,13 @@ type SetupRecord struct {
 	Revision int64 `json:"revision"`
 	Settings Setup `json:"settings"`
 }
+type ConnectionInfo struct {
+	Location  string `json:"location"`
+	Transport string `json:"transport"`
+}
+
 type Health struct {
+	Connection   *ConnectionInfo `json:"connection,omitempty"`
 	Status       string          `json:"status"`
 	APIVersion   string          `json:"apiVersion"`
 	Version      string          `json:"version"`
