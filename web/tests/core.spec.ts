@@ -25,6 +25,7 @@ async function revealControl(
   control: import("@playwright/test").Locator,
   hint = "",
 ) {
+  if (await control.isVisible()) return;
   if ((await control.count()) === 0) {
     if (hint.includes("Conversation name")) {
       const toggle = page.getByRole("button", {
@@ -47,16 +48,6 @@ async function revealControl(
         .click();
     else if (hint.includes("Task name"))
       await page.getByRole("button", { name: "New task", exact: true }).click();
-  }
-  if (
-    !(await control.count()) &&
-    page.url().includes("#agents/tasks") &&
-    !(await page.locator(".task-composer").isVisible()) &&
-    (await page
-      .getByRole("button", { name: "New task", exact: true })
-      .isVisible())
-  ) {
-    await page.getByRole("button", { name: "New task", exact: true }).click();
   }
   if (!(await control.count()) && !hint) {
     const options = page.locator(
