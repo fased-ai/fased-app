@@ -52,6 +52,7 @@ export function WorkspaceDialogs() {
             <div className="settings-body">
               <InstanceSummary />
               <RemoteConnection />
+              {core.error && <p role="alert">{core.error}</p>}
               <button
                 className="primary"
                 disabled={core.saving}

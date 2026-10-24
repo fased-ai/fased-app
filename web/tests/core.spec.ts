@@ -3093,7 +3093,7 @@ test("update recovery view rejects unsupported or lost status without retaining 
   ).toBeVisible();
 });
 
-test("claim, UI/CLI setup, restart and logout use one private instance", async ({
+test("claim, UI/CLI setup, restart and logout preserve one Local instance", async ({
   page,
 }) => {
   await page.goto(url);
@@ -3126,17 +3126,23 @@ test("claim, UI/CLI setup, restart and logout use one private instance", async (
   await page
     .getByRole("button", { name: "Set up workspace", exact: true })
     .click();
-  await page.getByRole("button", { name: /Remote Always-on/ }).click();
+  const instance = page.getByRole("dialog", { name: "Instance", exact: true });
+  await expect(instance.getByText("Local", { exact: true })).toBeVisible();
   await expect(
-    page.getByRole("button", { name: /Remote Always-on/ }),
-  ).toHaveAttribute("aria-pressed", "true");
+    instance.getByRole("button", { name: /Remote Always-on/ }),
+  ).toHaveCount(0);
+  await instance.getByText("Instance details", { exact: true }).click();
+  await expect(
+    instance.getByText(health.instanceId, { exact: true }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.reload();
   await expect(
     page.getByRole("button", { name: "Sign out", exact: true }),
   ).toBeVisible();
 
-  // CLI credentials travel over the protected socket, never URL/arguments.
+  // CLI credentials use the protected socket. Saved preferences cannot move
+  // this runtime or grant wallet/provider authority.
   await new Promise<void>((resolveLogin, reject) => {
     const login = spawn(binary, [
       "login",
@@ -3155,13 +3161,13 @@ test("claim, UI/CLI setup, restart and logout use one private instance", async (
   const current = JSON.parse(
     (await exec(binary, ["setup", "--data-dir", dir])).stdout,
   );
-  expect(current.settings.host).toBe("vps");
+  expect(current.settings.host).toBe("local");
   await exec(binary, [
     "setup",
     "--data-dir",
     dir,
     "--host",
-    "local",
+    "vps",
     "--wallet-mode",
     "watch",
   ]);
@@ -3169,48 +3175,50 @@ test("claim, UI/CLI setup, restart and logout use one private instance", async (
   await page
     .getByRole("button", { name: "Set up workspace", exact: true })
     .click();
-  await expect(
-    page.getByRole("button", { name: /Local Simpler/ }),
-  ).toHaveAttribute("aria-pressed", "true");
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
-  await expect(
-    page.getByRole("button", { name: "Save setup preferences" }),
-  ).toBeEnabled();
-  // Another client edits after the review was loaded. The UI must stay open,
-  // show the conflict and require a second review rather than report success.
+  await expect(instance.getByText("Local", { exact: true })).toBeVisible();
+  const saveSetup = instance.getByRole("button", { name: /Open chat/i });
+  // Preserve the existing stale-review contract through the compact setup UI.
   await exec(binary, ["setup", "--data-dir", dir, "--provider", "anthropic"]);
-  const saveSetup = page.getByRole("button", {
-    name: "Save setup preferences",
-  });
-  await saveSetup.scrollIntoViewIfNeeded();
-  await expect
-    .poll(() =>
-      saveSetup.evaluate((button) => {
-        const box = button.getBoundingClientRect();
-        const target = document.elementFromPoint(
-          box.x + box.width / 2,
-          box.y + box.height / 2,
-        );
-        return target !== null && button.contains(target);
-      }),
-    )
-    .toBe(true);
   await saveSetup.click();
-  await expect(page.getByRole("dialog").getByRole("alert")).toHaveText(
+  await expect(instance.getByRole("alert")).toHaveText(
     /settings changed in another client/,
   );
   expect(
     JSON.parse((await exec(binary, ["setup", "--data-dir", dir])).stdout)
       .settings.complete,
   ).toBe(false);
-  await page.getByRole("button", { name: "Save setup preferences" }).click();
+  await saveSetup.click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  expect(
-    JSON.parse((await exec(binary, ["setup", "--data-dir", dir])).stdout)
-      .settings.complete,
-  ).toBe(true);
+  const saved = JSON.parse(
+    (await exec(binary, ["setup", "--data-dir", dir])).stdout,
+  ).settings;
+  expect(saved).toMatchObject({
+    complete: true,
+    host: "vps",
+    walletMode: "watch",
+    provider: "anthropic",
+  });
+  await page.goto(url + "/#settings");
+  await page.getByText("Diagnostics", { exact: true }).click();
+  await expect(page.getByTestId("saved-deployment-preference")).toHaveText(
+    "Remote",
+  );
+  await expect(page.getByLabel("Instance location")).toHaveText("Local");
+  const unchangedHealth = await (
+    await page.request.get(`${url}/api/v1/health`)
+  ).json();
+  expect(unchangedHealth.instanceId).toBe(health.instanceId);
+  expect(unchangedHealth.connection).toEqual({
+    location: "local",
+    transport: "loopback",
+  });
+  for (const key of [
+    "aiConnections",
+    "walletSigner",
+    "financialExecution",
+    "updater",
+  ])
+    expect(unchangedHealth.capabilities[key]).toBe(false);
   const duplicate = await exec(binary, [
     "serve",
     "--listen",
