@@ -202,11 +202,9 @@ export function AccountManagement() {
         view.accountStates[a.id] === "current-fixture",
     ) ?? [];
   return (
-    <>
+    <div className="wallet-workspace">
       <SectionHead
-        eyebrow="PUBLIC ACCOUNTS · DISPOSABLE FIXTURE"
         title="Wallets"
-        description="One account registry for this UI and the CLI. Real wallets and financial execution are disabled."
         action={
           <button
             className="secondary"
@@ -229,11 +227,10 @@ export function AccountManagement() {
       )}
       <div className="info-banner account-safety">
         <div>
-          <strong>Public records are not spending authority.</strong>
+          <strong>Disposable public references only</strong>
           <span>
-            Balances and on-chain reads are unavailable. Watch and
-            external/manual modes save only disposable public references. Keys
-            and approval credentials stay outside the UI.
+            No balances, on-chain reads or signing. Keys and owner approvals
+            stay outside this UI.
           </span>
         </div>
         <Badge>REAL WALLETS DISABLED</Badge>
@@ -552,6 +549,6 @@ export function AccountManagement() {
           </section>
         </>
       )}
-    </>
+    </div>
   );
 }

@@ -23,11 +23,9 @@ function WalletPreview() {
   const { state, dispatch, setSetupOpen, setActionOpen, tab, navigate } =
     useWorkspace();
   return (
-    <>
+    <div className="wallet-workspace wallet-preview">
       <SectionHead
-        eyebrow="ACCOUNTS & AUTHORITY"
         title="Wallets"
-        description="Choose the custody you need. Keep permissions visible."
         action={
           <button className="primary" onClick={() => setSetupOpen(true)}>
             <Plus size={16} /> Explore wallet setup
@@ -53,10 +51,10 @@ function WalletPreview() {
           <div className="info-banner">
             <ShieldCheck size={18} />
             <div>
-              <strong>One wallet service. Explicit authority.</strong>
+              <strong>Wallet capability previews</strong>
               <span>
-                Keys belong to the isolated signer. Profiles and models receive
-                account references and bounded permissions.
+                Setup records a preference. These previews do not create keys,
+                connect wallets or grant permissions.
               </span>
             </div>
             <Badge>DESIGN</Badge>
@@ -259,6 +257,6 @@ function WalletPreview() {
           </Empty>
         </section>
       )}
-    </>
+    </div>
   );
 }

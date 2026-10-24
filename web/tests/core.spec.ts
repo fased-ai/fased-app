@@ -5906,3 +5906,143 @@ test("shared WEN app shell and agent panes retain bounded local controls", async
     page.getByRole("heading", { name: "Welcome back", exact: true }),
   ).toBeVisible();
 });
+
+test("shared WEN Overview Wallets and Settings preserve fixture authority and responsive controls", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(90000);
+  page.setDefaultTimeout(10000);
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const writes: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/v1/") && request.method() !== "GET")
+      writes.push(request.method() + " " + new URL(request.url()).pathname);
+  });
+  const checkLayout = async (name: string, selector: string) => {
+    const layout = page.locator(selector);
+    await expect(layout).toBeVisible();
+    await expect(page.locator("html")).toHaveCSS(
+      "background-color",
+      "rgb(21, 20, 28)",
+    );
+    await expect(layout.locator(".panel").first()).toHaveCSS(
+      "background-color",
+      "rgb(30, 29, 41)",
+    );
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    const columns = await layout.evaluate(
+      (el) => getComputedStyle(el).gridTemplateColumns.split(" ").length,
+    );
+    expect(columns).toBe(isMobile ? 1 : 2);
+    if (isMobile) {
+      const small = await layout
+        .locator("button, select, input:not([type=checkbox])")
+        .evaluateAll((els) =>
+          els
+            .filter(
+              (el) =>
+                el.getBoundingClientRect().width &&
+                el.getBoundingClientRect().height < 44,
+            )
+            .map((el) => el.textContent),
+        );
+      expect(small).toEqual([]);
+    }
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.screenshot({
+      path: `.evidence/wen-${name}-${isMobile ? "mobile" : "desktop"}.png`,
+      fullPage: true,
+    });
+  };
+  await expect(
+    page.getByRole("heading", { name: "Overview", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".hero-card, .hero-art")).toHaveCount(0);
+  await expect(
+    page
+      .getByRole("region", { name: "Terminals", exact: true })
+      .getByText("DEFERRED", { exact: true }),
+  ).toBeVisible();
+  await checkLayout("overview", ".overview-workspace");
+  await page.getByRole("button", { name: "Open Chat", exact: true }).click();
+  await expect(
+    page.getByLabel("Conversation name", { exact: true }),
+  ).toBeVisible();
+  await page.goto(url + "/#wallets/accounts");
+  await expect(
+    page.getByRole("heading", { name: "Public account records", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("REAL WALLETS DISABLED", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Record disposable signer", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", {
+      name: "Create permission proposal",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  await expect(page.locator(".account-safety")).toHaveCSS(
+    "background-color",
+    "rgb(41, 39, 56)",
+  );
+  await checkLayout("wallets", ".account-columns");
+  await page.goto(url + "/#settings");
+  await expect(
+    page
+      .getByRole("region", { name: "Updates & recovery" })
+      .getByRole("button", { name: "Refresh update status" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "Reset clears browser demo preferences. Saved core records are preserved.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  const notices = page.getByLabel("Show notices for pending proposals");
+  await expect(notices).toBeChecked();
+  const checkbox = await notices.evaluate((input) => {
+    const box = input.getBoundingClientRect(),
+      label = input.closest("label")!.getBoundingClientRect();
+    return { left: box.x - label.x, height: label.height };
+  });
+  expect(checkbox.left).toBeLessThan(24);
+  expect(checkbox.height).toBeGreaterThanOrEqual(isMobile ? 44 : 36);
+  await checkLayout("settings", ".settings-workspace");
+  await expect(
+    page.getByRole("region", { name: "Update preferences & proposals" }),
+  ).toBeVisible();
+  if (!isMobile) {
+    await page.setViewportSize({ width: 900, height: 1000 });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: ".evidence/wen-settings-tablet.png",
+      fullPage: true,
+    });
+  }
+  expect(writes).toEqual([]);
+  const health = await (await page.request.get(url + "/api/v1/health")).json();
+  expect(health.capabilities.walletSigner).toBe(false);
+});

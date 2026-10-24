@@ -895,3 +895,292 @@
     min-height: 44px;
   }
 }
+
+/* Workspace pages share the same pane geometry and canonical WEN controls. */
+.wt .overview-workspace,
+.wt .settings-workspace,
+.wt .account-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  margin: 0;
+}
+.wt .overview-workspace > *,
+.wt .settings-workspace > *,
+.wt .account-columns > * {
+  min-width: 0;
+}
+.wt .workspace-terminals,
+.wt .settings-workspace > .update-preferences {
+  grid-column: 1 / -1;
+}
+.wt .workspace-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0 0 12px;
+  border: 1px solid var(--wt-border);
+  border-radius: 8px;
+  background: var(--wt-surface);
+}
+.wt .workspace-metrics > div {
+  padding: 12px 16px;
+  min-width: 0;
+}
+.wt .workspace-metrics > div + div {
+  border-left: 1px solid var(--wt-border);
+}
+.wt .workspace-metrics dt {
+  color: var(--wt-muted);
+  font-size: 12px;
+}
+.wt .workspace-metrics dd {
+  margin: 8px 0 0;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+.wt .overview-workspace h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wt .workspace-rows {
+  display: grid;
+}
+.wt .workspace-row {
+  display: flex;
+  width: 100%;
+  height: auto;
+  min-height: 52px;
+  padding: 12px 16px;
+  gap: 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--wt-text);
+  white-space: normal;
+  text-align: left;
+}
+.wt .workspace-row + .workspace-row {
+  border-top: 1px solid var(--wt-border);
+}
+.wt .workspace-row:hover {
+  background: var(--wt-raised);
+}
+.wt .workspace-row > svg {
+  flex-shrink: 0;
+  color: var(--wt-cyan);
+}
+.wt .workspace-row-copy {
+  flex: 1;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.wt .workspace-row-copy > span {
+  color: var(--wt-muted);
+  font-size: 12px;
+}
+.wt .settings-primary {
+  display: grid;
+  gap: 12px;
+}
+.wt .settings-body {
+  padding: 16px;
+}
+.wt .settings-body > p,
+.wt .settings-body > label {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--wt-muted);
+}
+.wt .settings-body > select {
+  margin-top: 8px;
+}
+.wt .settings-workspace .provider-row {
+  gap: 12px;
+  padding: 12px 16px;
+  flex-wrap: wrap;
+  border-color: var(--wt-border);
+}
+.wt .settings-workspace .provider-row > div {
+  flex: 1;
+}
+.wt .settings-workspace .provider-mark {
+  background: var(--wt-raised);
+  color: var(--wt-cyan);
+  border-radius: 8px;
+  width: 36px;
+  height: 36px;
+}
+.wt .settings-workspace .panel-footer {
+  padding: 16px;
+  flex-wrap: wrap;
+  gap: 12px;
+  border-color: var(--wt-border);
+}
+.wt .settings-workspace .panel-footer > p {
+  margin: 0;
+  color: var(--wt-muted);
+}
+.wt .settings-workspace .update-preferences > .settings-body {
+  max-width: none;
+}
+.wt .update-policy-fields,
+.wt .update-proposal {
+  background: var(--wt-bg);
+  border-color: var(--wt-border);
+  border-radius: 8px;
+  padding: 16px;
+}
+.wt .update-form-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 0 12px;
+}
+.wt .update-observations {
+  font-size: 14px;
+}
+.wt .wallet-workspace {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.wt .wallet-workspace .section-head,
+.wt .wallet-workspace .info-banner {
+  margin: 0;
+}
+.wt .account-columns {
+  grid-template-columns: minmax(0, 1fr) 340px;
+}
+.wt .account-panel {
+  padding: 16px;
+}
+.wt .account-form {
+  margin: 12px 0;
+  gap: 12px;
+}
+.wt .account-form label {
+  gap: 6px;
+}
+.wt .account-form input,
+.wt .account-form select,
+.wt .account-actions input,
+.wt .settings-workspace input:not([type="checkbox"]),
+.wt .settings-workspace select {
+  width: 100%;
+  min-width: 0;
+  color: var(--wt-text);
+  background: var(--wt-raised);
+  border: 1px solid var(--wt-border);
+  border-radius: 8px;
+  font-size: 14px;
+}
+.wt .account-entry,
+.wt .account-actions {
+  gap: 12px;
+}
+.wt .account-key,
+.wt .update-guidance pre {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.wt .wallet-preview .wallet-mode-grid {
+  gap: 12px;
+  margin-bottom: 0;
+}
+.wt .wallet-preview .mode-card {
+  padding: 16px;
+}
+.wt .wallet-preview .feature-icon {
+  color: var(--wt-cyan);
+  background: var(--wt-raised);
+  border-radius: 8px;
+}
+@media (max-width: 1100px) {
+  .wt .settings-workspace,
+  .wt .account-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 767px) {
+  .wt .overview-workspace,
+  .wt .workspace-metrics,
+  .wt .wallet-preview .wallet-mode-grid,
+  .wt .wallet-preview .detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .wt .workspace-metrics > div + div {
+    border-left: 0;
+    border-top: 1px solid var(--wt-border);
+  }
+  .wt .wallet-workspace .account-form.proposal-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .wt .account-actions > button,
+  .wt .settings-workspace button {
+    height: auto;
+    min-height: 44px;
+    white-space: normal;
+  }
+  .wt .settings-workspace .provider-row > .secondary {
+    width: 100%;
+  }
+}
+
+.wt .overview-workspace > .panel,
+.wt .settings-primary > .panel,
+.wt .settings-workspace > .panel,
+.wt .account-columns > .panel,
+.wt .wallet-workspace > .panel {
+  margin: 0;
+}
+.wt .overview-workspace .avatar {
+  color: var(--wt-violet);
+  background: var(--wt-raised);
+  border-color: var(--wt-border);
+}
+.wt
+  .settings-workspace
+  .update-policy-fields
+  label:has(input[type="checkbox"]) {
+  flex-direction: row;
+  justify-content: flex-start;
+  min-height: 36px;
+  text-align: left;
+}
+.wt .settings-workspace input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  margin: 0;
+  padding: 0;
+  flex-shrink: 0;
+  accent-color: var(--wt-cyan);
+}
+@media (pointer: coarse) {
+  .wt
+    .settings-workspace
+    .update-policy-fields
+    label:has(input[type="checkbox"]) {
+    min-height: 44px;
+  }
+}
+
+.wt .wallet-workspace .info-banner {
+  color: var(--wt-text);
+  background: var(--wt-raised);
+  border: 1px solid var(--wt-border);
+}
+.wt .wallet-workspace .info-banner span {
+  color: var(--wt-muted);
+}
+.wt .wallet-workspace .info-banner > svg {
+  color: var(--wt-cyan);
+}
+.wt .workspace-metrics .badge,
+.wt .workspace-terminals .badge,
+.wt .wallet-workspace .badge,
+.wt .settings-workspace .badge {
+  font-size: 12px;
+}

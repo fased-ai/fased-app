@@ -153,9 +153,14 @@ test("terminal mockups cannot execute and make no remote requests", async ({
     page.getByRole("button", { name: "Execution unavailable" }),
   ).toBeDisabled();
   await page.goto("/#overview");
-  await expect(page.locator(".terminal-card")).toHaveCount(3);
+  const terminals = page.getByRole("region", {
+    name: "Terminals",
+    exact: true,
+  });
+  await expect(terminals.getByRole("button")).toHaveCount(3);
   await page
-    .locator(".terminal-card")
+    .getByRole("region", { name: "Terminals", exact: true })
+    .getByRole("button")
     .filter({ hasText: "WEN Satcoin Mining" })
     .click();
   await expect(page).toHaveURL(/#terminals\/satcoin$/);
@@ -203,7 +208,8 @@ test("mobile navigation, keyboard escape and unknown routes are usable", async (
   await page.goto("/#not-a-real-route");
   await expect(
     page.getByRole("heading", {
-      name: "A clear view. A considered next move.",
+      name: "Overview",
+      exact: true,
     }),
   ).toBeVisible();
   if (isMobile)
