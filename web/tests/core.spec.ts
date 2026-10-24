@@ -18,13 +18,13 @@ let child: ChildProcess | undefined;
 let url: string;
 let output = "";
 
-async function start(aiFixture = false) {
+async function start(aiFixture = false, listen = "127.0.0.1:0") {
   output = "";
   child = spawn(binary, [
     "serve",
     ...(aiFixture ? ["--ai-fixture"] : []),
     "--listen",
-    "127.0.0.1:0",
+    listen,
     "--data-dir",
     dir,
   ]);
@@ -79,6 +79,134 @@ test.afterEach(async () => {
   } finally {
     if (dir) await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("agent selection survives reload and core restart with scoped preference fallback", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(60000);
+  const external: string[] = [];
+  const writes: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (new URL(r.url()).pathname === "/api/v1/agents" && r.method() !== "GET")
+      writes.push(r.method());
+  });
+  await page.goto(url + "/#agents/memory");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = async () => {
+    const process = spawn(binary, [
+      "login",
+      "--data-dir",
+      dir,
+      "--password-stdin",
+    ]);
+    process.stdin!.end(fixturePassword + "\n");
+    expect((await once(process, "exit"))[0]).toBe(0);
+  };
+  await login();
+  const read = () =>
+    Promise.all(
+      ["wen-operator", "trading-analyst", "news-researcher"].map((id) =>
+        privateCLI(["agents", "--profile", id]),
+      ),
+    );
+  const baseline = await read();
+  const profile = (name: string) =>
+    page
+      .locator(".local-profile-picker")
+      .getByRole("button", { name: new RegExp(`^${name} `) });
+  const choose = async (name: string) => {
+    await profile(name).click();
+    await expect(profile(name)).toHaveAttribute("aria-pressed", "true");
+  };
+  await expect(profile("WEN Operator")).toHaveAttribute("aria-pressed", "true");
+  const health = await (await page.request.get(url + "/api/v1/health")).json();
+  const prefix = "fased.agent-profile.v1:";
+  const key = prefix + health.instanceId;
+  await page.evaluate(
+    (key) => localStorage.setItem(key, "trading-analyst"),
+    prefix + "another-instance",
+  );
+  await page.reload();
+  await expect(profile("WEN Operator")).toHaveAttribute("aria-pressed", "true");
+  await choose("Trading Analyst");
+  await page.reload();
+  await expect(profile("Trading Analyst")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(await read()).toEqual(baseline);
+  await choose("News Researcher");
+  await page.reload();
+  await expect(profile("News Researcher")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  const originalURL = url;
+  await stop();
+  await start(false, new URL(originalURL).host);
+  expect(url).toBe(originalURL);
+  await page.reload();
+  await expect(profile("News Researcher")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await login();
+  expect(await read()).toEqual(baseline);
+  const unknownRequests: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("removed-profile")) unknownRequests.push(r.url());
+  });
+  await page.evaluate(
+    (key) => localStorage.setItem(key, "removed-profile"),
+    key,
+  );
+  await page.reload();
+  await expect(profile("WEN Operator")).toHaveAttribute("aria-pressed", "true");
+  expect(unknownRequests).toEqual([]);
+  await page.evaluate((key) => localStorage.removeItem(key), key);
+  await page.reload();
+  await expect(profile("WEN Operator")).toHaveAttribute("aria-pressed", "true");
+  await page.addInitScript((prefix) => {
+    const read = Storage.prototype.getItem;
+    const write = Storage.prototype.setItem;
+    Storage.prototype.getItem = function (this: Storage, key: string) {
+      if (key.startsWith(prefix))
+        throw new DOMException("Fixture storage denied", "SecurityError");
+      return read.call(this, key);
+    };
+    Storage.prototype.setItem = function (
+      this: Storage,
+      key: string,
+      value: string,
+    ) {
+      if (key.startsWith(prefix))
+        throw new DOMException("Fixture storage denied", "SecurityError");
+      write.call(this, key, value);
+    };
+  }, prefix);
+  await page.reload();
+  await expect(profile("WEN Operator")).toHaveAttribute("aria-pressed", "true");
+  await choose("Trading Analyst");
+  expect(await read()).toEqual(baseline);
+  expect(external).toEqual([]);
+  expect(writes).toEqual([]);
+  await page.screenshot({
+    path: `.evidence/profile-continuity-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
 });
 
 test("task inbox opens the exact named run without writes across profiles and reload", async ({

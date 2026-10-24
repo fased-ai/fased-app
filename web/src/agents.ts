@@ -439,20 +439,49 @@ export function useAgents(core: ReturnType<typeof useCore>) {
   const current = useRef<AgentView | null>(null);
   const generation = useRef(0);
   const writing = useRef(false);
-  const accept = useCallback((v: AgentView) => {
-    if (!current.current || v.revision >= current.current.revision) {
-      current.current = v;
-      setView(v);
-    }
-  }, []);
+  const preferenceKey = core.instanceId
+    ? `fased.agent-profile.v1:${core.instanceId}`
+    : "";
+  const accept = useCallback(
+    (v: AgentView) => {
+      if (!current.current || v.revision >= current.current.revision) {
+        current.current = v;
+        setView(v);
+        try {
+          if (preferenceKey) localStorage.setItem(preferenceKey, v.profileId);
+        } catch {
+          // Browser preferences are optional; core records remain authoritative.
+        }
+      }
+    },
+    [preferenceKey],
+  );
   const refresh = useCallback(
     async (profile?: string) => {
       const epoch = generation.current;
       const sequence = ++readSequence.current;
       try {
-        const v = await core.request<AgentView>(
-          `agents?profile=${encodeURIComponent(profile ?? current.current?.profileId ?? "")}`,
+        const selected = profile ?? current.current?.profileId ?? "";
+        let v = await core.request<AgentView>(
+          `agents?profile=${encodeURIComponent(selected)}`,
         );
+        if (epoch !== generation.current) return;
+        if (!selected && preferenceKey) {
+          let remembered = "";
+          try {
+            remembered = localStorage.getItem(preferenceKey) ?? "";
+          } catch {
+            // A blocked or cleared preference must not prevent opening the app.
+          }
+          if (
+            remembered !== v.profileId &&
+            v.profiles.some((p) => p.id === remembered)
+          ) {
+            v = await core.request<AgentView>(
+              `agents?profile=${encodeURIComponent(remembered)}`,
+            );
+          }
+        }
         if (epoch === generation.current) {
           accept(v);
           if (sequence === readSequence.current) {
@@ -470,7 +499,7 @@ export function useAgents(core: ReturnType<typeof useCore>) {
         throw e;
       }
     },
-    [core.request, accept],
+    [core.request, accept, preferenceKey],
   );
   useEffect(() => {
     generation.current++;
