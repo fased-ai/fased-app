@@ -74,6 +74,13 @@ async function revealControl(
   }
 }
 
+async function openUpdateSettings(page: import("@playwright/test").Page) {
+  const section = page.locator("details.update-settings");
+  await expect(section).toBeVisible();
+  if ((await section.getAttribute("open")) === null)
+    await section.locator(":scope > summary").click();
+}
+
 async function openAISchedules(page: import("@playwright/test").Page) {
   const pane = page.locator(".scheduled-ai-disclosure");
   if ((await pane.getAttribute("open")) === null)
@@ -2686,6 +2693,7 @@ test("update preferences and review-only proposals share revisions, survive rest
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
   await page.goto(url + "/#settings");
+  await openUpdateSettings(page);
   const panel = page.getByRole("region", {
     name: "Update preferences & proposals",
   });
@@ -2851,6 +2859,7 @@ test("update preferences and review-only proposals share revisions, survive rest
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await openUpdateSettings(page);
   await expect(panel.getByLabel("IANA timezone")).toHaveValue(
     "America/Chicago",
   );
@@ -2887,6 +2896,7 @@ test("update status shares UI and private CLI observations across pause, release
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
   await page.goto(url + "/#settings");
+  await openUpdateSettings(page);
   const panel = page.getByRole("region", { name: "Updates & recovery" });
   await expect(
     panel.getByRole("heading", { name: "Signer not configured" }),
@@ -2976,6 +2986,7 @@ test("update status shares UI and private CLI observations across pause, release
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await openUpdateSettings(page);
   await expect(
     panel.getByRole("heading", { name: "Metadata paused", exact: true }),
   ).toBeVisible();
@@ -3043,6 +3054,7 @@ test("update recovery view rejects unsupported or lost status without retaining 
     });
   });
   await page.goto(url + "/#settings");
+  await openUpdateSettings(page);
   const panel = page.getByRole("region", { name: "Updates & recovery" });
   await expect(
     panel.getByRole("heading", {
@@ -8608,6 +8620,7 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
   );
   await checkLayout("wallets", ".account-columns");
   await page.goto(url + "/#settings");
+  await openUpdateSettings(page);
   await expect(
     page
       .getByRole("region", { name: "Updates & recovery" })
@@ -8895,6 +8908,7 @@ test("installation connection uses runtime identity and opens Remote without cha
     page.getByRole("heading", { name: "Overview", exact: true }),
   ).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
+  await expect(page.locator("html")).toHaveCSS("font-family", /Adwaita Sans/);
   const rows = page.locator(".workspace-row-copy");
   await expect(rows.first()).toHaveCSS("display", "flex");
   const name = await rows.first().locator("strong").boundingBox();
@@ -8947,6 +8961,10 @@ test("installation connection uses runtime identity and opens Remote without cha
   ).toBeVisible();
   await page.goto(url + "/#settings");
   await page.getByText("Connect to Remote", { exact: true }).click();
+  const connect = page.getByRole("button", { name: "Connect", exact: true });
+  await expect(connect).toHaveCSS("background-color", "rgb(255, 100, 124)");
+  await connect.hover();
+  await expect(connect).toHaveCSS("background-color", "rgb(255, 126, 146)");
   await page.getByLabel("Instance URL").fill("http://untrusted.example");
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("HTTPS");

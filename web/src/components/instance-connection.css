@@ -5,7 +5,7 @@
   font-style: normal;
   font-display: swap;
 }
-.wt {
+:root.wt {
   font-family: "Adwaita Sans", ui-sans-serif, system-ui, sans-serif;
 }
 .instance-facts {
@@ -65,7 +65,7 @@
 }
 .remote-connect input {
   width: 100%;
-  min-height: 42px;
+  min-height: 44px;
   border: 1px solid #373447;
   border-radius: 7px;
   background: #15141c;
@@ -76,13 +76,13 @@
   outline: 2px solid #9a7aff;
   outline-offset: 2px;
 }
-.remote-connect button.primary,
+.wt .remote-connect form button.primary,
 .instance-facts ~ button.primary,
-.core-auth button.primary {
+.wt .core-auth button.primary {
   background: #ff647c;
   color: #15141c;
   border: 0;
-  min-height: 42px;
+  min-height: 44px;
   border-radius: 7px;
   display: inline-flex;
   align-items: center;
@@ -91,8 +91,8 @@
   padding: 9px 16px;
   font-size: 14px;
 }
-.remote-connect button.primary:hover,
-.core-auth button.primary:hover {
+.wt .remote-connect form button.primary:hover,
+.wt .core-auth button.primary:hover {
   background: #ff7e92;
 }
 .remote-connect [role="alert"] {
@@ -160,4 +160,17 @@
 }
 .instance-details summary {
   cursor: pointer;
+}
+
+.wt .settings-workspace {
+  align-items: start;
+}
+.wt .settings-advanced > summary {
+  padding: 14px 16px;
+  cursor: pointer;
+  color: var(--wt-text);
+  font-size: 14px;
+}
+.wt .settings-advanced[open] > .panel {
+  margin: 0 12px 12px;
 }

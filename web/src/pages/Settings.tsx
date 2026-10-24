@@ -94,8 +94,11 @@ export function Settings() {
             </div>
           </section>
         </div>
-        <UpdateStatusPanel />
-        <UpdatePreferencesPanel />
+        <details className="panel settings-advanced update-settings">
+          <summary>Updates and recovery</summary>
+          <UpdateStatusPanel />
+          <UpdatePreferencesPanel />
+        </details>
       </div>
     </>
   );

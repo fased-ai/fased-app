@@ -21,7 +21,7 @@ import (
 func main() {
 	dir, err := core.DefaultDataDir()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot locate private core state")
+		fmt.Fprintln(os.Stderr, "Cannot locate Fased instance data")
 		os.Exit(1)
 	}
 	state := flag.String("data-dir", dir, "private instance state directory")

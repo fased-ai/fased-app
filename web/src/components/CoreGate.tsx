@@ -1,7 +1,7 @@
 import { InstanceSummary, RemoteConnection } from "./InstanceConnection";
 import logo from "../assets/fased-logo.svg";
 import { useState, type FormEvent, type ReactNode } from "react";
-import { ArrowRight, LockKeyhole, ShieldCheck } from "../icons";
+import { ArrowRight, ShieldCheck } from "../icons";
 import { useCore } from "../core";
 export function CoreGate({ children }: { children: ReactNode }) {
   const core = useCore();
@@ -66,9 +66,6 @@ export function CoreGate({ children }: { children: ReactNode }) {
         ) : (
           <form onSubmit={submit}>
             <div className="settings-body">
-              <span className="feature-icon lime">
-                <LockKeyhole size={23} />
-              </span>
               <h1>
                 {core.mode === "unclaimed" ? "Claim this workspace" : "Sign in"}
               </h1>
@@ -122,12 +119,6 @@ export function CoreGate({ children }: { children: ReactNode }) {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />
-              {core.mode === "unclaimed" && (
-                <p className="subtle">
-                  At least 12 characters. This protects app access; it is not a
-                  wallet unlock credential.
-                </p>
-              )}
               {core.error && (
                 <p className="core-error" role="alert">
                   {core.error}

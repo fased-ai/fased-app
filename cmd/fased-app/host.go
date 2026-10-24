@@ -41,7 +41,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	f.SetOutput(errOut)
 	root := f.String("prefix", paths.Root, "private application installation directory")
 	data := f.String("data-dir", paths.Data, "private instance state; preserved by uninstall")
-	listen := f.String("listen", "127.0.0.1:7331", "private core listener")
+	listen := f.String("listen", "127.0.0.1:7331", "loopback instance listener")
 	origin := f.String("public-origin", "", "exact private HTTPS reverse-proxy origin")
 	desktop := f.String("desktop-binary", "", "optional matching native desktop binary")
 	start := f.Bool("start", true, "start the user service after installation")

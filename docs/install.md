@@ -79,7 +79,7 @@ Use `--print` to verify/print without opening a browser, and optional `--instanc
 
 HTTPS is required for network destinations. HTTP is admitted only for explicit loopback/localhost SSH-forwarding addresses. Credentials, paths, query strings, fragments, redirects, incompatible APIs/identities, oversized responses and untrusted TLS fail before connection. CLI/native opening carries the verified public instance ID to the destination UI; the UI checks health before showing owner setup/sign-in or sending a password. Public health discovery omits credentials. Browser-to-browser connection opens the selected origin in a separate tab with no opener or copied session; its UI verifies its own runtime before sign-in. No local credential, conversation or setup preference is forwarded.
 
-The connection row shows the connected runtime profile, transport and public instance ID. Private HTTPS is displayed as Remote; a server installed as Remote also reports Remote through an SSH loopback connection. The stored deployment preference remains compatible metadata and is inspectable only in Diagnostics. Changing it does not move the runtime or change connection state. Existing owner data and authentication are reused across same-instance restart; connecting elsewhere leaves them on the original instance.
+The connection row follows the runtime profile and access transport, with the public instance ID under Instance details. Private HTTPS is displayed as Remote; a server installed as Remote also reports Remote through an SSH loopback connection. The stored deployment preference remains compatible metadata and is inspectable only in Diagnostics. Changing it does not move the runtime or change connection state. Existing owner data and authentication are reused across same-instance restart; connecting elsewhere leaves them on the original instance.
 
 ## Install
 
@@ -119,7 +119,7 @@ is logged in. It is not a Windows system service or an always-on Windows VPS.
 The future signer has a separate identity/administration gate.
 
 On macOS, the DMG contains `Fased App.app`; place it in the user's Applications
-folder. Its first launch asks before installing/starting the private core as a
+folder. Its first launch asks before installing/starting the Local instance as a
 user LaunchAgent. It does not install a system LaunchDaemon. The app/DMG still
 need Developer ID signing and notarization before retail distribution. Unsigned
 Windows/macOS packaging tests are engineering evidence only.
