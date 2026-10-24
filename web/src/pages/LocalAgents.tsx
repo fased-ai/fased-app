@@ -177,7 +177,6 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
           }}
         />
       )}
-      {tab === "settings" && <AIConnectionSettings />}
       {tab === "chat" && (
         <section className="panel agent-chat" aria-label="Agent chat workspace">
           <aside className="conversation-rail" aria-label="Conversations">
@@ -338,82 +337,86 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
         </section>
       )}
       {tab === "settings" && (
-        <section className="panel">
-          <div className="panel-heading">
-            <h2>Profile settings</h2>
-            <Badge>NO AUTHORITY</Badge>
-          </div>
-          <form
-            className="agent-record-body"
-            onSubmit={submit(async () => {
-              if (
-                await agents.change({
-                  action: "profile-update",
-                  revision: profileRevision.current,
-                  name,
-                  text: persona,
-                  provider,
-                  model,
-                })
-              )
-                profileRevision.current++;
-            })}
-          >
-            <label>
-              Profile name
-              <input
-                required
-                maxLength={80}
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </label>
-            <label>
-              Persona
-              <textarea
-                maxLength={4000}
-                value={persona}
-                onChange={(e) => setPersona(e.target.value)}
-              />
-            </label>
-            <label>
-              Provider preference
-              <select
-                value={provider}
-                onChange={(e) => setProvider(e.target.value as Provider)}
-              >
-                {Object.entries(providerNames).map(([id, title]) => (
-                  <option key={id} value={id}>
-                    {title}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Model preference
-              <input
-                maxLength={120}
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-              />
-            </label>
-            <p className="subtle">
-              Preferences only. No API key, subscription or provider connection
-              is configured here. Changing providers preserves conversations and
-              memory. Personas cannot grant tools or wallet access.
-            </p>
-            <button className="primary" disabled={agents.busy}>
-              Save profile
-            </button>
-            <button
-              type="button"
-              className="text-button"
-              onClick={reloadProfile}
+        <div className="agent-settings-workspace">
+          <section className="panel" aria-label="Profile settings">
+            <div className="panel-heading">
+              <h2>Profile settings</h2>
+              <Badge>NO AUTHORITY</Badge>
+            </div>
+            <form
+              className="agent-record-body"
+              onSubmit={submit(async () => {
+                if (
+                  await agents.change({
+                    action: "profile-update",
+                    revision: profileRevision.current,
+                    name,
+                    text: persona,
+                    provider,
+                    model,
+                  })
+                )
+                  profileRevision.current++;
+              })}
             >
-              Reload profile fields
-            </button>
-          </form>
-        </section>
+              <label>
+                Profile name
+                <input
+                  required
+                  maxLength={80}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </label>
+              <label>
+                Persona
+                <textarea
+                  maxLength={4000}
+                  value={persona}
+                  onChange={(e) => setPersona(e.target.value)}
+                />
+              </label>
+              <label>
+                Provider preference
+                <select
+                  value={provider}
+                  onChange={(e) => setProvider(e.target.value as Provider)}
+                >
+                  {Object.entries(providerNames).map(([id, title]) => (
+                    <option key={id} value={id}>
+                      {title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Model preference
+                <input
+                  maxLength={120}
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                />
+              </label>
+              <p className="subtle">
+                Preferences only. No API key, subscription or provider
+                connection is configured here. Changing providers preserves
+                conversations and memory. Personas cannot grant tools or wallet
+                access.
+              </p>
+              <button className="primary" disabled={agents.busy}>
+                Save profile
+              </button>
+              <button
+                type="button"
+                className="text-button"
+                onClick={reloadProfile}
+              >
+                Reload profile fields
+              </button>
+            </form>
+          </section>
+          <AIConnectionSettings />
+        </div>
       )}
       {tab === "memory" && (
         <section className="panel">
@@ -514,89 +517,104 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
         </section>
       )}
       {tab === "bots" && (
-        <section className="panel">
+        <section className="panel paper-strategies">
           <div className="panel-heading">
             <h2>Paper strategies</h2>
             <Badge>FIXED EXAMPLE INPUTS</Badge>
           </div>
-          <div className="agent-record-body">
-            <p>
-              No exchange, wallet, live price or return calculation is
-              connected. These examples exercise budgets and restart handling
-              using integer fixture units.
-            </p>
-            {v.bots.map((b) => (
-              <article className="memory-card" key={b.id}>
-                <strong>{b.name}</strong>
-                <p>
-                  {b.strategy} · Quantity {b.quantity} × fixed price{" "}
-                  {b.priceCents} · Used {b.spentCents} / {b.budgetCents} fixture
-                  units
-                </p>
-              </article>
-            ))}
-            <form
-              onSubmit={submit(async () => {
-                if (
-                  await agents.change({
-                    action: "bot-create",
-                    name: botName,
-                    quantity,
-                    priceCents: price,
-                    budgetCents: budget,
-                  })
-                )
-                  setBotName("");
-              })}
+          <div className="agent-split paper-workspace">
+            <div className="agent-record-body paper-library">
+              <p>
+                No exchange, wallet, live price or return calculation is
+                connected. These examples exercise budgets and restart handling
+                using integer fixture units.
+              </p>
+              {v.bots.map((b) => (
+                <article
+                  className="memory-card"
+                  key={b.id}
+                  aria-label={`Paper strategy ${b.name}`}
+                >
+                  <strong>{b.name}</strong>
+                  <p>
+                    {b.strategy} · Quantity {b.quantity} × fixed price{" "}
+                    {b.priceCents} · Used {b.spentCents} / {b.budgetCents}{" "}
+                    fixture units
+                  </p>
+                </article>
+              ))}
+              {!v.bots.length && (
+                <p className="subtle">No paper strategies saved.</p>
+              )}
+            </div>
+            <aside
+              className="agent-record-body paper-composer"
+              aria-label="Create paper strategy"
             >
-              <label>
-                Paper bot name
-                <input
-                  required
-                  maxLength={80}
-                  value={botName}
-                  onChange={(e) => setBotName(e.target.value)}
-                />
-              </label>
-              <div className="agent-grid">
+              <h3>New paper strategy</h3>
+              <form
+                onSubmit={submit(async () => {
+                  if (
+                    await agents.change({
+                      action: "bot-create",
+                      name: botName,
+                      quantity,
+                      priceCents: price,
+                      budgetCents: budget,
+                    })
+                  )
+                    setBotName("");
+                })}
+              >
                 <label>
-                  Example quantity
+                  Paper bot name
                   <input
-                    type="number"
-                    min={1}
-                    max={1000000}
                     required
-                    value={quantity}
-                    onChange={(e) => setQuantity(Number(e.target.value))}
+                    maxLength={80}
+                    value={botName}
+                    onChange={(e) => setBotName(e.target.value)}
                   />
                 </label>
-                <label>
-                  Fixed example price
-                  <input
-                    type="number"
-                    min={1}
-                    max={100000000}
-                    required
-                    value={price}
-                    onChange={(e) => setPrice(Number(e.target.value))}
-                  />
-                </label>
-                <label>
-                  Total fixture budget
-                  <input
-                    type="number"
-                    min={1}
-                    max={1000000000000}
-                    required
-                    value={budget}
-                    onChange={(e) => setBudget(Number(e.target.value))}
-                  />
-                </label>
-              </div>
-              <button className="primary" disabled={agents.busy}>
-                Create paper bot
-              </button>
-            </form>
+                <div className="agent-grid">
+                  <label>
+                    Example quantity
+                    <input
+                      type="number"
+                      min={1}
+                      max={1000000}
+                      required
+                      value={quantity}
+                      onChange={(e) => setQuantity(Number(e.target.value))}
+                    />
+                  </label>
+                  <label>
+                    Fixed example price
+                    <input
+                      type="number"
+                      min={1}
+                      max={100000000}
+                      required
+                      value={price}
+                      onChange={(e) => setPrice(Number(e.target.value))}
+                    />
+                  </label>
+                  <label>
+                    Total fixture budget
+                    <input
+                      type="number"
+                      min={1}
+                      max={1000000000000}
+                      required
+                      value={budget}
+                      onChange={(e) => setBudget(Number(e.target.value))}
+                    />
+                  </label>
+                </div>
+                <button className="primary" disabled={agents.busy}>
+                  Create paper bot
+                </button>
+              </form>{" "}
+            </aside>
           </div>
         </section>
       )}

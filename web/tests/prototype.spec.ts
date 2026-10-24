@@ -227,3 +227,41 @@ test("mobile navigation, keyboard escape and unknown routes are usable", async (
     ),
   ).toBe(true);
 });
+
+test("shared WEN Activity distinguishes browser demo notices", async ({
+  page,
+  isMobile,
+}) => {
+  await page.goto("/#settings");
+  await page
+    .getByRole("button", { name: "View setup", exact: true })
+    .first()
+    .click();
+  await page.goto("/#activity");
+  const activity = page.getByRole("region", {
+    name: "Activity records",
+    exact: true,
+  });
+  await expect(
+    activity.getByRole("heading", {
+      name: "Recent prototype activity",
+      exact: true,
+    }),
+  ).toBeVisible();
+  const event = activity
+    .getByRole("listitem")
+    .filter({ hasText: "OpenAI connection preview" });
+  await expect(event).toBeVisible();
+  await expect(event.getByText("DEMO", { exact: true })).toBeVisible();
+  await expect(activity.getByText("LOCAL ONLY", { exact: true })).toBeVisible();
+  await expect(activity).toHaveCSS("background-color", "rgb(30, 29, 41)");
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: `.evidence/wen-v3-activity-prototype-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+});

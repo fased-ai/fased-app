@@ -1,6 +1,7 @@
 import type { OpenAIModelPolicy, OpenAIAdmission } from "../agents";
 import { useEffect, useState } from "react";
 import { useCore } from "../core";
+import { Badge } from "../components/shared";
 
 type Connection = {
   admissionPolicy: OpenAIModelPolicy;
@@ -90,10 +91,10 @@ export function AIConnectionSettings() {
     }
   }
   return (
-    <section className="panel" aria-label="OpenAI connection">
+    <section className="panel ai-connection" aria-label="OpenAI connection">
       <div className="panel-heading">
         <h2>OpenAI connection</h2>
-        <span>TEST KEYS ONLY</span>
+        <Badge>TEST KEYS ONLY</Badge>
       </div>
       <div className="agent-record-body">
         <p>
@@ -107,7 +108,7 @@ export function AIConnectionSettings() {
           passphrase safe: password recovery cannot recover it. A compromised
           running core can access an unlocked key.
         </p>
-        <p role="status">
+        <p className="connection-status" role="status">
           {view?.ref
             ? `${view.locked ? "Locked" : "Unlocked"} · ${view.model} · ${view.ref}`
             : "No connection saved"}

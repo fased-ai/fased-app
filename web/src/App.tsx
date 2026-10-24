@@ -34,6 +34,7 @@ function WorkspaceShell() {
   const {
     state,
     core,
+    agents,
     setNoticesOpen,
     setProfileOpen,
     contextOpen,
@@ -255,28 +256,56 @@ function WorkspaceShell() {
               <Settings />
             ) : (
               <>
-                <SectionHead
-                  eyebrow="A DURABLE RECORD"
-                  title="Activity"
-                  description="Prototype events, setup decisions and notifications. Financial activity is not connected."
-                />
-                <section className="panel">
+                <SectionHead title="Activity" />
+                <section
+                  className="panel activity-workspace"
+                  aria-label="Activity records"
+                >
                   <div className="panel-heading">
-                    <h2>Recent prototype activity</h2>
-                    <Badge>LOCAL ONLY</Badge>
+                    <h2>
+                      {core.mode === "ready"
+                        ? "Profile activity"
+                        : "Recent prototype activity"}
+                    </h2>
+                    <Badge>
+                      {core.mode === "ready" ? "PROFILE ONLY" : "LOCAL ONLY"}
+                    </Badge>
                   </div>
-                  {state.notices.map((n) => (
-                    <div className="activity-row" key={n.id}>
-                      <span className="activity-icon">
-                        <CheckCheck size={17} />
-                      </span>
-                      <div>
-                        <strong>{n.title}</strong>
-                        <p>{n.detail}</p>
-                      </div>
-                      <Badge>DEMO</Badge>
-                    </div>
-                  ))}
+                  {core.mode === "ready" && (agents.error || !agents.view) ? (
+                    <p
+                      className="agent-record-body"
+                      role={agents.error ? "alert" : "status"}
+                    >
+                      {agents.error || "Loading agent activity…"}
+                    </p>
+                  ) : state.notices.length ? (
+                    <ul className="activity-list" aria-label="Activity events">
+                      {state.notices.map((n) => (
+                        <li className="activity-row" key={n.id}>
+                          <span className="activity-icon" aria-hidden="true">
+                            <CheckCheck size={17} />
+                          </span>
+                          <div>
+                            <strong>{n.title}</strong>
+                            <p>{n.detail}</p>
+                          </div>
+                          <Badge>
+                            {core.mode === "ready"
+                              ? n.read
+                                ? "READ"
+                                : "UNREAD"
+                              : "DEMO"}
+                          </Badge>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="agent-record-body">
+                      {core.mode === "ready"
+                        ? "No activity for this profile."
+                        : "No prototype activity."}
+                    </p>
+                  )}
                 </section>
               </>
             )}

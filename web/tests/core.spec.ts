@@ -6046,3 +6046,217 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
   const health = await (await page.request.get(url + "/api/v1/health")).json();
   expect(health.capabilities.walletSigner).toBe(false);
 });
+
+test("shared WEN remaining agent pages preserve news provenance paper budgets and disabled AI", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(90000);
+  page.setDefaultTimeout(10000);
+  await stop();
+  await start(true);
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await page.goto(url + "/#agents/news");
+  const selected = page
+    .locator(".local-profile-picker")
+    .getByRole("button", { name: /^Trading Analyst / });
+  await selected.click();
+  await expect(selected).toHaveAttribute("aria-pressed", "true");
+  const layout = async (name: string, selector: string) => {
+    const pane = page.locator(selector);
+    await expect(pane).toBeVisible();
+    expect(
+      await pane.evaluate(
+        (el) => getComputedStyle(el).gridTemplateColumns.split(" ").length,
+      ),
+    ).toBe(isMobile ? 1 : 2);
+    await expect(page.locator("html")).toHaveCSS(
+      "background-color",
+      "rgb(21, 20, 28)",
+    );
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    if (isMobile)
+      expect(
+        await pane
+          .locator("button, select, input:not([type=checkbox])")
+          .evaluateAll((els) =>
+            els
+              .filter(
+                (el) =>
+                  el.getBoundingClientRect().width &&
+                  el.getBoundingClientRect().height < 44,
+              )
+              .map((el) => el.textContent),
+          ),
+      ).toEqual([]);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.screenshot({
+      path: `.evidence/wen-v3-${name}-${isMobile ? "mobile" : "desktop"}.png`,
+      fullPage: true,
+    });
+  };
+  await expect(page.locator(".news-workspace")).toBeVisible();
+  await page.getByLabel("News source name").fill("V3 fixture headlines");
+  await page
+    .getByLabel("Public RSS URL")
+    .fill("https://news.fased.invalid/headlines.xml");
+  await page
+    .getByRole("button", { name: "Add news source", exact: true })
+    .click();
+  const feed = page.getByRole("article", {
+    name: "News source V3 fixture headlines",
+    exact: true,
+  });
+  await feed
+    .getByRole("button", { name: "Fetch headlines", exact: true })
+    .click();
+  await expect(
+    feed.getByRole("button", { name: "Discuss headline", exact: true }).first(),
+  ).toBeVisible();
+  await expect(feed).toContainText("SHA-256:");
+  await layout("news", ".news-workspace");
+  await page
+    .locator(".tabs")
+    .getByRole("button", { name: /^bots$/i })
+    .click();
+  await page.getByLabel("Paper bot name").fill("V3 paper budget");
+  await page
+    .getByRole("button", { name: "Create paper bot", exact: true })
+    .click();
+  await expect(page.locator(".paper-library")).toContainText("V3 paper budget");
+  await expect(page.locator(".paper-library")).toContainText(
+    "Used 0 / 500 fixture units",
+  );
+  await layout("bots", ".paper-workspace");
+  await page
+    .locator(".tabs")
+    .getByRole("button", { name: /^settings$/i })
+    .click();
+  await expect(page.getByLabel("Profile name", { exact: true })).toHaveValue(
+    "Trading Analyst",
+  );
+  const connection = page.getByRole("region", {
+    name: "OpenAI connection",
+    exact: true,
+  });
+  await expect(connection.getByRole("status")).toHaveText(
+    "No connection saved",
+  );
+  await expect(
+    connection.getByRole("button", {
+      name: "Save test connection",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  await expect(connection.getByLabel("Disposable API key")).toHaveValue("");
+  await layout("settings", ".agent-settings-workspace");
+  if (!isMobile) {
+    await page.setViewportSize({ width: 900, height: 1000 });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: ".evidence/wen-v3-settings-tablet.png",
+      fullPage: true,
+    });
+  }
+
+  if (!isMobile) await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto(url + "/#activity");
+  const activity = page.getByRole("region", {
+    name: "Activity records",
+    exact: true,
+  });
+  await expect(
+    activity.getByRole("heading", { name: "Profile activity", exact: true }),
+  ).toBeVisible();
+  await expect(
+    activity.getByText("No activity for this profile.", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    activity.getByRole("list", { name: "Activity events", exact: true }),
+  ).toHaveCount(0);
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const command = async (body: object) => {
+    const prior = await privateCLI(["agents", "--profile", "trading-analyst"]);
+    return privateCLI(["agents", "--request-stdin"], {
+      revision: prior.revision,
+      profileId: "trading-analyst",
+      ...body,
+    });
+  };
+  let view = await command({
+    action: "task-create",
+    name: "V3 activity reminder",
+    text: "Record the local fixture result",
+    intervalSeconds: 3600,
+    maxRuns: 1,
+  });
+  view = await command({ action: "task-run", id: view.tasks[0].id });
+  expect(view.tasks[0].runs).toBe(1);
+  await page.goto(url + "/#agents/tasks");
+  await page.reload();
+  await selected.click();
+  await expect(selected).toHaveAttribute("aria-pressed", "true");
+  await page.goto(url + "/#activity");
+  await expect(
+    activity.getByRole("list", { name: "Activity events", exact: true }),
+  ).toBeVisible();
+  await expect(activity).toContainText("V3 activity reminder");
+  await expect(activity).toContainText(
+    "Saved by the local task engine. No financial execution.",
+  );
+  await expect(activity.getByText("UNREAD", { exact: true })).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: `.evidence/wen-v3-activity-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+  view = await privateCLI(["agents", "--profile", "trading-analyst"]);
+  expect(view.bots).toHaveLength(1);
+  expect(view.bots[0].spentCents).toBe(0);
+  expect(view.tasks).toHaveLength(1);
+  expect(view.tasks[0].runs).toBe(1);
+  expect(view.aiRequests).toHaveLength(0);
+  const health = await (await page.request.get(url + "/api/v1/health")).json();
+  expect(health.capabilities.walletSigner).toBe(false);
+  expect(health.capabilities.financialExecution).toBe(false);
+  // An unavailable scoped core read must not relabel browser demo or cached records as current.
+  await page.route(/\/api\/v1\/agents(?:\?|$)/, (route) =>
+    route.fulfill({
+      status: 503,
+      json: {
+        error: {
+          code: "fixture_unavailable",
+          message: "Controlled activity read failure",
+        },
+      },
+    }),
+  );
+  await page.reload();
+  await expect(activity.getByRole("alert")).toBeVisible();
+  await expect(
+    activity.getByRole("list", { name: "Activity events", exact: true }),
+  ).toHaveCount(0);
+  await expect(activity).not.toContainText("V3 activity reminder");
+});

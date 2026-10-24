@@ -37,9 +37,7 @@ export function Agents() {
   return (
     <>
       <SectionHead
-        eyebrow="PERSISTENT PROFILES"
         title="Agents"
-        description="Identity, context and a clear remit. Models are a connection, not the agent."
         action={
           <button className="secondary" onClick={() => setProfileOpen(true)}>
             <Plus size={16} /> New profile
