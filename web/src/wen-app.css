@@ -3,6 +3,7 @@
 :root.wt {
   container-type: normal;
   container-name: none;
+  scroll-padding-top: 120px;
   --bg: var(--wt-bg);
   --panel: var(--wt-surface);
   --line: var(--wt-border);
@@ -816,4 +817,15 @@
     grid-row: 1;
     grid-column: 2;
   }
+}
+
+@media (max-width: 767px) {
+  :root.wt {
+    scroll-padding-top: 64px;
+  }
+}
+.wt .sidebar-bottom > button.active {
+  background: var(--wt-raised);
+  color: var(--wt-text);
+  box-shadow: inset 0 -2px var(--wt-violet);
 }

@@ -5753,11 +5753,13 @@ test("shared WEN app shell and agent panes retain bounded local controls", async
   isMobile,
 }) => {
   test.setTimeout(90000);
+  page.setDefaultTimeout(10000);
   await page.goto(url);
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await expect(page.locator(".core-auth-brand")).toHaveText("Fased");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -5783,7 +5785,6 @@ test("shared WEN app shell and agent panes retain bounded local controls", async
     expect(nav.y + nav.height).toBeLessThanOrEqual(header.y + header.height);
   }
   const screenshot = async (name: string) => {
-    await page.getByRole("heading", { name: "Agents", exact: true }).click();
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({ path: `.evidence/${name}.png`, fullPage: true });
   };
@@ -5873,4 +5874,9 @@ test("shared WEN app shell and agent panes retain bounded local controls", async
   await primary.focus();
   await expect(primary).toBeFocused();
   await expect(primary).toHaveCSS("outline-style", "solid");
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Welcome back", exact: true }),
+  ).toBeVisible();
 });

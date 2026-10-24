@@ -43,11 +43,7 @@ export function CoreGate({ children }: { children: ReactNode }) {
     <main className="core-gate">
       <section className="core-auth panel">
         <div className="core-auth-brand">
-          <span className="brand-mark">
-            f<i />
-          </span>
-          <strong>fased app</strong>
-          <span className="badge lime">PRIVATE CORE</span>
+          <strong>Fased</strong>
         </div>
         {core.mode === "loading" ? (
           <div className="empty-state" role="status">
