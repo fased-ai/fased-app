@@ -8,6 +8,18 @@ import { tmpdir } from "node:os";
 import { once } from "node:events";
 import { createHash, randomBytes } from "node:crypto";
 
+async function openConversationList(page: import("@playwright/test").Page) {
+  const toggle = page.getByRole("button", {
+    name: "Conversations",
+    exact: true,
+  });
+  if (
+    (await toggle.isVisible()) &&
+    (await toggle.getAttribute("aria-expanded")) !== "true"
+  )
+    await toggle.click();
+}
+
 async function revealControl(
   page: import("@playwright/test").Page,
   control: import("@playwright/test").Locator,
@@ -53,6 +65,13 @@ async function revealControl(
     if (await options.isVisible()) await options.click();
   }
   await expect(control).toBeAttached();
+  if (
+    !(await control.isVisible()) &&
+    (await control
+      .locator("xpath=ancestor::aside[@aria-label='Conversations']")
+      .count())
+  )
+    await openConversationList(page);
   // Click the outer disclosure first, exactly as an owner using the UI would.
   for (let i = 0; i < 4; i++) {
     if (await control.isVisible()) break;
@@ -1173,17 +1192,20 @@ test("chat drafts stay with their conversation through search switching and a pe
   const earlierDraft = "Unsent fixture context for the earlier thread.";
   const laterDraft = "Fixture context saved only in the later thread.";
   const earlierEdited = earlierDraft + " Edited while another thread saves.";
+  await openConversationList(page);
   await threads
     .getByRole("button", { name: "Earlier thread", exact: true })
     .click();
   await revealControl(page, message);
   await message.fill(earlierDraft);
+  await openConversationList(page);
   await threads
     .getByRole("button", { name: "Later thread", exact: true })
     .click();
   await expect(message).toHaveValue("");
   await revealControl(page, message);
   await message.fill(laterDraft);
+  await openConversationList(page);
   await threads
     .getByRole("button", { name: "Earlier thread", exact: true })
     .click();
@@ -1232,6 +1254,7 @@ test("chat drafts stay with their conversation through search switching and a pe
   }
   await revealControl(page, search);
   await search.fill("");
+  await openConversationList(page);
   await threads
     .getByRole("button", { name: "Later thread", exact: true })
     .click();
@@ -1239,6 +1262,7 @@ test("chat drafts stay with their conversation through search switching and a pe
   await expect(
     page.locator(".local-messages").getByText(laterDraft, { exact: true }),
   ).toBeVisible();
+  await openConversationList(page);
   await threads
     .getByRole("button", { name: "Earlier thread", exact: true })
     .click();
@@ -1982,6 +2006,7 @@ test("conversation search follows matching records and closes hidden conversatio
   const search = page.getByRole("searchbox", {
     name: "Search conversations",
     exact: true,
+    includeHidden: true,
   });
   for (const query of ["older saved", "ORCHID EVIDENCE"]) {
     await revealControl(page, search);
@@ -2450,10 +2475,15 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
       page.getByRole("searchbox", {
         name: "Search conversations",
         exact: true,
+        includeHidden: true,
       }),
     );
     await page
-      .getByRole("searchbox", { name: "Search conversations", exact: true })
+      .getByRole("searchbox", {
+        name: "Search conversations",
+        exact: true,
+        includeHidden: true,
+      })
       .fill(query);
     await expect(
       page
@@ -2480,10 +2510,18 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   }
   await revealControl(
     page,
-    page.getByRole("searchbox", { name: "Search conversations", exact: true }),
+    page.getByRole("searchbox", {
+      name: "Search conversations",
+      exact: true,
+      includeHidden: true,
+    }),
   );
   await page
-    .getByRole("searchbox", { name: "Search conversations", exact: true })
+    .getByRole("searchbox", {
+      name: "Search conversations",
+      exact: true,
+      includeHidden: true,
+    })
     .fill("");
   await page
     .getByRole("button", { name: headlineSession.name, exact: true })
@@ -5804,15 +5842,24 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
   await page
     .getByLabel("Agent", { exact: true })
     .selectOption({ label: "Trading Analyst" });
+  await openConversationList(page);
   await page
     .getByRole("button", { name: "Older conversation", exact: true })
     .click();
   await revealControl(
     page,
-    page.getByRole("searchbox", { name: "Search conversations", exact: true }),
+    page.getByRole("searchbox", {
+      name: "Search conversations",
+      exact: true,
+      includeHidden: true,
+    }),
   );
   await page
-    .getByRole("searchbox", { name: "Search conversations", exact: true })
+    .getByRole("searchbox", {
+      name: "Search conversations",
+      exact: true,
+      includeHidden: true,
+    })
     .fill("old filter");
   await page.getByRole("button", { name: "news", exact: true }).click();
   const panel = page.getByRole("region", { name: "News inputs", exact: true });
@@ -5876,7 +5923,11 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
     "Historical news headline",
   );
   await expect(
-    page.getByRole("searchbox", { name: "Search conversations", exact: true }),
+    page.getByRole("searchbox", {
+      name: "Search conversations",
+      exact: true,
+      includeHidden: true,
+    }),
   ).toHaveValue("");
   v = await read();
   expect({
@@ -6172,15 +6223,24 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
   await page
     .getByLabel("Agent", { exact: true })
     .selectOption({ label: "Trading Analyst" });
+  await openConversationList(page);
   await page
     .getByRole("button", { name: "Other conversation", exact: true })
     .click();
   await revealControl(
     page,
-    page.getByRole("searchbox", { name: "Search conversations", exact: true }),
+    page.getByRole("searchbox", {
+      name: "Search conversations",
+      exact: true,
+      includeHidden: true,
+    }),
   );
   await page
-    .getByRole("searchbox", { name: "Search conversations", exact: true })
+    .getByRole("searchbox", {
+      name: "Search conversations",
+      exact: true,
+      includeHidden: true,
+    })
     .fill("stale selection");
   await page.getByRole("button", { name: "memory", exact: true }).click();
   const search = async (q: string) => {
@@ -6227,7 +6287,11 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
     .getByRole("button", { name: "Open conversation", exact: true })
     .click();
   await expect(
-    page.getByRole("searchbox", { name: "Search conversations", exact: true }),
+    page.getByRole("searchbox", {
+      name: "Search conversations",
+      exact: true,
+      includeHidden: true,
+    }),
   ).toHaveValue("");
   await expect(
     page.getByRole("heading", { name: "Source conversation", exact: true }),
@@ -6488,6 +6552,7 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
   await page
     .getByLabel("Agent", { exact: true })
     .selectOption({ label: "Trading Analyst" });
+  await openConversationList(page);
   await page
     .getByRole("button", { name: "Selection conversation", exact: true })
     .click();
@@ -6714,6 +6779,7 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
   await page
     .getByLabel("Agent", { exact: true })
     .selectOption({ label: "Trading Analyst" });
+  await openConversationList(page);
   await page
     .getByRole("button", { name: "Selection conversation", exact: true })
     .click();
@@ -6773,6 +6839,7 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
   await page
     .getByLabel("Agent", { exact: true })
     .selectOption({ label: "Trading Analyst" });
+  await openConversationList(page);
   await page
     .getByRole("button", { name: "Selection conversation", exact: true })
     .click();
@@ -6910,6 +6977,7 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
   await expect(
     page.getByLabel("Agent", { exact: true }).locator("option:checked"),
   ).toHaveText("Trading Analyst");
+  await openConversationList(page);
   await page
     .getByRole("button", { name: "Saved draft conversation", exact: true })
     .click();
@@ -7175,6 +7243,7 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
     review.getByRole("heading", { name: "Request draft", exact: true }),
   ).toHaveCount(0);
   await delayedRead(async () => {
+    await openConversationList(page);
     await page
       .getByRole("button", { name: "Other draft conversation", exact: true })
       .click();
@@ -7191,6 +7260,7 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
   await expect(
     review.getByRole("heading", { name: "Request draft", exact: true }),
   ).toHaveCount(0);
+  await openConversationList(page);
   await page
     .getByRole("button", { name: "Saved draft conversation", exact: true })
     .click();
@@ -7211,6 +7281,7 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
   await expect(
     page.getByLabel("Agent", { exact: true }).locator("option:checked"),
   ).toHaveText("Trading Analyst");
+  await openConversationList(page);
   await page
     .getByRole("button", { name: "Saved draft conversation", exact: true })
     .click();
@@ -7246,6 +7317,7 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
   await expect(
     page.getByLabel("Agent", { exact: true }).locator("option:checked"),
   ).toHaveText("Trading Analyst");
+  await openConversationList(page);
   await page
     .getByRole("button", { name: "Saved draft conversation", exact: true })
     .click();
@@ -7399,6 +7471,7 @@ test("local agent evidence inspection shares UI/CLI sources, inert reads and res
     await expect(
       page.getByLabel("Agent", { exact: true }).locator("option:checked"),
     ).toHaveText("Trading Analyst");
+    await openConversationList(page);
     await page
       .getByRole("button", { name: "Evidence chat", exact: true })
       .click();
@@ -7612,6 +7685,7 @@ test("local agent evidence inspection shares UI/CLI sources, inert reads and res
     inspector.getByRole("article", { name: "Inspected evidence", exact: true }),
   ).toHaveCount(0);
   await delayedRead(async () => {
+    await openConversationList(page);
     await page
       .getByRole("button", { name: "Other evidence chat", exact: true })
       .click();
@@ -7622,6 +7696,7 @@ test("local agent evidence inspection shares UI/CLI sources, inert reads and res
   await expect(
     inspector.getByRole("article", { name: "Inspected evidence", exact: true }),
   ).toHaveCount(0);
+  await openConversationList(page);
   await page
     .getByRole("button", { name: "Evidence chat", exact: true })
     .click();
@@ -7806,6 +7881,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
     await expect(
       page.getByLabel("Agent", { exact: true }).locator("option:checked"),
     ).toHaveText("Trading Analyst");
+    await openConversationList(page);
     await page
       .getByRole("button", { name: "Evidence review chat", exact: true })
       .click();
@@ -8082,11 +8158,12 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
       await review
         .getByRole("button", { name: "Cancel draft", exact: true })
         .click();
-    else if (mode === "session")
+    else if (mode === "session") {
+      await openConversationList(page);
       await page
         .getByRole("button", { name: "Other review chat", exact: true })
         .click();
-    else {
+    } else {
       const profile = page.getByLabel("Agent", { exact: true });
       await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
       await page
