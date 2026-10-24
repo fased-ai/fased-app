@@ -30,11 +30,25 @@ func Start(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS, 
 	return start(ctx, dir, listen, publicOrigin, assets, false, custodyConfig...)
 }
 
-// StartAgentFixture enables only compiled, in-process model fixtures, never API credentials.
+// StartAgentFixture enables only compiled, in-process model fixtures; bound
+// disposable credentials may exercise authentication without contacting OpenAI.
 func StartAgentFixture(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS) (*Server, error) {
 	return start(ctx, dir, listen, publicOrigin, assets, true)
 }
+
+// StartSessionFixture enables only finite compiled shadow sessions. It cannot
+// configure a signer, model transport, external news or research endpoint.
+func StartSessionFixture(ctx context.Context, dir, listen string, assets fs.FS) (*Server, error) {
+	return startModes(ctx, dir, listen, "", assets, false, true)
+}
 func start(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS, fixture bool, custodyConfig ...string) (*Server, error) {
+	return startModes(ctx, dir, listen, publicOrigin, assets, fixture, false, custodyConfig...)
+}
+func startModes(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS, fixture, sessionFixture bool, custodyConfig ...string) (*Server, error) {
+	if sessionFixture && (fixture || len(custodyConfig) > 0 || publicOrigin != "") {
+		return nil, errors.New("session fixture requires a standalone local core")
+	}
+
 	host, _, err := net.SplitHostPort(listen)
 	if err != nil || !isLoopbackHost(host) {
 		return nil, errors.New("listen address must be an explicit loopback IP and port")
@@ -51,6 +65,7 @@ func start(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS, 
 		lock.Close()
 		return nil, err
 	}
+	store.sessionFixture = sessionFixture
 	failed := true
 	defer func() {
 		if failed {
@@ -113,15 +128,32 @@ func (s *Server) startAgentTasks() {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		lastError := ""
+		var newsRT http.RoundTripper = newPublicNewsTransport()
+		if s.agentFixture {
+			newsRT = fixtureNewsTransport{now: s.Store.now}
+		}
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
 				c, stop := context.WithTimeout(ctx, 5*time.Second)
-				e := s.Store.RunAgentTasks(c)
-				if e == nil {
-					e = s.Store.advanceAgentAI(c, fixtureAITransport{}, s.agentFixture)
+				e := s.Store.runAgentTasks(c, s.agentFixture)
+				if s.Store.sessionFixture {
+					stop()
+					c, stop = context.WithTimeout(ctx, 5*time.Second)
+					runErr := s.Store.advanceWENFixtureRuns(c)
+					if e == nil {
+						e = runErr
+					}
+				}
+				if e == nil && !s.Store.sessionFixture {
+					e = s.Store.advanceAgentNews(c, newsRT, s.agentFixture)
+					stop()
+					c, stop = context.WithTimeout(ctx, 5*time.Second)
+					if e == nil {
+						e = s.Store.advanceAgentAI(c, fixtureAITransport{}, s.agentFixture)
+					}
 				}
 				stop()
 				message := ""

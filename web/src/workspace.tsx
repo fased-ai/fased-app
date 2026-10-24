@@ -21,7 +21,9 @@ function loadInitialState() {
 }
 function getRoute() {
   const route = window.location.hash.slice(1);
-  return /^(overview|activity|settings|terminals(\/(asset|loss|hyperliquid|jupiter))?|agents\/(chat|bots|tasks|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
+  if (route === "terminals/asset" || route === "terminals/loss")
+    return "terminals/satcoin";
+  return /^(overview|activity|settings|terminals(\/(satcoin|hyperliquid|jupiter))?|agents\/(chat|bots|tasks|news|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
     route,
   )
     ? route
@@ -120,10 +122,14 @@ function useWorkspaceState() {
   const unread = state.notices.filter((n) => !n.read).length;
   useEffect(() => {
     const fn = () => {
-      setRoute(getRoute());
+      const next = getRoute();
+      if (next === "terminals/satcoin" && window.location.hash !== `#${next}`)
+        window.history.replaceState(window.history.state, "", `#${next}`);
+      setRoute(next);
       setQuery("");
       setSidebarOpen(false);
     };
+    fn();
     window.addEventListener("hashchange", fn);
     return () => window.removeEventListener("hashchange", fn);
   }, []);

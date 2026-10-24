@@ -20,15 +20,20 @@ import (
 )
 
 type Store struct {
-	db          *sql.DB
-	dir         string
-	instanceID  string
-	pauseFault  func(string) error // Test-only interruption injection, never configuration or IPC.
-	backupFault func(string) error // Test-only partial write/crash injection.
-	bootID      string
-	now         func() time.Time
-	authMu      sync.Mutex
-	fixture     func(context.Context, signer.Request) (signer.Response, error)
+	sessionFixture bool
+	aiMu           sync.Mutex
+	newsMu         sync.Mutex
+	provider       providerState
+	db             *sql.DB
+	dir            string
+	instanceID     string
+	pauseFault     func(string) error // Test-only interruption injection, never configuration or IPC.
+	backupFault    func(string) error // Test-only partial write/crash injection.
+	bootID         string
+	now            func() time.Time
+	authMu         sync.Mutex
+	fixture        func(context.Context, signer.Request) (signer.Response, error)
+	researchRead   func(context.Context, researchFactResult) (json.RawMessage, error) // Test-only local projection fault; never configuration/IPC.
 }
 
 func OpenStore(dir string) (_ *Store, resultErr error) {
@@ -132,6 +137,64 @@ PRAGMA user_version=1;`)
 			return nil, err
 		}
 	}
+	if schema <= 5 {
+		if err = migrateTaskAI(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if schema <= 6 {
+		if err = migrateAIConnections(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if schema <= 7 {
+		if err = migrateAgentNews(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if schema <= 8 {
+		if err = migrateAIAdmission(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if schema <= 9 {
+		if err = migrateWENPaper(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if schema <= 10 {
+		if err = migrateWENResearch(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if schema <= 11 {
+		if err = migrateWENResearchAI(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if schema <= 12 {
+		if err = migrateWENResearchLoop(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if schema <= 13 {
+		if err = migrateWENSessions(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if schema <= 14 {
+		if err = migrateWENFixtureRuns(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if schema <= 15 {
+		if err = migratePlaybooks(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if _, _, err = readAgents(ctx, db); err != nil {
+		return nil, err
+	}
 	store := &Store{db: db, dir: dir, now: time.Now, bootID: update.NewProbe()}
 	if err = db.QueryRowContext(ctx, "SELECT instance_id FROM instance WHERE id=1").Scan(&store.instanceID); err != nil {
 		return nil, err
@@ -139,9 +202,15 @@ PRAGMA user_version=1;`)
 	if _, err = store.UpdatePause(ctx, update.CorePauseCommand{Action: "status", ProbeID: update.NewProbe()}); err != nil {
 		return nil, err
 	}
+	if err = store.recoverWENSessions(ctx); err != nil {
+		return nil, err
+	}
+	if err = store.recoverWENFixtureRuns(ctx); err != nil {
+		return nil, err
+	}
 	return store, nil
 }
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error { s.lockAIConnection(); return s.db.Close() }
 func randomToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {

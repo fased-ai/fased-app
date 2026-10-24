@@ -11,7 +11,7 @@ concurrency:
 jobs:
   core:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 17
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,7 +33,8 @@ jobs:
         run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o .evidence/bin/windows.exe ./cmd/fased-app
       - name: Headless macOS compilation
         run: GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o .evidence/bin/macos ./cmd/fased-app
-      - run: npx playwright install --with-deps chromium
+      # Same runner libraries and headless browser as the managed signer UI proof.
+      - run: npx playwright install --only-shell chromium
       - run: npm run test:ui
       - run: npm run test:core-ui
       - uses: actions/upload-artifact@v4
@@ -149,6 +150,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+          cache: npm
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.x"
@@ -158,7 +160,7 @@ jobs:
         run: node scripts/check-signer-isolation.mjs
       - name: Build managed disposable core
         run: |
-          npm ci
+          npm ci --prefer-offline --no-audit --no-fund
           npm run build
           go build -trimpath -o .evidence/bin/fased-app ./cmd/fased-app
       - name: Build deliberately unhealthy disposable candidate
@@ -192,7 +194,8 @@ jobs:
           go test -v ./internal/update -run '^TestReleaseAdmissionCompiledCLI$' > .evidence/p4-release-admission/admission-cli.log 2>&1
           cat .evidence/p4-release-admission/admission-cli.log
       - name: Managed account UI browser prerequisite
-        run: npx playwright install --with-deps chromium
+        # The Ubuntu runner supplies the shared libraries; actual browser launch checks them.
+        run: npx playwright install --only-shell chromium
       - name: Installer-managed identities and protected owner recovery
         env:
           FASED_PORTABLE_ACCEPTANCE: "1"
@@ -346,7 +349,8 @@ jobs:
       - run: go build -o .evidence/bin/fased-signer ./cmd/fased-signer
       - run: go build -o .evidence/bin/fased-unhealthy-core ./internal/custodyinstall/testdata/unhealthy-core
       - run: node scripts/build-inspection-predecessor.mjs
-      - run: npx playwright install --with-deps chromium
+      # Reuse the headless browser/runtime proven by the core job.
+      - run: npx playwright install --only-shell chromium
       - name: Actual disposable installed inspection and guarded bridge
         env:
           FASED_INSTALLED_INSPECTION_FIXTURE: "1"

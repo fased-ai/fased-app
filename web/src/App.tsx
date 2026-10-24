@@ -1,12 +1,11 @@
+import logo from "./assets/fased-logo.svg";
 import {
   ArrowUpRight,
   Bell,
   BookOpen,
   Check,
   CheckCheck,
-  ChevronRight,
   FlaskConical,
-  LockKeyhole,
   Menu,
   MessageSquare,
   Monitor,
@@ -16,7 +15,6 @@ import {
   Search,
   Server,
   Settings2,
-  ShieldCheck,
   X,
 } from "./icons";
 import { providerNames } from "./state";
@@ -36,7 +34,7 @@ function WorkspaceShell() {
   const {
     state,
     core,
-    dispatch,
+    agents,
     setNoticesOpen,
     setProfileOpen,
     contextOpen,
@@ -80,22 +78,8 @@ function WorkspaceShell() {
             onClick={() => navigate("overview")}
             aria-label="Fased overview"
           >
-            <span className="brand-mark">
-              f<i />
-            </span>
-            <strong>
-              fased<span>app</span>
-            </strong>
+            <img src={logo} alt="" width="26" height="26" /> Fased
           </button>
-          <div className="workspace-switch">
-            <span className="workspace-avatar">F</span>
-            <span>
-              <strong>Personal workspace</strong>
-              <small>Private by design</small>
-            </span>
-            <LockKeyhole size={13} />
-          </div>
-          <p className="nav-label">WORKSPACE</p>
           <nav aria-label="Main navigation">
             {navigation.map((n) => (
               <a
@@ -114,51 +98,20 @@ function WorkspaceShell() {
               </a>
             ))}
           </nav>
-          <div className="sidebar-agents">
-            <div className="nav-label">
-              YOUR AGENTS{" "}
-              <button
-                className="icon-button"
-                aria-label="Create agent profile"
-                onClick={() => setProfileOpen(true)}
-              >
-                <Plus size={13} />
-              </button>
-            </div>
-            {state.profiles.slice(0, 5).map((p) => (
-              <button
-                key={p.id}
-                onClick={() => {
-                  dispatch({ type: "profile", id: p.id });
-                  navigate("agents/chat");
-                }}
-              >
-                <span className={`profile-dot ${p.color}`} />
-                {p.name}
-              </button>
-            ))}
-          </div>
+          <button
+            className="icon-button"
+            aria-label="Create agent profile"
+            onClick={() => setProfileOpen(true)}
+          >
+            <Plus size={16} />
+          </button>
           <div className="sidebar-bottom">
-            <div className="foundation-note">
-              <ShieldCheck size={19} />
-              <strong>A smaller foundation.</strong>
-              <p>
-                Your accounts and decisions.
-                <br />
-                Clear boundaries throughout.
-              </p>
-            </div>
             <button
               className={section === "settings" ? "active" : ""}
               onClick={() => navigate("settings")}
             >
               <Settings2 size={17} /> Settings
             </button>
-            <div className="sidebar-version">
-              <span className="dot" />
-              {core.mode === "ready" ? "Private core" : "Design prototype"}
-              <span>{core.mode === "ready" ? core.version : "0.0.0"}</span>
-            </div>
           </div>
         </aside>
         <div className="app-body">
@@ -171,8 +124,11 @@ function WorkspaceShell() {
               >
                 <Menu size={19} />
               </button>
+              <span className="mobile-brand">
+                <img src={logo} alt="" width="23" height="23" />
+                Fased
+              </span>
               <span className="breadcrumb">
-                Workspace <ChevronRight size={13} />{" "}
                 <strong>
                   {section === "agents"
                     ? "Agents"
@@ -189,15 +145,25 @@ function WorkspaceShell() {
               </span>
             </div>
             <div className="topbar-actions">
-              <div className="instance-pill">
+              <span className="fixture-indicator">
+                <FlaskConical size={12} /> Fixture
+              </span>
+              {core.mode === "ready" && (
+                <button
+                  className="text-button"
+                  disabled={core.saving}
+                  onClick={() => void core.logout()}
+                >
+                  Sign out
+                </button>
+              )}
+              <div className="instance-pill" aria-label="Instance location">
                 {state.setup.host === "local" ? (
                   <Monitor size={13} />
                 ) : (
                   <Server size={13} />
                 )}
-                <span>
-                  {state.setup.host === "local" ? "Local" : "VPS"} preview
-                </span>
+                <span>{state.setup.host === "local" ? "Local" : "Remote"}</span>
                 <span className="dot" />
               </div>
               <div className="search-wrap">
@@ -249,33 +215,6 @@ function WorkspaceShell() {
               </button>
             </div>
           </header>
-          <div className="prototype-strip">
-            <FlaskConical size={13} />
-            <strong>
-              {core.mode === "ready"
-                ? "PRIVATE CORE · TERMINAL PROTOTYPES"
-                : "INTERACTIVE PROTOTYPE"}
-            </strong>
-            <span>
-              Illustrative data. No connected wallets, AI requests or real
-              execution.
-            </span>
-          </div>
-          {core.mode === "ready" && (
-            <div className="core-status">
-              <span>
-                <ShieldCheck size={13} /> Core connected · setup saved to this
-                instance
-              </span>
-              <button
-                className="text-button"
-                disabled={core.saving}
-                onClick={() => void core.logout()}
-              >
-                Sign out
-              </button>
-            </div>
-          )}
           {core.error && core.mode === "ready" && (
             <div className="storage-warning" role="alert">
               {core.error}
@@ -304,41 +243,60 @@ function WorkspaceShell() {
               <Settings />
             ) : (
               <>
-                <SectionHead
-                  eyebrow="A DURABLE RECORD"
-                  title="Activity"
-                  description="Prototype events, setup decisions and notifications. Financial activity is not connected."
-                />
-                <section className="panel">
+                <SectionHead title="Activity" />
+                <section
+                  className="panel activity-workspace"
+                  aria-label="Activity records"
+                >
                   <div className="panel-heading">
-                    <h2>Recent prototype activity</h2>
-                    <Badge>LOCAL ONLY</Badge>
+                    <h2>
+                      {core.mode === "ready"
+                        ? "Profile activity"
+                        : "Recent prototype activity"}
+                    </h2>
+                    <Badge>
+                      {core.mode === "ready" ? "PROFILE ONLY" : "LOCAL ONLY"}
+                    </Badge>
                   </div>
-                  {state.notices.map((n) => (
-                    <div className="activity-row" key={n.id}>
-                      <span className="activity-icon">
-                        <CheckCheck size={17} />
-                      </span>
-                      <div>
-                        <strong>{n.title}</strong>
-                        <p>{n.detail}</p>
-                      </div>
-                      <Badge>DEMO</Badge>
-                    </div>
-                  ))}
+                  {core.mode === "ready" && (agents.error || !agents.view) ? (
+                    <p
+                      className="agent-record-body"
+                      role={agents.error ? "alert" : "status"}
+                    >
+                      {agents.error || "Loading agent activity…"}
+                    </p>
+                  ) : state.notices.length ? (
+                    <ul className="activity-list" aria-label="Activity events">
+                      {state.notices.map((n) => (
+                        <li className="activity-row" key={n.id}>
+                          <span className="activity-icon" aria-hidden="true">
+                            <CheckCheck size={17} />
+                          </span>
+                          <div>
+                            <strong>{n.title}</strong>
+                            <p>{n.detail}</p>
+                          </div>
+                          <Badge>
+                            {core.mode === "ready"
+                              ? n.read
+                                ? "READ"
+                                : "UNREAD"
+                              : "DEMO"}
+                          </Badge>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="agent-record-body">
+                      {core.mode === "ready"
+                        ? "No activity for this profile."
+                        : "No prototype activity."}
+                    </p>
+                  )}
                 </section>
               </>
             )}
           </main>
-          <footer className="app-footer">
-            <span>
-              <LockKeyhole size={12} />{" "}
-              {core.mode === "ready"
-                ? "Agent records stay on this instance."
-                : "Prototype preferences stay in this browser."}
-            </span>
-            <span>Foundation before execution.</span>
-          </footer>
         </div>
         {contextOpen && (
           <aside className="context-panel">
@@ -365,10 +323,6 @@ function WorkspaceShell() {
                 <small>Current workspace</small>
                 <strong>{section}</strong>
               </div>
-              <p className="context-note">
-                A contextual agent can explain selected state and draft
-                reviewable actions. This panel is a design preview.
-              </p>
               <button
                 className="secondary"
                 onClick={() => navigate("agents/chat")}

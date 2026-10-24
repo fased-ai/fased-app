@@ -8,11 +8,9 @@ test("setup resumes after reload and never creates signing authority", async ({
     path: `.evidence/overview-${test.info().project.name}.png`,
     fullPage: true,
   });
-  await expect(
-    page.getByText("INTERACTIVE PROTOTYPE", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Set up workspace" }).click();
-  await page.getByRole("button", { name: /Private VPS Always-on/ }).click();
+  await page.getByRole("button", { name: /Remote Always-on/ }).click();
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page
     .getByRole("button", { name: /Automation wallet Dedicated/ })
@@ -81,30 +79,98 @@ test("profiles keep separate model preferences and memories", async ({
 });
 test("terminal mockups cannot execute and make no remote requests", async ({
   page,
+  isMobile,
 }) => {
   const external: string[] = [];
+  const mutations: string[] = [];
   page.on("request", (request) => {
     if (!new URL(request.url()).hostname.match(/^(127\.0\.0\.1|localhost)$/))
       external.push(request.url());
+    if (!["GET", "HEAD"].includes(request.method()))
+      mutations.push(request.url());
   });
-  await page.goto("/#terminals/asset");
+  await page.goto("/#terminals");
+  await expect(page.locator(".terminal-card")).toHaveCount(3);
   await expect(
-    page.getByText("WEN Asset Mining is a design prototype.", { exact: true }),
-  ).toBeVisible();
+    page.getByRole("heading", { name: "WEN Satcoin Mining", exact: true }),
+  ).toHaveCount(1);
+  await page
+    .getByRole("button", { name: "WEN Satcoin Mining", exact: true })
+    .click();
+  for (const route of ["satcoin", "asset", "loss"]) {
+    await page.goto(`/#terminals/${route}`);
+    await expect(page).toHaveURL(/#terminals\/satcoin$/);
+    await expect(
+      page.getByRole("heading", { name: "WEN Satcoin Mining", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("WEN Satcoin Mining is a design prototype.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("All values below are illustrative.", { exact: false }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Execution unavailable" }),
+    ).toBeDisabled();
+    await expect(page.getByText("Not loaded", { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Results & claims", exact: true }),
+    ).toBeVisible();
+    await expect(page.locator("main")).not.toContainText(
+      /Asset Mining|Loss Mining|district|arena|eligible loss|paid winnings/i,
+    );
+    if (isMobile)
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+      ).toBe(true);
+  }
+  await page.reload();
+  await expect(page).toHaveURL(/#terminals\/satcoin$/);
+  // In-page hash changes use the same aliases as initial entry, without adding a redirect entry.
+  await page.evaluate(() => {
+    window.location.hash = "terminals/asset";
+  });
+  await expect(page).toHaveURL(/#terminals\/satcoin$/);
+  await page.getByRole("button", { name: "Hyperliquid", exact: true }).click();
+  await expect(page).toHaveURL(/#terminals\/hyperliquid$/);
   await expect(
     page.getByRole("button", { name: "Execution unavailable" }),
   ).toBeDisabled();
+  await page.goBack();
+  await expect(
+    page.getByRole("heading", { name: "WEN Satcoin Mining", exact: true }),
+  ).toBeVisible();
   await page
-    .getByRole("button", { name: "WEN Loss Mining", exact: true })
+    .getByRole("button", { name: "Solana / Jupiter", exact: true })
     .click();
   await expect(
-    page.getByText("WEN Loss Mining is a design prototype.", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Available funds", { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByText("Not loaded", { exact: true })).toBeVisible();
+    page.getByRole("button", { name: "Execution unavailable" }),
+  ).toBeDisabled();
+  await page.goto("/#overview");
+  const terminals = page.getByRole("region", {
+    name: "Terminals",
+    exact: true,
+  });
+  await expect(terminals.getByRole("button")).toHaveCount(3);
+  await page
+    .getByRole("region", { name: "Terminals", exact: true })
+    .getByRole("button")
+    .filter({ hasText: "WEN Satcoin Mining" })
+    .click();
+  await expect(page).toHaveURL(/#terminals\/satcoin$/);
+  await page
+    .getByRole("heading", { name: "WEN Satcoin Mining", exact: true })
+    .click();
+  await page.screenshot({
+    path: `.evidence/wen-satcoin-prototype/${test.info().project.name}.png`,
+    fullPage: true,
+  });
   expect(external).toEqual([]);
+  expect(mutations).toEqual([]);
 });
 test("chat creates an explicit local review preview without financial authority", async ({
   page,
@@ -140,7 +206,8 @@ test("mobile navigation, keyboard escape and unknown routes are usable", async (
   await page.goto("/#not-a-real-route");
   await expect(
     page.getByRole("heading", {
-      name: "A clear view. A considered next move.",
+      name: "Overview",
+      exact: true,
     }),
   ).toBeVisible();
   if (isMobile)
@@ -157,4 +224,42 @@ test("mobile navigation, keyboard escape and unknown routes are usable", async (
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBe(true);
+});
+
+test("shared WEN Activity distinguishes browser demo notices", async ({
+  page,
+  isMobile,
+}) => {
+  await page.goto("/#settings");
+  await page
+    .getByRole("button", { name: "View setup", exact: true })
+    .first()
+    .click();
+  await page.goto("/#activity");
+  const activity = page.getByRole("region", {
+    name: "Activity records",
+    exact: true,
+  });
+  await expect(
+    activity.getByRole("heading", {
+      name: "Recent prototype activity",
+      exact: true,
+    }),
+  ).toBeVisible();
+  const event = activity
+    .getByRole("listitem")
+    .filter({ hasText: "OpenAI connection preview" });
+  await expect(event).toBeVisible();
+  await expect(event.getByText("DEMO", { exact: true })).toBeVisible();
+  await expect(activity.getByText("LOCAL ONLY", { exact: true })).toBeVisible();
+  await expect(activity).toHaveCSS("background-color", "rgb(25, 25, 35)");
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: `.evidence/wen-v3-activity-prototype-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
 });

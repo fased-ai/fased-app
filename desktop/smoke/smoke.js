@@ -40,8 +40,12 @@
     input("owner-password", fixture.password);
     await pause(100);
     document.querySelector(".core-auth form .primary").click();
-    await wait(() =>
-      document.body.innerText.includes("PRIVATE CORE · TERMINAL PROTOTYPES"),
+    await wait(
+      () =>
+        document.querySelector("main#main-content") &&
+        [...document.querySelectorAll("button")].some(
+          (button) => button.textContent.trim() === "Sign out",
+        ),
     );
     phase = "authenticated setup";
     const token = sessionStorage.getItem("fased.core.session.v1");

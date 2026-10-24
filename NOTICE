@@ -3,7 +3,7 @@ Required Notice: Copyright 2026 Fased AI contributors.
 Original Fased App source is provided under PolyForm Perimeter 1.0.0.
 The unmodified license text is in LICENSE.
 
-P1 was implemented as new source. No source files from the legacy Fased,
+P1 was implemented as new source. Apart from the logo asset recorded below, no source files from the legacy Fased,
 OpenClaw, OpenBot or Hermes implementations have been copied into this tree.
 Design references do not imply affiliation or a license to their code.
 
@@ -36,3 +36,37 @@ AppArmor bwrap-userns-restrict profile from revision
 43ef5b6c962d324ffc58ca75843df26827026bfa, under GPL-2.0-or-later.
 Its original copyright record, full license and provenance are retained there.
 It is not linked into or embedded in Fased's original Go/TypeScript code.
+
+The original Fased logo at web/src/assets/fased-logo.svg is copied unchanged from
+fased/ui/public/fased-logo.svg, legacy revision
+3b336140bd59d2e027ce20b77372b3f2469944ce.
+Its SHA-256 is 85534712e5170566c3fbc93ccd960b562f616040860fc3f356e9cf1e4e2ac84c.
+The original MIT license and copyright notices are preserved alongside it at
+web/src/assets/LICENSE. These terms apply to that asset, not the original
+Fased App implementation. The Meteora visual reference does not supply copied
+source or assets and does not imply affiliation.
+
+License for the copied logo asset:
+
+MIT License
+
+Copyright (c) 2025 Peter Steinberger
+Copyright (c) 2026 Fcode AI (Modifications)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

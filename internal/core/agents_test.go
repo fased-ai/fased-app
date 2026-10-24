@@ -2,10 +2,13 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +16,123 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/update"
 )
+
+func agentRunChatFixture(t *testing.T, s *Store) AgentView {
+	t.Helper()
+	v := agentApply(t, s, AgentCommand{Action: "task-create", ProfileID: "trading-analyst", Name: "Daily review", Text: "Compare retained sources", IntervalSeconds: 60, MaxRuns: 1})
+	return agentApply(t, s, AgentCommand{Action: "task-run", ProfileID: v.ProfileID, ID: v.Tasks[0].ID})
+}
+
+func TestAgentRunChatCaptureRestartAndMemory(t *testing.T) {
+	s := fixtureStore(t)
+	v := agentRunChatFixture(t, s)
+	before, rev, err := readAgents(t.Context(), s.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v = agentApply(t, s, AgentCommand{Action: "task-run-explain", ProfileID: v.ProfileID, ID: v.Runs[0].ID})
+	after, next, _ := readAgents(t.Context(), s.db)
+	if next != rev+1 || len(after.Sessions) != 1 || len(after.Messages) != 1 {
+		t.Fatal("missing atomic conversation")
+	}
+	m := after.Messages[0]
+	parts := strings.Split(m.Text, "\nSnapshot SHA-256: ")
+	if len(parts) != 2 || parts[1] != fmt.Sprintf("%x", sha256.Sum256([]byte(parts[0]))) || !strings.Contains(parts[0], "Historical reminder run") || !strings.Contains(parts[0], v.Runs[0].ID) || !strings.Contains(parts[0], "Compare retained sources") || m.Role != "user" {
+		t.Fatal("missing labelled hashed source", m)
+	}
+	after.Sessions, after.Messages = before.Sessions, before.Messages
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("capture changed source records")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	n, err := OpenStore(s.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.Close()
+	v = agentApply(t, n, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Trading Analyst", Provider: "xai", Model: "preference-only"})
+	if len(v.Messages) != 1 || v.Messages[0] != m || len(v.AIRequests) != 0 {
+		t.Fatal("restart/provider change lost snapshot or called AI")
+	}
+	v = agentApply(t, n, AgentCommand{Action: "memory-chat-save", ProfileID: v.ProfileID, Source: "message", ID: m.ID, Text: "Review the daily journal"})
+	if len(v.Memories) != 1 || !strings.Contains(v.Memories[0].Source, "sha256=") {
+		t.Fatal("existing reviewed memory did not accept captured message")
+	}
+	foreign, err := n.Agents(t.Context(), "news-researcher", "Historical reminder run")
+	if err != nil || len(foreign.Messages) != 0 || len(foreign.Sessions) != 0 {
+		t.Fatal("profile leak")
+	}
+}
+
+func TestAgentRunChatRefusals(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  func(*agentDocument)
+		cmd  func(*AgentCommand)
+	}{
+		{"missing-run", nil, func(c *AgentCommand) { c.ID = "missing" }},
+		{"foreign-run", nil, func(c *AgentCommand) { c.ProfileID = "news-researcher" }},
+		{"ambiguous-run", func(d *agentDocument) { d.Runs = append(d.Runs, d.Runs[0]) }, nil},
+		{"missing-task", func(d *agentDocument) { d.Tasks = nil }, nil},
+		{"foreign-task", func(d *agentDocument) { d.Tasks[0].ProfileID = "news-researcher" }, nil},
+		{"ambiguous-task", func(d *agentDocument) { d.Tasks = append(d.Tasks, d.Tasks[0]) }, nil},
+		{"changed-task", func(d *agentDocument) { d.Tasks[0].Text = "Changed after run" }, nil},
+		{"changed-run", func(d *agentDocument) { d.Runs[0].At++ }, nil},
+		{"missing-notice", func(d *agentDocument) { d.Notices = nil }, nil},
+		{"ambiguous-notice", func(d *agentDocument) { d.Notices = append(d.Notices, d.Notices[0]) }, nil},
+		{"bot", func(d *agentDocument) { d.Tasks[0].BotID = "paper" }, nil},
+		{"financial", func(d *agentDocument) { d.Runs[0].CostCents = 1 }, nil},
+		{"wen", func(d *agentDocument) { d.Tasks[0].WEN = &WENPaperPlan{} }, nil},
+		{"unsupported", func(d *agentDocument) { d.Runs[0].Strategy = "paper-v1" }, nil},
+		{"session-capacity", func(d *agentDocument) {
+			for range 100 {
+				d.Sessions = append(d.Sessions, AgentSession{})
+			}
+		}, nil},
+		{"message-capacity", func(d *agentDocument) {
+			for range 200 {
+				d.Messages = append(d.Messages, AgentMessage{})
+			}
+		}, nil},
+		{"size", func(d *agentDocument) {
+			d.Tasks[0].Text = strings.Repeat("x", 3800)
+			d.Notices[0].Text = d.Tasks[0].Name + ": " + d.Tasks[0].Text
+		}, nil},
+		{"stale", nil, nil}, {"paused", nil, nil},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			s := fixtureStore(t)
+			v := agentRunChatFixture(t, s)
+			if tt.doc != nil {
+				rewriteReminderFixture(t, s, tt.doc)
+			}
+			v, _ = s.Agents(t.Context(), v.ProfileID, "")
+			c := AgentCommand{Action: "task-run-explain", ProfileID: v.ProfileID, Revision: v.Revision, ID: v.Runs[0].ID}
+			if tt.cmd != nil {
+				tt.cmd(&c)
+			}
+			if tt.name == "stale" {
+				c.Revision--
+			}
+			if tt.name == "paused" {
+				if _, err := s.db.Exec("UPDATE update_pause SET phase='paused'"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, revision, _ := readAgents(t.Context(), s.db)
+			if _, err := s.ChangeAgents(t.Context(), c); err == nil {
+				t.Fatal("unsafe capture accepted")
+			}
+			after, next, _ := readAgents(t.Context(), s.db)
+			if revision != next || !reflect.DeepEqual(before, after) {
+				t.Fatal("refusal changed retained state")
+			}
+		})
+	}
+}
 
 func agentApply(t *testing.T, s *Store, c AgentCommand) AgentView {
 	t.Helper()
@@ -344,5 +464,138 @@ func TestAgentsActualWorkerAndLargePrivateClient(t *testing.T) {
 	c.CSRF = csrfToken(token)
 	if e = c.Do(t.Context(), http.MethodGet, "/api/v1/agents?profile=news-researcher", nil, &v); e != nil || len(v.Memories) != 10 {
 		t.Fatal("private CLI response truncated", e)
+	}
+}
+
+func TestChatMemoryFromMessage(t *testing.T) {
+	s := fixtureStore(t)
+	v := agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: "trading-analyst", Name: "Research preferences"})
+	v = agentApply(t, s, AgentCommand{Action: "message-add", ProfileID: v.ProfileID, ID: v.Sessions[0].ID, Text: "Original retained message"})
+	source := v.Messages[0]
+	before := v
+	v = agentApply(t, s, AgentCommand{Action: "memory-chat-save", ProfileID: v.ProfileID, ID: source.ID, Source: "message", Text: "Owner-edited preference"})
+	if len(v.Memories) != 1 || v.Memories[0].Text != "Owner-edited preference" || !strings.Contains(v.Memories[0].Source, source.ID) || !strings.Contains(v.Memories[0].Source, "sha256=") || !strings.Contains(v.Memories[0].Source, "kind=message") {
+		t.Fatal("missing source-backed owner note", v.Memories)
+	}
+	if v.Revision != before.Revision+1 || len(v.Messages) != len(before.Messages) || len(v.Tasks) != 0 || len(v.AIRequests) != 0 || v.ProviderCallsEnabled || v.FinancialExecution {
+		t.Fatal("capture changed chat or enabled execution", v)
+	}
+}
+
+func TestChatMemoryRefusals(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  func(*agentDocument)
+		cmd  func(*AgentCommand)
+	}{
+		{"foreign-answer", nil, func(c *AgentCommand) { c.ProfileID = "news-researcher" }},
+		{"missing-source", nil, func(c *AgentCommand) { c.ID = "missing" }},
+		{"spoofed-evidence", nil, func(c *AgentCommand) { c.Source = "owner says this is verified" }},
+		{"incomplete-answer", func(d *agentDocument) { d.AIRequests[0].State = "cancelled" }, nil},
+		{"scheduled-answer", func(d *agentDocument) { d.AIRequests[0].TaskID = "scheduled" }, nil},
+		{"empty-answer", func(d *agentDocument) { d.AIRequests[0].Answer = "" }, nil},
+		{"ambiguous-answer", func(d *agentDocument) { d.AIRequests = append(d.AIRequests, d.AIRequests[0]) }, nil},
+		{"missing-session", func(d *agentDocument) { d.Sessions = nil }, nil},
+		{"ambiguous-session", func(d *agentDocument) { d.Sessions = append(d.Sessions, d.Sessions[0]) }, nil},
+		{"memory-capacity", func(d *agentDocument) {
+			for range 100 {
+				d.Memories = append(d.Memories, AgentMemory{Text: "retained", Source: "owner"})
+			}
+		}, nil},
+		{"empty-note", nil, func(c *AgentCommand) { c.Text = " " }},
+		{"oversized-note", nil, func(c *AgentCommand) { c.Text = strings.Repeat("界", 1400) }},
+		{"expired-note", nil, func(c *AgentCommand) { c.ExpiresAt = 1 }},
+		{"negative-expiry", nil, func(c *AgentCommand) { c.ExpiresAt = -1 }},
+		{"system-message", nil, func(c *AgentCommand) { c.Source = "message"; c.ID = "system-source" }},
+		{"foreign-message", nil, func(c *AgentCommand) { c.Source = "message"; c.ID = "user-source"; c.ProfileID = "news-researcher" }},
+		{"ambiguous-message", func(d *agentDocument) { d.Messages = append(d.Messages, d.Messages[0]) }, func(c *AgentCommand) { c.Source = "message"; c.ID = "user-source" }},
+		{"oversized-reference", func(d *agentDocument) {
+			d.Sessions[0].ID = strings.Repeat("s", 301)
+			d.AIRequests[0].SessionID = d.Sessions[0].ID
+		}, nil},
+		{"stale", nil, nil}, {"paused", nil, nil},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			s := fixtureStore(t)
+			v := reminderFixture(t, s)
+			rewriteReminderFixture(t, s, func(d *agentDocument) {
+				d.Messages = append(d.Messages, AgentMessage{ID: "user-source", ProfileID: v.ProfileID, SessionID: v.Sessions[0].ID, Role: "user", Text: "original"}, AgentMessage{ID: "system-source", ProfileID: v.ProfileID, SessionID: v.Sessions[0].ID, Role: "system", Text: "acknowledgement"})
+				if tt.doc != nil {
+					tt.doc(d)
+				}
+			})
+			v, _ = s.Agents(t.Context(), v.ProfileID, "")
+			c := AgentCommand{Action: "memory-chat-save", ProfileID: v.ProfileID, Revision: v.Revision, ID: v.AIRequests[0].ID, Source: "answer", Text: "Owner edited"}
+			if tt.cmd != nil {
+				tt.cmd(&c)
+			}
+			if tt.name == "stale" {
+				agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, Text: "another change", Source: "owner"})
+			}
+			if tt.name == "paused" {
+				if _, err := s.db.Exec("UPDATE update_pause SET phase='paused'"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, revision, _ := readAgents(t.Context(), s.db)
+			if _, err := s.ChangeAgents(t.Context(), c); err == nil {
+				t.Fatal("unsafe memory accepted")
+			}
+			after, next, _ := readAgents(t.Context(), s.db)
+			if revision != next || !reflect.DeepEqual(before, after) {
+				t.Fatal("refusal changed retained state")
+			}
+		})
+	}
+}
+
+func TestChatMemoryCorrectionExpiryRestartAndDelete(t *testing.T) {
+	s := fixtureStore(t)
+	now := time.Unix(1800000000, 0)
+	s.now = func() time.Time { return now }
+	v := agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: "trading-analyst", Name: "Preferences"})
+	session := v.Sessions[0].ID
+	v = agentApply(t, s, AgentCommand{Action: "message-add", ProfileID: v.ProfileID, ID: session, Text: "Original message"})
+	original := v.Messages[0]
+	v = agentApply(t, s, AgentCommand{Action: "memory-chat-save", ProfileID: v.ProfileID, ID: original.ID, Source: "message", Text: "First owner note", ExpiresAt: now.Unix() + 60})
+	note := v.Memories[0]
+	digest := fmt.Sprintf("sha256=%x", sha256.Sum256([]byte(original.Text)))
+	if !strings.Contains(note.Source, digest) || strings.Contains(note.Source, "First owner note") {
+		t.Fatal("source hash does not bind original", note)
+	}
+	v = agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, ID: note.ID, Text: "Corrected owner note", Source: note.Source, ExpiresAt: note.ExpiresAt})
+	if len(v.Memories[0].History) != 1 || v.Memories[0].History[0].Text != note.Text || v.Memories[0].History[0].Source != note.Source {
+		t.Fatal("lost correction evidence")
+	}
+	v = agentApply(t, s, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Analyst", Provider: "xai", Text: "Research"})
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenStore(s.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	reopened.now = func() time.Time { return now }
+	v, err = reopened.Agents(t.Context(), v.ProfileID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Memories[0].Text != "Corrected owner note" || v.Memories[0].Source != note.Source || v.Messages[0] != original || len(v.AIRequests) != 0 {
+		t.Fatal("restart changed memory/source", v)
+	}
+	other, _ := reopened.Agents(t.Context(), "news-researcher", "")
+	if len(other.Memories) != 0 {
+		t.Fatal("memory leaked")
+	}
+	now = now.Add(61 * time.Second)
+	v, _ = reopened.Agents(t.Context(), v.ProfileID, "")
+	if !v.Memories[0].Expired {
+		t.Fatal("expiry not exposed")
+	}
+	v = agentApply(t, reopened, AgentCommand{Action: "memory-delete", ProfileID: v.ProfileID, ID: note.ID})
+	if len(v.Memories) != 0 || len(v.Messages) != 2 || len(v.Tasks) != 0 || len(v.Runs) != 0 || len(v.Notices) != 0 {
+		t.Fatal("deletion affected original records", v)
 	}
 }

@@ -1,200 +1,134 @@
-import {
-  ArrowRight,
-  ArrowUpRight,
-  Bot,
-  Check,
-  ChevronRight,
-  Shield,
-  ShieldCheck,
-  Wallet,
-} from "../icons";
+import { ArrowRight, Bot, ChevronRight, Check } from "../icons";
 import { Badge, Avatar, SectionHead } from "../components/shared";
 import { terminalData } from "../fixtures";
 import { useWorkspace } from "../workspace";
+
 export function Overview() {
   const { state, dispatch, setSetupOpen, navigate } = useWorkspace();
   const steps = [
     {
-      title: "Make this workspace yours",
-      detail: "Choose local or VPS, with a clear setup path.",
+      title: state.setup.complete ? "Review setup" : "Set up workspace",
       done: state.setup.complete,
       action: () => setSetupOpen(true),
     },
     {
-      title: "Choose how your wallet works",
-      detail: "Watch-only, external approval, or bounded automation.",
-      done: state.setup.complete && state.setup.walletMode !== "skip",
+      title: "Public account records",
+      done: false,
       action: () => navigate("wallets/overview"),
     },
     {
-      title: "Give your agent a focus",
-      detail: "Pick a profile. AI is optional and permissions stay explicit.",
+      title: "Agent tasks",
       done: false,
-      action: () => navigate("agents/chat"),
+      action: () => navigate("agents/tasks"),
     },
   ];
   return (
     <>
       <SectionHead
-        eyebrow="YOUR PRIVATE WORKSPACE"
-        title="A clear view. A considered next move."
-        description="One place for your agents, accounts and financial automations."
+        title="Overview"
         action={
-          <button className="primary" onClick={() => setSetupOpen(true)}>
-            {state.setup.complete ? "Review setup" : "Set up workspace"}
-            <ArrowRight size={16} />
+          <button className="primary" onClick={() => navigate("agents/chat")}>
+            Open Chat <ArrowRight size={16} />
           </button>
         }
       />
-      <div className="hero-card">
-        <div className="hero-copy">
-          <Badge tone="lime">
-            <span className="dot" /> BUILT AROUND YOUR CONTROL
-          </Badge>
-          <h2>
-            Your strategy.
-            <br />
-            Your limits. Your workspace.
-          </h2>
-          <p>
-            Start with a profile. Explore the terminals. Add a wallet and AI
-            only when you need them.
-          </p>
-          <button
-            className="text-button"
-            onClick={() => navigate("agents/chat")}
-          >
-            Meet your agents <ArrowRight size={16} />
-          </button>
+      <dl className="workspace-metrics">
+        <div>
+          <dt>Agent profiles</dt>
+          <dd>{state.profiles.length}</dd>
         </div>
-        <div className="hero-art" aria-hidden="true">
-          <div className="orbital orbit-one" />
-          <div className="orbital orbit-two" />
-          <div className="orbital orbit-three" />
-          <div className="core-mark">
-            <span>f</span>
-            <i />
-          </div>
-          <span className="orbit-tag tag-top">
-            <ShieldCheck size={13} /> Owner permissions
-          </span>
-          <span className="orbit-tag tag-bottom">
-            <Bot size={13} /> Persistent profiles
-          </span>
+        <div>
+          <dt>Deployment preference</dt>
+          <dd>{state.setup.host === "vps" ? "Remote" : "Local"}</dd>
         </div>
-      </div>
-      <div className="stat-grid">
-        <div className="stat">
-          <span>
-            Agent profiles <Bot size={15} />
-          </span>
-          <strong>{String(state.profiles.length).padStart(2, "0")}</strong>
-          <small>Shared runtime, individual context</small>
+        <div>
+          <dt>Financial execution</dt>
+          <dd>
+            <Badge>DISABLED</Badge>
+          </dd>
         </div>
-        <div className="stat">
-          <span>
-            Wallet connection <Wallet size={15} />
-          </span>
-          <strong className="stat-word">Not connected</strong>
-          <small>Prototype · no balances loaded</small>
-        </div>
-        <div className="stat">
-          <span>
-            Execution mode <Shield size={15} />
-          </span>
-          <strong className="stat-word">Preview only</strong>
-          <small>Real signing is unavailable</small>
-        </div>
-      </div>
-      <div className="two-col">
-        <section className="panel">
+      </dl>
+      <div className="overview-workspace">
+        <section className="panel" aria-labelledby="overview-agents">
           <div className="panel-heading">
-            <h2>Your next steps</h2>
-            <Badge>
-              {state.setup.complete ? "SETUP PREVIEWED" : "GET STARTED"}
-            </Badge>
-          </div>
-          <div className="steps-list">
-            {steps.map((step, i) => (
-              <button
-                className="step-row"
-                key={step.title}
-                onClick={step.action}
-              >
-                <span className={`step-number ${step.done ? "done" : ""}`}>
-                  {step.done ? <Check size={14} /> : `0${i + 1}`}
-                </span>
-                <span>
-                  <strong>{step.title}</strong>
-                  <small>{step.detail}</small>
-                </span>
-                <ChevronRight size={16} />
-              </button>
-            ))}
-          </div>
-        </section>
-        <section className="panel">
-          <div className="panel-heading">
-            <h2>Agents at a glance</h2>
+            <h2 id="overview-agents">
+              <Bot size={16} /> Agents
+            </h2>
             <button
               className="text-button"
-              onClick={() => navigate("agents/chat")}
+              onClick={() => navigate("agents/memory")}
             >
-              View all <ArrowRight size={14} />
+              Memory <ArrowRight size={14} />
             </button>
           </div>
-          <div className="profile-list">
-            {state.profiles.slice(0, 3).map((p) => (
+          <div className="workspace-rows">
+            {state.profiles.map((p) => (
               <button
                 key={p.id}
+                className="workspace-row"
                 onClick={() => {
                   dispatch({ type: "profile", id: p.id });
                   navigate("agents/chat");
                 }}
               >
                 <Avatar profile={p} small />
-                <span>
+                <span className="workspace-row-copy">
                   <strong>{p.name}</strong>
-                  <small>{p.role}</small>
+                  <span>{p.role}</span>
                 </span>
-                <span className="status-text">Draft</span>
+                <ChevronRight size={16} />
               </button>
             ))}
           </div>
         </section>
-      </div>
-      <div className="section-label">
-        <div>
-          <h2>Four workspaces. One foundation.</h2>
-          <p className="subtle">
-            Explore the product direction. Each terminal is a labelled mockup.
-          </p>
-        </div>
-        <button className="text-button" onClick={() => navigate("terminals")}>
-          Explore terminals <ArrowRight size={15} />
-        </button>
-      </div>
-      <div className="terminal-grid">
-        {terminalData.map((t) => (
-          <button
-            className="terminal-card"
-            key={t.id}
-            onClick={() => navigate(`terminals/${t.id}`)}
-          >
-            <div className="card-top">
-              <span className={`feature-icon ${t.color}`}>
-                <t.icon size={20} />
-              </span>
-              <Badge>PROTOTYPE</Badge>
-            </div>
-            <small className="eyebrow">{t.category}</small>
-            <h3>{t.name}</h3>
-            <p>{t.desc}</p>
-            <span className="terminal-link">
-              Open preview <ArrowUpRight size={15} />
-            </span>
-          </button>
-        ))}
+        <section className="panel" aria-labelledby="overview-workspace">
+          <div className="panel-heading">
+            <h2 id="overview-workspace">Workspace</h2>
+          </div>
+          <div className="workspace-rows">
+            {steps.map((step) => (
+              <button
+                className="workspace-row"
+                key={step.title}
+                onClick={step.action}
+              >
+                <span className="workspace-row-copy">
+                  <strong>{step.title}</strong>
+                </span>
+                {step.done ? (
+                  <Check size={16} aria-hidden="true" />
+                ) : (
+                  <ChevronRight size={16} />
+                )}
+              </button>
+            ))}
+          </div>
+        </section>
+        <section
+          className="panel workspace-terminals"
+          aria-labelledby="overview-terminals"
+        >
+          <div className="panel-heading">
+            <h2 id="overview-terminals">Terminals</h2>
+            <Badge>PREVIEW ONLY</Badge>
+          </div>
+          <div className="workspace-rows">
+            {terminalData.map((t) => (
+              <button
+                className="workspace-row"
+                key={t.id}
+                onClick={() => navigate(`terminals/${t.id}`)}
+              >
+                <t.icon size={18} />
+                <span className="workspace-row-copy">
+                  <strong>{t.name}</strong>
+                </span>
+                <Badge>{t.id === "satcoin" ? "DEFERRED" : "DISABLED"}</Badge>
+                <ChevronRight size={16} />
+              </button>
+            ))}
+          </div>
+        </section>
       </div>
     </>
   );

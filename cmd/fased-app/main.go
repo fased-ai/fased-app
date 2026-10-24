@@ -66,6 +66,18 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	if len(args) > 0 && args[0] == "updates" {
 		return updatesCommand(args[1:], out, errOut)
 	}
+	if len(args) > 0 && args[0] == "ai-connection" {
+		return aiConnectionCommand(args[1:], in, out, errOut)
+	}
+	if len(args) > 0 && args[0] == "wen-market-data" {
+		return wenMarketDataCommand(args[1:], out, errOut)
+	}
+	if len(args) > 0 && args[0] == "wen-research" {
+		return wenResearchCommand(args[1:], in, out, errOut)
+	}
+	if len(args) > 0 && args[0] == "wen-session" {
+		return wenSessionCommand(args[1:], in, out, errOut)
+	}
 	if len(args) > 0 && args[0] == "agents" {
 		return agentsCommand(args[1:], in, out, errOut)
 	}
@@ -76,7 +88,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 		return custodyCommand(args[1:], in, out, errOut)
 	}
 	if len(args) == 0 {
-		return errors.New("usage: fased-app agents|updates|accounts|install|custody|service|open|access|recover|uninstall|serve|status|claim-code|claim|login|logout|setup|version [options]")
+		return errors.New("usage: fased-app wen-session|wen-research|wen-market-data|agents|updates|accounts|install|custody|service|open|access|recover|uninstall|serve|status|claim-code|claim|login|logout|setup|version [options]")
 	}
 	if args[0] == "install" || args[0] == "uninstall" || args[0] == "service" || args[0] == "open" {
 		return hostCommand(args, out, errOut)
@@ -99,18 +111,26 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	}
 	dir := flags.String("data-dir", dirDefault, "private instance state directory")
 	listen := flags.String("listen", "127.0.0.1:7331", "loopback listener")
+	researchOrigin := flags.String("wen-research-origin", "", "optional local read-only Kraken research service")
 	publicOrigin := flags.String("public-origin", "", "exact private HTTPS origin behind a trusted local proxy")
 	requireSandbox := flags.Bool("require-sandbox", false, "require installed Linux mount isolation before starting")
 	installationRoot := flags.String("installation-root", "", "immutable installed application directory")
 	custodyConfig := flags.String("custody-config", "", "root-owned managed fixture identity; never enables real wallets")
 	passwordStdin := flags.Bool("password-stdin", false, "read password from stdin instead of a terminal")
-	aiFixture := flags.Bool("ai-fixture", false, "development-only in-process provider fixtures; no API or credentials")
+	aiFixture := flags.Bool("ai-fixture", false, "development-only in-process provider fixtures; test credentials only, no live API")
+	sessionFixture := flags.Bool("session-fixture", false, "development-only bounded shadow session fixtures; no model, market or wallet")
 	interactive := flags.Bool("interactive", false, "walk through setup in the terminal")
 	host := flags.String("host", "", "setup deployment preference: local or vps")
 	wallet := flags.String("wallet-mode", "", "setup wallet preference: skip, watch, external, automation")
 	provider := flags.String("provider", "", "setup AI preference: none, openai, anthropic, xai")
 	if err = flags.Parse(args[1:]); err != nil {
 		return err
+	}
+	if *sessionFixture && (args[0] != "serve" || *aiFixture || *custodyConfig != "" || *requireSandbox || *publicOrigin != "" || *researchOrigin != "") {
+		return errors.New("session fixture is a standalone serve-only option; no AI, signer or external research")
+	}
+	if *researchOrigin != "" && (args[0] != "serve" || *aiFixture || *requireSandbox || *custodyConfig != "") {
+		return errors.New("research service is a standalone serve-only read option")
 	}
 	if *aiFixture && args[0] != "serve" {
 		return errors.New("AI fixture is a serve-only development option")
@@ -143,13 +163,20 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 				return err
 			}
 		}
+		if *sessionFixture {
+			server, e := core.StartSessionFixture(context.Background(), *dir, *listen, fasedapp.UI())
+			if e != nil {
+				return e
+			}
+			return serveStarted(server, out)
+		}
 		if *aiFixture {
 			if *custodyConfig != "" || *requireSandbox || *publicOrigin != "" {
 				return errors.New("AI fixture requires a standalone local development core")
 			}
 			return serveAgentFixture(*dir, *listen, out)
 		}
-		return serve(*dir, *listen, *publicOrigin, out, *custodyConfig)
+		return serveWithResearch(*dir, *listen, *publicOrigin, *researchOrigin, out, *custodyConfig)
 	case "claim-code":
 		store, err := core.OpenStore(*dir)
 		if err != nil {
@@ -280,8 +307,15 @@ func defaultDir() (string, error) {
 	return core.DefaultDataDir()
 }
 func serve(dir, listen, publicOrigin string, out io.Writer, custodyConfig ...string) error {
+	return serveWithResearch(dir, listen, publicOrigin, "", out, custodyConfig...)
+}
+func serveWithResearch(dir, listen, publicOrigin, researchOrigin string, out io.Writer, custodyConfig ...string) error {
 	server, err := core.Start(context.Background(), dir, listen, publicOrigin, fasedapp.UI(), custodyConfig...)
 	if err != nil {
+		return err
+	}
+	if err = server.ConfigureWENResearch(researchOrigin); err != nil {
+		_ = server.Close(context.Background())
 		return err
 	}
 	return serveStarted(server, out)

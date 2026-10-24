@@ -9,15 +9,19 @@ import {
 import { Badge, SectionHead, Empty, DemoChart } from "../components/shared";
 import { terminalData } from "../fixtures";
 import { useWorkspace } from "../workspace";
+import { WENPaperJourney } from "./WENPaperJourney";
+import { WENSessionRehearsal } from "./WENSessionRehearsal";
+import { WENSessionAutomatic } from "./WENSessionAutomatic";
 export function Terminals() {
   const { tab, navigate } = useWorkspace();
   const active = terminalData.find((t) => t.id === tab);
+  const mining = active?.id === "satcoin";
   return (
     <>
       <SectionHead
         eyebrow="FINANCIAL WORKSPACES"
         title={active?.name ?? "Terminals"}
-        description="Four focused workspaces, with one shared foundation for accounts, permissions and execution."
+        description="Three terminal prototypes for mining and trading, with shared accounts and permissions."
         action={<Badge>ALL TERMINALS · PROTOTYPE</Badge>}
       />
       <div className="terminal-switcher">
@@ -73,25 +77,24 @@ export function Terminals() {
             <div>
               <strong>{active.name} is a design prototype.</strong>
               <span>
-                {["asset", "loss"].includes(active.id)
-                  ? "WEN integration is deferred until its independent contract and acceptance are ready."
+                {mining
+                  ? "The local paper journey uses public fixtures. Live WEN integration awaits independent contract acceptance."
                   : "Venue integration, market data and financial execution have not been implemented."}{" "}
                 All values below are illustrative.
               </span>
             </div>
           </div>
+          {mining && <WENPaperJourney />}
+          {mining && <WENSessionRehearsal />}
+          {mining && <WENSessionAutomatic />}
           <div className="terminal-workspace">
             <section className="panel">
               <div className="panel-heading">
                 <div>
-                  <h2>
-                    {["asset", "loss"].includes(active.id)
-                      ? "Workspace preview"
-                      : "BTC / USD"}
-                  </h2>
+                  <h2>{mining ? "BTC context & ranges" : "BTC / USD"}</h2>
                   <small className="subtle">
-                    {["asset", "loss"].includes(active.id)
-                      ? "Illustrative district / arena layout"
+                    {mining
+                      ? "Illustrative layout · no live BTC data"
                       : "Illustrative market · no live price"}
                   </small>
                 </div>
@@ -115,20 +118,24 @@ export function Terminals() {
             </section>
             <section className="panel ticket">
               <div className="panel-heading">
-                <h2>
-                  {active.id === "asset"
-                    ? "Allocation preview"
-                    : "Order preview"}
-                </h2>
+                <h2>{mining ? "Mining session preview" : "Order preview"}</h2>
               </div>
               <label>Account</label>
               <div className="fake-input">
                 No account connected <ChevronDown size={15} />
               </div>
-              <label>Operating budget</label>
+              <label>{mining ? "SOL budget" : "Operating budget"}</label>
               <div className="fake-input">
                 Not assigned <span>—</span>
               </div>
+              {mining && (
+                <>
+                  <label>BTC range</label>
+                  <div className="fake-input">Not selected</div>
+                  <label>Commitment deadline</label>
+                  <div className="fake-input">Unavailable</div>
+                </>
+              )}
               <label>Owner mandate</label>
               <div className="fake-input">
                 Not created <LockKeyhole size={14} />
@@ -153,19 +160,20 @@ export function Terminals() {
           </div>
           <section className="panel">
             <div className="panel-heading">
-              <h2>
-                {active.id === "asset"
-                  ? "Orders & rewards"
-                  : "Positions & orders"}
-              </h2>
+              <h2>{mining ? "Results & claims" : "Positions & orders"}</h2>
               <Badge>PROTOTYPE</Badge>
             </div>
             <Empty
               icon={<TerminalSquare size={24} />}
-              title="No live positions or orders"
+              title={
+                mining
+                  ? "No mining session or claim loaded"
+                  : "No live positions or orders"
+              }
             >
-              This layout reserves space for verified state, pending outcomes
-              and recovery. It is not a connected account.
+              {mining
+                ? "Pending states, settled results and SAT/BTC claims require the accepted WEN integration. No rewards or claimable amounts are loaded."
+                : "This layout reserves space for verified state, pending outcomes and recovery. It is not a connected account."}
             </Empty>
           </section>
         </>
