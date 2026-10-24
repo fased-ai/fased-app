@@ -158,6 +158,7 @@ export async function fixtureUpdateIntentJourney({
         .getByLabel("Owner password", { exact: true })
         .fill(appPassword);
       await page.getByRole("button", { name: "Sign in", exact: true }).click();
+      await page.locator("details.update-settings > summary").click();
       const panel = page.getByRole("region", {
         name: "Update preferences & proposals",
       });
@@ -269,6 +270,7 @@ export async function fixtureUpdateIntentJourney({
         .getByLabel("Owner password", { exact: true })
         .fill(appPassword);
       await page.getByRole("button", { name: "Sign in", exact: true }).click();
+      await page.locator("details.update-settings > summary").click();
       const panel = page.getByRole("region", { name: "Updates & recovery" });
       await expect(
         panel.getByText(status.core.phase, { exact: true }),

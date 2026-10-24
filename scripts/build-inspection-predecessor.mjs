@@ -35,6 +35,33 @@ try {
   // code; keep the historical command dispatch without inspection admission or
   // the P5 HTTP surface/scheduler. Never claim this is the untouched old binary.
   const { storage } = await currentStorageFixture(scratch);
+  // This composed reader reuses today's UI for the account/update journeys.
+  // Backport its public connection descriptor without changing command,
+  // storage, inspection or signing authority. An untouched historical runtime
+  // still lacks this contract and remains incompatible with the current UI.
+  const httpPath = path.join(scratch, "internal/core/http.go"),
+    http = await readFile(httpPath, "utf8"),
+    healthMarker = "\t\twriteJSON(w, 200, h.store.Health())";
+  assert.equal(http.split(healthMarker).length, 2);
+  await writeFile(
+    httpPath,
+    http.replace(
+      healthMarker,
+      `\t\tlocation, transport := "local", "loopback"
+\t\tif h.publicHost != "" && r.Host == h.publicHost { location, transport = "remote", "private-https" }
+\t\twriteJSON(w, 200, struct {
+\t\t\tHealth
+\t\t\tConnection map[string]string \x60json:"connection"\x60
+\t\t}{h.store.Health(), map[string]string{"location": location, "transport": transport}})`,
+    ),
+  );
+  execFileSync("gofmt", ["-w", httpPath]);
+  const runtimeMetadata = {
+    fixtureOnly: true,
+    source:
+      "historical health projection plus current public connection descriptor",
+    httpSHA256: sha(await readFile(httpPath)),
+  };
   // UI is inert in this predecessor journey; the current bundle can be reused.
   // Its hash is recorded independently; no historical UI equivalence is claimed.
   assert.equal(
@@ -64,6 +91,7 @@ try {
         fixtureOnly: true,
         exactHistoricalBinary: false,
         storage,
+        runtimeMetadata,
         uiSha256: sha(await readFile("dist/index.html")),
         outputs,
       },
