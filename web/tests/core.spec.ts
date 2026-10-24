@@ -81,6 +81,219 @@ test.afterEach(async () => {
   }
 });
 
+test("expired owner access returns to sign-in without replay or stale-session restoration", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(60000);
+  page.setDefaultTimeout(10000);
+  const external: string[] = [];
+  const writes: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).origin !== new URL(url).origin)
+      external.push(request.url());
+    if (request.method() !== "GET")
+      writes.push(`${request.method()} ${new URL(request.url()).pathname}`);
+  });
+  await page.goto(url + "/#agents/tasks");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  const signOut = page.getByRole("button", { name: "Sign out", exact: true });
+  const signIn = page.getByRole("button", { name: "Sign in", exact: true });
+  const password = page.getByLabel("Owner password", { exact: true });
+  await expect(signOut).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const readAll = () =>
+    Promise.all(
+      ["wen-operator", "trading-analyst", "news-researcher"].map((id) =>
+        privateCLI(["agents", "--profile", id]),
+      ),
+    );
+  const initial = await readAll();
+  await privateCLI(["agents", "--request-stdin"], {
+    action: "task-create",
+    profileId: "trading-analyst",
+    revision: initial[1].revision,
+    name: "Owner-only fixture reminder",
+    text: "Retain this fixture record through authentication changes.",
+    intervalSeconds: 3600,
+    maxRuns: 1,
+  });
+  const baseline = await readAll();
+  const trading = () =>
+    page
+      .locator(".local-profile-picker")
+      .getByRole("button", { name: /^Trading Analyst / });
+  await trading().click();
+  await expect(
+    page.getByText("Owner-only fixture reminder", { exact: true }),
+  ).toBeVisible();
+  const headers = async () => {
+    const token = await page.evaluate(() =>
+      sessionStorage.getItem("fased.core.session.v1"),
+    );
+    expect(token).toBeTruthy();
+    return { Authorization: `Bearer ${token}`, Origin: url };
+  };
+  const revoke = async () => {
+    const h = await headers();
+    const state = await page.request.get(url + "/api/v1/auth/state", {
+      headers: h,
+    });
+    expect(state.status()).toBe(200);
+    const response = await page.request.post(url + "/api/v1/auth/logout", {
+      headers: { ...h, "X-CSRF-Token": (await state.json()).csrfToken },
+      data: {},
+    });
+    expect(response.status()).toBe(200);
+  };
+  const enter = async () => {
+    await password.fill(fixturePassword);
+    await signIn.click();
+    await expect(signOut).toBeEnabled();
+  };
+  await revoke();
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Sign in", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveText(
+    "Your session ended. Sign in again.",
+  );
+  await expect(password).toBeFocused();
+  await expect(
+    page.getByText("Owner-only fixture reminder", { exact: true }),
+  ).toHaveCount(0);
+  expect(
+    await page.evaluate(() => sessionStorage.getItem("fased.core.session.v1")),
+  ).toBeNull();
+  expect(writes.filter((s) => s.endsWith("/auth/login"))).toHaveLength(0);
+  await page.screenshot({
+    path: `.evidence/owner-sign-in-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+  await password.fill("incorrect-disposable-password");
+  await signIn.click();
+  await expect(page.getByRole("alert")).toContainText("authentication failed");
+  await expect(signIn).toBeEnabled();
+  await enter();
+  await expect(trading()).toHaveAttribute("aria-pressed", "true");
+  expect(await readAll()).toEqual(baseline);
+
+  // A committed write and an old 401 may arrive after the owner signs in again.
+  let releaseSetup = () => {};
+  let releaseOldRead = () => {};
+  const setupGate = new Promise<void>((resolve) => {
+    releaseSetup = resolve;
+  });
+  const oldReadGate = new Promise<void>((resolve) => {
+    releaseOldRead = resolve;
+  });
+  let setupHeld = false;
+  let setupDelivered = false;
+  let oldReadStarted = false;
+  let oldReadHeld = false;
+  let oldReadDelivered = false;
+  const setupURL = url + "/api/v1/setup";
+  const agentsURL = "**/api/v1/agents?**";
+  await page.route(setupURL, async (route) => {
+    if (route.request().method() !== "PUT") return route.continue();
+    const response = await route.fetch();
+    expect(response.status()).toBe(200);
+    setupHeld = true;
+    await setupGate;
+    await route.fulfill({ response });
+    setupDelivered = true;
+  });
+  try {
+    await page.goto(url + "/#settings");
+    await page.getByLabel("Deployment preference").selectOption("vps");
+    await expect.poll(() => setupHeld).toBe(true);
+    await exec(binary, ["setup", "--data-dir", dir, "--host", "local"]);
+    const current = await page.request.get(setupURL, {
+      headers: await headers(),
+    });
+    const currentSetup = await current.json();
+    expect(currentSetup.settings.host).toBe("local");
+    await page.goto(url + "/#agents/tasks");
+    await page.route(agentsURL, async (route) => {
+      if (oldReadStarted) return route.continue();
+      oldReadStarted = true;
+      oldReadHeld = true;
+      await oldReadGate;
+      const response = await route.fetch();
+      expect(response.status()).toBe(401);
+      await route.fulfill({ response });
+      oldReadDelivered = true;
+    });
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await expect.poll(() => oldReadHeld).toBe(true);
+    await revoke();
+    // A subsequent protected poll ends the session; do not click the old UI.
+    await expect(
+      page.getByRole("heading", { name: "Sign in", exact: true }),
+    ).toBeVisible({ timeout: 12000 });
+    await expect(signIn).toBeEnabled();
+    await enter();
+    await page.goto(url + "/#settings");
+    await expect(page.getByLabel("Deployment preference")).toHaveValue("local");
+    releaseOldRead();
+    releaseSetup();
+    await expect.poll(() => setupDelivered && oldReadDelivered).toBe(true);
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
+    await expect(signOut).toBeEnabled();
+    await expect(password).toHaveCount(0);
+    await expect(page.getByLabel("Deployment preference")).toHaveValue("local");
+    const after = await page.request.get(setupURL, {
+      headers: await headers(),
+    });
+    expect(await after.json()).toEqual(currentSetup);
+  } finally {
+    releaseOldRead();
+    releaseSetup();
+    if (!page.isClosed()) {
+      await page.unroute(agentsURL);
+      await page.unroute(setupURL);
+    }
+  }
+  await page.route(agentsURL, (route) =>
+    route.fulfill({
+      status: 403,
+      json: { error: "fixture permission denied" },
+    }),
+  );
+  await page.goto(url + "/#agents/tasks");
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "fixture permission denied",
+  );
+  await expect(signOut).toBeVisible();
+  await expect(password).toHaveCount(0);
+  await page.unroute(agentsURL);
+  await page
+    .getByRole("button", { name: "Refresh records", exact: true })
+    .click();
+  await expect(trading()).toBeEnabled();
+  expect(await readAll()).toEqual(baseline);
+  expect(writes.filter((s) => s === "PUT /api/v1/setup")).toHaveLength(1);
+  expect(writes.filter((s) => s === "POST /api/v1/auth/login")).toHaveLength(3);
+  expect(writes.filter((s) => s === "POST /api/v1/agents")).toEqual([]);
+  expect(external).toEqual([]);
+});
+
 test("periodic refresh follows the requested profile while a selection is pending", async ({
   page,
 }) => {
@@ -1997,9 +2210,7 @@ test("claim, UI/CLI setup, restart and logout use one private instance", async (
       .settings.walletMode,
   ).toBe("watch");
   await page.goto(url);
-  await expect(
-    page.getByRole("heading", { name: "Welcome back" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
@@ -2008,9 +2219,7 @@ test("claim, UI/CLI setup, restart and logout use one private instance", async (
     page.getByRole("button", { name: "Sign out", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
-  await expect(
-    page.getByRole("heading", { name: "Welcome back" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   expect((await page.request.get(`${url}/api/v1/setup`)).status()).toBe(401);
 });
 
@@ -6468,7 +6677,7 @@ test("shared WEN app shell and agent panes retain bounded local controls", async
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "Welcome back", exact: true }),
+    page.getByRole("heading", { name: "Sign in", exact: true }),
   ).toBeVisible();
 });
 

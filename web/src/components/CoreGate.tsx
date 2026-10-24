@@ -66,9 +66,7 @@ export function CoreGate({ children }: { children: ReactNode }) {
                 <LockKeyhole size={23} />
               </span>
               <h1>
-                {core.mode === "unclaimed"
-                  ? "Claim this workspace"
-                  : "Welcome back"}
+                {core.mode === "unclaimed" ? "Claim this workspace" : "Sign in"}
               </h1>
               <p>
                 {core.mode === "unclaimed"
@@ -110,6 +108,7 @@ export function CoreGate({ children }: { children: ReactNode }) {
               <input
                 id="owner-password"
                 type="password"
+                autoFocus={core.mode === "locked"}
                 autoComplete={
                   core.mode === "unclaimed"
                     ? "new-password"
