@@ -28,6 +28,68 @@ type AgentMemoryEvidence struct {
 	Text      string `json:"text,omitempty"`
 }
 
+// A transient, owner-reviewed correction using the existing memory-put writer.
+// The workspace revision binds the selected history entry until explicit save.
+type AgentMemoryRestoreDraft struct {
+	Version      string              `json:"version"`
+	Revision     int64               `json:"revision"`
+	ProfileID    string              `json:"profileId"`
+	MemoryID     string              `json:"memoryId"`
+	HistoryIndex int                 `json:"historyIndex"`
+	Current      MemoryRevision      `json:"current"`
+	Selected     MemoryRevision      `json:"selected"`
+	Evidence     AgentMemoryEvidence `json:"evidence"`
+	Command      AgentCommand        `json:"command"`
+}
+
+func (s *Store) AgentMemoryRestore(ctx context.Context, profile, id string, index int) (AgentMemoryRestoreDraft, error) {
+	if !validAgentText(profile, 80, true) || !utf8.ValidString(profile) || !validAgentText(id, 80, true) || !utf8.ValidString(id) || index < 0 || index >= 8 {
+		return AgentMemoryRestoreDraft{}, errors.New("select one profile memory and retained revision (0–7)")
+	}
+	d, revision, err := readAgents(ctx, s.db)
+	if err != nil {
+		return AgentMemoryRestoreDraft{}, err
+	}
+	profiles, matches := 0, 0
+	var selected *AgentMemory
+	for _, p := range d.Profiles {
+		if p.ID == profile {
+			profiles++
+		}
+	}
+	for i, m := range d.Memories {
+		if m.ID == id {
+			matches++
+			if m.ProfileID == profile {
+				selected = &d.Memories[i]
+			}
+		}
+	}
+	if profiles != 1 || matches != 1 || selected == nil || len(d.Memories) > 100 {
+		return AgentMemoryRestoreDraft{}, errors.New("profile memory unavailable or ambiguous")
+	}
+	if len(selected.History) >= 8 {
+		return AgentMemoryRestoreDraft{}, errors.New("memory correction history limit reached")
+	}
+	if index >= len(selected.History) {
+		return AgentMemoryRestoreDraft{}, errors.New("retained memory revision unavailable")
+	}
+	prior := selected.History[index]
+	current := MemoryRevision{Text: selected.Text, Source: selected.Source, At: selected.UpdatedAt, ExpiresAt: selected.ExpiresAt}
+	for _, record := range []MemoryRevision{prior, current} {
+		if !validAgentText(record.Text, 4000, true) || !utf8.ValidString(record.Text) || !validAgentText(record.Source, 300, true) || !utf8.ValidString(record.Source) || record.At < 0 || record.ExpiresAt < 0 {
+			return AgentMemoryRestoreDraft{}, errors.New("memory revision invalid; preserve state")
+		}
+	}
+	priorMemory := *selected
+	priorMemory.Source = prior.Source
+	return AgentMemoryRestoreDraft{
+		Version: "memory-restore-draft-v1", Revision: revision, ProfileID: profile, MemoryID: id, HistoryIndex: index,
+		Current: current, Selected: prior, Evidence: inspectMemorySource(d, priorMemory),
+		Command: AgentCommand{Action: "memory-put", Revision: revision, ProfileID: profile, ID: id, Text: prior.Text, Source: prior.Source, ExpiresAt: prior.ExpiresAt},
+	}, nil
+}
+
 func (s *Store) AgentMemories(ctx context.Context, profile, query, id string) (AgentMemoryView, error) {
 	if !validAgentText(query, 200, false) || !utf8.ValidString(query) || !validAgentText(id, 80, false) || !utf8.ValidString(id) {
 		return AgentMemoryView{}, errors.New("memory search or identity is invalid or too long")

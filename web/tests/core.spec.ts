@@ -81,6 +81,318 @@ test.afterEach(async () => {
   }
 });
 
+test("reviewed memory restoration shares inert UI CLI drafts, expiry, current-only context and restart", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(60000);
+  page.setDefaultTimeout(10000);
+  const external: string[] = [];
+  const writes: Record<string, unknown>[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).origin !== new URL(url).origin)
+      external.push(request.url());
+    if (
+      request.method() === "POST" &&
+      new URL(request.url()).pathname === "/api/v1/agents"
+    )
+      writes.push(request.postDataJSON());
+  });
+  await page.goto(url + "/#agents/memory");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const profileId = "trading-analyst";
+  const read = () => privateCLI(["agents", "--profile", profileId]);
+  const command = async (c: object) =>
+    privateCLI(["agents", "--request-stdin"], {
+      profileId,
+      revision: (await read()).revision,
+      ...c,
+    });
+  const draft = (id: string, index = 0, profile = profileId) =>
+    privateCLI([
+      "agents",
+      "--profile",
+      profile,
+      "--memory-restore-draft",
+      id,
+      "--memory-revision",
+      String(index),
+    ]);
+  let v = await command({
+    action: "session-create",
+    name: "Restoration source",
+  });
+  const sessionId = v.sessions[0].id;
+  v = await command({
+    action: "message-add",
+    id: sessionId,
+    text: "Original retained evidence, claims unverified.",
+  });
+  const futureExpiry = (Math.floor(Date.now() / 60000) + 61) * 60 + 17;
+  v = await command({
+    action: "memory-chat-save",
+    id: v.messages[0].id,
+    source: "message",
+    text: "Original concise preference",
+    expiresAt: futureExpiry,
+  });
+  const original = v.memories[0];
+  await command({
+    action: "memory-put",
+    id: original.id,
+    text: "Current owner preference",
+    source: "Owner current",
+  });
+  v = await command({
+    action: "memory-put",
+    text: "Expired retained preference",
+    source: "Owner expired",
+    expiresAt: 1,
+  });
+  const expiredID = v.memories.find(
+    (m: { text: string }) => m.text === "Expired retained preference",
+  ).id;
+  await command({
+    action: "memory-put",
+    id: expiredID,
+    text: "Current expiry preference",
+    source: "Owner expiry current",
+  });
+  await privateCLI(["agents", "--request-stdin"], {
+    action: "memory-put",
+    profileId: "news-researcher",
+    revision: (await read()).revision,
+    text: "Foreign profile secret",
+    source: "Foreign owner",
+  });
+  const before = await read();
+  const foreignBefore = await privateCLI([
+    "agents",
+    "--profile",
+    "news-researcher",
+  ]);
+  const cliDraft = await draft(original.id);
+  expect(cliDraft.version).toBe("memory-restore-draft-v1");
+  expect(cliDraft.command).toMatchObject({
+    action: "memory-put",
+    revision: before.revision,
+    id: original.id,
+    profileId,
+    text: original.text,
+    source: original.source,
+    expiresAt: futureExpiry,
+  });
+  expect(await read()).toEqual(before);
+  for (const args of [
+    ["--memory-restore-draft", original.id],
+    ["--memory-revision", "0"],
+    [
+      "--memory-restore-draft",
+      original.id,
+      "--memory-revision",
+      "0",
+      "--memory-search",
+      "",
+    ],
+    ["--memory-restore-draft", original.id, "--memory-revision", "8"],
+  ])
+    await expect(
+      privateCLI(["agents", "--profile", profileId, ...args]),
+    ).rejects.toThrow();
+  await expect(draft(original.id, 0, "news-researcher")).rejects.toThrow();
+  const trading = () =>
+    page
+      .locator(".local-profile-picker")
+      .getByRole("button", { name: /^Trading Analyst / });
+  await trading().click();
+  const card = (id: string) =>
+    page.getByRole("article", { name: `Memory ${id}`, exact: true });
+  async function review(id: string) {
+    await expect(card(id)).toBeVisible();
+    if ((await card(id).locator("details").getAttribute("open")) === null)
+      await card(id).locator("summary").click();
+    await card(id)
+      .getByRole("region", { name: "Memory revision 1", exact: true })
+      .getByRole("button", { name: "Review restoration", exact: true })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "Restore a memory", exact: true }),
+    ).toBeVisible();
+  }
+  await review(original.id);
+  await expect(
+    page.getByRole("region", { name: "Restoration source evidence" }),
+  ).toContainText("Original retained evidence, claims unverified.");
+  await expect(
+    page.getByRole("article", { name: "Current memory revision", exact: true }),
+  ).toContainText("Current owner preference");
+  await expect(
+    page.getByRole("textbox", { name: "Memory note", exact: true }),
+  ).toHaveValue(original.text);
+  expect(await read()).toEqual(before);
+  expect(writes).toHaveLength(0);
+  await page.screenshot({
+    path: `.evidence/memory-restore-review-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+  await page
+    .getByRole("button", { name: "Cancel restoration", exact: true })
+    .click();
+  expect(await read()).toEqual(before);
+  await review(original.id);
+  await command({
+    action: "memory-put",
+    id: original.id,
+    text: "Newer owner correction",
+    source: "Owner current",
+  });
+  await expect(
+    page.getByRole("button", { name: "Save restored memory", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page
+      .getByRole("status")
+      .filter({ hasText: "Workspace changed. Review the restoration again." }),
+  ).toBeVisible();
+  await expect(
+    privateCLI(["agents", "--request-stdin"], cliDraft.command),
+  ).rejects.toThrow(/conflict|changed|refresh/i);
+  const changed = await read();
+  expect(writes).toHaveLength(0);
+  await page
+    .getByRole("button", { name: "Cancel restoration", exact: true })
+    .click();
+  await review(original.id);
+  await page
+    .getByRole("button", { name: "Save restored memory", exact: true })
+    .click();
+  await expect
+    .poll(
+      async () =>
+        (await read()).memories.find(
+          (m: { id: string }) => m.id === original.id,
+        ).text,
+    )
+    .toBe(original.text);
+  let restored = (await read()).memories.find(
+    (m: { id: string }) => m.id === original.id,
+  );
+  expect(restored).toMatchObject({
+    source: original.source,
+    expiresAt: futureExpiry,
+    expired: false,
+  });
+  expect(restored.history.slice(0, 2)).toEqual(changed.memories[0].history);
+  expect(restored.history[2].text).toBe("Newer owner correction");
+  expect(writes).toHaveLength(1);
+  expect(writes[0]).toMatchObject({
+    action: "memory-put",
+    revision: changed.revision,
+    id: original.id,
+    expiresAt: futureExpiry,
+  });
+  await expect(
+    page.getByRole("heading", { name: "Add a memory", exact: true }),
+  ).toBeVisible();
+  await review(expiredID);
+  await expect(
+    page.getByRole("status").filter({ hasText: "Expired revision" }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Save restored memory", exact: true })
+    .click();
+  await expect
+    .poll(
+      async () =>
+        (await read()).memories.find((m: { id: string }) => m.id === expiredID)
+          .text,
+    )
+    .toBe("Expired retained preference");
+  restored = (await read()).memories.find(
+    (m: { id: string }) => m.id === expiredID,
+  );
+  expect(restored).toMatchObject({
+    source: "Owner expired",
+    expiresAt: 1,
+    expired: true,
+  });
+  expect(writes).toHaveLength(2);
+  v = await command({
+    action: "ai-prepare",
+    id: sessionId,
+    text: "Review the current notes",
+    memorySelection: { mode: "all" },
+    limits: {
+      maxInputTokens: 24000,
+      maxOutputTokens: 1024,
+      deadlineSeconds: 3,
+      budgetMicrousd: 30000,
+    },
+  });
+  const context = JSON.parse(v.aiRequests[0].context).context;
+  expect(context.memories).toHaveLength(1);
+  expect(context.memories[0]).toMatchObject({
+    id: original.id,
+    text: original.text,
+    source: original.source,
+    expiresAt: futureExpiry,
+  });
+  expect(context.memories[0]).not.toHaveProperty("history");
+  const retained = (await read()).memories;
+  const address = new URL(url).host;
+  await stop();
+  await start(false, address);
+  await page.reload();
+  await expect(card(original.id)).toBeVisible();
+  expect((await read()).memories).toEqual(retained);
+  await page
+    .locator(".local-profile-picker")
+    .getByRole("button", { name: /^News Researcher / })
+    .click();
+  await expect(card(original.id)).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Save restored memory", exact: true }),
+  ).toHaveCount(0);
+  expect(
+    (await privateCLI(["agents", "--profile", "news-researcher"])).memories,
+  ).toEqual(foreignBefore.memories);
+  await trading().click();
+  await expect(card(original.id)).toBeVisible();
+  await command({
+    action: "profile-update",
+    name: "Trading Analyst",
+    provider: "xai",
+    model: "preference-only",
+  });
+  const cliRestore = await draft(original.id, 1);
+  expect(cliRestore.selected.text).toBe("Current owner preference");
+  v = await privateCLI(["agents", "--request-stdin"], cliRestore.command);
+  expect(v.memories[0].text).toBe("Current owner preference");
+  expect(v.memories[0].history).toHaveLength(4);
+  await expect(card(original.id).locator(":scope > p")).toHaveText(
+    "Current owner preference",
+  );
+  expect(v.providerCallsEnabled).toBe(false);
+  expect(v.financialExecution).toBe(false);
+  expect(v.tasks).toHaveLength(0);
+  expect(v.runs).toHaveLength(0);
+  expect(external).toEqual([]);
+  expect(writes).toHaveLength(2);
+});
+
 test("expired owner access returns to sign-in without replay or stale-session restoration", async ({
   page,
   isMobile,

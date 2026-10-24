@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/core"
@@ -27,6 +28,8 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	search := flags.String("search", "", "search this profile's conversations, messages and completed AI questions/answers")
 	memorySearch := flags.String("memory-search", "", "read-only search of current profile memory text and source (200 bytes maximum)")
 	memorySource := flags.String("memory-source", "", "inspect one profile memory's retained chat evidence without writing or fetching")
+	memoryRestore := flags.String("memory-restore-draft", "", "review one profile memory's retained revision as an inert correction command")
+	memoryRevision := flags.Int("memory-revision", 0, "zero-based retained revision for --memory-restore-draft; explicit selection required")
 	draft := flags.String("ai-draft", "", "read a saved manual AI request as editable settings; no write, consent or execution")
 	reminderDraft := flags.String("reminder-draft", "", "inspect a saved plain reminder as a transient editable draft; no task or run is created")
 	evidence := flags.String("evidence", "", "read-only inspection: memory, headline or reminder-run")
@@ -38,8 +41,11 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	}
 	memoryMode, sourceSet, chatSearchSet, draftSet := false, false, false, false
 	reminderDraftSet := false
+	restoreSet, memoryRevisionSet := false, false
 	evidenceMode, evidenceItemSet := false, false
 	flags.Visit(func(f *flag.Flag) {
+		restoreSet = restoreSet || f.Name == "memory-restore-draft"
+		memoryRevisionSet = memoryRevisionSet || f.Name == "memory-revision"
 		if f.Name == "memory-search" || f.Name == "memory-source" {
 			memoryMode = true
 		}
@@ -50,6 +56,11 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 		sourceSet = sourceSet || f.Name == "memory-source"
 		chatSearchSet = chatSearchSet || f.Name == "search"
 	})
+	if restoreSet || memoryRevisionSet {
+		if !restoreSet || !memoryRevisionSet || *profile == "" || *memoryRestore == "" || *memoryRevision < 0 || *memoryRevision >= 8 || *change || reminderDraftSet || evidenceMode || memoryMode || draftSet || chatSearchSet {
+			return errors.New("use --profile PROFILE --memory-restore-draft MEMORY_ID --memory-revision INDEX (0–7) without other read modes or writes")
+		}
+	}
 	if reminderDraftSet && (*profile == "" || *reminderDraft == "" || *change || evidenceMode || memoryMode || draftSet || chatSearchSet) {
 		return errors.New("use --profile PROFILE --reminder-draft TASK_ID without other read modes or writes")
 	}
@@ -74,6 +85,14 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	defer c.Close()
 	if e = c.LoadSession(ctx, *dir); e != nil {
 		return e
+	}
+	if restoreSet {
+		q := url.Values{"profile": {*profile}, "memory-restore-draft": {*memoryRestore}, "memory-revision": {strconv.Itoa(*memoryRevision)}}
+		var v core.AgentMemoryRestoreDraft
+		if e = c.Do(ctx, http.MethodGet, "/api/v1/agents?"+q.Encode(), nil, &v); e != nil {
+			return e
+		}
+		return json.NewEncoder(out).Encode(v)
 	}
 	if reminderDraftSet {
 		q := url.Values{"profile": {*profile}, "reminder-draft": {*reminderDraft}}

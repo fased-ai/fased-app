@@ -2,12 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import type {
   AgentMemory,
   AgentMemoryEvidence,
+  AgentMemoryRestoreDraft,
   AgentMemoryView,
   AgentView,
 } from "../agents";
 import { useWorkspace } from "../workspace";
 
-const statuses: Record<AgentMemoryEvidence["status"], string> = {
+export const memoryEvidenceStatuses: Record<
+  AgentMemoryEvidence["status"],
+  string
+> = {
   matched: "Matched retained text · Claims unverified",
   "free-form": "Free-form source",
   invalid: "Invalid source reference",
@@ -21,10 +25,12 @@ const date = (at: number) =>
 export function MemoryRecall({
   view,
   onCorrect,
+  onRestore,
   onOpen,
 }: {
   view: AgentView;
   onCorrect: (memory: AgentMemory) => void;
+  onRestore: (draft: AgentMemoryRestoreDraft) => void;
   onOpen: (source: AgentMemoryEvidence) => void;
 }) {
   const { core, agents } = useWorkspace();
@@ -77,6 +83,30 @@ export function MemoryRecall({
     } catch (e) {
       if (epoch === generation.current)
         setError(e instanceof Error ? e.message : "Source unavailable");
+    } finally {
+      if (epoch === generation.current) setBusy(false);
+    }
+  }
+  async function restore(id: string, index: number) {
+    const epoch = generation.current;
+    setBusy(true);
+    setError("");
+    try {
+      const draft = await core.request<AgentMemoryRestoreDraft>(
+        `agents?profile=${encodeURIComponent(view.profileId)}&memory-restore-draft=${encodeURIComponent(id)}&memory-revision=${index}`,
+      );
+      if (epoch === generation.current) {
+        if (
+          draft.profileId !== view.profileId ||
+          draft.revision !== view.revision
+        ) {
+          setError("Workspace changed. Review the restoration again.");
+          void agents.refresh().catch(() => {});
+        } else onRestore(draft);
+      }
+    } catch (e) {
+      if (epoch === generation.current)
+        setError(e instanceof Error ? e.message : "Restoration unavailable");
     } finally {
       if (epoch === generation.current) setBusy(false);
     }
@@ -157,16 +187,35 @@ export function MemoryRecall({
             <details>
               <summary>{m.history.length} previous revision(s)</summary>
               {m.history.map((h, i) => (
-                <p key={i}>
-                  {h.text} · {h.source} · {date(h.at)}
-                </p>
+                <section key={i} aria-label={`Memory revision ${i + 1}`}>
+                  <p>{h.text}</p>
+                  <small>
+                    {h.source} · Updated {date(h.at)} · Expiry{" "}
+                    {date(h.expiresAt)}
+                  </small>
+                  <button
+                    className="text-button"
+                    disabled={
+                      agents.busy ||
+                      busy ||
+                      records.revision !== view.revision ||
+                      m.history.length >= 8
+                    }
+                    onClick={() => void restore(m.id, i)}
+                  >
+                    Review restoration
+                  </button>
+                </section>
               ))}
+              {m.history.length >= 8 && (
+                <p role="status">Correction history full.</p>
+              )}
             </details>
           )}
           {source?.memoryId === m.id && (
             <section aria-label="Memory source">
               <h4>Memory source</h4>
-              <p>{statuses[source.status]}</p>
+              <p>{memoryEvidenceStatuses[source.status]}</p>
               {source.status === "matched" && (
                 <>
                   <p>{source.text}</p>

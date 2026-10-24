@@ -3,11 +3,32 @@ package core
 import (
 	"errors"
 	"net/http"
+	"strconv"
 )
 
 func (h *HTTPHandler) agentsAPI(w http.ResponseWriter, r *http.Request, token string) {
 	if r.Method == http.MethodGet {
 		q := r.URL.Query()
+		if q.Has("memory-restore-draft") || q.Has("memory-revision") {
+			for key, values := range q {
+				if (key != "profile" && key != "memory-restore-draft" && key != "memory-revision") || len(values) != 1 {
+					writeError(w, 400, "one profile, memory and retained revision expected")
+					return
+				}
+			}
+			index, err := strconv.Atoi(q.Get("memory-revision"))
+			if err != nil || strconv.Itoa(index) != q.Get("memory-revision") {
+				writeError(w, 400, "select a retained revision (0–7)")
+				return
+			}
+			v, err := h.store.AgentMemoryRestore(r.Context(), q.Get("profile"), q.Get("memory-restore-draft"), index)
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			writeJSON(w, 200, v)
+			return
+		}
 		if q.Has("reminder-draft") {
 			for key, values := range q {
 				if (key != "profile" && key != "reminder-draft") || len(values) != 1 {

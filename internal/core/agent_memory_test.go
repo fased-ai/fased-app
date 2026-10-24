@@ -3,6 +3,7 @@ package core
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,201 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestAgentMemoryRestoreReadOnlyHTTP(t *testing.T) {
+	s := fixtureStore(t)
+	token := claimFixture(t, s)
+	v := agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: "trading-analyst", Text: "Retained expired preference", Source: "Owner original", ExpiresAt: 1})
+	id := v.Memories[0].ID
+	v = agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, ID: id, Text: "Current preference", Source: "Owner current"})
+	before, revision, _ := readAgents(t.Context(), s.db)
+	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/v1/agents?profile=trading-analyst&memory-restore-draft="+id+"&memory-revision=0", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("read-only restore draft got %d: %s", w.Code, w.Body)
+	}
+	var got struct {
+		Version string       `json:"version"`
+		Command AgentCommand `json:"command"`
+	}
+	if err = json.Unmarshal(w.Body.Bytes(), &got); err != nil || got.Version != "memory-restore-draft-v1" || got.Command.Action != "memory-put" || got.Command.Revision != revision || got.Command.ID != id || got.Command.ProfileID != v.ProfileID || got.Command.Text != before.Memories[0].History[0].Text || got.Command.Source != "Owner original" || got.Command.ExpiresAt != 1 {
+		t.Fatal("draft lost its history source, expiry or revision binding", w.Body, err)
+	}
+	after, next, _ := readAgents(t.Context(), s.db)
+	if revision != next || !reflect.DeepEqual(before, after) {
+		t.Fatal("preparing a restoration wrote state")
+	}
+}
+
+func TestAgentMemoryRestoreHTTPSelectorsAndAuth(t *testing.T) {
+	s := fixtureStore(t)
+	token := claimFixture(t, s)
+	v := agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: "trading-analyst", Text: "Private original note", Source: "Owner"})
+	id := v.Memories[0].ID
+	agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, ID: id, Text: "Private current note", Source: "Owner"})
+	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "profile=trading-analyst&memory-restore-draft=" + id + "&memory-revision="
+	queries := []string{
+		base + "", base + "-1", base + "8", base + "01", base + "+0", base + "0.0", base + "99999999999999999999999",
+		base + "0&memory-revision=0", base + "0&profile=trading-analyst", base + "0&memory-search=",
+		base + "0&ai-draft=x", base + "0&reminder-draft=x", "profile=trading-analyst&memory-restore-draft=" + id,
+		"profile=trading-analyst&memory-revision=0", "memory-restore-draft=" + id + "&memory-revision=0",
+		"profile=news-researcher&memory-restore-draft=" + id + "&memory-revision=0", base + "1",
+	}
+	before, revision, _ := readAgents(t.Context(), s.db)
+	for _, query := range queries {
+		t.Run(query, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/v1/agents?"+query, nil)
+			r.Header.Set("Authorization", "Bearer "+token)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != 400 || strings.Contains(w.Body.String(), "Private") {
+				t.Fatal("invalid read accepted or disclosed text", w.Code, w.Body)
+			}
+		})
+	}
+	r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/v1/agents?"+base+"0", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 401 {
+		t.Fatal("unauthenticated restoration read", w.Code)
+	}
+	after, next, _ := readAgents(t.Context(), s.db)
+	if revision != next || !reflect.DeepEqual(before, after) {
+		t.Fatal("rejected read changed state")
+	}
+}
+
+func TestAgentMemoryRestoreHistoryExpiryEvidenceAndRestart(t *testing.T) {
+	s, v, id := memoryRecallFixture(t, "message")
+	note := v.Memories[0]
+	v = agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, ID: id, Text: "Expired retained preference", Source: note.Source, ExpiresAt: 1})
+	v = agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, ID: id, Text: "Unselected history secret", Source: "Owner middle"})
+	v = agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, ID: id, Text: "Current owner preference", Source: "Owner current"})
+	agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: "news-researcher", Text: "Foreign memory secret", Source: "Foreign"})
+	before, revision, _ := readAgents(t.Context(), s.db)
+	draft, err := s.AgentMemoryRestore(t.Context(), v.ProfileID, id, 1)
+	if err != nil || draft.Revision != revision || draft.Current.Text != "Current owner preference" || draft.Selected.Text != "Expired retained preference" || draft.Evidence.Status != "matched" || draft.Evidence.Text != before.Messages[0].Text || draft.Command.ExpiresAt != 1 {
+		t.Fatal("wrong restoration facts", draft, err)
+	}
+	b, _ := json.Marshal(draft)
+	if strings.Contains(string(b), "Unselected history secret") || strings.Contains(string(b), "Foreign memory secret") || len(b) > 16000 {
+		t.Fatal("draft disclosed unrelated history")
+	}
+	after, next, _ := readAgents(t.Context(), s.db)
+	if next != revision || !reflect.DeepEqual(before, after) {
+		t.Fatal("abandoning draft wrote state")
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	n, err := OpenStore(s.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.Close()
+	got, err := n.ChangeAgents(t.Context(), draft.Command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := got.Memories[0]
+	if m.ID != id || m.Text != draft.Selected.Text || m.Source != note.Source || m.ExpiresAt != 1 || !m.Expired || len(m.History) != 4 || !reflect.DeepEqual(m.History[:3], before.Memories[0].History) || m.History[3].Text != draft.Current.Text {
+		t.Fatal("restore lost expiry/history/identity", m)
+	}
+	d, _, _ := readAgents(t.Context(), n.db)
+	context, err := aiContext(d, v.ProfileID, v.Sessions[0].ID, "Inspect notes", n.now().Unix())
+	if err != nil || strings.Contains(context, "Expired retained preference") || strings.Contains(context, "Unselected history secret") || strings.Contains(context, "Current owner preference") || strings.Contains(context, "Foreign memory secret") {
+		t.Fatal("expired/history/foreign note entered context", context, err)
+	}
+	agentApply(t, n, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, ID: id, Text: m.Text, Source: m.Source, ExpiresAt: n.now().Unix() + 317})
+	d, _, _ = readAgents(t.Context(), n.db)
+	context, err = aiContext(d, v.ProfileID, v.Sessions[0].ID, "Inspect notes", n.now().Unix())
+	if err != nil || !strings.Contains(context, "Expired retained preference") || strings.Contains(context, "Unselected history secret") || strings.Contains(context, "Current owner preference") || strings.Contains(context, "Foreign memory secret") {
+		t.Fatal("current-only restored context", context, err)
+	}
+	if len(d.AIRequests) != 0 || len(d.Tasks) != 0 || len(d.Runs) != 0 {
+		t.Fatal("restoration dispatched work")
+	}
+}
+
+func TestAgentMemoryRestoreStaleAndForeignSave(t *testing.T) {
+	for _, change := range []string{"correct", "delete", "foreign-command"} {
+		t.Run(change, func(t *testing.T) {
+			s, v, id := memoryRecallFixture(t, "message")
+			v = agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, ID: id, Text: "Current text", Source: "Owner"})
+			draft, err := s.AgentMemoryRestore(t.Context(), v.ProfileID, id, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if change == "delete" {
+				agentApply(t, s, AgentCommand{Action: "memory-delete", ProfileID: v.ProfileID, ID: id})
+			}
+			if change == "correct" {
+				agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, ID: id, Text: "Newer correction", Source: "Owner"})
+			}
+			if change == "foreign-command" {
+				draft.Command.ProfileID = "news-researcher"
+			}
+			before, revision, _ := readAgents(t.Context(), s.db)
+			_, err = s.ChangeAgents(t.Context(), draft.Command)
+			if err == nil || (change != "foreign-command" && !errors.Is(err, ErrConflict)) {
+				t.Fatal("stale/foreign restore accepted", err)
+			}
+			after, next, _ := readAgents(t.Context(), s.db)
+			if revision != next || !reflect.DeepEqual(before, after) {
+				t.Fatal("rejected restore wrote state")
+			}
+		})
+	}
+}
+
+func TestAgentMemoryRestoreRefusesAmbiguityCapacityAndInvalidHistory(t *testing.T) {
+	for _, change := range []string{"empty", "full", "overflow", "duplicate-memory", "duplicate-profile", "invalid-text", "negative-expiry"} {
+		t.Run(change, func(t *testing.T) {
+			s, v, id := memoryRecallFixture(t, "message")
+			v = agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, ID: id, Text: "Current text", Source: "Owner"})
+			rewriteReminderFixture(t, s, func(d *agentDocument) {
+				switch change {
+				case "empty":
+					d.Memories[0].History = nil
+				case "full", "overflow":
+					count := 8
+					if change == "overflow" {
+						count = 9
+					}
+					for len(d.Memories[0].History) < count {
+						d.Memories[0].History = append(d.Memories[0].History, d.Memories[0].History[0])
+					}
+				case "duplicate-memory":
+					d.Memories = append(d.Memories, d.Memories[0])
+				case "duplicate-profile":
+					d.Profiles = append(d.Profiles, d.Profiles[1])
+				case "invalid-text":
+					d.Memories[0].History[0].Text = "bad\x00text"
+				case "negative-expiry":
+					d.Memories[0].History[0].ExpiresAt = -1
+				}
+			})
+			before, revision, _ := readAgents(t.Context(), s.db)
+			if _, err := s.AgentMemoryRestore(t.Context(), v.ProfileID, id, 0); err == nil {
+				t.Fatal("invalid restoration admitted")
+			}
+			after, next, _ := readAgents(t.Context(), s.db)
+			if revision != next || !reflect.DeepEqual(before, after) {
+				t.Fatal("invalid read repaired state")
+			}
+		})
+	}
+}
 
 func TestAgentMemoryRecallHTTPReadOnly(t *testing.T) {
 	s := fixtureStore(t)

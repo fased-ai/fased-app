@@ -1,5 +1,5 @@
 import { ResearchReadPanel, type ResearchSelection } from "./ResearchReadPanel";
-import { MemoryRecall } from "./MemoryRecall";
+import { MemoryRecall, memoryEvidenceStatuses } from "./MemoryRecall";
 import { ChatMemoryReview } from "./ChatMemoryReview";
 import { useCore } from "../core";
 import { NewsInputs, NewsSourcePicker } from "./NewsInputs";
@@ -9,7 +9,11 @@ import { Plus, RefreshCw } from "../icons";
 import { Badge, SectionHead } from "../components/shared";
 import { useWorkspace } from "../workspace";
 import { providerNames, type Provider } from "../state";
-import type { AgentView } from "../agents";
+import type {
+  AgentMemory,
+  AgentMemoryRestoreDraft,
+  AgentView,
+} from "../agents";
 import "../agents.css";
 import { ScheduledAITasks } from "./ScheduledAITasks";
 import { SavedReminderDraft } from "./SavedReminderDraft";
@@ -103,6 +107,10 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
   const [memory, setMemory] = useState("");
   const [source, setSource] = useState("");
   const [expiry, setExpiry] = useState("");
+  const [memoryRestore, setMemoryRestore] =
+    useState<AgentMemoryRestoreDraft | null>(null);
+  const [memoryExpiryEdited, setMemoryExpiryEdited] = useState(false);
+  const memoryExpiryOriginal = useRef(0);
   const [name, setName] = useState(profile.name);
   const [persona, setPersona] = useState(profile.persona);
   const [provider, setProvider] = useState(profile.provider);
@@ -175,6 +183,32 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
     setMemory("");
     setSource("");
     setExpiry("");
+    setMemoryRestore(null);
+    setMemoryExpiryEdited(false);
+    memoryExpiryOriginal.current = 0;
+  }
+  function editMemory(
+    m: Pick<AgentMemory, "id" | "text" | "source" | "expiresAt">,
+    revision: number,
+    restoration: AgentMemoryRestoreDraft | null = null,
+  ) {
+    memoryRevision.current = revision;
+    setMemoryID(m.id);
+    setMemory(m.text);
+    setSource(m.source);
+    setMemoryRestore(restoration);
+    setMemoryExpiryEdited(false);
+    memoryExpiryOriginal.current = m.expiresAt;
+    setExpiry(
+      m.expiresAt
+        ? new Date(
+            m.expiresAt * 1000 -
+              new Date(m.expiresAt * 1000).getTimezoneOffset() * 60000,
+          )
+            .toISOString()
+            .slice(0, 19)
+        : "",
+    );
   }
   function submit(fn: () => Promise<void>) {
     return (e: FormEvent) => {
@@ -452,23 +486,14 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                   setSearch("");
                   navigate("agents/chat");
                 }}
-                onCorrect={(m) => {
-                  memoryRevision.current = v.revision;
-                  setMemoryID(m.id);
-                  setMemory(m.text);
-                  setSource(m.source);
-                  setExpiry(
-                    m.expiresAt
-                      ? new Date(
-                          m.expiresAt * 1000 -
-                            new Date(m.expiresAt * 1000).getTimezoneOffset() *
-                              60000,
-                        )
-                          .toISOString()
-                          .slice(0, 16)
-                      : "",
-                  );
-                }}
+                onCorrect={(m) => editMemory(m, v.revision)}
+                onRestore={(draft) =>
+                  editMemory(
+                    { id: draft.memoryId, ...draft.selected },
+                    draft.revision,
+                    draft,
+                  )
+                }
               />
             </div>
             <form
@@ -481,15 +506,63 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                     id: memoryID || undefined,
                     text: memory,
                     source,
-                    expiresAt: expiry
-                      ? Math.floor(new Date(expiry).getTime() / 1000)
-                      : 0,
+                    expiresAt: !memoryExpiryEdited
+                      ? memoryExpiryOriginal.current
+                      : expiry
+                        ? Math.floor(new Date(expiry).getTime() / 1000)
+                        : 0,
                   })
                 )
                   resetMemory();
               })}
             >
-              <h3>{memoryID ? "Correct a memory" : "Add a memory"}</h3>
+              <h3>
+                {memoryRestore
+                  ? "Restore a memory"
+                  : memoryID
+                    ? "Correct a memory"
+                    : "Add a memory"}
+              </h3>
+              {memoryRestore && (
+                <section aria-label="Memory restoration review">
+                  <article aria-label="Current memory revision">
+                    <h4>Current</h4>
+                    <p>{memoryRestore.current.text}</p>
+                    <small>
+                      {memoryRestore.current.source} · Updated{" "}
+                      {date(memoryRestore.current.at)} · Expiry{" "}
+                      {date(memoryRestore.current.expiresAt)}
+                    </small>
+                  </article>
+                  <article aria-label="Selected memory revision">
+                    <h4>Selected revision {memoryRestore.historyIndex + 1}</h4>
+                    <p>{memoryRestore.selected.text}</p>
+                    <small>
+                      {memoryRestore.selected.source} · Updated{" "}
+                      {date(memoryRestore.selected.at)} · Expiry{" "}
+                      {date(memoryRestore.selected.expiresAt)}
+                    </small>
+                  </article>
+                  {memoryRestore.selected.expiresAt > 0 &&
+                    memoryRestore.selected.expiresAt <= Date.now() / 1000 && (
+                      <p role="status">Expired revision</p>
+                    )}
+                  <section aria-label="Restoration source evidence">
+                    <h4>Recorded source</h4>
+                    <p>
+                      {memoryEvidenceStatuses[memoryRestore.evidence.status]}
+                    </p>
+                    {memoryRestore.evidence.text && (
+                      <blockquote>{memoryRestore.evidence.text}</blockquote>
+                    )}
+                  </section>
+                  {memoryRestore.revision !== v.revision && (
+                    <p role="status">
+                      Workspace changed. Review the restoration again.
+                    </p>
+                  )}
+                </section>
+              )}
               <label>
                 Memory note
                 <textarea
@@ -513,13 +586,27 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                 Expiry (optional)
                 <input
                   type="datetime-local"
+                  step="1"
                   value={expiry}
-                  onChange={(e) => setExpiry(e.target.value)}
+                  onChange={(e) => {
+                    setExpiry(e.target.value);
+                    setMemoryExpiryEdited(true);
+                  }}
                 />
               </label>
               <div className="agent-inline">
-                <button className="primary" disabled={agents.busy}>
-                  {memoryID ? "Save correction" : "Save memory"}
+                <button
+                  className="primary"
+                  disabled={
+                    agents.busy ||
+                    !!(memoryRestore && memoryRestore.revision !== v.revision)
+                  }
+                >
+                  {memoryRestore
+                    ? "Save restored memory"
+                    : memoryID
+                      ? "Save correction"
+                      : "Save memory"}
                 </button>
                 {memoryID && (
                   <button
@@ -527,7 +614,7 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                     className="secondary"
                     onClick={resetMemory}
                   >
-                    Cancel correction
+                    {memoryRestore ? "Cancel restoration" : "Cancel correction"}
                   </button>
                 )}
               </div>

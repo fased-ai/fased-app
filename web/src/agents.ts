@@ -104,6 +104,16 @@ export type AgentMemory = {
   expired: boolean;
   history: { text: string; source: string; at: number; expiresAt: number }[];
 };
+export type AgentMemoryRestoreDraft = {
+  version: "memory-restore-draft-v1";
+  revision: number;
+  profileId: string;
+  memoryId: string;
+  historyIndex: number;
+  current: AgentMemory["history"][number];
+  selected: AgentMemory["history"][number];
+  evidence: AgentMemoryEvidence;
+};
 export type PaperBot = {
   id: string;
   profileId: string;
