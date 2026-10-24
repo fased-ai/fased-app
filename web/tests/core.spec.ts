@@ -81,6 +81,151 @@ test.afterEach(async () => {
   }
 });
 
+test("task inbox opens the exact named run without writes across profiles and reload", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(60000);
+  page.setDefaultTimeout(10000);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+  });
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const profileId = "trading-analyst";
+  const read = () => privateCLI(["agents", "--profile", profileId]);
+  const command = async (c: Record<string, unknown>) =>
+    privateCLI(["agents", "--request-stdin"], {
+      profileId,
+      revision: (await read()).revision,
+      ...c,
+    });
+  for (const name of ["Earlier saved reminder", "Later saved reminder"]) {
+    const v = await command({
+      action: "task-create",
+      name,
+      text: `Review ${name}`,
+      intervalSeconds: 3600,
+      maxRuns: 1,
+    });
+    await command({ action: "task-run", id: v.tasks.at(-1).id });
+  }
+  let baseline = await read();
+  await page.goto(url + "/#agents/tasks");
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await expect(
+    page.getByRole("button", { name: /^Trading Analyst / }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "tasks", exact: true }).click();
+  const runCard = (id: string) =>
+    page.locator(".memory-card").filter({ hasText: `Run ${id}` });
+  for (const i of [1, 0]) {
+    const run = baseline.runs[i];
+    const task = baseline.tasks.find((t: any) => t.id === run.taskId);
+    await expect(
+      runCard(run.id).getByText(task.name, { exact: true }),
+    ).toBeVisible();
+    const notice = page.getByRole("article", {
+      name: `Task notification ${run.id}`,
+      exact: true,
+    });
+    await notice
+      .getByRole("button", { name: "View result", exact: true })
+      .click();
+    await expect(runCard(run.id)).toBeFocused();
+    expect(await read()).toEqual(baseline);
+  }
+  const firstRun = baseline.runs[0];
+  const firstNotice = page.getByRole("article", {
+    name: `Task notification ${firstRun.id}`,
+    exact: true,
+  });
+  await firstNotice
+    .getByRole("button", { name: "Mark read", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).notices[0].read).toBe(true);
+  const afterRead = await read();
+  expect(afterRead.runs).toEqual(baseline.runs);
+  expect(afterRead.tasks).toEqual(baseline.tasks);
+  baseline = afterRead;
+  await firstNotice
+    .getByRole("button", { name: "View result", exact: true })
+    .click();
+  expect(await read()).toEqual(baseline);
+  await page.getByRole("button", { name: /^News Researcher / }).click();
+  await expect(
+    page.getByText("No task notifications.", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "View result", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText("Earlier saved reminder", { exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await expect(firstNotice).toBeVisible();
+  let fault: "missing" | "foreign" = "missing";
+  const routePattern = /\/api\/v1\/agents\?/;
+  await page.route(routePattern, async (route) => {
+    const response = await route.fetch();
+    const v = await response.json();
+    if (v.profileId === profileId) {
+      if (fault === "missing") v.notices[0].runId = "unavailable-run";
+      else v.runs[0].profileId = "news-researcher";
+    }
+    await route.fulfill({ response, json: v });
+  });
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await expect(
+    firstNotice.getByRole("button", {
+      name: "Result unavailable",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  fault = "foreign";
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await expect(
+    runCard(firstRun.id).getByText("Task unavailable", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    firstNotice.getByRole("button", {
+      name: "Result unavailable",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  expect(await read()).toEqual(baseline);
+  await page.unroute(routePattern);
+  await page.reload();
+  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await expect(
+    firstNotice.getByRole("button", { name: "View result", exact: true }),
+  ).toBeEnabled();
+  await firstNotice
+    .getByRole("button", { name: "View result", exact: true })
+    .click();
+  await expect(runCard(firstRun.id)).toBeFocused();
+  expect(await read()).toEqual(baseline);
+  expect(external).toEqual([]);
+  await page.screenshot({
+    path: `.evidence/task-inbox-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+});
+
 test("reminder task draft shares inert inspection edited review and bounded creation across UI CLI and restart", async ({
   page,
   isMobile,

@@ -119,6 +119,12 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
   const [budget, setBudget] = useState(500);
   const profileRevision = useRef(v.revision);
   const memoryRevision = useRef(v.revision);
+  const runCards = useRef(new Map<string, HTMLElement>());
+  const taskNames = new Map(
+    v.tasks
+      .filter((t) => t.profileId === v.profileId)
+      .map((t) => [t.id, t.name]),
+  );
   function reloadProfile() {
     setName(profile.name);
     setPersona(profile.persona);
@@ -823,8 +829,24 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                     .slice()
                     .reverse()
                     .map((r) => (
-                      <article className="memory-card" key={r.id}>
-                        <strong>{r.outcome}</strong>
+                      <article
+                        className="memory-card task-run"
+                        key={r.id}
+                        tabIndex={-1}
+                        aria-label={`Run ${r.id}`}
+                        ref={(node) => {
+                          if (node) runCards.current.set(r.id, node);
+                          else runCards.current.delete(r.id);
+                        }}
+                      >
+                        <div className="panel-heading">
+                          <strong>
+                            {(r.profileId === v.profileId &&
+                              taskNames.get(r.taskId)) ||
+                              "Task unavailable"}
+                          </strong>
+                          <Badge>{r.outcome}</Badge>
+                        </div>
                         <p>
                           {r.strategy} · {date(r.at)}
                         </p>
@@ -895,28 +917,52 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                   v.notices
                     .slice()
                     .reverse()
-                    .map((n) => (
-                      <article className="memory-card" key={n.id}>
-                        <p>{n.text}</p>
-                        <small>{date(n.at)}</small>
-                        {!n.read ? (
+                    .map((n) => {
+                      const canView =
+                        n.profileId === v.profileId &&
+                        v.runs.some(
+                          (r) =>
+                            r.id === n.runId && r.profileId === v.profileId,
+                        );
+                      return (
+                        <article
+                          className="memory-card"
+                          key={n.id}
+                          aria-label={`Task notification ${n.id}`}
+                        >
+                          <p>{n.text}</p>
+                          <small>{date(n.at)}</small>
                           <button
-                            className="text-button"
-                            disabled={agents.busy}
-                            onClick={() =>
-                              void agents.change({
-                                action: "notice-read",
-                                id: n.id,
-                              })
-                            }
+                            className="secondary"
+                            disabled={agents.busy || !canView}
+                            onClick={() => {
+                              if (!canView) return;
+                              const card = runCards.current.get(n.runId);
+                              card?.scrollIntoView({ block: "center" });
+                              card?.focus({ preventScroll: true });
+                            }}
                           >
-                            Mark read
+                            {canView ? "View result" : "Result unavailable"}
                           </button>
-                        ) : (
-                          <small>Read</small>
-                        )}
-                      </article>
-                    ))
+                          {!n.read ? (
+                            <button
+                              className="text-button"
+                              disabled={agents.busy}
+                              onClick={() =>
+                                void agents.change({
+                                  action: "notice-read",
+                                  id: n.id,
+                                })
+                              }
+                            >
+                              Mark read
+                            </button>
+                          ) : (
+                            <small>Read</small>
+                          )}
+                        </article>
+                      );
+                    })
                 )}
               </div>
             </section>

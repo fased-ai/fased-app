@@ -1149,6 +1149,10 @@
   min-height: 36px;
   text-align: left;
 }
+.wt .task-run:focus {
+  outline: 2px solid var(--wt-cyan);
+  outline-offset: 3px;
+}
 .wt .settings-workspace input[type="checkbox"] {
   width: 16px;
   height: 16px;
