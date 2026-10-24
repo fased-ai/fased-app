@@ -1378,7 +1378,23 @@ test("claim, UI/CLI setup, restart and logout use one private instance", async (
   // Another client edits after the review was loaded. The UI must stay open,
   // show the conflict and require a second review rather than report success.
   await exec(binary, ["setup", "--data-dir", dir, "--provider", "anthropic"]);
-  await page.getByRole("button", { name: "Save setup preferences" }).click();
+  const saveSetup = page.getByRole("button", {
+    name: "Save setup preferences",
+  });
+  await saveSetup.scrollIntoViewIfNeeded();
+  await expect
+    .poll(() =>
+      saveSetup.evaluate((button) => {
+        const box = button.getBoundingClientRect();
+        const target = document.elementFromPoint(
+          box.x + box.width / 2,
+          box.y + box.height / 2,
+        );
+        return target !== null && button.contains(target);
+      }),
+    )
+    .toBe(true);
+  await saveSetup.click();
   await expect(page.getByRole("dialog").getByRole("alert")).toHaveText(
     /settings changed in another client/,
   );
@@ -5789,10 +5805,20 @@ test("shared WEN app shell and agent panes retain bounded local controls", async
     await page.screenshot({ path: `.evidence/${name}.png`, fullPage: true });
   };
   await page.goto(url + "/#agents/chat");
-  await page
+  // Exercise selection readiness independently of a fast local response.
+  await page.route(
+    /\/api\/v1\/agents\?profile=trading-analyst$/,
+    async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await route.continue();
+    },
+    { times: 1 },
+  );
+  const selectedProfile = page
     .locator(".local-profile-picker")
-    .getByRole("button", { name: /^Trading Analyst / })
-    .click();
+    .getByRole("button", { name: /^Trading Analyst / });
+  await selectedProfile.click();
+  await expect(selectedProfile).toHaveAttribute("aria-pressed", "true");
   await page
     .getByLabel("Conversation name", { exact: true })
     .fill("Design fixture chat");
