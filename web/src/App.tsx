@@ -1,3 +1,4 @@
+import logo from "./assets/fased-logo.svg";
 import {
   ArrowUpRight,
   Bell,
@@ -14,7 +15,6 @@ import {
   Search,
   Server,
   Settings2,
-  ShieldCheck,
   X,
 } from "./icons";
 import { providerNames } from "./state";
@@ -78,7 +78,7 @@ function WorkspaceShell() {
             onClick={() => navigate("overview")}
             aria-label="Fased overview"
           >
-            Fased
+            <img src={logo} alt="" width="26" height="26" /> Fased
           </button>
           <nav aria-label="Main navigation">
             {navigation.map((n) => (
@@ -112,11 +112,6 @@ function WorkspaceShell() {
             >
               <Settings2 size={17} /> Settings
             </button>
-            <div className="sidebar-version">
-              <span className="dot" />
-              {core.mode === "ready" ? "Private core" : "Design prototype"}
-              <span>{core.mode === "ready" ? core.version : "0.0.0"}</span>
-            </div>
           </div>
         </aside>
         <div className="app-body">
@@ -129,6 +124,10 @@ function WorkspaceShell() {
               >
                 <Menu size={19} />
               </button>
+              <span className="mobile-brand">
+                <img src={logo} alt="" width="23" height="23" />
+                Fased
+              </span>
               <span className="breadcrumb">
                 <strong>
                   {section === "agents"
@@ -146,15 +145,25 @@ function WorkspaceShell() {
               </span>
             </div>
             <div className="topbar-actions">
-              <div className="instance-pill">
+              <span className="fixture-indicator">
+                <FlaskConical size={12} /> Fixture
+              </span>
+              {core.mode === "ready" && (
+                <button
+                  className="text-button"
+                  disabled={core.saving}
+                  onClick={() => void core.logout()}
+                >
+                  Sign out
+                </button>
+              )}
+              <div className="instance-pill" aria-label="Instance location">
                 {state.setup.host === "local" ? (
                   <Monitor size={13} />
                 ) : (
                   <Server size={13} />
                 )}
-                <span>
-                  {state.setup.host === "local" ? "Local" : "VPS"} preview
-                </span>
+                <span>{state.setup.host === "local" ? "Local" : "Remote"}</span>
                 <span className="dot" />
               </div>
               <div className="search-wrap">
@@ -206,28 +215,6 @@ function WorkspaceShell() {
               </button>
             </div>
           </header>
-          <div className="prototype-strip">
-            {core.mode === "ready" ? (
-              <ShieldCheck size={13} aria-label="Core connected" />
-            ) : (
-              <FlaskConical size={13} />
-            )}
-            <strong>
-              {core.mode === "ready"
-                ? "FIXTURE WORKSPACE"
-                : "INTERACTIVE PROTOTYPE"}
-            </strong>
-            <span>Real AI, wallets and updates disabled.</span>
-            {core.mode === "ready" && (
-              <button
-                className="text-button"
-                disabled={core.saving}
-                onClick={() => void core.logout()}
-              >
-                Sign out
-              </button>
-            )}
-          </div>
           {core.error && core.mode === "ready" && (
             <div className="storage-warning" role="alert">
               {core.error}

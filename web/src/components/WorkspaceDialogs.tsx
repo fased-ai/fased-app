@@ -68,7 +68,7 @@ export function WorkspaceDialogs() {
             <p className="prototype-caption">
               <FlaskConical size={14} />
               {core.mode === "ready"
-                ? "Preferences are saved to your private core. Wallets and providers stay unconnected."
+                ? "Preferences are saved on this instance."
                 : "Setup simulation · no services or accounts are created"}
             </p>
             {core.error && core.mode === "ready" && (
@@ -95,9 +95,7 @@ export function WorkspaceDialogs() {
                       ) : (
                         <Server size={25} />
                       )}
-                      <strong>
-                        {host === "local" ? "Local computer" : "Private VPS"}
-                      </strong>
+                      <strong>{host === "local" ? "Local" : "Remote"}</strong>
                       <span>
                         {host === "local"
                           ? "Simpler setup. New decisions require your computer to be awake."
@@ -218,10 +216,8 @@ export function WorkspaceDialogs() {
                   <div>
                     <dt>Location</dt>
                     <dd>
-                      {state.setup.host === "local"
-                        ? "Local computer"
-                        : "Private VPS"}{" "}
-                      · simulated
+                      {state.setup.host === "local" ? "Local" : "Remote"} ·
+                      simulated
                     </dd>
                   </div>
                   <div>
@@ -467,8 +463,7 @@ export function WorkspaceDialogs() {
             <p>
               This removes this browser's demo setup, custom profiles, notes and
               inbox events. It affects no wallet, account or external service.
-              {core.mode === "ready" &&
-                " Your private core setup is preserved."}
+              {core.mode === "ready" && " Your setup is preserved."}
             </p>
           </div>
           <div className="dialog-footer">

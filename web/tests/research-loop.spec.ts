@@ -155,9 +155,7 @@ test("reviewed v2 continuations share UI/CLI consent, transcript and restart", a
     });
     const before = await read();
     await page.goto(url + "/#agents/chat");
-    await page
-      .getByRole("button", { name: "Inspect research", exact: true })
-      .click();
+    await page.getByRole("button", { name: "Sources", exact: true }).click();
     const panel = page.getByRole("region", {
       name: "Research inspection",
       exact: true,
@@ -177,11 +175,12 @@ test("reviewed v2 continuations share UI/CLI consent, transcript and restart", a
     await group
       .getByRole("combobox", { name: "Research mode", exact: true })
       .selectOption("loop");
+    await ai.locator(".message-options > summary").click();
     await ai
       .getByRole("combobox", { name: "Memory", exact: true })
       .selectOption("none");
     await ai
-      .getByRole("textbox", { name: "AI request", exact: true })
+      .getByRole("textbox", { name: "Message", exact: true })
       .fill("Two-step review.");
     await ai
       .getByRole("spinbutton", { name: "Model attempts", exact: true })

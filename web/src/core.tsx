@@ -153,7 +153,7 @@ function useCoreState() {
       else {
         setMode("error");
         setError(
-          "The private core is unavailable. Restart it or retry the connection.",
+          "The Fased instance is unavailable. Restart it or retry the connection.",
         );
       }
     });
@@ -228,7 +228,7 @@ function useCoreState() {
             await refresh().catch(() => {
               setMode("error");
               setError(
-                "The private core is unavailable. Retry the connection.",
+                "The Fased instance is unavailable. Retry the connection.",
               );
             });
         })
@@ -267,7 +267,7 @@ function useCoreState() {
         await refresh();
       } catch {
         setMode("error");
-        setError("The private core is unavailable. Retry the connection.");
+        setError("The Fased instance is unavailable. Retry the connection.");
       }
     },
   };

@@ -1,3 +1,4 @@
+import logo from "../assets/fased-logo.svg";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { ArrowRight, LockKeyhole, ShieldCheck } from "../icons";
 import { useCore } from "../core";
@@ -43,17 +44,18 @@ export function CoreGate({ children }: { children: ReactNode }) {
     <main className="core-gate">
       <section className="core-auth panel">
         <div className="core-auth-brand">
+          <img src={logo} alt="" width="28" height="28" />
           <strong>Fased</strong>
         </div>
         {core.mode === "loading" ? (
           <div className="empty-state" role="status">
             <ShieldCheck size={28} />
             <h1>Opening your workspace</h1>
-            <p>Checking the local core.</p>
+            <p>Connecting to Fased…</p>
           </div>
         ) : core.mode === "error" ? (
           <div className="settings-body">
-            <h1>Core connection unavailable</h1>
+            <h1>Connection unavailable</h1>
             <p role="alert">{core.error}</p>
             <button className="primary" onClick={() => void core.retry()}>
               Retry connection
@@ -71,7 +73,7 @@ export function CoreGate({ children }: { children: ReactNode }) {
               <p>
                 {core.mode === "unclaimed"
                   ? "Establish owner access before configuring this instance. No wallet or AI account is required."
-                  : "Sign in to your private core. Your setup is stored with this instance."}
+                  : "Sign in to this Fased instance."}
               </p>
               {core.mode === "unclaimed" && (
                 <>
@@ -139,9 +141,6 @@ export function CoreGate({ children }: { children: ReactNode }) {
                     : "Sign in"}
                 <ArrowRight size={15} />
               </button>
-              <p className="subtle">
-                Wallets, providers and financial terminals remain unconnected.
-              </p>
             </div>
           </form>
         )}

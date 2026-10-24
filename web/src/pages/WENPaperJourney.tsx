@@ -32,7 +32,7 @@ export function WENPaperJourney() {
         </p>
         {!ready ? (
           <p>
-            Connect and unlock your private core to save paper entries. Demo
+            Connect and unlock your Fased instance to save paper entries. Demo
             mode cannot run them.
           </p>
         ) : (

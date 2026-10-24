@@ -52,7 +52,7 @@ export function UpdateStatusPanel() {
         </p>
         {mode !== "ready" ? (
           <p className="subtle">
-            Connect and sign in to a private core to see actual status.
+            Connect and sign in to a Fased instance to see actual status.
             Prototype preferences cannot report installation or signer state.
           </p>
         ) : (

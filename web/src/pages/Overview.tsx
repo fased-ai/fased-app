@@ -39,9 +39,7 @@ export function Overview() {
         </div>
         <div>
           <dt>Deployment preference</dt>
-          <dd>
-            {state.setup.host === "vps" ? "Private VPS" : "Local computer"}
-          </dd>
+          <dd>{state.setup.host === "vps" ? "Remote" : "Local"}</dd>
         </div>
         <div>
           <dt>Financial execution</dt>

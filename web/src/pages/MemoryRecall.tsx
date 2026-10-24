@@ -149,7 +149,7 @@ export function MemoryRecall({
         >
           <p>{m.text}</p>
           <small>
-            {m.source} · Updated {date(m.updatedAt)} ·{" "}
+            Updated {date(m.updatedAt)} ·{" "}
             {m.expired ? "Expired" : date(m.expiresAt)}
           </small>
           <div className="agent-inline">

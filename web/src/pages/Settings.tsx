@@ -22,9 +22,7 @@ export function Settings() {
           <section className="panel">
             <div className="panel-heading">
               <h2>Instance</h2>
-              <Badge>
-                {core.mode === "ready" ? "PRIVATE CORE" : "SIMULATED"}
-              </Badge>
+              <Badge>{core.mode === "ready" ? "CONNECTED" : "SIMULATED"}</Badge>
             </div>
             <div className="settings-body">
               <label htmlFor="instance-host">Deployment preference</label>
@@ -38,8 +36,8 @@ export function Settings() {
                   })
                 }
               >
-                <option value="local">Local computer</option>
-                <option value="vps">Private VPS</option>
+                <option value="local">Local</option>
+                <option value="vps">Remote</option>
               </select>
               <p className="subtle">
                 {core.mode === "ready"

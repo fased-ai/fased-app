@@ -123,9 +123,7 @@ test("inert research preparation shares UI/CLI facts, cancellation and restart w
     });
     const before = await read();
     await page.goto(url + "/#agents/chat");
-    await page
-      .getByRole("button", { name: "Inspect research", exact: true })
-      .click();
+    await page.getByRole("button", { name: "Sources", exact: true }).click();
     const panel = page.getByRole("region", {
       name: "Research inspection",
       exact: true,
@@ -151,11 +149,12 @@ test("inert research preparation shares UI/CLI facts, cancellation and restart w
         .innerText(),
     );
     expect((await read()).revision).toBe(before.revision);
+    await ai.locator(".message-options > summary").click();
     await ai
       .getByRole("combobox", { name: "Memory", exact: true })
       .selectOption("none");
     await ai
-      .getByRole("textbox", { name: "AI request", exact: true })
+      .getByRole("textbox", { name: "Message", exact: true })
       .fill("Explain this retained source and its limits.");
     await ai
       .getByRole("button", { name: "Prepare research disclosure", exact: true })

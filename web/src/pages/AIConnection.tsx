@@ -97,88 +97,91 @@ export function AIConnectionSettings() {
         <Badge>TEST KEYS ONLY</Badge>
       </div>
       <div className="agent-record-body">
-        <p>
-          Live AI calls are disabled. Use a disposable fased-test- key to test
-          the connection. No OpenAI account is contacted and fixture prices are
-          examples.
-        </p>
-        <p>
-          The core encrypts the key with a separate vault passphrase. Unlock
-          lasts 15 minutes and ends on lock, logout or restart. Keep this
-          passphrase safe: password recovery cannot recover it. A compromised
-          running core can access an unlocked key.
-        </p>
         <p className="connection-status" role="status">
           {view?.ref
             ? `${view.locked ? "Locked" : "Unlocked"} · ${view.model} · ${view.ref}`
             : "No connection saved"}
         </p>
         {error && <p role="alert">{error}</p>}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void change("save");
-          }}
-          autoComplete="off"
-        >
-          <label>
-            Disposable API key
-            <input
-              type="password"
-              autoComplete="off"
-              value={key}
-              maxLength={256}
-              onChange={(e) => setKey(e.target.value)}
-            />
-          </label>
-          <label>
-            Vault passphrase
-            <input
-              type="password"
-              autoComplete="off"
-              value={passphrase}
-              maxLength={1024}
-              onChange={(e) => setPassphrase(e.target.value)}
-            />
-          </label>
-          <div className="agent-actions">
-            <button
-              className="primary"
-              disabled={busy || !view || !key || passphrase.length < 12}
-            >
-              {view?.ref ? "Replace test connection" : "Save test connection"}
-            </button>
-            <button
-              type="button"
-              className="secondary"
-              disabled={busy || !view?.ref || passphrase.length < 12}
-              onClick={() => void change("unlock")}
-            >
-              Unlock connection
-            </button>
-            <button
-              type="button"
-              className="secondary"
-              disabled={busy || !view?.ref}
-              onClick={() => void change("lock")}
-            >
-              Lock connection
-            </button>
-            <button
-              type="button"
-              className="secondary"
-              disabled={busy || !view?.ref || passphrase.length < 12}
-              onClick={() => void change("remove")}
-            >
-              Remove connection
-            </button>
-          </div>
-        </form>
-        <p>
-          Credential files are excluded from metadata backups. Lost
-          vault/passphrase: revoke the test key and reconnect; existing request
-          records and budget holds remain.
-        </p>
+        <details className="connection-options">
+          <summary>Connection settings</summary>
+          <p>
+            Live AI calls are disabled. Use a disposable fased-test- key to test
+            the connection. No OpenAI account is contacted and fixture prices
+            are examples.
+          </p>
+          <p>
+            The core encrypts the key with a separate vault passphrase. Unlock
+            lasts 15 minutes and ends on lock, logout or restart. Keep this
+            passphrase safe: password recovery cannot recover it. A compromised
+            running core can access an unlocked key.
+          </p>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void change("save");
+            }}
+            autoComplete="off"
+          >
+            <label>
+              Disposable API key
+              <input
+                type="password"
+                autoComplete="off"
+                value={key}
+                maxLength={256}
+                onChange={(e) => setKey(e.target.value)}
+              />
+            </label>
+            <label>
+              Vault passphrase
+              <input
+                type="password"
+                autoComplete="off"
+                value={passphrase}
+                maxLength={1024}
+                onChange={(e) => setPassphrase(e.target.value)}
+              />
+            </label>
+            <div className="agent-actions">
+              <button
+                className="primary"
+                disabled={busy || !view || !key || passphrase.length < 12}
+              >
+                {view?.ref ? "Replace test connection" : "Save test connection"}
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                disabled={busy || !view?.ref || passphrase.length < 12}
+                onClick={() => void change("unlock")}
+              >
+                Unlock connection
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                disabled={busy || !view?.ref}
+                onClick={() => void change("lock")}
+              >
+                Lock connection
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                disabled={busy || !view?.ref || passphrase.length < 12}
+                onClick={() => void change("remove")}
+              >
+                Remove connection
+              </button>
+            </div>
+          </form>
+          <p>
+            Credential files are excluded from metadata backups. Lost
+            vault/passphrase: revoke the test key and reconnect; existing
+            request records and budget holds remain.
+          </p>
+        </details>
       </div>
     </section>
   );

@@ -277,31 +277,37 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
                 }
               />
             </label>
-            {(
-              [
-                ["maxInputTokens", "Input token limit", 1000, 32000],
-                ["maxOutputTokens", "Output token limit", 128, 1024],
-                ["deadlineSeconds", "Request deadline (seconds)", 1, 5],
-                ["budgetMicrousd", "Fixture budget (micro USD)", 1, 1000000],
-              ] as const
-            ).map(([key, label, min, max]) => (
-              <label key={key}>
-                {label}
-                <input
-                  type="number"
-                  required
-                  min={min}
-                  max={max}
-                  value={form.limits[key]}
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      limits: { ...form.limits, [key]: e.target.valueAsNumber },
-                    })
-                  }
-                />
-              </label>
-            ))}
+            <details className="playbook-limits">
+              <summary>Advanced limits</summary>
+              {(
+                [
+                  ["maxInputTokens", "Input token limit", 1000, 32000],
+                  ["maxOutputTokens", "Output token limit", 128, 1024],
+                  ["deadlineSeconds", "Request deadline (seconds)", 1, 5],
+                  ["budgetMicrousd", "Fixture budget (micro USD)", 1, 1000000],
+                ] as const
+              ).map(([key, label, min, max]) => (
+                <label key={key}>
+                  {label}
+                  <input
+                    type="number"
+                    required
+                    min={min}
+                    max={max}
+                    value={form.limits[key]}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        limits: {
+                          ...form.limits,
+                          [key]: e.target.valueAsNumber,
+                        },
+                      })
+                    }
+                  />
+                </label>
+              ))}
+            </details>
             <div className="agent-inline">
               <button className="primary" disabled={busy || !sources.length}>
                 {editing ? "Save new version" : "Save playbook"}

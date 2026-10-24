@@ -137,8 +137,8 @@ export function UpdatePreferencesPanel() {
         </p>
         {core.mode !== "ready" ? (
           <p className="subtle">
-            Connect and sign in to a private core. Prototype mode does not save
-            update policy.
+            Connect and sign in to a Fased instance. Prototype mode does not
+            save update policy.
           </p>
         ) : (
           <>

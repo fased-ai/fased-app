@@ -8,11 +8,9 @@ test("setup resumes after reload and never creates signing authority", async ({
     path: `.evidence/overview-${test.info().project.name}.png`,
     fullPage: true,
   });
-  await expect(
-    page.getByText("INTERACTIVE PROTOTYPE", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Set up workspace" }).click();
-  await page.getByRole("button", { name: /Private VPS Always-on/ }).click();
+  await page.getByRole("button", { name: /Remote Always-on/ }).click();
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page
     .getByRole("button", { name: /Automation wallet Dedicated/ })
@@ -254,7 +252,7 @@ test("shared WEN Activity distinguishes browser demo notices", async ({
   await expect(event).toBeVisible();
   await expect(event.getByText("DEMO", { exact: true })).toBeVisible();
   await expect(activity.getByText("LOCAL ONLY", { exact: true })).toBeVisible();
-  await expect(activity).toHaveCSS("background-color", "rgb(30, 29, 41)");
+  await expect(activity).toHaveCSS("background-color", "rgb(25, 25, 35)");
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

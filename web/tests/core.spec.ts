@@ -8,6 +8,68 @@ import { tmpdir } from "node:os";
 import { once } from "node:events";
 import { createHash, randomBytes } from "node:crypto";
 
+async function revealControl(
+  page: import("@playwright/test").Page,
+  control: import("@playwright/test").Locator,
+  hint = "",
+) {
+  if ((await control.count()) === 0) {
+    if (hint.includes("Conversation name")) {
+      const toggle = page.getByRole("button", {
+        name: "Conversations",
+        exact: true,
+      });
+      if (
+        (await toggle.isVisible()) &&
+        !(await page
+          .getByRole("button", { name: "New conversation", exact: true })
+          .isVisible())
+      )
+        await toggle.click();
+      await page
+        .getByRole("button", { name: "New conversation", exact: true })
+        .click();
+    } else if (hint.includes("Memory note"))
+      await page
+        .getByRole("button", { name: "New memory", exact: true })
+        .click();
+    else if (hint.includes("Task name"))
+      await page.getByRole("button", { name: "New task", exact: true }).click();
+  }
+  if (
+    !(await control.count()) &&
+    page.url().includes("#agents/tasks") &&
+    !(await page.locator(".task-composer").isVisible()) &&
+    (await page
+      .getByRole("button", { name: "New task", exact: true })
+      .isVisible())
+  ) {
+    await page.getByRole("button", { name: "New task", exact: true }).click();
+  }
+  if (!(await control.count()) && !hint) {
+    const options = page.locator(
+      "details.message-options:not([open]) > summary",
+    );
+    if (await options.isVisible()) await options.click();
+  }
+  await expect(control).toBeAttached();
+  // Click the outer disclosure first, exactly as an owner using the UI would.
+  for (let i = 0; i < 4; i++) {
+    if (await control.isVisible()) break;
+    const closed = control
+      .locator("xpath=ancestor::details[not(@open)]")
+      .first();
+    if (!(await closed.count())) break;
+    await closed.locator(":scope > summary").click();
+  }
+}
+
+async function openAISchedules(page: import("@playwright/test").Page) {
+  const pane = page.locator(".scheduled-ai-disclosure");
+  if ((await pane.getAttribute("open")) === null)
+    await pane.locator(":scope > summary").click();
+}
+
 const exec = promisify(execFile);
 const binary = resolve(
   process.env.FASED_CORE_BINARY ?? ".evidence/bin/fased-app",
@@ -94,10 +156,13 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
     if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
   });
   await page.goto(url + "/#agents/tasks");
+
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -116,10 +181,11 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
       revision: (await read()).revision,
       ...c,
     });
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
   await page
-    .locator(".local-profile-picker")
-    .getByRole("button", { name: /News Researcher/ })
-    .click();
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "News Researcher" });
+  await page.getByRole("button", { name: "playbooks", exact: true }).click();
   const panel = page.getByRole("region", {
     name: "Agent playbooks",
     exact: true,
@@ -141,6 +207,11 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
   await panel
     .getByRole("button", { name: "New playbook", exact: true })
     .click();
+  await revealControl(
+    page,
+    panel.getByRole("textbox", { name: "Playbook name", exact: true }),
+    "",
+  );
   await panel
     .getByRole("textbox", { name: "Playbook name", exact: true })
     .fill("Fixture morning digest");
@@ -157,6 +228,11 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
   await panel
     .getByRole("button", { name: "Edit: Fixture morning digest", exact: true })
     .click();
+  await revealControl(
+    page,
+    panel.getByRole("textbox", { name: "Digest prompt", exact: true }),
+    "",
+  );
   await panel
     .getByRole("textbox", { name: "Digest prompt", exact: true })
     .fill(
@@ -210,6 +286,7 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
   await stop();
   await start(true, listen);
   await page.reload();
+  await page.getByRole("button", { name: "playbooks", exact: true }).click();
   await expect(
     panel.getByRole("button", {
       name: "Review: Fixture morning digest",
@@ -228,6 +305,10 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
     .click();
   await expect.poll(async () => (await read()).sessions.length).toBe(1);
   const sessionId = (await read()).sessions[0].id;
+  await revealControl(
+    page,
+    panel.getByRole("combobox", { name: "Digest conversation", exact: true }),
+  );
   await panel
     .getByRole("combobox", { name: "Digest conversation", exact: true })
     .selectOption(sessionId);
@@ -258,6 +339,10 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
       exact: true,
     })
     .click();
+  await revealControl(
+    page,
+    panel.getByRole("combobox", { name: "Digest conversation", exact: true }),
+  );
   await panel
     .getByRole("combobox", { name: "Digest conversation", exact: true })
     .selectOption(sessionId);
@@ -276,6 +361,7 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
     .getByRole("button", { name: "Prepare run review", exact: true })
     .click();
   await expect(panel.getByRole("alert")).toHaveCount(0);
+  await revealControl(page, consent);
   await consent.check();
   await expect(runButton).toBeEnabled();
   await page.screenshot({
@@ -328,6 +414,11 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
     name: "Chat memory review",
     exact: true,
   });
+  await revealControl(
+    page,
+    memory.getByRole("textbox", { name: "Reviewed memory note", exact: true }),
+    "",
+  );
   await memory
     .getByRole("textbox", { name: "Reviewed memory note", exact: true })
     .fill("Fixture digest sources must be checked before reuse.");
@@ -347,15 +438,21 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
   expect(foreign.playbooks).toHaveLength(0);
   expect(foreign.runs).toHaveLength(0);
   await page.goto(url + "/#agents/tasks");
+  await page.getByRole("button", { name: "playbooks", exact: true }).click();
   await stop();
   await start(false, listen);
   await page.reload();
+  await page.getByRole("button", { name: "playbooks", exact: true }).click();
   await panel
     .getByRole("button", {
       name: "Review: Fixture morning digest",
       exact: true,
     })
     .click();
+  await revealControl(
+    page,
+    panel.getByRole("combobox", { name: "Digest conversation", exact: true }),
+  );
   await panel
     .getByRole("combobox", { name: "Digest conversation", exact: true })
     .selectOption(sessionId);
@@ -394,7 +491,9 @@ test("reviewed memory restoration shares inert UI CLI drafts, expiry, current-on
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -505,11 +604,11 @@ test("reviewed memory restoration shares inert UI CLI drafts, expiry, current-on
       privateCLI(["agents", "--profile", profileId, ...args]),
     ).rejects.toThrow();
   await expect(draft(original.id, 0, "news-researcher")).rejects.toThrow();
-  const trading = () =>
-    page
-      .locator(".local-profile-picker")
-      .getByRole("button", { name: /^Trading Analyst / });
-  await trading().click();
+  const trading = () => page.getByLabel("Agent", { exact: true });
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   const card = (id: string) =>
     page.getByRole("article", { name: `Memory ${id}`, exact: true });
   async function review(id: string) {
@@ -598,7 +697,7 @@ test("reviewed memory restoration shares inert UI CLI drafts, expiry, current-on
   });
   await expect(
     page.getByRole("heading", { name: "Add a memory", exact: true }),
-  ).toBeVisible();
+  ).not.toBeVisible();
   await review(expiredID);
   await expect(
     page.getByRole("status").filter({ hasText: "Expired revision" }),
@@ -650,10 +749,10 @@ test("reviewed memory restoration shares inert UI CLI drafts, expiry, current-on
   await page.reload();
   await expect(card(original.id)).toBeVisible();
   expect((await read()).memories).toEqual(retained);
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
   await page
-    .locator(".local-profile-picker")
-    .getByRole("button", { name: /^News Researcher / })
-    .click();
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "News Researcher" });
   await expect(card(original.id)).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Save restored memory", exact: true }),
@@ -661,7 +760,10 @@ test("reviewed memory restoration shares inert UI CLI drafts, expiry, current-on
   expect(
     (await privateCLI(["agents", "--profile", "news-researcher"])).memories,
   ).toEqual(foreignBefore.memories);
-  await trading().click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   await expect(card(original.id)).toBeVisible();
   await command({
     action: "profile-update",
@@ -703,7 +805,9 @@ test("expired owner access returns to sign-in without replay or stale-session re
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -732,11 +836,11 @@ test("expired owner access returns to sign-in without replay or stale-session re
     maxRuns: 1,
   });
   const baseline = await readAll();
-  const trading = () =>
-    page
-      .locator(".local-profile-picker")
-      .getByRole("button", { name: /^Trading Analyst / });
-  await trading().click();
+  const trading = () => page.getByLabel("Agent", { exact: true });
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   await expect(
     page.getByText("Owner-only fixture reminder", { exact: true }),
   ).toBeVisible();
@@ -760,6 +864,7 @@ test("expired owner access returns to sign-in without replay or stale-session re
     expect(response.status()).toBe(200);
   };
   const enter = async () => {
+    await revealControl(page, password);
     await password.fill(fixturePassword);
     await signIn.click();
     await expect(signOut).toBeEnabled();
@@ -784,12 +889,15 @@ test("expired owner access returns to sign-in without replay or stale-session re
     path: `.evidence/owner-sign-in-${isMobile ? "mobile" : "desktop"}.png`,
     fullPage: true,
   });
+  await revealControl(page, password);
   await password.fill("incorrect-disposable-password");
   await signIn.click();
   await expect(page.getByRole("alert")).toContainText("authentication failed");
   await expect(signIn).toBeEnabled();
   await enter();
-  await expect(trading()).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("Trading Analyst");
   expect(await readAll()).toEqual(baseline);
 
   // A committed write and an old 401 may arrive after the owner signs in again.
@@ -819,6 +927,7 @@ test("expired owner access returns to sign-in without replay or stale-session re
   });
   try {
     await page.goto(url + "/#settings");
+    await revealControl(page, page.getByLabel("Deployment preference"), "");
     await page.getByLabel("Deployment preference").selectOption("vps");
     await expect.poll(() => setupHeld).toBe(true);
     await exec(binary, ["setup", "--data-dir", dir, "--host", "local"]);
@@ -913,7 +1022,9 @@ test("periodic refresh follows the requested profile while a selection is pendin
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -931,15 +1042,14 @@ test("periodic refresh follows the requested profile while a selection is pendin
       ),
     );
   const before = await readAll();
-  const profile = (name: string) =>
-    page
-      .locator(".local-profile-picker")
-      .getByRole("button", { name: new RegExp(`^${name} `) });
-  await profile("Trading Analyst").click();
-  await expect(profile("Trading Analyst")).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  const profile = (name: string) => page.getByLabel("Agent", { exact: true });
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
+  await expect(
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("Trading Analyst");
   let releaseSelection = () => {};
   let releasePoll = () => {};
   const selectionGate = new Promise<void>((resolve) => {
@@ -964,39 +1074,38 @@ test("periodic refresh follows the requested profile while a selection is pendin
     await route.continue();
   });
   try {
-    await profile("News Researcher").click();
+    await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+    await page
+      .getByLabel("Agent", { exact: true })
+      .selectOption({ label: "News Researcher" });
     await expect.poll(() => selecting).toBe(true);
     await expect.poll(() => !!pollRequest, { timeout: 12000 }).toBe(true);
     const pollProfile = new URL(pollRequest!.url()).searchParams.get("profile");
     releaseSelection();
-    await expect(profile("News Researcher")).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    await expect(
+      page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+    ).toHaveText("News Researcher");
     const response = pollRequest!.response();
     releasePoll();
     await (await response)!.finished();
     // Retain the visible regression as well as its incorrect request identity.
     if (pollProfile === "trading-analyst")
-      await expect(profile("Trading Analyst")).toHaveAttribute(
-        "aria-pressed",
-        "true",
-      );
+      await expect(
+        page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+      ).toHaveText("Trading Analyst");
     expect(pollProfile).toBe("news-researcher");
-    await expect(profile("News Researcher")).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    await expect(
+      page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+    ).toHaveText("News Researcher");
   } finally {
     releaseSelection();
     releasePoll();
     await page.unroute(routeURL);
   }
   await page.reload();
-  await expect(profile("News Researcher")).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  await expect(
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("News Researcher");
   expect(await readAll()).toEqual(before);
   expect(writes).toEqual([]);
   expect(external).toEqual([]);
@@ -1025,7 +1134,9 @@ test("chat drafts stay with their conversation through search switching and a pe
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -1052,10 +1163,10 @@ test("chat drafts stay with their conversation through search switching and a pe
   const laterId = await seed("trading-analyst", "Later thread");
   await seed("news-researcher", "News thread");
   const baseline = await readAll();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
   await page
-    .locator(".local-profile-picker")
-    .getByRole("button", { name: /^Trading Analyst / })
-    .click();
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   const threads = page.locator(".agent-session-list");
   const message = page.getByRole("textbox", { name: "Message", exact: true });
   const search = page.getByLabel("Search conversations", { exact: true });
@@ -1065,16 +1176,19 @@ test("chat drafts stay with their conversation through search switching and a pe
   await threads
     .getByRole("button", { name: "Earlier thread", exact: true })
     .click();
+  await revealControl(page, message);
   await message.fill(earlierDraft);
   await threads
     .getByRole("button", { name: "Later thread", exact: true })
     .click();
   await expect(message).toHaveValue("");
+  await revealControl(page, message);
   await message.fill(laterDraft);
   await threads
     .getByRole("button", { name: "Earlier thread", exact: true })
     .click();
   await expect(message).toHaveValue(earlierDraft);
+  await revealControl(page, search);
   await search.fill("Later thread");
   await expect(
     page.getByRole("heading", { name: "Later thread", exact: true }),
@@ -1102,8 +1216,10 @@ test("chat drafts stay with their conversation through search switching and a pe
       .getByRole("button", { name: "Save message", exact: true })
       .click();
     await expect.poll(() => saving).toBe(true);
+    await revealControl(page, search);
     await search.fill("Earlier thread");
     await expect(message).toHaveValue(earlierDraft);
+    await revealControl(page, message);
     await message.fill(earlierEdited);
     release();
     await expect(
@@ -1114,6 +1230,7 @@ test("chat drafts stay with their conversation through search switching and a pe
     release();
     await page.unroute(routeURL);
   }
+  await revealControl(page, search);
   await search.fill("");
   await threads
     .getByRole("button", { name: "Later thread", exact: true })
@@ -1129,10 +1246,10 @@ test("chat drafts stay with their conversation through search switching and a pe
   await expect(
     page.locator(".local-messages").getByText(laterDraft, { exact: true }),
   ).toHaveCount(0);
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
   await page
-    .locator(".local-profile-picker")
-    .getByRole("button", { name: /^News Researcher / })
-    .click();
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "News Researcher" });
   await expect(
     page.getByRole("heading", { name: "News thread", exact: true }),
   ).toBeVisible();
@@ -1200,7 +1317,9 @@ test("agent selection survives reload and core restart with scoped preference fa
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -1226,15 +1345,19 @@ test("agent selection survives reload and core restart with scoped preference fa
       ),
     );
   const baseline = await read();
-  const profile = (name: string) =>
-    page
-      .locator(".local-profile-picker")
-      .getByRole("button", { name: new RegExp(`^${name} `) });
+  const profile = (name: string) => page.getByLabel("Agent", { exact: true });
   const choose = async (name: string) => {
-    await profile(name).click();
-    await expect(profile(name)).toHaveAttribute("aria-pressed", "true");
+    await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+    await page
+      .getByLabel("Agent", { exact: true })
+      .selectOption({ label: name });
+    await expect(
+      page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+    ).toHaveText(name);
   };
-  await expect(profile("WEN Operator")).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("WEN Operator");
   const health = await (await page.request.get(url + "/api/v1/health")).json();
   const prefix = "fased.agent-profile.v1:";
   const key = prefix + health.instanceId;
@@ -1243,29 +1366,28 @@ test("agent selection survives reload and core restart with scoped preference fa
     prefix + "another-instance",
   );
   await page.reload();
-  await expect(profile("WEN Operator")).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("WEN Operator");
   await choose("Trading Analyst");
   await page.reload();
-  await expect(profile("Trading Analyst")).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  await expect(
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("Trading Analyst");
   expect(await read()).toEqual(baseline);
   await choose("News Researcher");
   await page.reload();
-  await expect(profile("News Researcher")).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  await expect(
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("News Researcher");
   const originalURL = url;
   await stop();
   await start(false, new URL(originalURL).host);
   expect(url).toBe(originalURL);
   await page.reload();
-  await expect(profile("News Researcher")).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  await expect(
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("News Researcher");
   await login();
   expect(await read()).toEqual(baseline);
   const unknownRequests: string[] = [];
@@ -1277,11 +1399,15 @@ test("agent selection survives reload and core restart with scoped preference fa
     key,
   );
   await page.reload();
-  await expect(profile("WEN Operator")).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("WEN Operator");
   expect(unknownRequests).toEqual([]);
   await page.evaluate((key) => localStorage.removeItem(key), key);
   await page.reload();
-  await expect(profile("WEN Operator")).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("WEN Operator");
   await page.addInitScript((prefix) => {
     const read = Storage.prototype.getItem;
     const write = Storage.prototype.setItem;
@@ -1301,7 +1427,9 @@ test("agent selection survives reload and core restart with scoped preference fa
     };
   }, prefix);
   await page.reload();
-  await expect(profile("WEN Operator")).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("WEN Operator");
   await choose("Trading Analyst");
   expect(await read()).toEqual(baseline);
   expect(external).toEqual([]);
@@ -1326,7 +1454,9 @@ test("task inbox opens the exact named run without writes across profiles and re
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -1357,16 +1487,20 @@ test("task inbox opens the exact named run without writes across profiles and re
   }
   let baseline = await read();
   await page.goto(url + "/#agents/tasks");
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   await expect(
-    page.getByRole("button", { name: /^Trading Analyst / }),
-  ).toHaveAttribute("aria-pressed", "true");
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("Trading Analyst");
   await page.getByRole("button", { name: "tasks", exact: true }).click();
   const runCard = (id: string) =>
     page.locator(".memory-card").filter({ hasText: `Run ${id}` });
   for (const i of [1, 0]) {
     const run = baseline.runs[i];
     const task = baseline.tasks.find((t: any) => t.id === run.taskId);
+    await page.getByRole("button", { name: "history", exact: true }).click();
     await expect(
       runCard(run.id).getByText(task.name, { exact: true }),
     ).toBeVisible();
@@ -1374,6 +1508,7 @@ test("task inbox opens the exact named run without writes across profiles and re
       name: `Task notification ${run.id}`,
       exact: true,
     });
+    await page.getByRole("button", { name: "inbox", exact: true }).click();
     await notice
       .getByRole("button", { name: "View result", exact: true })
       .click();
@@ -1385,6 +1520,7 @@ test("task inbox opens the exact named run without writes across profiles and re
     name: `Task notification ${firstRun.id}`,
     exact: true,
   });
+  await page.getByRole("button", { name: "inbox", exact: true }).click();
   await firstNotice
     .getByRole("button", { name: "Mark read", exact: true })
     .click();
@@ -1393,11 +1529,16 @@ test("task inbox opens the exact named run without writes across profiles and re
   expect(afterRead.runs).toEqual(baseline.runs);
   expect(afterRead.tasks).toEqual(baseline.tasks);
   baseline = afterRead;
+  await page.getByRole("button", { name: "inbox", exact: true }).click();
   await firstNotice
     .getByRole("button", { name: "View result", exact: true })
     .click();
   expect(await read()).toEqual(baseline);
-  await page.getByRole("button", { name: /^News Researcher / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "News Researcher" });
+  await page.getByRole("button", { name: "inbox", exact: true }).click();
   await expect(
     page.getByText("No task notifications.", { exact: true }),
   ).toBeVisible();
@@ -1407,7 +1548,11 @@ test("task inbox opens the exact named run without writes across profiles and re
   await expect(
     page.getByText("Earlier saved reminder", { exact: true }),
   ).toHaveCount(0);
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
+  await page.getByRole("button", { name: "inbox", exact: true }).click();
   await expect(firstNotice).toBeVisible();
   let fault: "missing" | "foreign" = "missing";
   const routePattern = /\/api\/v1\/agents\?/;
@@ -1420,7 +1565,11 @@ test("task inbox opens the exact named run without writes across profiles and re
     }
     await route.fulfill({ response, json: v });
   });
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
+  await page.getByRole("button", { name: "inbox", exact: true }).click();
   await expect(
     firstNotice.getByRole("button", {
       name: "Result unavailable",
@@ -1428,10 +1577,15 @@ test("task inbox opens the exact named run without writes across profiles and re
     }),
   ).toBeDisabled();
   fault = "foreign";
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
+  await page.getByRole("button", { name: "history", exact: true }).click();
   await expect(
     runCard(firstRun.id).getByText("Task unavailable", { exact: true }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "inbox", exact: true }).click();
   await expect(
     firstNotice.getByRole("button", {
       name: "Result unavailable",
@@ -1441,10 +1595,16 @@ test("task inbox opens the exact named run without writes across profiles and re
   expect(await read()).toEqual(baseline);
   await page.unroute(routePattern);
   await page.reload();
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await page.getByRole("button", { name: "inbox", exact: true }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
+  await page.getByRole("button", { name: "inbox", exact: true }).click();
   await expect(
     firstNotice.getByRole("button", { name: "View result", exact: true }),
   ).toBeEnabled();
+  await page.getByRole("button", { name: "inbox", exact: true }).click();
   await firstNotice
     .getByRole("button", { name: "View result", exact: true })
     .click();
@@ -1472,7 +1632,9 @@ test("reminder task draft shares inert inspection edited review and bounded crea
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -1521,10 +1683,14 @@ test("reminder task draft shares inert inspection edited review and bounded crea
   );
   expect(await read()).toEqual(v);
   await page.goto(url + "/#agents/tasks");
-  const picker = page.locator(".local-profile-picker");
-  const profile = picker.getByRole("button", { name: /Trading Analyst/ });
-  await profile.click();
-  await expect(profile).toHaveAttribute("aria-pressed", "true");
+  const profile = page.getByLabel("Agent", { exact: true });
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
+  await expect(
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("Trading Analyst");
   const reuse = page.getByRole("button", {
     name: "Reuse: Saved daily review",
     exact: true,
@@ -1542,9 +1708,19 @@ test("reminder task draft shares inert inspection edited review and bounded crea
   await panel.getByRole("button", { name: "Discard reminder draft" }).click();
   expect(await read()).toEqual(v);
   await reuse.click();
+  await revealControl(
+    page,
+    panel.getByRole("textbox", { name: "Reminder name", exact: true }),
+    "",
+  );
   await panel
     .getByRole("textbox", { name: "Reminder name", exact: true })
     .fill("Reused saved review");
+  await revealControl(
+    page,
+    panel.getByRole("textbox", { name: "Reminder text", exact: true }),
+    "",
+  );
   await panel
     .getByRole("textbox", { name: "Reminder text", exact: true })
     .fill("Review the saved journal again");
@@ -1558,6 +1734,11 @@ test("reminder task draft shares inert inspection edited review and bounded crea
     }),
   ).toBeVisible();
   expect(await read()).toEqual(v);
+  await revealControl(
+    page,
+    panel.getByRole("textbox", { name: "Reminder text", exact: true }),
+    "",
+  );
   await panel
     .getByRole("textbox", { name: "Reminder text", exact: true })
     .fill("Edited after the first review");
@@ -1589,15 +1770,33 @@ test("reminder task draft shares inert inspection edited review and bounded crea
   await expect(
     panel.getByRole("textbox", { name: "Reminder name", exact: true }),
   ).toHaveValue(original.name);
+  await revealControl(
+    page,
+    panel.getByRole("textbox", { name: "Reminder name", exact: true }),
+    "",
+  );
   await panel
     .getByRole("textbox", { name: "Reminder name", exact: true })
     .fill("Reused saved review");
+  await revealControl(
+    page,
+    panel.getByRole("textbox", { name: "Reminder text", exact: true }),
+    "",
+  );
   await panel
     .getByRole("textbox", { name: "Reminder text", exact: true })
     .fill("Review the saved journal again");
+  await revealControl(
+    page,
+    panel.getByRole("spinbutton", { name: "Interval in seconds", exact: true }),
+  );
   await panel
     .getByRole("spinbutton", { name: "Interval in seconds", exact: true })
     .fill("120");
+  await revealControl(
+    page,
+    panel.getByRole("spinbutton", { name: "Maximum evaluations", exact: true }),
+  );
   await panel
     .getByRole("spinbutton", { name: "Maximum evaluations", exact: true })
     .fill("1");
@@ -1636,9 +1835,14 @@ test("reminder task draft shares inert inspection edited review and bounded crea
   v = await read();
   expect(v.tasks[0]).toEqual(original);
   expect(v.tasks[1]).toMatchObject({ state: "completed", runs: 1, maxRuns: 1 });
-  const foreign = picker.getByRole("button", { name: /News Researcher/ });
-  await foreign.click();
-  await expect(foreign).toHaveAttribute("aria-pressed", "true");
+  const foreign = page.getByLabel("Agent", { exact: true });
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "News Researcher" });
+  await expect(
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("News Researcher");
   await expect(
     page.getByRole("button", { name: "Reuse: Saved daily review" }),
   ).toHaveCount(0);
@@ -1655,6 +1859,11 @@ test("reminder task draft shares inert inspection edited review and bounded crea
   await start();
   origins.add(new URL(url).origin);
   await page.goto(url + "/#agents/tasks");
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
@@ -1666,10 +1875,13 @@ test("reminder task draft shares inert inspection edited review and bounded crea
   expect(reopened.aiRequests).toHaveLength(0);
   expect(reopened.providerCallsEnabled).toBe(false);
   expect(reopened.financialExecution).toBe(false);
-  await picker.getByRole("button", { name: /Trading Analyst/ }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   await expect(
-    picker.getByRole("button", { name: /Trading Analyst/ }),
-  ).toHaveAttribute("aria-pressed", "true");
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("Trading Analyst");
   await page
     .getByRole("button", { name: "Reuse: Reused saved review", exact: true })
     .click();
@@ -1707,7 +1919,9 @@ test("conversation search follows matching records and closes hidden conversatio
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -1716,12 +1930,20 @@ test("conversation search follows matching records and closes hidden conversatio
     page.getByRole("button", { name: "Sign out", exact: true }),
   ).toBeVisible();
   await page.goto(url + "/#agents/chat");
-  const profile = page
-    .locator(".local-profile-picker")
-    .getByRole("button", { name: /^Trading Analyst / });
-  await profile.click();
-  await expect(profile).toHaveAttribute("aria-pressed", "true");
+  const profile = page.getByLabel("Agent", { exact: true });
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
+  await expect(
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("Trading Analyst");
   const create = async (name: string, text: string) => {
+    await revealControl(
+      page,
+      page.getByRole("textbox", { name: "Conversation name", exact: true }),
+      "Conversation name",
+    );
     await page
       .getByRole("textbox", { name: "Conversation name", exact: true })
       .fill(name);
@@ -1731,6 +1953,11 @@ test("conversation search follows matching records and closes hidden conversatio
     await expect(
       page.getByRole("heading", { name, exact: true }),
     ).toBeVisible();
+    await revealControl(
+      page,
+      page.getByRole("textbox", { name: "Message", exact: true }),
+      "",
+    );
     await page
       .getByRole("textbox", { name: "Message", exact: true })
       .fill(text);
@@ -1757,6 +1984,7 @@ test("conversation search follows matching records and closes hidden conversatio
     exact: true,
   });
   for (const query of ["older saved", "ORCHID EVIDENCE"]) {
+    await revealControl(page, search);
     await search.fill(query);
     await expect(
       page.locator(".agent-session-list").getByRole("button"),
@@ -1771,6 +1999,7 @@ test("conversation search follows matching records and closes hidden conversatio
       "Recent context",
     );
   }
+  await revealControl(page, search);
   await search.fill("no-such-local-conversation");
   await expect(
     page.getByText("No matching conversations.", { exact: true }),
@@ -1785,6 +2014,7 @@ test("conversation search follows matching records and closes hidden conversatio
     }),
   ).toHaveCount(0);
   await expect(page.locator(".local-messages")).toHaveCount(0);
+  await revealControl(page, search);
   await search.fill("");
   await expect(
     page.getByRole("heading", { name: "Recent separate notes", exact: true }),
@@ -1838,7 +2068,9 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -1861,25 +2093,45 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
       ...c,
     });
   const chooseProfile = async (name: RegExp) => {
-    const profile = page.getByRole("button", { name });
-    await profile.click();
-    await expect(profile).toHaveAttribute("aria-pressed", "true");
+    const profile = page.getByLabel("Agent", { exact: true });
+    await expect(profile).toBeVisible();
+    const chosen = (await profile.locator("option").allTextContents()).find(
+      (n) => name.test(n + " "),
+    );
+    expect(chosen).toBeTruthy();
+    await profile.selectOption({ label: chosen! });
+    await expect(profile.locator("option:checked")).toHaveText(chosen!);
   };
   const open = async (tab: string) => {
     await page.getByRole("button", { name: tab, exact: true }).click();
     await expect(
-      page.getByRole("button", { name: /^Trading Analyst / }),
-    ).toHaveAttribute("aria-pressed", "true");
+      page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+    ).toHaveText("Trading Analyst");
   };
   await page.goto(url + "/#agents/news");
   await chooseProfile(/^Trading Analyst /);
   const news = page.getByRole("region", { name: "News inputs", exact: true });
+  await revealControl(
+    page,
+    news.getByLabel("News source name", { exact: true }),
+    "",
+  );
   await news
     .getByLabel("News source name", { exact: true })
     .fill("Joined controlled news");
+  await revealControl(
+    page,
+    news.getByLabel("Public RSS URL", { exact: true }),
+    "",
+  );
   await news
     .getByLabel("Public RSS URL", { exact: true })
     .fill("https://news.fased.invalid/headlines.xml");
+  await revealControl(
+    page,
+    news.getByLabel("Source freshness limit (seconds)", { exact: true }),
+    "",
+  );
   await news
     .getByLabel("Source freshness limit (seconds)", { exact: true })
     .fill("600");
@@ -1934,9 +2186,10 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     exact: true,
   });
   const prompt = "Draft a reminder to review this saved headline";
-  await review.getByLabel("AI request", { exact: true }).fill(prompt);
+  await revealControl(page, review.getByLabel("Message", { exact: true }), "");
+  await review.getByLabel("Message", { exact: true }).fill(prompt);
   await review
-    .getByRole("button", { name: "Prepare disclosure", exact: true })
+    .getByRole("button", { name: "Review reply", exact: true })
     .click();
   await expect.poll(async () => (await read()).aiRequests.length).toBe(1);
   const prepared = (await read()).aiRequests[0];
@@ -1952,6 +2205,11 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     exact: true,
   });
   await expect(runFixture).toBeDisabled();
+  await revealControl(
+    page,
+    request.getByLabel("I reviewed this context and these fixture limits"),
+    "",
+  );
   await request
     .getByLabel("I reviewed this context and these fixture limits")
     .check();
@@ -1969,13 +2227,25 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     .click();
   const reminder = card.getByRole("region", { name: /Reminder task review:/ });
   const reminderName = "Joined saved headline review";
+  await revealControl(
+    page,
+    reminder.getByLabel("Reminder task name", { exact: true }),
+    "",
+  );
   await reminder
     .getByLabel("Reminder task name", { exact: true })
     .fill(reminderName);
+  await revealControl(
+    page,
+    reminder.getByLabel("Reminder text", { exact: true }),
+    "",
+  );
   await reminder
     .getByLabel("Reminder text", { exact: true })
     .fill(`Review saved headline: ${item.title}`);
+  await revealControl(page, reminder.getByLabel("Repeat every (seconds)"), "");
   await reminder.getByLabel("Repeat every (seconds)").fill("60");
+  await revealControl(page, reminder.getByLabel("Maximum reminder runs"), "");
   await reminder.getByLabel("Maximum reminder runs").fill("1");
   await reminder
     .getByRole("button", { name: "Review reminder schedule", exact: true })
@@ -1986,6 +2256,11 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   });
   await expect(create).toBeDisabled();
   expect((await read()).tasks).toHaveLength(0);
+  await revealControl(
+    page,
+    reminder.getByLabel("I reviewed this reminder text and schedule"),
+    "",
+  );
   await reminder
     .getByLabel("I reviewed this reminder text and schedule")
     .check();
@@ -2017,6 +2292,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     notices: v.notices,
     aiRequests: v.aiRequests,
   };
+  await page.getByRole("button", { name: "history", exact: true }).click();
   await page
     .locator(".memory-card")
     .filter({ hasText: `Run ${run.id}` })
@@ -2047,6 +2323,11 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   });
   const noteText =
     "Review retained headline provenance before planning the next reminder";
+  await revealControl(
+    page,
+    memoryReview.getByLabel("Reviewed memory note", { exact: true }),
+    "",
+  );
   await memoryReview
     .getByLabel("Reviewed memory note", { exact: true })
     .fill(noteText);
@@ -2078,6 +2359,10 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     .click();
   await expect(page).toHaveURL(/#agents\/memory$/);
   expect((await read()).memories).toHaveLength(1);
+  await revealControl(
+    page,
+    page.getByRole("searchbox", { name: "Search memories", exact: true }),
+  );
   await page
     .getByRole("searchbox", { name: "Search memories", exact: true })
     .fill("HEADLINE PROVENANCE");
@@ -2127,6 +2412,11 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   origins.add(new URL(url).origin);
   await login();
   await page.goto(url + "/#agents/chat");
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
@@ -2155,6 +2445,13 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     prompt.toUpperCase(),
     "NO MODEL, MARKET FEED OR WALLET WAS CONTACTED.",
   ]) {
+    await revealControl(
+      page,
+      page.getByRole("searchbox", {
+        name: "Search conversations",
+        exact: true,
+      }),
+    );
     await page
       .getByRole("searchbox", { name: "Search conversations", exact: true })
       .fill(query);
@@ -2181,6 +2478,10 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     expect(isolated.sessions).toHaveLength(0);
     expect(isolated.aiRequests).toHaveLength(0);
   }
+  await revealControl(
+    page,
+    page.getByRole("searchbox", { name: "Search conversations", exact: true }),
+  );
   await page
     .getByRole("searchbox", { name: "Search conversations", exact: true })
     .fill("");
@@ -2325,12 +2626,12 @@ test("update preferences and review-only proposals share revisions, survive rest
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
-  await expect(
-    page.getByText("FIXTURE WORKSPACE", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
@@ -2341,14 +2642,37 @@ test("update preferences and review-only proposals share revisions, survive rest
   await expect(
     panel.getByLabel("Show notices for pending proposals"),
   ).toBeChecked();
+  await revealControl(
+    page,
+    panel.getByLabel("Pin a release identity for review"),
+    "",
+  );
   await panel.getByLabel("Pin a release identity for review").check();
+  await revealControl(
+    page,
+    panel.getByLabel("Pinned sequence", { exact: true }),
+    "",
+  );
   await panel.getByLabel("Pinned sequence", { exact: true }).fill("7");
+  await revealControl(
+    page,
+    panel.getByLabel("Pinned manifest SHA-256", { exact: true }),
+    "",
+  );
   await panel
     .getByLabel("Pinned manifest SHA-256", { exact: true })
     .fill("a".repeat(64));
+  await revealControl(
+    page,
+    panel.getByLabel("Set a preferred maintenance window"),
+    "",
+  );
   await panel.getByLabel("Set a preferred maintenance window").check();
+  await revealControl(page, panel.getByLabel("IANA timezone"), "");
   await panel.getByLabel("IANA timezone").fill("America/Chicago");
+  await revealControl(page, panel.getByLabel("Window start"), "");
   await panel.getByLabel("Window start").fill("23:00");
+  await revealControl(page, panel.getByLabel("Window end"), "");
   await panel.getByLabel("Window end").fill("01:00");
   await panel
     .getByRole("button", { name: "Save update preferences", exact: true })
@@ -2359,10 +2683,25 @@ test("update preferences and review-only proposals share revisions, survive rest
   const initial = await privateCLI(["updates", "preferences"]);
   expect(initial.policy.window.timeZone).toBe("America/Chicago");
   expect(initial.policy.pin.sequence).toBe("7");
+  await revealControl(
+    page,
+    panel.getByLabel("Release label", { exact: true }),
+    "",
+  );
   await panel
     .getByLabel("Release label", { exact: true })
     .fill("Disposable review");
+  await revealControl(
+    page,
+    panel.getByLabel("Claimed sequence", { exact: true }),
+    "",
+  );
   await panel.getByLabel("Claimed sequence", { exact: true }).fill("7");
+  await revealControl(
+    page,
+    panel.getByLabel("Claimed manifest SHA-256", { exact: true }),
+    "",
+  );
   await panel
     .getByLabel("Claimed manifest SHA-256", { exact: true })
     .fill("a".repeat(64));
@@ -2435,6 +2774,11 @@ test("update preferences and review-only proposals share revisions, survive rest
     probeId: probe,
     request: pause,
   });
+  await revealControl(
+    page,
+    panel.getByLabel("Show notices for pending proposals"),
+    "",
+  );
   await panel.getByLabel("Show notices for pending proposals").check();
   await panel
     .getByRole("button", { name: "Save update preferences", exact: true })
@@ -2448,6 +2792,11 @@ test("update preferences and review-only proposals share revisions, survive rest
   await stop();
   await start();
   await page.goto(url + "/#settings");
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
@@ -2482,7 +2831,9 @@ test("update status shares UI and private CLI observations across pause, release
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
   await page.goto(url + "/#settings");
@@ -2566,6 +2917,11 @@ test("update status shares UI and private CLI observations across pause, release
   await stop();
   await start();
   await page.goto(url + "/#settings");
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
@@ -2599,7 +2955,9 @@ test("update recovery view rejects unsupported or lost status without retaining 
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
   let fail = false,
@@ -2687,12 +3045,12 @@ test("claim, UI/CLI setup, restart and logout use one private instance", async (
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
-  await expect(
-    page.getByText("FIXTURE WORKSPACE", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
   const health = await (await page.request.get(`${url}/api/v1/health`)).json();
   expect(health.capabilities.walletSigner).toBe(false);
   expect(health.capabilities.financialExecution).toBe(false);
@@ -2706,9 +3064,9 @@ test("claim, UI/CLI setup, restart and logout use one private instance", async (
   await page
     .getByRole("button", { name: "Set up workspace", exact: true })
     .click();
-  await page.getByRole("button", { name: /Private VPS Always-on/ }).click();
+  await page.getByRole("button", { name: /Remote Always-on/ }).click();
   await expect(
-    page.getByRole("button", { name: /Private VPS Always-on/ }),
+    page.getByRole("button", { name: /Remote Always-on/ }),
   ).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.reload();
@@ -2750,7 +3108,7 @@ test("claim, UI/CLI setup, restart and logout use one private instance", async (
     .getByRole("button", { name: "Set up workspace", exact: true })
     .click();
   await expect(
-    page.getByRole("button", { name: /Local computer Simpler/ }),
+    page.getByRole("button", { name: /Local Simpler/ }),
   ).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByRole("button", { name: "Continue", exact: true }).click();
@@ -2815,6 +3173,11 @@ test("claim, UI/CLI setup, restart and logout use one private instance", async (
   ).toBe("watch");
   await page.goto(url);
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
@@ -2835,7 +3198,9 @@ test("Satcoin prototype preserves legacy links and disabled authority across cor
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
   await expect(
@@ -2875,6 +3240,11 @@ test("Satcoin prototype preserves legacy links and disabled authority across cor
   await stop();
   await start();
   await page.goto(`${url}/#terminals/loss`);
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
@@ -2904,7 +3274,7 @@ test("production UI fails closed when the core API is unavailable", async ({
   );
   await page.goto(url);
   await expect(
-    page.getByRole("heading", { name: "Core connection unavailable" }),
+    page.getByRole("heading", { name: "Connection unavailable" }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Set up workspace" }),
@@ -2918,14 +3288,22 @@ test("public account records share UI/CLI state without wallet authority", async
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
   await page.goto(url + "/#wallets/accounts");
   await expect(
     page.getByRole("heading", { name: "Public account records" }),
   ).toBeVisible();
+  await revealControl(page, page.getByLabel("Name", { exact: true }), "");
   await page.getByLabel("Name", { exact: true }).fill("Disposable watch");
+  await revealControl(
+    page,
+    page.getByLabel("Disposable public key (64 lowercase hex)"),
+    "",
+  );
   await page
     .getByLabel("Disposable public key (64 lowercase hex)")
     .fill("4".repeat(64));
@@ -2949,6 +3327,7 @@ test("public account records share UI/CLI state without wallet authority", async
   expect(state.fixture.available).toBe(false);
   const stale = structuredClone(state.record);
   await page.getByRole("button", { name: "Rename", exact: true }).click();
+  await revealControl(page, page.getByLabel("New account name"), "");
   await page.getByLabel("New account name").fill("Shared watch");
   await page
     .getByRole("button", { name: "Save account name", exact: true })
@@ -3002,6 +3381,11 @@ test("public account records share UI/CLI state without wallet authority", async
   await stop();
   await start();
   await page.goto(url + "/#wallets/accounts");
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
@@ -3076,15 +3460,20 @@ test("proposal form uses explicit fixture labels (UI mock only)", async ({
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
-  await expect(
-    page.getByText("FIXTURE WORKSPACE", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
   await page.goto(url + "/#wallets/accounts");
   await expect(page.getByLabel("Fixture account", { exact: true })).toBeVisible(
     { timeout: 1000 },
+  );
+  await revealControl(
+    page,
+    page.getByLabel("Fixture account", { exact: true }),
+    "",
   );
   await page
     .getByLabel("Fixture account", { exact: true })
@@ -3109,17 +3498,22 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
-  await expect(
-    page.getByText("FIXTURE WORKSPACE", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
   await page.goto(url + "/#agents/chat");
   await page.getByRole("button", { name: "New profile", exact: true }).click();
+  await revealControl(
+    page,
+    page.getByLabel("Profile name", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Profile name", { exact: true })
     .fill("Local acceptance researcher");
@@ -3128,14 +3522,20 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
     .click();
   await expect(
     page.getByRole("heading", {
-      name: "Local acceptance researcher · Conversations",
+      name: "Conversations",
       exact: true,
     }),
   ).toBeVisible();
+  await revealControl(
+    page,
+    page.getByLabel("Conversation name"),
+    "Conversation name",
+  );
   await page.getByLabel("Conversation name").fill("Saved thesis");
   await page
     .getByRole("button", { name: "Create conversation", exact: true })
     .click();
+  await revealControl(page, page.getByLabel("Message", { exact: true }), "");
   await page
     .getByLabel("Message", { exact: true })
     .fill("Our local thesis survives restart");
@@ -3143,11 +3543,14 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
   await expect(
     page.getByText("Our local thesis survives restart", { exact: true }),
   ).toBeVisible();
-  await expect(
-    page.getByText("Saved locally. No AI provider was called.", {
-      exact: false,
-    }),
-  ).toBeVisible();
+  const savedNotice = page.getByText(
+    "Saved locally. No AI provider was called.",
+    { exact: false },
+  );
+  await expect(savedNotice).not.toBeVisible();
+  await page.locator(".chat-system summary").click();
+  await expect(savedNotice).toBeVisible();
+  await page.locator(".chat-system summary").click();
   let view = await privateCLI(["agents"]);
   const p = view.profiles.find(
     (x: { name: string }) => x.name === "Local acceptance researcher",
@@ -3173,7 +3576,9 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
     page.getByText("Concise answers", { exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Correct note", exact: true }).click();
+  await revealControl(page, page.getByLabel("Memory note"), "Memory note");
   await page.getByLabel("Memory note").fill("Detailed answers");
+  await revealControl(page, page.getByLabel("Evidence or source"), "");
   await page
     .getByLabel("Evidence or source")
     .fill("Corrected owner preference");
@@ -3187,7 +3592,9 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
   expect(view.memories[0].id).toBe(memoryID);
   expect(view.memories[0].history[0].text).toBe("Concise answers");
   await page.getByRole("button", { name: "settings", exact: true }).click();
+  await revealControl(page, page.getByLabel("Provider preference"), "");
   await page.getByLabel("Provider preference").selectOption("openai");
+  await revealControl(page, page.getByLabel("Model preference"), "");
   await page.getByLabel("Model preference").fill("reference-only");
   await page.getByRole("button", { name: "Save profile", exact: true }).click();
   await expect
@@ -3199,21 +3606,29 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
     )
     .toBe("openai");
   await page.getByRole("button", { name: "bots", exact: true }).click();
+  await revealControl(page, page.getByLabel("Paper bot name"), "");
   await page.getByLabel("Paper bot name").fill("Fixed example");
   await page
     .getByRole("button", { name: "Create paper bot", exact: true })
     .click();
   await expect(page.getByText("Fixed example", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "tasks", exact: true }).click();
+  await revealControl(
+    page,
+    page.getByLabel("Task name", { exact: true }),
+    "Task name",
+  );
   await page
     .getByLabel("Task name", { exact: true })
     .fill("One paper evaluation");
   view = await privateCLI(["agents", "--profile", p]);
+  await revealControl(page, page.getByLabel("Task kind"), "");
   await page.getByLabel("Task kind").selectOption(view.bots[0].id);
   await page.getByRole("button", { name: "Create task", exact: true }).click();
   await page
     .getByRole("button", { name: "Run now: One paper evaluation", exact: true })
     .click();
+  await page.getByRole("button", { name: "history", exact: true }).click();
   await expect(page.getByText("paper-filled", { exact: true })).toBeVisible();
   view = await privateCLI(["agents", "--profile", p]);
   expect(view.runs).toHaveLength(1);
@@ -3229,6 +3644,7 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
       .locator(".local-agents .memory-card")
       .first()
       .locator("p")
+      .first()
       .evaluate((e) => e.getBoundingClientRect().width),
   ).toBeGreaterThan(150);
   await page.getByRole("button", { name: "Refresh", exact: true }).focus();
@@ -3241,14 +3657,18 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
   await stop();
   await start();
   await page.goto(url + "/#agents/chat");
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page
-    .locator(".agent-picker")
-    .getByRole("button", { name: "Local acceptance researcher", exact: false })
-    .click();
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Local acceptance researcher" });
   await expect(
     page.getByText("Our local thesis survives restart", { exact: true }),
   ).toBeVisible();
@@ -3275,25 +3695,40 @@ test("bounded news inputs retain provenance across UI CLI and restart, hold depe
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
     .click();
-  await expect(
-    page.getByText("FIXTURE WORKSPACE", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
   await page.goto(url + "/#agents/news");
   const panel = page.getByRole("region", { name: "News inputs", exact: true });
+  await revealControl(
+    page,
+    panel.getByLabel("News source name", { exact: true }),
+    "",
+  );
   await panel
     .getByLabel("News source name", { exact: true })
     .fill("Controlled headlines");
+  await revealControl(
+    page,
+    panel.getByLabel("Public RSS URL", { exact: true }),
+    "",
+  );
   await panel
     .getByLabel("Public RSS URL", { exact: true })
     .fill("https://news.fased.invalid/headlines.xml");
+  await revealControl(
+    page,
+    panel.getByLabel("Source freshness limit (seconds)", { exact: true }),
+    "",
+  );
   await panel
     .getByLabel("Source freshness limit (seconds)", { exact: true })
     .fill("600");
@@ -3324,16 +3759,35 @@ test("bounded news inputs retain provenance across UI CLI and restart, hold depe
     (await privateCLI(["agents", "--profile", "trading-analyst"])).newsFetches,
   ).toHaveLength(0);
   await page.goto(url + "/#agents/tasks");
+  await revealControl(
+    page,
+    page.getByRole("combobox", { name: "News input", exact: true }).first(),
+  );
   await page
     .getByRole("combobox", { name: "News input", exact: true })
     .first()
     .selectOption(sourceID);
+  await revealControl(
+    page,
+    page.getByLabel("Task name", { exact: true }),
+    "Task name",
+  );
   await page
     .getByLabel("Task name", { exact: true })
     .fill("Sourced UI reminder");
+  await revealControl(
+    page,
+    page.getByLabel("Reminder text", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Reminder text", { exact: true })
     .fill("Review the retained headlines");
+  await revealControl(
+    page,
+    page.getByLabel("Maximum evaluations", { exact: true }),
+    "",
+  );
   await page.getByLabel("Maximum evaluations", { exact: true }).fill("1");
   await page.getByRole("button", { name: "Create task", exact: true }).click();
   await page
@@ -3350,9 +3804,19 @@ test("bounded news inputs retain provenance across UI CLI and restart, hold depe
   await panel
     .getByRole("button", { name: "Refresh news records", exact: true })
     .click();
+  await revealControl(
+    page,
+    panel.getByLabel("News source name", { exact: true }),
+    "",
+  );
   await panel
     .getByLabel("News source name", { exact: true })
     .fill("Unavailable headlines");
+  await revealControl(
+    page,
+    panel.getByLabel("Public RSS URL", { exact: true }),
+    "",
+  );
   await panel
     .getByLabel("Public RSS URL", { exact: true })
     .fill("https://news.fased.invalid/unavailable.xml");
@@ -3404,6 +3868,11 @@ test("bounded news inputs retain provenance across UI CLI and restart, hold depe
   await stop();
   await start();
   await page.goto(url);
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
@@ -3446,12 +3915,12 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
-  await expect(
-    page.getByText("FIXTURE WORKSPACE", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
@@ -3463,7 +3932,9 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
   await expect(panel.getByRole("status")).toHaveText("No connection saved");
   const key = "fased-test-browser-disposable-key";
   const passphrase = "disposable-browser-vault-passphrase";
+  await revealControl(page, panel.getByLabel("Disposable API key"), "");
   await panel.getByLabel("Disposable API key").fill(key);
+  await revealControl(page, panel.getByLabel("Vault passphrase"), "");
   await panel.getByLabel("Vault passphrase").fill(passphrase);
   await panel.getByRole("button", { name: "Save test connection" }).click();
   await expect(panel.getByRole("status")).toContainText("Unlocked");
@@ -3477,20 +3948,35 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
   expect(ciphertext).not.toContain(key);
   expect(ciphertext).not.toContain(passphrase);
   await page.goto(url + "/#agents/chat");
+  await revealControl(
+    page,
+    page.getByLabel("Conversation name"),
+    "Conversation name",
+  );
   await page.getByLabel("Conversation name").fill("Connected fixture review");
   await page.getByRole("button", { name: "Create conversation" }).click();
   const review = page.getByRole("region", {
     name: "Optional AI request review",
   });
+  await revealControl(
+    page,
+    review.getByRole("combobox", { name: "AI connection", exact: true }),
+  );
   await review
     .getByRole("combobox", { name: "AI connection", exact: true })
     .selectOption(firstRef);
+  await revealControl(page, review.getByLabel("Message", { exact: true }), "");
   await review
-    .getByLabel("AI request", { exact: true })
+    .getByLabel("Message", { exact: true })
     .fill("Analyze fixed paper inputs using the test connection");
-  await review.getByRole("button", { name: "Prepare disclosure" }).click();
+  await review.getByRole("button", { name: "Review reply" }).click();
   await review.getByText("Exact context disclosure", { exact: true }).click();
   await expect(review).toContainText(firstRef);
+  await revealControl(
+    page,
+    review.getByLabel("I reviewed this context and these fixture limits"),
+    "",
+  );
   await review
     .getByLabel("I reviewed this context and these fixture limits")
     .check();
@@ -3508,6 +3994,11 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
   await stop();
   await start();
   await page.goto(url);
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
@@ -3525,6 +4016,7 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
   expect(connection.locked).toBe(false);
   await page.reload();
   await expect(panel.getByRole("status")).toContainText("Unlocked");
+  await panel.getByText("Connection settings", { exact: true }).click();
   await panel
     .getByRole("button", { name: "Lock connection", exact: true })
     .click();
@@ -3564,16 +4056,21 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
-  await expect(
-    page.getByText("FIXTURE WORKSPACE", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
   await page.goto(url + "/#agents/chat");
+  await revealControl(
+    page,
+    page.getByLabel("Conversation name"),
+    "Conversation name",
+  );
   await page
     .getByLabel("Conversation name")
     .fill("Provider fixture conversation");
@@ -3587,15 +4084,21 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
   const panel = page.getByRole("region", {
     name: "Optional AI request review",
   });
+  await revealControl(page, panel.getByLabel("Message", { exact: true }), "");
   await panel
-    .getByLabel("AI request", { exact: true })
+    .getByLabel("Message", { exact: true })
     .fill("Compare a bounded paper strategy");
-  await panel.getByRole("button", { name: "Prepare disclosure" }).click();
+  await panel.getByRole("button", { name: "Review reply" }).click();
   await expect(panel.getByText("prepared", { exact: true })).toBeVisible();
   const run = panel.getByRole("button", { name: "Run development fixture" });
   await expect(run).toBeDisabled();
   await panel.getByText("Exact context disclosure", { exact: true }).click();
   await expect(panel.locator("pre")).toContainText('"store":false');
+  await revealControl(
+    page,
+    panel.getByLabel("I reviewed this context and these fixture limits"),
+    "",
+  );
   await panel
     .getByLabel("I reviewed this context and these fixture limits")
     .check();
@@ -3634,6 +4137,11 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
   await stop();
   await start();
   await page.goto(url);
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
@@ -3653,6 +4161,7 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
   const answer = "No model, market feed or wallet was contacted.";
   const checkSearch = async () => {
     for (const query of [question.toUpperCase(), answer.toUpperCase()]) {
+      await revealControl(page, page.getByLabel("Search conversations"), "");
       await page.getByLabel("Search conversations").fill(query);
       await expect(
         page.locator(".agent-session-list").getByRole("button", {
@@ -3683,22 +4192,21 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
     }
   };
   await checkSearch();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
   await page
-    .locator(".local-profile-picker")
-    .getByRole("button", {
-      name: /News Researcher/,
-    })
-    .click();
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "News Researcher" });
+  await revealControl(page, page.getByLabel("Search conversations"), "");
   await page.getByLabel("Search conversations").fill(answer);
   await expect(page.locator(".agent-session-list button")).toHaveCount(0);
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
   await page
-    .locator(".local-profile-picker")
-    .getByRole("button", {
-      name: new RegExp(profileName),
-    })
-    .click();
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: profileName });
   await page.getByRole("button", { name: "settings", exact: true }).click();
+  await revealControl(page, page.getByLabel("Provider preference"), "");
   await page.getByLabel("Provider preference").selectOption("anthropic");
+  await revealControl(page, page.getByLabel("Model preference"), "");
   await page.getByLabel("Model preference").fill("preference-only");
   await page.getByRole("button", { name: "Save profile", exact: true }).click();
   await expect
@@ -3715,8 +4223,10 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
     .toBe("anthropic");
   await page.getByRole("button", { name: "chat", exact: true }).click();
   await checkSearch();
+  await revealControl(page, page.getByLabel("Search conversations"), "");
   await page.getByLabel("Search conversations").fill("no-such-phrase");
   await expect(page.locator(".agent-session-list button")).toHaveCount(0);
+  await revealControl(page, page.getByLabel("Search conversations"), "");
   await page.getByLabel("Search conversations").fill("");
   await mkdir(".evidence/p5-ai-search", { recursive: true });
   await page.screenshot({
@@ -3734,16 +4244,21 @@ test("bounded AI schedules share consent and execution with CLI, survive restart
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
-  await expect(
-    page.getByText("FIXTURE WORKSPACE", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
   await page.goto(url + "/#agents/chat");
+  await revealControl(
+    page,
+    page.getByLabel("Conversation name"),
+    "Conversation name",
+  );
   await page.getByLabel("Conversation name").fill("Scheduled context");
   await page.getByRole("button", { name: "Create conversation" }).click();
   await expect(
@@ -3761,10 +4276,12 @@ test("bounded AI schedules share consent and execution with CLI, survive restart
   });
   const bot = v.bots[0].id;
   await page.goto(url + "/#agents/tasks");
+  await openAISchedules(page);
   // Hash navigation preserves the UI's cache. Reload after this external CLI
   // write so the task review uses the same current records.
   await page.reload();
-  await page.getByText("Scheduled AI · fixtures", { exact: true }).click();
+  await openAISchedules(page);
+  await openAISchedules(page);
   const region = page.getByRole("region", {
     name: "Scheduled AI steps",
     exact: true,
@@ -3774,10 +4291,17 @@ test("bounded AI schedules share consent and execution with CLI, survive restart
       name: "Fixed paper evaluation · Fixed task paper",
     }),
   ).toHaveCount(1);
+  await revealControl(page, region.getByLabel("AI task title"), "");
   await region.getByLabel("AI task title").fill("Two bounded AI evaluations");
+  await revealControl(page, region.getByLabel("AI analysis prompt"), "");
   await region
     .getByLabel("AI analysis prompt")
     .fill("Compare fixed paper inputs");
+  await revealControl(
+    page,
+    region.getByLabel("Step after validated AI response"),
+    "",
+  );
   await region.getByLabel("Step after validated AI response").selectOption(bot);
   await region.getByRole("button", { name: "Prepare AI task review" }).click();
   const task = region.getByRole("article", {
@@ -3790,6 +4314,11 @@ test("bounded AI schedules share consent and execution with CLI, survive restart
   await expect(authorize).toBeDisabled();
   await task.getByText("Review AI task disclosure").click();
   await expect(task.locator("pre")).toContainText('"store":false');
+  await revealControl(
+    page,
+    task.getByLabel("Allow this frozen context, schedule and limits"),
+    "",
+  );
   await task
     .getByLabel("Allow this frozen context, schedule and limits")
     .check();
@@ -3828,17 +4357,25 @@ test("bounded AI schedules share consent and execution with CLI, survive restart
   expect(v.tasks).toHaveLength(1);
   expect(v.providerCallsEnabled).toBe(false);
   await page.goto(url);
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.goto(url + "/#agents/tasks");
+  await openAISchedules(page);
   await expect(task.getByText("completed", { exact: true })).toBeVisible();
   await expect(task).toContainText("2/2 evaluations");
   await expect(task).toContainText(
     "No model, market feed or wallet was contacted.",
   );
+  await revealControl(page, region.getByLabel("AI task title"), "");
   await region.getByLabel("AI task title").fill("Cancelled schedule");
+  await revealControl(page, region.getByLabel("AI analysis prompt"), "");
   await region.getByLabel("AI analysis prompt").fill("No call needed");
   await region.getByRole("button", { name: "Prepare AI task review" }).click();
   const cancelled = region.getByRole("article", {
@@ -3868,12 +4405,12 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
-  await expect(
-    page.getByText("FIXTURE WORKSPACE", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
@@ -3885,21 +4422,35 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
   expect(connection.testOnly).toBe(true);
   expect(connection.liveCallsEnabled).toBe(false);
   await page.goto(url + "/#agents/chat");
+  await revealControl(
+    page,
+    page.getByLabel("Conversation name"),
+    "Conversation name",
+  );
   await page.getByLabel("Conversation name").fill("Admitted model review");
   await page.getByRole("button", { name: "Create conversation" }).click();
   const review = page.getByRole("region", {
     name: "Optional AI request review",
   });
+  await revealControl(
+    page,
+    review.getByRole("combobox", { name: "AI connection", exact: true }),
+  );
   await review
     .getByRole("combobox", { name: "AI connection", exact: true })
     .selectOption(connection.ref);
+  await revealControl(
+    page,
+    review.getByRole("combobox", { name: "AI model", exact: true }),
+  );
   await review
     .getByRole("combobox", { name: "AI model", exact: true })
     .selectOption(connection.admissionPolicy.model);
+  await revealControl(page, review.getByLabel("Message", { exact: true }), "");
   await review
-    .getByLabel("AI request", { exact: true })
+    .getByLabel("Message", { exact: true })
     .fill("Review the admitted model using controlled data");
-  await review.getByRole("button", { name: "Prepare disclosure" }).click();
+  await review.getByRole("button", { name: "Review reply" }).click();
   // An intentionally expired compiled tariff must refuse, including on future CI dates.
   if (Date.now() >= connection.admissionPolicy.expiresAt * 1000) {
     await expect(
@@ -3908,11 +4459,20 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
     expect((await privateCLI(["agents"])).aiRequests).toHaveLength(0);
     return;
   }
+  await revealControl(
+    page,
+    review.getByText("Model and tariff admission", { exact: true }),
+  );
   await review.getByText("Model and tariff admission", { exact: true }).click();
   await expect(review).toContainText(
     "input $0.40, cached input $0.10, output $1.60",
   );
   await expect(review).toContainText("All three API operations are simulated");
+  await revealControl(
+    page,
+    review.getByLabel("I reviewed this context and these fixture limits"),
+    "",
+  );
   await review
     .getByLabel("I reviewed this context and these fixture limits")
     .check();
@@ -3932,23 +4492,46 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
     (await privateCLI(["agents", "--profile", "news-researcher"])).aiRequests,
   ).toHaveLength(0);
   await page.goto(url + "/#agents/tasks");
-  await page.getByText("Scheduled AI · fixtures", { exact: true }).click();
+  await openAISchedules(page);
   const scheduled = page.getByRole("region", {
     name: "Scheduled AI steps",
     exact: true,
   });
+  await revealControl(
+    page,
+    scheduled.getByRole("combobox", { name: "AI connection", exact: true }),
+  );
   await scheduled
     .getByRole("combobox", { name: "AI connection", exact: true })
     .selectOption(connection.ref);
+  await revealControl(
+    page,
+    scheduled.getByRole("combobox", { name: "AI model", exact: true }),
+  );
   await scheduled
     .getByRole("combobox", { name: "AI model", exact: true })
     .selectOption(connection.admissionPolicy.model);
+  await revealControl(
+    page,
+    scheduled.getByLabel("AI task title", { exact: true }),
+    "",
+  );
   await scheduled
     .getByLabel("AI task title", { exact: true })
     .fill("Admitted UI task");
+  await revealControl(
+    page,
+    scheduled.getByLabel("AI analysis prompt", { exact: true }),
+    "",
+  );
   await scheduled
     .getByLabel("AI analysis prompt", { exact: true })
     .fill("Review the frozen controlled context");
+  await revealControl(
+    page,
+    scheduled.getByLabel("AI run count", { exact: true }),
+    "",
+  );
   await scheduled.getByLabel("AI run count", { exact: true }).fill("1");
   await scheduled
     .getByRole("button", { name: "Prepare AI task review" })
@@ -3960,6 +4543,11 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
   await expect(task).toBeVisible();
   await task.getByText("Review AI task disclosure", { exact: true }).click();
   await expect(task).toContainText(connection.admissionPolicy.model);
+  await revealControl(
+    page,
+    task.getByLabel("Allow this frozen context, schedule and limits"),
+    "",
+  );
   await task
     .getByLabel("Allow this frozen context, schedule and limits")
     .check();
@@ -3977,6 +4565,11 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
   await stop();
   await start();
   await page.goto(url);
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
@@ -3988,6 +4581,10 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
   expect(view.providerCallsEnabled).toBe(false);
   expect(view.financialExecution).toBe(false);
   await page.goto(url + "/#agents/chat");
+  await revealControl(
+    page,
+    page.getByText("Model and tariff admission", { exact: true }).first(),
+  );
   await page
     .getByText("Model and tariff admission", { exact: true })
     .first()
@@ -4016,7 +4613,9 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
   await expect(
@@ -4031,7 +4630,9 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
   });
   await page.goto(url + "/#terminals/satcoin");
   const journey = page.getByRole("region", { name: "WEN paper journey" });
+  await revealControl(page, journey.getByLabel("Paper entry name"), "");
   await journey.getByLabel("Paper entry name").fill("UI range C");
+  await revealControl(page, journey.getByLabel("Paper SOL budget"), "");
   await journey.getByLabel("Paper SOL budget").fill("0.25");
   await journey
     .getByRole("button", { name: "Prepare paper review", exact: true })
@@ -4062,6 +4663,11 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
   await stop();
   await start();
   await page.goto(url + "/#terminals/satcoin");
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
@@ -4103,6 +4709,7 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
   await expect(
     journey.getByRole("article", { name: "Paper entry CLI cancel" }),
   ).toContainText("cancelled");
+  await revealControl(page, journey.getByLabel("Paper agent profile"), "");
   await journey
     .getByLabel("Paper agent profile")
     .selectOption("news-researcher");
@@ -4111,11 +4718,17 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
   const other = await privateCLI(["agents", "--profile", "news-researcher"]);
   expect(other.tasks).toHaveLength(0);
   expect(other.runs).toHaveLength(0);
+  await revealControl(page, journey.getByLabel("Paper agent profile"), "");
   await journey.getByLabel("Paper agent profile").selectOption("wen-operator");
   await expect(card).toBeVisible();
   await stop();
   await start();
   await page.goto(url + "/#terminals/satcoin");
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
@@ -4160,7 +4773,9 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
   await expect(
@@ -4215,10 +4830,11 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
   const review = page.getByRole("region", {
     name: "Optional AI request review",
   });
+  await revealControl(page, review.getByLabel("Message", { exact: true }), "");
   await review
-    .getByLabel("AI request", { exact: true })
+    .getByLabel("Message", { exact: true })
     .fill("Explain these frozen paper facts and their limitations");
-  await review.getByRole("button", { name: /Prepare/ }).click();
+  await review.getByRole("button", { name: /Review reply|Prepare/ }).click();
   let request = review.locator(".ai-request").last();
   await request.locator("summary").first().click();
   await expect(request.locator("pre")).toContainText(task.wen.digest);
@@ -4233,13 +4849,19 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
     .click();
   v = await privateCLI(["agents"]);
   expect(v.aiRequests[0].state).toBe("cancelled");
+  await revealControl(page, review.getByLabel("Message", { exact: true }), "");
   await review
-    .getByLabel("AI request", { exact: true })
+    .getByLabel("Message", { exact: true })
     .fill(
       "Explain the captured range and pending receipt, without predicted rewards",
     );
-  await review.getByRole("button", { name: /Prepare/ }).click();
+  await review.getByRole("button", { name: /Review reply|Prepare/ }).click();
   request = review.locator(".ai-request").last();
+  await revealControl(
+    page,
+    request.getByLabel("I reviewed this context and these fixture limits"),
+    "",
+  );
   await request
     .getByLabel("I reviewed this context and these fixture limits")
     .check();
@@ -4290,6 +4912,11 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
   await stop();
   await start(true);
   await page.goto(url + "/#agents/chat");
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
@@ -4336,7 +4963,9 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
   await expect(
@@ -4365,13 +4994,22 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
     if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
   });
   await page.goto(url + "/#agents/chat");
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   const ai = page.getByRole("region", { name: "Optional AI request review" });
+  await revealControl(page, ai.getByLabel("Message", { exact: true }), "");
   await ai
-    .getByLabel("AI request", { exact: true })
+    .getByLabel("Message", { exact: true })
     .fill("Draft a reminder to review saved research");
-  await ai.getByRole("button", { name: /Prepare/ }).click();
+  await ai.getByRole("button", { name: /Review reply|Prepare/ }).click();
   const request = ai.locator(".ai-request").last();
+  await revealControl(
+    page,
+    request.getByLabel("I reviewed this context and these fixture limits"),
+    "",
+  );
   await request
     .getByLabel("I reviewed this context and these fixture limits")
     .check();
@@ -4388,13 +5026,25 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
     .getByRole("button", { name: "Review reminder task", exact: true })
     .click();
   const review = card.getByRole("region", { name: /Reminder task review:/ });
+  await revealControl(
+    page,
+    review.getByLabel("Reminder task name", { exact: true }),
+    "",
+  );
   await review
     .getByLabel("Reminder task name", { exact: true })
     .fill("Review my research");
+  await revealControl(
+    page,
+    review.getByLabel("Reminder text", { exact: true }),
+    "",
+  );
   await review
     .getByLabel("Reminder text", { exact: true })
     .fill("Read the saved headlines and my notes");
+  await revealControl(page, review.getByLabel("Repeat every (seconds)"), "");
   await review.getByLabel("Repeat every (seconds)").fill("3600");
+  await revealControl(page, review.getByLabel("Maximum reminder runs"), "");
   await review.getByLabel("Maximum reminder runs").fill("2");
   await review
     .getByRole("button", { name: "Review reminder schedule", exact: true })
@@ -4427,7 +5077,17 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
   await review
     .getByRole("button", { name: "Review reminder schedule", exact: true })
     .click();
+  await revealControl(
+    page,
+    review.getByLabel("I reviewed this reminder text and schedule"),
+    "",
+  );
   await review.getByLabel("I reviewed this reminder text and schedule").check();
+  await revealControl(
+    page,
+    review.getByLabel("Reminder text", { exact: true }),
+    "",
+  );
   await review
     .getByLabel("Reminder text", { exact: true })
     .fill("Edited: read saved research, no external actions");
@@ -4435,6 +5095,11 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
   await review
     .getByRole("button", { name: "Review reminder schedule", exact: true })
     .click();
+  await revealControl(
+    page,
+    review.getByLabel("I reviewed this reminder text and schedule"),
+    "",
+  );
   await review.getByLabel("I reviewed this reminder text and schedule").check();
   await create.click();
   await expect(card.getByRole("status")).toContainText(
@@ -4502,11 +5167,19 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
   await stop();
   await start(false);
   await page.goto(url + "/#agents/chat");
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   const proposal = {
     action: "ai-reminder-review",
     id: source.id,
@@ -4545,7 +5218,10 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
   expect(v.tasks[1].state).toBe("scheduled");
   expect(v.tasks[1].text).toBe(proposal.text);
   // Synchronize the external CLI write through the existing profile refresh.
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   await expect(
     page.getByText("Reminder task created: CLI reviewed reminder.", {
       exact: true,
@@ -4590,7 +5266,9 @@ test("chat memory requires explicit source-backed UI and CLI save and survives r
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
   await expect(
@@ -4623,7 +5301,10 @@ test("chat memory requires explicit source-backed UI and CLI save and survives r
     if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
   });
   await page.goto(url + "/#agents/chat");
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   const source = page
     .locator(".local-messages article")
     .filter({ hasText: message.text });
@@ -4634,6 +5315,11 @@ test("chat memory requires explicit source-backed UI and CLI save and survives r
   await expect(
     review.getByLabel("Reviewed memory note", { exact: true }),
   ).toHaveValue(message.text);
+  await revealControl(
+    page,
+    review.getByLabel("Reviewed memory note", { exact: true }),
+    "",
+  );
   await review
     .getByLabel("Reviewed memory note", { exact: true })
     .fill("Cancelled draft");
@@ -4664,10 +5350,20 @@ test("chat memory requires explicit source-backed UI and CLI save and survives r
   await source
     .getByRole("button", { name: "Remember this", exact: true })
     .click();
+  await revealControl(
+    page,
+    review.getByLabel("Reviewed memory note", { exact: true }),
+    "",
+  );
   await review
     .getByLabel("Reviewed memory note", { exact: true })
     .fill("Owner-reviewed preference: concise sourced answers");
   const expiry = new Date(Date.now() + 3600000).toISOString().slice(0, 16);
+  await revealControl(
+    page,
+    review.getByLabel("Memory expiry (optional)", { exact: true }),
+    "",
+  );
   await review
     .getByLabel("Memory expiry (optional)", { exact: true })
     .fill(expiry);
@@ -4704,7 +5400,10 @@ test("chat memory requires explicit source-backed UI and CLI save and survives r
     .poll(async () => (await read()).aiRequests.at(-1)?.state)
     .toBe("completed");
   await page.reload();
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   const request = page.locator(".ai-request").last();
   await request
     .getByRole("button", { name: "Remember this", exact: true })
@@ -4712,6 +5411,11 @@ test("chat memory requires explicit source-backed UI and CLI save and survives r
   const answerReview = request.getByRole("region", {
     name: "Chat memory review",
   });
+  await revealControl(
+    page,
+    answerReview.getByLabel("Reviewed memory note", { exact: true }),
+    "",
+  );
   await answerReview
     .getByLabel("Reviewed memory note", { exact: true })
     .fill("Owner interpretation of the fixture answer");
@@ -4777,11 +5481,19 @@ test("chat memory requires explicit source-backed UI and CLI save and survives r
     v.memories.find((m: { id: string }) => m.id === note.id).history[0].text,
   ).toBe(note.text);
   await page.goto(url + "/#agents/memory");
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   await expect(
     page.getByText("Corrected owner preference", { exact: true }),
   ).toBeVisible();
@@ -4826,7 +5538,9 @@ test("task run chat shares historical UI and CLI capture, explicit fixture expla
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
   await expect(
@@ -4866,7 +5580,11 @@ test("task run chat shares historical UI and CLI capture, explicit fixture expla
     if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
   });
   await page.goto(url + "/#agents/tasks");
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
+  await page.getByRole("button", { name: "history", exact: true }).click();
   await page
     .locator(".memory-card")
     .filter({ hasText: `Run ${plain.id}` })
@@ -4911,6 +5629,11 @@ test("task run chat shares historical UI and CLI capture, explicit fixture expla
     .click();
   const review = page.getByRole("region", { name: "Chat memory review" });
   expect((await read()).memories).toHaveLength(0);
+  await revealControl(
+    page,
+    review.getByLabel("Reviewed memory note", { exact: true }),
+    "",
+  );
   await review
     .getByLabel("Reviewed memory note", { exact: true })
     .fill("Review saved reminder outcomes before planning");
@@ -4997,11 +5720,19 @@ test("task run chat shares historical UI and CLI capture, explicit fixture expla
   await start();
   await login();
   await page.goto(url + "/#agents/chat");
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   await expect(page.locator(".local-messages")).toContainText(captured.text);
   v = await read();
   expect(v.messages.at(-1)).toEqual(captured);
@@ -5039,7 +5770,9 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -5067,21 +5800,43 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
     if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
   });
   await page.goto(url + "/#agents/chat");
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   await page
     .getByRole("button", { name: "Older conversation", exact: true })
     .click();
+  await revealControl(
+    page,
+    page.getByRole("searchbox", { name: "Search conversations", exact: true }),
+  );
   await page
     .getByRole("searchbox", { name: "Search conversations", exact: true })
     .fill("old filter");
   await page.getByRole("button", { name: "news", exact: true }).click();
   const panel = page.getByRole("region", { name: "News inputs", exact: true });
+  await revealControl(
+    page,
+    panel.getByLabel("News source name", { exact: true }),
+    "",
+  );
   await panel
     .getByLabel("News source name", { exact: true })
     .fill("Controlled headline source");
+  await revealControl(
+    page,
+    panel.getByLabel("Public RSS URL", { exact: true }),
+    "",
+  );
   await panel
     .getByLabel("Public RSS URL", { exact: true })
     .fill("https://news.fased.invalid/headlines.xml");
+  await revealControl(
+    page,
+    panel.getByLabel("Source freshness limit (seconds)", { exact: true }),
+    "",
+  );
   await panel
     .getByLabel("Source freshness limit (seconds)", { exact: true })
     .fill("600");
@@ -5193,7 +5948,10 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
     notices: v.notices,
   }).toEqual(disabled);
   await page.reload();
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   await expect(page.locator(".local-messages")).toContainText(captured.text);
   await page
     .locator(".local-messages")
@@ -5201,6 +5959,11 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
     .click();
   const review = page.getByRole("region", { name: "Chat memory review" });
   expect((await read()).memories).toHaveLength(0);
+  await revealControl(
+    page,
+    review.getByLabel("Reviewed memory note", { exact: true }),
+    "",
+  );
   await review
     .getByLabel("Reviewed memory note", { exact: true })
     .fill(
@@ -5248,11 +6011,19 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
   await start();
   await login();
   await page.goto(url + "/#agents/chat");
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   await expect(page.locator(".local-messages")).toContainText(captured.text);
   v = await read();
   expect(v.messages.at(-1)).toEqual(captured);
@@ -5294,7 +6065,9 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
   await expect(
@@ -5395,18 +6168,29 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
     if (!fixtureOrigins.has(new URL(r.url()).origin)) external.push(r.url());
   });
   await page.goto(url + "/#agents/chat");
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   await page
     .getByRole("button", { name: "Other conversation", exact: true })
     .click();
+  await revealControl(
+    page,
+    page.getByRole("searchbox", { name: "Search conversations", exact: true }),
+  );
   await page
     .getByRole("searchbox", { name: "Search conversations", exact: true })
     .fill("stale selection");
   await page.getByRole("button", { name: "memory", exact: true }).click();
   const search = async (q: string) => {
     await expect(
-      page.getByRole("button", { name: /^Trading Analyst / }),
-    ).toHaveAttribute("aria-pressed", "true");
+      page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+    ).toHaveText("Trading Analyst");
+    await revealControl(
+      page,
+      page.getByRole("searchbox", { name: "Search memories", exact: true }),
+    );
     await page
       .getByRole("searchbox", { name: "Search memories", exact: true })
       .fill(q);
@@ -5532,11 +6316,19 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
   fixtureOrigins.add(new URL(url).origin);
   await login();
   await page.goto(url + "/#agents/memory");
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   await search("Answer evidence");
   await page
     .getByRole("button", { name: "Inspect source", exact: true })
@@ -5575,7 +6367,10 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
       .getByRole("button", { name: "Inspect source", exact: true })
       .click();
     await requested;
-    await page.getByRole("button", { name: /^News Researcher / }).click();
+    await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+    await page
+      .getByLabel("Agent", { exact: true })
+      .selectOption({ label: "News Researcher" });
     await expect(
       page.getByRole("searchbox", { name: "Search memories", exact: true }),
     ).toHaveValue("");
@@ -5621,7 +6416,9 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -5687,7 +6484,10 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
     source: "foreign",
   });
   await page.goto(url + "/#agents/chat");
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   await page
     .getByRole("button", { name: "Selection conversation", exact: true })
     .click();
@@ -5696,12 +6496,29 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
     exact: true,
   });
   const prepare = async (mode: string, prompt: string) => {
+    await revealControl(
+      page,
+      review.getByRole("combobox", {
+        name: "Memory",
+        exact: true,
+        includeHidden: true,
+      }),
+    );
     await review
-      .getByRole("combobox", { name: "Memory", exact: true })
+      .getByRole("combobox", {
+        name: "Memory",
+        exact: true,
+        includeHidden: true,
+      })
       .selectOption(mode);
-    await review.getByLabel("AI request", { exact: true }).fill(prompt);
+    await revealControl(
+      page,
+      review.getByLabel("Message", { exact: true }),
+      "",
+    );
+    await review.getByLabel("Message", { exact: true }).fill(prompt);
     await review
-      .getByRole("button", { name: "Prepare disclosure", exact: true })
+      .getByRole("button", { name: "Review reply", exact: true })
       .click();
     await expect
       .poll(async () =>
@@ -5736,11 +6553,19 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
   expect(none.context.context.memories).toEqual([]);
   expect(none.q.context).not.toContain(note.text);
   expect(none.q.context).not.toContain(second.text);
+  await revealControl(
+    page,
+    review.getByRole("combobox", {
+      name: "Memory",
+      exact: true,
+      includeHidden: true,
+    }),
+  );
   await review
-    .getByRole("combobox", { name: "Memory", exact: true })
+    .getByRole("combobox", { name: "Memory", exact: true, includeHidden: true })
     .selectOption("selected");
   await expect(
-    review.getByRole("button", { name: "Prepare disclosure", exact: true }),
+    review.getByRole("button", { name: "Review reply", exact: true }),
   ).toBeDisabled();
   await expect(
     review.getByRole("checkbox", {
@@ -5751,6 +6576,10 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
   await expect(
     review.getByText("Foreign private preference", { exact: true }),
   ).toHaveCount(0);
+  await revealControl(
+    page,
+    review.getByRole("checkbox", { name: note.text, exact: true }),
+  );
   await review.getByRole("checkbox", { name: note.text, exact: true }).check();
   const selected = await prepare("selected", "Review only concise preference");
   expect(selected.context.memorySelection).toEqual({
@@ -5835,6 +6664,13 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
   expect(fresh.context.context.memories[0].text).toBe(
     "Owner corrected concise preference",
   );
+  await revealControl(
+    page,
+    fresh.card.getByRole("checkbox", {
+      name: "I reviewed this context and these fixture limits",
+      exact: true,
+    }),
+  );
   await fresh.card
     .getByRole("checkbox", {
       name: "I reviewed this context and these fixture limits",
@@ -5865,11 +6701,19 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
   origins.add(new URL(url).origin);
   await login();
   await page.goto(url + "/#agents/chat");
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   await page
     .getByRole("button", { name: "Selection conversation", exact: true })
     .click();
@@ -5877,7 +6721,11 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
   expect((await read()).providerCallsEnabled).toBe(false);
   expect((await read()).financialExecution).toBe(false);
   await expect(
-    review.getByRole("combobox", { name: "Memory", exact: true }),
+    review.getByRole("combobox", {
+      name: "Memory",
+      exact: true,
+      includeHidden: true,
+    }),
   ).toHaveValue("all");
   await expect(
     command({
@@ -5886,28 +6734,65 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
       consentDigest: none.q.digest,
     }),
   ).rejects.toThrow();
+  await revealControl(
+    page,
+    review.getByRole("combobox", {
+      name: "Memory",
+      exact: true,
+      includeHidden: true,
+    }),
+  );
   await review
-    .getByRole("combobox", { name: "Memory", exact: true })
+    .getByRole("combobox", { name: "Memory", exact: true, includeHidden: true })
     .selectOption("selected");
+  await revealControl(
+    page,
+    review.getByRole("checkbox", {
+      name: "Owner corrected concise preference",
+      exact: true,
+    }),
+  );
   await review
     .getByRole("checkbox", {
       name: "Owner corrected concise preference",
       exact: true,
     })
     .check();
-  await page.getByRole("button", { name: /^News Researcher / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "News Researcher" });
   await expect(
-    review.getByRole("combobox", { name: "Memory", exact: true }),
+    review.getByRole("combobox", {
+      name: "Memory",
+      exact: true,
+      includeHidden: true,
+    }),
   ).toHaveCount(0);
-  await page.getByRole("button", { name: /^Trading Analyst / }).click();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
   await page
     .getByRole("button", { name: "Selection conversation", exact: true })
     .click();
   await expect(
-    review.getByRole("combobox", { name: "Memory", exact: true }),
+    review.getByRole("combobox", {
+      name: "Memory",
+      exact: true,
+      includeHidden: true,
+    }),
   ).toHaveValue("all");
+  await revealControl(
+    page,
+    review.getByRole("combobox", {
+      name: "Memory",
+      exact: true,
+      includeHidden: true,
+    }),
+  );
   await review
-    .getByRole("combobox", { name: "Memory", exact: true })
+    .getByRole("combobox", { name: "Memory", exact: true, includeHidden: true })
     .selectOption("selected");
   await expect(
     review.getByRole("checkbox", {
@@ -5944,7 +6829,9 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -6015,9 +6902,14 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
   await command({ action: "memory-delete", id: note.id });
   await command({ action: "news-source-disable", id: source.id });
   await page.goto(url + "/#agents/chat");
-  const profile = page.getByRole("button", { name: /^Trading Analyst / });
-  await profile.click();
-  await expect(profile).toHaveAttribute("aria-pressed", "true");
+  const profile = page.getByLabel("Agent", { exact: true });
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
+  await expect(
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("Trading Analyst");
   await page
     .getByRole("button", { name: "Saved draft conversation", exact: true })
     .click();
@@ -6030,6 +6922,7 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
       has: page.getByRole("heading", { name: prompt, exact: true }),
     });
   const sourceCard = card(original.prompt);
+  await revealControl(page, sourceCard.getByRole("checkbox"));
   await sourceCard.getByRole("checkbox").check();
   const baseline = await read();
   const response = page.waitForResponse((r) => r.url().includes("&ai-draft="));
@@ -6062,13 +6955,17 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
   ])
     expect(shared).not.toHaveProperty(name);
   await expect(
-    review.getByRole("textbox", { name: "AI request", exact: true }),
+    review.getByRole("textbox", { name: "Message", exact: true }),
   ).toHaveValue(original.prompt);
   await expect(
     review.getByLabel("Maximum output tokens", { exact: true }),
   ).toHaveValue("512");
   await expect(
-    review.getByRole("combobox", { name: "Memory", exact: true }),
+    review.getByRole("combobox", {
+      name: "Memory",
+      exact: true,
+      includeHidden: true,
+    }),
   ).toHaveValue("selected");
   await expect(
     review.getByRole("checkbox", {
@@ -6086,11 +6983,16 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
     }),
   ).toHaveAttribute("disabled", "");
   await expect(sourceCard.getByRole("checkbox")).not.toBeChecked();
+  await revealControl(
+    page,
+    review.getByRole("textbox", { name: "Message", exact: true }),
+    "",
+  );
   await review
-    .getByRole("textbox", { name: "AI request", exact: true })
+    .getByRole("textbox", { name: "Message", exact: true })
     .fill("Transient edit only");
   await review
-    .getByRole("button", { name: "Prepare disclosure", exact: true })
+    .getByRole("button", { name: "Review reply", exact: true })
     .click();
   await expect(page.getByRole("alert")).toContainText(
     "selected memory is missing",
@@ -6100,36 +7002,73 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
     .getByRole("button", { name: "Cancel draft", exact: true })
     .click();
   await expect(
-    review.getByRole("textbox", { name: "AI request", exact: true }),
+    review.getByRole("textbox", { name: "Message", exact: true }),
   ).toHaveValue("");
   expect(await read()).toEqual(baseline);
   await sourceCard
     .getByRole("button", { name: "Use as draft", exact: true })
     .click();
   await expect(
-    review.getByRole("textbox", { name: "AI request", exact: true }),
+    review.getByRole("textbox", { name: "Message", exact: true }),
   ).toHaveValue(original.prompt);
+  await revealControl(
+    page,
+    review.getByRole("combobox", {
+      name: "Memory",
+      exact: true,
+      includeHidden: true,
+    }),
+  );
   await review
-    .getByRole("combobox", { name: "Memory", exact: true })
+    .getByRole("combobox", { name: "Memory", exact: true, includeHidden: true })
     .selectOption("none");
+  await revealControl(
+    page,
+    review.getByRole("combobox", { name: "News input", exact: true }),
+  );
   await review
     .getByRole("combobox", { name: "News input", exact: true })
     .selectOption("");
+  await revealControl(
+    page,
+    review.getByRole("textbox", { name: "Message", exact: true }),
+    "",
+  );
   await review
-    .getByRole("textbox", { name: "AI request", exact: true })
+    .getByRole("textbox", { name: "Message", exact: true })
     .fill("New corrected draft question");
+  await revealControl(
+    page,
+    review.getByLabel("Maximum input tokens", { exact: true }),
+    "",
+  );
   await review
     .getByLabel("Maximum input tokens", { exact: true })
     .fill("12000");
+  await revealControl(
+    page,
+    review.getByLabel("Maximum output tokens", { exact: true }),
+    "",
+  );
   await review.getByLabel("Maximum output tokens", { exact: true }).fill("256");
+  await revealControl(
+    page,
+    review.getByLabel("Request deadline (seconds)", { exact: true }),
+    "",
+  );
   await review
     .getByLabel("Request deadline (seconds)", { exact: true })
     .fill("2");
+  await revealControl(
+    page,
+    review.getByLabel("Fixture budget (micro USD)", { exact: true }),
+    "",
+  );
   await review
     .getByLabel("Fixture budget (micro USD)", { exact: true })
     .fill("15000");
   await review
-    .getByRole("button", { name: "Prepare disclosure", exact: true })
+    .getByRole("button", { name: "Review reply", exact: true })
     .click();
   await expect.poll(async () => (await read()).aiRequests.length).toBe(3);
   v = await read();
@@ -6160,6 +7099,7 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
       exact: true,
     }),
   ).toBeDisabled();
+  await revealControl(page, freshCard.getByRole("checkbox"));
   await freshCard.getByRole("checkbox").check();
   await freshCard
     .getByRole("button", { name: "Run development fixture", exact: true })
@@ -6171,13 +7111,22 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
     .getByRole("button", { name: "Use as draft", exact: true })
     .click();
   await expect(
-    review.getByRole("combobox", { name: "Memory", exact: true }),
+    review.getByRole("combobox", {
+      name: "Memory",
+      exact: true,
+      includeHidden: true,
+    }),
   ).toHaveValue("legacy");
+  await revealControl(
+    page,
+    review.getByRole("textbox", { name: "Message", exact: true }),
+    "",
+  );
   await review
-    .getByRole("textbox", { name: "AI request", exact: true })
+    .getByRole("textbox", { name: "Message", exact: true })
     .fill("Fresh legacy draft question");
   await review
-    .getByRole("button", { name: "Prepare disclosure", exact: true })
+    .getByRole("button", { name: "Review reply", exact: true })
     .click();
   await expect.poll(async () => (await read()).aiRequests.length).toBe(4);
   const freshLegacy = (await read()).aiRequests.at(-1);
@@ -6220,7 +7169,7 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
       .click();
   });
   await expect(
-    review.getByRole("textbox", { name: "AI request", exact: true }),
+    review.getByRole("textbox", { name: "Message", exact: true }),
   ).toHaveValue("");
   await expect(
     review.getByRole("heading", { name: "Request draft", exact: true }),
@@ -6237,7 +7186,7 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
     ).toBeVisible();
   });
   await expect(
-    review.getByRole("textbox", { name: "AI request", exact: true }),
+    review.getByRole("textbox", { name: "Message", exact: true }),
   ).toHaveValue("");
   await expect(
     review.getByRole("heading", { name: "Request draft", exact: true }),
@@ -6246,17 +7195,27 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
     .getByRole("button", { name: "Saved draft conversation", exact: true })
     .click();
   await delayedRead(async () => {
-    const other = page.getByRole("button", { name: /^News Researcher / });
-    await other.click();
-    await expect(other).toHaveAttribute("aria-pressed", "true");
+    const other = page.getByLabel("Agent", { exact: true });
+    await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+    await page
+      .getByLabel("Agent", { exact: true })
+      .selectOption({ label: "News Researcher" });
+    await expect(
+      page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+    ).toHaveText("News Researcher");
   });
-  await profile.click();
-  await expect(profile).toHaveAttribute("aria-pressed", "true");
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
+  await expect(
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("Trading Analyst");
   await page
     .getByRole("button", { name: "Saved draft conversation", exact: true })
     .click();
   await expect(
-    review.getByRole("textbox", { name: "AI request", exact: true }),
+    review.getByRole("textbox", { name: "Message", exact: true }),
   ).toHaveValue("");
   expect(await read()).toEqual(stable);
   const p = stable.profiles.find((p: { id: string }) => p.id === profileId);
@@ -6271,12 +7230,22 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
   origins.add(new URL(url).origin);
   await login();
   await page.goto(url + "/#agents/chat");
+  await revealControl(
+    page,
+    page.getByLabel("Owner password", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await profile.click();
-  await expect(profile).toHaveAttribute("aria-pressed", "true");
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
+  await expect(
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("Trading Analyst");
   await page
     .getByRole("button", { name: "Saved draft conversation", exact: true })
     .click();
@@ -6284,7 +7253,7 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
     .getByRole("button", { name: "Use as draft", exact: true })
     .click();
   await expect(
-    review.getByRole("textbox", { name: "AI request", exact: true }),
+    review.getByRole("textbox", { name: "Message", exact: true }),
   ).toHaveValue(original.prompt);
   const restored = await privateCLI([
     "agents",
@@ -6333,7 +7302,9 @@ test("local agent evidence inspection shares UI/CLI sources, inert reads and res
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -6407,6 +7378,11 @@ test("local agent evidence inspection shares UI/CLI sources, inert reads and res
   const openChat = async (signIn = false) => {
     await page.goto(url + "/#agents/chat");
     if (signIn) {
+      await revealControl(
+        page,
+        page.getByLabel("Owner password", { exact: true }),
+        "",
+      );
       await page
         .getByLabel("Owner password", { exact: true })
         .fill(fixturePassword);
@@ -6415,22 +7391,39 @@ test("local agent evidence inspection shares UI/CLI sources, inert reads and res
     await expect(
       page.getByRole("button", { name: "Sign out", exact: true }),
     ).toBeVisible();
-    const p = page.getByRole("button", { name: /^Trading Analyst / });
-    await p.click();
-    await expect(p).toHaveAttribute("aria-pressed", "true");
+    const p = page.getByLabel("Agent", { exact: true });
+    await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+    await page
+      .getByLabel("Agent", { exact: true })
+      .selectOption({ label: "Trading Analyst" });
+    await expect(
+      page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+    ).toHaveText("Trading Analyst");
     await page
       .getByRole("button", { name: "Evidence chat", exact: true })
       .click();
   };
   await openChat(true);
+  await page.locator(".chat-evidence > summary").click();
   const inspector = page.getByRole("region", {
     name: "Local agent evidence inspection",
     exact: true,
   });
   const choose = async (kind: string, id: string, item = "") => {
+    const evidence = page.locator(".chat-evidence");
+    if ((await evidence.getAttribute("open")) === null)
+      await evidence.locator(":scope > summary").click();
+    await revealControl(
+      page,
+      inspector.getByRole("combobox", { name: "Evidence type", exact: true }),
+    );
     await inspector
       .getByRole("combobox", { name: "Evidence type", exact: true })
       .selectOption(kind);
+    await revealControl(
+      page,
+      inspector.getByRole("combobox", { name: "Saved record", exact: true }),
+    );
     await inspector
       .getByRole("combobox", { name: "Saved record", exact: true })
       .selectOption(JSON.stringify([id, item]));
@@ -6633,9 +7626,14 @@ test("local agent evidence inspection shares UI/CLI sources, inert reads and res
     .getByRole("button", { name: "Evidence chat", exact: true })
     .click();
   await delayedRead(async () => {
-    const p = page.getByRole("button", { name: /^News Researcher / });
-    await p.click();
-    await expect(p).toHaveAttribute("aria-pressed", "true");
+    const p = page.getByLabel("Agent", { exact: true });
+    await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+    await page
+      .getByLabel("Agent", { exact: true })
+      .selectOption({ label: "News Researcher" });
+    await expect(
+      page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+    ).toHaveText("News Researcher");
   });
   await expect(inspector).toHaveCount(0);
   await openChat();
@@ -6712,7 +7710,9 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -6785,6 +7785,11 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
   const openChat = async (signIn = false) => {
     await page.goto(url + "/#agents/chat");
     if (signIn) {
+      await revealControl(
+        page,
+        page.getByLabel("Owner password", { exact: true }),
+        "",
+      );
       await page
         .getByLabel("Owner password", { exact: true })
         .fill(fixturePassword);
@@ -6793,14 +7798,20 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
     await expect(
       page.getByRole("button", { name: "Sign out", exact: true }),
     ).toBeVisible();
-    const profile = page.getByRole("button", { name: /^Trading Analyst / });
-    await profile.click();
-    await expect(profile).toHaveAttribute("aria-pressed", "true");
+    const profile = page.getByLabel("Agent", { exact: true });
+    await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+    await page
+      .getByLabel("Agent", { exact: true })
+      .selectOption({ label: "Trading Analyst" });
+    await expect(
+      page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+    ).toHaveText("Trading Analyst");
     await page
       .getByRole("button", { name: "Evidence review chat", exact: true })
       .click();
   };
   await openChat();
+  await page.locator(".chat-evidence > summary").click();
   const inspector = page.getByRole("region", {
     name: "Local agent evidence inspection",
     exact: true,
@@ -6814,9 +7825,20 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
     exact: true,
   });
   const choose = async (kind: string, id: string, itemId = "") => {
+    const evidence = page.locator(".chat-evidence");
+    if ((await evidence.getAttribute("open")) === null)
+      await evidence.locator(":scope > summary").click();
+    await revealControl(
+      page,
+      inspector.getByRole("combobox", { name: "Evidence type", exact: true }),
+    );
     await inspector
       .getByRole("combobox", { name: "Evidence type", exact: true })
       .selectOption(kind);
+    await revealControl(
+      page,
+      inspector.getByRole("combobox", { name: "Saved record", exact: true }),
+    );
     await inspector
       .getByRole("combobox", { name: "Saved record", exact: true })
       .selectOption(JSON.stringify([id, itemId]));
@@ -6836,7 +7858,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
         r.request().postDataJSON()?.action === "ai-prepare",
     );
     await review
-      .getByRole("button", { name: "Prepare disclosure", exact: true })
+      .getByRole("button", { name: "Review reply", exact: true })
       .click();
     const r = await response;
     expect(r.status()).toBe(200);
@@ -6868,13 +7890,30 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
         fullPage: true,
       });
     await expect(
-      review.getByRole("textbox", { name: "AI request", exact: true }),
+      review.getByRole("textbox", { name: "Message", exact: true }),
     ).toBeFocused();
+    await revealControl(
+      page,
+      review.getByRole("combobox", {
+        name: "Memory",
+        exact: true,
+        includeHidden: true,
+      }),
+    );
     await review
-      .getByRole("combobox", { name: "Memory", exact: true })
+      .getByRole("combobox", {
+        name: "Memory",
+        exact: true,
+        includeHidden: true,
+      })
       .selectOption("none");
+    await revealControl(
+      page,
+      review.getByRole("textbox", { name: "Message", exact: true }),
+      "",
+    );
     await review
-      .getByRole("textbox", { name: "AI request", exact: true })
+      .getByRole("textbox", { name: "Message", exact: true })
       .fill("Transient inspected question");
     expect(await read()).toEqual(baseline);
     await selected
@@ -6886,8 +7925,13 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
       .getByRole("button", { name: "Use in AI review", exact: true })
       .click();
     const prompt = "UI evidence " + q.kind;
+    await revealControl(
+      page,
+      review.getByRole("textbox", { name: "Message", exact: true }),
+      "",
+    );
     await review
-      .getByRole("textbox", { name: "AI request", exact: true })
+      .getByRole("textbox", { name: "Message", exact: true })
       .fill(prompt);
     const prepared = await prepareUI();
     const request = prepared.aiRequests.find((r: any) => r.prompt === prompt);
@@ -6924,6 +7968,13 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
     expect(
       (await read()).aiRequests.find((r: any) => r.id === request.id).state,
     ).toBe("prepared");
+    await revealControl(
+      page,
+      card.getByRole("checkbox", {
+        name: "I reviewed this context and these fixture limits",
+        exact: true,
+      }),
+    );
     await card
       .getByRole("checkbox", {
         name: "I reviewed this context and these fixture limits",
@@ -6997,7 +8048,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
     JSON.parse(memoryRequest.context).evidenceSelection.sha256,
   );
   await review
-    .getByRole("button", { name: "Prepare disclosure", exact: true })
+    .getByRole("button", { name: "Review reply", exact: true })
     .click();
   await expect(page.getByRole("alert")).toContainText(
     "inspected evidence changed",
@@ -7036,9 +8087,14 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
         .getByRole("button", { name: "Other review chat", exact: true })
         .click();
     else {
-      const profile = page.getByRole("button", { name: /^News Researcher / });
-      await profile.click();
-      await expect(profile).toHaveAttribute("aria-pressed", "true");
+      const profile = page.getByLabel("Agent", { exact: true });
+      await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+      await page
+        .getByLabel("Agent", { exact: true })
+        .selectOption({ label: "News Researcher" });
+      await expect(
+        page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+      ).toHaveText("News Researcher");
     }
     release();
     await delivered;
@@ -7052,7 +8108,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
     await expect(selected).toHaveCount(0);
     await openChat();
     await expect(
-      review.getByRole("textbox", { name: "AI request", exact: true }),
+      review.getByRole("textbox", { name: "Message", exact: true }),
     ).toHaveValue("");
     await expect(selected).toHaveCount(0);
     expect(await read()).toEqual(baseline);
@@ -7064,11 +8120,24 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
   await inspector
     .getByRole("button", { name: "Use in AI review", exact: true })
     .click();
+  await revealControl(
+    page,
+    review.getByRole("combobox", {
+      name: "Memory",
+      exact: true,
+      includeHidden: true,
+    }),
+  );
   await review
-    .getByRole("combobox", { name: "Memory", exact: true })
+    .getByRole("combobox", { name: "Memory", exact: true, includeHidden: true })
     .selectOption("none");
+  await revealControl(
+    page,
+    review.getByRole("textbox", { name: "Message", exact: true }),
+    "",
+  );
   await review
-    .getByRole("textbox", { name: "AI request", exact: true })
+    .getByRole("textbox", { name: "Message", exact: true })
     .fill("Reviewed correction");
   const corrected = await prepareUI();
   const correctedRequest = corrected.aiRequests.find(
@@ -7100,15 +8169,28 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
   await inspector
     .getByRole("button", { name: "Use in AI review", exact: true })
     .click();
+  await revealControl(
+    page,
+    review.getByRole("combobox", {
+      name: "Memory",
+      exact: true,
+      includeHidden: true,
+    }),
+  );
   await review
-    .getByRole("combobox", { name: "Memory", exact: true })
+    .getByRole("combobox", { name: "Memory", exact: true, includeHidden: true })
     .selectOption("none");
+  await revealControl(
+    page,
+    review.getByRole("textbox", { name: "Message", exact: true }),
+    "",
+  );
   await review
-    .getByRole("textbox", { name: "AI request", exact: true })
+    .getByRole("textbox", { name: "Message", exact: true })
     .fill("Too much complete evidence");
   const beforeOversize = await read();
   await review
-    .getByRole("button", { name: "Prepare disclosure", exact: true })
+    .getByRole("button", { name: "Review reply", exact: true })
     .click();
   await expect(page.getByRole("alert")).toContainText("exceed 8000 bytes");
   expect(await read()).toEqual(beforeOversize);
@@ -7142,147 +8224,192 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
   expect(external).toEqual([]);
 });
 
-test("shared WEN app shell and agent panes retain bounded local controls", async ({
+test("R1 workspace uses a compact branded shell and on-demand chat task memory controls", async ({
   page,
   isMobile,
 }) => {
   test.setTimeout(90000);
-  page.setDefaultTimeout(10000);
-  await page.goto(url);
+  await stop();
+  await start(true);
+  await page.goto(url + "/#agents/chat");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
-  await expect(page.locator(".core-auth-brand")).toHaveText("Fased");
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
     .click();
   await expect(
-    page.getByRole("button", { name: "Sign out", exact: true }),
+    page.locator(isMobile ? ".mobile-brand img" : ".brand img"),
   ).toBeVisible();
-  await expect(page.locator("html")).toHaveCSS(
-    "background-color",
-    "rgb(21, 20, 28)",
+  await expect(page.getByText("Private core", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Instance location")).toContainText("Local");
+  await expect(page.getByLabel("Agent", { exact: true })).toBeVisible();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption("trading-analyst");
+  await page
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await revealControl(
+    page,
+    page.getByLabel("Conversation name", { exact: true }),
+    "Conversation name",
   );
-  await expect(page.locator(".brand")).toHaveText("Fased");
-  await expect(page.locator(".brand-mark")).toHaveCount(0);
-  if (!isMobile) {
-    const header = (await page.locator(".sidebar").boundingBox())!;
-    const brand = (await page.locator(".brand").boundingBox())!;
-    const nav = (await page
-      .getByRole("navigation", { name: "Main navigation" })
-      .boundingBox())!;
-    expect(header.height).toBe(64);
-    expect(brand.x).toBeLessThan(100);
-    expect(nav.y).toBeGreaterThanOrEqual(header.y);
-    expect(nav.y + nav.height).toBeLessThanOrEqual(header.y + header.height);
-  }
-  const screenshot = async (name: string) => {
-    await page.evaluate(() => window.scrollTo(0, 0));
-    await page.screenshot({ path: `.evidence/${name}.png`, fullPage: true });
-  };
-  await page.goto(url + "/#agents/chat");
-  // Exercise selection readiness independently of a fast local response.
-  await page.route(
-    /\/api\/v1\/agents\?profile=trading-analyst$/,
-    async (route) => {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      await route.continue();
-    },
-    { times: 1 },
-  );
-  const selectedProfile = page
-    .locator(".local-profile-picker")
-    .getByRole("button", { name: /^Trading Analyst / });
-  await selectedProfile.click();
-  await expect(selectedProfile).toHaveAttribute("aria-pressed", "true");
   await page
     .getByLabel("Conversation name", { exact: true })
-    .fill("Design fixture chat");
+    .fill("R1 fixture conversation");
   await page
     .getByRole("button", { name: "Create conversation", exact: true })
     .click();
+  await expect(page.locator(".agent-chat textarea:visible")).toHaveCount(1);
+  await expect(
+    page.getByLabel("Maximum input tokens", { exact: true }),
+  ).not.toBeVisible();
+  await revealControl(page, page.getByLabel("Message", { exact: true }), "");
   await page
     .getByLabel("Message", { exact: true })
-    .fill("Review the local fixture result before scheduling.");
+    .fill("Review the R1 fixture journal before each run.");
   await page.getByRole("button", { name: "Save message", exact: true }).click();
   await expect(page.locator(".local-messages")).toContainText(
-    "Review the local fixture result",
+    "Review the R1 fixture journal",
   );
-  await expect(page.locator(".chat-review")).toBeVisible();
-  if (isMobile) {
-    expect(
-      await page
-        .locator(".local-profile-picker button")
-        .evaluateAll((buttons) =>
-          buttons.every((button) => button.scrollWidth <= button.clientWidth),
-        ),
-    ).toBe(true);
-  }
-  if (!isMobile) {
-    const rail = (await page.locator(".conversation-rail").boundingBox())!;
-    const thread = (await page.locator(".chat-thread").boundingBox())!;
-    const review = (await page.locator(".chat-review").boundingBox())!;
-    expect(rail.x + rail.width).toBeLessThanOrEqual(thread.x + 1);
-    expect(thread.x + thread.width).toBeLessThanOrEqual(review.x + 1);
-  }
-  await screenshot(`v1-chat-${test.info().project.name}`);
-  await page.getByRole("button", { name: "memory", exact: true }).click();
-  const editor = page.locator(".memory-editor");
-  await editor
-    .getByLabel("Memory note", { exact: true })
-    .fill("Design fixture note: review each schedule.");
-  await editor
-    .getByLabel("Evidence or source", { exact: true })
-    .fill("Disposable local design fixture");
-  await editor
-    .getByRole("button", { name: "Save memory", exact: true })
+  await expect(page.locator(".chat-system p")).not.toBeVisible();
+  await expect(page.locator(".chat-system summary")).toHaveText(
+    "Saved locally",
+  );
+  await page
+    .getByRole("button", { name: "Remember this", exact: true })
     .click();
+  await page
+    .getByRole("button", { name: "Save reviewed memory", exact: true })
+    .click();
+  await page.getByRole("button", { name: "memory", exact: true }).click();
   await expect(page.locator(".memory-library")).toContainText(
-    "Design fixture note",
+    "Review the R1 fixture journal",
   );
-  await screenshot(`v1-memory-${test.info().project.name}`);
+  await expect(page.locator(".memory-editor")).not.toBeVisible();
+  await page.getByRole("button", { name: "Correct note", exact: true }).click();
+  await expect(page.locator(".memory-editor")).toBeVisible();
+  await page
+    .getByRole("button", { name: "Cancel memory edit", exact: true })
+    .click();
   await page.getByRole("button", { name: "tasks", exact: true }).click();
+  await expect(page.locator(".task-composer")).not.toBeVisible();
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  await revealControl(
+    page,
+    page.getByLabel("Task name", { exact: true }),
+    "Task name",
+  );
   await page
     .getByLabel("Task name", { exact: true })
-    .fill("Design fixture reminder");
+    .fill("R1 fixture reminder");
+  await revealControl(
+    page,
+    page.getByLabel("Reminder text", { exact: true }),
+    "",
+  );
   await page
     .getByLabel("Reminder text", { exact: true })
-    .fill("Review the saved fixture note.");
-  await page.getByLabel("Interval in seconds", { exact: true }).fill("3600");
+    .fill("Review the saved note.");
   await page.getByRole("button", { name: "Create task", exact: true }).click();
-  const run = page.getByRole("button", {
-    name: "Run now: Design fixture reminder",
-    exact: true,
+  await page
+    .getByRole("button", { name: "Run now: R1 fixture reminder", exact: true })
+    .click();
+  await expect(page.getByRole("table", { name: "Automations" })).toContainText(
+    "completed",
+  );
+  await expect(page.getByRole("table", { name: "Automations" })).toContainText(
+    "1 / 1",
+  );
+  await page
+    .getByRole("button", { name: "Result: R1 fixture reminder", exact: true })
+    .click();
+  await expect(page.getByLabel("Run results")).toContainText(
+    "R1 fixture reminder",
+  );
+  await page.screenshot({
+    path: `.evidence/r1-tasks-${test.info().project.name}.png`,
+    fullPage: true,
   });
-  await run.click();
-  await expect(run).toBeDisabled();
-  await expect(page.locator(".task-list")).toContainText("1/1 evaluations");
-  await screenshot(`v1-tasks-${test.info().project.name}`);
-  if (!isMobile) {
-    await page.setViewportSize({ width: 1024, height: 900 });
-    await screenshot("v1-tasks-tablet");
-  }
+  await page.getByRole("button", { name: "chat", exact: true }).click();
+  await revealControl(page, page.getByLabel("Message", { exact: true }), "");
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Explain this fixture result.");
+  await page.getByRole("button", { name: "Review reply", exact: true }).click();
+  const review = page.locator(".ai-request").last();
+  await expect(
+    review.getByRole("button", {
+      name: "Run development fixture",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  await revealControl(
+    page,
+    review.getByLabel("I reviewed this context and these fixture limits", {
+      exact: true,
+    }),
+    "",
+  );
+  await review
+    .getByLabel("I reviewed this context and these fixture limits", {
+      exact: true,
+    })
+    .check();
+  await review
+    .getByRole("button", { name: "Run development fixture", exact: true })
+    .click();
+  await expect(review).toContainText("Development fixture response");
+  await page.screenshot({
+    path: `.evidence/r1-chat-${test.info().project.name}.png`,
+    fullPage: true,
+  });
+  await page.reload();
+  await expect(page.getByLabel("Agent", { exact: true })).toHaveValue(
+    "trading-analyst",
+  );
+  await expect(page.locator(".local-messages")).toContainText(
+    "Review the R1 fixture journal",
+  );
+  await expect(page.locator(".chat-system p")).not.toBeVisible();
+  await expect(page.locator(".chat-system summary")).toHaveText(
+    "Saved locally",
+  );
+  await page.getByRole("button", { name: "memory", exact: true }).click();
+  await page.screenshot({
+    path: `.evidence/r1-memory-${test.info().project.name}.png`,
+    fullPage: true,
+  });
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption("news-researcher");
+  await expect(page.locator(".memory-library")).not.toContainText(
+    "Review the R1 fixture journal",
+  );
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBe(true);
-  const primary = page.locator(".task-composer .primary");
-  await expect(primary).toHaveCSS("background-color", "rgb(255, 100, 124)");
-  await expect(primary).toHaveCSS("border-radius", "8px");
-  const bounds = (await primary.boundingBox())!;
-  expect(bounds.height).toBeGreaterThanOrEqual(isMobile ? 44 : 36);
-  await page.keyboard.press("Tab");
-  await primary.focus();
-  await expect(primary).toBeFocused();
-  await expect(primary).toHaveCSS("outline-style", "solid");
-  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-  await page.getByRole("button", { name: "Sign out", exact: true }).click();
-  await expect(
-    page.getByRole("heading", { name: "Sign in", exact: true }),
-  ).toBeVisible();
+  if (!isMobile)
+    expect(
+      (await page.locator(".sidebar").boundingBox())!.height,
+    ).toBeLessThanOrEqual(52);
+  const health = await (await page.request.get(url + "/api/v1/health")).json();
+  for (const key of [
+    "aiConnections",
+    "financialExecution",
+    "walletSigner",
+    "updater",
+  ])
+    expect(health.capabilities[key]).toBe(false);
 });
 
 test("shared WEN Overview Wallets and Settings preserve fixture authority and responsive controls", async ({
@@ -7295,7 +8422,9 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -7313,11 +8442,11 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
     await expect(layout).toBeVisible();
     await expect(page.locator("html")).toHaveCSS(
       "background-color",
-      "rgb(21, 20, 28)",
+      "rgb(16, 16, 22)",
     );
     await expect(layout.locator(".panel").first()).toHaveCSS(
       "background-color",
-      "rgb(30, 29, 41)",
+      "rgb(25, 25, 35)",
     );
     expect(
       await page.evaluate(
@@ -7359,6 +8488,11 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
   ).toBeVisible();
   await checkLayout("overview", ".overview-workspace");
   await page.getByRole("button", { name: "Open Chat", exact: true }).click();
+  await revealControl(
+    page,
+    page.getByLabel("Conversation name", { exact: true }),
+    "Conversation name",
+  );
   await expect(
     page.getByLabel("Conversation name", { exact: true }),
   ).toBeVisible();
@@ -7380,7 +8514,7 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
   ).toBeDisabled();
   await expect(page.locator(".account-safety")).toHaveCSS(
     "background-color",
-    "rgb(41, 39, 56)",
+    "rgb(25, 25, 35)",
   );
   await checkLayout("wallets", ".account-columns");
   await page.goto(url + "/#settings");
@@ -7437,17 +8571,22 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
+  await revealControl(page, page.getByLabel("One-use claim code"), "");
   await page.getByLabel("One-use claim code").fill(claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
     .click();
   await page.goto(url + "/#agents/news");
-  const selected = page
-    .locator(".local-profile-picker")
-    .getByRole("button", { name: /^Trading Analyst / });
-  await selected.click();
-  await expect(selected).toHaveAttribute("aria-pressed", "true");
+  const selected = page.getByLabel("Agent", { exact: true });
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
+  await expect(
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("Trading Analyst");
   const layout = async (name: string, selector: string) => {
     const pane = page.locator(selector);
     await expect(pane).toBeVisible();
@@ -7458,7 +8597,7 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
     ).toBe(isMobile ? 1 : 2);
     await expect(page.locator("html")).toHaveCSS(
       "background-color",
-      "rgb(21, 20, 28)",
+      "rgb(16, 16, 22)",
     );
     expect(
       await page.evaluate(
@@ -7486,7 +8625,9 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
     });
   };
   await expect(page.locator(".news-workspace")).toBeVisible();
+  await revealControl(page, page.getByLabel("News source name"), "");
   await page.getByLabel("News source name").fill("V3 fixture headlines");
+  await revealControl(page, page.getByLabel("Public RSS URL"), "");
   await page
     .getByLabel("Public RSS URL")
     .fill("https://news.fased.invalid/headlines.xml");
@@ -7509,6 +8650,7 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
     .locator(".tabs")
     .getByRole("button", { name: /^bots$/i })
     .click();
+  await revealControl(page, page.getByLabel("Paper bot name"), "");
   await page.getByLabel("Paper bot name").fill("V3 paper budget");
   await page
     .getByRole("button", { name: "Create paper bot", exact: true })
@@ -7532,6 +8674,7 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
   await expect(connection.getByRole("status")).toHaveText(
     "No connection saved",
   );
+  await connection.locator(".connection-options > summary").click();
   await expect(
     connection.getByRole("button", {
       name: "Save test connection",
@@ -7590,8 +8733,13 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
   expect(view.tasks[0].runs).toBe(1);
   await page.goto(url + "/#agents/tasks");
   await page.reload();
-  await selected.click();
-  await expect(selected).toHaveAttribute("aria-pressed", "true");
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
+  await expect(
+    page.getByLabel("Agent", { exact: true }).locator("option:checked"),
+  ).toHaveText("Trading Analyst");
   await page.goto(url + "/#activity");
   await expect(
     activity.getByRole("list", { name: "Activity events", exact: true }),
