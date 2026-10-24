@@ -786,6 +786,10 @@ test("reviewed memory restoration shares inert UI CLI drafts, expiry, current-on
   v = await privateCLI(["agents", "--request-stdin"], cliRestore.command);
   expect(v.memories[0].text).toBe("Current owner preference");
   expect(v.memories[0].history).toHaveLength(4);
+  // Explicitly refresh after the CLI write; do not race the five-second poll.
+  await page
+    .getByRole("button", { name: "Search memory", exact: true })
+    .click();
   await expect(card(original.id).locator(":scope > p")).toHaveText(
     "Current owner preference",
   );
@@ -3788,6 +3792,7 @@ test("bounded news inputs retain provenance across UI CLI and restart, hold depe
     (await privateCLI(["agents", "--profile", "trading-analyst"])).newsFetches,
   ).toHaveLength(0);
   await page.goto(url + "/#agents/tasks");
+  await page.getByRole("button", { name: "New task", exact: true }).click();
   await revealControl(
     page,
     page.getByRole("combobox", { name: "News input", exact: true }).first(),
