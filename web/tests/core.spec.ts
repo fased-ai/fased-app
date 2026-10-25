@@ -1390,12 +1390,6 @@ async function revealControl(
 ) {
   if (await control.isVisible()) return;
   if ((await control.count()) === 0) {
-    const options = page.locator(".message-options");
-    if (
-      (await options.count()) === 1 &&
-      (await options.getAttribute("open")) === null
-    )
-      await options.locator(":scope > summary").click();
     if (hint.includes("Conversation name")) {
       const toggle = page.getByRole("button", {
         name: "Conversations",
@@ -2632,6 +2626,10 @@ test("chat drafts stay with their conversation through search switching and a pe
         includeHidden: true,
       }),
     );
+    if (isMobile)
+      await expect(
+        page.getByRole("button", { name: "Conversations", exact: true }),
+      ).toHaveAttribute("aria-expanded", "false");
     await page
       .getByRole("button", {
         name: "Save message",

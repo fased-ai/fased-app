@@ -4,6 +4,7 @@ type ChatComposer = {
   value: string;
   onChange: (value: string) => void;
   onSave: () => Promise<void>;
+  onInteract?: () => void;
 };
 import { AgentEvidenceInspector } from "./AgentEvidence";
 import { ChatPermissionReview } from "./ChatPermission";
@@ -447,6 +448,8 @@ function AgentAIForm({
         </div>
         <form
           className="chat-message-form"
+          onClickCapture={() => composer?.onInteract?.()}
+          onKeyDownCapture={() => composer?.onInteract?.()}
           onSubmit={async (e) => {
             e.preventDefault();
             setOptionsOpen(false);

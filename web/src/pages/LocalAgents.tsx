@@ -460,6 +460,7 @@ function LocalAgentEditor({
                     sessionId={activeSession.id}
                     composer={{
                       value: message,
+                      onInteract: () => setRailOpen(false),
                       onChange: (text) => updateMessage(activeSession.id, text),
                       onSave: async () => {
                         const submitted = message;

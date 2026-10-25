@@ -16,6 +16,7 @@ export default defineConfig({
     ["json", { outputFile: ".evidence/core-browser-results.json" }],
   ],
   fullyParallel: false,
-  workers: 1,
+  // Worker-local fixtures use unique temporary directories and loopback ports.
+  workers: 2,
   webServer: undefined,
 });
