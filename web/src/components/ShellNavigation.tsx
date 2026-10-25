@@ -274,7 +274,10 @@ export function ShellNavigation() {
         hidden={!preferences.rail}
         aria-label={t("Page shortcuts")}
       >
-        {links(shellPages, true)}
+        {links(
+          shellPages.filter((page) => page.path !== "overview"),
+          true,
+        )}
         <div className="shell-rail-bottom">
           {utility(
             contextOpen ? "Close context panel" : "Open context panel",

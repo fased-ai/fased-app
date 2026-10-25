@@ -10884,6 +10884,76 @@ test("reviewed task credential allowance is scoped, finite and revocable in Prov
   });
 });
 
+test("Dashboard drag and resize autosave without a duplicate home rail shortcut", async ({
+  page,
+  isMobile,
+}) => {
+  page.setDefaultTimeout(10000);
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  const board = page.locator(".dashboard-grid");
+  await expect(board).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const original = await privateCLI(["agents"]);
+  const tasks = board.locator('[data-widget="tasks"]');
+  if (isMobile) {
+    await tasks.locator("summary").click();
+    await tasks.getByRole("button", { name: "Move up", exact: true }).click();
+    await tasks.locator("summary").click();
+  } else {
+    await tasks
+      .getByRole("button", { name: "Move Tasks", exact: true })
+      .dragTo(board.locator('[data-widget="agents"]'));
+  }
+  await expect(board.locator("[data-widget]").first()).toHaveAttribute(
+    "data-widget",
+    "tasks",
+  );
+  await tasks.locator("summary").click();
+  await tasks.getByLabel("Tasks size", { exact: true }).selectOption("tall");
+  await tasks.locator("summary").click();
+  await page.reload();
+  await expect(board.locator("[data-widget]").first()).toHaveAttribute(
+    "data-widget",
+    "tasks",
+  );
+  await expect(tasks).toHaveClass(/size-tall/);
+  expect((await privateCLI(["agents"])).revision).toBe(original.revision);
+  const rail = page.locator("#shell-rail");
+  await expect(
+    rail.getByRole("link", {
+      name: "Dashboard",
+      exact: true,
+      includeHidden: true,
+    }),
+  ).toHaveCount(0);
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .getByRole("link", { name: "Chat", exact: true })
+    .click();
+  await page.getByRole("link", { name: "Fased", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Dashboard", exact: true }),
+  ).toBeVisible();
+  await expect(board.locator("[data-widget]").first()).toHaveAttribute(
+    "data-widget",
+    "tasks",
+  );
+  await page.screenshot({
+    path: `.evidence/dashboard-home-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+});
+
 test("Dashboard joins provider agent Chat reviewed task result and memory without live authority", async ({
   page,
   isMobile,
