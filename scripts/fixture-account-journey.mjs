@@ -34,7 +34,7 @@ export async function fixtureAccountJourney({
     await page.getByLabel("Owner password", { exact: true }).fill(appPassword);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await page
-      .getByRole("heading", { name: "Public account records", exact: true })
+      .getByRole("heading", { name: "Wallets", level: 1, exact: true })
       .waitFor();
     await page.getByLabel("Name", { exact: true }).fill("Disposable UI watch");
     await page

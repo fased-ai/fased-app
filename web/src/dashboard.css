@@ -32,7 +32,7 @@
 .wt .dashboard-widget {
   position: relative;
   min-width: 0;
-  min-height: 224px;
+  min-height: 144px;
   background: var(--wt-surface);
   border: 1px solid var(--wt-border);
   border-radius: 8px;
@@ -137,7 +137,7 @@
   -webkit-box-orient: vertical;
 }
 .wt .dashboard-empty {
-  min-height: 165px;
+  min-height: 105px;
   display: flex;
   align-items: center;
   justify-content: center;
