@@ -95,6 +95,20 @@ package's platform and file inventory before installation. This detects mixed
 or corrupt package files; a checksum in the package is **not** independent proof
 of who published it. Public bootstrap trust is a separate release requirement.
 
+When installation finishes, the wizard prints the selected connection steps and
+commands using the installed executable and exact state directory; adding Fased
+to PATH is not required. SSH mode prints the forwarding command for your chosen
+port before directing you to the browser on your computer. Tailscale mode prints
+the private tailnet URL. Get the first owner setup code on the installed host;
+existing owners sign in with their existing password. Installation, browser and
+CLI all use this same engine and state. With `--start=false`, the wizard instead
+prints the start command and, for Tailscale, the subsequent access-enable command;
+it does not claim that the private UI is ready.
+
+Later examples use `fased-app` as shorthand for that installed executable. Use
+the full path printed by the wizard unless you have added its directory to PATH;
+retain printed `--prefix` and `--data-dir` values for a custom installation.
+
 For a prepared Linux VPS with SSH access:
 
 ```sh

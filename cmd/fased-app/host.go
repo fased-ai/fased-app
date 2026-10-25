@@ -183,8 +183,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			}
 		}
 		if *interactive {
-			fmt.Fprintln(errOut, "Fased is installed. Open:", url)
-			fmt.Fprintln(errOut, "Owner setup code: fased-app claim-code --data-dir", m.Data)
+			installationHandoff(errOut, m, plan, url)
 		}
 		return json.NewEncoder(out).Encode(map[string]any{"location": installLocation(*vps), "installed": true, "application": filepath.Join(m.Root, localinstall.EngineName()), "data": m.Data, "autostart": m.Autostart, "url": url, "access": plan, "walletsConnected": false})
 	case "uninstall":
@@ -258,6 +257,51 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		return nil
 	}
 	return errors.New("unknown installation command")
+}
+
+// Keep the terminal handoff on the installed engine and its existing state.
+// Access instructions are produced by the same planner that configured it.
+func installationHandoff(out io.Writer, m localinstall.Manifest, plan privateaccess.Plan, readyURL string) {
+	engine := filepath.Join(m.Root, localinstall.EngineName())
+	service := func(action string) string {
+		return installationCommand(engine, "service", action, "--prefix", m.Root, "--data-dir", m.Data)
+	}
+	fmt.Fprintln(out, "Fased is installed.")
+	if readyURL == "" {
+		fmt.Fprintln(out, "Start the installed instance:")
+		fmt.Fprintln(out, service("start"))
+		if plan.Mode == "tailscale" {
+			fmt.Fprintln(out, "Then enable private access:")
+			fmt.Fprintln(out, installationCommand(engine, "access", "enable", "--prefix", m.Root, "--data-dir", m.Data))
+		}
+	} else {
+		for _, instruction := range plan.Instructions {
+			fmt.Fprintln(out, instruction)
+		}
+		fmt.Fprintln(out, "First visit: run this on the installed host for an owner setup code, then choose your password in the private UI:")
+		fmt.Fprintln(out, installationCommand(engine, "claim-code", "--data-dir", m.Data))
+		fmt.Fprintln(out, "Already set up? Sign in with your existing owner password.")
+	}
+	fmt.Fprintln(out, "Check this instance:")
+	fmt.Fprintln(out, service("status"))
+}
+
+// Quote every argument for the platform's normal terminal; paths may contain
+// spaces, quotes or shell syntax. This only renders commands, never runs them.
+func installationCommand(args ...string) string {
+	quoted := make([]string, len(args))
+	for i, arg := range args {
+		if runtime.GOOS == "windows" {
+			quoted[i] = "'" + strings.ReplaceAll(arg, "'", "''") + "'"
+		} else {
+			quoted[i] = "'" + strings.ReplaceAll(arg, "'", "'\"'\"'") + "'"
+		}
+	}
+	command := strings.Join(quoted, " ")
+	if runtime.GOOS == "windows" {
+		return "& " + command
+	}
+	return command
 }
 func waitForCore(ctx context.Context, dir string) (string, error) {
 	deadline, cancel := context.WithTimeout(ctx, 8*time.Second)
