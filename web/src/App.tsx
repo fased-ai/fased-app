@@ -14,6 +14,7 @@ import { Settings } from "./pages/Settings";
 import { CoreProvider } from "./core";
 import { CoreGate } from "./components/CoreGate";
 function WorkspaceShell() {
+  const { t: uiText } = useUI();
   const { preferences, t } = useUI();
   const {
     state,
@@ -52,8 +53,9 @@ function WorkspaceShell() {
           )}
           {storageError && (
             <div className="storage-warning" role="alert">
-              Browser storage is unavailable. Changes last only until this page
-              is closed.
+              {uiText(
+                "Browser storage is unavailable. Changes last only until this page is closed.",
+              )}
             </div>
           )}
           <main id="main-content" tabIndex={-1} className="main-content">
@@ -76,19 +78,21 @@ function WorkspaceShell() {
               <Settings />
             ) : (
               <>
-                <SectionHead title="Activity" />
+                <SectionHead title={uiText("Activity")} />
                 <section
                   className="panel activity-workspace"
-                  aria-label="Activity records"
+                  aria-label={uiText("Activity records")}
                 >
                   <div className="panel-heading">
                     <h2>
                       {core.mode === "ready"
-                        ? "Profile activity"
-                        : "Recent prototype activity"}
+                        ? uiText("Profile activity")
+                        : uiText("Recent prototype activity")}
                     </h2>
                     <Badge>
-                      {core.mode === "ready" ? "PROFILE ONLY" : "LOCAL ONLY"}
+                      {core.mode === "ready"
+                        ? uiText("PROFILE ONLY")
+                        : uiText("LOCAL ONLY")}
                     </Badge>
                   </div>
                   {core.mode === "ready" && (agents.error || !agents.view) ? (
@@ -96,10 +100,13 @@ function WorkspaceShell() {
                       className="agent-record-body"
                       role={agents.error ? "alert" : "status"}
                     >
-                      {agents.error || "Loading agent activity…"}
+                      {agents.error || uiText("Loading agent activity…")}
                     </p>
                   ) : state.notices.length ? (
-                    <ul className="activity-list" aria-label="Activity events">
+                    <ul
+                      className="activity-list"
+                      aria-label={uiText("Activity events")}
+                    >
                       {state.notices.map((n) => (
                         <li className="activity-row" key={n.id}>
                           <span className="activity-icon" aria-hidden="true">
@@ -112,9 +119,9 @@ function WorkspaceShell() {
                           <Badge>
                             {core.mode === "ready"
                               ? n.read
-                                ? "READ"
-                                : "UNREAD"
-                              : "DEMO"}
+                                ? uiText("READ")
+                                : uiText("UNREAD")
+                              : uiText("DEMO")}
                           </Badge>
                         </li>
                       ))}
@@ -122,8 +129,8 @@ function WorkspaceShell() {
                   ) : (
                     <p className="agent-record-body">
                       {core.mode === "ready"
-                        ? "No activity for this profile."
-                        : "No prototype activity."}
+                        ? uiText("No activity for this profile.")
+                        : uiText("No prototype activity.")}
                     </p>
                   )}
                 </section>
@@ -134,39 +141,41 @@ function WorkspaceShell() {
         {contextOpen && (
           <aside className="context-panel">
             <div className="panel-heading">
-              <h2>Workspace context</h2>
+              <h2>{uiText("Workspace context")}</h2>
               <button
                 className="icon-button"
-                aria-label="Close workspace context"
+                aria-label={uiText("Close workspace context")}
                 onClick={() => setContextOpen(false)}
               >
                 <X size={17} />
               </button>
             </div>
             <div className="context-inner">
-              <Badge tone="lime">SELECTED PROFILE</Badge>
+              <Badge tone="lime">{uiText("SELECTED PROFILE")}</Badge>
               <Avatar profile={profile} />
               <h2>{profile.name}</h2>
               <p>{profile.role}</p>
               <div className="context-detail">
-                <small>AI connection</small>
+                <small>{uiText("AI connection")}</small>
                 <strong>{providerNames[profile.provider]}</strong>
-                <small>Wallet authority</small>
-                <strong>None assigned</strong>
-                <small>Current workspace</small>
+                <small>{uiText("Wallet authority")}</small>
+                <strong>{uiText("None assigned")}</strong>
+                <small>{uiText("Current workspace")}</small>
                 <strong>{section}</strong>
               </div>
               <button
                 className="secondary"
                 onClick={() => navigate("agents/chat")}
               >
-                <MessageSquare size={15} /> Open agent chat
+                <MessageSquare size={15} />
+                {uiText(" Open agent chat")}
               </button>
               <button
                 className="text-button"
                 onClick={() => navigate("agents/memory")}
               >
-                <BookOpen size={14} /> Inspect memory
+                <BookOpen size={14} />
+                {uiText(" Inspect memory")}
               </button>
             </div>
           </aside>
@@ -179,7 +188,7 @@ function WorkspaceShell() {
           {toast}
           <button
             className="icon-button"
-            aria-label="Dismiss notification"
+            aria-label={uiText("Dismiss notification")}
             onClick={() => setToast("")}
           >
             <X size={14} />

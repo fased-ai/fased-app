@@ -1,3 +1,4 @@
+import { useUI } from "../ui-preferences";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -17,6 +18,7 @@ import { providerNames, type Provider } from "../state";
 import { Badge, Avatar, SectionHead, Empty } from "../components/shared";
 import { useWorkspace } from "../workspace";
 export function Agents() {
+  const { t: uiText } = useUI();
   const {
     state,
     dispatch,
@@ -37,10 +39,11 @@ export function Agents() {
   return (
     <>
       <SectionHead
-        title="Agents"
+        title={uiText("Agents")}
         action={
           <button className="secondary" onClick={() => setProfileOpen(true)}>
-            <Plus size={16} /> New profile
+            <Plus size={16} />
+            {uiText(" New profile")}
           </button>
         }
       />
@@ -61,7 +64,7 @@ export function Agents() {
           </button>
         ))}
       </div>
-      <div className="tabs" aria-label="Agent sections">
+      <div className="tabs" aria-label={uiText("Agent sections")}>
         {["chat", "bots", "tasks", "memory", "settings"].map((t) => (
           <button
             key={t}
@@ -81,7 +84,8 @@ export function Agents() {
               <div>
                 <h2>{profile.name}</h2>
                 <small className="subtle">
-                  {providerNames[profile.provider]} · prototype conversation
+                  {providerNames[profile.provider]}
+                  {uiText(" · prototype conversation")}
                 </small>
               </div>
             </div>
@@ -92,7 +96,8 @@ export function Agents() {
                 notify("Prototype conversation cleared");
               }}
             >
-              New conversation <Plus size={14} />
+              {uiText("New conversation ")}
+              <Plus size={14} />
             </button>
           </div>
           <div className="chat-messages" aria-live="polite">
@@ -101,11 +106,12 @@ export function Agents() {
                 <span className="agent-symbol">
                   <Sparkles size={28} />
                 </span>
-                <p className="eyebrow">A THOUGHTFUL START</p>
-                <h2>What would you like to work through?</h2>
+                <p className="eyebrow">{uiText("A THOUGHTFUL START")}</p>
+                <h2>{uiText("What would you like to work through?")}</h2>
                 <p>
-                  Explore the conversation flow. Responses below are scripted
-                  examples, not AI output.
+                  {uiText(
+                    "Explore the conversation flow. Responses below are scripted examples, not AI output.",
+                  )}
                 </p>
                 <div className="suggestions">
                   {[
@@ -125,7 +131,7 @@ export function Agents() {
                 <div className={`message ${m.role}`} key={`${profile.id}-${i}`}>
                   <span className="message-author">
                     {m.role === "you"
-                      ? "You"
+                      ? uiText("You")
                       : `${profile.name} · scripted preview`}
                   </span>
                   <p>{m.text}</p>
@@ -134,7 +140,8 @@ export function Agents() {
                       className="text-button"
                       onClick={() => setActionOpen(true)}
                     >
-                      Preview a review card <ArrowRight size={13} />
+                      {uiText("Preview a review card ")}
+                      <ArrowRight size={13} />
                     </button>
                   )}
                 </div>
@@ -143,24 +150,26 @@ export function Agents() {
           </div>
           <form className="chat-composer" onSubmit={sendChat}>
             <label className="sr-only" htmlFor="chat-message">
-              Message your agent
+              {uiText("Message your agent")}
             </label>
             <textarea
               id="chat-message"
-              placeholder="Describe a goal, ask for context, or draft a task…"
+              placeholder={uiText(
+                "Describe a goal, ask for context, or draft a task…",
+              )}
               maxLength={1000}
               value={message}
               onChange={(e) => setMessage(e.target.value)}
             />
             <div>
               <span>
-                <FlaskConical size={13} /> Scripted prototype · no provider
-                requests
+                <FlaskConical size={13} />
+                {uiText(" Scripted prototype · no provider requests")}
               </span>
               <button
                 className="primary icon-button"
                 disabled={!message.trim()}
-                aria-label="Send prototype message"
+                aria-label={uiText("Send prototype message")}
               >
                 <ArrowUpRight size={17} />
               </button>
@@ -173,10 +182,11 @@ export function Agents() {
           <div className="info-banner">
             <FlaskConical size={18} />
             <div>
-              <strong>Paper behavior first.</strong>
+              <strong>{uiText("Paper behavior first.")}</strong>
               <span>
-                This sample bot changes local prototype state only. No strategy
-                engine or financial adapter is running.
+                {uiText(
+                  "This sample bot changes local prototype state only. No strategy engine or financial adapter is running.",
+                )}
               </span>
             </div>
           </div>
@@ -186,41 +196,46 @@ export function Agents() {
                 <SlidersHorizontal size={22} />
               </span>
               <div>
-                <h2>Allocation review</h2>
+                <h2>{uiText("Allocation review")}</h2>
                 <p className="subtle">
-                  Example strategy · version 1 · {profile.name}
+                  {uiText("Example strategy · version 1 · ")}
+                  {profile.name}
                 </p>
               </div>
               <Badge tone={state.paused ? "muted" : "lime"}>
-                {state.paused ? "PAUSED · DEMO" : "RUNNING · DEMO"}
+                {state.paused
+                  ? uiText("PAUSED · DEMO")
+                  : uiText("RUNNING · DEMO")}
               </Badge>
             </div>
             <div className="detail-grid">
               <div>
-                <small>Execution</small>
-                <strong>Simulated preview</strong>
+                <small>{uiText("Execution")}</small>
+                <strong>{uiText("Simulated preview")}</strong>
               </div>
               <div>
-                <small>Capital</small>
-                <strong>Not assigned</strong>
+                <small>{uiText("Capital")}</small>
+                <strong>{uiText("Not assigned")}</strong>
               </div>
               <div>
-                <small>Next action</small>
+                <small>{uiText("Next action")}</small>
                 <strong>
                   {state.paused
-                    ? "Owner resumes demo"
-                    : "Awaiting simulated signal"}
+                    ? uiText("Owner resumes demo")
+                    : uiText("Awaiting simulated signal")}
                 </strong>
               </div>
             </div>
             <div className="panel-footer">
-              <span className="subtle">No permissions or wallet assigned.</span>
+              <span className="subtle">
+                {uiText("No permissions or wallet assigned.")}
+              </span>
               <div className="flex">
                 <button
                   className="secondary"
                   onClick={() => setActionOpen(true)}
                 >
-                  Inspect strategy
+                  {uiText("Inspect strategy")}
                 </button>
                 <button
                   className="primary"
@@ -232,7 +247,7 @@ export function Agents() {
                   }}
                 >
                   {state.paused ? <Play size={14} /> : <Pause size={14} />}{" "}
-                  {state.paused ? "Resume demo" : "Pause demo"}
+                  {state.paused ? uiText("Resume demo") : uiText("Pause demo")}
                 </button>
               </div>
             </div>
@@ -242,8 +257,8 @@ export function Agents() {
       {tab === "tasks" && (
         <section className="panel">
           <div className="panel-heading">
-            <h2>Task previews</h2>
-            <Badge>NO SCHEDULER CONNECTED</Badge>
+            <h2>{uiText("Task previews")}</h2>
+            <Badge>{uiText("NO SCHEDULER CONNECTED")}</Badge>
           </div>
           {[
             [
@@ -274,7 +289,8 @@ export function Agents() {
                     )
                   }
                 >
-                  Preview run <Play size={13} />
+                  {uiText("Preview run ")}
+                  <Play size={13} />
                 </button>
               </div>
             );
@@ -286,17 +302,20 @@ export function Agents() {
           <div className="info-banner">
             <BookOpen size={18} />
             <div>
-              <strong>Memory you can inspect.</strong>
+              <strong>{uiText("Memory you can inspect.")}</strong>
               <span>
-                Notes are scoped to {profile.name}. They do not grant wallet
-                authority or replace financial records.
+                {uiText("Notes are scoped to ")}
+                {profile.name}
+                {uiText(
+                  ". They do not grant wallet authority or replace financial records.",
+                )}
               </span>
             </div>
           </div>
           <section className="panel">
             <div className="panel-heading">
-              <h2>Saved context</h2>
-              <Badge>LOCAL PROTOTYPE</Badge>
+              <h2>{uiText("Saved context")}</h2>
+              <Badge>{uiText("LOCAL PROTOTYPE")}</Badge>
             </div>
             {state.memories
               .filter((m) => m.profileId === profile.id)
@@ -320,8 +339,13 @@ export function Agents() {
                 </article>
               ))}
             {!state.memories.some((m) => m.profileId === profile.id) && (
-              <Empty icon={<BookOpen size={24} />} title="A clean context">
-                Add a non-sensitive draft preference for this profile.
+              <Empty
+                icon={<BookOpen size={24} />}
+                title={uiText("A clean context")}
+              >
+                {uiText(
+                  "Add a non-sensitive draft preference for this profile.",
+                )}
               </Empty>
             )}
             <form
@@ -338,16 +362,19 @@ export function Agents() {
                 notify("Prototype memory saved");
               }}
             >
-              <label htmlFor="memory-note">Add a draft note</label>
+              <label htmlFor="memory-note">{uiText("Add a draft note")}</label>
               <textarea
                 id="memory-note"
                 value={memoryText}
                 maxLength={500}
-                placeholder="A preference or workflow note. Do not enter credentials."
+                placeholder={uiText(
+                  "A preference or workflow note. Do not enter credentials.",
+                )}
                 onChange={(e) => setMemoryText(e.target.value)}
               />
               <button className="secondary" disabled={!memoryText.trim()}>
-                <Plus size={14} /> Save note
+                <Plus size={14} />
+                {uiText(" Save note")}
               </button>
             </form>
           </section>
@@ -356,11 +383,13 @@ export function Agents() {
       {tab === "settings" && (
         <section className="panel">
           <div className="panel-heading">
-            <h2>Profile preferences</h2>
-            <Badge>NO AUTHORITY CHANGES</Badge>
+            <h2>{uiText("Profile preferences")}</h2>
+            <Badge>{uiText("NO AUTHORITY CHANGES")}</Badge>
           </div>
           <div className="settings-body">
-            <label htmlFor="profile-provider">Preferred AI connection</label>
+            <label htmlFor="profile-provider">
+              {uiText("Preferred AI connection")}
+            </label>
             <select
               id="profile-provider"
               value={profile.provider}
@@ -374,22 +403,24 @@ export function Agents() {
               {Object.entries(providerNames).map(([id, name]) => (
                 <option key={id} value={id}>
                   {name}
-                  {id !== "none" ? " · not connected" : ""}
+                  {id !== "none" ? uiText(" · not connected") : ""}
                 </option>
               ))}
             </select>
             <p className="subtle">
-              A preference only. No authentication or model request is
-              performed. Other profiles keep their own selection.
+              {uiText(
+                "A preference only. No authentication or model request is performed. Other profiles keep their own selection.",
+              )}
             </p>
             <div className="inline-detail">
-              <span>Wallet permissions</span>
-              <strong>None assigned</strong>
+              <span>{uiText("Wallet permissions")}</span>
+              <strong>{uiText("None assigned")}</strong>
               <button
                 className="text-button"
                 onClick={() => navigate("wallets/permissions")}
               >
-                Inspect policy model <ArrowRight size={14} />
+                {uiText("Inspect policy model ")}
+                <ArrowRight size={14} />
               </button>
             </div>
           </div>

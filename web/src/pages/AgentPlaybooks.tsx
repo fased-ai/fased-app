@@ -1,3 +1,4 @@
+import { useUI } from "../ui-preferences";
 import { useState } from "react";
 import { useCore } from "../core";
 import { useWorkspace } from "../workspace";
@@ -25,6 +26,7 @@ const defaults: PlaybookVersion = {
   createdAt: 0,
 };
 export function AgentPlaybooks({ view: v }: { view: AgentView }) {
+  const { t: uiText } = useUI();
   const core = useCore();
   const { agents, navigate } = useWorkspace();
   const [editing, setEditing] = useState<string>();
@@ -93,10 +95,10 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
     }
   }
   return (
-    <section className="panel" aria-label="Agent playbooks">
+    <section className="panel" aria-label={uiText("Agent playbooks")}>
       <div className="panel-heading">
-        <h2>Playbooks</h2>
-        <Badge>FIXTURE</Badge>
+        <h2>{uiText("Playbooks")}</h2>
+        <Badge>{uiText("FIXTURE")}</Badge>
       </div>
       <div className="agent-record-body">
         {error && <p role="alert">{error}</p>}
@@ -112,7 +114,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
               setForm({ ...defaults, newsSourceId: sources[0]?.id ?? "" });
             }}
           >
-            New playbook
+            {uiText("New playbook")}
           </button>
           {v.aiFixtureAvailable && sources.length === 0 && (
             <button
@@ -127,7 +129,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
                 })
               }
             >
-              Add fixture news source
+              {uiText("Add fixture news source")}
             </button>
           )}
           {v.aiFixtureAvailable && sources.length > 0 && (
@@ -154,10 +156,10 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
                 })
               }
             >
-              Fetch fixture headlines
+              {uiText("Fetch fixture headlines")}
             </button>
           )}
-          <a href="#agents/news">News inputs</a>
+          <a href="#agents/news">{uiText("News inputs")}</a>
         </div>
         {books.map((p) => {
           const n = versions[p.id] ?? p.versions.length;
@@ -166,7 +168,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
             <article className="memory-card" key={p.id}>
               <h3>{selected.name}</h3>
               <label>
-                Version
+                {uiText("Version")}
                 <select
                   aria-label={`Version of ${selected.name}`}
                   value={n}
@@ -182,8 +184,13 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
                 >
                   {p.versions.map((item) => (
                     <option key={item.version} value={item.version}>
-                      v{item.version} ·{" "}
-                      {new Date(item.createdAt * 1000).toLocaleString()}
+                      {uiText("v")}
+                      {item.version} ·{" "}
+                      {new Date(item.createdAt * 1000).toLocaleString(
+                        typeof document === "undefined"
+                          ? "en"
+                          : document.documentElement.lang,
+                      )}
                     </option>
                   ))}
                 </select>
@@ -195,14 +202,16 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
                   disabled={busy}
                   onClick={() => void load(p.id, n, false)}
                 >
-                  Review: {selected.name}
+                  {uiText("Review: ")}
+                  {selected.name}
                 </button>
                 <button
                   className="text-button"
                   disabled={busy}
                   onClick={() => void load(p.id, n, true)}
                 >
-                  Edit: {selected.name}
+                  {uiText("Edit: ")}
+                  {selected.name}
                 </button>
               </div>
             </article>
@@ -211,7 +220,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
         {editing !== undefined && (
           <form
             className="agent-form-grid"
-            aria-label="Playbook settings"
+            aria-label={uiText("Playbook settings")}
             onSubmit={async (e) => {
               e.preventDefault();
               const ok = await agents.change({
@@ -227,7 +236,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
             }}
           >
             <label>
-              Playbook name
+              {uiText("Playbook name")}
               <input
                 required
                 maxLength={80}
@@ -236,7 +245,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
               />
             </label>
             <label>
-              Digest prompt
+              {uiText("Digest prompt")}
               <textarea
                 required
                 maxLength={1000}
@@ -245,7 +254,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
               />
             </label>
             <label>
-              Fixture news source
+              {uiText("Fixture news source")}
               <select
                 required
                 value={form.newsSourceId}
@@ -253,7 +262,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
                   setForm({ ...form, newsSourceId: e.target.value })
                 }
               >
-                <option value="">Select source</option>
+                <option value="">{uiText("Select source")}</option>
                 {sources.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
@@ -262,7 +271,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
               </select>
             </label>
             <label>
-              Maximum news age (seconds)
+              {uiText("Maximum news age (seconds)")}
               <input
                 type="number"
                 required
@@ -278,7 +287,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
               />
             </label>
             <details className="playbook-limits">
-              <summary>Advanced limits</summary>
+              <summary>{uiText("Advanced limits")}</summary>
               {(
                 [
                   ["maxInputTokens", "Input token limit", 1000, 32000],
@@ -310,7 +319,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
             </details>
             <div className="agent-inline">
               <button className="primary" disabled={busy || !sources.length}>
-                {editing ? "Save new version" : "Save playbook"}
+                {editing ? uiText("Save new version") : uiText("Save playbook")}
               </button>
               <button
                 type="button"
@@ -318,24 +327,28 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
                 disabled={busy}
                 onClick={() => setEditing(undefined)}
               >
-                Cancel settings
+                {uiText("Cancel settings")}
               </button>
             </div>
           </form>
         )}
         {draft && (
-          <section aria-label="Review playbook run">
+          <section aria-label={uiText("Review playbook run")}>
             <h3>
-              {draft.selected.name} · v{draft.selected.version}
+              {draft.selected.name}
+              {uiText(" · v")}
+              {draft.selected.version}
             </h3>
             <p>
               {draft.source.name} · {draft.source.url}
             </p>
             <p>
-              One fixture run · news age ≤ {draft.selected.newsMaxAgeSeconds}s
+              {uiText("One fixture run · news age ≤ ")}
+              {draft.selected.newsMaxAgeSeconds}
+              {uiText("s")}
             </p>
             <label>
-              Digest conversation
+              {uiText("Digest conversation")}
               <select
                 value={session}
                 disabled={busy}
@@ -345,7 +358,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
                   setApproved(false);
                 }}
               >
-                <option value="">Select conversation</option>
+                <option value="">{uiText("Select conversation")}</option>
                 {v.sessions.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
@@ -364,7 +377,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
                   })
                 }
               >
-                Create digest conversation
+                {uiText("Create digest conversation")}
               </button>
             )}
             <div className="agent-inline">
@@ -373,7 +386,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
                 disabled={busy || !session}
                 onClick={() => void prepare()}
               >
-                Prepare run review
+                {uiText("Prepare run review")}
               </button>
               <button
                 className="text-button"
@@ -384,20 +397,25 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
                   setApproved(false);
                 }}
               >
-                Cancel run review
+                {uiText("Cancel run review")}
               </button>
             </div>
             {review && (
               <>
                 {stale && (
                   <p role="alert">
-                    Review expired or records changed. Prepare the run review
-                    again.
+                    {uiText(
+                      "Review expired or records changed. Prepare the run review again.",
+                    )}
                   </p>
                 )}
                 <p>
-                  Current fixture preview · retrieved{" "}
-                  {new Date(review.news.fetchedAt * 1000).toLocaleString()}
+                  {uiText("Current fixture preview · retrieved")}{" "}
+                  {new Date(review.news.fetchedAt * 1000).toLocaleString(
+                    typeof document === "undefined"
+                      ? "en"
+                      : document.documentElement.lang,
+                  )}
                 </p>
                 <ul>
                   {review.news.items.map((item) => (
@@ -405,11 +423,14 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
                   ))}
                 </ul>
                 <p>
-                  The run fetches fresh fixture headlines under this source
-                  policy. Headlines are untrusted data.
+                  {uiText(
+                    "The run fetches fresh fixture headlines under this source policy. Headlines are untrusted data.",
+                  )}
                 </p>
                 <details>
-                  <summary>Context, limits and source evidence</summary>
+                  <summary>
+                    {uiText("Context, limits and source evidence")}
+                  </summary>
                   <pre
                     style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
                   >
@@ -435,7 +456,9 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
                     disabled={busy || stale || !v.aiFixtureAvailable}
                     onChange={(e) => setApproved(e.target.checked)}
                   />
-                  Approve this context, source policy and one fixture run
+                  {uiText(
+                    "Approve this context, source policy and one fixture run",
+                  )}
                 </label>
                 <button
                   className="primary"
@@ -448,7 +471,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
                     }
                   }}
                 >
-                  Run fixture digest once
+                  {uiText("Run fixture digest once")}
                 </button>
               </>
             )}
@@ -464,10 +487,13 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
               aria-label={`Digest run ${task.name}`}
             >
               <h3>
-                {task.name} · v{task.playbook!.version}
+                {task.name}
+                {uiText(" · v")}
+                {task.playbook!.version}
               </h3>
               <p>
-                {task.state} · {task.runs}/1 runs
+                {task.state} · {task.runs}
+                {uiText("/1 runs")}
               </p>
               {request?.answer && (
                 <p style={{ whiteSpace: "pre-wrap" }}>{request.answer}</p>
@@ -475,7 +501,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
               {request?.failure && <p role="alert">{request.failure}</p>}
               {run?.news && (
                 <details>
-                  <summary>Run source evidence</summary>
+                  <summary>{uiText("Run source evidence")}</summary>
                   <pre
                     style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
                   >
@@ -497,7 +523,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
                       navigate("agents/chat");
                   }}
                 >
-                  Discuss digest
+                  {uiText("Discuss digest")}
                 </button>
               )}
             </article>

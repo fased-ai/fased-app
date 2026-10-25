@@ -67,8 +67,9 @@ function AgentAIForm({
   onClearResearch?: () => void;
   composer?: ChatComposer;
 }) {
+  const { t: uiText } = useUI();
   const { core, agents, navigate } = useWorkspace();
-  const { t: tr } = useUI();
+  const tr = uiText;
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [localPrompt, setLocalPrompt] = useState("");
   const prompt = composer ? composer.value : localPrompt;
@@ -237,7 +238,7 @@ function AgentAIForm({
   return (
     <>
       <details className="chat-evidence">
-        <summary>Saved evidence</summary>
+        <summary>{uiText("Saved evidence")}</summary>
         {!researchSelection && (
           <AgentEvidenceInspector
             view={view}
@@ -260,13 +261,20 @@ function AgentAIForm({
           />
         )}
       </details>
-      <section className="ai-review" aria-label="Optional AI request review">
+      <section
+        className="ai-review"
+        aria-label={uiText("Optional AI request review")}
+      >
         {draftError && <p role="alert">{draftError}</p>}
         {(draftSource || draftBusy) && (
           <div className="agent-inline">
-            <h4>{draftBusy ? "Loading request draft…" : "Request draft"}</h4>
+            <h4>
+              {draftBusy
+                ? uiText("Loading request draft…")
+                : uiText("Request draft")}
+            </h4>
             <button type="button" className="secondary" onClick={cancelDraft}>
-              Cancel draft
+              {uiText("Cancel draft")}
             </button>
           </div>
         )}
@@ -307,14 +315,16 @@ function AgentAIForm({
                 >
                   {entry.message.role === "system" ? (
                     <details>
-                      <summary>Saved locally</summary>
+                      <summary>{uiText("Saved locally")}</summary>
                       <p>{entry.message.text}</p>
                     </details>
                   ) : (
                     <>
                       <small>
-                        {entry.message.role === "user" ? "You" : "Record"} ·{" "}
-                        {new Date(entry.at * 1000).toLocaleString()}
+                        {entry.message.role === "user"
+                          ? uiText("You")
+                          : uiText("Record")}{" "}
+                        · {new Date(entry.at * 1000).toLocaleString()}
                       </small>
                       <p>{entry.message.text}</p>
                     </>
@@ -495,17 +505,19 @@ function AgentAIForm({
           }}
         >
           {researchSelection && (
-            <fieldset aria-label="Selected research for AI">
-              <legend>Selected research</legend>
+            <fieldset aria-label={uiText("Selected research for AI")}>
+              <legend>{uiText("Selected research")}</legend>
               <label>
-                Research mode
+                {uiText("Research mode")}
                 <select
                   value={researchMode}
                   disabled={researchPreparing}
                   onChange={(e) => setResearchMode(e.target.value)}
                 >
-                  <option value="single">Single request</option>
-                  <option value="loop">Reviewed continuations</option>
+                  <option value="single">{uiText("Single request")}</option>
+                  <option value="loop">
+                    {uiText("Reviewed continuations")}
+                  </option>
                 </select>
               </label>
               <pre>{JSON.stringify(researchSelection, null, 2)}</pre>
@@ -515,22 +527,22 @@ function AgentAIForm({
                 disabled={researchPreparing}
                 onClick={onClearResearch}
               >
-                Remove research
+                {uiText("Remove research")}
               </button>
             </fieldset>
           )}
           {evidenceSelection && (
-            <fieldset aria-label="AI evidence selection">
-              <legend>Selected evidence</legend>
+            <fieldset aria-label={uiText("AI evidence selection")}>
+              <legend>{uiText("Selected evidence")}</legend>
               <pre>{JSON.stringify(evidenceSelection, null, 2)}</pre>
               {!evidenceAvailable && (
                 <p role="status">
-                  Selected evidence unavailable. Inspect again.
+                  {uiText("Selected evidence unavailable. Inspect again.")}
                 </p>
               )}
               {evidencePreview && (
                 <details>
-                  <summary>Inspected record</summary>
+                  <summary>{uiText("Inspected record")}</summary>
                   <pre>{JSON.stringify(evidencePreview, null, 2)}</pre>
                 </details>
               )}
@@ -539,20 +551,20 @@ function AgentAIForm({
                 className="secondary"
                 onClick={removeEvidence}
               >
-                Remove evidence
+                {uiText("Remove evidence")}
               </button>
             </fieldset>
           )}
           <label className="chat-input">
-            <span>{composer ? tr("Message") : "AI request"}</span>
+            <span>{composer ? tr("Message") : uiText("AI request")}</span>
             <textarea
               ref={questionRef}
-              aria-label={composer ? tr("Message") : "AI request"}
+              aria-label={composer ? tr("Message") : uiText("AI request")}
               required
               maxLength={composer ? 4000 : 2000}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Message your agent…"
+              placeholder={uiText("Message your agent…")}
               autoFocus
               onKeyDown={(e) => {
                 if (
@@ -567,7 +579,10 @@ function AgentAIForm({
               }}
             />
           </label>
-          <div className="chat-composer-toolbar" aria-label="Reply connection">
+          <div
+            className="chat-composer-toolbar"
+            aria-label={uiText("Reply connection")}
+          >
             <ConnectionPicker
               value={connectionRef}
               onChange={setConnectionRef}
@@ -580,8 +595,8 @@ function AgentAIForm({
             <button
               type="button"
               className="text-button"
-              aria-label="Providers"
-              title="Providers"
+              aria-label={uiText("Providers")}
+              title={uiText("Providers")}
               onClick={() => navigate("agents/settings")}
             >
               <SlidersHorizontal size={16} />
@@ -592,7 +607,7 @@ function AgentAIForm({
             open={optionsOpen}
             onToggle={(e) => setOptionsOpen(e.currentTarget.open)}
           >
-            <summary>Message options</summary>
+            <summary>{uiText("Message options")}</summary>
             {composer && (
               <button
                 type="button"
@@ -600,7 +615,7 @@ function AgentAIForm({
                 disabled={agents.busy || !prompt.trim()}
                 onClick={() => void composer.onSave()}
               >
-                Save message
+                {uiText("Save message")}
               </button>
             )}
             {!researchSelection && (
@@ -613,7 +628,7 @@ function AgentAIForm({
               />
             )}
             <label>
-              Memory
+              {uiText("Memory")}
               <select
                 value={memoryMode}
                 onChange={(e) =>
@@ -623,19 +638,21 @@ function AgentAIForm({
                 }
               >
                 {legacyDraft && (
-                  <option value="legacy">Legacy active notes</option>
+                  <option value="legacy">
+                    {uiText("Legacy active notes")}
+                  </option>
                 )}
                 <option value="relevant">
                   {tr("Relevant notes and recent chat")}
                 </option>
-                <option value="all">All active notes</option>
-                <option value="none">None</option>
-                <option value="selected">Selected notes</option>
+                <option value="all">{uiText("All active notes")}</option>
+                <option value="none">{uiText("None")}</option>
+                <option value="selected">{uiText("Selected notes")}</option>
               </select>
             </label>
             {memoryMode === "selected" && (
-              <fieldset aria-label="AI memory selection">
-                <legend>Selected notes</legend>
+              <fieldset aria-label={uiText("AI memory selection")}>
+                <legend>{uiText("Selected notes")}</legend>
                 {view.memories.map((m) => (
                   <label key={m.id}>
                     <input
@@ -645,7 +662,7 @@ function AgentAIForm({
                       onChange={(e) => toggleMemory(m.id, e.target.checked)}
                     />
                     {m.text}
-                    {m.expired ? " (expired)" : ""}
+                    {m.expired ? uiText(" (expired)") : ""}
                   </label>
                 ))}
                 {memoryIds
@@ -657,14 +674,15 @@ function AgentAIForm({
                         checked
                         onChange={() => toggleMemory(id, false)}
                       />
-                      Unavailable note: {id}
+                      {uiText("Unavailable note: ")}
+                      {id}
                     </label>
                   ))}
               </fieldset>
             )}
             <div className="agent-form-grid">
               <label>
-                Maximum input tokens
+                {uiText("Maximum input tokens")}
                 <input
                   type="number"
                   min={1000}
@@ -675,7 +693,7 @@ function AgentAIForm({
                 />
               </label>
               <label>
-                Maximum output tokens
+                {uiText("Maximum output tokens")}
                 <input
                   type="number"
                   min={128}
@@ -686,7 +704,7 @@ function AgentAIForm({
                 />
               </label>
               <label>
-                Request deadline (seconds)
+                {uiText("Request deadline (seconds)")}
                 <input
                   type="number"
                   min={1}
@@ -697,7 +715,7 @@ function AgentAIForm({
                 />
               </label>
               <label>
-                Fixture budget (micro USD)
+                {uiText("Fixture budget (micro USD)")}
                 <input
                   type="number"
                   min={1}
@@ -712,11 +730,11 @@ function AgentAIForm({
           {researchSelection && (
             <fieldset
               className="agent-form-grid"
-              aria-label="Research turn limits"
+              aria-label={uiText("Research turn limits")}
             >
-              <legend>Research turn limits</legend>
+              <legend>{uiText("Research turn limits")}</legend>
               <label>
-                Model attempts
+                {uiText("Model attempts")}
                 <input
                   type="number"
                   min={1}
@@ -727,7 +745,7 @@ function AgentAIForm({
                 />
               </label>
               <label>
-                Read attempts
+                {uiText("Read attempts")}
                 <input
                   type="number"
                   min={1}
@@ -738,7 +756,7 @@ function AgentAIForm({
                 />
               </label>
               <label>
-                Research deadline (seconds)
+                {uiText("Research deadline (seconds)")}
                 <input
                   type="number"
                   min={1}
@@ -749,7 +767,7 @@ function AgentAIForm({
                 />
               </label>
               <label>
-                Turn budget (micro USD)
+                {uiText("Turn budget (micro USD)")}
                 <input
                   type="number"
                   min={1}
@@ -791,7 +809,7 @@ function AgentAIForm({
               {remembering
                 ? tr("Remember")
                 : researchSelection
-                  ? "Prepare research disclosure"
+                  ? uiText("Prepare research disclosure")
                   : tr("Send")}
             </button>
           </div>

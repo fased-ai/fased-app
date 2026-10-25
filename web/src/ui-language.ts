@@ -1,3 +1,4 @@
+import { pageCopy } from "./ui-language-pages";
 export const languages = {
   en: "English",
   ru: "Русский",
@@ -8,6 +9,8 @@ export const languages = {
 export type Language = keyof typeof languages;
 // Interface copy only. Never translate user records, model output or server receipts.
 const rows = {
+  ...pageCopy,
+  "No expiry": ["Без срока", "Sin caducidad", "无有效期限制", "만료 없음"],
   "Weekdays at {time}": [
     "По будням в {time}",
     "Días laborables a las {time}",
@@ -421,11 +424,24 @@ const rows = {
 } satisfies Record<string, [string, string, string, string]>;
 export type Copy = keyof typeof rows;
 export const copyKeys = Object.keys(rows) as Copy[];
-export function translate(language: Language, key: string): string {
-  const row = Object.hasOwn(rows, key) ? rows[key as Copy] : undefined;
-  return language === "en" || !row
-    ? key
-    : row[({ ru: 0, es: 1, zh: 2, ko: 3 } as const)[language]];
+export function translate(
+  language: Language,
+  key: string,
+  values: Record<string, string | number> = {},
+): string {
+  const normalized = key.trim();
+  const row = Object.hasOwn(rows, normalized)
+    ? rows[normalized as Copy]
+    : undefined;
+  const result =
+    language === "en" || !row
+      ? key
+      : key.slice(0, key.indexOf(normalized)) +
+        row[({ ru: 0, es: 1, zh: 2, ko: 3 } as const)[language]] +
+        key.slice(key.indexOf(normalized) + normalized.length);
+  return result.replace(/\{(\w+)\}/g, (match, name: string) =>
+    Object.hasOwn(values, name) ? String(values[name]) : match,
+  );
 }
 export function resolveLanguage(
   value: string,

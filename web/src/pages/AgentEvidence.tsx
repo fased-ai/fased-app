@@ -1,3 +1,4 @@
+import { useUI } from "../ui-preferences";
 import { useEffect, useRef, useState } from "react";
 import type {
   AgentView,
@@ -31,6 +32,7 @@ function EvidenceForm({
   view: AgentView;
   onUse?: (evidence: AgentEvidenceView) => void;
 }) {
+  const { t: uiText } = useUI();
   const { core, agents } = useWorkspace();
   const [kind, setKind] = useState<AgentEvidenceKind>("memory");
   const [selection, setSelection] = useState("");
@@ -113,8 +115,11 @@ function EvidenceForm({
         ? result.data.headline.title
         : result?.data.task.text;
   return (
-    <section className="ai-review" aria-label="Local agent evidence inspection">
-      <h3>Saved evidence</h3>
+    <section
+      className="ai-review"
+      aria-label={uiText("Local agent evidence inspection")}
+    >
+      <h3>{uiText("Saved evidence")}</h3>
       <form
         className="agent-form-grid"
         onSubmit={(e) => {
@@ -123,7 +128,7 @@ function EvidenceForm({
         }}
       >
         <label>
-          Evidence type
+          {uiText("Evidence type")}
           <select
             value={kind}
             onChange={(e) => {
@@ -132,13 +137,13 @@ function EvidenceForm({
               setSelection("");
             }}
           >
-            <option value="memory">Memory note</option>
-            <option value="headline">Saved headline</option>
-            <option value="reminder-run">Reminder run</option>
+            <option value="memory">{uiText("Memory note")}</option>
+            <option value="headline">{uiText("Saved headline")}</option>
+            <option value="reminder-run">{uiText("Reminder run")}</option>
           </select>
         </label>
         <label>
-          Saved record
+          {uiText("Saved record")}
           <select
             value={selection}
             required
@@ -147,10 +152,10 @@ function EvidenceForm({
               setSelection(e.target.value);
             }}
           >
-            <option value="">Select a record</option>
+            <option value="">{uiText("Select a record")}</option>
             {selection && !choices.some((c) => c.value === selection) && (
               <option value={selection} disabled>
-                Selected evidence unavailable
+                {uiText("Selected evidence unavailable")}
               </option>
             )}
             {choices.map((c) => (
@@ -164,28 +169,34 @@ function EvidenceForm({
           className="secondary"
           disabled={busy || agents.busy || !selection}
         >
-          Inspect evidence
+          {uiText("Inspect evidence")}
         </button>
       </form>
       {(busy || result || error) && (
         <button type="button" className="secondary" onClick={cancel}>
-          Cancel inspection
+          {uiText("Cancel inspection")}
         </button>
       )}
-      {busy && <p role="status">Inspecting saved evidence…</p>}
+      {busy && <p role="status">{uiText("Inspecting saved evidence…")}</p>}
       {error && <p role="alert">{error}</p>}
       {result && !current && (
-        <p role="status">Workspace changed. Inspect again.</p>
+        <p role="status">{uiText("Workspace changed. Inspect again.")}</p>
       )}
       {result && current && (
-        <article aria-label="Inspected evidence">
+        <article aria-label={uiText("Inspected evidence")}>
           <p>
-            {result.historical ? "Historical record" : "Current memory"} ·{" "}
-            {result.freshness} · Untrusted data
+            {result.historical
+              ? uiText("Historical record")
+              : uiText("Current memory")}{" "}
+            · {result.freshness}
+            {uiText(" · Untrusted data")}
           </p>
           <p>{text}</p>
           <p>
-            Recorded {at(result.recordedAt)} · Inspected {at(result.observedAt)}
+            {uiText("Recorded ")}
+            {at(result.recordedAt)}
+            {uiText(" · Inspected ")}
+            {at(result.observedAt)}
           </p>
           {onUse && (
             <button
@@ -197,11 +208,11 @@ function EvidenceForm({
               }
               onClick={() => onUse(result)}
             >
-              Use in AI review
+              {uiText("Use in AI review")}
             </button>
           )}
           <details>
-            <summary>Complete evidence response</summary>
+            <summary>{uiText("Complete evidence response")}</summary>
             <pre>{JSON.stringify(result, null, 2)}</pre>
           </details>
         </article>

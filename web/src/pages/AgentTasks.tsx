@@ -1,3 +1,4 @@
+import { resolveLanguage, translate } from "../ui-language";
 import { useUI } from "../ui-preferences";
 import { useEffect, useRef, useState } from "react";
 import type {
@@ -29,15 +30,26 @@ import {
 } from "./TaskCronFields";
 import { NewsSourcePicker } from "./NewsInputs";
 
-const date = (at: number) => (at ? new Date(at * 1000).toLocaleString() : "—");
+const displayLocale = () =>
+  typeof document === "undefined" ? "en" : document.documentElement.lang;
+const taskCopy = (key: string, values?: Record<string, string | number>) =>
+  translate(resolveLanguage("system", [displayLocale()]), key, values);
+const date = (at: number) =>
+  at ? new Date(at * 1000).toLocaleString(displayLocale()) : "—";
 export function taskInterval(seconds: number) {
-  if (seconds % 86400 === 0)
-    return `${seconds / 86400} ${seconds === 86400 ? "day" : "days"}`;
-  if (seconds % 3600 === 0)
-    return `${seconds / 3600} ${seconds === 3600 ? "hour" : "hours"}`;
-  if (seconds % 60 === 0)
-    return `${seconds / 60} ${seconds === 60 ? "minute" : "minutes"}`;
-  return `${seconds} seconds`;
+  const [value, unit] =
+    seconds % 86400 === 0
+      ? ([seconds / 86400, "day"] as const)
+      : seconds % 3600 === 0
+        ? ([seconds / 3600, "hour"] as const)
+        : seconds % 60 === 0
+          ? ([seconds / 60, "minute"] as const)
+          : ([seconds, "second"] as const);
+  return new Intl.NumberFormat(displayLocale(), {
+    style: "unit",
+    unit,
+    unitDisplay: "long",
+  }).format(value);
 }
 const schedule = (t: {
   calendar?: TaskCalendar;
@@ -46,11 +58,19 @@ const schedule = (t: {
 }) =>
   t.calendar
     ? t.calendar.version === "cron-v1"
-      ? `${calendarLabel(t.calendar)} · ${t.maxRuns} runs`
-      : "Once · " + calendarLabel(t.calendar)
+      ? taskCopy("{schedule} · {count} runs", {
+          schedule: calendarLabel(t.calendar),
+          count: t.maxRuns,
+        })
+      : taskCopy("Once · {schedule}", { schedule: calendarLabel(t.calendar) })
     : t.maxRuns === 1
-      ? `Once, after ${taskInterval(t.intervalSeconds)}`
-      : `Every ${taskInterval(t.intervalSeconds)} · ${t.maxRuns} runs`;
+      ? taskCopy("Once, after {duration}", {
+          duration: taskInterval(t.intervalSeconds),
+        })
+      : taskCopy("Every {duration} · {count} runs", {
+          duration: taskInterval(t.intervalSeconds),
+          count: t.maxRuns,
+        });
 const nextRun = (t: AgentTask) =>
   t.nextAt && t.calendar
     ? calendarLabel({ ...t.calendar, version: "once-at-v1", at: t.nextAt })
@@ -69,7 +89,8 @@ export function AgentTasks({
   setPanel: (value: string) => void;
   onDiscuss: () => void;
 }) {
-  const { t: tr } = useUI();
+  const { t: uiText } = useUI();
+  const tr = uiText;
   const { agents } = useWorkspace();
   const [editing, setEditing] = useState(false);
   const [selected, setSelected] = useState("");
@@ -104,7 +125,7 @@ export function AgentTasks({
           <button
             className="text-button"
             disabled={agents.busy || t.state !== "scheduled"}
-            aria-label={`Run now: ${t.name}`}
+            aria-label={`${uiText("Run now")}: ${t.name}`}
             onClick={async () => {
               if (await agents.change({ action: "task-run", id: t.id })) {
                 setSelected(t.id);
@@ -112,18 +133,18 @@ export function AgentTasks({
               }
             }}
           >
-            Run
+            {uiText("Run")}
           </button>
         )}
         {needsReview ? (
           <button className="text-button" onClick={reviewAI}>
-            Review
+            {uiText("Review")}
           </button>
         ) : (
           <button
             className="text-button"
             disabled={agents.busy || finished(t)}
-            aria-label={`${t.state === "paused" || t.state === "held" ? "Resume" : "Pause"}: ${t.name}`}
+            aria-label={`${uiText(t.state === "paused" || t.state === "held" ? "Resume" : "Pause")}: ${t.name}`}
             onClick={() =>
               void agents.change({
                 action:
@@ -134,12 +155,14 @@ export function AgentTasks({
               })
             }
           >
-            {t.state === "paused" || t.state === "held" ? "Resume" : "Pause"}
+            {t.state === "paused" || t.state === "held"
+              ? uiText("Resume")
+              : uiText("Pause")}
           </button>
         )}
         <button
           className="text-button"
-          aria-label={`Result: ${t.name}`}
+          aria-label={`${uiText("Result")}: ${t.name}`}
           disabled={!v.runs.some((r) => r.taskId === t.id)}
           onClick={() => {
             const r = v.runs.filter((r) => r.taskId === t.id).at(-1);
@@ -151,13 +174,13 @@ export function AgentTasks({
         {!t.calendar && !t.news && !t.botId && !t.ai && (
           <button
             className="text-button"
-            aria-label={`Reuse: ${t.name}`}
+            aria-label={`${uiText("Reuse")}: ${t.name}`}
             onClick={() => {
               setReuse(t.id);
               setEditing(false);
             }}
           >
-            Reuse
+            {uiText("Reuse")}
           </button>
         )}
       </div>
@@ -189,7 +212,9 @@ export function AgentTasks({
       >
         <header className="task-result-heading">
           <strong>
-            {inline ? "Latest result" : (task?.name ?? "Task unavailable")}
+            {inline
+              ? uiText("Latest result")
+              : (task?.name ?? uiText("Task unavailable"))}
           </strong>
           <Badge>{run.outcome}</Badge>
         </header>
@@ -197,7 +222,7 @@ export function AgentTasks({
           {date(run.at)}
         </time>
         <p className="task-result-text">
-          {answer || notice?.text || task?.text || "Saved result"}
+          {answer || notice?.text || task?.text || uiText("Saved result")}
         </p>
         {!run.wen &&
           !run.botId &&
@@ -209,25 +234,39 @@ export function AgentTasks({
               disabled={agents.busy}
               onClick={() => void discuss(run)}
             >
-              Discuss run
+              {uiText("Discuss run")}
             </button>
           )}
         <details className="task-inspection">
-          <summary>Run details</summary>
+          <summary>{uiText("Run details")}</summary>
           <p>
-            {run.strategy} · Run {run.id}
+            {run.strategy}
+            {uiText(" · Run ")}
+            {run.id}
           </p>
           {run.botId && (
             <p>
-              Quantity {run.quantity} · Fixed price {run.priceCents} · Cost{" "}
-              {run.costCents} · Budget before {run.budgetBefore}
+              {uiText("Quantity ")}
+              {run.quantity}
+              {uiText(" · Fixed price ")}
+              {run.priceCents}
+              {uiText(" · Cost")} {run.costCents}
+              {uiText(" · Budget before ")}
+              {run.budgetBefore}
             </p>
           )}
-          {run.wen && <p>Unsigned paper receipt · {run.wen.receiptSha256}</p>}
+          {run.wen && (
+            <p>
+              {uiText("Unsigned paper receipt · ")}
+              {run.wen.receiptSha256}
+            </p>
+          )}
           {run.news && (
             <p className="news-provenance">
-              News snapshot {run.news.fetchId} · {run.news.url} · retrieved{" "}
-              {date(run.news.fetchedAt)} · {run.news.bodySha256}
+              {uiText("News snapshot ")}
+              {run.news.fetchId} · {run.news.url}
+              {uiText(" · retrieved")} {date(run.news.fetchedAt)} ·{" "}
+              {run.news.bodySha256}
             </p>
           )}
         </details>
@@ -237,7 +276,7 @@ export function AgentTasks({
   return (
     <div className="tasks-screen">
       <div className="tasks-toolbar">
-        <nav className="task-views tabs" aria-label="Task views">
+        <nav className="task-views tabs" aria-label={uiText("Task views")}>
           {["automations", "history", "inbox", "playbooks", "archive"].map(
             (t) => (
               <button
@@ -256,7 +295,7 @@ export function AgentTasks({
         <div className="row-actions">
           <button
             className="text-button"
-            aria-label="Refresh"
+            aria-label={uiText("Refresh")}
             onClick={() => void agents.refresh().catch(() => {})}
           >
             <RefreshCw size={14} />
@@ -283,25 +322,25 @@ export function AgentTasks({
         >
           <div className="task-list">
             <div className="panel-heading">
-              <h2>Automations</h2>
+              <h2>{uiText("Automations")}</h2>
               <span>{tasks.length}</span>
             </div>
             {tasks.length === 0 ? (
               <div className="task-empty">
-                <h3>No tasks yet</h3>
+                <h3>{uiText("No tasks yet")}</h3>
                 <button className="secondary" onClick={() => setEditing(true)}>
-                  Create your first task
+                  {uiText("Create your first task")}
                 </button>
               </div>
             ) : (
-              <table className="task-table" aria-label="Automations">
+              <table className="task-table" aria-label={uiText("Automations")}>
                 <thead>
                   <tr>
-                    <th>Task</th>
-                    <th>Status</th>
-                    <th>Runs</th>
-                    <th>Next run</th>
-                    <th>Actions</th>
+                    <th>{uiText("Task")}</th>
+                    <th>{uiText("Status")}</th>
+                    <th>{uiText("Runs")}</th>
+                    <th>{uiText("Next run")}</th>
+                    <th>{uiText("Actions")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -355,31 +394,34 @@ export function AgentTasks({
             </aside>
           ) : (
             selectedTask && (
-              <aside className="task-detail" aria-label="Task details">
+              <aside
+                className="task-detail"
+                aria-label={uiText("Task details")}
+              >
                 <div className="panel-heading">
                   <h3>{selectedTask.name}</h3>
                   <button
                     className="text-button"
-                    aria-label="Close task details"
+                    aria-label={uiText("Close task details")}
                     onClick={() => setSelected("")}
                   >
-                    Close
+                    {uiText("Close")}
                   </button>
                 </div>
                 <div className="task-detail-body">
                   <p className="task-result-text">
-                    {selectedTask.text || "Fixed paper evaluation"}
+                    {selectedTask.text || uiText("Fixed paper evaluation")}
                   </p>
                   <dl className="task-facts">
-                    <dt>Schedule</dt>
+                    <dt>{uiText("Schedule")}</dt>
                     <dd>{schedule(selectedTask)}</dd>
-                    <dt>Next run</dt>
+                    <dt>{uiText("Next run")}</dt>
                     <dd>
                       {selectedTask.state === "scheduled"
                         ? nextRun(selectedTask)
                         : "—"}
                     </dd>
-                    <dt>Status</dt>
+                    <dt>{uiText("Status")}</dt>
                     <dd>{selectedTask.state}</dd>
                   </dl>
                   {selectedTask.state === "completed" &&
@@ -414,8 +456,10 @@ export function AgentTasks({
                         .filter((f) => f.taskId === selectedTask.id)
                         .at(-1)?.failure ||
                         (selectedTask.ai
-                          ? "Review a fresh AI plan before continuing."
-                          : "Check the selected news source, then resume.")}
+                          ? uiText("Review a fresh AI plan before continuing.")
+                          : uiText(
+                              "Check the selected news source, then resume.",
+                            ))}
                     </p>
                   )}
                   {selectedRun ? (
@@ -423,7 +467,7 @@ export function AgentTasks({
                       result(selectedRun, true)
                     ) : null
                   ) : (
-                    <p className="empty-row">No runs yet.</p>
+                    <p className="empty-row">{uiText("No runs yet.")}</p>
                   )}
                 </div>
               </aside>
@@ -434,20 +478,20 @@ export function AgentTasks({
       <div className="task-results">
         <section
           className="panel"
-          aria-label="Run results"
+          aria-label={uiText("Run results")}
           hidden={panel !== "history"}
         >
           <div className="panel-heading">
-            <h2>Results</h2>
+            <h2>{uiText("Results")}</h2>
             {resultId && (
               <button className="text-button" onClick={() => setResultId("")}>
-                All results
+                {uiText("All results")}
               </button>
             )}
           </div>
           <div className="agent-record-body">
             {v.runs.length === 0 ? (
-              <p className="empty-row">No runs yet.</p>
+              <p className="empty-row">{uiText("No runs yet.")}</p>
             ) : (
               panel === "history" &&
               v.runs
@@ -460,11 +504,11 @@ export function AgentTasks({
         </section>
         <section className="panel" hidden={panel !== "inbox"}>
           <div className="panel-heading">
-            <h2>Task inbox</h2>
+            <h2>{uiText("Task inbox")}</h2>
           </div>
           <div className="agent-record-body">
             {v.notices.length === 0 ? (
-              <p>No task notifications.</p>
+              <p>{uiText("No task notifications.")}</p>
             ) : (
               v.notices
                 .slice()
@@ -491,7 +535,9 @@ export function AgentTasks({
                             if (canView) showRun(n.runId);
                           }}
                         >
-                          {canView ? "View result" : "Result unavailable"}
+                          {canView
+                            ? uiText("View result")
+                            : uiText("Result unavailable")}
                         </button>
                         {!n.read ? (
                           <button
@@ -504,10 +550,10 @@ export function AgentTasks({
                               })
                             }
                           >
-                            Mark read
+                            {uiText("Mark read")}
                           </button>
                         ) : (
-                          <small>Read</small>
+                          <small>{uiText("Read")}</small>
                         )}
                       </div>
                     </article>
@@ -518,35 +564,35 @@ export function AgentTasks({
         </section>
       </div>
       <details className="task-inspection schedule-behavior">
-        <summary>Schedule & storage</summary>
+        <summary>{uiText("Schedule & storage")}</summary>
         <p>
-          Tasks run while Fased runs, even with the browser closed. Missed
-          intervals become one run. Resume starts a new interval. Calendar
-          reminders keep their original date; overdue reminders run once after
-          resume or restart. Run now completes a calendar reminder early; it
-          will not run again on its date. For a recurring calendar, Run now
-          consumes the upcoming occurrence.
+          {uiText(
+            "Tasks run while Fased runs, even with the browser closed. Missed intervals become one run. Resume starts a new interval. Calendar reminders keep their original date; overdue reminders run once after resume or restart. Run now completes a calendar reminder early; it will not run again on its date. For a recurring calendar, Run now consumes the upcoming occurrence.",
+          )}
         </p>
         <p>
-          Intervals: 1 minute–7 days, up to 20 runs. Calendar reminders: one
-          date within 366 days. Recurring calendars use a named time zone, an
-          end date within one year and up to 20 runs. Missing local times are
-          skipped; repeated times run once.
+          {uiText(
+            "Intervals: 1 minute–7 days, up to 20 runs. Calendar reminders: one date within 366 days. Recurring calendars use a named time zone, an end date within one year and up to 20 runs. Missing local times are skipped; repeated times run once.",
+          )}
         </p>
         {v.taskCapacity && (
           <p>
-            Workspace capacity: {v.taskCapacity.tasks}/100 tasks ·{" "}
-            {v.taskCapacity.evaluations}/200 allocated runs ·{" "}
-            {v.taskCapacity.runs}/200 results · {v.taskCapacity.notices}/200
-            notifications · {Math.ceil(v.taskCapacity.bytes / 1024)}/512 KiB.
-            Future output also reserves space. History is retained; reaching a
-            limit stops further writes. Continuous operation beyond these limits
-            is not available yet.
+            {uiText("Workspace capacity: ")}
+            {v.taskCapacity.tasks}
+            {uiText("/100 tasks ·")} {v.taskCapacity.evaluations}
+            {uiText("/200 allocated runs ·")} {v.taskCapacity.runs}
+            {uiText("/200 results · ")}
+            {v.taskCapacity.notices}
+            {uiText("/200 notifications · ")}
+            {Math.ceil(v.taskCapacity.bytes / 1024)}
+            {uiText(
+              "/512 KiB. Future output also reserves space. History is retained; reaching a limit stops further writes. Continuous operation beyond these limits is not available yet.",
+            )}
           </p>
         )}
       </details>
       <details className="scheduled-ai-disclosure" ref={advanced}>
-        <summary>Advanced AI schedules · fixtures</summary>
+        <summary>{uiText("Advanced AI schedules · fixtures")}</summary>
         <ScheduledAITasks view={v} />
       </details>
     </div>
@@ -560,7 +606,8 @@ function TaskComposer({
   view: AgentView;
   close: () => void;
 }) {
-  const { t: tr } = useUI();
+  const { t: uiText } = useUI();
+  const tr = uiText;
   const core = useCore();
   const { agents } = useWorkspace();
   const [name, setName] = useState("");
@@ -657,12 +704,12 @@ function TaskComposer({
   return (
     <aside
       className="task-composer"
-      aria-label={review ? "Review task" : "Create a task"}
+      aria-label={review ? uiText("Review task") : uiText("Create a task")}
     >
       <div className="panel-heading">
         <h3>{review ? tr("Review task") : tr("New task")}</h3>
         <button type="button" className="text-button" onClick={close}>
-          Cancel task
+          {uiText("Cancel task")}
         </button>
       </div>
       <div className="task-detail-body">
@@ -676,15 +723,15 @@ function TaskComposer({
                 : review.text}
             </p>
             <dl className="task-facts">
-              <dt>Agent</dt>
+              <dt>{uiText("Agent")}</dt>
               <dd>{v.profiles.find((p) => p.id === review.profileId)?.name}</dd>
               <dt>{tr("Schedule")}</dt>
               <dd>
                 {review.calendar?.version === "once-at-v1"
-                  ? "Once"
+                  ? uiText("Once")
                   : schedule(review)}
               </dd>
-              <dt>Starts</dt>
+              <dt>{uiText("Starts")}</dt>
               <dd>
                 {review.calendar
                   ? calendarLabel({ ...review.calendar, version: "once-at-v1" })
@@ -706,21 +753,21 @@ function TaskComposer({
                   </dd>
                 </>
               )}
-              <dt>Inputs</dt>
+              <dt>{uiText("Inputs")}</dt>
               <dd>
                 {review.news
                   ? `${v.newsSources.find((s) => s.id === review.news?.sourceId)?.name ?? "Selected source"} · fresh within ${taskInterval(review.news.maxAgeSeconds)}`
-                  : "Saved task only"}
+                  : uiText("Saved task only")}
               </dd>
             </dl>
             <p className="task-review-boundary">
               {review.bot
-                ? "Paper only · no market orders"
-                : "No AI or wallet access"}
+                ? uiText("Paper only · no market orders")
+                : uiText("No AI or wallet access")}
             </p>
             {stale && (
               <p role="alert">
-                Records changed or review expired. Review again.
+                {uiText("Records changed or review expired. Review again.")}
               </p>
             )}
             <div className="task-review-actions">
@@ -729,7 +776,7 @@ function TaskComposer({
                 disabled={busy}
                 onClick={() => edit(() => {})}
               >
-                Edit task
+                {uiText("Edit task")}
               </button>
               {stale ? (
                 <button
@@ -737,7 +784,7 @@ function TaskComposer({
                   disabled={busy}
                   onClick={() => void prepare()}
                 >
-                  Review again
+                  {uiText("Review again")}
                 </button>
               ) : (
                 <button
@@ -762,7 +809,7 @@ function TaskComposer({
               )}
             </div>
             <details className="task-inspection">
-              <summary>Review details</summary>
+              <summary>{uiText("Review details")}</summary>
               <pre>{JSON.stringify(review, null, 2)}</pre>
             </details>
           </>
@@ -792,7 +839,9 @@ function TaskComposer({
                     maxLength={4000}
                     aria-label={tr("Reminder text")}
                     value={text}
-                    placeholder="What should this task remind you to do?"
+                    placeholder={uiText(
+                      "What should this task remind you to do?",
+                    )}
                     onChange={(e) => edit(() => setText(e.target.value))}
                   />
                 </label>
@@ -823,9 +872,9 @@ function TaskComposer({
                     })
                   }
                 >
-                  <option value="once">Run once</option>
-                  <option value="repeat">Repeat</option>
-                  <option value="calendar">At a date & time</option>
+                  <option value="once">{uiText("Run once")}</option>
+                  <option value="repeat">{uiText("Repeat")}</option>
+                  <option value="calendar">{uiText("At a date & time")}</option>
                   <option value="cron">{tr("Recurring calendar")}</option>
                 </select>
               </label>
@@ -837,20 +886,20 @@ function TaskComposer({
               ) : calendarMode ? (
                 <div className="task-calendar-fields">
                   <label>
-                    Date & time
+                    {uiText("Date & time")}
                     <input
                       type="datetime-local"
                       required
-                      aria-label="Date & time"
+                      aria-label={uiText("Date & time")}
                       value={at}
                       onChange={(e) => edit(() => setAt(e.target.value))}
                     />
                   </label>
                   <label>
-                    Time zone
+                    {uiText("Time zone")}
                     <select
                       value={zone}
-                      aria-label="Time zone"
+                      aria-label={uiText("Time zone")}
                       onChange={(e) =>
                         edit(() => {
                           const next = e.target.value;
@@ -879,7 +928,7 @@ function TaskComposer({
               ) : (
                 <div className="task-timing">
                   <label>
-                    {runs === 1 ? "First run in" : "Every"}
+                    {runs === 1 ? uiText("First run in") : uiText("Every")}
                     <input
                       type="number"
                       min={60 / unit}
@@ -895,7 +944,7 @@ function TaskComposer({
                     />
                   </label>
                   <label>
-                    Unit
+                    {uiText("Unit")}
                     <select
                       value={unit}
                       onChange={(e) => {
@@ -911,18 +960,18 @@ function TaskComposer({
                         });
                       }}
                     >
-                      <option value={60}>Minutes</option>
-                      <option value={3600}>Hours</option>
-                      <option value={86400}>Days</option>
+                      <option value={60}>{uiText("Minutes")}</option>
+                      <option value={3600}>{uiText("Hours")}</option>
+                      <option value={86400}>{uiText("Days")}</option>
                     </select>
                   </label>
                 </div>
               )}
               {!calendarMode && (runs > 1 || cronMode) && (
                 <label>
-                  Maximum runs
+                  {uiText("Maximum runs")}
                   <input
-                    aria-label="Maximum evaluations"
+                    aria-label={uiText("Maximum evaluations")}
                     type="number"
                     required
                     min={cronMode ? 1 : 2}
@@ -936,17 +985,18 @@ function TaskComposer({
               )}
               {!calendarMode && !cronMode && (
                 <details className="task-inspection">
-                  <summary>Inputs & advanced timing</summary>
+                  <summary>{uiText("Inputs & advanced timing")}</summary>
                   <label>
-                    Task kind
+                    {uiText("Task kind")}
                     <select
                       value={bot}
                       onChange={(e) => edit(() => setBot(e.target.value))}
                     >
-                      <option value="">Local reminder</option>
+                      <option value="">{uiText("Local reminder")}</option>
                       {v.bots.map((b) => (
                         <option key={b.id} value={b.id}>
-                          Paper evaluation · {b.name}
+                          {uiText("Paper evaluation · ")}
+                          {b.name}
                         </option>
                       ))}
                     </select>
@@ -959,7 +1009,7 @@ function TaskComposer({
                     onAge={(value) => edit(() => setAge(value))}
                   />
                   <label>
-                    Interval in seconds
+                    {uiText("Interval in seconds")}
                     <input
                       required
                       type="number"
@@ -973,7 +1023,7 @@ function TaskComposer({
                   </label>
                   {runs === 1 && (
                     <label>
-                      Maximum evaluations
+                      {uiText("Maximum evaluations")}
                       <input
                         type="number"
                         required

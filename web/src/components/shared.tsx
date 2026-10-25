@@ -109,16 +109,20 @@ export function Dialog({
   );
 }
 export function DemoChart() {
+  const { t: uiText } = useUI();
   return (
-    <div className="chart" aria-label="Illustrative chart, not market data">
+    <div
+      className="chart"
+      aria-label={uiText("Illustrative chart, not market data")}
+    >
       <div className="chart-grid" />
       <div className="chart-label">
-        ILLUSTRATIVE DATA · NO MARKET CONNECTION
+        {uiText("ILLUSTRATIVE DATA · NO MARKET CONNECTION")}
       </div>
       <svg
         viewBox="0 0 800 210"
         role="img"
-        aria-label="Illustrative market price line"
+        aria-label={uiText("Illustrative market price line")}
         preserveAspectRatio="none"
       >
         <defs>

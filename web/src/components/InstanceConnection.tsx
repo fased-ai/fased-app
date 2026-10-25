@@ -1,3 +1,4 @@
+import { useUI } from "../ui-preferences";
 import "./instance-connection.css";
 import { useState, useId, type FormEvent } from "react";
 import { instanceOrigin } from "../connection";
@@ -5,6 +6,7 @@ import { useCore } from "../core";
 import { ArrowRight, Monitor, Server } from "../icons";
 
 export function InstanceSummary() {
+  const { t: uiText } = useUI();
   const core = useCore();
   const info = core.connection;
   if (!info) return null;
@@ -12,33 +14,33 @@ export function InstanceSummary() {
     <>
       <dl className="instance-facts">
         <div>
-          <dt>Connection</dt>
+          <dt>{uiText("Connection")}</dt>
           <dd>
             {info.location === "local" ? (
               <Monitor size={14} />
             ) : (
               <Server size={14} />
             )}{" "}
-            {info.location === "local" ? "Local" : "Remote"}{" "}
+            {info.location === "local" ? uiText("Local") : uiText("Remote")}{" "}
             <span className="dot" />
           </dd>
         </div>
         <div>
-          <dt>Address</dt>
+          <dt>{uiText("Address")}</dt>
           <dd>
             {location.hostname === "wails" ||
             location.hostname === "wails.localhost"
-              ? "Desktop connection"
+              ? uiText("Desktop connection")
               : location.origin}
           </dd>
         </div>
       </dl>
       <details className="instance-details">
-        <summary>Instance details</summary>
+        <summary>{uiText("Instance details")}</summary>
         <dl className="instance-facts">
           {" "}
           <div>
-            <dt>Instance</dt>
+            <dt>{uiText("Instance")}</dt>
             <dd className="instance-identity">{info.instanceId}</dd>
           </div>
         </dl>
@@ -47,6 +49,7 @@ export function InstanceSummary() {
   );
 }
 export function RemoteConnection({ expanded = false }: { expanded?: boolean }) {
+  const { t: uiText } = useUI();
   const inputId = useId();
   const [address, setAddress] = useState("");
   const [error, setError] = useState("");
@@ -97,13 +100,13 @@ export function RemoteConnection({ expanded = false }: { expanded?: boolean }) {
   }
   return (
     <details className="remote-connect" open={expanded || undefined}>
-      <summary>Connect to Remote</summary>
+      <summary>{uiText("Connect to Remote")}</summary>
       <form onSubmit={submit}>
-        <label htmlFor={inputId}>Instance URL</label>
+        <label htmlFor={inputId}>{uiText("Instance URL")}</label>
         <input
           id={inputId}
           type="url"
-          placeholder="https://your-instance.ts.net"
+          placeholder={uiText("https://your-instance.ts.net")}
           autoComplete="url"
           value={address}
           onChange={(e) => {
@@ -114,14 +117,14 @@ export function RemoteConnection({ expanded = false }: { expanded?: boolean }) {
           maxLength={2048}
         />
         <button className="primary" disabled={busy}>
-          {busy ? "Checking…" : "Connect"}
+          {busy ? uiText("Checking…") : uiText("Connect")}
           <ArrowRight size={14} />
         </button>
         {error && <p role="alert">{error}</p>}
         {opened && (
           <p role="status">
             <a href={destination} target="_blank" rel="noopener noreferrer">
-              Continue to this instance
+              {uiText("Continue to this instance")}
             </a>
           </p>
         )}

@@ -1,3 +1,4 @@
+import { useUI } from "../ui-preferences";
 import { useEffect, useRef, useState } from "react";
 import type { AgentView, TaskReminderReview } from "../agents";
 import { useCore } from "../core";
@@ -12,6 +13,7 @@ export function SavedReminderDraft({
   sourceID: string;
   close: () => void;
 }) {
+  const { t: uiText } = useUI();
   const core = useCore();
   const { agents } = useWorkspace();
   const [draft, setDraft] = useState<TaskReminderReview>();
@@ -84,14 +86,14 @@ export function SavedReminderDraft({
     pendingReview.current = false;
   }
   return (
-    <section className="panel" aria-label="Reuse reminder">
+    <section className="panel" aria-label={uiText("Reuse reminder")}>
       <div className="agent-record-body">
-        <h3>Reuse reminder</h3>
-        {loading && <p role="status">Loading saved reminder…</p>}
+        <h3>{uiText("Reuse reminder")}</h3>
+        {loading && <p role="status">{uiText("Loading saved reminder…")}</p>}
         {error && <p role="alert">{error}</p>}
         {stale && (
           <p role="alert">
-            Records changed. Reload the reminder to review again.
+            {uiText("Records changed. Reload the reminder to review again.")}
           </p>
         )}
         <button
@@ -99,12 +101,12 @@ export function SavedReminderDraft({
           disabled={agents.busy || loading}
           onClick={() => setReload((v) => v + 1)}
         >
-          Reload reminder
+          {uiText("Reload reminder")}
         </button>
         {draft && (
           <>
             <details>
-              <summary>Saved reminder source</summary>
+              <summary>{uiText("Saved reminder source")}</summary>
               <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
                 {JSON.stringify(
                   { source: draft.source, sha256: draft.sourceSha256 },
@@ -128,7 +130,7 @@ export function SavedReminderDraft({
             >
               <fieldset disabled={blocked} style={{ minWidth: 0 }}>
                 <label>
-                  Reminder name
+                  {uiText("Reminder name")}
                   <input
                     required
                     maxLength={80}
@@ -137,7 +139,7 @@ export function SavedReminderDraft({
                   />
                 </label>
                 <label>
-                  Reminder text
+                  {uiText("Reminder text")}
                   <textarea
                     required
                     maxLength={4000}
@@ -147,7 +149,7 @@ export function SavedReminderDraft({
                 </label>
                 <div className="agent-grid">
                   <label>
-                    Interval in seconds
+                    {uiText("Interval in seconds")}
                     <input
                       type="number"
                       min={60}
@@ -160,7 +162,7 @@ export function SavedReminderDraft({
                     />
                   </label>
                   <label>
-                    Maximum evaluations
+                    {uiText("Maximum evaluations")}
                     <input
                       type="number"
                       min={1}
@@ -173,19 +175,23 @@ export function SavedReminderDraft({
                     />
                   </label>
                 </div>
-                <button className="secondary">Review new reminder</button>
+                <button className="secondary">
+                  {uiText("Review new reminder")}
+                </button>
               </fieldset>
             </form>
             {matching && review && (
-              <div aria-label="New reminder review">
+              <div aria-label={uiText("New reminder review")}>
                 <h4>{review.name}</h4>
                 <p>{review.text}</p>
                 <p>
-                  Every {review.intervalSeconds}s · up to {review.maxRuns}{" "}
-                  evaluations
+                  {uiText("Every ")}
+                  {review.intervalSeconds}
+                  {uiText("s · up to ")}
+                  {review.maxRuns} {uiText("evaluations")}
                 </p>
                 <p>
-                  Review expires{" "}
+                  {uiText("Review expires")}{" "}
                   {new Date(review.expiresAt * 1000).toLocaleString()}
                 </p>
                 <button
@@ -204,14 +210,14 @@ export function SavedReminderDraft({
                       close();
                   }}
                 >
-                  Create reviewed reminder
+                  {uiText("Create reviewed reminder")}
                 </button>
               </div>
             )}
           </>
         )}
         <button className="text-button" onClick={close}>
-          Discard reminder draft
+          {uiText("Discard reminder draft")}
         </button>
       </div>
     </section>

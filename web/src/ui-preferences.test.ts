@@ -2,6 +2,18 @@ import { describe, expect, it } from "vitest";
 import { parsePreferences, defaultPreferences } from "./ui-preferences";
 import { copyKeys, languages, resolveLanguage, translate } from "./ui-language";
 describe("UI preferences", () => {
+  it("translates reachable setup and agent controls while preserving owner content", () => {
+    expect(translate("ru", "Refresh records")).toBe("Обновить записи");
+    expect(translate("es", "Connection settings")).toBe("Ajustes de conexión");
+    expect(translate("zh", "Updates and recovery")).toBe("更新与恢复");
+    expect(translate("ko", "No expiry")).toBe("만료 없음");
+    expect(translate("ru", "Owner fact: 250 SOL")).toBe("Owner fact: 250 SOL");
+    expect(translate("es", " Open Chat ")).toBe(" Abrir Chat ");
+    expect(
+      translate("zh", "Once · {schedule}", { schedule: "09:00 UTC" }),
+    ).toBe("单次 · 09:00 UTC");
+    expect(translate("ko", "Daily at {time}")).toBe("매일 {time}");
+  });
   it("refuses corrupt or unsupported browser values without touching application state", () => {
     for (const value of [
       null,

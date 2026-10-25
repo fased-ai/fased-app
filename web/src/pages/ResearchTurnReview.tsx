@@ -1,3 +1,4 @@
+import { useUI } from "../ui-preferences";
 import { useEffect, useRef, useState } from "react";
 import type { AgentAIRequest, ResearchAIReview } from "../agents";
 import { useCore } from "../core";
@@ -13,6 +14,7 @@ export function ResearchTurnReview({
   fixtureAvailable: boolean;
   onChanged: () => Promise<void>;
 }) {
+  const { t: uiText } = useUI();
   const core = useCore();
   const [result, setResult] = useState<ResearchAIReview>();
   const [error, setError] = useState("");
@@ -148,13 +150,13 @@ export function ResearchTurnReview({
     }
   }
   return (
-    <section aria-label="Research turn">
+    <section aria-label={uiText("Research turn")}>
       <button
         className="secondary"
         disabled={busy}
         onClick={() => void inspect()}
       >
-        Inspect research turn
+        {uiText("Inspect research turn")}
       </button>
       {busy && (
         <button
@@ -165,12 +167,12 @@ export function ResearchTurnReview({
             setBusy(false);
           }}
         >
-          Cancel turn inspection
+          {uiText("Cancel turn inspection")}
         </button>
       )}
       {error && <p role="alert">{error}</p>}
       {result && (
-        <div role="region" aria-label="Research turn record">
+        <div role="region" aria-label={uiText("Research turn record")}>
           <p role="status">
             {result.turn.state} · {result.sourceState}
           </p>
@@ -185,7 +187,7 @@ export function ResearchTurnReview({
               }
               onClick={() => void changeTurn(true)}
             >
-              Prepare next research request
+              {uiText("Prepare next research request")}
             </button>
           )}
           {version === 2 &&
@@ -203,7 +205,7 @@ export function ResearchTurnReview({
                 disabled={busy || result.revision !== revision}
                 onClick={() => void changeTurn(false)}
               >
-                Cancel research turn
+                {uiText("Cancel research turn")}
               </button>
             )}
           {request.state === "prepared" &&
@@ -222,8 +224,12 @@ export function ResearchTurnReview({
                     onChange={(e) => setConsent(e.target.checked)}
                   />
                   {version === 2
-                    ? "I reviewed this wire and its allowed local reads and consent to one fixture request"
-                    : "I reviewed this research wire and consent to one fixture request"}
+                    ? uiText(
+                        "I reviewed this wire and its allowed local reads and consent to one fixture request",
+                      )
+                    : uiText(
+                        "I reviewed this research wire and consent to one fixture request",
+                      )}
                 </label>
                 <button
                   className="primary"
@@ -236,7 +242,7 @@ export function ResearchTurnReview({
                   }
                   onClick={() => void startFixture()}
                 >
-                  Run research fixture
+                  {uiText("Run research fixture")}
                 </button>
               </>
             )}

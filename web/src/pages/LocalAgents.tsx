@@ -20,9 +20,14 @@ import { AgentTasks } from "./AgentTasks";
 import { AgentAIReview } from "./AgentAIReview";
 
 const date = (at: number) =>
-  at ? new Date(at * 1000).toLocaleString() : "No expiry";
+  at
+    ? new Date(at * 1000).toLocaleString(
+        typeof document === "undefined" ? "en" : document.documentElement.lang,
+      )
+    : "No expiry";
 export function LocalAgents() {
-  const { t } = useUI();
+  const { t: uiText } = useUI();
+  const t = uiText;
   const { agents, setProfileOpen, tab, navigate } = useWorkspace();
   const [taskPanel, setTaskPanel] = useState("automations");
   return (
@@ -30,7 +35,7 @@ export function LocalAgents() {
       <SectionHead
         title={
           agents.view?.profiles.find((p) => p.id === agents.view?.profileId)
-            ?.name ?? "Agents"
+            ?.name ?? uiText("Agents")
         }
         action={
           <div className="agent-header-actions">
@@ -70,15 +75,20 @@ export function LocalAgents() {
             {tab === "settings" && (
               <button
                 className="icon-button"
-                aria-label="Bots"
-                data-tooltip="Bots"
+                aria-label={uiText("Bots")}
+                data-tooltip={uiText("Bots")}
                 onClick={() => navigate("agents/bots")}
               >
                 <Bot size={17} />
               </button>
             )}
-            <button className="secondary" onClick={() => setProfileOpen(true)}>
-              <Plus size={16} /> {t("New profile")}
+            <button
+              className="icon-button"
+              aria-label={t("New profile")}
+              data-tooltip={t("New profile")}
+              onClick={() => setProfileOpen(true)}
+            >
+              <Plus size={17} aria-hidden="true" />
             </button>
           </div>
         }
@@ -90,12 +100,12 @@ export function LocalAgents() {
             className="text-button"
             onClick={() => void agents.refresh().catch(() => {})}
           >
-            Refresh records
+            {uiText("Refresh records")}
           </button>
         </p>
       )}
       {!agents.view ? (
-        <p role="status">Loading local agent records…</p>
+        <p role="status">{uiText("Loading local agent records…")}</p>
       ) : (
         <>
           <LocalAgentEditor
@@ -118,8 +128,9 @@ function LocalAgentEditor({
   taskPanel: string;
   setTaskPanel: (value: string) => void;
 }) {
+  const { t: uiText } = useUI();
   const { agents, tab, navigate } = useWorkspace();
-  const { t } = useUI();
+  const t = uiText;
   const core = useCore();
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [archiveSearch, setArchiveSearch] = useState("");
@@ -296,16 +307,19 @@ function LocalAgentEditor({
       {tab === "chat" && (
         <section
           className={`panel agent-chat ${activeSession ? "has-conversation" : ""} ${railOpen ? "rail-open" : ""}`}
-          aria-label="Agent chat workspace"
+          aria-label={uiText("Agent chat workspace")}
         >
           <button
             className="text-button mobile-conversation-button"
             aria-expanded={railOpen}
             onClick={() => setRailOpen(!railOpen)}
           >
-            Conversations
+            {uiText("Conversations")}
           </button>
-          <aside className="conversation-rail" aria-label="Conversations">
+          <aside
+            className="conversation-rail"
+            aria-label={uiText("Conversations")}
+          >
             <div className="rail-heading">
               <h2>{t("Conversations")}</h2>
               <button
@@ -386,7 +400,9 @@ function LocalAgentEditor({
                   {s.name}
                 </button>
               ))}
-              {matching.length === 0 && <p>No matching conversations.</p>}
+              {matching.length === 0 && (
+                <p>{uiText("No matching conversations.")}</p>
+              )}
             </div>
           </aside>
           <div
@@ -461,7 +477,10 @@ function LocalAgentEditor({
                   />
                 </div>
                 {researchOpen && core.mode === "ready" && (
-                  <aside className="chat-review" aria-label="Source inspector">
+                  <aside
+                    className="chat-review"
+                    aria-label={uiText("Source inspector")}
+                  >
                     <ResearchReadPanel
                       key={`research:${v.profileId}:${activeSession.id}`}
                       view={v}
@@ -479,8 +498,8 @@ function LocalAgentEditor({
               <div className="chat-empty">
                 <h3>
                   {search
-                    ? "No matching conversations"
-                    : "Start a conversation"}
+                    ? uiText("No matching conversations")
+                    : uiText("Start a conversation")}
                 </h3>
                 <button
                   className="primary"
@@ -509,10 +528,10 @@ function LocalAgentEditor({
       )}
       {tab === "settings" && (
         <div className="agent-settings-workspace">
-          <section className="panel" aria-label="Profile settings">
+          <section className="panel" aria-label={uiText("Profile settings")}>
             <div className="panel-heading">
-              <h2>Profile settings</h2>
-              <Badge>NO AUTHORITY</Badge>
+              <h2>{uiText("Profile settings")}</h2>
+              <Badge>{uiText("NO AUTHORITY")}</Badge>
             </div>
             <form
               className="agent-record-body"
@@ -531,7 +550,7 @@ function LocalAgentEditor({
               })}
             >
               <label>
-                Profile name
+                {uiText("Profile name")}
                 <input
                   disabled={agents.busy}
                   required
@@ -541,7 +560,7 @@ function LocalAgentEditor({
                 />
               </label>
               <label>
-                Persona
+                {uiText("Persona")}
                 <textarea
                   disabled={agents.busy}
                   maxLength={4000}
@@ -550,9 +569,9 @@ function LocalAgentEditor({
                 />
               </label>
               <details className="profile-defaults">
-                <summary>Profile defaults</summary>
+                <summary>{uiText("Profile defaults")}</summary>
                 <label>
-                  Provider preference
+                  {uiText("Provider preference")}
                   <select
                     disabled={agents.busy}
                     value={provider}
@@ -566,7 +585,7 @@ function LocalAgentEditor({
                   </select>
                 </label>
                 <label>
-                  Model preference
+                  {uiText("Model preference")}
                   <input
                     disabled={agents.busy}
                     maxLength={120}
@@ -574,17 +593,19 @@ function LocalAgentEditor({
                     onChange={(e) => setModel(e.target.value)}
                   />
                 </label>
-                <p className="subtle">Preferences do not connect a provider.</p>
+                <p className="subtle">
+                  {uiText("Preferences do not connect a provider.")}
+                </p>
               </details>
               <button className="primary" disabled={agents.busy}>
-                Save profile
+                {uiText("Save profile")}
               </button>
               <button
                 type="button"
                 className="text-button"
                 onClick={reloadProfile}
               >
-                Reload profile fields
+                {uiText("Reload profile fields")}
               </button>
             </form>
           </section>
@@ -594,7 +615,7 @@ function LocalAgentEditor({
       {tab === "memory" && (
         <section className="panel">
           <div className="panel-heading">
-            <h2>Memory</h2>
+            <h2>{uiText("Memory")}</h2>
             <button
               className="secondary"
               onClick={() => {
@@ -604,7 +625,7 @@ function LocalAgentEditor({
             >
               {t("New memory")}
             </button>
-            <Badge>PROFILE ONLY</Badge>
+            <Badge>{uiText("PROFILE ONLY")}</Badge>
           </div>
           <div className="agent-record-body memory-workspace">
             <div className="memory-library">
@@ -650,7 +671,7 @@ function LocalAgentEditor({
                 onClose={resetMemory}
               >
                 <form
-                  aria-label="Memory editor"
+                  aria-label={uiText("Memory editor")}
                   className="memory-editor"
                   onSubmit={submit(async () => {
                     if (
@@ -671,34 +692,41 @@ function LocalAgentEditor({
                   })}
                 >
                   {memoryRestore && (
-                    <section aria-label="Memory restoration review">
-                      <article aria-label="Current memory revision">
-                        <h4>Current</h4>
+                    <section aria-label={uiText("Memory restoration review")}>
+                      <article aria-label={uiText("Current memory revision")}>
+                        <h4>{uiText("Current")}</h4>
                         <p>{memoryRestore.current.text}</p>
                         <small>
-                          {memoryRestore.current.source} · Updated{" "}
-                          {date(memoryRestore.current.at)} · Expiry{" "}
+                          {memoryRestore.current.source}
+                          {uiText(" · Updated")}{" "}
+                          {date(memoryRestore.current.at)}
+                          {uiText(" · Expiry")}{" "}
                           {date(memoryRestore.current.expiresAt)}
                         </small>
                       </article>
-                      <article aria-label="Selected memory revision">
+                      <article aria-label={uiText("Selected memory revision")}>
                         <h4>
-                          Selected revision {memoryRestore.historyIndex + 1}
+                          {uiText("Selected revision ")}
+                          {memoryRestore.historyIndex + 1}
                         </h4>
                         <p>{memoryRestore.selected.text}</p>
                         <small>
-                          {memoryRestore.selected.source} · Updated{" "}
-                          {date(memoryRestore.selected.at)} · Expiry{" "}
+                          {memoryRestore.selected.source}
+                          {uiText(" · Updated")}{" "}
+                          {date(memoryRestore.selected.at)}
+                          {uiText(" · Expiry")}{" "}
                           {date(memoryRestore.selected.expiresAt)}
                         </small>
                       </article>
                       {memoryRestore.selected.expiresAt > 0 &&
                         memoryRestore.selected.expiresAt <=
                           Date.now() / 1000 && (
-                          <p role="status">Expired revision</p>
+                          <p role="status">{uiText("Expired revision")}</p>
                         )}
-                      <section aria-label="Restoration source evidence">
-                        <h4>Recorded source</h4>
+                      <section
+                        aria-label={uiText("Restoration source evidence")}
+                      >
+                        <h4>{uiText("Recorded source")}</h4>
                         <p>
                           {
                             memoryEvidenceStatuses[
@@ -712,7 +740,9 @@ function LocalAgentEditor({
                       </section>
                       {memoryRestore.revision !== v.revision && (
                         <p role="status">
-                          Workspace changed. Review the restoration again.
+                          {uiText(
+                            "Workspace changed. Review the restoration again.",
+                          )}
                         </p>
                       )}
                     </section>
@@ -730,16 +760,18 @@ function LocalAgentEditor({
                   <details className="task-inspection">
                     <summary>{t("Source & expiry")}</summary>
                     <label>
-                      Evidence or source
+                      {uiText("Evidence or source")}
                       <input
                         maxLength={300}
                         value={source}
                         onChange={(e) => setSource(e.target.value)}
-                        placeholder="e.g. Owner preference, reviewed today"
+                        placeholder={uiText(
+                          "e.g. Owner preference, reviewed today",
+                        )}
                       />
                     </label>
                     <label>
-                      Expiry (optional)
+                      {uiText("Expiry (optional)")}
                       <input
                         type="datetime-local"
                         step="1"
@@ -773,10 +805,10 @@ function LocalAgentEditor({
                       onClick={resetMemory}
                     >
                       {memoryRestore
-                        ? "Cancel restoration"
+                        ? uiText("Cancel restoration")
                         : memoryID
-                          ? "Cancel correction"
-                          : "Cancel memory edit"}
+                          ? uiText("Cancel correction")
+                          : uiText("Cancel memory edit")}
                     </button>
                   </div>
                 </form>
@@ -788,15 +820,15 @@ function LocalAgentEditor({
       {tab === "bots" && (
         <section className="panel paper-strategies">
           <div className="panel-heading">
-            <h2>Paper strategies</h2>
-            <Badge>FIXED EXAMPLE INPUTS</Badge>
+            <h2>{uiText("Paper strategies")}</h2>
+            <Badge>{uiText("FIXED EXAMPLE INPUTS")}</Badge>
           </div>
           <div className="agent-split paper-workspace">
             <div className="agent-record-body paper-library">
               <p>
-                No exchange, wallet, live price or return calculation is
-                connected. These examples exercise budgets and restart handling
-                using integer fixture units.
+                {uiText(
+                  "No exchange, wallet, live price or return calculation is connected. These examples exercise budgets and restart handling using integer fixture units.",
+                )}
               </p>
               {v.bots.map((b) => (
                 <article
@@ -806,21 +838,24 @@ function LocalAgentEditor({
                 >
                   <strong>{b.name}</strong>
                   <p>
-                    {b.strategy} · Quantity {b.quantity} × fixed price{" "}
-                    {b.priceCents} · Used {b.spentCents} / {b.budgetCents}{" "}
-                    fixture units
+                    {b.strategy}
+                    {uiText(" · Quantity ")}
+                    {b.quantity}
+                    {uiText(" × fixed price")} {b.priceCents}
+                    {uiText(" · Used ")}
+                    {b.spentCents} / {b.budgetCents} {uiText("fixture units")}
                   </p>
                 </article>
               ))}
               {!v.bots.length && (
-                <p className="subtle">No paper strategies saved.</p>
+                <p className="subtle">{uiText("No paper strategies saved.")}</p>
               )}
             </div>
             <aside
               className="agent-record-body paper-composer"
-              aria-label="Create paper strategy"
+              aria-label={uiText("Create paper strategy")}
             >
-              <h3>New paper strategy</h3>
+              <h3>{uiText("New paper strategy")}</h3>
               <form
                 onSubmit={submit(async () => {
                   if (
@@ -836,7 +871,7 @@ function LocalAgentEditor({
                 })}
               >
                 <label>
-                  Paper bot name
+                  {uiText("Paper bot name")}
                   <input
                     required
                     maxLength={80}
@@ -846,7 +881,7 @@ function LocalAgentEditor({
                 </label>
                 <div className="agent-grid">
                   <label>
-                    Example quantity
+                    {uiText("Example quantity")}
                     <input
                       type="number"
                       min={1}
@@ -857,7 +892,7 @@ function LocalAgentEditor({
                     />
                   </label>
                   <label>
-                    Fixed example price
+                    {uiText("Fixed example price")}
                     <input
                       type="number"
                       min={1}
@@ -868,7 +903,7 @@ function LocalAgentEditor({
                     />
                   </label>
                   <label>
-                    Total fixture budget
+                    {uiText("Total fixture budget")}
                     <input
                       type="number"
                       min={1}
@@ -880,7 +915,7 @@ function LocalAgentEditor({
                   </label>
                 </div>
                 <button className="primary" disabled={agents.busy}>
-                  Create paper bot
+                  {uiText("Create paper bot")}
                 </button>
               </form>{" "}
             </aside>

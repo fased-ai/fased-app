@@ -306,7 +306,12 @@ export function TaskHistory({
             </dl>
             {(entry.entry.runs ?? []).map((run) => (
               <p key={run.id}>
-                {new Date(run.at * 1000).toLocaleString()} · {run.outcome}
+                {new Date(run.at * 1000).toLocaleString(
+                  typeof document === "undefined"
+                    ? "en"
+                    : document.documentElement.lang,
+                )}{" "}
+                · {run.outcome}
               </p>
             ))}
             <details className="task-inspection">

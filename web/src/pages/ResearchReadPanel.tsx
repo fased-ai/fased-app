@@ -1,3 +1,4 @@
+import { useUI } from "../ui-preferences";
 import { useEffect, useRef, useState } from "react";
 import type { AgentView } from "../agents";
 import { useCore } from "../core";
@@ -90,6 +91,7 @@ export function ResearchReadPanel({
   onClose: () => void;
   onUseAI?: (selection: ResearchSelection) => void;
 }) {
+  const { t: uiText } = useUI();
   const core = useCore();
   const [library, setLibrary] = useState<Library | null>(null);
   const [messages, setMessages] = useState<string[]>([]),
@@ -248,11 +250,11 @@ export function ResearchReadPanel({
   return (
     <section
       className="wen-chat-revision wen-research-inspection"
-      aria-label="Research inspection"
+      aria-label={uiText("Research inspection")}
     >
-      <h4>Research inspection</h4>
+      <h4>{uiText("Research inspection")}</h4>
       <fieldset disabled={!library}>
-        <legend>Saved messages</legend>
+        <legend>{uiText("Saved messages")}</legend>
         {view.messages
           .filter((m) => m.sessionId === sessionId && m.role === "user")
           .map((m) => (
@@ -270,7 +272,7 @@ export function ResearchReadPanel({
           ))}
       </fieldset>
       <fieldset disabled={!library}>
-        <legend>Saved strategies</legend>
+        <legend>{uiText("Saved strategies")}</legend>
         {library?.versions.map((v) => (
           <label key={v.digest}>
             <input
@@ -287,9 +289,9 @@ export function ResearchReadPanel({
         ))}
       </fieldset>
       <label>
-        Imported history
+        {uiText("Imported history")}
         <select
-          aria-label="Imported history"
+          aria-label={uiText("Imported history")}
           value={history}
           onChange={(e) => {
             invalidate();
@@ -297,7 +299,7 @@ export function ResearchReadPanel({
             setFilter("");
           }}
         >
-          <option value="">None</option>
+          <option value="">{uiText("None")}</option>
           {library?.bundles.map((b, i) => (
             <option key={i} value={i}>
               {i + 1}: {b.scope.dataset} · unverified
@@ -307,16 +309,16 @@ export function ResearchReadPanel({
       </label>
       {history !== "" && (
         <label>
-          History strategy
+          {uiText("History strategy")}
           <select
-            aria-label="History strategy"
+            aria-label={uiText("History strategy")}
             value={filter}
             onChange={(e) => {
               invalidate();
               setFilter(e.target.value);
             }}
           >
-            <option value="">All declared entries</option>
+            <option value="">{uiText("All declared entries")}</option>
             {library?.versions
               .filter((v) => versions.includes(v.digest))
               .map((v) => (
@@ -329,11 +331,11 @@ export function ResearchReadPanel({
       )}
       <div className="wen-research-actions">
         <button disabled={!library || busy} onClick={() => void inspect()}>
-          Inspect selected records
+          {uiText("Inspect selected records")}
         </button>
         {busy && (
           <button className="secondary" onClick={invalidate}>
-            Cancel inspection
+            {uiText("Cancel inspection")}
           </button>
         )}
         <button
@@ -343,23 +345,25 @@ export function ResearchReadPanel({
             onClose();
           }}
         >
-          Close inspection
+          {uiText("Close inspection")}
         </button>
       </div>
-      {busy && <p role="status">Reading selected records…</p>}
+      {busy && <p role="status">{uiText("Reading selected records…")}</p>}
       {error && <p role="alert">{error}</p>}
       {result && (
-        <div role="region" aria-label="Research results">
+        <div role="region" aria-label={uiText("Research results")}>
           {result.status === "complete" && selection && onUseAI && (
             <button className="secondary" onClick={() => onUseAI(selection)}>
-              Review research with AI
+              {uiText("Review research with AI")}
             </button>
           )}
           <p role="status">
             {result.status} · {result.usage.completed}/{result.usage.attempted}{" "}
-            completed
+            {uiText("completed")}
           </p>
-          <pre aria-label="Response SHA-256">{result.resultSHA256}</pre>
+          <pre aria-label={uiText("Response SHA-256")}>
+            {result.resultSHA256}
+          </pre>
           {result.results.map((r) => (
             <details key={r.id} open>
               <summary>
@@ -370,7 +374,7 @@ export function ResearchReadPanel({
             </details>
           ))}
           <details>
-            <summary>Source evidence</summary>
+            <summary>{uiText("Source evidence")}</summary>
             <pre>{JSON.stringify(result.sources, null, 2)}</pre>
           </details>
         </div>

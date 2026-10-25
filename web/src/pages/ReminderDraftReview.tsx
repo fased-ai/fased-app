@@ -1,3 +1,4 @@
+import { useUI } from "../ui-preferences";
 import { useEffect, useState } from "react";
 import type { AgentView, AgentAIRequest, ReminderReview } from "../agents";
 import { useWorkspace } from "../workspace";
@@ -9,6 +10,7 @@ export function ReminderDraftReview({
   view: AgentView;
   card: AgentAIRequest["cards"][number];
 }) {
+  const { t: uiText } = useUI();
   const { agents, navigate } = useWorkspace();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(card.title);
@@ -24,13 +26,16 @@ export function ReminderDraftReview({
   if (created)
     return (
       <div className="agent-inline">
-        <p role="status">Reminder task created: {created.name}.</p>
+        <p role="status">
+          {uiText("Reminder task created: ")}
+          {created.name}.
+        </p>
         <button
           type="button"
           className="secondary"
           onClick={() => navigate("agents/tasks")}
         >
-          Open Tasks
+          {uiText("Open Tasks")}
         </button>
       </div>
     );
@@ -41,7 +46,7 @@ export function ReminderDraftReview({
         disabled={agents.busy}
         onClick={() => setOpen(true)}
       >
-        Review reminder task
+        {uiText("Review reminder task")}
       </button>
     );
   const clear = () => {
@@ -54,11 +59,11 @@ export function ReminderDraftReview({
     review.expiresAt > Date.now() / 1000;
   return (
     <section aria-label={`Reminder task review: ${card.title}`}>
-      <h4>Review a local reminder</h4>
+      <h4>{uiText("Review a local reminder")}</h4>
       <p>
-        Edit this draft, review the exact schedule, then explicitly create the
-        task. It only writes a reminder to your inbox; it cannot call AI, fetch
-        news or trade.
+        {uiText(
+          "Edit this draft, review the exact schedule, then explicitly create the task. It only writes a reminder to your inbox; it cannot call AI, fetch news or trade.",
+        )}
       </p>
       <form
         className="agent-form"
@@ -76,7 +81,7 @@ export function ReminderDraftReview({
         }}
       >
         <label>
-          Reminder task name
+          {uiText("Reminder task name")}
           <input
             required
             maxLength={80}
@@ -88,9 +93,9 @@ export function ReminderDraftReview({
           />
         </label>
         <label>
-          Reminder text
+          {uiText("Reminder text")}
           <textarea
-            aria-label="Reminder text"
+            aria-label={uiText("Reminder text")}
             required
             maxLength={4000}
             value={text}
@@ -101,7 +106,7 @@ export function ReminderDraftReview({
           />
         </label>
         <label>
-          Repeat every (seconds)
+          {uiText("Repeat every (seconds)")}
           <input
             type="number"
             required
@@ -116,7 +121,7 @@ export function ReminderDraftReview({
           />
         </label>
         <label>
-          Maximum reminder runs
+          {uiText("Maximum reminder runs")}
           <input
             type="number"
             required
@@ -131,7 +136,7 @@ export function ReminderDraftReview({
           />
         </label>
         <button className="secondary" disabled={agents.busy}>
-          Review reminder schedule
+          {uiText("Review reminder schedule")}
         </button>
       </form>
       {review && (
@@ -139,31 +144,44 @@ export function ReminderDraftReview({
           <strong>{review.name}</strong>
           <p>{review.text}</p>
           <p>
-            First reminder {review.intervalSeconds} seconds after creation;
-            repeat at that interval for at most {review.maxRuns} runs while the
-            core runs. Missed intervals coalesce.
+            {uiText("First reminder ")}
+            {review.intervalSeconds}
+            {uiText(
+              " seconds after creation; repeat at that interval for at most ",
+            )}
+            {review.maxRuns}
+            {uiText(" runs while the core runs. Missed intervals coalesce.")}
           </p>
           <p>
-            Review expires {new Date(review.expiresAt * 1000).toLocaleString()}.
-            No task has been created.
+            {uiText("Review expires ")}
+            {new Date(review.expiresAt * 1000).toLocaleString()}
+            {uiText(". No task has been created.")}
           </p>
           <details>
-            <summary>Reminder source and review evidence</summary>
+            <summary>{uiText("Reminder source and review evidence")}</summary>
             <p>
-              Chat request: <code>{review.requestId}</code>
+              {uiText("Chat request: ")}
+              <code>{review.requestId}</code>
             </p>
             <p>
-              Conversation: <code>{review.sessionId}</code>
+              {uiText("Conversation: ")}
+              <code>{review.sessionId}</code>
             </p>
-            <p>Source draft: {review.sourceTitle}</p>
+            <p>
+              {uiText("Source draft: ")}
+              {review.sourceTitle}
+            </p>
             <p>{review.sourceText}</p>
             <p>
-              Review SHA-256: <code>{review.digest}</code>
+              {uiText("Review SHA-256: ")}
+              <code>{review.digest}</code>
             </p>
           </details>
           {!valid && (
             <p role="status">
-              Workspace changed or review expired. Review the schedule again.
+              {uiText(
+                "Workspace changed or review expired. Review the schedule again.",
+              )}
             </p>
           )}
           <label className="check-label">
@@ -175,7 +193,7 @@ export function ReminderDraftReview({
                 setConsent(e.target.checked ? review.digest : "")
               }
             />
-            I reviewed this reminder text and schedule
+            {uiText("I reviewed this reminder text and schedule")}
           </label>
           <button
             className="primary"
@@ -194,7 +212,7 @@ export function ReminderDraftReview({
               })
             }
           >
-            Create reviewed reminder
+            {uiText("Create reviewed reminder")}
           </button>
         </div>
       )}
@@ -206,7 +224,7 @@ export function ReminderDraftReview({
           setOpen(false);
         }}
       >
-        Cancel reminder review
+        {uiText("Cancel reminder review")}
       </button>
     </section>
   );

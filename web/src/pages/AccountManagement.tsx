@@ -1,3 +1,4 @@
+import { useUI } from "../ui-preferences";
 import { useEffect, useState, type FormEvent } from "react";
 import { useCore } from "../core";
 import { Badge, SectionHead } from "../components/shared";
@@ -12,6 +13,7 @@ import {
 import "../accounts.css";
 
 export function AccountManagement() {
+  const { t: uiText } = useUI();
   const core = useCore();
   const [view, setView] = useState<AccountsView | null>(null);
   const [error, setError] = useState("");
@@ -204,14 +206,14 @@ export function AccountManagement() {
   return (
     <div className="wallet-workspace">
       <SectionHead
-        title="Wallets"
+        title={uiText("Wallets")}
         action={
           <button
             className="secondary"
             disabled={busy}
             onClick={() => void refresh()}
           >
-            Refresh accounts and approvals
+            {uiText("Refresh accounts and approvals")}
           </button>
         }
       />
@@ -227,25 +229,31 @@ export function AccountManagement() {
       )}
       <div className="info-banner account-safety">
         <div>
-          <strong>Disposable public references only</strong>
+          <strong>{uiText("Disposable public references only")}</strong>
           <span>
-            No balances, on-chain reads or signing. Keys and owner approvals
-            stay outside this UI.
+            {uiText(
+              "No balances, on-chain reads or signing. Keys and owner approvals stay outside this UI.",
+            )}
           </span>
         </div>
-        <Badge>REAL WALLETS DISABLED</Badge>
+        <Badge>{uiText("REAL WALLETS DISABLED")}</Badge>
       </div>
       {!view ? (
-        <p role="status">Loading public accounts…</p>
+        <p role="status">{uiText("Loading public accounts…")}</p>
       ) : (
         <>
           <div className="account-columns">
             <section className="panel account-panel">
               <div className="panel-heading">
-                <h2>Public account records</h2>
-                <Badge>REVISION {view.record.revision}</Badge>
+                <h2>{uiText("Public account records")}</h2>
+                <Badge>
+                  {uiText("REVISION ")}
+                  {view.record.revision}
+                </Badge>
               </div>
-              {!view.record.accounts.length && <p>No accounts recorded.</p>}
+              {!view.record.accounts.length && (
+                <p>{uiText("No accounts recorded.")}</p>
+              )}
               {view.record.accounts.map((a) => (
                 <article
                   className="account-entry"
@@ -255,7 +263,9 @@ export function AccountManagement() {
                   <div className="panel-heading">
                     <h3>{a.name}</h3>
                     <Badge>
-                      {a.mode === "external" ? "external/manual" : a.mode}
+                      {a.mode === "external"
+                        ? uiText("external/manual")
+                        : a.mode}
                     </Badge>
                   </div>
                   <p>
@@ -267,13 +277,17 @@ export function AccountManagement() {
                           "Stale reference — refresh before proposing permissions",
                         unverified: "Signer unavailable — reference unverified",
                       } as Record<string, string>
-                    )[view.accountStates[a.id]] ?? "Reference unverified"}{" "}
-                    · Balance unavailable
+                    )[view.accountStates[a.id]] ??
+                      uiText("Reference unverified")}{" "}
+                    {uiText("· Balance unavailable")}
                   </p>
                   <code className="account-key">{a.publicKey}</code>
                   {a.signer && (
                     <p className="account-key">
-                      Wallet {a.signer.walletId} · Epoch {a.signer.epoch}
+                      {uiText("Wallet ")}
+                      {a.signer.walletId}
+                      {uiText(" · Epoch ")}
+                      {a.signer.epoch}
                     </p>
                   )}
                   <div className="account-actions">
@@ -285,14 +299,14 @@ export function AccountManagement() {
                         setNewName(a.name);
                       }}
                     >
-                      Rename
+                      {uiText("Rename")}
                     </button>
                     <button
                       className="text-button"
                       disabled={busy}
                       onClick={() => void remove(a)}
                     >
-                      Remove record
+                      {uiText("Remove record")}
                     </button>
                     {a.mode === "fixture-managed" &&
                       view.accountStates[a.id] === "stale" &&
@@ -302,7 +316,7 @@ export function AccountManagement() {
                           disabled={busy}
                           onClick={() => void rebind(a)}
                         >
-                          Refresh fixture reference
+                          {uiText("Refresh fixture reference")}
                         </button>
                       )}
                   </div>
@@ -323,32 +337,33 @@ export function AccountManagement() {
                       }}
                     >
                       <input
-                        aria-label="New account name"
+                        aria-label={uiText("New account name")}
                         value={newName}
                         onChange={(e) => setNewName(e.target.value)}
                         maxLength={80}
                         required
                       />
                       <button className="secondary" disabled={busy}>
-                        Save account name
+                        {uiText("Save account name")}
                       </button>
                     </form>
                   )}
                 </article>
               ))}
               <p className="account-note">
-                Removing a record does not delete a key or revoke a signer
-                grant. Authority is managed separately by the owner.
+                {uiText(
+                  "Removing a record does not delete a key or revoke a signer grant. Authority is managed separately by the owner.",
+                )}
               </p>
             </section>
             <section className="panel account-panel">
-              <h2>Add a public record</h2>
+              <h2>{uiText("Add a public record")}</h2>
               <form
                 className="account-form"
                 onSubmit={(e) => void addPublic(e)}
               >
                 <label>
-                  Name
+                  {uiText("Name")}
                   <input
                     value={name}
                     onChange={(e) => setName(e.target.value)}
@@ -357,18 +372,20 @@ export function AccountManagement() {
                   />
                 </label>
                 <label>
-                  Capability mode
+                  {uiText("Capability mode")}
                   <select
-                    aria-label="Capability mode"
+                    aria-label={uiText("Capability mode")}
                     value={mode}
                     onChange={(e) => setMode(e.target.value as typeof mode)}
                   >
-                    <option value="watch">Watch-only record</option>
-                    <option value="external">External/manual record</option>
+                    <option value="watch">{uiText("Watch-only record")}</option>
+                    <option value="external">
+                      {uiText("External/manual record")}
+                    </option>
                   </select>
                 </label>
                 <label>
-                  Disposable public key (64 lowercase hex)
+                  {uiText("Disposable public key (64 lowercase hex)")}
                   <input
                     value={key}
                     onChange={(e) => setKey(e.target.value)}
@@ -380,21 +397,29 @@ export function AccountManagement() {
                   className="secondary"
                   disabled={busy || view.record.accounts.length >= 8}
                 >
-                  Save public account
+                  {uiText("Save public account")}
                 </button>
               </form>
               <div className="account-entry">
-                <h3>Isolated disposable signer</h3>
+                <h3>{uiText("Isolated disposable signer")}</h3>
                 <p>
                   {ref
                     ? view.fixture.status?.recoveryRequired
-                      ? "Recovery hold — new permissions blocked."
+                      ? uiText("Recovery hold — new permissions blocked.")
                       : view.fixture.status?.locked
-                        ? "Locked. Owner approval takes place in the terminal."
-                        : "Manually unlocked fixture. Real execution is disabled."
+                        ? uiText(
+                            "Locked. Owner approval takes place in the terminal.",
+                          )
+                        : uiText(
+                            "Manually unlocked fixture. Real execution is disabled.",
+                          )
                     : view.fixture.available
-                      ? "Signer reachable. Complete disposable custody setup in the owner terminal; this UI never creates keys."
-                      : "Not configured. Ordinary installation never creates a signer or keys."}
+                      ? uiText(
+                          "Signer reachable. Complete disposable custody setup in the owner terminal; this UI never creates keys.",
+                        )
+                      : uiText(
+                          "Not configured. Ordinary installation never creates a signer or keys.",
+                        )}
                 </p>
                 <button
                   className="secondary"
@@ -406,33 +431,36 @@ export function AccountManagement() {
                     managed.length > 0
                   }
                 >
-                  Record disposable signer
+                  {uiText("Record disposable signer")}
                 </button>
               </div>
             </section>
           </div>
           <section className="panel account-panel">
             <div className="panel-heading">
-              <h2>Permission proposals</h2>
-              <Badge>OWNER TERMINAL REQUIRED</Badge>
+              <h2>{uiText("Permission proposals")}</h2>
+              <Badge>{uiText("OWNER TERMINAL REQUIRED")}</Badge>
             </div>
             <p>
-              A persona or app session cannot approve a mandate. Wallet lifetime
-              caps include earlier spent and held units.
+              {uiText(
+                "A persona or app session cannot approve a mandate. Wallet lifetime caps include earlier spent and held units.",
+              )}
             </p>
             <form
               className="account-form proposal-fields"
               onSubmit={(e) => void propose(e)}
             >
               <label>
-                Fixture account
+                {uiText("Fixture account")}
                 <select
-                  aria-label="Fixture account"
+                  aria-label={uiText("Fixture account")}
                   value={selected}
                   onChange={(e) => setSelected(e.target.value)}
                   required
                 >
-                  <option value="">Select a current fixture reference</option>
+                  <option value="">
+                    {uiText("Select a current fixture reference")}
+                  </option>
                   {managed.map((a) => (
                     <option key={a.id} value={a.id}>
                       {a.name}
@@ -441,7 +469,7 @@ export function AccountManagement() {
                 </select>
               </label>
               <label>
-                Wallet lifetime cap
+                {uiText("Wallet lifetime cap")}
                 <input
                   value={walletBudget}
                   onChange={(e) => setWalletBudget(e.target.value)}
@@ -450,7 +478,7 @@ export function AccountManagement() {
                 />
               </label>
               <label>
-                Bot grant cap
+                {uiText("Bot grant cap")}
                 <input
                   value={botBudget}
                   onChange={(e) => setBotBudget(e.target.value)}
@@ -459,7 +487,7 @@ export function AccountManagement() {
                 />
               </label>
               <label>
-                Maximum per operation
+                {uiText("Maximum per operation")}
                 <input
                   value={maxOperation}
                   onChange={(e) => setMaxOperation(e.target.value)}
@@ -468,7 +496,7 @@ export function AccountManagement() {
                 />
               </label>
               <label>
-                Expiry in minutes
+                {uiText("Expiry in minutes")}
                 <input
                   value={minutes}
                   onChange={(e) => setMinutes(e.target.value)}
@@ -479,7 +507,7 @@ export function AccountManagement() {
                 />
               </label>
               <label>
-                Fixture bot identity
+                {uiText("Fixture bot identity")}
                 <input
                   value={botID}
                   onChange={(e) => setBotID(e.target.value)}
@@ -496,7 +524,7 @@ export function AccountManagement() {
                   view.record.proposals.length >= 8
                 }
               >
-                Create permission proposal
+                {uiText("Create permission proposal")}
               </button>
             </form>
             {view.record.proposals.map((d) => {
@@ -509,29 +537,38 @@ export function AccountManagement() {
                   aria-label={`Proposal ${p.id}`}
                 >
                   <div className="panel-heading">
-                    <h3>Disposable mandate</h3>
-                    <Badge>{proof?.receipt.state ?? "unverified"}</Badge>
+                    <h3>{uiText("Disposable mandate")}</h3>
+                    <Badge>
+                      {proof?.receipt.state ?? uiText("unverified")}
+                    </Badge>
                   </div>
                   <p>
-                    Wallet cap {p.policy.budget} · Bot cap {p.grant.budget} ·
-                    Per operation {p.grant.maxOperation} fixture units
+                    {uiText("Wallet cap ")}
+                    {p.policy.budget}
+                    {uiText(" · Bot cap ")}
+                    {p.grant.budget}
+                    {uiText(" · Per operation ")}
+                    {p.grant.maxOperation}
+                    {uiText(" fixture units")}
                   </p>
                   <p>
-                    Expires{" "}
-                    {new Date(p.grant.expiresAt * 1000).toLocaleString()} ·
-                    Destination fixture:treasury
+                    {uiText("Expires")}{" "}
+                    {new Date(p.grant.expiresAt * 1000).toLocaleString()}
+                    {uiText(" · Destination fixture:treasury")}
                   </p>
                   <p className="account-key">
-                    Bot {p.grant.botId} · Digest {proof?.digest}
+                    {uiText("Bot ")}
+                    {p.grant.botId}
+                    {uiText(" · Digest ")}
+                    {proof?.digest}
                   </p>
                   <button className="secondary" onClick={() => download(p)}>
-                    Download public proposal
+                    {uiText("Download public proposal")}
                   </button>
                   <p className="account-note">
-                    Save this public file in your owner account. Run the command
-                    on the instance host, compare the digest and all limits in
-                    the protected terminal, then explicitly approve. Passwords
-                    never belong here.
+                    {uiText(
+                      "Save this public file in your owner account. Run the command on the instance host, compare the digest and all limits in the protected terminal, then explicitly approve. Passwords never belong here.",
+                    )}
                   </p>
                   <code className="account-key">
                     fased-app custody approve --disposable-fixture
@@ -539,9 +576,9 @@ export function AccountManagement() {
                     {p.id}.json
                   </code>
                   <p className="account-note">
-                    An approval receipt records owner consent for the fixture.
-                    It does not enable real wallets, automatic unlock or live
-                    trading.
+                    {uiText(
+                      "An approval receipt records owner consent for the fixture. It does not enable real wallets, automatic unlock or live trading.",
+                    )}
                   </p>
                 </article>
               );

@@ -1,3 +1,4 @@
+import { useUI } from "../ui-preferences";
 import {
   useCallback,
   useEffect,
@@ -25,6 +26,7 @@ const weekdays = [
   "Saturday",
 ];
 export function UpdatePreferencesPanel() {
+  const { t: uiText } = useUI();
   const core = useCore();
   const [view, setView] = useState<UpdatePreferencesView | null>(null);
   const [policy, setPolicy] = useState<UpdatePolicy>({ notify: true });
@@ -126,19 +128,22 @@ export function UpdatePreferencesPanel() {
       aria-labelledby="update-preferences-title"
     >
       <div className="panel-heading">
-        <h2 id="update-preferences-title">Update preferences & proposals</h2>
-        <Badge>REVIEW ONLY</Badge>
+        <h2 id="update-preferences-title">
+          {uiText("Update preferences & proposals")}
+        </h2>
+        <Badge>{uiText("REVIEW ONLY")}</Badge>
       </div>
       <div className="settings-body">
         <p>
-          Save notice, pin and window preferences here. Automatic updates remain
-          disabled. These records cannot install, resume, unlock or authorize
-          anything.
+          {uiText(
+            "Save notice, pin and window preferences here. Automatic updates remain disabled. These records cannot install, resume, unlock or authorize anything.",
+          )}
         </p>
         {core.mode !== "ready" ? (
           <p className="subtle">
-            Connect and sign in to a Fased instance. Prototype mode does not
-            save update policy.
+            {uiText(
+              "Connect and sign in to a Fased instance. Prototype mode does not save update policy.",
+            )}
           </p>
         ) : (
           <>
@@ -147,7 +152,7 @@ export function UpdatePreferencesPanel() {
               disabled={busy}
               onClick={() => void refresh()}
             >
-              {busy ? "Working…" : "Refresh update preferences"}
+              {busy ? uiText("Working…") : uiText("Refresh update preferences")}
             </button>
             {error && <p role="alert">{error}</p>}
             {notice && <p role="status">{notice}</p>}
@@ -164,7 +169,7 @@ export function UpdatePreferencesPanel() {
                   }}
                 >
                   <fieldset disabled={busy} className="update-policy-fields">
-                    <legend>Notice and review preferences</legend>
+                    <legend>{uiText("Notice and review preferences")}</legend>
                     <label>
                       <input
                         type="checkbox"
@@ -173,12 +178,12 @@ export function UpdatePreferencesPanel() {
                           setPolicy({ ...policy, notify: e.target.checked })
                         }
                       />
-                      Show notices for pending proposals
+                      {uiText("Show notices for pending proposals")}
                     </label>
                     <p className="subtle">
-                      Notices come only from saved manual proposals. No release
-                      feed, background checks, desktop push or scheduler is
-                      active.
+                      {uiText(
+                        "Notices come only from saved manual proposals. No release feed, background checks, desktop push or scheduler is active.",
+                      )}
                     </p>
                     <label>
                       <input
@@ -193,12 +198,12 @@ export function UpdatePreferencesPanel() {
                           })
                         }
                       />
-                      Pin a release identity for review
+                      {uiText("Pin a release identity for review")}
                     </label>
                     {policy.pin && (
                       <div className="update-form-grid">
                         <label>
-                          Pinned sequence
+                          {uiText("Pinned sequence")}
                           <input
                             required
                             inputMode="numeric"
@@ -215,7 +220,7 @@ export function UpdatePreferencesPanel() {
                           />
                         </label>
                         <label>
-                          Pinned manifest SHA-256
+                          {uiText("Pinned manifest SHA-256")}
                           <input
                             required
                             minLength={64}
@@ -235,9 +240,9 @@ export function UpdatePreferencesPanel() {
                       </div>
                     )}
                     <p className="subtle">
-                      A pin compares claimed sequence and digest. It does not
-                      verify a release or constrain the protected owner's
-                      separate review.
+                      {uiText(
+                        "A pin compares claimed sequence and digest. It does not verify a release or constrain the protected owner's separate review.",
+                      )}
                     </p>
                     <label>
                       <input
@@ -257,13 +262,13 @@ export function UpdatePreferencesPanel() {
                           })
                         }
                       />
-                      Set a preferred maintenance window
+                      {uiText("Set a preferred maintenance window")}
                     </label>
                     {policy.window && (
                       <>
                         <div className="update-form-grid">
                           <label>
-                            IANA timezone
+                            {uiText("IANA timezone")}
                             <input
                               required
                               value={policy.window.timeZone}
@@ -279,7 +284,7 @@ export function UpdatePreferencesPanel() {
                             />
                           </label>
                           <label>
-                            Window start
+                            {uiText("Window start")}
                             <input
                               required
                               type="time"
@@ -296,7 +301,7 @@ export function UpdatePreferencesPanel() {
                             />
                           </label>
                           <label>
-                            Window end
+                            {uiText("Window end")}
                             <input
                               required
                               type="time"
@@ -316,7 +321,7 @@ export function UpdatePreferencesPanel() {
                         <div
                           className="update-weekdays"
                           role="group"
-                          aria-label="Maintenance start days"
+                          aria-label={uiText("Maintenance start days")}
                         >
                           {weekdays.map((day, n) => (
                             <label key={day}>
@@ -343,26 +348,29 @@ export function UpdatePreferencesPanel() {
                           ))}
                         </div>
                         <p className="subtle">
-                          15 minutes to 12 hours, on the selected start days;
-                          crossing midnight is supported. Repeated DST minutes
-                          both count; skipped minutes never occur. This is
-                          guidance, not a trigger.
+                          {uiText(
+                            "15 minutes to 12 hours, on the selected start days; crossing midnight is supported. Repeated DST minutes both count; skipped minutes never occur. This is guidance, not a trigger.",
+                          )}
                         </p>
                       </>
                     )}
                     <p>
-                      Window at last check: <strong>{view.window}</strong> ·{" "}
-                      {new Date(view.evaluatedAt).toLocaleString()}. Refresh to
-                      evaluate again.
+                      {uiText("Window at last check: ")}
+                      <strong>{view.window}</strong> ·{" "}
+                      {new Date(view.evaluatedAt).toLocaleString()}
+                      {uiText(". Refresh to evaluate again.")}
                     </p>
                     <button className="primary" type="submit">
-                      Save update preferences
+                      {uiText("Save update preferences")}
                     </button>
                   </fieldset>
                 </form>
-                <h3>Update notices ({view.notifications.length})</h3>
+                <h3>
+                  {uiText("Update notices (")}
+                  {view.notifications.length})
+                </h3>
                 {view.notifications.length === 0 ? (
-                  <p className="subtle">No pending notices.</p>
+                  <p className="subtle">{uiText("No pending notices.")}</p>
                 ) : (
                   <ul>
                     {view.notifications.map((id) => (
@@ -371,21 +379,22 @@ export function UpdatePreferencesPanel() {
                           view.proposals.find((p) => p.digest === id)!.candidate
                             .release
                         }{" "}
-                        — manual proposal awaiting review
+                        {uiText("— manual proposal awaiting review")}
                       </li>
                     ))}
                   </ul>
                 )}
-                <h3>Manual update proposals</h3>
+                <h3>{uiText("Manual update proposals")}</h3>
                 <p className="subtle">
-                  Public metadata only. Claimed releases and digests are
-                  unverified. The protected owner flow must independently verify
-                  signatures, artifacts, compatibility and current state.
+                  {uiText(
+                    "Public metadata only. Claimed releases and digests are unverified. The protected owner flow must independently verify signatures, artifacts, compatibility and current state.",
+                  )}
                 </p>
                 {dirty && (
                   <p role="status">
-                    Save preferences or refresh to discard changes before
-                    managing proposals.
+                    {uiText(
+                      "Save preferences or refresh to discard changes before managing proposals.",
+                    )}
                   </p>
                 )}
                 <form onSubmit={(e) => void propose(e)}>
@@ -393,10 +402,10 @@ export function UpdatePreferencesPanel() {
                     disabled={busy || dirty}
                     className="update-policy-fields"
                   >
-                    <legend>Add a review-only proposal</legend>
+                    <legend>{uiText("Add a review-only proposal")}</legend>
                     <div className="update-form-grid">
                       <label>
-                        Release label
+                        {uiText("Release label")}
                         <input
                           required
                           maxLength={80}
@@ -405,7 +414,7 @@ export function UpdatePreferencesPanel() {
                         />
                       </label>
                       <label>
-                        Claimed sequence
+                        {uiText("Claimed sequence")}
                         <input
                           required
                           inputMode="numeric"
@@ -414,7 +423,7 @@ export function UpdatePreferencesPanel() {
                         />
                       </label>
                       <label>
-                        Claimed manifest SHA-256
+                        {uiText("Claimed manifest SHA-256")}
                         <input
                           required
                           minLength={64}
@@ -424,29 +433,29 @@ export function UpdatePreferencesPanel() {
                         />
                       </label>
                       <label>
-                        Proposal OS
+                        {uiText("Proposal OS")}
                         <select
                           value={os}
                           onChange={(e) => setOS(e.target.value)}
                         >
-                          <option value="linux">Linux</option>
-                          <option value="darwin">macOS</option>
-                          <option value="windows">Windows</option>
+                          <option value="linux">{uiText("Linux")}</option>
+                          <option value="darwin">{uiText("macOS")}</option>
+                          <option value="windows">{uiText("Windows")}</option>
                         </select>
                       </label>
                       <label>
-                        Proposal architecture
+                        {uiText("Proposal architecture")}
                         <select
                           value={arch}
                           onChange={(e) => setArch(e.target.value)}
                         >
-                          <option value="amd64">x86-64</option>
-                          <option value="arm64">ARM64</option>
+                          <option value="amd64">{uiText("x86-64")}</option>
+                          <option value="arm64">{uiText("ARM64")}</option>
                         </select>
                       </label>
                     </div>
                     <button className="secondary" type="submit">
-                      Add review-only proposal
+                      {uiText("Add review-only proposal")}
                     </button>
                   </fieldset>
                 </form>
@@ -457,25 +466,29 @@ export function UpdatePreferencesPanel() {
                     aria-label={`Update proposal ${p.candidate.release}`}
                   >
                     <h4>
-                      {p.candidate.release} <Badge>UNVERIFIED</Badge>
+                      {p.candidate.release}{" "}
+                      <Badge>{uiText("UNVERIFIED")}</Badge>
                     </h4>
                     <p>
-                      {p.candidate.target.os}/{p.candidate.target.arch} ·
-                      Sequence {p.candidate.sequence} · {p.state} ·{" "}
+                      {p.candidate.target.os}/{p.candidate.target.arch}
+                      {uiText(" · Sequence ")}
+                      {p.candidate.sequence} · {p.state} ·{" "}
                       {p.pinMatch
-                        ? "Matches current pin preference"
-                        : "Does not match current pin preference"}
+                        ? uiText("Matches current pin preference")
+                        : uiText("Does not match current pin preference")}
                     </p>
                     <p>
-                      Claimed manifest:{" "}
+                      {uiText("Claimed manifest:")}{" "}
                       <code>{p.candidate.manifestSha256}</code>
                     </p>
                     <p>
-                      Review digest: <code>{p.digest}</code>
+                      {uiText("Review digest: ")}
+                      <code>{p.digest}</code>
                     </p>
                     <p className="subtle">
-                      Marking reviewed acknowledges this exact metadata only. It
-                      cannot approve an update.
+                      {uiText(
+                        "Marking reviewed acknowledges this exact metadata only. It cannot approve an update.",
+                      )}
                     </p>
                     <div className="update-actions">
                       {p.state === "pending" && (
@@ -490,7 +503,7 @@ export function UpdatePreferencesPanel() {
                             })
                           }
                         >
-                          Mark reviewed
+                          {uiText("Mark reviewed")}
                         </button>
                       )}
                       {p.state !== "dismissed" && (
@@ -505,7 +518,7 @@ export function UpdatePreferencesPanel() {
                             })
                           }
                         >
-                          Dismiss proposal
+                          {uiText("Dismiss proposal")}
                         </button>
                       )}
                       {p.state === "dismissed" && (
@@ -520,7 +533,7 @@ export function UpdatePreferencesPanel() {
                             })
                           }
                         >
-                          Remove dismissed proposal
+                          {uiText("Remove dismissed proposal")}
                         </button>
                       )}
                       <button
@@ -540,14 +553,15 @@ export function UpdatePreferencesPanel() {
                           })
                         }
                       >
-                        Pin this proposal
+                        {uiText("Pin this proposal")}
                       </button>
                     </div>
                   </article>
                 ))}
                 <p className="subtle">
-                  Up to eight proposals. Dismiss and remove old entries
-                  explicitly. Removal forgets its notice history.
+                  {uiText(
+                    "Up to eight proposals. Dismiss and remove old entries explicitly. Removal forgets its notice history.",
+                  )}
                 </p>
               </>
             )}

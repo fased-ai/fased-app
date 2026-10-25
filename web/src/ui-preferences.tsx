@@ -93,7 +93,8 @@ function usePreferenceState() {
     update,
     language,
     storageError,
-    t: (key: string) => translate(language, key),
+    t: (key: string, values?: Record<string, string | number>) =>
+      translate(language, key, values),
   };
 }
 const UIContext = createContext<ReturnType<typeof usePreferenceState> | null>(

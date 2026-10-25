@@ -1,3 +1,4 @@
+import { useUI } from "../ui-preferences";
 import type { AgentAIRequest, AgentView } from "../agents";
 import { useWorkspace } from "../workspace";
 import { ResearchTurnReview } from "./ResearchTurnReview";
@@ -25,15 +26,16 @@ export function ChatReply({
   useDraft: (id: string) => Promise<void>;
   onReviewStrategy?: (requestId: string, cardId: string) => void;
 }) {
+  const { t: uiText } = useUI();
   const { agents } = useWorkspace();
   return (
     <article className="ai-request" key={q.id}>
       <div className="chat-prompt">
-        <small>You</small>
+        <small>{uiText("You")}</small>
         <h4>{q.prompt}</h4>
       </div>
       {q.state === "prepared" && (
-        <h5 className="reply-review-title">Review reply</h5>
+        <h5 className="reply-review-title">{uiText("Review reply")}</h5>
       )}
       {q.researchTurnId &&
         !requests.some(
@@ -50,42 +52,68 @@ export function ChatReply({
         )}
       <div className="response-status">
         <strong>{q.state}</strong>
-        <small>Fixture · {money(q.spentMicrousd)}</small>
+        <small>
+          {uiText("Fixture · ")}
+          {money(q.spentMicrousd)}
+        </small>
       </div>
       {q.state === "prepared" && (
         <p className="review-limits">
-          Up to {q.limits.maxInputTokens} input / {q.limits.maxOutputTokens}{" "}
-          output tokens · {q.limits.deadlineSeconds}s ·{" "}
-          {money(q.limits.budgetMicrousd)} fixture budget
+          {uiText("Up to ")}
+          {q.limits.maxInputTokens}
+          {uiText(" input / ")}
+          {q.limits.maxOutputTokens} {uiText("output tokens · ")}
+          {q.limits.deadlineSeconds}
+          {uiText("s ·")} {money(q.limits.budgetMicrousd)}
+          {uiText(" fixture budget")}
         </p>
       )}
       <details>
-        <summary>Exact context disclosure</summary>
+        <summary>{uiText("Exact context disclosure")}</summary>
         <AIAdmissionReview policy={q.policy} admission={q.admission} />
         <p>
-          Model: {q.model} · Held {money(q.heldMicrousd)} · Spent{" "}
-          {money(q.spentMicrousd)} (fixture only)
+          {uiText("Model: ")}
+          {q.model}
+          {uiText(" · Held ")}
+          {money(q.heldMicrousd)}
+          {uiText(" · Spent")} {money(q.spentMicrousd)}
+          {uiText(" (fixture only)")}
         </p>
         <p>
-          Limits: {q.limits.maxInputTokens} input / {q.limits.maxOutputTokens}{" "}
-          output tokens · {q.limits.deadlineSeconds}s · Budget{" "}
-          {money(q.limits.budgetMicrousd)} · No tools
+          {uiText("Limits: ")}
+          {q.limits.maxInputTokens}
+          {uiText(" input / ")}
+          {q.limits.maxOutputTokens} {uiText("output tokens · ")}
+          {q.limits.deadlineSeconds}
+          {uiText("s · Budget")} {money(q.limits.budgetMicrousd)}
+          {uiText(" · No tools")}
         </p>
 
-        <p>Connection: {q.connectionRef || "no credential"}</p>
+        <p>
+          {uiText("Connection: ")}
+          {q.connectionRef || uiText("no credential")}
+        </p>
         {q.news && (
           <p>
-            News snapshot: {q.news.fetchId} · source {q.news.url} · freshness{" "}
-            {q.news.maxAgeSeconds}s · content hash {q.news.bodySha256}
+            {uiText("News snapshot: ")}
+            {q.news.fetchId}
+            {uiText(" · source ")}
+            {q.news.url}
+            {uiText(" · freshness")} {q.news.maxAgeSeconds}
+            {uiText("s · content hash ")}
+            {q.news.bodySha256}
           </p>
         )}
         <pre>{q.disclosure}</pre>
         <p>
-          Also included: fixed instructions treating this context as untrusted
-          data, and the review-only output schema. No other profiles, expired
-          notes, credentials or wallet records.
+          {uiText(
+            "Also included: fixed instructions treating this context as untrusted data, and the review-only output schema. No other profiles, expired notes, credentials or wallet records.",
+          )}
         </p>
-        <p className="subtle">Disclosure SHA-256: {q.digest}</p>
+        <p className="subtle">
+          {uiText("Disclosure SHA-256: ")}
+          {q.digest}
+        </p>
       </details>
       {q.failure && <p role="status">{q.failure}</p>}
       {q.state === "prepared" && !q.researchTurnId && (
@@ -96,7 +124,7 @@ export function ChatReply({
               checked={consent === q.digest}
               onChange={(e) => setConsent(e.target.checked ? q.digest : "")}
             />
-            I reviewed this context and these fixture limits
+            {uiText("I reviewed this context and these fixture limits")}
           </label>
           <button
             className="primary"
@@ -115,12 +143,13 @@ export function ChatReply({
                 });
             }}
           >
-            Run development fixture
+            {uiText("Run development fixture")}
           </button>
           {!view.aiFixtureAvailable && (
             <p className="subtle">
-              Execution is disabled in this core. Only an explicitly started
-              local development fixture can run.
+              {uiText(
+                "Execution is disabled in this core. Only an explicitly started local development fixture can run.",
+              )}
             </p>
           )}
         </>
@@ -136,13 +165,14 @@ export function ChatReply({
             })
           }
         >
-          Stop
+          {uiText("Stop")}
         </button>
       )}
       {q.answer && (
         <div className="chat-response">
           <small>
-            {view.profiles.find((p) => p.id === q.profileId)?.name || "Agent"}
+            {view.profiles.find((p) => p.id === q.profileId)?.name ||
+              uiText("Agent")}
           </small>
           <p className="ai-answer">{q.answer}</p>
         </div>
@@ -164,7 +194,7 @@ export function ChatReply({
           disabled={agents.busy || draftBusy}
           onClick={() => void useDraft(q.id)}
         >
-          Use as draft
+          {uiText("Use as draft")}
         </button>
       )}
       {q.cards.map((card) => (
@@ -174,7 +204,8 @@ export function ChatReply({
           aria-label={card.title}
         >
           <small>
-            {card.kind} · {card.review} · REVIEW ONLY
+            {card.kind} · {card.review}
+            {uiText(" · REVIEW ONLY")}
           </small>
           <h4>{card.title}</h4>
           <p>{card.text}</p>
@@ -188,7 +219,7 @@ export function ChatReply({
                 disabled={agents.busy}
                 onClick={() => onReviewStrategy(q.id, card.id)}
               >
-                Review WEN revision
+                {uiText("Review WEN revision")}
               </button>
             )}
           {card.kind === "reminder-draft" && card.review !== "dismissed" && (
@@ -210,7 +241,7 @@ export function ChatReply({
                   })
                 }
               >
-                Keep draft
+                {uiText("Keep draft")}
               </button>
               <button
                 className="text-button"
@@ -222,7 +253,7 @@ export function ChatReply({
                   })
                 }
               >
-                Dismiss draft
+                {uiText("Dismiss draft")}
               </button>
             </div>
           )}

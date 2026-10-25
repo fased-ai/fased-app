@@ -316,7 +316,8 @@
   top: 50%;
   transform: translateY(-50%);
 }
-.wt .shell-header .shell-tools > button:last-child::after {
+.wt .shell-header .shell-tools > button:last-child::after,
+.wt .agent-header-actions > button[data-tooltip]:last-child::after {
   left: auto;
   right: 0;
   transform: none;

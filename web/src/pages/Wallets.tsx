@@ -1,3 +1,4 @@
+import { useUI } from "../ui-preferences";
 import {
   ArrowRight,
   Check,
@@ -20,19 +21,21 @@ export function Wallets() {
   return core.mode === "ready" ? <AccountManagement /> : <WalletPreview />;
 }
 function WalletPreview() {
+  const { t: uiText } = useUI();
   const { state, dispatch, setSetupOpen, setActionOpen, tab, navigate } =
     useWorkspace();
   return (
     <div className="wallet-workspace wallet-preview">
       <SectionHead
-        title="Wallets"
+        title={uiText("Wallets")}
         action={
           <button className="primary" onClick={() => setSetupOpen(true)}>
-            <Plus size={16} /> Explore wallet setup
+            <Plus size={16} />
+            {uiText(" Explore wallet setup")}
           </button>
         }
       />
-      <div className="tabs" aria-label="Wallet sections">
+      <div className="tabs" aria-label={uiText("Wallet sections")}>
         {["overview", "accounts", "permissions", "security", "activity"].map(
           (t) => (
             <button
@@ -51,13 +54,14 @@ function WalletPreview() {
           <div className="info-banner">
             <ShieldCheck size={18} />
             <div>
-              <strong>Wallet capability previews</strong>
+              <strong>{uiText("Wallet capability previews")}</strong>
               <span>
-                Setup records a preference. These previews do not create keys,
-                connect wallets or grant permissions.
+                {uiText(
+                  "Setup records a preference. These previews do not create keys, connect wallets or grant permissions.",
+                )}
               </span>
             </div>
-            <Badge>DESIGN</Badge>
+            <Badge>{uiText("DESIGN")}</Badge>
           </div>
           <div className="wallet-mode-grid">
             {(["watch", "external", "automation"] as WalletMode[]).map(
@@ -103,7 +107,8 @@ function WalletPreview() {
                         setSetupOpen(true);
                       }}
                     >
-                      Preview this mode <ArrowRight size={14} />
+                      {uiText("Preview this mode ")}
+                      <ArrowRight size={14} />
                     </button>
                   </section>
                 );
@@ -113,10 +118,11 @@ function WalletPreview() {
           <section className="panel">
             <Empty
               icon={<Wallet size={26} />}
-              title="Your accounts will appear here"
+              title={uiText("Your accounts will appear here")}
             >
-              There is no live wallet connection in this prototype. Your
-              selected setup mode is{" "}
+              {uiText(
+                "There is no live wallet connection in this prototype. Your selected setup mode is",
+              )}{" "}
               <strong>{walletNames[state.setup.walletMode]}</strong>.
             </Empty>
           </section>
@@ -125,22 +131,23 @@ function WalletPreview() {
       {tab === "accounts" && (
         <section className="panel">
           <div className="panel-heading">
-            <h2>Account connections</h2>
-            <Badge>NO LIVE ACCOUNTS</Badge>
+            <h2>{uiText("Account connections")}</h2>
+            <Badge>{uiText("NO LIVE ACCOUNTS")}</Badge>
           </div>
           <Empty
             icon={<Link2 size={25} />}
-            title="Choose capability before connecting"
+            title={uiText("Choose capability before connecting")}
           >
-            A public watch address, an external wallet and an automation wallet
-            have different authority. Setup previews never create keys or load
-            balances.
+            {uiText(
+              "A public watch address, an external wallet and an automation wallet have different authority. Setup previews never create keys or load balances.",
+            )}
           </Empty>
           <div className="inline-detail">
-            <span>Selected draft</span>
+            <span>{uiText("Selected draft")}</span>
             <strong>{walletNames[state.setup.walletMode]}</strong>
             <button className="text-button" onClick={() => setSetupOpen(true)}>
-              Change <ArrowRight size={14} />
+              {uiText("Change ")}
+              <ArrowRight size={14} />
             </button>
           </div>
         </section>
@@ -150,51 +157,54 @@ function WalletPreview() {
           <div className="info-banner">
             <Shield size={18} />
             <div>
-              <strong>Persona is not permission.</strong>
+              <strong>{uiText("Persona is not permission.")}</strong>
               <span>
-                Names, prompts, models and memory cannot expand spending
-                authority.
+                {uiText(
+                  "Names, prompts, models and memory cannot expand spending authority.",
+                )}
               </span>
             </div>
           </div>
           <section className="panel">
             <div className="panel-heading">
-              <h2>Example bounded mandate</h2>
-              <Badge>ILLUSTRATIVE · INACTIVE</Badge>
+              <h2>{uiText("Example bounded mandate")}</h2>
+              <Badge>{uiText("ILLUSTRATIVE · INACTIVE")}</Badge>
             </div>
             <div className="detail-grid">
               <div>
-                <small>Assigned profile</small>
-                <strong>WEN Operator</strong>
+                <small>{uiText("Assigned profile")}</small>
+                <strong>{uiText("WEN Operator")}</strong>
               </div>
               <div>
-                <small>Operation</small>
-                <strong>Supported typed action only</strong>
+                <small>{uiText("Operation")}</small>
+                <strong>{uiText("Supported typed action only")}</strong>
               </div>
               <div>
-                <small>Per-action ceiling</small>
-                <strong>50 units · example</strong>
+                <small>{uiText("Per-action ceiling")}</small>
+                <strong>{uiText("50 units · example")}</strong>
               </div>
               <div>
-                <small>Expiry</small>
-                <strong>Owner-selected · not configured</strong>
+                <small>{uiText("Expiry")}</small>
+                <strong>{uiText("Owner-selected · not configured")}</strong>
               </div>
               <div>
-                <small>Policy enforcement</small>
-                <strong>Independent signer</strong>
+                <small>{uiText("Policy enforcement")}</small>
+                <strong>{uiText("Independent signer")}</strong>
               </div>
               <div>
-                <small>Grant status</small>
-                <strong>Not created</strong>
+                <small>{uiText("Grant status")}</small>
+                <strong>{uiText("Not created")}</strong>
               </div>
             </div>
             <div className="panel-footer">
               <p>
-                Real limits, assets and destinations will be reviewed in the
-                protected owner flow.
+                {uiText(
+                  "Real limits, assets and destinations will be reviewed in the protected owner flow.",
+                )}
               </p>
               <button className="secondary" onClick={() => setActionOpen(true)}>
-                Preview review card <ArrowRight size={14} />
+                {uiText("Preview review card ")}
+                <ArrowRight size={14} />
               </button>
             </div>
           </section>
@@ -204,8 +214,8 @@ function WalletPreview() {
         <>
           <section className="panel">
             <div className="panel-heading">
-              <h2>Security model</h2>
-              <Badge>PLANNED · NOT IMPLEMENTED</Badge>
+              <h2>{uiText("Security model")}</h2>
+              <Badge>{uiText("PLANNED · NOT IMPLEMENTED")}</Badge>
             </div>
             <div className="security-list">
               {[
@@ -232,7 +242,7 @@ function WalletPreview() {
                     <strong>{title}</strong>
                     <p>{text}</p>
                   </span>
-                  <Badge>DESIGN</Badge>
+                  <Badge>{uiText("DESIGN")}</Badge>
                 </div>
               ))}
             </div>
@@ -240,10 +250,11 @@ function WalletPreview() {
           <div className="info-banner amber">
             <LockKeyhole size={18} />
             <div>
-              <strong>This prototype holds no keys.</strong>
+              <strong>{uiText("This prototype holds no keys.")}</strong>
               <span>
-                No creation, import, export, encryption or signing functionality
-                has been implemented.
+                {uiText(
+                  "No creation, import, export, encryption or signing functionality has been implemented.",
+                )}
               </span>
             </div>
           </div>
@@ -251,9 +262,13 @@ function WalletPreview() {
       )}
       {tab === "activity" && (
         <section className="panel">
-          <Empty icon={<Clock3 size={26} />} title="No financial activity">
-            Prototype events appear in Activity. No transaction has been
-            prepared, signed or submitted.
+          <Empty
+            icon={<Clock3 size={26} />}
+            title={uiText("No financial activity")}
+          >
+            {uiText(
+              "Prototype events appear in Activity. No transaction has been prepared, signed or submitted.",
+            )}
           </Empty>
         </section>
       )}

@@ -1,3 +1,4 @@
+import { useUI } from "../ui-preferences";
 import { NewsSourcePicker } from "./NewsInputs";
 import {
   AIModelPicker,
@@ -9,6 +10,7 @@ import { useWorkspace } from "../workspace";
 import type { AgentView } from "../agents";
 const money = (n: number) => `$${(n / 1_000_000).toFixed(6)}`;
 export function ScheduledAITasks({ view: v }: { view: AgentView }) {
+  const { t: uiText } = useUI();
   const { agents } = useWorkspace();
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -30,18 +32,19 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
   const sessionID =
     v.sessions.find((s) => s.id === session)?.id ?? v.sessions[0]?.id ?? "";
   return (
-    <section className="panel scheduled-ai" aria-label="Scheduled AI steps">
+    <section
+      className="panel scheduled-ai"
+      aria-label={uiText("Scheduled AI steps")}
+    >
       <div className="panel-heading">
-        <h2>Scheduled AI steps</h2>
-        <span>DEVELOPMENT FIXTURES</span>
+        <h2>{uiText("Scheduled AI steps")}</h2>
+        <span>{uiText("DEVELOPMENT FIXTURES")}</span>
       </div>
       <div className="agent-record-body">
         <p>
-          Authorize a fixed context and a bounded schedule. Each successful,
-          validated fixture response allows the selected reminder or fixed paper
-          evaluation. Cards cannot change inputs or execute trades. Changed
-          context, expired consent or provider failure holds this task;
-          independent local tasks continue.
+          {uiText(
+            "Authorize a fixed context and a bounded schedule. Each successful, validated fixture response allows the selected reminder or fixed paper evaluation. Cards cannot change inputs or execute trades. Changed context, expired consent or provider failure holds this task; independent local tasks continue.",
+          )}
         </p>
         {v.tasks
           .filter((t) => t.ai)
@@ -58,57 +61,88 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
               >
                 <h3>{t.name}</h3>
                 <p>
-                  <strong>{t.state}</strong> · {t.runs}/{t.maxRuns} evaluations
-                  · Every {t.intervalSeconds}s
+                  <strong>{t.state}</strong> · {t.runs}/{t.maxRuns}
+                  {uiText(" evaluations · Every ")}
+                  {t.intervalSeconds}
+                  {uiText("s")}
                 </p>
                 <p>
-                  Fixture cost: spent {money(spent)} + held {money(held)} /{" "}
-                  {money(a.budgetMicrousd)} total. One call per evaluation, zero
-                  tools, no retries or provider fallback.
+                  {uiText("Fixture cost: spent ")}
+                  {money(spent)}
+                  {uiText(" + held ")}
+                  {money(held)} / {money(a.budgetMicrousd)}
+                  {uiText(
+                    " total. One call per evaluation, zero tools, no retries or provider fallback.",
+                  )}
                 </p>
                 <p>
-                  Consent expires{" "}
-                  {new Date(a.expiresAt * 1000).toLocaleString()}. The frozen
-                  context is rechecked before dispatch and dependent work.
+                  {uiText("Consent expires")}{" "}
+                  {new Date(a.expiresAt * 1000).toLocaleString(
+                    typeof document === "undefined"
+                      ? "en"
+                      : document.documentElement.lang,
+                  )}
+                  {uiText(
+                    ". The frozen context is rechecked before dispatch and dependent work.",
+                  )}
                 </p>
                 {a.bot ? (
                   <p>
-                    Fixed paper inputs: {a.bot.name} · {a.bot.quantity} ×{" "}
-                    {a.bot.priceCents} · Shared paper budget {a.bot.budgetCents}{" "}
-                    fixture units.
+                    {uiText("Fixed paper inputs: ")}
+                    {a.bot.name} · {a.bot.quantity} × {a.bot.priceCents}
+                    {uiText(" · Shared paper budget ")}
+                    {a.bot.budgetCents} {uiText("fixture units.")}
                   </p>
                 ) : (
-                  <p>Dependent reminder: {t.text}</p>
+                  <p>
+                    {uiText("Dependent reminder: ")}
+                    {t.text}
+                  </p>
                 )}
                 <details>
-                  <summary>Review AI task disclosure</summary>
-                  <p>Connection: {a.connectionRef || "no credential"}</p>
+                  <summary>{uiText("Review AI task disclosure")}</summary>
+                  <p>
+                    {uiText("Connection: ")}
+                    {a.connectionRef || uiText("no credential")}
+                  </p>
                   {t.news && (
                     <p>
-                      Each run fetches up to five untrusted headlines from{" "}
-                      {t.news.url}, with publication/retrieval age at most{" "}
-                      {t.news.maxAgeSeconds}s. New evidence is recorded per
-                      request. Failure holds only this task.
+                      {uiText(
+                        "Each run fetches up to five untrusted headlines from",
+                      )}{" "}
+                      {t.news.url}
+                      {uiText(", with publication/retrieval age at most")}{" "}
+                      {t.news.maxAgeSeconds}
+                      {uiText(
+                        "s. New evidence is recorded per request. Failure holds only this task.",
+                      )}
                     </p>
                   )}
                   <pre>{a.disclosure}</pre>
                   <p>
-                    Per call: {a.limits.maxInputTokens} input /{" "}
-                    {a.limits.maxOutputTokens} output tokens ·{" "}
-                    {a.limits.deadlineSeconds}s ·{" "}
-                    {money(a.limits.budgetMicrousd)} cap.{" "}
+                    {uiText("Per call: ")}
+                    {a.limits.maxInputTokens}
+                    {uiText(" input /")} {a.limits.maxOutputTokens}
+                    {uiText(" output tokens ·")} {a.limits.deadlineSeconds}
+                    {uiText("s ·")} {money(a.limits.budgetMicrousd)}
+                    {uiText(" cap.")}{" "}
                     {a.policy ? (
-                      "Use the snapshot tariff disclosed below; all calls remain simulated."
+                      uiText(
+                        "Use the snapshot tariff disclosed below; all calls remain simulated.",
+                      )
                     ) : (
                       <>
-                        Invented rates: 1 micro USD per input token, 4 per
-                        output token. No provider, API key, subscription or real
-                        charge.
+                        {uiText(
+                          "Invented rates: 1 micro USD per input token, 4 per output token. No provider, API key, subscription or real charge.",
+                        )}
                       </>
                     )}
                   </p>
                   <AIAdmissionReview policy={a.policy} />
-                  <p>Task SHA-256: {a.digest}</p>
+                  <p>
+                    {uiText("Task SHA-256: ")}
+                    {a.digest}
+                  </p>
                 </details>
                 {t.state === "review" && (
                   <>
@@ -120,7 +154,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                           setConsent(e.target.checked ? a.digest : "")
                         }
                       />
-                      Allow this frozen context, schedule and limits
+                      {uiText("Allow this frozen context, schedule and limits")}
                     </label>
                     <button
                       className="primary"
@@ -141,7 +175,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                           })
                       }
                     >
-                      Authorize fixture schedule
+                      {uiText("Authorize fixture schedule")}
                     </button>
                   </>
                 )}
@@ -153,7 +187,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                       void agents.change({ action: "task-run", id: t.id })
                     }
                   >
-                    Evaluate now
+                    {uiText("Evaluate now")}
                   </button>
                 )}
                 {["scheduled", "paused"].includes(t.state) && (
@@ -169,8 +203,8 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                     }
                   >
                     {t.state === "paused"
-                      ? "Resume AI schedule"
-                      : "Pause AI schedule"}
+                      ? uiText("Resume AI schedule")
+                      : uiText("Pause AI schedule")}
                   </button>
                 )}
                 {["review", "scheduled", "paused", "waiting-ai"].includes(
@@ -184,26 +218,29 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                     }
                   >
                     {t.state === "waiting-ai"
-                      ? "Stop pending AI step"
-                      : "Cancel AI schedule"}
+                      ? uiText("Stop pending AI step")
+                      : uiText("Cancel AI schedule")}
                   </button>
                 )}
                 {t.state === "held" && (
                   <p role="status">
-                    Dependent work stopped. Prepare and review a new plan. An
-                    uncertain dispatched reservation cannot be reset.
+                    {uiText(
+                      "Dependent work stopped. Prepare and review a new plan. An uncertain dispatched reservation cannot be reset.",
+                    )}
                   </p>
                 )}
                 {!v.aiFixtureAvailable && (
                   <p className="subtle">
-                    Only a standalone core explicitly started with the
-                    development fixture can activate or run AI schedules.
+                    {uiText(
+                      "Only a standalone core explicitly started with the development fixture can activate or run AI schedules.",
+                    )}
                   </p>
                 )}
                 {requests.map((q) => (
                   <section className="ai-action-card" key={q.id}>
                     <small>
-                      Request {q.id} · {q.state}
+                      {uiText("Request ")}
+                      {q.id} · {q.state}
                     </small>
                     <AIAdmissionReview
                       policy={q.policy}
@@ -212,13 +249,16 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                     <p>
                       {q.answer ||
                         q.failure ||
-                        "Waiting for the fixture result."}
+                        uiText("Waiting for the fixture result.")}
                     </p>
                     {q.cards.map((card) => (
                       <div key={card.id}>
                         <strong>{card.title}</strong>
                         <p>{card.text}</p>
-                        <small>{card.review} · REVIEW ONLY</small>
+                        <small>
+                          {card.review}
+                          {uiText(" · REVIEW ONLY")}
+                        </small>
                         {card.review === "unreviewed" && (
                           <div className="agent-inline">
                             <button
@@ -231,7 +271,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                                 })
                               }
                             >
-                              Keep draft
+                              {uiText("Keep draft")}
                             </button>
                             <button
                               className="text-button"
@@ -243,7 +283,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                                 })
                               }
                             >
-                              Dismiss draft
+                              {uiText("Dismiss draft")}
                             </button>
                           </div>
                         )}
@@ -301,9 +341,9 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
               });
           }}
         >
-          <h3>Prepare an AI schedule</h3>
+          <h3>{uiText("Prepare an AI schedule")}</h3>
           <label>
-            AI task title
+            {uiText("AI task title")}
             <input
               required
               maxLength={80}
@@ -312,13 +352,15 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
             />
           </label>
           <label>
-            AI context conversation
+            {uiText("AI context conversation")}
             <select
               required
               value={sessionID}
               onChange={(e) => setSession(e.target.value)}
             >
-              <option value="">Create a conversation in Chat first</option>
+              <option value="">
+                {uiText("Create a conversation in Chat first")}
+              </option>
               {v.sessions.map((s) => (
                 <option value={s.id} key={s.id}>
                   {s.name}
@@ -327,7 +369,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
             </select>
           </label>
           <label>
-            AI analysis prompt
+            {uiText("AI analysis prompt")}
             <textarea
               required
               maxLength={1000}
@@ -336,19 +378,22 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
             />
           </label>
           <label>
-            Step after validated AI response
+            {uiText("Step after validated AI response")}
             <select value={bot} onChange={(e) => setBot(e.target.value)}>
-              <option value="">Local reminder using this prompt</option>
+              <option value="">
+                {uiText("Local reminder using this prompt")}
+              </option>
               {v.bots.map((b) => (
                 <option value={b.id} key={b.id}>
-                  Fixed paper evaluation · {b.name}
+                  {uiText("Fixed paper evaluation · ")}
+                  {b.name}
                 </option>
               ))}
             </select>
           </label>
           <div className="agent-grid">
             <label>
-              AI cadence (seconds)
+              {uiText("AI cadence (seconds)")}
               <input
                 type="number"
                 required
@@ -359,7 +404,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
               />
             </label>
             <label>
-              AI run count
+              {uiText("AI run count")}
               <input
                 type="number"
                 required
@@ -370,7 +415,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
               />
             </label>
             <label>
-              AI consent lifetime (minutes)
+              {uiText("AI consent lifetime (minutes)")}
               <input
                 type="number"
                 required
@@ -381,7 +426,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
               />
             </label>
             <label>
-              AI total cost cap (micro USD)
+              {uiText("AI total cost cap (micro USD)")}
               <input
                 type="number"
                 required
@@ -392,7 +437,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
               />
             </label>
             <label>
-              Input token cap
+              {uiText("Input token cap")}
               <input
                 type="number"
                 required
@@ -403,7 +448,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
               />
             </label>
             <label>
-              Output token cap
+              {uiText("Output token cap")}
               <input
                 type="number"
                 required
@@ -414,7 +459,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
               />
             </label>
             <label>
-              AI timeout (seconds)
+              {uiText("AI timeout (seconds)")}
               <input
                 type="number"
                 required
@@ -425,7 +470,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
               />
             </label>
             <label>
-              Per-call cost cap (micro USD)
+              {uiText("Per-call cost cap (micro USD)")}
               <input
                 type="number"
                 required
@@ -437,12 +482,12 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
             </label>
           </div>
           <p className="subtle">
-            Reserve enough for every evaluation at the reviewed limits. Up to
-            ten retained/future requests share local capacity. Prices and token
-            counts are fixtures; no real API is connected.
+            {uiText(
+              "Reserve enough for every evaluation at the reviewed limits. Up to ten retained/future requests share local capacity. Prices and token counts are fixtures; no real API is connected.",
+            )}
           </p>
           <button className="secondary" disabled={agents.busy || !sessionID}>
-            Prepare AI task review
+            {uiText("Prepare AI task review")}
           </button>
         </form>
       </div>

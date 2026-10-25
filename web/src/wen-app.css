@@ -315,8 +315,8 @@
 .wt .agent-settings-workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 12px;
-  margin: 12px 0;
+  gap: 8px;
+  margin: 8px 0;
 }
 .wt .info-banner {
   background: var(--wt-surface);
@@ -582,7 +582,7 @@
 .wt .chat-composer-toolbar {
   display: grid;
   grid-column: 1 / -1;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 44px;
+  grid-template-columns: minmax(0, 240px) minmax(0, 240px) 30px;
   align-items: center;
   gap: 8px;
 }

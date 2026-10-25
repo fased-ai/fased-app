@@ -362,6 +362,162 @@ test("reviewed recurring tasks preserve named zones bounds CLI results pause and
   expect(external).toEqual([]);
 });
 
+test("existing pages localize controls and keep owner drafts records and Meteora panes", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(120000);
+  page.setDefaultTimeout(10000);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+  });
+  await page.goto(url + "/#agents/chat");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  await openConversationList(page);
+  await page
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Owner conversation — 250 SOL");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Owner draft — 250 SOL");
+  const before = await privateCLI(["agents"]);
+  const cases = [
+    [
+      "ru",
+      "Интерфейс",
+      "Настройки подключения",
+      "Нет источников новостей.",
+      "В этом профиле нет заметок.",
+      "Публичные записи аккаунтов",
+    ],
+    [
+      "es",
+      "Preferencias",
+      "Ajustes de conexión",
+      "No hay fuentes de noticias guardadas.",
+      "Este perfil no tiene notas.",
+      "Registros públicos de cuentas",
+    ],
+    [
+      "zh",
+      "偏好设置",
+      "连接设置",
+      "尚未保存新闻来源。",
+      "此档案暂无记忆。",
+      "公开账户记录",
+    ],
+    [
+      "ko",
+      "환경설정",
+      "연결 설정",
+      "저장된 뉴스 소스가 없습니다.",
+      "이 프로필에 메모가 없습니다.",
+      "공개 계정 기록",
+    ],
+    [
+      "en",
+      "Preferences",
+      "Connection settings",
+      "No news sources saved.",
+      "No notes in this profile.",
+      "Public account records",
+    ],
+  ];
+  let preferences = "Preferences";
+  for (const [
+    locale,
+    nextPreferences,
+    connection,
+    news,
+    memory,
+    accounts,
+  ] of cases) {
+    await page.getByRole("button", { name: preferences, exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.locator("select").nth(1).selectOption(locale);
+    await dialog
+      .locator("select")
+      .first()
+      .selectOption(locale === "es" || locale === "ko" ? "light" : "dark");
+    await page.keyboard.press("Escape");
+    preferences = nextPreferences;
+    await expect(page.locator("html")).toHaveAttribute(
+      "lang",
+      locale === "zh" ? "zh-Hans" : locale,
+    );
+    for (const [route, expected] of [
+      ["settings", connection],
+      ["agents/news", news],
+      ["agents/memory", memory],
+      ["wallets/overview", accounts],
+      ["overview", null],
+      ["agents/tasks", null],
+      ["agents/chat", null],
+    ] as const) {
+      await page.evaluate((hash) => {
+        location.hash = hash;
+      }, route);
+      if (expected) await expect(page.locator("main")).toContainText(expected);
+      if (route === "agents/chat")
+        await expect(page.locator(".chat-input")).toHaveValue(
+          "Owner draft — 250 SOL",
+        );
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+        `${locale}/${route} has no page overflow`,
+      ).toBe(true);
+      if (
+        route === "settings" ||
+        route === "agents/chat" ||
+        route === "agents/tasks"
+      )
+        await page.screenshot({
+          path: `.evidence/pages-${locale}-${route.replaceAll("/", "-")}-${test.info().project.name}.png`,
+          fullPage: false,
+        });
+    }
+    await expect(page.locator(".conversation-rail")).toContainText(
+      "Owner conversation — 250 SOL",
+    );
+  }
+  expect(await privateCLI(["agents"])).toEqual(before);
+  expect(external).toEqual([]);
+  const health = await (await page.request.get(url + "/api/v1/health")).json();
+  for (const key of [
+    "aiConnections",
+    "financialExecution",
+    "walletSigner",
+    "updater",
+  ])
+    expect(health.capabilities[key]).toBe(false);
+  if (!isMobile)
+    expect((await page.locator(".shell-header").boundingBox())!.height).toBe(
+      50,
+    );
+});
+
 test("Meteora shell preserves drafts and records through navigation theme language and restart", async ({
   page,
   isMobile,

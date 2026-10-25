@@ -1,9 +1,11 @@
+import { useUI } from "../ui-preferences";
 import { InstanceSummary, RemoteConnection } from "./InstanceConnection";
 import logo from "../assets/fased-logo.svg";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { ArrowRight, ShieldCheck } from "../icons";
 import { useCore } from "../core";
 export function CoreGate({ children }: { children: ReactNode }) {
+  const { t: uiText } = useUI();
   const core = useCore();
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -52,26 +54,34 @@ export function CoreGate({ children }: { children: ReactNode }) {
         {core.mode === "loading" ? (
           <div className="empty-state" role="status">
             <ShieldCheck size={28} />
-            <h1>Opening your workspace</h1>
-            <p>Connecting to Fased…</p>
+            <h1>{uiText("Opening your workspace")}</h1>
+            <p>{uiText("Connecting to Fased…")}</p>
           </div>
         ) : core.mode === "error" ? (
           <div className="settings-body">
-            <h1>{native ? "Connect to Fased" : "Connection unavailable"}</h1>
+            <h1>
+              {native
+                ? uiText("Connect to Fased")
+                : uiText("Connection unavailable")}
+            </h1>
             {!native && <p role="alert">{core.error}</p>}
             <button className="primary" onClick={() => void core.retry()}>
-              Retry connection
+              {uiText("Retry connection")}
             </button>
           </div>
         ) : (
           <form onSubmit={submit}>
             <div className="settings-body">
               <h1>
-                {core.mode === "unclaimed" ? "Claim this workspace" : "Sign in"}
+                {core.mode === "unclaimed"
+                  ? uiText("Claim this workspace")
+                  : uiText("Sign in")}
               </h1>
               {core.mode === "unclaimed" && (
                 <>
-                  <label htmlFor="owner-code">One-use claim code</label>
+                  <label htmlFor="owner-code">
+                    {uiText("One-use claim code")}
+                  </label>
                   <input
                     id="owner-code"
                     type="password"
@@ -81,10 +91,13 @@ export function CoreGate({ children }: { children: ReactNode }) {
                     onChange={(e) => setCode(e.target.value)}
                   />
                   <details>
-                    <summary>Get setup code</summary>
+                    <summary>{uiText("Get setup code")}</summary>
                     <p>
-                      Run <code>fased-app claim-code</code> on this instance.
-                      Codes expire after 15 minutes.
+                      {uiText("Run ")}
+                      <code>fased-app claim-code</code>
+                      {uiText(
+                        " on this instance. Codes expire after 15 minutes.",
+                      )}
                     </p>
                   </details>
                   {native && (
@@ -93,7 +106,7 @@ export function CoreGate({ children }: { children: ReactNode }) {
                       className="secondary"
                       onClick={() => void useLocalCode()}
                     >
-                      Use this computer’s setup code
+                      {uiText("Use this computer’s setup code")}
                     </button>
                   )}
                   {claimError && <p role="alert">{claimError}</p>}
@@ -101,8 +114,8 @@ export function CoreGate({ children }: { children: ReactNode }) {
               )}
               <label htmlFor="owner-password">
                 {core.mode === "unclaimed"
-                  ? "Create owner password"
-                  : "Owner password"}
+                  ? uiText("Create owner password")
+                  : uiText("Owner password")}
               </label>
               <input
                 id="owner-password"
@@ -126,10 +139,10 @@ export function CoreGate({ children }: { children: ReactNode }) {
               )}
               <button className="primary" disabled={core.saving}>
                 {core.saving
-                  ? "Checking…"
+                  ? uiText("Checking…")
                   : core.mode === "unclaimed"
-                    ? "Claim workspace"
-                    : "Sign in"}
+                    ? uiText("Claim workspace")
+                    : uiText("Sign in")}
                 <ArrowRight size={15} />
               </button>
             </div>

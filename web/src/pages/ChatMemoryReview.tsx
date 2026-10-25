@@ -1,3 +1,4 @@
+import { useUI } from "../ui-preferences";
 import { useState } from "react";
 import type { AgentView, ChatMemorySource } from "../agents";
 import { useWorkspace } from "../workspace";
@@ -15,6 +16,7 @@ export function ChatMemoryReview({
   sourceText: string;
   sessionId: string;
 }) {
+  const { t: uiText } = useUI();
   const { agents, navigate } = useWorkspace();
   const [revision, setRevision] = useState<number>();
   const [saved, setSaved] = useState(false);
@@ -25,13 +27,13 @@ export function ChatMemoryReview({
       <>
         {saved && (
           <div className="agent-inline">
-            <p role="status">Memory saved.</p>
+            <p role="status">{uiText("Memory saved.")}</p>
             <button
               type="button"
               className="secondary"
               onClick={() => navigate("agents/memory")}
             >
-              Open Memory
+              {uiText("Open Memory")}
             </button>
           </div>
         )}
@@ -45,26 +47,34 @@ export function ChatMemoryReview({
             setRevision(view.revision);
           }}
         >
-          Remember this
+          {uiText("Remember this")}
         </button>
       </>
     );
   const stale = revision !== view.revision;
   return (
-    <section aria-label="Chat memory review">
-      <h4>Review a profile memory</h4>
+    <section aria-label={uiText("Chat memory review")}>
+      <h4>{uiText("Review a profile memory")}</h4>
       <p>
-        This saves your edited note for future disclosed context. It does not
-        verify the source, train a model or grant permissions.
+        {uiText(
+          "This saves your edited note for future disclosed context. It does not verify the source, train a model or grant permissions.",
+        )}
       </p>
       <details open>
         <summary>
-          Retained {sourceKind === "message" ? "user message" : "manual answer"}
+          {uiText("Retained ")}
+          {sourceKind === "message"
+            ? uiText("user message")
+            : uiText("manual answer")}
         </summary>
         <p>{sourceText}</p>
         <small>
-          Profile {view.profileId} · Conversation {sessionId} · Source{" "}
-          {sourceId}. The server records its identity and content hash.
+          {uiText("Profile ")}
+          {view.profileId}
+          {uiText(" · Conversation ")}
+          {sessionId}
+          {uiText(" · Source")} {sourceId}
+          {uiText(". The server records its identity and content hash.")}
         </small>
       </details>
       <form
@@ -92,9 +102,9 @@ export function ChatMemoryReview({
         }}
       >
         <label>
-          Reviewed memory note
+          {uiText("Reviewed memory note")}
           <textarea
-            aria-label="Reviewed memory note"
+            aria-label={uiText("Reviewed memory note")}
             required
             maxLength={4000}
             value={text}
@@ -102,7 +112,7 @@ export function ChatMemoryReview({
           />
         </label>
         <label>
-          Memory expiry (optional)
+          {uiText("Memory expiry (optional)")}
           <input
             type="datetime-local"
             value={expiry}
@@ -111,12 +121,14 @@ export function ChatMemoryReview({
         </label>
         {stale && (
           <p role="status">
-            Workspace changed. Cancel and select the source again before saving.
+            {uiText(
+              "Workspace changed. Cancel and select the source again before saving.",
+            )}
           </p>
         )}
         <div className="agent-inline">
           <button className="primary" disabled={agents.busy || stale}>
-            Save reviewed memory
+            {uiText("Save reviewed memory")}
           </button>
           <button
             type="button"
@@ -124,7 +136,7 @@ export function ChatMemoryReview({
             disabled={agents.busy}
             onClick={() => setRevision(undefined)}
           >
-            Cancel memory
+            {uiText("Cancel memory")}
           </button>
         </div>
       </form>

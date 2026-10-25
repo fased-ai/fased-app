@@ -1,23 +1,25 @@
+import { useUI } from "../ui-preferences";
 import { ArrowRight, Bot, ChevronRight, Check } from "../icons";
 import { Badge, Avatar, SectionHead } from "../components/shared";
 import { terminalData } from "../fixtures";
 import { useWorkspace } from "../workspace";
 
 export function Overview() {
+  const { t: uiText } = useUI();
   const { state, core, dispatch, setSetupOpen, navigate } = useWorkspace();
   const steps = [
     {
-      title: state.setup.complete ? "Review setup" : "Set up workspace",
+      title: uiText(state.setup.complete ? "Review setup" : "Set up workspace"),
       done: state.setup.complete,
       action: () => setSetupOpen(true),
     },
     {
-      title: "Public account records",
+      title: uiText("Public account records"),
       done: false,
       action: () => navigate("wallets/overview"),
     },
     {
-      title: "Agent tasks",
+      title: uiText("Agent tasks"),
       done: false,
       action: () => navigate("agents/tasks"),
     },
@@ -25,32 +27,33 @@ export function Overview() {
   return (
     <>
       <SectionHead
-        title="Overview"
+        title={uiText("Overview")}
         action={
           <button className="primary" onClick={() => navigate("agents/chat")}>
-            Open Chat <ArrowRight size={16} />
+            {uiText("Open Chat ")}
+            <ArrowRight size={16} />
           </button>
         }
       />
       <dl className="workspace-metrics">
         <div>
-          <dt>Agent profiles</dt>
+          <dt>{uiText("Agent profiles")}</dt>
           <dd>{state.profiles.length}</dd>
         </div>
         <div>
-          <dt>Connection</dt>
+          <dt>{uiText("Connection")}</dt>
           <dd>
             {core.connection
               ? core.connection.location === "remote"
-                ? "Remote"
-                : "Local"
-              : "Preview"}
+                ? uiText("Remote")
+                : uiText("Local")
+              : uiText("Preview")}
           </dd>
         </div>
         <div>
-          <dt>Financial execution</dt>
+          <dt>{uiText("Financial execution")}</dt>
           <dd>
-            <Badge>DISABLED</Badge>
+            <Badge>{uiText("DISABLED")}</Badge>
           </dd>
         </div>
       </dl>
@@ -58,13 +61,15 @@ export function Overview() {
         <section className="panel" aria-labelledby="overview-agents">
           <div className="panel-heading">
             <h2 id="overview-agents">
-              <Bot size={16} /> Agents
+              <Bot size={16} />
+              {uiText(" Agents")}
             </h2>
             <button
               className="text-button"
               onClick={() => navigate("agents/memory")}
             >
-              Memory <ArrowRight size={14} />
+              {uiText("Memory ")}
+              <ArrowRight size={14} />
             </button>
           </div>
           <div className="workspace-rows">
@@ -89,7 +94,7 @@ export function Overview() {
         </section>
         <section className="panel" aria-labelledby="overview-workspace">
           <div className="panel-heading">
-            <h2 id="overview-workspace">Workspace</h2>
+            <h2 id="overview-workspace">{uiText("Workspace")}</h2>
           </div>
           <div className="workspace-rows">
             {steps.map((step) => (
@@ -115,8 +120,8 @@ export function Overview() {
           aria-labelledby="overview-terminals"
         >
           <div className="panel-heading">
-            <h2 id="overview-terminals">Terminals</h2>
-            <Badge>PREVIEW ONLY</Badge>
+            <h2 id="overview-terminals">{uiText("Terminals")}</h2>
+            <Badge>{uiText("PREVIEW ONLY")}</Badge>
           </div>
           <div className="workspace-rows">
             {terminalData.map((t) => (
@@ -129,7 +134,9 @@ export function Overview() {
                 <span className="workspace-row-copy">
                   <strong>{t.name}</strong>
                 </span>
-                <Badge>{t.id === "satcoin" ? "DEFERRED" : "DISABLED"}</Badge>
+                <Badge>
+                  {t.id === "satcoin" ? uiText("DEFERRED") : uiText("DISABLED")}
+                </Badge>
                 <ChevronRight size={16} />
               </button>
             ))}

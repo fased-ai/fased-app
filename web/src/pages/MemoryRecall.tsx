@@ -37,8 +37,9 @@ export function MemoryRecall({
   onRestore: (draft: AgentMemoryRestoreDraft) => void;
   onOpen: (source: AgentMemoryEvidence) => void;
 }) {
+  const { t: uiText } = useUI();
   const { core, agents } = useWorkspace();
-  const { t } = useUI();
+  const t = uiText;
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [readGeneration, setReadGeneration] = useState(0);
@@ -132,7 +133,7 @@ export function MemoryRecall({
         }}
       >
         <label>
-          Search memories
+          {uiText("Search memories")}
           <input
             type="search"
             maxLength={200}
@@ -141,11 +142,11 @@ export function MemoryRecall({
           />
         </label>
         <button className="secondary" disabled={busy}>
-          Search memory
+          {uiText("Search memory")}
         </button>
       </form>
       {error && <p role="alert">{error}</p>}
-      {!records && !error && <p role="status">Loading memories…</p>}
+      {!records && !error && <p role="status">{uiText("Loading memories…")}</p>}
       {records?.memories.map((m) => (
         <article
           className="memory-card"
@@ -253,7 +254,11 @@ export function MemoryRecall({
         </article>
       ))}
       {records?.memories.length === 0 && (
-        <p>{query ? "No matching memories." : "No notes in this profile."}</p>
+        <p>
+          {query
+            ? uiText("No matching memories.")
+            : uiText("No notes in this profile.")}
+        </p>
       )}
     </>
   );

@@ -1,10 +1,15 @@
+import { useUI } from "../ui-preferences";
 import { useState } from "react";
 import { Badge } from "../components/shared";
 import type { AgentView } from "../agents";
 import { useWorkspace } from "../workspace";
 
 const at = (n: number) =>
-  n ? new Date(n * 1000).toLocaleString() : "Not retrieved";
+  n
+    ? new Date(n * 1000).toLocaleString(
+        typeof document === "undefined" ? "en" : document.documentElement.lang,
+      )
+    : "Not retrieved";
 export function NewsSourcePicker({
   view,
   value,
@@ -18,12 +23,13 @@ export function NewsSourcePicker({
   age: number;
   onAge: (age: number) => void;
 }) {
+  const { t: uiText } = useUI();
   return (
     <div className="agent-form-grid">
       <label>
-        News input
+        {uiText("News input")}
         <select
-          aria-label="News input"
+          aria-label={uiText("News input")}
           value={value}
           onChange={(e) => {
             onChange(e.target.value);
@@ -31,23 +37,24 @@ export function NewsSourcePicker({
             if (s) onAge(s.maxAgeSeconds);
           }}
         >
-          <option value="">None</option>
+          <option value="">{uiText("None")}</option>
           {value && !view.newsSources.some((s) => s.id === value) && (
             <option value={value} disabled>
-              Unavailable news source: {value}
+              {uiText("Unavailable news source: ")}
+              {value}
             </option>
           )}
           {view.newsSources.map((s) => (
             <option key={s.id} value={s.id} disabled={s.disabled}>
               {s.name}
-              {s.disabled ? " · disabled" : ""}
+              {s.disabled ? uiText(" · disabled") : ""}
             </option>
           ))}
         </select>
       </label>
       {value && (
         <label>
-          Maximum news age (seconds)
+          {uiText("Maximum news age (seconds)")}
           <input
             type="number"
             min={60}
@@ -68,20 +75,21 @@ export function NewsInputs({
   view: AgentView;
   onDiscuss: () => void;
 }) {
+  const { t: uiText } = useUI();
   const { agents } = useWorkspace();
   const [name, setName] = useState("");
   const [url, setURL] = useState("");
   const [age, setAge] = useState(3600);
   return (
-    <section className="panel news-inputs" aria-label="News inputs">
+    <section className="panel news-inputs" aria-label={uiText("News inputs")}>
       <div className="panel-heading">
-        <h2>News inputs</h2>
-        <Badge>PUBLIC RSS · UNTRUSTED</Badge>
+        <h2>{uiText("News inputs")}</h2>
+        <Badge>{uiText("PUBLIC RSS · UNTRUSTED")}</Badge>
       </div>
       <div className="agent-split news-workspace">
         <div className="agent-record-body news-library">
           {!v.newsSources.length && (
-            <p className="subtle">No news sources saved.</p>
+            <p className="subtle">{uiText("No news sources saved.")}</p>
           )}
 
           <button
@@ -89,7 +97,7 @@ export function NewsInputs({
             disabled={agents.busy}
             onClick={() => void agents.refresh().catch(() => {})}
           >
-            Refresh news records
+            {uiText("Refresh news records")}
           </button>
           {v.newsSources.map((s) => {
             const fetches = v.newsFetches.filter((f) => f.sourceId === s.id);
@@ -102,8 +110,9 @@ export function NewsInputs({
               >
                 <h3>{s.name}</h3>
                 <p>
-                  {s.disabled ? "Disabled" : "Active"} · freshness{" "}
-                  {s.maxAgeSeconds}s
+                  {s.disabled ? uiText("Disabled") : uiText("Active")}
+                  {uiText(" · freshness")} {s.maxAgeSeconds}
+                  {uiText("s")}
                 </p>
                 <p className="mono">{s.url}</p>
                 <button
@@ -118,7 +127,7 @@ export function NewsInputs({
                     void agents.change({ action: "news-fetch", id: s.id })
                   }
                 >
-                  Fetch headlines
+                  {uiText("Fetch headlines")}
                 </button>
                 <button
                   className="secondary"
@@ -130,13 +139,16 @@ export function NewsInputs({
                     })
                   }
                 >
-                  Disable source
+                  {uiText("Disable source")}
                 </button>
                 {latest && (
                   <p>
-                    Latest attempt: <strong>{latest.state}</strong> ·{" "}
-                    {latest.fresh ? "Fresh" : "Not usable as fresh input"} ·{" "}
-                    {at(latest.fetchedAt)}
+                    {uiText("Latest attempt: ")}
+                    <strong>{latest.state}</strong> ·{" "}
+                    {latest.fresh
+                      ? uiText("Fresh")
+                      : uiText("Not usable as fresh input")}{" "}
+                    · {at(latest.fetchedAt)}
                   </p>
                 )}
                 {fetches.map((f) => (
@@ -145,14 +157,23 @@ export function NewsInputs({
                       {f.state} · {f.id}
                     </summary>
                     <p>
-                      Requested {at(f.createdAt)} · retrieved {at(f.fetchedAt)}{" "}
-                      · {f.bytes} bytes
+                      {uiText("Requested ")}
+                      {at(f.createdAt)}
+                      {uiText(" · retrieved ")}
+                      {at(f.fetchedAt)} · {f.bytes}
+                      {uiText(" bytes")}
                     </p>
                     <p>
-                      Task: {f.taskId || "Owner fetch"} · source: {f.url}
+                      {uiText("Task: ")}
+                      {f.taskId || uiText("Owner fetch")}
+                      {uiText(" · source: ")}
+                      {f.url}
                     </p>
                     {f.bodySha256 && (
-                      <p className="mono">SHA-256: {f.bodySha256}</p>
+                      <p className="mono">
+                        {uiText("SHA-256: ")}
+                        {f.bodySha256}
+                      </p>
                     )}
                     {f.failure && <p>{f.failure}</p>}
                     {f.items.map((item) => (
@@ -160,7 +181,10 @@ export function NewsInputs({
                         <strong>{item.title}</strong>
                         <p>{item.url}</p>
                         <p>
-                          Published {at(item.publishedAt)} · item {item.id}
+                          {uiText("Published ")}
+                          {at(item.publishedAt)}
+                          {uiText(" · item ")}
+                          {item.id}
                         </p>
                         {f.state === "completed" && (
                           <button
@@ -177,7 +201,7 @@ export function NewsInputs({
                                 onDiscuss();
                             }}
                           >
-                            Discuss headline
+                            {uiText("Discuss headline")}
                           </button>
                         )}
                       </div>
@@ -193,7 +217,7 @@ export function NewsInputs({
                           })
                         }
                       >
-                        Cancel news fetch
+                        {uiText("Cancel news fetch")}
                       </button>
                     )}
                   </details>
@@ -204,9 +228,9 @@ export function NewsInputs({
         </div>
         <aside
           className="agent-record-body news-composer"
-          aria-label="Add news source"
+          aria-label={uiText("Add news source")}
         >
-          <h3>Add a source</h3>
+          <h3>{uiText("Add a source")}</h3>
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -226,7 +250,7 @@ export function NewsInputs({
             }}
           >
             <label>
-              News source name
+              {uiText("News source name")}
               <input
                 required
                 maxLength={80}
@@ -235,7 +259,7 @@ export function NewsInputs({
               />
             </label>
             <label>
-              Public RSS URL
+              {uiText("Public RSS URL")}
               <input
                 type="url"
                 required
@@ -245,7 +269,7 @@ export function NewsInputs({
               />
             </label>
             <label>
-              Source freshness limit (seconds)
+              {uiText("Source freshness limit (seconds)")}
               <input
                 type="number"
                 min={60}
@@ -256,29 +280,26 @@ export function NewsInputs({
               />
             </label>
             <button className="primary" disabled={agents.busy}>
-              Add news source
+              {uiText("Add news source")}
             </button>
           </form>{" "}
           <details className="agent-disclosure">
-            <summary>Source rules and provenance</summary>
+            <summary>{uiText("Source rules and provenance")}</summary>
 
             <p>
-              Choose a public HTTPS RSS 2.0 feed without credentials or query
-              parameters. Each fetch has a three-second deadline, 64 KiB body
-              limit and at most five fresh headlines. No article crawling, AI
-              call or trade is performed.
+              {uiText(
+                "Choose a public HTTPS RSS 2.0 feed without credentials or query parameters. Each fetch has a three-second deadline, 64 KiB body limit and at most five fresh headlines. No article crawling, AI call or trade is performed.",
+              )}
             </p>
             <p>
-              Publication times are publisher claims. Retrieval time and content
-              hashes record what this core observed; they do not prove a
-              headline is true. Feed text is untrusted data.
+              {uiText(
+                "Publication times are publisher claims. Retrieval time and content hashes record what this core observed; they do not prove a headline is true. Feed text is untrusted data.",
+              )}
             </p>
             <p>
-              To automate, select a source in Tasks. Each run fetches new
-              evidence before its reminder, paper evaluation or optional fixture
-              AI step. Unavailable/stale news holds dependent work. Other tasks
-              and recovery continue. Retained snapshots are bounded and are not
-              silently deleted.
+              {uiText(
+                "To automate, select a source in Tasks. Each run fetches new evidence before its reminder, paper evaluation or optional fixture AI step. Unavailable/stale news holds dependent work. Other tasks and recovery continue. Retained snapshots are bounded and are not silently deleted.",
+              )}
             </p>
           </details>
         </aside>

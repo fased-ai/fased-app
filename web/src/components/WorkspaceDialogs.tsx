@@ -1,3 +1,4 @@
+import { useUI } from "../ui-preferences";
 import { InstanceSummary, RemoteConnection } from "./InstanceConnection";
 import {
   ArrowRight,
@@ -20,6 +21,7 @@ import {
 import { Badge, Dialog } from "../components/shared";
 import { useWorkspace } from "../workspace";
 export function WorkspaceDialogs() {
+  const { t: uiText } = useUI();
   const {
     state,
     core,
@@ -48,7 +50,10 @@ export function WorkspaceDialogs() {
     <>
       {setupOpen &&
         (connected ? (
-          <Dialog title="Instance" onClose={() => setSetupOpen(false)}>
+          <Dialog
+            title={uiText("Instance")}
+            onClose={() => setSetupOpen(false)}
+          >
             <div className="settings-body">
               <InstanceSummary />
               <RemoteConnection />
@@ -63,13 +68,14 @@ export function WorkspaceDialogs() {
                   }
                 }}
               >
-                Open Chat <ArrowRight size={14} />
+                {uiText("Open Chat ")}
+                <ArrowRight size={14} />
               </button>
             </div>
           </Dialog>
         ) : (
           <Dialog
-            title="Make this workspace yours"
+            title={uiText("Make this workspace yours")}
             onClose={() => setSetupOpen(false)}
             wide
           >
@@ -91,8 +97,10 @@ export function WorkspaceDialogs() {
               <p className="prototype-caption">
                 <FlaskConical size={14} />
                 {connected
-                  ? "Preferences are saved on this instance."
-                  : "Setup simulation · no services or accounts are created"}
+                  ? uiText("Preferences are saved on this instance.")
+                  : uiText(
+                      "Setup simulation · no services or accounts are created",
+                    )}
               </p>
               {core.error && connected && (
                 <p className="core-error" role="alert">
@@ -107,9 +115,11 @@ export function WorkspaceDialogs() {
                   </>
                 ) : (
                   <>
-                    <h3>Where will your instance run?</h3>
+                    <h3>{uiText("Where will your instance run?")}</h3>
                     <p>
-                      Use one instance from a desktop window, browser or CLI.
+                      {uiText(
+                        "Use one instance from a desktop window, browser or CLI.",
+                      )}
                     </p>
                     <div className="choice-grid">
                       {(["local", "vps"] as const).map((host) => (
@@ -127,12 +137,18 @@ export function WorkspaceDialogs() {
                             <Server size={25} />
                           )}
                           <strong>
-                            {host === "local" ? "Local" : "Remote"}
+                            {host === "local"
+                              ? uiText("Local")
+                              : uiText("Remote")}
                           </strong>
                           <span>
                             {host === "local"
-                              ? "Simpler setup. New decisions require your computer to be awake."
-                              : "Always-on host. Private access and application authentication are required."}
+                              ? uiText(
+                                  "Simpler setup. New decisions require your computer to be awake.",
+                                )
+                              : uiText(
+                                  "Always-on host. Private access and application authentication are required.",
+                                )}
                           </span>
                         </button>
                       ))}
@@ -141,11 +157,13 @@ export function WorkspaceDialogs() {
                       <div className="info-banner">
                         <Globe2 size={17} />
                         <div>
-                          <strong>Private access, before remote use.</strong>
+                          <strong>
+                            {uiText("Private access, before remote use.")}
+                          </strong>
                           <span>
-                            The working installer will guide Tailscale
-                            authorization or an SSH tunnel. This preview changes
-                            no network settings.
+                            {uiText(
+                              "The working installer will guide Tailscale authorization or an SSH tunnel. This preview changes no network settings.",
+                            )}
                           </span>
                         </div>
                       </div>
@@ -154,8 +172,12 @@ export function WorkspaceDialogs() {
                 ))}
               {state.setup.step === 1 && (
                 <>
-                  <h3>Choose your wallet capability</h3>
-                  <p>You can explore first and connect an account later.</p>
+                  <h3>{uiText("Choose your wallet capability")}</h3>
+                  <p>
+                    {uiText(
+                      "You can explore first and connect an account later.",
+                    )}
+                  </p>
                   <div className="wallet-choices">
                     {(
                       [
@@ -200,10 +222,13 @@ export function WorkspaceDialogs() {
                     <div className="info-banner amber">
                       <LockKeyhole size={17} />
                       <div>
-                        <strong>Manual unlock is the default.</strong>
+                        <strong>
+                          {uiText("Manual unlock is the default.")}
+                        </strong>
                         <span>
-                          Keys, backup and permission setup are not implemented
-                          in P1. No key will be generated here.
+                          {uiText(
+                            "Keys, backup and permission setup are not implemented in P1. No key will be generated here.",
+                          )}
                         </span>
                       </div>
                     </div>
@@ -212,10 +237,11 @@ export function WorkspaceDialogs() {
               )}
               {state.setup.step === 2 && (
                 <>
-                  <h3>Add AI when a task needs it</h3>
+                  <h3>{uiText("Add AI when a task needs it")}</h3>
                   <p>
-                    Deterministic tasks can work without an AI account. This
-                    step saves a preference only.
+                    {uiText(
+                      "Deterministic tasks can work without an AI account. This step saves a preference only.",
+                    )}
                   </p>
                   <div className="wallet-choices">
                     {Object.entries(providerNames).map(([id, name]) => (
@@ -232,12 +258,14 @@ export function WorkspaceDialogs() {
                       >
                         <span>
                           <strong>
-                            {id === "none" ? "Set up later" : name}
+                            {id === "none" ? uiText("Set up later") : name}
                           </strong>
                           <small>
                             {id === "none"
-                              ? "Start without a provider."
-                              : "Real authentication belongs to a later phase."}
+                              ? uiText("Start without a provider.")
+                              : uiText(
+                                  "Real authentication belongs to a later phase.",
+                                )}
                           </small>
                         </span>
                         {state.setup.provider === id && <Check size={17} />}
@@ -245,45 +273,53 @@ export function WorkspaceDialogs() {
                     ))}
                   </div>
                   <p className="subtle">
-                    No API keys, login tokens or subscription credentials are
-                    accepted in this prototype.
+                    {uiText(
+                      "No API keys, login tokens or subscription credentials are accepted in this prototype.",
+                    )}
                   </p>
                 </>
               )}
               {state.setup.step === 3 && (
                 <>
-                  <h3>A clear starting point</h3>
+                  <h3>{uiText("A clear starting point")}</h3>
                   <p>
-                    Review your preferences before returning to the workspace.
+                    {uiText(
+                      "Review your preferences before returning to the workspace.",
+                    )}
                   </p>
                   <dl className="review-list">
                     <div>
-                      <dt>Location</dt>
+                      <dt>{uiText("Location")}</dt>
                       <dd>
-                        {state.setup.host === "local" ? "Local" : "Remote"} ·
-                        simulated
+                        {state.setup.host === "local"
+                          ? uiText("Local")
+                          : uiText("Remote")}
+                        {uiText(" · simulated")}
                       </dd>
                     </div>
                     <div>
-                      <dt>Wallet mode</dt>
+                      <dt>{uiText("Wallet mode")}</dt>
                       <dd>{walletNames[state.setup.walletMode]}</dd>
                     </div>
                     <div>
-                      <dt>AI preference</dt>
+                      <dt>{uiText("AI preference")}</dt>
                       <dd>{providerNames[state.setup.provider]}</dd>
                     </div>
                     <div>
-                      <dt>Execution</dt>
-                      <dd>Unavailable · prototype only</dd>
+                      <dt>{uiText("Execution")}</dt>
+                      <dd>{uiText("Unavailable · prototype only")}</dd>
                     </div>
                   </dl>
                   <div className="info-banner">
                     <ShieldCheck size={17} />
                     <div>
-                      <strong>No financial authority is created.</strong>
+                      <strong>
+                        {uiText("No financial authority is created.")}
+                      </strong>
                       <span>
-                        Wallet keys, grants, live accounts and provider
-                        connections remain unconfigured.
+                        {uiText(
+                          "Wallet keys, grants, live accounts and provider connections remain unconfigured.",
+                        )}
                       </span>
                     </div>
                   </div>
@@ -303,7 +339,9 @@ export function WorkspaceDialogs() {
                     : setSetupOpen(false)
                 }
               >
-                {state.setup.step > 0 ? "Back" : "Explore first"}
+                {state.setup.step > 0
+                  ? uiText("Back")
+                  : uiText("Explore first")}
               </button>
               <button
                 className="primary"
@@ -330,10 +368,10 @@ export function WorkspaceDialogs() {
                 }}
               >
                 {state.setup.step < 3
-                  ? "Continue"
+                  ? uiText("Continue")
                   : connected
-                    ? "Save setup preferences"
-                    : "Save prototype preferences"}
+                    ? uiText("Save setup preferences")
+                    : uiText("Save prototype preferences")}
                 <ArrowRight size={15} />
               </button>
             </div>
@@ -341,18 +379,19 @@ export function WorkspaceDialogs() {
         ))}
       {noticesOpen && (
         <Dialog
-          title="Notification inbox"
+          title={uiText("Notification inbox")}
           onClose={() => setNoticesOpen(false)}
         >
           <div className="notice-tools">
             <p className="subtle">
-              Durable prototype events. No external deliveries.
+              {uiText("Durable prototype events. No external deliveries.")}
             </p>
             <button
               className="text-button"
               onClick={() => dispatch({ type: "read-notices" })}
             >
-              Mark all read <CheckCheck size={14} />
+              {uiText("Mark all read ")}
+              <CheckCheck size={14} />
             </button>
           </div>
           <div className="notice-list">
@@ -370,42 +409,43 @@ export function WorkspaceDialogs() {
       )}
       {actionOpen && (
         <Dialog
-          title="Review an action before it runs"
+          title={uiText("Review an action before it runs")}
           onClose={() => setActionOpen(false)}
         >
           <div className="setup-body">
-            <Badge>SIMULATED · NOT SIGNABLE</Badge>
-            <h3>Example allocation review</h3>
+            <Badge>{uiText("SIMULATED · NOT SIGNABLE")}</Badge>
+            <h3>{uiText("Example allocation review")}</h3>
             <p>
-              Actions become structured records with explicit authority. A chat
-              message is not a wallet permission.
+              {uiText(
+                "Actions become structured records with explicit authority. A chat message is not a wallet permission.",
+              )}
             </p>
             <dl className="review-list">
               <div>
-                <dt>Profile</dt>
+                <dt>{uiText("Profile")}</dt>
                 <dd>{profile.name}</dd>
               </div>
               <div>
-                <dt>Requested action</dt>
-                <dd>Read and compare a draft strategy</dd>
+                <dt>{uiText("Requested action")}</dt>
+                <dd>{uiText("Read and compare a draft strategy")}</dd>
               </div>
               <div>
-                <dt>Funds or destination</dt>
-                <dd>None</dd>
+                <dt>{uiText("Funds or destination")}</dt>
+                <dd>{uiText("None")}</dd>
               </div>
               <div>
-                <dt>Financial permission</dt>
-                <dd>Not granted</dd>
+                <dt>{uiText("Financial permission")}</dt>
+                <dd>{uiText("Not granted")}</dd>
               </div>
               <div>
-                <dt>Result</dt>
-                <dd>Local preview record only</dd>
+                <dt>{uiText("Result")}</dt>
+                <dd>{uiText("Local preview record only")}</dd>
               </div>
             </dl>
           </div>
           <div className="dialog-footer">
             <button className="secondary" onClick={() => setActionOpen(false)}>
-              Cancel
+              {uiText("Cancel")}
             </button>
             <button
               className="primary"
@@ -417,14 +457,15 @@ export function WorkspaceDialogs() {
                 );
               }}
             >
-              Record preview <Check size={14} />
+              {uiText("Record preview ")}
+              <Check size={14} />
             </button>
           </div>
         </Dialog>
       )}
       {profileOpen && (
         <Dialog
-          title="Create an agent profile"
+          title={uiText("Create an agent profile")}
           onClose={() => setProfileOpen(false)}
         >
           <form
@@ -460,7 +501,7 @@ export function WorkspaceDialogs() {
             }}
           >
             <div className="settings-body">
-              <label htmlFor="new-profile-name">Profile name</label>
+              <label htmlFor="new-profile-name">{uiText("Profile name")}</label>
               <input
                 id="new-profile-name"
                 autoFocus
@@ -468,12 +509,13 @@ export function WorkspaceDialogs() {
                 maxLength={48}
                 value={profileName}
                 onChange={(e) => setProfileName(e.target.value)}
-                placeholder="e.g. Portfolio Researcher"
+                placeholder={uiText("e.g. Portfolio Researcher")}
               />
               <p className="subtle">
                 {agents.error && <span role="alert">{agents.error}</span>}
-                Profiles hold their own context and model preference. They do
-                not need a separate service or wallet.
+                {uiText(
+                  "Profiles hold their own context and model preference. They do not need a separate service or wallet.",
+                )}
               </p>
             </div>
             <div className="dialog-footer">
@@ -482,7 +524,7 @@ export function WorkspaceDialogs() {
                 type="button"
                 onClick={() => setProfileOpen(false)}
               >
-                Cancel
+                {uiText("Cancel")}
               </button>
               <button
                 className="primary"
@@ -493,7 +535,8 @@ export function WorkspaceDialogs() {
                   (connected && !agents.view)
                 }
               >
-                Create profile <Plus size={14} />
+                {uiText("Create profile ")}
+                <Plus size={14} />
               </button>
             </div>
           </form>
@@ -501,19 +544,20 @@ export function WorkspaceDialogs() {
       )}
       {resetOpen && (
         <Dialog
-          title="Reset prototype preferences?"
+          title={uiText("Reset prototype preferences?")}
           onClose={() => setResetOpen(false)}
         >
           <div className="settings-body">
             <p>
-              This removes this browser's demo setup, custom profiles, notes and
-              inbox events. It affects no wallet, account or external service.
-              {connected && " Your setup is preserved."}
+              {uiText(
+                "This removes this browser's demo setup, custom profiles, notes and inbox events. It affects no wallet, account or external service.",
+              )}
+              {connected && uiText(" Your setup is preserved.")}
             </p>
           </div>
           <div className="dialog-footer">
             <button className="secondary" onClick={() => setResetOpen(false)}>
-              Keep preferences
+              {uiText("Keep preferences")}
             </button>
             <button
               className="primary"
@@ -525,7 +569,7 @@ export function WorkspaceDialogs() {
                 setToast("Prototype preferences reset");
               }}
             >
-              Reset prototype
+              {uiText("Reset prototype")}
             </button>
           </div>
         </Dialog>
