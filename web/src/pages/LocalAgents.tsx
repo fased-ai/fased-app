@@ -3,7 +3,7 @@ import { MemoryRecall, memoryEvidenceStatuses } from "./MemoryRecall";
 import { useUI } from "../ui-preferences";
 import { useCore } from "../core";
 import { NewsInputs } from "./NewsInputs";
-import { AIConnectionSettings } from "./AIConnection";
+import { AIConnectionSettings, useAIConnection } from "./AIConnection";
 import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { BookOpen, Bot, Plus, Settings2, History } from "../icons";
 import { Badge, SectionHead, Dialog } from "../components/shared";
@@ -33,15 +33,23 @@ export function LocalAgents() {
   return (
     <>
       <SectionHead
-        title={
-          agents.view?.profiles.find((p) => p.id === agents.view?.profileId)
-            ?.name ?? uiText("Agents")
-        }
+        title={uiText(
+          (
+            {
+              chat: "Chat",
+              tasks: "Tasks",
+              news: "News",
+              memory: "Memory",
+              settings: "Agents",
+              bots: "Strategies",
+            } as Record<string, string>
+          )[tab] || "Agents",
+        )}
         action={
           <div className="agent-header-actions">
             {agents.view && (
               <label className="profile-select">
-                {t("Agent")}
+                <span className="sr-only">{t("Agent")}</span>
                 <select
                   aria-label={t("Agent")}
                   disabled={agents.busy}
@@ -84,8 +92,8 @@ export function LocalAgents() {
             )}
             <button
               className="icon-button"
-              aria-label={t("New profile")}
-              data-tooltip={t("New profile")}
+              aria-label={t("New agent")}
+              data-tooltip={t("New agent")}
               onClick={() => setProfileOpen(true)}
             >
               <Plus size={17} aria-hidden="true" />
@@ -145,10 +153,12 @@ function LocalAgentEditor({
   const [researchSelection, setResearchSelection] =
     useState<ResearchSelection>();
   const profile = v.profiles.find((p) => p.id === v.profileId)!;
+  const { view: connection } = useAIConnection();
   const [session, setSession] = useState("");
   const [sessionName, setSessionName] = useState("");
   const [search, setSearch] = useState("");
-  const [messageDrafts, setMessageDrafts] = useState(new Map<string, string>());
+  const { chatDrafts: messageDrafts, setChatDrafts: setMessageDrafts } =
+    useWorkspace();
   const [memoryID, setMemoryID] = useState("");
   const [memory, setMemory] = useState("");
   const [source, setSource] = useState("");
@@ -213,13 +223,16 @@ function LocalAgentEditor({
   const activeSession =
     matching.find((s) => s.id === session) ?? matching.at(-1);
   const message = activeSession
-    ? (messageDrafts.get(activeSession.id) ?? "")
+    ? (messageDrafts.get(
+        `${core.instanceId}:${v.profileId}:${activeSession.id}`,
+      ) ?? "")
     : "";
   function updateMessage(sessionId: string, text: string) {
     setMessageDrafts((drafts) => {
       const next = new Map(drafts);
-      if (text) next.set(sessionId, text);
-      else next.delete(sessionId);
+      if (text)
+        next.set(`${core.instanceId}:${v.profileId}:${sessionId}`, text);
+      else next.delete(`${core.instanceId}:${v.profileId}:${sessionId}`);
       return next;
     });
   }
@@ -459,10 +472,17 @@ function LocalAgentEditor({
                           })
                         )
                           setMessageDrafts((current) => {
-                            if (current.get(thread) !== submitted)
+                            if (
+                              current.get(
+                                `${core.instanceId}:${v.profileId}:${thread}`,
+                              ) !== submitted
+                            )
                               return current;
                             const next = new Map(current);
-                            next.set(thread, "");
+                            next.set(
+                              `${core.instanceId}:${v.profileId}:${thread}`,
+                              "",
+                            );
                             return next;
                           });
                       },
@@ -528,10 +548,10 @@ function LocalAgentEditor({
       )}
       {tab === "settings" && (
         <div className="agent-settings-workspace">
-          <section className="panel" aria-label={uiText("Profile settings")}>
+          <section className="panel" aria-label={uiText("Agent settings")}>
             <div className="panel-heading">
-              <h2>{uiText("Profile settings")}</h2>
-              <Badge>{uiText("NO AUTHORITY")}</Badge>
+              <h2>{uiText("Agent")}</h2>
+              <Badge>{uiText("Demo")}</Badge>
             </div>
             <form
               className="agent-record-body"
@@ -550,7 +570,7 @@ function LocalAgentEditor({
               })}
             >
               <label>
-                {uiText("Profile name")}
+                {uiText("Name")}
                 <input
                   disabled={agents.busy}
                   required
@@ -560,7 +580,7 @@ function LocalAgentEditor({
                 />
               </label>
               <label>
-                {uiText("Persona")}
+                {uiText("Instructions")}
                 <textarea
                   disabled={agents.busy}
                   maxLength={4000}
@@ -569,13 +589,18 @@ function LocalAgentEditor({
                 />
               </label>
               <details className="profile-defaults">
-                <summary>{uiText("Profile defaults")}</summary>
+                <summary>{uiText("Model")}</summary>
                 <label>
-                  {uiText("Provider preference")}
+                  {uiText("Provider")}
                   <select
                     disabled={agents.busy}
                     value={provider}
-                    onChange={(e) => setProvider(e.target.value as Provider)}
+                    aria-label={uiText("Provider")}
+                    onChange={(e) => {
+                      setProvider(e.target.value as Provider);
+                      if (e.target.value === "openai" && !model)
+                        setModel(connection?.admissionPolicy?.model || "");
+                    }}
                   >
                     {Object.entries(providerNames).map(([id, title]) => (
                       <option key={id} value={id}>
@@ -585,27 +610,30 @@ function LocalAgentEditor({
                   </select>
                 </label>
                 <label>
-                  {uiText("Model preference")}
+                  {uiText("Model")}
                   <input
+                    list="agent-models"
                     disabled={agents.busy}
                     maxLength={120}
                     value={model}
                     onChange={(e) => setModel(e.target.value)}
                   />
                 </label>
-                <p className="subtle">
-                  {uiText("Preferences do not connect a provider.")}
-                </p>
+                <datalist id="agent-models">
+                  {connection?.admissionPolicy && (
+                    <option value={connection.admissionPolicy.model} />
+                  )}
+                </datalist>
               </details>
               <button className="primary" disabled={agents.busy}>
-                {uiText("Save profile")}
+                {uiText("Save agent")}
               </button>
               <button
                 type="button"
                 className="text-button"
                 onClick={reloadProfile}
               >
-                {uiText("Reload profile fields")}
+                {uiText("Reload")}
               </button>
             </form>
           </section>
@@ -623,7 +651,7 @@ function LocalAgentEditor({
                 setMemoryOpen(true);
               }}
             >
-              {t("New memory")}
+              {t("Add fact")}
             </button>
             <Badge>{uiText("PROFILE ONLY")}</Badge>
           </div>
@@ -666,7 +694,7 @@ function LocalAgentEditor({
                     ? t("Restore a memory")
                     : memoryID
                       ? t("Correct a memory")
-                      : t("New memory")
+                      : t("Add fact")
                 }
                 onClose={resetMemory}
               >
@@ -748,9 +776,9 @@ function LocalAgentEditor({
                     </section>
                   )}
                   <label>
-                    {t("Memory note")}
+                    {t("Fact")}
                     <textarea
-                      aria-label={t("Memory note")}
+                      aria-label={t("Fact")}
                       required
                       maxLength={4000}
                       value={memory}

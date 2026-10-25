@@ -245,7 +245,7 @@ export function AccountManagement() {
           <div className="account-columns">
             <section className="panel account-panel">
               <div className="panel-heading">
-                <h2>{uiText("Public account records")}</h2>
+                <h2>{uiText("Accounts")}</h2>
                 <Badge>
                   {uiText("REVISION ")}
                   {view.record.revision}

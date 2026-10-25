@@ -30,10 +30,8 @@ export function ChatPermissionReview({
             <dd>{p.model}</dd>
           </div>
           <div>
-            <dt>{t("AI connection")}</dt>
-            <dd>
-              {p.connectionRef ? t("OpenAI fixture") : t("Local fixture")}
-            </dd>
+            <dt>{t("Provider")}</dt>
+            <dd>{p.connectionRef ? t("OpenAI fixture") : t("Demo")}</dd>
           </div>
           <div>
             <dt>{t("Allowance")}</dt>
@@ -50,7 +48,7 @@ export function ChatPermissionReview({
           </div>
         </dl>
         <details>
-          <summary>{t("Inspect limits")}</summary>
+          <summary>{t("Limits")}</summary>
           <pre>{JSON.stringify(p, null, 2)}</pre>
         </details>
       </div>

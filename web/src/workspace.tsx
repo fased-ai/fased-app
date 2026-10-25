@@ -23,6 +23,7 @@ function loadInitialState() {
 function getRoute() {
   const raw = window.location.hash.slice(1);
   const aliases: Record<string, string> = {
+    dashboard: "overview",
     chat: "agents/chat",
     tasks: "agents/tasks",
     agents: "agents/settings",
@@ -114,6 +115,8 @@ function useWorkspaceState() {
     localDispatch(action);
   }
   const [route, setRoute] = useState(getRoute);
+  const [focusedTask, setFocusedTask] = useState("");
+  const [chatDrafts, setChatDrafts] = useState(new Map<string, string>());
   const [setupOpen, setSetupOpen] = useState(false);
   const [noticesOpen, setNoticesOpen] = useState(false);
   const [actionOpen, setActionOpen] = useState(false);
@@ -199,6 +202,7 @@ function useWorkspaceState() {
   }
   const searchItems = [
     ...[
+      ["Dashboard", "overview"],
       ["Chat", "agents/chat"],
       ["Tasks", "agents/tasks"],
       ["Agents", "agents/settings"],
@@ -216,6 +220,10 @@ function useWorkspaceState() {
   return {
     core,
     agents,
+    focusedTask,
+    setFocusedTask,
+    chatDrafts,
+    setChatDrafts,
     state,
     dispatch,
     route,

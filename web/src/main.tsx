@@ -5,6 +5,7 @@ import "./styles.css";
 import "./vendor/wen-design/style.css";
 import "./wen-app.css";
 import "./shell.css";
+import "./dashboard.css";
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <App />

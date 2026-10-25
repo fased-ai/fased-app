@@ -91,7 +91,7 @@ export function AgentTasks({
 }) {
   const { t: uiText } = useUI();
   const tr = uiText;
-  const { agents } = useWorkspace();
+  const { agents, focusedTask, setFocusedTask } = useWorkspace();
   const [editing, setEditing] = useState(false);
   const [selected, setSelected] = useState("");
   const [resultId, setResultId] = useState("");
@@ -100,6 +100,13 @@ export function AgentTasks({
   const runCards = useRef(new Map<string, HTMLElement>());
   const tasks = v.tasks.filter((t) => !t.wen);
   const selectedTask = tasks.find((t) => t.id === selected);
+  useEffect(() => {
+    if (!focusedTask) return;
+    setPanel("automations");
+    if (focusedTask === "new") setEditing(true);
+    else if (tasks.some((t) => t.id === focusedTask)) setSelected(focusedTask);
+    setFocusedTask("");
+  }, [focusedTask, tasks, setFocusedTask, setPanel]);
   const selectedRun = v.runs.filter((r) => r.taskId === selected).at(-1);
   function reviewAI() {
     if (advanced.current) {
@@ -234,7 +241,7 @@ export function AgentTasks({
               disabled={agents.busy}
               onClick={() => void discuss(run)}
             >
-              {uiText("Discuss run")}
+              {uiText("Discuss")}
             </button>
           )}
         <details className="task-inspection">
@@ -592,7 +599,7 @@ export function AgentTasks({
         )}
       </details>
       <details className="scheduled-ai-disclosure" ref={advanced}>
-        <summary>{uiText("Advanced AI schedules · fixtures")}</summary>
+        <summary>{uiText("AI tasks")}</summary>
         <ScheduledAITasks view={v} />
       </details>
     </div>

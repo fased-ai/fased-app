@@ -501,7 +501,7 @@ export function WorkspaceDialogs() {
             }}
           >
             <div className="settings-body">
-              <label htmlFor="new-profile-name">{uiText("Profile name")}</label>
+              <label htmlFor="new-profile-name">{uiText("Name")}</label>
               <input
                 id="new-profile-name"
                 autoFocus
@@ -513,9 +513,6 @@ export function WorkspaceDialogs() {
               />
               <p className="subtle">
                 {agents.error && <span role="alert">{agents.error}</span>}
-                {uiText(
-                  "Profiles hold their own context and model preference. They do not need a separate service or wallet.",
-                )}
               </p>
             </div>
             <div className="dialog-footer">
@@ -535,7 +532,7 @@ export function WorkspaceDialogs() {
                   (connected && !agents.view)
                 }
               >
-                {uiText("Create profile ")}
+                {uiText("Create agent")}
                 <Plus size={14} />
               </button>
             </div>

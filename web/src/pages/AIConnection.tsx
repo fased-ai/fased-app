@@ -69,16 +69,17 @@ export function ConnectionPicker({
   const { view, refresh } = useAIConnection();
   return (
     <label>
-      <span>{uiText("AI connection")}</span>
+      <span>{uiText("Provider")}</span>
       <select
         value={value}
+        aria-label={uiText("Provider")}
         onChange={(e) => onChange(e.target.value)}
         onFocus={() => void refresh()}
       >
-        <option value="">{uiText("Local fixture")}</option>
+        <option value="">{uiText("Demo")}</option>
         {view?.ref && (
           <option value={view.ref} disabled={view.locked}>
-            {uiText("OpenAI fixture · ")}
+            {uiText("OpenAI · ")}
             {view.locked ? uiText("locked") : uiText("ready")}
           </option>
         )}
@@ -120,18 +121,15 @@ export function AIConnectionSettings() {
     }
   }
   return (
-    <section
-      className="panel ai-connection"
-      aria-label={uiText("OpenAI connection")}
-    >
+    <section className="panel ai-connection" aria-label={uiText("Providers")}>
       <div className="panel-heading">
-        <h2>{uiText("OpenAI connection")}</h2>
-        <Badge>{uiText("FIXTURE")}</Badge>
+        <h2>{uiText("Providers")}</h2>
+        <Badge>{uiText("Demo")}</Badge>
       </div>
       <div className="agent-record-body">
         <p className="connection-status" role="status">
           {view?.ref
-            ? `${uiText(view.locked ? "Locked" : "Unlocked")} · ${uiText("OpenAI fixture")}`
+            ? `${uiText(view.locked ? "Locked" : "Unlocked")} · ${uiText("OpenAI")}`
             : uiText("No connection saved")}
         </p>
         {error && <p role="alert">{error}</p>}
@@ -145,7 +143,7 @@ export function AIConnectionSettings() {
           />
         )}
         <details className="connection-options">
-          <summary>{uiText("Connection settings")}</summary>
+          <summary>{uiText("Credentials")}</summary>
           <p>
             {uiText("Disposable fased-test- keys only. No real API calls.")}
           </p>
@@ -157,7 +155,7 @@ export function AIConnectionSettings() {
             autoComplete="off"
           >
             <label>
-              {uiText("Disposable API key")}
+              {uiText("Test key")}
               <input
                 type="password"
                 autoComplete="off"
@@ -181,9 +179,7 @@ export function AIConnectionSettings() {
                 className="primary"
                 disabled={busy || !view || !key || passphrase.length < 12}
               >
-                {view?.ref
-                  ? uiText("Replace test connection")
-                  : uiText("Save test connection")}
+                {view?.ref ? uiText("Replace") : uiText("Save")}
               </button>
               <button
                 type="button"
@@ -191,7 +187,7 @@ export function AIConnectionSettings() {
                 disabled={busy || !view?.ref || passphrase.length < 12}
                 onClick={() => void change("unlock")}
               >
-                {uiText("Unlock connection")}
+                {uiText("Unlock")}
               </button>
               <button
                 type="button"
@@ -199,7 +195,7 @@ export function AIConnectionSettings() {
                 disabled={busy || !view?.ref}
                 onClick={() => void change("lock")}
               >
-                {uiText("Lock connection")}
+                {uiText("Lock")}
               </button>
               <button
                 type="button"
@@ -207,12 +203,12 @@ export function AIConnectionSettings() {
                 disabled={busy || !view?.ref || passphrase.length < 12}
                 onClick={() => void change("remove")}
               >
-                {uiText("Remove connection")}
+                {uiText("Remove")}
               </button>
             </div>
           </form>
           <details className="connection-inspection">
-            <summary>{uiText("Vault and recovery")}</summary>
+            <summary>{uiText("Recovery")}</summary>
             <p>
               {uiText(
                 "Encrypted with your separate vault passphrase. Unlock lasts 15 minutes; lock, sign-out and restart end it. An unlocked key is accessible to the running core.",
@@ -247,13 +243,13 @@ export function AIModelPicker({
   const { view } = useAIConnection();
   return (
     <label>
-      <span>{uiText("AI model")}</span>
+      <span>{uiText("Model")}</span>
       <select
-        aria-label={uiText("AI model")}
+        aria-label={uiText("Model")}
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >
-        <option value="">{uiText("Fixture model")}</option>
+        <option value="">{uiText("Demo")}</option>
         {value && value !== view?.admissionPolicy?.model && (
           <option value={value} disabled>
             {uiText("Unavailable model: ")}
@@ -271,7 +267,7 @@ export function AIModelPicker({
             }
           >
             {view.admissionPolicy.model}
-            {uiText(" · admission fixture only")}
+            {uiText("")}
           </option>
         )}
       </select>

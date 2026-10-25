@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeftRight,
+  LayoutDashboard,
   Bell,
   Bot,
   ChevronDown,
@@ -27,6 +28,7 @@ import { AppearanceSettings, useUI } from "../ui-preferences";
 import { Dialog } from "./shared";
 
 export const shellPages = [
+  { name: "Dashboard", path: "overview", icon: LayoutDashboard },
   { name: "Chat", path: "agents/chat", icon: MessageSquare },
   { name: "Tasks", path: "agents/tasks", icon: Clock3 },
   { name: "Agents", path: "agents/settings", icon: Bot },
@@ -38,6 +40,7 @@ export const shellPages = [
 export function ShellNavigation() {
   const {
     core,
+    agents,
     route,
     navigate,
     query,
@@ -123,17 +126,21 @@ export function ShellNavigation() {
           preferences.rail ? PanelLeftClose : PanelLeftOpen,
           () => update({ rail: !preferences.rail }),
         )}
-        <a className="shell-brand" href="#agents/chat" aria-label="Fased">
+        <a className="shell-brand" href="#overview" aria-label="Fased">
           <img src={logo} alt="" width="25" height="25" />
           Fased
         </a>
         <nav className="shell-top-nav" aria-label={t("Main navigation")}>
-          {shellPages.slice(0, 3).map((p) => (
+          {shellPages.slice(0, 4).map((p) => (
             <a
               key={p.path}
               href={`#${p.path}`}
               aria-current={route === p.path ? "page" : undefined}
-              className={p.name !== "Chat" ? "shell-top-extra" : undefined}
+              className={
+                p.name !== "Chat" && p.name !== "Dashboard"
+                  ? "shell-top-extra"
+                  : undefined
+              }
             >
               {t(p.name)}
             </a>
@@ -156,11 +163,15 @@ export function ShellNavigation() {
                 className="shell-more"
                 aria-label={t("More pages")}
               >
-                {links(shellPages.slice(1))}
-                <hr />
-                <a href="#overview" onClick={closeMore}>
-                  {t("Overview")}
+                <a
+                  href="#overview"
+                  className="shell-overflow-route"
+                  onClick={closeMore}
+                >
+                  {t("Dashboard")}
                 </a>
+                {links(shellPages.slice(2))}
+                <hr />
                 <a href="#activity" onClick={closeMore}>
                   <History size={18} />
                   {t("Activity")}
@@ -201,6 +212,9 @@ export function ShellNavigation() {
           {t("Search Fased")}
         </button>
         <div className="shell-tools">
+          {(core.mode !== "ready" || agents.view?.aiFixtureAvailable) && (
+            <span className="shell-demo">{t("Demo")}</span>
+          )}
           <span className="shell-desktop-utility">
             {utility("Providers", Plug, () => navigate("settings"))}
           </span>

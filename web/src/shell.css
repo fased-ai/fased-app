@@ -72,7 +72,7 @@
   height: 50px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   padding: 0 12px;
   background: var(--shell-header);
   min-width: 0;
@@ -512,5 +512,124 @@
   .wt .shell-rail a,
   .wt .shell-rail button {
     min-height: 44px;
+  }
+}
+/* Connected agent controls share the compact Meteora toolbar. */
+.wt .shell-demo {
+  color: var(--wt-muted);
+  font-size: 11px;
+  padding: 3px 6px;
+  border: 1px solid var(--wt-border);
+  border-radius: 4px;
+}
+.wt .chat-workspace .chat-composer {
+  position: relative;
+}
+.wt .chat-composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.wt .reply-model-menu,
+.wt .message-options {
+  position: relative;
+  min-width: 0;
+}
+.wt .reply-model-menu > summary,
+.wt .message-options > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: 12px;
+  min-height: 30px;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px 7px;
+  color: var(--wt-muted);
+  border-radius: 6px;
+}
+.wt .reply-model-menu > summary::-webkit-details-marker,
+.wt .message-options > summary::-webkit-details-marker {
+  display: none;
+}
+.wt .reply-model-panel,
+.wt .message-options[open] {
+  z-index: 30;
+}
+.wt .reply-model-panel {
+  position: absolute;
+  bottom: 36px;
+  left: 0;
+  min-width: 240px;
+  max-width: min(360px, 75vw);
+  padding: 12px;
+  background: var(--wt-raised);
+  border: 1px solid var(--wt-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 30px var(--shell-shadow);
+}
+.wt .reply-model-panel label {
+  display: block;
+  margin: 0 0 10px;
+  font-size: 12px;
+}
+.wt .reply-model-panel label select {
+  display: block;
+  width: 100%;
+  margin-top: 5px;
+}
+.wt .chat-composer-toolbar > .message-options[open] {
+  position: absolute;
+  bottom: 44px;
+  right: 8px;
+  width: min(480px, calc(100% - 16px));
+  max-height: min(65dvh, 540px);
+  overflow: auto;
+  background: var(--wt-raised);
+  border: 1px solid var(--wt-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 30px var(--shell-shadow);
+  padding: 10px;
+}
+.wt .chat-composer-toolbar > .message-options[open] > summary {
+  margin-left: auto;
+}
+.wt .reply-unavailable {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--wt-muted);
+}
+.wt .agent-header-actions .profile-select {
+  display: block;
+}
+.wt .agent-header-actions .profile-select select {
+  max-width: 210px;
+  padding: 5px 8px;
+}
+.wt .chat-input > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+@media (max-width: 600px) {
+  .wt .reply-model-menu > summary {
+    max-width: 170px;
+  }
+  .wt .agent-header-actions .profile-select select {
+    max-width: 160px;
+  }
+}
+
+@media (max-width: 480px) {
+  .wt .shell-top-nav > a[href="#overview"] {
+    display: none;
   }
 }

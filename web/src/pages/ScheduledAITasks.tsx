@@ -1,11 +1,13 @@
+import { agentReplyDefaults } from "../agent-defaults";
 import { useUI } from "../ui-preferences";
 import { NewsSourcePicker } from "./NewsInputs";
 import {
   AIModelPicker,
+  useAIConnection,
   AIAdmissionReview,
   ConnectionPicker,
 } from "./AIConnection";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useWorkspace } from "../workspace";
 import type { AgentView } from "../agents";
 const money = (n: number) => `$${(n / 1_000_000).toFixed(6)}`;
@@ -16,8 +18,24 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
   const [prompt, setPrompt] = useState("");
   const [newsSourceId, setNewsSourceId] = useState("");
   const [newsAge, setNewsAge] = useState(3600);
+  const { view: access } = useAIConnection();
+  const agent = v.profiles.find((p) => p.id === v.profileId)!;
+  const inherited = agentReplyDefaults(
+    agent,
+    access
+      ? {
+          ref: access.ref,
+          locked: access.locked,
+          model: access.admissionPolicy?.model,
+        }
+      : null,
+  );
   const [connectionRef, setConnectionRef] = useState("");
   const [model, setModel] = useState("");
+  useEffect(() => {
+    setConnectionRef(inherited.connectionRef);
+    setModel(inherited.model);
+  }, [inherited.connectionRef, inherited.model]);
   const [session, setSession] = useState("");
   const [bot, setBot] = useState("");
   const [interval, setInterval] = useState(60);

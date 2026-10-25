@@ -88,7 +88,7 @@ export function TaskAccessSettings({
   }
   return (
     <details className="connection-options">
-      <summary>{t("Unattended tasks")}</summary>
+      <summary>{t("Background access")}</summary>
       {error && <p role="alert">{t(error)}</p>}
       {connection.taskAccess && (
         <div className="agent-inline">
@@ -207,7 +207,7 @@ export function TaskAccessSettings({
             />
           </label>
           <details>
-            <summary>{t("Inspect limits")}</summary>
+            <summary>{t("Limits")}</summary>
             <pre>{JSON.stringify(review, null, 2)}</pre>
           </details>
           <div className="agent-actions">

@@ -11,7 +11,7 @@ test("setup resumes after reload and never creates signing authority", async ({
     fullPage: true,
   });
   await expect(page.getByLabel("Instance location")).toHaveText("Preview");
-  await page.getByRole("button", { name: "Set up workspace" }).click();
+  await page.getByRole("button", { name: "Setup" }).click();
   await page.getByRole("button", { name: /Remote Always-on/ }).click();
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page
@@ -19,7 +19,7 @@ test("setup resumes after reload and never creates signing authority", async ({
     .click();
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.reload();
-  await page.getByRole("button", { name: "Set up workspace" }).click();
+  await page.getByRole("button", { name: "Setup" }).click();
   await expect(
     page.getByRole("heading", { name: "Choose your wallet capability" }),
   ).toBeVisible();
@@ -35,7 +35,7 @@ test("setup resumes after reload and never creates signing authority", async ({
     .getByRole("button", { name: "Save prototype preferences" })
     .click();
   await expect(
-    page.getByRole("button", { name: "Review setup", exact: true }),
+    page.getByRole("button", { name: "Setup", exact: true }),
   ).toBeVisible();
   await page.goto("/#wallets/security");
   await expect(
@@ -151,16 +151,15 @@ test("terminal mockups cannot execute and make no remote requests", async ({
     page.getByRole("button", { name: "Execution unavailable" }),
   ).toBeDisabled();
   await page.goto("/#overview");
-  const terminals = page.getByRole("region", {
-    name: "Terminals",
-    exact: true,
-  });
-  await expect(terminals.getByRole("button")).toHaveCount(3);
+  await page.getByRole("button", { name: "Add widgets", exact: true }).click();
   await page
-    .getByRole("region", { name: "Terminals", exact: true })
-    .getByRole("button")
-    .filter({ hasText: "Mining" })
+    .getByRole("dialog", { name: "Widgets", exact: true })
+    .getByRole("button", { name: "Mining", exact: true })
     .click();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  const mining = page.locator('[data-widget="mining"]');
+  await expect(mining).toContainText("Unavailable");
+  await mining.locator("button.dashboard-title").click();
   await expect(page).toHaveURL(/#terminals\/satcoin$/);
   await page.getByRole("heading", { name: "Mining", exact: true }).click();
   await page.screenshot({
@@ -209,7 +208,7 @@ test("mobile navigation, keyboard escape and unknown routes are usable", async (
   await page.goto("/#not-a-real-route");
   await expect(
     page.getByRole("heading", {
-      name: "Overview",
+      name: "Dashboard",
       exact: true,
     }),
   ).toBeVisible();

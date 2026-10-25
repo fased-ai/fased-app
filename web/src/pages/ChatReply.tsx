@@ -50,10 +50,13 @@ export function ChatReply({
             onChanged={() => agents.refresh()}
           />
         )}
-      <div className="response-status">
+      <div
+        className="response-status"
+        hidden={!!q.chatPermissionId && q.state === "completed"}
+      >
         <strong>{uiText(q.state)}</strong>
         <small>
-          {uiText("Fixture · ")}
+          {uiText("Demo · ")}
           {money(q.spentMicrousd)}
         </small>
       </div>
@@ -69,7 +72,7 @@ export function ChatReply({
         </p>
       )}
       <details>
-        <summary>{uiText("Exact context disclosure")}</summary>
+        <summary>{uiText("Details")}</summary>
         <AIAdmissionReview policy={q.policy} admission={q.admission} />
         <p>
           {uiText("Model: ")}
@@ -205,8 +208,15 @@ export function ChatReply({
           aria-label={card.title}
         >
           <small>
-            {card.kind} · {card.review}
-            {uiText(" · REVIEW ONLY")}
+            {uiText(card.kind === "reminder-draft" ? "Task" : "Proposal")} ·{" "}
+            {uiText(
+              card.review === "kept"
+                ? "Saved"
+                : card.review === "dismissed"
+                  ? "Dismissed"
+                  : "Draft",
+            )}
+            {card.kind !== "reminder-draft" && uiText(" · REVIEW ONLY")}
           </small>
           <h4>{card.title}</h4>
           <p>{card.text}</p>

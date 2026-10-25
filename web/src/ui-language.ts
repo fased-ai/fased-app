@@ -1,3 +1,4 @@
+import { priorityCopy } from "./ui-language-priority";
 import { pageCopy } from "./ui-language-pages";
 export const languages = {
   en: "English",
@@ -10,6 +11,7 @@ export type Language = keyof typeof languages;
 // Interface copy only. Never translate user records, model output or server receipts.
 const rows = {
   ...pageCopy,
+  ...priorityCopy,
   "No expiry": ["Без срока", "Sin caducidad", "无有效期限制", "만료 없음"],
   "Weekdays at {time}": [
     "По будням в {time}",
