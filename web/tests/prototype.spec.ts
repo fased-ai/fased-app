@@ -52,9 +52,11 @@ test("profiles keep separate model preferences and memories", async ({
   page,
 }) => {
   await page.goto("/#agents/settings");
-  await page.getByLabel("Preferred AI connection").selectOption("openai");
+  await page.getByLabel("Provider", { exact: true }).selectOption("openai");
   await page.getByRole("button", { name: /TA Trading Analyst/ }).click();
-  await expect(page.getByLabel("Preferred AI connection")).toHaveValue("none");
+  await expect(page.getByLabel("Provider", { exact: true })).toHaveValue(
+    "none",
+  );
   await page.evaluate(() => {
     window.location.hash = "agents/memory";
   });

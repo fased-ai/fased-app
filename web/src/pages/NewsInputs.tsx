@@ -201,7 +201,7 @@ export function NewsInputs({
                                 onDiscuss();
                             }}
                           >
-                            {uiText("Discuss headline")}
+                            {uiText("Discuss")}
                           </button>
                         )}
                       </div>

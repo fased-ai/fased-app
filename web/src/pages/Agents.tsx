@@ -43,7 +43,7 @@ export function Agents() {
         action={
           <button className="secondary" onClick={() => setProfileOpen(true)}>
             <Plus size={16} />
-            {uiText(" New profile")}
+            {uiText(" New agent")}
           </button>
         }
       />
@@ -387,9 +387,7 @@ export function Agents() {
             <Badge>{uiText("NO AUTHORITY CHANGES")}</Badge>
           </div>
           <div className="settings-body">
-            <label htmlFor="profile-provider">
-              {uiText("Preferred AI connection")}
-            </label>
+            <label htmlFor="profile-provider">{uiText("Provider")}</label>
             <select
               id="profile-provider"
               value={profile.provider}

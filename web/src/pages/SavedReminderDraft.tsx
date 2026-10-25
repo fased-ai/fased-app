@@ -210,7 +210,7 @@ export function SavedReminderDraft({
                       close();
                   }}
                 >
-                  {uiText("Create reviewed reminder")}
+                  {uiText("Create task")}
                 </button>
               </div>
             )}

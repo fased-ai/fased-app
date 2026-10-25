@@ -31,7 +31,7 @@ export function ChatPermissionReview({
           </div>
           <div>
             <dt>{t("Provider")}</dt>
-            <dd>{p.connectionRef ? t("OpenAI fixture") : t("Demo")}</dd>
+            <dd>{p.connectionRef ? t("OpenAI") : t("Demo")}</dd>
           </div>
           <div>
             <dt>{t("Allowance")}</dt>

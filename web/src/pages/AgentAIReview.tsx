@@ -87,7 +87,7 @@ function AgentAIForm({
   }
   const [newsSourceId, setNewsSourceId] = useState("");
   const [newsAge, setNewsAge] = useState(3600);
-  const { view: access } = useAIConnection();
+  const { view: access, refresh: refreshAccess } = useAIConnection();
   const agent = view.profiles.find((p) => p.id === view.profileId)!;
   const inherited = agentReplyDefaults(
     agent,
@@ -192,7 +192,7 @@ function AgentAIForm({
     setConsent("");
   }
   async function useDraft(id: string) {
-    setOptionsOpen(true);
+    setOptionsOpen(false);
     onClearResearch?.();
     const epoch = ++generation.current;
     setDraftBusy(true);
@@ -483,9 +483,7 @@ function AgentAIForm({
                   return;
                 }
                 if (current.ref !== connectionRef || current.locked)
-                  throw new Error(
-                    "Selected connection is locked or unavailable. Unlock it in Providers or select Local fixture.",
-                  );
+                  throw new Error(tr("Provider unavailable"));
               } catch (err) {
                 if (epoch === generation.current)
                   setDraftError(
@@ -766,7 +764,10 @@ function AgentAIForm({
             <details
               className="message-options"
               open={optionsOpen}
-              onToggle={(e) => setOptionsOpen(e.currentTarget.open)}
+              onToggle={(e) => {
+                setOptionsOpen(e.currentTarget.open);
+                if (e.currentTarget.open) void refreshAccess();
+              }}
             >
               <summary aria-label={tr("Options")} title={tr("Options")}>
                 <SlidersHorizontal size={16} />
@@ -790,6 +791,7 @@ function AgentAIForm({
                       });
                       setEvidencePreview(e);
                       setConsent("");
+                      setOptionsOpen(false);
                       questionRef.current?.focus();
                     }}
                   />
@@ -835,8 +837,8 @@ function AgentAIForm({
                   className="text-button"
                   disabled={agents.busy || !prompt.trim()}
                   onClick={async () => {
-                    await composer.onSave();
                     setOptionsOpen(false);
+                    await composer.onSave();
                   }}
                 >
                   {uiText("Save message")}

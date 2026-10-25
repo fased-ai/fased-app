@@ -1,5 +1,6 @@
 // Product UI vocabulary; records and protocol identifiers remain unchanged.
 export const priorityCopy = {
+  Accounts: ["Счета", "Cuentas", "账户", "계정"],
   Small: ["Обычный", "Normal", "标准", "기본"],
   Wide: ["Широкий", "Ancho", "宽", "넓게"],
   Tall: ["Высокий", "Alto", "高", "높게"],

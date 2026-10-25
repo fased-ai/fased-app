@@ -156,7 +156,7 @@ function WorkspaceShell() {
               <h2>{profile.name}</h2>
               <p>{profile.role}</p>
               <div className="context-detail">
-                <small>{uiText("AI connection")}</small>
+                <small>{uiText("Provider")}</small>
                 <strong>{providerNames[profile.provider]}</strong>
                 <small>{uiText("Wallet authority")}</small>
                 <strong>{uiText("None assigned")}</strong>

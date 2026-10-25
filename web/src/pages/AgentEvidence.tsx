@@ -119,14 +119,8 @@ function EvidenceForm({
       className="ai-review"
       aria-label={uiText("Local agent evidence inspection")}
     >
-      <h3>{uiText("Saved evidence")}</h3>
-      <form
-        className="agent-form-grid"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (selection) void inspect();
-        }}
-      >
+      <h3>{uiText("Sources")}</h3>
+      <div className="agent-form-grid">
         <label>
           {uiText("Evidence type")}
           <select
@@ -137,7 +131,7 @@ function EvidenceForm({
               setSelection("");
             }}
           >
-            <option value="memory">{uiText("Memory note")}</option>
+            <option value="memory">{uiText("Fact")}</option>
             <option value="headline">{uiText("Saved headline")}</option>
             <option value="reminder-run">{uiText("Reminder run")}</option>
           </select>
@@ -146,7 +140,6 @@ function EvidenceForm({
           {uiText("Saved record")}
           <select
             value={selection}
-            required
             onChange={(e) => {
               cancel();
               setSelection(e.target.value);
@@ -166,12 +159,14 @@ function EvidenceForm({
           </select>
         </label>
         <button
+          type="button"
           className="secondary"
           disabled={busy || agents.busy || !selection}
+          onClick={() => void inspect()}
         >
           {uiText("Inspect evidence")}
         </button>
-      </form>
+      </div>
       {(busy || result || error) && (
         <button type="button" className="secondary" onClick={cancel}>
           {uiText("Cancel inspection")}

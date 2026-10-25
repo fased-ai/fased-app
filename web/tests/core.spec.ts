@@ -442,34 +442,34 @@ test("existing pages localize controls and keep owner drafts records and Meteora
     [
       "ru",
       "Интерфейс",
-      "Настройки подключения",
+      "Доступ",
       "Нет источников новостей.",
       "В этом профиле нет заметок.",
-      "Публичные записи аккаунтов",
+      "Кошельки",
     ],
     [
       "es",
       "Preferencias",
-      "Ajustes de conexión",
+      "Credenciales",
       "No hay fuentes de noticias guardadas.",
       "Este perfil no tiene notas.",
-      "Registros públicos de cuentas",
+      "Billeteras",
     ],
     [
       "zh",
       "偏好设置",
-      "连接设置",
+      "凭据",
       "尚未保存新闻来源。",
       "此档案暂无记忆。",
-      "公开账户记录",
+      "钱包",
     ],
     [
       "ko",
       "환경설정",
-      "연결 설정",
+      "인증 정보",
       "저장된 뉴스 소스가 없습니다.",
       "이 프로필에 메모가 없습니다.",
-      "공개 계정 기록",
+      "지갑",
     ],
     [
       "en",
@@ -516,7 +516,7 @@ test("existing pages localize controls and keep owner drafts records and Meteora
       }, route);
       if (expected) await expect(page.locator("main")).toContainText(expected);
       if (route === "agents/chat")
-        await expect(page.locator(".chat-input")).toHaveValue(
+        await expect(page.locator(".chat-input textarea")).toHaveValue(
           "Owner draft — 250 SOL",
         );
       expect(
@@ -657,7 +657,9 @@ test("Meteora shell preserves drafts and records through navigation theme langua
       "lang",
       code === "zh" ? "zh-Hans" : code,
     );
-    await expect(page.locator(".shell-top-nav > a").first()).toHaveText(chat);
+    await expect(
+      page.locator('.shell-top-nav > a[href="#agents/chat"]'),
+    ).toHaveText(chat);
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth,
@@ -1175,9 +1177,12 @@ test("normal Chat grants bounded replies, streams Send and retains scoped histor
   const picker = chat.getByRole("combobox", {
     name: "Provider",
     exact: true,
+    includeHidden: true,
   });
-  await expect(picker).toBeVisible();
+  await expect(picker).not.toBeVisible();
+  await revealControl(page, picker);
   await picker.selectOption(connection.ref);
+  await chat.locator(".reply-model-menu > summary").click();
   await chat
     .getByLabel("Message", { exact: true })
     .fill("Explain my fixture research limits");
@@ -1385,6 +1390,12 @@ async function revealControl(
 ) {
   if (await control.isVisible()) return;
   if ((await control.count()) === 0) {
+    const options = page.locator(".message-options");
+    if (
+      (await options.count()) === 1 &&
+      (await options.getAttribute("open")) === null
+    )
+      await options.locator(":scope > summary").click();
     if (hint.includes("Conversation name")) {
       const toggle = page.getByRole("button", {
         name: "Conversations",
@@ -1417,11 +1428,21 @@ async function revealControl(
   // Keep click targets stable as disclosures open; outermost first.
   const disclosures = control.locator("xpath=ancestor::details");
   for (let i = 0; i < (await disclosures.count()); i++) {
+    if (await control.isVisible()) break;
     const section = disclosures.nth(i);
     if ((await section.getAttribute("open")) === null)
       await section.locator(":scope > summary").click();
   }
   await expect(control).toBeVisible();
+}
+
+async function openEvidence(page: import("@playwright/test").Page) {
+  const options = page.locator(".message-options");
+  if ((await options.getAttribute("open")) === null)
+    await options.locator(":scope > summary").click();
+  const evidence = page.locator(".chat-evidence");
+  if ((await evidence.getAttribute("open")) === null)
+    await evidence.locator(":scope > summary").click();
 }
 
 async function openUpdateSettings(page: import("@playwright/test").Page) {
@@ -3649,10 +3670,10 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   await expect
     .poll(async () => (await read()).aiRequests[0]?.state)
     .toBe("completed");
-  const card = request
-    .locator(".ai-action-card")
-    .filter({ hasText: "reminder" })
-    .first();
+  const card = request.getByRole("region", {
+    name: "Review paper journal",
+    exact: true,
+  });
   await card.getByRole("button", { name: "Keep draft", exact: true }).click();
   await card.getByRole("button", { name: "Review task", exact: true }).click();
   const reminder = card.getByRole("region", { name: /Reminder task review:/ });
@@ -5040,8 +5061,8 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
     page.getByText("Concise answers", { exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Correct note", exact: true }).click();
-  await revealControl(page, page.getByLabel("Fact"), "Fact");
-  await page.getByLabel("Fact").fill("Detailed answers");
+  await revealControl(page, page.getByLabel("Fact", { exact: true }), "Fact");
+  await page.getByLabel("Fact", { exact: true }).fill("Detailed answers");
   await revealControl(page, page.getByLabel("Evidence or source"), "");
   await page
     .getByLabel("Evidence or source")
@@ -5076,16 +5097,16 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
     window.location.hash = "agents/settings";
   });
   try {
-    await revealControl(page, page.getByLabel("Provider"), "");
-    await expect(page.getByLabel("Provider")).toBeDisabled();
+    await revealControl(page, page.getByLabel("Provider", { exact: true }), "");
+    await expect(page.getByLabel("Provider", { exact: true })).toBeDisabled();
   } finally {
     releaseMemory();
   }
-  await expect(page.getByLabel("Provider")).toBeEnabled();
+  await expect(page.getByLabel("Provider", { exact: true })).toBeEnabled();
   await page.unroute("**/api/v1/agents", holdMemoryResponse);
-  await page.getByLabel("Provider").selectOption("openai");
-  await revealControl(page, page.getByLabel("Model"), "");
-  await page.getByLabel("Model").fill("reference-only");
+  await page.getByLabel("Provider", { exact: true }).selectOption("openai");
+  await revealControl(page, page.getByLabel("Model", { exact: true }), "");
+  await page.getByLabel("Model", { exact: true }).fill("reference-only");
   await page.getByRole("button", { name: "Save agent", exact: true }).click();
   await expect
     .poll(
@@ -5629,9 +5650,15 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
   });
   const card = panel.getByRole("region", { name: "Review paper journal" });
   await card.getByRole("button", { name: "Keep draft" }).click();
-  await expect(card).toContainText("kept");
+  await expect(card).toContainText("Saved");
   const view = await privateCLI(["agents"]);
   expect(view.aiRequests).toHaveLength(1);
+  expect(
+    view.aiRequests[0].cards.find(
+      (c: { title: string; review: string }) =>
+        c.title === "Review paper journal",
+    )?.review,
+  ).toBe("kept");
   expect(view.tasks).toHaveLength(0);
   expect(view.aiRequests[0].heldMicrousd).toBe(0);
   expect(view.providerCallsEnabled).toBe(false);
@@ -5727,10 +5754,10 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
   await page.evaluate(() => {
     window.location.hash = "agents/settings";
   });
-  await revealControl(page, page.getByLabel("Provider"), "");
-  await page.getByLabel("Provider").selectOption("anthropic");
-  await revealControl(page, page.getByLabel("Model"), "");
-  await page.getByLabel("Model").fill("preference-only");
+  await revealControl(page, page.getByLabel("Provider", { exact: true }), "");
+  await page.getByLabel("Provider", { exact: true }).selectOption("anthropic");
+  await revealControl(page, page.getByLabel("Model", { exact: true }), "");
+  await page.getByLabel("Model", { exact: true }).fill("preference-only");
   await page.getByRole("button", { name: "Save agent", exact: true }).click();
   await expect
     .poll(async () => {
@@ -8238,6 +8265,14 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
   ).rejects.toThrow();
   expect(await read()).toEqual(corrected);
   // A fresh explicit UI consent is the only execution in this journey.
+  await revealControl(
+    page,
+    review.getByRole("checkbox", {
+      name: "Owner corrected concise preference",
+      exact: true,
+      includeHidden: true,
+    }),
+  );
   await expect(
     review.getByRole("checkbox", {
       name: "Owner corrected concise preference",
@@ -8554,6 +8589,14 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
       includeHidden: true,
     }),
   ).toHaveValue("selected");
+  await revealControl(
+    page,
+    review.getByRole("combobox", {
+      name: "Memory",
+      exact: true,
+      includeHidden: true,
+    }),
+  );
   await expect(
     review.getByRole("checkbox", {
       name: `Unavailable note: ${note.id}`,
@@ -8989,15 +9032,13 @@ test("local agent evidence inspection shares UI/CLI sources, inert reads and res
       .click();
   };
   await openChat(true);
-  await page.locator(".chat-evidence > summary").click();
+  await openEvidence(page);
   const inspector = page.getByRole("region", {
     name: "Local agent evidence inspection",
     exact: true,
   });
   const choose = async (kind: string, id: string, item = "") => {
-    const evidence = page.locator(".chat-evidence");
-    if ((await evidence.getAttribute("open")) === null)
-      await evidence.locator(":scope > summary").click();
+    await openEvidence(page);
     await revealControl(
       page,
       inspector.getByRole("combobox", { name: "Evidence type", exact: true }),
@@ -9014,6 +9055,8 @@ test("local agent evidence inspection shares UI/CLI sources, inert reads and res
       .selectOption(JSON.stringify([id, item]));
   };
   const baseline = await read();
+  const inspectionDraft = "Keep this draft while inspecting sources";
+  await page.getByLabel("Message", { exact: true }).fill(inspectionDraft);
   const hashes: Record<string, string> = {};
   for (const q of [
     { kind: "memory", id: note.id, item: "" },
@@ -9084,6 +9127,9 @@ test("local agent evidence inspection shares UI/CLI sources, inert reads and res
       .click();
     await expect(card).toHaveCount(0);
     expect(await read()).toEqual(baseline);
+    await expect(page.getByLabel("Message", { exact: true })).toHaveValue(
+      inspectionDraft,
+    );
   }
   await choose("memory", note.id);
   await inspector
@@ -9399,7 +9445,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
       .click();
   };
   await openChat();
-  await page.locator(".chat-evidence > summary").click();
+  await openEvidence(page);
   const inspector = page.getByRole("region", {
     name: "Local agent evidence inspection",
     exact: true,
@@ -9413,9 +9459,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
     exact: true,
   });
   const choose = async (kind: string, id: string, itemId = "") => {
-    const evidence = page.locator(".chat-evidence");
-    if ((await evidence.getAttribute("open")) === null)
-      await evidence.locator(":scope > summary").click();
+    await openEvidence(page);
     await revealControl(
       page,
       inspector.getByRole("combobox", { name: "Evidence type", exact: true }),
@@ -9700,6 +9744,31 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
     await expect(selected).toHaveCount(0);
     expect(await read()).toEqual(baseline);
   }
+  const chooseDemo = async () => {
+    // Unsupported agent defaults must not silently become Demo after navigation.
+    await expect(review.getByRole("status")).toContainText(
+      "Provider unavailable",
+    );
+    await expect(
+      review.getByRole("button", { name: "Send", exact: true }),
+    ).toBeDisabled();
+    const provider = review.getByRole("combobox", {
+      name: "Provider",
+      exact: true,
+      includeHidden: true,
+    });
+    await revealControl(page, provider);
+    await provider.selectOption("");
+    await expect(
+      review.getByRole("combobox", {
+        name: "Model",
+        exact: true,
+        includeHidden: true,
+      }),
+    ).toHaveValue("");
+    await review.locator(".reply-model-menu > summary").click();
+  };
+  await chooseDemo();
   const current = await choose("memory", note.id);
   expect(current.sha256).not.toBe(
     JSON.parse(memoryRequest.context).evidenceSelection.sha256,
@@ -9751,6 +9820,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
   const large = v.memories.find((m: any) => m.text === largeText);
   await page.reload();
   await openChat();
+  await chooseDemo();
   const oversized = await choose("memory", large.id);
   expect(Buffer.byteLength(JSON.stringify(oversized))).toBeLessThan(16384);
   await inspector
@@ -9783,6 +9853,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
   await selected
     .getByRole("button", { name: "Remove evidence", exact: true })
     .click();
+  await openEvidence(page);
   await inspector
     .getByRole("button", { name: "Cancel inspection", exact: true })
     .click();
