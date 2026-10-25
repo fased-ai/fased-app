@@ -637,6 +637,8 @@
 /* Compact agent utilities share the existing Meteora surfaces and controls. */
 .wt .provider-entry {
   display: flex;
+  min-height: 44px;
+  flex-shrink: 0;
   align-items: center;
   justify-content: space-between;
   width: 100%;
