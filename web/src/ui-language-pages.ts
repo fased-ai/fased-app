@@ -1,5 +1,82 @@
 // Static interface copy; user records, model output and raw receipts are never catalog keys.
 export const pageCopy = {
+  Expired: ["Истекло", "Caducado", "已过期", "만료됨"],
+  "Memory source": [
+    "Источник памяти",
+    "Fuente de memoria",
+    "记忆来源",
+    "메모리 출처",
+  ],
+  "Open conversation": [
+    "Открыть диалог",
+    "Abrir conversación",
+    "打开对话",
+    "대화 열기",
+  ],
+  "Review restoration": [
+    "Проверить восстановление",
+    "Revisar restauración",
+    "审核恢复",
+    "복원 검토",
+  ],
+  "Workspace changed. Inspect the source again.": [
+    "Область изменилась. Проверьте источник заново.",
+    "El espacio cambió. Inspecciona la fuente de nuevo.",
+    "工作区已更改。请重新查看来源。",
+    "작업 공간이 변경되었습니다. 출처를 다시 검사하세요.",
+  ],
+  "previous revision(s)": [
+    "предыдущих версий",
+    "versiones anteriores",
+    "个先前版本",
+    "개 이전 버전",
+  ],
+  "· SHA-256": ["· SHA-256", "· SHA-256", "· SHA-256", "· SHA-256"],
+  "· unverified": ["· не проверено", "· sin verificar", "· 未验证", "· 미검증"],
+  "Matched retained text · Claims unverified": [
+    "Совпадает с сохранённым текстом · утверждения не проверены",
+    "Coincide con el texto guardado · afirmaciones sin verificar",
+    "与保留文本匹配 · 声明未验证",
+    "보관된 텍스트와 일치 · 주장은 미검증",
+  ],
+  "Free-form source": [
+    "Произвольный источник",
+    "Fuente libre",
+    "自由格式来源",
+    "자유 형식 출처",
+  ],
+  "Invalid source reference": [
+    "Неверная ссылка на источник",
+    "Referencia de fuente no válida",
+    "来源引用无效",
+    "유효하지 않은 출처 참조",
+  ],
+  "Recorded source unavailable": [
+    "Сохранённый источник недоступен",
+    "Fuente registrada no disponible",
+    "记录的来源不可用",
+    "기록된 출처를 사용할 수 없음",
+  ],
+  "Ambiguous source reference": [
+    "Неоднозначная ссылка на источник",
+    "Referencia de fuente ambigua",
+    "来源引用不明确",
+    "모호한 출처 참조",
+  ],
+  "Recorded source text changed": [
+    "Текст сохранённого источника изменился",
+    "El texto de la fuente registrada cambió",
+    "记录的来源文本已更改",
+    "기록된 출처 텍스트가 변경됨",
+  ],
+  Unlocked: ["Разблокировано", "Desbloqueado", "已解锁", "잠금 해제됨"],
+  "OpenAI fixture": [
+    "Тест OpenAI",
+    "Prueba OpenAI",
+    "OpenAI 测试",
+    "OpenAI 테스트",
+  ],
+
   "All declared entries": [
     "Все заявленные записи",
     "Todas las entradas declaradas",

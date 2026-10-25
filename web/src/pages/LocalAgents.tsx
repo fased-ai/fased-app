@@ -701,7 +701,7 @@ function LocalAgentEditor({
                           {uiText(" · Updated")}{" "}
                           {date(memoryRestore.current.at)}
                           {uiText(" · Expiry")}{" "}
-                          {date(memoryRestore.current.expiresAt)}
+                          {uiText(date(memoryRestore.current.expiresAt))}
                         </small>
                       </article>
                       <article aria-label={uiText("Selected memory revision")}>
@@ -715,7 +715,7 @@ function LocalAgentEditor({
                           {uiText(" · Updated")}{" "}
                           {date(memoryRestore.selected.at)}
                           {uiText(" · Expiry")}{" "}
-                          {date(memoryRestore.selected.expiresAt)}
+                          {uiText(date(memoryRestore.selected.expiresAt))}
                         </small>
                       </article>
                       {memoryRestore.selected.expiresAt > 0 &&

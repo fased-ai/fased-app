@@ -128,7 +128,7 @@ export function AIConnectionSettings() {
       <div className="agent-record-body">
         <p className="connection-status" role="status">
           {view?.ref
-            ? `${view.locked ? "Locked" : "Unlocked"} · OpenAI fixture`
+            ? `${uiText(view.locked ? "Locked" : "Unlocked")} · ${uiText("OpenAI fixture")}`
             : uiText("No connection saved")}
         </p>
         {error && <p role="alert">{error}</p>}

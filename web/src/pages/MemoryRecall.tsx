@@ -22,7 +22,9 @@ export const memoryEvidenceStatuses: Record<
   changed: "Recorded source text changed",
 };
 const date = (at: number) =>
-  at ? new Date(at * 1000).toLocaleString() : "No expiry";
+  at
+    ? new Date(at * 1000).toLocaleString(document.documentElement.lang)
+    : "No expiry";
 
 export function MemoryRecall({
   view,
@@ -154,7 +156,7 @@ export function MemoryRecall({
           aria-label={`Memory ${m.id}`}
         >
           <p>{m.text}</p>
-          {m.expired && <small>Expired</small>}
+          {m.expired && <small>{uiText("Expired")}</small>}
           <div className="agent-inline">
             <button
               className="text-button"
@@ -204,13 +206,18 @@ export function MemoryRecall({
           </div>
           {m.history.length > 0 && (
             <details>
-              <summary>{m.history.length} previous revision(s)</summary>
+              <summary>
+                {m.history.length}
+                {uiText(" previous revision(s)")}
+              </summary>
               {m.history.map((h, i) => (
                 <section key={i} aria-label={`Memory revision ${i + 1}`}>
                   <p>{h.text}</p>
                   <small>
-                    {h.source} · Updated {date(h.at)} · Expiry{" "}
-                    {date(h.expiresAt)}
+                    {h.source}
+                    {uiText(" · Updated ")}
+                    {date(h.at)}
+                    {uiText(" · Expiry")} {uiText(date(h.expiresAt))}
                   </small>
                   <button
                     className="text-button"
@@ -219,34 +226,36 @@ export function MemoryRecall({
                     }
                     onClick={() => void restore(m.id, i)}
                   >
-                    Review restoration
+                    {uiText("Review restoration")}
                   </button>
                 </section>
               ))}
             </details>
           )}
           {source?.memoryId === m.id && (
-            <section aria-label="Memory source">
-              <h4>Memory source</h4>
-              <p>{memoryEvidenceStatuses[source.status]}</p>
+            <section aria-label={uiText("Memory source")}>
+              <h4>{uiText("Memory source")}</h4>
+              <p>{uiText(memoryEvidenceStatuses[source.status])}</p>
               {source.status === "matched" && (
                 <>
                   <p>{source.text}</p>
                   <small>
-                    {source.kind} · {source.id} · SHA-256 {source.sha256}
+                    {source.kind} · {source.id}
+                    {uiText(" · SHA-256 ")}
+                    {source.sha256}
                   </small>
                   <button
                     className="secondary"
                     disabled={!current || agents.busy}
                     onClick={() => onOpen(source)}
                   >
-                    Open conversation
+                    {uiText("Open conversation")}
                   </button>
                 </>
               )}
               {!current && (
                 <p role="status">
-                  Workspace changed. Inspect the source again.
+                  {uiText("Workspace changed. Inspect the source again.")}
                 </p>
               )}
             </section>

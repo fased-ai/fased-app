@@ -302,7 +302,8 @@ export function ResearchReadPanel({
           <option value="">{uiText("None")}</option>
           {library?.bundles.map((b, i) => (
             <option key={i} value={i}>
-              {i + 1}: {b.scope.dataset} · unverified
+              {i + 1}: {b.scope.dataset}
+              {uiText(" · unverified")}
             </option>
           ))}
         </select>
