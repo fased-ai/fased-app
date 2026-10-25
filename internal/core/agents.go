@@ -127,6 +127,8 @@ type agentDocument struct {
 	WENRehearsal  *wenSessionWorkspace `json:"wenRehearsal,omitempty"`
 }
 type AgentView struct {
+	TaskReview           *TaskReview         `json:"taskReview,omitempty"`
+	TaskCapacity         TaskCapacity        `json:"taskCapacity"`
 	Playbooks            []AgentPlaybook     `json:"playbooks"`
 	PlaybookReview       *PlaybookReview     `json:"playbookReview,omitempty"`
 	TaskReminderReview   *TaskReminderReview `json:"taskReminderReview,omitempty"`
@@ -258,6 +260,7 @@ func agentView(d agentDocument, revision int64, profile, query string, now int64
 	}
 	v := AgentView{NewsSources: []NewsSource{}, NewsFetches: []NewsFetch{}, Revision: revision, ProfileID: profile, Profiles: d.Profiles, Sessions: []AgentSession{}, Messages: []AgentMessage{}, Memories: []AgentMemory{}, Bots: []PaperBot{}, Tasks: []AgentTask{}, Runs: []AgentRun{}, Notices: []AgentNotice{}, AIRequests: []AgentAIRequest{}}
 	v.Playbooks = []AgentPlaybook{}
+	v.TaskCapacity = agentTaskCapacity(d)
 	for _, p := range d.Playbooks {
 		if p.ProfileID == profile {
 			v.Playbooks = append(v.Playbooks, p)
@@ -619,6 +622,22 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		plain := AgentCommand{Name: review.Name, Text: review.Text, IntervalSeconds: review.IntervalSeconds, MaxRuns: review.MaxRuns}
 		if err = appendAgentTask(&d, plain, profile, id, now); err != nil {
 			return AgentView{}, err
+		}
+	case "task-review", "task-reviewed-create":
+		review, err := reviewAgentTask(d, c, profile, revision, now)
+		if err != nil {
+			return AgentView{}, err
+		}
+		if c.Action == "task-review" {
+			v, err := agentView(d, revision, profile, "", now)
+			v.TaskReview = review
+			return v, err
+		}
+		if c.ConsentDigest != review.Digest {
+			return AgentView{}, errors.New("task review changed; review again")
+		}
+		if e = appendAgentTask(&d, c, profile, id, now); e != nil {
+			return AgentView{}, e
 		}
 	case "task-create":
 		if e = appendAgentTask(&d, c, profile, id, now); e != nil {

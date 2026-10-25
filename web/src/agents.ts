@@ -339,6 +339,14 @@ export type PlaybookReview = {
   command: AgentCommand;
 };
 export type AgentView = {
+  taskReview?: TaskReview;
+  taskCapacity?: {
+    tasks: number;
+    evaluations: number;
+    runs: number;
+    notices: number;
+    bytes: number;
+  };
   playbooks?: AgentPlaybook[];
   playbookReview?: PlaybookReview;
   taskReminderReview?: TaskReminderReview;
@@ -359,6 +367,19 @@ export type AgentView = {
   notices: AgentNotice[];
   providerCallsEnabled: false;
   financialExecution: false;
+};
+export type TaskReview = {
+  version: "task-review-v1";
+  revision: number;
+  profileId: string;
+  name: string;
+  text: string;
+  bot?: PaperBot;
+  news?: TaskNewsInput;
+  intervalSeconds: number;
+  maxRuns: number;
+  expiresAt: number;
+  digest: string;
 };
 export type AgentMemoryEvidence = {
   memoryId: string;

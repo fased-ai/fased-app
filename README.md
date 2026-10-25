@@ -135,6 +135,15 @@ model calls, RPC requests, wallet access or financial orders are available.
 Browser-only design mode retains its separate illustrative data. Reset prototype
 preserves the core's setup and agent records.
 
+In **Agents → Tasks**, choose **New task**, describe the reminder, choose
+**Run once** or **Repeat**, then **Review task**. The review shows the job,
+interval, run limit and selected inputs. Only **Create task** enables it; opening,
+editing or cancelling a review saves nothing. Changed records or a ten-minute
+expiry require another review. **Run**, **Pause**, **Resume** and **Result** manage
+the saved task. Results show the saved reminder or fixture answer; receipts remain
+under **Run details**. **Schedule & storage** shows the shared capacity and recovery
+behavior. Calendar times, cron and timezones remain unavailable.
+
 Tasks run in the existing core with the UI closed. Reminders and the versioned
 `fixed-paper-buy-v1` strategy are the only task kinds. Each task has a 60-second to
 seven-day interval and 1–20 evaluations; missed intervals coalesce into one run.

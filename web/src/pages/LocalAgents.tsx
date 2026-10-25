@@ -1,10 +1,10 @@
 import { ResearchReadPanel, type ResearchSelection } from "./ResearchReadPanel";
 import { MemoryRecall, memoryEvidenceStatuses } from "./MemoryRecall";
 import { useCore } from "../core";
-import { NewsInputs, NewsSourcePicker } from "./NewsInputs";
+import { NewsInputs } from "./NewsInputs";
 import { AIConnectionSettings } from "./AIConnection";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Plus, RefreshCw } from "../icons";
+import { Plus } from "../icons";
 import { Badge, SectionHead } from "../components/shared";
 import { useWorkspace } from "../workspace";
 import { providerNames, type Provider } from "../state";
@@ -14,9 +14,7 @@ import type {
   AgentView,
 } from "../agents";
 import "../agents.css";
-import { AgentPlaybooks } from "./AgentPlaybooks";
-import { ScheduledAITasks } from "./ScheduledAITasks";
-import { SavedReminderDraft } from "./SavedReminderDraft";
+import { AgentTasks } from "./AgentTasks";
 import { AgentAIReview } from "./AgentAIReview";
 
 const date = (at: number) =>
@@ -111,12 +109,8 @@ function LocalAgentEditor({
   const [newConversation, setNewConversation] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
-  const [taskOpen, setTaskOpen] = useState(false);
-  const [resultId, setResultId] = useState("");
   const [researchSelection, setResearchSelection] =
     useState<ResearchSelection>();
-  const [newsSourceId, setNewsSourceId] = useState("");
-  const [newsAge, setNewsAge] = useState(3600);
   const profile = v.profiles.find((p) => p.id === v.profileId)!;
   const [session, setSession] = useState("");
   const [sessionName, setSessionName] = useState("");
@@ -134,35 +128,12 @@ function LocalAgentEditor({
   const [persona, setPersona] = useState(profile.persona);
   const [provider, setProvider] = useState(profile.provider);
   const [model, setModel] = useState(profile.model);
-  const [taskName, setTaskName] = useState("");
-  const [taskText, setTaskText] = useState("");
-  const [bot, setBot] = useState("");
-  const [interval, setInterval] = useState(60);
-  const [maxRuns, setMaxRuns] = useState(1);
-  const [reminderSource, setReminderSource] = useState("");
   const [botName, setBotName] = useState("");
   const [quantity, setQuantity] = useState(1);
   const [price, setPrice] = useState(100);
   const [budget, setBudget] = useState(500);
   const profileRevision = useRef(v.revision);
   const memoryRevision = useRef(v.revision);
-  const runCards = useRef(new Map<string, HTMLElement>());
-  function showRun(id: string) {
-    setResultId(id);
-    setTaskPanel("history");
-    requestAnimationFrame(() => {
-      const card = runCards.current.get(id);
-      if (card?.isConnected) {
-        card.scrollIntoView({ block: "center" });
-        card.focus({ preventScroll: true });
-      }
-    });
-  }
-  const taskNames = new Map(
-    v.tasks
-      .filter((t) => t.profileId === v.profileId)
-      .map((t) => [t.id, t.name]),
-  );
   function reloadProfile() {
     setName(profile.name);
     setPersona(profile.persona);
@@ -786,446 +757,16 @@ function LocalAgentEditor({
         </section>
       )}
       {tab === "tasks" && (
-        <>
-          <nav className="task-views tabs" aria-label="Task views">
-            {["automations", "playbooks", "history", "inbox"].map((t) => (
-              <button
-                key={t}
-                aria-pressed={taskPanel === t}
-                onClick={() => {
-                  setTaskPanel(t);
-                  if (t === "history") setResultId("");
-                }}
-              >
-                {t}
-              </button>
-            ))}
-            <button
-              className="secondary"
-              onClick={() => {
-                setTaskPanel("automations");
-                setTaskOpen(true);
-              }}
-            >
-              New task
-            </button>
-            <button
-              className="text-button"
-              onClick={() => void agents.refresh().catch(() => {})}
-            >
-              <RefreshCw size={14} /> Refresh
-            </button>
-          </nav>
-          <div hidden={taskPanel !== "playbooks"}>
-            <AgentPlaybooks key={v.profileId} view={v} />
-          </div>
-          <section
-            className="panel task-board"
-            hidden={taskPanel !== "automations"}
-          >
-            <div className="panel-heading">
-              <h2>Automations</h2>
-            </div>
-            <div className="agent-record-body task-workspace">
-              <div className="task-list">
-                <details className="schedule-behavior">
-                  <summary>Schedule behavior</summary>
-                  <p>
-                    Runs while this core is running, even with the browser
-                    closed. Missed intervals coalesce into one evaluation. Pause
-                    prevents new evaluations; resume schedules the next
-                    interval.
-                  </p>
-                </details>
-                <div className="table-scroll">
-                  <table className="task-table" aria-label="Automations">
-                    <thead>
-                      <tr>
-                        <th>Name</th>
-                        <th>Status</th>
-                        <th>Runs</th>
-                        <th>Next run</th>
-                        <th>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {v.tasks
-                        .filter((t) => !t.wen)
-                        .map((t) => {
-                          const last = v.runs
-                            .filter((r) => r.taskId === t.id)
-                            .at(-1);
-                          return (
-                            <tr key={t.id}>
-                              <td>
-                                <strong>{t.name}</strong>
-                                <small>
-                                  {t.ai
-                                    ? "Fixture AI"
-                                    : t.botId
-                                      ? "Paper evaluation"
-                                      : "Reminder"}
-                                </small>
-                              </td>
-                              <td>
-                                <span className={`task-state ${t.state}`}>
-                                  {t.state}
-                                </span>
-                              </td>
-                              <td>
-                                {t.runs} / {t.maxRuns}
-                              </td>
-                              <td>
-                                {t.state === "scheduled" ? date(t.nextAt) : "—"}
-                              </td>
-                              <td>
-                                <div className="row-actions">
-                                  {!t.ai && (
-                                    <button
-                                      className="text-button"
-                                      disabled={
-                                        agents.busy || t.state !== "scheduled"
-                                      }
-                                      aria-label={`Run now: ${t.name}`}
-                                      onClick={() =>
-                                        void agents.change({
-                                          action: "task-run",
-                                          id: t.id,
-                                        })
-                                      }
-                                    >
-                                      Run
-                                    </button>
-                                  )}
-                                  <button
-                                    className="text-button"
-                                    disabled={
-                                      agents.busy ||
-                                      t.state === "completed" ||
-                                      t.runs >= t.maxRuns
-                                    }
-                                    aria-label={`${t.state === "paused" || t.state === "held" ? "Resume" : "Pause"}: ${t.name}`}
-                                    onClick={() =>
-                                      void agents.change({
-                                        action:
-                                          t.state === "paused" ||
-                                          t.state === "held"
-                                            ? "task-resume"
-                                            : "task-pause",
-                                        id: t.id,
-                                      })
-                                    }
-                                  >
-                                    {t.state === "paused" || t.state === "held"
-                                      ? "Resume"
-                                      : "Pause"}
-                                  </button>
-                                  {!t.news && !t.botId && !t.ai && (
-                                    <button
-                                      className="text-button"
-                                      aria-label={`Reuse: ${t.name}`}
-                                      onClick={() => setReminderSource(t.id)}
-                                    >
-                                      Reuse
-                                    </button>
-                                  )}
-                                  <button
-                                    className="text-button"
-                                    aria-label={`Result: ${t.name}`}
-                                    disabled={!last}
-                                    onClick={() => {
-                                      if (last) {
-                                        setResultId(last.id);
-                                        setTaskPanel("history");
-                                      }
-                                    }}
-                                  >
-                                    Result
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                    </tbody>
-                  </table>
-                </div>
-                {!v.tasks.some((t) => !t.wen) && (
-                  <p className="empty-row">No automations yet.</p>
-                )}
-                {reminderSource && (
-                  <SavedReminderDraft
-                    key={reminderSource}
-                    view={v}
-                    sourceID={reminderSource}
-                    close={() => setReminderSource("")}
-                  />
-                )}
-              </div>
-              {taskOpen && (
-                <form
-                  className="task-composer"
-                  onSubmit={submit(async () => {
-                    if (
-                      await agents.change({
-                        action: "task-create",
-                        newsSourceId,
-                        newsMaxAgeSeconds: newsSourceId ? newsAge : undefined,
-                        name: taskName,
-                        text: taskText,
-                        botId: bot,
-                        intervalSeconds: interval,
-                        maxRuns,
-                      })
-                    ) {
-                      setTaskOpen(false);
-                      setTaskName("");
-                      setTaskText("");
-                    }
-                  })}
-                >
-                  <div className="panel-heading">
-                    <h3>Create a task</h3>
-                    <button
-                      type="button"
-                      className="text-button"
-                      onClick={() => setTaskOpen(false)}
-                    >
-                      Cancel task
-                    </button>
-                  </div>
-                  <NewsSourcePicker
-                    view={v}
-                    value={newsSourceId}
-                    onChange={setNewsSourceId}
-                    age={newsAge}
-                    onAge={setNewsAge}
-                  />
-                  <label>
-                    Task name
-                    <input
-                      required
-                      maxLength={80}
-                      value={taskName}
-                      onChange={(e) => setTaskName(e.target.value)}
-                    />
-                  </label>
-                  <label>
-                    Task kind
-                    <select
-                      value={bot}
-                      onChange={(e) => setBot(e.target.value)}
-                    >
-                      <option value="">Local reminder</option>
-                      {v.bots.map((b) => (
-                        <option key={b.id} value={b.id}>
-                          Paper evaluation · {b.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  {!bot && (
-                    <label>
-                      Reminder text
-                      <textarea
-                        required
-                        maxLength={4000}
-                        value={taskText}
-                        onChange={(e) => setTaskText(e.target.value)}
-                      />
-                    </label>
-                  )}
-                  <div className="agent-grid">
-                    <label>
-                      Interval in seconds
-                      <input
-                        type="number"
-                        min={60}
-                        max={604800}
-                        required
-                        value={interval}
-                        onChange={(e) => setInterval(Number(e.target.value))}
-                      />
-                    </label>
-                    <label>
-                      Maximum evaluations
-                      <input
-                        type="number"
-                        min={1}
-                        max={20}
-                        required
-                        value={maxRuns}
-                        onChange={(e) => setMaxRuns(Number(e.target.value))}
-                      />
-                    </label>
-                  </div>
-                  <button className="primary" disabled={agents.busy}>
-                    Create task
-                  </button>
-                </form>
-              )}
-            </div>
-          </section>
-          <div className="task-results">
-            <section
-              className="panel"
-              aria-label="Run results"
-              hidden={taskPanel !== "history"}
-            >
-              <div className="panel-heading">
-                <h2>Execution journal</h2>
-                <Badge>PAPER / REMINDERS</Badge>
-              </div>
-              <div className="agent-record-body">
-                {v.runs.length === 0 ? (
-                  <p>No evaluations yet.</p>
-                ) : (
-                  v.runs
-                    .slice()
-                    .reverse()
-                    .filter((r) => !resultId || r.id === resultId)
-                    .map((r) => (
-                      <article
-                        className="memory-card task-run"
-                        key={r.id}
-                        tabIndex={-1}
-                        aria-label={`Run ${r.id}`}
-                        ref={(node) => {
-                          if (node) runCards.current.set(r.id, node);
-                          else runCards.current.delete(r.id);
-                        }}
-                      >
-                        <div className="panel-heading">
-                          <strong>
-                            {(r.profileId === v.profileId &&
-                              taskNames.get(r.taskId)) ||
-                              "Task unavailable"}
-                          </strong>
-                          <Badge>{r.outcome}</Badge>
-                        </div>
-                        <p>
-                          {r.strategy} · {date(r.at)}
-                        </p>
-                        {r.wen && (
-                          <p>
-                            Unsigned WEN paper receipt · unsettled · no rewards
-                            or claims. Receipt SHA-256:{" "}
-                            <code className="wrap-anywhere">
-                              {r.wen.receiptSha256}
-                            </code>
-                          </p>
-                        )}
-                        {r.botId && (
-                          <p>
-                            Inputs: quantity {r.quantity}, fixed price{" "}
-                            {r.priceCents}, cost {r.costCents}, budget before{" "}
-                            {r.budgetBefore}
-                          </p>
-                        )}
-                        {r.news && (
-                          <p className="news-provenance">
-                            News snapshot {r.news.fetchId} · source {r.news.url}{" "}
-                            · retrieved {date(r.news.fetchedAt)} · content{" "}
-                            {r.news.bodySha256}
-                          </p>
-                        )}
-                        <small>Run {r.id}</small>
-                        {!r.wen &&
-                          !r.botId &&
-                          [
-                            "reminder-v1",
-                            "ai-step-v1/reminder-v1",
-                            "ai-step-v1",
-                          ].includes(r.strategy) && (
-                            <button
-                              className="secondary"
-                              disabled={agents.busy}
-                              onClick={async () => {
-                                if (
-                                  await agents.change({
-                                    action: "task-run-explain",
-                                    id: r.id,
-                                  })
-                                ) {
-                                  setSession("");
-                                  setSearch("");
-                                  navigate("agents/chat");
-                                }
-                              }}
-                            >
-                              Discuss run
-                            </button>
-                          )}
-                      </article>
-                    ))
-                )}
-              </div>
-            </section>
-            <section className="panel" hidden={taskPanel !== "inbox"}>
-              <div className="panel-heading">
-                <h2>Task inbox</h2>
-                <Badge>DURABLE</Badge>
-              </div>
-              <div className="agent-record-body">
-                {v.notices.length === 0 ? (
-                  <p>No task notifications.</p>
-                ) : (
-                  v.notices
-                    .slice()
-                    .reverse()
-                    .map((n) => {
-                      const canView =
-                        n.profileId === v.profileId &&
-                        v.runs.some(
-                          (r) =>
-                            r.id === n.runId && r.profileId === v.profileId,
-                        );
-                      return (
-                        <article
-                          className="memory-card"
-                          key={n.id}
-                          aria-label={`Task notification ${n.id}`}
-                        >
-                          <p>{n.text}</p>
-                          <small>{date(n.at)}</small>
-                          <button
-                            className="secondary"
-                            disabled={agents.busy || !canView}
-                            onClick={() => {
-                              if (!canView) return;
-                              showRun(n.runId);
-                            }}
-                          >
-                            {canView ? "View result" : "Result unavailable"}
-                          </button>
-                          {!n.read ? (
-                            <button
-                              className="text-button"
-                              disabled={agents.busy}
-                              onClick={() =>
-                                void agents.change({
-                                  action: "notice-read",
-                                  id: n.id,
-                                })
-                              }
-                            >
-                              Mark read
-                            </button>
-                          ) : (
-                            <small>Read</small>
-                          )}
-                        </article>
-                      );
-                    })
-                )}
-              </div>
-            </section>
-          </div>
-          <details className="scheduled-ai-disclosure">
-            <summary>Advanced AI schedules · fixtures</summary>
-            <ScheduledAITasks view={v} />
-          </details>
-        </>
+        <AgentTasks
+          view={v}
+          panel={taskPanel}
+          setPanel={setTaskPanel}
+          onDiscuss={() => {
+            setSession("");
+            setSearch("");
+            navigate("agents/chat");
+          }}
+        />
       )}
     </div>
   );

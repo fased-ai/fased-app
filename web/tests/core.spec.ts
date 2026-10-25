@@ -8,6 +8,169 @@ import { tmpdir } from "node:os";
 import { once } from "node:events";
 import { createHash, randomBytes } from "node:crypto";
 
+test("compact Tasks reviews without writes and preserves bounded runs across UI CLI restart", async ({
+  page,
+}) => {
+  test.setTimeout(75000);
+  page.setDefaultTimeout(10000);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+  });
+  await page.goto(url + "/#agents/tasks");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  await page.goto(url + "/#agents/tasks");
+  await expect(
+    page.getByRole("heading", { name: "No tasks yet", exact: true }),
+  ).toBeVisible();
+  await page.evaluate(() => scrollTo(0, 0));
+  await page.screenshot({
+    path: `.evidence/tasks-empty-${test.info().project.name}.png`,
+    fullPage: false,
+  });
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  await page.getByLabel("Task name", { exact: true }).fill("Journal review");
+  await page
+    .getByLabel("Reminder text", { exact: true })
+    .fill("Review the saved fixture results.");
+  await page
+    .getByRole("combobox", { name: "Schedule", exact: true })
+    .selectOption("repeat");
+  await page.getByLabel("Every", { exact: true }).fill("15");
+  await page.getByRole("button", { name: "Review task", exact: true }).click();
+  const review = page.getByRole("complementary", {
+    name: "Review task",
+    exact: true,
+  });
+  await expect(review).toContainText("Every 15 minutes · 3 runs");
+  const before = await privateCLI(["agents"]);
+  expect(before.tasks).toHaveLength(0);
+  expect(before.runs).toHaveLength(0);
+  await page.evaluate(() => scrollTo(0, 0));
+  await page.screenshot({
+    path: `.evidence/tasks-review-${test.info().project.name}.png`,
+    fullPage: false,
+  });
+  await review.getByRole("button", { name: "Edit task", exact: true }).click();
+  await page
+    .getByLabel("Reminder text", { exact: true })
+    .fill("Review the corrected fixture results.");
+  await expect(
+    page.getByRole("button", { name: "Create task", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Review task", exact: true }).click();
+  await expect(review).toContainText("Review the corrected fixture results.");
+  await privateCLI(["agents", "--request-stdin"], {
+    action: "session-create",
+    profileId: before.profileId,
+    revision: before.revision,
+    name: "Concurrent fixture conversation",
+  });
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(review.getByRole("alert")).toContainText("Records changed");
+  await review
+    .getByRole("button", { name: "Review again", exact: true })
+    .click();
+  await expect(review.getByRole("alert")).toHaveCount(0);
+  await review
+    .getByRole("button", { name: "Create task", exact: true })
+    .click();
+  const table = page.getByRole("table", { name: "Automations", exact: true });
+  await expect(table).toContainText("Journal review");
+  let v = await privateCLI(["agents"]);
+  const id = v.tasks[0].id;
+  expect(v.tasks[0]).toMatchObject({
+    text: "Review the corrected fixture results.",
+    intervalSeconds: 900,
+    maxRuns: 3,
+    runs: 0,
+    state: "scheduled",
+  });
+  expect(v.revision).toBe(before.revision + 2);
+  await page
+    .getByRole("button", { name: "Run now: Journal review", exact: true })
+    .click();
+  await expect(table).toContainText("1 / 3");
+  const details = page.getByRole("complementary", {
+    name: "Task details",
+    exact: true,
+  });
+  await expect(details.locator(".task-run")).toContainText(
+    "Journal review: Review the corrected fixture results.",
+  );
+  await page
+    .getByRole("button", { name: "Pause: Journal review", exact: true })
+    .click();
+  await expect(table).toContainText("paused");
+  await expect(
+    page.getByRole("button", { name: "Run now: Journal review", exact: true }),
+  ).toBeDisabled();
+  const paused = await privateCLI(["agents"]);
+  expect(paused.runs).toHaveLength(1);
+  await page.evaluate(() => scrollTo(0, 0));
+  await page.screenshot({
+    path: `.evidence/tasks-paused-${test.info().project.name}.png`,
+    fullPage: false,
+  });
+  await stop();
+  await start();
+  await page.goto(url + "/#agents/tasks");
+  await page.getByLabel("Owner password").fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(table).toContainText("paused");
+  expect((await privateCLI(["agents"])).runs).toEqual(paused.runs);
+  await page
+    .getByRole("button", { name: "Resume: Journal review", exact: true })
+    .click();
+  await expect(table).toContainText("scheduled");
+  v = await privateCLI(["agents"]);
+  expect(v.tasks[0].nextAt).toBeGreaterThan(Date.now() / 1000 + 895);
+  await page
+    .getByRole("button", { name: "Result: Journal review", exact: true })
+    .click();
+  await expect(page.getByLabel("Run results", { exact: true })).toContainText(
+    "Journal review: Review the corrected fixture results.",
+  );
+  await expect(
+    page
+      .getByLabel("Run results", { exact: true })
+      .getByText("Run details", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByLabel("Run results", { exact: true }).locator("details"),
+  ).not.toHaveAttribute("open");
+  const foreign = await privateCLI(["agents", "--profile", "news-researcher"]);
+  expect(foreign.tasks).toHaveLength(0);
+  expect(foreign.runs).toHaveLength(0);
+  expect(v.tasks[0].id).toBe(id);
+  expect(v.providerCallsEnabled).toBe(false);
+  expect(v.financialExecution).toBe(false);
+  expect(external).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.evaluate(() => scrollTo(0, 0));
+  await page.screenshot({
+    path: `.evidence/tasks-result-${test.info().project.name}.png`,
+    fullPage: false,
+  });
+});
+
 test("normal Chat connects a fixture provider, reviews one reply and retains scoped history without live calls", async ({
   page,
 }) => {
@@ -3918,6 +4081,7 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
   view = await privateCLI(["agents", "--profile", p]);
   await revealControl(page, page.getByLabel("Task kind"), "");
   await page.getByLabel("Task kind").selectOption(view.bots[0].id);
+  await page.getByRole("button", { name: "Review task", exact: true }).click();
   await page.getByRole("button", { name: "Create task", exact: true }).click();
   await page
     .getByRole("button", { name: "Run now: One paper evaluation", exact: true })
@@ -4056,10 +4220,20 @@ test("bounded news inputs retain provenance across UI CLI and restart, hold depe
   await page.getByRole("button", { name: "New task", exact: true }).click();
   await revealControl(
     page,
-    page.getByRole("combobox", { name: "News input", exact: true }).first(),
+    page
+      .getByRole("combobox", {
+        name: "News input",
+        exact: true,
+        includeHidden: true,
+      })
+      .first(),
   );
   await page
-    .getByRole("combobox", { name: "News input", exact: true })
+    .getByRole("combobox", {
+      name: "News input",
+      exact: true,
+      includeHidden: true,
+    })
     .first()
     .selectOption(sourceID);
   await revealControl(
@@ -4084,6 +4258,7 @@ test("bounded news inputs retain provenance across UI CLI and restart, hold depe
     "",
   );
   await page.getByLabel("Maximum evaluations", { exact: true }).fill("1");
+  await page.getByRole("button", { name: "Review task", exact: true }).click();
   await page.getByRole("button", { name: "Create task", exact: true }).click();
   await page
     .getByRole("button", { name: "Run now: Sourced UI reminder", exact: true })
@@ -8649,6 +8824,7 @@ test("R1 workspace uses a compact branded shell and on-demand chat task memory c
   await page
     .getByLabel("Reminder text", { exact: true })
     .fill("Review the saved note.");
+  await page.getByRole("button", { name: "Review task", exact: true }).click();
   await page.getByRole("button", { name: "Create task", exact: true }).click();
   await page
     .getByRole("button", { name: "Run now: R1 fixture reminder", exact: true })

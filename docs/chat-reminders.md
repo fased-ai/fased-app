@@ -79,3 +79,28 @@ another review. A repeated confirmation cannot duplicate creation; another copy
 requires a fresh explicit review. Restart grants no execution or renewed consent.
 Existing per-task and aggregate limits and update pause still apply. No AI,
 credential, wallet, new storage format or service is involved.
+
+## Create a task directly
+
+Tasks → **New task** uses the same read-only review and atomic creation in UI
+and CLI. Through `fased-app agents --request-stdin`, submit `task-review` with
+`revision`, `profileId`, `name`, `text`, `intervalSeconds` and `maxRuns`. Optional
+`botId` and `newsSourceId`/`newsMaxAgeSeconds` select existing same-profile inputs.
+Inspect `taskReview`, then submit exactly those inputs as `task-reviewed-create`
+with its `consentDigest` and `expiresAt`. Changed settings, profile, revision or
+expiry refuse without writing. No AI, wallet, tool or mining grant is accepted.
+The older explicit `task-create` CLI command remains compatible.
+
+A single run starts after the chosen delay; repeated runs use the same interval.
+Run now consumes one of the reviewed runs. Pause stops future runs; resume starts
+a new interval. Missed intervals coalesce into one run, with no catch-up burst.
+AI tasks in held/review/cancelled states need their existing fresh AI review;
+resume never substitutes for that consent. Failed news requires correction of the
+selected source before resume. No cached-news fallback is added.
+
+This fixture workspace retains history and has finite capacity: 100 tasks,
+200 allocated evaluations, 200 results, 200 notices and 512 KiB including other
+agent records and reserved future output. Limits are workspace-wide and are not
+reset by marking notifications read or completing a task. No automatic pruning,
+archive or unbounded unattended-operation claim is made. Inspect and preserve
+records on a capacity error; do not delete the instance or raise limits.
