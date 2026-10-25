@@ -1,4 +1,4 @@
-import { SlidersHorizontal, Trash2, Eye, History } from "../icons";
+import { SlidersHorizontal, Trash2, Eye, History, Search } from "../icons";
 import { useEffect, useRef, useState } from "react";
 import type {
   AgentMemory,
@@ -126,7 +126,7 @@ export function MemoryRecall({
   return (
     <>
       <form
-        className="agent-inline"
+        className="agent-inline memory-search"
         onSubmit={(e) => {
           e.preventDefault();
           setQuery(search);
@@ -135,16 +135,22 @@ export function MemoryRecall({
         }}
       >
         <label>
-          {uiText("Search memories")}
+          <span className="sr-only">{uiText("Search")}</span>
           <input
             type="search"
+            placeholder={uiText("Search")}
             maxLength={200}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
         </label>
-        <button className="secondary" disabled={busy}>
-          {uiText("Search memory")}
+        <button
+          className="icon-button"
+          aria-label={t("Search")}
+          title={t("Search")}
+          disabled={busy}
+        >
+          <Search size={16} />
         </button>
       </form>
       {error && <p role="alert">{error}</p>}
@@ -157,15 +163,15 @@ export function MemoryRecall({
         >
           <p>{m.text}</p>
           {m.expired && <small>{uiText("Expired")}</small>}
-          <div className="agent-inline">
+          <div className="agent-inline memory-actions">
             <button
               className="text-button"
               disabled={
                 agents.busy || busy || records.revision !== view.revision
               }
               onClick={() => onCorrect(m)}
-              aria-label={t("Correct note")}
-              title={t("Correct note")}
+              aria-label={t("Edit")}
+              title={t("Edit")}
             >
               <SlidersHorizontal size={15} />
             </button>
@@ -177,8 +183,8 @@ export function MemoryRecall({
               onClick={() =>
                 void agents.change({ action: "memory-delete", id: m.id })
               }
-              aria-label={t("Delete note")}
-              title={t("Delete note")}
+              aria-label={t("Forget")}
+              title={t("Forget")}
             >
               <Trash2 size={15} />
             </button>
@@ -188,16 +194,16 @@ export function MemoryRecall({
                 agents.busy || busy || records.revision !== view.revision
               }
               onClick={() => void inspect(m.id)}
-              aria-label={t("Inspect source")}
-              title={t("Inspect source")}
+              aria-label={t("Source")}
+              title={t("Source")}
             >
               <Eye size={15} />
             </button>
             {onOlder && (
               <button
                 className="icon-button"
-                aria-label={t("Older memory revisions")}
-                title={t("Older memory revisions")}
+                aria-label={t("History")}
+                title={t("History")}
                 onClick={() => onOlder(m)}
               >
                 <History size={15} />
@@ -249,7 +255,7 @@ export function MemoryRecall({
                     disabled={!current || agents.busy}
                     onClick={() => onOpen(source)}
                   >
-                    {uiText("Open conversation")}
+                    {uiText("Open Chat")}
                   </button>
                 </>
               )}

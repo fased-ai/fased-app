@@ -1,6 +1,7 @@
 import { useUI } from "../ui-preferences";
 import { useState } from "react";
-import { Badge } from "../components/shared";
+import { Dialog } from "../components/shared";
+import { RefreshCw, Settings2 } from "../icons";
 import type { AgentView } from "../agents";
 import { useWorkspace } from "../workspace";
 
@@ -27,9 +28,9 @@ export function NewsSourcePicker({
   return (
     <div className="agent-form-grid">
       <label>
-        {uiText("News input")}
+        {uiText("News source")}
         <select
-          aria-label={uiText("News input")}
+          aria-label={uiText("News source")}
           value={value}
           onChange={(e) => {
             onChange(e.target.value);
@@ -54,14 +55,15 @@ export function NewsSourcePicker({
       </label>
       {value && (
         <label>
-          {uiText("Maximum news age (seconds)")}
+          {uiText("Freshness (minutes)")}
           <input
             type="number"
-            min={60}
-            max={86400}
+            min={1}
+            max={1440}
+            step="any"
             required
-            value={age}
-            onChange={(e) => onAge(e.target.valueAsNumber)}
+            value={age / 60}
+            onChange={(e) => onAge(Math.round(e.target.valueAsNumber * 60))}
           />
         </label>
       )}
@@ -75,235 +77,371 @@ export function NewsInputs({
   view: AgentView;
   onDiscuss: () => void;
 }) {
-  const { t: uiText } = useUI();
+  const { t } = useUI();
   const { agents } = useWorkspace();
+  const [settings, setSettings] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [selected, setSelected] = useState("");
   const [name, setName] = useState("");
   const [url, setURL] = useState("");
   const [age, setAge] = useState(3600);
+  const time = (n: number) => (n ? at(n) : t("Not retrieved"));
+  const seen = new Set<string>();
+  // Saved headlines remain inspectable after failure; they never become a fresh
+  // task input through this presentation path. Execution still checks the core.
+  const headlines = v.newsFetches
+    .slice()
+    .reverse()
+    .filter(
+      (f) => f.state === "completed" && (!selected || f.sourceId === selected),
+    )
+    .flatMap((fetch) => fetch.items.map((item) => ({ fetch, item })))
+    .filter(({ fetch, item }) => {
+      const key = `${fetch.sourceId}:${item.url}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  const state = (value: string) =>
+    t(
+      (
+        {
+          queued: "Queued",
+          fetching: "Loading",
+          completed: "Completed",
+          failed: "Failed",
+          cancelled: "Cancelled",
+        } as Record<string, string>
+      )[value] || value,
+    );
   return (
-    <section className="panel news-inputs" aria-label={uiText("News inputs")}>
-      <div className="panel-heading">
-        <h2>{uiText("News inputs")}</h2>
-        <Badge>{uiText("PUBLIC RSS · UNTRUSTED")}</Badge>
+    <section className="panel news-inputs news-feed" aria-label={t("News")}>
+      <div className="panel-heading news-toolbar">
+        <select
+          aria-label={t("News source")}
+          value={selected}
+          onChange={(e) => setSelected(e.target.value)}
+        >
+          <option value="">{t("All sources")}</option>
+          {v.newsSources.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+        <button
+          className="icon-button"
+          aria-label={t("Refresh")}
+          title={t("Refresh")}
+          disabled={agents.busy}
+          onClick={() => void agents.refresh().catch(() => {})}
+        >
+          <RefreshCw size={16} />
+        </button>
+        <button className="secondary" onClick={() => setSettings(true)}>
+          <Settings2 size={16} />
+          {t("Sources")}
+        </button>
       </div>
-      <div className="agent-split news-workspace">
-        <div className="agent-record-body news-library">
-          {!v.newsSources.length && (
-            <p className="subtle">{uiText("No news sources saved.")}</p>
-          )}
-
-          <button
-            className="secondary"
-            disabled={agents.busy}
-            onClick={() => void agents.refresh().catch(() => {})}
-          >
-            {uiText("Refresh news records")}
-          </button>
-          {v.newsSources.map((s) => {
-            const fetches = v.newsFetches.filter((f) => f.sourceId === s.id);
-            const latest = fetches.at(-1);
+      <div className="news-headlines">
+        {v.newsSources
+          .filter((s) => !selected || s.id === selected)
+          .map((s) => {
+            const latest = v.newsFetches
+              .filter((f) => f.sourceId === s.id)
+              .at(-1);
+            if (!latest || latest.state === "completed") return null;
             return (
-              <article
-                className="ai-request"
-                key={s.id}
-                aria-label={`News source ${s.name}`}
-              >
-                <h3>{s.name}</h3>
-                <p>
-                  {s.disabled ? uiText("Disabled") : uiText("Active")}
-                  {uiText(" · freshness")} {s.maxAgeSeconds}
-                  {uiText("s")}
-                </p>
-                <p className="mono">{s.url}</p>
-                <button
-                  className="secondary"
-                  disabled={
-                    agents.busy ||
-                    s.disabled ||
-                    latest?.state === "queued" ||
-                    latest?.state === "fetching"
-                  }
-                  onClick={() =>
-                    void agents.change({ action: "news-fetch", id: s.id })
-                  }
-                >
-                  {uiText("Fetch headlines")}
-                </button>
-                <button
-                  className="secondary"
-                  disabled={agents.busy || s.disabled}
-                  onClick={() =>
-                    void agents.change({
-                      action: "news-source-disable",
-                      id: s.id,
-                    })
-                  }
-                >
-                  {uiText("Disable source")}
-                </button>
-                {latest && (
-                  <p>
-                    {uiText("Latest attempt: ")}
-                    <strong>{latest.state}</strong> ·{" "}
-                    {latest.fresh
-                      ? uiText("Fresh")
-                      : uiText("Not usable as fresh input")}{" "}
-                    · {at(latest.fetchedAt)}
-                  </p>
-                )}
-                {fetches.map((f) => (
-                  <details key={f.id} open={f.id === latest?.id}>
-                    <summary>
-                      {f.state} · {f.id}
-                    </summary>
-                    <p>
-                      {uiText("Requested ")}
-                      {at(f.createdAt)}
-                      {uiText(" · retrieved ")}
-                      {at(f.fetchedAt)} · {f.bytes}
-                      {uiText(" bytes")}
-                    </p>
-                    <p>
-                      {uiText("Task: ")}
-                      {f.taskId || uiText("Owner fetch")}
-                      {uiText(" · source: ")}
-                      {f.url}
-                    </p>
-                    {f.bodySha256 && (
-                      <p className="mono">
-                        {uiText("SHA-256: ")}
-                        {f.bodySha256}
-                      </p>
-                    )}
-                    {f.failure && <p>{f.failure}</p>}
-                    {f.items.map((item) => (
-                      <div className="memory-record" key={item.id}>
-                        <strong>{item.title}</strong>
-                        <p>{item.url}</p>
-                        <p>
-                          {uiText("Published ")}
-                          {at(item.publishedAt)}
-                          {uiText(" · item ")}
-                          {item.id}
-                        </p>
-                        {f.state === "completed" && (
-                          <button
-                            className="secondary"
-                            disabled={agents.busy}
-                            onClick={async () => {
-                              if (
-                                await agents.change({
-                                  action: "news-item-explain",
-                                  id: f.id,
-                                  source: item.id,
-                                })
-                              )
-                                onDiscuss();
-                            }}
-                          >
-                            {uiText("Discuss")}
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                    {(f.state === "queued" || f.state === "fetching") && (
-                      <button
-                        className="secondary"
-                        disabled={agents.busy}
-                        onClick={() =>
-                          void agents.change({
-                            action: "news-cancel",
-                            id: f.id,
-                          })
-                        }
-                      >
-                        {uiText("Cancel news fetch")}
-                      </button>
-                    )}
+              <div className="news-status" role="status" key={s.id}>
+                <span>
+                  {s.name} · {state(latest.state)}
+                </span>
+                {latest.failure && (
+                  <details>
+                    <summary>{t("Details")}</summary>
+                    <p>{latest.failure}</p>
                   </details>
-                ))}
-              </article>
+                )}
+                {(latest.state === "queued" || latest.state === "fetching") && (
+                  <button
+                    className="text-button"
+                    disabled={agents.busy}
+                    onClick={() =>
+                      void agents.change({
+                        action: "news-cancel",
+                        id: latest.id,
+                      })
+                    }
+                  >
+                    {t("Cancel")}
+                  </button>
+                )}
+              </div>
             );
           })}
-        </div>
-        <aside
-          className="agent-record-body news-composer"
-          aria-label={uiText("Add news source")}
-        >
-          <h3>{uiText("Add a source")}</h3>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void agents
-                .change({
-                  action: "news-source-add",
-                  name,
-                  source: url,
-                  newsMaxAgeSeconds: age,
-                })
-                .then((ok) => {
-                  if (ok) {
-                    setName("");
-                    setURL("");
-                  }
-                });
-            }}
-          >
-            <label>
-              {uiText("News source name")}
-              <input
-                required
-                maxLength={80}
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </label>
-            <label>
-              {uiText("Public RSS URL")}
-              <input
-                type="url"
-                required
-                maxLength={300}
-                value={url}
-                onChange={(e) => setURL(e.target.value)}
-              />
-            </label>
-            <label>
-              {uiText("Source freshness limit (seconds)")}
-              <input
-                type="number"
-                min={60}
-                max={86400}
-                required
-                value={age}
-                onChange={(e) => setAge(e.target.valueAsNumber)}
-              />
-            </label>
-            <button className="primary" disabled={agents.busy}>
-              {uiText("Add news source")}
-            </button>
-          </form>{" "}
-          <details className="agent-disclosure">
-            <summary>{uiText("Source rules and provenance")}</summary>
-
-            <p>
-              {uiText(
-                "Choose a public HTTPS RSS 2.0 feed without credentials or query parameters. Each fetch has a three-second deadline, 64 KiB body limit and at most five fresh headlines. No article crawling, AI call or trade is performed.",
-              )}
-            </p>
-            <p>
-              {uiText(
-                "Publication times are publisher claims. Retrieval time and content hashes record what this core observed; they do not prove a headline is true. Feed text is untrusted data.",
-              )}
-            </p>
-            <p>
-              {uiText(
-                "To automate, select a source in Tasks. Each run fetches new evidence before its reminder, paper evaluation or optional fixture AI step. Unavailable/stale news holds dependent work. Other tasks and recovery continue. Retained snapshots are bounded and are not silently deleted.",
-              )}
-            </p>
-          </details>
-        </aside>
+        {!headlines.length && (
+          <div className="news-empty">{t("No headlines")}</div>
+        )}
+        {headlines.map(({ fetch: f, item }) => {
+          const source = v.newsSources.find((s) => s.id === f.sourceId);
+          const latest = v.newsFetches
+            .filter((x) => x.sourceId === f.sourceId)
+            .at(-1);
+          const freshness =
+            source?.disabled || latest?.id !== f.id
+              ? "Saved"
+              : f.fresh
+                ? "Fresh"
+                : "Stale";
+          return (
+            <article className="news-headline" key={`${f.id}:${item.id}`}>
+              <div className="news-headline-meta">
+                <span>{source?.name || f.url}</span>
+                <time
+                  dateTime={new Date(item.publishedAt * 1000).toISOString()}
+                >
+                  {time(item.publishedAt)}
+                </time>
+                <span className={freshness === "Fresh" ? "news-fresh" : ""}>
+                  {t(freshness)}
+                </span>
+              </div>
+              <a
+                className="news-title"
+                href={item.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                referrerPolicy="no-referrer"
+              >
+                {item.title}
+              </a>
+              <div className="news-headline-actions">
+                <button
+                  className="text-button"
+                  disabled={agents.busy}
+                  onClick={async () => {
+                    if (
+                      await agents.change({
+                        action: "news-item-explain",
+                        id: f.id,
+                        source: item.id,
+                      })
+                    )
+                      onDiscuss();
+                  }}
+                >
+                  {t("Discuss")}
+                </button>
+                <details className="news-details">
+                  <summary>{t("Details")}</summary>
+                  <p>
+                    {t("Retrieved")} · {time(f.fetchedAt)}
+                  </p>
+                  <p>{item.url}</p>
+                  <p>
+                    {t("Source")} · {f.url}
+                  </p>
+                  <p className="mono">{f.bodySha256}</p>
+                  <p>{t("Saved news is untrusted data.")}</p>
+                </details>
+              </div>
+            </article>
+          );
+        })}
       </div>
+      {settings && (
+        <Dialog title={t("Sources")} onClose={() => setSettings(false)} wide>
+          <div className="news-source-settings">
+            {agents.error && <p role="alert">{agents.error}</p>}
+            <div className="news-source-toolbar">
+              <button className="secondary" onClick={() => setAdding(true)}>
+                {t("Add source")}
+              </button>
+            </div>
+            {adding && (
+              <form
+                className="news-source-form"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void agents
+                    .change({
+                      action: "news-source-add",
+                      name,
+                      source: url,
+                      newsMaxAgeSeconds: age,
+                    })
+                    .then((ok) => {
+                      if (ok) {
+                        setName("");
+                        setURL("");
+                        setAdding(false);
+                      }
+                    });
+                }}
+              >
+                <label>
+                  {t("Name")}
+                  <input
+                    autoFocus
+                    required
+                    maxLength={80}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                  />
+                </label>
+                <label>
+                  {t("Feed URL")}
+                  <input
+                    type="url"
+                    required
+                    maxLength={300}
+                    value={url}
+                    onChange={(e) => setURL(e.target.value)}
+                  />
+                </label>
+                <label>
+                  {t("Freshness (minutes)")}
+                  <input
+                    type="number"
+                    min={1}
+                    max={1440}
+                    step="any"
+                    required
+                    value={age / 60}
+                    onChange={(e) =>
+                      setAge(Math.round(e.target.valueAsNumber * 60))
+                    }
+                  />
+                </label>
+                <div className="agent-inline">
+                  <button className="primary" disabled={agents.busy}>
+                    {t("Add")}
+                  </button>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => setAdding(false)}
+                  >
+                    {t("Cancel")}
+                  </button>
+                </div>
+              </form>
+            )}
+            {!v.newsSources.length && <p>{t("No sources")}</p>}
+            {v.newsSources.map((s) => {
+              const fetches = v.newsFetches.filter((f) => f.sourceId === s.id);
+              const latest = fetches.at(-1);
+              return (
+                <section
+                  className="news-source"
+                  role="group"
+                  aria-label={t("Source {name}", { name: s.name })}
+                  key={s.id}
+                >
+                  <div className="news-source-heading">
+                    <strong>{s.name}</strong>
+                    <span>{t(s.disabled ? "Disabled" : "Active")}</span>
+                  </div>
+                  <p className="news-source-url">{s.url}</p>
+                  <p>
+                    {t("Freshness (minutes)")} ·{" "}
+                    {new Intl.NumberFormat(
+                      document.documentElement.lang,
+                    ).format(s.maxAgeSeconds / 60)}
+                  </p>
+                  <div className="agent-inline">
+                    <button
+                      className="secondary"
+                      disabled={
+                        agents.busy ||
+                        s.disabled ||
+                        latest?.state === "queued" ||
+                        latest?.state === "fetching"
+                      }
+                      onClick={() =>
+                        void agents.change({ action: "news-fetch", id: s.id })
+                      }
+                    >
+                      {t("Fetch")}
+                    </button>
+                    <button
+                      className="text-button"
+                      disabled={agents.busy || s.disabled}
+                      onClick={() =>
+                        void agents.change({
+                          action: "news-source-disable",
+                          id: s.id,
+                        })
+                      }
+                    >
+                      {t("Disable")}
+                    </button>
+                  </div>
+                  {fetches
+                    .slice()
+                    .reverse()
+                    .map((f) => (
+                      <details className="news-fetch" key={f.id}>
+                        <summary>
+                          {state(f.state)} · {time(f.createdAt)}
+                        </summary>
+                        <p>
+                          {t("Retrieved")} · {time(f.fetchedAt)}
+                        </p>
+                        <p>{f.failure}</p>
+                        <dl>
+                          <dt>{t("Fetch")}</dt>
+                          <dd>{f.id}</dd>
+                          <dt>{t("Task")}</dt>
+                          <dd>{f.taskId || t("None")}</dd>
+                          <dt>{t("Source")}</dt>
+                          <dd>{f.url}</dd>
+                        </dl>
+                        <p className="mono">{f.bodySha256}</p>
+                        <p>
+                          {f.bytes} {t("bytes")}
+                        </p>
+                        {f.items.map((item) => (
+                          <p key={item.id}>
+                            {item.title} · {time(item.publishedAt)}
+                          </p>
+                        ))}
+                        {(f.state === "queued" || f.state === "fetching") && (
+                          <button
+                            className="text-button"
+                            disabled={agents.busy}
+                            onClick={() =>
+                              void agents.change({
+                                action: "news-cancel",
+                                id: f.id,
+                              })
+                            }
+                          >
+                            {t("Cancel")}
+                          </button>
+                        )}
+                      </details>
+                    ))}
+                </section>
+              );
+            })}
+            <details className="source-rules">
+              <summary>{t("Details")}</summary>
+              <p>{t("Saved news is untrusted data.")}</p>
+              <p>
+                {t(
+                  "Choose a public HTTPS RSS 2.0 feed without credentials or query parameters. Each fetch has a three-second deadline, 64 KiB body limit and at most five fresh headlines. No article crawling, AI call or trade is performed.",
+                )}
+              </p>
+              <p>
+                {t(
+                  "To automate, select a source in Tasks. Each run fetches new evidence before its reminder, paper evaluation or optional fixture AI step. Unavailable/stale news holds dependent work. Other tasks and recovery continue. Retained snapshots are bounded and are not silently deleted.",
+                )}
+              </p>
+            </details>
+          </div>
+        </Dialog>
+      )}
     </section>
   );
 }

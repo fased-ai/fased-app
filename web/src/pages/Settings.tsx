@@ -6,13 +6,13 @@ import { AppearanceSettings, useUI } from "../ui-preferences";
 import { ArrowRight } from "../icons";
 import { UpdateStatusPanel } from "../components/UpdateStatusPanel";
 import { UpdatePreferencesPanel } from "../components/UpdatePreferencesPanel";
-import { AIConnectionSettings } from "./AIConnection";
 import { Badge, SectionHead } from "../components/shared";
 import { useWorkspace } from "../workspace";
 export function Settings() {
   const { t: uiText } = useUI();
   const t = uiText;
-  const { core, state, setSetupOpen, setResetOpen } = useWorkspace();
+  const { core, state, setSetupOpen, setResetOpen, setProvidersOpen } =
+    useWorkspace();
   return (
     <>
       <SectionHead title={t("Settings")} />
@@ -57,7 +57,15 @@ export function Settings() {
               </button>
             </div>
           </section>
-          {core.mode === "ready" && <AIConnectionSettings />}
+          {core.mode === "ready" && (
+            <button
+              className="panel provider-entry"
+              onClick={() => setProvidersOpen(true)}
+            >
+              <span>{uiText("Providers")}</span>
+              <ArrowRight size={16} />
+            </button>
+          )}
           <section className="panel">
             <div className="panel-heading">
               <h2>{uiText("Browser demo data")}</h2>

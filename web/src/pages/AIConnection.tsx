@@ -3,7 +3,6 @@ import type { OpenAIModelPolicy, OpenAIAdmission } from "../agents";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useCore } from "../core";
 import { TaskAccessSettings, type TaskAccessAllowance } from "./TaskAccess";
-import { Badge } from "../components/shared";
 
 export type Connection = {
   taskAccess?: TaskAccessAllowance;
@@ -121,10 +120,12 @@ export function AIConnectionSettings() {
     }
   }
   return (
-    <section className="panel ai-connection" aria-label={uiText("Providers")}>
+    <section
+      className="panel ai-connection provider-editor"
+      aria-label={uiText("Providers")}
+    >
       <div className="panel-heading">
-        <h2>{uiText("Providers")}</h2>
-        <Badge>{uiText("Demo")}</Badge>
+        <h3>OpenAI</h3>
       </div>
       <div className="agent-record-body">
         <p className="connection-status" role="status">

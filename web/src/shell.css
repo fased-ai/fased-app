@@ -633,3 +633,218 @@
     display: none;
   }
 }
+
+/* Compact agent utilities share the existing Meteora surfaces and controls. */
+.wt .provider-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 14px 18px;
+  color: var(--wt-text);
+  text-align: left;
+}
+.wt .provider-editor.panel {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.wt .provider-editor .panel-heading {
+  padding-top: 4px;
+}
+.wt .news-toolbar {
+  gap: 8px;
+}
+.wt .news-toolbar select {
+  min-width: 0;
+  max-width: 280px;
+  margin-right: auto;
+}
+.wt .news-headlines {
+  padding: 0 18px;
+}
+.wt .news-headline {
+  padding: 17px 0;
+  border-bottom: 1px solid var(--wt-border);
+}
+.wt .news-headline:last-child {
+  border-bottom: 0;
+}
+.wt .news-headline-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+  color: var(--wt-muted);
+  font-size: 12px;
+}
+.wt .news-title {
+  display: block;
+  color: var(--wt-text);
+  font-size: 15px;
+  line-height: 1.5;
+  font-weight: 600;
+  padding: 8px 0;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+.wt .news-title:hover {
+  color: var(--wt-coral);
+}
+.wt .news-headline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 18px;
+}
+.wt .news-details {
+  min-width: 0;
+  flex: 1;
+}
+.wt .news-details summary {
+  padding: 7px 0;
+  color: var(--wt-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.wt .news-details p,
+.wt .news-source p,
+.wt .news-source dd {
+  overflow-wrap: anywhere;
+}
+.wt .news-fresh {
+  color: var(--wt-text);
+  font-weight: 600;
+}
+.wt .news-empty {
+  min-height: 200px;
+  display: grid;
+  place-items: center;
+  color: var(--wt-muted);
+  font-size: 13px;
+}
+.wt .news-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--wt-border);
+  font-size: 13px;
+}
+.wt .news-source-settings {
+  padding: 8px 18px 18px;
+}
+.wt .news-source-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+.wt .news-source-form {
+  display: grid;
+  gap: 12px;
+  padding: 12px 0 16px;
+}
+.wt .news-source {
+  border-bottom: 1px solid var(--wt-border);
+  padding: 10px 0;
+}
+.wt .news-source-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  cursor: pointer;
+  font-size: 13px;
+}
+.wt .news-source-heading span {
+  color: var(--wt-muted);
+  font-size: 12px;
+}
+.wt .news-source-url {
+  color: var(--wt-muted);
+  font-size: 12px;
+}
+.wt .news-fetch,
+.wt .source-rules {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--wt-muted);
+}
+.wt .memory-search {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.wt .memory-search label {
+  flex: 1;
+  margin: 0;
+}
+.wt .memory-search input {
+  width: 100%;
+}
+.wt .memory-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 12px;
+  padding: 12px 0;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--wt-border);
+  border-radius: 0;
+  background: transparent;
+}
+.wt .memory-card > p {
+  margin: 0;
+  align-self: center;
+}
+.wt .memory-card > small {
+  grid-column: 1;
+}
+.wt .memory-card > details,
+.wt .memory-card > section {
+  grid-column: 1 / -1;
+}
+.wt .memory-actions {
+  grid-column: 2;
+  grid-row: 1;
+  gap: 2px;
+  margin: 0;
+}
+.wt .memory-actions button {
+  min-width: 30px;
+  min-height: 30px;
+  padding: 5px;
+}
+@media (max-width: 600px) {
+  .wt .news-headlines {
+    padding: 0 12px;
+  }
+  .wt .news-toolbar {
+    flex-wrap: wrap;
+  }
+  .wt .news-toolbar select {
+    flex: 1;
+    width: 120px;
+  }
+  .wt .memory-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .wt .memory-actions {
+    grid-column: 1;
+    grid-row: auto;
+  }
+}
+@media (pointer: coarse) {
+  .wt .memory-actions button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+.wt .agent-settings-workspace {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 880px;
+}

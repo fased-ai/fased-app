@@ -1,3 +1,4 @@
+import { AIConnectionSettings } from "../pages/AIConnection";
 import { useUI } from "../ui-preferences";
 import { InstanceSummary, RemoteConnection } from "./InstanceConnection";
 import {
@@ -29,6 +30,8 @@ export function WorkspaceDialogs() {
     dispatch,
     setupOpen,
     setSetupOpen,
+    providersOpen,
+    setProvidersOpen,
     noticesOpen,
     setNoticesOpen,
     actionOpen,
@@ -48,6 +51,14 @@ export function WorkspaceDialogs() {
   const connected = core.mode === "ready";
   return (
     <>
+      {providersOpen && connected && (
+        <Dialog
+          title={uiText("Providers")}
+          onClose={() => setProvidersOpen(false)}
+        >
+          <AIConnectionSettings />
+        </Dialog>
+      )}
       {setupOpen &&
         (connected ? (
           <Dialog

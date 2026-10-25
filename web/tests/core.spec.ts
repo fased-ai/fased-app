@@ -145,9 +145,7 @@ test("agent memory and archives keep recall sources journals and results through
     exact: true,
   });
   await expect(memoryCard).toContainText(note.text);
-  await memoryCard
-    .getByRole("button", { name: "Correct note", exact: true })
-    .click();
+  await memoryCard.getByRole("button", { name: "Edit", exact: true }).click();
   const edit = page.getByRole("dialog", {
     name: "Correct a memory",
     exact: true,
@@ -213,7 +211,7 @@ test("agent memory and archives keep recall sources journals and results through
     })
     .first()
     .click();
-  await page.getByRole("button", { name: "automations", exact: true }).click();
+  await page.getByRole("button", { name: "Tasks", exact: true }).click();
   await page
     .getByRole("button", { name: "Archive reminder result", exact: true })
     .click();
@@ -442,40 +440,33 @@ test("existing pages localize controls and keep owner drafts records and Meteora
     [
       "ru",
       "Интерфейс",
-      "Доступ",
-      "Нет источников новостей.",
+      "Провайдеры",
+      "Нет новостей",
       "В этом профиле нет заметок.",
       "Кошельки",
     ],
     [
       "es",
       "Preferencias",
-      "Credenciales",
-      "No hay fuentes de noticias guardadas.",
+      "Proveedores",
+      "Sin titulares",
       "Este perfil no tiene notas.",
       "Billeteras",
     ],
-    [
-      "zh",
-      "偏好设置",
-      "凭据",
-      "尚未保存新闻来源。",
-      "此档案暂无记忆。",
-      "钱包",
-    ],
+    ["zh", "偏好设置", "模型服务", "暂无新闻", "此档案暂无记忆。", "钱包"],
     [
       "ko",
       "환경설정",
-      "인증 정보",
-      "저장된 뉴스 소스가 없습니다.",
+      "제공업체",
+      "헤드라인 없음",
       "이 프로필에 메모가 없습니다.",
       "지갑",
     ],
     [
       "en",
       "Preferences",
-      "Credentials",
-      "No news sources saved.",
+      "Providers",
+      "No headlines",
       "No notes in this profile.",
       "Wallets",
     ],
@@ -869,7 +860,7 @@ test.describe("calendar reminders", () => {
     await review
       .getByRole("button", { name: "Create task", exact: true })
       .click();
-    const table = page.getByRole("table", { name: "Automations", exact: true });
+    const table = page.getByRole("table", { name: "Tasks", exact: true });
     await expect(table).toContainText("Calendar journal");
     let v = await privateCLI(["agents"]);
     const id = v.tasks[0].id;
@@ -982,9 +973,7 @@ test("compact Tasks reviews without writes and preserves bounded runs across UI 
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
   await page.goto(url + "/#agents/tasks");
-  await expect(
-    page.getByRole("heading", { name: "No tasks yet", exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("No tasks", { exact: true })).toBeVisible();
   await page.evaluate(() => scrollTo(0, 0));
   await page.screenshot({
     path: `.evidence/tasks-empty-${test.info().project.name}.png`,
@@ -1037,7 +1026,7 @@ test("compact Tasks reviews without writes and preserves bounded runs across UI 
   await review
     .getByRole("button", { name: "Create task", exact: true })
     .click();
-  const table = page.getByRole("table", { name: "Automations", exact: true });
+  const table = page.getByRole("table", { name: "Tasks", exact: true });
   await expect(table).toContainText("Journal review");
   let v = await privateCLI(["agents"]);
   const id = v.tasks[0].id;
@@ -1146,6 +1135,7 @@ test("normal Chat grants bounded replies, streams Send and retains scoped histor
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
   await page.goto(url + "/#settings");
+  await openProviders(page);
   const provider = page.getByRole("region", {
     name: "Providers",
     exact: true,
@@ -1361,6 +1351,51 @@ test("normal Chat keeps a draft when its selected connection locks and stops a p
   expect(view.aiRequests[0].spentMicrousd).toBe(0);
 });
 
+async function openProviders(page: import("@playwright/test").Page) {
+  const dialog = page.getByRole("dialog", { name: "Providers", exact: true });
+  if (!(await dialog.isVisible()))
+    await page
+      .getByRole("button", { name: "Providers", exact: true })
+      .last()
+      .click();
+  await expect(dialog).toBeVisible();
+}
+async function openNewsSources(
+  page: import("@playwright/test").Page,
+  add = false,
+) {
+  const dialog = page.getByRole("dialog", { name: "Sources", exact: true });
+  if (!(await dialog.isVisible()))
+    await page.getByRole("button", { name: "Sources", exact: true }).click();
+  if (
+    add &&
+    !(await dialog.getByLabel("Feed URL", { exact: true }).isVisible())
+  )
+    await dialog
+      .getByRole("button", { name: "Add source", exact: true })
+      .click();
+}
+async function closeNewsSources(page: import("@playwright/test").Page) {
+  const dialog = page.getByRole("dialog", { name: "Sources", exact: true });
+  if (await dialog.isVisible())
+    await dialog
+      .getByRole("button", { name: "Close dialog", exact: true })
+      .click();
+}
+async function newsFetchControl(
+  page: import("@playwright/test").Page,
+  enabled: boolean,
+) {
+  await openNewsSources(page);
+  const control = page
+    .getByRole("dialog", { name: "Sources", exact: true })
+    .getByRole("button", { name: "Fetch", exact: true })
+    .first();
+  if (enabled) await expect(control).toBeEnabled();
+  else await expect(control).toBeDisabled();
+  await closeNewsSources(page);
+}
+
 async function exactReplyReview(page: import("@playwright/test").Page) {
   const control = page.getByRole("checkbox", {
     name: "Review each reply",
@@ -1572,7 +1607,7 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
   await page
     .getByLabel("Agent", { exact: true })
     .selectOption({ label: "News Researcher" });
-  await page.getByRole("button", { name: "playbooks", exact: true }).click();
+  await page.getByRole("button", { name: "Templates", exact: true }).click();
   const panel = page.getByRole("region", {
     name: "Agent playbooks",
     exact: true,
@@ -1673,7 +1708,7 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
   await stop();
   await start(true, listen);
   await page.reload();
-  await page.getByRole("button", { name: "playbooks", exact: true }).click();
+  await page.getByRole("button", { name: "Templates", exact: true }).click();
   await expect(
     panel.getByRole("button", {
       name: "Review: Fixture morning digest",
@@ -1825,11 +1860,11 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
   expect(foreign.playbooks).toHaveLength(0);
   expect(foreign.runs).toHaveLength(0);
   await page.goto(url + "/#agents/tasks");
-  await page.getByRole("button", { name: "playbooks", exact: true }).click();
+  await page.getByRole("button", { name: "Templates", exact: true }).click();
   await stop();
   await start(false, listen);
   await page.reload();
-  await page.getByRole("button", { name: "playbooks", exact: true }).click();
+  await page.getByRole("button", { name: "Templates", exact: true }).click();
   await panel
     .getByRole("button", {
       name: "Review: Fixture morning digest",
@@ -2164,9 +2199,7 @@ test("reviewed memory restoration shares inert UI CLI drafts, expiry, current-on
   expect(v.memories[0].text).toBe("Current owner preference");
   expect(v.memories[0].history).toHaveLength(4);
   // Explicitly refresh after the CLI write; do not race the five-second poll.
-  await page
-    .getByRole("button", { name: "Search memory", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   await expect(card(original.id).locator(":scope > p")).toHaveText(
     "Current owner preference",
   );
@@ -2938,7 +2971,7 @@ test("task inbox opens the exact named run without writes across profiles and re
   for (const i of [1, 0]) {
     const run = baseline.runs[i];
     const task = baseline.tasks.find((t: any) => t.id === run.taskId);
-    await page.getByRole("button", { name: "history", exact: true }).click();
+    await page.getByRole("button", { name: "Results", exact: true }).click();
     await expect(
       runCard(run.id).getByText(task.name, { exact: true }),
     ).toBeVisible();
@@ -2946,7 +2979,7 @@ test("task inbox opens the exact named run without writes across profiles and re
       name: `Task notification ${run.id}`,
       exact: true,
     });
-    await page.getByRole("button", { name: "inbox", exact: true }).click();
+    await page.getByRole("button", { name: "Inbox", exact: true }).click();
     await notice
       .getByRole("button", { name: "View result", exact: true })
       .click();
@@ -2958,7 +2991,7 @@ test("task inbox opens the exact named run without writes across profiles and re
     name: `Task notification ${firstRun.id}`,
     exact: true,
   });
-  await page.getByRole("button", { name: "inbox", exact: true }).click();
+  await page.getByRole("button", { name: "Inbox", exact: true }).click();
   await firstNotice
     .getByRole("button", { name: "Mark read", exact: true })
     .click();
@@ -2967,7 +3000,7 @@ test("task inbox opens the exact named run without writes across profiles and re
   expect(afterRead.runs).toEqual(baseline.runs);
   expect(afterRead.tasks).toEqual(baseline.tasks);
   baseline = afterRead;
-  await page.getByRole("button", { name: "inbox", exact: true }).click();
+  await page.getByRole("button", { name: "Inbox", exact: true }).click();
   await firstNotice
     .getByRole("button", { name: "View result", exact: true })
     .click();
@@ -2976,7 +3009,7 @@ test("task inbox opens the exact named run without writes across profiles and re
   await page
     .getByLabel("Agent", { exact: true })
     .selectOption({ label: "News Researcher" });
-  await page.getByRole("button", { name: "inbox", exact: true }).click();
+  await page.getByRole("button", { name: "Inbox", exact: true }).click();
   await expect(
     page.getByText("No task notifications.", { exact: true }),
   ).toBeVisible();
@@ -2990,7 +3023,7 @@ test("task inbox opens the exact named run without writes across profiles and re
   await page
     .getByLabel("Agent", { exact: true })
     .selectOption({ label: "Trading Analyst" });
-  await page.getByRole("button", { name: "inbox", exact: true }).click();
+  await page.getByRole("button", { name: "Inbox", exact: true }).click();
   await expect(firstNotice).toBeVisible();
   let fault: "missing" | "foreign" = "missing";
   const routePattern = /\/api\/v1\/agents\?/;
@@ -3007,7 +3040,7 @@ test("task inbox opens the exact named run without writes across profiles and re
   await page
     .getByLabel("Agent", { exact: true })
     .selectOption({ label: "Trading Analyst" });
-  await page.getByRole("button", { name: "inbox", exact: true }).click();
+  await page.getByRole("button", { name: "Inbox", exact: true }).click();
   await expect(
     firstNotice.getByRole("button", {
       name: "Result unavailable",
@@ -3019,11 +3052,11 @@ test("task inbox opens the exact named run without writes across profiles and re
   await page
     .getByLabel("Agent", { exact: true })
     .selectOption({ label: "Trading Analyst" });
-  await page.getByRole("button", { name: "history", exact: true }).click();
+  await page.getByRole("button", { name: "Results", exact: true }).click();
   await expect(
     runCard(firstRun.id).getByText("Task unavailable", { exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "inbox", exact: true }).click();
+  await page.getByRole("button", { name: "Inbox", exact: true }).click();
   await expect(
     firstNotice.getByRole("button", {
       name: "Result unavailable",
@@ -3033,16 +3066,16 @@ test("task inbox opens the exact named run without writes across profiles and re
   expect(await read()).toEqual(baseline);
   await page.unroute(routePattern);
   await page.reload();
-  await page.getByRole("button", { name: "inbox", exact: true }).click();
+  await page.getByRole("button", { name: "Inbox", exact: true }).click();
   await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
   await page
     .getByLabel("Agent", { exact: true })
     .selectOption({ label: "Trading Analyst" });
-  await page.getByRole("button", { name: "inbox", exact: true }).click();
+  await page.getByRole("button", { name: "Inbox", exact: true }).click();
   await expect(
     firstNotice.getByRole("button", { name: "View result", exact: true }),
   ).toBeEnabled();
-  await page.getByRole("button", { name: "inbox", exact: true }).click();
+  await page.getByRole("button", { name: "Inbox", exact: true }).click();
   await firstNotice
     .getByRole("button", { name: "View result", exact: true })
     .click();
@@ -3562,56 +3595,40 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   };
   await page.goto(url + "/#agents/news");
   await chooseProfile(/^Trading Analyst /);
-  const news = page.getByRole("region", { name: "News inputs", exact: true });
-  await revealControl(
-    page,
-    news.getByLabel("News source name", { exact: true }),
-    "",
-  );
+  const news = page.getByRole("region", { name: "News", exact: true });
+  await openNewsSources(page, true);
+  await revealControl(page, news.getByLabel("Name", { exact: true }), "");
+  await news.getByLabel("Name", { exact: true }).fill("Joined controlled news");
+  await revealControl(page, news.getByLabel("Feed URL", { exact: true }), "");
   await news
-    .getByLabel("News source name", { exact: true })
-    .fill("Joined controlled news");
-  await revealControl(
-    page,
-    news.getByLabel("Public RSS URL", { exact: true }),
-    "",
-  );
-  await news
-    .getByLabel("Public RSS URL", { exact: true })
+    .getByLabel("Feed URL", { exact: true })
     .fill("https://news.fased.invalid/headlines.xml");
   await revealControl(
     page,
-    news.getByLabel("Source freshness limit (seconds)", { exact: true }),
+    news.getByLabel("Freshness (minutes)", { exact: true }),
     "",
   );
-  await news
-    .getByLabel("Source freshness limit (seconds)", { exact: true })
-    .fill("600");
-  await news
-    .getByRole("button", { name: "Add news source", exact: true })
-    .click();
-  const source = news.getByRole("article", {
-    name: "News source Joined controlled news",
+  await news.getByLabel("Freshness (minutes)", { exact: true }).fill("10");
+  await news.getByRole("button", { name: "Add", exact: true }).click();
+  const source = news.getByRole("group", {
+    name: "Source Joined controlled news",
     exact: true,
   });
   await expect(source).toBeVisible();
   expect(
     (await read()).newsSources.map((s: { name: string }) => s.name),
   ).toEqual(["Joined controlled news"]);
-  await source
-    .getByRole("button", { name: "Fetch headlines", exact: true })
-    .click();
+  await source.getByRole("button", { name: "Fetch", exact: true }).click();
   await expect
     .poll(async () => (await read()).newsFetches[0]?.state)
     .toBe("completed");
-  await news
-    .getByRole("button", { name: "Refresh news records", exact: true })
-    .click();
+  await closeNewsSources(page);
+  await news.getByRole("button", { name: "Refresh", exact: true }).click();
   const fetched = await read();
   const fetch = fetched.newsFetches[0],
     item = fetch.items[0];
-  await source
-    .locator(".memory-record")
+  await news
+    .locator(".news-headline")
     .filter({ hasText: item.title })
     .getByRole("button", { name: "Discuss", exact: true })
     .click();
@@ -3741,7 +3758,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     notices: v.notices,
     aiRequests: v.aiRequests,
   };
-  await page.getByRole("button", { name: "history", exact: true }).click();
+  await page.getByRole("button", { name: "Results", exact: true }).click();
   await page
     .locator(".memory-card")
     .filter({ hasText: `Run ${run.id}` })
@@ -3808,14 +3825,12 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   expect((await read()).memories).toHaveLength(1);
   await revealControl(
     page,
-    page.getByRole("searchbox", { name: "Search memories", exact: true }),
+    page.getByRole("searchbox", { name: "Search", exact: true }),
   );
   await page
-    .getByRole("searchbox", { name: "Search memories", exact: true })
+    .getByRole("searchbox", { name: "Search", exact: true })
     .fill("HEADLINE PROVENANCE");
-  await page
-    .getByRole("button", { name: "Search memory", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   await expect(
     page.getByRole("article", { name: `Memory ${note.id}`, exact: true }),
   ).toContainText(noteText);
@@ -3998,9 +4013,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
       });
   });
   try {
-    await page
-      .getByRole("button", { name: "Refresh news records", exact: true })
-      .click();
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
     await expect.poll(() => captured).toBe(true);
     // The existing five-second poll supplies the newer failed read. A second
     // click could instead wait forever on the now-disabled refresh control.
@@ -4008,9 +4021,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
       "Controlled agent read unavailable",
       { timeout: 8000 },
     );
-    await expect(
-      page.getByRole("button", { name: "Fetch headlines", exact: true }),
-    ).toBeDisabled();
+    await newsFetchControl(page, false);
   } finally {
     release();
   }
@@ -4025,27 +4036,19 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     "Controlled agent read unavailable",
     { timeout: 1000 },
   );
-  await expect(
-    page.getByRole("button", { name: "Fetch headlines", exact: true }),
-  ).toBeDisabled();
+  await newsFetchControl(page, false);
   await page.unroute(agentsRead);
   await page
     .getByRole("button", { name: "Refresh records", exact: true })
     .click();
   await expect(page.getByRole("alert")).toHaveCount(0);
-  await expect(
-    page.getByRole("button", { name: "Fetch headlines", exact: true }),
-  ).toBeEnabled();
+  await newsFetchControl(page, true);
   expect(await read()).toEqual(restarted);
   // Keep the app loaded while the real fixture core disappears.
   await stop();
-  await page
-    .getByRole("button", { name: "Refresh news records", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(page.getByRole("alert")).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Fetch headlines", exact: true }),
-  ).toBeDisabled();
+  await newsFetchControl(page, false);
   await writeFile(
     `.evidence/joined-agent/${isMobile ? "mobile" : "desktop"}.json`,
     JSON.stringify(
@@ -5058,7 +5061,7 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
   await expect(
     page.getByText("Concise answers", { exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Correct note", exact: true }).click();
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
   await revealControl(page, page.getByLabel("Fact", { exact: true }), "Fact");
   await page.getByLabel("Fact", { exact: true }).fill("Detailed answers");
   await revealControl(page, page.getByLabel("Evidence or source"), "");
@@ -5142,7 +5145,7 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
   await page
     .getByRole("button", { name: "Run now: One paper evaluation", exact: true })
     .click();
-  await page.getByRole("button", { name: "history", exact: true }).click();
+  await page.getByRole("button", { name: "Results", exact: true }).click();
   await expect(page.getByText("paper-filled", { exact: true })).toBeVisible();
   view = await privateCLI(["agents", "--profile", p]);
   expect(view.runs).toHaveLength(1);
@@ -5223,48 +5226,34 @@ test("bounded news inputs retain provenance across UI CLI and restart, hold depe
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
   await page.goto(url + "/#agents/news");
-  const panel = page.getByRole("region", { name: "News inputs", exact: true });
-  await revealControl(
-    page,
-    panel.getByLabel("News source name", { exact: true }),
-    "",
-  );
+  const panel = page.getByRole("region", { name: "News", exact: true });
+  await openNewsSources(page, true);
+  await revealControl(page, panel.getByLabel("Name", { exact: true }), "");
+  await panel.getByLabel("Name", { exact: true }).fill("Controlled headlines");
+  await revealControl(page, panel.getByLabel("Feed URL", { exact: true }), "");
   await panel
-    .getByLabel("News source name", { exact: true })
-    .fill("Controlled headlines");
-  await revealControl(
-    page,
-    panel.getByLabel("Public RSS URL", { exact: true }),
-    "",
-  );
-  await panel
-    .getByLabel("Public RSS URL", { exact: true })
+    .getByLabel("Feed URL", { exact: true })
     .fill("https://news.fased.invalid/headlines.xml");
   await revealControl(
     page,
-    panel.getByLabel("Source freshness limit (seconds)", { exact: true }),
+    panel.getByLabel("Freshness (minutes)", { exact: true }),
     "",
   );
-  await panel
-    .getByLabel("Source freshness limit (seconds)", { exact: true })
-    .fill("600");
-  await panel
-    .getByRole("button", { name: "Add news source", exact: true })
-    .click();
-  const source = panel.getByRole("article", {
-    name: "News source Controlled headlines",
+  await panel.getByLabel("Freshness (minutes)", { exact: true }).fill("10");
+  await panel.getByRole("button", { name: "Add", exact: true }).click();
+  const source = panel.getByRole("group", {
+    name: "Source Controlled headlines",
     exact: true,
   });
-  await source
-    .getByRole("button", { name: "Fetch headlines", exact: true })
-    .click();
+  await source.getByRole("button", { name: "Fetch", exact: true }).click();
   await expect
     .poll(async () => (await privateCLI(["agents"])).newsFetches[0]?.state)
     .toBe("completed");
-  await panel
-    .getByRole("button", { name: "Refresh news records", exact: true })
-    .click();
-  await expect(source).toContainText("Controlled paper-news headline");
+  await closeNewsSources(page);
+  await panel.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(panel.locator(".news-headlines")).toContainText(
+    "Controlled paper-news headline",
+  );
   let v = await privateCLI(["agents"]);
   const sourceID = v.newsSources[0].id;
   const first = v.newsFetches[0];
@@ -5280,7 +5269,7 @@ test("bounded news inputs retain provenance across UI CLI and restart, hold depe
     page,
     page
       .getByRole("combobox", {
-        name: "News input",
+        name: "News source",
         exact: true,
         includeHidden: true,
       })
@@ -5288,7 +5277,7 @@ test("bounded news inputs retain provenance across UI CLI and restart, hold depe
   );
   await page
     .getByRole("combobox", {
-      name: "News input",
+      name: "News source",
       exact: true,
       includeHidden: true,
     })
@@ -5329,31 +5318,19 @@ test("bounded news inputs retain provenance across UI CLI and restart, hold depe
   expect(v.runs[0].news.fetchId).not.toBe(first.id);
   expect(v.aiRequests).toHaveLength(0);
   await page.goto(url + "/#agents/news");
+  await closeNewsSources(page);
+  await panel.getByRole("button", { name: "Refresh", exact: true }).click();
+  await openNewsSources(page, true);
+  await revealControl(page, panel.getByLabel("Name", { exact: true }), "");
+  await panel.getByLabel("Name", { exact: true }).fill("Unavailable headlines");
+  await revealControl(page, panel.getByLabel("Feed URL", { exact: true }), "");
   await panel
-    .getByRole("button", { name: "Refresh news records", exact: true })
-    .click();
-  await revealControl(
-    page,
-    panel.getByLabel("News source name", { exact: true }),
-    "",
-  );
-  await panel
-    .getByLabel("News source name", { exact: true })
-    .fill("Unavailable headlines");
-  await revealControl(
-    page,
-    panel.getByLabel("Public RSS URL", { exact: true }),
-    "",
-  );
-  await panel
-    .getByLabel("Public RSS URL", { exact: true })
+    .getByLabel("Feed URL", { exact: true })
     .fill("https://news.fased.invalid/unavailable.xml");
-  await panel
-    .getByRole("button", { name: "Add news source", exact: true })
-    .click();
+  await panel.getByRole("button", { name: "Add", exact: true }).click();
   await expect(
-    panel.getByRole("article", {
-      name: "News source Unavailable headlines",
+    panel.getByRole("group", {
+      name: "Source Unavailable headlines",
       exact: true,
     }),
   ).toBeVisible();
@@ -5406,13 +5383,14 @@ test("bounded news inputs retain provenance across UI CLI and restart, hold depe
     .fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.goto(url + "/#agents/news");
+  await openNewsSources(page);
   await expect(source).toContainText(first.bodySha256);
   await expect(
-    panel.getByRole("article", {
-      name: "News source Unavailable headlines",
+    panel.getByRole("group", {
+      name: "Source Unavailable headlines",
       exact: true,
     }),
-  ).toContainText("failed");
+  ).toContainText("Failed");
   v = await privateCLI(["agents"]);
   expect(v.tasks.map((t: { state: string }) => t.state)).toEqual([
     "completed",
@@ -5455,6 +5433,7 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
   await page.goto(url + "/#agents/settings");
+  await openProviders(page);
   const panel = page.getByRole("region", {
     name: "Providers",
     exact: true,
@@ -5543,6 +5522,7 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
     .fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.goto(url + "/#agents/settings");
+  await openProviders(page);
   await expect(panel.getByRole("status")).toContainText("Locked");
   connection = await privateCLI(["ai-connection"]);
   expect(connection.ref).toBe(firstRef);
@@ -5554,6 +5534,7 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
   });
   expect(connection.locked).toBe(false);
   await page.reload();
+  await openProviders(page);
   await expect(panel.getByRole("status")).toContainText("Unlocked");
   await panel.getByText("Credentials", { exact: true }).click();
   await panel.getByRole("button", { name: "Lock", exact: true }).click();
@@ -5572,6 +5553,7 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
     passphrase,
   });
   await page.reload();
+  await openProviders(page);
   await expect(panel.getByRole("status")).toHaveText("No connection saved");
   agents = await privateCLI(["agents"]);
   expect(agents.aiRequests[0].state).toBe("completed");
@@ -7085,9 +7067,7 @@ test("chat memory requires explicit source-backed UI and CLI save and survives r
   const memory = page
     .locator(".memory-card")
     .filter({ hasText: "CLI-reviewed preference" });
-  await memory
-    .getByRole("button", { name: "Delete note", exact: true })
-    .click();
+  await memory.getByRole("button", { name: "Forget", exact: true }).click();
   await expect(memory).toHaveCount(0);
   v = await read();
   expect(v.messages[0]).toEqual(message);
@@ -7169,7 +7149,7 @@ test("task run chat shares historical UI and CLI capture, explicit fixture expla
   await page
     .getByLabel("Agent", { exact: true })
     .selectOption({ label: "Trading Analyst" });
-  await page.getByRole("button", { name: "history", exact: true }).click();
+  await page.getByRole("button", { name: "Results", exact: true }).click();
   await page
     .locator(".memory-card")
     .filter({ hasText: `Run ${plain.id}` })
@@ -7407,47 +7387,57 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
   await page.evaluate(() => {
     window.location.hash = "agents/news";
   });
-  const panel = page.getByRole("region", { name: "News inputs", exact: true });
-  await revealControl(
-    page,
-    panel.getByLabel("News source name", { exact: true }),
-    "",
-  );
+  const panel = page.getByRole("region", { name: "News", exact: true });
+  await openNewsSources(page, true);
+  await revealControl(page, panel.getByLabel("Name", { exact: true }), "");
   await panel
-    .getByLabel("News source name", { exact: true })
+    .getByLabel("Name", { exact: true })
     .fill("Controlled headline source");
-  await revealControl(
-    page,
-    panel.getByLabel("Public RSS URL", { exact: true }),
-    "",
-  );
+  await revealControl(page, panel.getByLabel("Feed URL", { exact: true }), "");
   await panel
-    .getByLabel("Public RSS URL", { exact: true })
+    .getByLabel("Feed URL", { exact: true })
     .fill("https://news.fased.invalid/headlines.xml");
   await revealControl(
     page,
-    panel.getByLabel("Source freshness limit (seconds)", { exact: true }),
+    panel.getByLabel("Freshness (minutes)", { exact: true }),
     "",
   );
-  await panel
-    .getByLabel("Source freshness limit (seconds)", { exact: true })
-    .fill("600");
-  await panel
-    .getByRole("button", { name: "Add news source", exact: true })
-    .click();
-  const source = panel.getByRole("article", {
-    name: "News source Controlled headline source",
+  await panel.getByLabel("Freshness (minutes)", { exact: true }).fill("10");
+  await panel.getByRole("button", { name: "Add", exact: true }).click();
+  const source = panel.getByRole("group", {
+    name: "Source Controlled headline source",
     exact: true,
   });
-  await source
-    .getByRole("button", { name: "Fetch headlines", exact: true })
-    .click();
+  await source.getByRole("button", { name: "Fetch", exact: true }).click();
   await expect
     .poll(async () => (await read()).newsFetches[0]?.state)
     .toBe("completed");
-  await panel
-    .getByRole("button", { name: "Refresh news records", exact: true })
-    .click();
+  await closeNewsSources(page);
+  await panel.getByRole("button", { name: "Refresh", exact: true }).click();
+  await page.screenshot({
+    path: `.evidence/news-journey-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .locator("select")
+    .first()
+    .selectOption("light");
+  await page.keyboard.press("Escape");
+  await expect(panel.locator(".news-headline")).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: `.evidence/news-light-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await page.getByRole("dialog").locator("select").first().selectOption("dark");
+  await page.keyboard.press("Escape");
   let v = await read();
   const fetch = v.newsFetches[0],
     item = fetch.items[0];
@@ -7459,8 +7449,8 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
     notices: v.notices,
     ai: v.aiRequests,
   };
-  await source
-    .locator(".memory-record")
+  await panel
+    .locator(".news-headline")
     .filter({ hasText: item.title })
     .getByRole("button", { name: "Discuss", exact: true })
     .click();
@@ -7792,14 +7782,10 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
     ).toHaveText("Trading Analyst");
     await revealControl(
       page,
-      page.getByRole("searchbox", { name: "Search memories", exact: true }),
+      page.getByRole("searchbox", { name: "Search", exact: true }),
     );
-    await page
-      .getByRole("searchbox", { name: "Search memories", exact: true })
-      .fill(q);
-    await page
-      .getByRole("button", { name: "Search memory", exact: true })
-      .click();
+    await page.getByRole("searchbox", { name: "Search", exact: true }).fill(q);
+    await page.getByRole("button", { name: "Search", exact: true }).click();
     const result = await recall(q);
     await expect(page.locator("article[aria-label^='Memory ']")).toHaveCount(
       result.memories.length,
@@ -7809,9 +7795,7 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
   const stable = await read();
   const result = await search("  CONCISE  ");
   expect(result.memories.map((m: { id: string }) => m.id)).toEqual([note.id]);
-  await page
-    .getByRole("button", { name: "Inspect source", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Source", exact: true }).click();
   const inspection = page.getByRole("region", {
     name: "Memory source",
     exact: true,
@@ -7827,7 +7811,7 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
   expect(source.text).toBe(message.text);
   expect(source.kind).toBe("message");
   await inspection
-    .getByRole("button", { name: "Open conversation", exact: true })
+    .getByRole("button", { name: "Open Chat", exact: true })
     .click();
   await expect(
     page.getByRole("searchbox", {
@@ -7881,9 +7865,7 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
   await expect(page.locator("article[aria-label^='Memory ']")).toContainText(
     "Edited concise preference",
   );
-  await page
-    .getByRole("button", { name: "Inspect source", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Source", exact: true }).click();
   await expect(inspection).toContainText(message.text);
   expect((await recall("", note.id)).source).toEqual(source);
   for (const [query, status] of [
@@ -7892,13 +7874,11 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
     ["Changed reference", "Recorded source text changed"],
   ]) {
     await search(query);
-    await page
-      .getByRole("button", { name: "Inspect source", exact: true })
-      .click();
+    await page.getByRole("button", { name: "Source", exact: true }).click();
     await expect(inspection).toContainText(status);
     await expect(
       inspection.getByRole("button", {
-        name: "Open conversation",
+        name: "Open Chat",
         exact: true,
       }),
     ).toHaveCount(0);
@@ -7908,9 +7888,7 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
       ).toContainText("Expired");
   }
   await search("Answer evidence");
-  await page
-    .getByRole("button", { name: "Inspect source", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Source", exact: true }).click();
   await expect(inspection).toContainText(answer.answer);
   expect((await recall("", answerNote.id)).source.kind).toBe("answer");
   const beforeRestart = await command({
@@ -7939,9 +7917,7 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
     .getByLabel("Agent", { exact: true })
     .selectOption({ label: "Trading Analyst" });
   await search("Answer evidence");
-  await page
-    .getByRole("button", { name: "Inspect source", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Source", exact: true }).click();
   await expect(inspection).toContainText(answer.answer);
   expect((await recall("", note.id)).source).toEqual(source);
   expect((await read()).aiRequests).toEqual(beforeRestart.aiRequests);
@@ -7972,16 +7948,14 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
   };
   await page.route("**/api/v1/agents?**", intercept);
   try {
-    await page
-      .getByRole("button", { name: "Inspect source", exact: true })
-      .click();
+    await page.getByRole("button", { name: "Source", exact: true }).click();
     await requested;
     await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
     await page
       .getByLabel("Agent", { exact: true })
       .selectOption({ label: "News Researcher" });
     await expect(
-      page.getByRole("searchbox", { name: "Search memories", exact: true }),
+      page.getByRole("searchbox", { name: "Search", exact: true }),
     ).toHaveValue("");
     release();
     await expect(
@@ -8602,7 +8576,7 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
     }),
   ).toBeChecked();
   await expect(
-    review.getByRole("combobox", { name: "News input", exact: true }),
+    review.getByRole("combobox", { name: "News source", exact: true }),
   ).toHaveValue(source.id);
   await expect(
     review.getByRole("option", {
@@ -8651,10 +8625,10 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
     .selectOption("none");
   await revealControl(
     page,
-    review.getByRole("combobox", { name: "News input", exact: true }),
+    review.getByRole("combobox", { name: "News source", exact: true }),
   );
   await review
-    .getByRole("combobox", { name: "News input", exact: true })
+    .getByRole("combobox", { name: "News source", exact: true })
     .selectOption("");
   await revealControl(
     page,
@@ -9960,7 +9934,7 @@ test("R1 workspace uses a compact branded shell and on-demand chat task memory c
     "Review the R1 fixture journal",
   );
   await expect(page.locator(".memory-editor")).not.toBeVisible();
-  await page.getByRole("button", { name: "Correct note", exact: true }).click();
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
   await expect(page.locator(".memory-editor")).toBeVisible();
   await page
     .getByRole("button", { name: "Cancel correction", exact: true })
@@ -9991,10 +9965,10 @@ test("R1 workspace uses a compact branded shell and on-demand chat task memory c
   await page
     .getByRole("button", { name: "Run now: R1 fixture reminder", exact: true })
     .click();
-  await expect(page.getByRole("table", { name: "Automations" })).toContainText(
+  await expect(page.getByRole("table", { name: "Tasks" })).toContainText(
     "completed",
   );
-  await expect(page.getByRole("table", { name: "Automations" })).toContainText(
+  await expect(page.getByRole("table", { name: "Tasks" })).toContainText(
     "1 / 1",
   );
   await page
@@ -10292,6 +10266,17 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
     .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const newsLogin = spawn(binary, [
+    "login",
+    "--data-dir",
+    dir,
+    "--password-stdin",
+  ]);
+  newsLogin.stdin!.end(fixturePassword + "\n");
+  expect((await once(newsLogin, "exit"))[0]).toBe(0);
   await page.goto(url + "/#agents/news");
   const selected = page.getByLabel("Agent", { exact: true });
   await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
@@ -10308,7 +10293,7 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
       await pane.evaluate(
         (el) => getComputedStyle(el).gridTemplateColumns.split(" ").length,
       ),
-    ).toBe(isMobile ? 1 : 2);
+    ).toBe(isMobile || name === "settings" ? 1 : 2);
     await expect(page.locator("html")).toHaveCSS(
       "background-color",
       "rgb(25, 25, 34)",
@@ -10356,29 +10341,47 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
       fullPage: true,
     });
   };
-  await expect(page.locator(".news-workspace")).toBeVisible();
-  await revealControl(page, page.getByLabel("News source name"), "");
-  await page.getByLabel("News source name").fill("V3 fixture headlines");
-  await revealControl(page, page.getByLabel("Public RSS URL"), "");
+  await expect(page.locator(".news-feed")).toBeVisible();
+  await openNewsSources(page, true);
+  await revealControl(page, page.getByLabel("Name"), "");
+  await page.getByLabel("Name").fill("V3 fixture headlines");
+  await revealControl(page, page.getByLabel("Feed URL"), "");
   await page
-    .getByLabel("Public RSS URL")
+    .getByLabel("Feed URL")
     .fill("https://news.fased.invalid/headlines.xml");
-  await page
-    .getByRole("button", { name: "Add news source", exact: true })
-    .click();
-  const feed = page.getByRole("article", {
-    name: "News source V3 fixture headlines",
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  const feed = page.getByRole("group", {
+    name: "Source V3 fixture headlines",
     exact: true,
   });
-  await feed
-    .getByRole("button", { name: "Fetch headlines", exact: true })
+  await feed.getByRole("button", { name: "Fetch", exact: true }).click();
+  await expect
+    .poll(
+      async () =>
+        (await privateCLI(["agents", "--profile", "trading-analyst"]))
+          .newsFetches[0]?.state,
+    )
+    .toBe("completed");
+  await closeNewsSources(page);
+  await page
+    .getByRole("region", { name: "News", exact: true })
+    .getByRole("button", { name: "Refresh", exact: true })
     .click();
+  await expect(page.locator(".news-headline")).toContainText(
+    "Controlled paper-news headline",
+  );
+  await page.locator(".news-details > summary").click();
+  await expect(page.locator(".news-details")).toContainText(
+    (await privateCLI(["agents", "--profile", "trading-analyst"]))
+      .newsFetches[0].bodySha256,
+  );
   await expect(
-    feed.getByRole("button", { name: "Discuss", exact: true }).first(),
-    // Queued fetch: 3s fetch + 2s finalization + the existing 5s UI refresh.
-  ).toBeVisible({ timeout: 12000 });
-  await expect(feed).toContainText("SHA-256:");
-  await layout("news", ".news-workspace");
+    page.getByRole("textbox", { name: "Feed URL", exact: true }),
+  ).toHaveCount(0);
+  await page.screenshot({
+    path: `.evidence/news-feed-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
   await page.evaluate(() => {
     window.location.hash = "agents/bots";
   });
@@ -10398,6 +10401,7 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
   await expect(page.getByLabel("Name", { exact: true })).toHaveValue(
     "Trading Analyst",
   );
+  await openProviders(page);
   const connection = page.getByRole("region", {
     name: "Providers",
     exact: true,
@@ -10413,6 +10417,10 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
     }),
   ).toBeDisabled();
   await expect(connection.getByLabel("Test key")).toHaveValue("");
+  await page
+    .getByRole("dialog", { name: "Providers", exact: true })
+    .getByRole("button", { name: "Close dialog", exact: true })
+    .click();
   await layout("settings", ".agent-settings-workspace");
   if (!isMobile) {
     await page.setViewportSize({ width: 900, height: 1000 });
@@ -10816,6 +10824,7 @@ test("reviewed task credential allowance is scoped, finite and revocable in Prov
   });
   await page.goto(url + "/#agents/settings");
   await page.reload();
+  await openProviders(page);
   const provider = page.getByRole("region", {
     name: "Providers",
     exact: true,
@@ -10954,6 +10963,103 @@ test("Dashboard drag and resize autosave without a duplicate home rail shortcut"
   });
 });
 
+test("compact agent pages share one provider editor and keep feed settings off the page", async ({
+  page,
+}) => {
+  page.setDefaultTimeout(10000);
+  await stop();
+  await start(true);
+  await page.goto(url + "/#agents/news");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "News", exact: true }).first(),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("textbox", { name: "Feed URL", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText("PUBLIC RSS · UNTRUSTED", { exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Sources", exact: true }).click();
+  const sources = page.getByRole("dialog", { name: "Sources", exact: true });
+  await expect(sources).toBeVisible();
+  await sources
+    .getByRole("button", { name: "Add source", exact: true })
+    .click();
+  await expect(
+    sources.getByRole("textbox", { name: "Feed URL", exact: true }),
+  ).toBeVisible();
+  await sources
+    .getByLabel("Name", { exact: true })
+    .fill("Invalid controlled source");
+  await sources
+    .getByLabel("Feed URL", { exact: true })
+    .fill("https://news.fased.invalid/headlines.xml?test=1");
+  await sources.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(sources.getByRole("alert")).toBeVisible();
+  await expect(sources.getByLabel("Name", { exact: true })).toHaveValue(
+    "Invalid controlled source",
+  );
+  await expect(sources.locator(".news-source")).toHaveCount(0);
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await page.goto(url + "/#agents/settings");
+  const instructions = page.getByRole("textbox", {
+    name: "Instructions",
+    exact: true,
+  });
+  await instructions.fill("Preserve these unsaved agent instructions");
+  await expect(page.locator(".ai-connection")).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "Providers", exact: true })
+    .last()
+    .click();
+  const provider = page.getByRole("dialog", { name: "Providers", exact: true });
+  await expect(provider.locator(".ai-connection")).toHaveCount(1);
+  await provider.getByText("Credentials", { exact: true }).click();
+  await provider
+    .getByLabel("Test key", { exact: true })
+    .fill("fased-test-discarded-editor");
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Providers", exact: true })
+    .last()
+    .click();
+  await provider.getByText("Credentials", { exact: true }).click();
+  await expect(provider.getByLabel("Test key", { exact: true })).toHaveValue(
+    "",
+  );
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await expect(instructions).toHaveValue(
+    "Preserve these unsaved agent instructions",
+  );
+  await page.goto(url + "/#agents/tasks");
+  await expect(
+    page
+      .getByRole("navigation", { name: "Task views", exact: true })
+      .getByRole("button", { name: "Tasks", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "playbooks", exact: true }),
+  ).toHaveCount(0);
+  await page.goto(url + "/#agents/memory");
+  await expect(page.getByText("PROFILE ONLY", { exact: true })).toHaveCount(0);
+  const health = await (await page.request.get(url + "/api/v1/health")).json();
+  for (const capability of [
+    "aiConnections",
+    "walletSigner",
+    "financialExecution",
+    "updater",
+  ])
+    expect(health.capabilities[capability]).toBe(false);
+});
+
 test("Dashboard joins provider agent Chat reviewed task result and memory without live authority", async ({
   page,
   isMobile,
@@ -11044,6 +11150,10 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
   await page.getByRole("button", { name: "Start chat", exact: true }).click();
   const input = page.getByLabel("Message", { exact: true });
   await expect(page.locator(".reply-model-menu>summary")).toHaveText(
+    "gpt-4.1-mini",
+  );
+  await expect(page.locator(".reply-model-menu>summary")).toHaveAttribute(
+    "title",
     "gpt-4.1-mini-2025-04-14",
   );
   await expect(page.getByLabel("Provider", { exact: true })).not.toBeVisible();

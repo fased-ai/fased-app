@@ -3,7 +3,7 @@ import { MemoryRecall, memoryEvidenceStatuses } from "./MemoryRecall";
 import { useUI } from "../ui-preferences";
 import { useCore } from "../core";
 import { NewsInputs } from "./NewsInputs";
-import { AIConnectionSettings, useAIConnection } from "./AIConnection";
+import { useAIConnection } from "./AIConnection";
 import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { BookOpen, Bot, Plus, Settings2, History } from "../icons";
 import { Badge, SectionHead, Dialog } from "../components/shared";
@@ -136,6 +136,7 @@ function LocalAgentEditor({
   taskPanel: string;
   setTaskPanel: (value: string) => void;
 }) {
+  const { setProvidersOpen } = useWorkspace();
   const { t: uiText } = useUI();
   const { agents, tab, navigate } = useWorkspace();
   const t = uiText;
@@ -552,7 +553,13 @@ function LocalAgentEditor({
           <section className="panel" aria-label={uiText("Agent settings")}>
             <div className="panel-heading">
               <h2>{uiText("Agent")}</h2>
-              <Badge>{uiText("Demo")}</Badge>
+              <button
+                className="secondary"
+                onClick={() => setProvidersOpen(true)}
+              >
+                <Settings2 size={16} />
+                {t("Providers")}
+              </button>
             </div>
             <form
               className="agent-record-body"
@@ -638,7 +645,6 @@ function LocalAgentEditor({
               </button>
             </form>
           </section>
-          <AIConnectionSettings />
         </div>
       )}
       {tab === "memory" && (
@@ -654,7 +660,6 @@ function LocalAgentEditor({
             >
               {t("Add fact")}
             </button>
-            <Badge>{uiText("PROFILE ONLY")}</Badge>
           </div>
           <div className="agent-record-body memory-workspace">
             <div className="memory-library">
@@ -720,6 +725,7 @@ function LocalAgentEditor({
                       resetMemory();
                   })}
                 >
+                  {agents.error && <p role="alert">{agents.error}</p>}
                   {memoryRestore && (
                     <section aria-label={uiText("Memory restoration review")}>
                       <article aria-label={uiText("Current memory revision")}>
@@ -787,7 +793,7 @@ function LocalAgentEditor({
                     />
                   </label>
                   <details className="task-inspection">
-                    <summary>{t("Source & expiry")}</summary>
+                    <summary>{t("Details")}</summary>
                     <label>
                       {uiText("Evidence or source")}
                       <input

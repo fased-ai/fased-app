@@ -294,7 +294,17 @@ export function AgentTasks({
                   if (t === "history") setResultId("");
                 }}
               >
-                {t}
+                {uiText(
+                  (
+                    {
+                      automations: "Tasks",
+                      history: "Results",
+                      inbox: "Inbox",
+                      playbooks: "Templates",
+                      archive: "Archive",
+                    } as Record<string, string>
+                  )[t],
+                )}
               </button>
             ),
           )}
@@ -329,18 +339,15 @@ export function AgentTasks({
         >
           <div className="task-list">
             <div className="panel-heading">
-              <h2>{uiText("Automations")}</h2>
+              <h2>{uiText("Tasks")}</h2>
               <span>{tasks.length}</span>
             </div>
             {tasks.length === 0 ? (
               <div className="task-empty">
-                <h3>{uiText("No tasks yet")}</h3>
-                <button className="secondary" onClick={() => setEditing(true)}>
-                  {uiText("Create your first task")}
-                </button>
+                <p>{uiText("No tasks")}</p>
               </div>
             ) : (
-              <table className="task-table" aria-label={uiText("Automations")}>
+              <table className="task-table" aria-label={uiText("Tasks")}>
                 <thead>
                   <tr>
                     <th>{uiText("Task")}</th>
@@ -511,7 +518,7 @@ export function AgentTasks({
         </section>
         <section className="panel" hidden={panel !== "inbox"}>
           <div className="panel-heading">
-            <h2>{uiText("Task inbox")}</h2>
+            <h2>{uiText("Inbox")}</h2>
           </div>
           <div className="agent-record-body">
             {v.notices.length === 0 ? (
@@ -571,7 +578,7 @@ export function AgentTasks({
         </section>
       </div>
       <details className="task-inspection schedule-behavior">
-        <summary>{uiText("Schedule & storage")}</summary>
+        <summary>{uiText("Timing")}</summary>
         <p>
           {uiText(
             "Tasks run while Fased runs, even with the browser closed. Missed intervals become one run. Resume starts a new interval. Calendar reminders keep their original date; overdue reminders run once after resume or restart. Run now completes a calendar reminder early; it will not run again on its date. For a recurring calendar, Run now consumes the upcoming occurrence.",
@@ -992,7 +999,7 @@ function TaskComposer({
               )}
               {!calendarMode && !cronMode && (
                 <details className="task-inspection">
-                  <summary>{uiText("Inputs & advanced timing")}</summary>
+                  <summary>{uiText("Options")}</summary>
                   <label>
                     {uiText("Task kind")}
                     <select

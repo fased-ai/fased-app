@@ -50,6 +50,7 @@ export function ShellNavigation() {
     setNoticesOpen,
     contextOpen,
     setContextOpen,
+    setProvidersOpen,
   } = useWorkspace();
   const { preferences, update, t } = useUI();
   const [more, setMore] = useState(false);
@@ -216,7 +217,11 @@ export function ShellNavigation() {
             <span className="shell-demo">{t("Demo")}</span>
           )}
           <span className="shell-desktop-utility">
-            {utility("Providers", Plug, () => navigate("settings"))}
+            {utility("Providers", Plug, () =>
+              core.mode === "ready"
+                ? setProvidersOpen(true)
+                : navigate("settings"),
+            )}
           </span>
           <span className="shell-desktop-utility">
             {utility("Wallets", Wallet, () => navigate("wallets/overview"))}

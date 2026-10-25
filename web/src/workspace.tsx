@@ -118,6 +118,8 @@ function useWorkspaceState() {
   const [focusedTask, setFocusedTask] = useState("");
   const [chatDrafts, setChatDrafts] = useState(new Map<string, string>());
   const [setupOpen, setSetupOpen] = useState(false);
+  const [providersOpen, setProvidersOpen] = useState(false);
+  useEffect(() => setProvidersOpen(false), [core.mode, core.instanceId, route]);
   const [noticesOpen, setNoticesOpen] = useState(false);
   const [actionOpen, setActionOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -229,6 +231,8 @@ function useWorkspaceState() {
     route,
     setupOpen,
     setSetupOpen,
+    providersOpen,
+    setProvidersOpen,
     noticesOpen,
     setNoticesOpen,
     actionOpen,

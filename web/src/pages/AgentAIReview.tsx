@@ -1,4 +1,5 @@
 import { agentReplyDefaults } from "../agent-defaults";
+import { Plug } from "../icons";
 import { useUI } from "../ui-preferences";
 type ChatComposer = {
   value: string;
@@ -72,6 +73,7 @@ function AgentAIForm({
   onClearResearch?: () => void;
   composer?: ChatComposer;
 }) {
+  const { setProvidersOpen } = useWorkspace();
   const { t: uiText } = useUI();
   const { core, agents, navigate } = useWorkspace();
   const tr = uiText;
@@ -726,8 +728,12 @@ function AgentAIForm({
             aria-label={uiText("Reply connection")}
           >
             <details className="reply-model-menu">
-              <summary aria-label={tr("Reply model")}>
-                {model || tr(replyReady ? "Demo" : "Provider")}
+              <summary
+                aria-label={tr("Reply model")}
+                title={model || tr("Demo")}
+              >
+                {model.replace(/-\d{4}-\d{2}-\d{2}$/, "") ||
+                  tr(replyReady ? "Demo" : "Provider")}
               </summary>
               <div className="reply-model-panel">
                 <ConnectionPicker
@@ -760,9 +766,9 @@ function AgentAIForm({
               className="text-button"
               aria-label={uiText("Providers")}
               title={uiText("Providers")}
-              onClick={() => navigate("agents/settings")}
+              onClick={() => setProvidersOpen(true)}
             >
-              <SlidersHorizontal size={16} />
+              <Plug size={16} />
             </button>
             <details
               className="message-options"
