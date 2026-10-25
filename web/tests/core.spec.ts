@@ -80,6 +80,9 @@ test("normal Chat connects a fixture provider, reviews one reply and retains sco
   await composer.press("Shift+Enter");
   await expect(composer).toHaveValue("Explain my fixture research limits\n");
   await composer.press("Enter");
+  await expect(
+    chat.locator(".ai-request").last().getByText("prepared", { exact: true }),
+  ).toBeVisible();
   let view = await privateCLI(["agents"]);
   const q = view.aiRequests[0];
   expect(q.state).toBe("prepared");
