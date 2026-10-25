@@ -43,9 +43,7 @@
     await wait(
       () =>
         document.querySelector("main#main-content") &&
-        [...document.querySelectorAll("button")].some(
-          (button) => button.textContent.trim() === "Sign out",
-        ),
+        document.querySelector('button[aria-label="Sign out"]'),
     );
     phase = "authenticated setup";
     const token = sessionStorage.getItem("fased.core.session.v1");
