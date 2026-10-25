@@ -19,3 +19,12 @@ export function agentReplyDefaults(agent: AgentDefaults, access: Access) {
       access.model === agent.model,
   };
 }
+
+// A deliberate provider change starts with that provider's admitted model.
+// Never retain a model belonging to the previous provider.
+export function modelForProviderChange(
+  provider: string,
+  admittedModel?: string,
+) {
+  return provider === "openai" ? admittedModel || "" : "";
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentReplyDefaults } from "./agent-defaults";
+import { agentReplyDefaults, modelForProviderChange } from "./agent-defaults";
 
 describe("Agent reply defaults", () => {
   it("inherits the agent provider/model and refuses missing or locked access", () => {
@@ -29,5 +29,21 @@ describe("Agent reply defaults", () => {
     expect(
       agentReplyDefaults({ provider: "xai", model: "grok" }, null).ready,
     ).toBe(false);
+  });
+});
+
+describe("Provider changes", () => {
+  it("selects the connected model, clears Demo, and never carries a foreign model", () => {
+    const model = "gpt-4.1-mini-2025-04-14";
+    expect(modelForProviderChange("openai", model)).toBe(model);
+    expect(modelForProviderChange("none", model)).toBe("");
+    expect(modelForProviderChange("xai", model)).toBe("");
+    expect(modelForProviderChange("openai", undefined)).toBe("");
+    expect(
+      agentReplyDefaults(
+        { provider: "none", model: modelForProviderChange("none", model) },
+        null,
+      ).ready,
+    ).toBe(true);
   });
 });

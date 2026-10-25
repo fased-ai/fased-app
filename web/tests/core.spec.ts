@@ -11135,10 +11135,14 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
   await page.getByLabel("Agent", { exact: true }).selectOption(p);
   const provider = page.getByLabel("Provider", { exact: true });
   await revealControl(page, provider);
+  const agentModel = page.getByLabel("Model", { exact: true });
+  await agentModel.fill("previous-provider-model");
   await provider.selectOption("openai");
-  await page
-    .getByLabel("Model", { exact: true })
-    .fill("gpt-4.1-mini-2025-04-14");
+  await expect(agentModel).toHaveValue("gpt-4.1-mini-2025-04-14");
+  await provider.selectOption("none");
+  await expect(agentModel).toHaveValue("");
+  await provider.selectOption("openai");
+  await expect(agentModel).toHaveValue("gpt-4.1-mini-2025-04-14");
   await page.getByRole("button", { name: "Save agent", exact: true }).click();
   await expect
     .poll(

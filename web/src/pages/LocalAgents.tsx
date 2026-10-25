@@ -3,6 +3,7 @@ import { MemoryRecall, memoryEvidenceStatuses } from "./MemoryRecall";
 import { useUI } from "../ui-preferences";
 import { useCore } from "../core";
 import { NewsInputs } from "./NewsInputs";
+import { modelForProviderChange } from "../agent-defaults";
 import { useAIConnection } from "./AIConnection";
 import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { BookOpen, Bot, Plus, Settings2, History } from "../icons";
@@ -606,8 +607,12 @@ function LocalAgentEditor({
                     aria-label={uiText("Provider")}
                     onChange={(e) => {
                       setProvider(e.target.value as Provider);
-                      if (e.target.value === "openai" && !model)
-                        setModel(connection?.admissionPolicy?.model || "");
+                      setModel(
+                        modelForProviderChange(
+                          e.target.value,
+                          connection?.admissionPolicy?.model,
+                        ),
+                      );
                     }}
                   >
                     {Object.entries(providerNames).map(([id, title]) => (
