@@ -230,7 +230,7 @@ func TestAgentPlaybookMigrationAndCompatibility(t *testing.T) {
 	}
 	var schema int
 	s.db.QueryRow("PRAGMA user_version").Scan(&schema)
-	if schema != 16 || StateSchema != 16 {
+	if schema != 16 || StateSchema < 16 {
 		t.Fatal("missing newer-reader protection")
 	}
 	contract := UpdateContract()

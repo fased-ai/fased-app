@@ -70,6 +70,7 @@ type PaperBot struct {
 	SpentCents  int64  `json:"spentCents"`
 }
 type AgentTask struct {
+	Calendar        *TaskCalendar   `json:"calendar,omitempty"`
 	Playbook        *PlaybookOrigin `json:"playbook,omitempty"`
 	WEN             *WENPaperPlan   `json:"wen,omitempty"`
 	News            *TaskNewsInput  `json:"news,omitempty"`
@@ -154,6 +155,7 @@ type AgentView struct {
 // Optional fields are inert data for a fixed action; unknown fields/actions are
 // rejected. No arbitrary callback, URL, model tool or shell can be submitted.
 type AgentCommand struct {
+	Calendar             *TaskCalendar        `json:"calendar,omitempty"`
 	PlaybookVersion      int                  `json:"playbookVersion,omitempty"`
 	SessionID            string               `json:"sessionId,omitempty"`
 	EvidenceSelection    *AIEvidenceSelection `json:"evidenceSelection,omitempty"`
@@ -237,6 +239,9 @@ func readAgents(ctx context.Context, r snapshotReader) (agentDocument, int64, er
 				_, e = wenSessionStorage(d)
 				if e == nil {
 					e = validatePlaybookStorage([]byte(b), d)
+					if e == nil {
+						e = validateCalendarStorage([]byte(b), d)
+					}
 				}
 			}
 		}
@@ -357,6 +362,9 @@ func validAgentText(v string, max int, required bool) bool {
 	return (!required || strings.TrimSpace(v) != "") && len(v) <= max && !strings.ContainsRune(v, 0)
 }
 func agentCapacity(d agentDocument) error {
+	if e := validateCalendarTasks(d); e != nil {
+		return e
+	}
 	if e := validatePlaybooks(d); e != nil {
 		return e
 	}
@@ -411,6 +419,9 @@ func (s *Store) ChangeAgents(ctx context.Context, c AgentCommand) (AgentView, er
 	return s.changeAgents(ctx, c, false)
 }
 func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) (AgentView, error) {
+	if c.Calendar != nil && c.Action != "task-review" && c.Action != "task-reviewed-create" {
+		return AgentView{}, errors.New("calendar settings require reviewed task creation")
+	}
 	if (c.PlaybookVersion != 0 || c.SessionID != "") && !strings.HasPrefix(c.Action, "playbook-") {
 		return AgentView{}, errors.New("playbook selectors require a playbook action")
 	}
@@ -681,7 +692,9 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 					return AgentView{}, errors.New("AI task requires active fixture and unchanged unexpired consent")
 				}
 				d.Tasks[i].State = "scheduled"
-				d.Tasks[i].NextAt = now + t.IntervalSeconds
+				if t.Calendar == nil {
+					d.Tasks[i].NextAt = now + t.IntervalSeconds
+				}
 			case "task-run":
 				if t.State != "scheduled" {
 					return AgentView{}, errors.New("resume the paused task first")
@@ -737,6 +750,7 @@ func captureAgentRunContext(d *agentDocument, profile, runID, id string, revisio
 		Task                          struct {
 			ID, Name, Text, StateAtCapture string
 			IntervalSeconds                int64
+			Calendar                       *TaskCalendar `json:",omitempty"`
 			MaxRuns, RunsAtCapture         int
 		}
 		Run struct {
@@ -747,6 +761,7 @@ func captureAgentRunContext(d *agentDocument, profile, runID, id string, revisio
 		AI *recordedAgentAI `json:",omitempty"`
 	}{Version: "agent-run-chat-v1", ProfileID: profile, CapturedAt: now, WorkspaceRevision: revision, AI: ai}
 	snapshot.Task.ID, snapshot.Task.Name, snapshot.Task.Text = task.ID, task.Name, task.Text
+	snapshot.Task.Calendar = task.Calendar
 	snapshot.Task.StateAtCapture, snapshot.Task.IntervalSeconds, snapshot.Task.MaxRuns, snapshot.Task.RunsAtCapture = task.State, task.IntervalSeconds, task.MaxRuns, task.Runs
 	snapshot.Run.ID, snapshot.Run.Strategy, snapshot.Run.Outcome, snapshot.Run.AIDigest, snapshot.Run.At, snapshot.Run.News = r.ID, r.Strategy, r.Outcome, r.AIDigest, r.At, r.News
 	b, err := json.Marshal(snapshot)
@@ -847,7 +862,9 @@ func runAgentTask(d *agentDocument, i int, now int64) error {
 	if t.News != nil {
 		t.News.FetchID = ""
 	}
-	t.NextAt = now + t.IntervalSeconds
+	if t.Calendar == nil {
+		t.NextAt = now + t.IntervalSeconds
+	}
 	if t.Runs >= t.MaxRuns {
 		t.State = "completed"
 	}

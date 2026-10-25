@@ -49,7 +49,7 @@ func savedPlainReminder(d agentDocument, profile, id string) (AgentTask, error) 
 	if !validAgentText(id, 80, true) || !validAgentText(profile, 80, true) || !utf8.ValidString(id+profile) || profiles != 1 || tasks != 1 || source.ProfileID != profile || source.AI != nil || source.News != nil || source.WEN != nil || source.BotID != "" {
 		return AgentTask{}, errors.New("one same-profile saved plain reminder required")
 	}
-	if !validAgentText(source.Name, 80, true) || !validAgentText(source.Text, 4000, true) || !utf8.ValidString(source.Name+source.Text) || source.IntervalSeconds < 60 || source.IntervalSeconds > 604800 || source.MaxRuns < 1 || source.MaxRuns > 20 || source.Runs < 0 || source.Runs > source.MaxRuns || source.NextAt < 0 ||
+	if !validAgentText(source.Name, 80, true) || !validAgentText(source.Text, 4000, true) || !utf8.ValidString(source.Name+source.Text) || (source.Calendar == nil && (source.IntervalSeconds < 60 || source.IntervalSeconds > 604800)) || (source.Calendar != nil && !validCalendarTask(source)) || source.MaxRuns < 1 || source.MaxRuns > 20 || source.Runs < 0 || source.Runs > source.MaxRuns || source.NextAt < 0 ||
 		(source.State != "scheduled" && source.State != "paused" && source.State != "completed") || (source.State == "completed") != (source.Runs == source.MaxRuns) {
 		return AgentTask{}, errors.New("saved reminder integrity invalid; preserve its records")
 	}
@@ -63,6 +63,9 @@ func reviewTaskReminder(d agentDocument, c AgentCommand, profile string, revisio
 	source, err := savedPlainReminder(d, profile, c.ID)
 	if err != nil {
 		return nil, err
+	}
+	if source.Calendar != nil {
+		return nil, errors.New("choose New task to review a new calendar date")
 	}
 	plain := AgentCommand{Name: c.Name, Text: c.Text, IntervalSeconds: c.IntervalSeconds, MaxRuns: c.MaxRuns}
 	if _, err = validateAgentTask(d, plain, profile); err != nil {

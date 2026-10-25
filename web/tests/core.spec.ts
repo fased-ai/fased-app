@@ -8,6 +8,194 @@ import { tmpdir } from "node:os";
 import { once } from "node:events";
 import { createHash, randomBytes } from "node:crypto";
 
+test.describe("calendar reminders", () => {
+  test.use({ timezoneId: "America/Chicago" });
+  test("reviewed calendar reminder shares UI CLI date and survives paused restart", async ({
+    page,
+  }) => {
+    test.setTimeout(75000);
+    const external: string[] = [];
+    page.on("request", (r) => {
+      if (new URL(r.url()).origin !== new URL(url).origin)
+        external.push(r.url());
+    });
+    await page.goto(url + "/#agents/tasks");
+    const claim = JSON.parse(
+      await readFile(join(dir, "claim-code.json"), "utf8"),
+    );
+    await page.getByLabel("One-use claim code").fill(claim.code);
+    await page.getByLabel("Create owner password").fill(fixturePassword);
+    await page
+      .getByRole("button", { name: "Claim workspace", exact: true })
+      .click();
+    await expect(
+      page.getByRole("button", { name: "Sign out", exact: true }),
+    ).toBeVisible();
+    const login = spawn(binary, [
+      "login",
+      "--data-dir",
+      dir,
+      "--password-stdin",
+    ]);
+    login.stdin!.end(fixturePassword + "\n");
+    expect((await once(login, "exit"))[0]).toBe(0);
+    await page.goto(url + "/#agents/tasks");
+    const newTask = page.getByRole("button", { name: "New task", exact: true });
+    await newTask.hover();
+    const contrast = await newTask.evaluate((el) => {
+      const s = getComputedStyle(el);
+      const luminance = (color: string) => {
+        const channels = color
+          .match(/[\d.]+/g)!
+          .slice(0, 3)
+          .map(Number)
+          .map((x) => {
+            const v = x / 255;
+            return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+          });
+        return (
+          channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
+        );
+      };
+      const a = luminance(s.color),
+        b = luminance(s.backgroundColor);
+      return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+    });
+    expect(contrast).toBeGreaterThanOrEqual(4.5);
+    await newTask.click();
+    await page
+      .getByLabel("Task name", { exact: true })
+      .fill("Calendar journal");
+    await page
+      .getByLabel("Reminder text", { exact: true })
+      .fill("Review the saved fixture journal.");
+    await page
+      .getByRole("combobox", { name: "Schedule", exact: true })
+      .selectOption("calendar");
+    await expect(page.getByLabel("Time zone", { exact: true })).toHaveValue(
+      "America/Chicago",
+    );
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await page.evaluate(() => scrollTo(0, 0));
+    await page.screenshot({
+      path: `.evidence/calendar-editor-${test.info().project.name}.png`,
+      fullPage: false,
+    });
+    await page
+      .getByLabel("Date & time", { exact: true })
+      .fill("2027-03-14T02:30");
+    await page
+      .getByRole("button", { name: "Review task", exact: true })
+      .click();
+    await expect(page.getByRole("alert")).toContainText("does not exist");
+    await page
+      .getByLabel("Date & time", { exact: true })
+      .fill("2026-11-01T01:30");
+    await page
+      .getByRole("button", { name: "Review task", exact: true })
+      .click();
+    await expect(page.getByRole("alert")).toContainText("occurs twice");
+    const before = await privateCLI(["agents"]);
+    expect(before.tasks).toHaveLength(0);
+    await page.getByLabel("Time zone", { exact: true }).selectOption("UTC");
+    const at = Math.floor((Date.now() / 1000 + 3600) / 60) * 60;
+    await page
+      .getByLabel("Date & time", { exact: true })
+      .fill(new Date(at * 1000).toISOString().slice(0, 16));
+    await page
+      .getByRole("button", { name: "Review task", exact: true })
+      .click();
+    const review = page.getByRole("complementary", {
+      name: "Review task",
+      exact: true,
+    });
+    await expect(review).toContainText("UTC");
+    await expect(
+      review.getByText("No AI or wallet access", { exact: true }),
+    ).toBeVisible();
+    expect((await privateCLI(["agents"])).revision).toBe(before.revision);
+    await page.evaluate(() => scrollTo(0, 0));
+    await page.screenshot({
+      path: `.evidence/calendar-review-${test.info().project.name}.png`,
+      fullPage: false,
+    });
+    await review
+      .getByRole("button", { name: "Create task", exact: true })
+      .click();
+    const table = page.getByRole("table", { name: "Automations", exact: true });
+    await expect(table).toContainText("Calendar journal");
+    let v = await privateCLI(["agents"]);
+    const id = v.tasks[0].id;
+    expect(v.tasks[0]).toMatchObject({
+      calendar: { version: "once-at-v1", at, timeZone: "UTC" },
+      nextAt: at,
+      intervalSeconds: 0,
+      maxRuns: 1,
+      runs: 0,
+    });
+    await page
+      .getByRole("button", { name: "Pause: Calendar journal", exact: true })
+      .click();
+    await expect(table).toContainText("paused");
+    await stop();
+    await start();
+    await page.goto(url + "/#agents/tasks");
+    await page.getByLabel("Owner password").fill(fixturePassword);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await expect(table).toContainText("paused");
+    await page
+      .getByRole("button", { name: "Resume: Calendar journal", exact: true })
+      .click();
+    await expect(table).toContainText("scheduled");
+    v = await privateCLI(["agents"]);
+    expect(v.tasks[0].nextAt).toBe(at);
+    expect(v.tasks[0].calendar.at).toBe(at);
+    expect(v.runs).toHaveLength(0);
+    await page
+      .getByRole("button", { name: "Run now: Calendar journal", exact: true })
+      .click();
+    await expect(table).toContainText("completed");
+    await page
+      .getByRole("button", { name: "Result: Calendar journal", exact: true })
+      .click();
+    await expect(page.getByLabel("Run results", { exact: true })).toContainText(
+      "Calendar journal: Review the saved fixture journal.",
+    );
+    v = await privateCLI(["agents"]);
+    expect(v.tasks[0]).toMatchObject({
+      id,
+      nextAt: at,
+      runs: 1,
+      state: "completed",
+    });
+    expect(v.runs).toHaveLength(1);
+    expect(v.providerCallsEnabled).toBe(false);
+    expect(v.financialExecution).toBe(false);
+    const foreign = await privateCLI([
+      "agents",
+      "--profile",
+      "news-researcher",
+    ]);
+    expect(foreign.tasks).toHaveLength(0);
+    expect(foreign.runs).toHaveLength(0);
+    expect(external).toEqual([]);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await page.evaluate(() => scrollTo(0, 0));
+    await page.screenshot({
+      path: `.evidence/calendar-result-${test.info().project.name}.png`,
+      fullPage: false,
+    });
+  });
+});
+
 test("compact Tasks reviews without writes and preserves bounded runs across UI CLI restart", async ({
   page,
 }) => {

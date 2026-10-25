@@ -66,9 +66,10 @@ try {
   );
   pass(
     "schemaPauseAndApprovalFeatures",
-    contracts[0].state[0].versions.min === 16 &&
-      contracts[0].state[0].versions.max === 16 &&
+    contracts[0].state[0].versions.min === 17 &&
+      contracts[0].state[0].versions.max === 17 &&
       contracts[0].state[0].features.includes("agents-playbooks-v1") &&
+      contracts[0].state[0].features.includes("agents-calendar-v1") &&
       contracts[0].state[0].features.includes("agents-local-v1") &&
       contracts[0].state[0].features.includes("agents-wen-paper-v1") &&
       contracts[0].state[0].features.includes("wen-research-v1") &&
@@ -312,6 +313,21 @@ try {
       "schema7CoreReaderDenied",
       (m) => {
         m.components[0].contract.state[0].versions = { min: 7, max: 7 };
+      },
+    ],
+    [
+      "schema16CoreReaderDenied",
+      (m) => {
+        m.components[0].contract.state[0].versions = { min: 16, max: 16 };
+      },
+    ],
+    [
+      "calendarFeatureErasureDenied",
+      (m) => {
+        m.components[0].contract.state[0].features =
+          m.components[0].contract.state[0].features.filter(
+            (f) => f !== "agents-calendar-v1",
+          );
       },
     ],
     [

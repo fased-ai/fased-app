@@ -98,6 +98,36 @@ AI tasks in held/review/cancelled states need their existing fresh AI review;
 resume never substitutes for that consent. Failed news requires correction of the
 selected source before resume. No cached-news fallback is added.
 
+For one reminder at a specific date, choose **At a date & time**. The UI offers
+your browser's timezone and UTC. Nonexistent or repeated daylight-saving wall
+times require correction or an explicit UTC time. Review displays the named
+zone and UTC offset; the stored instant never depends on the server's timezone.
+Dates must be 1 minute–366 days ahead at review/creation. This first calendar
+version accepts plain reminders only, with one run and no bot/news/AI binding.
+
+The same CLI `task-review` command uses `maxRuns: 1`, no interval, and:
+
+```json
+{
+  "calendar": {
+    "version": "once-at-v1",
+    "at": 1793514600,
+    "timeZone": "America/Chicago"
+  }
+}
+```
+
+`at` is an absolute Unix timestamp in seconds; choose a future instant for the
+actual request. Create with the exact reviewed digest/expiry as above. Direct
+`task-create` does not bypass calendar review. Pause retains the original date;
+resume or restart runs an overdue scheduled reminder once. **Run now** completes
+it early and prevents a second run on that date. Completed reminders do not
+restart. Choose **New task** for another date. Cron remains unavailable.
+
+Schema 17 protects calendar fields. Migration from schema 16 changes only the
+schema marker and preserves documents/revisions. Older binaries refuse schema 17. Recovery to a schema-16 binary needs its matching pre-migration backup;
+never clear the schema marker or point the old binary at newer state.
+
 This fixture workspace retains history and has finite capacity: 100 tasks,
 200 allocated evaluations, 200 results, 200 notices and 512 KiB including other
 agent records and reserved future output. Limits are workspace-wide and are not

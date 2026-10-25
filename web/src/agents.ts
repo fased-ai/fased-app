@@ -177,7 +177,13 @@ export type WENPaperResult = {
     selection: number | null;
   };
 };
+export type TaskCalendar = {
+  version: "once-at-v1";
+  at: number;
+  timeZone: string;
+};
 export type AgentTask = {
+  calendar?: TaskCalendar;
   playbook?: { id: string; version: number; sha256: string };
   wen?: WENPaperPlan;
   news?: TaskNewsInput;
@@ -369,6 +375,7 @@ export type AgentView = {
   financialExecution: false;
 };
 export type TaskReview = {
+  calendar?: TaskCalendar;
   version: "task-review-v1";
   revision: number;
   profileId: string;
@@ -468,6 +475,7 @@ export type AgentEvidenceView = {
     }
 );
 export type AgentCommand = {
+  calendar?: TaskCalendar;
   playbookVersion?: number;
   sessionId?: string;
   memorySelection?: AIMemorySelection;

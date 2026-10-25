@@ -10,6 +10,7 @@ import (
 // TaskReview is an inert, expiring projection. Only the existing atomic task
 // creation writes state; revision and digest bind the reviewed policy.
 type TaskReview struct {
+	Calendar        *TaskCalendar  `json:"calendar,omitempty"`
 	Version         string         `json:"version"`
 	Revision        int64          `json:"revision"`
 	ProfileID       string         `json:"profileId"`
@@ -41,7 +42,11 @@ func agentTaskCapacity(d agentDocument) TaskCapacity {
 }
 
 func reviewAgentTask(d agentDocument, c AgentCommand, profile string, revision, now int64) (*TaskReview, error) {
+	if err := validateCalendarCommand(c, now); err != nil {
+		return nil, err
+	}
 	unexpected := c
+	unexpected.Calendar = nil
 	unexpected.Action, unexpected.ProfileID, unexpected.Name, unexpected.Text, unexpected.BotID, unexpected.NewsSourceID, unexpected.ConsentDigest = "", "", "", "", "", "", ""
 	unexpected.Revision, unexpected.IntervalSeconds, unexpected.NewsMaxAgeSeconds, unexpected.ExpiresAt, unexpected.MaxRuns = 0, 0, 0, 0, 0
 	if unexpected != (AgentCommand{}) {
@@ -61,7 +66,12 @@ func reviewAgentTask(d agentDocument, c AgentCommand, profile string, revision, 
 			return nil, errors.New("task review expired; review again")
 		}
 	}
-	r := &TaskReview{Version: "task-review-v1", Revision: revision, ProfileID: profile, Name: c.Name, Text: c.Text, News: news, IntervalSeconds: c.IntervalSeconds, MaxRuns: c.MaxRuns, ExpiresAt: expires}
+	var calendar *TaskCalendar
+	if c.Calendar != nil {
+		copy := *c.Calendar
+		calendar = &copy
+	}
+	r := &TaskReview{Calendar: calendar, Version: "task-review-v1", Revision: revision, ProfileID: profile, Name: c.Name, Text: c.Text, News: news, IntervalSeconds: c.IntervalSeconds, MaxRuns: c.MaxRuns, ExpiresAt: expires}
 	if c.BotID != "" {
 		for _, b := range d.Bots {
 			if b.ID == c.BotID && b.ProfileID == profile {

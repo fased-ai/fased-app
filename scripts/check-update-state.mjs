@@ -118,8 +118,9 @@ try {
     a.version === 1 &&
       a.probeId === probe &&
       a.state.name === "core-db" &&
-      a.state.version === 16 &&
+      a.state.version === 17 &&
       a.state.features.includes("agents-playbooks-v1") &&
+      a.state.features.includes("agents-calendar-v1") &&
       a.state.features.includes("agents-local-v1") &&
       a.state.features.includes("agents-wen-paper-v1"),
   );

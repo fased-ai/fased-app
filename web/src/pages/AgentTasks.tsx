@@ -5,6 +5,7 @@ import type {
   AgentTask,
   AgentView,
   TaskReview,
+  TaskCalendar,
 } from "../agents";
 import { useCore } from "../core";
 import { useWorkspace } from "../workspace";
@@ -13,6 +14,11 @@ import { Badge } from "../components/shared";
 import { AgentPlaybooks } from "./AgentPlaybooks";
 import { ScheduledAITasks } from "./ScheduledAITasks";
 import { SavedReminderDraft } from "./SavedReminderDraft";
+import {
+  calendarFromInput,
+  calendarInput,
+  calendarLabel,
+} from "../task-calendar";
 import { NewsSourcePicker } from "./NewsInputs";
 
 const date = (at: number) => (at ? new Date(at * 1000).toLocaleString() : "—");
@@ -25,10 +31,18 @@ export function taskInterval(seconds: number) {
     return `${seconds / 60} ${seconds === 60 ? "minute" : "minutes"}`;
   return `${seconds} seconds`;
 }
-const schedule = (t: { intervalSeconds: number; maxRuns: number }) =>
-  t.maxRuns === 1
-    ? `Once, after ${taskInterval(t.intervalSeconds)}`
-    : `Every ${taskInterval(t.intervalSeconds)} · ${t.maxRuns} runs`;
+const schedule = (t: {
+  calendar?: TaskCalendar;
+  intervalSeconds: number;
+  maxRuns: number;
+}) =>
+  t.calendar
+    ? "Once · " + calendarLabel(t.calendar)
+    : t.maxRuns === 1
+      ? `Once, after ${taskInterval(t.intervalSeconds)}`
+      : `Every ${taskInterval(t.intervalSeconds)} · ${t.maxRuns} runs`;
+const nextRun = (t: AgentTask) =>
+  t.calendar ? calendarLabel(t.calendar) : date(t.nextAt);
 const finished = (t: AgentTask) =>
   t.state === "completed" || t.runs >= t.maxRuns || t.state === "cancelled";
 
@@ -121,7 +135,7 @@ export function AgentTasks({
         >
           Result
         </button>
-        {!t.news && !t.botId && !t.ai && (
+        {!t.calendar && !t.news && !t.botId && !t.ai && (
           <button
             className="text-button"
             aria-label={`Reuse: ${t.name}`}
@@ -299,7 +313,7 @@ export function AgentTasks({
                         {t.runs} / {t.maxRuns}
                       </td>
                       <td className="task-next">
-                        {t.state === "scheduled" ? date(t.nextAt) : "—"}
+                        {t.state === "scheduled" ? nextRun(t) : "—"}
                       </td>
                       <td>{actions(t)}</td>
                     </tr>
@@ -346,7 +360,7 @@ export function AgentTasks({
                     <dt>Next run</dt>
                     <dd>
                       {selectedTask.state === "scheduled"
-                        ? date(selectedTask.nextAt)
+                        ? nextRun(selectedTask)
                         : "—"}
                     </dd>
                     <dt>Status</dt>
@@ -465,12 +479,14 @@ export function AgentTasks({
         <summary>Schedule & storage</summary>
         <p>
           Tasks run while Fased runs, even with the browser closed. Missed
-          intervals become one run. Resume starts a new interval; completed
-          tasks do not restart.
+          intervals become one run. Resume starts a new interval. Calendar
+          reminders keep their original date; overdue reminders run once after
+          resume or restart. Run now completes a calendar reminder early; it
+          will not run again on its date.
         </p>
         <p>
-          Intervals: 1 minute–7 days, up to 20 runs. Calendar times, cron and
-          timezones are not available yet.
+          Intervals: 1 minute–7 days, up to 20 runs. Calendar reminders: one
+          date within 366 days, in local time or UTC. Cron is not available yet.
         </p>
         {v.taskCapacity && (
           <p>
@@ -509,6 +525,12 @@ function TaskComposer({
   const [seconds, setSeconds] = useState(60);
   const [unit, setUnit] = useState(60);
   const [runs, setRuns] = useState(1);
+  const [calendarMode, setCalendarMode] = useState(false);
+  const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const [zone, setZone] = useState(localZone);
+  const [at, setAt] = useState(() =>
+    calendarInput(Date.now() / 1000 + 1800, localZone),
+  );
   const [review, setReview] = useState<TaskReview>();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -534,6 +556,15 @@ function TaskComposer({
   const stale =
     !!review &&
     (review.revision !== v.revision || review.expiresAt * 1000 <= now);
+  let calendar: TaskCalendar | undefined;
+  let calendarError = "";
+  if (calendarMode) {
+    try {
+      calendar = calendarFromInput(at, zone);
+    } catch (e) {
+      calendarError = e instanceof Error ? e.message : "Choose a date and time";
+    }
+  }
   const command: AgentCommand = {
     action: "task-review",
     profileId: v.profileId,
@@ -543,8 +574,9 @@ function TaskComposer({
     botId: bot,
     newsSourceId: news,
     newsMaxAgeSeconds: news ? age : undefined,
-    intervalSeconds: seconds,
-    maxRuns: runs,
+    calendar,
+    intervalSeconds: calendarMode ? 0 : seconds,
+    maxRuns: calendarMode ? 1 : runs,
   };
   async function prepare() {
     const attempt = ++generation.current;
@@ -552,6 +584,7 @@ function TaskComposer({
     setError("");
     setReview(undefined);
     try {
+      if (calendarError) throw Error(calendarError);
       const next = await core.request<AgentView>("agents", "POST", command);
       if (attempt === generation.current) {
         if (!next.taskReview) throw Error("Task review unavailable");
@@ -591,9 +624,13 @@ function TaskComposer({
               <dt>Agent</dt>
               <dd>{v.profiles.find((p) => p.id === review.profileId)?.name}</dd>
               <dt>Schedule</dt>
-              <dd>{schedule(review)}</dd>
+              <dd>{review.calendar ? "Once" : schedule(review)}</dd>
               <dt>Starts</dt>
-              <dd>{taskInterval(review.intervalSeconds)} after creation</dd>
+              <dd>
+                {review.calendar
+                  ? calendarLabel(review.calendar)
+                  : `${taskInterval(review.intervalSeconds)} after creation`}
+              </dd>
               <dt>Inputs</dt>
               <dd>
                 {review.news
@@ -688,56 +725,110 @@ function TaskComposer({
                 Schedule
                 <select
                   aria-label="Schedule"
-                  value={runs === 1 ? "once" : "repeat"}
+                  value={
+                    calendarMode ? "calendar" : runs === 1 ? "once" : "repeat"
+                  }
                   onChange={(e) =>
-                    edit(() => setRuns(e.target.value === "once" ? 1 : 3))
+                    edit(() => {
+                      const next = e.target.value;
+                      setCalendarMode(next === "calendar");
+                      setRuns(next === "repeat" ? 3 : 1);
+                      if (next === "calendar") {
+                        setBot("");
+                        setNews("");
+                      }
+                    })
                   }
                 >
                   <option value="once">Run once</option>
                   <option value="repeat">Repeat</option>
+                  <option value="calendar">At a date & time</option>
                 </select>
               </label>
-              <div className="task-timing">
-                <label>
-                  {runs === 1 ? "First run in" : "Every"}
-                  <input
-                    type="number"
-                    min={60 / unit}
-                    max={604800 / unit}
-                    step="any"
-                    required
-                    value={seconds / unit}
-                    onChange={(e) =>
-                      edit(() =>
-                        setSeconds(Math.round(Number(e.target.value) * unit)),
-                      )
-                    }
-                  />
-                </label>
-                <label>
-                  Unit
-                  <select
-                    value={unit}
-                    onChange={(e) => {
-                      const next = Number(e.target.value);
-                      edit(() => {
-                        setSeconds(
-                          Math.min(
-                            604800,
-                            Math.max(60, (seconds / unit) * next),
-                          ),
-                        );
-                        setUnit(next);
-                      });
-                    }}
-                  >
-                    <option value={60}>Minutes</option>
-                    <option value={3600}>Hours</option>
-                    <option value={86400}>Days</option>
-                  </select>
-                </label>
-              </div>
-              {runs > 1 && (
+              {calendarMode ? (
+                <div className="task-calendar-fields">
+                  <label>
+                    Date & time
+                    <input
+                      type="datetime-local"
+                      required
+                      aria-label="Date & time"
+                      value={at}
+                      onChange={(e) => edit(() => setAt(e.target.value))}
+                    />
+                  </label>
+                  <label>
+                    Time zone
+                    <select
+                      value={zone}
+                      aria-label="Time zone"
+                      onChange={(e) =>
+                        edit(() => {
+                          const next = e.target.value;
+                          try {
+                            setAt(
+                              calendarInput(
+                                calendarFromInput(at, zone).at,
+                                next,
+                              ),
+                            );
+                          } catch {
+                            // A rejected wall time stays visible for correction.
+                          }
+                          setZone(next);
+                        })
+                      }
+                    >
+                      {localZone !== "UTC" && (
+                        <option value={localZone}>{localZone}</option>
+                      )}
+                      <option value="UTC">UTC</option>
+                    </select>
+                  </label>
+                </div>
+              ) : (
+                <div className="task-timing">
+                  <label>
+                    {runs === 1 ? "First run in" : "Every"}
+                    <input
+                      type="number"
+                      min={60 / unit}
+                      max={604800 / unit}
+                      step="any"
+                      required
+                      value={seconds / unit}
+                      onChange={(e) =>
+                        edit(() =>
+                          setSeconds(Math.round(Number(e.target.value) * unit)),
+                        )
+                      }
+                    />
+                  </label>
+                  <label>
+                    Unit
+                    <select
+                      value={unit}
+                      onChange={(e) => {
+                        const next = Number(e.target.value);
+                        edit(() => {
+                          setSeconds(
+                            Math.min(
+                              604800,
+                              Math.max(60, (seconds / unit) * next),
+                            ),
+                          );
+                          setUnit(next);
+                        });
+                      }}
+                    >
+                      <option value={60}>Minutes</option>
+                      <option value={3600}>Hours</option>
+                      <option value={86400}>Days</option>
+                    </select>
+                  </label>
+                </div>
+              )}
+              {!calendarMode && runs > 1 && (
                 <label>
                   Maximum runs
                   <input
@@ -753,58 +844,60 @@ function TaskComposer({
                   />
                 </label>
               )}
-              <details className="task-inspection">
-                <summary>Inputs & advanced timing</summary>
-                <label>
-                  Task kind
-                  <select
-                    value={bot}
-                    onChange={(e) => edit(() => setBot(e.target.value))}
-                  >
-                    <option value="">Local reminder</option>
-                    {v.bots.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        Paper evaluation · {b.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <NewsSourcePicker
-                  view={v}
-                  value={news}
-                  onChange={(value) => edit(() => setNews(value))}
-                  age={age}
-                  onAge={(value) => edit(() => setAge(value))}
-                />
-                <label>
-                  Interval in seconds
-                  <input
-                    required
-                    type="number"
-                    min={60}
-                    max={604800}
-                    value={seconds}
-                    onChange={(e) =>
-                      edit(() => setSeconds(Number(e.target.value)))
-                    }
-                  />
-                </label>
-                {runs === 1 && (
+              {!calendarMode && (
+                <details className="task-inspection">
+                  <summary>Inputs & advanced timing</summary>
                   <label>
-                    Maximum evaluations
+                    Task kind
+                    <select
+                      value={bot}
+                      onChange={(e) => edit(() => setBot(e.target.value))}
+                    >
+                      <option value="">Local reminder</option>
+                      {v.bots.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          Paper evaluation · {b.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <NewsSourcePicker
+                    view={v}
+                    value={news}
+                    onChange={(value) => edit(() => setNews(value))}
+                    age={age}
+                    onAge={(value) => edit(() => setAge(value))}
+                  />
+                  <label>
+                    Interval in seconds
                     <input
-                      type="number"
                       required
-                      min={1}
-                      max={20}
-                      value={runs}
+                      type="number"
+                      min={60}
+                      max={604800}
+                      value={seconds}
                       onChange={(e) =>
-                        edit(() => setRuns(Number(e.target.value)))
+                        edit(() => setSeconds(Number(e.target.value)))
                       }
                     />
                   </label>
-                )}
-              </details>
+                  {runs === 1 && (
+                    <label>
+                      Maximum evaluations
+                      <input
+                        type="number"
+                        required
+                        min={1}
+                        max={20}
+                        value={runs}
+                        onChange={(e) =>
+                          edit(() => setRuns(Number(e.target.value)))
+                        }
+                      />
+                    </label>
+                  )}
+                </details>
+              )}
               <button className="primary" disabled={busy}>
                 Review task
               </button>

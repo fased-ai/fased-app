@@ -90,7 +90,7 @@ func reviewChatReminder(d *agentDocument, c AgentCommand, profile string, revisi
 }
 
 func validateAgentTask(d agentDocument, c AgentCommand, profile string) (*TaskNewsInput, error) {
-	if !validAgentText(c.Name, 80, true) || len(d.Tasks) >= 100 || c.IntervalSeconds < 60 || c.IntervalSeconds > 604800 || c.MaxRuns < 1 || c.MaxRuns > 20 {
+	if !validAgentText(c.Name, 80, true) || len(d.Tasks) >= 100 || (c.Calendar == nil && (c.IntervalSeconds < 60 || c.IntervalSeconds > 604800)) || c.MaxRuns < 1 || c.MaxRuns > 20 {
 		return nil, errors.New("task requires name, interval 60–604800 seconds and 1–20 runs")
 	}
 	if c.BotID != "" {
@@ -121,10 +121,19 @@ func validateAgentTask(d agentDocument, c AgentCommand, profile string) (*TaskNe
 }
 
 func appendAgentTask(d *agentDocument, c AgentCommand, profile, id string, now int64) error {
+	if err := validateCalendarCommand(c, now); err != nil {
+		return err
+	}
 	news, err := validateAgentTask(*d, c, profile)
 	if err != nil {
 		return err
 	}
-	d.Tasks = append(d.Tasks, AgentTask{News: news, ID: id, ProfileID: profile, Name: c.Name, Text: c.Text, BotID: c.BotID, IntervalSeconds: c.IntervalSeconds, MaxRuns: c.MaxRuns, NextAt: now + c.IntervalSeconds, State: "scheduled"})
+	next := now + c.IntervalSeconds
+	var calendar *TaskCalendar
+	if c.Calendar != nil {
+		copy := *c.Calendar
+		calendar, next = &copy, copy.At
+	}
+	d.Tasks = append(d.Tasks, AgentTask{Calendar: calendar, News: news, ID: id, ProfileID: profile, Name: c.Name, Text: c.Text, BotID: c.BotID, IntervalSeconds: c.IntervalSeconds, MaxRuns: c.MaxRuns, NextAt: next, State: "scheduled"})
 	return nil
 }

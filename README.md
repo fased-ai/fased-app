@@ -481,3 +481,9 @@ Schema 15 protects automatic run/consent history and shares capacity/accounting 
 From an extracted engineering package, run `./fased-app install --bundle . --interactive`. Choose Local for this computer, Remote for the server being installed, or Connect for an existing instance. Existing instances also open with `fased-app connect --url https://your-instance.ts.net`; `--print` verifies without opening a browser and `--instance-id ID` binds a known identity. Remote access uses its own browser origin/session; it creates no local engine. [Installation and private access](docs/install.md#choose-local-or-remote) retains prerequisites, platform gates and recovery instructions.
 
 Setup/sign-in and Settings show actual instance identity/location. A saved deployment preference does not change the connection. First-run does not ask for a wallet/RPC/provider. Real AI, wallets, mining execution and automatic/public updates remain disabled; current package and trust acceptance is engineering-only.
+
+Calendar reminders in Tasks use the same reviewed UI/CLI flow: one date in local
+time or UTC, one result, pause/resume and restart without shifting the saved
+instant. Schema 17 protects these schedules from older readers. Calendar inputs
+remain plain reminders; cron, continuous retention and real AI/financial
+execution stay unavailable. See [reminder timing and CLI](docs/chat-reminders.md).

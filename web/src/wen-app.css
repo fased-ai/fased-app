@@ -65,7 +65,7 @@
   padding: 6px 13px;
   font-weight: 600;
 }
-.wt .primary:hover {
+.wt button.primary:hover:not(:disabled) {
   background: #ff7a8e;
 }
 .wt .secondary {
@@ -912,6 +912,13 @@
   width: 100%;
   min-width: 0;
   color: var(--wt-text);
+}
+.wt .task-calendar-fields {
+  display: grid;
+  gap: 14px;
+}
+.wt .task-calendar-fields input {
+  color-scheme: dark;
 }
 .wt .task-timing {
   display: grid;
