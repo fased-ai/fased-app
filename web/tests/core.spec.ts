@@ -8934,7 +8934,8 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
     .click();
   await expect(
     feed.getByRole("button", { name: "Discuss headline", exact: true }).first(),
-  ).toBeVisible();
+    // Queued fetch: 3s fetch + 2s finalization + the existing 5s UI refresh.
+  ).toBeVisible({ timeout: 12000 });
   await expect(feed).toContainText("SHA-256:");
   await layout("news", ".news-workspace");
   await page
