@@ -227,12 +227,7 @@ async function revealControl(
     else if (hint.includes("Task name"))
       await page.getByRole("button", { name: "New task", exact: true }).click();
   }
-  if (!(await control.count()) && !hint) {
-    const options = page.locator(
-      "details.message-options:not([open]) > summary",
-    );
-    if (await options.isVisible()) await options.click();
-  }
+  // Let navigation attach its control before choosing the owning disclosure.
   await expect(control).toBeAttached();
   if (
     !(await control.isVisible()) &&
@@ -241,15 +236,14 @@ async function revealControl(
       .count())
   )
     await openConversationList(page);
-  // Click the outer disclosure first, exactly as an owner using the UI would.
-  for (let i = 0; i < 4; i++) {
-    if (await control.isVisible()) break;
-    const closed = control
-      .locator("xpath=ancestor::details[not(@open)]")
-      .first();
-    if (!(await closed.count())) break;
-    await closed.locator(":scope > summary").click();
+  // Keep click targets stable as disclosures open; outermost first.
+  const disclosures = control.locator("xpath=ancestor::details");
+  for (let i = 0; i < (await disclosures.count()); i++) {
+    const section = disclosures.nth(i);
+    if ((await section.getAttribute("open")) === null)
+      await section.locator(":scope > summary").click();
   }
+  await expect(control).toBeVisible();
 }
 
 async function openUpdateSettings(page: import("@playwright/test").Page) {
