@@ -51,7 +51,7 @@ export function ChatReply({
           />
         )}
       <div className="response-status">
-        <strong>{q.state}</strong>
+        <strong>{uiText(q.state)}</strong>
         <small>
           {uiText("Fixture · ")}
           {money(q.spentMicrousd)}
@@ -154,27 +154,28 @@ export function ChatReply({
           )}
         </>
       )}
-      {["prepared", "queued", "running"].includes(q.state) && (
-        <button
-          className="secondary"
-          disabled={agents.busy}
-          onClick={() =>
-            void agents.change({
-              action: "ai-cancel",
-              id: q.id,
-            })
-          }
-        >
-          {uiText("Stop")}
-        </button>
-      )}
-      {q.answer && (
+      {!q.chatPermissionId &&
+        ["prepared", "queued", "running"].includes(q.state) && (
+          <button
+            className="secondary"
+            disabled={agents.busy}
+            onClick={() =>
+              void agents.change({
+                action: "ai-cancel",
+                id: q.id,
+              })
+            }
+          >
+            {uiText("Stop")}
+          </button>
+        )}
+      {(q.answer || q.partialAnswer) && (
         <div className="chat-response">
           <small>
             {view.profiles.find((p) => p.id === q.profileId)?.name ||
               uiText("Agent")}
           </small>
-          <p className="ai-answer">{q.answer}</p>
+          <p className="ai-answer">{q.answer || q.partialAnswer}</p>
         </div>
       )}
       {q.state === "completed" && q.answer && (

@@ -367,6 +367,21 @@
   color: var(--wt-text);
   border-color: var(--wt-border);
 }
+.wt .dialog-footer {
+  background: var(--wt-surface);
+  border-color: var(--wt-border);
+}
+.wt .review-list > div {
+  border-color: var(--wt-border);
+  font-size: 13px;
+  padding: 10px 0;
+}
+.wt .review-list dt {
+  color: var(--wt-muted);
+}
+.wt .review-list dd {
+  color: var(--wt-text);
+}
 .wt .dialog-heading .icon-button {
   color: var(--wt-muted);
   background: var(--wt-raised);

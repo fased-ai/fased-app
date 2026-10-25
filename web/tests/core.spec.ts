@@ -64,6 +64,7 @@ test("agent memory and archives keep recall sources journals and results through
   await page
     .getByLabel("Message", { exact: true })
     .fill("What is my SOL risk budget?");
+  await exactReplyReview(page);
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect.poll(async () => (await read()).aiRequests.length).toBe(1);
   v = await read();
@@ -1027,7 +1028,7 @@ test("compact Tasks reviews without writes and preserves bounded runs across UI 
   });
 });
 
-test("normal Chat connects a fixture provider, reviews one reply and retains scoped history without live calls", async ({
+test("normal Chat grants bounded replies, streams Send and retains scoped history without live calls", async ({
   page,
 }) => {
   test.setTimeout(75000);
@@ -1103,24 +1104,32 @@ test("normal Chat connects a fixture provider, reviews one reply and retains sco
   await composer.press("Shift+Enter");
   await expect(composer).toHaveValue("Explain my fixture research limits\n");
   await composer.press("Enter");
-  await expect(
-    chat.locator(".ai-request").last().getByText("prepared", { exact: true }),
-  ).toBeVisible();
-  let view = await privateCLI(["agents"]);
-  const q = view.aiRequests[0];
-  expect(q.state).toBe("prepared");
-  expect(q.connectionRef).toBe(connection.ref);
-  expect(q.answer).toBe("");
+  const permission = page.getByRole("dialog", {
+    name: "Allow replies",
+    exact: true,
+  });
+  await expect(permission).toBeVisible();
+  await page.screenshot({
+    path: `.evidence/chat-permission-${test.info().project.name}.png`,
+    fullPage: false,
+  });
+  expect((await privateCLI(["agents"])).aiRequests).toHaveLength(0);
+  await permission.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(composer).toHaveValue("Explain my fixture research limits\n");
+  await composer.press("Enter");
+  await permission
+    .getByRole("button", { name: "Allow and send", exact: true })
+    .click();
   const card = chat.locator(".ai-request").last();
   await expect(
-    card.getByRole("button", { name: "Run development fixture", exact: true }),
-  ).toBeDisabled();
-  await card
-    .getByLabel("I reviewed this context and these fixture limits")
-    .check();
-  await card
-    .getByRole("button", { name: "Run development fixture", exact: true })
-    .click();
+    chat.getByRole("button", { name: "Stop", exact: true }),
+  ).toBeVisible();
+  await expect(card.locator(".ai-answer")).not.toBeEmpty();
+  let view = await privateCLI(["agents"]);
+  const q = view.aiRequests[0];
+  expect(q.connectionRef).toBe(connection.ref);
+  expect(q.stream).toBe(true);
+  expect(q.chatPermissionId).toBeTruthy();
   await expect(card.locator(".ai-answer")).toContainText(
     "Development fixture response",
     { timeout: 12000 },
@@ -1137,8 +1146,32 @@ test("normal Chat connects a fixture provider, reviews one reply and retains sco
     fullPage: true,
   });
   view = await privateCLI(["agents"]);
-  expect(view.aiRequests[0].state).toBe("completed");
+  await expect
+    .poll(async () => (await privateCLI(["agents"])).aiRequests[0].state)
+    .toBe("completed");
   expect(view.providerCallsEnabled).toBe(false);
+  await composer.fill("How do these limits apply to the last reply?");
+  await chat.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(permission).not.toBeVisible();
+  await expect
+    .poll(
+      async () =>
+        (await privateCLI(["agents"])).aiRequests.filter(
+          (q: any) => q.state === "completed",
+        ).length,
+      { timeout: 12000 },
+    )
+    .toBe(2);
+  view = await privateCLI(["agents"]);
+  expect(view.sessions[0].chat.usedRequests).toBe(2);
+  expect(view.aiRequests[1].context).toContain(view.aiRequests[0].answer);
+  await composer.fill("Stop this reply");
+  await chat.getByRole("button", { name: "Send", exact: true }).click();
+  await chat.getByRole("button", { name: "Stop", exact: true }).click();
+  await expect
+    .poll(async () => (await privateCLI(["agents"])).aiRequests.at(-1).state)
+    .toBe("cancelled");
+
   const other = view.profiles.find((p: any) => p.id !== view.profileId).id;
   const isolated = await privateCLI(["agents", "--profile", other]);
   expect(isolated.aiRequests).toHaveLength(0);
@@ -1146,7 +1179,7 @@ test("normal Chat connects a fixture provider, reviews one reply and retains sco
   await stop();
   await start(true, `127.0.0.1:${port}`);
   await page.reload();
-  await expect(chat.locator(".ai-answer")).toContainText(
+  await expect(chat.locator(".ai-answer").first()).toContainText(
     "Development fixture response",
   );
   expect((await privateCLI(["ai-connection"])).locked).toBe(true);
@@ -1191,6 +1224,7 @@ test("normal Chat keeps a draft when its selected connection locks and stops a p
     action: "lock",
     ref: c.ref,
   });
+  await exactReplyReview(page);
   await chat.getByRole("button", { name: "Send", exact: true }).click();
   await expect(chat.getByRole("alert")).toContainText("locked");
   await expect(input).toHaveValue(
@@ -1200,6 +1234,7 @@ test("normal Chat keeps a draft when its selected connection locks and stops a p
   await chat
     .getByRole("combobox", { name: "AI connection", exact: true })
     .selectOption("");
+  await exactReplyReview(page);
   await chat.getByRole("button", { name: "Send", exact: true }).click();
   await chat.getByRole("button", { name: "Stop", exact: true }).click();
   await expect(chat.getByText("cancelled", { exact: true })).toBeVisible();
@@ -1208,6 +1243,16 @@ test("normal Chat keeps a draft when its selected connection locks and stops a p
   expect(view.aiRequests[0].connectionRef || "").toBe("");
   expect(view.aiRequests[0].spentMicrousd).toBe(0);
 });
+
+async function exactReplyReview(page: import("@playwright/test").Page) {
+  const control = page.getByRole("checkbox", {
+    name: "Review each reply",
+    exact: true,
+    includeHidden: true,
+  });
+  await revealControl(page, control, "Message options");
+  await control.check();
+}
 
 async function openConversationList(page: import("@playwright/test").Page) {
   const toggle = page.getByRole("button", {
@@ -3468,6 +3513,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   const prompt = "Draft a reminder to review this saved headline";
   await revealControl(page, review.getByLabel("Message", { exact: true }), "");
   await review.getByLabel("Message", { exact: true }).fill(prompt);
+  await exactReplyReview(page);
   await review.getByRole("button", { name: "Send", exact: true }).click();
   await expect.poll(async () => (await read()).aiRequests.length).toBe(1);
   const prepared = (await read()).aiRequests[0];
@@ -5344,6 +5390,7 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
   await review
     .getByLabel("Message", { exact: true })
     .fill("Analyze fixed paper inputs using the test connection");
+  await exactReplyReview(page);
   await review.getByRole("button", { name: "Send" }).click();
   await review.getByText("Exact context disclosure", { exact: true }).click();
   await expect(review).toContainText(firstRef);
@@ -5465,6 +5512,7 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
   await panel
     .getByLabel("Message", { exact: true })
     .fill("Compare a bounded paper strategy");
+  await exactReplyReview(page);
   await panel.getByRole("button", { name: "Send" }).click();
   await expect(panel.getByText("prepared", { exact: true })).toBeVisible();
   const run = panel.getByRole("button", { name: "Run development fixture" });
@@ -5835,6 +5883,7 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
   await review
     .getByLabel("Message", { exact: true })
     .fill("Review the admitted model using controlled data");
+  await exactReplyReview(page);
   await review.getByRole("button", { name: "Send" }).click();
   // An intentionally expired compiled tariff must refuse, including on future CI dates.
   if (Date.now() >= connection.admissionPolicy.expiresAt * 1000) {
@@ -6219,6 +6268,7 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
   await review
     .getByLabel("Message", { exact: true })
     .fill("Explain these frozen paper facts and their limitations");
+  await exactReplyReview(page);
   await review.getByRole("button", { name: /Send|Prepare/ }).click();
   let request = review.locator(".ai-request").last();
   await request.locator("summary").first().click();
@@ -6238,6 +6288,7 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
     .fill(
       "Explain the captured range and pending receipt, without predicted rewards",
     );
+  await exactReplyReview(page);
   await review.getByRole("button", { name: /Send|Prepare/ }).click();
   request = review.locator(".ai-request").last();
   await revealControl(
@@ -6386,6 +6437,7 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
   await ai
     .getByLabel("Message", { exact: true })
     .fill("Draft a reminder to review saved research");
+  await exactReplyReview(page);
   await ai.getByRole("button", { name: /Send|Prepare/ }).click();
   const request = ai.locator(".ai-request").last();
   await revealControl(
@@ -7933,6 +7985,7 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
       "",
     );
     await review.getByLabel("Message", { exact: true }).fill(prompt);
+    await exactReplyReview(page);
     await review.getByRole("button", { name: "Send", exact: true }).click();
     await expect
       .poll(async () =>
@@ -8408,6 +8461,7 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
   await review
     .getByRole("textbox", { name: "Message", exact: true })
     .fill("Transient edit only");
+  await exactReplyReview(page);
   await review.getByRole("button", { name: "Send", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText(
     "selected memory is missing",
@@ -8482,6 +8536,7 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
   await review
     .getByLabel("Fixture budget (micro USD)", { exact: true })
     .fill("15000");
+  await exactReplyReview(page);
   await review.getByRole("button", { name: "Send", exact: true }).click();
   await expect.poll(async () => (await read()).aiRequests.length).toBe(3);
   v = await read();
@@ -8538,6 +8593,7 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
   await review
     .getByRole("textbox", { name: "Message", exact: true })
     .fill("Fresh legacy draft question");
+  await exactReplyReview(page);
   await review.getByRole("button", { name: "Send", exact: true }).click();
   await expect.poll(async () => (await read()).aiRequests.length).toBe(4);
   const freshLegacy = (await read()).aiRequests.at(-1);
@@ -9276,6 +9332,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
         r.url().includes("/api/v1/agents") &&
         r.request().postDataJSON()?.action === "ai-prepare",
     );
+    await exactReplyReview(page);
     await review.getByRole("button", { name: "Send", exact: true }).click();
     const r = await response;
     expect(r.status()).toBe(200);
@@ -9464,6 +9521,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
   await expect(selected).toContainText(
     JSON.parse(memoryRequest.context).evidenceSelection.sha256,
   );
+  await exactReplyReview(page);
   await review.getByRole("button", { name: "Send", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText(
     "inspected evidence changed",
@@ -9605,6 +9663,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
     .getByRole("textbox", { name: "Message", exact: true })
     .fill("Too much complete evidence");
   const beforeOversize = await read();
+  await exactReplyReview(page);
   await review.getByRole("button", { name: "Send", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("exceed 8000 bytes");
   expect(await read()).toEqual(beforeOversize);
@@ -9775,6 +9834,7 @@ test("R1 workspace uses a compact branded shell and on-demand chat task memory c
   await page
     .getByLabel("Message", { exact: true })
     .fill("Explain this fixture result.");
+  await exactReplyReview(page);
   await page.getByRole("button", { name: "Send", exact: true }).click();
   const review = page.locator(".ai-request").last();
   await expect(
@@ -10437,4 +10497,135 @@ test("installation connection refuses changed identity before sending an owner p
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("identity changed");
   expect(sent).toBe(0);
+});
+
+test("reviewed task credential allowance is scoped, finite and revocable in Providers and CLI", async ({
+  page,
+}) => {
+  test.setTimeout(75000);
+  await stop();
+  await start(true);
+  await page.goto(url + "/#agents/chat");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const passphrase = "disposable-task-access-passphrase";
+  const connection = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "save",
+    key: "fased-test-browser-task-access-key",
+    passphrase,
+  });
+  let v = await privateCLI(["agents"]);
+  const change = async (c: unknown) => {
+    v = await privateCLI(["agents", "--request-stdin"], {
+      profileId: v.profileId,
+      revision: v.revision,
+      ...(c as object),
+    });
+    return v;
+  };
+  await change({ action: "session-create", name: "Task access source" });
+  const session = v.sessions[0].id;
+  await change({
+    action: "task-ai-prepare",
+    id: session,
+    name: "Selected fixture reminder",
+    text: "Review the fixed context",
+    connectionRef: connection.ref,
+    intervalSeconds: 3600,
+    maxRuns: 2,
+    authorizationSeconds: 7200,
+    totalBudgetMicrousd: 60000,
+    limits: {
+      maxInputTokens: 24000,
+      maxOutputTokens: 1024,
+      deadlineSeconds: 3,
+      budgetMicrousd: 30000,
+    },
+  });
+  const task = v.tasks[0];
+  await change({
+    action: "task-ai-authorize",
+    id: task.id,
+    consentDigest: task.ai.digest,
+  });
+  await page.goto(url + "/#agents/settings");
+  await page.reload();
+  const provider = page.getByRole("region", {
+    name: "OpenAI connection",
+    exact: true,
+  });
+  await provider.getByText("Unattended tasks", { exact: true }).click();
+  await provider
+    .getByRole("checkbox", { name: task.name, exact: true })
+    .check();
+  await provider
+    .getByRole("button", { name: "Review access", exact: true })
+    .click();
+  await expect(
+    provider.getByText(
+      "Selected tasks only. Closing the browser keeps them running. Lock, sign-out, expiry or restart stops credential access.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  expect((await privateCLI(["ai-connection"])).taskAccess).toBeUndefined();
+  await provider
+    .getByLabel("Vault passphrase", { exact: true })
+    .first()
+    .fill(passphrase);
+  await provider
+    .getByRole("button", { name: "Allow task access", exact: true })
+    .click();
+  await expect
+    .poll(
+      async () => (await privateCLI(["ai-connection"])).taskAccess?.tasks[0].id,
+    )
+    .toBe(task.id);
+  await change({ action: "task-run", id: task.id });
+  await expect
+    .poll(async () => (await privateCLI(["agents"])).tasks[0].runs, {
+      timeout: 12000,
+    })
+    .toBe(1);
+  await expect
+    .poll(
+      async () =>
+        (await privateCLI(["ai-connection"])).taskAccess?.usedRequests,
+    )
+    .toBe(1);
+  await provider.getByRole("button", { name: "Revoke", exact: true }).click();
+  await expect
+    .poll(async () => (await privateCLI(["ai-connection"])).taskAccess)
+    .toBeUndefined();
+  v = await privateCLI(["agents"]);
+  await change({ action: "task-run", id: task.id });
+  await expect
+    .poll(async () => (await privateCLI(["agents"])).tasks[0].state, {
+      timeout: 12000,
+    })
+    .toBe("held");
+  const held = await privateCLI(["agents"]);
+  expect(held.tasks[0].runs).toBe(2);
+  expect(
+    held.runs.filter((r: any) => r.strategy === "ai-step-v1/reminder-v1"),
+  ).toHaveLength(1);
+  expect(held.runs.at(-1).outcome).toBe("ai-cancelled");
+  expect(held.aiRequests.at(-1).spentMicrousd).toBe(0);
+  const status = await privateCLI(["ai-connection"]);
+  expect(status.liveCallsEnabled).toBe(false);
+  await page.screenshot({
+    path: `.evidence/provider-task-access-${test.info().project.name}.png`,
+    fullPage: false,
+  });
 });

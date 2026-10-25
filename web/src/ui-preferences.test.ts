@@ -14,6 +14,22 @@ describe("UI preferences", () => {
     ).toBe("单次 · 09:00 UTC");
     expect(translate("ko", "Daily at {time}")).toBe("매일 {time}");
   });
+  it("translates finite Chat and credential permissions without changing values", () => {
+    for (const language of ["ru", "es", "zh", "ko"] as const) {
+      expect(translate(language, "Allow and send")).not.toBe("Allow and send");
+      const limits = translate(
+        language,
+        "{count} replies · {minutes} minutes",
+        { count: 20, minutes: 15 },
+      );
+      expect(limits).toContain("20");
+      expect(limits).toContain("15");
+      expect(limits).not.toContain("{count}");
+      expect(translate(language, "Unattended tasks")).not.toBe(
+        "Unattended tasks",
+      );
+    }
+  });
   it("refuses corrupt or unsupported browser values without touching application state", () => {
     for (const value of [
       null,

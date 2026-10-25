@@ -81,6 +81,7 @@ export type AgentProfile = {
   model: string;
 };
 export type AgentSession = {
+  chat?: ChatPermission;
   id: string;
   profileId: string;
   name: string;
@@ -234,7 +235,29 @@ export type AILimits = {
   deadlineSeconds: number;
   budgetMicrousd: number;
 };
+export type ChatPermission = {
+  id: string;
+  profileId: string;
+  sessionId: string;
+  connectionRef: string;
+  model: string;
+  memoryMode: string;
+  personaDigest: string;
+  bootId: string;
+  revision: number;
+  createdAt: number;
+  expiresAt: number;
+  limits: AILimits;
+  maxRequests: number;
+  budgetMicrousd: number;
+  usedRequests: number;
+  allocatedMicrousd: number;
+  revoked: boolean;
+};
 export type AgentAIRequest = {
+  chatPermissionId?: string;
+  stream?: boolean;
+  partialAnswer?: string;
   researchTurnId?: string;
   researchStep?: number;
   policy?: OpenAIModelPolicy;
@@ -349,6 +372,8 @@ export type PlaybookReview = {
   command: AgentCommand;
 };
 export type AgentView = {
+  chatReview?: ChatPermission;
+  chatReadiness?: Record<string, string>;
   archivedAISpentMicrousd?: number;
   taskReview?: TaskReview;
   taskCapacity?: {
@@ -480,6 +505,7 @@ export type AgentEvidenceView = {
     }
 );
 export type AgentCommand = {
+  chatPermission?: ChatPermission;
   historyDays?: number;
   calendar?: TaskCalendar;
   playbookVersion?: number;
@@ -598,7 +624,13 @@ export function useAgents(core: ReturnType<typeof useCore>) {
     if (core.mode !== "ready") return;
     const load = () => refresh().catch(() => {});
     void load();
-    const timer = setInterval(() => void load(), 5000);
+    let ticks = 0;
+    const timer = setInterval(() => {
+      const active = current.current?.aiRequests.some(
+        (q) => q.state === "queued" || q.state === "running",
+      );
+      if (!writing.current && (active || ++ticks % 10 === 0)) void load();
+    }, 500);
     return () => {
       generation.current++;
       clearInterval(timer);

@@ -5,6 +5,7 @@ type ChatComposer = {
   onSave: () => Promise<void>;
 };
 import { AgentEvidenceInspector } from "./AgentEvidence";
+import { ChatPermissionReview } from "./ChatPermission";
 import { ChatReply } from "./ChatReply";
 import { SlidersHorizontal, BookOpen } from "../icons";
 import type { ResearchSelection } from "./ResearchReadPanel";
@@ -18,6 +19,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import type {
   AgentView,
+  ChatPermission,
   AIMemorySelection,
   AgentAIRequestDraft,
   AIEvidenceSelection,
@@ -71,6 +73,9 @@ function AgentAIForm({
   const { core, agents, navigate } = useWorkspace();
   const tr = uiText;
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [permissionReview, setPermissionReview] = useState<ChatPermission>();
+  const [permissionPrompt, setPermissionPrompt] = useState("");
+  const [reviewEach, setReviewEach] = useState(false);
   const [localPrompt, setLocalPrompt] = useState("");
   const prompt = composer ? composer.value : localPrompt;
   const remembering = /^\s*\/remember(?:\s|$)/.test(prompt);
@@ -196,6 +201,67 @@ function AgentAIForm({
     setMemoryIds((ids) =>
       checked ? [...ids, id] : ids.filter((n) => n !== id),
     );
+  const currentPermission = view.sessions.find((s) => s.id === sessionId)?.chat;
+  const normalChat =
+    !reviewEach &&
+    !researchSelection &&
+    !evidenceSelection &&
+    !newsSourceId &&
+    !draftSource &&
+    (memoryMode === "relevant" || memoryMode === "none");
+  function matchingPermission(p: ChatPermission) {
+    return (
+      p.sessionId === sessionId &&
+      p.profileId === view.profileId &&
+      p.connectionRef === connectionRef &&
+      p.model === (model || "fixture-openai-v1") &&
+      p.memoryMode === memoryMode &&
+      p.limits.maxInputTokens === input &&
+      p.limits.maxOutputTokens === output &&
+      p.limits.deadlineSeconds === deadline &&
+      p.limits.budgetMicrousd === budget
+    );
+  }
+  useEffect(() => {
+    setPermissionReview(undefined);
+  }, [
+    connectionRef,
+    model,
+    memoryMode,
+    input,
+    output,
+    deadline,
+    budget,
+    newsSourceId,
+    evidenceSelection,
+    reviewEach,
+  ]);
+  async function sendNormal(p: ChatPermission, text: string, allow = false) {
+    if (!matchingPermission(p)) return;
+    setDraftBusy(true);
+    try {
+      if (
+        allow &&
+        !(await agents.change({
+          action: "chat-allow",
+          id: sessionId,
+          chatPermission: p,
+          consentDigest: p.id,
+        }))
+      )
+        return;
+      setPermissionReview(undefined);
+      const ok = await agents.change({
+        action: "chat-send",
+        id: sessionId,
+        text,
+        consentDigest: p.id,
+      });
+      if (ok && currentPrompt.current === text) setPrompt("");
+    } finally {
+      setDraftBusy(false);
+    }
+  }
   const requests = view.aiRequests.filter(
     (q) => q.sessionId === sessionId && !q.taskId,
   );
@@ -208,7 +274,12 @@ function AgentAIForm({
       el.scrollTop +=
         reply.getBoundingClientRect().top - el.getBoundingClientRect().top;
     else el.scrollTop = el.scrollHeight;
-  }, [view.messages.length, requests.length, latest?.state]);
+  }, [
+    view.messages.length,
+    requests.length,
+    latest?.state,
+    latest?.partialAnswer,
+  ]);
   const evidenceAvailable =
     !evidenceSelection ||
     (evidenceSelection.kind === "memory"
@@ -237,6 +308,16 @@ function AgentAIForm({
   }
   return (
     <>
+      {permissionReview && (
+        <ChatPermissionReview
+          permission={permissionReview}
+          busy={agents.busy || draftBusy}
+          onClose={() => setPermissionReview(undefined)}
+          onAllow={() =>
+            void sendNormal(permissionReview, permissionPrompt, true)
+          }
+        />
+      )}
       <details className="chat-evidence">
         <summary>{uiText("Saved evidence")}</summary>
         {!researchSelection && (
@@ -265,7 +346,7 @@ function AgentAIForm({
         className="ai-review"
         aria-label={uiText("Optional AI request review")}
       >
-        {draftError && <p role="alert">{draftError}</p>}
+        {draftError && <p role="alert">{uiText(draftError)}</p>}
         {(draftSource || draftBusy) && (
           <div className="agent-inline">
             <h4>
@@ -412,6 +493,55 @@ function AgentAIForm({
               return;
             }
             followReplies.current = true;
+            if (normalChat) {
+              try {
+                if (
+                  currentPermission &&
+                  matchingPermission(currentPermission) &&
+                  view.chatReadiness?.[sessionId] === "ready"
+                ) {
+                  await sendNormal(currentPermission, submittedPrompt);
+                } else {
+                  setDraftBusy(true);
+                  const reviewed = await core.request<AgentView>(
+                    "agents",
+                    "POST",
+                    {
+                      action: "chat-review",
+                      profileId: view.profileId,
+                      revision: view.revision,
+                      id: sessionId,
+                      connectionRef,
+                      model,
+                      memorySelection: { mode: memoryMode },
+                      limits: {
+                        maxInputTokens: input,
+                        maxOutputTokens: output,
+                        deadlineSeconds: deadline,
+                        budgetMicrousd: budget,
+                      },
+                      maxRuns: 20,
+                      authorizationSeconds: 900,
+                      totalBudgetMicrousd: 600000,
+                    },
+                  );
+                  if (epoch === generation.current && reviewed.chatReview) {
+                    setPermissionPrompt(submittedPrompt);
+                    setPermissionReview(reviewed.chatReview);
+                  }
+                }
+              } catch (err) {
+                setDraftError(
+                  err instanceof Error
+                    ? err.message
+                    : "Chat permission unavailable",
+                );
+              } finally {
+                preparing.current = false;
+                setDraftBusy(false);
+              }
+              return;
+            }
             if (researchSelection) {
               if (researchPreparing) {
                 preparing.current = false;
@@ -608,6 +738,40 @@ function AgentAIForm({
             onToggle={(e) => setOptionsOpen(e.currentTarget.open)}
           >
             <summary>{uiText("Message options")}</summary>
+            <label className="ai-consent">
+              <input
+                type="checkbox"
+                checked={reviewEach}
+                onChange={(e) => setReviewEach(e.target.checked)}
+              />
+              {tr("Review each reply")}
+            </label>
+            {currentPermission &&
+              view.chatReadiness?.[sessionId] === "ready" && (
+                <div className="agent-inline">
+                  <span>
+                    {tr("{count} replies left", {
+                      count:
+                        currentPermission.maxRequests -
+                        currentPermission.usedRequests,
+                    })}
+                  </span>
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={agents.busy}
+                    onClick={() =>
+                      void agents.change({
+                        action: "chat-revoke",
+                        id: sessionId,
+                        consentDigest: currentPermission.id,
+                      })
+                    }
+                  >
+                    {tr("Revoke")}
+                  </button>
+                </div>
+              )}
             {composer && (
               <button
                 type="button"
@@ -793,25 +957,39 @@ function AgentAIForm({
             >
               <BookOpen size={16} />
             </button>
-            <button
-              className="primary"
-              disabled={
-                agents.busy ||
-                !prompt.trim() ||
-                prompt.length > 2000 ||
-                researchPreparing ||
-                draftBusy ||
-                (!remembering &&
-                  memoryMode === "selected" &&
-                  memoryIds.length === 0)
-              }
-            >
-              {remembering
-                ? tr("Remember")
-                : researchSelection
-                  ? uiText("Prepare research disclosure")
-                  : tr("Send")}
-            </button>
+            {latest?.chatPermissionId &&
+            ["queued", "running"].includes(latest.state) ? (
+              <button
+                type="button"
+                className="primary"
+                disabled={agents.busy}
+                onClick={() =>
+                  void agents.change({ action: "ai-cancel", id: latest.id })
+                }
+              >
+                {tr("Stop")}
+              </button>
+            ) : (
+              <button
+                className="primary"
+                disabled={
+                  agents.busy ||
+                  !prompt.trim() ||
+                  prompt.length > 2000 ||
+                  researchPreparing ||
+                  draftBusy ||
+                  (!remembering &&
+                    memoryMode === "selected" &&
+                    memoryIds.length === 0)
+                }
+              >
+                {remembering
+                  ? tr("Remember")
+                  : researchSelection
+                    ? uiText("Prepare research disclosure")
+                    : tr("Send")}
+              </button>
+            )}
           </div>
         </form>
       </section>

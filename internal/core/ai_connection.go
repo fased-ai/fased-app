@@ -25,22 +25,30 @@ import (
 )
 
 type AIConnectionCommand struct {
-	Action     string `json:"action"`
-	Ref        string `json:"ref,omitempty"`
-	Key        string `json:"key,omitempty"`
-	Passphrase string `json:"passphrase,omitempty"`
+	Revision             int64                `json:"revision,omitempty"`
+	ProfileID            string               `json:"profileId,omitempty"`
+	TaskIDs              []string             `json:"taskIds,omitempty"`
+	AuthorizationSeconds int64                `json:"authorizationSeconds,omitempty"`
+	Allowance            *TaskAccessAllowance `json:"allowance,omitempty"`
+	ConsentDigest        string               `json:"consentDigest,omitempty"`
+	Action               string               `json:"action"`
+	Ref                  string               `json:"ref,omitempty"`
+	Key                  string               `json:"key,omitempty"`
+	Passphrase           string               `json:"passphrase,omitempty"`
 }
 type AIConnectionView struct {
-	AdmissionPolicy        OpenAIModelPolicy `json:"admissionPolicy"`
-	Ref                    string            `json:"ref"`
-	Provider               string            `json:"provider"`
-	Model                  string            `json:"model"`
-	Locked                 bool              `json:"locked"`
-	UnlockExpires          int64             `json:"unlockExpires"`
-	TestOnly               bool              `json:"testOnly"`
-	LiveCallsEnabled       bool              `json:"liveCallsEnabled"`
-	InputMicrousdPerToken  int64             `json:"inputMicrousdPerToken"`
-	OutputMicrousdPerToken int64             `json:"outputMicrousdPerToken"`
+	TaskAccess             *TaskAccessAllowance `json:"taskAccess,omitempty"`
+	AccessReview           *TaskAccessAllowance `json:"accessReview,omitempty"`
+	AdmissionPolicy        OpenAIModelPolicy    `json:"admissionPolicy"`
+	Ref                    string               `json:"ref"`
+	Provider               string               `json:"provider"`
+	Model                  string               `json:"model"`
+	Locked                 bool                 `json:"locked"`
+	UnlockExpires          int64                `json:"unlockExpires"`
+	TestOnly               bool                 `json:"testOnly"`
+	LiveCallsEnabled       bool                 `json:"liveCallsEnabled"`
+	InputMicrousdPerToken  int64                `json:"inputMicrousdPerToken"`
+	OutputMicrousdPerToken int64                `json:"outputMicrousdPerToken"`
 }
 type aiVaultEnvelope struct {
 	Version    int    `json:"version"`
@@ -50,11 +58,13 @@ type aiVaultEnvelope struct {
 	Ciphertext []byte `json:"ciphertext"`
 }
 type providerState struct {
-	mu      sync.Mutex
-	ref     string
-	key     []byte
-	expires int64
-	digest  [32]byte
+	taskAccessLast int64
+	taskAccess     *TaskAccessAllowance
+	mu             sync.Mutex
+	ref            string
+	key            []byte
+	expires        int64
+	digest         [32]byte
 }
 
 func testAICredential(key string) bool {
@@ -81,12 +91,15 @@ func (s *Store) readAIVault() (aiVaultEnvelope, error) {
 }
 func (s *Store) clearAIConnectionLocked() {
 	clear(s.provider.key)
+	s.provider.taskAccess = nil
+	s.provider.taskAccessLast = 0
 	s.provider.key = nil
 	s.provider.ref = ""
 	s.provider.expires = 0
 	s.provider.digest = [32]byte{}
 }
 func (s *Store) lockAIConnection() {
+	s.chatEpoch.Add(1)
 	s.provider.mu.Lock()
 	defer s.provider.mu.Unlock()
 	s.clearAIConnectionLocked()
@@ -104,9 +117,21 @@ func (s *Store) aiConnectionLocked() (AIConnectionView, error) {
 	}
 	v.Ref = env.Ref
 	encoded, _ := json.Marshal(env)
-	if s.provider.digest == sha256.Sum256(encoded) && s.provider.ref == env.Ref && s.provider.expires > s.now().Unix() && len(s.provider.key) > 0 {
-		v.Locked = false
-		v.UnlockExpires = s.provider.expires
+	if s.provider.digest == sha256.Sum256(encoded) && s.provider.ref == env.Ref && len(s.provider.key) > 0 {
+		if s.provider.expires > s.now().Unix() {
+			v.Locked = false
+			v.UnlockExpires = s.provider.expires
+		}
+		if s.taskAccessCurrent(s.provider.taskAccess) {
+			copy := *s.provider.taskAccess
+			copy.Tasks = append([]TaskAccessBinding(nil), copy.Tasks...)
+			v.TaskAccess = &copy
+		} else {
+			s.provider.taskAccess = nil
+		}
+		if v.Locked && v.TaskAccess == nil {
+			s.clearAIConnectionLocked()
+		}
 	} else {
 		s.clearAIConnectionLocked()
 	}
@@ -126,6 +151,9 @@ func (s *Store) aiConnectionValid(ref string) bool {
 }
 func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (AIConnectionView, error) {
 	// All paths needing both locks acquire SQLite before the in-memory mutex.
+	if !taskAccessAction(c.Action) && (c.Allowance != nil || len(c.TaskIDs) > 0 || c.ProfileID != "" || c.AuthorizationSeconds != 0 || c.ConsentDigest != "" || c.Revision != 0) {
+		return AIConnectionView{}, errors.New("task credential scope requires a dedicated review")
+	}
 	if c.Action == "lock" {
 		if c.Key != "" || c.Passphrase != "" {
 			return AIConnectionView{}, errors.New("lock accepts no secrets")
@@ -139,6 +167,7 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		if c.Ref != v.Ref {
 			return v, ErrConflict
 		}
+		s.chatEpoch.Add(1)
 		s.clearAIConnectionLocked()
 		return s.aiConnectionLocked()
 	}
@@ -158,6 +187,9 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	}
 	if c.Ref != v.Ref {
 		return v, ErrConflict
+	}
+	if taskAccessAction(c.Action) {
+		return s.changeTaskAccess(ctx, tx, c, v)
 	}
 	if c.Action != "save" && c.Action != "unlock" && c.Action != "remove" {
 		return v, errors.New("unknown credential operation")
@@ -188,12 +220,14 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		}
 	}
 	if c.Action == "remove" {
+		s.chatEpoch.Add(1)
 		if e = os.Remove(s.aiVaultPath()); e != nil {
 			return v, errors.New("credential removal failed")
 		}
 		s.clearAIConnectionLocked()
 		return s.aiConnectionLocked()
 	}
+	s.chatEpoch.Add(1)
 	env := aiVaultEnvelope{Version: 1, Salt: make([]byte, 16), Nonce: make([]byte, 12)}
 	if env.Ref, e = randomToken(); e != nil {
 		return v, e
@@ -248,9 +282,10 @@ func (f *openAIHTTPSFixture) RoundTrip(r *http.Request) (*http.Response, error) 
 }
 
 type authenticatedAITransport struct {
-	store *Store
-	ref   string
-	next  http.RoundTripper
+	store   *Store
+	ref     string
+	next    http.RoundTripper
+	request *AgentAIRequest
 }
 
 func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -259,7 +294,11 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 	}
 	a.store.provider.mu.Lock()
 	v, e := a.store.aiConnectionLocked()
-	if e != nil || v.Locked || v.Ref != a.ref {
+	allowed := e == nil && !v.Locked && v.Ref == a.ref
+	if a.request != nil && a.request.TaskID != "" {
+		allowed = e == nil && v.Ref == a.ref && a.store.taskAccessMatches(*a.request, a.store.provider.taskAccess, true)
+	}
+	if !allowed {
 		a.store.provider.mu.Unlock()
 		return nil, errors.New("connection locked or changed")
 	}
@@ -276,6 +315,10 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 	res, e := a.next.RoundTrip(copy)
 	if e != nil {
 		return nil, errors.New("provider transport unavailable")
+	}
+	if strings.Split(res.Header.Get("Content-Type"), ";")[0] == "text/event-stream" {
+		res.Body = &guardedAIBody{body: res.Body, key: append([]byte(nil), key...)}
+		return res, nil
 	}
 	body, e := io.ReadAll(io.LimitReader(res.Body, 16385))
 	res.Body.Close()

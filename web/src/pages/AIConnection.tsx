@@ -2,9 +2,12 @@ import { useUI } from "../ui-preferences";
 import type { OpenAIModelPolicy, OpenAIAdmission } from "../agents";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useCore } from "../core";
+import { TaskAccessSettings, type TaskAccessAllowance } from "./TaskAccess";
 import { Badge } from "../components/shared";
 
 export type Connection = {
+  taskAccess?: TaskAccessAllowance;
+  accessReview?: TaskAccessAllowance;
   admissionPolicy: OpenAIModelPolicy;
   ref: string;
   model: string;
@@ -132,6 +135,15 @@ export function AIConnectionSettings() {
             : uiText("No connection saved")}
         </p>
         {error && <p role="alert">{error}</p>}
+        {view?.ref && (
+          <TaskAccessSettings
+            key={`${view.ref}:${core.instanceId}`}
+            connection={view}
+            onChanged={() =>
+              window.dispatchEvent(new Event("ai-connection-changed"))
+            }
+          />
+        )}
         <details className="connection-options">
           <summary>{uiText("Connection settings")}</summary>
           <p>

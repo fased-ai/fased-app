@@ -17,6 +17,9 @@ export async function currentStorageFixture(archivedRoot) {
     "agent_cron.go",
     "agent_history.go",
     "agent_recall.go",
+    "agent_chat.go",
+    "agent_ai_stream.go",
+    "ai_task_access.go",
     "agent_playbooks.go",
     "wen_paper.go",
     "agent_ai.go",
@@ -91,13 +94,14 @@ export async function currentStorageFixture(archivedRoot) {
   await writeFile(
     store,
     before
+      .replace('"sync"', '"sync"\n"sync/atomic"')
       .replace(
         "type Store struct {",
-        "type Store struct {\n\tsessionFixture bool\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState\n\tresearchRead func(context.Context, researchFactResult) (json.RawMessage, error)",
+        "type Store struct {\n\tchatEpoch atomic.Uint64\n\tprogressMu sync.Mutex\n\taiProgress map[string]string\n\tsessionFixture bool\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState\n\tresearchRead func(context.Context, researchFactResult) (json.RawMessage, error)",
       )
       .replace(
         marker,
-        "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }; if schema <= 6 { if err = migrateAIConnections(ctx, db); err != nil { return nil, err } }; if schema <= 7 { if err = migrateAgentNews(ctx, db); err != nil { return nil, err } }; if schema <= 8 { if err = migrateAIAdmission(ctx, db); err != nil { return nil, err } }; if schema <= 9 { if err = migrateWENPaper(ctx, db); err != nil { return nil, err } }; if schema <= 10 { if err = migrateWENResearch(ctx, db); err != nil { return nil, err } }; if schema <= 11 { if err = migrateWENResearchAI(ctx, db); err != nil { return nil, err } }; if schema <= 12 { if err = migrateWENResearchLoop(ctx, db); err != nil { return nil, err } }; if schema <= 13 { if err = migrateWENSessions(ctx, db); err != nil { return nil, err } }; if schema <= 14 { if err = migrateWENFixtureRuns(ctx, db); err != nil { return nil, err } }; if schema <= 15 { if err = migratePlaybooks(ctx, db); err != nil { return nil, err } }; if schema <= 16 { if err = migrateTaskCalendar(ctx, db); err != nil { return nil, err } }; if schema <= 17 { if err = migrateTaskCron(ctx, db); err != nil { return nil, err } }\n" +
+        "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }; if schema <= 6 { if err = migrateAIConnections(ctx, db); err != nil { return nil, err } }; if schema <= 7 { if err = migrateAgentNews(ctx, db); err != nil { return nil, err } }; if schema <= 8 { if err = migrateAIAdmission(ctx, db); err != nil { return nil, err } }; if schema <= 9 { if err = migrateWENPaper(ctx, db); err != nil { return nil, err } }; if schema <= 10 { if err = migrateWENResearch(ctx, db); err != nil { return nil, err } }; if schema <= 11 { if err = migrateWENResearchAI(ctx, db); err != nil { return nil, err } }; if schema <= 12 { if err = migrateWENResearchLoop(ctx, db); err != nil { return nil, err } }; if schema <= 13 { if err = migrateWENSessions(ctx, db); err != nil { return nil, err } }; if schema <= 14 { if err = migrateWENFixtureRuns(ctx, db); err != nil { return nil, err } }; if schema <= 15 { if err = migratePlaybooks(ctx, db); err != nil { return nil, err } }; if schema <= 16 { if err = migrateTaskCalendar(ctx, db); err != nil { return nil, err } }; if schema <= 17 { if err = migrateTaskCron(ctx, db); err != nil { return nil, err } }; if schema <= 18 { if err = migrateAgentChat(ctx, db); err != nil { return nil, err } }\n" +
           marker,
       ),
   );

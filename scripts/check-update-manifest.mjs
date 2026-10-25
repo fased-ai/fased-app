@@ -66,12 +66,13 @@ try {
   );
   pass(
     "schemaPauseAndApprovalFeatures",
-    contracts[0].state[0].versions.min === 18 &&
-      contracts[0].state[0].versions.max === 18 &&
+    contracts[0].state[0].versions.min === 19 &&
+      contracts[0].state[0].versions.max === 19 &&
       contracts[0].state[0].features.includes("agents-playbooks-v1") &&
       contracts[0].state[0].features.includes("agents-cron-v1") &&
       contracts[0].state[0].features.includes("agents-history-v1") &&
       contracts[0].state[0].features.includes("agents-recall-v1") &&
+      contracts[0].state[0].features.includes("agents-chat-permission-v1") &&
       contracts[0].state[0].features.includes("agents-calendar-v1") &&
       contracts[0].state[0].features.includes("agents-local-v1") &&
       contracts[0].state[0].features.includes("agents-wen-paper-v1") &&
@@ -345,6 +346,15 @@ try {
         m.components[0].contract.state[0].features =
           m.components[0].contract.state[0].features.filter(
             (f) => f !== "agents-history-v1",
+          );
+      },
+    ],
+    [
+      "chatPermissionFeatureErasureDenied",
+      (m) => {
+        m.components[0].contract.state[0].features =
+          m.components[0].contract.state[0].features.filter(
+            (f) => f !== "agents-chat-permission-v1",
           );
       },
     ],

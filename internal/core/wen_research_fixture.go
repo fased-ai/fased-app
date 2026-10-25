@@ -161,6 +161,19 @@ func (s *Store) reviewAIRequest(ctx context.Context, q AgentAIRequest) error {
 	if err != nil {
 		return err
 	}
+	if q.ChatPermissionID != "" {
+		active := false
+		for _, current := range d.AIRequests {
+			if current.ID == q.ID && current.State == "running" && current.DispatchBoot == q.DispatchBoot && current.Digest == q.Digest {
+				active = true
+			}
+		}
+		var phase string
+		if !active || !s.chatRequestValid(d, q, s.now().Unix()) || !s.aiRequestConnectionValid(q) || tx.QueryRowContext(ctx, "SELECT phase FROM update_pause WHERE id=1").Scan(&phase) != nil || phase == "paused" {
+			return errors.New("Chat stopped before provider operation")
+		}
+	}
+
 	if isResearchAI(q) {
 		active := false
 		for _, current := range d.AIRequests {

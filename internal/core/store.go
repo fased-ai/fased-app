@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/signer"
@@ -22,6 +23,9 @@ import (
 type Store struct {
 	sessionFixture bool
 	aiMu           sync.Mutex
+	chatEpoch      atomic.Uint64
+	progressMu     sync.Mutex
+	aiProgress     map[string]string
 	newsMu         sync.Mutex
 	provider       providerState
 	db             *sql.DB
@@ -199,6 +203,11 @@ PRAGMA user_version=1;`)
 	}
 	if schema <= 17 {
 		if err = migrateTaskCron(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if schema <= 18 {
+		if err = migrateAgentChat(ctx, db); err != nil {
 			return nil, err
 		}
 	}

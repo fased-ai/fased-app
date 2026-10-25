@@ -1,5 +1,162 @@
 // Static interface copy; user records, model output and raw receipts are never catalog keys.
 export const pageCopy = {
+  "Allow replies": [
+    "Разрешить ответы",
+    "Permitir respuestas",
+    "允许回复",
+    "답변 허용",
+  ],
+  "This conversation and relevant current notes. No tools or scheduled work.": [
+    "Этот диалог и подходящие текущие заметки. Без инструментов и задач по расписанию.",
+    "Esta conversación y las notas actuales pertinentes. Sin herramientas ni tareas programadas.",
+    "此对话和相关当前笔记。不包含工具或定时任务。",
+    "이 대화와 관련된 현재 메모만 사용합니다. 도구나 예약 작업은 포함되지 않습니다.",
+  ],
+  "This conversation only. No notes, tools or scheduled work.": [
+    "Только этот диалог. Без заметок, инструментов и задач по расписанию.",
+    "Solo esta conversación. Sin notas, herramientas ni tareas programadas.",
+    "仅此对话。不包含笔记、工具或定时任务。",
+    "이 대화만 사용합니다. 메모, 도구, 예약 작업은 포함되지 않습니다.",
+  ],
+  Allowance: ["Лимит", "Límite", "额度", "허용량"],
+  "{count} replies · {minutes} minutes": [
+    "{count} ответов · {minutes} мин.",
+    "{count} respuestas · {minutes} minutos",
+    "{count} 次回复 · {minutes} 分钟",
+    "답변 {count}회 · {minutes}분",
+  ],
+  "Maximum cost": [
+    "Максимальная стоимость",
+    "Coste máximo",
+    "最高费用",
+    "최대 비용",
+  ],
+  "Inspect limits": [
+    "Посмотреть ограничения",
+    "Ver límites",
+    "查看限制",
+    "한도 확인",
+  ],
+  "Allow and send": [
+    "Разрешить и отправить",
+    "Permitir y enviar",
+    "允许并发送",
+    "허용 후 보내기",
+  ],
+  "Review each reply": [
+    "Проверять каждый запрос",
+    "Revisar cada solicitud",
+    "逐次审核请求",
+    "각 요청 검토",
+  ],
+  "{count} replies left": [
+    "Осталось ответов: {count}",
+    "Quedan {count} respuestas",
+    "剩余 {count} 次回复",
+    "남은 답변 {count}회",
+  ],
+  "Unattended tasks": [
+    "Автономные задачи",
+    "Tareas sin supervisión",
+    "无人值守任务",
+    "무인 작업",
+  ],
+  "Reviewed tasks": [
+    "Одобренные задачи",
+    "Tareas revisadas",
+    "已审核任务",
+    "검토된 작업",
+  ],
+  "No reviewed tasks use this connection": [
+    "Нет одобренных задач с этим подключением",
+    "Ninguna tarea revisada usa esta conexión",
+    "没有已审核任务使用此连接",
+    "이 연결을 사용하는 검토된 작업이 없습니다",
+  ],
+  "Credential access": [
+    "Доступ к ключу",
+    "Acceso a la credencial",
+    "凭据访问",
+    "인증 정보 접근",
+  ],
+  "15 minutes": ["15 минут", "15 minutos", "15 分钟", "15분"],
+  "1 hour": ["1 час", "1 hora", "1 小时", "1시간"],
+  "24 hours": ["24 часа", "24 horas", "24 小时", "24시간"],
+  "Review access": [
+    "Проверить доступ",
+    "Revisar acceso",
+    "审核访问",
+    "접근 검토",
+  ],
+  "Selected tasks only. Closing the browser keeps them running. Lock, sign-out, expiry or restart stops credential access.":
+    [
+      "Только выбранные задачи. Они работают после закрытия браузера. Блокировка, выход, истечение срока или перезапуск закрывают доступ к ключу.",
+      "Solo las tareas seleccionadas. Siguen al cerrar el navegador. Bloquear, cerrar sesión, caducar o reiniciar detiene el acceso a la credencial.",
+      "仅限所选任务。关闭浏览器后继续运行。锁定、退出登录、到期或重启将停止凭据访问。",
+      "선택한 작업만 허용합니다. 브라우저를 닫아도 계속 실행됩니다. 잠금, 로그아웃, 만료 또는 재시작 시 인증 정보 접근이 중단됩니다.",
+    ],
+  "Allow task access": [
+    "Разрешить доступ задачам",
+    "Permitir acceso a tareas",
+    "允许任务访问",
+    "작업 접근 허용",
+  ],
+  "Chat permission unavailable": [
+    "Доступ к ответам недоступен",
+    "Permiso de chat no disponible",
+    "对话权限不可用",
+    "채팅 권한을 사용할 수 없습니다",
+  ],
+  "Chat capacity reached; archive a settled conversation in History; linked or uncertain records stay protected":
+    [
+      "Лимит диалогов: архивируйте завершённый диалог в истории. Связанные записи и неизвестные расходы остаются защищёнными.",
+      "Capacidad de chat agotada; archiva una conversación resuelta en Historial. Los registros vinculados o inciertos se conservan.",
+      "对话容量已满；请在历史记录中归档已结算的对话。有关联或费用未确定的记录会保留。",
+      "채팅 용량에 도달했습니다. 기록에서 정산된 대화를 보관하세요. 연결된 기록과 불확실한 사용 내역은 보호됩니다.",
+    ],
+  "profile has pending or uncertain usage; inspect it before another reply": [
+    "Есть незавершённый запрос или неизвестные расходы. Проверьте их перед новым ответом.",
+    "El perfil tiene uso pendiente o incierto; revísalo antes de otra respuesta.",
+    "此配置有待处理或未确定的用量；请先检查再请求回复。",
+    "프로필에 대기 중이거나 불확실한 사용량이 있습니다. 다음 답변 전에 확인하세요.",
+  ],
+  "Chat permission unavailable; review current scope and connection": [
+    "Нет разрешения для этого диалога. Проверьте область доступа и подключение.",
+    "Permiso de chat no disponible; revisa el alcance y la conexión actuales.",
+    "对话权限不可用；请审核当前范围和连接。",
+    "채팅 권한이 없습니다. 현재 범위와 연결을 검토하세요.",
+  ],
+  "Chat scope changed; review permission again": [
+    "Область диалога изменилась. Проверьте разрешение заново.",
+    "El alcance del chat cambió; revisa el permiso de nuevo.",
+    "对话范围已更改；请重新审核权限。",
+    "채팅 범위가 변경되었습니다. 권한을 다시 검토하세요.",
+  ],
+  "reply exceeds Chat input allowance; start a fresh conversation or review larger limits":
+    [
+      "Ответ превышает лимит контекста. Начните новый диалог или пересмотрите ограничения.",
+      "La respuesta supera el límite de entrada; inicia otra conversación o revisa los límites.",
+      "回复超出对话输入额度；请新建对话或审核更大额度。",
+      "답변이 채팅 입력 한도를 초과합니다. 새 대화를 시작하거나 더 큰 한도를 검토하세요.",
+    ],
+  "pending or uncertain usage keeps new credential access locked": [
+    "Незавершённые запросы или неизвестные расходы блокируют новый доступ к ключу.",
+    "El uso pendiente o incierto bloquea el nuevo acceso a la credencial.",
+    "待处理或未确定的用量会阻止新的凭据访问。",
+    "대기 중이거나 불확실한 사용량 때문에 새 인증 정보 접근이 잠겨 있습니다.",
+  ],
+  "selected task is not ready with this connection": [
+    "Выбранная задача не готова с этим подключением.",
+    "La tarea seleccionada no está lista con esta conexión.",
+    "所选任务尚不能使用此连接。",
+    "선택한 작업이 이 연결을 사용할 준비가 되지 않았습니다.",
+  ],
+  "task access scope changed; review it again": [
+    "Область доступа задач изменилась. Проверьте её заново.",
+    "El alcance de acceso cambió; revísalo de nuevo.",
+    "任务访问范围已更改；请重新审核。",
+    "작업 접근 범위가 변경되었습니다. 다시 검토하세요.",
+  ],
   Expired: ["Истекло", "Caducado", "已过期", "만료됨"],
   "Memory source": [
     "Источник памяти",

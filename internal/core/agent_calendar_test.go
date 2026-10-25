@@ -207,7 +207,7 @@ func TestCalendarMigrationPreservesOriginalsAndRefusesUnprotectedFields(t *testi
 		t.Fatal("migration rewrote original records/revision")
 	}
 	var schema int
-	if err = n.db.QueryRow("PRAGMA user_version").Scan(&schema); err != nil || schema != 18 || StateSchema != 18 {
+	if err = n.db.QueryRow("PRAGMA user_version").Scan(&schema); err != nil || schema != StateSchema || StateSchema < 18 {
 		t.Fatal("schema protection missing", schema, err)
 	}
 	b, _ := json.Marshal(UpdateContract())

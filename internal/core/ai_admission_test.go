@@ -46,6 +46,22 @@ func admissionPlan(t *testing.T, s *Store, ref string, scheduled bool) AgentView
 	}
 	return agentApply(t, s, c)
 }
+
+// A connected scheduled fixture must carry the same finite credential grant as
+// the product. Admission failures below still exercise the actual HTTPS path.
+func authorizeAdmissionTask(t *testing.T, s *Store, v AgentView) AgentView {
+	t.Helper()
+	v = taskAIAuthorize(t, s, v)
+	task := v.Tasks[len(v.Tasks)-1]
+	reviewed, e := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "task-access-review", Ref: task.AI.ConnectionRef, Revision: v.Revision, ProfileID: v.ProfileID, TaskIDs: []string{task.ID}, AuthorizationSeconds: 600})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "task-access-allow", Ref: task.AI.ConnectionRef, Allowance: reviewed.AccessReview, ConsentDigest: reviewed.AccessReview.ID, Passphrase: testVaultPassword}); e != nil {
+		t.Fatal(e)
+	}
+	return v
+}
 func admissionReply(w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(value)
@@ -61,7 +77,7 @@ func TestOpenAIAdmissionHTTPSJoinedTaskAndRestart(t *testing.T) {
 	if task.AI.Policy == nil || !strings.Contains(task.AI.Disclosure, admittedOpenAIModel) || task.AI.Authorized {
 		t.Fatal("policy missing from unapproved plan")
 	}
-	v = taskAIRun(t, s, taskAIAuthorize(t, s, v))
+	v = taskAIRun(t, s, authorizeAdmissionTask(t, s, v))
 	var paths []string
 	var counted map[string]json.RawMessage
 	rt := httpsFixture(t, func(w http.ResponseWriter, r *http.Request) {
@@ -128,7 +144,7 @@ func TestOpenAIAdmissionHTTPSRefusalsAndDependentIsolation(t *testing.T) {
 	for _, mode := range []string{"401", "403", "429", "wrong-model", "shutdown", "missing-created", "count-null", "count-negative", "count-over", "count-fraction", "count-object", "count-duplicate", "redirect", "oversize", "reflection", "timeout"} {
 		t.Run(mode, func(t *testing.T) {
 			s, c := admissionStore(t)
-			v := taskAIRun(t, s, taskAIAuthorize(t, s, admissionPlan(t, s, c.Ref, true)))
+			v := taskAIRun(t, s, authorizeAdmissionTask(t, s, admissionPlan(t, s, c.Ref, true)))
 			var calls, generations atomic.Int32
 			rt := httpsFixture(t, func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)

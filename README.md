@@ -346,11 +346,10 @@ The controlling product/implementation/checkpoint documents are maintained in th
 Original Fased App code is under [PolyForm Perimeter 1.0.0](LICENSE). It is source-available with restrictions on providing competing products/services; it is not described as permissive or OSI open source. See [NOTICE](NOTICE) for attribution and dependency boundaries. License selection does not change third-party terms.
 
 Optional AI request review is a development fixture, not a connected provider.
-In Agents → Chat, choose **Start chat** or a saved conversation, select the fixture connection/model, and **Send** from the single composer. Enter sends; Shift+Enter adds a line. Send prepares a request; inspect its complete
-wire disclosure and limits, then consent to that exact digest. Ordinary cores can
+In Agents → Chat, choose **Start chat** or a saved conversation, select the fixture connection/model, and **Send** from the single composer. Enter sends; Shift+Enter adds a line. The first normal Send reviews a finite conversation/provider/model/memory allowance; Allow and send then dispatches one reply, and subsequent sends use its remaining limits. Stop cancels, and controlled Responses SSE provides transient progress until final validation. Advanced exact-disclosure reviews remain available in Message options; see [connection and task-access policy](docs/ai-connections.md). Ordinary cores can
 prepare and cancel reviews but cannot execute them. A standalone disposable
 `fased-app serve --ai-fixture --listen 127.0.0.1:0 --data-dir <disposable-directory>`
-can run the compiled in-process Responses fixture. It accepts no API credentials,
+can run the compiled in-process Responses fixture. It accepts disposable `fased-test-` credentials only,
 never contacts OpenAI and cannot be combined with a managed custody/sandbox or
 public-origin option. The fixture uses invented prices; a ChatGPT subscription
 is not connected and no billing assurance for real API use is implied.

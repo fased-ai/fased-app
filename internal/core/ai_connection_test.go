@@ -371,7 +371,16 @@ func TestAIConnectionBoundTaskAndActiveCancellation(t *testing.T) {
 		v := taskAIPlan(t, s, 1)
 		a := v.Tasks[0].AI
 		v = agentApply(t, s, AgentCommand{Action: "task-ai-prepare", ProfileID: v.ProfileID, ID: a.SessionID, Name: "Connected reminder", Text: "Review fixed paper inputs", IntervalSeconds: 60, MaxRuns: 1, Limits: &a.Limits, TotalBudgetMicrousd: 30000, AuthorizationSeconds: 3600, ConnectionRef: connection.Ref})
-		v = taskAIRun(t, s, taskAIAuthorize(t, s, v))
+		v = taskAIAuthorize(t, s, v)
+		task := v.Tasks[len(v.Tasks)-1]
+		reviewed, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "task-access-review", Ref: connection.Ref, Revision: v.Revision, ProfileID: v.ProfileID, TaskIDs: []string{task.ID}, AuthorizationSeconds: 1800})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "task-access-allow", Ref: connection.Ref, Allowance: reviewed.AccessReview, ConsentDigest: reviewed.AccessReview.ID, Passphrase: testVaultPassword}); err != nil {
+			t.Fatal(err)
+		}
+		v = taskAIRun(t, s, v)
 		if len(v.AIRequests) != 1 || v.AIRequests[0].ConnectionRef != connection.Ref {
 			t.Fatal("task lost credential binding")
 		}

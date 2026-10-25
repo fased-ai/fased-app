@@ -38,6 +38,10 @@ type AIActionCard struct {
 	Review string `json:"review"`
 }
 type AgentAIRequest struct {
+	taskAccessID      string
+	ChatPermissionID  string             `json:"chatPermissionId,omitempty"`
+	Stream            bool               `json:"stream,omitempty"`
+	PartialAnswer     string             `json:"partialAnswer,omitempty"`
 	researchFrame     *researchLoopFrame // transient parsed result, persisted only in the turn ledger
 	ResearchTurnID    string             `json:"researchTurnId,omitempty"`
 	ResearchStep      int                `json:"researchStep,omitempty"`
@@ -291,6 +295,9 @@ func aiDigest(q AgentAIRequest) string {
 		CreatedAt                                                     int64
 		Limits                                                        AILimits
 	}{q.Policy, q.ID, q.ProfileID, q.SessionID, string(wire), q.TaskID, q.TaskDigest, q.ConnectionRef, q.CreatedAt, q.Limits})
+	if q.ChatPermissionID != "" {
+		b = append(b, []byte("\nchat-v1:"+q.ChatPermissionID)...)
+	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
@@ -409,6 +416,9 @@ func aiWire(q AgentAIRequest) ([]byte, error) {
 		wire["text"] = map[string]any{"format": map[string]any{"type": "json_schema", "name": "fased_research_step_v1", "strict": true, "schema": loopOutputSchema()}}
 	}
 
+	if q.Stream {
+		wire["stream"] = true
+	}
 	if q.Policy != nil {
 		wire["truncation"] = "disabled"
 	}
@@ -429,6 +439,9 @@ func callAgentAIAt(ctx context.Context, q AgentAIRequest, rt http.RoundTripper, 
 
 // Only the worker may call this after persisting the reviewed attempt and hold.
 func callReviewedAgentAIAt(ctx context.Context, q AgentAIRequest, rt http.RoundTripper, now func() time.Time) (AgentAIRequest, error) {
+	return callReviewedAgentAIStreamAt(ctx, q, rt, now, nil)
+}
+func callReviewedAgentAIStreamAt(ctx context.Context, q AgentAIRequest, rt http.RoundTripper, now func() time.Time, onDelta func(string)) (AgentAIRequest, error) {
 	if validateAIModelPolicy(q, now().Unix()) != nil {
 		return q, errors.New("model admission unavailable")
 	}
@@ -455,7 +468,13 @@ func callReviewedAgentAIAt(ctx context.Context, q AgentAIRequest, rt http.RoundT
 		return q, errors.New("provider result unavailable; reservation retained")
 	}
 	defer res.Body.Close()
-	b, e = io.ReadAll(io.LimitReader(res.Body, 16385))
+	if q.Stream && res.StatusCode == 200 && strings.Split(res.Header.Get("Content-Type"), ";")[0] == "text/event-stream" {
+		b, e = readAIStream(res.Body, q.Model, onDelta)
+	} else if q.Stream {
+		return q, errors.New("provider stream unavailable; reservation retained")
+	} else {
+		b, e = io.ReadAll(io.LimitReader(res.Body, 16385))
+	}
 	if e != nil || len(b) > 16384 || res.StatusCode != 200 {
 		return q, errors.New("provider response refused; reservation retained")
 	}
@@ -548,7 +567,7 @@ func callReviewedAgentAIAt(ctx context.Context, q AgentAIRequest, rt http.RoundT
 	}
 	decoder := json.NewDecoder(strings.NewReader(o.Content[0].Text))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&out) != nil || decoder.Decode(new(any)) != io.EOF || !validAgentText(out.Answer, 2000, true) || out.Cards == nil || len(out.Cards) > 3 {
+	if !uniqueAIJSON([]byte(o.Content[0].Text)) || decoder.Decode(&out) != nil || decoder.Decode(new(any)) != io.EOF || !validAgentText(out.Answer, 2000, true) || out.Cards == nil || len(out.Cards) > 3 {
 		return q, nil
 	}
 	cards := []AIActionCard{}
@@ -663,7 +682,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 		}
 		if dispatch == nil && enabled && q.State == "queued" {
 			current, e := reviewedAIContext(ctx, tx, d, r, *q, s.now().Unix())
-			if e != nil || validateAIModelPolicy(*q, s.now().Unix()) != nil || current != q.Context || aiDigest(*q) != q.Digest || s.now().Unix() < q.CreatedAt || s.now().Unix()-q.CreatedAt > 600 || taskAIRequestValid(d, *q, s.now().Unix()) != nil || !s.aiConnectionValid(q.ConnectionRef) || (isResearchLoop(*q) && !loopFit(d.ResearchTurns[researchTurnIndex(d, q.ProfileID, q.ResearchTurnID)], researchFrameLimit)) {
+			if e != nil || validateAIModelPolicy(*q, s.now().Unix()) != nil || current != q.Context || aiDigest(*q) != q.Digest || s.now().Unix() < q.CreatedAt || s.now().Unix()-q.CreatedAt > 600 || taskAIRequestValid(d, *q, s.now().Unix()) != nil || !s.aiRequestConnectionValid(*q) || !s.chatRequestValid(d, *q, s.now().Unix()) || (isResearchLoop(*q) && !loopFit(d.ResearchTurns[researchTurnIndex(d, q.ProfileID, q.ResearchTurnID)], researchFrameLimit)) {
 				q.State = "cancelled"
 				q.HeldMicrousd = 0
 				q.Failure = "Undispatched request changed, expired or stopped; prepare a fresh review."
@@ -674,6 +693,9 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 					return e
 				}
 				changed = true
+				continue
+			}
+			if !s.reserveTaskAccess(q) {
 				continue
 			}
 			q.State = "running"
@@ -704,7 +726,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 		return nil
 	}
 	var observed *atomic.Int64
-	if isResearchAI(*dispatch) {
+	if isResearchAI(*dispatch) || dispatch.ChatPermissionID != "" || dispatch.taskAccessID != "" {
 		observed = &atomic.Int64{}
 		observed.Store(s.now().Unix())
 	}
@@ -747,7 +769,10 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 						active = false
 					}
 				}
-				if !active || validateAIModelPolicy(*dispatch, s.now().Unix()) != nil || !s.aiConnectionValid(dispatch.ConnectionRef) {
+				if !s.chatRequestValid(current, *dispatch, s.now().Unix()) || (observed != nil && !observeAIClock(observed, s.now().Unix())) {
+					active = false
+				}
+				if !active || validateAIModelPolicy(*dispatch, s.now().Unix()) != nil || !s.aiRequestConnectionValid(*dispatch) {
 					cancel()
 					return
 				}
@@ -755,12 +780,20 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 		}
 	}()
 	if dispatch.ConnectionRef != "" {
-		rt = authenticatedAITransport{store: s, ref: dispatch.ConnectionRef, next: rt}
+		rt = authenticatedAITransport{store: s, ref: dispatch.ConnectionRef, next: rt, request: dispatch}
 	}
 	if aiUsesReviewedContext(*dispatch) {
 		rt = aiMemoryReviewTransport{store: s, request: *dispatch, next: rt, observed: observed}
 	}
-	result, callErr := callReviewedAgentAIAt(callCtx, *dispatch, rt, s.now)
+	defer func() { s.progressMu.Lock(); delete(s.aiProgress, dispatch.ID); s.progressMu.Unlock() }()
+	result, callErr := callReviewedAgentAIStreamAt(callCtx, *dispatch, rt, s.now, func(text string) {
+		s.progressMu.Lock()
+		defer s.progressMu.Unlock()
+		if s.aiProgress == nil {
+			s.aiProgress = map[string]string{}
+		}
+		s.aiProgress[dispatch.ID] = text
+	})
 	cancel()
 	<-monitorDone
 	// Shutdown/timeout must not erase the dispatched reservation. Persist with a
@@ -785,8 +818,9 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 				q.Failure = "Provider result unavailable or unverified; reservation retained. No retry or fallback."
 			} else {
 				q = result
-				if validateAIModelPolicy(q, s.now().Unix()) != nil {
-					q.State, q.Failure = "failed", "Model/tariff admission expired before completion; dependent work stopped."
+				if !s.chatRequestValid(d, q, s.now().Unix()) || (observed != nil && !observeAIClock(observed, s.now().Unix())) || !s.aiRequestConnectionValid(*dispatch) || validateAIModelPolicy(q, s.now().Unix()) != nil {
+					q.State, q.Failure = "failed", "Provider permission or model admission changed or expired before completion; dependent work stopped."
+					q.Answer, q.Cards = "", []AIActionCard{}
 				}
 				if q.News != nil || aiUsesReviewedContext(q) {
 					current, err := reviewedAIContext(finish, tx, d, r, q, s.now().Unix())
@@ -840,8 +874,9 @@ func (fixtureAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		return nil, errors.New("fixture input bound")
 	}
 	var request struct {
-		Model string `json:"model"`
-		Input string `json:"input"`
+		Model  string `json:"model"`
+		Input  string `json:"input"`
+		Stream bool   `json:"stream"`
 	}
 	if json.Unmarshal(b, &request) != nil || !openAIRequestAllowed(r) || (request.Model != fixtureAIModel && request.Model != admittedOpenAIModel) {
 		return nil, errors.New("compiled fixture request refused")
@@ -859,6 +894,9 @@ func (fixtureAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		output, _ = json.Marshal(fixtureResearchLoop(loop))
 	}
 	body, _ := json.Marshal(map[string]any{"id": "fixture-response", "model": request.Model, "status": "completed", "service_tier": "default", "usage": map[string]int{"input_tokens": inputTokens, "output_tokens": 128, "total_tokens": inputTokens + 128}, "output": []any{map[string]any{"type": "message", "role": "assistant", "status": "completed", "content": []any{map[string]string{"type": "output_text", "text": string(output)}}}}})
+	if request.Stream {
+		return fixtureAIStream(r, body, output), nil
+	}
 	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(bytes.NewReader(body)), Request: r}, nil
 }
 

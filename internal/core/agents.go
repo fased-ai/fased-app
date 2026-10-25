@@ -31,10 +31,11 @@ type AgentProfile struct {
 	Model       string `json:"model"`
 }
 type AgentSession struct {
-	ID        string `json:"id"`
-	ProfileID string `json:"profileId"`
-	Name      string `json:"name"`
-	CreatedAt int64  `json:"createdAt"`
+	Chat      *ChatPermission `json:"chat,omitempty"`
+	ID        string          `json:"id"`
+	ProfileID string          `json:"profileId"`
+	Name      string          `json:"name"`
+	CreatedAt int64           `json:"createdAt"`
 }
 type AgentMessage struct {
 	ID        string `json:"id"`
@@ -131,6 +132,8 @@ type agentDocument struct {
 	WENRehearsal            *wenSessionWorkspace `json:"wenRehearsal,omitempty"`
 }
 type AgentView struct {
+	ChatReview              *ChatPermission     `json:"chatReview,omitempty"`
+	ChatReadiness           map[string]string   `json:"chatReadiness,omitempty"`
 	ArchivedAISpentMicrousd int64               `json:"archivedAISpentMicrousd,omitempty"`
 	TaskReview              *TaskReview         `json:"taskReview,omitempty"`
 	TaskCapacity            TaskCapacity        `json:"taskCapacity"`
@@ -159,6 +162,7 @@ type AgentView struct {
 // Optional fields are inert data for a fixed action; unknown fields/actions are
 // rejected. No arbitrary callback, URL, model tool or shell can be submitted.
 type AgentCommand struct {
+	ChatPermission       *ChatPermission      `json:"chatPermission,omitempty"`
 	HistoryDays          int                  `json:"historyDays,omitempty"`
 	Calendar             *TaskCalendar        `json:"calendar,omitempty"`
 	PlaybookVersion      int                  `json:"playbookVersion,omitempty"`
@@ -266,6 +270,9 @@ func readAgents(ctx context.Context, r snapshotReader) (agentDocument, int64, er
 				}
 			}
 		}
+	}
+	if e == nil {
+		e = validateChatStorage([]byte(b), d)
 	}
 	return d, revision, e
 }
@@ -377,12 +384,17 @@ func (s *Store) Agents(ctx context.Context, profile, query string) (AgentView, e
 	if len(query) > 200 {
 		return AgentView{}, errors.New("search is too long")
 	}
-	return agentView(d, r, profile, query, s.now().Unix())
+	v, e := agentView(d, r, profile, query, s.now().Unix())
+	return s.chatView(v), e
 }
 func validAgentText(v string, max int, required bool) bool {
 	return (!required || strings.TrimSpace(v) != "") && len(v) <= max && !strings.ContainsRune(v, 0)
 }
 func agentCapacity(d agentDocument) error {
+	raw, _ := json.Marshal(d)
+	if e := validateChatStorage(raw, d); e != nil {
+		return e
+	}
 	for _, p := range d.Profiles {
 		if !validHistoryDays(p.HistoryDays) {
 			return errors.New("unsupported history policy; preserve records")
@@ -445,6 +457,9 @@ func (s *Store) ChangeAgents(ctx context.Context, c AgentCommand) (AgentView, er
 	return s.changeAgents(ctx, c, false)
 }
 func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) (AgentView, error) {
+	if c.ChatPermission != nil && c.Action != "chat-allow" {
+		return AgentView{}, errors.New("Chat permission requires its own approval")
+	}
 	if c.HistoryDays != 0 && c.Action != "history-policy" {
 		return AgentView{}, errors.New("history settings require their own action")
 	}
@@ -457,7 +472,7 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 	if c.EvidenceSelection != nil && c.Action != "ai-prepare" {
 		return AgentView{}, errors.New("evidence selection is only supported for a manual AI review")
 	}
-	if c.MemorySelection != nil && c.Action != "ai-prepare" {
+	if c.MemorySelection != nil && c.Action != "ai-prepare" && c.Action != "chat-review" {
 		return AgentView{}, errors.New("memory selection is only supported for a manual AI review")
 	}
 	tx, e := s.db.BeginTx(ctx, nil)
@@ -506,6 +521,18 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		}
 	}
 	switch c.Action {
+	case "chat-review":
+		p, err := s.chatReview(d, c, profile, revision, now)
+		if err != nil {
+			return AgentView{}, err
+		}
+		v, err := agentView(d, revision, profile, "", now)
+		v.ChatReview = &p
+		return s.chatView(v), err
+	case "chat-allow", "chat-send", "chat-revoke":
+		if e = s.changeChat(&d, c, profile, id, revision, now, fixture); e != nil {
+			return AgentView{}, e
+		}
 	case "playbook-save":
 		if e = savePlaybook(&d, c, profile, id, now); e != nil {
 			return AgentView{}, e
@@ -788,7 +815,8 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 	if e = tx.Commit(); e != nil {
 		return AgentView{}, e
 	}
-	return agentView(d, revision+1, profile, "", now)
+	v, e := agentView(d, revision+1, profile, "", now)
+	return s.chatView(v), e
 }
 
 // Capture retained facts only. None of the source task's execution/consent paths

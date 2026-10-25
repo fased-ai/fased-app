@@ -100,7 +100,7 @@ func openAICountWire(q AgentAIRequest) ([]byte, error) {
 	}
 	// All token-bearing fields, including instructions, schema and empty tools,
 	// remain byte-for-byte identical. No conversation/previous-response state.
-	for _, key := range []string{"store", "background", "service_tier", "max_output_tokens"} {
+	for _, key := range []string{"store", "background", "service_tier", "max_output_tokens", "stream"} {
 		delete(wire, key)
 	}
 	return json.Marshal(wire)
