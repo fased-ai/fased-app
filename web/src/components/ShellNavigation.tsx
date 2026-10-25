@@ -77,7 +77,7 @@ export function ShellNavigation() {
   }, [more]);
   function closeMore() {
     setMore(false);
-    moreButton.current?.focus();
+    if (more) moreButton.current?.focus();
   }
   const links = (items: readonly (typeof shellPages)[number][], rail = false) =>
     items.map((p) => (

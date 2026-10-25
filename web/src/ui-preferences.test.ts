@@ -28,5 +28,7 @@ describe("UI preferences", () => {
     expect(translate("ko", "Owner-authored saved headline")).toBe(
       "Owner-authored saved headline",
     );
+    expect(translate("ru", "constructor")).toBe("constructor");
+    expect(translate("es", "toString")).toBe("toString");
   });
 });

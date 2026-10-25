@@ -197,7 +197,7 @@ const rows = {
 export type Copy = keyof typeof rows;
 export const copyKeys = Object.keys(rows) as Copy[];
 export function translate(language: Language, key: string): string {
-  const row = rows[key as Copy];
+  const row = Object.hasOwn(rows, key) ? rows[key as Copy] : undefined;
   return language === "en" || !row
     ? key
     : row[({ ru: 0, es: 1, zh: 2, ko: 3 } as const)[language]];
