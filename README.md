@@ -303,7 +303,7 @@ The controlling product/implementation/checkpoint documents are maintained in th
 Original Fased App code is under [PolyForm Perimeter 1.0.0](LICENSE). It is source-available with restrictions on providing competing products/services; it is not described as permissive or OSI open source. See [NOTICE](NOTICE) for attribution and dependency boundaries. License selection does not change third-party terms.
 
 Optional AI request review is a development fixture, not a connected provider.
-Create a conversation in Agents → Chat, prepare a request, inspect its complete
+In Agents → Chat, choose **Start chat** or a saved conversation, select the fixture connection/model, and **Send** from the single composer. Enter sends; Shift+Enter adds a line. Send prepares a request; inspect its complete
 wire disclosure and limits, then consent to that exact digest. Ordinary cores can
 prepare and cancel reviews but cannot execute them. A standalone disposable
 `fased-app serve --ai-fixture --listen 127.0.0.1:0 --data-dir <disposable-directory>`

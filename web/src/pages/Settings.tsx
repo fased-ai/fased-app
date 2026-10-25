@@ -5,12 +5,11 @@ import {
 import { ArrowRight } from "../icons";
 import { UpdateStatusPanel } from "../components/UpdateStatusPanel";
 import { UpdatePreferencesPanel } from "../components/UpdatePreferencesPanel";
-import { providerNames } from "../state";
+import { AIConnectionSettings } from "./AIConnection";
 import { Badge, SectionHead } from "../components/shared";
 import { useWorkspace } from "../workspace";
 export function Settings() {
-  const { core, state, setSetupOpen, setResetOpen, notify, navigate } =
-    useWorkspace();
+  const { core, state, setSetupOpen, setResetOpen } = useWorkspace();
   return (
     <>
       <SectionHead title="Settings" />
@@ -41,39 +40,7 @@ export function Settings() {
               </button>
             </div>
           </section>
-          <section className="panel">
-            <div className="panel-heading">
-              <h2>AI connections</h2>
-              <button
-                className="text-button"
-                onClick={() => navigate("agents/settings")}
-              >
-                Manage connections <ArrowRight size={14} />
-              </button>
-            </div>
-            {Object.entries(providerNames)
-              .filter(([id]) => id !== "none")
-              .map(([id, name]) => (
-                <div className="provider-row" key={id}>
-                  <span className="provider-mark">{name[0]}</span>
-                  <div>
-                    <strong>{name}</strong>
-                  </div>
-                  <Badge>PREVIEW</Badge>
-                  <button
-                    className="secondary"
-                    onClick={() =>
-                      notify(
-                        `${name} connection preview`,
-                        "Real authentication belongs to a later phase. This prototype does not accept API keys or subscription credentials.",
-                      )
-                    }
-                  >
-                    View setup <ArrowRight size={13} />
-                  </button>
-                </div>
-              ))}
-          </section>
+          {core.mode === "ready" && <AIConnectionSettings />}
           <section className="panel">
             <div className="panel-heading">
               <h2>Browser demo data</h2>

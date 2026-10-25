@@ -230,11 +230,8 @@ test("shared WEN Activity distinguishes browser demo notices", async ({
   page,
   isMobile,
 }) => {
-  await page.goto("/#settings");
-  await page
-    .getByRole("button", { name: "View setup", exact: true })
-    .first()
-    .click();
+  await page.goto("/#agents/bots");
+  await page.getByRole("button", { name: /Pause demo|Resume demo/ }).click();
   await page.goto("/#activity");
   const activity = page.getByRole("region", {
     name: "Activity records",
@@ -248,7 +245,7 @@ test("shared WEN Activity distinguishes browser demo notices", async ({
   ).toBeVisible();
   const event = activity
     .getByRole("listitem")
-    .filter({ hasText: "OpenAI connection preview" });
+    .filter({ hasText: /Demo bot paused|Demo bot resumed/ });
   await expect(event).toBeVisible();
   await expect(event.getByText("DEMO", { exact: true })).toBeVisible();
   await expect(activity.getByText("LOCAL ONLY", { exact: true })).toBeVisible();

@@ -399,8 +399,31 @@ function LocalAgentEditor({
               </>
             ) : (
               <div className="chat-empty">
-                <h3>No conversation selected</h3>
-                <p>Create a conversation to start.</p>
+                <h3>
+                  {search
+                    ? "No matching conversations"
+                    : "Start a conversation"}
+                </h3>
+                <button
+                  className="primary"
+                  disabled={agents.busy}
+                  onClick={() => {
+                    void agents
+                      .change({
+                        action: "session-create",
+                        name: "New conversation",
+                      })
+                      .then((ok) => {
+                        if (ok) {
+                          setSearch("");
+                          setSession("");
+                          setRailOpen(false);
+                        }
+                      });
+                  }}
+                >
+                  Start chat
+                </button>
               </div>
             )}
           </div>
@@ -446,33 +469,31 @@ function LocalAgentEditor({
                   onChange={(e) => setPersona(e.target.value)}
                 />
               </label>
-              <label>
-                Provider preference
-                <select
-                  value={provider}
-                  onChange={(e) => setProvider(e.target.value as Provider)}
-                >
-                  {Object.entries(providerNames).map(([id, title]) => (
-                    <option key={id} value={id}>
-                      {title}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Model preference
-                <input
-                  maxLength={120}
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                />
-              </label>
-              <p className="subtle">
-                Preferences only. No API key, subscription or provider
-                connection is configured here. Changing providers preserves
-                conversations and memory. Personas cannot grant tools or wallet
-                access.
-              </p>
+              <details className="profile-defaults">
+                <summary>Profile defaults</summary>
+                <label>
+                  Provider preference
+                  <select
+                    value={provider}
+                    onChange={(e) => setProvider(e.target.value as Provider)}
+                  >
+                    {Object.entries(providerNames).map(([id, title]) => (
+                      <option key={id} value={id}>
+                        {title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Model preference
+                  <input
+                    maxLength={120}
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                  />
+                </label>
+                <p className="subtle">Preferences do not connect a provider.</p>
+              </details>
               <button className="primary" disabled={agents.busy}>
                 Save profile
               </button>

@@ -694,11 +694,65 @@
   align-items: center;
   gap: 8px;
 }
-.wt .composer-actions > button:last-child {
-  color: var(--wt-text);
-  background: var(--wt-raised);
-  border: 1px solid var(--line);
-  padding: 6px 12px;
+.wt .composer-actions > .primary {
+  background: var(--wt-coral);
+  color: var(--wt-bg);
+  padding: 7px 22px;
+  min-width: 88px;
+}
+.wt .chat-composer-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.wt .chat-composer-toolbar label {
+  display: block;
+  flex: 1 1 140px;
+  min-width: 0;
+}
+.wt .chat-composer-toolbar label > span,
+.wt .chat-input > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.wt .chat-composer-toolbar select {
+  width: 100%;
+  padding: 6px 8px;
+  min-height: 32px;
+  font-size: 12px;
+}
+.wt .chat-composer-toolbar button {
+  margin-left: auto;
+  font-size: 12px;
+}
+.wt .reply-review-title {
+  margin: 14px 0 6px;
+  font-size: 13px;
+  color: var(--wt-violet);
+}
+.wt .chat-prompt {
+  padding-bottom: 8px;
+}
+.wt .chat-response {
+  margin-top: 14px;
+}
+.wt .chat-response .ai-answer {
+  font-size: 14px;
+  line-height: 1.7;
+}
+.wt .ai-connection .agent-record-body {
+  gap: 12px;
+  padding: 16px;
+}
+.wt .ai-connection .connection-status {
+  margin: 0;
+}
+.wt .ai-connection form {
+  margin: 12px 0;
 }
 .wt .message-options {
   font-size: 11px;

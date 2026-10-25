@@ -1,9 +1,9 @@
 import type { OpenAIModelPolicy, OpenAIAdmission } from "../agents";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useCore } from "../core";
 import { Badge } from "../components/shared";
 
-type Connection = {
+export type Connection = {
   admissionPolicy: OpenAIModelPolicy;
   ref: string;
   model: string;
@@ -12,24 +12,46 @@ type Connection = {
   testOnly: true;
   liveCallsEnabled: false;
 };
-function useConnection() {
+export function useAIConnection() {
   const core = useCore();
   const [view, setView] = useState<Connection | null>(null);
   const [error, setError] = useState("");
-  const refresh = () => {
-    void core
-      .request<Connection>("ai/connection")
-      .then(setView)
-      .catch(() => {
+  const generation = useRef(0);
+  const refresh = useCallback(async () => {
+    const epoch = ++generation.current;
+    try {
+      const next = await core.request<Connection>("ai/connection");
+      if (epoch === generation.current) {
+        setView(next);
+        setError("");
+      }
+      return next;
+    } catch {
+      if (epoch === generation.current) {
         setView(null);
-        setError("Connection unavailable. Preserve the vault before recovery.");
-      });
-  };
+        setError("Connection unavailable. Try again; preserve the vault.");
+      }
+      return null;
+    }
+  }, [core.request]);
   useEffect(() => {
-    refresh();
-    window.addEventListener("ai-connection-changed", refresh);
-    return () => window.removeEventListener("ai-connection-changed", refresh);
-  }, []);
+    setView(null);
+    setError("");
+    if (core.mode !== "ready") return;
+    const load = () => {
+      void refresh();
+    };
+    load();
+    window.addEventListener("ai-connection-changed", load);
+    window.addEventListener("focus", load);
+    const timer = window.setInterval(load, 15000);
+    return () => {
+      generation.current++;
+      clearInterval(timer);
+      window.removeEventListener("ai-connection-changed", load);
+      window.removeEventListener("focus", load);
+    };
+  }, [refresh, core.mode, core.instanceId]);
   return { view, setView, error, setError, refresh, core };
 }
 export function ConnectionPicker({
@@ -39,19 +61,19 @@ export function ConnectionPicker({
   value: string;
   onChange: (ref: string) => void;
 }) {
-  const { view, refresh } = useConnection();
+  const { view, refresh } = useAIConnection();
   return (
     <label>
-      AI connection
+      <span>AI connection</span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        onFocus={refresh}
+        onFocus={() => void refresh()}
       >
-        <option value="">In-process fixture (no credential)</option>
+        <option value="">Local fixture</option>
         {view?.ref && (
           <option value={view.ref} disabled={view.locked}>
-            OpenAI test connection · {view.locked ? "locked" : view.model}
+            OpenAI fixture · {view.locked ? "locked" : "ready"}
           </option>
         )}
         {value && value !== view?.ref && (
@@ -64,7 +86,7 @@ export function ConnectionPicker({
   );
 }
 export function AIConnectionSettings() {
-  const { view, setView, error, setError, core } = useConnection();
+  const { view, setView, error, setError, core } = useAIConnection();
   const [key, setKey] = useState("");
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
@@ -94,28 +116,18 @@ export function AIConnectionSettings() {
     <section className="panel ai-connection" aria-label="OpenAI connection">
       <div className="panel-heading">
         <h2>OpenAI connection</h2>
-        <Badge>TEST KEYS ONLY</Badge>
+        <Badge>FIXTURE</Badge>
       </div>
       <div className="agent-record-body">
         <p className="connection-status" role="status">
           {view?.ref
-            ? `${view.locked ? "Locked" : "Unlocked"} · ${view.model} · ${view.ref}`
+            ? `${view.locked ? "Locked" : "Unlocked"} · OpenAI fixture`
             : "No connection saved"}
         </p>
         {error && <p role="alert">{error}</p>}
         <details className="connection-options">
           <summary>Connection settings</summary>
-          <p>
-            Live AI calls are disabled. Use a disposable fased-test- key to test
-            the connection. No OpenAI account is contacted and fixture prices
-            are examples.
-          </p>
-          <p>
-            The core encrypts the key with a separate vault passphrase. Unlock
-            lasts 15 minutes and ends on lock, logout or restart. Keep this
-            passphrase safe: password recovery cannot recover it. A compromised
-            running core can access an unlocked key.
-          </p>
+          <p>Disposable fased-test- keys only. No real API calls.</p>
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -176,11 +188,20 @@ export function AIConnectionSettings() {
               </button>
             </div>
           </form>
-          <p>
-            Credential files are excluded from metadata backups. Lost
-            vault/passphrase: revoke the test key and reconnect; existing
-            request records and budget holds remain.
-          </p>
+          <details className="connection-inspection">
+            <summary>Vault and recovery</summary>
+            <p>
+              Encrypted with your separate vault passphrase. Unlock lasts 15
+              minutes; lock, sign-out and restart end it. An unlocked key is
+              accessible to the running core.
+            </p>
+            <p>
+              Metadata backups exclude credentials. Keep the vault and
+              passphrase; owner password recovery cannot recover them.
+              Reconnecting preserves request records and budget holds.
+            </p>
+            <p>Connection: {view?.ref || "None"}</p>
+          </details>
         </details>
       </div>
     </section>
@@ -196,16 +217,16 @@ export function AIModelPicker({
   onChange: (v: string) => void;
   connectionRef: string;
 }) {
-  const { view } = useConnection();
+  const { view } = useAIConnection();
   return (
     <label>
-      AI model
+      <span>AI model</span>
       <select
         aria-label="AI model"
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >
-        <option value="">Fixture model · invented tariff</option>
+        <option value="">Fixture model</option>
         {value && value !== view?.admissionPolicy?.model && (
           <option value={value} disabled>
             Unavailable model: {value}
@@ -215,7 +236,10 @@ export function AIModelPicker({
           <option
             value={view.admissionPolicy.model}
             disabled={
-              !connectionRef || view.locked || view.ref !== connectionRef
+              !connectionRef ||
+              view.locked ||
+              view.ref !== connectionRef ||
+              Date.now() / 1000 >= view.admissionPolicy.expiresAt
             }
           >
             {view.admissionPolicy.model} · admission fixture only

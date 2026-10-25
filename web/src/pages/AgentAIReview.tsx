@@ -4,15 +4,14 @@ type ChatComposer = {
   onSave: () => Promise<void>;
 };
 import { AgentEvidenceInspector } from "./AgentEvidence";
-import { ResearchTurnReview } from "./ResearchTurnReview";
+import { ChatReply } from "./ChatReply";
 import type { ResearchSelection } from "./ResearchReadPanel";
 import { ChatMemoryReview } from "./ChatMemoryReview";
-import { ReminderDraftReview } from "./ReminderDraftReview";
 import { NewsSourcePicker } from "./NewsInputs";
 import {
   AIModelPicker,
-  AIAdmissionReview,
   ConnectionPicker,
+  type Connection,
 } from "./AIConnection";
 import { useEffect, useRef, useState } from "react";
 import type {
@@ -24,7 +23,6 @@ import type {
 } from "../agents";
 import { useWorkspace } from "../workspace";
 
-const money = (n: number) => `$${(n / 1_000_000).toFixed(6)}`;
 export function AgentAIReview({
   view,
   sessionId,
@@ -67,7 +65,7 @@ function AgentAIForm({
   onClearResearch?: () => void;
   composer?: ChatComposer;
 }) {
-  const { core, agents } = useWorkspace();
+  const { core, agents, navigate } = useWorkspace();
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [localPrompt, setLocalPrompt] = useState("");
   const prompt = composer ? composer.value : localPrompt;
@@ -104,6 +102,11 @@ function AgentAIForm({
     useState<AgentEvidenceView | null>(null);
   const questionRef = useRef<HTMLTextAreaElement>(null);
   const generation = useRef(0);
+  const preparing = useRef(false);
+  const currentPrompt = useRef(prompt);
+  currentPrompt.current = prompt;
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const followReplies = useRef(true);
   useEffect(() => {
     generation.current++;
     setResearchPreparing(false);
@@ -191,6 +194,11 @@ function AgentAIForm({
   const requests = view.aiRequests.filter(
     (q) => q.sessionId === sessionId && !q.taskId,
   );
+  const latest = requests.at(-1);
+  useEffect(() => {
+    if (followReplies.current && messagesRef.current)
+      messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+  }, [view.messages.length, requests.length, latest?.state]);
   const evidenceAvailable =
     !evidenceSelection ||
     (evidenceSelection.kind === "memory"
@@ -253,7 +261,16 @@ function AgentAIForm({
             </button>
           </div>
         )}
-        <div className="local-messages" aria-live="polite">
+        <div
+          className="local-messages"
+          aria-live="polite"
+          ref={messagesRef}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            followReplies.current =
+              el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+          }}
+        >
           {[
             ...view.messages
               .filter((m) => m.sessionId === sessionId)
@@ -304,225 +321,66 @@ function AgentAIForm({
                   )}
                 </article>
               ) : (
-                (() => {
-                  const q = entry.request!;
-                  return (
-                    <article className="ai-request" key={q.id}>
-                      <h4>{q.prompt}</h4>
-                      {!q.researchTurnId && (
-                        <button
-                          type="button"
-                          className="secondary"
-                          disabled={agents.busy || draftBusy}
-                          onClick={() => void useDraft(q.id)}
-                        >
-                          Use as draft
-                        </button>
-                      )}
-                      {q.researchTurnId &&
-                        !requests.some(
-                          (other) =>
-                            other.researchTurnId === q.researchTurnId &&
-                            (other.researchStep ?? 0) > (q.researchStep ?? 0),
-                        ) && (
-                          <ResearchTurnReview
-                            request={q}
-                            revision={view.revision}
-                            fixtureAvailable={view.aiFixtureAvailable}
-                            onChanged={() => agents.refresh()}
-                          />
-                        )}
-                      <div className="response-status">
-                        <strong>{q.state}</strong>
-                        <small>Fixture · {money(q.spentMicrousd)}</small>
-                      </div>
-                      {q.state === "prepared" && (
-                        <p className="review-limits">
-                          Up to {q.limits.maxInputTokens} input /{" "}
-                          {q.limits.maxOutputTokens} output tokens ·{" "}
-                          {q.limits.deadlineSeconds}s ·{" "}
-                          {money(q.limits.budgetMicrousd)} fixture budget
-                        </p>
-                      )}
-                      <details>
-                        <summary>Exact context disclosure</summary>
-                        <AIAdmissionReview
-                          policy={q.policy}
-                          admission={q.admission}
-                        />
-                        <p>
-                          Model: {q.model} · Held {money(q.heldMicrousd)} ·
-                          Spent {money(q.spentMicrousd)} (fixture only)
-                        </p>
-                        <p>
-                          Limits: {q.limits.maxInputTokens} input /{" "}
-                          {q.limits.maxOutputTokens} output tokens ·{" "}
-                          {q.limits.deadlineSeconds}s · Budget{" "}
-                          {money(q.limits.budgetMicrousd)} · No tools
-                        </p>
-
-                        <p>Connection: {q.connectionRef || "no credential"}</p>
-                        {q.news && (
-                          <p>
-                            News snapshot: {q.news.fetchId} · source{" "}
-                            {q.news.url} · freshness {q.news.maxAgeSeconds}s ·
-                            content hash {q.news.bodySha256}
-                          </p>
-                        )}
-                        <pre>{q.disclosure}</pre>
-                        <p>
-                          Also included: fixed instructions treating this
-                          context as untrusted data, and the review-only output
-                          schema. No other profiles, expired notes, credentials
-                          or wallet records.
-                        </p>
-                        <p className="subtle">Disclosure SHA-256: {q.digest}</p>
-                      </details>
-                      {q.failure && <p role="status">{q.failure}</p>}
-                      {q.state === "prepared" && !q.researchTurnId && (
-                        <>
-                          <label className="ai-consent">
-                            <input
-                              type="checkbox"
-                              checked={consent === q.digest}
-                              onChange={(e) =>
-                                setConsent(e.target.checked ? q.digest : "")
-                              }
-                            />
-                            I reviewed this context and these fixture limits
-                          </label>
-                          <button
-                            className="primary"
-                            disabled={
-                              agents.busy ||
-                              consent !== q.digest ||
-                              !view.aiFixtureAvailable
-                            }
-                            onClick={() => {
-                              void agents
-                                .change({
-                                  action: "ai-start",
-                                  id: q.id,
-                                  consentDigest: q.digest,
-                                })
-                                .then((ok) => {
-                                  if (ok) setConsent("");
-                                });
-                            }}
-                          >
-                            Run development fixture
-                          </button>
-                          {!view.aiFixtureAvailable && (
-                            <p className="subtle">
-                              Execution is disabled in this core. Only an
-                              explicitly started local development fixture can
-                              run.
-                            </p>
-                          )}
-                        </>
-                      )}
-                      {["prepared", "queued", "running"].includes(q.state) && (
-                        <button
-                          className="secondary"
-                          disabled={agents.busy}
-                          onClick={() =>
-                            void agents.change({
-                              action: "ai-cancel",
-                              id: q.id,
-                            })
-                          }
-                        >
-                          Cancel request
-                        </button>
-                      )}
-                      {q.answer && <p className="ai-answer">{q.answer}</p>}
-                      {q.state === "completed" && q.answer && (
-                        <ChatMemoryReview
-                          key={`${view.profileId}:${q.id}`}
-                          view={view}
-                          sourceId={q.id}
-                          sourceKind="answer"
-                          sourceText={q.answer}
-                          sessionId={q.sessionId}
-                        />
-                      )}
-                      {q.cards.map((card) => (
-                        <section
-                          className="ai-action-card"
-                          key={card.id}
-                          aria-label={card.title}
-                        >
-                          <small>
-                            {card.kind} · {card.review} · REVIEW ONLY
-                          </small>
-                          <h4>{card.title}</h4>
-                          <p>{card.text}</p>
-                          <p className="subtle">
-                            Keeping this draft records your review. It creates
-                            no task, bot, permission or trade.
-                          </p>
-                          {q.state === "completed" &&
-                            card.kind === "paper-strategy-draft" &&
-                            card.review !== "dismissed" &&
-                            onReviewStrategy && (
-                              <button
-                                className="secondary"
-                                disabled={agents.busy}
-                                onClick={() => onReviewStrategy(q.id, card.id)}
-                              >
-                                Review WEN revision
-                              </button>
-                            )}
-                          {card.kind === "reminder-draft" &&
-                            card.review !== "dismissed" && (
-                              <ReminderDraftReview
-                                key={`${view.profileId}:${card.id}`}
-                                view={view}
-                                card={card}
-                              />
-                            )}
-                          {card.review === "unreviewed" && (
-                            <div className="agent-inline">
-                              <button
-                                className="secondary"
-                                disabled={agents.busy}
-                                onClick={() =>
-                                  void agents.change({
-                                    action: "ai-card-keep",
-                                    id: card.id,
-                                  })
-                                }
-                              >
-                                Keep draft
-                              </button>
-                              <button
-                                className="text-button"
-                                disabled={agents.busy}
-                                onClick={() =>
-                                  void agents.change({
-                                    action: "ai-card-dismiss",
-                                    id: card.id,
-                                  })
-                                }
-                              >
-                                Dismiss draft
-                              </button>
-                            </div>
-                          )}
-                        </section>
-                      ))}
-                    </article>
-                  );
-                })()
+                <ChatReply
+                  key={entry.id}
+                  q={entry.request!}
+                  requests={requests}
+                  view={view}
+                  draftBusy={draftBusy}
+                  consent={consent}
+                  setConsent={setConsent}
+                  useDraft={useDraft}
+                  onReviewStrategy={onReviewStrategy}
+                />
               ),
             )}
         </div>
         <form
           className="chat-message-form"
-          onSubmit={(e) => {
+          onSubmit={async (e) => {
             e.preventDefault();
+            if (agents.busy || draftBusy || preparing.current) return;
+            preparing.current = true;
+            setDraftError("");
+            const epoch = generation.current;
+            const submittedPrompt = prompt;
+            // Verify the explicitly selected credential immediately before prepare.
+            // Never fall back to another connection after lock, rotation or loss.
+            if (connectionRef) {
+              setDraftBusy(true);
+              try {
+                const current = await core.request<Connection>("ai/connection");
+                if (epoch !== generation.current) {
+                  preparing.current = false;
+                  return;
+                }
+                if (current.ref !== connectionRef || current.locked)
+                  throw new Error(
+                    "Selected connection is locked or unavailable. Unlock it in Providers or select Local fixture.",
+                  );
+              } catch (err) {
+                if (epoch === generation.current)
+                  setDraftError(
+                    err instanceof Error
+                      ? err.message
+                      : "Connection unavailable",
+                  );
+                preparing.current = false;
+                return;
+              } finally {
+                if (epoch === generation.current) setDraftBusy(false);
+              }
+            }
+            if (epoch !== generation.current) {
+              preparing.current = false;
+              return;
+            }
+            followReplies.current = true;
             if (researchSelection) {
-              if (researchPreparing) return;
+              if (researchPreparing) {
+                preparing.current = false;
+                return;
+              }
               const epoch = generation.current;
               setResearchPreparing(true);
               setDraftError("");
@@ -564,6 +422,7 @@ function AgentAIForm({
                   if (epoch === generation.current) setDraftError(err.message);
                 })
                 .finally(() => {
+                  preparing.current = false;
                   if (epoch === generation.current) setResearchPreparing(false);
                 });
               return;
@@ -596,13 +455,16 @@ function AgentAIForm({
                 },
               })
               .then((ok) => {
-                if (ok) {
-                  setPrompt("");
+                if (ok && epoch === generation.current) {
+                  if (currentPrompt.current === submittedPrompt) setPrompt("");
                   setConsent("");
                   setDraftSource("");
                   setEvidenceSelection(undefined);
                   setEvidencePreview(null);
                 }
+              })
+              .finally(() => {
+                preparing.current = false;
               });
           }}
         >
@@ -655,22 +517,31 @@ function AgentAIForm({
               </button>
             </fieldset>
           )}
-          <label>
-            {composer ? "Message" : "AI request"}
+          <label className="chat-input">
+            <span>{composer ? "Message" : "AI request"}</span>
             <textarea
               ref={questionRef}
+              aria-label={composer ? "Message" : "AI request"}
               required
               maxLength={composer ? 4000 : 2000}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
+              placeholder="Message your agent…"
+              autoFocus
+              onKeyDown={(e) => {
+                if (
+                  e.key === "Enter" &&
+                  !e.shiftKey &&
+                  !e.nativeEvent.isComposing &&
+                  !e.repeat
+                ) {
+                  e.preventDefault();
+                  e.currentTarget.form?.requestSubmit();
+                }
+              }}
             />
           </label>
-          <details
-            className="message-options"
-            open={optionsOpen}
-            onToggle={(e) => setOptionsOpen(e.currentTarget.open)}
-          >
-            <summary>Message options</summary>
+          <div className="chat-composer-toolbar" aria-label="Reply connection">
             <ConnectionPicker
               value={connectionRef}
               onChange={setConnectionRef}
@@ -680,6 +551,30 @@ function AgentAIForm({
               onChange={setModel}
               connectionRef={connectionRef}
             />
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => navigate("agents/settings")}
+            >
+              Providers
+            </button>
+          </div>
+          <details
+            className="message-options"
+            open={optionsOpen}
+            onToggle={(e) => setOptionsOpen(e.currentTarget.open)}
+          >
+            <summary>Message options</summary>
+            {composer && (
+              <button
+                type="button"
+                className="text-button"
+                disabled={agents.busy || !prompt.trim()}
+                onClick={() => void composer.onSave()}
+              >
+                Save message
+              </button>
+            )}
             {!researchSelection && (
               <NewsSourcePicker
                 view={view}
@@ -836,29 +731,18 @@ function AgentAIForm({
             </fieldset>
           )}
           <div className="composer-actions">
-            {composer && (
-              <button
-                type="button"
-                className="text-button"
-                disabled={agents.busy || !prompt.trim()}
-                onClick={() => void composer.onSave()}
-              >
-                Save message
-              </button>
-            )}
             <button
-              className="secondary"
+              className="primary"
               disabled={
                 agents.busy ||
+                !prompt.trim() ||
                 prompt.length > 2000 ||
                 researchPreparing ||
                 draftBusy ||
                 (memoryMode === "selected" && memoryIds.length === 0)
               }
             >
-              {researchSelection
-                ? "Prepare research disclosure"
-                : "Review reply"}
+              {researchSelection ? "Prepare research disclosure" : "Send"}
             </button>
           </div>
         </form>

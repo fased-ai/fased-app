@@ -275,9 +275,7 @@ test("inert research preparation shares UI/CLI facts, cancellation and restart w
     expect(changed.sourceState).toBe("source_changed");
     expect(changed.request.digest).toBe(q.digest);
     await page.reload();
-    await page
-      .getByRole("button", { name: "Cancel request", exact: true })
-      .click();
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
     await expect
       .poll(async () => (await read()).aiRequests[0].state)
       .toBe("cancelled");
