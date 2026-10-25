@@ -1,4 +1,4 @@
-import { expect, test, type Request } from "@playwright/test";
+import { expect, test, type Request, type Route } from "@playwright/test";
 
 test.use({ colorScheme: "dark" });
 import { spawn, type ChildProcess } from "node:child_process";
@@ -4754,19 +4754,43 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
   await page
     .getByLabel("Evidence or source")
     .fill("Corrected owner preference");
+  let releaseMemory!: () => void;
+  let memoryCommitted!: () => void;
+  const heldMemory = new Promise<void>((resolve) => (releaseMemory = resolve));
+  const committedMemory = new Promise<void>(
+    (resolve) => (memoryCommitted = resolve),
+  );
+  const holdMemoryResponse = async (route: Route) => {
+    const request = route.request();
+    if (
+      request.method() === "POST" &&
+      request.postDataJSON().action === "memory-put"
+    ) {
+      const response = await route.fetch();
+      memoryCommitted();
+      await heldMemory;
+      await route.fulfill({ response });
+    } else await route.continue();
+  };
+  await page.route("**/api/v1/agents", holdMemoryResponse);
   await page
     .getByRole("button", { name: "Save correction", exact: true })
     .click();
-  await expect(
-    page.getByText("Detailed answers", { exact: true }),
-  ).toBeVisible();
+  await committedMemory;
   view = await privateCLI(["agents", "--profile", p]);
   expect(view.memories[0].id).toBe(memoryID);
   expect(view.memories[0].history[0].text).toBe("Concise answers");
   await page.evaluate(() => {
     window.location.hash = "agents/settings";
   });
-  await revealControl(page, page.getByLabel("Provider preference"), "");
+  try {
+    await revealControl(page, page.getByLabel("Provider preference"), "");
+    await expect(page.getByLabel("Provider preference")).toBeDisabled();
+  } finally {
+    releaseMemory();
+  }
+  await expect(page.getByLabel("Provider preference")).toBeEnabled();
+  await page.unroute("**/api/v1/agents", holdMemoryResponse);
   await page.getByLabel("Provider preference").selectOption("openai");
   await revealControl(page, page.getByLabel("Model preference"), "");
   await page.getByLabel("Model preference").fill("reference-only");
@@ -7961,7 +7985,7 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
       exact: true,
       includeHidden: true,
     }),
-  ).toHaveValue("all");
+  ).toHaveValue("relevant");
   await expect(
     command({
       action: "ai-start",
@@ -8018,7 +8042,7 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
       exact: true,
       includeHidden: true,
     }),
-  ).toHaveValue("all");
+  ).toHaveValue("relevant");
   await revealControl(
     page,
     review.getByRole("combobox", {

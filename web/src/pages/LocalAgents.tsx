@@ -4,7 +4,7 @@ import { useUI } from "../ui-preferences";
 import { useCore } from "../core";
 import { NewsInputs } from "./NewsInputs";
 import { AIConnectionSettings } from "./AIConnection";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { BookOpen, Bot, Plus, Settings2, History } from "../icons";
 import { Badge, SectionHead, Dialog } from "../components/shared";
 import { useWorkspace } from "../workspace";
@@ -155,6 +155,7 @@ function LocalAgentEditor({
   const [price, setPrice] = useState(100);
   const [budget, setBudget] = useState(500);
   const profileRevision = useRef(v.revision);
+  const profileInitialized = useRef(false);
   const memoryRevision = useRef(v.revision);
   function reloadProfile() {
     setName(profile.name);
@@ -163,9 +164,19 @@ function LocalAgentEditor({
     setModel(profile.model);
     profileRevision.current = v.revision;
   }
-  useEffect(() => {
-    if (tab === "settings") reloadProfile();
-  }, [tab]);
+  useLayoutEffect(() => {
+    if (tab !== "settings") {
+      profileInitialized.current = false;
+      return;
+    }
+    // A preceding save may still be awaiting its response as this tab opens.
+    // Capture its resulting revision before fields become interactive, once per
+    // entry. Later external changes still require explicit reload/review.
+    if (!agents.busy && !profileInitialized.current) {
+      reloadProfile();
+      profileInitialized.current = true;
+    }
+  }, [tab, agents.busy]);
   const query = search.toLowerCase();
   const matching = v.sessions.filter(
     (s) =>
@@ -522,6 +533,7 @@ function LocalAgentEditor({
               <label>
                 Profile name
                 <input
+                  disabled={agents.busy}
                   required
                   maxLength={80}
                   value={name}
@@ -531,6 +543,7 @@ function LocalAgentEditor({
               <label>
                 Persona
                 <textarea
+                  disabled={agents.busy}
                   maxLength={4000}
                   value={persona}
                   onChange={(e) => setPersona(e.target.value)}
@@ -541,6 +554,7 @@ function LocalAgentEditor({
                 <label>
                   Provider preference
                   <select
+                    disabled={agents.busy}
                     value={provider}
                     onChange={(e) => setProvider(e.target.value as Provider)}
                   >
@@ -554,6 +568,7 @@ function LocalAgentEditor({
                 <label>
                   Model preference
                   <input
+                    disabled={agents.busy}
                     maxLength={120}
                     value={model}
                     onChange={(e) => setModel(e.target.value)}
