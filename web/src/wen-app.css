@@ -670,6 +670,7 @@
 }
 .wt .chat-message-form {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   flex-shrink: 0;
   gap: 7px;
   padding: 10px 16px 12px;
@@ -679,6 +680,7 @@
   overflow-y: auto;
 }
 .wt .chat-message-form > label {
+  grid-column: 1 / -1;
   font-size: 11px;
   color: var(--wt-muted);
 }
@@ -689,6 +691,7 @@
   width: 100%;
 }
 .wt .composer-actions {
+  grid-column: 2;
   display: flex;
   justify-content: flex-end;
   align-items: center;
@@ -701,8 +704,9 @@
   min-width: 88px;
 }
 .wt .chat-composer-toolbar {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 44px;
   align-items: center;
   gap: 8px;
 }
@@ -764,8 +768,12 @@
   color: var(--wt-muted);
 }
 .wt .message-options[open] {
+  grid-column: 1 / -1;
   display: grid;
   gap: 10px;
+}
+.wt .chat-message-form > fieldset {
+  grid-column: 1 / -1;
 }
 .wt .message-options label {
   display: grid;

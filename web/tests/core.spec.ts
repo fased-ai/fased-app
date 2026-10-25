@@ -99,6 +99,7 @@ test("normal Chat connects a fixture provider, reviews one reply and retains sco
     "Development fixture response",
     { timeout: 12000 },
   );
+  await expect(card.locator(".ai-answer")).toBeInViewport();
   await expect(
     card.getByText("Exact context disclosure", { exact: true }),
   ).toBeVisible();

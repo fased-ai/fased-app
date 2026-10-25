@@ -5,6 +5,7 @@ type ChatComposer = {
 };
 import { AgentEvidenceInspector } from "./AgentEvidence";
 import { ChatReply } from "./ChatReply";
+import { SlidersHorizontal } from "../icons";
 import type { ResearchSelection } from "./ResearchReadPanel";
 import { ChatMemoryReview } from "./ChatMemoryReview";
 import { NewsSourcePicker } from "./NewsInputs";
@@ -196,8 +197,13 @@ function AgentAIForm({
   );
   const latest = requests.at(-1);
   useEffect(() => {
-    if (followReplies.current && messagesRef.current)
-      messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+    const el = messagesRef.current;
+    if (!followReplies.current || !el) return;
+    const reply = el.lastElementChild;
+    if (latest?.state === "completed" && reply)
+      el.scrollTop +=
+        reply.getBoundingClientRect().top - el.getBoundingClientRect().top;
+    else el.scrollTop = el.scrollHeight;
   }, [view.messages.length, requests.length, latest?.state]);
   const evidenceAvailable =
     !evidenceSelection ||
@@ -554,9 +560,11 @@ function AgentAIForm({
             <button
               type="button"
               className="text-button"
+              aria-label="Providers"
+              title="Providers"
               onClick={() => navigate("agents/settings")}
             >
-              Providers
+              <SlidersHorizontal size={16} />
             </button>
           </div>
           <details
