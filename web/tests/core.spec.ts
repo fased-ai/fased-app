@@ -5988,6 +5988,25 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
   await task
     .getByRole("button", { name: "Authorize fixture schedule" })
     .click();
+  await expect(
+    task.getByRole("button", { name: "Evaluate now" }),
+  ).toBeEnabled();
+  view = await privateCLI(["agents"]);
+  const access = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "task-access-review",
+    ref: connection.ref,
+    revision: view.revision,
+    profileId: view.profileId,
+    taskIds: [view.tasks[0].id],
+    authorizationSeconds: 600,
+  });
+  await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "task-access-allow",
+    ref: connection.ref,
+    allowance: access.accessReview,
+    consentDigest: access.accessReview.id,
+    passphrase: "disposable-admission-vault-passphrase",
+  });
   await task.getByRole("button", { name: "Evaluate now" }).click();
   await expect
     .poll(async () => (await privateCLI(["agents"])).tasks[0].state)
