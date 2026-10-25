@@ -2872,7 +2872,10 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     await expect(profile.locator("option:checked")).toHaveText(chosen!);
   };
   const open = async (tab: string) => {
-    await page.getByRole("button", { name: tab, exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Page shortcuts", exact: true })
+      .getByRole("link", { name: tab, exact: true })
+      .click();
     await expect(
       page.getByLabel("Agent", { exact: true }).locator("option:checked"),
     ).toHaveText("Trading Analyst");
@@ -3290,7 +3293,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     path: `.evidence/joined-agent/${isMobile ? "mobile" : "desktop"}.png`,
     fullPage: true,
   });
-  await open("news");
+  await open("News");
   const agentsRead = "**/api/v1/agents?*";
   let captured = false,
     release!: () => void;
@@ -3411,7 +3414,9 @@ test("update preferences and review-only proposals share revisions, survive rest
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
-  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
@@ -3835,7 +3840,9 @@ test("claim, UI/CLI setup, restart and logout preserve one Local instance", asyn
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
-  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
   const health = await (await page.request.get(`${url}/api/v1/health`)).json();
   expect(health.capabilities.walletSigner).toBe(false);
   expect(health.capabilities.financialExecution).toBe(false);
@@ -4258,7 +4265,9 @@ test("proposal form uses explicit fixture labels (UI mock only)", async ({
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
-  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
   await page.goto(url + "/#wallets/accounts");
   await expect(page.getByLabel("Fixture account", { exact: true })).toBeVisible(
     { timeout: 1000 },
@@ -4296,7 +4305,9 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
-  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
@@ -4518,7 +4529,9 @@ test("bounded news inputs retain provenance across UI CLI and restart, hold depe
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
     .click();
-  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
@@ -4748,7 +4761,9 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
-  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
@@ -4889,7 +4904,9 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
-  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
@@ -5081,7 +5098,9 @@ test("bounded AI schedules share consent and execution with CLI, survive restart
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
-  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
@@ -5242,7 +5261,9 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
-  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
@@ -9735,6 +9756,7 @@ test("installation connection uses runtime identity and opens Remote without cha
   await expect(dialog.getByText("Local", { exact: true })).toBeVisible();
   await expect(dialog.getByLabel("Wallet preference")).toHaveCount(0);
   await dialog.getByRole("button", { name: "Open Chat", exact: true }).click();
+  await expect(page).toHaveURL(/#agents\/chat$/);
   await expect(
     page
       .getByRole("navigation", { name: "Main navigation", exact: true })
