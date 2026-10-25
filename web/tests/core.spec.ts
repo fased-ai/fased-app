@@ -74,7 +74,11 @@ test("normal Chat connects a fixture provider, reviews one reply and retains sco
     .getByLabel("Message", { exact: true })
     .fill("Explain my fixture research limits");
   await expect(
-    chat.getByRole("button", { name: "Save message", exact: true }),
+    chat.getByRole("button", {
+      name: "Save message",
+      exact: true,
+      includeHidden: true,
+    }),
   ).not.toBeVisible();
   const composer = chat.getByLabel("Message", { exact: true });
   await composer.press("Shift+Enter");
@@ -1427,10 +1431,18 @@ test("chat drafts stay with their conversation through search switching and a pe
   try {
     await revealControl(
       page,
-      page.getByRole("button", { name: "Save message", exact: true }),
+      page.getByRole("button", {
+        name: "Save message",
+        exact: true,
+        includeHidden: true,
+      }),
     );
     await page
-      .getByRole("button", { name: "Save message", exact: true })
+      .getByRole("button", {
+        name: "Save message",
+        exact: true,
+        includeHidden: true,
+      })
       .click();
     await expect.poll(() => saving).toBe(true);
     await revealControl(page, search);
@@ -1441,10 +1453,18 @@ test("chat drafts stay with their conversation through search switching and a pe
     release();
     await revealControl(
       page,
-      page.getByRole("button", { name: "Save message", exact: true }),
+      page.getByRole("button", {
+        name: "Save message",
+        exact: true,
+        includeHidden: true,
+      }),
     );
     await expect(
-      page.getByRole("button", { name: "Save message", exact: true }),
+      page.getByRole("button", {
+        name: "Save message",
+        exact: true,
+        includeHidden: true,
+      }),
     ).toBeEnabled();
     await expect(message).toHaveValue(earlierEdited);
   } finally {
@@ -2186,10 +2206,18 @@ test("conversation search follows matching records and closes hidden conversatio
       .fill(text);
     await revealControl(
       page,
-      page.getByRole("button", { name: "Save message", exact: true }),
+      page.getByRole("button", {
+        name: "Save message",
+        exact: true,
+        includeHidden: true,
+      }),
     );
     await page
-      .getByRole("button", { name: "Save message", exact: true })
+      .getByRole("button", {
+        name: "Save message",
+        exact: true,
+        includeHidden: true,
+      })
       .click();
     await expect(page.locator(".local-messages")).toContainText(text);
   };
@@ -3793,9 +3821,19 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
     .fill("Our local thesis survives restart");
   await revealControl(
     page,
-    page.getByRole("button", { name: "Save message", exact: true }),
+    page.getByRole("button", {
+      name: "Save message",
+      exact: true,
+      includeHidden: true,
+    }),
   );
-  await page.getByRole("button", { name: "Save message", exact: true }).click();
+  await page
+    .getByRole("button", {
+      name: "Save message",
+      exact: true,
+      includeHidden: true,
+    })
+    .click();
   await expect(
     page.getByText("Our local thesis survives restart", { exact: true }),
   ).toBeVisible();
@@ -8556,9 +8594,19 @@ test("R1 workspace uses a compact branded shell and on-demand chat task memory c
     .fill("Review the R1 fixture journal before each run.");
   await revealControl(
     page,
-    page.getByRole("button", { name: "Save message", exact: true }),
+    page.getByRole("button", {
+      name: "Save message",
+      exact: true,
+      includeHidden: true,
+    }),
   );
-  await page.getByRole("button", { name: "Save message", exact: true }).click();
+  await page
+    .getByRole("button", {
+      name: "Save message",
+      exact: true,
+      includeHidden: true,
+    })
+    .click();
   await expect(page.locator(".local-messages")).toContainText(
     "Review the R1 fixture journal",
   );
