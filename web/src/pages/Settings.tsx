@@ -2,6 +2,7 @@ import {
   InstanceSummary,
   RemoteConnection,
 } from "../components/InstanceConnection";
+import { AppearanceSettings, useUI } from "../ui-preferences";
 import { ArrowRight } from "../icons";
 import { UpdateStatusPanel } from "../components/UpdateStatusPanel";
 import { UpdatePreferencesPanel } from "../components/UpdatePreferencesPanel";
@@ -9,12 +10,19 @@ import { AIConnectionSettings } from "./AIConnection";
 import { Badge, SectionHead } from "../components/shared";
 import { useWorkspace } from "../workspace";
 export function Settings() {
+  const { t } = useUI();
   const { core, state, setSetupOpen, setResetOpen } = useWorkspace();
   return (
     <>
-      <SectionHead title="Settings" />
+      <SectionHead title={t("Settings")} />
       <div className="settings-workspace">
         <div className="settings-primary">
+          <section className="panel">
+            <div className="panel-heading">
+              <h2>{t("Preferences")}</h2>
+            </div>
+            <AppearanceSettings />
+          </section>
           <section className="panel">
             <div className="panel-heading">
               <h2>Instance</h2>

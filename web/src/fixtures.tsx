@@ -17,7 +17,7 @@ export const navigation = [
 export const terminalData = [
   {
     id: "satcoin",
-    name: "WEN Satcoin Mining",
+    name: "Mining",
     category: "WEN",
     desc: "Preview BTC ranges, bounded SOL sessions, results and claims.",
     icon: Zap,
@@ -33,7 +33,7 @@ export const terminalData = [
   },
   {
     id: "jupiter",
-    name: "Solana / Jupiter",
+    name: "Onchain",
     category: "TRADING",
     desc: "Swaps, watchlists and supported limit orders.",
     icon: ArrowUpRight,

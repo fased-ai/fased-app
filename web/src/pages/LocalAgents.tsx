@@ -1,10 +1,11 @@
 import { ResearchReadPanel, type ResearchSelection } from "./ResearchReadPanel";
 import { MemoryRecall, memoryEvidenceStatuses } from "./MemoryRecall";
+import { useUI } from "../ui-preferences";
 import { useCore } from "../core";
 import { NewsInputs } from "./NewsInputs";
 import { AIConnectionSettings } from "./AIConnection";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Plus } from "../icons";
+import { BookOpen, Bot, Plus, Settings2 } from "../icons";
 import { Badge, SectionHead } from "../components/shared";
 import { useWorkspace } from "../workspace";
 import { providerNames, type Provider } from "../state";
@@ -20,6 +21,7 @@ import { AgentAIReview } from "./AgentAIReview";
 const date = (at: number) =>
   at ? new Date(at * 1000).toLocaleString() : "No expiry";
 export function LocalAgents() {
+  const { t } = useUI();
   const { agents, setProfileOpen, tab, navigate } = useWorkspace();
   const [taskPanel, setTaskPanel] = useState("automations");
   return (
@@ -33,9 +35,9 @@ export function LocalAgents() {
           <div className="agent-header-actions">
             {agents.view && (
               <label className="profile-select">
-                Agent
+                {t("Agent")}
                 <select
-                  aria-label="Agent"
+                  aria-label={t("Agent")}
                   disabled={agents.busy}
                   value={agents.view.profileId}
                   onChange={(e) => void agents.select(e.target.value)}
@@ -48,8 +50,34 @@ export function LocalAgents() {
                 </select>
               </label>
             )}
+            <button
+              className="icon-button"
+              aria-label={t("Memory")}
+              data-tooltip={t("Memory")}
+              onClick={() => navigate("agents/memory")}
+            >
+              <BookOpen size={17} />
+            </button>
+            <button
+              className="icon-button"
+              aria-label={t("Agents")}
+              data-tooltip={t("Agents")}
+              onClick={() => navigate("agents/settings")}
+            >
+              <Settings2 size={17} />
+            </button>
+            {tab === "settings" && (
+              <button
+                className="icon-button"
+                aria-label="Bots"
+                data-tooltip="Bots"
+                onClick={() => navigate("agents/bots")}
+              >
+                <Bot size={17} />
+              </button>
+            )}
             <button className="secondary" onClick={() => setProfileOpen(true)}>
-              <Plus size={16} /> New profile
+              <Plus size={16} /> {t("New profile")}
             </button>
           </div>
         }
@@ -69,20 +97,6 @@ export function LocalAgents() {
         <p role="status">Loading local agent records…</p>
       ) : (
         <>
-          <div className="tabs" aria-label="Agent sections">
-            {["chat", "bots", "tasks", "news", "memory", "settings"].map(
-              (t) => (
-                <button
-                  key={t}
-                  className={tab === t ? "active" : ""}
-                  aria-current={tab === t ? "page" : undefined}
-                  onClick={() => navigate(`agents/${t}`)}
-                >
-                  {t}
-                </button>
-              ),
-            )}
-          </div>
           <LocalAgentEditor
             key={agents.view.profileId}
             view={agents.view}
@@ -104,6 +118,7 @@ function LocalAgentEditor({
   setTaskPanel: (value: string) => void;
 }) {
   const { agents, tab, navigate } = useWorkspace();
+  const { t } = useUI();
   const core = useCore();
   const [researchOpen, setResearchOpen] = useState(false);
   const [newConversation, setNewConversation] = useState(false);
@@ -249,7 +264,7 @@ function LocalAgentEditor({
               <button
                 className="text-button"
                 onClick={() => setNewConversation(!newConversation)}
-                aria-label="New conversation"
+                aria-label={t("New conversation")}
               >
                 <Plus size={15} />
               </button>
@@ -272,7 +287,7 @@ function LocalAgentEditor({
                 })}
               >
                 <label>
-                  Conversation name
+                  {t("Conversation name")}
                   <input
                     required
                     maxLength={80}
@@ -281,17 +296,17 @@ function LocalAgentEditor({
                   />
                 </label>
                 <button className="secondary" disabled={agents.busy}>
-                  Create conversation
+                  {t("Create conversation")}
                 </button>
               </form>
             )}
             <label>
-              Search conversations
+              {t("Search conversations")}
               <input
                 type="search"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search conversations"
+                placeholder={t("Search conversations")}
               />
             </label>
             <div className="agent-session-list">
@@ -351,7 +366,7 @@ function LocalAgentEditor({
                   className="text-button chat-context-button"
                   onClick={() => setResearchOpen(!researchOpen)}
                 >
-                  Sources
+                  {t("Sources")}
                 </button>
                 {researchOpen && core.mode === "ready" && (
                   <aside className="chat-review" aria-label="Source inspector">
@@ -393,7 +408,7 @@ function LocalAgentEditor({
                       });
                   }}
                 >
-                  Start chat
+                  {t("Start chat")}
                 </button>
               </div>
             )}

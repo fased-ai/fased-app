@@ -1,3 +1,4 @@
+import { useUI } from "../ui-preferences";
 type ChatComposer = {
   value: string;
   onChange: (value: string) => void;
@@ -67,6 +68,7 @@ function AgentAIForm({
   composer?: ChatComposer;
 }) {
   const { core, agents, navigate } = useWorkspace();
+  const { t: tr } = useUI();
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [localPrompt, setLocalPrompt] = useState("");
   const prompt = composer ? composer.value : localPrompt;
@@ -524,10 +526,10 @@ function AgentAIForm({
             </fieldset>
           )}
           <label className="chat-input">
-            <span>{composer ? "Message" : "AI request"}</span>
+            <span>{composer ? tr("Message") : "AI request"}</span>
             <textarea
               ref={questionRef}
-              aria-label={composer ? "Message" : "AI request"}
+              aria-label={composer ? tr("Message") : "AI request"}
               required
               maxLength={composer ? 4000 : 2000}
               value={prompt}
@@ -750,7 +752,7 @@ function AgentAIForm({
                 (memoryMode === "selected" && memoryIds.length === 0)
               }
             >
-              {researchSelection ? "Prepare research disclosure" : "Send"}
+              {researchSelection ? "Prepare research disclosure" : tr("Send")}
             </button>
           </div>
         </form>

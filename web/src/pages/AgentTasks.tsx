@@ -1,3 +1,4 @@
+import { useUI } from "../ui-preferences";
 import { useEffect, useRef, useState } from "react";
 import type {
   AgentCommand,
@@ -57,6 +58,7 @@ export function AgentTasks({
   setPanel: (value: string) => void;
   onDiscuss: () => void;
 }) {
+  const { t: tr } = useUI();
   const { agents } = useWorkspace();
   const [editing, setEditing] = useState(false);
   const [selected, setSelected] = useState("");
@@ -133,7 +135,7 @@ export function AgentTasks({
             if (r) showRun(r.id);
           }}
         >
-          Result
+          {tr("Result")}
         </button>
         {!t.calendar && !t.news && !t.botId && !t.ai && (
           <button
@@ -254,7 +256,7 @@ export function AgentTasks({
               setReuse("");
             }}
           >
-            New task
+            {tr("New task")}
           </button>
         </div>
       </div>
@@ -515,6 +517,7 @@ function TaskComposer({
   view: AgentView;
   close: () => void;
 }) {
+  const { t: tr } = useUI();
   const core = useCore();
   const { agents } = useWorkspace();
   const [name, setName] = useState("");
@@ -605,7 +608,7 @@ function TaskComposer({
       aria-label={review ? "Review task" : "Create a task"}
     >
       <div className="panel-heading">
-        <h3>{review ? "Review task" : "New task"}</h3>
+        <h3>{review ? tr("Review task") : tr("New task")}</h3>
         <button type="button" className="text-button" onClick={close}>
           Cancel task
         </button>
@@ -623,7 +626,7 @@ function TaskComposer({
             <dl className="task-facts">
               <dt>Agent</dt>
               <dd>{v.profiles.find((p) => p.id === review.profileId)?.name}</dd>
-              <dt>Schedule</dt>
+              <dt>{tr("Schedule")}</dt>
               <dd>{review.calendar ? "Once" : schedule(review)}</dd>
               <dt>Starts</dt>
               <dd>
@@ -681,7 +684,7 @@ function TaskComposer({
                       close();
                   }}
                 >
-                  Create task
+                  {tr("Create task")}
                 </button>
               )}
             </div>
@@ -699,7 +702,7 @@ function TaskComposer({
           >
             <fieldset disabled={busy}>
               <label>
-                Task name
+                {tr("Task name")}
                 <input
                   required
                   maxLength={80}
@@ -709,12 +712,12 @@ function TaskComposer({
               </label>
               {!bot && (
                 <label>
-                  Reminder text
+                  {tr("Reminder text")}
                   <textarea
                     required
                     rows={3}
                     maxLength={4000}
-                    aria-label="Reminder text"
+                    aria-label={tr("Reminder text")}
                     value={text}
                     placeholder="What should this task remind you to do?"
                     onChange={(e) => edit(() => setText(e.target.value))}
@@ -722,9 +725,9 @@ function TaskComposer({
                 </label>
               )}
               <label>
-                Schedule
+                {tr("Schedule")}
                 <select
-                  aria-label="Schedule"
+                  aria-label={tr("Schedule")}
                   value={
                     calendarMode ? "calendar" : runs === 1 ? "once" : "repeat"
                   }
@@ -899,7 +902,7 @@ function TaskComposer({
                 </details>
               )}
               <button className="primary" disabled={busy}>
-                Review task
+                {tr("Review task")}
               </button>
             </fieldset>
           </form>

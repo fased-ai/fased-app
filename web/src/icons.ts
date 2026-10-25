@@ -1,4 +1,11 @@
 export {
+  ArrowLeftRight,
+  History,
+  LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Pickaxe,
+  Plug,
   ArrowDownLeft,
   ArrowRight,
   ArrowUpRight,

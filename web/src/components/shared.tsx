@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
+import { useUI } from "../ui-preferences";
 import { X } from "../icons";
 import { type Profile } from "../state";
 export function Badge({
@@ -73,6 +74,7 @@ export function Dialog({
   onClose: () => void;
   wide?: boolean;
 }) {
+  const { t } = useUI();
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const el = ref.current;
@@ -95,7 +97,7 @@ export function Dialog({
         <h2 id="dialog-title">{title}</h2>
         <button
           className="icon-button"
-          aria-label="Close dialog"
+          aria-label={t("Close dialog")}
           onClick={onClose}
         >
           <X size={18} />

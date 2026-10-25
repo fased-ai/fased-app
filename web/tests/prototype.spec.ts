@@ -1,4 +1,6 @@
 import { expect, test } from "@playwright/test";
+
+test.use({ colorScheme: "dark" });
 test("setup resumes after reload and never creates signing authority", async ({
   page,
   isMobile,
@@ -8,7 +10,7 @@ test("setup resumes after reload and never creates signing authority", async ({
     path: `.evidence/overview-${test.info().project.name}.png`,
     fullPage: true,
   });
-  await expect(page.getByText("Fixture", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Instance location")).toHaveText("Preview");
   await page.getByRole("button", { name: "Set up workspace" }).click();
   await page.getByRole("button", { name: /Remote Always-on/ }).click();
   await page.getByRole("button", { name: "Continue", exact: true }).click();
@@ -53,7 +55,9 @@ test("profiles keep separate model preferences and memories", async ({
   await page.getByLabel("Preferred AI connection").selectOption("openai");
   await page.getByRole("button", { name: /TA Trading Analyst/ }).click();
   await expect(page.getByLabel("Preferred AI connection")).toHaveValue("none");
-  await page.getByRole("button", { name: "memory", exact: true }).click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/memory";
+  });
   await expect(
     page.getByText("Compare strategy versions after fees", { exact: false }),
   ).toBeVisible();
@@ -92,19 +96,17 @@ test("terminal mockups cannot execute and make no remote requests", async ({
   await page.goto("/#terminals");
   await expect(page.locator(".terminal-card")).toHaveCount(3);
   await expect(
-    page.getByRole("heading", { name: "WEN Satcoin Mining", exact: true }),
+    page.getByRole("heading", { name: "Mining", exact: true }),
   ).toHaveCount(1);
-  await page
-    .getByRole("button", { name: "WEN Satcoin Mining", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Mining", exact: true }).click();
   for (const route of ["satcoin", "asset", "loss"]) {
     await page.goto(`/#terminals/${route}`);
     await expect(page).toHaveURL(/#terminals\/satcoin$/);
     await expect(
-      page.getByRole("heading", { name: "WEN Satcoin Mining", exact: true }),
+      page.getByRole("heading", { name: "Mining", exact: true }),
     ).toBeVisible();
     await expect(
-      page.getByText("WEN Satcoin Mining is a design prototype.", {
+      page.getByText("Mining is a design prototype.", {
         exact: true,
       }),
     ).toBeVisible();
@@ -142,11 +144,9 @@ test("terminal mockups cannot execute and make no remote requests", async ({
   ).toBeDisabled();
   await page.goBack();
   await expect(
-    page.getByRole("heading", { name: "WEN Satcoin Mining", exact: true }),
+    page.getByRole("heading", { name: "Mining", exact: true }),
   ).toBeVisible();
-  await page
-    .getByRole("button", { name: "Solana / Jupiter", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Onchain", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Execution unavailable" }),
   ).toBeDisabled();
@@ -159,12 +159,10 @@ test("terminal mockups cannot execute and make no remote requests", async ({
   await page
     .getByRole("region", { name: "Terminals", exact: true })
     .getByRole("button")
-    .filter({ hasText: "WEN Satcoin Mining" })
+    .filter({ hasText: "Mining" })
     .click();
   await expect(page).toHaveURL(/#terminals\/satcoin$/);
-  await page
-    .getByRole("heading", { name: "WEN Satcoin Mining", exact: true })
-    .click();
+  await page.getByRole("heading", { name: "Mining", exact: true }).click();
   await page.screenshot({
     path: `.evidence/wen-satcoin-prototype/${test.info().project.name}.png`,
     fullPage: true,
@@ -174,6 +172,7 @@ test("terminal mockups cannot execute and make no remote requests", async ({
 });
 test("chat creates an explicit local review preview without financial authority", async ({
   page,
+  isMobile,
 }) => {
   await page.goto("/#agents/chat");
   await page
@@ -187,6 +186,8 @@ test("chat creates an explicit local review preview without financial authority"
   await expect(page.getByText("Not granted", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Record preview" }).click();
   await expect(page.getByRole("status")).toHaveText(/Action preview recorded/);
+  if (isMobile)
+    await page.getByRole("button", { name: "More", exact: true }).click();
   await page.getByRole("button", { name: /Notifications, \d+ unread/ }).click();
   await expect(
     page.getByText("An illustrative read-only review was recorded.", {
@@ -195,6 +196,8 @@ test("chat creates an explicit local review preview without financial authority"
   ).toBeVisible();
   await page.getByRole("button", { name: "Mark all read" }).click();
   await page.getByRole("button", { name: "Close dialog" }).click();
+  if (isMobile)
+    await page.getByRole("button", { name: "More", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Notifications, 0 unread" }),
   ).toBeVisible();
@@ -210,9 +213,11 @@ test("mobile navigation, keyboard escape and unknown routes are usable", async (
       exact: true,
     }),
   ).toBeVisible();
-  if (isMobile)
-    await page.getByRole("button", { name: "Open navigation" }).click();
-  await page.getByRole("link", { name: "Wallets", exact: true }).click();
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "More pages" })
+    .getByRole("link", { name: "Wallets", exact: true })
+    .click();
   await expect(
     page.getByRole("heading", { name: "Wallets", exact: true }),
   ).toBeVisible();
@@ -249,7 +254,7 @@ test("shared WEN Activity distinguishes browser demo notices", async ({
   await expect(event).toBeVisible();
   await expect(event.getByText("DEMO", { exact: true })).toBeVisible();
   await expect(activity.getByText("LOCAL ONLY", { exact: true })).toBeVisible();
-  await expect(activity).toHaveCSS("background-color", "rgb(30, 29, 41)");
+  await expect(activity).toHaveCSS("background-color", "rgb(30, 30, 42)");
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

@@ -1,4 +1,6 @@
 import { expect, test, type Request } from "@playwright/test";
+
+test.use({ colorScheme: "dark" });
 import { spawn, type ChildProcess } from "node:child_process";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -7,6 +9,164 @@ import { basename, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { once } from "node:events";
 import { createHash, randomBytes } from "node:crypto";
+
+test("Meteora shell preserves drafts and records through navigation theme language and restart", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(75000);
+  page.setDefaultTimeout(10000);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+  });
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.goto(url + "/#chat");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  await expect(
+    page.getByRole("button", { name: "Preferences", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Untranslated owner conversation");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  const message = page.getByLabel("Message", { exact: true });
+  await message.fill("Do not translate or discard this unsent draft.");
+  const before = await privateCLI(["agents"]);
+  const rail = page.getByRole("navigation", {
+    name: "Page shortcuts",
+    exact: true,
+  });
+  expect((await rail.textContent())?.trim()).toBe("");
+  await rail.getByRole("link", { name: "Mining", exact: true }).focus();
+  expect(
+    await rail
+      .getByRole("link", { name: "Mining", exact: true })
+      .evaluate((el) => getComputedStyle(el, "::after").opacity),
+  ).toBe("1");
+  await page
+    .getByRole("button", { name: "Hide navigation rail", exact: true })
+    .click();
+  await expect(rail).toBeHidden();
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  const more = page.getByRole("navigation", {
+    name: "More pages",
+    exact: true,
+  });
+  await expect(
+    more.getByRole("link", { name: "Onchain", exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(
+    page.getByRole("button", { name: "More", exact: true }),
+  ).toBeFocused();
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await more.getByRole("link", { name: "Onchain", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .getByRole("link", { name: "Chat", exact: true })
+    .click();
+  await expect(message).toHaveValue(
+    "Do not translate or discard this unsent draft.",
+  );
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Appearance", { exact: true }).selectOption("light");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.screenshot({
+    path: `.evidence/shell-light-dialog-${test.info().project.name}.png`,
+    fullPage: false,
+  });
+  await page.keyboard.press("Escape");
+  await page.screenshot({
+    path: `.evidence/shell-light-${test.info().project.name}.png`,
+    fullPage: false,
+  });
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  for (const [code, chat] of [
+    ["ru", "Чат"],
+    ["es", "Chat"],
+    ["zh", "聊天"],
+    ["ko", "채팅"],
+  ]) {
+    await dialog.locator("select").nth(1).selectOption(code);
+    await expect(page.locator("html")).toHaveAttribute(
+      "lang",
+      code === "zh" ? "zh-Hans" : code,
+    );
+    await expect(page.locator(".shell-top-nav > a").first()).toHaveText(chat);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+  }
+  await dialog.locator("select").nth(1).selectOption("en");
+  await dialog.getByLabel("Appearance", { exact: true }).selectOption("system");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await dialog.getByLabel("Appearance", { exact: true }).selectOption("dark");
+  await page.keyboard.press("Escape");
+  await expect(message).toHaveValue(
+    "Do not translate or discard this unsent draft.",
+  );
+  await page
+    .getByRole("button", { name: "Show navigation rail", exact: true })
+    .click();
+  await expect(rail).toBeVisible();
+  await page.screenshot({
+    path: `.evidence/shell-dark-${test.info().project.name}.png`,
+    fullPage: false,
+  });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  expect(await privateCLI(["agents"])).toEqual(before);
+  const address = new URL(url);
+  await stop();
+  await start(false, address.host);
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(rail).toBeVisible();
+  await expect(page.getByLabel("Agent", { exact: true })).toHaveValue(
+    before.profileId,
+  );
+  expect(await privateCLI(["agents"])).toEqual(before);
+  if (!isMobile)
+    expect((await page.locator(".shell-header").boundingBox())!.height).toBe(
+      50,
+    );
+  const health = await (await page.request.get(url + "/api/v1/health")).json();
+  for (const key of [
+    "aiConnections",
+    "financialExecution",
+    "walletSigner",
+    "updater",
+  ])
+    expect(health.capabilities[key]).toBe(false);
+  expect(external).toEqual([]);
+});
 
 test.describe("calendar reminders", () => {
   test.use({ timezoneId: "America/Chicago" });
@@ -2088,7 +2248,9 @@ test("task inbox opens the exact named run without writes across profiles and re
   await expect(
     page.getByLabel("Agent", { exact: true }).locator("option:checked"),
   ).toHaveText("Trading Analyst");
-  await page.getByRole("button", { name: "tasks", exact: true }).click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/tasks";
+  });
   const runCard = (id: string) =>
     page.locator(".memory-card").filter({ hasText: `Run ${id}` });
   for (const i of [1, 0]) {
@@ -3850,7 +4012,7 @@ test("Satcoin prototype preserves legacy links and disabled authority across cor
     await page.goto(`${url}/#terminals/${route}`);
     await expect(page).toHaveURL(/#terminals\/satcoin$/);
     await expect(
-      page.getByRole("heading", { name: "WEN Satcoin Mining", exact: true }),
+      page.getByRole("heading", { name: "Mining", exact: true }),
     ).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Execution unavailable" }),
@@ -3882,7 +4044,7 @@ test("Satcoin prototype preserves legacy links and disabled authority across cor
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page).toHaveURL(/#terminals\/satcoin$/);
   await expect(
-    page.getByRole("heading", { name: "WEN Satcoin Mining", exact: true }),
+    page.getByRole("heading", { name: "Mining", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Execution unavailable" }),
@@ -4216,7 +4378,9 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
     source: "Owner preference",
   });
   const memoryID = view.memories[0].id;
-  await page.getByRole("button", { name: "memory", exact: true }).click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/memory";
+  });
   await expect(
     page.getByText("Concise answers", { exact: true }),
   ).toBeVisible();
@@ -4236,7 +4400,9 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
   view = await privateCLI(["agents", "--profile", p]);
   expect(view.memories[0].id).toBe(memoryID);
   expect(view.memories[0].history[0].text).toBe("Concise answers");
-  await page.getByRole("button", { name: "settings", exact: true }).click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/settings";
+  });
   await revealControl(page, page.getByLabel("Provider preference"), "");
   await page.getByLabel("Provider preference").selectOption("openai");
   await revealControl(page, page.getByLabel("Model preference"), "");
@@ -4250,14 +4416,18 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
         ).provider,
     )
     .toBe("openai");
-  await page.getByRole("button", { name: "bots", exact: true }).click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/bots";
+  });
   await revealControl(page, page.getByLabel("Paper bot name"), "");
   await page.getByLabel("Paper bot name").fill("Fixed example");
   await page
     .getByRole("button", { name: "Create paper bot", exact: true })
     .click();
   await expect(page.getByText("Fixed example", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "tasks", exact: true }).click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/tasks";
+  });
   await revealControl(
     page,
     page.getByLabel("Task name", { exact: true }),
@@ -4861,7 +5031,9 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
   await page
     .getByLabel("Agent", { exact: true })
     .selectOption({ label: profileName });
-  await page.getByRole("button", { name: "settings", exact: true }).click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/settings";
+  });
   await revealControl(page, page.getByLabel("Provider preference"), "");
   await page.getByLabel("Provider preference").selectOption("anthropic");
   await revealControl(page, page.getByLabel("Model preference"), "");
@@ -4879,7 +5051,9 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
       ).provider;
     })
     .toBe("anthropic");
-  await page.getByRole("button", { name: "chat", exact: true }).click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/chat";
+  });
   await checkSearch();
   await revealControl(page, page.getByLabel("Search conversations"), "");
   await page.getByLabel("Search conversations").fill("no-such-phrase");
@@ -6479,7 +6653,9 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
       includeHidden: true,
     })
     .fill("old filter");
-  await page.getByRole("button", { name: "news", exact: true }).click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/news";
+  });
   const panel = page.getByRole("region", { name: "News inputs", exact: true });
   await revealControl(
     page,
@@ -6860,7 +7036,9 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
       includeHidden: true,
     })
     .fill("stale selection");
-  await page.getByRole("button", { name: "memory", exact: true }).click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/memory";
+  });
   const search = async (q: string) => {
     await expect(
       page.getByLabel("Agent", { exact: true }).locator("option:checked"),
@@ -6937,7 +7115,9 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
     ]),
   ).rejects.toThrow();
   await expect(recall("x".repeat(201))).rejects.toThrow();
-  await page.getByRole("button", { name: "memory", exact: true }).click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/memory";
+  });
   await search("Edited concise preference");
   v = await command({
     action: "memory-put",
@@ -8923,9 +9103,7 @@ test("R1 workspace uses a compact branded shell and on-demand chat task memory c
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
     .click();
-  await expect(
-    page.locator(isMobile ? ".mobile-brand img" : ".brand img"),
-  ).toBeVisible();
+  await expect(page.locator(".shell-brand img")).toBeVisible();
   await expect(page.getByText("Private core", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Instance location")).toContainText("Local");
   await expect(page.getByLabel("Agent", { exact: true })).toBeVisible();
@@ -8983,7 +9161,9 @@ test("R1 workspace uses a compact branded shell and on-demand chat task memory c
   await page
     .getByRole("button", { name: "Save reviewed memory", exact: true })
     .click();
-  await page.getByRole("button", { name: "memory", exact: true }).click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/memory";
+  });
   await expect(page.locator(".memory-library")).toContainText(
     "Review the R1 fixture journal",
   );
@@ -8993,7 +9173,9 @@ test("R1 workspace uses a compact branded shell and on-demand chat task memory c
   await page
     .getByRole("button", { name: "Cancel memory edit", exact: true })
     .click();
-  await page.getByRole("button", { name: "tasks", exact: true }).click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/tasks";
+  });
   await expect(page.locator(".task-composer")).not.toBeVisible();
   await page.getByRole("button", { name: "New task", exact: true }).click();
   await revealControl(
@@ -9033,7 +9215,9 @@ test("R1 workspace uses a compact branded shell and on-demand chat task memory c
     path: `.evidence/r1-tasks-${test.info().project.name}.png`,
     fullPage: true,
   });
-  await page.getByRole("button", { name: "chat", exact: true }).click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/chat";
+  });
   await revealControl(page, page.getByLabel("Message", { exact: true }), "");
   await page
     .getByLabel("Message", { exact: true })
@@ -9077,7 +9261,9 @@ test("R1 workspace uses a compact branded shell and on-demand chat task memory c
   await expect(page.locator(".chat-system summary")).toHaveText(
     "Saved locally",
   );
-  await page.getByRole("button", { name: "memory", exact: true }).click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/memory";
+  });
   await page.screenshot({
     path: `.evidence/r1-memory-${test.info().project.name}.png`,
     fullPage: true,
@@ -9096,7 +9282,7 @@ test("R1 workspace uses a compact branded shell and on-demand chat task memory c
   ).toBe(true);
   if (!isMobile)
     expect(
-      (await page.locator(".sidebar").boundingBox())!.height,
+      (await page.locator(".shell-header").boundingBox())!.height,
     ).toBeLessThanOrEqual(52);
   const health = await (await page.request.get(url + "/api/v1/health")).json();
   for (const key of [
@@ -9138,11 +9324,11 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
     await expect(layout).toBeVisible();
     await expect(page.locator("html")).toHaveCSS(
       "background-color",
-      "rgb(21, 20, 28)",
+      "rgb(25, 25, 34)",
     );
     await expect(layout.locator(".panel").first()).toHaveCSS(
       "background-color",
-      "rgb(30, 29, 41)",
+      "rgb(30, 30, 42)",
     );
     expect(
       await page.evaluate(
@@ -9210,7 +9396,7 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
   ).toBeDisabled();
   await expect(page.locator(".account-safety")).toHaveCSS(
     "background-color",
-    "rgb(30, 29, 41)",
+    "rgb(30, 30, 42)",
   );
   await checkLayout("wallets", ".account-columns");
   await page.goto(url + "/#settings");
@@ -9294,7 +9480,7 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
     ).toBe(isMobile ? 1 : 2);
     await expect(page.locator("html")).toHaveCSS(
       "background-color",
-      "rgb(21, 20, 28)",
+      "rgb(25, 25, 34)",
     );
     expect(
       await page.evaluate(
@@ -9344,10 +9530,9 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
   ).toBeVisible({ timeout: 12000 });
   await expect(feed).toContainText("SHA-256:");
   await layout("news", ".news-workspace");
-  await page
-    .locator(".tabs")
-    .getByRole("button", { name: /^bots$/i })
-    .click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/bots";
+  });
   await revealControl(page, page.getByLabel("Paper bot name"), "");
   await page.getByLabel("Paper bot name").fill("V3 paper budget");
   await page
@@ -9358,10 +9543,9 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
     "Used 0 / 500 fixture units",
   );
   await layout("bots", ".paper-workspace");
-  await page
-    .locator(".tabs")
-    .getByRole("button", { name: /^settings$/i })
-    .click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/settings";
+  });
   await expect(page.getByLabel("Profile name", { exact: true })).toHaveValue(
     "Trading Analyst",
   );
@@ -9503,7 +9687,7 @@ test("installation connection uses runtime identity and opens Remote without cha
     page.getByRole("heading", { name: "Overview", exact: true }),
   ).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
-  await expect(page.locator("html")).toHaveCSS("font-family", /Adwaita Sans/);
+  await expect(page.locator("html")).toHaveCSS("font-family", /Fased Inter/);
   const rows = page.locator(".workspace-row-copy");
   await expect(rows.first()).toHaveCSS("display", "flex");
   const name = await rows.first().locator("strong").boundingBox();
@@ -9552,14 +9736,16 @@ test("installation connection uses runtime identity and opens Remote without cha
   await expect(dialog.getByLabel("Wallet preference")).toHaveCount(0);
   await dialog.getByRole("button", { name: "Open Chat", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: /^chat$/i, exact: true }),
+    page
+      .getByRole("navigation", { name: "Main navigation", exact: true })
+      .getByRole("link", { name: "Chat", exact: true }),
   ).toBeVisible();
   await page.goto(url + "/#settings");
   await page.getByText("Connect to Remote", { exact: true }).click();
   const connect = page.getByRole("button", { name: "Connect", exact: true });
   await expect(connect).toHaveCSS("background-color", "rgb(255, 100, 124)");
   await connect.hover();
-  await expect(connect).toHaveCSS("background-color", "rgb(255, 126, 146)");
+  await expect(connect).toHaveCSS("background-color", "rgb(255, 122, 142)");
   await page.getByLabel("Instance URL").fill("http://untrusted.example");
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("HTTPS");

@@ -8,7 +8,8 @@ import {
   type FormEvent,
 } from "react";
 import { initialState, reducer, restoreState, STORAGE_KEY } from "./state";
-import { navigation, terminalData } from "./fixtures";
+import { terminalData } from "./fixtures";
+import { useUI } from "./ui-preferences";
 import { useCore } from "./core";
 import { useAgents } from "./agents";
 import type { Action } from "./state";
@@ -20,7 +21,18 @@ function loadInitialState() {
   }
 }
 function getRoute() {
-  const route = window.location.hash.slice(1);
+  const raw = window.location.hash.slice(1);
+  const aliases: Record<string, string> = {
+    chat: "agents/chat",
+    tasks: "agents/tasks",
+    agents: "agents/settings",
+    news: "agents/news",
+    memory: "agents/memory",
+    mining: "terminals/satcoin",
+    onchain: "terminals/jupiter",
+    hyperliquid: "terminals/hyperliquid",
+  };
+  const route = aliases[raw] ?? raw;
   if (route === "terminals/asset" || route === "terminals/loss")
     return "terminals/satcoin";
   return /^(overview|activity|settings|terminals(\/(satcoin|hyperliquid|jupiter))?|agents\/(chat|bots|tasks|news|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
@@ -30,6 +42,7 @@ function getRoute() {
     : "overview";
 }
 function useWorkspaceState() {
+  const { t } = useUI();
   const [prototypeState, localDispatch] = useReducer(
     reducer,
     undefined,
@@ -106,7 +119,6 @@ function useWorkspaceState() {
   const [actionOpen, setActionOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [storageError, setStorageError] = useState(false);
@@ -127,7 +139,6 @@ function useWorkspaceState() {
         window.history.replaceState(window.history.state, "", `#${next}`);
       setRoute(next);
       setQuery("");
-      setSidebarOpen(false);
     };
     fn();
     window.addEventListener("hashchange", fn);
@@ -153,7 +164,6 @@ function useWorkspaceState() {
   function navigate(path: string) {
     window.location.hash = path;
     if (path === route) {
-      setSidebarOpen(false);
       setQuery("");
     }
   }
@@ -188,12 +198,20 @@ function useWorkspaceState() {
     setMessage("");
   }
   const searchItems = [
-    ...navigation.map((n) => ({ title: n.title, path: n.path })),
+    ...[
+      ["Chat", "agents/chat"],
+      ["Tasks", "agents/tasks"],
+      ["Agents", "agents/settings"],
+      ["News", "agents/news"],
+      ["Wallets", "wallets/overview"],
+      ["Settings", "settings"],
+      ["Activity", "activity"],
+    ].map(([title, path]) => ({ title, path })),
     ...terminalData.map((t) => ({ title: t.name, path: `terminals/${t.id}` })),
     { title: "Memory", path: "agents/memory" },
     { title: "Permissions", path: "wallets/permissions" },
     { title: "AI connections", path: "settings" },
-  ].filter((item) => item.title.toLowerCase().includes(query.toLowerCase()));
+  ].filter((item) => t(item.title).toLowerCase().includes(query.toLowerCase()));
 
   return {
     core,
@@ -211,8 +229,6 @@ function useWorkspaceState() {
     setProfileOpen,
     contextOpen,
     setContextOpen,
-    sidebarOpen,
-    setSidebarOpen,
     resetOpen,
     setResetOpen,
     query,

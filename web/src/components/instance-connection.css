@@ -1,12 +1,5 @@
-@font-face {
-  font-family: "Adwaita Sans";
-  src: url("../assets/fonts/AdwaitaSans-Regular.ttf") format("truetype");
-  font-weight: 100 900;
-  font-style: normal;
-  font-display: swap;
-}
 :root.wt {
-  font-family: "Adwaita Sans", ui-sans-serif, system-ui, sans-serif;
+  font-family: "Fased Inter", Inter, ui-sans-serif, system-ui, sans-serif;
 }
 .instance-facts {
   margin: 0;
@@ -20,10 +13,10 @@
   gap: 14px;
   align-items: center;
   padding: 12px 0;
-  border-bottom: 1px solid #373447;
+  border-bottom: 1px solid var(--wt-border);
 }
 .instance-facts dt {
-  color: #b7b2c8;
+  color: var(--wt-muted);
 }
 .instance-facts dd {
   margin: 0;
@@ -40,20 +33,20 @@
 }
 .remote-connect {
   margin-top: 16px;
-  border-top: 1px solid #373447;
+  border-top: 1px solid var(--wt-border);
   padding-top: 14px;
   font-size: 14px;
 }
 .remote-connect > summary {
   cursor: pointer;
-  color: #b7b2c8;
+  color: var(--wt-muted);
   list-style: none;
 }
 .remote-connect > summary::before {
   content: "+";
   display: inline-block;
   width: 20px;
-  color: #9a7aff;
+  color: var(--wt-violet);
 }
 .remote-connect[open] > summary::before {
   content: "−";
@@ -66,21 +59,21 @@
 .remote-connect input {
   width: 100%;
   min-height: 44px;
-  border: 1px solid #373447;
+  border: 1px solid var(--wt-border);
   border-radius: 7px;
-  background: #15141c;
-  color: #f3f2f7;
+  background: var(--wt-bg);
+  color: var(--wt-text);
   padding: 9px 12px;
 }
 .remote-connect input:focus-visible {
-  outline: 2px solid #9a7aff;
+  outline: 2px solid var(--wt-violet);
   outline-offset: 2px;
 }
 .wt .remote-connect form button.primary,
 .instance-facts ~ button.primary,
 .wt .core-auth button.primary {
-  background: #ff647c;
-  color: #15141c;
+  background: var(--wt-coral);
+  color: var(--wt-bg);
   border: 0;
   min-height: 44px;
   border-radius: 7px;
@@ -93,20 +86,20 @@
 }
 .wt .remote-connect form button.primary:hover,
 .wt .core-auth button.primary:hover {
-  background: #ff7e92;
+  background: var(--shell-primary-hover);
 }
 .remote-connect [role="alert"] {
-  color: #ff97a7;
+  color: var(--wt-coral);
   margin: 0;
 }
 .remote-connect [role="status"] {
-  color: #b7b2c8;
+  color: var(--wt-muted);
   margin: 0;
 }
 .wt .core-auth {
   width: min(520px, 100%);
-  background: #1e1d29;
-  border: 1px solid #373447;
+  background: var(--wt-surface);
+  border: 1px solid var(--wt-border);
   border-radius: 10px;
   padding: 24px;
   box-shadow: none;
@@ -156,7 +149,7 @@
 .instance-details {
   margin-top: 12px;
   font-size: 13px;
-  color: #b7b2c8;
+  color: var(--wt-muted);
 }
 .instance-details summary {
   cursor: pointer;

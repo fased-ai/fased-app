@@ -19,12 +19,6 @@
 .wt [hidden] {
   display: none !important;
 }
-.wt .app {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  grid-template-rows: 48px minmax(0, 1fr);
-  min-height: 100dvh;
-}
 .wt button,
 .wt input,
 .wt select,
@@ -134,122 +128,6 @@
 .wt h3 {
   font-size: 13px;
 }
-.wt .sidebar {
-  position: sticky;
-  inset: 0 0 auto;
-  z-index: 60;
-  width: auto;
-  grid-column: 1;
-  grid-row: 1;
-  height: 48px;
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 18px;
-  padding: 0 14px;
-  border: 0;
-  border-bottom: 1px solid var(--line);
-  background: var(--wt-bg);
-  transform: none;
-}
-.wt .brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: auto;
-  margin: 0 8px 0 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--wt-text);
-  font-size: 18px;
-  letter-spacing: -0.5px;
-  font-weight: 650;
-}
-.wt .brand img {
-  object-fit: contain;
-}
-.wt .sidebar nav {
-  display: flex;
-  align-items: stretch;
-  gap: 5px;
-  height: 100%;
-}
-.wt .sidebar nav a {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 30px;
-  padding: 0 10px;
-  color: var(--wt-muted);
-  font-size: 12px;
-  border-radius: 0;
-  border-bottom: 2px solid transparent;
-}
-.wt .sidebar nav a.active {
-  color: var(--wt-text);
-  background: transparent;
-  border-bottom-color: var(--wt-coral);
-  box-shadow: none;
-}
-.wt .sidebar nav a:hover {
-  background: transparent;
-  color: var(--wt-text);
-}
-.wt .sidebar nav a > svg {
-  display: none;
-}
-.wt .nav-count {
-  padding: 1px 4px;
-  font-size: 10px;
-  background: transparent;
-  color: var(--wt-muted);
-}
-.wt .sidebar > .icon-button {
-  margin-left: auto;
-}
-.wt .sidebar-bottom {
-  margin: 0;
-  padding: 0;
-  display: flex;
-  align-items: center;
-}
-.wt .sidebar-bottom > button {
-  margin: 0;
-  width: auto;
-  padding: 5px;
-  font-size: 12px;
-  color: var(--wt-muted);
-  background: transparent;
-}
-.wt .app-body {
-  display: contents;
-  min-width: 0;
-}
-.wt .topbar {
-  position: sticky;
-  top: 0;
-  grid-column: 2;
-  grid-row: 1;
-  z-index: 45;
-  height: 48px;
-  padding: 0 15px;
-  display: flex;
-  border-bottom: 1px solid var(--line);
-  background: var(--wt-bg);
-}
-.wt .topbar-actions {
-  gap: 12px;
-  margin-left: auto;
-}
-.wt .breadcrumb {
-  display: none;
-  font-size: 12px;
-  color: var(--wt-muted);
-}
-.wt .breadcrumb strong {
-  font-weight: 500;
-}
 .wt .instance-pill {
   display: flex;
   align-items: center;
@@ -284,10 +162,6 @@
   font-size: 11px;
   padding: 2px 6px;
   border: 0;
-}
-.wt .menu-button,
-.wt .mobile-brand {
-  display: none;
 }
 .wt .main-content {
   grid-column: 1/-1;
@@ -918,7 +792,7 @@
   gap: 14px;
 }
 .wt .task-calendar-fields input {
-  color-scheme: dark;
+  color-scheme: inherit;
 }
 .wt .task-timing {
   display: grid;
@@ -1098,12 +972,6 @@
   .wt .search-wrap {
     display: none;
   }
-  .wt .sidebar {
-    gap: 10px;
-  }
-  .wt .sidebar nav a {
-    padding: 0 6px;
-  }
   .wt .agent-chat {
     grid-template-columns: 195px minmax(0, 1fr);
   }
@@ -1118,79 +986,12 @@
   .wt .task-workspace.with-detail > :is(.task-composer, .task-detail) {
     grid-row: 1;
   }
-  .wt .sidebar {
-    position: fixed;
-    top: 0;
-    bottom: 0;
-    left: 0;
-    display: none;
-    flex-direction: column;
-    align-items: stretch;
-    width: 250px;
-    height: 100dvh;
-    padding: 20px 14px;
-    border-right: 1px solid var(--line);
-    gap: 20px;
-  }
-  .wt .sidebar.open {
-    display: flex;
-  }
-  .wt .sidebar nav {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    height: auto;
-  }
-  .wt .sidebar nav a {
-    padding: 10px;
-  }
-  .wt .sidebar-bottom {
-    margin-top: auto;
-  }
-  .wt .sidebar > .icon-button {
-    margin: 0;
-  }
-  .wt .sidebar-backdrop {
-    position: fixed;
-    inset: 0;
-    display: block;
-    background: #0008;
-    z-index: 55;
-    border: 0;
-    border-radius: 0;
-  }
-  .wt .topbar {
-    grid-column: 1/-1;
-    top: 0;
-    height: 44px;
-    padding: 0 8px;
-    gap: 6px;
-  }
-  .wt .menu-button {
-    display: inline-flex;
-  }
-  .wt .mobile-brand {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    font-weight: 600;
-  }
-  .wt .breadcrumb {
-    display: none;
-  }
-  .wt .topbar-actions {
-    gap: 6px;
-  }
   .wt .fixture-indicator {
     font-size: 10px;
     gap: 3px;
   }
   .wt .fixture-indicator svg {
     display: none;
-  }
-  .wt .topbar-actions .text-button {
-    font-size: 10px;
-    padding: 2px 3px;
   }
   .wt .instance-pill {
     font-size: 10px;
@@ -1425,10 +1226,6 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
-.wt .topbar .instance-pill > span {
-  display: inline-block;
-}
-
 .wt .chat-workspace.with-inspector {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
@@ -1512,16 +1309,10 @@
   top: 48px;
 }
 @media (max-width: 760px) {
-  .wt .app {
-    display: block;
-  }
   .wt .main-content:has(> .local-agents) {
     display: flex;
     flex-direction: column;
     gap: 0;
-  }
-  .wt .topbar {
-    width: 100%;
   }
   .wt .context-panel {
     top: 44px;
