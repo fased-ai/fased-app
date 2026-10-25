@@ -354,6 +354,7 @@ func TestWENResearchAIMigration(t *testing.T) {
 		delete(fields, "researchTurns")
 		legacy, _ := json.Marshal(fields)
 		s.db.Exec("UPDATE agent_workspace SET document=? WHERE id=1", string(legacy))
+		dropEmptyHistoryFixture(t, s)
 		s.db.Exec("PRAGMA user_version=11")
 		n, e := OpenStore(s.dir)
 		if e != nil {

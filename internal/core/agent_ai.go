@@ -108,13 +108,19 @@ type aiSelectedMemory struct {
 	ExpiresAt int64  `json:"expiresAt"`
 }
 
-func selectedAIMemories(d agentDocument, profile string, choice AIMemorySelection, now int64) (AIMemorySelection, []aiSelectedMemory, error) {
-	if (choice.Mode != "all" && choice.Mode != "none" && choice.Mode != "selected") ||
+func selectedAIMemories(d agentDocument, profile string, choice AIMemorySelection, now int64, query ...string) (AIMemorySelection, []aiSelectedMemory, error) {
+	if (choice.Mode != "all" && choice.Mode != "none" && choice.Mode != "selected" && choice.Mode != "relevant") ||
 		(choice.Mode != "selected" && len(choice.IDs) != 0) ||
 		(choice.Mode == "selected" && (len(choice.IDs) == 0 || len(choice.IDs) > 100)) {
 		return choice, nil, errors.New("choose all, none, or 1–100 unique current memory IDs")
 	}
 	ids := append([]string(nil), choice.IDs...)
+	if choice.Mode == "relevant" {
+		if len(query) != 1 {
+			return choice, nil, errors.New("relevant recall requires the reviewed prompt")
+		}
+		ids = relevantMemoryIDs(d, profile, query[0], now)
+	}
 	if choice.Mode == "all" {
 		for _, m := range d.Memories {
 			if m.ProfileID == profile && (m.ExpiresAt == 0 || m.ExpiresAt > now) {
@@ -201,7 +207,7 @@ func aiContextWithMemory(d agentDocument, profile, session, prompt string, now i
 		data.Memories = notes
 		payload = data
 	} else {
-		choice, notes, err := selectedAIMemories(d, profile, *selection, now)
+		choice, notes, err := selectedAIMemories(d, profile, *selection, now, prompt)
 		if err != nil {
 			return "", err
 		}
@@ -211,6 +217,62 @@ func aiContextWithMemory(d agentDocument, profile, session, prompt string, now i
 			Selection AIMemorySelection `json:"memorySelection"`
 			Context   any               `json:"context"`
 		}{aiMemoryContextVersion, choice, data}
+	}
+	if selection != nil && selection.Mode == "relevant" {
+		type group struct {
+			at       int64
+			messages []message
+		}
+		groups := []group{}
+		for _, m := range d.Messages {
+			if m.ProfileID == profile && m.SessionID == session && m.Role == "user" {
+				groups = append(groups, group{m.CreatedAt, []message{{m.Role, m.Text}}})
+			}
+		}
+		for _, q := range d.AIRequests {
+			if q.ProfileID == profile && q.SessionID == session && q.State == "completed" && q.TaskID == "" && !isResearchAI(q) {
+				groups = append(groups, group{q.CreatedAt, []message{{"user", q.Prompt}, {"assistant", q.Answer}}})
+			}
+		}
+		sort.SliceStable(groups, func(i, j int) bool { return groups[i].at < groups[j].at })
+		if len(groups) > 6 {
+			groups = groups[len(groups)-6:]
+		}
+		notes := data.Memories.([]aiSelectedMemory)
+		build := func() ([]byte, error) {
+			data.Messages = []message{}
+			for _, g := range groups {
+				data.Messages = append(data.Messages, g.messages...)
+			}
+			data.Memories = notes
+			return json.Marshal(struct {
+				Version   string            `json:"version"`
+				Selection AIMemorySelection `json:"memorySelection"`
+				Context   any               `json:"context"`
+			}{aiMemoryContextVersion, *selection, data})
+		}
+		b, e := build()
+		if e != nil {
+			return "", e
+		}
+		for len(b) > 8000 && len(groups) > 0 {
+			groups = groups[1:]
+			b, e = build()
+			if e != nil {
+				return "", e
+			}
+		}
+		for len(b) > 8000 && len(notes) > 0 {
+			notes = notes[:len(notes)-1]
+			b, e = build()
+			if e != nil {
+				return "", e
+			}
+		}
+		if len(b) > 8000 {
+			return "", errors.New("prompt and persona exceed the context limit")
+		}
+		return string(b), nil
 	}
 	b, e := json.Marshal(payload)
 	if e != nil {
@@ -941,7 +1003,7 @@ func draftMemorySelection(q AgentAIRequest) (*AIMemorySelection, error) {
 			return nil, bad
 		}
 		choice := *selection
-		if (choice.Mode != "all" && choice.Mode != "none" && choice.Mode != "selected") || (choice.Mode != "selected" && len(choice.IDs) != 0) || (choice.Mode == "selected" && (len(choice.IDs) == 0 || len(choice.IDs) > 100)) {
+		if (choice.Mode != "all" && choice.Mode != "none" && choice.Mode != "selected" && choice.Mode != "relevant") || (choice.Mode != "selected" && len(choice.IDs) != 0) || (choice.Mode == "selected" && (len(choice.IDs) == 0 || len(choice.IDs) > 100)) {
 			return nil, bad
 		}
 		for i, id := range choice.IDs {
@@ -950,7 +1012,7 @@ func draftMemorySelection(q AgentAIRequest) (*AIMemorySelection, error) {
 			}
 		}
 		var notes []aiSelectedMemory
-		if json.Unmarshal(base.Memories, &notes) != nil || notes == nil || len(notes) > 100 || (choice.Mode == "none" && len(notes) != 0) || (choice.Mode == "selected" && len(notes) != len(choice.IDs)) {
+		if json.Unmarshal(base.Memories, &notes) != nil || notes == nil || len(notes) > 100 || (choice.Mode == "relevant" && len(notes) > 5) || (choice.Mode == "none" && len(notes) != 0) || (choice.Mode == "selected" && len(notes) != len(choice.IDs)) {
 			return nil, bad
 		}
 		for i, n := range notes {

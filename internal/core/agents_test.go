@@ -334,6 +334,7 @@ func TestAgentsSchemaMigrationAndPausedPredecessor(t *testing.T) {
 				t.Fatal(e)
 			}
 			// Reconstruct only the previous schema's shape, never owner state.
+			dropEmptyHistoryFixture(t, s)
 			if _, e = s.db.Exec("DROP TABLE agent_workspace; PRAGMA user_version=3;"); e != nil {
 				t.Fatal(e)
 			}

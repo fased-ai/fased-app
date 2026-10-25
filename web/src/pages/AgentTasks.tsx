@@ -12,6 +12,7 @@ import { useCore } from "../core";
 import { useWorkspace } from "../workspace";
 import { RefreshCw } from "../icons";
 import { Badge } from "../components/shared";
+import { TaskHistory } from "./TaskHistory";
 import { AgentPlaybooks } from "./AgentPlaybooks";
 import { ScheduledAITasks } from "./ScheduledAITasks";
 import { SavedReminderDraft } from "./SavedReminderDraft";
@@ -20,6 +21,12 @@ import {
   calendarInput,
   calendarLabel,
 } from "../task-calendar";
+import {
+  TaskCronFields,
+  cronCalendar,
+  timeZones,
+  type CronSettings,
+} from "./TaskCronFields";
 import { NewsSourcePicker } from "./NewsInputs";
 
 const date = (at: number) => (at ? new Date(at * 1000).toLocaleString() : "—");
@@ -38,12 +45,16 @@ const schedule = (t: {
   maxRuns: number;
 }) =>
   t.calendar
-    ? "Once · " + calendarLabel(t.calendar)
+    ? t.calendar.version === "cron-v1"
+      ? `${calendarLabel(t.calendar)} · ${t.maxRuns} runs`
+      : "Once · " + calendarLabel(t.calendar)
     : t.maxRuns === 1
       ? `Once, after ${taskInterval(t.intervalSeconds)}`
       : `Every ${taskInterval(t.intervalSeconds)} · ${t.maxRuns} runs`;
 const nextRun = (t: AgentTask) =>
-  t.calendar ? calendarLabel(t.calendar) : date(t.nextAt);
+  t.nextAt && t.calendar
+    ? calendarLabel({ ...t.calendar, version: "once-at-v1", at: t.nextAt })
+    : date(t.nextAt);
 const finished = (t: AgentTask) =>
   t.state === "completed" || t.runs >= t.maxRuns || t.state === "cancelled";
 
@@ -227,18 +238,20 @@ export function AgentTasks({
     <div className="tasks-screen">
       <div className="tasks-toolbar">
         <nav className="task-views tabs" aria-label="Task views">
-          {["automations", "history", "inbox", "playbooks"].map((t) => (
-            <button
-              key={t}
-              aria-pressed={panel === t}
-              onClick={() => {
-                setPanel(t);
-                if (t === "history") setResultId("");
-              }}
-            >
-              {t}
-            </button>
-          ))}
+          {["automations", "history", "inbox", "playbooks", "archive"].map(
+            (t) => (
+              <button
+                key={t}
+                aria-pressed={panel === t}
+                onClick={() => {
+                  setPanel(t);
+                  if (t === "history") setResultId("");
+                }}
+              >
+                {t}
+              </button>
+            ),
+          )}
         </nav>
         <div className="row-actions">
           <button
@@ -263,6 +276,7 @@ export function AgentTasks({
       <div hidden={panel !== "playbooks"}>
         <AgentPlaybooks key={v.profileId} view={v} />
       </div>
+      {panel === "archive" && <TaskHistory key={v.profileId} view={v} />}
       <section className="panel task-board" hidden={panel !== "automations"}>
         <div
           className={`task-workspace ${editing || selectedTask || reuse ? "with-detail" : ""}`}
@@ -368,6 +382,32 @@ export function AgentTasks({
                     <dt>Status</dt>
                     <dd>{selectedTask.state}</dd>
                   </dl>
+                  {selectedTask.state === "completed" &&
+                    selectedTask.id.length === 43 &&
+                    !selectedTask.id.includes(":") &&
+                    !selectedTask.ai &&
+                    !selectedTask.news &&
+                    !selectedTask.wen &&
+                    !selectedTask.playbook &&
+                    !selectedTask.botId && (
+                      <button
+                        className="text-button"
+                        disabled={agents.busy}
+                        onClick={async () => {
+                          if (
+                            await agents.change({
+                              action: "task-archive",
+                              id: selectedTask.id,
+                            })
+                          ) {
+                            setSelected("");
+                            setPanel("archive");
+                          }
+                        }}
+                      >
+                        {tr("Archive task")}
+                      </button>
+                    )}
                   {selectedTask.state === "held" && (
                     <p role="status">
                       {v.newsFetches
@@ -484,11 +524,14 @@ export function AgentTasks({
           intervals become one run. Resume starts a new interval. Calendar
           reminders keep their original date; overdue reminders run once after
           resume or restart. Run now completes a calendar reminder early; it
-          will not run again on its date.
+          will not run again on its date. For a recurring calendar, Run now
+          consumes the upcoming occurrence.
         </p>
         <p>
           Intervals: 1 minute–7 days, up to 20 runs. Calendar reminders: one
-          date within 366 days, in local time or UTC. Cron is not available yet.
+          date within 366 days. Recurring calendars use a named time zone, an
+          end date within one year and up to 20 runs. Missing local times are
+          skipped; repeated times run once.
         </p>
         {v.taskCapacity && (
           <p>
@@ -529,8 +572,17 @@ function TaskComposer({
   const [unit, setUnit] = useState(60);
   const [runs, setRuns] = useState(1);
   const [calendarMode, setCalendarMode] = useState(false);
+  const [cronMode, setCronMode] = useState(false);
   const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const [zone, setZone] = useState(localZone);
+  const [cron, setCron] = useState<CronSettings>({
+    preset: "daily",
+    time: "09:00",
+    weekday: "1",
+    expression: "0 9 * * 1-5",
+    timeZone: localZone,
+    until: calendarInput(Date.now() / 1000 + 30 * 86400, localZone),
+  });
   const [at, setAt] = useState(() =>
     calendarInput(Date.now() / 1000 + 1800, localZone),
   );
@@ -561,9 +613,9 @@ function TaskComposer({
     (review.revision !== v.revision || review.expiresAt * 1000 <= now);
   let calendar: TaskCalendar | undefined;
   let calendarError = "";
-  if (calendarMode) {
+  if (calendarMode || cronMode) {
     try {
-      calendar = calendarFromInput(at, zone);
+      calendar = cronMode ? cronCalendar(cron) : calendarFromInput(at, zone);
     } catch (e) {
       calendarError = e instanceof Error ? e.message : "Choose a date and time";
     }
@@ -578,7 +630,7 @@ function TaskComposer({
     newsSourceId: news,
     newsMaxAgeSeconds: news ? age : undefined,
     calendar,
-    intervalSeconds: calendarMode ? 0 : seconds,
+    intervalSeconds: calendarMode || cronMode ? 0 : seconds,
     maxRuns: calendarMode ? 1 : runs,
   };
   async function prepare() {
@@ -627,13 +679,33 @@ function TaskComposer({
               <dt>Agent</dt>
               <dd>{v.profiles.find((p) => p.id === review.profileId)?.name}</dd>
               <dt>{tr("Schedule")}</dt>
-              <dd>{review.calendar ? "Once" : schedule(review)}</dd>
+              <dd>
+                {review.calendar?.version === "once-at-v1"
+                  ? "Once"
+                  : schedule(review)}
+              </dd>
               <dt>Starts</dt>
               <dd>
                 {review.calendar
-                  ? calendarLabel(review.calendar)
+                  ? calendarLabel({ ...review.calendar, version: "once-at-v1" })
                   : `${taskInterval(review.intervalSeconds)} after creation`}
               </dd>
+              {review.calendar?.version === "cron-v1" && (
+                <>
+                  <dt>{tr("End date")}</dt>
+                  <dd>
+                    {calendarLabel({
+                      ...review.calendar,
+                      version: "once-at-v1",
+                      at: review.calendar.until!,
+                    })}
+                  </dd>
+                  <dt>{tr("Clock changes")}</dt>
+                  <dd>
+                    {tr("Missing times skipped; repeated times run once.")}
+                  </dd>
+                </>
+              )}
               <dt>Inputs</dt>
               <dd>
                 {review.news
@@ -676,6 +748,7 @@ function TaskComposer({
                       await agents.change({
                         ...command,
                         action: "task-reviewed-create",
+                        calendar: review.calendar,
                         revision: review.revision,
                         expiresAt: review.expiresAt,
                         consentDigest: review.digest,
@@ -729,14 +802,21 @@ function TaskComposer({
                 <select
                   aria-label={tr("Schedule")}
                   value={
-                    calendarMode ? "calendar" : runs === 1 ? "once" : "repeat"
+                    cronMode
+                      ? "cron"
+                      : calendarMode
+                        ? "calendar"
+                        : runs === 1
+                          ? "once"
+                          : "repeat"
                   }
                   onChange={(e) =>
                     edit(() => {
                       const next = e.target.value;
                       setCalendarMode(next === "calendar");
-                      setRuns(next === "repeat" ? 3 : 1);
-                      if (next === "calendar") {
+                      setCronMode(next === "cron");
+                      setRuns(next === "cron" ? 10 : next === "repeat" ? 3 : 1);
+                      if (next === "calendar" || next === "cron") {
                         setBot("");
                         setNews("");
                       }
@@ -746,9 +826,15 @@ function TaskComposer({
                   <option value="once">Run once</option>
                   <option value="repeat">Repeat</option>
                   <option value="calendar">At a date & time</option>
+                  <option value="cron">{tr("Recurring calendar")}</option>
                 </select>
               </label>
-              {calendarMode ? (
+              {cronMode ? (
+                <TaskCronFields
+                  value={cron}
+                  onChange={(value) => edit(() => setCron(value))}
+                />
+              ) : calendarMode ? (
                 <div className="task-calendar-fields">
                   <label>
                     Date & time
@@ -782,10 +868,11 @@ function TaskComposer({
                         })
                       }
                     >
-                      {localZone !== "UTC" && (
-                        <option value={localZone}>{localZone}</option>
-                      )}
-                      <option value="UTC">UTC</option>
+                      {timeZones(localZone).map((z) => (
+                        <option key={z} value={z}>
+                          {z}
+                        </option>
+                      ))}
                     </select>
                   </label>
                 </div>
@@ -831,14 +918,14 @@ function TaskComposer({
                   </label>
                 </div>
               )}
-              {!calendarMode && runs > 1 && (
+              {!calendarMode && (runs > 1 || cronMode) && (
                 <label>
                   Maximum runs
                   <input
                     aria-label="Maximum evaluations"
                     type="number"
                     required
-                    min={2}
+                    min={cronMode ? 1 : 2}
                     max={20}
                     value={runs}
                     onChange={(e) =>
@@ -847,7 +934,7 @@ function TaskComposer({
                   />
                 </label>
               )}
-              {!calendarMode && (
+              {!calendarMode && !cronMode && (
                 <details className="task-inspection">
                   <summary>Inputs & advanced timing</summary>
                   <label>

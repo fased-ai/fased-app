@@ -371,6 +371,7 @@ func TestWENSessionLifecycleIdentityAndHolds(t *testing.T) {
 func TestWENSessionStorageMigration(t *testing.T) {
 	t.Run("format-only-and-paused", func(t *testing.T) {
 		s := fixtureStore(t)
+		dropEmptyHistoryFixture(t, s)
 		_, e := s.db.Exec("PRAGMA user_version=13")
 		if e != nil {
 			t.Fatal(e)

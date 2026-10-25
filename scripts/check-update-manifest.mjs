@@ -66,9 +66,12 @@ try {
   );
   pass(
     "schemaPauseAndApprovalFeatures",
-    contracts[0].state[0].versions.min === 17 &&
-      contracts[0].state[0].versions.max === 17 &&
+    contracts[0].state[0].versions.min === 18 &&
+      contracts[0].state[0].versions.max === 18 &&
       contracts[0].state[0].features.includes("agents-playbooks-v1") &&
+      contracts[0].state[0].features.includes("agents-cron-v1") &&
+      contracts[0].state[0].features.includes("agents-history-v1") &&
+      contracts[0].state[0].features.includes("agents-recall-v1") &&
       contracts[0].state[0].features.includes("agents-calendar-v1") &&
       contracts[0].state[0].features.includes("agents-local-v1") &&
       contracts[0].state[0].features.includes("agents-wen-paper-v1") &&
@@ -319,6 +322,39 @@ try {
       "schema16CoreReaderDenied",
       (m) => {
         m.components[0].contract.state[0].versions = { min: 16, max: 16 };
+      },
+    ],
+    [
+      "schema17CoreReaderDenied",
+      (m) => {
+        m.components[0].contract.state[0].versions = { min: 17, max: 17 };
+      },
+    ],
+    [
+      "cronFeatureErasureDenied",
+      (m) => {
+        m.components[0].contract.state[0].features =
+          m.components[0].contract.state[0].features.filter(
+            (f) => f !== "agents-cron-v1",
+          );
+      },
+    ],
+    [
+      "historyFeatureErasureDenied",
+      (m) => {
+        m.components[0].contract.state[0].features =
+          m.components[0].contract.state[0].features.filter(
+            (f) => f !== "agents-history-v1",
+          );
+      },
+    ],
+    [
+      "recallFeatureErasureDenied",
+      (m) => {
+        m.components[0].contract.state[0].features =
+          m.components[0].contract.state[0].features.filter(
+            (f) => f !== "agents-recall-v1",
+          );
       },
     ],
     [

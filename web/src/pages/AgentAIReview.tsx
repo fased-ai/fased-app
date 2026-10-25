@@ -6,7 +6,7 @@ type ChatComposer = {
 };
 import { AgentEvidenceInspector } from "./AgentEvidence";
 import { ChatReply } from "./ChatReply";
-import { SlidersHorizontal } from "../icons";
+import { SlidersHorizontal, BookOpen } from "../icons";
 import type { ResearchSelection } from "./ResearchReadPanel";
 import { ChatMemoryReview } from "./ChatMemoryReview";
 import { NewsSourcePicker } from "./NewsInputs";
@@ -72,6 +72,7 @@ function AgentAIForm({
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [localPrompt, setLocalPrompt] = useState("");
   const prompt = composer ? composer.value : localPrompt;
+  const remembering = /^\s*\/remember(?:\s|$)/.test(prompt);
   function setPrompt(value: string) {
     setLocalPrompt(value);
     composer?.onChange(value);
@@ -93,7 +94,7 @@ function AgentAIForm({
   const [consent, setConsent] = useState("");
   const [memoryMode, setMemoryMode] = useState<
     AIMemorySelection["mode"] | "legacy"
-  >("all");
+  >("relevant");
   const [memoryIds, setMemoryIds] = useState<string[]>([]);
   const [draftSource, setDraftSource] = useState("");
   const [legacyDraft, setLegacyDraft] = useState(false);
@@ -352,6 +353,23 @@ function AgentAIForm({
             setDraftError("");
             const epoch = generation.current;
             const submittedPrompt = prompt;
+            if (/^\s*\/remember(?:\s|$)/.test(submittedPrompt)) {
+              try {
+                if (composer) await composer.onSave();
+                else if (
+                  await agents.change({
+                    action: "message-add",
+                    id: sessionId,
+                    text: submittedPrompt,
+                  })
+                ) {
+                  if (currentPrompt.current === submittedPrompt) setPrompt("");
+                }
+              } finally {
+                preparing.current = false;
+              }
+              return;
+            }
             // Verify the explicitly selected credential immediately before prepare.
             // Never fall back to another connection after lock, rotation or loss.
             if (connectionRef) {
@@ -607,6 +625,9 @@ function AgentAIForm({
                 {legacyDraft && (
                   <option value="legacy">Legacy active notes</option>
                 )}
+                <option value="relevant">
+                  {tr("Relevant notes and recent chat")}
+                </option>
                 <option value="all">All active notes</option>
                 <option value="none">None</option>
                 <option value="selected">Selected notes</option>
@@ -742,6 +763,19 @@ function AgentAIForm({
           )}
           <div className="composer-actions">
             <button
+              type="button"
+              className="icon-button"
+              aria-label={tr("Remember a fact")}
+              title={tr("Remember a fact")}
+              disabled={agents.busy || draftBusy}
+              onClick={() => {
+                if (!remembering) setPrompt("/remember " + prompt.trim());
+                questionRef.current?.focus();
+              }}
+            >
+              <BookOpen size={16} />
+            </button>
+            <button
               className="primary"
               disabled={
                 agents.busy ||
@@ -749,10 +783,16 @@ function AgentAIForm({
                 prompt.length > 2000 ||
                 researchPreparing ||
                 draftBusy ||
-                (memoryMode === "selected" && memoryIds.length === 0)
+                (!remembering &&
+                  memoryMode === "selected" &&
+                  memoryIds.length === 0)
               }
             >
-              {researchSelection ? "Prepare research disclosure" : tr("Send")}
+              {remembering
+                ? tr("Remember")
+                : researchSelection
+                  ? "Prepare research disclosure"
+                  : tr("Send")}
             </button>
           </div>
         </form>

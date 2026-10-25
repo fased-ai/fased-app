@@ -169,7 +169,7 @@ func TestAgentMemoryRestoreStaleAndForeignSave(t *testing.T) {
 }
 
 func TestAgentMemoryRestoreRefusesAmbiguityCapacityAndInvalidHistory(t *testing.T) {
-	for _, change := range []string{"empty", "full", "overflow", "duplicate-memory", "duplicate-profile", "invalid-text", "negative-expiry"} {
+	for _, change := range []string{"empty", "overflow", "duplicate-memory", "duplicate-profile", "invalid-text", "negative-expiry"} {
 		t.Run(change, func(t *testing.T) {
 			s, v, id := memoryRecallFixture(t, "message")
 			v = agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, ID: id, Text: "Current text", Source: "Owner"})

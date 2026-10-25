@@ -142,7 +142,13 @@ editing or cancelling a review saves nothing. Changed records or a ten-minute
 expiry require another review. **Run**, **Pause**, **Resume** and **Result** manage
 the saved task. Results show the saved reminder or fixture answer; receipts remain
 under **Run details**. **Schedule & storage** shows the shared capacity and recovery
-behavior. Calendar times, cron and timezones remain unavailable.
+behavior. **Calendar date** schedules one local date; **Recurring calendar**
+offers daily, weekday, weekly or five-field cron schedules in a named timezone.
+Recurring reminders require an end date and a maximum of 1–20 runs. The review
+binds the first occurrence, rule, timezone, end date and run limit. Missing local
+times are skipped; a repeated local minute runs once. Missed occurrences coalesce
+into one run. Pause and restart retain the reviewed next occurrence; **Run now**
+consumes it. Cron is available only for plain reminders.
 
 Tasks run in the existing core with the UI closed. Reminders and the versioned
 `fixed-paper-buy-v1` strategy are the only task kinds. Each task has a 60-second to
@@ -174,13 +180,41 @@ A command includes the revision returned by the previous read. For example:
 ```
 
 Stale commands fail with a conflict; they are never replayed automatically.
-Supported actions: `profile-create`, `profile-update`, `session-create`,
+Supported actions include `profile-create`, `profile-update`, `session-create`, `session-archive`,
 `message-add`, `memory-put`, `memory-delete`, `memory-chat-save`, `bot-create`, `task-create`,
-`task-pause`, `task-resume`, `task-run`, `notice-read`. Profile/session/memory/task
+`task-pause`, `task-resume`, `task-run`, `task-archive`, `history-policy`, `notice-read`. Profile/session/memory/task
 IDs are scoped by the server. Personas and stored text grant no tools or wallet
 permissions. Every memory has evidence/source, timestamp, optional
-expiry and up to eight previous revisions. Memory deletion leaves task/paper
-journals intact.
+expiry and eight recent previous revisions; older corrections remain in immutable
+history. Memory deletion leaves task/paper journals intact.
+
+### Recall and retained history
+
+Chat uses a small set of relevant current notes from the selected profile by
+default. This is local text matching, not a model call. Review shows the exact
+context before any fixture answer runs. Expired notes are excluded. **Remember a
+fact**, or `/remember FACT` in Chat, explicitly saves a source-linked note without
+calling a provider. Normal messages, news and model replies are not captured as
+facts automatically. Notes can be corrected or forgotten in Memory.
+
+The Chat archive preserves conversations, final manual fixture answers, their
+context and spending records. Pending requests and linked task/research records
+must resolve first. Completed unlinked plain reminders can be archived from
+Tasks. Archive settings optionally move read results after 7, 30 or 90 days;
+automatic archiving is off by default. Archive records are searchable, exportable
+and read-only. Sources in archived conversations remain inspectable. Archiving
+does not discard financial journals or grant execution authority.
+
+```sh
+fased-app agents --profile trading-analyst --history
+fased-app agents --profile trading-analyst --history-kind conversations --history --history-search "risk"
+fased-app agents --profile trading-analyst --history-kind memories --history
+```
+
+Use `--history-task ID` for one record and `--before CURSOR` for the next page.
+Archived memory revisions open as editable correction proposals; saving still
+requires the current workspace revision. Current notes retain the existing active
+capacity. Task kinds with unresolved dependencies remain in the active workspace.
 
 ### Find a memory and inspect its source
 

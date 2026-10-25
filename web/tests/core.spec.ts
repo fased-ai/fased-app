@@ -10,6 +10,358 @@ import { tmpdir } from "node:os";
 import { once } from "node:events";
 import { createHash, randomBytes } from "node:crypto";
 
+test("agent memory and archives keep recall sources journals and results through UI CLI restart", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(120000);
+  page.setDefaultTimeout(10000);
+  await stop();
+  await start(true);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+  });
+  await page.goto(url + "/#agents/chat");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const p = "trading-analyst";
+  await page.getByLabel("Agent", { exact: true }).selectOption(p);
+  const read = () => privateCLI(["agents", "--profile", p]);
+  await openConversationList(page);
+  await page
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Agent workbench");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Remember a fact", exact: true })
+    .click();
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("/remember My SOL risk budget is 500 units");
+  await page.getByRole("button", { name: "Remember", exact: true }).click();
+  await expect.poll(async () => (await read()).memories.length).toBe(1);
+  let v = await read();
+  const note = v.memories[0];
+  expect(v.aiRequests).toHaveLength(0);
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("What is my SOL risk budget?");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect.poll(async () => (await read()).aiRequests.length).toBe(1);
+  v = await read();
+  const prepared = v.aiRequests[0];
+  expect(JSON.parse(prepared.context).memorySelection.mode).toBe("relevant");
+  expect(prepared.context).toContain(note.text);
+  const card = page.locator(".ai-request").last();
+  await card
+    .getByRole("checkbox", {
+      name: "I reviewed this context and these fixture limits",
+      exact: true,
+    })
+    .check();
+  await card
+    .getByRole("button", { name: "Run development fixture", exact: true })
+    .click();
+  await expect
+    .poll(async () => (await read()).aiRequests[0].state)
+    .toBe("completed");
+  v = await read();
+  const answer = v.aiRequests[0];
+  await expect(card).toContainText(answer.answer);
+  await page
+    .getByRole("button", { name: "Archive conversation", exact: true })
+    .click();
+  const archive = page.getByRole("dialog", {
+    name: "Archived conversations",
+    exact: true,
+  });
+  await expect(archive).toBeVisible();
+  await archive
+    .locator(".memory-row")
+    .filter({ hasText: "Agent workbench" })
+    .click();
+  await expect(archive).toContainText(answer.answer);
+  const downloaded = page.waitForEvent("download");
+  await archive
+    .getByRole("button", { name: "Export JSON", exact: true })
+    .click();
+  const exported = JSON.parse(
+    await readFile((await (await downloaded).path())!, "utf8"),
+  );
+  expect(exported.entry.aiRequests[0].digest).toBe(answer.digest);
+  expect(JSON.stringify(exported)).not.toContain(fixturePassword);
+  await page.screenshot({
+    path: `.evidence/conversation-archive-${test.info().project.name}.png`,
+    fullPage: false,
+  });
+  await archive
+    .getByRole("button", { name: "Close dialog", exact: true })
+    .click();
+  v = await read();
+  expect(v.sessions).toHaveLength(0);
+  expect(v.aiRequests).toHaveLength(0);
+  expect(v.archivedAISpentMicrousd).toBe(answer.spentMicrousd);
+  const source = await privateCLI([
+    "agents",
+    "--profile",
+    p,
+    "--memory-source",
+    note.id,
+  ]);
+  expect(source.source.status).toBe("matched");
+  const cliArchive = await privateCLI([
+    "agents",
+    "--profile",
+    p,
+    "--history",
+    "--history-kind",
+    "conversations",
+    "--history-search",
+    "SOL RISK",
+  ]);
+  expect(cliArchive.records).toHaveLength(1);
+  await page.goto(url + "/#agents/memory");
+  const memoryCard = page.getByRole("article", {
+    name: `Memory ${note.id}`,
+    exact: true,
+  });
+  await expect(memoryCard).toContainText(note.text);
+  await memoryCard
+    .getByRole("button", { name: "Correct note", exact: true })
+    .click();
+  const edit = page.getByRole("dialog", {
+    name: "Correct a memory",
+    exact: true,
+  });
+  await expect(edit).toBeVisible();
+  await expect(edit.getByLabel("Evidence or source")).not.toBeVisible();
+  await edit
+    .getByLabel("Memory note", { exact: true })
+    .fill("My SOL risk budget is 250 units");
+  await edit
+    .getByRole("button", { name: "Save correction", exact: true })
+    .click();
+  await expect(memoryCard).toContainText("250 units");
+  await page.screenshot({
+    path: `.evidence/memory-library-${test.info().project.name}.png`,
+    fullPage: false,
+  });
+  const saved = await read(),
+    address = new URL(url);
+  await stop();
+  await start(true, address.host);
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  expect(await read()).toEqual(saved);
+  const command = async (c: Record<string, unknown>) =>
+    privateCLI(["agents", "--request-stdin"], {
+      profileId: p,
+      revision: (await read()).revision,
+      ...c,
+    });
+  v = await command({ action: "session-create", name: "Current preferences" });
+  const session = v.sessions[0].id;
+  v = await command({
+    action: "ai-prepare",
+    id: session,
+    text: "Explain my SOL risk budget",
+    memorySelection: { mode: "relevant" },
+    limits: {
+      maxInputTokens: 24000,
+      maxOutputTokens: 1024,
+      deadlineSeconds: 3,
+      budgetMicrousd: 30000,
+    },
+  });
+  expect(v.aiRequests[0].context).toContain("250 units");
+  expect(v.aiRequests[0].context).not.toContain("500 units");
+  v = await command({
+    action: "task-create",
+    name: "Archive reminder result",
+    text: "Read the retained journal",
+    intervalSeconds: 60,
+    maxRuns: 1,
+  });
+  const task = v.tasks[0];
+  await command({ action: "task-run", id: task.id });
+  await page.goto(url + "/#agents/tasks");
+  await page
+    .getByRole("button", {
+      name: "Result: Archive reminder result",
+      exact: true,
+    })
+    .first()
+    .click();
+  await page.getByRole("button", { name: "automations", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Archive reminder result", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Archive task", exact: true }).click();
+  const tasks = page.getByRole("region", {
+    name: "Archived tasks",
+    exact: true,
+  });
+  await expect(tasks.locator(".memory-row")).toContainText(
+    "Archive reminder result",
+  );
+  const old = await privateCLI(["agents", "--profile", p, "--history"]);
+  expect(old.records).toHaveLength(1);
+  expect((await read()).tasks).toHaveLength(0);
+  const health = await (await page.request.get(url + "/api/v1/health")).json();
+  for (const key of [
+    "aiConnections",
+    "financialExecution",
+    "walletSigner",
+    "updater",
+  ])
+    expect(health.capabilities[key]).toBe(false);
+  if (isMobile)
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+  expect(external).toEqual([]);
+});
+
+test("reviewed recurring tasks preserve named zones bounds CLI results pause and restart", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(75000);
+  page.setDefaultTimeout(10000);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+  });
+  await page.goto(url + "/#agents/tasks");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const before = await privateCLI(["agents"]);
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  await page.getByLabel("Task name", { exact: true }).fill("Weekday journal");
+  await page
+    .getByLabel("Reminder text", { exact: true })
+    .fill("Review saved positions and task results");
+  await page.getByLabel("Schedule", { exact: true }).selectOption("cron");
+  await page.getByLabel("Recurrence", { exact: true }).selectOption("weekdays");
+  await page.getByLabel("Time", { exact: true }).fill("09:30");
+  await page
+    .getByLabel("Time zone", { exact: true })
+    .selectOption("Asia/Seoul");
+  await page.getByLabel("Maximum evaluations", { exact: true }).fill("3");
+  await page.screenshot({
+    path: `.evidence/cron-editor-${test.info().project.name}.png`,
+    fullPage: false,
+  });
+  await page.getByRole("button", { name: "Review task", exact: true }).click();
+  const review = page.getByRole("complementary", {
+    name: "Review task",
+    exact: true,
+  });
+  await expect(review).toContainText("Asia/Seoul");
+  await expect(review).toContainText(
+    "Missing times skipped; repeated times run once.",
+  );
+  expect(await privateCLI(["agents"])).toEqual(before);
+  await page.screenshot({
+    path: `.evidence/cron-review-${test.info().project.name}.png`,
+    fullPage: false,
+  });
+  await page.getByRole("button", { name: "Create task", exact: true }).click();
+  await expect
+    .poll(async () => (await privateCLI(["agents"])).tasks.length)
+    .toBe(1);
+  let v = await privateCLI(["agents"]);
+  const task = v.tasks[0];
+  expect(task.calendar).toMatchObject({
+    version: "cron-v1",
+    expression: "30 9 * * 1-5",
+    timeZone: "Asia/Seoul",
+  });
+  expect(task.maxRuns).toBe(3);
+  expect(task.nextAt).toBe(task.calendar.at);
+  await page
+    .getByRole("button", { name: "Run now: Weekday journal", exact: true })
+    .first()
+    .click();
+  await expect
+    .poll(async () => (await privateCLI(["agents"])).tasks[0].runs)
+    .toBe(1);
+  v = await privateCLI(["agents"]);
+  expect(v.runs).toHaveLength(1);
+  expect(v.tasks[0].nextAt).toBeGreaterThan(task.nextAt);
+  await page
+    .getByRole("button", { name: "Pause: Weekday journal", exact: true })
+    .first()
+    .click();
+  await expect
+    .poll(async () => (await privateCLI(["agents"])).tasks[0].state)
+    .toBe("paused");
+  v = await privateCLI(["agents"]);
+  await page.screenshot({
+    path: `.evidence/cron-result-${test.info().project.name}.png`,
+    fullPage: false,
+  });
+  const address = new URL(url);
+  await stop();
+  await start(false, address.host);
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  expect(await privateCLI(["agents"])).toEqual(v);
+  const other = await privateCLI(["agents", "--profile", "news-researcher"]);
+  expect(other.tasks).toHaveLength(0);
+  const health = await (await page.request.get(url + "/api/v1/health")).json();
+  for (const key of [
+    "aiConnections",
+    "financialExecution",
+    "walletSigner",
+    "updater",
+  ])
+    expect(health.capabilities[key]).toBe(false);
+  if (isMobile)
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+  expect(external).toEqual([]);
+});
+
 test("Meteora shell preserves drafts and records through navigation theme language and restart", async ({
   page,
   isMobile,
@@ -9192,7 +9544,7 @@ test("R1 workspace uses a compact branded shell and on-demand chat task memory c
   await page.getByRole("button", { name: "Correct note", exact: true }).click();
   await expect(page.locator(".memory-editor")).toBeVisible();
   await page
-    .getByRole("button", { name: "Cancel memory edit", exact: true })
+    .getByRole("button", { name: "Cancel correction", exact: true })
     .click();
   await page.evaluate(() => {
     window.location.hash = "agents/tasks";

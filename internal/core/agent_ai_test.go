@@ -389,6 +389,7 @@ func TestAgentAIInputBoundsExpiryMigrationAndCapacity(t *testing.T) {
 		t.Run(map[bool]string{false: "schema4-idle", true: "schema4-paused"}[paused], func(t *testing.T) {
 			s := fixtureStore(t)
 			v := aiPrepare(t, s)
+			dropEmptyHistoryFixture(t, s)
 			if _, e := s.db.Exec("PRAGMA user_version=4"); e != nil {
 				t.Fatal(e)
 			}

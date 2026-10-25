@@ -23,11 +23,12 @@ WHEN (SELECT phase FROM update_pause WHERE id=1)='paused' BEGIN SELECT RAISE(ABO
 PRAGMA user_version=4;`
 
 type AgentProfile struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Persona  string `json:"persona"`
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
+	HistoryDays int    `json:"historyDays,omitempty"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Persona     string `json:"persona"`
+	Provider    string `json:"provider"`
+	Model       string `json:"model"`
 }
 type AgentSession struct {
 	ID        string `json:"id"`
@@ -50,14 +51,15 @@ type MemoryRevision struct {
 	ExpiresAt int64  `json:"expiresAt"`
 }
 type AgentMemory struct {
-	ID        string           `json:"id"`
-	ProfileID string           `json:"profileId"`
-	Text      string           `json:"text"`
-	Source    string           `json:"source"`
-	UpdatedAt int64            `json:"updatedAt"`
-	ExpiresAt int64            `json:"expiresAt"`
-	Expired   bool             `json:"expired"`
-	History   []MemoryRevision `json:"history"`
+	HistoryOffset int64            `json:"historyOffset,omitempty"`
+	ID            string           `json:"id"`
+	ProfileID     string           `json:"profileId"`
+	Text          string           `json:"text"`
+	Source        string           `json:"source"`
+	UpdatedAt     int64            `json:"updatedAt"`
+	ExpiresAt     int64            `json:"expiresAt"`
+	Expired       bool             `json:"expired"`
+	History       []MemoryRevision `json:"history"`
 }
 type PaperBot struct {
 	ID          string `json:"id"`
@@ -112,49 +114,52 @@ type AgentNotice struct {
 	Read      bool   `json:"read"`
 }
 type agentDocument struct {
-	Playbooks     []AgentPlaybook      `json:"playbooks,omitempty"`
-	NewsSources   []NewsSource         `json:"newsSources"`
-	NewsFetches   []NewsFetch          `json:"newsFetches"`
-	Profiles      []AgentProfile       `json:"profiles"`
-	Sessions      []AgentSession       `json:"sessions"`
-	Messages      []AgentMessage       `json:"messages"`
-	Memories      []AgentMemory        `json:"memories"`
-	Bots          []PaperBot           `json:"bots"`
-	Tasks         []AgentTask          `json:"tasks"`
-	Runs          []AgentRun           `json:"runs"`
-	Notices       []AgentNotice        `json:"notices"`
-	AIRequests    []AgentAIRequest     `json:"aiRequests"`
-	ResearchTurns []WENResearchTurn    `json:"researchTurns"`
-	WENRehearsal  *wenSessionWorkspace `json:"wenRehearsal,omitempty"`
+	ArchivedAISpentMicrousd map[string]int64     `json:"archivedAISpentMicrousd,omitempty"`
+	Playbooks               []AgentPlaybook      `json:"playbooks,omitempty"`
+	NewsSources             []NewsSource         `json:"newsSources"`
+	NewsFetches             []NewsFetch          `json:"newsFetches"`
+	Profiles                []AgentProfile       `json:"profiles"`
+	Sessions                []AgentSession       `json:"sessions"`
+	Messages                []AgentMessage       `json:"messages"`
+	Memories                []AgentMemory        `json:"memories"`
+	Bots                    []PaperBot           `json:"bots"`
+	Tasks                   []AgentTask          `json:"tasks"`
+	Runs                    []AgentRun           `json:"runs"`
+	Notices                 []AgentNotice        `json:"notices"`
+	AIRequests              []AgentAIRequest     `json:"aiRequests"`
+	ResearchTurns           []WENResearchTurn    `json:"researchTurns"`
+	WENRehearsal            *wenSessionWorkspace `json:"wenRehearsal,omitempty"`
 }
 type AgentView struct {
-	TaskReview           *TaskReview         `json:"taskReview,omitempty"`
-	TaskCapacity         TaskCapacity        `json:"taskCapacity"`
-	Playbooks            []AgentPlaybook     `json:"playbooks"`
-	PlaybookReview       *PlaybookReview     `json:"playbookReview,omitempty"`
-	TaskReminderReview   *TaskReminderReview `json:"taskReminderReview,omitempty"`
-	ReminderReview       *ReminderReview     `json:"reminderReview,omitempty"`
-	NewsSources          []NewsSource        `json:"newsSources"`
-	NewsFetches          []NewsFetch         `json:"newsFetches"`
-	AIRequests           []AgentAIRequest    `json:"aiRequests"`
-	AIFixtureAvailable   bool                `json:"aiFixtureAvailable"`
-	Revision             int64               `json:"revision"`
-	ProfileID            string              `json:"profileId"`
-	Profiles             []AgentProfile      `json:"profiles"`
-	Sessions             []AgentSession      `json:"sessions"`
-	Messages             []AgentMessage      `json:"messages"`
-	Memories             []AgentMemory       `json:"memories"`
-	Bots                 []PaperBot          `json:"bots"`
-	Tasks                []AgentTask         `json:"tasks"`
-	Runs                 []AgentRun          `json:"runs"`
-	Notices              []AgentNotice       `json:"notices"`
-	ProviderCallsEnabled bool                `json:"providerCallsEnabled"`
-	FinancialExecution   bool                `json:"financialExecution"`
+	ArchivedAISpentMicrousd int64               `json:"archivedAISpentMicrousd,omitempty"`
+	TaskReview              *TaskReview         `json:"taskReview,omitempty"`
+	TaskCapacity            TaskCapacity        `json:"taskCapacity"`
+	Playbooks               []AgentPlaybook     `json:"playbooks"`
+	PlaybookReview          *PlaybookReview     `json:"playbookReview,omitempty"`
+	TaskReminderReview      *TaskReminderReview `json:"taskReminderReview,omitempty"`
+	ReminderReview          *ReminderReview     `json:"reminderReview,omitempty"`
+	NewsSources             []NewsSource        `json:"newsSources"`
+	NewsFetches             []NewsFetch         `json:"newsFetches"`
+	AIRequests              []AgentAIRequest    `json:"aiRequests"`
+	AIFixtureAvailable      bool                `json:"aiFixtureAvailable"`
+	Revision                int64               `json:"revision"`
+	ProfileID               string              `json:"profileId"`
+	Profiles                []AgentProfile      `json:"profiles"`
+	Sessions                []AgentSession      `json:"sessions"`
+	Messages                []AgentMessage      `json:"messages"`
+	Memories                []AgentMemory       `json:"memories"`
+	Bots                    []PaperBot          `json:"bots"`
+	Tasks                   []AgentTask         `json:"tasks"`
+	Runs                    []AgentRun          `json:"runs"`
+	Notices                 []AgentNotice       `json:"notices"`
+	ProviderCallsEnabled    bool                `json:"providerCallsEnabled"`
+	FinancialExecution      bool                `json:"financialExecution"`
 }
 
 // Optional fields are inert data for a fixed action; unknown fields/actions are
 // rejected. No arbitrary callback, URL, model tool or shell can be submitted.
 type AgentCommand struct {
+	HistoryDays          int                  `json:"historyDays,omitempty"`
 	Calendar             *TaskCalendar        `json:"calendar,omitempty"`
 	PlaybookVersion      int                  `json:"playbookVersion,omitempty"`
 	SessionID            string               `json:"sessionId,omitempty"`
@@ -229,6 +234,22 @@ func readAgents(ctx context.Context, r snapshotReader) (agentDocument, int64, er
 			e = errors.New("agent storage exceeds local prototype capacity")
 		} else {
 			e = json.Unmarshal([]byte(b), &d)
+			if e == nil {
+				for _, p := range d.Profiles {
+					if !validHistoryDays(p.HistoryDays) {
+						e = errors.New("unsupported history policy; preserve records")
+						break
+					}
+				}
+			}
+			if e == nil {
+				for p, total := range d.ArchivedAISpentMicrousd {
+					if total < 0 || agentProfile(d, p) < 0 {
+						e = errors.New("unsupported archived journal total; preserve records")
+						break
+					}
+				}
+			}
 			if e == nil && len(d.Profiles) == 0 {
 				e = errors.New("missing agent profiles; preserve state")
 			}
@@ -263,7 +284,7 @@ func agentView(d agentDocument, revision int64, profile, query string, now int64
 	if agentProfile(d, profile) < 0 {
 		return AgentView{}, errors.New("profile not found")
 	}
-	v := AgentView{NewsSources: []NewsSource{}, NewsFetches: []NewsFetch{}, Revision: revision, ProfileID: profile, Profiles: d.Profiles, Sessions: []AgentSession{}, Messages: []AgentMessage{}, Memories: []AgentMemory{}, Bots: []PaperBot{}, Tasks: []AgentTask{}, Runs: []AgentRun{}, Notices: []AgentNotice{}, AIRequests: []AgentAIRequest{}}
+	v := AgentView{ArchivedAISpentMicrousd: d.ArchivedAISpentMicrousd[profile], NewsSources: []NewsSource{}, NewsFetches: []NewsFetch{}, Revision: revision, ProfileID: profile, Profiles: d.Profiles, Sessions: []AgentSession{}, Messages: []AgentMessage{}, Memories: []AgentMemory{}, Bots: []PaperBot{}, Tasks: []AgentTask{}, Runs: []AgentRun{}, Notices: []AgentNotice{}, AIRequests: []AgentAIRequest{}}
 	v.Playbooks = []AgentPlaybook{}
 	v.TaskCapacity = agentTaskCapacity(d)
 	for _, p := range d.Playbooks {
@@ -362,6 +383,11 @@ func validAgentText(v string, max int, required bool) bool {
 	return (!required || strings.TrimSpace(v) != "") && len(v) <= max && !strings.ContainsRune(v, 0)
 }
 func agentCapacity(d agentDocument) error {
+	for _, p := range d.Profiles {
+		if !validHistoryDays(p.HistoryDays) {
+			return errors.New("unsupported history policy; preserve records")
+		}
+	}
 	if e := validateCalendarTasks(d); e != nil {
 		return e
 	}
@@ -419,6 +445,9 @@ func (s *Store) ChangeAgents(ctx context.Context, c AgentCommand) (AgentView, er
 	return s.changeAgents(ctx, c, false)
 }
 func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) (AgentView, error) {
+	if c.HistoryDays != 0 && c.Action != "history-policy" {
+		return AgentView{}, errors.New("history settings require their own action")
+	}
 	if c.Calendar != nil && c.Action != "task-review" && c.Action != "task-reviewed-create" {
 		return AgentView{}, errors.New("calendar settings require reviewed task creation")
 	}
@@ -551,7 +580,7 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		if !validAgentText(c.Name, 80, true) || (c.Provider != "none" && c.Provider != "openai" && c.Provider != "anthropic" && c.Provider != "xai") {
 			return AgentView{}, errors.New("name and supported provider preference required")
 		}
-		d.Profiles[pi] = AgentProfile{ID: profile, Name: strings.TrimSpace(c.Name), Persona: c.Text, Provider: c.Provider, Model: c.Model}
+		d.Profiles[pi] = AgentProfile{ID: profile, Name: strings.TrimSpace(c.Name), Persona: c.Text, Provider: c.Provider, Model: c.Model, HistoryDays: d.Profiles[pi].HistoryDays}
 	case "session-create":
 		if !validAgentText(c.Name, 80, true) || len(d.Sessions) >= 100 {
 			return AgentView{}, errors.New("session name required or session limit reached")
@@ -568,7 +597,32 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 			return AgentView{}, errors.New("profile session and message required; maximum 200 messages")
 		}
 		d.Messages = append(d.Messages, AgentMessage{ID: id, ProfileID: profile, SessionID: c.ID, Role: "user", Text: c.Text, CreatedAt: now}, AgentMessage{ID: id + "-local", ProfileID: profile, SessionID: c.ID, Role: "system", Text: "Saved locally. No AI provider was called. Use Tasks for bounded reminders or paper examples.", CreatedAt: now})
+		remembered, err := rememberOwnerMessage(&d, profile, id, c.Text, now)
+		if err != nil {
+			return AgentView{}, err
+		}
+		if remembered {
+			d.Messages[len(d.Messages)-1].Text = "Remembered. You can correct or forget this in Memory."
+		}
+	case "history-policy":
+		if !validHistoryDays(c.HistoryDays) {
+			return AgentView{}, errors.New("choose off, 7, 30 or 90 days")
+		}
+		d.Profiles[pi].HistoryDays = c.HistoryDays
+	case "session-archive":
+		if e = archiveConversation(ctx, tx, &d, profile, c.ID, now); e != nil {
+			return AgentView{}, e
+		}
+	case "task-archive":
+		if e = archiveTask(ctx, tx, &d, profile, c.ID, now); e != nil {
+			return AgentView{}, e
+		}
 	case "memory-put":
+		if c.ID != "" {
+			if e = rollMemoryHistory(ctx, tx, &d, profile, c.ID, now); e != nil {
+				return AgentView{}, e
+			}
+		}
 		if e = putAgentMemory(&d, c, profile, id, now); e != nil {
 			return AgentView{}, e
 		}
@@ -688,6 +742,9 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 					d.Tasks[i].State = "paused"
 				}
 			case "task-resume":
+				if cronTask(t) && now > t.Calendar.Until {
+					return AgentView{}, errors.New("schedule ended; create a new reviewed task")
+				}
 				if t.AI != nil && (t.State != "paused" || !fixture || validateTaskAI(d, t, now) != nil) {
 					return AgentView{}, errors.New("AI task requires active fixture and unchanged unexpired consent")
 				}
@@ -822,6 +879,11 @@ func runAgentTask(d *agentDocument, i int, now int64) error {
 		return errors.New("local run/inbox capacity reached; no task executed")
 	}
 	t := &d.Tasks[i]
+	if cronTask(*t) && now > t.Calendar.Until {
+		t.State = "completed"
+		t.NextAt = 0
+		return nil
+	}
 	run := AgentRun{ID: fmt.Sprintf("%s:%d", t.ID, t.Runs+1), ProfileID: t.ProfileID, TaskID: t.ID, BotID: t.BotID, Strategy: "reminder-v1", At: now, Outcome: "reminded"}
 	if t.News != nil {
 		f, e := freshNews(*d, t.ProfileID, t.News, now)
@@ -862,7 +924,9 @@ func runAgentTask(d *agentDocument, i int, now int64) error {
 	if t.News != nil {
 		t.News.FetchID = ""
 	}
-	if t.Calendar == nil {
+	if cronTask(*t) {
+		advanceCron(t, now)
+	} else if t.Calendar == nil {
 		t.NextAt = now + t.IntervalSeconds
 	}
 	if t.Runs >= t.MaxRuns {
@@ -891,8 +955,11 @@ func (s *Store) runAgentTasks(ctx context.Context, fixture bool) error {
 	if e != nil {
 		return e
 	}
-	changed := false
 	now := s.now().Unix()
+	changed, e := archiveOldTasks(ctx, tx, &d, now)
+	if e != nil {
+		return e
+	}
 	for i, t := range d.Tasks {
 		if t.State == "scheduled" && t.Runs < t.MaxRuns && t.NextAt <= now {
 			if e = evaluateAgentTask(&d, i, now, fixture); e != nil {

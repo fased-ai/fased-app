@@ -73,6 +73,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { useCore } from "./core";
 import type { Provider } from "./state";
 export type AgentProfile = {
+  historyDays?: number;
   id: string;
   name: string;
   persona: string;
@@ -95,6 +96,7 @@ export type AgentMessage = {
 };
 export type ChatMemorySource = "message" | "answer";
 export type AgentMemory = {
+  historyOffset?: number;
   id: string;
   profileId: string;
   text: string;
@@ -178,7 +180,9 @@ export type WENPaperResult = {
   };
 };
 export type TaskCalendar = {
-  version: "once-at-v1";
+  version: "once-at-v1" | "cron-v1";
+  expression?: string;
+  until?: number;
   at: number;
   timeZone: string;
 };
@@ -345,6 +349,7 @@ export type PlaybookReview = {
   command: AgentCommand;
 };
 export type AgentView = {
+  archivedAISpentMicrousd?: number;
   taskReview?: TaskReview;
   taskCapacity?: {
     tasks: number;
@@ -410,7 +415,7 @@ export type AgentMemoryView = {
   source?: AgentMemoryEvidence;
 };
 export type AIMemorySelection = {
-  mode: "all" | "none" | "selected";
+  mode: "all" | "none" | "selected" | "relevant";
   ids?: string[];
 };
 export type AIEvidenceSelection = {
@@ -475,6 +480,7 @@ export type AgentEvidenceView = {
     }
 );
 export type AgentCommand = {
+  historyDays?: number;
   calendar?: TaskCalendar;
   playbookVersion?: number;
   sessionId?: string;

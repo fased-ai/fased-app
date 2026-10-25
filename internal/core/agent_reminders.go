@@ -131,7 +131,7 @@ func appendAgentTask(d *agentDocument, c AgentCommand, profile, id string, now i
 	next := now + c.IntervalSeconds
 	var calendar *TaskCalendar
 	if c.Calendar != nil {
-		copy := *c.Calendar
+		copy := *normalizedCalendar(c.Calendar, now)
 		calendar, next = &copy, copy.At
 	}
 	d.Tasks = append(d.Tasks, AgentTask{Calendar: calendar, News: news, ID: id, ProfileID: profile, Name: c.Name, Text: c.Text, BotID: c.BotID, IntervalSeconds: c.IntervalSeconds, MaxRuns: c.MaxRuns, NextAt: next, State: "scheduled"})

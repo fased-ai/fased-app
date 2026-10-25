@@ -70,6 +70,7 @@ func TestPublicAccountsRevisionRestartAndMigration(t *testing.T) {
 		t.Fatal(e)
 	}
 	// A typed disposable schema-1 DB with the exact preceding tables/data.
+	dropEmptyHistoryFixture(t, s)
 	if _, e = s.db.Exec("DROP TABLE agent_workspace; DROP TRIGGER update_pause_instance; DROP TABLE update_pause; DROP TABLE accounts; PRAGMA user_version=1;"); e != nil {
 		t.Fatal(e)
 	}

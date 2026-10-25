@@ -5,8 +5,8 @@ import { useCore } from "../core";
 import { NewsInputs } from "./NewsInputs";
 import { AIConnectionSettings } from "./AIConnection";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { BookOpen, Bot, Plus, Settings2 } from "../icons";
-import { Badge, SectionHead } from "../components/shared";
+import { BookOpen, Bot, Plus, Settings2, History } from "../icons";
+import { Badge, SectionHead, Dialog } from "../components/shared";
 import { useWorkspace } from "../workspace";
 import { providerNames, type Provider } from "../state";
 import type {
@@ -15,6 +15,7 @@ import type {
   AgentView,
 } from "../agents";
 import "../agents.css";
+import { TaskHistory } from "./TaskHistory";
 import { AgentTasks } from "./AgentTasks";
 import { AgentAIReview } from "./AgentAIReview";
 
@@ -120,6 +121,12 @@ function LocalAgentEditor({
   const { agents, tab, navigate } = useWorkspace();
   const { t } = useUI();
   const core = useCore();
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiveSearch, setArchiveSearch] = useState("");
+  const [archiveKind, setArchiveKind] = useState<"conversations" | "memories">(
+    "conversations",
+  );
+  const [archiveSource, setArchiveSource] = useState("");
   const [researchOpen, setResearchOpen] = useState(false);
   const [newConversation, setNewConversation] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
@@ -246,6 +253,35 @@ function LocalAgentEditor({
           }}
         />
       )}
+      {archiveOpen && (
+        <Dialog
+          title={t(
+            archiveKind === "memories"
+              ? "Memory history"
+              : "Archived conversations",
+          )}
+          wide
+          onClose={() => setArchiveOpen(false)}
+        >
+          <TaskHistory
+            key={v.profileId}
+            view={v}
+            kind={archiveKind}
+            initialSearch={archiveSearch}
+            initialSource={archiveSource}
+            onMemorySelected={(m) => {
+              setArchiveOpen(false);
+              editMemory(
+                {
+                  ...m,
+                  id: v.memories.some((note) => note.id === m.id) ? m.id : "",
+                },
+                v.revision,
+              );
+            }}
+          />
+        </Dialog>
+      )}
       {tab === "chat" && (
         <section
           className={`panel agent-chat ${activeSession ? "has-conversation" : ""} ${railOpen ? "rail-open" : ""}`}
@@ -260,7 +296,20 @@ function LocalAgentEditor({
           </button>
           <aside className="conversation-rail" aria-label="Conversations">
             <div className="rail-heading">
-              <h2>Conversations</h2>
+              <h2>{t("Conversations")}</h2>
+              <button
+                className="icon-button"
+                aria-label={t("Archived conversations")}
+                title={t("Archived conversations")}
+                onClick={() => {
+                  setArchiveKind("conversations");
+                  setArchiveSearch(search);
+                  setArchiveSource("");
+                  setArchiveOpen(true);
+                }}
+              >
+                <History size={15} />
+              </button>
               <button
                 className="text-button"
                 onClick={() => setNewConversation(!newConversation)}
@@ -335,7 +384,37 @@ function LocalAgentEditor({
             {activeSession ? (
               <>
                 <div className="chat-thread">
-                  <h3>{activeSession.name}</h3>
+                  <div className="panel-heading chat-thread-heading">
+                    <h3>{activeSession.name}</h3>
+                    <button
+                      className="icon-button"
+                      aria-label={t("Archive conversation")}
+                      title={t("Archive conversation")}
+                      disabled={agents.busy || !!message.trim()}
+                      onClick={async () => {
+                        if (
+                          await agents.change({
+                            action: "session-archive",
+                            id: activeSession.id,
+                          })
+                        ) {
+                          setSession("");
+                          setArchiveSearch("");
+                          setArchiveSource("");
+                          setArchiveKind("conversations");
+                          setArchiveOpen(true);
+                        }
+                      }}
+                    >
+                      <History size={15} />
+                    </button>
+                    <button
+                      className="text-button chat-context-button"
+                      onClick={() => setResearchOpen(!researchOpen)}
+                    >
+                      {t("Sources")}
+                    </button>
+                  </div>
                   <AgentAIReview
                     view={v}
                     sessionId={activeSession.id}
@@ -343,14 +422,22 @@ function LocalAgentEditor({
                       value: message,
                       onChange: (text) => updateMessage(activeSession.id, text),
                       onSave: async () => {
+                        const submitted = message;
+                        const thread = activeSession.id;
                         if (
                           await agents.change({
                             action: "message-add",
                             id: activeSession.id,
-                            text: message,
+                            text: submitted,
                           })
                         )
-                          updateMessage(activeSession.id, "");
+                          setMessageDrafts((current) => {
+                            if (current.get(thread) !== submitted)
+                              return current;
+                            const next = new Map(current);
+                            next.set(thread, "");
+                            return next;
+                          });
                       },
                     }}
                     researchSelection={
@@ -362,12 +449,6 @@ function LocalAgentEditor({
                     onClearResearch={() => setResearchSelection(undefined)}
                   />
                 </div>
-                <button
-                  className="text-button chat-context-button"
-                  onClick={() => setResearchOpen(!researchOpen)}
-                >
-                  {t("Sources")}
-                </button>
                 {researchOpen && core.mode === "ready" && (
                   <aside className="chat-review" aria-label="Source inspector">
                     <ResearchReadPanel
@@ -506,7 +587,7 @@ function LocalAgentEditor({
                 setMemoryOpen(true);
               }}
             >
-              New memory
+              {t("New memory")}
             </button>
             <Badge>PROFILE ONLY</Badge>
           </div>
@@ -514,10 +595,23 @@ function LocalAgentEditor({
             <div className="memory-library">
               <MemoryRecall
                 view={v}
+                onOlder={(m) => {
+                  setArchiveKind("memories");
+                  setArchiveSource("");
+                  setArchiveSearch(m.id);
+                  setArchiveOpen(true);
+                }}
                 onOpen={(source) => {
-                  setSession(source.sessionId!);
-                  setSearch("");
-                  navigate("agents/chat");
+                  if (v.sessions.some((s) => s.id === source.sessionId)) {
+                    setSession(source.sessionId!);
+                    setSearch("");
+                    navigate("agents/chat");
+                  } else {
+                    setArchiveKind("conversations");
+                    setArchiveSource(source.sessionId!);
+                    setArchiveSearch("");
+                    setArchiveOpen(true);
+                  }
                 }}
                 onCorrect={(m) => editMemory(m, v.revision)}
                 onRestore={(draft) =>
@@ -530,129 +624,134 @@ function LocalAgentEditor({
               />
             </div>
             {memoryOpen && (
-              <form
-                aria-label="Memory editor"
-                className="memory-editor"
-                onSubmit={submit(async () => {
-                  if (
-                    await agents.change({
-                      action: "memory-put",
-                      revision: memoryID ? memoryRevision.current : undefined,
-                      id: memoryID || undefined,
-                      text: memory,
-                      source,
-                      expiresAt: !memoryExpiryEdited
-                        ? memoryExpiryOriginal.current
-                        : expiry
-                          ? Math.floor(new Date(expiry).getTime() / 1000)
-                          : 0,
-                    })
-                  )
-                    resetMemory();
-                })}
-              >
-                <button
-                  type="button"
-                  className="text-button"
-                  onClick={resetMemory}
-                >
-                  Cancel memory edit
-                </button>
-                <h3>
-                  {memoryRestore
-                    ? "Restore a memory"
+              <Dialog
+                title={
+                  memoryRestore
+                    ? t("Restore a memory")
                     : memoryID
-                      ? "Correct a memory"
-                      : "Add a memory"}
-                </h3>
-                {memoryRestore && (
-                  <section aria-label="Memory restoration review">
-                    <article aria-label="Current memory revision">
-                      <h4>Current</h4>
-                      <p>{memoryRestore.current.text}</p>
-                      <small>
-                        {memoryRestore.current.source} · Updated{" "}
-                        {date(memoryRestore.current.at)} · Expiry{" "}
-                        {date(memoryRestore.current.expiresAt)}
-                      </small>
-                    </article>
-                    <article aria-label="Selected memory revision">
-                      <h4>
-                        Selected revision {memoryRestore.historyIndex + 1}
-                      </h4>
-                      <p>{memoryRestore.selected.text}</p>
-                      <small>
-                        {memoryRestore.selected.source} · Updated{" "}
-                        {date(memoryRestore.selected.at)} · Expiry{" "}
-                        {date(memoryRestore.selected.expiresAt)}
-                      </small>
-                    </article>
-                    {memoryRestore.selected.expiresAt > 0 &&
-                      memoryRestore.selected.expiresAt <= Date.now() / 1000 && (
-                        <p role="status">Expired revision</p>
-                      )}
-                    <section aria-label="Restoration source evidence">
-                      <h4>Recorded source</h4>
-                      <p>
-                        {memoryEvidenceStatuses[memoryRestore.evidence.status]}
-                      </p>
-                      {memoryRestore.evidence.text && (
-                        <blockquote>{memoryRestore.evidence.text}</blockquote>
+                      ? t("Correct a memory")
+                      : t("New memory")
+                }
+                onClose={resetMemory}
+              >
+                <form
+                  aria-label="Memory editor"
+                  className="memory-editor"
+                  onSubmit={submit(async () => {
+                    if (
+                      await agents.change({
+                        action: "memory-put",
+                        revision: memoryID ? memoryRevision.current : undefined,
+                        id: memoryID || undefined,
+                        text: memory,
+                        source: source.trim() || "Owner note",
+                        expiresAt: !memoryExpiryEdited
+                          ? memoryExpiryOriginal.current
+                          : expiry
+                            ? Math.floor(new Date(expiry).getTime() / 1000)
+                            : 0,
+                      })
+                    )
+                      resetMemory();
+                  })}
+                >
+                  {memoryRestore && (
+                    <section aria-label="Memory restoration review">
+                      <article aria-label="Current memory revision">
+                        <h4>Current</h4>
+                        <p>{memoryRestore.current.text}</p>
+                        <small>
+                          {memoryRestore.current.source} · Updated{" "}
+                          {date(memoryRestore.current.at)} · Expiry{" "}
+                          {date(memoryRestore.current.expiresAt)}
+                        </small>
+                      </article>
+                      <article aria-label="Selected memory revision">
+                        <h4>
+                          Selected revision {memoryRestore.historyIndex + 1}
+                        </h4>
+                        <p>{memoryRestore.selected.text}</p>
+                        <small>
+                          {memoryRestore.selected.source} · Updated{" "}
+                          {date(memoryRestore.selected.at)} · Expiry{" "}
+                          {date(memoryRestore.selected.expiresAt)}
+                        </small>
+                      </article>
+                      {memoryRestore.selected.expiresAt > 0 &&
+                        memoryRestore.selected.expiresAt <=
+                          Date.now() / 1000 && (
+                          <p role="status">Expired revision</p>
+                        )}
+                      <section aria-label="Restoration source evidence">
+                        <h4>Recorded source</h4>
+                        <p>
+                          {
+                            memoryEvidenceStatuses[
+                              memoryRestore.evidence.status
+                            ]
+                          }
+                        </p>
+                        {memoryRestore.evidence.text && (
+                          <blockquote>{memoryRestore.evidence.text}</blockquote>
+                        )}
+                      </section>
+                      {memoryRestore.revision !== v.revision && (
+                        <p role="status">
+                          Workspace changed. Review the restoration again.
+                        </p>
                       )}
                     </section>
-                    {memoryRestore.revision !== v.revision && (
-                      <p role="status">
-                        Workspace changed. Review the restoration again.
-                      </p>
-                    )}
-                  </section>
-                )}
-                <label>
-                  Memory note
-                  <textarea
-                    required
-                    maxLength={4000}
-                    value={memory}
-                    onChange={(e) => setMemory(e.target.value)}
-                  />
-                </label>
-                <label>
-                  Evidence or source
-                  <input
-                    required
-                    maxLength={300}
-                    value={source}
-                    onChange={(e) => setSource(e.target.value)}
-                    placeholder="e.g. Owner preference, reviewed today"
-                  />
-                </label>
-                <label>
-                  Expiry (optional)
-                  <input
-                    type="datetime-local"
-                    step="1"
-                    value={expiry}
-                    onChange={(e) => {
-                      setExpiry(e.target.value);
-                      setMemoryExpiryEdited(true);
-                    }}
-                  />
-                </label>
-                <div className="agent-inline">
-                  <button
-                    className="primary"
-                    disabled={
-                      agents.busy ||
-                      !!(memoryRestore && memoryRestore.revision !== v.revision)
-                    }
-                  >
-                    {memoryRestore
-                      ? "Save restored memory"
-                      : memoryID
-                        ? "Save correction"
-                        : "Save memory"}
-                  </button>
-                  {memoryID && (
+                  )}
+                  <label>
+                    {t("Memory note")}
+                    <textarea
+                      aria-label={t("Memory note")}
+                      required
+                      maxLength={4000}
+                      value={memory}
+                      onChange={(e) => setMemory(e.target.value)}
+                    />
+                  </label>
+                  <details className="task-inspection">
+                    <summary>{t("Source & expiry")}</summary>
+                    <label>
+                      Evidence or source
+                      <input
+                        maxLength={300}
+                        value={source}
+                        onChange={(e) => setSource(e.target.value)}
+                        placeholder="e.g. Owner preference, reviewed today"
+                      />
+                    </label>
+                    <label>
+                      Expiry (optional)
+                      <input
+                        type="datetime-local"
+                        step="1"
+                        value={expiry}
+                        onChange={(e) => {
+                          setExpiry(e.target.value);
+                          setMemoryExpiryEdited(true);
+                        }}
+                      />
+                    </label>
+                  </details>
+                  <div className="agent-inline">
+                    <button
+                      className="primary"
+                      disabled={
+                        agents.busy ||
+                        !!(
+                          memoryRestore && memoryRestore.revision !== v.revision
+                        )
+                      }
+                    >
+                      {memoryRestore
+                        ? t("Save restored memory")
+                        : memoryID
+                          ? t("Save correction")
+                          : t("Save memory")}
+                    </button>
                     <button
                       type="button"
                       className="secondary"
@@ -660,11 +759,13 @@ function LocalAgentEditor({
                     >
                       {memoryRestore
                         ? "Cancel restoration"
-                        : "Cancel correction"}
+                        : memoryID
+                          ? "Cancel correction"
+                          : "Cancel memory edit"}
                     </button>
-                  )}
-                </div>
-              </form>
+                  </div>
+                </form>
+              </Dialog>
             )}
           </div>
         </section>

@@ -190,6 +190,7 @@ func TestCalendarMigrationPreservesOriginalsAndRefusesUnprotectedFields(t *testi
 	s := fixtureStore(t)
 	agentApply(t, s, AgentCommand{Action: "task-create", ProfileID: "trading-analyst", Name: "Old interval", Text: "Retain this schedule", IntervalSeconds: 300, MaxRuns: 2})
 	before := retainedRevisionState(t, s)
+	dropEmptyHistoryFixture(t, s)
 	if _, err := s.db.Exec("PRAGMA user_version=16"); err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +207,7 @@ func TestCalendarMigrationPreservesOriginalsAndRefusesUnprotectedFields(t *testi
 		t.Fatal("migration rewrote original records/revision")
 	}
 	var schema int
-	if err = n.db.QueryRow("PRAGMA user_version").Scan(&schema); err != nil || schema != 17 || StateSchema != 17 {
+	if err = n.db.QueryRow("PRAGMA user_version").Scan(&schema); err != nil || schema != 18 || StateSchema != 18 {
 		t.Fatal("schema protection missing", schema, err)
 	}
 	b, _ := json.Marshal(UpdateContract())

@@ -1,3 +1,4 @@
+import { SlidersHorizontal, Trash2, Eye, History } from "../icons";
 import { useEffect, useRef, useState } from "react";
 import type {
   AgentMemory,
@@ -7,6 +8,7 @@ import type {
   AgentView,
 } from "../agents";
 import { useWorkspace } from "../workspace";
+import { useUI } from "../ui-preferences";
 
 export const memoryEvidenceStatuses: Record<
   AgentMemoryEvidence["status"],
@@ -24,16 +26,19 @@ const date = (at: number) =>
 
 export function MemoryRecall({
   view,
+  onOlder,
   onCorrect,
   onRestore,
   onOpen,
 }: {
   view: AgentView;
+  onOlder?: (memory: AgentMemory) => void;
   onCorrect: (memory: AgentMemory) => void;
   onRestore: (draft: AgentMemoryRestoreDraft) => void;
   onOpen: (source: AgentMemoryEvidence) => void;
 }) {
   const { core, agents } = useWorkspace();
+  const { t } = useUI();
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [readGeneration, setReadGeneration] = useState(0);
@@ -148,10 +153,7 @@ export function MemoryRecall({
           aria-label={`Memory ${m.id}`}
         >
           <p>{m.text}</p>
-          <small>
-            Updated {date(m.updatedAt)} ·{" "}
-            {m.expired ? "Expired" : date(m.expiresAt)}
-          </small>
+          {m.expired && <small>Expired</small>}
           <div className="agent-inline">
             <button
               className="text-button"
@@ -159,8 +161,10 @@ export function MemoryRecall({
                 agents.busy || busy || records.revision !== view.revision
               }
               onClick={() => onCorrect(m)}
+              aria-label={t("Correct note")}
+              title={t("Correct note")}
             >
-              Correct note
+              <SlidersHorizontal size={15} />
             </button>
             <button
               className="text-button"
@@ -170,8 +174,10 @@ export function MemoryRecall({
               onClick={() =>
                 void agents.change({ action: "memory-delete", id: m.id })
               }
+              aria-label={t("Delete note")}
+              title={t("Delete note")}
             >
-              Delete note
+              <Trash2 size={15} />
             </button>
             <button
               className="text-button"
@@ -179,9 +185,21 @@ export function MemoryRecall({
                 agents.busy || busy || records.revision !== view.revision
               }
               onClick={() => void inspect(m.id)}
+              aria-label={t("Inspect source")}
+              title={t("Inspect source")}
             >
-              Inspect source
+              <Eye size={15} />
             </button>
+            {onOlder && (
+              <button
+                className="icon-button"
+                aria-label={t("Older memory revisions")}
+                title={t("Older memory revisions")}
+                onClick={() => onOlder(m)}
+              >
+                <History size={15} />
+              </button>
+            )}
           </div>
           {m.history.length > 0 && (
             <details>
@@ -196,10 +214,7 @@ export function MemoryRecall({
                   <button
                     className="text-button"
                     disabled={
-                      agents.busy ||
-                      busy ||
-                      records.revision !== view.revision ||
-                      m.history.length >= 8
+                      agents.busy || busy || records.revision !== view.revision
                     }
                     onClick={() => void restore(m.id, i)}
                   >
@@ -207,9 +222,6 @@ export function MemoryRecall({
                   </button>
                 </section>
               ))}
-              {m.history.length >= 8 && (
-                <p role="status">Correction history full.</p>
-              )}
             </details>
           )}
           {source?.memoryId === m.id && (

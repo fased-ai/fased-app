@@ -11,38 +11,53 @@ import (
 	_ "time/tzdata"
 )
 
-// TaskCalendar is an absolute one-time instant. The named zone is display
-// metadata, never the server's local timezone or a repeating wall-clock rule.
+// TaskCalendar is a versioned reviewed schedule. Once-at keeps its absolute
+// instant; cron evaluates named-zone wall time within a fixed bounded horizon.
 type TaskCalendar struct {
-	Version  string `json:"version"`
-	At       int64  `json:"at"`
-	TimeZone string `json:"timeZone"`
+	Expression string `json:"expression,omitempty"`
+	Until      int64  `json:"until,omitempty"`
+	Version    string `json:"version"`
+	At         int64  `json:"at"`
+	TimeZone   string `json:"timeZone"`
 }
 
 func validCalendar(c *TaskCalendar) bool {
-	if c == nil || c.Version != "once-at-v1" || c.At <= 0 || c.TimeZone == "Local" || !validAgentText(c.TimeZone, 120, true) {
+	if c == nil || c.TimeZone == "Local" || !validAgentText(c.TimeZone, 120, true) {
 		return false
 	}
 	_, err := time.LoadLocation(c.TimeZone)
-	return err == nil
+	if err != nil {
+		return false
+	}
+	if c.Version == "cron-v1" {
+		return validCron(c)
+	}
+	return c.Version == "once-at-v1" && c.At > 0 && c.Expression == "" && c.Until == 0
 }
 
 func validateCalendarCommand(c AgentCommand, now int64) error {
 	if c.Calendar == nil {
 		return nil
 	}
-	if !validCalendar(c.Calendar) || c.Calendar.At < now+60 || c.Calendar.At > now+366*86400 {
+	if c.Calendar.Version == "cron-v1" {
+		if _, e := parseCron(c.Calendar.Expression); e != nil {
+			return e
+		}
+	}
+	calendar := normalizedCalendar(c.Calendar, now)
+	if !validCalendar(calendar) || calendar.At < now+60 || calendar.At > now+366*86400 || (calendar.Version == "cron-v1" && calendar.Until > now+366*86400) {
 		return errors.New("choose a valid timezone and a date 1 minute–366 days ahead")
 	}
-	if c.IntervalSeconds != 0 || c.MaxRuns != 1 || c.BotID != "" || c.NewsSourceID != "" || c.NewsMaxAgeSeconds != 0 {
-		return errors.New("calendar schedules support one plain reminder, without interval, bot or news inputs")
+	if c.IntervalSeconds != 0 || (calendar.Version == "once-at-v1" && c.MaxRuns != 1) || c.BotID != "" || c.NewsSourceID != "" || c.NewsMaxAgeSeconds != 0 {
+		return errors.New("calendar schedules support plain reminders without interval, bot or news inputs")
 	}
 	return nil
 }
 
 func validCalendarTask(t AgentTask) bool {
-	return validCalendar(t.Calendar) && t.IntervalSeconds == 0 && t.MaxRuns == 1 && t.Runs >= 0 && t.Runs <= 1 && t.NextAt == t.Calendar.At && t.AI == nil && t.News == nil && t.BotID == "" && t.WEN == nil && t.Playbook == nil && validAgentText(t.Text, 4000, true) &&
-		(t.State == "scheduled" || t.State == "paused" || t.State == "completed") && ((t.State == "completed") == (t.Runs == 1))
+	policy := (cronTask(t) && validCronTask(t)) || (!cronTask(t) && validCalendar(t.Calendar) && t.MaxRuns == 1 && t.Runs >= 0 && t.Runs <= 1 && t.NextAt == t.Calendar.At && ((t.State == "completed") == (t.Runs == 1)))
+	return policy && t.IntervalSeconds == 0 && t.AI == nil && t.News == nil && t.BotID == "" && t.WEN == nil && t.Playbook == nil && validAgentText(t.Text, 4000, true) &&
+		(t.State == "scheduled" || t.State == "paused" || t.State == "completed")
 }
 
 func validateCalendarTasks(d agentDocument) error {
@@ -68,6 +83,15 @@ func validateCalendarStorage(raw []byte, d agentDocument) error {
 			}
 		}
 		if b, ok := t["calendar"]; ok {
+			var fields map[string]json.RawMessage
+			if json.Unmarshal(b, &fields) != nil {
+				return errors.New("invalid calendar fields; preserve state")
+			}
+			for key := range fields {
+				if key != "version" && key != "at" && key != "timeZone" && key != "expression" && key != "until" {
+					return errors.New("unsupported calendar fields; preserve state")
+				}
+			}
 			var c *TaskCalendar
 			dec := json.NewDecoder(bytes.NewReader(b))
 			dec.DisallowUnknownFields()

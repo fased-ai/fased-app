@@ -671,6 +671,7 @@ func TestNewsPauseCancellationAndSchema7(t *testing.T) {
 	for _, paused := range []bool{false, true} {
 		s := newsTestStore(t)
 		v := newsAdd(t, s, "trading-analyst")
+		dropEmptyHistoryFixture(t, s)
 		_, _ = s.db.Exec("PRAGMA user_version=7")
 		if paused {
 			_, _ = s.db.Exec("UPDATE update_pause SET phase='paused'")

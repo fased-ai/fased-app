@@ -163,6 +163,7 @@ func TestWENPaperCapacityAndPausedMigration(t *testing.T) {
 		t.Fatal("reserved inbox stolen")
 	}
 	tx.Rollback()
+	dropEmptyHistoryFixture(t, s)
 	if _, err = s.db.Exec("UPDATE update_pause SET phase='paused' WHERE id=1; PRAGMA user_version=9"); err != nil {
 		t.Fatal(err)
 	}

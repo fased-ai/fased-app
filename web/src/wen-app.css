@@ -445,11 +445,15 @@
   min-width: 0;
   min-height: 0;
 }
-.wt .chat-thread > h3 {
-  min-height: 42px;
-  padding: 12px 86px 10px 16px;
-  border-bottom: 1px solid var(--line);
-  font-weight: 500;
+.wt .chat-thread-heading {
+  flex: 0 0 auto;
+}
+.wt .chat-thread-heading h3 {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .wt .chat-empty {
   display: grid;
@@ -460,9 +464,7 @@
   color: var(--wt-muted);
 }
 .wt .chat-context-button {
-  position: absolute;
-  top: 5px;
-  right: 10px;
+  flex: 0 0 auto;
 }
 .wt .chat-review {
   position: absolute;
@@ -717,6 +719,9 @@
   min-height: 25px;
   font-size: 11px;
   padding: 2px 6px;
+}
+.wt .tasks-screen {
+  min-width: 0;
 }
 .wt .tasks-toolbar {
   display: flex;
@@ -1084,14 +1089,10 @@
   .wt .has-conversation:not(.rail-open) {
     grid-template-rows: auto minmax(0, 1fr);
   }
-  .wt .chat-thread > h3 {
+  .wt .chat-thread-heading h3 {
     font-size: 12px;
-    padding: 10px 65px 9px 12px;
-    min-height: 36px;
   }
   .wt .chat-context-button {
-    right: 3px;
-    top: 3px;
     font-size: 10px;
   }
   .wt .chat-review {
@@ -1236,9 +1237,6 @@
   height: 100%;
   border-left: 1px solid var(--line);
 }
-.wt .with-inspector > .chat-context-button {
-  display: none;
-}
 .wt .connection-options {
   padding: 10px 12px;
 }
@@ -1313,6 +1311,9 @@
     display: flex;
     flex-direction: column;
     gap: 0;
+  }
+  .wt .main-content:has(> .local-agents) > .section-head {
+    flex-shrink: 0;
   }
   .wt .context-panel {
     top: 44px;

@@ -68,8 +68,8 @@ func (s *Store) AgentMemoryRestore(ctx context.Context, profile, id string, inde
 	if profiles != 1 || matches != 1 || selected == nil || len(d.Memories) > 100 {
 		return AgentMemoryRestoreDraft{}, errors.New("profile memory unavailable or ambiguous")
 	}
-	if len(selected.History) >= 8 {
-		return AgentMemoryRestoreDraft{}, errors.New("memory correction history limit reached")
+	if len(selected.History) > 8 || selected.HistoryOffset < 0 {
+		return AgentMemoryRestoreDraft{}, errors.New("unsupported memory history; preserve records")
 	}
 	if index >= len(selected.History) {
 		return AgentMemoryRestoreDraft{}, errors.New("retained memory revision unavailable")
@@ -83,6 +83,9 @@ func (s *Store) AgentMemoryRestore(ctx context.Context, profile, id string, inde
 	}
 	priorMemory := *selected
 	priorMemory.Source = prior.Source
+	if err := hydrateMemorySource(ctx, s.db, &d, priorMemory); err != nil {
+		return AgentMemoryRestoreDraft{}, err
+	}
 	return AgentMemoryRestoreDraft{
 		Version: "memory-restore-draft-v1", Revision: revision, ProfileID: profile, MemoryID: id, HistoryIndex: index,
 		Current: current, Selected: prior, Evidence: inspectMemorySource(d, priorMemory),
@@ -128,6 +131,9 @@ func (s *Store) AgentMemories(ctx context.Context, profile, query, id string) (A
 	if id != "" {
 		if matches != 1 || selected == nil {
 			return AgentMemoryView{}, errors.New("profile memory unavailable or ambiguous")
+		}
+		if err := hydrateMemorySource(ctx, s.db, &d, *selected); err != nil {
+			return AgentMemoryView{}, err
 		}
 		evidence := inspectMemorySource(d, *selected)
 		v.Source = &evidence

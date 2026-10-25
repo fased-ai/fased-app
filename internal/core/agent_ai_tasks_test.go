@@ -239,6 +239,7 @@ func TestTaskAIReviewExpiryCapacityAndMigration(t *testing.T) {
 		t.Run(fmt.Sprint("schema5-", paused), func(t *testing.T) {
 			s := fixtureStore(t)
 			v := taskAIPlan(t, s, 1)
+			dropEmptyHistoryFixture(t, s)
 			if _, e := s.db.Exec("PRAGMA user_version=5"); e != nil {
 				t.Fatal(e)
 			}

@@ -9,6 +9,38 @@ import (
 func (h *HTTPHandler) agentsAPI(w http.ResponseWriter, r *http.Request, token string) {
 	if r.Method == http.MethodGet {
 		q := r.URL.Query()
+		if q.Has("history") || q.Has("before") || q.Has("history-task") || q.Has("history-q") {
+			for key, values := range q {
+				if (key != "profile" && key != "history" && key != "before" && key != "history-task" && key != "history-q") || len(values) != 1 {
+					writeError(w, 400, "one profile and history page or task expected")
+					return
+				}
+			}
+			if q.Get("history") != "tasks" && q.Get("history") != "conversations" && q.Get("history") != "memories" {
+				writeError(w, 400, "select task history")
+				return
+			}
+			before := int64(0)
+			var err error
+			if q.Has("before") {
+				before, err = strconv.ParseInt(q.Get("before"), 10, 64)
+				if err != nil || before < 0 || strconv.FormatInt(before, 10) != q.Get("before") {
+					writeError(w, 400, "invalid history cursor")
+					return
+				}
+			}
+			if q.Has("history-task") && q.Get("history-task") == "" {
+				writeError(w, 400, "select one archived task")
+				return
+			}
+			view, err := h.store.AgentTaskHistory(r.Context(), q.Get("profile"), before, q.Get("history-task"), q.Get("history"), q.Get("history-q"))
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			writeJSON(w, 200, view)
+			return
+		}
 		if q.Has("playbook-draft") || q.Has("playbook-version") {
 			for key, values := range q {
 				if (key != "profile" && key != "playbook-draft" && key != "playbook-version") || len(values) != 1 {

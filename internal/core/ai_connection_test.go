@@ -343,6 +343,7 @@ func TestAIConnectionTLSAdmissionAndOwnerAPI(t *testing.T) {
 func TestAIConnectionSchema6MigrationGuard(t *testing.T) {
 	for _, paused := range []bool{false, true} {
 		s := fixtureStore(t)
+		dropEmptyHistoryFixture(t, s)
 		_, _ = s.db.Exec("PRAGMA user_version=6")
 		if paused {
 			_, _ = s.db.Exec("UPDATE update_pause SET phase='paused'")

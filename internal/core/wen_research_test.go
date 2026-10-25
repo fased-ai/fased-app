@@ -92,6 +92,7 @@ func TestWENResearchHTTPAuthority(t *testing.T) {
 func TestWENResearchSchema10MigrationAndNewerRefusal(t *testing.T) {
 	s := fixtureStore(t)
 	dir := s.dir
+	dropEmptyHistoryFixture(t, s)
 	s.db.Exec("DROP TABLE wen_research; PRAGMA user_version=10;")
 	s.Close()
 	n, e := OpenStore(dir)

@@ -37,7 +37,12 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	evidence := flags.String("evidence", "", "read-only inspection: memory, headline or reminder-run")
 	evidenceID := flags.String("evidence-id", "", "one saved source identity")
 	evidenceItem := flags.String("evidence-item", "", "item identity for headline inspection only")
-	change := flags.Bool("request-stdin", false, "read one revision-checked local agent command JSON (including ai-prepare memorySelection (all/none/selected IDs), news-item-explain, task-run-explain, memory-chat-save and ai-reminder-review/create); no credentials")
+	history := flags.Bool("history", false, "read immutable completed reminder history; no execution authority")
+	historyKind := flags.String("history-kind", "tasks", "tasks, conversations or memories")
+	historyQuery := flags.String("history-search", "", "search archived task text or conversation questions/answers")
+	historyTask := flags.String("history-task", "", "inspect/export one archived task with --history")
+	before := flags.Int64("before", 0, "read the next --history page before this archive row")
+	change := flags.Bool("request-stdin", false, "read one revision-checked local agent command JSON (including ai-prepare memorySelection (relevant/all/none/selected IDs), news-item-explain, task-run-explain, memory-chat-save and ai-reminder-review/create); no credentials")
 	if e = flags.Parse(args); e != nil {
 		return e
 	}
@@ -86,6 +91,11 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	if flags.NArg() != 0 || (*change && (*profile != "" || *search != "")) {
 		return errors.New("use scoped reading or one command from stdin")
 	}
+	if *history || *historyTask != "" || *before != 0 || *historyKind != "tasks" || *historyQuery != "" {
+		if !*history || (*historyKind != "tasks" && *historyKind != "conversations" && *historyKind != "memories") || *profile == "" || *before < 0 || (*before != 0 && *historyTask != "") || *change || memoryMode || evidenceMode || draftSet || reminderDraftSet || restoreSet || playbookSet || chatSearchSet {
+			return errors.New("use --profile PROFILE --history with optional --before CURSOR or --history-task ID")
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	c, e := core.NewClient(ctx, *dir)
@@ -95,6 +105,23 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	defer c.Close()
 	if e = c.LoadSession(ctx, *dir); e != nil {
 		return e
+	}
+	if *history {
+		q := url.Values{"profile": {*profile}, "history": {*historyKind}}
+		if *historyQuery != "" {
+			q.Set("history-q", *historyQuery)
+		}
+		if *before != 0 {
+			q.Set("before", strconv.FormatInt(*before, 10))
+		}
+		if *historyTask != "" {
+			q.Set("history-task", *historyTask)
+		}
+		var v core.TaskHistoryView
+		if e = c.Do(ctx, http.MethodGet, "/api/v1/agents?"+q.Encode(), nil, &v); e != nil {
+			return e
+		}
+		return json.NewEncoder(out).Encode(v)
 	}
 	if playbookSet {
 		q := url.Values{"profile": {*profile}, "playbook-draft": {*playbookDraft}, "playbook-version": {strconv.Itoa(*playbookVersion)}}

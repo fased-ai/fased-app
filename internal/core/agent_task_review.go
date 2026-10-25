@@ -68,7 +68,7 @@ func reviewAgentTask(d agentDocument, c AgentCommand, profile string, revision, 
 	}
 	var calendar *TaskCalendar
 	if c.Calendar != nil {
-		copy := *c.Calendar
+		copy := *normalizedCalendar(c.Calendar, now)
 		calendar = &copy
 	}
 	r := &TaskReview{Calendar: calendar, Version: "task-review-v1", Revision: revision, ProfileID: profile, Name: c.Name, Text: c.Text, News: news, IntervalSeconds: c.IntervalSeconds, MaxRuns: c.MaxRuns, ExpiresAt: expires}
