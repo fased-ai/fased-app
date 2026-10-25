@@ -523,6 +523,7 @@ func TestWENResearchLoopCompatibility(t *testing.T) {
 					d.AIRequests[0].HeldMicrousd = 100
 					d.ResearchTurns[0].State = "held"
 				})
+				dropEmptyHistoryFixture(t, s)
 				s.db.Exec("PRAGMA user_version=12")
 				if mode == "paused-12" {
 					s.db.Exec("UPDATE update_pause SET phase='paused' WHERE id=1")

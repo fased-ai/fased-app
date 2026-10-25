@@ -50,6 +50,7 @@ func TestWENResearchAILegacyHolds(t *testing.T) {
 		d.AIRequests[0].State = "unknown"
 		d.AIRequests[0].HeldMicrousd = 100
 	})
+	dropEmptyHistoryFixture(t, s)
 	s.db.Exec("PRAGMA user_version=11")
 	n, e := OpenStore(s.dir)
 	if e != nil {
