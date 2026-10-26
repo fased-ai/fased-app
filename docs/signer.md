@@ -91,11 +91,20 @@ local wire protocol. Setup/import, bounded manual unlock, verified encrypted
 backup and recovery use the existing owner helper and three-UID isolation.
 Recovery keeps the public key/wallet ID, creates a new authority epoch and
 stays locked with a recovery hold. Raw fixture export, fixture grants and
-all signing/financial/update mutations refuse this mode. Owner-only update
-inventory and cold inspection report v2 vault bytes, immutable key history and
-the recovery hold; they neither unlock nor replace files. They do not invent
-a fixture ledger, update sequence or mock receipts. V1 update controllers and
-reader bootstrap refuse v2 installations. Its key-history
+all signing/financial mutations refuse this mode. Owner-only update inventory
+and cold inspection report v2 vault bytes, key history and the recovery hold.
+Explicitly reviewed development updates use the existing prepare/stage/pause/
+backup/install/complete controller with `custody-compatibility` contracts.
+Maintenance records append only to the existing key-history journal; they never
+create fixture grants or mock receipts. Release floors survive abort, rollback,
+restart and key recovery. Binary replacement never rewrites encrypted wallet
+bytes, clears the recovery hold or unlocks a key.
+
+Both installed and candidate binaries must advertise the same managed maintenance
+format. Earlier v2 readers reject extended history, and incompatible rollback
+candidates are refused before replacement. Reader bootstrap remains v1-only;
+this does not silently upgrade an existing pre-maintenance v2 installation.
+All candidates/trust used for acceptance are disposable and unpublished. Its key-history
 record cannot contain fixture policies, grants, transactions or mock outcomes.
 Missing/conflicting history and interrupted publication preserve originals;
 ordinary and predecessor readers refuse the new format.

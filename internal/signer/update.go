@@ -17,3 +17,10 @@ func UpdateContract() update.Contract {
 			{Name: "mock-receipts", Versions: update.Range{Min: JournalFormat, Max: JournalFormat}, Features: []string{"mock-outcomes-v1"}},
 		}}
 }
+
+func ManagedUpdateContract() update.Contract {
+	return update.Contract{Version: 1, Component: "signer", Protocol: 2, PeerProtocol: update.Range{Min: 1, Max: 1}, Features: []string{"managed-custody-updates-v2"}, RequiresPeer: []string{"managed-custody-updates-v2"}, State: []update.StateSupport{
+		{Name: "vault", Versions: update.Range{Min: 2, Max: 2}, Features: []string{"managed-key-v2", "authority-epoch-v1"}},
+		{Name: "operations", Versions: update.Range{Min: 1, Max: 1}, Features: []string{"managed-key-history-v1", "managed-maintenance-v2", "install-completion-v1"}},
+	}}
+}

@@ -74,7 +74,7 @@ func execute(v *Vault, r Request, owner bool) Response {
 	}
 	if v.network != "" {
 		switch r.Action {
-		case "status", "create", "import-managed-seed", "unlock", "lock", "backup", "verify-backup", "restore", "fixture-update-inventory":
+		case "status", "create", "import-managed-seed", "unlock", "lock", "backup", "verify-backup", "restore", "fixture-update-inventory", "fixture-update-status", "fixture-update-prepare", "fixture-update-abort", "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish", "fixture-update-preflight", "fixture-install-controller":
 		default:
 			return Response{Error: ErrUnavailable.Error()}
 		}

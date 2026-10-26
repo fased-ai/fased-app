@@ -51,7 +51,7 @@ func InspectUpdate(c Config, id string) (Response, error) {
 		return Response{}, e
 	}
 	defer v.Close()
-	if c.Version == 2 {
+	if c.Version == 2 && id == "" {
 		if id != "" {
 			return Response{}, ErrUnavailable
 		}

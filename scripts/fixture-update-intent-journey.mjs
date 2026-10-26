@@ -29,9 +29,12 @@ export async function fixtureUpdateIntentJourney({
   env,
   url,
   appPassword,
+  networkMode = false,
 }) {
   assert(process.getuid() > 0);
-  const evidence = path.resolve(".evidence/p4-complete");
+  const evidence = path.resolve(
+    networkMode ? ".evidence/p4-network-complete" : ".evidence/p4-complete",
+  );
   await mkdir(evidence, { recursive: true });
   const checks = {};
   const pass = (name, value) => {
@@ -331,16 +334,24 @@ export async function fixtureUpdateIntentJourney({
   }
   const contracts = [
     JSON.parse(
-      execFileSync(root + "/fased-app", ["updates", "compatibility"], {
-        encoding: "utf8",
-        env,
-      }),
+      execFileSync(
+        root + "/fased-app",
+        ["updates", networkMode ? "custody-compatibility" : "compatibility"],
+        {
+          encoding: "utf8",
+          env,
+        },
+      ),
     ).contract,
     JSON.parse(
-      execFileSync(root + "/fased-signer", ["fixture-compatibility"], {
-        encoding: "utf8",
-        env,
-      }),
+      execFileSync(
+        root + "/fased-signer",
+        [networkMode ? "custody-compatibility" : "fixture-compatibility"],
+        {
+          encoding: "utf8",
+          env,
+        },
+      ),
     ),
   ];
   const manifest = {
@@ -845,8 +856,12 @@ finally:
         current.signer.unknown === before.signer.unknown &&
         current.signer.states.find((s) => s.name === "vault").anchor ===
           before.signer.states.find((s) => s.name === "vault").anchor &&
-        current.signer.states.find((s) => s.name === "mock-receipts").anchor ===
-          before.signer.states.find((s) => s.name === "mock-receipts").anchor,
+        (networkMode
+          ? current.signer.states.every((s) => s.name !== "mock-receipts")
+          : current.signer.states.find((s) => s.name === "mock-receipts")
+              .anchor ===
+            before.signer.states.find((s) => s.name === "mock-receipts")
+              .anchor),
     );
     await saveManifest(1);
     pass(

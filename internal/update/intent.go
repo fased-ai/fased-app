@@ -74,7 +74,7 @@ type IntentRequest struct {
 func JoinSnapshots(c CoreSnapshot, s SignerSnapshot, target Target) (Inventory, error) {
 	snapshotOK := s.Version == 1 && len(s.States) == 3
 	if s.Version == 2 {
-		snapshotOK = len(s.States) == 2 && s.States[0].Name == "vault" && s.States[0].Version == 2 && s.States[1].Name == "operations" && s.States[1].Version == 1 && s.RecoveryHold && s.Spent == 0 && s.Held == 0 && s.Pending == 0 && s.Unknown == 0 && s.SequenceFloor == 0 && s.InstalledSequence == 0 && s.ActiveIntentID == ""
+		snapshotOK = len(s.States) == 2 && s.States[0].Name == "vault" && s.States[0].Version == 2 && s.States[1].Name == "operations" && s.States[1].Version == 1 && s.RecoveryHold && s.Spent == 0 && s.Held == 0 && s.Pending == 0 && s.Unknown == 0 && s.InstalledSequence <= s.SequenceFloor
 	}
 	if c.Version != 1 || !snapshotOK || !IDOK(c.ProbeID) || c.ProbeID != s.ProbeID || !IDOK(c.BootID) || !IDOK(s.BootID) || !tokenOK(c.InstanceID) || !hashOK(s.AuthoritySHA256) || c.State.Name != "core-db" || s.ActiveIntentID != "" && !IDOK(s.ActiveIntentID) {
 		return Inventory{}, errors.New("invalid service snapshot identity")
@@ -83,6 +83,9 @@ func JoinSnapshots(c CoreSnapshot, s SignerSnapshot, target Target) (Inventory, 
 	return Inventory{Version: 1, FixtureOnly: true, Target: target, SequenceFloor: s.SequenceFloor, States: states, Pending: s.Pending, Unknown: s.Unknown, RecoveryHold: s.RecoveryHold}, nil
 }
 func ValidateIntent(i Intent) error {
+	if i.Signer.Version == 2 && !ManagedContracts(i.Contracts) {
+		return errors.New("managed maintenance contracts required")
+	}
 	if i.Lifecycle != nil && i.Lifecycle.Entrypoint >= 3 && i.ManifestExpiresAt <= i.CreatedAt {
 		return errors.New("controller-aware intents require signed manifest expiry")
 	}
@@ -96,7 +99,7 @@ func ValidateIntent(i Intent) error {
 	if e != nil {
 		return e
 	}
-	if len(inv.States) != 4 || inv.Pending < 0 || inv.Unknown < 0 || inv.Unknown > inv.Pending {
+	if (i.Signer.Version == 1 && len(inv.States) != 4 || i.Signer.Version == 2 && len(inv.States) != 3) || inv.Pending < 0 || inv.Unknown < 0 || inv.Unknown > inv.Pending {
 		return errors.New("invalid intent state")
 	}
 	return nil

@@ -37,9 +37,9 @@ func (v *Vault) importManagedSeed(seed, password []byte) error {
 }
 
 // There are no financial operations in this format. Preserve an immutable key
-// lifecycle record rather than minting fixture grants or mock transaction history.
+// lifecycle record followed only by reviewed maintenance transitions.
 func managedHistory(records []journalRecord) (*AccountRef, error) {
-	if len(records) != 1 {
+	if len(records) < 1 {
 		return nil, errors.New("incomplete managed key history")
 	}
 	r := records[0]
@@ -51,6 +51,14 @@ func managedHistory(records []journalRecord) (*AccountRef, error) {
 		return nil, errors.New("managed key history cannot carry financial authority")
 	}
 	ref := *r.Account
+	l := newLedger()
+	l.ref = ref
+	l.lastTime = r.At
+	for _, record := range records[1:] {
+		if err := l.apply(record); err != nil {
+			return nil, err
+		}
+	}
 	return &ref, nil
 }
 func (v *Vault) openManagedHistory() error {
@@ -58,7 +66,7 @@ func (v *Vault) openManagedHistory() error {
 	if _, _, err := v.store.readJournal("mock-receipts.log"); !errors.Is(err, os.ErrNotExist) {
 		return errors.New("mixed or unreadable managed key history")
 	}
-	_, records, err := v.store.readJournal("operations.log")
+	main, records, err := v.store.readJournal("operations.log")
 	if errors.Is(err, os.ErrNotExist) && v.record == nil {
 		return nil
 	}
@@ -73,6 +81,19 @@ func (v *Vault) openManagedHistory() error {
 		return errors.New("managed key history identity mismatch")
 	}
 	v.managedRef = ref
+	l := newLedger()
+	l.main = main
+	l.ref = *ref
+	l.lastTime = records[0].At
+	for _, r := range records[1:] {
+		if err := l.apply(r); err != nil {
+			return err
+		}
+	}
+	if v.record != nil && len(records) > 1 && v.record.Ref.SignerID != ref.SignerID {
+		return errors.New("maintenance history belongs to another installation")
+	}
+	v.ledger = l
 	return nil
 }
 func (s *storage) ensureManagedHistory(e envelope) error {
@@ -96,10 +117,10 @@ func (s *storage) ensureManagedHistory(e envelope) error {
 	return s.appendJournal(&journal{name: "operations.log"}, journalRecord{Kind: "managed-key-init", Account: &e.Ref, MissingHistory: true, At: time.Now().Unix()})
 }
 
-// managedUpdateSnapshot describes custody bytes without inventing a financial
-// ledger, sequence floor or permission to replace a recovery-held installation.
+// managedUpdateSnapshot binds custody bytes and maintenance floors without
+// granting financial authority or clearing the recovery hold.
 func (v *Vault) managedUpdateSnapshot(probe string) (update.SignerSnapshot, error) {
-	if !update.IDOK(probe) || v.closed || v.store.failedState() || v.record == nil || v.managedRef == nil {
+	if !update.IDOK(probe) || v.closed || v.store.failedState() || v.record == nil || v.managedRef == nil || v.ledger == nil {
 		return update.SignerSnapshot{}, ErrUnavailable
 	}
 	b, err := v.store.read()
@@ -115,15 +136,15 @@ func (v *Vault) managedUpdateSnapshot(probe string) (update.SignerSnapshot, erro
 		return update.SignerSnapshot{}, err
 	}
 	ref, err := managedHistory(records)
-	if err != nil || !sameWallet(*ref, v.record.Ref) || *ref != *v.managedRef {
+	if err != nil || !sameWallet(*ref, v.record.Ref) || *ref != *v.managedRef || main.seq != v.ledger.main.seq || main.hash != v.ledger.main.hash {
 		return update.SignerSnapshot{}, errors.New("durable managed history changed")
 	}
 	if _, _, err := v.store.readJournal("mock-receipts.log"); !errors.Is(err, os.ErrNotExist) {
 		return update.SignerSnapshot{}, errors.New("mixed managed history")
 	}
-	return update.SignerSnapshot{Version: 2, ProbeID: probe, BootID: v.bootID, AuthoritySHA256: update.SnapshotDigest("managed-authority", []AccountRef{v.record.Ref, *ref}), RecoveryHold: true, States: []update.State{
+	return update.SignerSnapshot{Version: 2, ProbeID: probe, BootID: v.bootID, AuthoritySHA256: update.SnapshotDigest("managed-authority", []AccountRef{v.record.Ref, *ref}), RecoveryHold: true, SequenceFloor: v.ledger.updateFloor, InstalledSequence: v.ledger.installedSequence, ActiveIntentID: v.ledger.activeUpdate, States: []update.State{
 		{Name: "vault", Version: 2, Features: []string{"managed-key-v2", "authority-epoch-v1"}, Anchor: update.SnapshotDigest("vault-bytes", b)},
-		{Name: "operations", Version: 1, Features: []string{"managed-key-history-v1"}, Anchor: update.SnapshotDigest("managed-history-head", struct {
+		{Name: "operations", Version: 1, Features: []string{"managed-key-history-v1", "managed-maintenance-v2", "install-completion-v1"}, Anchor: update.SnapshotDigest("managed-history-head", struct {
 			Sequence int
 			Hash     string
 		}{main.seq, main.hash})},

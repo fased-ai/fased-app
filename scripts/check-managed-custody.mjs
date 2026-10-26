@@ -583,6 +583,33 @@ try {
       "network:recoveredUpdateRefused",
       fails(() => fixtureOwner("fixture-update-prepare")),
     );
+    cli(["login", "--prepare-host", "--password-stdin"], appPassword + "\n");
+    await fixtureUpdateIntentJourney({
+      engine,
+      root,
+      cli,
+      ownerStatus: secretStatus,
+      ownerUnlock: unlockFixture,
+      walletPassword: replacement,
+      stopServices: () => {
+        for (const unit of units) osTool("/usr/bin/systemctl", ["stop", unit]);
+      },
+      restartSigner: () => osTool("/usr/bin/systemctl", ["restart", units[1]]),
+      restartApp: () => osTool("/usr/bin/systemctl", ["restart", units[0]]),
+      backups,
+      check,
+      fails,
+      env,
+      url: "http://" + listen,
+      appPassword,
+      networkMode: true,
+    });
+    check(
+      "network:updateKeepsRecoveryHold",
+      secretStatus().locked &&
+        secretStatus().recoveryRequired &&
+        secretStatus().account.publicKey === initial.account.publicKey,
+    );
     const protectedHashes = () =>
       ["vault.json", "operations.log"].map((name) =>
         sha(

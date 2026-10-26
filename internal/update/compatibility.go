@@ -98,6 +98,36 @@ var requiredStateFeatures = map[string][]string{
 	"mock-receipts": {"mock-outcomes-v1"},
 }
 
+// Managed custody has key history, not fixture transactions or mock receipts.
+func managedStateProfile() (map[string]string, map[string][]string) {
+	return map[string]string{"core-db": "core", "vault": "signer", "operations": "signer"}, map[string][]string{
+		"core-db": requiredStateFeatures["core-db"], "vault": {"managed-key-v2", "authority-epoch-v1"}, "operations": {"managed-key-history-v1", "managed-maintenance-v2", "install-completion-v1"},
+	}
+}
+func ManagedContracts(cs []Contract) bool {
+	if len(cs) != 2 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, c := range cs {
+		if c.Component != "core" && c.Component != "signer" || seen[c.Component] || !containsAll(c.Features, []string{"managed-custody-updates-v2"}) {
+			return false
+		}
+		seen[c.Component] = true
+		if c.Component == "signer" && c.Protocol != 2 {
+			return false
+		}
+	}
+	return seen["core"] && seen["signer"]
+}
+func managedComponents(cs []Component) bool {
+	c := []Contract{}
+	for _, v := range cs {
+		c = append(c, v.Contract)
+	}
+	return ManagedContracts(c)
+}
+
 func listOK(a []string) bool {
 	if len(a) > 32 {
 		return false
@@ -128,6 +158,11 @@ func containsAll(have, need []string) bool {
 
 func validateComponents(cs []Component) error { return validateComponentsFor(cs, lifecycleOK) }
 func validateComponentsFor(cs []Component, lifecycle func(*LifecycleContract) bool) error {
+	managed := managedComponents(cs)
+	owners := stateOwner
+	if managed {
+		owners, _ = managedStateProfile()
+	}
 	if len(cs) != 2 {
 		return errors.New("complete core and signer pair required")
 	}
@@ -147,12 +182,12 @@ func validateComponentsFor(cs []Component, lifecycle func(*LifecycleContract) bo
 		files[strings.ToLower(a.File)] = true
 		states := map[string]bool{}
 		for _, s := range x.State {
-			if stateOwner[s.Name] != x.Component || states[s.Name] || !s.Versions.valid() || !listOK(s.Features) {
+			if owners[s.Name] != x.Component || states[s.Name] || !s.Versions.valid() || !listOK(s.Features) {
 				return errors.New("invalid state contract")
 			}
 			states[s.Name] = true
 		}
-		for name, owner := range stateOwner {
+		for name, owner := range owners {
 			if owner == x.Component && !states[name] {
 				return errors.New("missing state contract")
 			}
@@ -167,7 +202,7 @@ func validateComponentsFor(cs []Component, lifecycle func(*LifecycleContract) bo
 	}
 	// This package begins after schema 2/approval journals. An old protocol-1
 	// signer without approval support is not a compatible downgrade.
-	if !containsAll(core.Features, []string{"account-registry-v1", "fixture-proposals-v1"}) || !containsAll(signer.Features, []string{"fixture-public-status-v1", "fixture-approval-receipts-v1", "fixture-update-preflight-v1"}) {
+	if !containsAll(core.Features, []string{"account-registry-v1", "fixture-proposals-v1"}) || (!managed && !containsAll(signer.Features, []string{"fixture-public-status-v1", "fixture-approval-receipts-v1", "fixture-update-preflight-v1"})) {
 		return errors.New("pre-approval component is unsupported")
 	}
 	return nil
@@ -184,7 +219,14 @@ func Compatible(m Manifest, sha string, inv Inventory) (Plan, error) {
 	if inv.Version != 1 || !inv.FixtureOnly || !targetOK(inv.Target) || inv.Target != m.Target || !hashOK(sha) || m.Sequence == 0 || m.Sequence <= inv.SequenceFloor {
 		return p, errors.New("fixture inventory target or sequence floor mismatch")
 	}
-	if len(inv.States) != len(stateOwner) || inv.Pending < 0 || inv.Pending > 1024 || inv.Unknown < 0 || inv.Unknown > inv.Pending {
+	owners, required := stateOwner, requiredStateFeatures
+	if managedComponents(m.Components) {
+		owners, required = managedStateProfile()
+		if !inv.RecoveryHold || inv.Pending != 0 || inv.Unknown != 0 {
+			return p, errors.New("managed recovery hold required")
+		}
+	}
+	if len(inv.States) != len(owners) || inv.Pending < 0 || inv.Pending > 1024 || inv.Unknown < 0 || inv.Unknown > inv.Pending {
 		return p, errors.New("invalid state inventory")
 	}
 	support := map[string]StateSupport{}
@@ -196,7 +238,7 @@ func Compatible(m Manifest, sha string, inv Inventory) (Plan, error) {
 	seen := map[string]bool{}
 	for _, s := range inv.States {
 		x, ok := support[s.Name]
-		if !ok || seen[s.Name] || !hashOK(s.Anchor) || !listOK(s.Features) || !containsAll(s.Features, requiredStateFeatures[s.Name]) || !x.Versions.has(s.Version) || !containsAll(x.Features, s.Features) {
+		if !ok || seen[s.Name] || !hashOK(s.Anchor) || !listOK(s.Features) || !containsAll(s.Features, required[s.Name]) || !x.Versions.has(s.Version) || !containsAll(x.Features, s.Features) {
 			return p, fmt.Errorf("incompatible durable state: %s", s.Name)
 		}
 		seen[s.Name] = true

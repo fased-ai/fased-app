@@ -245,11 +245,6 @@ jobs:
         env:
           FASED_PORTABLE_ACCEPTANCE: "1"
         run: node scripts/check-managed-custody.mjs
-      - name: Installed network custody and held-update refusal
-        env:
-          FASED_MANAGED_NETWORK: "devnet"
-          FASED_MANAGED_EVIDENCE: .evidence/p3-network-managed
-        run: node scripts/check-managed-custody.mjs
       - name: Compile pinned predecessor and bad-health bootstrap fixtures
         run: node scripts/build-bootstrap-fixtures.mjs
       - name: Actual older-helper bootstrap and subsequent coordinated update
@@ -286,8 +281,6 @@ jobs:
             .evidence/p3-managed/managed-install-result.json
             .evidence/p3-managed/managed-install.log
             .evidence/p3-managed/accounts-ui-*.png
-            .evidence/p3-network-managed/managed-install-result.json
-            .evidence/p3-network-managed/managed-install.log
             .evidence/p4-updates/manifest-cli-result.json
             .evidence/p4-updates/manifest-cli.log
             .evidence/p4-intents/core-cli-result.json
@@ -417,6 +410,11 @@ jobs:
           FASED_MANAGED_SIGNER: .evidence/p4-installed-inspection/predecessor-signer
           FASED_MANAGED_EVIDENCE: .evidence/p4-installed-inspection/managed
         run: node scripts/check-installed-inspection-fixture.mjs
+      - name: Installed network custody and reviewed replacement recovery
+        env:
+          FASED_MANAGED_NETWORK: "devnet"
+          FASED_MANAGED_EVIDENCE: .evidence/p3-network-managed
+        run: node scripts/check-managed-custody.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -428,6 +426,9 @@ jobs:
             .evidence/p4-installed-inspection/*.stderr
             .evidence/p4-installed-inspection/*.log
             .evidence/p4-installed-inspection/managed/**
+            .evidence/p3-network-managed/*.json
+            .evidence/p3-network-managed/*.log
+            .evidence/p4-network-complete/*.json
           retention-days: 7
   prototype:
     if: always()
