@@ -575,13 +575,16 @@ func TestWENSessionLifecycleSourceHoldCanStop(t *testing.T) {
 
 func TestWENSessionLifecycleBackwardAckDoesNotRenew(t *testing.T) {
 	s, h, _, review := sessionFixture(t, "review", "fixture-4h")
+	// Bind the stored guard and rollback to one controlled clock, rather than
+	// sampling wall time after a potentially second-crossing store operation.
+	originalWall := s.now()
+	s.now = func() time.Time { return originalWall }
 	v, e := h.CreateWENSession(t.Context(), review)
 	if e != nil {
 		t.Fatal(e)
 	}
 	id := v.Sessions[0].Record.SessionID
 	v = sessionStep(t, h, v, id)
-	originalWall := s.now()
 	s.now = func() time.Time { return originalWall.Add(-time.Second) }
 	decision := v.Sessions[0].Pending.DecisionID
 	v, e = h.ControlWENSession(t.Context(), WENSessionControl{Schema: "wen-session-control/1", Profile: v.Profile, Revision: v.Revision, PoolRevision: sessionPool(t, v).Revision, SessionID: id, Action: "acknowledge", DecisionID: &decision})
