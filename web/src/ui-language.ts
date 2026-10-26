@@ -10,6 +10,29 @@ export const languages = {
 export type Language = keyof typeof languages;
 // Interface copy only. Never translate user records, model output or server receipts.
 const rows = {
+  "API key": ["API-ключ", "Clave API", "API 密钥", "API 키"],
+  "RPC API key": ["Ключ RPC", "Clave RPC", "RPC 密钥", "RPC 키"],
+  "Vault password": [
+    "Пароль хранилища",
+    "Contraseña del almacén",
+    "保险库密码",
+    "보관함 비밀번호",
+  ],
+  "Save key": ["Сохранить ключ", "Guardar clave", "保存密钥", "키 저장"],
+  "Verify key": ["Проверить ключ", "Verificar clave", "验证密钥", "키 확인"],
+  "Remove key": ["Удалить ключ", "Eliminar clave", "删除密钥", "키 삭제"],
+  "Key verified": [
+    "Ключ проверен",
+    "Clave verificada",
+    "密钥已验证",
+    "키 확인됨",
+  ],
+  "Credential operation failed": [
+    "Ошибка доступа к ключу",
+    "Error al gestionar la clave",
+    "密钥操作失败",
+    "키 작업 실패",
+  ],
   "RPC URL": ["URL RPC", "URL RPC", "RPC 地址", "RPC URL"],
   "Check RPC": ["Проверить RPC", "Comprobar RPC", "检查 RPC", "RPC 확인"],
   "RPC verified (demo)": [

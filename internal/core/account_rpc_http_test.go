@@ -54,3 +54,38 @@ func TestRPCConfigHTTPAuthorizationAndSecrets(t *testing.T) {
 		})
 	}
 }
+
+func TestRPCCredentialHTTPAuthorizationAndRedaction(t *testing.T) {
+	s := fixtureStore(t)
+	c := rpcSecretSetup(t, s)
+	token, err := s.Login(t.Context(), testPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(c)
+	for _, tc := range []struct {
+		auth, csrf string
+		body       []byte
+		status     int
+	}{
+		{"", "", b, 401}, {token, "", b, 403}, {token, csrfToken(token), append(append([]byte{}, b[:len(b)-1]...), []byte(`,"endpoint":"https://example.com"}`)...), 400}, {token, csrfToken(token), b, 200}, {token, csrfToken(token), b, 400},
+	} {
+		req := httptest.NewRequest("PUT", "http://127.0.0.1:7331/api/v1/accounts/rpc-credential", bytes.NewReader(tc.body))
+		req.Header.Set("Origin", "http://127.0.0.1:7331")
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+tc.auth)
+		req.Header.Set("X-CSRF-Token", tc.csrf)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != tc.status {
+			t.Fatalf("status %d expected %d", w.Code, tc.status)
+		}
+		if bytes.Contains(w.Body.Bytes(), []byte(c.Key)) || bytes.Contains(w.Body.Bytes(), []byte(c.Passphrase)) {
+			t.Fatal("secret response")
+		}
+	}
+}

@@ -258,6 +258,25 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, v)
 		return
+	case "/api/v1/accounts/rpc-credential":
+		if r.Method != http.MethodPut {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.mutation(w, r) || !h.csrf(w, r, token) {
+			return
+		}
+		var input RPCCredentialCommand
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		result, err := h.store.RPCCredential(r.Context(), input)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, 200, result)
+		return
 	case "/api/v1/accounts/rpc":
 		if r.Method != http.MethodPut {
 			writeError(w, 405, "method not allowed")

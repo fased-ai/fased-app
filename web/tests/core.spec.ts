@@ -4861,6 +4861,40 @@ test("public account records share UI/CLI state without wallet authority", async
   await expect(
     page.getByText("RPC verified (demo)", { exact: true }),
   ).toHaveCount(0);
+  await page.getByText("API key", { exact: true }).first().click();
+  await page
+    .getByLabel("RPC API key", { exact: true })
+    .fill("fased-rpc-test-disposable-browser-123456");
+  await page
+    .getByLabel("Vault password", { exact: true })
+    .fill("Disposable browser vault password 123");
+  await page.getByRole("button", { name: "Save key", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Remove key", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel("RPC API key", { exact: true })).toHaveValue("");
+  const credential = await privateCLI(["accounts", "--rpc-credential-stdin"], {
+    accountId: state.record.accounts[0].id,
+    revision: state.record.revision,
+    action: "status",
+    ref: "",
+  });
+  expect(credential.saved).toBe(true);
+  expect(credential.locked).toBe(true);
+  expect(credential.liveRPC).toBe(false);
+  expect(JSON.stringify(credential)).not.toContain("disposable-browser");
+  await page
+    .getByLabel("Vault password", { exact: true })
+    .fill("Disposable browser vault password 123");
+  await page.getByRole("button", { name: "Verify key", exact: true }).click();
+  await expect(page.getByText("Key verified", { exact: true })).toBeVisible();
+  await privateCLI(["accounts", "--rpc-credential-stdin"], {
+    accountId: state.record.accounts[0].id,
+    revision: state.record.revision,
+    action: "remove",
+    ref: credential.ref,
+    passphrase: "Disposable browser vault password 123",
+  });
   await page.getByRole("button", { name: "Remove", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   state = await privateCLI(["accounts"]);

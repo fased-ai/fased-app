@@ -1,3 +1,4 @@
+import { RPCCredential } from "./RPCCredential";
 import { useState, useRef, useEffect } from "react";
 import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
@@ -134,6 +135,11 @@ export function RPCCheck({
         {result && <p role="status">{t("RPC verified (demo)")}</p>}
         {error && <p role="alert">{error}</p>}
       </form>
+      <RPCCredential
+        accountId={account.id}
+        revision={revision}
+        configured={!!account.rpc}
+      />
     </Dialog>
   );
 }

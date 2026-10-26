@@ -478,3 +478,27 @@ preserves account bytes/revisions and refuses paused recovery or RPC data alread
 present in an unprotected schema. Existing snapshot/backup/pause mechanisms cover
 the settings. Only the compiled fixture URL is accepted; API keys, authenticated
 URLs, live transports and real RPC credential storage remain unavailable.
+
+### RPC test credentials
+
+Wallets → RPC → API key and `accounts --rpc-credential-stdin` use the same
+owner-authenticated core operation. Save RPC settings first. Input is private
+JSON with `accountId`, current `revision`, current credential `ref` (empty for
+first save), `action` (`status`, `save`, `verify`, `remove`), and, except status,
+`passphrase`. Only save accepts `key`, with the deliberately nonproduction
+`fased-rpc-test-` prefix (30–256 bytes). Never put secrets in command arguments.
+
+Each account has a private encrypted vault outside SQLite and metadata backups.
+AES-GCM and the existing password KDF bind ciphertext to the instance, account,
+RPC configuration and fresh credential reference. Replacement/removal require
+the existing vault password; stale references fail. Verify checks local decryption
+only: it never proves provider acceptance, sends credentials, or leaves a key
+unlocked. No password/key is returned. Restart has no retained plaintext state.
+
+Keep vault files with the original instance when backing up; metadata-only
+recovery does not include them. Lost vault passwords cannot be recovered by
+resetting the app password. Malformed vaults are preserved rather than replaced.
+Identity/configuration changes make the saved binding stale; explicit replacement
+requires its password. Removed wallet records do not silently delete vault files.
+This is disposable credential storage acceptance, not live RPC integration or
+production credential recovery acceptance. The Go signer remains unchanged.
