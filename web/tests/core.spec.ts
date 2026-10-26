@@ -11366,7 +11366,13 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
   )
     .getByRole("button", { name: "Agents", exact: true })
     .click();
-  await page.getByLabel("Agent", { exact: true }).selectOption(p);
+  await expect(
+    page.getByRole("heading", { name: "Agents", exact: true }),
+  ).toBeVisible();
+  await page
+    .locator(".agent-header-actions")
+    .getByRole("combobox", { name: "Agent", exact: true })
+    .selectOption(p);
   const provider = page.getByLabel("Provider", { exact: true });
   await revealControl(page, provider);
   const agentModel = page.getByLabel("Model", { exact: true });
