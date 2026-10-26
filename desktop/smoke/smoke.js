@@ -65,6 +65,32 @@
     });
     if (updated.status !== 200)
       throw new Error(`Native setup rejected: ${updated.status}`);
+    phase = "provider and profile transport";
+    const provider = await fetch("/api/v1/ai/connection", { headers });
+    if (provider.status !== 200)
+      throw new Error(`Provider read: ${provider.status}`);
+    const agents = await fetch("/api/v1/agents?profile=news-researcher", {
+      headers,
+    });
+    const view = await agents.json();
+    if (agents.status !== 200 || view.profileId !== "news-researcher")
+      throw new Error("Native profile query was rejected or dropped");
+    const conversation = await fetch("/api/v1/agents", {
+      method: "POST",
+      headers: {
+        ...headers,
+        "Content-Type": "application/json",
+        "X-CSRF-Token": auth.csrfToken,
+      },
+      body: JSON.stringify({
+        action: "session-create",
+        revision: view.revision,
+        profileId: view.profileId,
+        name: "Native smoke",
+      }),
+    });
+    if (conversation.status !== 200)
+      throw new Error(`Conversation write: ${conversation.status}`);
     window.runtime.EventsEmit(
       "fased-native-smoke",
       JSON.stringify({
@@ -75,6 +101,8 @@
           "owner claim",
           "bearer and CSRF",
           "private IPC setup",
+          "provider read",
+          "profile query and conversation write",
         ],
       }),
     );

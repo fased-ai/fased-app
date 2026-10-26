@@ -302,7 +302,7 @@ func aiDigest(q AgentAIRequest) string {
 	return hex.EncodeToString(sum[:])
 }
 func aiReservation(l AILimits) int64 { return l.MaxInputTokens + 4*l.MaxOutputTokens }
-func changeAgentAI(d *agentDocument, c AgentCommand, profile, id string, now int64, fixture bool) error {
+func changeAgentAI(d *agentDocument, c AgentCommand, profile, id string, now int64, fixture bool, review func(AgentAIRequest) (string, error)) error {
 	if c.Action == "ai-prepare" {
 		if c.Limits == nil || taskAIRequestSlots(*d) >= 10 {
 			return errors.New("explicit request limits required; maximum ten retained AI requests")
@@ -375,7 +375,13 @@ func changeAgentAI(d *agentDocument, c AgentCommand, profile, id string, now int
 			if e := validateAIModelPolicy(*q, now); e != nil {
 				return e
 			}
-			context, e := aiRequestContext(*d, *q, now)
+			var context string
+			var e error
+			if review != nil {
+				context, e = review(*q)
+			} else {
+				context, e = aiRequestContext(*d, *q, now)
+			}
 			if e != nil || context != q.Context || now < q.CreatedAt || now-q.CreatedAt > 600 {
 				return errors.New("disclosure changed or expired; prepare and review a fresh request")
 			}
@@ -1295,6 +1301,10 @@ func frozenAIEvidenceData(v AgentEvidenceView) bool {
 	return false
 }
 func aiEvidenceRequestContext(d agentDocument, q AgentAIRequest, now int64) (string, error) {
+	return aiEvidenceSourceContext(d, d, q, now)
+}
+
+func aiEvidenceSourceContext(d, source agentDocument, q AgentAIRequest, now int64) (string, error) {
 	e, err := frozenAIEvidence(q)
 	if err != nil {
 		return "", err
@@ -1308,7 +1318,7 @@ func aiEvidenceRequestContext(d agentDocument, q AgentAIRequest, now int64) (str
 	if err != nil {
 		return "", err
 	}
-	current, err := resolveAIEvidence(d, q, e.Selection, e.Evidence.Revision, now)
+	current, err := resolveAIEvidence(source, q, e.Selection, e.Evidence.Revision, now)
 	if err != nil {
 		return "", err
 	}

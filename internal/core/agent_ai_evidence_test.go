@@ -542,3 +542,59 @@ func TestAgentAIEvidenceNewsDependencyAndExpiry(t *testing.T) {
 		selectionRefused(t, s, AgentCommand{Action: "ai-start", ProfileID: v.ProfileID, ID: q.ID, ConsentDigest: q.Digest}, true)
 	})
 }
+
+func TestArchivedMemoryEvidenceJourney(t *testing.T) {
+	s := fixtureStore(t)
+	v := aiStart(t, s, aiPrepare(t, s))
+	if err := s.advanceAgentAI(t.Context(), fixtureAITransport{}, true); err != nil {
+		t.Fatal(err)
+	}
+	v, _ = s.Agents(t.Context(), v.ProfileID, "")
+	q := v.AIRequests[0]
+	v = agentApply(t, s, AgentCommand{Action: "memory-chat-save", ProfileID: v.ProfileID, ID: q.ID, Source: "answer", Text: "Retained preference"})
+	note := v.Memories[0]
+	v = agentApply(t, s, AgentCommand{Action: "session-archive", ProfileID: v.ProfileID, ID: q.SessionID})
+	dir := s.dir
+	s.Close()
+	s, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	v = agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: v.ProfileID, Name: "New review"})
+	before := retainedRevisionState(t, s)
+	evidence, err := s.AgentEvidence(t.Context(), v.ProfileID, "memory", note.ID, "")
+	if err != nil {
+		t.Fatal("archived evidence", err)
+	}
+	if retainedRevisionState(t, s) != before {
+		t.Fatal("inspection mutated state")
+	}
+	if _, err = s.AgentEvidence(t.Context(), "news-researcher", "memory", note.ID, ""); err == nil {
+		t.Fatal("foreign memory admitted")
+	}
+	v = agentApply(t, s, evidenceAICommand(t, v.Sessions[0].ID, evidence))
+	v = aiStart(t, s, v)
+	if err = s.advanceAgentAI(t.Context(), fixtureAITransport{}, true); err != nil {
+		t.Fatal(err)
+	}
+	v, _ = s.Agents(t.Context(), v.ProfileID, "")
+	if len(v.Sessions) != 1 || len(v.AIRequests) != 1 || v.AIRequests[0].State != "completed" {
+		t.Fatal("archive restored or request not completed", v.AIRequests)
+	}
+	// Simulate disk corruption in this disposable store; ordinary writes are immutable.
+	if _, err = s.db.ExecContext(t.Context(), "DROP TRIGGER task_history_immutable_update"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.db.ExecContext(t.Context(), "UPDATE agent_history SET record=record || ' ' WHERE source_id=?", q.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.AgentEvidence(t.Context(), v.ProfileID, "memory", note.ID, ""); err == nil {
+		t.Fatal("tampered archive accepted")
+	}
+	c := evidenceAICommand(t, v.Sessions[0].ID, evidence)
+	c.Revision = v.Revision
+	if _, err = s.ChangeAgents(t.Context(), c); err == nil {
+		t.Fatal("tampered archive prepared")
+	}
+}

@@ -30,7 +30,16 @@ type AgentEvidenceView struct {
 }
 
 func (s *Store) AgentEvidence(ctx context.Context, profile, kind, id, item string) (AgentEvidenceView, error) {
-	d, revision, err := readAgents(ctx, s.db)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AgentEvidenceView{}, err
+	}
+	defer tx.Rollback()
+	d, revision, err := readAgents(ctx, tx)
+	if err != nil {
+		return AgentEvidenceView{}, err
+	}
+	d, err = evidenceSourceDocument(ctx, tx, d, profile, kind, id)
 	if err != nil {
 		return AgentEvidenceView{}, err
 	}
@@ -165,4 +174,23 @@ func finishAgentEvidence(v AgentEvidenceView) (AgentEvidenceView, error) {
 		return AgentEvidenceView{}, errors.New("complete evidence exceeds 16 KiB; nothing truncated or returned")
 	}
 	return v, nil
+}
+
+// Hydration is a read projection only: never save archived records into the
+// active workspace or include them in ordinary conversation context.
+func evidenceSourceDocument(ctx context.Context, r snapshotReader, d agentDocument, profile, kind, id string) (agentDocument, error) {
+	if kind != "memory" {
+		return d, nil
+	}
+	for _, m := range d.Memories {
+		if m.ID == id && m.ProfileID == profile {
+			d.Sessions = append(d.Sessions[:0:0], d.Sessions...)
+			d.Messages = append(d.Messages[:0:0], d.Messages...)
+			d.AIRequests = append(d.AIRequests[:0:0], d.AIRequests...)
+			if err := hydrateMemorySource(ctx, r, &d, m); err != nil {
+				return agentDocument{}, err
+			}
+		}
+	}
+	return d, nil
 }

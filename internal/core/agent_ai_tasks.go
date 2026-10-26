@@ -166,7 +166,7 @@ func changeTaskAI(d *agentDocument, c AgentCommand, profile, id string, now int6
 		// all future request slots rather than publishing a disposable preview request.
 		copy := *d
 		copy.AIRequests = append([]AgentAIRequest{}, d.AIRequests...)
-		if e := changeAgentAI(&copy, AgentCommand{Model: c.Model, ConnectionRef: c.ConnectionRef, Action: "ai-prepare", ID: c.ID, Text: c.Text, Limits: c.Limits}, profile, id, now, false); e != nil {
+		if e := changeAgentAI(&copy, AgentCommand{Model: c.Model, ConnectionRef: c.ConnectionRef, Action: "ai-prepare", ID: c.ID, Text: c.Text, Limits: c.Limits}, profile, id, now, false, nil); e != nil {
 			return e
 		}
 		q := copy.AIRequests[len(copy.AIRequests)-1]

@@ -167,7 +167,7 @@ func (s *Store) changeChat(d *agentDocument, c AgentCommand, profile, id string,
 			return errors.New("Chat capacity reached; archive a settled conversation in History; linked or uncertain records stay protected")
 		}
 		cmd := AgentCommand{Action: "ai-prepare", ID: c.ID, Text: c.Text, Model: p.Model, ConnectionRef: p.ConnectionRef, Limits: &p.Limits, MemorySelection: &AIMemorySelection{Mode: p.MemoryMode}}
-		if e := changeAgentAI(d, cmd, profile, id, now, true); e != nil {
+		if e := changeAgentAI(d, cmd, profile, id, now, true, nil); e != nil {
 			return e
 		}
 		q := &d.AIRequests[len(d.AIRequests)-1]

@@ -594,7 +594,7 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 			return AgentView{}, e
 		}
 	case "ai-prepare", "ai-start", "ai-cancel", "ai-card-keep", "ai-card-dismiss":
-		if e = changeAgentAI(&d, c, profile, id, now, providerAllowed); e != nil {
+		if e = changeAgentAI(&d, c, profile, id, now, providerAllowed, func(q AgentAIRequest) (string, error) { return reviewedAIContext(ctx, tx, d, revision, q, now) }); e != nil {
 			return AgentView{}, e
 		}
 		if c.Action == "ai-prepare" {
@@ -608,7 +608,11 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 				}
 			}
 			if c.EvidenceSelection != nil {
-				if err := attachAIEvidence(d, &d.AIRequests[len(d.AIRequests)-1], *c.EvidenceSelection, revision, now); err != nil {
+				source, err := evidenceSourceDocument(ctx, tx, d, profile, c.EvidenceSelection.Kind, c.EvidenceSelection.ID)
+				if err != nil {
+					return AgentView{}, err
+				}
+				if err := attachAIEvidence(source, &d.AIRequests[len(d.AIRequests)-1], *c.EvidenceSelection, revision, now); err != nil {
 					return AgentView{}, err
 				}
 			}
@@ -1251,7 +1255,7 @@ func retainedNewsItem(d agentDocument, profile, fetchID, itemID string, now int6
 			source = &d.NewsSources[i]
 		}
 	}
-	if source == nil || source.ProfileID != profile || source.URL != f.URL || source.MaxAgeSeconds != f.MaxAgeSeconds || !validAgentText(source.Name, 80, true) {
+	if source == nil || source.ProfileID != profile || source.URL != f.URL || !retainedFetchPolicy(d, *source, *f) || !validAgentText(source.Name, 80, true) {
 		return nil, nil, nil, refused
 	}
 	if _, err := newsURL(f.URL); err != nil {
@@ -1282,4 +1286,23 @@ func retainedNewsItem(d agentDocument, profile, fetchID, itemID string, now int6
 		return nil, nil, nil, refused
 	}
 	return f, source, item, nil
+}
+
+// Manual fetches bind the source limit; task fetches bind their immutable task
+// policy as well. A stricter task window is valid, never a freshness renewal.
+func retainedFetchPolicy(d agentDocument, source NewsSource, f NewsFetch) bool {
+	if f.TaskID == "" {
+		return source.MaxAgeSeconds == f.MaxAgeSeconds
+	}
+	matches := 0
+	for _, task := range d.Tasks {
+		if task.ID != f.TaskID {
+			continue
+		}
+		matches++
+		if task.ProfileID != f.ProfileID || task.News == nil || task.News.SourceID != f.SourceID || task.News.URL != f.URL || task.News.MaxAgeSeconds != f.MaxAgeSeconds || f.MaxAgeSeconds > source.MaxAgeSeconds {
+			return false
+		}
+	}
+	return matches == 1
 }

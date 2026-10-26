@@ -734,3 +734,49 @@ func TestNewsBoundedRunsAndAINewsSuccess(t *testing.T) {
 		t.Fatal("resume exceeded evaluation ceiling")
 	}
 }
+
+func TestTaskHeadlineStricterFreshnessEvidence(t *testing.T) {
+	s := newsTestStore(t)
+	v := newsPlan(t, s, newsAdd(t, s, "trading-analyst"), "", 1)
+	v = newsRun(t, s, v)
+	calls := new(atomic.Int32)
+	if err := s.advanceAgentNews(t.Context(), newsHTTPS(t, rssHandler(newsRSS(s.now().Unix()), calls)), false); err != nil {
+		t.Fatal(err)
+	}
+	v, _ = s.Agents(t.Context(), v.ProfileID, "")
+	f := v.NewsFetches[0]
+	if f.State != "completed" || f.MaxAgeSeconds != 300 || v.NewsSources[0].MaxAgeSeconds != 600 {
+		t.Fatal("bad fixture")
+	}
+	evidence, err := s.AgentEvidence(t.Context(), v.ProfileID, "headline", f.ID, f.Items[0].ID)
+	if err != nil {
+		t.Fatal("task headline", err)
+	}
+	v = agentApply(t, s, AgentCommand{Action: "news-item-explain", ProfileID: v.ProfileID, ID: f.ID, Source: f.Items[0].ID})
+	v = agentApply(t, s, evidenceAICommand(t, v.Sessions[0].ID, evidence))
+	if len(v.AIRequests) != 1 || calls.Load() != 1 {
+		t.Fatal("review dispatched/refetched")
+	}
+	d, rev, _ := readAgents(t.Context(), s.db)
+	stale, err := inspectAgentEvidence(d, rev, v.ProfileID, "headline", f.ID, f.Items[0].ID, s.now().Unix()+301)
+	if err != nil || stale.Freshness != "stale" {
+		t.Fatal("stale headline not labelled", err)
+	}
+	if _, err = freshNews(d, v.ProfileID, d.Tasks[0].News, s.now().Unix()+301); err == nil {
+		t.Fatal("stale task input admitted")
+	}
+	for _, mutate := range []func(*agentDocument){
+		func(d *agentDocument) { d.Tasks[0].News.MaxAgeSeconds = 301 },
+		func(d *agentDocument) { d.Tasks[0].ProfileID = "news-researcher" },
+		func(d *agentDocument) { d.NewsFetches[0].TaskID = "missing" },
+		func(d *agentDocument) { d.NewsFetches[0].MaxAgeSeconds = 601 },
+	} {
+		raw, _ := json.Marshal(d)
+		var changed agentDocument
+		json.Unmarshal(raw, &changed)
+		mutate(&changed)
+		if _, err := inspectAgentEvidence(changed, rev, v.ProfileID, "headline", f.ID, f.Items[0].ID, s.now().Unix()); err == nil {
+			t.Fatal("altered task binding admitted")
+		}
+	}
+}

@@ -52,6 +52,17 @@ func researchSourceState(ctx context.Context, r snapshotReader, d agentDocument,
 // be one snapshot, and SQLite's single connection must never be nested here.
 func reviewedAIContext(ctx context.Context, r snapshotReader, d agentDocument, rev int64, q AgentAIRequest, now int64) (string, error) {
 	if !isResearchAI(q) {
+		if aiHasEvidence(q) {
+			e, err := frozenAIEvidence(q)
+			if err != nil {
+				return "", err
+			}
+			source, err := evidenceSourceDocument(ctx, r, d, q.ProfileID, e.Selection.Kind, e.Selection.ID)
+			if err != nil {
+				return "", err
+			}
+			return aiEvidenceSourceContext(d, source, q, now)
+		}
 		return aiRequestContext(d, q, now)
 	}
 	i := researchTurnIndex(d, q.ProfileID, q.ResearchTurnID)
