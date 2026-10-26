@@ -95,7 +95,7 @@ export async function fixtureAccountJourney({
       .click();
     await page
       .getByRole("heading", {
-        name: "Disposable operating account",
+        name: "Wallet",
         exact: true,
       })
       .waitFor();
