@@ -9,14 +9,10 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -251,34 +247,6 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	s.provider.digest = sha256.Sum256(encoded)
 	s.provider.ref, s.provider.key, s.provider.expires = env.Ref, []byte(c.Key), s.now().Add(15*time.Minute).Unix()
 	return s.aiConnectionLocked()
-}
-
-// Requests retain the official origin; controlled tests can map it only to a
-// loopback HTTPS server with an explicit trust root. No endpoint or CA enters IPC.
-func newOpenAIHTTPSFixture(endpoint string, roots *x509.CertPool) (http.RoundTripper, error) {
-	u, e := url.Parse(endpoint)
-	if e != nil || u.Scheme != "https" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || roots == nil || net.ParseIP(u.Hostname()) == nil || !net.ParseIP(u.Hostname()).IsLoopback() || u.Port() == "" {
-		return nil, errors.New("explicit trusted loopback HTTPS fixture required")
-	}
-	return &openAIHTTPSFixture{origin: u, transport: &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}, DisableKeepAlives: true, DisableCompression: true, MaxResponseHeaderBytes: 8192, TLSHandshakeTimeout: time.Second, ResponseHeaderTimeout: 5 * time.Second}}, nil
-}
-
-type openAIHTTPSFixture struct {
-	origin    *url.URL
-	transport *http.Transport
-}
-
-func (f *openAIHTTPSFixture) RoundTrip(r *http.Request) (*http.Response, error) {
-	if !openAIRequestAllowed(r) || !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer fased-test-") {
-		return nil, errors.New("unreviewed fixture request refused")
-	}
-	copy := r.Clone(r.Context())
-	u := *r.URL
-	u.Host = f.origin.Host
-	copy.URL, copy.Host = &u, u.Host
-	// No automatic transport replay of an uncertain POST.
-	copy.GetBody = nil
-	return f.transport.RoundTrip(copy)
 }
 
 type authenticatedAITransport struct {

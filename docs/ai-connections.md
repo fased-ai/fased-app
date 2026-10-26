@@ -1,6 +1,6 @@
 # OpenAI development connection
 
-This build accepts **disposable `fased-test-` keys only**, never real OpenAI credentials. Normal and managed cores cannot execute provider calls. A standalone `serve --ai-fixture` core can authenticate a bound test connection to its compiled in-process fixture. Tests inject a trusted loopback HTTPS Responses endpoint; no endpoint/CA override, real model call, subscription, wallet or public-update authority is exposed in the application.
+This build accepts **disposable `fased-test-` keys only**, never real OpenAI credentials. Normal and managed cores cannot execute provider calls. A standalone `serve --ai-fixture` core can authenticate a bound test connection to its compiled in-process fixture. The shared worker now has a fixed-origin HTTPS transport for the official OpenAI model/count/Responses paths, but its production dispatch gate remains closed. Tests exercise that same transport with a loopback TLS dialer defined only in Go test files; no endpoint/CA override, real model call, subscription, wallet or public-update authority is exposed in the application.
 
 In Settings → OpenAI connection → Connection settings (also available in Agents → Settings), save a disposable test key with a separate vault passphrase of at least 12 characters. Both fields clear on submission. The core returns only a random connection reference, model/capability information and lock state. This is the only credential adapter currently available; ChatGPT subscriptions, Anthropic and xAI sign-in are not connected.
 
@@ -99,3 +99,13 @@ format; newly reviewed snapshot plans bind their exact policy.
 This completes model/token/tariff/access admission implementation and controlled
 acceptance. Actual account access, billing and live response acceptance require
 separate authorization and remain an explicit external boundary.
+
+## Transport implementation and activation boundary
+
+`openai_transport.go` supplies the fixed-origin TLS transport used by the core worker. It accepts only the already-admitted model, token-count and Responses paths, drops ambient headers, disables proxy inheritance and connection reuse, removes replayable request bodies, bounds each exchange to five seconds and refuses redirects. The existing authenticated wrapper, admission, SSE parsing, consent, finite task grants and journal remain authoritative. No second provider engine is introduced.
+
+Production construction is disabled: neither CLI, environment, UI nor IPC can open this gate. Real credentials remain rejected by the existing vault admission. Controlled tests replace only the TCP destination and trust root, retain the official request Host, and pass through the same transport. This injection exists only in `_test.go` files. Runtime `--ai-fixture` still uses the explicit inert development responder; it never silently stands in for an unavailable provider.
+
+This completes the dormant HTTPS transport implementation, not live credential admission or provider acceptance. A separately authorized activation change must admit the credential lifecycle, recheck the pinned model/tariff contract and enable dispatch together; it must not simply toggle the transport gate. Actual account availability, billing, remote responses and retail usability remain unverified. No UI or stored data changes accompany this transport delivery.
+
+Protocol reference: [OpenAI Responses streaming](https://developers.openai.com/api/docs/guides/streaming-responses), reviewed 26 October 2026. Existing model selection and tariff are unchanged.
