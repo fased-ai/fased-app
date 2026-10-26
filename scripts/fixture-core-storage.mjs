@@ -10,6 +10,7 @@ export async function currentStorageFixture(archivedRoot) {
   const sha = (b) => createHash("sha256").update(b).digest("hex");
   for (const file of [
     "agents.go",
+    "account_rpc_storage.go",
     "agent_reminders.go",
     "agent_task_drafts.go",
     "agent_task_review.go",
@@ -44,6 +45,19 @@ export async function currentStorageFixture(archivedRoot) {
     await writeFile(path.join(archivedRoot, "internal/core", file), bytes);
     storage[file] = sha(bytes);
   }
+  // Preserve the new storage field without adding any configuration routes.
+  const accounts = path.join(archivedRoot, "internal/core/accounts.go");
+  const accountBefore = await readFile(accounts, "utf8");
+  assert.equal(accountBefore.split("type Account struct {").length, 2);
+  assert.ok(!accountBefore.includes("*AccountRPC"));
+  await writeFile(
+    accounts,
+    accountBefore.replace(
+      "type Account struct {",
+      'type Account struct {\n\tRPC *AccountRPC `json:"rpc,omitempty"`',
+    ),
+  );
+  storage["accounts.go"] = sha(await readFile(accounts));
   const strategyRoot = path.join(archivedRoot, "internal/wenstrategy");
   await mkdir(path.join(strategyRoot, "testdata"), { recursive: true });
   for (const file of [
@@ -101,7 +115,7 @@ export async function currentStorageFixture(archivedRoot) {
       )
       .replace(
         marker,
-        "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }; if schema <= 6 { if err = migrateAIConnections(ctx, db); err != nil { return nil, err } }; if schema <= 7 { if err = migrateAgentNews(ctx, db); err != nil { return nil, err } }; if schema <= 8 { if err = migrateAIAdmission(ctx, db); err != nil { return nil, err } }; if schema <= 9 { if err = migrateWENPaper(ctx, db); err != nil { return nil, err } }; if schema <= 10 { if err = migrateWENResearch(ctx, db); err != nil { return nil, err } }; if schema <= 11 { if err = migrateWENResearchAI(ctx, db); err != nil { return nil, err } }; if schema <= 12 { if err = migrateWENResearchLoop(ctx, db); err != nil { return nil, err } }; if schema <= 13 { if err = migrateWENSessions(ctx, db); err != nil { return nil, err } }; if schema <= 14 { if err = migrateWENFixtureRuns(ctx, db); err != nil { return nil, err } }; if schema <= 15 { if err = migratePlaybooks(ctx, db); err != nil { return nil, err } }; if schema <= 16 { if err = migrateTaskCalendar(ctx, db); err != nil { return nil, err } }; if schema <= 17 { if err = migrateTaskCron(ctx, db); err != nil { return nil, err } }; if schema <= 18 { if err = migrateAgentChat(ctx, db); err != nil { return nil, err } }\n" +
+        "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }; if schema <= 6 { if err = migrateAIConnections(ctx, db); err != nil { return nil, err } }; if schema <= 7 { if err = migrateAgentNews(ctx, db); err != nil { return nil, err } }; if schema <= 8 { if err = migrateAIAdmission(ctx, db); err != nil { return nil, err } }; if schema <= 9 { if err = migrateWENPaper(ctx, db); err != nil { return nil, err } }; if schema <= 10 { if err = migrateWENResearch(ctx, db); err != nil { return nil, err } }; if schema <= 11 { if err = migrateWENResearchAI(ctx, db); err != nil { return nil, err } }; if schema <= 12 { if err = migrateWENResearchLoop(ctx, db); err != nil { return nil, err } }; if schema <= 13 { if err = migrateWENSessions(ctx, db); err != nil { return nil, err } }; if schema <= 14 { if err = migrateWENFixtureRuns(ctx, db); err != nil { return nil, err } }; if schema <= 15 { if err = migratePlaybooks(ctx, db); err != nil { return nil, err } }; if schema <= 16 { if err = migrateTaskCalendar(ctx, db); err != nil { return nil, err } }; if schema <= 17 { if err = migrateTaskCron(ctx, db); err != nil { return nil, err } }; if schema <= 18 { if err = migrateAgentChat(ctx, db); err != nil { return nil, err } }; if schema <= 19 { if err = migrateAccountRPC(ctx, db); err != nil { return nil, err } }\n" +
           marker,
       ),
   );

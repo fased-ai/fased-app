@@ -15,12 +15,6 @@ import (
 
 // App-owned public records are preferences, never signer authority. No balance,
 // private credential or asserted approval is accepted in this schema.
-type AccountRPC struct {
-	Version  int    `json:"version"`
-	Endpoint string `json:"endpoint"`
-	Network  string `json:"network"`
-}
-
 type Account struct {
 	RPC       *AccountRPC        `json:"rpc,omitempty"`
 	Version   int                `json:"version"`
