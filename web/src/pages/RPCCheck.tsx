@@ -2,8 +2,16 @@ import { useState, useRef, useEffect } from "react";
 import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
 import { Dialog } from "../components/shared";
-import { fixtureNetwork } from "../accounts";
-export function RPCCheck({ onClose }: { onClose: () => void }) {
+import { type Account } from "../accounts";
+export function RPCCheck({
+  account,
+  revision,
+  onClose,
+}: {
+  account: Account;
+  revision: number;
+  onClose: () => void;
+}) {
   const { t } = useUI();
   const core = useCore();
   const [endpoint, setEndpoint] = useState("https://rpc.fased.invalid/solana");
@@ -21,7 +29,7 @@ export function RPCCheck({ onClose }: { onClose: () => void }) {
     };
   }, [core.instanceId]);
   return (
-    <Dialog title="RPC" onClose={onClose}>
+    <Dialog title={`RPC · ${account.name}`} onClose={onClose}>
       <form
         onSubmit={async (e) => {
           e.preventDefault();
@@ -34,12 +42,21 @@ export function RPCCheck({ onClose }: { onClose: () => void }) {
             const v = await core.request<{
               fixtureOnly: boolean;
               liveRPC: boolean;
+              account?: Account;
+              accountRevision?: number;
             }>("accounts/rpc-check", "POST", {
               endpoint,
-              network: fixtureNetwork,
+              network: account.network,
+              accountId: account.id,
+              accountRevision: revision,
             });
             if (epoch === generation.current) {
-              if (!v.fixtureOnly || v.liveRPC)
+              if (
+                !v.fixtureOnly ||
+                v.liveRPC ||
+                v.account?.id !== account.id ||
+                v.accountRevision !== revision
+              )
                 throw new Error("Unexpected RPC capability");
               setResult(true);
             }

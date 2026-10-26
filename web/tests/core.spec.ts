@@ -4823,11 +4823,24 @@ test("public account records share UI/CLI state without wallet authority", async
   const rpc = await privateCLI(["accounts", "--check-rpc-stdin"], {
     endpoint: "https://rpc.fased.invalid/solana",
     network: "disposable-fixture:v1",
+    accountId: state.record.accounts[0].id,
+    accountRevision: state.record.revision,
   });
+  expect(rpc.account.id).toBe(state.record.accounts[0].id);
+  expect(rpc.accountRevision).toBe(state.record.revision);
+  expect(rpc.accountState).toBe("public-record-only");
   expect(rpc.fixtureOnly).toBe(true);
   expect(rpc.liveRPC).toBe(false);
   expect(rpc.genesisHash).toBe("11111111111111111111111111111112");
   expect((await privateCLI(["accounts"])).record).toEqual(state.record);
+  await expect(
+    privateCLI(["accounts", "--check-rpc-stdin"], {
+      endpoint: "https://rpc.fased.invalid/solana",
+      network: "disposable-fixture:v1",
+      accountId: state.record.accounts[0].id,
+      accountRevision: state.record.revision + 1,
+    }),
+  ).rejects.toThrow("wallet changed");
   const stale = structuredClone(state.record);
   await page.getByRole("button", { name: "Rename", exact: true }).click();
   await revealControl(page, page.getByLabel("New account name"), "");

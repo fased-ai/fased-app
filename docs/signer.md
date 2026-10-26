@@ -436,3 +436,15 @@ An interrupted import preserves the new identity: use `custody setup` with the
 same backup path and current password to finish backup verification. Never retry
 by deleting signer state. Existing input/backup files are not overwritten or removed.
 Real keys, funds, signing and mining remain disabled.
+
+## Wallet-bound RPC checks
+
+Choose RPC on a saved Wallets row. The same CLI check accepts `accountId` and
+`accountRevision` alongside the disposable endpoint/network. These two fields
+must be supplied together. The core reads the saved network and public identity;
+managed records must match the signer's current reference. It checks again after
+the diagnostic, refusing deleted/changed records, changed epochs and unavailable
+signers. The returned account/revision/state is a historical diagnostic, never a
+balance, persistent RPC configuration or signing permission. Locked/held wallets
+can be diagnosed without unlocking or removing their hold. Standalone CLI checks
+remain compatible and return no wallet binding. No account data is written.

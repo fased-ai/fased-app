@@ -17,7 +17,13 @@ import "../accounts.css";
 export function AccountManagement() {
   const { t: uiText } = useUI();
   const core = useCore();
-  const [rpcOpen, setRPCOpen] = useState(false);
+  const [rpcAccount, setRPCAccount] = useState<{
+    account: Account;
+    revision: number;
+  } | null>(null);
+  useEffect(() => {
+    setRPCAccount(null);
+  }, [core.instanceId]);
   const [view, setView] = useState<AccountsView | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -208,14 +214,13 @@ export function AccountManagement() {
     ) ?? [];
   return (
     <div className="wallet-workspace">
-      {rpcOpen && <RPCCheck onClose={() => setRPCOpen(false)} />}
+      {rpcAccount && (
+        <RPCCheck {...rpcAccount} onClose={() => setRPCAccount(null)} />
+      )}
       <SectionHead
         title={uiText("Wallets")}
         action={
           <>
-            <button className="secondary" onClick={() => setRPCOpen(true)}>
-              RPC
-            </button>
             <button
               className="secondary"
               disabled={busy}
@@ -302,6 +307,18 @@ export function AccountManagement() {
                     </p>
                   )}
                   <div className="account-actions">
+                    <button
+                      className="text-button"
+                      disabled={busy}
+                      onClick={() =>
+                        setRPCAccount({
+                          account: a,
+                          revision: view.record.revision,
+                        })
+                      }
+                    >
+                      RPC
+                    </button>
                     <button
                       className="text-button"
                       disabled={busy}

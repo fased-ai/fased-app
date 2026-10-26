@@ -18,7 +18,9 @@ import (
 type rpcTransportFunc func(*http.Request) (*http.Response, error)
 
 func (f rpcTransportFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
-func rpcInput() RPCCheckRequest                                              { return RPCCheckRequest{FixtureRPCURL, signer.FixtureNetwork} }
+func rpcInput() RPCCheckRequest {
+	return RPCCheckRequest{Endpoint: FixtureRPCURL, Network: signer.FixtureNetwork}
+}
 
 func TestRPCAdmissionAndCancellation(t *testing.T) {
 	result, err := CheckFixtureRPC(context.Background(), rpcInput())
@@ -28,14 +30,14 @@ func TestRPCAdmissionAndCancellation(t *testing.T) {
 	for _, endpoint := range []string{"http://rpc.fased.invalid/solana", "https://secret@rpc.fased.invalid/solana", FixtureRPCURL + "?key=secret", FixtureRPCURL + "#secret", "https://127.0.0.1/solana", "https://10.0.0.1/solana", "https://rpc.fased.invalid:443/solana", "https://example.com/solana", ""} {
 		t.Run(endpoint, func(t *testing.T) {
 			calls := 0
-			_, err := checkRPC(context.Background(), RPCCheckRequest{endpoint, signer.FixtureNetwork}, rpcTransportFunc(func(*http.Request) (*http.Response, error) { calls++; return nil, fmt.Errorf("unexpected") }))
+			_, err := checkRPC(context.Background(), RPCCheckRequest{Endpoint: endpoint, Network: signer.FixtureNetwork}, rpcTransportFunc(func(*http.Request) (*http.Response, error) { calls++; return nil, fmt.Errorf("unexpected") }))
 			if err == nil || calls != 0 || strings.Contains(err.Error(), "secret") {
 				t.Fatal("endpoint admitted or reflected", calls, err)
 			}
 		})
 	}
 	for _, network := range []string{"mainnet-beta", "devnet", ""} {
-		if _, err := CheckFixtureRPC(context.Background(), RPCCheckRequest{FixtureRPCURL, network}); err == nil {
+		if _, err := CheckFixtureRPC(context.Background(), RPCCheckRequest{Endpoint: FixtureRPCURL, Network: network}); err == nil {
 			t.Fatal("network admitted")
 		}
 	}

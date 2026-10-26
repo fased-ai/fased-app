@@ -270,7 +270,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		if !decodeJSON(w, r, &input) {
 			return
 		}
-		result, err := CheckFixtureRPC(r.Context(), input)
+		result, err := h.store.CheckAccountRPC(r.Context(), input)
 		if err != nil {
 			writeError(w, 400, err.Error())
 			return

@@ -16,16 +16,21 @@ const FixtureRPCURL = "https://rpc.fased.invalid/solana"
 const fixtureGenesis = "11111111111111111111111111111112"
 
 type RPCCheckRequest struct {
-	Endpoint string `json:"endpoint"`
-	Network  string `json:"network"`
+	AccountID       string `json:"accountId,omitempty"`
+	AccountRevision *int64 `json:"accountRevision,omitempty"`
+	Endpoint        string `json:"endpoint"`
+	Network         string `json:"network"`
 }
 type RPCCheckResult struct {
-	Endpoint    string    `json:"endpoint"`
-	Network     string    `json:"network"`
-	GenesisHash string    `json:"genesisHash"`
-	CheckedAt   time.Time `json:"checkedAt"`
-	FixtureOnly bool      `json:"fixtureOnly"`
-	LiveRPC     bool      `json:"liveRPC"`
+	Account         *Account  `json:"account,omitempty"`
+	AccountRevision *int64    `json:"accountRevision,omitempty"`
+	AccountState    string    `json:"accountState,omitempty"`
+	Endpoint        string    `json:"endpoint"`
+	Network         string    `json:"network"`
+	GenesisHash     string    `json:"genesisHash"`
+	CheckedAt       time.Time `json:"checkedAt"`
+	FixtureOnly     bool      `json:"fixtureOnly"`
+	LiveRPC         bool      `json:"liveRPC"`
 }
 
 // CheckFixtureRPC has no live transport, credential storage or signer authority.
@@ -137,4 +142,62 @@ func (fixtureRPCTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	data, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
 	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(bytes.NewReader(data)), Request: r}, nil
+}
+
+// CheckAccountRPC binds a diagnostic to a saved public account and checks the
+// signer epoch both before and after the request. It grants no wallet authority.
+func (s *Store) CheckAccountRPC(ctx context.Context, input RPCCheckRequest) (RPCCheckResult, error) {
+	return s.checkAccountRPC(ctx, input, CheckFixtureRPC)
+}
+func (s *Store) checkAccountRPC(ctx context.Context, input RPCCheckRequest, check func(context.Context, RPCCheckRequest) (RPCCheckResult, error)) (RPCCheckResult, error) {
+	if input.AccountID == "" && input.AccountRevision == nil {
+		return check(ctx, input)
+	}
+	var empty RPCCheckResult
+	if input.AccountID == "" || input.AccountRevision == nil || *input.AccountRevision < 0 {
+		return empty, errors.New("choose a saved wallet revision")
+	}
+	lookup := func() (Account, string, error) {
+		record, err := s.accountsRecord(ctx)
+		if err != nil {
+			return Account{}, "", err
+		}
+		if record.Revision != *input.AccountRevision {
+			return Account{}, "", errors.New("wallet changed; refresh and check again")
+		}
+		for _, a := range record.Accounts {
+			if a.ID != input.AccountID {
+				continue
+			}
+			if a.Network != input.Network {
+				return Account{}, "", errors.New("wallet network mismatch")
+			}
+			state := "public-record-only"
+			if a.Mode == "fixture-managed" {
+				live := s.fixtureView(ctx)
+				if !live.Available || live.Status == nil || live.Status.Account == nil || a.Signer == nil || *live.Status.Account != *a.Signer {
+					return Account{}, "", errors.New("wallet reference is stale or signer unavailable")
+				}
+				state = "current-fixture"
+			}
+			return a, state, nil
+		}
+		return Account{}, "", errors.New("wallet unavailable; refresh and check again")
+	}
+	if _, _, err := lookup(); err != nil {
+		return empty, err
+	}
+	result, err := check(ctx, input)
+	if err != nil {
+		return empty, err
+	}
+	account, state, err := lookup()
+	if err != nil {
+		return empty, err
+	}
+	result.Account = &account
+	revision := *input.AccountRevision
+	result.AccountRevision = &revision
+	result.AccountState = state
+	return result, nil
 }
