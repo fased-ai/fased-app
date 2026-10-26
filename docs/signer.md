@@ -577,3 +577,37 @@ routing, encrypted production credential admission, supported-network wallet
 binding and separately authorized live acceptance remain unfinished. A root-only
 URL policy must not be presented as support for those providers' authenticated
 URLs. No new schema or automatic migration is introduced.
+
+### Dormant authenticated provider settings
+
+Schema 21 protects version-2 read-only (`watch`) public accounts and RPC settings.
+Only mainnet-beta/devnet and the compiled Helius/Alchemy origins are admitted.
+No signer reference, managed key or transaction permission is added. Public account
+metadata stores the origin and network, never an API key. Saving settings does not
+claim that the provider is reachable: the separate credential check performs
+`getGenesisHash` and `getHealth`.
+
+Version-2 RPC vaults bind the encrypted key to the original instance, account,
+network, provider settings and fresh reference. Existing version-1 fixture files
+are unchanged. Explicit rotation, locked restart, encrypted backup verification,
+missing-file restore and password-confirmed removal reuse the existing command.
+Backups cannot overwrite a vault or migrate an identity. Inactive provider state
+can still be inspected, backed up and removed; opening a connection, saving a new
+key and restoring require admission. There is no unattended unlock.
+
+The transport inserts the key only for the outgoing request: Helius uses the
+[`api-key` query](https://www.helius.dev/docs/api-reference/rpc/http/getgenesishash),
+Alchemy uses the [`/v2/{apiKey}` path](https://www.alchemy.com/docs/chains/solana/solana-api-endpoints/get-identity).
+Hosts are selected from the provider/network mapping, not supplied alongside the
+secret. Public-IP pinning, TLS, bounded responses, cancellation, no redirects and
+per-operation stale-reference checks remain enforced. URL-bearing transport errors
+and response request metadata are sanitized before returning to the core.
+
+Both account/credential admission and network dispatch remain disabled in ordinary
+constructors. Only tests enable the private gates with disposable inputs and
+loopback TLS. There is no UI/CLI/environment override. Existing Wallets and CLI
+fixture flows remain unchanged; no new provider controls are exposed until live
+onboarding is separately authorized. Production provider/account acceptance and
+managed signer network/custody integration remain open. Schema-20 binaries refuse
+schema-21 databases before access; schema migration preserves prior account and
+credential bytes and refuses paused or prematurely upgraded records.

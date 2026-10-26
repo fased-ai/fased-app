@@ -21,6 +21,7 @@ import (
 )
 
 type Store struct {
+	rpcAdmission   bool // Disabled in ordinary constructors; tests only.
 	sessionFixture bool
 	aiMu           sync.Mutex
 	chatEpoch      atomic.Uint64
@@ -213,6 +214,11 @@ PRAGMA user_version=1;`)
 	}
 	if schema <= 19 {
 		if err = migrateAccountRPC(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if schema <= 20 {
+		if err = migrateProviderRPC(ctx, db); err != nil {
 			return nil, err
 		}
 	}

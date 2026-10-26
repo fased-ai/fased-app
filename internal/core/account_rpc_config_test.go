@@ -192,7 +192,7 @@ func TestRPCSchemaMigrationPreservesAndRefuses(t *testing.T) {
 			var schema int
 			n.db.QueryRow("SELECT document FROM accounts WHERE id=1").Scan(&after)
 			n.db.QueryRow("PRAGMA user_version").Scan(&schema)
-			if raw != after || schema != 20 {
+			if raw != after || schema != StateSchema {
 				t.Fatal("migration rewrote accounts or wrong schema")
 			}
 			record, _ := n.accountsRecord(t.Context())
@@ -233,7 +233,7 @@ func TestRPCConfigBackup(t *testing.T) {
 	}
 	db.QueryRow("PRAGMA user_version").Scan(&schema)
 	var record AccountsRecord
-	if json.Unmarshal([]byte(raw), &record) != nil || schema != 20 || rev != v.Record.Revision || record.Accounts[0].RPC.Endpoint != FixtureRPCURL {
+	if json.Unmarshal([]byte(raw), &record) != nil || schema != StateSchema || rev != v.Record.Revision || record.Accounts[0].RPC.Endpoint != FixtureRPCURL {
 		t.Fatal("backup lost RPC or reader floor")
 	}
 }

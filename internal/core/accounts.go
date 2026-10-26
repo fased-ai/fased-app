@@ -172,7 +172,7 @@ func validateAccounts(r AccountsRecord, old AccountsRecord, live FixtureView, no
 		oldProposals[p.Proposal.ID] = p
 	}
 	for _, a := range r.Accounts {
-		if a.Version != 1 || !hexValue(a.ID, 16) || !validName(a.Name) || a.Network != signer.FixtureNetwork || !hexValue(a.PublicKey, 32) {
+		if !((a.Version == 1 && a.Network == signer.FixtureNetwork) || (a.Version == 2 && a.Mode == "watch" && a.Signer == nil && solanaGenesis(a.Network) != "")) || !hexValue(a.ID, 16) || !validName(a.Name) || !hexValue(a.PublicKey, 32) {
 			return errors.New("use a versioned disposable public account; real wallets are disabled")
 		}
 		if _, ok := accounts[a.ID]; ok {
@@ -196,7 +196,7 @@ func validateAccounts(r AccountsRecord, old AccountsRecord, live FixtureView, no
 		default:
 			return errors.New("invalid account capability mode")
 		}
-		if a.RPC != nil && (a.RPC.Version != 1 || a.RPC.Endpoint != FixtureRPCURL || a.RPC.Network != a.Network || a.Network != signer.FixtureNetwork) {
+		if a.RPC != nil && !validProviderRPC(a) && (a.RPC.Version != 1 || a.RPC.Endpoint != FixtureRPCURL || a.RPC.Network != a.Network || a.Network != signer.FixtureNetwork) {
 			return errors.New("only disposable RPC settings are available")
 		}
 		accounts[a.ID] = a
@@ -251,6 +251,20 @@ func (s *Store) updateAccounts(ctx context.Context, r AccountsRecord, rpcChange 
 				r.Accounts[i].RPC = before.RPC
 			} else {
 				r.Accounts[i].RPC = nil
+			}
+		}
+	}
+	if !s.rpcAdmission {
+		prior := map[string]Account{}
+		for _, a := range old.Accounts {
+			prior[a.ID] = a
+		}
+		for _, a := range r.Accounts {
+			if a.Version == 2 {
+				b, ok := prior[a.ID]
+				if !ok || !sameAccountIdentity(a, b) || a.Version != b.Version || (a.RPC != nil && (b.RPC == nil || *a.RPC != *b.RPC)) {
+					return AccountsView{}, errors.New("live wallet configuration disabled")
+				}
 			}
 		}
 	}

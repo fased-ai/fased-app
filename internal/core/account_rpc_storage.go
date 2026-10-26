@@ -51,3 +51,35 @@ func migrateAccountRPC(ctx context.Context, db *sql.DB) error {
 	}
 	return tx.Commit()
 }
+
+// Raise only the reader floor; never rewrite prior account or credential bytes.
+func migrateProviderRPC(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var phase, raw string
+	if err = tx.QueryRowContext(ctx, "SELECT phase FROM update_pause WHERE id=1").Scan(&phase); err != nil {
+		return err
+	}
+	if phase == "paused" {
+		return errors.New("finish schema 20 recovery before RPC migration")
+	}
+	if err = tx.QueryRowContext(ctx, "SELECT document FROM accounts WHERE id=1").Scan(&raw); err != nil {
+		return err
+	}
+	var r AccountsRecord
+	if json.Unmarshal([]byte(raw), &r) != nil || r.Version != 1 {
+		return errors.New("preserve invalid account records")
+	}
+	for _, a := range r.Accounts {
+		if a.Version != 1 || (a.RPC != nil && a.RPC.Version != 1) {
+			return errors.New("provider RPC data present before reader protection")
+		}
+	}
+	if _, err = tx.ExecContext(ctx, "PRAGMA user_version=21"); err != nil {
+		return err
+	}
+	return tx.Commit()
+}

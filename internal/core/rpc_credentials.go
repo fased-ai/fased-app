@@ -2,7 +2,8 @@ package core
 
 // RPC credentials are separate from account metadata and wallet authority.
 // No plaintext is retained after an operation. Authenticated checks use only
-// compiled fixtures or test-injected controlled HTTPS, never a live transport.
+// compiled fixtures or dormant provider routing exercised through test-only TLS.
+// Ordinary credential admission and provider network dispatch remain disabled.
 import (
 	"context"
 	"crypto/aes"
@@ -60,7 +61,11 @@ func (s *Store) rpcVaultPath(id string) string {
 	return filepath.Join(s.dir, "rpc-credential-"+id+".json")
 }
 func (s *Store) rpcAAD(id string, v rpcVault) []byte {
-	return []byte("fased-rpc-vault-v1:" + s.instanceID + ":" + id + ":" + v.Ref + ":" + v.Binding)
+	prefix := "fased-rpc-vault-v1:"
+	if v.Version == 2 {
+		prefix = "fased-rpc-vault-v2:"
+	}
+	return []byte(prefix + s.instanceID + ":" + id + ":" + v.Ref + ":" + v.Binding)
 }
 func (s *Store) readRPCVault(id string) (rpcVault, error) {
 	var v rpcVault
@@ -82,7 +87,12 @@ func (s *Store) readRPCVault(id string) (rpcVault, error) {
 	return v, nil
 }
 func (s *Store) RPCCredential(ctx context.Context, c RPCCredentialCommand) (RPCCredentialView, error) {
-	return s.rpcCredential(ctx, c, checkCredentialRPC)
+	return s.rpcCredential(ctx, c, func(ctx context.Context, in RPCCheckRequest, key []byte, valid func() error) (RPCCheckResult, error) {
+		if in.Endpoint == FixtureRPCURL {
+			return checkCredentialRPC(ctx, in, key, valid)
+		}
+		return checkProviderRPC(ctx, in, key, valid, newPublicRPCTransport())
+	})
 }
 func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check func(context.Context, RPCCheckRequest, []byte, func() error) (RPCCheckResult, error)) (RPCCredentialView, error) {
 	fail := errors.New("RPC credential operation refused")
@@ -98,7 +108,7 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		if c.Key != "" || c.Passphrase != "" {
 			return view, fail
 		}
-	} else if !validPassword(c.Passphrase) || (c.Action == "save" && !testRPCCredential(c.Key)) || (c.Action != "save" && c.Key != "") {
+	} else if !validPassword(c.Passphrase) || (c.Action == "save" && c.Key == "") || (c.Action != "save" && c.Key != "") {
 		return view, fail
 	}
 	if c.Action == "check" {
@@ -138,6 +148,17 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 	if account == nil {
 		return view, fail
 	}
+	version := 1
+	if account.Version == 2 {
+		version = 2
+		view.TestOnly = false
+	}
+	if version == 2 && !s.rpcAdmission && (c.Action == "save" || c.Action == "verify" || c.Action == "check" || c.Action == "restore") {
+		return view, errors.New("live RPC credentials disabled")
+	}
+	if c.Action == "save" && !validRPCSecret(version, c.Key) {
+		return view, fail
+	}
 	if (c.Action == "save" || c.Action == "verify" || c.Action == "check" || c.Action == "restore") && account.Mode == "fixture-managed" {
 		live := s.fixtureView(ctx)
 		if account.Signer == nil || live.Status == nil || live.Status.Account == nil || *live.Status.Account != *account.Signer {
@@ -150,6 +171,7 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		return view, errors.New("RPC vault unavailable; preserve it before recovery")
 	}
 	if exists {
+		view.TestOnly = v.Version == 1
 		view.Ref = v.Ref
 		view.Saved = true
 		view.Stale = account.RPC == nil || v.Binding != rpcBinding(*account)
@@ -160,7 +182,7 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 	if c.Ref != view.Ref {
 		return view, ErrConflict
 	}
-	if c.Action != "remove" && (account.RPC == nil || account.RPC.Endpoint != FixtureRPCURL || account.RPC.Network != account.Network) {
+	if c.Action != "remove" && (account.RPC == nil || (version == 1 && account.RPC.Endpoint != FixtureRPCURL) || (version == 2 && !validProviderRPC(*account)) || account.RPC.Network != account.Network) {
 		return view, fail
 	}
 	var restored []byte
@@ -185,12 +207,12 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		gcm, _ := cipher.NewGCM(block)
 		plain, err := gcm.Open(nil, v.Nonce, v.Ciphertext, s.rpcAAD(c.AccountID, v))
 		defer clear(plain)
-		if err != nil || !testRPCCredential(string(plain)) {
+		if err != nil || !validRPCSecret(v.Version, string(plain)) {
 			return view, fail
 		}
 
 		if c.Action == "check" {
-			if view.Stale || check == nil {
+			if view.Stale || check == nil || v.Version != version {
 				return view, fail
 			}
 			sealed, _ := json.Marshal(v)
@@ -230,7 +252,7 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		if view.Stale {
 			return view, fail
 		}
-		view.Backup = &RPCCredentialBackup{Version: 1, InstanceID: s.instanceID, AccountID: account.ID, Vault: v}
+		view.Backup = &RPCCredentialBackup{Version: v.Version, InstanceID: s.instanceID, AccountID: account.ID, Vault: v}
 		view.BackupVerified = true
 		return view, nil
 	}
@@ -246,7 +268,7 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		}
 		return RPCCredentialView{Locked: true, TestOnly: true}, nil
 	}
-	v = rpcVault{Version: 1, Binding: rpcBinding(*account), Salt: make([]byte, 16), Nonce: make([]byte, 12)}
+	v = rpcVault{Version: version, Binding: rpcBinding(*account), Salt: make([]byte, 16), Nonce: make([]byte, 12)}
 	if v.Ref, e = randomToken(); e != nil {
 		return view, fail
 	}
@@ -269,5 +291,5 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 	if WritePrivateJSON(s.rpcVaultPath(c.AccountID), v) != nil {
 		return view, fail
 	}
-	return RPCCredentialView{Ref: v.Ref, Saved: true, Locked: true, TestOnly: true}, nil
+	return RPCCredentialView{Ref: v.Ref, Saved: true, Locked: true, TestOnly: version == 1}, nil
 }

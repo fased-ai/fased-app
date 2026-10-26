@@ -14,7 +14,7 @@ type RPCConfigInput struct {
 }
 
 func sameAccountIdentity(a, b Account) bool {
-	if a.ID != b.ID || a.Mode != b.Mode || a.Network != b.Network || a.PublicKey != b.PublicKey {
+	if a.Version != b.Version || a.ID != b.ID || a.Mode != b.Mode || a.Network != b.Network || a.PublicKey != b.PublicKey {
 		return false
 	}
 	if a.Signer == nil || b.Signer == nil {
@@ -43,6 +43,13 @@ func (s *Store) ConfigureAccountRPC(ctx context.Context, in RPCConfigInput) (Acc
 		} else {
 			if in.Endpoint == "" || in.Network == "" {
 				return AccountsView{}, errors.New("choose an endpoint and network")
+			}
+			if a.Version == 2 {
+				if !s.rpcAdmission || in.Network != a.Network || rpcProvider(in.Endpoint, in.Network) == "" {
+					return AccountsView{}, errors.New("live RPC configuration disabled")
+				}
+				record.Accounts[i].RPC = &AccountRPC{Version: 2, Endpoint: in.Endpoint, Network: in.Network}
+				return s.updateAccounts(ctx, record, true)
 			}
 			if _, err = s.CheckAccountRPC(ctx, RPCCheckRequest{AccountID: a.ID, AccountRevision: &in.Revision, Endpoint: in.Endpoint, Network: in.Network}); err != nil {
 				return AccountsView{}, err
