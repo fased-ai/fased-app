@@ -1079,7 +1079,9 @@ finally:
     );
     pass(
       "installerRecordsConvergeToExactInstalledPair",
-      rootIntent.coreHash === installedManifest.coreHash &&
+      rootIntent.version === installedManifest.version &&
+        rootIntent.network === installedManifest.network &&
+        rootIntent.coreHash === installedManifest.coreHash &&
         rootIntent.signerHash === installedManifest.signerHash &&
         JSON.stringify(rootIntent) === JSON.stringify(ownerIntent) &&
         readyRecord.manifest ===
@@ -1122,6 +1124,9 @@ finally:
             root + "/fased-signer",
             "--listen",
             installedManifest.listen,
+            ...(installedManifest.network
+              ? ["--network", installedManifest.network]
+              : []),
           ],
           { encoding: "utf8", env, timeout: 30000 },
         ),
