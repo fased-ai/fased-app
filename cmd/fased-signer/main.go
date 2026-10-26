@@ -50,6 +50,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	approvalStdin := flags.Bool("approval-stdin", false, "fixture CI only: approval challenge line from stdin")
 	passwordStdin := flags.Bool("password-stdin", false, "fixture automation only: password lines from private stdin")
 	documentPath := flags.String("file", "", "exclusive owner output or encrypted restore input")
+	seedPath := flags.String("seed-file", "", "private owner file containing a disposable 32-byte seed")
 	lifetime := flags.Duration("unlock-for", 15*time.Minute, "manual unlock lifetime, at most one hour")
 	requestStdin := flags.Bool("request-stdin", false, "public typed fixture policy/intent JSON from stdin; no credentials")
 	intentID := flags.String("intent-id", "", "exact disposable installation intent for cold inspection")
@@ -92,7 +93,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		<-ctx.Done()
 		return nil
 	}
-	if args[0] != "owner" && args[0] != "app" && args[0] != "setup" && args[0] != "recover" && args[0] != "approve" {
+	if args[0] != "owner" && args[0] != "app" && args[0] != "setup" && args[0] != "recover" && args[0] != "approve" && args[0] != "import" {
 		return errors.New("unsupported fixture command")
 	}
 	owner := args[0] != "app"
@@ -106,7 +107,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	}
 	r := signer.Request{Action: *action}
 	if *requestStdin {
-		if *passwordStdin || args[0] == "setup" || args[0] == "recover" {
+		if *passwordStdin || args[0] == "setup" || args[0] == "recover" || args[0] == "import" {
 			return errors.New("public fixture input cannot carry credentials")
 		}
 		document, e := io.ReadAll(io.LimitReader(input, 16*1024+1))
@@ -178,6 +179,11 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 			return signer.Call(ctx, c, true, r)
 		})
 	}
+	if args[0] == "import" {
+		return conductImport(ctx, *seedPath, *documentPath, password, out, func(ctx context.Context, r signer.Request) (signer.Response, error) {
+			return signer.Call(ctx, c, true, r)
+		})
+	}
 	if args[0] == "setup" || args[0] == "recover" {
 		return ownerFlow(ctx, c, args[0], *documentPath, password, out)
 	}
@@ -191,6 +197,11 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 				return errors.New("unlock lifetime must be one second to one hour")
 			}
 			r.UnlockSeconds = int(*lifetime / time.Second)
+		}
+	case "import-fixture-seed":
+		r.Document, err = readOwnerFile(*documentPath)
+		if err == nil {
+			r.Password, err = password("New fixture unlock password", true)
 		}
 	case "restore", "verify-backup":
 		r.Document, err = readOwnerFile(*documentPath)

@@ -1,5 +1,5 @@
 // Package signer is an engineering custody fixture. It has no transaction or
-// arbitrary-message signing API, chain adapter, key import, or automatic unlock.
+// arbitrary-message signing API, chain adapter, real-key admission, or automatic unlock.
 package signer
 
 import (
@@ -275,6 +275,21 @@ func (v *Vault) save(e envelope) error {
 }
 
 func (v *Vault) Create(password []byte) error {
+	seed := randomBytes(ed25519.SeedSize)
+	defer wipe(seed)
+	return v.createSeed(seed, password, false)
+}
+
+// ImportFixtureSeed accepts only a raw disposable Ed25519 seed. Import never
+// inherits permissions or unlocks; fresh identity and a recovery hold are durable.
+func (v *Vault) ImportFixtureSeed(seed, password []byte) error {
+	if len(seed) != ed25519.SeedSize {
+		return errors.New("expected a 32-byte disposable seed")
+	}
+	return v.createSeed(seed, password, true)
+}
+
+func (v *Vault) createSeed(seed, password []byte, recovery bool) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.closed {
@@ -283,16 +298,14 @@ func (v *Vault) Create(password []byte) error {
 	if v.record != nil || v.ledger != nil {
 		return errors.New("fixture vault already exists; never overwrite wallet identity")
 	}
-	seed := randomBytes(ed25519.SeedSize)
-	defer wipe(seed)
 	private := ed25519.NewKeyFromSeed(seed)
 	defer wipe(private)
 	ref := AccountRef{Version: 1, SignerID: v.signerID, WalletID: randomID(), Epoch: randomID(), Network: FixtureNetwork, PublicKey: hex.EncodeToString(private[ed25519.SeedSize:])}
-	e, err := seal(seed, password, ref, "vault", false)
+	e, err := seal(seed, password, ref, "vault", recovery)
 	if err != nil {
 		return err
 	}
-	return v.save(e) // Creation does not unlock.
+	return v.save(e)
 }
 
 func (v *Vault) Unlock(password []byte, lifetime time.Duration) error {

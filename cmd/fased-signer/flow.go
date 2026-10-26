@@ -126,3 +126,27 @@ func conductFlow(ctx context.Context, action, path string, ask askPassword, out 
 		BackupFile     string              `json:"backupFile"`
 	}{locked.Status.PublicView(), true, path})
 }
+
+// The protected owner helper reads the seed. The existing setup flow owns
+// backup publication, verification, bounded unlock and lock-on-failure.
+func conductImport(ctx context.Context, seedPath, backupPath string, ask askPassword, out io.Writer, call ownerCall) error {
+	seed, err := readOwnerFile(seedPath)
+	if err != nil {
+		return err
+	}
+	defer clear(seed)
+	if len(seed) != 32 {
+		return errors.New("expected a 32-byte disposable seed")
+	}
+	return conductFlow(ctx, "setup", backupPath, ask, out, func(ctx context.Context, r signer.Request) (signer.Response, error) {
+		if r.Action == "create" {
+			r.Action = "import-fixture-seed"
+			r.Document = seed
+		}
+		response, err := call(ctx, r)
+		if r.Action == "status" && err == nil && response.Status.Account != nil {
+			return signer.Response{}, errors.New("import requires an empty signer; use setup to finish an interrupted import")
+		}
+		return response, err
+	})
+}

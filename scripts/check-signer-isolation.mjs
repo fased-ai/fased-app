@@ -350,7 +350,7 @@ s=socket.socket(socket.AF_UNIX); s.connect(c['socketDir']+'/owner.sock'); result
 s=socket.socket(socket.AF_UNIX); s.connect(c['socketDir']+'/app.sock'); f=s.makefile('rwb'); hello=json.loads(f.readline())
 f.write((json.dumps({'version':1,'signerId':c['signerId'],'challenge':hello['challenge'],'request':{'action':'export-fixture-seed'}})+'\n').encode()); f.flush()
 r=json.loads(f.readline()); result['rawExportDenied']=bool(r.get('error')) and not r.get('document'); s.close()
-for action in ['verify-backup','fixture-policy','fixture-grant','fixture-revoke','fixture-recover-authority','fixture-approve-proposal','fixture-update-inventory','fixture-update-status','fixture-update-prepare','fixture-update-abort','fixture-update-stage-status','fixture-update-stage-write','fixture-update-stage-finish','fixture-update-preflight','fixture-install-controller']:
+for action in ['import-fixture-seed','verify-backup','fixture-policy','fixture-grant','fixture-revoke','fixture-recover-authority','fixture-approve-proposal','fixture-update-inventory','fixture-update-status','fixture-update-prepare','fixture-update-abort','fixture-update-stage-status','fixture-update-stage-write','fixture-update-stage-finish','fixture-update-preflight','fixture-install-controller']:
  s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/app.sock');f=s.makefile('rwb');h=json.loads(f.readline());f.write((json.dumps({'version':1,'signerId':c['signerId'],'challenge':h['challenge'],'request':{'action':action}})+'\n').encode());f.flush();v=json.loads(f.readline());result['raw:'+action]=v.get('error')=='owner administration denied';s.close()
 print(json.dumps(result))
 `;
@@ -481,6 +481,74 @@ print(json.dumps(result))
         `${root}/owner-backups/locked.fixture`,
       ]),
     ),
+  );
+  await stop(server);
+  const importConfig = {
+    ...config,
+    signerId: randomBytes(16).toString("hex"),
+    stateDir: `${root}/import-state`,
+    socketDir: `${root}/import-sockets`,
+  };
+  const importPath = await publishConfig("import-identity.json", importConfig);
+  server = await start(signer, importPath);
+  const importBackup = `${root}/owner-backups/import.json`;
+  const importArgs = [
+    "--seed-file",
+    seed,
+    "--file",
+    importBackup,
+    "--password-stdin",
+  ];
+  const importPasswords = `${replacement}\n${replacement}\n${backupPassword}\n${backupPassword}\n`;
+  check(
+    "appCannotImport",
+    fails(() =>
+      invoke(app, importPath, "import", "status", importPasswords, importArgs),
+    ),
+  );
+  const imported = invoke(
+    owner,
+    importPath,
+    "import",
+    "status",
+    importPasswords,
+    importArgs,
+  );
+  check(
+    "protectedImportBackupLocked",
+    imported.backupVerified &&
+      imported.status.locked &&
+      imported.status.recoveryRequired &&
+      !imported.status.walletSigner &&
+      imported.status.account.publicKey === initial.account.publicKey &&
+      imported.status.account.walletId !== initial.account.walletId &&
+      imported.status.account.epoch !== initial.account.epoch,
+  );
+  check(
+    "importCannotOverwrite",
+    fails(() =>
+      invoke(
+        owner,
+        importPath,
+        "import",
+        "status",
+        importPasswords,
+        importArgs,
+      ),
+    ),
+  );
+  check(
+    "appCannotReadImportBackup",
+    fails(() => as(app, "/usr/bin/cat", [importBackup])),
+  );
+  await stop(server);
+  server = await start(signer, importPath);
+  const importRestart = invoke(owner, importPath, "owner", "status");
+  check(
+    "importRestartPreservesHold",
+    importRestart.locked &&
+      importRestart.recoveryRequired &&
+      importRestart.account.walletId === imported.status.account.walletId,
   );
   await stop(server);
   const restoredConfig = {

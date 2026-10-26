@@ -60,6 +60,9 @@ type Response struct {
 func execute(v *Vault, r Request, owner bool) Response {
 	defer wipe(r.Password)
 	defer wipe(r.NewPassword)
+	if r.Action == "import-fixture-seed" {
+		defer wipe(r.Document)
+	}
 	var document []byte
 	var err error
 	if !owner && !AppActionAllowed(r.Action) {
@@ -130,6 +133,8 @@ func execute(v *Vault, r Request, owner bool) Response {
 		}
 		return out
 	case "status":
+	case "import-fixture-seed":
+		err = v.ImportFixtureSeed(r.Document, r.Password)
 	case "create":
 		err = v.Create(r.Password)
 	case "unlock":

@@ -26,7 +26,7 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 		return bootstrapCommand(args[1:], in, out, errOut)
 	}
 	if len(args) == 0 {
-		return errors.New("usage: fased-app custody install|status|setup|recover|approve|updates|accounts|login|remove --disposable-fixture [options]")
+		return errors.New("usage: fased-app custody install|status|setup|import|recover|approve|updates|accounts|login|remove --disposable-fixture [options]")
 	}
 	if runtime.GOOS != "linux" || os.Getuid() <= 0 || os.Getuid() != os.Geteuid() {
 		return errors.New("custody fixture requires an ordinary Linux owner; real wallets remain disabled")
@@ -38,6 +38,7 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 	key := f.String("signer-binary", "", "matching engineering fased-signer executable")
 	listen := f.String("listen", "127.0.0.1:7332", "managed private loopback listener")
 	file := f.String("backup-file", "", "owner-selected private encrypted backup file")
+	seedFile := f.String("seed-file", "", "private owner disposable seed file; import only")
 	proposalFile := f.String("proposal-file", "", "owner-selected public proposal JSON")
 	approvalStdin := f.Bool("approval-stdin", false, "fixture CI only: approval challenge through stdin")
 	requestStdin := f.Bool("request-stdin", false, "public account record JSON from stdin")
@@ -129,11 +130,17 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 		child.Stdout = out
 		child.Stderr = errOut
 		return child.Run()
-	case "setup", "recover":
+	case "setup", "recover", "import":
 		if *file == "" {
 			return errors.New("choose --backup-file in a private owner directory")
 		}
 		command := []string{args[0], "--config", m.Root + "/identity.json", "--disposable-fixture", "--file", *file}
+		if args[0] == "import" {
+			if *seedFile == "" {
+				return errors.New("choose --seed-file in a private owner directory")
+			}
+			command = append(command, "--seed-file", *seedFile)
+		}
 		if *passwordStdin {
 			command = append(command, "--password-stdin")
 		}

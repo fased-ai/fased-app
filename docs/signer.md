@@ -418,3 +418,21 @@ The result is transient and does not save an endpoint, alter accounts or authori
 signing. Controlled HTTPS tests exercise the same parser with a disposable TLS
 server. This is not verification of a real Solana cluster or production RPC
 security; live DNS/IP admission, credential handling and activation remain held.
+
+## Protected disposable import
+
+`fased-app custody import --disposable-fixture --seed-file /private/seed.fixture --backup-file /private/backup.json`
+
+Use an unfunded disposable 32-byte Ed25519 seed file, owned by the ordinary owner,
+mode 0600 in a private directory. No mnemonic, expanded private-key JSON, key
+argument, environment variable or UI upload is accepted. The immutable owner
+helper reads the seed directly; the app backend never handles it. Passwords use
+the owner terminal (private stdin is available only for fixture automation).
+
+Import requires an empty signer and a new backup path. It assigns fresh wallet
+and epoch identifiers, retains a recovery hold, encrypts and verifies the backup,
+and finishes locked. It neither adopts old permissions nor enables signing.
+An interrupted import preserves the new identity: use `custody setup` with the
+same backup path and current password to finish backup verification. Never retry
+by deleting signer state. Existing input/backup files are not overwritten or removed.
+Real keys, funds, signing and mining remain disabled.

@@ -84,7 +84,7 @@ func protocolRequest(t *testing.T, c Config, owner bool, r Request) Response {
 
 func TestOwnerAndAppProtocolBoundaries(t *testing.T) {
 	c, v := protocolFixture(t, os.Geteuid(), os.Geteuid())
-	for _, action := range []string{"create", "unlock", "lock", "backup", "verify-backup", "restore", "export-fixture-seed", "sign", "submit", "grant"} {
+	for _, action := range []string{"import-fixture-seed", "create", "unlock", "lock", "backup", "verify-backup", "restore", "export-fixture-seed", "sign", "submit", "grant"} {
 		r := protocolRequest(t, c, false, Request{Action: action, Password: []byte("Disposable RPC password")})
 		if r.Error == "" || r.Document != nil || v.Status().Account != nil {
 			t.Fatalf("app authorized %s", action)
