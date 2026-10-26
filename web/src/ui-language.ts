@@ -10,6 +10,18 @@ export const languages = {
 export type Language = keyof typeof languages;
 // Interface copy only. Never translate user records, model output or server receipts.
 const rows = {
+  "Check connection": [
+    "Проверить связь",
+    "Comprobar conexión",
+    "检查连接",
+    "연결 확인",
+  ],
+  "Connected (demo)": [
+    "Подключено (демо)",
+    "Conectado (demo)",
+    "已连接（演示）",
+    "연결됨 (데모)",
+  ],
   "API key": ["API-ключ", "Clave API", "API 密钥", "API 키"],
   "RPC API key": ["Ключ RPC", "Clave RPC", "RPC 密钥", "RPC 키"],
   "Vault password": [

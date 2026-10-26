@@ -8,6 +8,7 @@ type Status = {
   locked: boolean;
   testOnly: boolean;
   liveRPC: boolean;
+  check?: { fixtureOnly: boolean; liveRPC: boolean };
 };
 export function RPCCredential({
   accountId,
@@ -57,6 +58,7 @@ export function RPCCredential({
     setBusy(true);
     setError("");
     setVerified(false);
+    setStatus({ ...status, check: undefined });
     try {
       const v = await core.request<Status>("accounts/rpc-credential", "PUT", {
         accountId,
@@ -67,6 +69,8 @@ export function RPCCredential({
         ...(action === "save" ? { key } : {}),
       });
       if (epoch === generation.current) {
+        if (action === "check" && (!v.check?.fixtureOnly || v.check.liveRPC))
+          throw new Error("Unexpected RPC capability");
         setStatus(v);
         setVerified(action === "verify");
       }
@@ -128,6 +132,13 @@ export function RPCCredential({
             </button>
             <button
               type="button"
+              disabled={busy || !password || status.stale || !configured}
+              onClick={() => void change("check")}
+            >
+              {t("Check connection")}
+            </button>
+            <button
+              type="button"
               disabled={busy || !password}
               onClick={() => void change("remove")}
             >
@@ -138,6 +149,7 @@ export function RPCCredential({
         {status?.saved && (
           <span>{t(status.stale ? "Reconnect" : "Saved")}</span>
         )}
+        {status?.check && <span role="status">{t("Connected (demo)")}</span>}
         {verified && <span role="status">{t("Key verified")}</span>}
         {error && <p role="alert">{error}</p>}
       </form>

@@ -4888,6 +4888,30 @@ test("public account records share UI/CLI state without wallet authority", async
     .fill("Disposable browser vault password 123");
   await page.getByRole("button", { name: "Verify key", exact: true }).click();
   await expect(page.getByText("Key verified", { exact: true })).toBeVisible();
+  await page
+    .getByLabel("Vault password", { exact: true })
+    .fill("Disposable browser vault password 123");
+  await page
+    .getByRole("button", { name: "Check connection", exact: true })
+    .click();
+  await expect(
+    page.getByText("Connected (demo)", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Vault password", { exact: true })).toHaveValue(
+    "",
+  );
+  const connection = await privateCLI(["accounts", "--rpc-credential-stdin"], {
+    accountId: state.record.accounts[0].id,
+    revision: state.record.revision,
+    action: "check",
+    ref: credential.ref,
+    passphrase: "Disposable browser vault password 123",
+  });
+  expect(connection.check.fixtureOnly).toBe(true);
+  expect(connection.check.liveRPC).toBe(false);
+  expect(connection.locked).toBe(true);
+  expect(JSON.stringify(connection)).not.toContain("disposable-browser");
+
   await privateCLI(["accounts", "--rpc-credential-stdin"], {
     accountId: state.record.accounts[0].id,
     revision: state.record.revision,

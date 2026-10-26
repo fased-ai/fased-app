@@ -502,3 +502,24 @@ Identity/configuration changes make the saved binding stale; explicit replacemen
 requires its password. Removed wallet records do not silently delete vault files.
 This is disposable credential storage acceptance, not live RPC integration or
 production credential recovery acceptance. The Go signer remains unchanged.
+
+### One-operation authenticated RPC check
+
+`accounts --rpc-credential-stdin` also accepts `action: "check"`, with the saved
+account revision, credential reference and vault passphrase; no `key` or endpoint
+override is accepted. Wallets → RPC → API key → Check connection uses that same
+operation. The result is transient and labelled demo, never persisted readiness.
+
+The existing SQLite write fence prevents concurrent account/credential edits
+through the core while the operation runs (five-second context, three-second HTTP
+budget). Each of the two fixed genesis/health requests and final completion
+rechecks the credential bytes and current managed signer reference. Plaintext is
+cleared after the operation; no unlock session, retries or unattended grant exists.
+
+Ordinary builds use an inert authenticated responder. Go tests may inject a
+controlled HTTPS adapter that maps only the compiled fixture origin to a literal
+loopback IP with explicit certificate roots. No proxy, redirect, cookie, runtime
+origin/CA override or live transport is exposed. Credentials appear only in the
+Authorization header, never in URLs, public results or errors. Responses remain
+bounded and must match the fixture network and healthy status. This proves the
+authenticated transport contract, not real provider acceptance or live connectivity.

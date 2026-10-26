@@ -1,7 +1,8 @@
 package core
 
 // RPC credentials are separate from account metadata and wallet authority.
-// No plaintext is retained after an operation or sent to any transport.
+// No plaintext is retained after an operation. Authenticated checks use only
+// compiled fixtures or test-injected controlled HTTPS, never a live transport.
 import (
 	"context"
 	"crypto/aes"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type RPCCredentialCommand struct {
@@ -25,12 +27,13 @@ type RPCCredentialCommand struct {
 	Passphrase string `json:"passphrase,omitempty"`
 }
 type RPCCredentialView struct {
-	Ref      string `json:"ref"`
-	Saved    bool   `json:"saved"`
-	Stale    bool   `json:"stale"`
-	Locked   bool   `json:"locked"`
-	TestOnly bool   `json:"testOnly"`
-	LiveRPC  bool   `json:"liveRPC"`
+	Ref      string          `json:"ref"`
+	Saved    bool            `json:"saved"`
+	Stale    bool            `json:"stale"`
+	Locked   bool            `json:"locked"`
+	TestOnly bool            `json:"testOnly"`
+	LiveRPC  bool            `json:"liveRPC"`
+	Check    *RPCCheckResult `json:"check,omitempty"`
 }
 type rpcVault struct {
 	Version    int    `json:"version"`
@@ -76,9 +79,12 @@ func (s *Store) readRPCVault(id string) (rpcVault, error) {
 	return v, nil
 }
 func (s *Store) RPCCredential(ctx context.Context, c RPCCredentialCommand) (RPCCredentialView, error) {
+	return s.rpcCredential(ctx, c, checkCredentialRPC)
+}
+func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check func(context.Context, RPCCheckRequest, []byte, func() error) (RPCCheckResult, error)) (RPCCredentialView, error) {
 	fail := errors.New("RPC credential operation refused")
 	view := RPCCredentialView{Locked: true, TestOnly: true}
-	if !hexValue(c.AccountID, 16) || (c.Action != "status" && c.Action != "save" && c.Action != "verify" && c.Action != "remove") {
+	if !hexValue(c.AccountID, 16) || (c.Action != "status" && c.Action != "save" && c.Action != "verify" && c.Action != "check" && c.Action != "remove") {
 		return view, fail
 	}
 	if c.Action == "status" {
@@ -87,6 +93,11 @@ func (s *Store) RPCCredential(ctx context.Context, c RPCCredentialCommand) (RPCC
 		}
 	} else if !validPassword(c.Passphrase) || (c.Action == "save" && !testRPCCredential(c.Key)) || (c.Action != "save" && c.Key != "") {
 		return view, fail
+	}
+	if c.Action == "check" {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
 	}
 	// SQLite's write fence serializes configuration/identity changes and vault
 	// operations across processes, and refuses mutations during update pause.
@@ -120,7 +131,7 @@ func (s *Store) RPCCredential(ctx context.Context, c RPCCredentialCommand) (RPCC
 	if account == nil {
 		return view, fail
 	}
-	if (c.Action == "save" || c.Action == "verify") && account.Mode == "fixture-managed" {
+	if (c.Action == "save" || c.Action == "verify" || c.Action == "check") && account.Mode == "fixture-managed" {
 		live := s.fixtureView(ctx)
 		if account.Signer == nil || live.Status == nil || live.Status.Account == nil || *live.Status.Account != *account.Signer {
 			return view, fail
@@ -154,6 +165,41 @@ func (s *Store) RPCCredential(ctx context.Context, c RPCCredentialCommand) (RPCC
 		defer clear(plain)
 		if err != nil || !testRPCCredential(string(plain)) {
 			return view, fail
+		}
+
+		if c.Action == "check" {
+			if view.Stale || check == nil {
+				return view, fail
+			}
+			sealed, _ := json.Marshal(v)
+			valid := func() error {
+				if ctx.Err() != nil {
+					return fail
+				}
+				current, e := s.readRPCVault(c.AccountID)
+				if e != nil {
+					return fail
+				}
+				encoded, _ := json.Marshal(current)
+				if sha256.Sum256(encoded) != sha256.Sum256(sealed) {
+					return fail
+				}
+				if account.Mode == "fixture-managed" {
+					live := s.fixtureView(ctx)
+					if account.Signer == nil || live.Status == nil || live.Status.Account == nil || *live.Status.Account != *account.Signer {
+						return fail
+					}
+				}
+				return nil
+			}
+			result, e := check(ctx, RPCCheckRequest{Endpoint: account.RPC.Endpoint, Network: account.RPC.Network}, plain, valid)
+			if e != nil || valid() != nil {
+				return view, errors.New("Authenticated RPC check failed")
+			}
+			result.Account = account
+			result.AccountRevision = &revision
+			view.Check = &result
+			return view, nil
 		}
 	} else if c.Action != "save" {
 		return view, fail
