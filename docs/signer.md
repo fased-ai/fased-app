@@ -550,3 +550,30 @@ instance metadata. It does not recover a forgotten password, migrate credentials
 to a different instance, undo provider revocation or establish real-key acceptance.
 Browser export is intentionally absent: private-file export remains in the CLI;
 the browser can inspect/restore an explicitly selected encrypted backup.
+
+### Dormant public RPC admission
+
+The existing read-only checker now contains a disabled HTTPS path for Solana
+`mainnet-beta` and `devnet`. It shares the fixture check's bounded
+`getGenesisHash` → `getHealth` protocol. The canonical genesis values are pinned
+from [Solana validator cluster documentation](https://edge.docs.solanalabs.com/de/clusters/available);
+[getGenesisHash](https://solana.com/docs/rpc/http/getgenesishash) reports the
+connected cluster, not endpoint honesty or transaction finality.
+
+Admission accepts only HTTPS DNS origins on the default port, with an optional
+root slash. Credentials, other paths, queries, fragments, IP literals and local
+names are refused. Every connection resolves once, rejects the entire answer set
+if any address is non-public, and dials a checked IP while TLS verifies the
+original hostname. Proxies, redirects and persistent connections are disabled.
+Responses and elapsed time retain the existing bounds; errors do not echo URLs
+or server bodies.
+
+Ordinary constructors keep dispatch closed before DNS. No environment, UI or CLI
+switch enables it. Tests alone inject a loopback TLS destination and trusted test
+certificate into the actual transport. Existing saved wallet settings, credentials
+and signer authority remain disposable-only and unchanged. This implements
+unauthenticated origin/network checking; provider-specific Helius/Alchemy secret
+routing, encrypted production credential admission, supported-network wallet
+binding and separately authorized live acceptance remain unfinished. A root-only
+URL policy must not be presented as support for those providers' authenticated
+URLs. No new schema or automatic migration is introduced.

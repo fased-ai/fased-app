@@ -33,10 +33,13 @@ type RPCCheckResult struct {
 	LiveRPC         bool      `json:"liveRPC"`
 }
 
-// CheckFixtureRPC has no live transport, credential storage or signer authority.
-// A later live adapter must separately admit endpoints, DNS/IPs and credentials.
+// CheckFixtureRPC preserves fixture behavior; public endpoints reach the dormant
+// production checker, whose ordinary constructor refuses before DNS or dispatch.
 func CheckFixtureRPC(ctx context.Context, input RPCCheckRequest) (RPCCheckResult, error) {
-	return checkRPC(ctx, input, fixtureRPCTransport{})
+	if input.Endpoint == FixtureRPCURL {
+		return checkRPC(ctx, input, fixtureRPCTransport{})
+	}
+	return checkPublicRPC(ctx, input, newPublicRPCTransport())
 }
 func checkRPC(ctx context.Context, input RPCCheckRequest, rt http.RoundTripper) (RPCCheckResult, error) {
 	var empty RPCCheckResult
@@ -45,6 +48,11 @@ func checkRPC(ctx context.Context, input RPCCheckRequest, rt http.RoundTripper) 
 	if input.Endpoint != FixtureRPCURL || input.Network != signer.FixtureNetwork || rt == nil {
 		return empty, errors.New("only the disposable RPC endpoint and network are available")
 	}
+	return checkRPCProtocol(ctx, input, rt, fixtureGenesis, true)
+}
+
+func checkRPCProtocol(ctx context.Context, input RPCCheckRequest, rt http.RoundTripper, genesis string, fixture bool) (RPCCheckResult, error) {
+	var empty RPCCheckResult
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	client := http.Client{Transport: rt, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("RPC redirects refused") }}
@@ -68,14 +76,14 @@ func checkRPC(ctx context.Context, input RPCCheckRequest, rt http.RoundTripper) 
 		if e != nil {
 			return empty, e
 		}
-		if i == 0 && result != fixtureGenesis {
+		if i == 0 && result != genesis {
 			return empty, errors.New("RPC network mismatch")
 		}
 		if i == 1 && result != "ok" {
 			return empty, errors.New("RPC unhealthy")
 		}
 	}
-	return RPCCheckResult{Endpoint: FixtureRPCURL, Network: signer.FixtureNetwork, GenesisHash: fixtureGenesis, CheckedAt: time.Now().UTC(), FixtureOnly: true}, nil
+	return RPCCheckResult{Endpoint: input.Endpoint, Network: input.Network, GenesisHash: genesis, CheckedAt: time.Now().UTC(), FixtureOnly: fixture, LiveRPC: !fixture}, nil
 }
 
 func rpcResult(data []byte, id int) (string, error) {
