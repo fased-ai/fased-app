@@ -240,6 +240,8 @@ try {
   for (const [name, user, mode] of [
     ["state", signer, "0700"],
     ["sockets", signer, "0755"],
+    ["import-state", signer, "0700"],
+    ["import-sockets", signer, "0755"],
     ["restored-state", signer, "0700"],
     ["restored-sockets", signer, "0755"],
     ["owner-backups", owner, "0700"],
