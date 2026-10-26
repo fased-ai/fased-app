@@ -376,3 +376,20 @@ returns public status only. Wrong passwords, another wallet's backup, locked
 state and application-channel requests are refused. Preserve the original backup;
 verification never replaces it. This does not validate disk-loss recovery or
 introduce RPC, real-wallet import, signing or network access.
+
+## Disposable Solana public identity
+
+Signer status now includes an optional versioned `publicIdentity`: the canonical
+base58 address of the existing 32-byte Ed25519 public key, `chain: solana`,
+`network: disposable-fixture:v1`, and `fixtureOnly: true`. It is available while
+locked and passes through the same read-only core account view and CLI. Wallets
+displays it only for a current managed fixture reference; stale/unavailable
+references retain their original public key. The original hex key remains the
+stored authority identity and is available in the address tooltip.
+
+This is address formatting, not RPC verification or proof of an on-chain account.
+No balance, cluster, funding, signing or Hyperliquid capability is implied. Never
+fund these disposable addresses. Recovery preserves the address while changing
+the authority epoch and retaining the lock/recovery hold. No vault/account schema
+or key material is changed. Encoding follows the [Solana account address
+format](https://solana.com/docs/core/accounts/account-structure).

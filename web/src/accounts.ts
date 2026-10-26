@@ -41,6 +41,13 @@ export type AccountsView = {
     available: boolean;
     status?: {
       account?: AccountRef;
+      publicIdentity?: {
+        version: number;
+        chain: string;
+        address: string;
+        network: string;
+        fixtureOnly: boolean;
+      };
       locked: boolean;
       recoveryRequired: boolean;
       walletSigner: boolean;
@@ -56,3 +63,17 @@ export type AccountsView = {
 };
 export const fixtureNetwork = "disposable-fixture:v1";
 export const publicID = () => crypto.randomUUID().replaceAll("-", "");
+
+export function accountAddress(a: Account, view: AccountsView): string {
+  const status = view.fixture.status;
+  const identity = status?.publicIdentity;
+  return a.mode === "fixture-managed" &&
+    view.accountStates[a.id] === "current-fixture" &&
+    status?.account?.publicKey === a.publicKey &&
+    identity?.version === 1 &&
+    identity.chain === "solana" &&
+    identity.fixtureOnly &&
+    identity.network === fixtureNetwork
+    ? identity.address
+    : a.publicKey;
+}

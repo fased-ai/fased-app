@@ -3,6 +3,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useCore } from "../core";
 import { Badge, SectionHead } from "../components/shared";
 import {
+  accountAddress,
   fixtureNetwork,
   publicID,
   type Account,
@@ -281,7 +282,9 @@ export function AccountManagement() {
                       uiText("Reference unverified")}{" "}
                     {uiText("· Balance unavailable")}
                   </p>
-                  <code className="account-key">{a.publicKey}</code>
+                  <code className="account-key" title={a.publicKey}>
+                    {accountAddress(a, view)}
+                  </code>
                   {a.signer && (
                     <p className="account-key">
                       {uiText("Wallet ")}

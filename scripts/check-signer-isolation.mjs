@@ -331,6 +331,13 @@ try {
       !initial.financialExecution &&
       !initial.unattendedUnlock,
   );
+  check(
+    "solanaPublicIdentityWhileLocked",
+    initial.publicIdentity?.chain === "solana" &&
+      initial.publicIdentity?.fixtureOnly === true &&
+      initial.publicIdentity?.network === config.mode &&
+      /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(initial.publicIdentity?.address),
+  );
   // Bypass the client role guard. The daemon must enforce actual kernel UID,
   // even when a malicious app constructs the owner protocol itself.
   const probe = String.raw`
@@ -355,7 +362,10 @@ print(json.dumps(result))
   const view = invoke(app, configPath, "app", "status");
   check(
     "appSeesPublicReferenceOnly",
-    view.account.publicKey === initial.account.publicKey && !view.walletSigner,
+    view.account.publicKey === initial.account.publicKey &&
+      JSON.stringify(view.publicIdentity) ===
+        JSON.stringify(initial.publicIdentity) &&
+      !view.walletSigner,
   );
   check(
     "appCannotUseOwnerHelper",
@@ -510,6 +520,7 @@ print(json.dumps(result))
     restored.locked &&
       restored.recoveryRequired &&
       restored.account.publicKey === initial.account.publicKey &&
+      restored.publicIdentity?.address === initial.publicIdentity?.address &&
       restored.account.walletId === initial.account.walletId &&
       restored.account.epoch !== initial.account.epoch &&
       restored.account.signerId !== initial.account.signerId &&

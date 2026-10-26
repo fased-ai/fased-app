@@ -118,7 +118,7 @@ func TestAccountsBindLiveEpochAndNeverTrustAppApproval(t *testing.T) {
 		calls = append(calls, r.Action)
 		switch r.Action {
 		case "status":
-			return signer.Response{Status: signer.Status{FixtureOnly: true, Locked: true, Account: &ref}}, nil
+			return signer.Response{Status: signer.Status{FixtureOnly: true, Locked: true, Account: &ref, PublicIdentity: ref.PublicIdentity()}}, nil
 		case "fixture-approvals":
 			return signer.Response{Approvals: []signer.ApprovalReceipt{receipt}}, nil
 		}
@@ -135,6 +135,9 @@ func TestAccountsBindLiveEpochAndNeverTrustAppApproval(t *testing.T) {
 	v, e := s.UpdateAccounts(t.Context(), r)
 	if e != nil {
 		t.Fatal(e)
+	}
+	if v.Fixture.Status.PublicIdentity == nil || v.Fixture.Status.PublicIdentity.Chain != "solana" || v.Fixture.Status.WalletSigner {
+		t.Fatal("public identity lost or conferred authority")
 	}
 	if v.Proposals[0].Receipt.State != "not-approved" {
 		t.Fatal("draft conferred authority")
