@@ -66,17 +66,19 @@ type Status struct {
 }
 
 type Vault struct {
-	mu       sync.Mutex
-	store    *storage
-	signerID string
-	record   *envelope
-	ledger   *ledger
-	seed     []byte
-	until    time.Time
-	timer    *time.Timer
-	now      func() time.Time
-	closed   bool
-	bootID   string
+	mu         sync.Mutex
+	store      *storage
+	signerID   string
+	network    string
+	managedRef *AccountRef
+	record     *envelope
+	ledger     *ledger
+	seed       []byte
+	until      time.Time
+	timer      *time.Timer
+	now        func() time.Time
+	closed     bool
+	bootID     string
 }
 
 func validPassword(p []byte) bool { return utf8.Valid(p) && utf8.RuneCount(p) >= 12 && len(p) <= 1024 }
@@ -112,8 +114,7 @@ func (e envelope) aad() []byte {
 }
 
 func (e envelope) validate(purpose string) error {
-	if e.Version != VaultFormat || e.Purpose != purpose || e.KDF != "argon2id-m65536-t3-p2-aes256gcm-v1" ||
-		e.Ref.Version != 1 || e.Ref.Network != FixtureNetwork || !validID(e.Ref.SignerID) || !validID(e.Ref.WalletID) || !validID(e.Ref.Epoch) ||
+	if !validEnvelopeIdentity(e) || e.Purpose != purpose || e.KDF != "argon2id-m65536-t3-p2-aes256gcm-v1" ||
 		len(e.Salt) != 16 || len(e.Nonce) != 12 || len(e.Ciphertext) != ed25519.SeedSize+16 {
 		return errors.New("unsupported or damaged fixture document")
 	}
@@ -133,6 +134,9 @@ func seal(seed, password []byte, ref AccountRef, purpose string, recovery bool) 
 		return envelope{}, errors.New("use 12 or more characters, at most 1024 bytes")
 	}
 	e := envelope{Version: VaultFormat, Purpose: purpose, KDF: "argon2id-m65536-t3-p2-aes256gcm-v1", Ref: ref, RecoveryRequired: recovery, Salt: randomBytes(16), Nonce: randomBytes(12)}
+	if ref.Version == 2 {
+		e.Version = 2
+	}
 	key := argon2.IDKey(password, e.Salt, 3, 64*1024, 2, 32)
 	defer wipe(key)
 	block, err := aes.NewCipher(key)
@@ -181,12 +185,20 @@ func unseal(e envelope, password []byte, purpose string) ([]byte, error) {
 // to the Linux transport; same-UID unit fixtures do not establish OS isolation.
 func Open(dir, signerID string) (*Vault, error) { return openVault(dir, signerID, false) }
 func openVault(dir, signerID string, readOnly bool) (*Vault, error) {
+	return openVaultNetwork(dir, signerID, readOnly, "")
+}
+func openVaultNetwork(dir, signerID string, readOnly bool, network string) (*Vault, error) {
+	if network != "" && !managedNetwork(network) {
+		return nil, ErrUnavailable
+	}
 	if !validID(signerID) {
 		return nil, errors.New("invalid signer identity")
 	}
 	var s *storage
 	var err error
-	if readOnly {
+	if network != "" {
+		s, err = openNetworkStorage(dir, readOnly, network)
+	} else if readOnly {
 		s, err = openStorageReadonly(dir)
 	} else {
 		s, err = openStorage(dir)
@@ -194,12 +206,15 @@ func openVault(dir, signerID string, readOnly bool) (*Vault, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := &Vault{store: s, signerID: signerID, now: time.Now, bootID: update.NewProbe()}
+	v := &Vault{store: s, signerID: signerID, network: network, now: time.Now, bootID: update.NewProbe()}
 	b, err := s.read()
 	if err == nil {
 		var e envelope
 		if err = decode(b, &e); err == nil {
 			err = e.validate("vault")
+			if err == nil && !envelopeForNetwork(e, network) {
+				err = ErrUnavailable
+			}
 		}
 		if err == nil && e.Ref.SignerID != signerID {
 			err = errors.New("vault belongs to another signer identity")
@@ -283,6 +298,9 @@ func (v *Vault) Create(password []byte) error {
 // ImportFixtureSeed accepts only a raw disposable Ed25519 seed. Import never
 // inherits permissions or unlocks; fresh identity and a recovery hold are durable.
 func (v *Vault) ImportFixtureSeed(seed, password []byte) error {
+	if v.network != "" {
+		return ErrUnavailable
+	}
 	if len(seed) != ed25519.SeedSize {
 		return errors.New("expected a 32-byte disposable seed")
 	}
@@ -295,12 +313,17 @@ func (v *Vault) createSeed(seed, password []byte, recovery bool) error {
 	if v.closed {
 		return ErrUnavailable
 	}
-	if v.record != nil || v.ledger != nil {
+	if v.record != nil || v.ledger != nil || v.managedRef != nil {
 		return errors.New("fixture vault already exists; never overwrite wallet identity")
 	}
 	private := ed25519.NewKeyFromSeed(seed)
 	defer wipe(private)
 	ref := AccountRef{Version: 1, SignerID: v.signerID, WalletID: randomID(), Epoch: randomID(), Network: FixtureNetwork, PublicKey: hex.EncodeToString(private[ed25519.SeedSize:])}
+	if v.network != "" {
+		ref.Version = 2
+		ref.Network = v.network
+		recovery = true
+	}
 	e, err := seal(seed, password, ref, "vault", recovery)
 	if err != nil {
 		return err
@@ -382,7 +405,7 @@ func (v *Vault) VerifyBackup(document, password []byte) error {
 		return err
 	}
 	defer wipe(seed)
-	if e.Ref.WalletID != v.record.Ref.WalletID || !bytes.Equal(seed, v.seed) {
+	if !sameWallet(e.Ref, v.record.Ref) || !bytes.Equal(seed, v.seed) {
 		return errors.New("backup belongs to another fixture wallet")
 	}
 	return nil
@@ -407,6 +430,12 @@ func (v *Vault) Restore(backup, backupPassword, newPassword []byte) error {
 	if err := decode(backup, &e); err != nil {
 		return err
 	}
+	if !envelopeForNetwork(e, v.network) {
+		return ErrUnavailable
+	}
+	if v.managedRef != nil && !sameWallet(*v.managedRef, e.Ref) {
+		return errors.New("backup conflicts with retained key history")
+	}
 	seed, err := unseal(e, backupPassword, "backup")
 	if err != nil {
 		return err
@@ -427,6 +456,9 @@ func (v *Vault) Restore(backup, backupPassword, newPassword []byte) error {
 // ExportFixtureSeed is owner-only through the transport. It never reaches the
 // general application, UI, logs or model. These keys must never receive funds.
 func (v *Vault) ExportFixtureSeed() ([]byte, error) {
+	if v.network != "" {
+		return nil, ErrUnavailable
+	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.closed {

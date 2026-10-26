@@ -118,9 +118,9 @@ export function AccountManagement() {
       accounts: [
         ...view.record.accounts,
         {
-          version: 1,
+          version: ref.version === 2 ? 3 : 1,
           id: publicID(),
-          name: "Disposable operating account",
+          name: "Wallet",
           mode: "fixture-managed",
           publicKey: ref.publicKey,
           network: ref.network,

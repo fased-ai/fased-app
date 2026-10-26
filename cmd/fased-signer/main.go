@@ -180,9 +180,13 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		})
 	}
 	if args[0] == "import" {
-		return conductImport(ctx, *seedPath, *documentPath, password, out, func(ctx context.Context, r signer.Request) (signer.Response, error) {
+		importAction := "import-fixture-seed"
+		if c.Version == 2 {
+			importAction = "import-managed-seed"
+		}
+		return conductImportAction(ctx, *seedPath, *documentPath, password, out, func(ctx context.Context, r signer.Request) (signer.Response, error) {
 			return signer.Call(ctx, c, true, r)
-		})
+		}, importAction)
 	}
 	if args[0] == "setup" || args[0] == "recover" {
 		return ownerFlow(ctx, c, args[0], *documentPath, password, out)
@@ -198,7 +202,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 			}
 			r.UnlockSeconds = int(*lifetime / time.Second)
 		}
-	case "import-fixture-seed":
+	case "import-fixture-seed", "import-managed-seed":
 		r.Document, err = readOwnerFile(*documentPath)
 		if err == nil {
 			r.Password, err = password("New fixture unlock password", true)

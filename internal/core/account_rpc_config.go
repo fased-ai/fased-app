@@ -44,7 +44,13 @@ func (s *Store) ConfigureAccountRPC(ctx context.Context, in RPCConfigInput) (Acc
 			if in.Endpoint == "" || in.Network == "" {
 				return AccountsView{}, errors.New("choose an endpoint and network")
 			}
-			if a.Version == 2 {
+			if managedNetworkAccount(a) {
+				live := s.fixtureView(ctx)
+				if live.Status == nil || live.Status.Account == nil || *live.Status.Account != *a.Signer {
+					return AccountsView{}, errors.New("wallet reference is stale or signer unavailable")
+				}
+			}
+			if a.Version == 2 || managedNetworkAccount(a) {
 				if !s.rpcAdmission || in.Network != a.Network || rpcProvider(in.Endpoint, in.Network) == "" {
 					return AccountsView{}, errors.New("live RPC configuration disabled")
 				}

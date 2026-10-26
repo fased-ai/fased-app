@@ -51,6 +51,10 @@ type AccountsView struct {
 	Proposals     []ProposalView    `json:"proposals"`
 }
 
+func managedNetworkAccount(a Account) bool {
+	return a.Version == 3 && a.Mode == "fixture-managed" && a.Signer != nil && signer.ValidManagedAccountRef(*a.Signer) && a.Signer.Network == a.Network && a.Signer.PublicKey == a.PublicKey
+}
+
 func defaultAccounts() AccountsRecord {
 	return AccountsRecord{Version: 1, Accounts: []Account{}, Proposals: []ProposalDraft{}}
 }
@@ -172,7 +176,7 @@ func validateAccounts(r AccountsRecord, old AccountsRecord, live FixtureView, no
 		oldProposals[p.Proposal.ID] = p
 	}
 	for _, a := range r.Accounts {
-		if !((a.Version == 1 && a.Network == signer.FixtureNetwork) || (a.Version == 2 && a.Mode == "watch" && a.Signer == nil && solanaGenesis(a.Network) != "")) || !hexValue(a.ID, 16) || !validName(a.Name) || !hexValue(a.PublicKey, 32) {
+		if !((a.Version == 1 && a.Network == signer.FixtureNetwork) || (a.Version == 2 && a.Mode == "watch" && a.Signer == nil && solanaGenesis(a.Network) != "") || managedNetworkAccount(a)) || !hexValue(a.ID, 16) || !validName(a.Name) || !hexValue(a.PublicKey, 32) {
 			return errors.New("use a versioned disposable public account; real wallets are disabled")
 		}
 		if _, ok := accounts[a.ID]; ok {
@@ -184,12 +188,12 @@ func validateAccounts(r AccountsRecord, old AccountsRecord, live FixtureView, no
 				return errors.New("public/manual records have no signer authority")
 			}
 		case "fixture-managed":
-			if a.Signer == nil || !signer.ValidAccountRef(*a.Signer) || a.Signer.PublicKey != a.PublicKey || a.Signer.Network != a.Network {
+			if a.Signer == nil || !(a.Version == 1 && signer.ValidAccountRef(*a.Signer) || managedNetworkAccount(a)) || a.Signer.PublicKey != a.PublicKey || a.Signer.Network != a.Network {
 				return errors.New("invalid fixture account reference")
 			}
 			prior, ok := oldAccounts[a.ID]
 			if !ok || prior.Signer == nil || *prior.Signer != *a.Signer {
-				if live.Status == nil || live.Status.Account == nil || *live.Status.Account != *a.Signer {
+				if live.Status == nil || live.Status.Account == nil || *live.Status.Account != *a.Signer || !live.Status.FixtureOnly || live.Status.WalletSigner || live.Status.FinancialExecution {
 					return errors.New("stale or unavailable signer reference; refresh before recording it")
 				}
 			}
@@ -205,7 +209,7 @@ func validateAccounts(r AccountsRecord, old AccountsRecord, live FixtureView, no
 	for _, d := range r.Proposals {
 		p := d.Proposal
 		a, ok := accounts[d.AccountID]
-		if !ok || a.Mode != "fixture-managed" || a.Signer == nil || p.Policy.Account != *a.Signer || p.Grant.Account != *a.Signer || seen[p.ID] {
+		if !ok || a.Version != 1 || a.Mode != "fixture-managed" || a.Signer == nil || p.Policy.Account != *a.Signer || p.Grant.Account != *a.Signer || seen[p.ID] {
 			return errors.New("proposal must bind one recorded fixture account")
 		}
 		seen[p.ID] = true

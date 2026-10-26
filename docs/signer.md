@@ -74,6 +74,37 @@ not separate installed UIDs. The Ubuntu CI boundary fixture runs the server and
 clients as three different ordinary users, and tests the actual kernel denials.
 Neither test class enables a wallet or establishes retail custody acceptance.
 
+## Network-bound disposable custody
+
+The same signer and protected owner helper also accept an explicit engineering
+configuration with `version: 2`, `mode: "disposable-custody:v2"` and `network`
+set to `devnet` or `mainnet-beta`. This is a disposable-key test path, not live
+wallet admission. Ordinary installation still produces the version-1 fixture;
+there is no automatic upgrade or network selection in that installer yet.
+Never fund these keys or import a real wallet.
+
+Version 2 binds the network into the encrypted vault, backup, key identity and
+local wire protocol. Setup/import, bounded manual unlock, verified encrypted
+backup and recovery use the existing owner helper and three-UID isolation.
+Recovery keeps the public key/wallet ID, creates a new authority epoch and
+stays locked with a recovery hold. Raw fixture export, fixture grants and
+all signing/financial/update operations refuse this mode. Its key-history
+record cannot contain fixture policies, grants, transactions or mock outcomes.
+Missing/conflicting history and interrupted publication preserve originals;
+ordinary and predecessor readers refuse the new format.
+
+Core schema 22 preserves version-3 public account records for these version-2
+signer references. UI and CLI share that record and the existing RPC workflow.
+A recovered epoch makes old RPC credentials stale, including during an in-flight
+check. No profile, app record or RPC credential grants signer authority.
+Provider credential admission and real RPC dispatch remain disabled; controlled
+tests alone admit disposable provider strings and HTTPS fixtures.
+
+The ordinary update contract still covers version-1 signer custody only. Network
+custody installer generation, recovery-aware update/inspection compatibility,
+and real-wallet acceptance remain open; do not enable or roll out this mode as
+a supported customer installation.
+
 ## Engineering commands
 
 Run the locally executable checks from the source checkout:

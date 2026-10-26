@@ -393,6 +393,9 @@ func (l *ledger) append(v *Vault, r journalRecord) error {
 }
 
 func (v *Vault) openLedger() error {
+	if v.network != "" {
+		return v.openManagedHistory()
+	}
 	main, rs, err := v.store.readJournal("operations.log")
 	mock, ms, me := v.store.readJournal("mock-receipts.log")
 	if errors.Is(err, os.ErrNotExist) && errors.Is(me, os.ErrNotExist) {
@@ -442,6 +445,9 @@ func (v *Vault) openLedger() error {
 // Thus a crash during first setup preserves the encrypted original and cannot
 // be mistaken for permission to reset an existing wallet's counters.
 func (s *storage) ensureInitialHistory(e envelope) error {
+	if e.Version == 2 {
+		return s.ensureManagedHistory(e)
+	}
 	_, _, err := s.readJournal("operations.log")
 	mock, ms, me := s.readJournal("mock-receipts.log")
 	if err == nil && me == nil {
@@ -472,7 +478,7 @@ func (v *Vault) recoveryRequired() bool {
 	return v.record != nil && (v.ledger == nil || v.ledger.ref != v.record.Ref || v.ledger.missingHistory)
 }
 func (v *Vault) fixtureReady(unlock bool) error {
-	if v.closed || v.store.failedState() || v.record == nil || v.ledger == nil {
+	if v.network != "" || v.closed || v.store.failedState() || v.record == nil || v.ledger == nil {
 		return ErrUnavailable
 	}
 	if v.ledger.activeUpdate != "" {

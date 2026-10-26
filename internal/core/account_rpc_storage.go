@@ -83,3 +83,35 @@ func migrateProviderRPC(ctx context.Context, db *sql.DB) error {
 	}
 	return tx.Commit()
 }
+
+// Managed references must not reach readers that can erase their binding.
+func migrateManagedKeys(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var phase, raw string
+	if err = tx.QueryRowContext(ctx, "SELECT phase FROM update_pause WHERE id=1").Scan(&phase); err != nil {
+		return err
+	}
+	if phase == "paused" {
+		return errors.New("finish schema 21 recovery before managed key migration")
+	}
+	if err = tx.QueryRowContext(ctx, "SELECT document FROM accounts WHERE id=1").Scan(&raw); err != nil {
+		return err
+	}
+	var r AccountsRecord
+	if json.Unmarshal([]byte(raw), &r) != nil || r.Version != 1 {
+		return errors.New("preserve invalid account records")
+	}
+	for _, a := range r.Accounts {
+		if a.Version < 1 || a.Version > 2 || a.Signer != nil && a.Signer.Version != 1 {
+			return errors.New("managed identity present before reader protection")
+		}
+	}
+	if _, err = tx.ExecContext(ctx, "PRAGMA user_version=22"); err != nil {
+		return err
+	}
+	return tx.Commit()
+}

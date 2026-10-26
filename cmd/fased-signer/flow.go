@@ -130,6 +130,12 @@ func conductFlow(ctx context.Context, action, path string, ask askPassword, out 
 // The protected owner helper reads the seed. The existing setup flow owns
 // backup publication, verification, bounded unlock and lock-on-failure.
 func conductImport(ctx context.Context, seedPath, backupPath string, ask askPassword, out io.Writer, call ownerCall) error {
+	return conductImportAction(ctx, seedPath, backupPath, ask, out, call, "import-fixture-seed")
+}
+func conductImportAction(ctx context.Context, seedPath, backupPath string, ask askPassword, out io.Writer, call ownerCall, action string) error {
+	if action != "import-fixture-seed" && action != "import-managed-seed" {
+		return signer.ErrUnavailable
+	}
 	seed, err := readOwnerFile(seedPath)
 	if err != nil {
 		return err
@@ -140,7 +146,7 @@ func conductImport(ctx context.Context, seedPath, backupPath string, ask askPass
 	}
 	return conductFlow(ctx, "setup", backupPath, ask, out, func(ctx context.Context, r signer.Request) (signer.Response, error) {
 		if r.Action == "create" {
-			r.Action = "import-fixture-seed"
+			r.Action = action
 			r.Document = seed
 		}
 		response, err := call(ctx, r)

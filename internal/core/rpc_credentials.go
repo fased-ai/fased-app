@@ -149,7 +149,7 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		return view, fail
 	}
 	version := 1
-	if account.Version == 2 {
+	if account.Version == 2 || managedNetworkAccount(*account) {
 		version = 2
 		view.TestOnly = false
 	}

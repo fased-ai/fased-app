@@ -6,7 +6,7 @@ import (
 )
 
 // PublicIdentity is an address-format projection, not a chain account or RPC
-// verification. The authority reference remains on the disposable network.
+// verification. Network custody identities grant no signing authority.
 type PublicIdentity struct {
 	Version     int    `json:"version"`
 	Chain       string `json:"chain"`
@@ -16,11 +16,11 @@ type PublicIdentity struct {
 }
 
 func (r AccountRef) PublicIdentity() *PublicIdentity {
-	key, err := hex.DecodeString(r.PublicKey)
-	if err != nil || len(key) != 32 || hex.EncodeToString(key) != r.PublicKey || r.Version != 1 || r.Network != FixtureNetwork || !validID(r.SignerID) || !validID(r.WalletID) || !validID(r.Epoch) {
+	if !validRef(r) && !managedRefValid(r) {
 		return nil
 	}
-	return &PublicIdentity{Version: 1, Chain: "solana", Address: base58PublicKey(key), Network: FixtureNetwork, FixtureOnly: true}
+	key, _ := hex.DecodeString(r.PublicKey)
+	return &PublicIdentity{Version: r.Version, Chain: "solana", Address: base58PublicKey(key), Network: r.Network, FixtureOnly: true}
 }
 
 // Base58 is public address formatting only; no key generation or cryptography.

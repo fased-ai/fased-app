@@ -214,7 +214,7 @@ func serveMode(ctx context.Context, c Config, guarded bool) (*Server, error) {
 	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
 		return nil, err
 	}
-	v, err := Open(c.StateDir, c.SignerID)
+	v, err := openVaultNetwork(c.StateDir, c.SignerID, false, c.Network)
 	if err != nil {
 		return nil, err
 	}
@@ -336,7 +336,7 @@ func (s *Server) accept(listener *net.UnixListener, c Config, uid int, owner boo
 			}()
 			conn.SetDeadline(time.Now().Add(30 * time.Second))
 			nonce := randomID()
-			if json.NewEncoder(conn).Encode(greeting{Version: 1, SignerID: c.SignerID, Challenge: nonce}) != nil {
+			if json.NewEncoder(conn).Encode(greeting{Version: c.Version, SignerID: c.SignerID, Challenge: nonce}) != nil {
 				return
 			}
 			var request wireRequest
@@ -345,7 +345,8 @@ func (s *Server) accept(listener *net.UnixListener, c Config, uid int, owner boo
 			}
 			defer wipe(request.Request.Password)
 			defer wipe(request.Request.NewPassword)
-			if request.Version != 1 || request.SignerID != c.SignerID || request.Challenge != nonce {
+			defer wipe(request.Request.Document)
+			if request.Version != c.Version || request.SignerID != c.SignerID || request.Challenge != nonce {
 				return
 			}
 			response := execute(s.vault, request.Request, owner)
@@ -414,10 +415,10 @@ func call(ctx context.Context, c Config, owner bool, request Request) (Response,
 	if err = readWire(conn, &hello); err != nil {
 		return response, err
 	}
-	if hello.Version != 1 || hello.SignerID != c.SignerID || !validID(hello.Challenge) {
+	if hello.Version != c.Version || hello.SignerID != c.SignerID || !validID(hello.Challenge) {
 		return response, errors.New("signer identity/challenge mismatch")
 	}
-	if err = json.NewEncoder(conn).Encode(wireRequest{Version: 1, SignerID: c.SignerID, Challenge: hello.Challenge, Request: request}); err != nil {
+	if err = json.NewEncoder(conn).Encode(wireRequest{Version: c.Version, SignerID: c.SignerID, Challenge: hello.Challenge, Request: request}); err != nil {
 		return response, err
 	}
 	if err = readWire(conn, &response); err != nil {

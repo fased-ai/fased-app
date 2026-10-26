@@ -71,10 +71,17 @@ export function accountAddress(a: Account, view: AccountsView): string {
   return a.mode === "fixture-managed" &&
     view.accountStates[a.id] === "current-fixture" &&
     status?.account?.publicKey === a.publicKey &&
-    identity?.version === 1 &&
+    identity &&
+    ((a.version === 1 &&
+      identity.version === 1 &&
+      identity.network === fixtureNetwork) ||
+      (a.version === 3 &&
+        a.signer?.version === 2 &&
+        identity.version === 2 &&
+        identity.network === a.network &&
+        ["devnet", "mainnet-beta"].includes(a.network))) &&
     identity.chain === "solana" &&
-    identity.fixtureOnly &&
-    identity.network === fixtureNetwork
+    identity.fixtureOnly
     ? identity.address
     : a.publicKey;
 }

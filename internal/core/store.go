@@ -222,6 +222,11 @@ PRAGMA user_version=1;`)
 			return nil, err
 		}
 	}
+	if schema <= 21 {
+		if err = migrateManagedKeys(ctx, db); err != nil {
+			return nil, err
+		}
+	}
 	if _, _, err = readAgents(ctx, db); err != nil {
 		return nil, err
 	}

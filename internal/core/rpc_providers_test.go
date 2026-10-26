@@ -295,7 +295,7 @@ func TestProviderRPCMigrationPreservesAndRefuses(t *testing.T) {
 			n.db.QueryRow("SELECT document FROM accounts WHERE id=1").Scan(&after)
 			n.db.QueryRow("PRAGMA user_version").Scan(&schema)
 			next, _ := os.ReadFile(n.rpcVaultPath(c.AccountID))
-			if before != after || !bytes.Equal(vault, next) || schema != 21 {
+			if before != after || !bytes.Equal(vault, next) || schema != StateSchema {
 				t.Fatal("migration changed prior state")
 			}
 		})

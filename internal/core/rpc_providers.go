@@ -42,7 +42,7 @@ func validRPCSecret(version int, key string) bool {
 	return true
 }
 func validProviderRPC(a Account) bool {
-	return a.Version == 2 && a.Mode == "watch" && a.Signer == nil && solanaGenesis(a.Network) != "" && a.RPC != nil && a.RPC.Version == 2 && a.RPC.Network == a.Network && rpcProvider(a.RPC.Endpoint, a.Network) != ""
+	return (a.Version == 2 && a.Mode == "watch" && a.Signer == nil || managedNetworkAccount(a)) && solanaGenesis(a.Network) != "" && a.RPC != nil && a.RPC.Version == 2 && a.RPC.Network == a.Network && rpcProvider(a.RPC.Endpoint, a.Network) != ""
 }
 
 type providerRPCTransport struct {
