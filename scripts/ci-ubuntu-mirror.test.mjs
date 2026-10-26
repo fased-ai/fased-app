@@ -25,6 +25,18 @@ test("only the Azure archive URI changes; suites, security and signing stay inta
     ),
   );
 });
+test("the official runner mirror-list source bypasses Azure without changing trust", () => {
+  const mirrorList = source.replace(
+    "http://azure.archive.ubuntu.com/ubuntu/",
+    "mirror+file:/etc/apt/apt-mirrors.txt",
+  );
+  assert.equal(mainArchiveSources(mirrorList), mainArchiveSources(source));
+  assert.throws(
+    () =>
+      mainArchiveSources(mirrorList.replace("apt-mirrors.txt", "unknown.txt")),
+    /Expected/,
+  );
+});
 test("runner changes and unsigned or trust-bypassing sources fail closed", () => {
   assert.throws(
     () =>

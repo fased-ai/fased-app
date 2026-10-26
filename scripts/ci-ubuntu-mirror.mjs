@@ -1,4 +1,5 @@
 // CI runner configuration only; never used by the application or installer.
+// The runner image uses mirror+file to prefer Azure; bypass that slow first hop.
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
@@ -9,7 +10,7 @@ export function mainArchiveSources(source) {
     .split(/(\n\s*\n)/)
     .map((stanza) => {
       if (
-        !/^URIs: http:\/\/azure\.archive\.ubuntu\.com\/ubuntu\/?\s*$/m.test(
+        !/^URIs: (?:http:\/\/azure\.archive\.ubuntu\.com\/ubuntu\/?|mirror\+file:\/etc\/apt\/apt-mirrors\.txt)[ \t]*$/m.test(
           stanza,
         )
       )
@@ -25,14 +26,14 @@ export function mainArchiveSources(source) {
       );
       replaced++;
       return stanza.replace(
-        /^URIs: http:\/\/azure\.archive\.ubuntu\.com\/ubuntu\/?[ \t]*$/m,
+        /^URIs: (?:http:\/\/azure\.archive\.ubuntu\.com\/ubuntu\/?|mirror\+file:\/etc\/apt\/apt-mirrors\.txt)[ \t]*$/m,
         "URIs: https://archive.ubuntu.com/ubuntu/",
       );
     })
     .join("");
   assert.ok(
     replaced > 0,
-    "Expected GitHub Ubuntu Azure mirror; inspect runner sources before changing acquisition",
+    "Expected GitHub Ubuntu Azure mirror or image mirror list; inspect runner sources before changing acquisition",
   );
   return result;
 }
@@ -51,6 +52,12 @@ if (
   const source = await readFile(
     "/etc/apt/sources.list.d/ubuntu.sources",
     "utf8",
+  );
+  console.log(
+    source
+      .split("\n")
+      .filter((line) => line.startsWith("URIs:"))
+      .join("\n"),
   );
   const result = mainArchiveSources(source);
   await mkdir(".evidence", { recursive: true });
