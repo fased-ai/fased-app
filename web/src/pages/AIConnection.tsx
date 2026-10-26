@@ -5,7 +5,7 @@ import { useCore } from "../core";
 import { TaskAccessSettings, type TaskAccessAllowance } from "./TaskAccess";
 
 export type Connection = {
-  credentialMode?: "test";
+  credentialMode?: "test" | "openai";
   taskAccess?: TaskAccessAllowance;
   accessReview?: TaskAccessAllowance;
   admissionPolicy: OpenAIModelPolicy;
@@ -13,7 +13,7 @@ export type Connection = {
   model: string;
   locked: boolean;
   unlockExpires: number;
-  testOnly: true;
+  testOnly: boolean;
   liveCallsEnabled: false;
 };
 export function useAIConnection() {

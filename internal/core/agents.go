@@ -507,6 +507,15 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 			return AgentView{}, e
 		}
 	}
+	if (c.Action == "chat-review" || c.Action == "ai-prepare" || c.Action == "task-ai-prepare") && c.ConnectionRef != "" {
+		connection, err := s.AIConnection()
+		if err != nil {
+			return AgentView{}, err
+		}
+		if connection.Ref == c.ConnectionRef && connection.CredentialMode == "openai" && c.Model != admittedOpenAIModel {
+			return AgentView{}, errors.New("select the admitted provider model")
+		}
+	}
 	id, e := randomToken()
 	if e != nil {
 		return AgentView{}, e

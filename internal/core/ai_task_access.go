@@ -4,8 +4,6 @@ package core
 // task's disclosure/schedule/budget or unlocks interactive Chat after 15 minutes.
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -155,13 +153,9 @@ func (s *Store) changeTaskAccess(ctx context.Context, tx *sql.Tx, c AIConnection
 	if e != nil {
 		return v, errors.New("credential vault unavailable")
 	}
-	key := passwordHash(c.Passphrase, env.Salt)
-	block, _ := aes.NewCipher(key)
-	clear(key)
-	gcm, _ := cipher.NewGCM(block)
-	plain, e := gcm.Open(nil, env.Nonce, env.Ciphertext, []byte("fased-api-vault-v1:"+s.instanceID+":"+env.Ref))
+	plain, e := s.openAIVault(env, c.Passphrase)
 	defer clear(plain)
-	if e != nil || !testAICredential(string(plain)) {
+	if e != nil {
 		return v, errors.New("vault unlock failed")
 	}
 	// Preserve the original interactive expiry; this access is task-scoped only.

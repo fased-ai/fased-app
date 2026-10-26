@@ -5652,6 +5652,20 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
   const ciphertext = await readFile(join(dir, "ai-credentials.json"), "utf8");
   expect(ciphertext).not.toContain(key);
   expect(ciphertext).not.toContain(passphrase);
+  expect(connection.credentialMode).toBe("test");
+  await expect(
+    privateCLI(["ai-connection", "--request-stdin"], {
+      action: "save",
+      credentialMode: "openai",
+      ref: firstRef,
+      key: "disposable-api-input-not-issued-by-any-provider",
+      passphrase,
+    }),
+  ).rejects.toThrow();
+  expect(await readFile(join(dir, "ai-credentials.json"), "utf8")).toBe(
+    ciphertext,
+  );
+
   await page.goto(url + "/#agents/chat");
   await revealControl(
     page,

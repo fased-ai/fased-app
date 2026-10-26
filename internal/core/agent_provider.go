@@ -18,7 +18,7 @@ func (s *Store) resolveAgentProvider(c *AgentCommand, profile AgentProfile) erro
 			return errors.New("agent model unavailable")
 		}
 		connection, err := s.AIConnection()
-		if err != nil || connection.Ref == "" || connection.Locked || !connection.TestOnly {
+		if err != nil || connection.Ref == "" || connection.Locked {
 			return errors.New("unlock the selected connection first")
 		}
 		ref, model = connection.Ref, profile.Model

@@ -45,10 +45,11 @@ type AIConnectionView struct {
 	UnlockExpires          int64                `json:"unlockExpires"`
 	TestOnly               bool                 `json:"testOnly"`
 	LiveCallsEnabled       bool                 `json:"liveCallsEnabled"`
-	InputMicrousdPerToken  int64                `json:"inputMicrousdPerToken"`
-	OutputMicrousdPerToken int64                `json:"outputMicrousdPerToken"`
+	InputMicrousdPerToken  int64                `json:"inputMicrousdPerToken,omitempty"`
+	OutputMicrousdPerToken int64                `json:"outputMicrousdPerToken,omitempty"`
 }
 type aiVaultEnvelope struct {
+	Mode       string `json:"mode,omitempty"`
 	Version    int    `json:"version"`
 	Ref        string `json:"ref"`
 	Salt       []byte `json:"salt"`
@@ -56,6 +57,8 @@ type aiVaultEnvelope struct {
 	Ciphertext []byte `json:"ciphertext"`
 }
 type providerState struct {
+	// Closed in every runtime constructor. Only controlled tests set this field.
+	apiCredentials bool
 	taskAccessLast int64
 	taskAccess     *TaskAccessAllowance
 	mu             sync.Mutex
@@ -82,7 +85,7 @@ func (s *Store) readAIVault() (aiVaultEnvelope, error) {
 	if e != nil {
 		return v, e
 	}
-	if json.Unmarshal(b, &v) != nil || v.Version != 1 || len(v.Ref) != 43 || len(v.Salt) != 16 || len(v.Nonce) != 12 || len(v.Ciphertext) < 16 || len(v.Ciphertext) > 512 {
+	if json.Unmarshal(b, &v) != nil || !validAIVaultMode(v) || len(v.Ref) != 43 || len(v.Salt) != 16 || len(v.Nonce) != 12 || len(v.Ciphertext) < 16 || len(v.Ciphertext) > 512 {
 		return v, errors.New("invalid credential vault")
 	}
 	return v, nil
@@ -114,6 +117,18 @@ func (s *Store) aiConnectionLocked() (AIConnectionView, error) {
 		return v, errors.New("credential vault unavailable; preserve it before recovery")
 	}
 	v.Ref = env.Ref
+	v.CredentialMode = aiVaultMode(env)
+	v.TestOnly = v.CredentialMode == "test"
+	if !v.TestOnly {
+		v.Model = admittedOpenAIModel
+		// Legacy per-token integers describe the fixture tariff only. The versioned
+		// admissionPolicy is authoritative for the actual model's fractional tariff.
+		v.InputMicrousdPerToken, v.OutputMicrousdPerToken = 0, 0
+	}
+	if !s.aiCredentialModeAllowed(v.CredentialMode) {
+		s.clearAIConnectionLocked()
+		return v, nil
+	}
 	encoded, _ := json.Marshal(env)
 	if s.provider.digest == sha256.Sum256(encoded) && s.provider.ref == env.Ref && len(s.provider.key) > 0 {
 		if s.provider.expires > s.now().Unix() {
@@ -150,7 +165,7 @@ func (s *Store) aiConnectionValid(ref string) bool {
 func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (AIConnectionView, error) {
 	// Empty mode preserves existing test-vault clients. Mode selection never
 	// enables a provider or changes the saved vault format/credential authority.
-	if c.CredentialMode != "" && (c.Action != "save" || c.CredentialMode != "test") {
+	if c.CredentialMode != "" && (c.Action != "save" || (c.CredentialMode != "test" && c.CredentialMode != "openai")) {
 		return AIConnectionView{}, errors.New("credential mode unavailable; real credentials disabled")
 	}
 	// All paths needing both locks acquire SQLite before the in-memory mutex.
@@ -192,26 +207,32 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		return v, ErrConflict
 	}
 	if taskAccessAction(c.Action) {
+		if c.Action != "task-access-revoke" && !s.aiCredentialModeAllowed(v.CredentialMode) {
+			return v, errors.New("credential mode unavailable; real credentials disabled")
+		}
 		return s.changeTaskAccess(ctx, tx, c, v)
 	}
 	if c.Action != "save" && c.Action != "unlock" && c.Action != "remove" {
 		return v, errors.New("unknown credential operation")
 	}
-	if !validPassword(c.Passphrase) || (c.Action == "save" && !testAICredential(c.Key)) || (c.Action != "save" && c.Key != "") {
-		return v, errors.New("explicit vault passphrase and disposable fased-test- key required; real credentials disabled")
+	mode := c.CredentialMode
+	if mode == "" {
+		mode = "test"
+	}
+	if (c.Action == "save" && !s.aiCredentialModeAllowed(mode)) || (c.Action == "unlock" && !s.aiCredentialModeAllowed(v.CredentialMode)) {
+		return v, errors.New("credential mode unavailable; real credentials disabled")
+	}
+	if !validPassword(c.Passphrase) || (c.Action == "save" && !validAICredential(mode, c.Key)) || (c.Action != "save" && c.Key != "") {
+		return v, errors.New("invalid credential or vault passphrase")
 	}
 	if c.Action != "save" || v.Ref != "" {
 		env, err := s.readAIVault()
 		if err != nil {
 			return v, errors.New("credential vault unavailable")
 		}
-		key := passwordHash(c.Passphrase, env.Salt)
-		block, _ := aes.NewCipher(key)
-		clear(key)
-		gcm, _ := cipher.NewGCM(block)
-		plain, err := gcm.Open(nil, env.Nonce, env.Ciphertext, []byte("fased-api-vault-v1:"+s.instanceID+":"+env.Ref))
+		plain, err := s.openAIVault(env, c.Passphrase)
 		defer clear(plain)
-		if err != nil || !testAICredential(string(plain)) {
+		if err != nil {
 			return v, errors.New("vault unlock failed")
 		}
 		if c.Action == "unlock" {
@@ -232,6 +253,9 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	}
 	s.chatEpoch.Add(1)
 	env := aiVaultEnvelope{Version: 1, Salt: make([]byte, 16), Nonce: make([]byte, 12)}
+	if mode == "openai" {
+		env.Version, env.Mode = 2, mode
+	}
 	if env.Ref, e = randomToken(); e != nil {
 		return v, e
 	}
@@ -245,7 +269,7 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	block, _ := aes.NewCipher(key)
 	clear(key)
 	gcm, _ := cipher.NewGCM(block)
-	env.Ciphertext = gcm.Seal(nil, env.Nonce, []byte(c.Key), []byte("fased-api-vault-v1:"+s.instanceID+":"+env.Ref))
+	env.Ciphertext = gcm.Seal(nil, env.Nonce, []byte(c.Key), s.aiVaultAAD(env))
 	if e = WritePrivateJSON(s.aiVaultPath(), env); e != nil {
 		return v, errors.New("credential storage failed; inspect vault before retry")
 	}
@@ -272,6 +296,9 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 	allowed := e == nil && !v.Locked && v.Ref == a.ref
 	if a.request != nil && a.request.TaskID != "" {
 		allowed = e == nil && v.Ref == a.ref && a.store.taskAccessMatches(*a.request, a.store.provider.taskAccess, true)
+	}
+	if v.CredentialMode == "openai" && (a.request == nil || a.request.Model != admittedOpenAIModel || a.request.Policy == nil) {
+		allowed = false
 	}
 	if !allowed {
 		a.store.provider.mu.Unlock()
@@ -302,4 +329,54 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 	}
 	res.Body = io.NopCloser(bytes.NewReader(body))
 	return res, nil
+}
+
+func validAIVaultMode(v aiVaultEnvelope) bool {
+	return (v.Version == 1 && v.Mode == "") || (v.Version == 2 && v.Mode == "openai")
+}
+func aiVaultMode(v aiVaultEnvelope) string {
+	if v.Version == 1 {
+		return "test"
+	}
+	return v.Mode
+}
+func (s *Store) aiCredentialModeAllowed(mode string) bool {
+	return mode == "test" || (mode == "openai" && s.provider.apiCredentials)
+}
+func validAICredential(mode, key string) bool {
+	if mode == "test" {
+		return testAICredential(key)
+	}
+	if mode != "openai" || len(key) < 24 || len(key) > 256 || strings.HasPrefix(key, "fased-test-") {
+		return false
+	}
+	// Opaque bounded ASCII token: no guessed provider-specific prefix or account
+	// validity claim. Actual account acceptance requires the held live check.
+	for _, b := range []byte(key) {
+		if b < 33 || b > 126 {
+			return false
+		}
+	}
+	return true
+}
+func (s *Store) aiVaultAAD(v aiVaultEnvelope) []byte {
+	if v.Version == 1 {
+		return []byte("fased-api-vault-v1:" + s.instanceID + ":" + v.Ref)
+	}
+	return []byte("fased-api-vault-v2:" + s.instanceID + ":openai:" + v.Mode + ":" + v.Ref)
+}
+func (s *Store) openAIVault(v aiVaultEnvelope, passphrase string) ([]byte, error) {
+	if !validAIVaultMode(v) {
+		return nil, errors.New("vault mode unavailable")
+	}
+	key := passwordHash(passphrase, v.Salt)
+	block, _ := aes.NewCipher(key)
+	clear(key)
+	gcm, _ := cipher.NewGCM(block)
+	plain, err := gcm.Open(nil, v.Nonce, v.Ciphertext, s.aiVaultAAD(v))
+	if err != nil || !validAICredential(aiVaultMode(v), string(plain)) {
+		clear(plain)
+		return nil, errors.New("vault unlock failed")
+	}
+	return plain, nil
 }

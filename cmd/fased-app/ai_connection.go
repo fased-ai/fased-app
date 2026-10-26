@@ -45,9 +45,9 @@ func aiConnectionCommand(args []string, in *os.File, out, errOut io.Writer) erro
 		if term.IsTerminal(int(in.Fd())) {
 			return errors.New("credential JSON requires a private pipe, not an echoing terminal")
 		}
-		b, e := io.ReadAll(io.LimitReader(in, 4097))
-		if e != nil {
-			return e
+		b, readErr := io.ReadAll(io.LimitReader(in, 4097))
+		if readErr != nil {
+			return readErr
 		}
 		defer clear(b)
 		if len(b) > 4096 {
