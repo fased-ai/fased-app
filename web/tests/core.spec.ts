@@ -11336,12 +11336,36 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     path: `.evidence/dashboard-${isMobile ? "mobile" : "desktop"}.png`,
     fullPage: true,
   });
-  const connection = await privateCLI(["ai-connection", "--request-stdin"], {
-    action: "save",
-    key: "fased-test-dashboard-disposable-key",
-    passphrase: "disposable-dashboard-vault-password",
-  });
-  await page.goto(url + "/#agents/settings");
+  const openSetup = async () => {
+    await page.locator(".shell-brand").click();
+    await page.getByRole("button", { name: "Setup", exact: true }).click();
+    return page.getByRole("dialog", { name: "Instance", exact: true });
+  };
+  const instance = await openSetup();
+  await instance
+    .getByRole("button", { name: "Providers", exact: true })
+    .click();
+  const editor = page.getByRole("dialog", { name: "Providers", exact: true });
+  await expect(instance).not.toBeVisible();
+  await editor.getByText("Credentials", { exact: true }).click();
+  await editor
+    .getByLabel("Test key", { exact: true })
+    .fill("fased-test-dashboard-disposable-key");
+  await editor
+    .getByLabel("Vault passphrase", { exact: true })
+    .fill("disposable-dashboard-vault-password");
+  await editor.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(editor.getByRole("status")).toContainText("OpenAI");
+  const connection = await privateCLI(["ai-connection"]);
+  expect(connection.ref).not.toBe("");
+  await editor
+    .getByRole("button", { name: "Close dialog", exact: true })
+    .click();
+  await (
+    await openSetup()
+  )
+    .getByRole("button", { name: "Agents", exact: true })
+    .click();
   await page.getByLabel("Agent", { exact: true }).selectOption(p);
   const provider = page.getByLabel("Provider", { exact: true });
   await revealControl(page, provider);
@@ -11414,7 +11438,12 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     .click();
   await expect.poll(async () => (await read()).runs.length).toBe(1);
   expect((await read()).runs[0].outcome).toBe("reminded");
-  await page.locator('.shell-top-nav>a[href="#agents/chat"]').click();
+  await page.getByRole("button", { name: "Discuss", exact: true }).click();
+  await expect(page.locator(".local-messages")).toContainText(
+    "Inspect the saved SOL risk limits",
+  );
+  const resultMessage = (await read()).messages.at(-1);
+  expect(resultMessage.text).toContain((await read()).runs[0].id);
   await page
     .getByRole("button", { name: "Remember this", exact: true })
     .last()
@@ -11424,6 +11453,9 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     .fill("Prefer daily SOL risk summaries");
   await page.getByRole("button", { name: "Save memory", exact: true }).click();
   await expect.poll(async () => (await read()).memories.length).toBe(1);
+  expect(JSON.stringify((await read()).memories[0])).toContain(
+    resultMessage.id,
+  );
   await page.getByRole("button", { name: "Memory", exact: true }).click();
   await expect(
     page.getByText("Prefer daily SOL risk summaries", { exact: true }),
@@ -11447,6 +11479,62 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
   await expect(
     page.getByRole("complementary", { name: "Task details", exact: true }),
   ).toContainText("Daily SOL review");
+  await (
+    await openSetup()
+  )
+    .getByRole("button", { name: "Wallets", exact: true })
+    .click();
+  await revealControl(page, page.getByLabel("Name", { exact: true }), "");
+  await page.getByLabel("Name", { exact: true }).fill("Joined watch");
+  await page
+    .getByLabel("Disposable public key (64 lowercase hex)")
+    .fill("4".repeat(64));
+  await page
+    .getByRole("button", { name: "Save public account", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Joined watch", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "RPC", exact: true }).click();
+  await expect(page.getByLabel("Network", { exact: true })).toHaveValue("Demo");
+  await page.getByRole("button", { name: "Check RPC", exact: true }).click();
+  await expect(
+    page.getByText("RPC verified (demo)", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect
+    .poll(
+      async () =>
+        (await privateCLI(["accounts"])).record.accounts[0]?.rpc?.endpoint,
+    )
+    .toBe("https://rpc.fased.invalid/solana");
+  const accounts = (await privateCLI(["accounts"])).record;
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  // Read-only network-bound views must show their real network, never Demo.
+  for (const network of ["devnet", "mainnet-beta"]) {
+    await page.route("**/api/v1/accounts", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      body.record.accounts[0].network = network;
+      await route.fulfill({ response, json: body });
+    });
+    await page.reload();
+    await page.getByRole("button", { name: "RPC", exact: true }).click();
+    await expect(page.getByLabel("Network", { exact: true })).toHaveValue(
+      network,
+    );
+    await page
+      .getByRole("button", { name: "Close dialog", exact: true })
+      .click();
+    await page.unroute("**/api/v1/accounts");
+  }
+  expect((await privateCLI(["accounts"])).record).toEqual(accounts);
+  await (
+    await openSetup()
+  )
+    .getByRole("button", { name: "Open Chat", exact: true })
+    .click();
+  await expect(page.getByLabel("Message", { exact: true })).toBeVisible();
   v = await read();
   const retained = {
     tasks: v.tasks,
@@ -11466,6 +11554,7 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
   nextLogin.stdin!.end(fixturePassword + "\n");
   expect((await once(nextLogin, "exit"))[0]).toBe(0);
   v = await read();
+  expect((await privateCLI(["accounts"])).record).toEqual(accounts);
   expect({
     tasks: v.tasks,
     runs: v.runs,

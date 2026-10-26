@@ -68,6 +68,35 @@ export function WorkspaceDialogs() {
             <div className="settings-body">
               <InstanceSummary />
               <RemoteConnection />
+              <div className="agent-actions">
+                <button
+                  className="secondary"
+                  onClick={() => {
+                    setSetupOpen(false);
+                    setProvidersOpen(true);
+                  }}
+                >
+                  {uiText("Providers")}
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() => {
+                    setSetupOpen(false);
+                    navigate("agents/settings");
+                  }}
+                >
+                  {uiText("Agents")}
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() => {
+                    setSetupOpen(false);
+                    navigate("wallets/accounts");
+                  }}
+                >
+                  {uiText("Wallets")}
+                </button>
+              </div>
               {core.error && <p role="alert">{core.error}</p>}
               <button
                 className="primary"

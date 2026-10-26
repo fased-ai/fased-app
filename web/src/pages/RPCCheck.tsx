@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from "react";
 import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
 import { Dialog } from "../components/shared";
-import { type Account, type AccountsView } from "../accounts";
+import { fixtureNetwork, type Account, type AccountsView } from "../accounts";
 export function RPCCheck({
   account,
   revision,
@@ -109,7 +109,12 @@ export function RPCCheck({
         </label>
         <label>
           {t("Network")}
-          <input readOnly value={t("Demo")} />
+          <input
+            readOnly
+            value={
+              account.network === fixtureNetwork ? t("Demo") : account.network
+            }
+          />
         </label>
         <button className="primary" disabled={busy}>
           {t("Check RPC")}
