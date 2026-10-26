@@ -397,3 +397,24 @@ format](https://solana.com/docs/core/accounts/account-structure).
 The version-1 signer IPC response is unchanged. The existing owner helper and
 core decorate the authenticated public status locally; older strict IPC clients
 therefore receive no new fields. No additional signer command is required.
+
+## Disposable RPC check
+
+Wallets → RPC and `fased-app accounts --check-rpc-stdin` share one authenticated,
+CSRF-protected core check. Supply JSON on stdin:
+
+```json
+{
+  "endpoint": "https://rpc.fased.invalid/solana",
+  "network": "disposable-fixture:v1"
+}
+```
+
+Only this exact endpoint/network pair is admitted. The runtime uses a compiled
+in-process fixture, never the public network. It verifies a synthetic genesis
+identity and health response with bounded time/body sizes; redirects, credentials,
+other destinations, mismatched networks and malformed replies fail closed.
+The result is transient and does not save an endpoint, alter accounts or authorize
+signing. Controlled HTTPS tests exercise the same parser with a disposable TLS
+server. This is not verification of a real Solana cluster or production RPC
+security; live DNS/IP admission, credential handling and activation remain held.

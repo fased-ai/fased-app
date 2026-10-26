@@ -1,0 +1,140 @@
+package core
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"time"
+
+	"github.com/fased-ai/fased-app/internal/signer"
+)
+
+const FixtureRPCURL = "https://rpc.fased.invalid/solana"
+const fixtureGenesis = "11111111111111111111111111111112"
+
+type RPCCheckRequest struct {
+	Endpoint string `json:"endpoint"`
+	Network  string `json:"network"`
+}
+type RPCCheckResult struct {
+	Endpoint    string    `json:"endpoint"`
+	Network     string    `json:"network"`
+	GenesisHash string    `json:"genesisHash"`
+	CheckedAt   time.Time `json:"checkedAt"`
+	FixtureOnly bool      `json:"fixtureOnly"`
+	LiveRPC     bool      `json:"liveRPC"`
+}
+
+// CheckFixtureRPC has no live transport, credential storage or signer authority.
+// A later live adapter must separately admit endpoints, DNS/IPs and credentials.
+func CheckFixtureRPC(ctx context.Context, input RPCCheckRequest) (RPCCheckResult, error) {
+	return checkRPC(ctx, input, fixtureRPCTransport{})
+}
+func checkRPC(ctx context.Context, input RPCCheckRequest, rt http.RoundTripper) (RPCCheckResult, error) {
+	var empty RPCCheckResult
+	// Exact admission precedes any transport. Reject credentials, alternate hosts,
+	// ports, queries, fragments and private destinations without echoing input.
+	if input.Endpoint != FixtureRPCURL || input.Network != signer.FixtureNetwork || rt == nil {
+		return empty, errors.New("only the disposable RPC endpoint and network are available")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	client := http.Client{Transport: rt, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("RPC redirects refused") }}
+	for i, method := range []string{"getGenesisHash", "getHealth"} {
+		body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": i + 1, "method": method})
+		req, e := http.NewRequestWithContext(ctx, http.MethodPost, input.Endpoint, bytes.NewReader(body))
+		if e != nil {
+			return empty, errors.New("RPC request unavailable")
+		}
+		req.Header.Set("Content-Type", "application/json")
+		response, e := client.Do(req)
+		if e != nil {
+			return empty, errors.New("RPC check failed")
+		}
+		data, e := io.ReadAll(io.LimitReader(response.Body, 4097))
+		response.Body.Close()
+		if e != nil || response.StatusCode != 200 || len(data) > 4096 {
+			return empty, errors.New("RPC response refused")
+		}
+		result, e := rpcResult(data, i+1)
+		if e != nil {
+			return empty, e
+		}
+		if i == 0 && result != fixtureGenesis {
+			return empty, errors.New("RPC network mismatch")
+		}
+		if i == 1 && result != "ok" {
+			return empty, errors.New("RPC unhealthy")
+		}
+	}
+	return RPCCheckResult{Endpoint: FixtureRPCURL, Network: signer.FixtureNetwork, GenesisHash: fixtureGenesis, CheckedAt: time.Now().UTC(), FixtureOnly: true}, nil
+}
+
+func rpcResult(data []byte, id int) (string, error) {
+	fail := errors.New("invalid RPC response")
+	d := json.NewDecoder(bytes.NewReader(data))
+	token, e := d.Token()
+	if e != nil || token != json.Delim('{') {
+		return "", fail
+	}
+	fields := map[string]json.RawMessage{}
+	for d.More() {
+		key, e := d.Token()
+		if e != nil {
+			return "", fail
+		}
+		name, ok := key.(string)
+		if !ok {
+			return "", fail
+		}
+		if _, exists := fields[name]; exists {
+			return "", fail
+		}
+		if name != "jsonrpc" && name != "id" && name != "result" {
+			return "", fail
+		}
+		var value json.RawMessage
+		if d.Decode(&value) != nil {
+			return "", fail
+		}
+		fields[name] = value
+	}
+	if _, e = d.Token(); e != nil || d.Decode(new(any)) != io.EOF || len(fields) != 3 {
+		return "", fail
+	}
+	var version, result string
+	var replyID int
+	if json.Unmarshal(fields["jsonrpc"], &version) != nil || version != "2.0" || json.Unmarshal(fields["id"], &replyID) != nil || replyID != id || json.Unmarshal(fields["result"], &result) != nil || result == "" {
+		return "", fail
+	}
+	return result, nil
+}
+
+type fixtureRPCTransport struct{}
+
+func (fixtureRPCTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if e := r.Context().Err(); e != nil {
+		return nil, e
+	}
+	if r.URL.String() != FixtureRPCURL || r.Method != http.MethodPost || r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" {
+		return nil, errors.New("fixture RPC request refused")
+	}
+	var request struct {
+		Method string `json:"method"`
+		ID     int    `json:"id"`
+	}
+	if json.NewDecoder(r.Body).Decode(&request) != nil {
+		return nil, errors.New("invalid fixture RPC request")
+	}
+	result := fixtureGenesis
+	if request.Method == "getHealth" {
+		result = "ok"
+	} else if request.Method != "getGenesisHash" {
+		return nil, errors.New("fixture RPC method refused")
+	}
+	data, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
+	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(bytes.NewReader(data)), Request: r}, nil
+}

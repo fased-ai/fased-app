@@ -4804,6 +4804,30 @@ test("public account records share UI/CLI state without wallet authority", async
   );
   expect(state.record.accounts[0].name).toBe("Disposable watch");
   expect(state.fixture.available).toBe(false);
+  await page.getByRole("button", { name: "RPC", exact: true }).click();
+  await page.getByRole("button", { name: "Check RPC", exact: true }).click();
+  await expect(
+    page.getByText("RPC verified (demo)", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByLabel("RPC URL", { exact: true })
+    .fill("https://127.0.0.1/private");
+  await page.getByRole("button", { name: "Check RPC", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "only the disposable RPC",
+  );
+  await expect(
+    page.getByText("RPC verified (demo)", { exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  const rpc = await privateCLI(["accounts", "--check-rpc-stdin"], {
+    endpoint: "https://rpc.fased.invalid/solana",
+    network: "disposable-fixture:v1",
+  });
+  expect(rpc.fixtureOnly).toBe(true);
+  expect(rpc.liveRPC).toBe(false);
+  expect(rpc.genesisHash).toBe("11111111111111111111111111111112");
+  expect((await privateCLI(["accounts"])).record).toEqual(state.record);
   const stale = structuredClone(state.record);
   await page.getByRole("button", { name: "Rename", exact: true }).click();
   await revealControl(page, page.getByLabel("New account name"), "");

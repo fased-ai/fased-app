@@ -21,6 +21,7 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 		return e
 	}
 	dir := flags.String("data-dir", base, "private instance directory")
+	rpcCheck := flags.Bool("check-rpc-stdin", false, "check disposable RPC endpoint/network JSON; no saving or live calls")
 	update := flags.Bool("request-stdin", false, "revision-checked public account record JSON from stdin; no secrets")
 	if e = flags.Parse(args); e != nil {
 		return e
@@ -36,6 +37,26 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	defer c.Close()
 	if e = c.LoadSession(ctx, *dir); e != nil {
 		return e
+	}
+	if *rpcCheck {
+		if *update {
+			return errors.New("choose account update or RPC check")
+		}
+		b, err := io.ReadAll(io.LimitReader(in, 2049))
+		if err != nil || len(b) > 2048 {
+			return errors.New("invalid RPC check input")
+		}
+		var input core.RPCCheckRequest
+		d := json.NewDecoder(bytes.NewReader(b))
+		d.DisallowUnknownFields()
+		if d.Decode(&input) != nil || d.Decode(new(any)) != io.EOF {
+			return errors.New("invalid RPC check input; no credentials accepted")
+		}
+		var result core.RPCCheckResult
+		if err = c.Do(ctx, http.MethodPost, "/api/v1/accounts/rpc-check", input, &result); err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(result)
 	}
 	var result core.AccountsView
 	if *update {

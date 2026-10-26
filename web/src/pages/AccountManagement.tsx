@@ -1,3 +1,4 @@
+import { RPCCheck } from "./RPCCheck";
 import { useUI } from "../ui-preferences";
 import { useEffect, useState, type FormEvent } from "react";
 import { useCore } from "../core";
@@ -16,6 +17,7 @@ import "../accounts.css";
 export function AccountManagement() {
   const { t: uiText } = useUI();
   const core = useCore();
+  const [rpcOpen, setRPCOpen] = useState(false);
   const [view, setView] = useState<AccountsView | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -206,16 +208,22 @@ export function AccountManagement() {
     ) ?? [];
   return (
     <div className="wallet-workspace">
+      {rpcOpen && <RPCCheck onClose={() => setRPCOpen(false)} />}
       <SectionHead
         title={uiText("Wallets")}
         action={
-          <button
-            className="secondary"
-            disabled={busy}
-            onClick={() => void refresh()}
-          >
-            {uiText("Refresh accounts and approvals")}
-          </button>
+          <>
+            <button className="secondary" onClick={() => setRPCOpen(true)}>
+              RPC
+            </button>
+            <button
+              className="secondary"
+              disabled={busy}
+              onClick={() => void refresh()}
+            >
+              {uiText("Refresh accounts and approvals")}
+            </button>
+          </>
         }
       />
       {error && (

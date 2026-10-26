@@ -10,6 +10,14 @@ export const languages = {
 export type Language = keyof typeof languages;
 // Interface copy only. Never translate user records, model output or server receipts.
 const rows = {
+  "RPC URL": ["URL RPC", "URL RPC", "RPC 地址", "RPC URL"],
+  "Check RPC": ["Проверить RPC", "Comprobar RPC", "检查 RPC", "RPC 확인"],
+  "RPC verified (demo)": [
+    "RPC проверен (демо)",
+    "RPC verificado (demo)",
+    "RPC 已验证（演示）",
+    "RPC 확인됨 (데모)",
+  ],
   ...pageCopy,
   ...priorityCopy,
   "No expiry": ["Без срока", "Sin caducidad", "无有效期限制", "만료 없음"],
