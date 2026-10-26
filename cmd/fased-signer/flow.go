@@ -121,8 +121,8 @@ func conductFlow(ctx context.Context, action, path string, ask askPassword, out 
 		return errors.New("unsafe owner-flow completion state")
 	}
 	return json.NewEncoder(out).Encode(struct {
-		Status         signer.Status `json:"status"`
-		BackupVerified bool          `json:"backupVerified"`
-		BackupFile     string        `json:"backupFile"`
-	}{locked.Status, true, path})
+		Status         signer.PublicStatus `json:"status"`
+		BackupVerified bool                `json:"backupVerified"`
+		BackupFile     string              `json:"backupFile"`
+	}{locked.Status.PublicView(), true, path})
 }

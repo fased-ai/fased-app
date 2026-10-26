@@ -44,3 +44,18 @@ func base58PublicKey(key []byte) string {
 	}
 	return string(out)
 }
+
+// PublicStatus decorates an authenticated status for UI/CLI output only. Never
+// add this field to the strict version-1 signer IPC response.
+type PublicStatus struct {
+	Status
+	PublicIdentity *PublicIdentity `json:"publicIdentity,omitempty"`
+}
+
+func (s Status) PublicView() PublicStatus {
+	p := PublicStatus{Status: s}
+	if s.Account != nil {
+		p.PublicIdentity = s.Account.PublicIdentity()
+	}
+	return p
+}

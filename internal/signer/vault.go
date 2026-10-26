@@ -54,16 +54,15 @@ type envelope struct {
 }
 
 type Status struct {
-	PublicIdentity     *PublicIdentity `json:"publicIdentity,omitempty"`
-	UpdateHeld         bool            `json:"updateHeld"`
-	FixtureOnly        bool            `json:"fixtureOnly"`
-	WalletSigner       bool            `json:"walletSigner"`
-	FinancialExecution bool            `json:"financialExecution"`
-	Account            *AccountRef     `json:"account,omitempty"`
-	Locked             bool            `json:"locked"`
-	UnlockUntil        time.Time       `json:"unlockUntil,omitempty"`
-	RecoveryRequired   bool            `json:"recoveryRequired"`
-	UnattendedUnlock   bool            `json:"unattendedUnlock"`
+	UpdateHeld         bool        `json:"updateHeld"`
+	FixtureOnly        bool        `json:"fixtureOnly"`
+	WalletSigner       bool        `json:"walletSigner"`
+	FinancialExecution bool        `json:"financialExecution"`
+	Account            *AccountRef `json:"account,omitempty"`
+	Locked             bool        `json:"locked"`
+	UnlockUntil        time.Time   `json:"unlockUntil,omitempty"`
+	RecoveryRequired   bool        `json:"recoveryRequired"`
+	UnattendedUnlock   bool        `json:"unattendedUnlock"`
 }
 
 type Vault struct {
@@ -254,7 +253,6 @@ func (v *Vault) Status() Status {
 	if v.record != nil {
 		ref := v.record.Ref
 		s.Account = &ref
-		s.PublicIdentity = ref.PublicIdentity()
 		s.RecoveryRequired = v.recoveryRequired()
 	}
 	return s

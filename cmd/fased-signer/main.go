@@ -226,5 +226,5 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	if len(r.Action) >= 8 && r.Action[:8] == "fixture-" {
 		return json.NewEncoder(out).Encode(response)
 	}
-	return json.NewEncoder(out).Encode(response.Status)
+	return json.NewEncoder(out).Encode(response.Status.PublicView())
 }

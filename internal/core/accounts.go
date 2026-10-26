@@ -35,8 +35,8 @@ type AccountsRecord struct {
 	Proposals []ProposalDraft `json:"proposals"`
 }
 type FixtureView struct {
-	Available bool           `json:"available"`
-	Status    *signer.Status `json:"status,omitempty"`
+	Available bool                 `json:"available"`
+	Status    *signer.PublicStatus `json:"status,omitempty"`
 }
 type ProposalView struct {
 	ID      string                 `json:"id"`
@@ -98,7 +98,8 @@ func (s *Store) fixtureView(ctx context.Context) FixtureView {
 	if e != nil {
 		return FixtureView{}
 	}
-	return FixtureView{Available: true, Status: &r.Status}
+	public := r.Status.PublicView()
+	return FixtureView{Available: true, Status: &public}
 }
 func (s *Store) accountsRecord(ctx context.Context) (AccountsRecord, error) {
 	var r AccountsRecord

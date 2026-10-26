@@ -118,7 +118,7 @@ func TestAccountsBindLiveEpochAndNeverTrustAppApproval(t *testing.T) {
 		calls = append(calls, r.Action)
 		switch r.Action {
 		case "status":
-			return signer.Response{Status: signer.Status{FixtureOnly: true, Locked: true, Account: &ref, PublicIdentity: ref.PublicIdentity()}}, nil
+			return signer.Response{Status: signer.Status{FixtureOnly: true, Locked: true, Account: &ref}}, nil
 		case "fixture-approvals":
 			return signer.Response{Approvals: []signer.ApprovalReceipt{receipt}}, nil
 		}

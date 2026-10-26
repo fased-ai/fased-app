@@ -3,6 +3,8 @@
 package signer
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -40,7 +42,7 @@ func TestPublicIdentitySurvivesRecoveryWithoutAuthority(t *testing.T) {
 	if e := v.Create(fixturePassword); e != nil {
 		t.Fatal(e)
 	}
-	initial := v.Status()
+	initial := v.Status().PublicView()
 	if initial.PublicIdentity == nil || !initial.Locked || initial.WalletSigner {
 		t.Fatal("identity requires unlock or grants signing")
 	}
@@ -48,7 +50,7 @@ func TestPublicIdentitySurvivesRecoveryWithoutAuthority(t *testing.T) {
 		t.Fatal(e)
 	}
 	v = openFixture(t, dir)
-	if current := v.Status(); current.PublicIdentity == nil || *current.PublicIdentity != *initial.PublicIdentity || !current.Locked {
+	if current := v.Status().PublicView(); current.PublicIdentity == nil || *current.PublicIdentity != *initial.PublicIdentity || !current.Locked {
 		t.Fatal("restart changed identity or unlocked")
 	}
 	if e := v.Unlock(fixturePassword, time.Minute); e != nil {
@@ -63,8 +65,28 @@ func TestPublicIdentitySurvivesRecoveryWithoutAuthority(t *testing.T) {
 	if e = restored.Restore(backup, backupPassword, fixturePassword); e != nil {
 		t.Fatal(e)
 	}
-	next := restored.Status()
+	next := restored.Status().PublicView()
 	if next.PublicIdentity == nil || *next.PublicIdentity != *initial.PublicIdentity || next.Account.Epoch == initial.Account.Epoch || !next.Locked || !next.RecoveryRequired || next.WalletSigner || next.FinancialExecution {
 		t.Fatal("recovery identity/authority drift")
+	}
+}
+
+func TestPublicIdentityDoesNotChangeSignerWire(t *testing.T) {
+	ref := AccountRef{Version: 1, SignerID: strings.Repeat("1", 32), WalletID: strings.Repeat("2", 32), Epoch: strings.Repeat("3", 32), Network: FixtureNetwork, PublicKey: strings.Repeat("0", 64)}
+	status := Status{FixtureOnly: true, Locked: true, Account: &ref}
+	wire, e := json.Marshal(Response{Status: status})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if bytes.Contains(wire, []byte("publicIdentity")) {
+		t.Fatal("new field leaked into strict IPC")
+	}
+	var old Response
+	if e = decodeWire(wire, &old); e != nil {
+		t.Fatal(e)
+	}
+	public, e := json.Marshal(status.PublicView())
+	if e != nil || !bytes.Contains(public, []byte("publicIdentity")) {
+		t.Fatal("public view missing identity", e)
 	}
 }

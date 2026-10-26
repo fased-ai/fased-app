@@ -379,7 +379,7 @@ introduce RPC, real-wallet import, signing or network access.
 
 ## Disposable Solana public identity
 
-Signer status now includes an optional versioned `publicIdentity`: the canonical
+The owner-helper/core public status view includes an optional versioned `publicIdentity`: the canonical
 base58 address of the existing 32-byte Ed25519 public key, `chain: solana`,
 `network: disposable-fixture:v1`, and `fixtureOnly: true`. It is available while
 locked and passes through the same read-only core account view and CLI. Wallets
@@ -393,3 +393,7 @@ fund these disposable addresses. Recovery preserves the address while changing
 the authority epoch and retaining the lock/recovery hold. No vault/account schema
 or key material is changed. Encoding follows the [Solana account address
 format](https://solana.com/docs/core/accounts/account-structure).
+
+The version-1 signer IPC response is unchanged. The existing owner helper and
+core decorate the authenticated public status locally; older strict IPC clients
+therefore receive no new fields. No additional signer command is required.
