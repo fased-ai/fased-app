@@ -9,7 +9,42 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
+  classify:
+    runs-on: ubuntu-latest
+    outputs:
+      core: ${{ steps.route.outputs.core }}
+      desktop: ${{ steps.route.outputs.desktop }}
+      signer: ${{ steps.route.outputs.signer }}
+      handoff: ${{ steps.route.outputs.handoff }}
+      handoff_uid: ${{ steps.route.outputs.handoff_uid }}
+      inspection: ${{ steps.route.outputs.inspection }}
+      vm: ${{ steps.route.outputs.vm }}
+      scope: ${{ steps.route.outputs.scope }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: node --test scripts/ci-routing.test.mjs
+      - id: route
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          FULL_RUN: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          mkdir -p .evidence
+          if [[ "$BASE_SHA" =~ ^[a-f0-9]{40}$ ]] && git show "$BASE_SHA:scripts/ci-routing.mjs" > .evidence/trusted-ci-routing.mjs; then
+            node .evidence/trusted-ci-routing.mjs plan
+          else
+            # Policy installation or unavailable base: require every lane.
+            for lane in core desktop signer handoff handoff_uid inspection vm; do echo "$lane=true" >> "$GITHUB_OUTPUT"; done
+            echo "scope=full" >> "$GITHUB_OUTPUT"
+          fi
   core:
+    needs: classify
+    if: needs.classify.outputs.core == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -27,7 +62,10 @@ jobs:
       - run: npm run check
       - run: go mod verify
       - run: test -z "$(gofmt -l cmd internal desktop ui.go)"
-      - run: npm run test:core
+      - if: needs.classify.outputs.scope == 'full'
+        run: npm run test:core
+      - if: needs.classify.outputs.scope == 'rpc'
+        run: go test -race ./internal/core -run 'Test(RPC|AccountRPC|PublicRPC|ProviderRPC)'
       - run: npm run build:core
       - name: Headless Windows compilation
         run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o .evidence/bin/windows.exe ./cmd/fased-app
@@ -36,7 +74,10 @@ jobs:
       # Same runner libraries and headless browser as the managed signer UI proof.
       - run: npx playwright install --only-shell chromium
       - run: npm run test:ui
-      - run: npm run test:core-ui
+      - if: needs.classify.outputs.scope != 'rpc'
+        run: npm run test:core-ui
+      - if: needs.classify.outputs.scope == 'rpc'
+        run: npm run test:core-ui -- --grep 'public account records share UI/CLI state without wallet authority'
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -49,6 +90,8 @@ jobs:
             .evidence/core-browser/
           retention-days: 7
   desktop:
+    needs: classify
+    if: needs.classify.outputs.desktop == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -143,6 +186,8 @@ jobs:
             .evidence/*.log
           retention-days: 7
   signer:
+    needs: classify
+    if: needs.classify.outputs.signer == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -272,6 +317,8 @@ jobs:
             .evidence/p4-preflight/core-cli.log
           retention-days: 7
   handoff:
+    needs: classify
+    if: needs.classify.outputs.handoff == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -300,6 +347,8 @@ jobs:
             .evidence/p4-handoff-model/handoff-source-inputs.json
           retention-days: 7
   handoff-uid:
+    needs: classify
+    if: needs.classify.outputs.handoff_uid == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -332,6 +381,8 @@ jobs:
             .evidence/p4-handoff-uid/*.log
           retention-days: 7
   inspection-installed:
+    needs: classify
+    if: needs.classify.outputs.inspection == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
@@ -373,15 +424,23 @@ jobs:
           retention-days: 7
   prototype:
     if: always()
-    needs: [core, desktop, signer, handoff, handoff-uid, inspection-installed]
+    needs:
+      [
+        classify,
+        core,
+        desktop,
+        signer,
+        handoff,
+        handoff-uid,
+        inspection-installed,
+      ]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
       - name: Required aggregate check
         env:
-          CORE_RESULT: ${{ needs.core.result }}
-          DESKTOP_RESULT: ${{ needs.desktop.result }}
-          SIGNER_RESULT: ${{ needs.signer.result }}
-          HANDOFF_RESULT: ${{ needs.handoff.result }}
-          HANDOFF_UID_RESULT: ${{ needs.handoff-uid.result }}
-          INSPECTION_RESULT: ${{ needs.inspection-installed.result }}
-        run: test "$CORE_RESULT" = success && test "$DESKTOP_RESULT" = success && test "$SIGNER_RESULT" = success && test "$HANDOFF_RESULT" = success && test "$HANDOFF_UID_RESULT" = success && test "$INSPECTION_RESULT" = success
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: node scripts/ci-routing.mjs gate
