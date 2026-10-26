@@ -11580,3 +11580,75 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     expect(health.capabilities[name]).toBe(false);
   expect(external).toEqual([]);
 });
+
+test("provider editor follows core credential admission without enabling live calls", async ({
+  page,
+}) => {
+  await stop();
+  await start();
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Dashboard", exact: true }),
+  ).toBeVisible();
+  let saved: Record<string, unknown> | undefined;
+  // UI-only capability injection. POST is intercepted and never reaches a vault,
+  // model endpoint or live admission path. Ordinary server remains closed.
+  await page.route("**/api/v1/ai/connection", async (route) => {
+    if (route.request().method() === "POST") {
+      saved = route.request().postDataJSON();
+      await route.fulfill({
+        json: {
+          credentialMode: "openai",
+          credentialModes: ["openai"],
+          ref: "",
+          model: "gpt-4.1-mini-2025-04-14",
+          locked: true,
+          liveCallsEnabled: false,
+        },
+      });
+      return;
+    }
+    const response = await route.fetch();
+    const connection = await response.json();
+    expect(connection.liveCallsEnabled).toBe(false);
+    expect(connection.credentialModes).toEqual(["test"]);
+    await route.fulfill({
+      response,
+      json: { ...connection, credentialModes: ["openai"] },
+    });
+  });
+  await page.getByRole("button", { name: "Setup", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "Instance", exact: true })
+    .getByRole("button", { name: "Providers", exact: true })
+    .click();
+  const editor = page.getByRole("dialog", { name: "Providers", exact: true });
+  await editor.getByText("Credentials", { exact: true }).click();
+  await editor
+    .getByLabel("API key", { exact: true })
+    .fill("disposable-api-input-not-issued-by-any-provider");
+  await editor
+    .getByLabel("Vault passphrase", { exact: true })
+    .fill("disposable-admission-vault-password");
+  await editor.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => saved?.credentialMode).toBe("openai");
+  await expect(editor.getByLabel("API key", { exact: true })).toHaveValue("");
+  await page.unroute("**/api/v1/ai/connection");
+  await page.reload();
+  await page.getByRole("button", { name: "Setup", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "Instance", exact: true })
+    .getByRole("button", { name: "Providers", exact: true })
+    .click();
+  await editor.getByText("Credentials", { exact: true }).click();
+  await expect(editor.getByLabel("Test key", { exact: true })).toBeVisible();
+  await expect(editor.getByRole("status")).toContainText("No connection saved");
+});

@@ -1,7 +1,7 @@
 package core
 
 // API credentials are separate from wallet authority and metadata snapshots.
-// This development admission accepts only deliberately non-OpenAI test keys.
+// Ordinary admission remains closed by the shared provider release hold.
 import (
 	"bytes"
 	"context"
@@ -34,6 +34,7 @@ type AIConnectionCommand struct {
 	Passphrase           string               `json:"passphrase,omitempty"`
 }
 type AIConnectionView struct {
+	CredentialModes        []string             `json:"credentialModes"`
 	CredentialMode         string               `json:"credentialMode"`
 	TaskAccess             *TaskAccessAllowance `json:"taskAccess,omitempty"`
 	AccessReview           *TaskAccessAllowance `json:"accessReview,omitempty"`
@@ -107,6 +108,11 @@ func (s *Store) lockAIConnection() {
 }
 func (s *Store) aiConnectionLocked() (AIConnectionView, error) {
 	v := AIConnectionView{CredentialMode: "test", AdmissionPolicy: openAIModelPolicy(), Provider: "openai", Model: fixtureAIModel, Locked: true, TestOnly: true, InputMicrousdPerToken: 1, OutputMicrousdPerToken: 4}
+	v.CredentialModes = []string{"test"}
+	if s.provider.apiCredentials {
+		v.CredentialModes = []string{"openai"}
+	}
+	v.LiveCallsEnabled = providerActivationEnabled && s.provider.apiCredentials
 	env, e := s.readAIVault()
 	if errors.Is(e, os.ErrNotExist) {
 		s.clearAIConnectionLocked()

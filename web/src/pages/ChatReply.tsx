@@ -46,7 +46,9 @@ export function ChatReply({
           <ResearchTurnReview
             request={q}
             revision={view.revision}
-            fixtureAvailable={view.aiFixtureAvailable}
+            fixtureAvailable={
+              view.aiExecutionAvailable ?? view.aiFixtureAvailable
+            }
             onChanged={() => agents.refresh()}
           />
         )}
@@ -132,7 +134,9 @@ export function ChatReply({
           <button
             className="primary"
             disabled={
-              agents.busy || consent !== q.digest || !view.aiFixtureAvailable
+              agents.busy ||
+              consent !== q.digest ||
+              !(view.aiExecutionAvailable ?? view.aiFixtureAvailable)
             }
             onClick={() => {
               void agents
@@ -148,7 +152,7 @@ export function ChatReply({
           >
             {uiText("Run development fixture")}
           </button>
-          {!view.aiFixtureAvailable && (
+          {!(view.aiExecutionAvailable ?? view.aiFixtureAvailable) && (
             <p className="subtle">
               {uiText(
                 "Execution is disabled in this core. Only an explicitly started local development fixture can run.",

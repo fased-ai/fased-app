@@ -153,7 +153,7 @@ func (s *Store) changeChat(d *agentDocument, c AgentCommand, profile, id string,
 	case "chat-send":
 		p := session.Chat
 		if !fixture {
-			return errors.New("provider execution disabled; development fixture required")
+			return errors.New("provider execution unavailable")
 		}
 		if p == nil || c.ConsentDigest != p.ID || (chatPermissionReason(*d, p, s.bootID, now) != "ready" || p.AccessEpoch != s.chatEpoch.Load()) || !s.aiConnectionValid(p.ConnectionRef) {
 			return errors.New("Chat permission unavailable; review current scope and connection")
@@ -287,6 +287,8 @@ func migrateAgentChat(ctx context.Context, db *sql.DB) error {
 	return tx.Commit()
 }
 func (s *Store) chatView(v AgentView) AgentView {
+	v.AIExecutionAvailable = s.aiExecutionAvailable(false)
+	v.ProviderCallsEnabled = providerActivationEnabled && s.provider.apiCredentials
 	d := agentDocument{Profiles: v.Profiles, Sessions: v.Sessions}
 	v.ChatReadiness = map[string]string{}
 	for _, ss := range v.Sessions {

@@ -623,7 +623,8 @@ func observeAIClock(last *atomic.Int64, now int64) bool {
 		}
 	}
 }
-func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enabled bool) error {
+func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, fixture bool) error {
+	enabled := s.aiExecutionAvailable(fixture)
 	if !s.aiMu.TryLock() {
 		return nil
 	}
@@ -682,7 +683,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 		}
 		if dispatch == nil && enabled && q.State == "queued" {
 			current, e := reviewedAIContext(ctx, tx, d, r, *q, s.now().Unix())
-			if e != nil || validateAIModelPolicy(*q, s.now().Unix()) != nil || current != q.Context || aiDigest(*q) != q.Digest || s.now().Unix() < q.CreatedAt || s.now().Unix()-q.CreatedAt > 600 || taskAIRequestValid(d, *q, s.now().Unix()) != nil || !s.aiRequestConnectionValid(*q) || !s.chatRequestValid(d, *q, s.now().Unix()) || (isResearchLoop(*q) && !loopFit(d.ResearchTurns[researchTurnIndex(d, q.ProfileID, q.ResearchTurnID)], researchFrameLimit)) {
+			if !s.providerDispatchAllowed(d, *q, fixture) || e != nil || validateAIModelPolicy(*q, s.now().Unix()) != nil || current != q.Context || aiDigest(*q) != q.Digest || s.now().Unix() < q.CreatedAt || s.now().Unix()-q.CreatedAt > 600 || taskAIRequestValid(d, *q, s.now().Unix()) != nil || !s.aiRequestConnectionValid(*q) || !s.chatRequestValid(d, *q, s.now().Unix()) || (isResearchLoop(*q) && !loopFit(d.ResearchTurns[researchTurnIndex(d, q.ProfileID, q.ResearchTurnID)], researchFrameLimit)) {
 				q.State = "cancelled"
 				q.HeldMicrousd = 0
 				q.Failure = "Undispatched request changed, expired or stopped; prepare a fresh review."

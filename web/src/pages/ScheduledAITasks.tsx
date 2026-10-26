@@ -180,7 +180,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                       className="primary"
                       disabled={
                         agents.busy ||
-                        !v.aiFixtureAvailable ||
+                        !(v.aiExecutionAvailable ?? v.aiFixtureAvailable) ||
                         consent !== a.digest
                       }
                       onClick={() =>
@@ -202,7 +202,10 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                 {t.state === "scheduled" && (
                   <button
                     className="secondary"
-                    disabled={agents.busy || !v.aiFixtureAvailable}
+                    disabled={
+                      agents.busy ||
+                      !(v.aiExecutionAvailable ?? v.aiFixtureAvailable)
+                    }
                     onClick={() =>
                       void agents.change({ action: "task-run", id: t.id })
                     }
@@ -213,7 +216,10 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                 {["scheduled", "paused"].includes(t.state) && (
                   <button
                     className="text-button"
-                    disabled={agents.busy || !v.aiFixtureAvailable}
+                    disabled={
+                      agents.busy ||
+                      !(v.aiExecutionAvailable ?? v.aiFixtureAvailable)
+                    }
                     onClick={() =>
                       void agents.change({
                         action:
@@ -249,7 +255,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                     )}
                   </p>
                 )}
-                {!v.aiFixtureAvailable && (
+                {!(v.aiExecutionAvailable ?? v.aiFixtureAvailable) && (
                   <p className="subtle">
                     {uiText(
                       "Only a standalone core explicitly started with the development fixture can activate or run AI schedules.",

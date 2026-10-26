@@ -6,6 +6,7 @@ import { TaskAccessSettings, type TaskAccessAllowance } from "./TaskAccess";
 
 export type Connection = {
   credentialMode?: "test" | "openai";
+  credentialModes?: ("test" | "openai")[];
   taskAccess?: TaskAccessAllowance;
   accessReview?: TaskAccessAllowance;
   admissionPolicy: OpenAIModelPolicy;
@@ -14,7 +15,7 @@ export type Connection = {
   locked: boolean;
   unlockExpires: number;
   testOnly: boolean;
-  liveCallsEnabled: false;
+  liveCallsEnabled: boolean;
 };
 export function useAIConnection() {
   const core = useCore();
@@ -98,6 +99,7 @@ export function AIConnectionSettings() {
   const [key, setKey] = useState("");
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
+  const apiMode = view?.credentialModes?.includes("openai") ?? false;
   async function change(action: string) {
     setBusy(true);
     setError("");
@@ -111,7 +113,7 @@ export function AIConnectionSettings() {
         ref: view?.ref ?? "",
         ...(action !== "lock" ? { passphrase: secret } : {}),
         ...(action === "save"
-          ? { key: credential, credentialMode: "test" }
+          ? { key: credential, credentialMode: apiMode ? "openai" : "test" }
           : {}),
       });
       setView(next);
@@ -148,9 +150,11 @@ export function AIConnectionSettings() {
         )}
         <details className="connection-options">
           <summary>{uiText("Credentials")}</summary>
-          <p>
-            {uiText("Disposable fased-test- keys only. No real API calls.")}
-          </p>
+          {!apiMode && (
+            <p>
+              {uiText("Disposable fased-test- keys only. No real API calls.")}
+            </p>
+          )}
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -159,7 +163,7 @@ export function AIConnectionSettings() {
             autoComplete="off"
           >
             <label>
-              {uiText("Test key")}
+              {uiText(apiMode ? "API key" : "Test key")}
               <input
                 type="password"
                 autoComplete="off"

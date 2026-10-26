@@ -150,7 +150,7 @@ func (s *Server) startAgentTasks() {
 					}
 				}
 				if e == nil && !s.Store.sessionFixture {
-					e = s.Store.advanceAgentNews(c, newsRT, s.agentFixture)
+					e = s.Store.advanceAgentNews(c, newsRT, s.Store.aiExecutionAvailable(s.agentFixture))
 					stop()
 					c, stop = context.WithTimeout(ctx, 5*time.Second)
 					if e == nil {

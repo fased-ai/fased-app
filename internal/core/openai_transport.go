@@ -20,7 +20,7 @@ type openAITransport struct {
 }
 
 func newOpenAITransport() *openAITransport {
-	return &openAITransport{wire: &http.Transport{
+	return &openAITransport{enabled: providerActivationEnabled, wire: &http.Transport{
 		Proxy:                  nil,
 		DialContext:            (&net.Dialer{Timeout: time.Second}).DialContext,
 		TLSClientConfig:        &tls.Config{MinVersion: tls.VersionTLS12},

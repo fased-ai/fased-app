@@ -144,6 +144,7 @@ type AgentView struct {
 	NewsSources             []NewsSource        `json:"newsSources"`
 	NewsFetches             []NewsFetch         `json:"newsFetches"`
 	AIRequests              []AgentAIRequest    `json:"aiRequests"`
+	AIExecutionAvailable    bool                `json:"aiExecutionAvailable"`
 	AIFixtureAvailable      bool                `json:"aiFixtureAvailable"`
 	Revision                int64               `json:"revision"`
 	ProfileID               string              `json:"profileId"`
@@ -538,6 +539,7 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 			}
 		}
 	}
+	providerAllowed := s.providerActionAllowed(d, c, profile, fixture)
 	switch c.Action {
 	case "chat-review":
 		p, err := s.chatReview(d, c, profile, revision, now)
@@ -548,7 +550,7 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		v.ChatReview = &p
 		return s.chatView(v), err
 	case "chat-allow", "chat-send", "chat-revoke":
-		if e = s.changeChat(&d, c, profile, id, revision, now, fixture); e != nil {
+		if e = s.changeChat(&d, c, profile, id, revision, now, providerAllowed); e != nil {
 			return AgentView{}, e
 		}
 	case "playbook-save":
@@ -592,7 +594,7 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 			return AgentView{}, e
 		}
 	case "ai-prepare", "ai-start", "ai-cancel", "ai-card-keep", "ai-card-dismiss":
-		if e = changeAgentAI(&d, c, profile, id, now, fixture); e != nil {
+		if e = changeAgentAI(&d, c, profile, id, now, providerAllowed); e != nil {
 			return AgentView{}, e
 		}
 		if c.Action == "ai-prepare" {
@@ -612,7 +614,7 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 			}
 		}
 	case "task-ai-prepare", "task-ai-authorize", "task-ai-cancel":
-		if e = changeTaskAI(&d, c, profile, id, now, fixture); e != nil {
+		if e = changeTaskAI(&d, c, profile, id, now, providerAllowed); e != nil {
 			return AgentView{}, e
 		}
 	case "profile-create":
@@ -790,8 +792,8 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 				if cronTask(t) && now > t.Calendar.Until {
 					return AgentView{}, errors.New("schedule ended; create a new reviewed task")
 				}
-				if t.AI != nil && (t.State != "paused" || !fixture || validateTaskAI(d, t, now) != nil) {
-					return AgentView{}, errors.New("AI task requires active fixture and unchanged unexpired consent")
+				if t.AI != nil && (t.State != "paused" || !providerAllowed || validateTaskAI(d, t, now) != nil) {
+					return AgentView{}, errors.New("AI task requires provider access and unchanged unexpired consent")
 				}
 				d.Tasks[i].State = "scheduled"
 				if t.Calendar == nil {
@@ -801,7 +803,7 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 				if t.State != "scheduled" {
 					return AgentView{}, errors.New("resume the paused task first")
 				}
-				if e = evaluateAgentTask(&d, i, now, fixture); e != nil {
+				if e = evaluateAgentTask(&d, i, now, providerAllowed); e != nil {
 					return AgentView{}, e
 				}
 			}
@@ -1008,7 +1010,8 @@ func (s *Store) runAgentTasks(ctx context.Context, fixture bool) error {
 	}
 	for i, t := range d.Tasks {
 		if t.State == "scheduled" && t.Runs < t.MaxRuns && t.NextAt <= now {
-			if e = evaluateAgentTask(&d, i, now, fixture); e != nil {
+			allowed := s.providerTaskAllowed(t, fixture)
+			if e = evaluateAgentTask(&d, i, now, allowed); e != nil {
 				return e
 			}
 			changed = true

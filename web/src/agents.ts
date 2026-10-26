@@ -390,6 +390,7 @@ export type AgentView = {
   newsSources: NewsSource[];
   newsFetches: NewsFetch[];
   aiRequests: AgentAIRequest[];
+  aiExecutionAvailable?: boolean;
   aiFixtureAvailable: boolean;
   revision: number;
   profileId: string;

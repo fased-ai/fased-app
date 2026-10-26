@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -139,7 +140,7 @@ func TestAPICredentialControlledHTTPSChat(t *testing.T) {
 		t.Fatal("API mode not bound")
 	}
 	v = agentApply(t, s, AgentCommand{Action: "chat-allow", ProfileID: v.ProfileID, ID: id, ChatPermission: &p, ConsentDigest: p.ID})
-	v = chatSend(t, s, v, p, "Review saved sources")
+	v = agentApply(t, s, AgentCommand{Action: "chat-send", ProfileID: v.ProfileID, ID: p.SessionID, Text: "Review saved sources", ConsentDigest: p.ID})
 	calls := 0
 	fixture := httpsFixture(t, func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -162,7 +163,7 @@ func TestAPICredentialControlledHTTPSChat(t *testing.T) {
 	}).(testOpenAITransport)
 	// Only the fixture prefix check is bypassed; the test-only loopback TLS dialer
 	// and actual transport/admission remain unchanged. No external host is used.
-	if e := s.advanceAgentAI(t.Context(), fixture.next, true); e != nil {
+	if e := s.advanceAgentAI(t.Context(), fixture.next, false); e != nil {
 		t.Fatal(e)
 	}
 	got, e := s.Agents(t.Context(), v.ProfileID, "")
@@ -171,7 +172,27 @@ func TestAPICredentialControlledHTTPSChat(t *testing.T) {
 	}
 	// A finite task grant can use the API-mode vault after interactive expiry.
 	v = agentApply(t, s, AgentCommand{Action: "task-ai-prepare", UseAgentDefaults: true, ProfileID: v.ProfileID, ID: id, Name: "Bounded API task", Text: "Review saved sources", IntervalSeconds: 60, MaxRuns: 1, Limits: &AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024, DeadlineSeconds: 5, BudgetMicrousd: 30000}, AuthorizationSeconds: 3600, TotalBudgetMicrousd: 30000})
-	v = taskAIAuthorize(t, s, v)
+	reviewed := v.Tasks[len(v.Tasks)-1]
+	if !s.providerTaskAllowed(reviewed, false) {
+		t.Fatal("ordinary provider task refused")
+	}
+	for _, alter := range []func(*AgentTask){
+		func(task *AgentTask) { task.Playbook = &PlaybookOrigin{} },
+		func(task *AgentTask) { task.WEN = &WENPaperPlan{} },
+		func(task *AgentTask) { task.BotID = "held-bot" },
+	} {
+		held := reviewed
+		alter(&held)
+		if s.providerTaskAllowed(held, false) {
+			t.Fatal("held task kind gained provider execution")
+		}
+		q := taskAIRequest(held, s.now().Unix())
+		q.TaskID = held.ID
+		if s.providerDispatchAllowed(agentDocument{Tasks: []AgentTask{held}}, q, false) {
+			t.Fatal("retained held task reached dispatch")
+		}
+	}
+	v = agentApply(t, s, AgentCommand{Action: "task-ai-authorize", ProfileID: v.ProfileID, ID: reviewed.ID, ConsentDigest: reviewed.AI.Digest})
 	task := v.Tasks[len(v.Tasks)-1]
 	grant, e := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "task-access-review", Ref: connection.Ref, Revision: v.Revision, ProfileID: v.ProfileID, TaskIDs: []string{task.ID}, AuthorizationSeconds: 3600})
 	if e != nil || grant.AccessReview == nil {
@@ -186,15 +207,22 @@ func TestAPICredentialControlledHTTPSChat(t *testing.T) {
 	if e != nil || !status.Locked || status.TaskAccess == nil {
 		t.Fatal("task grant extended interactive unlock", e)
 	}
-	if e = s.runAgentTasks(t.Context(), true); e != nil {
+	if e = s.runAgentTasks(t.Context(), false); e != nil {
 		t.Fatal(e)
 	}
-	if e = s.advanceAgentAI(t.Context(), fixture.next, true); e != nil {
+	if e = s.advanceAgentAI(t.Context(), fixture.next, false); e != nil {
 		t.Fatal(e)
 	}
 	got, e = s.Agents(t.Context(), v.ProfileID, "")
 	if e != nil || len(got.AIRequests) != 2 || got.AIRequests[1].State != "completed" || calls != 6 {
 		t.Fatal("API task completion", e, calls)
+	}
+	if len(got.Runs) != 1 || got.Runs[0].AIRequestID != got.AIRequests[1].ID {
+		t.Fatal("provider task did not settle through the shared run engine")
+	}
+	got = agentApply(t, s, AgentCommand{Action: "memory-chat-save", ProfileID: got.ProfileID, ID: got.AIRequests[0].ID, Source: "answer", Text: "Reviewed provider answer"})
+	if len(got.Memories) != 1 || !strings.Contains(got.Memories[0].Source, got.AIRequests[0].ID) {
+		t.Fatal("provider answer lost memory provenance")
 	}
 	s.provider.apiCredentials = false
 	view, e := s.AIConnection()
