@@ -132,6 +132,9 @@ func TestNetworkInstallerIdentity(t *testing.T) {
 		if e := j.validate(m.Owner); e != nil {
 			t.Fatal(e)
 		}
+		if installerIntent(m) != j {
+			t.Fatal("completion lost installed network identity")
+		}
 		j.Version = 1
 		if j.validate(m.Owner) == nil {
 			t.Fatal("old intent accepted network")

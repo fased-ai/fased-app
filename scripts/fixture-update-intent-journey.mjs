@@ -430,6 +430,7 @@ try:
  if not done:done,status=os.waitpid(pid,0)
  code=os.waitstatus_to_exitcode(status)
  assert sent,'no protected terminal review: '+seen.decode(errors='replace')
+ if choice in ('interrupt','resume-interrupt'):assert interrupted,'interruption boundary not reached: '+seen.decode(errors='replace')
  assert (code==0)==(choice=='approve'),'unexpected exit: '+seen.decode(errors='replace')
  if operation=='prepare':assert b'No installation or resume is authorized' in seen and b'"sha256"' in seen and b'"spent"' in seen and b'"held"' in seen,'incomplete review'
  print(json.dumps({'terminal':True,'operation':operation,'choice':choice,'exitCode':code,'completeReview':True,'interrupted':interrupted,'concurrentDenied':concurrentDenied}))
