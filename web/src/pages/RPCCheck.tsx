@@ -32,7 +32,7 @@ export function RPCCheck({
     return () => {
       generation.current++;
     };
-  }, [core.instanceId]);
+  }, [core.instanceId, revision, account.id]);
   async function save(remove = false) {
     if (busy) return;
     const epoch = ++generation.current;

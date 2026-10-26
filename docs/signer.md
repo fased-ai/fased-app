@@ -523,3 +523,30 @@ origin/CA override or live transport is exposed. Credentials appear only in the
 Authorization header, never in URLs, public results or errors. Responses remain
 bounded and must match the fixture network and healthy status. This proves the
 authenticated transport contract, not real provider acceptance or live connectivity.
+
+### Encrypted RPC credential recovery
+
+Export through the owner CLI into a new private file. Use
+`accounts --rpc-credential-stdin --rpc-backup-out /private/path/rpc.json` with
+`action: "backup"`, current `accountId`, `revision`, `ref` and `passphrase` on
+private stdin. The command prints status only. It refuses existing destinations
+and uses a private, synced temporary file with exclusive publication. The backup
+contains ciphertext and original instance/account bindings, never plaintext keys.
+Do not store it beside its password. Keep an off-device copy; a same-disk file
+alone is not disaster recovery.
+
+Wallets → RPC → API key → Recovery accepts that encrypted file for Verify backup
+or Restore. The same `verify-backup`/`restore` actions accept a `backup` object
+through private CLI stdin. Verification checks decryption and exact current
+instance/account/RPC binding without changing state. Restore only fills a missing
+vault, requires the backup password, and re-encrypts with a new credential reference.
+It never overwrites an existing/corrupt vault or changes signer state. Preserve a
+corrupt file before owner-assisted recovery. Changed identity/settings, another
+instance, stale revisions and update pause refuse restoration. Recovery stays
+locked and needs a new explicit connection check.
+
+This supports recovery of a lost RPC credential file alongside the original
+instance metadata. It does not recover a forgotten password, migrate credentials
+to a different instance, undo provider revocation or establish real-key acceptance.
+Browser export is intentionally absent: private-file export remains in the CLI;
+the browser can inspect/restore an explicitly selected encrypted backup.

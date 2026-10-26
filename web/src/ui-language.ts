@@ -10,6 +10,32 @@ export const languages = {
 export type Language = keyof typeof languages;
 // Interface copy only. Never translate user records, model output or server receipts.
 const rows = {
+  Recovery: ["Восстановление", "Recuperación", "恢复", "복구"],
+  Restore: ["Восстановить", "Restaurar", "恢复", "복원"],
+  "Backup file": [
+    "Файл резервной копии",
+    "Archivo de copia",
+    "备份文件",
+    "백업 파일",
+  ],
+  "Invalid backup": [
+    "Неверная резервная копия",
+    "Copia no válida",
+    "备份无效",
+    "잘못된 백업",
+  ],
+  "Verify backup": [
+    "Проверить копию",
+    "Verificar copia",
+    "验证备份",
+    "백업 확인",
+  ],
+  "Backup verified": [
+    "Копия проверена",
+    "Copia verificada",
+    "备份已验证",
+    "백업 확인됨",
+  ],
   "Check connection": [
     "Проверить связь",
     "Comprobar conexión",

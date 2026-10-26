@@ -220,7 +220,14 @@ export function AccountManagement() {
           onClose={() => setRPCAccount(null)}
           onSaved={(v) => {
             setView(v);
-            setRPCAccount(null);
+            const updated = v.record.accounts.find(
+              (a) => a.id === rpcAccount.account.id,
+            );
+            setRPCAccount(
+              updated
+                ? { account: updated, revision: v.record.revision }
+                : null,
+            );
           }}
         />
       )}

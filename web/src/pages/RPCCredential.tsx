@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
 type Status = {
+  backupVerified?: boolean;
   ref: string;
   saved: boolean;
   stale: boolean;
@@ -27,10 +28,12 @@ export function RPCCredential({
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [verified, setVerified] = useState(false);
+  const [backup, setBackup] = useState<unknown>();
   const generation = useRef(0);
   useEffect(() => {
     const epoch = ++generation.current;
     setStatus(undefined);
+    setBackup(undefined);
     setKey("");
     setPassword("");
     setError("");
@@ -58,7 +61,7 @@ export function RPCCredential({
     setBusy(true);
     setError("");
     setVerified(false);
-    setStatus({ ...status, check: undefined });
+    setStatus({ ...status, check: undefined, backupVerified: false });
     try {
       const v = await core.request<Status>("accounts/rpc-credential", "PUT", {
         accountId,
@@ -67,12 +70,14 @@ export function RPCCredential({
         action,
         passphrase: password,
         ...(action === "save" ? { key } : {}),
+        ...(["restore", "verify-backup"].includes(action) ? { backup } : {}),
       });
       if (epoch === generation.current) {
         if (action === "check" && (!v.check?.fixtureOnly || v.check.liveRPC))
           throw new Error("Unexpected RPC capability");
         setStatus(v);
         setVerified(action === "verify");
+        if (action === "restore") setBackup(undefined);
       }
     } catch {
       if (epoch === generation.current)
@@ -145,6 +150,57 @@ export function RPCCredential({
               {t("Remove key")}
             </button>
           </>
+        )}
+        <details>
+          <summary>{t("Recovery")}</summary>
+          <label>
+            {t("Backup file")}
+            <input
+              type="file"
+              accept="application/json,.json"
+              aria-label={t("Backup file")}
+              disabled={busy}
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                const epoch = generation.current;
+                setBackup(undefined);
+                setError("");
+                if (!file) return;
+                try {
+                  if (file.size > 2048) throw new Error();
+                  const parsed: unknown = JSON.parse(await file.text());
+                  if (epoch === generation.current) setBackup(parsed);
+                } catch {
+                  if (epoch === generation.current)
+                    setError(t("Invalid backup"));
+                }
+              }}
+            />
+          </label>
+          <button
+            type="button"
+            disabled={busy || !backup || !password || !status}
+            onClick={() => void change("verify-backup")}
+          >
+            {t("Verify backup")}
+          </button>
+          <button
+            type="button"
+            disabled={
+              busy ||
+              !backup ||
+              !password ||
+              !status ||
+              status.saved ||
+              !configured
+            }
+            onClick={() => void change("restore")}
+          >
+            {t("Restore")}
+          </button>
+        </details>
+        {status?.backupVerified && (
+          <span role="status">{t("Backup verified")}</span>
         )}
         {status?.saved && (
           <span>{t(status.stale ? "Reconnect" : "Saved")}</span>

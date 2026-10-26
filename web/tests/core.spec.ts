@@ -4843,7 +4843,9 @@ test("public account records share UI/CLI state without wallet authority", async
   ).rejects.toThrow("wallet changed");
   await page.getByRole("button", { name: "RPC", exact: true }).click();
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Remove", exact: true }),
+  ).toBeVisible();
   state = await privateCLI(["accounts"]);
   expect(state.record.accounts[0].rpc.endpoint).toBe(
     "https://rpc.fased.invalid/solana",
@@ -4912,15 +4914,67 @@ test("public account records share UI/CLI state without wallet authority", async
   expect(connection.locked).toBe(true);
   expect(JSON.stringify(connection)).not.toContain("disposable-browser");
 
+  const backupPath = join(dir, "rpc-backup.json");
+  const backupStatus = await privateCLI(
+    ["accounts", "--rpc-credential-stdin", "--rpc-backup-out", backupPath],
+    {
+      accountId: state.record.accounts[0].id,
+      revision: state.record.revision,
+      action: "backup",
+      ref: credential.ref,
+      passphrase: "Disposable browser vault password 123",
+    },
+  );
+  expect(backupStatus.backup).toBeUndefined();
+  expect(await readFile(backupPath, "utf8")).not.toContain(
+    "disposable-browser",
+  );
+  await page.getByText("Recovery", { exact: true }).click();
+  await page
+    .getByLabel("Backup file", { exact: true })
+    .setInputFiles(backupPath);
+  await page
+    .getByLabel("Vault password", { exact: true })
+    .fill("Disposable browser vault password 123");
+  await page
+    .getByRole("button", { name: "Verify backup", exact: true })
+    .click();
+  await expect(
+    page.getByText("Backup verified", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByLabel("Vault password", { exact: true })
+    .fill("Disposable browser vault password 123");
+  await page.getByRole("button", { name: "Remove key", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Remove key", exact: true }),
+  ).toHaveCount(0);
+  await page
+    .getByLabel("Vault password", { exact: true })
+    .fill("Disposable browser vault password 123");
+  await page.getByRole("button", { name: "Restore", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Remove key", exact: true }),
+  ).toBeVisible();
+  const recovered = await privateCLI(["accounts", "--rpc-credential-stdin"], {
+    accountId: state.record.accounts[0].id,
+    revision: state.record.revision,
+    action: "status",
+    ref: "",
+  });
+  expect(recovered.ref).not.toBe(credential.ref);
+  expect(recovered.locked).toBe(true);
   await privateCLI(["accounts", "--rpc-credential-stdin"], {
     accountId: state.record.accounts[0].id,
     revision: state.record.revision,
     action: "remove",
-    ref: credential.ref,
+    ref: recovered.ref,
     passphrase: "Disposable browser vault password 123",
   });
   await page.getByRole("button", { name: "Remove", exact: true }).click();
-  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Remove", exact: true }),
+  ).toHaveCount(0);
   state = await privateCLI(["accounts"]);
   expect(state.record.accounts[0].rpc).toBeUndefined();
   state = await privateCLI(["accounts", "--rpc-stdin"], {
