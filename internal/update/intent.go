@@ -72,7 +72,11 @@ type IntentRequest struct {
 }
 
 func JoinSnapshots(c CoreSnapshot, s SignerSnapshot, target Target) (Inventory, error) {
-	if c.Version != 1 || s.Version != 1 || !IDOK(c.ProbeID) || c.ProbeID != s.ProbeID || !IDOK(c.BootID) || !IDOK(s.BootID) || !tokenOK(c.InstanceID) || !hashOK(s.AuthoritySHA256) || c.State.Name != "core-db" || len(s.States) != 3 || s.ActiveIntentID != "" && !IDOK(s.ActiveIntentID) {
+	snapshotOK := s.Version == 1 && len(s.States) == 3
+	if s.Version == 2 {
+		snapshotOK = len(s.States) == 2 && s.States[0].Name == "vault" && s.States[0].Version == 2 && s.States[1].Name == "operations" && s.States[1].Version == 1 && s.RecoveryHold && s.Spent == 0 && s.Held == 0 && s.Pending == 0 && s.Unknown == 0 && s.SequenceFloor == 0 && s.InstalledSequence == 0 && s.ActiveIntentID == ""
+	}
+	if c.Version != 1 || !snapshotOK || !IDOK(c.ProbeID) || c.ProbeID != s.ProbeID || !IDOK(c.BootID) || !IDOK(s.BootID) || !tokenOK(c.InstanceID) || !hashOK(s.AuthoritySHA256) || c.State.Name != "core-db" || s.ActiveIntentID != "" && !IDOK(s.ActiveIntentID) {
 		return Inventory{}, errors.New("invalid service snapshot identity")
 	}
 	states := append([]State{c.State}, s.States...)

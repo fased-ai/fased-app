@@ -79,8 +79,11 @@ Neither test class enables a wallet or establishes retail custody acceptance.
 The same signer and protected owner helper also accept an explicit engineering
 configuration with `version: 2`, `mode: "disposable-custody:v2"` and `network`
 set to `devnet` or `mainnet-beta`. This is a disposable-key test path, not live
-wallet admission. Ordinary installation still produces the version-1 fixture;
-there is no automatic upgrade or network selection in that installer yet.
+wallet admission. `custody install --network devnet` (or `mainnet-beta`)
+with the existing `--disposable-fixture --prepare-host --signer-binary` options
+creates this isolated configuration. Omitting `--network` retains v1. The network
+is immutable in the installation intent, manifest and retry; existing
+installations cannot be retargeted or silently converted.
 Never fund these keys or import a real wallet.
 
 Version 2 binds the network into the encrypted vault, backup, key identity and
@@ -88,7 +91,11 @@ local wire protocol. Setup/import, bounded manual unlock, verified encrypted
 backup and recovery use the existing owner helper and three-UID isolation.
 Recovery keeps the public key/wallet ID, creates a new authority epoch and
 stays locked with a recovery hold. Raw fixture export, fixture grants and
-all signing/financial/update operations refuse this mode. Its key-history
+all signing/financial/update mutations refuse this mode. Owner-only update
+inventory and cold inspection report v2 vault bytes, immutable key history and
+the recovery hold; they neither unlock nor replace files. They do not invent
+a fixture ledger, update sequence or mock receipts. V1 update controllers and
+reader bootstrap refuse v2 installations. Its key-history
 record cannot contain fixture policies, grants, transactions or mock outcomes.
 Missing/conflicting history and interrupted publication preserve originals;
 ordinary and predecessor readers refuse the new format.

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/signer"
+	"github.com/fased-ai/fased-app/internal/update"
 	"golang.org/x/term"
 )
 
@@ -35,6 +36,9 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	}
 	if len(args) == 1 && args[0] == "fixture-compatibility" {
 		return json.NewEncoder(out).Encode(signer.UpdateContract())
+	}
+	if len(args) == 1 && args[0] == "custody-version" {
+		return json.NewEncoder(out).Encode(map[string]any{"protocol": 2, "ownerFlow": 1, "mode": signer.ManagedFixtureMode, "walletSigner": false})
 	}
 	if len(args) == 1 && args[0] == "fixture-version" {
 		return json.NewEncoder(out).Encode(map[string]any{"protocol": 1, "ownerFlow": 1, "mode": signer.FixtureNetwork, "walletSigner": false})
@@ -192,6 +196,8 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		return ownerFlow(ctx, c, args[0], *documentPath, password, out)
 	}
 	switch r.Action {
+	case "fixture-update-inventory":
+		r.ProbeID = update.NewProbe()
 	case "status", "lock":
 	case "fixture-approvals", "fixture-state", "fixture-policy", "fixture-grant", "fixture-revoke", "fixture-recover-authority", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation":
 	case "create", "unlock", "backup":

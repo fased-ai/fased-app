@@ -41,7 +41,7 @@ func (t BootstrapTransaction) Plan() (update.BootstrapPlan, error) {
 	b := t.Target
 	b.CoreHash = t.Base.CoreHash
 	b.SignerHash = t.Base.SignerHash
-	if t.Version != 1 || !update.IDOK(t.ID) || t.Base.validate() != nil || t.Target.validate() != nil || b != t.Base || t.Signer.ActiveIntentID != "" || t.Signer.InstalledSequence != 0 || p.Target.Sequence <= t.Signer.SequenceFloor {
+	if t.Version != 1 || t.Base.Version != 1 || !update.IDOK(t.ID) || t.Base.validate() != nil || t.Target.validate() != nil || b != t.Base || t.Signer.ActiveIntentID != "" || t.Signer.InstalledSequence != 0 || p.Target.Sequence <= t.Signer.SequenceFloor {
 		return p, errors.New("unsupported bootstrap identity or financial floor")
 	}
 	for _, c := range p.Maintenance.Components {

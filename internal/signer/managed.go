@@ -4,12 +4,13 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
+	"github.com/fased-ai/fased-app/internal/update"
 	"os"
 	"time"
 )
 
 // The network-bound key lifecycle is available only to an explicit version-2
-// disposable custody configuration. Ordinary installers still generate version 1.
+// disposable custody configuration. Installers require explicit network selection; the default remains version 1.
 // Version 2 is custody only and never satisfies fixture grant authority.
 func managedNetwork(network string) bool       { return network == "mainnet-beta" || network == "devnet" }
 func ValidManagedAccountRef(r AccountRef) bool { return managedRefValid(r) }
@@ -93,4 +94,38 @@ func (s *storage) ensureManagedHistory(e envelope) error {
 		return err
 	}
 	return s.appendJournal(&journal{name: "operations.log"}, journalRecord{Kind: "managed-key-init", Account: &e.Ref, MissingHistory: true, At: time.Now().Unix()})
+}
+
+// managedUpdateSnapshot describes custody bytes without inventing a financial
+// ledger, sequence floor or permission to replace a recovery-held installation.
+func (v *Vault) managedUpdateSnapshot(probe string) (update.SignerSnapshot, error) {
+	if !update.IDOK(probe) || v.closed || v.store.failedState() || v.record == nil || v.managedRef == nil {
+		return update.SignerSnapshot{}, ErrUnavailable
+	}
+	b, err := v.store.read()
+	if err != nil {
+		return update.SignerSnapshot{}, err
+	}
+	var disk envelope
+	if decode(b, &disk) != nil || update.SnapshotDigest("vault", disk) != update.SnapshotDigest("vault", *v.record) {
+		return update.SignerSnapshot{}, errors.New("durable managed vault changed")
+	}
+	main, records, err := v.store.readJournal("operations.log")
+	if err != nil {
+		return update.SignerSnapshot{}, err
+	}
+	ref, err := managedHistory(records)
+	if err != nil || !sameWallet(*ref, v.record.Ref) || *ref != *v.managedRef {
+		return update.SignerSnapshot{}, errors.New("durable managed history changed")
+	}
+	if _, _, err := v.store.readJournal("mock-receipts.log"); !errors.Is(err, os.ErrNotExist) {
+		return update.SignerSnapshot{}, errors.New("mixed managed history")
+	}
+	return update.SignerSnapshot{Version: 2, ProbeID: probe, BootID: v.bootID, AuthoritySHA256: update.SnapshotDigest("managed-authority", []AccountRef{v.record.Ref, *ref}), RecoveryHold: true, States: []update.State{
+		{Name: "vault", Version: 2, Features: []string{"managed-key-v2", "authority-epoch-v1"}, Anchor: update.SnapshotDigest("vault-bytes", b)},
+		{Name: "operations", Version: 1, Features: []string{"managed-key-history-v1"}, Anchor: update.SnapshotDigest("managed-history-head", struct {
+			Sequence int
+			Hash     string
+		}{main.seq, main.hash})},
+	}}, nil
 }

@@ -38,7 +38,7 @@ func inspectVault(c Config) (*Vault, error) {
 	if e := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); e != nil {
 		return nil, e
 	}
-	v, e := Open(c.StateDir, c.SignerID)
+	v, e := openVaultNetwork(c.StateDir, c.SignerID, false, c.Network)
 	if e != nil {
 		return nil, e
 	}
@@ -51,6 +51,13 @@ func InspectUpdate(c Config, id string) (Response, error) {
 		return Response{}, e
 	}
 	defer v.Close()
+	if c.Version == 2 {
+		if id != "" {
+			return Response{}, ErrUnavailable
+		}
+		s, e := v.UpdateInventory(update.NewProbe())
+		return Response{UpdateInventory: s, Status: v.Status()}, e
+	}
 	i, e := v.UpdateIntent(id)
 	if e != nil {
 		return Response{}, e

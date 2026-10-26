@@ -23,7 +23,7 @@ func (t InstallTransaction) dir() string {
 	return t.Base.Root + "/updates/" + t.Binding.Index.Binding.Pause.Request.IntentID
 }
 func (t InstallTransaction) valid() bool {
-	if t.Version != 1 || t.Base.validate() != nil || t.Target.validate() != nil || update.ValidateInstallBinding(t.Binding) != nil || t.Binding.Index.Binding.Pause.Request == nil {
+	if t.Version != 1 || t.Base.Version != 1 || t.Base.validate() != nil || t.Target.validate() != nil || update.ValidateInstallBinding(t.Binding) != nil || t.Binding.Index.Binding.Pause.Request == nil {
 		return false
 	}
 	b := t.Target

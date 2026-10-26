@@ -245,6 +245,11 @@ jobs:
         env:
           FASED_PORTABLE_ACCEPTANCE: "1"
         run: node scripts/check-managed-custody.mjs
+      - name: Installed network custody and held-update refusal
+        env:
+          FASED_MANAGED_NETWORK: "devnet"
+          FASED_MANAGED_EVIDENCE: .evidence/p3-network-managed
+        run: node scripts/check-managed-custody.mjs
       - name: Compile pinned predecessor and bad-health bootstrap fixtures
         run: node scripts/build-bootstrap-fixtures.mjs
       - name: Actual older-helper bootstrap and subsequent coordinated update
@@ -281,6 +286,8 @@ jobs:
             .evidence/p3-managed/managed-install-result.json
             .evidence/p3-managed/managed-install.log
             .evidence/p3-managed/accounts-ui-*.png
+            .evidence/p3-network-managed/managed-install-result.json
+            .evidence/p3-network-managed/managed-install.log
             .evidence/p4-updates/manifest-cli-result.json
             .evidence/p4-updates/manifest-cli.log
             .evidence/p4-intents/core-cli-result.json

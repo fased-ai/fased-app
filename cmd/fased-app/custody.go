@@ -35,6 +35,7 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 	f.SetOutput(errOut)
 	disposable := f.Bool("disposable-fixture", false, "confirm unfunded disposable keys only")
 	prepare := f.Bool("prepare-host", false, "authorize dedicated locked OS identities, immutable files and system services")
+	network := f.String("network", "", "disposable key network: devnet or mainnet-beta; install only")
 	key := f.String("signer-binary", "", "matching engineering fased-signer executable")
 	listen := f.String("listen", "127.0.0.1:7332", "managed private loopback listener")
 	file := f.String("backup-file", "", "owner-selected private encrypted backup file")
@@ -48,6 +49,9 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 	}
 	if f.NArg() != 0 || !*disposable {
 		return errors.New("explicit --disposable-fixture confirmation is required; real wallets unavailable")
+	}
+	if *network != "" && args[0] != "install" {
+		return errors.New("network is selected only during installation")
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -66,7 +70,7 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 		}
 		installCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 		defer cancel()
-		m, e := custodyinstall.Install(installCtx, custodyinstall.Options{Core: engine, Signer: signerPath, Listen: *listen, PrepareHost: *prepare, Disposable: *disposable}, system)
+		m, e := custodyinstall.Install(installCtx, custodyinstall.Options{Network: *network, Core: engine, Signer: signerPath, Listen: *listen, PrepareHost: *prepare, Disposable: *disposable}, system)
 		if e != nil {
 			return e
 		}

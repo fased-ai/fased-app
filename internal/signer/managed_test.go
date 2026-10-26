@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/fased-ai/fased-app/internal/update"
 	"net"
 	"os"
 	"path/filepath"
@@ -288,5 +289,69 @@ func TestManagedTransportVersionAndOwnerRole(t *testing.T) {
 	app.SetDeadline(time.Now().Add(time.Second))
 	if readWire(app, &hello) == nil {
 		t.Fatal("wrong kernel role received app challenge")
+	}
+}
+
+func TestManagedReadOnlyUpdateInventory(t *testing.T) {
+	dir := fixtureDir(t)
+	v := managedFixture(t, dir, "devnet")
+	if e := v.Create(fixturePassword); e != nil {
+		t.Fatal(e)
+	}
+	probe := testSignerID
+	s, e := v.UpdateInventory(probe)
+	if e != nil || s.Version != 2 || !s.RecoveryHold || len(s.States) != 2 || s.States[0].Version != 2 || s.ActiveIntentID != "" {
+		t.Fatal(s, e)
+	}
+
+	c := update.CoreSnapshot{Version: 1, ProbeID: probe, BootID: probe, InstanceID: "fixture-core", State: update.State{Name: "core-db", Version: 22}}
+	if _, err := update.JoinSnapshots(c, *s, update.Target{OS: "linux", Arch: "amd64"}); err != nil {
+		t.Fatal(err)
+	}
+	bad := *s
+	bad.Version = 1
+	if _, err := update.JoinSnapshots(c, bad, update.Target{OS: "linux", Arch: "amd64"}); err == nil {
+		t.Fatal("legacy inventory accepted managed shape")
+	}
+	bad = *s
+	bad.RecoveryHold = false
+	if _, err := update.JoinSnapshots(c, bad, update.Target{OS: "linux", Arch: "amd64"}); err == nil {
+		t.Fatal("managed hold cleared")
+	}
+	if e := v.Unlock(fixturePassword, time.Minute); e != nil {
+		t.Fatal(e)
+	}
+	backup, e := v.Backup(backupPassword)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer wipe(backup)
+	v.Lock()
+	recovered := managedFixture(t, fixtureDir(t), "devnet")
+	if e := recovered.Restore(backup, backupPassword, fixturePassword); e != nil {
+		t.Fatal(e)
+	}
+	rs, e := recovered.UpdateInventory(probe)
+	if e != nil || rs.AuthoritySHA256 == s.AuthoritySHA256 || !rs.RecoveryHold {
+		t.Fatal(rs, e)
+	}
+	denied := execute(v, Request{Action: "fixture-update-inventory", ProbeID: probe}, false)
+	if denied.Error == "" {
+		t.Fatal("app accessed owner inventory")
+	}
+	allowed := execute(v, Request{Action: "fixture-update-inventory", ProbeID: probe}, true)
+	if allowed.Error != "" || allowed.UpdateInventory == nil || !allowed.Status.Locked {
+		t.Fatal(allowed)
+	}
+	for _, action := range []string{"fixture-update-prepare", "fixture-update-preflight", "fixture-install-controller"} {
+		if execute(v, Request{Action: action}, true).Error == "" {
+			t.Fatal("held custody accepted update", action)
+		}
+	}
+	if e := os.WriteFile(filepath.Join(dir, "mock-receipts.log"), []byte("mixed"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := v.UpdateInventory(probe); e == nil {
+		t.Fatal("mixed history accepted")
 	}
 }

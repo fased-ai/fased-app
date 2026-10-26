@@ -114,3 +114,74 @@ func TestForeignTargetsAndStagesAreNeverMutated(t *testing.T) {
 		}
 	}
 }
+
+func TestNetworkInstallerIdentity(t *testing.T) {
+	for _, network := range []string{"devnet", "mainnet-beta"} {
+		m := fixtureManifest()
+		m.Version = 2
+		m.Mode = modeFor(network)
+		m.Network = network
+		if e := m.validate(); e != nil {
+			t.Fatal(e)
+		}
+		c := identityConfig(m)
+		if e := c.Validate(); e != nil || c.Network != network || c.Version != 2 {
+			t.Fatal(c, e)
+		}
+		j := journal{Version: 2, Network: network, ID: m.ID, Owner: m.Owner, CoreHash: m.CoreHash, SignerHash: m.SignerHash, Listen: m.Listen}
+		if e := j.validate(m.Owner); e != nil {
+			t.Fatal(e)
+		}
+		j.Version = 1
+		if j.validate(m.Owner) == nil {
+			t.Fatal("old intent accepted network")
+		}
+		m.Version = 1
+		if m.validate() == nil {
+			t.Fatal("old manifest accepted network")
+		}
+		m.Version = 2
+		m.InspectionBridge = strings.Repeat("a", 32)
+		if m.validate() == nil {
+			t.Fatal("fixture reader bridge accepted network custody")
+		}
+	}
+	m := fixtureManifest()
+	c := identityConfig(m)
+	if c.Version != 1 || c.Network != "" {
+		t.Fatal("legacy identity changed")
+	}
+	for _, network := range []string{"testnet", "https://rpc.invalid", "solana"} {
+		if custodyMode(2, modeFor(network), network) {
+			t.Fatal("unsupported network")
+		}
+	}
+}
+
+func TestNetworkCustodyCannotUseLegacyControllers(t *testing.T) {
+	tx, _ := modelTransaction(t)
+	if !tx.valid() {
+		t.Fatal("invalid fixture baseline")
+	}
+	for _, m := range []*Manifest{&tx.Base, &tx.Target} {
+		m.Version = 2
+		m.Mode = modeFor("devnet")
+		m.Network = "devnet"
+	}
+	tx.Binding.PreviousManifest = sum(mustJSON(tx.Base))
+	if tx.valid() {
+		t.Fatal("legacy installation controller accepted network custody")
+	}
+	boot, _, _ := bootstrapModel(t)
+	if _, e := boot.Plan(); e != nil {
+		t.Fatal(e)
+	}
+	for _, m := range []*Manifest{&boot.Base, &boot.Target} {
+		m.Version = 2
+		m.Mode = modeFor("devnet")
+		m.Network = "devnet"
+	}
+	if _, e := boot.Plan(); e == nil {
+		t.Fatal("legacy bootstrap accepted network custody")
+	}
+}
