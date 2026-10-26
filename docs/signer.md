@@ -448,3 +448,33 @@ signers. The returned account/revision/state is a historical diagnostic, never a
 balance, persistent RPC configuration or signing permission. Locked/held wallets
 can be diagnosed without unlocking or removing their hold. Standalone CLI checks
 remain compatible and return no wallet binding. No account data is written.
+
+## Persistent fixture RPC settings
+
+Wallets → RPC → Save checks and stores the selected disposable endpoint/network
+against the saved wallet revision. Remove clears only the RPC preference. The
+same operations use `accounts --rpc-stdin`:
+
+```json
+{
+  "accountId": "<saved-account-id>",
+  "revision": 1,
+  "endpoint": "https://rpc.fased.invalid/solana",
+  "network": "disposable-fixture:v1"
+}
+```
+
+To remove, supply only `accountId`, `revision` and `"remove":true`. To check the
+saved settings, `accounts --check-rpc-stdin` accepts `accountId` and
+`accountRevision` without an endpoint/network. Inspect `accounts` for the latest
+revision; stale writes fail without retry. Ordinary rename edits preserve the
+configuration, including clients that omit its optional field. Rebinding a key,
+mode, network or signer epoch clears it; saving again needs fresh validation.
+Removal remains available for stale/offline signer records. Saving never clears
+locks or recovery holds, grants authority, or stores a lasting verification.
+
+Core schema 20 protects these public preferences from older readers. Migration
+preserves account bytes/revisions and refuses paused recovery or RPC data already
+present in an unprotected schema. Existing snapshot/backup/pause mechanisms cover
+the settings. Only the compiled fixture URL is accepted; API keys, authenticated
+URLs, live transports and real RPC credential storage remain unavailable.

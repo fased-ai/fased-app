@@ -387,6 +387,7 @@ const rows = {
   Resume: ["Продолжить", "Reanudar", "恢复", "재개"],
   Cancel: ["Отмена", "Cancelar", "取消", "취소"],
   Save: ["Сохранить", "Guardar", "保存", "저장"],
+  Remove: ["Удалить", "Eliminar", "移除", "삭제"],
   Edit: ["Изменить", "Editar", "编辑", "편집"],
   Result: ["Результат", "Resultado", "结果", "결과"],
   Sources: ["Источники", "Fuentes", "来源", "출처"],

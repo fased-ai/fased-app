@@ -2,19 +2,23 @@ import { useState, useRef, useEffect } from "react";
 import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
 import { Dialog } from "../components/shared";
-import { type Account } from "../accounts";
+import { type Account, type AccountsView } from "../accounts";
 export function RPCCheck({
   account,
   revision,
   onClose,
+  onSaved,
 }: {
   account: Account;
   revision: number;
   onClose: () => void;
+  onSaved: (view: AccountsView) => void;
 }) {
   const { t } = useUI();
   const core = useCore();
-  const [endpoint, setEndpoint] = useState("https://rpc.fased.invalid/solana");
+  const [endpoint, setEndpoint] = useState(
+    account.rpc?.endpoint ?? "https://rpc.fased.invalid/solana",
+  );
   const [result, setResult] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -28,6 +32,26 @@ export function RPCCheck({
       generation.current++;
     };
   }, [core.instanceId]);
+  async function save(remove = false) {
+    if (busy) return;
+    const epoch = ++generation.current;
+    setBusy(true);
+    setError("");
+    setResult(false);
+    try {
+      const view = await core.request<AccountsView>("accounts/rpc", "PUT", {
+        accountId: account.id,
+        revision,
+        ...(remove ? { remove: true } : { endpoint, network: account.network }),
+      });
+      if (epoch === generation.current) onSaved(view);
+    } catch (e) {
+      if (epoch === generation.current)
+        setError(e instanceof Error ? e.message : "RPC settings unavailable");
+    } finally {
+      if (epoch === generation.current) setBusy(false);
+    }
+  }
   return (
     <Dialog title={`RPC · ${account.name}`} onClose={onClose}>
       <form
@@ -89,6 +113,24 @@ export function RPCCheck({
         <button className="primary" disabled={busy}>
           {t("Check RPC")}
         </button>
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy}
+          onClick={() => void save()}
+        >
+          {t("Save")}
+        </button>
+        {account.rpc && (
+          <button
+            type="button"
+            className="text-button"
+            disabled={busy}
+            onClick={() => void save(true)}
+          >
+            {t("Remove")}
+          </button>
+        )}
         {result && <p role="status">{t("RPC verified (demo)")}</p>}
         {error && <p role="alert">{error}</p>}
       </form>

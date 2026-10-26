@@ -215,7 +215,14 @@ export function AccountManagement() {
   return (
     <div className="wallet-workspace">
       {rpcAccount && (
-        <RPCCheck {...rpcAccount} onClose={() => setRPCAccount(null)} />
+        <RPCCheck
+          {...rpcAccount}
+          onClose={() => setRPCAccount(null)}
+          onSaved={(v) => {
+            setView(v);
+            setRPCAccount(null);
+          }}
+        />
       )}
       <SectionHead
         title={uiText("Wallets")}

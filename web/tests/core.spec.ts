@@ -4841,6 +4841,46 @@ test("public account records share UI/CLI state without wallet authority", async
       accountRevision: state.record.revision + 1,
     }),
   ).rejects.toThrow("wallet changed");
+  await page.getByRole("button", { name: "RPC", exact: true }).click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  state = await privateCLI(["accounts"]);
+  expect(state.record.accounts[0].rpc.endpoint).toBe(
+    "https://rpc.fased.invalid/solana",
+  );
+  const savedCheck = await privateCLI(["accounts", "--check-rpc-stdin"], {
+    accountId: state.record.accounts[0].id,
+    accountRevision: state.record.revision,
+  });
+  expect(savedCheck.account.rpc).toEqual(state.record.accounts[0].rpc);
+  await page.reload();
+  await page.getByRole("button", { name: "RPC", exact: true }).click();
+  await expect(page.getByLabel("RPC URL", { exact: true })).toHaveValue(
+    state.record.accounts[0].rpc.endpoint,
+  );
+  await expect(
+    page.getByText("RPC verified (demo)", { exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Remove", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  state = await privateCLI(["accounts"]);
+  expect(state.record.accounts[0].rpc).toBeUndefined();
+  state = await privateCLI(["accounts", "--rpc-stdin"], {
+    accountId: state.record.accounts[0].id,
+    revision: state.record.revision,
+    endpoint: "https://rpc.fased.invalid/solana",
+    network: "disposable-fixture:v1",
+  });
+  await expect(
+    privateCLI(["accounts", "--rpc-stdin"], {
+      accountId: state.record.accounts[0].id,
+      revision: state.record.revision,
+      endpoint: "https://rpc.fased.invalid/solana",
+      network: "disposable-fixture:v1",
+      apiKey: "disposable-refused",
+    }),
+  ).rejects.toThrow("no credentials accepted");
+  await page.reload();
   const stale = structuredClone(state.record);
   await page.getByRole("button", { name: "Rename", exact: true }).click();
   await revealControl(page, page.getByLabel("New account name"), "");

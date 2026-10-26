@@ -15,7 +15,14 @@ import (
 
 // App-owned public records are preferences, never signer authority. No balance,
 // private credential or asserted approval is accepted in this schema.
+type AccountRPC struct {
+	Version  int    `json:"version"`
+	Endpoint string `json:"endpoint"`
+	Network  string `json:"network"`
+}
+
 type Account struct {
+	RPC       *AccountRPC        `json:"rpc,omitempty"`
 	Version   int                `json:"version"`
 	ID        string             `json:"id"`
 	Name      string             `json:"name"`
@@ -195,6 +202,9 @@ func validateAccounts(r AccountsRecord, old AccountsRecord, live FixtureView, no
 		default:
 			return errors.New("invalid account capability mode")
 		}
+		if a.RPC != nil && (a.RPC.Version != 1 || a.RPC.Endpoint != FixtureRPCURL || a.RPC.Network != a.Network || a.Network != signer.FixtureNetwork) {
+			return errors.New("only disposable RPC settings are available")
+		}
 		accounts[a.ID] = a
 	}
 	seen := map[string]bool{}
@@ -221,12 +231,34 @@ func validateAccounts(r AccountsRecord, old AccountsRecord, live FixtureView, no
 	return nil
 }
 func (s *Store) UpdateAccounts(ctx context.Context, r AccountsRecord) (AccountsView, error) {
+	return s.updateAccounts(ctx, r, false)
+}
+func (s *Store) updateAccounts(ctx context.Context, r AccountsRecord, rpcChange bool) (AccountsView, error) {
 	old, e := s.accountsRecord(ctx)
 	if e != nil {
 		return AccountsView{}, e
 	}
 	if old.Revision != r.Revision {
 		return AccountsView{}, ErrConflict
+	}
+	if !rpcChange {
+		prior := map[string]Account{}
+		for _, a := range old.Accounts {
+			prior[a.ID] = a
+		}
+		for i, a := range r.Accounts {
+			before := prior[a.ID]
+			if a.RPC != nil && (before.RPC == nil || *a.RPC != *before.RPC) {
+				return AccountsView{}, errors.New("use the RPC settings command")
+			}
+			// Older clients may omit RPC fields. Preserve them on ordinary edits, but
+			// never carry a configuration across a changed key, mode or signer epoch.
+			if sameAccountIdentity(a, before) {
+				r.Accounts[i].RPC = before.RPC
+			} else {
+				r.Accounts[i].RPC = nil
+			}
+		}
 	}
 	if e = validateAccounts(r, old, s.fixtureView(ctx), s.now().Unix()); e != nil {
 		return AccountsView{}, e

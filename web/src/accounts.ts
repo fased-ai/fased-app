@@ -7,6 +7,7 @@ export type AccountRef = {
   publicKey: string;
 };
 export type Account = {
+  rpc?: { version: number; endpoint: string; network: string };
   version: number;
   id: string;
   name: string;

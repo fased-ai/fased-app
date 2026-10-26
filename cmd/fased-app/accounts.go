@@ -21,6 +21,7 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 		return e
 	}
 	dir := flags.String("data-dir", base, "private instance directory")
+	rpcConfig := flags.Bool("rpc-stdin", false, "save/remove disposable wallet RPC settings from JSON")
 	rpcCheck := flags.Bool("check-rpc-stdin", false, "check disposable RPC endpoint/network JSON; no saving or live calls")
 	update := flags.Bool("request-stdin", false, "revision-checked public account record JSON from stdin; no secrets")
 	if e = flags.Parse(args); e != nil {
@@ -37,6 +38,26 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	defer c.Close()
 	if e = c.LoadSession(ctx, *dir); e != nil {
 		return e
+	}
+	if *rpcConfig {
+		if *rpcCheck || *update {
+			return errors.New("choose one account operation")
+		}
+		b, err := io.ReadAll(io.LimitReader(in, 2049))
+		if err != nil || len(b) > 2048 {
+			return errors.New("invalid RPC settings")
+		}
+		var input core.RPCConfigInput
+		d := json.NewDecoder(bytes.NewReader(b))
+		d.DisallowUnknownFields()
+		if d.Decode(&input) != nil || d.Decode(new(any)) != io.EOF {
+			return errors.New("invalid RPC settings; no credentials accepted")
+		}
+		var result core.AccountsView
+		if err = c.Do(ctx, http.MethodPut, "/api/v1/accounts/rpc", input, &result); err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(result)
 	}
 	if *rpcCheck {
 		if *update {

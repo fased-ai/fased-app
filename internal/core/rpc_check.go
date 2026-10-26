@@ -154,6 +154,21 @@ func (s *Store) checkAccountRPC(ctx context.Context, input RPCCheckRequest, chec
 		return check(ctx, input)
 	}
 	var empty RPCCheckResult
+	if input.Endpoint == "" && input.Network == "" && input.AccountID != "" {
+		record, err := s.accountsRecord(ctx)
+		if err != nil {
+			return empty, err
+		}
+		for _, a := range record.Accounts {
+			if a.ID == input.AccountID && a.RPC != nil {
+				input.Endpoint = a.RPC.Endpoint
+				input.Network = a.RPC.Network
+			}
+		}
+		if input.Endpoint == "" {
+			return empty, errors.New("save RPC settings first")
+		}
+	}
 	if input.AccountID == "" || input.AccountRevision == nil || *input.AccountRevision < 0 {
 		return empty, errors.New("choose a saved wallet revision")
 	}
