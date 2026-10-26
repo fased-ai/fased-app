@@ -192,12 +192,12 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 			}
 			r.UnlockSeconds = int(*lifetime / time.Second)
 		}
-	case "restore":
+	case "restore", "verify-backup":
 		r.Document, err = readOwnerFile(*documentPath)
 		if err == nil {
 			r.Password, err = password("Backup password", false)
 		}
-		if err == nil {
+		if err == nil && r.Action == "restore" {
 			r.NewPassword, err = password("New fixture unlock password", true)
 		}
 	case "export-fixture-seed":

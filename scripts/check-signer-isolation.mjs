@@ -343,7 +343,7 @@ s=socket.socket(socket.AF_UNIX); s.connect(c['socketDir']+'/owner.sock'); result
 s=socket.socket(socket.AF_UNIX); s.connect(c['socketDir']+'/app.sock'); f=s.makefile('rwb'); hello=json.loads(f.readline())
 f.write((json.dumps({'version':1,'signerId':c['signerId'],'challenge':hello['challenge'],'request':{'action':'export-fixture-seed'}})+'\n').encode()); f.flush()
 r=json.loads(f.readline()); result['rawExportDenied']=bool(r.get('error')) and not r.get('document'); s.close()
-for action in ['fixture-policy','fixture-grant','fixture-revoke','fixture-recover-authority','fixture-approve-proposal','fixture-update-inventory','fixture-update-status','fixture-update-prepare','fixture-update-abort','fixture-update-stage-status','fixture-update-stage-write','fixture-update-stage-finish','fixture-update-preflight','fixture-install-controller']:
+for action in ['verify-backup','fixture-policy','fixture-grant','fixture-revoke','fixture-recover-authority','fixture-approve-proposal','fixture-update-inventory','fixture-update-status','fixture-update-prepare','fixture-update-abort','fixture-update-stage-status','fixture-update-stage-write','fixture-update-stage-finish','fixture-update-preflight','fixture-install-controller']:
  s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/app.sock');f=s.makefile('rwb');h=json.loads(f.readline());f.write((json.dumps({'version':1,'signerId':c['signerId'],'challenge':h['challenge'],'request':{'action':action}})+'\n').encode());f.flush();v=json.loads(f.readline());result['raw:'+action]=v.get('error')=='owner administration denied';s.close()
 print(json.dumps(result))
 `;
@@ -378,6 +378,49 @@ print(json.dumps(result))
     `${backupPassword}\n${backupPassword}\n`,
     ["--password-stdin", "--file", backup],
   );
+  const verified = invoke(
+    owner,
+    configPath,
+    "owner",
+    "verify-backup",
+    `${backupPassword}\n`,
+    ["--password-stdin", "--file", backup],
+  );
+  check(
+    "ownerRechecksSavedBackup",
+    verified.account.walletId === initial.account.walletId &&
+      !verified.walletSigner,
+  );
+  check(
+    "backupCheckRejectsWrongPassword",
+    fails(() =>
+      invoke(
+        owner,
+        configPath,
+        "owner",
+        "verify-backup",
+        "wrong disposable password\n",
+        ["--password-stdin", "--file", backup],
+      ),
+    ),
+  );
+  invoke(owner, configPath, "owner", "lock");
+  check(
+    "backupCheckRequiresUnlock",
+    fails(() =>
+      invoke(
+        owner,
+        configPath,
+        "owner",
+        "verify-backup",
+        `${backupPassword}\n`,
+        ["--password-stdin", "--file", backup],
+      ),
+    ),
+  );
+  invoke(owner, configPath, "owner", "unlock", `${unlock}\n`, [
+    "--password-stdin",
+  ]);
   invoke(owner, configPath, "owner", "export-fixture-seed", undefined, [
     "--file",
     seed,

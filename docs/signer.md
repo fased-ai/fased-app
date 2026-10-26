@@ -87,7 +87,7 @@ installation is tested by `node scripts/check-managed-custody.mjs` in disposable
 Ubuntu CI. Both refuse ordinary local execution. No local owner account, service,
 sudo policy or default instance is modified by the unit tests.
 
-The fixture helper accepts `owner --action status|create|unlock|lock|backup|restore`
+The fixture helper accepts `owner --action status|create|unlock|lock|backup|verify-backup|restore`
 and advanced `export-fixture-seed`; the app can read `status` and request only the
 typed fixture operations described below.
 Every invocation requires `--config` and `--disposable-fixture`. Passwords are
@@ -364,3 +364,15 @@ journey additionally exercises the immutable executable, real signer/app/owner
 UIDs, a fresh empty target configuration, source-byte preservation, restart and
 read-only recovery. Its evidence remains separate from public/native/VPS or
 physical disk-loss acceptance.
+
+## Recheck a saved backup
+
+The protected owner helper supports `owner --action verify-backup --file <backup>`
+with the same `--config` and `--disposable-fixture` requirements. Unlock the
+fixture signer first; enter the backup password at the terminal prompt. This
+checks the encrypted file against the current wallet without restoring it,
+returning a seed, or changing permissions or recovery holds. A successful check
+returns public status only. Wrong passwords, another wallet's backup, locked
+state and application-channel requests are refused. Preserve the original backup;
+verification never replaces it. This does not validate disk-loss recovery or
+introduce RPC, real-wallet import, signing or network access.
