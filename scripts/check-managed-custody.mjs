@@ -583,11 +583,19 @@ try {
       "network:recoveredUpdateRefused",
       fails(() => fixtureOwner("fixture-update-prepare")),
     );
+    const protectedHashes = () =>
+      ["vault.json", "operations.log"].map((name) =>
+        sha(
+          osTool("/usr/bin/cat", [root + "/signer-state/" + name], {
+            encoding: null,
+          }),
+        ),
+      );
+    const beforeRemove = protectedHashes();
     cli(["remove", "--prepare-host"]);
     check(
       "network:removePreservesKey",
-      (await exists(root + "/signer-state/vault.json")) &&
-        (await exists(root + "/signer-state/operations.log")),
+      protectedHashes().every((hash, index) => hash === beforeRemove[index]),
     );
   } else {
     const probe = String.raw`
