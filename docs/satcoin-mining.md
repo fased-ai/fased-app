@@ -4,6 +4,14 @@
 
 Satcoin is the asset name; SAT is the shorthand used for quantities. Participants commit SOL across BTC price ranges in ten-minute rounds. BTC's measured movement determines accuracy. Capital × accuracy determines shares of released fresh BTC and unlocked SAT. More capital increases the share at equal accuracy; it does not change the likelihood of BTC reaching a range.
 
+## Bootstrap and graduation
+
+New Satcoin supply starts at zero. Bootstrap divides earned SAT **50% miners / 50% LP** and routes **90% of actual deductions plus exact-entry fees to LP SOL / 10% Operating**. Principal recovery is unchanged. Bootstrap has no ordinary BTC, daily-prize or staking distributions.
+
+The **8× boost is limited to 60,000 gross SAT** inside the **1,500,000 annual / 30,000,000 lifetime** totals. Mining continues without a calendar expiry until settled LP funds reach **50 net SOL and 15,000 SAT**. Accepted rounds finish before all accounted balances seed the official **SAT/SOL** pool. Earned SAT can begin its 24-hour stake maturity during bootstrap. After verified LP activation, normal mining does not require eligible stakers. If the fixed snapshot has none, that round’s staking allocation returns in SOL to its original forfeiture contributors, proportional to their actual deductions; later stakers cannot claim it.
+
+Bootstrap advances the annual allowance; the remaining schedule is reduced as necessary, with reservations counted once and no boost reset. Extra liquidity later uses received treasury funds, without new SAT minting. The opening price comes from actual deposited balances and available market depth. See [the full launch rules](https://docs.satcoin.app/bootstrap).
+
 ## Show the complete round
 
 1. BTC context, the five published ranges and separate commitment, reveal and settlement timing.
@@ -12,7 +20,7 @@ Satcoin is the asset name; SAT is the shorthand used for quantities. Participant
 4. Historical or estimated crowding before sealed commitment; final crowding afterward.
 5. Settlement status, pending conversion, actual claims and recovery actions without repeating an uncertain transaction.
 
-Exact-range entries return 99% of principal after the 1% fee to Operating. Incorrect entries deduct 5%–10%, return 90%–95%, and may earn partial fresh rewards. The current forfeiture split is 74% miners, 1% daily competition, 10% stakers, 10% Operating and 5% treasury. Treasury contributions are half BTC and half USDC; bought SAT remains locked without staking or burning. SAT remains limited to 1,000,000 cumulative issuance including 50,000 Genesis, and at most 50,000 mining SAT annually. Accepted capital unlocks the scheduled award up to the 5 SOL threshold, then accuracy and remaining caps constrain release. None of these displays promises profitable resale.
+Exact entries return 99% after the 1% fee; incorrect entries deduct 5%–10%, return 90%–95% and may earn partial rewards. The destination of deductions and SAT depends on the admitted phase. Normal forfeitures retain 74/1/10/10/5 and exact fees go to Operating. The normal treasury allocation divides **50% to BTC holdings, 25% to USDC-funded locked SAT purchases and 25% to SOL-funded balanced SAT/SOL additions**. The liquidity budget covers both assets and cannot use locked SAT or participant claims. Bounded purchases/additions can be skipped when execution conditions fail. Market purchases do not mint SAT or promise a price floor. SAT starts at zero with 30m lifetime / 1.5m annual total limits, including bootstrap and LP awards. Capital unlock remains 5 SOL, then accuracy and the actual phase-specific ceiling constrain release.
 
 ## Bound every strategy
 
