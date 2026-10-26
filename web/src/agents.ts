@@ -505,6 +505,7 @@ export type AgentEvidenceView = {
     }
 );
 export type AgentCommand = {
+  useAgentDefaults?: boolean;
   chatPermission?: ChatPermission;
   historyDays?: number;
   calendar?: TaskCalendar;

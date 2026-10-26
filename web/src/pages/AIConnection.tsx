@@ -5,6 +5,7 @@ import { useCore } from "../core";
 import { TaskAccessSettings, type TaskAccessAllowance } from "./TaskAccess";
 
 export type Connection = {
+  credentialMode?: "test";
   taskAccess?: TaskAccessAllowance;
   accessReview?: TaskAccessAllowance;
   admissionPolicy: OpenAIModelPolicy;
@@ -109,7 +110,9 @@ export function AIConnectionSettings() {
         action,
         ref: view?.ref ?? "",
         ...(action !== "lock" ? { passphrase: secret } : {}),
-        ...(action === "save" ? { key: credential } : {}),
+        ...(action === "save"
+          ? { key: credential, credentialMode: "test" }
+          : {}),
       });
       setView(next);
       window.dispatchEvent(new Event("ai-connection-changed"));

@@ -30,12 +30,14 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
         }
       : null,
   );
+  const [overridden, setOverridden] = useState(false);
   const [connectionRef, setConnectionRef] = useState("");
   const [model, setModel] = useState("");
   useEffect(() => {
+    if (overridden) return;
     setConnectionRef(inherited.connectionRef);
     setModel(inherited.model);
-  }, [inherited.connectionRef, inherited.model]);
+  }, [inherited.connectionRef, inherited.model, overridden]);
   const [session, setSession] = useState("");
   const [bot, setBot] = useState("");
   const [interval, setInterval] = useState(60);
@@ -312,10 +314,19 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
               </article>
             );
           })}
-        <ConnectionPicker value={connectionRef} onChange={setConnectionRef} />
+        <ConnectionPicker
+          value={connectionRef}
+          onChange={(ref) => {
+            setOverridden(true);
+            setConnectionRef(ref);
+          }}
+        />
         <AIModelPicker
           value={model}
-          onChange={setModel}
+          onChange={(value) => {
+            setOverridden(true);
+            setModel(value);
+          }}
           connectionRef={connectionRef}
         />
         <NewsSourcePicker
@@ -331,6 +342,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
             void agents
               .change({
                 action: "task-ai-prepare",
+                useAgentDefaults: !overridden,
                 connectionRef,
                 model,
                 newsSourceId,

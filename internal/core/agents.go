@@ -162,6 +162,7 @@ type AgentView struct {
 // Optional fields are inert data for a fixed action; unknown fields/actions are
 // rejected. No arbitrary callback, URL, model tool or shell can be submitted.
 type AgentCommand struct {
+	UseAgentDefaults     bool                 `json:"useAgentDefaults,omitempty"`
 	ChatPermission       *ChatPermission      `json:"chatPermission,omitempty"`
 	HistoryDays          int                  `json:"historyDays,omitempty"`
 	Calendar             *TaskCalendar        `json:"calendar,omitempty"`
@@ -497,6 +498,14 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 	pi := agentProfile(d, profile)
 	if pi < 0 {
 		return AgentView{}, errors.New("profile not found")
+	}
+	if c.UseAgentDefaults {
+		if c.Action != "chat-review" && c.Action != "ai-prepare" && c.Action != "task-ai-prepare" {
+			return AgentView{}, errors.New("agent provider selection requires a new review")
+		}
+		if e = s.resolveAgentProvider(&c, d.Profiles[pi]); e != nil {
+			return AgentView{}, e
+		}
 	}
 	id, e := randomToken()
 	if e != nil {

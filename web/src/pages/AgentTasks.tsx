@@ -607,7 +607,7 @@ export function AgentTasks({
       </details>
       <details className="scheduled-ai-disclosure" ref={advanced}>
         <summary>{uiText("AI tasks")}</summary>
-        <ScheduledAITasks view={v} />
+        <ScheduledAITasks key={v.profileId} view={v} />
       </details>
     </div>
   );

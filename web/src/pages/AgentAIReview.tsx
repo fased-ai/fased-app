@@ -522,6 +522,7 @@ function AgentAIForm({
                     "POST",
                     {
                       action: "chat-review",
+                      useAgentDefaults: !overridden && !draftSource,
                       profileId: view.profileId,
                       revision: view.revision,
                       id: sessionId,
@@ -610,6 +611,7 @@ function AgentAIForm({
             void agents
               .change({
                 action: "ai-prepare",
+                useAgentDefaults: !overridden && !draftSource,
                 evidenceSelection,
                 ...(memoryMode === "legacy"
                   ? {}

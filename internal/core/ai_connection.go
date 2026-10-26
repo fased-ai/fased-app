@@ -21,6 +21,7 @@ import (
 )
 
 type AIConnectionCommand struct {
+	CredentialMode       string               `json:"credentialMode,omitempty"`
 	Revision             int64                `json:"revision,omitempty"`
 	ProfileID            string               `json:"profileId,omitempty"`
 	TaskIDs              []string             `json:"taskIds,omitempty"`
@@ -33,6 +34,7 @@ type AIConnectionCommand struct {
 	Passphrase           string               `json:"passphrase,omitempty"`
 }
 type AIConnectionView struct {
+	CredentialMode         string               `json:"credentialMode"`
 	TaskAccess             *TaskAccessAllowance `json:"taskAccess,omitempty"`
 	AccessReview           *TaskAccessAllowance `json:"accessReview,omitempty"`
 	AdmissionPolicy        OpenAIModelPolicy    `json:"admissionPolicy"`
@@ -101,7 +103,7 @@ func (s *Store) lockAIConnection() {
 	s.clearAIConnectionLocked()
 }
 func (s *Store) aiConnectionLocked() (AIConnectionView, error) {
-	v := AIConnectionView{AdmissionPolicy: openAIModelPolicy(), Provider: "openai", Model: fixtureAIModel, Locked: true, TestOnly: true, InputMicrousdPerToken: 1, OutputMicrousdPerToken: 4}
+	v := AIConnectionView{CredentialMode: "test", AdmissionPolicy: openAIModelPolicy(), Provider: "openai", Model: fixtureAIModel, Locked: true, TestOnly: true, InputMicrousdPerToken: 1, OutputMicrousdPerToken: 4}
 	env, e := s.readAIVault()
 	if errors.Is(e, os.ErrNotExist) {
 		s.clearAIConnectionLocked()
@@ -146,6 +148,11 @@ func (s *Store) aiConnectionValid(ref string) bool {
 	return e == nil && v.Ref == ref && !v.Locked
 }
 func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (AIConnectionView, error) {
+	// Empty mode preserves existing test-vault clients. Mode selection never
+	// enables a provider or changes the saved vault format/credential authority.
+	if c.CredentialMode != "" && (c.Action != "save" || c.CredentialMode != "test") {
+		return AIConnectionView{}, errors.New("credential mode unavailable; real credentials disabled")
+	}
 	// All paths needing both locks acquire SQLite before the in-memory mutex.
 	if !taskAccessAction(c.Action) && (c.Allowance != nil || len(c.TaskIDs) > 0 || c.ProfileID != "" || c.AuthorizationSeconds != 0 || c.ConsentDigest != "" || c.Revision != 0) {
 		return AIConnectionView{}, errors.New("task credential scope requires a dedicated review")
