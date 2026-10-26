@@ -110,7 +110,7 @@ func (t *publicRPCTransport) RoundTrip(r *http.Request) (*http.Response, error) 
 func checkPublicRPC(ctx context.Context, in RPCCheckRequest, t *publicRPCTransport) (RPCCheckResult, error) {
 	genesis := solanaGenesis(in.Network)
 	if _, err := publicRPCURL(in.Endpoint); err != nil || genesis == "" || t == nil || !t.enabled {
-		return RPCCheckResult{}, errors.New("live RPC disabled or endpoint unavailable")
+		return RPCCheckResult{}, errors.New("only the disposable RPC endpoint and network are available")
 	}
 	return checkRPCProtocol(ctx, in, t, genesis, false)
 }

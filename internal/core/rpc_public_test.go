@@ -19,8 +19,8 @@ func TestPublicRPCAdmissionClosed(t *testing.T) {
 		if _, err := publicRPCURL(raw); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := CheckFixtureRPC(context.Background(), RPCCheckRequest{Endpoint: raw, Network: "devnet"}); err == nil {
-			t.Fatal("ordinary dispatch admitted")
+		if _, err := CheckFixtureRPC(context.Background(), RPCCheckRequest{Endpoint: raw, Network: "devnet"}); err == nil || !strings.Contains(err.Error(), "only the disposable RPC") {
+			t.Fatal("ordinary dispatch admitted or refusal contract changed")
 		}
 	}
 	for _, raw := range []string{"http://example.com", "https://user:secret@example.com", "https://example.com?key=secret", "https://example.com?", "https://example.com/#secret", "https://example.com/secret", "https://example.com/%2f", "https://example.com:443", "https://example.com:", "https://127.0.0.1", "https://[::1]", "https://host.local", "https://host.invalid", "https://EXAMPLE.com", "https://example.com.", "https://-bad.com", "https://example.com\\secret", "https://example.com#"} {
