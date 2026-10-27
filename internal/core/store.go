@@ -21,24 +21,25 @@ import (
 )
 
 type Store struct {
-	rpcAdmission   bool // Disabled in ordinary constructors; tests only.
-	sessionFixture bool
-	aiMu           sync.Mutex
-	chatEpoch      atomic.Uint64
-	progressMu     sync.Mutex
-	aiProgress     map[string]string
-	newsMu         sync.Mutex
-	provider       providerState
-	db             *sql.DB
-	dir            string
-	instanceID     string
-	pauseFault     func(string) error // Test-only interruption injection, never configuration or IPC.
-	backupFault    func(string) error // Test-only partial write/crash injection.
-	bootID         string
-	now            func() time.Time
-	authMu         sync.Mutex
-	fixture        func(context.Context, signer.Request) (signer.Response, error)
-	researchRead   func(context.Context, researchFactResult) (json.RawMessage, error) // Test-only local projection fault; never configuration/IPC.
+	providerFixture bool
+	rpcAdmission    bool // Disabled in ordinary constructors; tests only.
+	sessionFixture  bool
+	aiMu            sync.Mutex
+	chatEpoch       atomic.Uint64
+	progressMu      sync.Mutex
+	aiProgress      map[string]string
+	newsMu          sync.Mutex
+	provider        providerState
+	db              *sql.DB
+	dir             string
+	instanceID      string
+	pauseFault      func(string) error // Test-only interruption injection, never configuration or IPC.
+	backupFault     func(string) error // Test-only partial write/crash injection.
+	bootID          string
+	now             func() time.Time
+	authMu          sync.Mutex
+	fixture         func(context.Context, signer.Request) (signer.Response, error)
+	researchRead    func(context.Context, researchFactResult) (json.RawMessage, error) // Test-only local projection fault; never configuration/IPC.
 }
 
 func OpenStore(dir string) (_ *Store, resultErr error) {
@@ -224,6 +225,21 @@ PRAGMA user_version=1;`)
 	}
 	if schema <= 21 {
 		if err = migrateManagedKeys(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if schema <= 22 {
+		if err = migrateProviderAccounts(ctx, db, dir); err != nil {
+			return nil, err
+		}
+	}
+	if schema <= 23 {
+		if err = migrateProviderModels(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if schema <= 24 {
+		if err = migrateNativeProviders(ctx, db); err != nil {
 			return nil, err
 		}
 	}

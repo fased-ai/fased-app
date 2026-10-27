@@ -41,12 +41,12 @@ func taskAccessDigest(a TaskAccessAllowance) string {
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
-func (s *Store) taskAccessCurrent(a *TaskAccessAllowance) bool {
+func (s *Store) taskAccessCurrent(a *TaskAccessAllowance, state *providerCredential) bool {
 	now := s.now().Unix()
-	if a == nil || a.ID != taskAccessDigest(*a) || a.BootID != s.bootID || now < a.CreatedAt || now >= a.ExpiresAt || now < s.provider.taskAccessLast || a.ConnectionRef != s.provider.ref || len(s.provider.key) == 0 {
+	if a == nil || a.ID != taskAccessDigest(*a) || a.BootID != s.bootID || now < a.CreatedAt || now >= a.ExpiresAt || now < state.taskAccessLast || a.ConnectionRef != state.ref || len(state.key) == 0 {
 		return false
 	}
-	s.provider.taskAccessLast = now
+	state.taskAccessLast = now
 	return true
 }
 func (s *Store) reviewTaskAccess(d agentDocument, c AIConnectionCommand, revision int64) (TaskAccessAllowance, error) {
@@ -106,15 +106,16 @@ func (s *Store) reviewTaskAccess(d agentDocument, c AIConnectionCommand, revisio
 	return a, nil
 }
 func (s *Store) changeTaskAccess(ctx context.Context, tx *sql.Tx, c AIConnectionCommand, v AIConnectionView) (AIConnectionView, error) {
+	state := s.credentialLocked(c.Ref)
 	if c.Action == "task-access-revoke" {
 		if c.Passphrase != "" || c.Key != "" || c.Allowance != nil {
 			return v, errors.New("revoke accepts no secrets or new allowance")
 		}
-		s.provider.taskAccess = nil
-		if s.provider.expires <= s.now().Unix() {
-			s.clearAIConnectionLocked()
+		state.taskAccess = nil
+		if state.expires <= s.now().Unix() {
+			s.clearAIConnectionLocked(c.Ref)
 		}
-		return s.aiConnectionLocked()
+		return s.aiConnectionLocked(c.Ref)
 	}
 	d, revision, e := readAgents(ctx, tx)
 	if e != nil {
@@ -149,7 +150,7 @@ func (s *Store) changeTaskAccess(ctx context.Context, tx *sql.Tx, c AIConnection
 	if p.CreatedAt > s.now().Unix() || s.now().Unix()-p.CreatedAt > 300 || p.UsedRequests != 0 || p.AllocatedMicrousd != 0 || p.ID != expected.ID || p.ID != c.ConsentDigest || p.BootID != s.bootID {
 		return v, errors.New("task access scope changed; review it again")
 	}
-	env, e := s.readAIVault()
+	env, e := s.readAIVault(c.Ref)
 	if e != nil {
 		return v, errors.New("credential vault unavailable")
 	}
@@ -159,17 +160,17 @@ func (s *Store) changeTaskAccess(ctx context.Context, tx *sql.Tx, c AIConnection
 		return v, errors.New("vault unlock failed")
 	}
 	// Preserve the original interactive expiry; this access is task-scoped only.
-	clear(s.provider.key)
-	s.provider.key = append([]byte(nil), plain...)
-	s.provider.ref = env.Ref
+	clear(state.key)
+	state.key = append([]byte(nil), plain...)
+	state.ref = env.Ref
 	encoded, _ := json.Marshal(env)
-	s.provider.digest = sha256.Sum256(encoded)
-	s.provider.taskAccess = &p
-	s.provider.taskAccessLast = s.now().Unix()
-	return s.aiConnectionLocked()
+	state.digest = sha256.Sum256(encoded)
+	state.taskAccess = &p
+	state.taskAccessLast = s.now().Unix()
+	return s.aiConnectionLocked(c.Ref)
 }
-func (s *Store) taskAccessMatches(q AgentAIRequest, a *TaskAccessAllowance, allocated bool) bool {
-	if !s.taskAccessCurrent(a) || q.TaskID == "" || q.ProfileID != a.ProfileID || q.Model != a.Model || q.ConnectionRef != a.ConnectionRef || q.Limits.MaxInputTokens > a.Limits.MaxInputTokens || q.Limits.MaxOutputTokens > a.Limits.MaxOutputTokens || q.Limits.DeadlineSeconds > a.Limits.DeadlineSeconds || q.Limits.BudgetMicrousd > a.Limits.BudgetMicrousd {
+func (s *Store) taskAccessMatches(q AgentAIRequest, a *TaskAccessAllowance, allocated bool, state *providerCredential) bool {
+	if !s.taskAccessCurrent(a, state) || q.TaskID == "" || q.ProfileID != a.ProfileID || q.Model != a.Model || q.ConnectionRef != a.ConnectionRef || q.Limits.MaxInputTokens > a.Limits.MaxInputTokens || q.Limits.MaxOutputTokens > a.Limits.MaxOutputTokens || q.Limits.DeadlineSeconds > a.Limits.DeadlineSeconds || q.Limits.BudgetMicrousd > a.Limits.BudgetMicrousd {
 		return false
 	}
 	if allocated {
@@ -192,12 +193,13 @@ func (s *Store) aiRequestConnectionValid(q AgentAIRequest) bool {
 	}
 	s.provider.mu.Lock()
 	defer s.provider.mu.Unlock()
-	v, e := s.aiConnectionLocked()
+	state := s.credentialLocked(q.ConnectionRef)
+	v, e := s.aiConnectionLocked(q.ConnectionRef)
 	if e != nil || v.Ref != q.ConnectionRef {
 		return false
 	}
 	if q.TaskID != "" {
-		return s.taskAccessMatches(q, s.provider.taskAccess, q.taskAccessID != "")
+		return s.taskAccessMatches(q, state.taskAccess, q.taskAccessID != "", state)
 	}
 	return !v.Locked
 }
@@ -207,17 +209,18 @@ func (s *Store) reserveTaskAccess(q *AgentAIRequest) bool {
 	}
 	s.provider.mu.Lock()
 	defer s.provider.mu.Unlock()
-	v, e := s.aiConnectionLocked()
+	state := s.credentialLocked(q.ConnectionRef)
+	v, e := s.aiConnectionLocked(q.ConnectionRef)
 	if e != nil || v.Ref != q.ConnectionRef {
 		return false
 	}
 	if q.TaskID == "" {
 		return !v.Locked
 	}
-	if !s.taskAccessMatches(*q, s.provider.taskAccess, false) {
+	if !s.taskAccessMatches(*q, state.taskAccess, false, state) {
 		return false
 	}
-	a := s.provider.taskAccess
+	a := state.taskAccess
 	a.UsedRequests++
 	a.AllocatedMicrousd += aiRequestReservation(*q)
 	q.taskAccessID = a.ID

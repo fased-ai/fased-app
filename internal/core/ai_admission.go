@@ -8,15 +8,25 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
+	"strings"
 	"time"
 )
 
-const admittedOpenAIModel = "gpt-4.1-mini-2025-04-14"
+const admittedOpenAIModel = "gpt-6.1-terra"
+const legacyOpenAIModel = "gpt-4.1-mini-2025-04-14"
 
 type OpenAIModelPolicy struct {
+	Provider                 string `json:"provider,omitempty"`
+	WireVersion              string `json:"wireVersion,omitempty"`
+	APIVersion               string `json:"apiVersion,omitempty"`
+	BillableOutputTokens     int64  `json:"billableOutputTokens,omitempty"`
+	MaxRequestBudgetMicrousd int64  `json:"maxRequestBudgetMicrousd,omitempty"`
+	Reasoning                string `json:"reasoning,omitempty"`
+	CacheMode                string `json:"cacheMode,omitempty"`
 	ID                       string `json:"id"`
 	Model                    string `json:"model"`
 	ReviewedAt               int64  `json:"reviewedAt"`
@@ -43,9 +53,9 @@ type OpenAIAdmission struct {
 	GenerationAttempted bool   `json:"generationAttempted"`
 }
 
-func openAIModelPolicy() OpenAIModelPolicy {
+func legacyOpenAIModelPolicy() OpenAIModelPolicy {
 	reviewed := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC).Unix()
-	return OpenAIModelPolicy{ID: "openai-text-standard-2026-10-21-v1", Model: admittedOpenAIModel,
+	return OpenAIModelPolicy{ID: "openai-text-standard-2026-10-21-v1", Model: legacyOpenAIModel,
 		ReviewedAt: reviewed, ExpiresAt: reviewed + 30*86400, ContextTokens: 1047576, OutputTokens: 32768,
 		InputMicrousdPerMillion: 400000, CachedMicrousdPerMillion: 100000, OutputMicrousdPerMillion: 1600000,
 		ModelSource:  "https://developers.openai.com/api/docs/models/gpt-4.1-mini",
@@ -53,11 +63,64 @@ func openAIModelPolicy() OpenAIModelPolicy {
 		TokenSource:  "https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count"}
 }
 
+func openAIModelPolicy(ids ...string) OpenAIModelPolicy {
+	id := admittedOpenAIModel
+	if len(ids) > 0 {
+		id = ids[0]
+	}
+	if id == legacyOpenAIModel {
+		return legacyOpenAIModelPolicy()
+	}
+	m, ok := currentProviderModel(id)
+	if !ok {
+		return OpenAIModelPolicy{}
+	}
+	p := OpenAIModelPolicy{ID: fmt.Sprintf("%s-latest-v%d-%d:%s", modelProvider(m), registryForProvider(modelProvider(m)).Version, registryForProvider(modelProvider(m)).ReviewedAt, id), Model: id, Reasoning: m.Reasoning, ReviewedAt: registryForProvider(modelProvider(m)).ReviewedAt, ExpiresAt: registryForProvider(modelProvider(m)).ExpiresAt, ContextTokens: m.ContextTokens, OutputTokens: m.OutputTokens, InputMicrousdPerMillion: m.Input, CachedMicrousdPerMillion: m.Cached, OutputMicrousdPerMillion: m.Output, ModelSource: m.Source, TariffSource: registryForProvider(modelProvider(m)).Sources["pricing"]}
+	if modelProvider(m) == "openai" {
+		p.CacheMode = "explicit"
+		p.TokenSource = "https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count"
+	} else {
+		p.Provider = modelProvider(m)
+		p.MaxRequestBudgetMicrousd = maxModelBudget(id)
+		p.WireVersion = p.Provider + "-responses-v1"
+		if p.Provider == "anthropic" {
+			p.WireVersion = "anthropic-messages-v1"
+			p.APIVersion = "2026-10-21"
+			p.TokenSource = "https://platform.claude.com/docs/en/api/messages/count_tokens"
+		} else {
+			p.BillableOutputTokens = m.BillableOutputTokens
+			p.TokenSource = "https://docs.x.ai/developers/rest-api-reference/inference/other"
+		}
+	}
+	return p
+}
+func migrateProviderModels(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var phase string
+	if err = tx.QueryRowContext(ctx, "SELECT phase FROM update_pause WHERE id=1").Scan(&phase); err != nil {
+		return err
+	}
+	if phase == "paused" {
+		return errors.New("finish schema 23 recovery before current model migration")
+	}
+	if _, _, err = readAgents(ctx, tx); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "PRAGMA user_version=24"); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func validateAIModelPolicy(q AgentAIRequest, now int64) error {
 	if q.Model == fixtureAIModel && q.Policy == nil {
 		return nil
 	}
-	p := openAIModelPolicy()
+	p := openAIModelPolicy(q.Model)
 	if q.Policy == nil || *q.Policy != p || q.Model != p.Model || q.ConnectionRef == "" || now < p.ReviewedAt || now >= p.ExpiresAt || q.Limits.MaxInputTokens+q.Limits.MaxOutputTokens > p.ContextTokens || q.Limits.MaxOutputTokens > p.OutputTokens {
 		return errors.New("model, token or tariff policy unavailable/expired; review supported admission with an unlocked test connection")
 	}
@@ -73,7 +136,11 @@ func aiUsageCost(q AgentAIRequest, input, cached, output int64) int64 {
 	return ((input-cached)*p.InputMicrousdPerMillion + cached*p.CachedMicrousdPerMillion + output*p.OutputMicrousdPerMillion + 999999) / 1000000
 }
 func aiRequestReservation(q AgentAIRequest) int64 {
-	return aiUsageCost(q, q.Limits.MaxInputTokens, 0, q.Limits.MaxOutputTokens)
+	output := q.Limits.MaxOutputTokens
+	if q.Policy != nil && q.Policy.BillableOutputTokens > output {
+		output = q.Policy.BillableOutputTokens
+	}
+	return aiUsageCost(q, q.Limits.MaxInputTokens, 0, output)
 }
 func aiWireWithinBound(q AgentAIRequest, wire []byte) bool {
 	if q.Policy == nil {
@@ -86,7 +153,8 @@ func openAIRequestAllowed(r *http.Request) bool {
 	if r.URL.Scheme != "https" || r.URL.Host != "api.openai.com" || r.URL.RawQuery != "" || r.URL.ForceQuery || r.URL.Fragment != "" || r.URL.User != nil {
 		return false
 	}
-	return (r.Method == "GET" && r.URL.Path == "/v1/models/"+admittedOpenAIModel) ||
+	_, known := currentProviderModel(strings.TrimPrefix(r.URL.Path, "/v1/models/"))
+	return (r.Method == "GET" && (r.URL.Path == "/v1/models" || strings.HasPrefix(r.URL.Path, "/v1/models/") && known)) ||
 		(r.Method == "POST" && (r.URL.Path == "/v1/responses" || r.URL.Path == "/v1/responses/input_tokens"))
 }
 func openAICountWire(q AgentAIRequest) ([]byte, error) {
@@ -135,14 +203,18 @@ func admissionJSON(ctx context.Context, rt http.RoundTripper, method, path strin
 
 // Duplicate usage/identity keys are ambiguous evidence, even if encoding/json
 // would select their final value. Bounds are independent of the provider schema.
-func uniqueAIJSON(raw []byte) bool {
+func uniqueAIJSON(raw []byte, budgets ...int) bool {
+	budget := 4096
+	if len(budgets) > 0 {
+		budget = budgets[0]
+	}
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.UseNumber()
 	tokens := 0
 	var value func(int) bool
 	value = func(depth int) bool {
 		tokens++
-		if depth > 16 || tokens > 4096 {
+		if depth > 16 || tokens > budget {
 			return false
 		}
 		t, e := d.Token()
@@ -187,7 +259,7 @@ func admitOpenAI(ctx context.Context, q *AgentAIRequest, rt http.RoundTripper, n
 		q.Failure = "Model/access/token/tariff admission refused; no response creation attempted. Review a new request; no retry or fallback."
 		return false
 	}
-	if validateAIModelPolicy(*q, now().Unix()) != nil {
+	if !currentModelRequest(*q) || validateAIModelPolicy(*q, now().Unix()) != nil {
 		return refuse()
 	}
 	var model struct {

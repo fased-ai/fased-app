@@ -15,8 +15,9 @@ import (
 // deliberately absent: neither environment, CLI nor IPC can enable dispatch.
 // Controlled tests exercise the same transport with a test-only TLS dialer.
 type openAITransport struct {
-	wire    *http.Transport
-	enabled bool
+	provider string
+	wire     *http.Transport
+	enabled  bool
 }
 
 func newOpenAITransport() *openAITransport {
@@ -36,23 +37,41 @@ func (t *openAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if t == nil || !t.enabled || t.wire == nil {
 		return nil, errors.New("provider execution disabled")
 	}
-	if r == nil || r.URL == nil || !openAIRequestAllowed(r) || r.URL.Opaque != "" || r.URL.RawPath != "" || (r.Host != "" && r.Host != "api.openai.com") {
+	provider := t.provider
+	if provider == "" {
+		provider = "openai"
+	}
+	if !providerRequestAllowed(provider, r) {
 		return nil, errors.New("provider origin refused")
 	}
-	auth := r.Header.Values("Authorization")
-	if len(auth) != 1 || !strings.HasPrefix(auth[0], "Bearer ") || len(auth[0]) <= 7 || len(auth[0]) > 4096 || strings.ContainsAny(auth[0][7:], " \t\r\n") {
+	header := "Authorization"
+	if provider == "anthropic" {
+		header = "x-api-key"
+	}
+	auth := r.Header.Values(header)
+	if len(auth) != 1 || len(auth[0]) < 8 || len(auth[0]) > 4096 || provider != "anthropic" && !strings.HasPrefix(auth[0], "Bearer ") || provider == "anthropic" && r.Header.Get("anthropic-version") != "2026-10-21" {
+		return nil, errors.New("provider authentication required")
+	}
+	token := auth[0]
+	if provider != "anthropic" {
+		token = strings.TrimPrefix(token, "Bearer ")
+	}
+	if strings.ContainsAny(token, " \t\r\n") {
 		return nil, errors.New("provider authentication required")
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	copy := r.Clone(ctx)
 	// Do not inherit cookies, routing headers, idempotency keys or ambient auth.
 	copy.Header = make(http.Header)
-	copy.Header.Set("Authorization", auth[0])
+	copy.Header.Set(header, auth[0])
+	if provider == "anthropic" {
+		copy.Header.Set("anthropic-version", "2026-10-21")
+	}
 	copy.Header.Set("Content-Type", "application/json")
 	copy.Header.Set("Accept", "application/json, text/event-stream")
 	copy.GetBody = nil
 	response, err := t.wire.RoundTrip(copy)
-	copy.Header.Del("Authorization")
+	copy.Header.Del(header)
 	if err != nil {
 		cancel()
 		return nil, errors.New("provider transport unavailable")
@@ -74,4 +93,10 @@ type openAIResponseBody struct {
 func (b *openAIResponseBody) Close() error {
 	b.cancel()
 	return b.ReadCloser.Close()
+}
+
+func newNativeProviderTransport(provider string) *openAITransport {
+	t := newOpenAITransport()
+	t.provider = provider
+	return t
 }

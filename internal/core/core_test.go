@@ -46,6 +46,7 @@ func fixtureStore(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
+	s.providerFixture = true
 	return s
 }
 func claimFixture(t *testing.T, s *Store) string {

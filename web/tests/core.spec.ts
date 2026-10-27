@@ -1263,6 +1263,18 @@ test("normal Chat grants bounded replies, streams Send and retains scoped histor
   const other = view.profiles.find((p: any) => p.id !== view.profileId).id;
   const isolated = await privateCLI(["agents", "--profile", other]);
   expect(isolated.aiRequests).toHaveLength(0);
+  // A saved connected Demo request remains a valid explicit selection.
+  expect(q.model).toBe("fixture-openai-v1");
+  await chat
+    .locator(".ai-request")
+    .first()
+    .getByRole("button", { name: "Use as draft", exact: true })
+    .click();
+  await expect(composer).toHaveValue(q.prompt);
+  await expect(
+    chat.getByRole("button", { name: "Send", exact: true }),
+  ).toBeEnabled();
+  expect((await privateCLI(["agents"])).aiRequests).toHaveLength(3);
   const port = new URL(url).port;
   await stop();
   await start(true, `127.0.0.1:${port}`);
@@ -5303,7 +5315,9 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
   await page.unroute("**/api/v1/agents", holdMemoryResponse);
   await page.getByLabel("Provider", { exact: true }).selectOption("openai");
   await revealControl(page, page.getByLabel("Model", { exact: true }), "");
-  await page.getByLabel("Model", { exact: true }).fill("reference-only");
+  await expect(page.getByLabel("Model", { exact: true })).toHaveValue(
+    "gpt-6.1-terra",
+  );
   await page.getByRole("button", { name: "Save agent", exact: true }).click();
   await expect
     .poll(
@@ -5945,9 +5959,29 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
     window.location.hash = "agents/settings";
   });
   await revealControl(page, page.getByLabel("Provider", { exact: true }), "");
-  await page.getByLabel("Provider", { exact: true }).selectOption("anthropic");
+  // Switch the current model preference without changing retained history.
+  const beforeProvider = await privateCLI([
+    "agents",
+    "--profile",
+    saved.profileId,
+  ]);
+  await privateCLI(["agents", "--request-stdin"], {
+    action: "profile-update",
+    revision: beforeProvider.revision,
+    profileId: saved.profileId,
+    name: profileName,
+    provider: "openai",
+    model: "gpt-6.1-sol",
+  });
+  await page.reload();
+  await revealControl(page, page.getByLabel("Provider", { exact: true }), "");
+  await expect(page.getByLabel("Provider", { exact: true })).toHaveValue(
+    "anthropic",
+  );
   await revealControl(page, page.getByLabel("Model", { exact: true }), "");
-  await page.getByLabel("Model", { exact: true }).fill("preference-only");
+  await expect(page.getByLabel("Model", { exact: true })).toHaveValue(
+    "preference-only",
+  );
   await page.getByRole("button", { name: "Save agent", exact: true }).click();
   await expect
     .poll(async () => {
@@ -5960,7 +5994,7 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
         (p: { id: string }) => p.id === saved.profileId,
       ).provider;
     })
-    .toBe("anthropic");
+    .toBe("openai");
   await page.evaluate(() => {
     window.location.hash = "agents/chat";
   });
@@ -9838,8 +9872,8 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
     action: "profile-update",
     name: "Trading Analyst",
     text: after.profiles.find((p: any) => p.id === profileId).persona,
-    provider: "anthropic",
-    model: "preference-only",
+    provider: "openai",
+    model: "gpt-6.1-sol",
   });
   await stop();
   await start();
@@ -11356,8 +11390,28 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     .fill("disposable-dashboard-vault-password");
   await editor.getByRole("button", { name: "Save", exact: true }).click();
   await expect(editor.getByRole("status")).toContainText("OpenAI");
-  const connection = await privateCLI(["ai-connection"]);
-  expect(connection.ref).not.toBe("");
+  const primary = await privateCLI(["ai-connection"]);
+  expect(primary.ref).not.toBe("");
+  await editor
+    .getByRole("button", { name: "Add provider", exact: true })
+    .click();
+  await editor.getByLabel("Name", { exact: true }).fill("Research");
+  await editor
+    .getByLabel("Test key", { exact: true })
+    .fill("fased-test-second-dashboard-key");
+  await editor
+    .getByLabel("Vault passphrase", { exact: true })
+    .fill("disposable-dashboard-vault-password");
+  await editor.getByRole("button", { name: "Save", exact: true }).click();
+  await expect
+    .poll(async () => (await privateCLI(["ai-connection"])).connections.length)
+    .toBe(2);
+  const providerAccounts = await privateCLI(["ai-connection"]);
+  const connection = providerAccounts.connections.find(
+    (a: any) => a.name === "Research",
+  );
+  expect(providerAccounts.ref).toBe(primary.ref);
+  expect(connection.ref).not.toBe(primary.ref);
   await editor
     .getByRole("button", { name: "Close dialog", exact: true })
     .click();
@@ -11376,29 +11430,32 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
   const provider = page.getByLabel("Provider", { exact: true });
   await revealControl(page, provider);
   const agentModel = page.getByLabel("Model", { exact: true });
-  await agentModel.fill("previous-provider-model");
+  await expect(agentModel).toHaveJSProperty("tagName", "SELECT");
   await provider.selectOption("openai");
-  await expect(agentModel).toHaveValue("gpt-4.1-mini-2025-04-14");
+  await expect(agentModel).toHaveValue("gpt-6.1-terra");
   await provider.selectOption("none");
   await expect(agentModel).toHaveValue("");
   await provider.selectOption("openai");
-  await expect(agentModel).toHaveValue("gpt-4.1-mini-2025-04-14");
+  await expect(agentModel).toHaveValue("gpt-6.1-terra");
+  await page
+    .getByLabel("Account", { exact: true })
+    .selectOption(connection.ref);
   await page.getByRole("button", { name: "Save agent", exact: true }).click();
   await expect
     .poll(
       async () =>
         (await read()).profiles.find((x: { id: string }) => x.id === p).model,
     )
-    .toBe("gpt-4.1-mini-2025-04-14");
+    .toBe("gpt-6.1-terra");
   await page.goto(url + "/#agents/chat");
   await page.getByRole("button", { name: "Start chat", exact: true }).click();
   const input = page.getByLabel("Message", { exact: true });
   await expect(page.locator(".reply-model-menu>summary")).toHaveText(
-    "gpt-4.1-mini",
+    "gpt-6.1-terra",
   );
   await expect(page.locator(".reply-model-menu>summary")).toHaveAttribute(
     "title",
-    "gpt-4.1-mini-2025-04-14",
+    "gpt-6.1-terra",
   );
   await expect(page.getByLabel("Provider", { exact: true })).not.toBeVisible();
   await input.fill("Preserve this draft across Dashboard");
@@ -11420,7 +11477,7 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
   let v = await read();
   const q = v.aiRequests.at(-1);
   expect(q.connectionRef).toBe(connection.ref);
-  expect(q.model).toBe("gpt-4.1-mini-2025-04-14");
+  expect(q.model).toBe("gpt-6.1-terra");
   await page.screenshot({
     path: `.evidence/chat-${isMobile ? "mobile" : "desktop"}.png`,
     fullPage: false,
@@ -11609,7 +11666,7 @@ test("provider editor follows core credential admission without enabling live ca
           credentialMode: "openai",
           credentialModes: ["openai"],
           ref: "",
-          model: "gpt-4.1-mini-2025-04-14",
+          model: "gpt-6.1-terra",
           locked: true,
           liveCallsEnabled: false,
         },
@@ -11641,7 +11698,7 @@ test("provider editor follows core credential admission without enabling live ca
   await editor.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(() => saved?.credentialMode).toBe("openai");
   await expect(editor.getByLabel("API key", { exact: true })).toHaveValue("");
-  await page.unroute("**/api/v1/ai/connection");
+  await page.unrouteAll({ behavior: "wait" });
   await page.reload();
   await page.getByRole("button", { name: "Setup", exact: true }).click();
   await page
@@ -11651,4 +11708,336 @@ test("provider editor follows core credential admission without enabling live ca
   await editor.getByText("Credentials", { exact: true }).click();
   await expect(editor.getByLabel("Test key", { exact: true })).toBeVisible();
   await expect(editor.getByRole("status")).toContainText("No connection saved");
+});
+
+test("multiple accounts keep scheduled agent selection and refuse a stale provider editor", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  await stop();
+  await start(true);
+  await page.goto(url + "/#agents/tasks");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const passphrase = "disposable-multi-account-password";
+  const a = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "save",
+    name: "Primary",
+    key: "fased-test-primary-account-key",
+    passphrase,
+  });
+  const b = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "add",
+    name: "Research",
+    key: "fased-test-research-account-key",
+    passphrase,
+  });
+  const profileId = "trading-analyst";
+  const read = () => privateCLI(["agents", "--profile", profileId]);
+  const command = async (c: Record<string, unknown>) =>
+    privateCLI(["agents", "--request-stdin"], {
+      profileId,
+      revision: (await read()).revision,
+      ...c,
+    });
+  await command({
+    action: "profile-update",
+    name: "Analyst",
+    provider: "openai",
+    model: "gpt-6.1-sol",
+    accountRef: b.ref,
+  });
+  await command({ action: "session-create", name: "Account schedule" });
+  await page.reload();
+  await page.getByLabel("Agent", { exact: true }).selectOption(profileId);
+  await openAISchedules(page);
+  const perCall = page.getByLabel("Per-call cost cap (micro USD)", {
+    exact: true,
+  });
+  const total = page.getByLabel("AI total cost cap (micro USD)", {
+    exact: true,
+  });
+  await revealControl(page, perCall, "");
+  await expect(perCall).toHaveValue("58240");
+  await perCall.fill("100");
+  await total.fill("200");
+  await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "models-refresh",
+    ref: b.ref,
+  });
+  await page.evaluate(() =>
+    window.dispatchEvent(new Event("ai-connection-changed")),
+  );
+  await expect(perCall).toHaveValue("100");
+  await expect(total).toHaveValue("200");
+  await perCall.fill("58240");
+  await total.fill("116480");
+  await revealControl(page, page.getByLabel("AI task title"), "");
+  await page.getByLabel("AI task title").fill("Research account only");
+  await page
+    .getByLabel("AI analysis prompt")
+    .fill("Summarize the saved fixture context");
+  await page
+    .getByRole("button", { name: "Prepare AI task review", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).tasks.length).toBe(1);
+  expect((await read()).tasks[0].ai.connectionRef).toBe(b.ref);
+  expect((await read()).tasks[0].ai.model).toBe("gpt-6.1-sol");
+  const retainedTask = (await read()).tasks[0];
+  const refreshed = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "models-refresh",
+    ref: b.ref,
+  });
+  expect(refreshed.catalog.policy).toBe("latest-only");
+  expect(
+    refreshed.catalog.models
+      .filter((m: any) => m.selectable)
+      .map((m: any) => m.id),
+  ).toEqual(["gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra"]);
+  expect((await read()).tasks[0]).toEqual(retainedTask);
+  expect((await read()).tasks[0].state).toBe("review");
+  await page.goto(url + "/#agents/settings");
+  await page
+    .getByRole("region", { name: "Agent settings", exact: true })
+    .getByRole("button", { name: "Providers", exact: true })
+    .click();
+  const editor = page.getByRole("dialog", { name: "Providers", exact: true });
+  await editor.getByLabel("Account", { exact: true }).selectOption(b.ref);
+  await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "remove",
+    ref: b.ref,
+    passphrase,
+  });
+  await page.evaluate(() =>
+    window.dispatchEvent(new Event("ai-connection-changed")),
+  );
+  await expect(editor.getByLabel("Account", { exact: true })).toHaveValue(
+    b.ref,
+  );
+  await editor.getByText("Credentials", { exact: true }).click();
+  await expect(
+    editor.getByRole("button", { name: "Lock", exact: true }),
+  ).toBeDisabled();
+  expect((await privateCLI(["ai-connection"])).ref).toBe(a.ref);
+  expect((await privateCLI(["ai-connection"])).locked).toBe(false);
+  expect((await read()).tasks[0].ai.connectionRef).toBe(b.ref);
+});
+
+test("shared Add Provider binds native accounts and latest models across Chat and tasks", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(90000);
+  await stop();
+  await start(true);
+  await page.goto(url + "/#agents/settings");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const passphrase = "disposable-native-provider-password";
+  const primary = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "save",
+    name: "Primary",
+    key: "fased-test-primary-preserved",
+    passphrase,
+  });
+  const refs: Record<string, string> = {};
+  await page
+    .getByRole("region", { name: "Agent settings", exact: true })
+    .getByRole("button", { name: "Providers", exact: true })
+    .click();
+  const editor = page.getByRole("dialog", { name: "Providers", exact: true });
+  for (const provider of ["anthropic", "xai"]) {
+    await editor
+      .getByRole("button", { name: "Add provider", exact: true })
+      .click();
+    await editor.getByLabel("Provider", { exact: true }).selectOption(provider);
+    await revealControl(page, editor.getByLabel("Name", { exact: true }), "");
+    await editor
+      .getByLabel("Name", { exact: true })
+      .fill(provider === "anthropic" ? "Claude research" : "Grok research");
+    await editor
+      .getByLabel("Test key", { exact: true })
+      .fill(`fased-test-${provider}-disposable-ui-key`);
+    await editor
+      .getByLabel("Vault passphrase", { exact: true })
+      .fill(passphrase);
+    await editor.getByRole("button", { name: "Save", exact: true }).click();
+    await expect
+      .poll(
+        async () =>
+          (await privateCLI(["ai-connection"])).connections.find(
+            (a: any) => a.provider === provider,
+          )?.locked,
+      )
+      .toBe(false);
+    const account = (await privateCLI(["ai-connection"])).connections.find(
+      (a: any) => a.provider === provider,
+    );
+    refs[provider] = account.ref;
+    await expect(editor.getByLabel("Name", { exact: true })).toHaveValue(
+      account.name,
+    );
+    await editor
+      .getByLabel("Name", { exact: true })
+      .fill("Unsaved provider name");
+    const refreshButton = editor.getByRole("button", {
+      name: "Refresh models",
+      exact: true,
+    });
+    const refreshed = page.waitForResponse(
+      (r) =>
+        r.url().endsWith("/api/v1/ai/connection") &&
+        r.request().method() === "POST",
+    );
+    await refreshButton.click();
+    expect((await refreshed).status()).toBe(200);
+    await expect(refreshButton).toBeEnabled();
+    await expect(editor.getByLabel("Name", { exact: true })).toHaveValue(
+      "Unsaved provider name",
+    );
+    await editor.getByLabel("Name", { exact: true }).fill(account.name);
+    expect(account.liveCallsEnabled).toBe(false);
+    expect(
+      account.catalog.models
+        .filter((m: any) => m.selectable)
+        .map((m: any) => m.id),
+    ).toEqual(
+      provider === "anthropic"
+        ? [
+            "claude-haiku-5-5",
+            "claude-sonnet-5-5",
+            "claude-opus-5-5",
+            "claude-fable-5-1",
+          ]
+        : ["grok-4.7"],
+    );
+  }
+  expect((await privateCLI(["ai-connection"])).ref).toBe(primary.ref);
+  await page.screenshot({
+    path: `.evidence/provider-adapters/add-provider-${isMobile ? "mobile" : "desktop"}.png`,
+  });
+  await editor
+    .getByRole("button", { name: "Close dialog", exact: true })
+    .click();
+  const profileId = "trading-analyst",
+    read = () => privateCLI(["agents", "--profile", profileId]);
+  const command = async (c: Record<string, unknown>) =>
+    privateCLI(["agents", "--request-stdin"], {
+      revision: (await read()).revision,
+      profileId,
+      ...c,
+    });
+  await command({ action: "session-create", name: "Native providers" });
+  const retained: any[] = [];
+  for (const provider of ["anthropic", "xai"]) {
+    await page.goto(url + "/#agents");
+    await page
+      .locator(".agent-header-actions")
+      .getByRole("combobox", { name: "Agent", exact: true })
+      .selectOption(profileId);
+    const providerSelect = page.getByLabel("Provider", { exact: true });
+    await revealControl(page, providerSelect);
+    await providerSelect.selectOption(provider);
+    await expect(page.getByLabel("Account", { exact: true })).toHaveValue(
+      refs[provider],
+    );
+    const model = provider === "anthropic" ? "claude-sonnet-5-5" : "grok-4.7";
+    await page.getByLabel("Model", { exact: true }).selectOption(model);
+    await page.getByRole("button", { name: "Save agent", exact: true }).click();
+    await expect
+      .poll(
+        async () =>
+          (await read()).profiles.find((p: any) => p.id === profileId).model,
+      )
+      .toBe(model);
+    await page.goto(url + "/#agents/chat");
+    await page.getByLabel("Agent", { exact: true }).selectOption(profileId);
+    await page
+      .getByLabel("Message", { exact: true })
+      .fill("Summarize my disposable fixture note");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    const review = page.getByRole("dialog", {
+      name: "Allow replies",
+      exact: true,
+    });
+    await expect(
+      review.getByText(provider === "anthropic" ? "Anthropic" : "xAI", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    if (provider === "xai") {
+      await expect(
+        review.getByText("Output reserve", { exact: true }),
+      ).toBeVisible();
+      await expect(
+        review.getByTitle("Includes reasoning tokens", { exact: true }),
+      ).toContainText("500,000");
+    }
+    await review
+      .getByRole("button", { name: "Allow and send", exact: true })
+      .click();
+    await expect
+      .poll(async () => {
+        const requests = (await read()).aiRequests;
+        return { count: requests.length, state: requests.at(-1)?.state };
+      })
+      .toEqual({ count: retained.length + 1, state: "completed" });
+    const result = (await read()).aiRequests.at(-1);
+    expect(result.model).toBe(model);
+    expect(result.connectionRef).toBe(refs[provider]);
+    expect(result.policy.provider).toBe(provider);
+    if (provider === "xai")
+      expect(result.policy.billableOutputTokens).toBe(500000);
+    expect(result.answer).toContain("Development fixture response");
+    retained.push(result);
+    await page.goto(url + "/#agents/tasks");
+    await page.getByLabel("Agent", { exact: true }).selectOption(profileId);
+    await openAISchedules(page);
+    const title = page.getByLabel("AI task title");
+    await revealControl(page, title, "");
+    await title.fill(provider + " fixture task");
+    await page
+      .getByLabel("AI analysis prompt")
+      .fill("Keep this account and model");
+    await page
+      .getByRole("button", { name: "Prepare AI task review", exact: true })
+      .click();
+    await expect
+      .poll(async () => (await read()).tasks.length)
+      .toBe(retained.length);
+    const task = (await read()).tasks.at(-1);
+    expect(task.ai.model).toBe(model);
+    expect(task.ai.connectionRef).toBe(refs[provider]);
+  }
+  const final = await read();
+  expect(final.aiRequests).toEqual(retained);
+  expect(final.tasks[0].ai.model).toBe("claude-sonnet-5-5");
+  expect(final.tasks[1].ai.model).toBe("grok-4.7");
+  await page.screenshot({
+    path: `.evidence/provider-adapters/native-task-${isMobile ? "mobile" : "desktop"}.png`,
+  });
 });

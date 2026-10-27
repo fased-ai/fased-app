@@ -69,6 +69,7 @@ func readAIStream(body io.Reader, model string, onDelta func(string)) ([]byte, e
 	scanner.Buffer(make([]byte, 4096), 32768)
 	var data, event, identity, output string
 	var completed []byte
+	textIndex := -1
 	sequence := int64(-1)
 	total := 0
 	seenCreated, seenDone := false, false
@@ -116,7 +117,10 @@ func readAIStream(body io.Reader, model string, onDelta func(string)) ([]byte, e
 				return false
 			}
 		case "response.output_text.delta":
-			if !seenCreated || seenDone || frame.OutputIndex != 0 || frame.ContentIndex != 0 || frame.Delta == "" {
+			if textIndex < 0 {
+				textIndex = frame.OutputIndex
+			}
+			if !seenCreated || seenDone || frame.OutputIndex < 0 || frame.OutputIndex > 7 || frame.OutputIndex != textIndex || frame.ContentIndex != 0 || frame.Delta == "" {
 				return false
 			}
 			output += frame.Delta
@@ -127,17 +131,25 @@ func readAIStream(body io.Reader, model string, onDelta func(string)) ([]byte, e
 				onDelta(partialAIAnswer(output))
 			}
 		case "response.output_text.done":
-			if !seenCreated || seenDone || frame.OutputIndex != 0 || frame.ContentIndex != 0 || frame.Text != output {
+			if !seenCreated || seenDone || frame.OutputIndex != textIndex || frame.ContentIndex != 0 || frame.Text != output {
 				return false
 			}
 			seenDone = true
 		case "response.completed":
 			var r struct {
 				ID, Model, Status string
-				Output            []struct{ Content []struct{ Text string } }
+				Output            []struct {
+					Type    string
+					Content []struct{ Text string }
+				}
 			}
-			if !seenDone || json.Unmarshal(frame.Response, &r) != nil || r.ID != identity || r.Model != model || r.Status != "completed" || len(r.Output) != 1 || len(r.Output[0].Content) != 1 || r.Output[0].Content[0].Text != output || len(frame.Response) > 16384 {
+			if !seenDone || json.Unmarshal(frame.Response, &r) != nil || r.ID != identity || r.Model != model || r.Status != "completed" || len(r.Output) > 8 || textIndex < 0 || textIndex >= len(r.Output) || len(r.Output[textIndex].Content) != 1 || r.Output[textIndex].Content[0].Text != output || len(frame.Response) > 16384 {
 				return false
+			}
+			for i, item := range r.Output {
+				if i != textIndex && item.Type != "reasoning" {
+					return false
+				}
 			}
 			completed = append([]byte(nil), frame.Response...)
 		default:
@@ -183,6 +195,18 @@ func readAIStream(body io.Reader, model string, onDelta func(string)) ([]byte, e
 	return completed, nil
 }
 func fixtureAIStream(r *http.Request, body, output []byte) *http.Response {
+	outputIndex := 0
+	var response struct {
+		ID     string
+		Output []struct{ Type string }
+	}
+	json.Unmarshal(body, &response)
+	for i, item := range response.Output {
+		if item.Type == "message" {
+			outputIndex = i
+			break
+		}
+	}
 	reader, writer := io.Pipe()
 	go func() {
 		defer writer.Close()
@@ -195,7 +219,7 @@ func fixtureAIStream(r *http.Request, body, output []byte) *http.Response {
 			_, e := writer.Write(append(append([]byte("event: "+kind+"\ndata: "), b...), []byte("\n\n")...))
 			return e == nil
 		}
-		if !send("response.created", map[string]any{"response": map[string]any{"id": "fixture-response", "model": func() string { var v struct{ Model string }; _ = json.Unmarshal(body, &v); return v.Model }()}}) {
+		if !send("response.created", map[string]any{"response": map[string]any{"id": response.ID, "model": func() string { var v struct{ Model string }; _ = json.Unmarshal(body, &v); return v.Model }()}}) {
 			return
 		}
 		for start := 0; start < len(output); {
@@ -212,12 +236,12 @@ func fixtureAIStream(r *http.Request, body, output []byte) *http.Response {
 				return
 			case <-time.After(35 * time.Millisecond):
 			}
-			if !send("response.output_text.delta", map[string]any{"delta": string(output[start:end]), "output_index": 0, "content_index": 0}) {
+			if !send("response.output_text.delta", map[string]any{"delta": string(output[start:end]), "output_index": outputIndex, "content_index": 0}) {
 				return
 			}
 			start = end
 		}
-		if !send("response.output_text.done", map[string]any{"text": string(output), "output_index": 0, "content_index": 0}) {
+		if !send("response.output_text.done", map[string]any{"text": string(output), "output_index": outputIndex, "content_index": 0}) {
 			return
 		}
 		send("response.completed", map[string]any{"response": json.RawMessage(body)})

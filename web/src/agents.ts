@@ -1,4 +1,11 @@
 export type OpenAIModelPolicy = {
+  provider?: string;
+  wireVersion?: string;
+  apiVersion?: string;
+  billableOutputTokens?: number;
+  maxRequestBudgetMicrousd?: number;
+  reasoning?: string;
+  cacheMode?: string;
   id: string;
   model: string;
   reviewedAt: number;
@@ -73,6 +80,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { useCore } from "./core";
 import type { Provider } from "./state";
 export type AgentProfile = {
+  connectionRef?: string;
   historyDays?: number;
   id: string;
   name: string;
@@ -236,6 +244,8 @@ export type AILimits = {
   budgetMicrousd: number;
 };
 export type ChatPermission = {
+  accessEpoch: number;
+  connectionEpoch?: number;
   id: string;
   profileId: string;
   sessionId: string;
@@ -506,6 +516,7 @@ export type AgentEvidenceView = {
     }
 );
 export type AgentCommand = {
+  accountRef?: string;
   useAgentDefaults?: boolean;
   chatPermission?: ChatPermission;
   historyDays?: number;

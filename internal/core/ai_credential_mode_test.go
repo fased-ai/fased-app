@@ -226,7 +226,7 @@ func TestAPICredentialControlledHTTPSChat(t *testing.T) {
 	}
 	s.provider.apiCredentials = false
 	view, e := s.AIConnection()
-	if e != nil || !view.Locked || len(s.provider.key) != 0 || view.TaskAccess != nil {
+	if e != nil || !view.Locked || len(s.provider.accounts[view.Ref].key) != 0 || view.TaskAccess != nil {
 		t.Fatal("closed policy retained credential", e)
 	}
 }

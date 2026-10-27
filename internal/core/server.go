@@ -66,6 +66,7 @@ func startModes(ctx context.Context, dir, listen, publicOrigin string, assets fs
 		return nil, err
 	}
 	store.sessionFixture = sessionFixture
+	store.providerFixture = fixture
 	failed := true
 	defer func() {
 		if failed {

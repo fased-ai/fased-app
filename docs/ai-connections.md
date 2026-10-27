@@ -1,14 +1,35 @@
-# OpenAI development connection
+# Provider connections
 
-This build accepts **disposable `fased-test-` keys only**, never real OpenAI credentials. Normal and managed cores cannot execute provider calls. A standalone `serve --ai-fixture` core can authenticate a bound test connection to its compiled in-process fixture. The shared worker now has a fixed-origin HTTPS transport for the official OpenAI model/count/Responses paths, but its production dispatch gate remains closed. Tests exercise that same transport with a loopback TLS dialer defined only in Go test files; no endpoint/CA override, real model call, subscription, wallet or public-update authority is exposed in the application.
+This build accepts **disposable `fased-test-` keys only**, never real provider credentials. Normal and managed cores cannot execute provider calls. A standalone `serve --ai-fixture` core can authenticate a bound test connection to its compiled in-process fixture. The shared worker now has a fixed-origin HTTPS transport for the official OpenAI, Anthropic and xAI model/count/generation paths, but its production dispatch gate remains closed. Tests exercise that same transport with a loopback TLS dialer defined only in Go test files; no endpoint/CA override, real model call, subscription, wallet or public-update authority is exposed in the application.
 
-In Settings → OpenAI connection → Connection settings (also available in Agents → Settings), save a disposable test key with a separate vault passphrase of at least 12 characters. Both fields clear on submission. The core returns only a random connection reference, model/capability information and lock state. This is the only credential adapter currently available; ChatGPT subscriptions, Anthropic and xAI sign-in are not connected.
+Open **Providers** from the toolbar or Agents settings. Choose **Add provider**, select OpenAI, Anthropic or xAI, name the account, and enter its disposable key and vault passphrase. Up to eight accounts have independent encryption, unlocks and task access. Saving or unlocking discovers models for that exact account; the refresh icon repeats discovery. Agent settings choose the account and model; Chat and Tasks inherit them, with explicit overrides. Supported official sign-in adapters will use the same connection/model flow; none is shipped in this build.
 
-In Chat, select a conversation or choose **Start chat**. Select **Local fixture** (no credential) or the unlocked **OpenAI fixture**, then the fixture model or supported admission snapshot. **Send** (Enter; Shift+Enter inserts a line) first opens **Allow replies** for this conversation, memory scope, model and connection: at most 20 replies / 15 minutes / $0.60 of simulated request ceilings by default. **Allow and send** dispatches one reply; subsequent Send uses only the remaining permission. Changed scope requires a new review. **Stop** cancels the current request. Partial text comes from actual controlled Responses SSE deltas; it is transient and cannot become memory or action cards until complete response/usage validation. The fixture never contacts OpenAI. **Message options → Review each reply**, new evidence/news scope and saved-request drafts retain the existing exact-disclosure review; schedules/tools are outside Chat permission.
+In Chat, select a conversation or choose **Start chat**. Select **Demo** or the unlocked account, then a supported current model. **Send** (Enter; Shift+Enter inserts a line) first opens **Allow replies** for this conversation, memory scope, model and connection: at most 20 replies / 15 minutes with a reviewed cost allowance (normally $0.60; a higher model reservation is shown explicitly). **Allow and send** dispatches one reply; subsequent Send uses only the remaining permission. Changed scope requires a new review. **Stop** cancels the current request. Partial text comes from controlled provider SSE deltas; it is transient and cannot become memory or action cards until complete response/usage validation. The fixture never contacts a provider. **Message options → Review each reply**, new evidence/news scope and saved-request drafts retain the existing exact-disclosure review; schedules/tools are outside Chat permission.
 
 Connection/model controls stay beside the composer. **Providers** opens connection management; **Message options** holds memory/source/limit controls and the optional **Save message** local-only action. Completed replies retain **Remember this**, **Use as draft** and reviewed proposal controls. A selected locked, replaced or missing connection preserves the question and requires an explicit correction; it never switches credentials or falls back automatically. Connection changes and profile preferences do not authorize requests or erase history. Restart locks the vault and preserves conversations/results.
 
-The Local or Remote engine owns `ai-credentials.json`: Argon2id (64 MiB, three iterations, parallelism two) derives an AES-256-GCM key from the vault passphrase and a random salt. Authentication binds the encrypted API key to the instance and random connection reference. The private data directory/file protections apply (0700/0600 on Unix, current-user/SYSTEM DACL on Windows). No unlock password or encryption master key is stored next to the ciphertext. Interactive unlock lasts at most 15 minutes. Explicitly reviewed task access may retain the credential in memory until its finite expiry; it does not unlock Chat. Lock, logout, restart or ciphertext changes invalidate access. These controls protect stored data; a compromised owner account/core can access an unlocked credential. Go/browser memory cannot promise perfect zeroization.
+**Latest models only.** Current recommendations are GPT-6.1 Terra, GPT-6.1 Sol and GPT-6 Astra; Claude Haiku/Sonnet/Opus 5.5 and Fable 5.1; and Grok 4.7. Each account offers only its provider’s reviewed current models. The core intersects reviewed model definitions with each account's returned model list. Listing does not establish credit, quota, compatibility or permission to generate. Unknown/older models cannot execute; older histories and drafts remain inspectable and require explicit current-model review to run again. Discovery failure, expiry or account changes disable selection without substituting a different model/account. Known superseded models stay refused after failed refreshes. Discovery is bounded, in memory, and cleared with credential access; restart locks every account.
+
+Fresh model selection proposes a sufficient budget for the selected tariff. An account refresh never raises owner-edited limits. Exact model/account, wire settings, tariff and budgets remain bound to consent. OpenAI uses explicit-only caching with no breakpoints. Anthropic sends no cache-creation directives; xAI uses standard automatic cache reads. Reported cache usage is validated against the pinned tariff. Reasoning metadata cannot become an answer or action. Actual usage and admission must still validate before completion.
+
+## Provider maintenance
+
+Runtime refresh uses the selected account and the official Models API. It changes availability metadata, not approved tasks, model definitions or adapter code.
+
+Maintainers use one source update path:
+
+```sh
+node scripts/provider-models.mjs --check
+node scripts/provider-models.mjs --apply-reviewed .evidence/provider-models/provider-update-proposal.json
+```
+
+The check fetches the current provider catalogue, authentication/discovery/cache contracts, model capabilities/limits and standard pricing from approved official sources for all three providers. Native documentation uses its official machine-readable Markdown link, recorded with its hash. It writes one local proposal with source hashes, current model metadata and proposed removals. An empty/incomplete catalogue, missing source, incompatible model or new family cannot be silently renewed/applied. New model families and API/authentication changes need adapter review and focused checks. Review the proposal and source diff before applying; application changes repository definitions only. Build/test and the existing trusted release process deliver accepted changes. Automatic/public updates remain disabled.
+
+Run this before provider releases, after an upstream change or when a model stops working. Additional provider adapters must register their official sources and contract checks in this same maintenance path. It covers OpenAI, Anthropic and xAI API adapters; official account sign-in remains separate. A newer generation is removed from old recommendations in the proposal and requires explicit adapter review before addition. No schedule, public policy downloader or new service is installed.
+
+Schema 25 protects provider identity, native request policy and billable-output reservation. Schema 24 introduced current-model policy/wire fields. Migration preserves records and revisions, refuses paused state and leaves encrypted credential bytes unchanged. Older readers refuse this state.
+
+The Local or Remote engine owns `ai-credentials.json`: Argon2id (64 MiB, three iterations, parallelism two) derives an AES-256-GCM key from the vault passphrase and a random salt. Authentication binds the encrypted API key to the instance and random connection reference; native envelopes also bind the provider and credential mode. The private data directory/file protections apply (0700/0600 on Unix, current-user/SYSTEM DACL on Windows). No unlock password or encryption master key is stored next to the ciphertext. Interactive unlock lasts at most 15 minutes. Explicitly reviewed task access may retain the credential in memory until its finite expiry; it does not unlock Chat. Lock, logout, restart or ciphertext changes invalidate access. These controls protect stored data; a compromised owner account/core can access an unlocked credential. Go/browser memory cannot promise perfect zeroization.
 
 Replacement requires the current reference and vault passphrase and creates a fresh reference. Prepared/queued old references cannot dispatch, and active requests are cancelled on revocation/lock. Unknown dispatched usage retains its reservation and is never retried. Completed answers and journals survive replacement/removal. Removal requires the vault passphrase, preserves request history/holds and is local deletion, not provider-side revocation or secure disk erasure.
 
@@ -29,7 +50,7 @@ The wire contract follows the official [Responses API](https://developers.openai
 
 ## Finite access for reviewed tasks
 
-In **OpenAI connection → Unattended tasks**, select the agent and already-reviewed tasks, choose up to 24 hours and **Review access**. The core derives the selected task digests, one model, per-request token/time ceilings, at most ten remaining requests and their total cost ceiling. Confirm the exact review with the vault passphrase using **Allow task access**. Task disclosure, schedule, limits, freshness checks and failure isolation remain authoritative. Connected scheduled tasks require this allowance even during an interactive unlock. Local no-AI tasks need no credential and continue independently.
+In **Providers → Background access**, select the agent and already-reviewed tasks, choose up to 24 hours and **Review access**. The core derives the selected task digests, one model, per-request token/time ceilings, at most ten remaining requests and their total cost ceiling. Confirm the exact review with the vault passphrase using **Allow task access**. Task disclosure, schedule, limits, freshness checks and failure isolation remain authoritative. Connected scheduled tasks require this allowance even during an interactive unlock. Local no-AI tasks need no credential and continue independently.
 
 Closing the browser preserves the finite allowance. **Revoke**, lock, sign-out, expiry, rotation, clock rollback or restart stops new dependent calls and cancels in-flight access conservatively. Dispatched unknown usage keeps its reservation. An allowance counts each attempted request by its full cost ceiling, without recycling it; verified spending remains in the request journal. Restart is locked with no credential/grant persistence or replay. No owner password, vault passphrase or master key is stored next to the ciphertext, and no wallet authority is introduced.
 
@@ -37,68 +58,17 @@ UI and CLI use the same owner-authenticated records. `agents --request-stdin` ac
 
 Schema 19 / `agents-chat-permission-v1` protects durable Chat permissions and stream bindings; older readers refuse. The format-only migration preserves document bytes/revisions and rejects paused recovery or new fields in schema 18. Partial output and task credential grants are never persisted. Existing active-document and ten-request ceilings remain; capacity failures preserve linked news/research/tasks and uncertain holds. Archive settled conversations through existing History to free slots, with journals/spending/source inspection retained. Linked or unsettled work refuses archiving; no automatic pruning, cap increase or unbounded automation is claimed.
 
-## Pinned OpenAI admission
+## Current model admission
 
-In Chat or Scheduled AI steps, explicitly choose the unlocked test connection and
-`gpt-4.1-mini-2025-04-14` in **AI model**. The existing fixture model remains the
-default. A profile's saved provider/model preference never selects or enables an
-API call. CLI `ai-prepare` and `task-ai-prepare` accept the same `model` and
-`connectionRef` fields through the existing `agents --request-stdin` path.
-Aliases, unknown snapshots and missing/locked connections are refused.
+The reviewed registries in `internal/core/provider_models.json`, `provider_anthropic.json` and `provider_xai.json` own the current model IDs, capabilities, tariffs and expiry. They are shared by UI and CLI. New requests freeze model, account, tariff, reasoning and cache wire settings in their policy; later updates cannot rewrite their disclosure. Expired/changed policies require a fresh review. The tighter owner limits remain 1,000–32,000 input tokens, 128–1,024 output tokens and a 1–5 second exchange deadline.
 
-The compiled `openai-text-standard-2026-10-21-v1` policy was reviewed on
-2026-10-21 and expires on 2026-11-20 (UTC). It admits the pinned text/Structured
-Outputs Responses contract, with a 1,047,576-token context and 32,768-token model
-output limit. Fased's tighter owner limits remain 1,000–32,000 input tokens,
-128–1,024 output tokens and a 1–5 second total deadline. No reasoning-specific
-options, tools, images, files, prior-response state or alternate service tiers
-are enabled. These capabilities come from the official
-[model page](https://developers.openai.com/api/docs/models/gpt-4.1-mini).
+OpenAI and xAI use Responses; Anthropic uses Messages with API version `2026-10-21`. All use streaming and structured text output, with no tools, images, attachments or alternate billing tier. Exact-model access is checked before generation. OpenAI’s count covers its complete token-bearing request; Anthropic’s native token count is an estimate. xAI tokenizes the full submitted wire as text, also applies a byte bound plus framing reserve, and treats the result only as an estimate. Actual usage must validate inside reviewed limits before completion. Costs are public-tariff estimates, not provider invoices or tax/discount claims.
 
-The [published standard tariff](https://developers.openai.com/api/docs/pricing)
-is USD $0.40 input, $0.10 cached input and $1.60 output per million tokens. The
-policy stores integer micro USD per million tokens. Reserve the uncached
-maximum, then round the combined per-request cost upward to a whole micro USD;
-24,000 input plus 1,024 output tokens reserves 11,239 micro USD ($0.011239).
-Verified reported cache tokens use the cached rate; absent cache details use the
-uncached ceiling. Accounting records token counts and the cost basis. These are
-public-tariff estimates, not an invoice, account-specific price or tax guarantee.
-Tariff/model changes require a new reviewed build and fresh consent; expiry or
-mismatch stops dependent work, with no remote tariff fetch or silent fallback.
+Anthropic’s inclusive output count already covers thinking. Grok reports reasoning separately from visible output, and its visible output cap is not a billable ceiling. Grok reviews therefore disclose a conservative 500,000-token output reservation, including reasoning, in addition to the requested visible cap. Default 24,000 input limits reserve $3.048 per attempt at the reviewed standard tariff. This is deliberately conservative; it is not a measured typical price or a provider-enforced hard spend cap. Unknown/over-limit usage keeps its reservation without retry. The live gate remains closed pending separately authorized billing and cancellation acceptance.
 
-Before any dispatch, review the exact context, limits, policy and consent digest.
-Consent also covers preflight disclosure: model visibility uses
-[GET /v1/models/{snapshot}](https://developers.openai.com/api/reference/resources/models/methods/retrieve),
-then [POST /v1/responses/input_tokens](https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count)
-receives the same model, instructions, input, output schema, empty tools and
-truncation setting as response creation. Fased strips only fields unsupported by
-counting: store, background, service tier and maximum output tokens. Actual token
-admission uses the count response, never a byte-count approximation.
+A missing/mismatched model, tier, usage or completion retains uncertain reservations without retry. Account listing alone cannot prove quota or generation permission. Every request retains admission timestamps and payload/response hashes. Legacy records keep their original policies and costs and remain inspectable; latest-only selection does not rewrite them. Older provider models cannot be selected or dispatched.
 
-Every evaluation checks again with its bound credential reference. Model
-visibility is not proof of billing credit, quota or response-create permission;
-response creation can still be denied. A denied, malformed, oversized, ambiguous,
-expired or unavailable preflight records a failed request and holds dependent
-work without creating a response, retrying or stopping independent reminders.
-Access/token evidence retains timestamps and hashes of the model record, exact
-count payload/response and generation wire. After generation is attempted,
-missing/mismatched model, tier or usage retains the reservation as unknown.
-Reported input must equal the admitted count. Unverified or interrupted creation
-is never replayed, including after update-pause recovery in the same process.
-
-**All three API operations remain fixture-only.** The standalone compiled fixture
-returns a simulated count of 256 tokens; it is not a tokenizer or account-access
-proof. Controlled HTTPS tests inject trusted loopback endpoints and test keys.
-There is no runtime endpoint, CA or real-key override. Normal/managed provider
-execution, real credentials, wallets and automatic/public updates stay disabled.
-Schema 9 plus `agents-ai-admission-v1` protects policy/evidence fields from older
-writers. Paused schema-8 state must finish recovery before migration. Legacy
-fixture requests/plans without a policy preserve their existing disclosure/digest
-format; newly reviewed snapshot plans bind their exact policy.
-
-This completes model/token/tariff/access admission implementation and controlled
-acceptance. Actual account access, billing and live response acceptance require
-separate authorization and remain an explicit external boundary.
+Model-list, exact-model, token-count and Responses operations remain controlled-fixture acceptance only. Normal/managed provider execution, real credentials, wallets and automatic/public updates remain held.
 
 ## Transport implementation and activation boundary
 
@@ -108,13 +78,11 @@ Production construction is disabled: neither CLI, environment, UI nor IPC can op
 
 The dormant HTTPS transport and mode-bound credential implementation are present; neither establishes live provider acceptance. A separately authorized activation change must admit the credential lifecycle, recheck the pinned model/tariff contract and enable dispatch together; it must not simply toggle the transport gate. Actual account availability, billing, remote responses and retail usability remain unverified. No UI or stored data changes accompany this transport delivery.
 
-Protocol reference: [OpenAI Responses streaming](https://developers.openai.com/api/docs/guides/streaming-responses), reviewed 26 October 2026. Existing model selection and tariff are unchanged.
+Protocol references: [OpenAI Responses streaming](https://developers.openai.com/api/docs/guides/streaming-responses), [Anthropic Messages](https://platform.claude.com/docs/en/api/messages/create) and [xAI Responses](https://docs.x.ai/developers/rest-api-reference/inference/responses), reviewed against current official documentation. Model definitions and tariffs travel through the reviewed source-update path above.
 
 ## Shared agent selection
 
-UI Chat and scheduled reviews now ask the Go core to resolve the saved agent provider/model. CLI `agents --request-stdin` uses the identical behavior with `useAgentDefaults: true` on `chat-review`, `ai-prepare` or `task-ai-prepare`. Omit `connectionRef` and `model` to resolve the current saved preference, or supply observed values to require that exact selection. Missing/locked connections, unsupported providers/models and changed observed references fail; they never fall back to Demo. Resolution happens only when preparing a fresh review. The resulting concrete model/reference is covered by existing consent and is never re-resolved at dispatch or restart. Explicit overrides and older clients without this field retain their previous behavior.
-
-Credential save accepts `credentialMode: "test"`; omission preserves legacy clients. Any other mode is refused before reading or changing the vault, and supplying a mode on non-save actions is refused. Status reports `credentialMode: "test"`. Ordinary runtime admission still accepts only test mode. The dormant API-mode lifecycle below does not expose a UI/CLI activation switch. Real credentials remain rejected and transport activation remains closed; neither this field nor agent defaults authorize a request. Existing test vaults and SQLite schema are unchanged.
+An agent stores its provider, immutable account reference and current model preference. Chat and scheduled tasks inherit that selection for new reviews. A deliberate override affects only that review; changes never retarget saved requests or tasks. Missing, locked, replaced, superseded or unavailable choices require owner correction. Profile settings select defaults; consent and finite limits authorize work.
 
 ## Dormant API-mode vault lifecycle
 
@@ -125,3 +93,5 @@ Version 2 authenticates the instance, fixed OpenAI provider, mode, vault version
 Existing version-1 test vaults remain byte-for-byte unchanged by reads and unlocks. Only explicit owner-passphrase-authorized replacement can create another mode/version, with fresh salt, nonce and reference. Version-1 readers reject version 2; downgrading metadata cannot make ciphertext decrypt under version-1 associated data. Never overwrite an unrecognized or damaged vault to recover it. Restart locks API mode with its admission gate closed. Inactive API vaults report their mode and locked state, refuse unlock/task access and retain their bytes; an owner can still remove one or replace it with a test vault after proving its passphrase. Removal is local deletion, not provider-side revocation or secure disk erasure.
 
 Controlled evidence covers replacement/rotation, wrong passphrase, mode/version/reference/instance/ciphertext tamper, closed restart, inactive cleanup, Chat and finite scheduled use through loopback HTTPS. Real credentials, actual account/model availability, billing and public activation remain unaccepted and disabled. No keys or owner state are migrated automatically.
+
+Native version-4 envelopes bind instance, provider, mode and reference in AES-GCM associated data. Adding another provider preserves the existing OpenAI version-1/2 envelope bytes inside the version-3 account collection. Provider changes require adding another account, not relabeling an existing credential. Wrong-provider origins and headers are refused before credentials leave the core. Each account has its own discovery, lock, Chat epoch and finite task grant. Schema-24 readers refuse schema 25; paused migration is refused. Fixture and controlled-HTTPS acceptance do not activate ordinary API credential admission or network dispatch.
