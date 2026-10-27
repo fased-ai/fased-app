@@ -1,6 +1,9 @@
 package core
 
-import "errors"
+import (
+	"errors"
+	"strings"
+)
 
 // The catalogue describes selection, not authority. Only the existing admission,
 // credential and reviewed-request checks may authorize a provider operation.
@@ -41,6 +44,37 @@ func providerCatalog(v AIConnectionView, now int64) ProviderCatalog {
 	// Status without discovered evidence still shows the reviewed current set,
 	// never an older model or account-inferred entitlement.
 	return discoveredProviderCatalog(v, modelDiscovery{}, now)
+}
+
+// Creation commits one complete preference, without granting Chat/task access.
+// Name-only legacy commands remain provider-free; an AI selection must name its
+// exact account rather than resolving the default account after creation.
+func (s *Store) configuredAgent(c AgentCommand, id string) (AgentProfile, error) {
+	provider := c.Provider
+	if provider == "" {
+		provider = "none"
+	}
+	p := AgentProfile{ID: id, Name: strings.TrimSpace(c.Name), Persona: c.Text, Provider: provider, Model: c.Model}
+	if c.AccountRef != nil {
+		p.ConnectionRef = *c.AccountRef
+	}
+	if c.ConnectionRef != "" {
+		return AgentProfile{}, errors.New("select the agent account")
+	}
+	if provider == "none" {
+		if p.ConnectionRef != "" || p.Model != "" {
+			return AgentProfile{}, errors.New("no-AI agents cannot select an account or model")
+		}
+		return p, nil
+	}
+	if !validConnectionRef(p.ConnectionRef) || p.Model == "" || p.Model == fixtureAIModel {
+		return AgentProfile{}, errors.New("select an account and current model")
+	}
+	selection := AgentCommand{ConnectionRef: p.ConnectionRef, Model: p.Model}
+	if err := s.resolveAgentProvider(&selection, p); err != nil {
+		return AgentProfile{}, err
+	}
+	return p, nil
 }
 
 // Resolve saved preferences only while preparing a new review. The resulting

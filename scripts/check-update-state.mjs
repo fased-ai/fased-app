@@ -118,7 +118,7 @@ try {
     a.version === 1 &&
       a.probeId === probe &&
       a.state.name === "core-db" &&
-      a.state.version === 25 &&
+      a.state.version === 26 &&
       a.state.features.includes("agents-playbooks-v1") &&
       a.state.features.includes("agents-cron-v1") &&
       a.state.features.includes("agents-history-v1") &&
@@ -128,6 +128,7 @@ try {
       a.state.features.includes("agents-ai-accounts-v1") &&
       a.state.features.includes("agents-current-models-v1") &&
       a.state.features.includes("agents-native-providers-v1") &&
+      a.state.features.includes("agents-signin-plan-v2") &&
       a.state.features.includes("agents-local-v1") &&
       a.state.features.includes("agents-wen-paper-v1"),
   );

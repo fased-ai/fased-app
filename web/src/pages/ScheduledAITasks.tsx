@@ -10,6 +10,7 @@ import {
 import { useState, useEffect, useRef } from "react";
 import { useWorkspace } from "../workspace";
 import type { AgentView } from "../agents";
+import { isPlanPolicy, planFailureDetails } from "../agents";
 const money = (n: number) => `$${(n / 1_000_000).toFixed(6)}`;
 export function ScheduledAITasks({ view: v }: { view: AgentView }) {
   const { t: uiText } = useUI();
@@ -30,7 +31,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
       ? {
           ref: access.ref,
           provider: access.provider,
-          locked: access.locked,
+          locked: access.locked || !!access.planPaused,
           model: access.catalog?.models.find(
             (m) =>
               m.selectable &&
@@ -58,16 +59,21 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
   const [deadline, setDeadline] = useState(3);
   const [budget, setBudget] = useState(60000);
   const [perCall, setPerCall] = useState(30000);
+  const selectedAccount =
+    accounts?.connections?.find((item) => item.ref === connectionRef) ??
+    (accounts?.ref === connectionRef ? accounts : null);
+  const selectedPolicy = selectedAccount?.catalog?.models.find(
+    (item) => item.id === model,
+  )?.policy;
+  const planUsage = isPlanPolicy(selectedPolicy);
   const budgetModel = useRef("");
   useEffect(() => {
-    const identity = connectionRef + ":" + model;
+    const identity = connectionRef + ":" + model + ":" + selectedPolicy?.id;
     if (budgetModel.current === identity) return;
-    const a =
-      accounts?.connections?.find((a) => a.ref === connectionRef) ??
-      (accounts?.ref === connectionRef ? accounts : null);
-    const p = a?.catalog?.models.find((m) => m.id === model)?.policy;
+    const p = selectedPolicy;
     if (!p) return;
     budgetModel.current = identity;
+    if (isPlanPolicy(p)) return;
     const ceiling = Math.ceil(
       (input * p.inputMicrousdPerMillion +
         Math.max(output, p.billableOutputTokens || 0) *
@@ -83,7 +89,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
         Math.max(b, ceiling * runs),
       ),
     );
-  }, [model, connectionRef, input, output, runs, accounts]);
+  }, [model, connectionRef, input, output, runs, accounts, selectedPolicy]);
   const [consent, setConsent] = useState("");
   const sessionID =
     v.sessions.find((s) => s.id === session)?.id ?? v.sessions[0]?.id ?? "";
@@ -94,14 +100,16 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
     >
       <div className="panel-heading">
         <h2>{uiText("Scheduled AI steps")}</h2>
-        <span>{uiText("DEVELOPMENT FIXTURES")}</span>
+        <span>{uiText(planUsage ? "ChatGPT" : "DEVELOPMENT FIXTURES")}</span>
       </div>
       <div className="agent-record-body">
-        <p>
-          {uiText(
-            "Authorize a fixed context and a bounded schedule. Each successful, validated fixture response allows the selected reminder or fixed paper evaluation. Cards cannot change inputs or execute trades. Changed context, expired consent or provider failure holds this task; independent local tasks continue.",
-          )}
-        </p>
+        {!planUsage && (
+          <p>
+            {uiText(
+              "Authorize a fixed context and a bounded schedule. Each successful, validated fixture response allows the selected reminder or fixed paper evaluation. Cards cannot change inputs or execute trades. Changed context, expired consent or provider failure holds this task; independent local tasks continue.",
+            )}
+          </p>
+        )}
         {v.tasks
           .filter((t) => t.ai)
           .map((t) => {
@@ -109,6 +117,10 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
             const requests = v.aiRequests.filter((q) => q.taskId === t.id);
             const spent = requests.reduce((n, q) => n + q.spentMicrousd, 0);
             const held = requests.reduce((n, q) => n + q.heldMicrousd, 0);
+            const taskPlanUsage = isPlanPolicy(a.policy);
+            const reported = requests.filter(
+              (q) => q.costBasis === "chatgpt-plan-reported-usage",
+            );
             return (
               <article
                 className="ai-request"
@@ -122,15 +134,33 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                   {t.intervalSeconds}
                   {uiText("s")}
                 </p>
-                <p>
-                  {uiText("Fixture cost: spent ")}
-                  {money(spent)}
-                  {uiText(" + held ")}
-                  {money(held)} / {money(a.budgetMicrousd)}
-                  {uiText(
-                    " total. One call per evaluation, zero tools, no retries or provider fallback.",
-                  )}
-                </p>
+                {taskPlanUsage ? (
+                  <p>
+                    {uiText("ChatGPT")}
+                    {!!reported.length && (
+                      <>
+                        {" "}
+                        · {uiText("Input tokens")}:{" "}
+                        {reported.reduce((n, q) => n + q.inputTokens, 0)} ·{" "}
+                        {uiText("Output tokens")}:{" "}
+                        {reported.reduce((n, q) => n + q.outputTokens, 0)}
+                      </>
+                    )}
+                    {requests.some((q) => q.state === "unknown") && (
+                      <> · {uiText("Usage unavailable")}</>
+                    )}
+                  </p>
+                ) : (
+                  <p>
+                    {uiText("Fixture cost: spent ")}
+                    {money(spent)}
+                    {uiText(" + held ")}
+                    {money(held)} / {money(a.budgetMicrousd)}
+                    {uiText(
+                      " total. One call per evaluation, zero tools, no retries or provider fallback.",
+                    )}
+                  </p>
+                )}
                 <p>
                   {uiText("Consent expires")}{" "}
                   {new Date(a.expiresAt * 1000).toLocaleString(
@@ -180,19 +210,26 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                     {a.limits.maxInputTokens}
                     {uiText(" input /")} {a.limits.maxOutputTokens}
                     {uiText(" output tokens ·")} {a.limits.deadlineSeconds}
-                    {uiText("s ·")} {money(a.limits.budgetMicrousd)}
-                    {uiText(" cap.")}{" "}
-                    {a.policy ? (
-                      uiText(
-                        "Use the snapshot tariff disclosed below; all calls remain simulated.",
-                      )
-                    ) : (
+                    {uiText("s")}
+                    {!taskPlanUsage && (
                       <>
-                        {uiText(
-                          "Invented rates: 1 micro USD per input token, 4 per output token. No provider, API key, subscription or real charge.",
-                        )}
+                        {" · "}
+                        {money(a.limits.budgetMicrousd)}
+                        {uiText(" cap.")}{" "}
                       </>
                     )}
+                    {!taskPlanUsage &&
+                      (a.policy ? (
+                        uiText(
+                          "Use the snapshot tariff disclosed below; all calls remain simulated.",
+                        )
+                      ) : (
+                        <>
+                          {uiText(
+                            "Invented rates: 1 micro USD per input token, 4 per output token. No provider, API key, subscription or real charge.",
+                          )}
+                        </>
+                      ))}
                   </p>
                   <AIAdmissionReview policy={a.policy} />
                   <p>
@@ -231,7 +268,11 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                           })
                       }
                     >
-                      {uiText("Authorize fixture schedule")}
+                      {uiText(
+                        taskPlanUsage
+                          ? "Authorize task"
+                          : "Authorize fixture schedule",
+                      )}
                     </button>
                   </>
                 )}
@@ -298,61 +339,74 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                     )}
                   </p>
                 )}
-                {requests.map((q) => (
-                  <section className="ai-action-card" key={q.id}>
-                    <small>
-                      {uiText("Request ")}
-                      {q.id} · {q.state}
-                    </small>
-                    <AIAdmissionReview
-                      policy={q.policy}
-                      admission={q.admission}
-                    />
-                    <p>
-                      {q.answer ||
-                        q.failure ||
-                        uiText("Waiting for the fixture result.")}
-                    </p>
-                    {q.cards.map((card) => (
-                      <div key={card.id}>
-                        <strong>{card.title}</strong>
-                        <p>{card.text}</p>
-                        <small>
-                          {card.review}
-                          {uiText(" · REVIEW ONLY")}
-                        </small>
-                        {card.review === "unreviewed" && (
-                          <div className="agent-inline">
-                            <button
-                              className="secondary"
-                              disabled={agents.busy}
-                              onClick={() =>
-                                void agents.change({
-                                  action: "ai-card-keep",
-                                  id: card.id,
-                                })
-                              }
-                            >
-                              {uiText("Keep draft")}
-                            </button>
-                            <button
-                              className="text-button"
-                              disabled={agents.busy}
-                              onClick={() =>
-                                void agents.change({
-                                  action: "ai-card-dismiss",
-                                  id: card.id,
-                                })
-                              }
-                            >
-                              {uiText("Dismiss draft")}
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </section>
-                ))}
+                {requests.map((q) => {
+                  const planFailure = isPlanPolicy(q.policy)
+                    ? planFailureDetails(q.failure)
+                    : null;
+                  return (
+                    <section className="ai-action-card" key={q.id}>
+                      <small>
+                        {uiText("Request ")}
+                        {q.id} · {q.state}
+                      </small>
+                      <AIAdmissionReview
+                        policy={q.policy}
+                        admission={q.admission}
+                      />
+                      <p>
+                        {q.answer ||
+                          (planFailure
+                            ? uiText(planFailure.summary)
+                            : q.failure) ||
+                          uiText("Waiting for the fixture result.")}
+                      </p>
+                      {planFailure && (
+                        <details>
+                          <summary>{uiText("Provider response")}</summary>
+                          <pre>{planFailure.details}</pre>
+                        </details>
+                      )}
+                      {q.cards.map((card) => (
+                        <div key={card.id}>
+                          <strong>{card.title}</strong>
+                          <p>{card.text}</p>
+                          <small>
+                            {card.review}
+                            {uiText(" · REVIEW ONLY")}
+                          </small>
+                          {card.review === "unreviewed" && (
+                            <div className="agent-inline">
+                              <button
+                                className="secondary"
+                                disabled={agents.busy}
+                                onClick={() =>
+                                  void agents.change({
+                                    action: "ai-card-keep",
+                                    id: card.id,
+                                  })
+                                }
+                              >
+                                {uiText("Keep draft")}
+                              </button>
+                              <button
+                                className="text-button"
+                                disabled={agents.busy}
+                                onClick={() =>
+                                  void agents.change({
+                                    action: "ai-card-dismiss",
+                                    id: card.id,
+                                  })
+                                }
+                              >
+                                {uiText("Dismiss draft")}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </section>
+                  );
+                })}
               </article>
             );
           })}
@@ -402,13 +456,13 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                 botId: bot,
                 intervalSeconds: interval,
                 maxRuns: runs,
-                totalBudgetMicrousd: budget,
+                totalBudgetMicrousd: planUsage ? 0 : budget,
                 authorizationSeconds: minutes * 60,
                 limits: {
                   maxInputTokens: input,
                   maxOutputTokens: output,
                   deadlineSeconds: deadline,
-                  budgetMicrousd: perCall,
+                  budgetMicrousd: planUsage ? 0 : perCall,
                 },
               })
               .then((ok) => {
@@ -504,17 +558,19 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                 onChange={(e) => setMinutes(e.target.valueAsNumber)}
               />
             </label>
-            <label>
-              {uiText("AI total cost cap (micro USD)")}
-              <input
-                type="number"
-                required
-                min={1}
-                max={model.startsWith("grok-") ? 10000000 : 1000000}
-                value={budget}
-                onChange={(e) => setBudget(e.target.valueAsNumber)}
-              />
-            </label>
+            {!planUsage && (
+              <label>
+                {uiText("AI total cost cap (micro USD)")}
+                <input
+                  type="number"
+                  required
+                  min={1}
+                  max={model.startsWith("grok-") ? 10000000 : 1000000}
+                  value={budget}
+                  onChange={(e) => setBudget(e.target.valueAsNumber)}
+                />
+              </label>
+            )}
             <label>
               {uiText("Input token cap")}
               <input
@@ -548,23 +604,27 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                 onChange={(e) => setDeadline(e.target.valueAsNumber)}
               />
             </label>
-            <label>
-              {uiText("Per-call cost cap (micro USD)")}
-              <input
-                type="number"
-                required
-                min={1}
-                max={model.startsWith("grok-") ? 10000000 : 1000000}
-                value={perCall}
-                onChange={(e) => setPerCall(e.target.valueAsNumber)}
-              />
-            </label>
-          </div>
-          <p className="subtle">
-            {uiText(
-              "Reserve enough for every evaluation at the reviewed limits. Up to ten retained/future requests share local capacity. Prices and token counts are fixtures; no real API is connected.",
+            {!planUsage && (
+              <label>
+                {uiText("Per-call cost cap (micro USD)")}
+                <input
+                  type="number"
+                  required
+                  min={1}
+                  max={model.startsWith("grok-") ? 10000000 : 1000000}
+                  value={perCall}
+                  onChange={(e) => setPerCall(e.target.valueAsNumber)}
+                />
+              </label>
             )}
-          </p>
+          </div>
+          {!planUsage && (
+            <p className="subtle">
+              {uiText(
+                "Reserve enough for every evaluation at the reviewed limits. Up to ten retained/future requests share local capacity. Prices and token counts are fixtures; no real API is connected.",
+              )}
+            </p>
+          )}
           <button className="secondary" disabled={agents.busy || !sessionID}>
             {uiText("Prepare AI task review")}
           </button>

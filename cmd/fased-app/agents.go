@@ -42,7 +42,7 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	historyQuery := flags.String("history-search", "", "search archived task text or conversation questions/answers")
 	historyTask := flags.String("history-task", "", "inspect/export one archived task with --history")
 	before := flags.Int64("before", 0, "read the next --history page before this archive row")
-	change := flags.Bool("request-stdin", false, "read one revision-checked local agent command JSON (including chat-review/chat-allow/chat-send/chat-revoke and ai-prepare memorySelection (relevant/all/none/selected IDs), news-item-explain, task-run-explain, memory-chat-save and ai-reminder-review/create); no credentials")
+	change := flags.Bool("request-stdin", false, "read one revision-checked agent command; ChatGPT plan limits use zero monetary fields and finite request/time/token bounds; never credentials")
 	if e = flags.Parse(args); e != nil {
 		return e
 	}

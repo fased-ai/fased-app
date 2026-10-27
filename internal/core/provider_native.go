@@ -44,7 +44,11 @@ func providerEntries() []ProviderEntry {
 	out := []ProviderEntry{}
 	for _, id := range []string{"openai", "anthropic", "xai"} {
 		p, _ := providerDefinitionFor(id)
-		out = append(out, ProviderEntry{ID: id, Name: p.Name, Methods: []ProviderMethod{{ID: "api-key", Name: "API key"}}})
+		methods := []ProviderMethod{{ID: "api-key", Name: "API key"}}
+		if id == "openai" {
+			methods = append(methods, ProviderMethod{ID: "sign-in", Name: "Continue with ChatGPT"})
+		}
+		out = append(out, ProviderEntry{ID: id, Name: p.Name, Methods: methods})
 	}
 	return out
 }

@@ -76,6 +76,114 @@ func TestInstallRetryIdentityAndData(t *testing.T) {
 		t.Fatal("tampered executable accepted")
 	}
 }
+
+func TestVerifiedInstallRefusesChangedInputBeforeMutation(t *testing.T) {
+	for _, kind := range []string{"engine", "desktop", "malformed", "uppercase", "missing-desktop"} {
+		t.Run(kind, func(t *testing.T) {
+			p, engine := installFixture(t)
+			want, err := digest(engine)
+			if err != nil {
+				t.Fatal(err)
+			}
+			o := Options{Engine: engine, EngineSHA256: want}
+			switch kind {
+			case "engine":
+				if err = os.WriteFile(engine, []byte("changed after bundle verification"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			case "desktop":
+				o.Desktop = engine
+				o.DesktopSHA256 = strings.Repeat("0", 64)
+			case "malformed":
+				o.EngineSHA256 = "not-a-digest"
+			case "uppercase":
+				o.EngineSHA256 = strings.ToUpper(want)
+			case "missing-desktop":
+				o.DesktopSHA256 = want
+			}
+			if _, err = Install(t.Context(), p, o); err == nil {
+				t.Fatal("verified source mismatch accepted", kind)
+			}
+			for _, path := range []string{p.Root, p.Data} {
+				if _, err = os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("invalid source touched installation/state", path, err)
+				}
+			}
+		})
+	}
+}
+
+func TestVerifiedStagingRejectsChangedCopyAndAllowsRetry(t *testing.T) {
+	p, engine := installFixture(t)
+	want, err := digest(engine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = core.EnsurePrivateDirectory(p.Root); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(p.Root, engineName)
+	if err = writeNew(target, strings.NewReader("changed while source was copied"), 0700, want); err == nil {
+		t.Fatal("changed copy published as verified application")
+	}
+	for _, path := range []string{target, filepath.Join(p.Root, ".staging-"+engineName)} {
+		if _, err = os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("rejected copy left an owned file", path, err)
+		}
+	}
+	// An interrupted preparing receipt may retry the same verified source; bad
+	// staged bytes must not poison its final target or affect the state directory.
+	input, err := os.Open(engine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	if err = writeNew(target, input, 0700, want); err != nil {
+		t.Fatal("verified source could not retry", err)
+	}
+	if got, err := digest(target); err != nil || got != want {
+		t.Fatal("restored source identity changed", got, err)
+	}
+}
+
+func TestVerifiedInstallRetryPreservesExistingState(t *testing.T) {
+	p, engine := installFixture(t)
+	want, err := digest(engine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := Options{Engine: engine, EngineSHA256: want}
+	if _, err = Install(t.Context(), p, o); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(p.Data, "retained-owner-record")
+	if err = os.WriteFile(state, []byte("disposable preserved record"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(p.Root, "install.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = Install(t.Context(), p, o); err != nil {
+		t.Fatal("identical verified retry failed", err)
+	}
+	if err = os.WriteFile(engine, []byte("substituted after bundle verification"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = Install(t.Context(), p, o); err == nil {
+		t.Fatal("verified retry accepted substituted source")
+	}
+	after, err := os.ReadFile(filepath.Join(p.Root, "install.json"))
+	if err != nil || string(before) != string(after) {
+		t.Fatal("refused retry changed installation identity", err)
+	}
+	if data, err := os.ReadFile(state); err != nil || string(data) != "disposable preserved record" {
+		t.Fatal("verified retry changed owner state", err)
+	}
+	if got, err := digest(filepath.Join(p.Root, engineName)); err != nil || got != want {
+		t.Fatal("verified retry replaced installed bytes", got, err)
+	}
+}
 func TestInterruptedFirstInstallResumesWithoutAdoptingUnknownFiles(t *testing.T) {
 	p, engine := installFixture(t)
 	m, err := Install(t.Context(), p, Options{Engine: engine})

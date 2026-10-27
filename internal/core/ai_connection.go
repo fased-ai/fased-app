@@ -22,6 +22,9 @@ import (
 )
 
 type AIConnectionCommand struct {
+	SignInID             string                `json:"signInId,omitempty"`
+	Callback             string                `json:"callback,omitempty"`
+	Remote               bool                  `json:"remote,omitempty"`
 	Pilot                *OpenAIPilotAllowance `json:"pilot,omitempty"`
 	Provider             string                `json:"provider,omitempty"`
 	Name                 string                `json:"name,omitempty"`
@@ -38,6 +41,12 @@ type AIConnectionCommand struct {
 	Passphrase           string                `json:"passphrase,omitempty"`
 }
 type AIConnectionView struct {
+	AuthMethod             string                `json:"authMethod"`
+	PlanUse                bool                  `json:"planUse"`
+	PlanPaused             bool                  `json:"planPaused"`
+	PlanFailure            string                `json:"planFailure,omitempty"`
+	SignInAvailable        bool                  `json:"signInAvailable"`
+	SignIn                 *ProviderSignInView   `json:"signIn,omitempty"`
 	PilotEnrollment        bool                  `json:"pilotEnrollment,omitempty"`
 	PilotAvailable         bool                  `json:"pilotAvailable,omitempty"`
 	Pilot                  *OpenAIPilotAllowance `json:"pilot,omitempty"`
@@ -62,6 +71,7 @@ type AIConnectionView struct {
 	OutputMicrousdPerToken int64                 `json:"outputMicrousdPerToken,omitempty"`
 }
 type aiVaultEnvelope struct {
+	TestOnly   bool   `json:"testOnly,omitempty"`
 	Provider   string `json:"provider,omitempty"`
 	Name       string `json:"name,omitempty"`
 	Mode       string `json:"mode,omitempty"`
@@ -72,6 +82,9 @@ type aiVaultEnvelope struct {
 	Ciphertext []byte `json:"ciphertext"`
 }
 type providerState struct {
+	signIn          *providerSignInAttempt
+	signInTransport http.RoundTripper // controlled tests only; ordinary constructors never inject it
+	signInRenewals  map[string]bool
 	// Closed in every runtime constructor. Only controlled tests set this field.
 	apiCredentials bool
 	nextEpoch      uint64
@@ -79,6 +92,8 @@ type providerState struct {
 	mu             sync.Mutex
 }
 type providerCredential struct {
+	planPaused     bool
+	planFailure    string
 	superseded     map[string]bool
 	discovery      modelDiscovery
 	modelRefresh   uint64
@@ -102,6 +117,10 @@ type aiVaultCollection struct {
 	Accounts []aiVaultEnvelope `json:"accounts"`
 }
 
+// Eight maximum sign-in envelopes include base64 expansion and JSON metadata.
+// Reader and atomic writer enforce the same serialized byte limit.
+const aiVaultMaxSerializedBytes = 256 * 1024
+
 func validConnectionRef(ref string) bool {
 	if len(ref) != 43 {
 		return false
@@ -119,7 +138,7 @@ func (s *Store) readAIVaultCollection() (aiVaultCollection, error) {
 	if e != nil {
 		return col, e
 	}
-	if !info.Mode().IsRegular() || info.Size() > 32768 {
+	if !info.Mode().IsRegular() || info.Size() > aiVaultMaxSerializedBytes {
 		return col, errors.New("invalid credential vault")
 	}
 	b, e := ReadPrivateFile(s.aiVaultPath())
@@ -137,26 +156,43 @@ func (s *Store) readAIVaultCollection() (aiVaultCollection, error) {
 	} else {
 		col = aiVaultCollection{Version: 3, Default: legacy.Ref, Accounts: []aiVaultEnvelope{legacy}}
 	}
+	if err := validateAIVaultCollection(col); err != nil {
+		return col, err
+	}
+	return col, nil
+}
+func validateAIVaultCollection(col aiVaultCollection) error {
+	if col.Version != 3 || len(col.Accounts) > 8 {
+		return errors.New("invalid credential collection")
+	}
 	seen := map[string]bool{}
 	for _, v := range col.Accounts {
-		if seen[v.Ref] || !validAIVaultMode(v) || !validConnectionRef(v.Ref) || !validAgentText(v.Name, 80, false) || len(v.Salt) != 16 || len(v.Nonce) != 12 || len(v.Ciphertext) < 16 || len(v.Ciphertext) > 512 {
-			return col, errors.New("invalid credential vault")
+		if seen[v.Ref] || !validAIVaultMode(v) || !validConnectionRef(v.Ref) || !validAgentText(v.Name, 80, false) || len(v.Salt) != 16 || len(v.Nonce) != 12 || len(v.Ciphertext) < 16 || len(v.Ciphertext) > aiVaultCiphertextBound(v) {
+			return errors.New("invalid credential vault")
 		}
 		seen[v.Ref] = true
 	}
 	if col.Default != "" && !seen[col.Default] {
-		return col, errors.New("invalid default connection")
+		return errors.New("invalid default connection")
 	}
-	return col, nil
+	return nil
 }
 func (s *Store) writeAIVaultCollection(col aiVaultCollection) error {
+	if err := validateAIVaultCollection(col); err != nil {
+		return err
+	}
 	if len(col.Accounts) == 0 {
 		return os.Remove(s.aiVaultPath())
 	}
+	var value any = col
 	if len(col.Accounts) == 1 && col.Default == col.Accounts[0].Ref {
-		return WritePrivateJSON(s.aiVaultPath(), col.Accounts[0])
+		value = col.Accounts[0]
 	}
-	return WritePrivateJSON(s.aiVaultPath(), col)
+	serialized, err := json.Marshal(value)
+	if err != nil || len(serialized)+1 > aiVaultMaxSerializedBytes {
+		return errors.New("credential vault serialized size exceeded")
+	}
+	return WritePrivateJSON(s.aiVaultPath(), value)
 }
 func (s *Store) readAIVault(refs ...string) (aiVaultEnvelope, error) {
 	col, e := s.readAIVaultCollection()
@@ -214,6 +250,7 @@ func (s *Store) lockAIConnection() {
 	s.chatEpoch.Add(1)
 	s.provider.mu.Lock()
 	defer s.provider.mu.Unlock()
+	s.cancelProviderSignInLocked()
 	s.clearAIConnectionLocked()
 	for ref := range s.provider.accounts {
 		s.clearAIConnectionLocked(ref)
@@ -222,6 +259,20 @@ func (s *Store) lockAIConnection() {
 func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err error) {
 	v = AIConnectionView{CredentialMode: "test", AdmissionPolicy: openAIModelPolicy(), Provider: "openai", Model: fixtureAIModel, Locked: true, TestOnly: true, InputMicrousdPerToken: 1, OutputMicrousdPerToken: 4}
 	defer func() {
+		v.SignInAvailable = s.providerSignInAvailableLocked()
+		v.SignIn = s.providerSignInViewLocked()
+		v.AuthMethod = "api-key"
+		if v.CredentialMode == "openai-signin" {
+			v.AuthMethod = "sign-in"
+			if policy := chatModelPolicyForMethod(v.Model, "sign-in"); policy != nil {
+				v.AdmissionPolicy = *policy
+			}
+			if state := s.provider.accounts[v.Ref]; state != nil {
+				if credential, ok := parseProviderSignInCredential(state.key); ok {
+					v.PlanUse = credential.planUse()
+				}
+			}
+		}
 		s.pilotViewLocked(&v)
 		if s.pilotBindingActiveLocked() {
 			v.PilotEnrollment = true
@@ -281,8 +332,12 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 	v.Name = env.Name
 	v.Provider = aiVaultProvider(env)
 	v.Ref = env.Ref
+	v.PlanPaused, v.PlanFailure = state.planPaused, state.planFailure
 	v.CredentialMode = aiVaultMode(env)
-	v.TestOnly = v.CredentialMode == "test"
+	v.TestOnly = v.CredentialMode == "test" || env.Version == 5 && env.TestOnly
+	if env.Version == 5 {
+		v.Model, v.AdmissionPolicy = admittedOpenAIModel, openAIModelPolicy(admittedOpenAIModel)
+	}
 	if v.Provider != "openai" {
 		v.Model = registryForProvider(v.Provider).Models[0].ID
 		v.AdmissionPolicy = openAIModelPolicy(v.Model)
@@ -295,7 +350,7 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 		// admissionPolicy is authoritative for the actual model's fractional tariff.
 		v.InputMicrousdPerToken, v.OutputMicrousdPerToken = 0, 0
 	}
-	if !s.aiCredentialModeAllowed(v.CredentialMode) && !(s.pilotTargetLocked(v.Ref) && v.CredentialMode == "openai") {
+	if !s.aiVaultModeAllowed(env) && !(s.pilotTargetLocked(v.Ref) && v.CredentialMode == "openai") {
 		s.clearAIConnectionLocked(env.Ref)
 
 		return v, nil
@@ -350,9 +405,35 @@ func (s *Store) aiConnectionValid(ref string) bool {
 		return true
 	}
 	v, e := s.AIConnection(ref)
-	return e == nil && v.Ref == ref && !v.Locked
+	return e == nil && v.Ref == ref && !v.Locked && !v.PlanPaused
+}
+
+// A plan failure revokes permissions for this account without deleting its
+// credentials. Only an explicit successful owner unlock clears this pause.
+func (s *Store) pauseSignInAccount(ref, failure string) {
+	s.provider.mu.Lock()
+	defer s.provider.mu.Unlock()
+	env, err := s.readAIVault(ref)
+	if err != nil || env.Ref != ref || env.Version != 5 || aiVaultMode(env) != "openai-signin" {
+		return
+	}
+	state := s.credentialLocked(ref)
+	s.provider.nextEpoch++
+	state.epoch = s.provider.nextEpoch
+	state.taskAccess, state.taskAccessLast = nil, 0
+	state.planPaused = true
+	if len(failure) > 2048 {
+		failure = "Plan access paused; inspect the request."
+	}
+	state.planFailure = failure
 }
 func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (AIConnectionView, error) {
+	if strings.HasPrefix(c.Action, "sign-in-") {
+		return s.changeProviderSignIn(ctx, c)
+	}
+	if c.SignInID != "" || c.Callback != "" || c.Remote {
+		return AIConnectionView{}, errors.New("sign-in fields require a sign-in operation")
+	}
 	if pilotAction(c.Action) {
 		v, e := s.changeOpenAIPilot(ctx, c)
 		if e == nil && c.Action == "pilot-allow" && s.pilotTransport(c.Ref) != nil {
@@ -373,7 +454,7 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	if err != nil {
 		return v, err
 	}
-	if (c.Action == "save" || c.Action == "add" || c.Action == "unlock") && v.Ref != "" && !s.deferPilotDiscovery() {
+	if (c.Action == "save" || c.Action == "add" || c.Action == "unlock") && v.Ref != "" && (v.AuthMethod != "sign-in" || v.PlanUse) && !s.deferPilotDiscovery() {
 		return s.refreshProviderModels(ctx, v.Ref, s.providerModelTransport(v.Ref))
 	}
 	return v, nil
@@ -383,6 +464,10 @@ func (s *Store) providerModelTransport(ref string) http.RoundTripper {
 		return t
 	}
 	if s.providerFixture {
+		v, err := s.AIConnection(ref)
+		if err == nil && v.AuthMethod == "sign-in" {
+			return providerSignInModelFixture{}
+		}
 		return fixtureAITransport{}
 	}
 	v, err := s.AIConnection(ref)
@@ -443,6 +528,9 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	if c.Action == "save" && v.Ref != "" && c.Provider != "" && c.Provider != v.Provider {
 		return v, errors.New("add a separate provider connection")
 	}
+	if (c.Action == "save" || c.Action == "remove") && v.AuthMethod == "sign-in" {
+		return v, errors.New("reconnect this sign-in account or add a separate API-key account")
+	}
 	if c.Action == "add" {
 		if c.Ref != "" {
 			return v, ErrConflict
@@ -498,6 +586,7 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 			encoded, _ := json.Marshal(env)
 			state.digest = sha256.Sum256(encoded)
 			state.ref, state.key, state.expires = env.Ref, append([]byte(nil), plain...), s.now().Add(15*time.Minute).Unix()
+			state.planPaused, state.planFailure = false, ""
 			return s.aiConnectionLocked(env.Ref)
 		}
 	}
@@ -586,6 +675,8 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	return s.aiConnectionLocked(env.Ref)
 }
 
+type providerMethodContextKey struct{}
+
 type authenticatedAITransport struct {
 	modelsOnly bool
 	store      *Store
@@ -605,7 +696,17 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 	if a.request != nil && a.request.TaskID != "" {
 		allowed = e == nil && v.Ref == a.ref && a.store.taskAccessMatches(*a.request, state.taskAccess, true, state)
 	}
+	if v.PlanPaused && !a.modelsOnly {
+		allowed = false
+	}
 	if !a.modelsOnly && a.request != nil && (policyProvider(a.request.Policy) != v.Provider || !providerRequestAllowed(v.Provider, r)) {
+		allowed = false
+	}
+	if v.AuthMethod == "sign-in" {
+		if !((r.Method == "GET" && r.URL.Path == "/v1/models") || (r.Method == "POST" && r.URL.Path == "/v1/responses")) || !a.modelsOnly && (a.request == nil || !signInRequest(*a.request)) {
+			allowed = false
+		}
+	} else if a.request != nil && signInRequest(*a.request) {
 		allowed = false
 	}
 	if v.CredentialMode != "test" && !a.modelsOnly && (a.request == nil || !currentModelRequest(*a.request)) {
@@ -620,12 +721,22 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 		return nil, errors.New("pilot scope or allowance unavailable")
 	}
 	key := append([]byte(nil), state.key...)
+	if v.AuthMethod == "sign-in" {
+		credential, ok := parseProviderSignInCredential(key)
+		if !ok || !credential.planUse() || credential.ExpiresAt <= a.store.now().Unix() {
+			clear(key)
+			a.store.provider.mu.Unlock()
+			return nil, errors.New("sign-in expired or ChatGPT plan access unavailable; refresh or reconnect")
+		}
+		clear(key)
+		key = []byte(credential.AccessToken)
+	}
 	a.store.provider.mu.Unlock()
 	defer clear(key)
 	if !providerRequestAllowed(v.Provider, r) {
 		return nil, errors.New("provider origin refused")
 	}
-	copy := r.Clone(r.Context())
+	copy := r.Clone(context.WithValue(r.Context(), providerMethodContextKey{}, v.AuthMethod))
 	copy.Header = r.Header.Clone()
 	copy.Header.Del("Authorization")
 	copy.Header.Del("x-api-key")
@@ -641,6 +752,15 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 	res, e := a.next.RoundTrip(copy)
 	if e != nil {
 		return nil, errors.New("provider transport unavailable")
+	}
+	// Diagnostic identifiers are untrusted provider input too. Preserve ordinary
+	// request IDs, but never persist an echoed credential through an error header.
+	res.Header = res.Header.Clone()
+	for _, value := range res.Header.Values("X-Request-Id") {
+		if bytes.Contains([]byte(value), key) {
+			res.Header.Del("X-Request-Id")
+			break
+		}
 	}
 	if strings.Split(res.Header.Get("Content-Type"), ";")[0] == "text/event-stream" {
 		res.Body = &guardedAIBody{body: res.Body, key: append([]byte(nil), key...)}
@@ -660,6 +780,12 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 }
 
 func validAIVaultMode(v aiVaultEnvelope) bool {
+	if v.Version == 5 {
+		return v.Mode == "openai-signin" && v.Provider == "openai"
+	}
+	if v.TestOnly {
+		return false
+	}
 	if v.Version == 1 {
 		return v.Mode == "" && v.Provider == ""
 	}
@@ -681,10 +807,17 @@ func aiVaultMode(v aiVaultEnvelope) string {
 	return v.Mode
 }
 func (s *Store) aiCredentialModeAllowed(mode string) bool {
+	if mode == "openai-signin" {
+		return s.provider.apiCredentials || s.providerFixture || s.provider.signInTransport != nil
+	}
 	_, ok := providerDefinitionFor(mode)
 	return mode == "test" || (ok && mode != "" && s.provider.apiCredentials)
 }
 func validAICredential(mode, key string) bool {
+	if mode == "openai-signin" {
+		_, ok := parseProviderSignInCredential([]byte(key))
+		return ok
+	}
 	if mode == "test" {
 		return testAICredential(key)
 	}
@@ -699,6 +832,13 @@ func validAICredential(mode, key string) bool {
 	return true
 }
 func (s *Store) aiVaultAAD(v aiVaultEnvelope) []byte {
+	if v.Version == 5 {
+		kind := "live"
+		if v.TestOnly {
+			kind = "fixture"
+		}
+		return []byte("fased-provider-signin-v5:" + s.instanceID + ":" + v.Provider + ":" + v.Mode + ":" + v.Ref + ":" + kind)
+	}
 	if v.Version == 1 {
 		return []byte("fased-api-vault-v1:" + s.instanceID + ":" + v.Ref)
 	}

@@ -21,6 +21,7 @@ import (
 type Paths struct{ Root, Data string }
 type Options struct {
 	Engine, Desktop, Listen, PublicOrigin, Location string
+	EngineSHA256, DesktopSHA256                     string
 	Start, Autostart                                bool
 }
 type Manifest struct {
@@ -105,6 +106,13 @@ func digest(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 func bytesDigest(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }
+func validExpectedDigest(value string) bool {
+	if len(value) != sha256.Size*2 || value != strings.ToLower(value) {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
 func Load(paths Paths) (Manifest, error) {
 	p, err := normalize(paths)
 	if err != nil {
@@ -145,17 +153,6 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 	if err != nil {
 		return Manifest{}, err
 	}
-	if err = core.EnsurePrivateDirectory(p.Root); err != nil {
-		return Manifest{}, err
-	}
-	lock, err := core.LockInstance(filepath.Join(p.Root, "install.lock"))
-	if err != nil {
-		return Manifest{}, errors.New("another installation operation is active")
-	}
-	defer lock.Close()
-	if err = core.EnsurePrivateDirectory(p.Data); err != nil {
-		return Manifest{}, err
-	}
 	if options.Listen == "" {
 		options.Listen = "127.0.0.1:7331"
 	}
@@ -167,15 +164,38 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 	if err != nil {
 		return Manifest{}, err
 	}
+	if options.EngineSHA256 != "" && (!validExpectedDigest(options.EngineSHA256) || engineHash != options.EngineSHA256) {
+		return Manifest{}, errors.New("application differs from the verified bundle; acquire the same intact bundle before retrying")
+	}
+	if options.DesktopSHA256 != "" && (options.Desktop == "" || !validExpectedDigest(options.DesktopSHA256)) {
+		return Manifest{}, errors.New("verified desktop digest requires the selected desktop binary")
+	}
 	files := map[string]string{engineName: engineHash, definitionName: bytesDigest(unit)}
 	if options.Desktop != "" {
 		files[desktopName], err = digest(options.Desktop)
 		if err != nil {
 			return Manifest{}, err
 		}
+		if options.DesktopSHA256 != "" && files[desktopName] != options.DesktopSHA256 {
+			return Manifest{}, errors.New("desktop differs from the verified bundle; acquire the same intact bundle before retrying")
+		}
 		if b := shortcutDefinition(p); len(b) > 0 {
 			files[shortcutName] = bytesDigest(b)
 		}
+	}
+	// Verification precedes every installation/state mutation. Keep the chosen
+	// source digests through staged copying so later source replacement cannot
+	// widen the caller's verified bundle selection.
+	if err = core.EnsurePrivateDirectory(p.Root); err != nil {
+		return Manifest{}, err
+	}
+	lock, err := core.LockInstance(filepath.Join(p.Root, "install.lock"))
+	if err != nil {
+		return Manifest{}, errors.New("another installation operation is active")
+	}
+	defer lock.Close()
+	if err = core.EnsurePrivateDirectory(p.Data); err != nil {
+		return Manifest{}, err
 	}
 	m, loadErr := Load(p)
 	if loadErr == nil {
@@ -224,7 +244,7 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 				if name == shortcutName {
 					b = shortcutDefinition(p)
 				}
-				err = writeNew(target, strings.NewReader(string(b)), 0600)
+				err = writeNew(target, strings.NewReader(string(b)), 0600, hash)
 			} else {
 				source := options.Engine
 				if name == desktopName {
@@ -233,7 +253,7 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 				var f *os.File
 				f, err = os.Open(source)
 				if err == nil {
-					err = writeNew(target, f, 0700)
+					err = writeNew(target, f, 0700, hash)
 					f.Close()
 				}
 			}
@@ -274,7 +294,10 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 	}
 	return m, err
 }
-func writeNew(path string, in io.Reader, mode os.FileMode) (result error) {
+func writeNew(path string, in io.Reader, mode os.FileMode, expected string) (result error) {
+	if !validExpectedDigest(expected) {
+		return errors.New("verified installation digest required before staging")
+	}
 	stage := filepath.Join(filepath.Dir(path), ".staging-"+filepath.Base(path))
 	// A preparing receipt owns this exact staging name. A killed first install
 	// may leave an incomplete copy; retry removes it without touching app data.
@@ -297,9 +320,13 @@ func writeNew(path string, in io.Reader, mode os.FileMode) (result error) {
 			_ = os.Remove(stage)
 		}
 	}()
-	_, copyErr := io.Copy(f, in)
+	h := sha256.New()
+	_, copyErr := io.Copy(io.MultiWriter(f, h), in)
 	if err = errors.Join(copyErr, f.Sync(), f.Close()); err != nil {
 		return err
+	}
+	if hex.EncodeToString(h.Sum(nil)) != expected {
+		return errors.New("source changed while copying; no application file was published; retry the verified bundle")
 	}
 	return os.Rename(stage, path)
 }

@@ -1,15 +1,141 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/fased-ai/fased-app/internal/bundle"
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
 )
+
+func installationBundleFixture(t *testing.T, desktop bool) (string, bundle.Manifest, string) {
+	t.Helper()
+	dir := t.TempDir()
+	m := bundle.Manifest{Schema: 1, Platform: runtime.GOOS, Arch: runtime.GOARCH, Version: core.Version, UnsignedEngineering: true, Desktop: desktop, Files: map[string]bundle.File{}}
+	names := []string{localinstall.EngineName(), "LICENSE", "NOTICE"}
+	for name := range bundle.PlatformFiles() {
+		names = append(names, name)
+	}
+	if desktop {
+		names = append(names, localinstall.DesktopName())
+	}
+	for _, name := range names {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("disposable "+name), 0700); err != nil {
+			t.Fatal(err)
+		}
+		var err error
+		m.Files[name], err = bundle.Inspect(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir, m, saveInstallationBundle(t, dir, m)
+}
+
+func saveInstallationBundle(t *testing.T, dir string, m bundle.Manifest) string {
+	t.Helper()
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "bundle.json"), b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+func TestInstallationBundleBindsCoreDesktopAndVersion(t *testing.T) {
+	for _, desktop := range []bool{false, true} {
+		dir, _, pin := installationBundleFixture(t, desktop)
+		desktopPath := ""
+		if desktop {
+			desktopPath = filepath.Join(dir, localinstall.DesktopName())
+		}
+		m, canonical, err := verifiedInstallationBundle(dir, filepath.Join(dir, localinstall.EngineName()), desktopPath, pin)
+		if err != nil || canonical != dir || m.Desktop != desktop {
+			t.Fatal(m, canonical, err)
+		}
+		if _, _, err = verifiedInstallationBundle(dir, os.Args[0], desktopPath, pin); err == nil {
+			t.Fatal("core outside verified package accepted")
+		}
+		other := filepath.Join(t.TempDir(), "other-desktop")
+		if err = os.WriteFile(other, []byte("other executable"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err = verifiedInstallationBundle(dir, filepath.Join(dir, localinstall.EngineName()), other, pin); err == nil {
+			t.Fatal("unverified desktop accepted")
+		}
+	}
+	dir, m, _ := installationBundleFixture(t, false)
+	m.Version = "different version"
+	pin := saveInstallationBundle(t, dir, m)
+	if _, _, err := verifiedInstallationBundle(dir, filepath.Join(dir, localinstall.EngineName()), "", pin); err == nil {
+		t.Fatal("mismatched metadata version accepted")
+	}
+}
+
+func TestInstallRejectsBundleBeforePrivateAccessAndMutation(t *testing.T) {
+	dir, _, _ := installationBundleFixture(t, false)
+	parent := t.TempDir()
+	app, data := filepath.Join(parent, "app"), filepath.Join(parent, "data")
+	err := hostCommand([]string{"install", "--bundle", dir, "--bundle-sha256", strings.Repeat("0", 64), "--vps", "--autostart", "--access", "tailscale", "--prefix", app, "--data-dir", data, "--start=false"}, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "independently obtained digest") {
+		t.Fatal("bundle was not refused before host access:", err)
+	}
+	for _, path := range []string{app, data} {
+		if _, err = os.Stat(path); !os.IsNotExist(err) {
+			t.Fatal("rejected bundle touched installation state:", path, err)
+		}
+	}
+	if err = hostCommand([]string{"install", "--bundle-sha256", strings.Repeat("0", 64)}, io.Discard, io.Discard); err == nil {
+		t.Fatal("detached bundle digest accepted")
+	}
+}
+
+func TestInstallationAutostartMatchesLocalRemoteChoice(t *testing.T) {
+	for _, tc := range []struct {
+		name, input  string
+		remote, want bool
+	}{
+		{"local default", "\n", false, false},
+		{"remote default", "\n", true, true},
+		{"local opt in", "YES\n", false, true},
+		{"remote decline", "no\n", true, false},
+		{"retry invalid choice", "sometimes\ny\n", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			got, err := installationAutostart(bufio.NewReader(strings.NewReader(tc.input)), &out, tc.remote)
+			if err != nil || got != tc.want {
+				t.Fatal(got, err, out.String())
+			}
+			prompt := "Start Fased at login? [y/N]"
+			if tc.remote {
+				prompt = "Keep Fased running after logout and reboot? [Y/n]"
+			}
+			if !strings.Contains(out.String(), prompt) {
+				t.Fatal("wrong runtime profile prompt", out.String())
+			}
+		})
+	}
+	if _, err := installationAutostart(bufio.NewReader(strings.NewReader("")), io.Discard, true); err == nil {
+		t.Fatal("EOF authorized background execution")
+	}
+}
 
 func TestInstallationHandoffUsesInstalledPathsAndPrivateAccess(t *testing.T) {
 	m := localinstall.Manifest{Root: "/home/owner/Fased app", Data: "/home/owner/private state", Location: "remote"}

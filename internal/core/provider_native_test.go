@@ -34,6 +34,60 @@ func addNativeAccount(t *testing.T, s *Store, provider string, api bool) AIConne
 	return v
 }
 
+// Account setup is discovery/credential management. It must never authorize or
+// queue generation; only an explicit Chat/task action may do that.
+func TestProviderSetupNeverQueuesGeneration(t *testing.T) {
+	for _, provider := range []string{"openai", "anthropic", "xai"} {
+		t.Run(provider, func(t *testing.T) {
+			s := fixtureStore(t)
+			agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: "trading-analyst", Name: "Preserved conversation"})
+			before, _, err := readAgents(t.Context(), s.db)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original, _ := json.Marshal(before)
+			assertIdle := func() {
+				t.Helper()
+				rt := aiTestTransport(func(*http.Request) (*http.Response, error) {
+					t.Error("account setup dispatched generation")
+					return nil, errors.New("generation forbidden during setup")
+				})
+				if err := s.advanceAgentAI(t.Context(), rt, true); err != nil {
+					t.Fatal(err)
+				}
+				after, _, err := readAgents(t.Context(), s.db)
+				if err != nil {
+					t.Fatal(err)
+				}
+				retained, _ := json.Marshal(after)
+				if !bytes.Equal(original, retained) {
+					t.Fatal("account setup changed conversations, tasks, grants or requests")
+				}
+			}
+			a := addNativeAccount(t, s, provider, false)
+			assertIdle()
+			for _, action := range []string{"lock", "unlock", "models-refresh", "save", "remove"} {
+				c := AIConnectionCommand{Action: action, Ref: a.Ref}
+				if action == "unlock" || action == "save" || action == "remove" {
+					c.Passphrase = testVaultPassword
+				}
+				if action == "save" {
+					c.Provider, c.Key = provider, "fased-test-reconnected-disposable-key"
+				}
+				next, err := s.ChangeAIConnection(t.Context(), c)
+				if err != nil {
+					t.Fatal(action, err)
+				}
+				if action == "save" && next.Ref == a.Ref {
+					t.Fatal("reconnect reused the revoked identity")
+				}
+				a = next
+				assertIdle()
+			}
+		})
+	}
+}
+
 // The production constructor never accepts an endpoint or trust override. This
 // test-only dialer preserves the official URL, Host, headers and TLS validation.
 func nativeHTTPSFixture(t *testing.T, provider string, h http.HandlerFunc) *openAITransport {

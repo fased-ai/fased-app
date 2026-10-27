@@ -130,10 +130,15 @@ pin its exact HTTPS raw-content origin/path and branch policy before activation.
 That branch serves signed metadata, not executable scripts or a second software
 release channel. This is a design recommendation, not a newly created branch.
 
-Production transport needs a separate reviewed fetcher. [GitHub's release-asset API](https://docs.github.com/en/rest/releases/assets#get-a-release-asset)
-can stream bytes or return a redirect. The current development downloader forbids
-every redirect and must retain that rule; it is not a drop-in public GitHub client.
-Specify and test these production restrictions before enabling network acquisition:
+A separate production-capable GitHub fetcher is implemented in
+`internal/releaseops/github.go` and verified only through controlled TLS/DNS
+fixtures. Ordinary GitHub bootstrap activation remains disabled. The
+[release-asset API](https://docs.github.com/en/rest/releases/assets#get-a-release-asset)
+supports direct bytes or a redirect; the implementation pins API version
+2026-03-10 and the documented repository/release/asset routes. Production binding
+and real delivery acceptance remain open. The existing development downloader
+still forbids every redirect; its authority is unchanged. These restrictions
+govern the separately constructed GitHub path:
 
 - Metadata uses exact approved URLs, HTTPS system roots, no redirects or credentials.
   Discovery pointers and API responses are untrusted locators, never release approval.
@@ -150,7 +155,7 @@ Specify and test these production restrictions before enabling network acquisiti
   from logs, receipts and persisted locators. Limit a redirect URL to 8 KiB.
 - Retain the development fetcher's bounded unencoded complete-response checks,
   16 KiB response headers, 64 KiB metadata/descriptor limits and 256 MiB per-artifact
-  ceiling. Proposed refresh limits are 32 sequential root steps, 16 non-root metadata files
+  ceiling. Refresh limits are 32 sequential root steps, 16 non-root metadata files
   per refresh, 20 seconds per response and 2 minutes total. Reaching a bound fails
   closed; very old clients need a reviewed checkpoint/recovery path, not a bypass.
   The root-step budget is separate from the non-root metadata-file budget.
@@ -158,6 +163,40 @@ Specify and test these production restrictions before enabling network acquisiti
   code for version discovery, extract arbitrary archive paths, evaluate a package
   hook or pass a remote path/command to a privileged tool. Any new package format
   needs a fixed-layout/allowed-hook review and its own acceptance first.
+
+### Controlled GitHub implementation
+
+`GitHubPolicy` pins repository name/ID, protected metadata branch, exact raw/API/CDN
+hosts, API version and a repository-linked CDN path prefix. No production values
+are selected automatically. Caller-authenticated `GitHubAsset` values bind release
+and asset IDs, name, byte length/SHA256 and an exact CDN path. Anonymous API
+preflight checks repository identity and release/asset membership; those replies
+are consistency checks, never authorization of software. Unrelated official JSON
+fields are tolerated; duplicate/aliased identity fields, wrong types, drafts and
+mismatches fail. Mutable tags, `latest`, browser-download URLs and API digests do
+not choose bytes. See the official [release](https://docs.github.com/en/rest/releases/releases#get-a-release)
+and [repository](https://docs.github.com/en/rest/repos/repos#get-a-repository) contracts.
+
+Metadata never redirects. A binary response is either complete 200 or one approved
+HTTPS redirect to the signed exact path on the pinned CDN host. Redirect queries
+are held only in memory; empty/invalid query forms and control characters fail,
+and no token-bearing URL enters errors or persisted locators. The shared existing
+wire checks every DNS answer, rejects special/mixed answers and dials the checked
+IP directly under the original TLS hostname. No proxy, auth, cookie, referer or
+range state is inherited. Refresh counters/deadline are finite; exact artifact
+length/hash must match before bytes are returned. Transport never executes or
+extracts content.
+
+The first installer has a separate version-2 controlled GitHub purpose: the policy
+is inside its independently pinned seed, the locator inside its TUF-signed
+descriptor, and it must equal the TUF-authorized archive identity. Version1 seeds
+remain origin-only and cannot acquire GitHub authority. Controlled Go tests use a
+private factory; ordinary CLI/JSON has no hook or activation flag. Production
+construction uses system roots and public DNS; test CA/resolver/dial injection is
+available only through the separately named controlled constructor. This does
+not authenticate the public initial verifier, fill production provenance/custody
+bindings, or enable an updater. The legacy .invalid/inert release rehearsal and
+publisher ledger remain separate and cannot authorize this transport's software.
 
 The exact metadata URL/branch, repository/release policy and asset-delivery host
 remain UNASSIGNED. Controlled test host mappings must not become production

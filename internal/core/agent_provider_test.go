@@ -24,8 +24,12 @@ func TestProviderCatalogTracksConnectionWithoutEntitlementClaims(t *testing.T) {
 	}
 	for i, id := range []string{"openai", "anthropic", "xai"} {
 		p := v.Catalog.Providers[i]
-		if p.ID != id || len(p.Methods) != 1 || p.Methods[0].ID != "api-key" {
-			t.Fatal("provider methods must describe only implemented API adapters", p)
+		methods := 1
+		if id == "openai" {
+			methods = 2
+		}
+		if p.ID != id || len(p.Methods) != methods || p.Methods[0].ID != "api-key" || (id == "openai" && p.Methods[1].ID != "sign-in") {
+			t.Fatal("provider methods must describe implemented account routes", p)
 		}
 	}
 	if m := v.Catalog.Models[0]; m.Selectable || m.Availability != "disconnected" || m.ID != admittedOpenAIModel {

@@ -1,6 +1,6 @@
-// Package releaseops rehearses release operations with disposable, inert inputs.
-// It is not imported by the application, signer, installer or updater. The exact
-// .invalid hosts below deliberately cannot supply production release transport.
+// Package releaseops contains release rehearsals and a separately constructed
+// GitHub transport. The legacy .invalid/inert rehearsal boundary stays intact;
+// ordinary production GitHub activation remains a distinct held decision.
 package releaseops
 
 import (
@@ -62,6 +62,14 @@ func publicIP(a netip.Addr) bool {
 }
 
 func newTransport(ca []byte, lookup resolver, dial dialer) (*transport, error) {
+	return newHostTransport(ca, []string{apiHost, assetHost, metadataHost}, lookup, dial)
+}
+
+func newHostTransport(ca []byte, hosts []string, lookup resolver, dial dialer) (*transport, error) {
+	allowed := map[string]bool{}
+	for _, host := range hosts {
+		allowed[host] = true
+	}
 	if lookup == nil {
 		lookup = func(c context.Context, h string) ([]netip.Addr, error) {
 			return net.DefaultResolver.LookupNetIP(c, "ip", h)
@@ -80,7 +88,7 @@ func newTransport(ca []byte, lookup resolver, dial dialer) (*transport, error) {
 	w := &http.Transport{Proxy: nil, DisableCompression: true, DisableKeepAlives: true, MaxResponseHeaderBytes: 16 << 10, ResponseHeaderTimeout: 20 * time.Second, TLSHandshakeTimeout: 20 * time.Second, TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
 	w.DialContext = func(c context.Context, network, address string) (net.Conn, error) {
 		h, p, e := net.SplitHostPort(address)
-		if e != nil || p != "443" || h != apiHost && h != assetHost && h != metadataHost {
+		if e != nil || p != "443" || !allowed[h] {
 			return nil, errors.New("fixture dial host refused")
 		}
 		ips, e := lookup(c, h)

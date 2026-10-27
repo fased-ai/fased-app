@@ -63,7 +63,7 @@ func (s *Store) reviewTaskAccess(d agentDocument, c AIConnectionCommand, revisio
 		selected[id] = true
 	}
 	for _, q := range d.AIRequests {
-		if q.ProfileID == c.ProfileID && q.HeldMicrousd > 0 {
+		if q.ProfileID == c.ProfileID && aiHasUsageHold(q) {
 			return a, errors.New("pending or uncertain usage keeps new credential access locked")
 		}
 	}
@@ -99,7 +99,15 @@ func (s *Store) reviewTaskAccess(d agentDocument, c AIConnectionCommand, revisio
 			a.Limits.BudgetMicrousd = l.BudgetMicrousd
 		}
 	}
-	if len(a.Tasks) != len(c.TaskIDs) || a.MaxRequests < 1 || a.MaxRequests > 10 || a.BudgetMicrousd < 1 || a.BudgetMicrousd > 10000000 || a.ExpiresAt <= now {
+	plan := len(a.Tasks) > 0 && a.BudgetMicrousd == 0
+	if plan {
+		for _, task := range d.Tasks {
+			if selected[task.ID] && (task.AI == nil || !planSignInPolicy(task.AI.Policy)) {
+				plan = false
+			}
+		}
+	}
+	if len(a.Tasks) != len(c.TaskIDs) || a.MaxRequests < 1 || a.MaxRequests > 10 || !plan && a.BudgetMicrousd < 1 || a.BudgetMicrousd > 10000000 || a.ExpiresAt <= now {
 		return a, errors.New("selected tasks exceed finite credential allowance")
 	}
 	a.ID = taskAccessDigest(a)
@@ -119,6 +127,9 @@ func (s *Store) changeTaskAccess(ctx context.Context, tx *sql.Tx, c AIConnection
 			s.clearAIConnectionLocked(c.Ref)
 		}
 		return s.aiConnectionLocked(c.Ref)
+	}
+	if v.PlanPaused {
+		return v, errors.New("plan access is paused; unlock explicitly and review new task access")
 	}
 	d, revision, e := readAgents(ctx, tx)
 	if e != nil {

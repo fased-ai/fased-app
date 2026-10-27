@@ -51,6 +51,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	access := f.String("access", "local", "local, ssh or tailscale private access")
 	vps := f.Bool("vps", false, "require always-on Linux VPS readiness")
 	packageDir := f.String("bundle", "", "verify and install this platform package inventory")
+	packageSHA256 := f.String("bundle-sha256", "", "independently obtained SHA-256 of exact bundle.json bytes")
 	installRuntime := f.Bool("install-runtime", false, "authorize Ubuntu 24.04's OS package manager to install missing desktop runtime libraries")
 	prepareHost := f.Bool("prepare-host", false, "authorize Ubuntu OS prerequisites and the verified restrictive sandbox policy")
 	if err = f.Parse(remaining); err != nil {
@@ -58,6 +59,9 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	}
 	if f.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
+	}
+	if *packageSHA256 != "" && (command != "install" || *packageDir == "") {
+		return errors.New("--bundle-sha256 requires install --bundle")
 	}
 	paths = localinstall.Paths{Root: *root, Data: *data}
 	budget := 30 * time.Second
@@ -100,14 +104,27 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 					return errors.New("choose tailscale or ssh")
 				}
 			}
-			answer, e := installationAnswer(r, errOut, "Start Fased at login (required for Remote)? [y/N]: ")
+			autostartChoice, e := installationAutostart(r, errOut, *vps)
 			if e != nil {
 				return e
 			}
-			if answer != "" && !strings.EqualFold(answer, "y") && !strings.EqualFold(answer, "n") {
-				return errors.New("choose y or n")
+			*autostart = autostartChoice
+		}
+		engine, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		var inventory bundle.Manifest
+		if *packageDir != "" {
+			var canonical string
+			inventory, canonical, err = verifiedInstallationBundle(*packageDir, engine, *desktop, *packageSHA256)
+			if err != nil {
+				return err
 			}
-			*autostart = strings.EqualFold(answer, "y")
+			*packageDir = canonical
+			if inventory.Desktop {
+				*desktop = filepath.Join(canonical, localinstall.DesktopName())
+			}
 		}
 		if *vps {
 			if *access != "ssh" && *access != "tailscale" {
@@ -118,24 +135,6 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			}
 			if err = checkLinger(ctx); err != nil {
 				return err
-			}
-		}
-		engine, err := os.Executable()
-		if err != nil {
-			return err
-		}
-		if *packageDir != "" {
-			inventory, e := bundle.Verify(*packageDir)
-			if e != nil {
-				return e
-			}
-			expected, _ := filepath.Abs(filepath.Join(*packageDir, localinstall.EngineName()))
-			actual, _ := filepath.EvalSymlinks(engine)
-			if actual != expected {
-				return errors.New("run the core from the selected verified package")
-			}
-			if inventory.Desktop {
-				*desktop = filepath.Join(*packageDir, localinstall.DesktopName())
 			}
 		}
 		plan, err := privateaccess.System().Plan(ctx, *access, *listen)
@@ -159,7 +158,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		if err = desktopRuntime(ctx, *desktop, *packageDir, *data, *installRuntime, *prepareHost, os.Stdin, errOut); err != nil {
 			return err
 		}
-		m, err := localinstall.Install(ctx, paths, localinstall.Options{Engine: engine, Desktop: *desktop, Listen: *listen, PublicOrigin: *origin, Start: *start, Autostart: *autostart, Location: installLocation(*vps)})
+		m, err := localinstall.Install(ctx, paths, localinstall.Options{Engine: engine, EngineSHA256: inventory.Files[localinstall.EngineName()].SHA256, Desktop: *desktop, DesktopSHA256: inventory.Files[localinstall.DesktopName()].SHA256, Listen: *listen, PublicOrigin: *origin, Start: *start, Autostart: *autostart, Location: installLocation(*vps)})
 		if err != nil {
 			return err
 		}
@@ -259,6 +258,45 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	return errors.New("unknown installation command")
 }
 
+// Bind installation to the running core and the exact verified inventory.
+// An optional external digest pins bundle.json, not a publisher/release channel.
+func verifiedInstallationBundle(directory, engine, desktop, pin string) (bundle.Manifest, string, error) {
+	var empty bundle.Manifest
+	directory, err := filepath.Abs(directory)
+	if err != nil {
+		return empty, "", err
+	}
+	directory, err = filepath.EvalSymlinks(directory)
+	if err != nil {
+		return empty, "", err
+	}
+	m, err := bundle.VerifyPinned(directory, pin)
+	if err != nil {
+		return empty, "", err
+	}
+	if m.Version != core.Version {
+		return empty, "", errors.New("bundle version differs from the running core")
+	}
+	actual, err := filepath.EvalSymlinks(engine)
+	if err != nil {
+		return empty, "", err
+	}
+	actual, err = filepath.Abs(actual)
+	if err != nil || actual != filepath.Join(directory, localinstall.EngineName()) {
+		return empty, "", errors.New("run the core from the selected verified package")
+	}
+	if desktop != "" {
+		actual, err = filepath.EvalSymlinks(desktop)
+		if err == nil {
+			actual, err = filepath.Abs(actual)
+		}
+		if !m.Desktop || err != nil || actual != filepath.Join(directory, localinstall.DesktopName()) {
+			return empty, "", errors.New("desktop binary must belong to the selected verified package")
+		}
+	}
+	return m, directory, nil
+}
+
 // Keep the terminal handoff on the installed engine and its existing state.
 // Access instructions are produced by the same planner that configured it.
 func installationHandoff(out io.Writer, m localinstall.Manifest, plan privateaccess.Plan, readyURL string) {
@@ -353,5 +391,27 @@ func installationChoice(r *bufio.Reader, out io.Writer) (string, error) {
 			return "connect", nil
 		}
 		fmt.Fprintln(out, "Choose local, remote or connect.")
+	}
+}
+
+func installationAutostart(r *bufio.Reader, out io.Writer, remote bool) (bool, error) {
+	prompt := "Start Fased at login? [y/N]: "
+	if remote {
+		prompt = "Keep Fased running after logout and reboot? [Y/n]: "
+	}
+	for {
+		answer, err := installationAnswer(r, out, prompt)
+		if err != nil {
+			return false, err
+		}
+		switch strings.ToLower(answer) {
+		case "":
+			return remote, nil
+		case "y", "yes":
+			return true, nil
+		case "n", "no":
+			return false, nil
+		}
+		fmt.Fprintln(out, "Choose yes or no.")
 	}
 }

@@ -101,7 +101,7 @@ func (s *Store) refreshProviderModels(ctx context.Context, ref string, rt http.R
 	// the credential mutex. A later completion cannot overwrite a newer refresh.
 	s.provider.mu.Lock()
 	v, err := s.aiConnectionLocked(ref)
-	if err != nil || v.Ref != ref || v.Locked {
+	if err != nil || v.Ref != ref || v.Locked || v.AuthMethod == "sign-in" && !v.PlanUse {
 		s.provider.mu.Unlock()
 		return v, errors.New("unlock this account before refreshing models")
 	}
@@ -116,7 +116,7 @@ func (s *Store) refreshProviderModels(ctx context.Context, ref string, rt http.R
 	defer cancel()
 	provider := v.Provider
 	client := http.Client{Transport: authenticatedAITransport{store: s, ref: ref, next: rt, modelsOnly: true}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("provider redirect refused") }}
-	result = fetchProviderModelList(ctx, &client, provider, s.now())
+	result = fetchProviderModelList(ctx, &client, provider, s.now(), v.AuthMethod)
 
 	if ctx.Err() != nil {
 		result = modelDiscovery{State: "failed"}
@@ -144,7 +144,7 @@ func (s *Store) refreshProviderModels(ctx context.Context, ref string, rt http.R
 	return s.aiConnectionLocked(ref)
 }
 
-func fetchProviderModelList(ctx context.Context, client *http.Client, provider string, now time.Time) modelDiscovery {
+func fetchProviderModelList(ctx context.Context, client *http.Client, provider string, now time.Time, method string) modelDiscovery {
 	failed := modelDiscovery{State: "failed"}
 	path := "/v1/models"
 	if provider == "anthropic" {
@@ -167,7 +167,9 @@ func fetchProviderModelList(ctx context.Context, client *http.Client, provider s
 		}
 		var records []discoveredModel
 		cursor, object := "", "list"
-		if provider == "anthropic" {
+		if method == "sign-in" {
+			records, err = parseProviderSignInModels(raw, now.Unix())
+		} else if provider == "anthropic" {
 			records, cursor, err = parseAnthropicModelPage(raw)
 		} else {
 			err = parseProviderModelList(provider, raw, &object, &records)
@@ -213,6 +215,10 @@ func discoveredProviderCatalog(v AIConnectionView, d modelDiscovery, now int64) 
 	}
 	for _, entry := range registry.Models {
 		m := ProviderModel{ID: entry.ID, Name: entry.Name, Provider: provider, Method: "api-key", ConnectionRef: v.Ref, Recommended: true, Tier: entry.Tier, Policy: chatModelPolicy(entry.ID)}
+		if v.AuthMethod == "sign-in" {
+			m.Method = "sign-in"
+			m.Policy = chatModelPolicyForMethod(entry.ID, "sign-in")
+		}
 		record, listed := records[entry.ID]
 		superseded := false
 		for _, r := range records {
@@ -221,6 +227,8 @@ func discoveredProviderCatalog(v AIConnectionView, d modelDiscovery, now int64) 
 			}
 		}
 		switch {
+		case v.AuthMethod == "sign-in" && !v.PlanUse && !v.Locked:
+			m.Availability = "plan-access-required"
 		case now < registry.ReviewedAt || now >= registry.ExpiresAt:
 			m.Availability = "expired"
 		case v.Ref == "":

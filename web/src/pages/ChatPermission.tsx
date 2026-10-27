@@ -1,5 +1,6 @@
 import { Dialog } from "../components/shared";
 import type { ChatPermission, OpenAIModelPolicy } from "../agents";
+import { isPlanPolicy } from "../agents";
 import { useUI } from "../ui-preferences";
 
 export function ChatPermissionReview({
@@ -18,6 +19,10 @@ export function ChatPermissionReview({
   onClose: () => void;
 }) {
   const { t } = useUI();
+  const planUsage =
+    isPlanPolicy(policy) &&
+    p.budgetMicrousd === 0 &&
+    p.limits.budgetMicrousd === 0;
   return (
     <Dialog title={t("Allow replies")} onClose={onClose}>
       <div className="setup-body">
@@ -54,10 +59,27 @@ export function ChatPermissionReview({
               })}
             </dd>
           </div>
-          <div>
-            <dt>{t("Maximum cost")}</dt>
-            <dd>${(p.budgetMicrousd / 1_000_000).toFixed(2)}</dd>
-          </div>
+          {planUsage ? (
+            <>
+              <div>
+                <dt>{t("Usage")}</dt>
+                <dd>{t("ChatGPT")}</dd>
+              </div>
+              <div>
+                <dt>{t("App limits")}</dt>
+                <dd>
+                  {p.limits.maxInputTokens} / {p.limits.maxOutputTokens}{" "}
+                  {t("tokens")} · {p.limits.deadlineSeconds}
+                  {t("s")}
+                </dd>
+              </div>
+            </>
+          ) : (
+            <div>
+              <dt>{t("Maximum cost")}</dt>
+              <dd>${(p.budgetMicrousd / 1_000_000).toFixed(2)}</dd>
+            </div>
+          )}
         </dl>
         <details>
           <summary>{t("Limits")}</summary>

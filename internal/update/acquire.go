@@ -45,6 +45,20 @@ type AcquisitionReceipt struct {
 	Plan            Plan   `json:"plan"`
 }
 
+// DevelopmentAcquisitionURL shares the canonical, credential-free HTTPS policy
+// with the separately gated initial installer. It grants no release authority.
+func DevelopmentAcquisitionURL(raw string) (*url.URL, error) { return acquisitionURL(raw) }
+
+// DevelopmentAcquisitionClient retains anonymous/no-proxy/no-redirect transport;
+// an explicit test CA is usable only by callers' development admission paths.
+func DevelopmentAcquisitionClient(ca []byte) (*http.Client, *http.Transport, error) {
+	return acquisitionClient(ca)
+}
+
+func DevelopmentAcquisitionResponse(ctx context.Context, client *http.Client, address string, limit int64) (*http.Response, error) {
+	return acquisitionResponse(ctx, client, address, limit)
+}
+
 func acquisitionURL(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.Opaque != "" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawFragment != "" || u.RawPath != "" || u.String() != raw {

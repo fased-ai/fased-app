@@ -19,6 +19,44 @@ export type OpenAIModelPolicy = {
   tariffSource: string;
   tokenSource: string;
 };
+
+// Only the reviewed plan policy has non-monetary limits. Retained v1 fixture
+// requests and API-key policies keep their original accounting presentation.
+export function isPlanPolicy(policy?: OpenAIModelPolicy) {
+  return policy?.wireVersion === "openai-signin-v2";
+}
+
+export function planFailureDetails(failure: string) {
+  const prefix = "OpenAI plan request stopped. Diagnostics: ";
+  if (!failure.startsWith(prefix)) return null;
+  const details = failure.slice(prefix.length);
+  let status = 0;
+  let code = "";
+  try {
+    const value = JSON.parse(details);
+    if (Number.isInteger(value?.status)) status = value.status;
+    if (typeof value?.code === "string") code = value.code.slice(0, 128);
+  } catch {
+    // Retain diagnostics for inspection; never expose them as the status label.
+  }
+  const summary =
+    status === 429 || /rate_limit|quota|usage_limit/.test(code)
+      ? "ChatGPT limit reached"
+      : status === 401 || /authentication|invalid_token/.test(code)
+        ? "Reconnect required"
+        : status === 403 || /scope|permission|access_denied/.test(code)
+          ? "Plan access unavailable"
+          : code === "context_length_exceeded"
+            ? "Input too long"
+            : code === "model_not_found"
+              ? "Model unavailable"
+              : status === 408 || status === 504 || /timeout/.test(code)
+                ? "Request timed out"
+                : status >= 500
+                  ? "ChatGPT unavailable"
+                  : "ChatGPT request failed";
+  return { summary, details };
+}
 export type OpenAIAdmission = {
   state: string;
   wireSha256: string;
@@ -669,6 +707,8 @@ export function useAgents(core: ReturnType<typeof useCore>) {
         revision: command.revision ?? current.current.revision,
       });
       if (epoch === generation.current) {
+        if (command.action === "profile-create")
+          requestedProfile.current = v.profileId;
         accept(v);
         generation.current++;
       }

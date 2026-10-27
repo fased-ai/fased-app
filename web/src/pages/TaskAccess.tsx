@@ -169,7 +169,7 @@ export function TaskAccessSettings({
           </label>
           <button
             className="secondary"
-            disabled={busy || ids.length === 0}
+            disabled={busy || connection.planPaused || ids.length === 0}
             onClick={() => void change("task-access-review")}
           >
             {t("Review access")}
@@ -189,7 +189,10 @@ export function TaskAccessSettings({
               count: review.maxRequests,
               minutes: Math.floor((review.expiresAt - review.createdAt) / 60),
             })}{" "}
-            · ${(review.budgetMicrousd / 1_000_000).toFixed(2)}
+            ·{" "}
+            {connection.authMethod === "sign-in" && review.budgetMicrousd === 0
+              ? t("ChatGPT")
+              : `$${(review.budgetMicrousd / 1_000_000).toFixed(2)}`}
           </p>
           <p>
             {t(
@@ -213,7 +216,7 @@ export function TaskAccessSettings({
           <div className="agent-actions">
             <button
               className="primary"
-              disabled={busy || passphrase.length < 12}
+              disabled={busy || connection.planPaused || passphrase.length < 12}
             >
               {t("Allow task access")}
             </button>

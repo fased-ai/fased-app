@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
 )
 
@@ -217,8 +218,7 @@ func (m Manager) Enable(ctx context.Context, root string, p Plan, instanceID str
 		return errors.New("private HTTPS could not be verified; retain SSH/console access and retry this command")
 	}
 	defer resp.Body.Close()
-	var health core.Health
-	if resp.StatusCode != 200 || json.NewDecoder(http.MaxBytesReader(nil, resp.Body, 32*1024)).Decode(&health) != nil || health.InstanceID != instanceID || health.APIVersion != core.APIVersion {
+	if _, err = connection.ReadHealth(resp, instanceID); err != nil {
 		return errors.New("private HTTPS reached a different or incompatible app; route remains recorded for recovery")
 	}
 	r.Phase = "ready"

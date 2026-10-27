@@ -1,5 +1,6 @@
 import { useUI } from "../ui-preferences";
 import type { AgentAIRequest, AgentView } from "../agents";
+import { isPlanPolicy, planFailureDetails } from "../agents";
 import { useWorkspace } from "../workspace";
 import { ResearchTurnReview } from "./ResearchTurnReview";
 import { ChatMemoryReview } from "./ChatMemoryReview";
@@ -28,6 +29,9 @@ export function ChatReply({
 }) {
   const { t: uiText } = useUI();
   const { agents } = useWorkspace();
+  const planUsage = isPlanPolicy(q.policy);
+  const reportedUsage = q.costBasis === "chatgpt-plan-reported-usage";
+  const planFailure = planUsage ? planFailureDetails(q.failure) : null;
   return (
     <article className="ai-request" key={q.id}>
       <div className="chat-prompt">
@@ -58,8 +62,14 @@ export function ChatReply({
       >
         <strong>{uiText(q.state)}</strong>
         <small>
-          {uiText("Demo · ")}
-          {money(q.spentMicrousd)}
+          {planUsage ? (
+            uiText("ChatGPT")
+          ) : (
+            <>
+              {uiText("Demo · ")}
+              {money(q.spentMicrousd)}
+            </>
+          )}
         </small>
       </div>
       {q.state === "prepared" && (
@@ -69,28 +79,64 @@ export function ChatReply({
           {uiText(" input / ")}
           {q.limits.maxOutputTokens} {uiText("output tokens · ")}
           {q.limits.deadlineSeconds}
-          {uiText("s ·")} {money(q.limits.budgetMicrousd)}
-          {uiText(" fixture budget")}
+          {uiText("s")}
+          {!planUsage && (
+            <>
+              {" · "}
+              {money(q.limits.budgetMicrousd)}
+              {uiText(" fixture budget")}
+            </>
+          )}
         </p>
       )}
       <details>
         <summary>{uiText("Details")}</summary>
         <AIAdmissionReview policy={q.policy} admission={q.admission} />
+        {planFailure && (
+          <details>
+            <summary>{uiText("Provider response")}</summary>
+            <pre>{planFailure.details}</pre>
+          </details>
+        )}
         <p>
           {uiText("Model: ")}
           {q.model}
-          {uiText(" · Held ")}
-          {money(q.heldMicrousd)}
-          {uiText(" · Spent")} {money(q.spentMicrousd)}
-          {uiText(" (fixture only)")}
+          {!planUsage && (
+            <>
+              {uiText(" · Held ")}
+              {money(q.heldMicrousd)}
+              {uiText(" · Spent")} {money(q.spentMicrousd)}
+              {uiText(" (fixture only)")}
+            </>
+          )}
         </p>
+        {planUsage &&
+          (reportedUsage ? (
+            <dl className="review-list">
+              <div>
+                <dt>{uiText("Input tokens")}</dt>
+                <dd>{q.inputTokens}</dd>
+              </div>
+              <div>
+                <dt>{uiText("Output tokens")}</dt>
+                <dd>{q.outputTokens}</dd>
+              </div>
+            </dl>
+          ) : q.state === "unknown" ? (
+            <p>{uiText("Usage unavailable")}</p>
+          ) : null)}
         <p>
           {uiText("Limits: ")}
           {q.limits.maxInputTokens}
           {uiText(" input / ")}
           {q.limits.maxOutputTokens} {uiText("output tokens · ")}
           {q.limits.deadlineSeconds}
-          {uiText("s · Budget")} {money(q.limits.budgetMicrousd)}
+          {uiText("s")}
+          {!planUsage && (
+            <>
+              {uiText(" · Budget")} {money(q.limits.budgetMicrousd)}
+            </>
+          )}
           {uiText(" · No tools")}
         </p>
 
@@ -120,7 +166,11 @@ export function ChatReply({
           {q.digest}
         </p>
       </details>
-      {q.failure && <p role="status">{q.failure}</p>}
+      {q.failure && (
+        <p role="status">
+          {planFailure ? uiText(planFailure.summary) : q.failure}
+        </p>
+      )}
       {q.state === "prepared" && !q.researchTurnId && (
         <>
           <label className="ai-consent">
@@ -129,7 +179,11 @@ export function ChatReply({
               checked={consent === q.digest}
               onChange={(e) => setConsent(e.target.checked ? q.digest : "")}
             />
-            {uiText("I reviewed this context and these fixture limits")}
+            {uiText(
+              planUsage
+                ? "I reviewed this context and these limits"
+                : "I reviewed this context and these fixture limits",
+            )}
           </label>
           <button
             className="primary"
@@ -150,7 +204,7 @@ export function ChatReply({
                 });
             }}
           >
-            {uiText("Run development fixture")}
+            {uiText(planUsage ? "Run" : "Run development fixture")}
           </button>
           {!(view.aiExecutionAvailable ?? view.aiFixtureAvailable) && (
             <p className="subtle">

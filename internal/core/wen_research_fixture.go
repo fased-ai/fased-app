@@ -108,7 +108,7 @@ func (s *Store) StartWENResearchAI(ctx context.Context, c WENResearchAIStartInpu
 	}
 
 	for _, q := range d.AIRequests {
-		if q.ProfileID == c.Profile && q.HeldMicrousd > 0 {
+		if q.ProfileID == c.Profile && aiHasUsageHold(q) {
 			return out, errors.New("profile has a pending or uncertain request; no additional call allowed")
 		}
 	}

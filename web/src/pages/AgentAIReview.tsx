@@ -29,6 +29,7 @@ import type {
   AIEvidenceSelection,
   AgentEvidenceView,
 } from "../agents";
+import { isPlanPolicy } from "../agents";
 import { useWorkspace } from "../workspace";
 
 export function AgentAIReview({
@@ -102,7 +103,7 @@ function AgentAIForm({
       ? {
           ref: access.ref,
           provider: access.provider,
-          locked: access.locked,
+          locked: access.locked || !!access.planPaused,
           model: access.catalog?.models.find(
             (m) =>
               m.selectable &&
@@ -139,12 +140,18 @@ function AgentAIForm({
   const selectedAccess =
     accounts?.connections?.find((a) => a.ref === connectionRef) ??
     (accounts?.ref === connectionRef ? accounts : null);
+  const selectedPolicy = selectedAccess?.catalog?.models.find(
+    (item) => item.id === model,
+  )?.policy;
+  const planUsage = isPlanPolicy(selectedPolicy);
+  const requestBudget = planUsage ? 0 : budget;
   const replyReady =
     overridden || draftSource
       ? (!connectionRef && !model) ||
         (!!connectionRef &&
           selectedAccess?.ref === connectionRef &&
           !selectedAccess.locked &&
+          !selectedAccess.planPaused &&
           ((!model && selectedAccess.testOnly) ||
             selectedAccess.catalog?.models.some(
               (m) =>
@@ -157,13 +164,12 @@ function AgentAIForm({
   const budgetModel = useRef("");
   useEffect(() => {
     if (draftSource) return;
-    const identity = connectionRef + ":" + model;
+    const identity = connectionRef + ":" + model + ":" + selectedPolicy?.id;
     if (budgetModel.current === identity) return;
-    const p = selectedAccess?.catalog?.models.find(
-      (m) => m.id === model,
-    )?.policy;
+    const p = selectedPolicy;
     if (!p) return;
     budgetModel.current = identity;
+    if (isPlanPolicy(p)) return;
     const ceiling = Math.ceil(
       (input * p.inputMicrousdPerMillion +
         Math.max(output, p.billableOutputTokens || 0) *
@@ -173,7 +179,15 @@ function AgentAIForm({
     setBudget((b) =>
       Math.min(p.maxRequestBudgetMicrousd || 1000000, Math.max(b, ceiling)),
     );
-  }, [model, connectionRef, draftSource, input, output, accounts]);
+  }, [
+    model,
+    connectionRef,
+    draftSource,
+    input,
+    output,
+    accounts,
+    selectedPolicy,
+  ]);
 
   const [legacyDraft, setLegacyDraft] = useState(false);
   const [draftBusy, setDraftBusy] = useState(false);
@@ -291,7 +305,7 @@ function AgentAIForm({
       p.limits.maxInputTokens === input &&
       p.limits.maxOutputTokens === output &&
       p.limits.deadlineSeconds === deadline &&
-      p.limits.budgetMicrousd === budget
+      p.limits.budgetMicrousd === requestBudget
     );
   }
   useEffect(() => {
@@ -303,7 +317,7 @@ function AgentAIForm({
     input,
     output,
     deadline,
-    budget,
+    requestBudget,
     newsSourceId,
     evidenceSelection,
     reviewEach,
@@ -395,7 +409,11 @@ function AgentAIForm({
         <ChatPermissionReview
           permission={permissionReview}
           providerName={
-            permissionReview.connectionRef ? permissionProvider : tr("Demo")
+            isPlanPolicy(permissionPolicy)
+              ? tr("ChatGPT")
+              : permissionReview.connectionRef
+                ? permissionProvider
+                : tr("Demo")
           }
           policy={permissionPolicy}
           busy={agents.busy || draftBusy}
@@ -541,7 +559,7 @@ function AgentAIForm({
                 const selected =
                   current.connections?.find((a) => a.ref === connectionRef) ??
                   (current.ref === connectionRef ? current : null);
-                if (!selected || selected.locked)
+                if (!selected || selected.locked || selected.planPaused)
                   throw new Error(tr("Provider unavailable"));
               } catch (err) {
                 if (epoch === generation.current)
@@ -587,11 +605,13 @@ function AgentAIForm({
                         maxInputTokens: input,
                         maxOutputTokens: output,
                         deadlineSeconds: deadline,
-                        budgetMicrousd: budget,
+                        budgetMicrousd: requestBudget,
                       },
                       maxRuns: 20,
                       authorizationSeconds: 900,
-                      totalBudgetMicrousd: Math.max(600000, budget),
+                      totalBudgetMicrousd: planUsage
+                        ? 0
+                        : Math.max(600000, budget),
                     },
                   );
                   if (epoch === generation.current && reviewed.chatReview) {
@@ -637,13 +657,13 @@ function AgentAIForm({
                     maxInputTokens: input,
                     maxOutputTokens: output,
                     deadlineSeconds: deadline,
-                    budgetMicrousd: budget,
+                    budgetMicrousd: requestBudget,
                   },
                   bounds: {
                     maxModelAttempts: modelAttempts,
                     maxToolAttempts: toolAttempts,
                     wallSeconds: turnSeconds,
-                    budgetMicrousd: turnBudget,
+                    budgetMicrousd: planUsage ? 0 : turnBudget,
                   },
                 })
                 .then(() => {
@@ -687,7 +707,7 @@ function AgentAIForm({
                   maxInputTokens: input,
                   maxOutputTokens: output,
                   deadlineSeconds: deadline,
-                  budgetMicrousd: budget,
+                  budgetMicrousd: requestBudget,
                 },
               })
               .then((ok) => {
@@ -1013,24 +1033,29 @@ function AgentAIForm({
                     onChange={(e) => setDeadline(e.target.valueAsNumber)}
                   />
                 </label>
-                <label>
-                  {uiText("Spending limit ($)")}
-                  <input
-                    type="number"
-                    min={0.000001}
-                    step="0.000001"
-                    max={
-                      (selectedAccess?.catalog?.models.find(
-                        (m) => m.id === model,
-                      )?.policy?.maxRequestBudgetMicrousd || 1000000) / 1000000
-                    }
-                    required
-                    value={budget / 1_000_000}
-                    onChange={(e) =>
-                      setBudget(Math.round(e.target.valueAsNumber * 1_000_000))
-                    }
-                  />
-                </label>
+                {!planUsage && (
+                  <label>
+                    {uiText("Spending limit ($)")}
+                    <input
+                      type="number"
+                      min={0.000001}
+                      step="0.000001"
+                      max={
+                        (selectedAccess?.catalog?.models.find(
+                          (m) => m.id === model,
+                        )?.policy?.maxRequestBudgetMicrousd || 1000000) /
+                        1000000
+                      }
+                      required
+                      value={budget / 1_000_000}
+                      onChange={(e) =>
+                        setBudget(
+                          Math.round(e.target.valueAsNumber * 1_000_000),
+                        )
+                      }
+                    />
+                  </label>
+                )}
               </div>
             </details>
           </div>
@@ -1085,17 +1110,19 @@ function AgentAIForm({
                   onChange={(e) => setTurnSeconds(e.target.valueAsNumber)}
                 />
               </label>
-              <label>
-                {uiText("Turn budget (micro USD)")}
-                <input
-                  type="number"
-                  min={1}
-                  max={3000000}
-                  required
-                  value={turnBudget}
-                  onChange={(e) => setTurnBudget(e.target.valueAsNumber)}
-                />
-              </label>
+              {!planUsage && (
+                <label>
+                  {uiText("Turn budget (micro USD)")}
+                  <input
+                    type="number"
+                    min={1}
+                    max={3000000}
+                    required
+                    value={turnBudget}
+                    onChange={(e) => setTurnBudget(e.target.valueAsNumber)}
+                  />
+                </label>
+              )}
             </fieldset>
           )}
           <div className="composer-actions">
