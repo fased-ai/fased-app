@@ -17,6 +17,7 @@ export async function currentStorageFixture(archivedRoot) {
     "provider_xai.json",
     "provider_models.json",
     "openai_transport.go",
+    "openai_pilot.go",
     "provider_admission.go",
     "account_rpc_storage.go",
     "agent_reminders.go",
@@ -119,7 +120,7 @@ export async function currentStorageFixture(archivedRoot) {
       .replace('"sync"', '"sync"\n"sync/atomic"')
       .replace(
         "type Store struct {",
-        "type Store struct {\n\tproviderFixture bool\n\tchatEpoch atomic.Uint64\n\tprogressMu sync.Mutex\n\taiProgress map[string]string\n\tsessionFixture bool\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState\n\tresearchRead func(context.Context, researchFactResult) (json.RawMessage, error)",
+        "type Store struct {\n\tproviderFixture bool\n\tchatEpoch atomic.Uint64\n\tprogressMu sync.Mutex\n\taiProgress map[string]string\n\tsessionFixture bool\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState\n\tpilot openAIPilotState\n\tresearchRead func(context.Context, researchFactResult) (json.RawMessage, error)",
       )
       .replace(
         marker,
