@@ -4,8 +4,13 @@ import type { OpenAIModelPolicy, OpenAIAdmission } from "../agents";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useCore } from "../core";
 import { TaskAccessSettings, type TaskAccessAllowance } from "./TaskAccess";
+import { OpenAIPilotSettings, type PilotAllowance } from "./OpenAIPilot";
 
 export type Connection = {
+  pilotAvailable?: boolean;
+  pilot?: PilotAllowance;
+  pilotReview?: PilotAllowance;
+  pilotState?: string;
   provider?: string;
   name?: string;
   connections?: Connection[];
@@ -300,6 +305,7 @@ export function AIConnectionSettings() {
         {view?.catalog?.state === "failed" && (
           <p role="alert">{uiText("Models unavailable")}</p>
         )}
+        {view?.ref && <OpenAIPilotSettings connection={view} />}
         {view?.ref && (
           <TaskAccessSettings
             key={`${view.ref}:${core.instanceId}`}

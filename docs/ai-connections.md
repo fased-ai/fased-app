@@ -1,5 +1,37 @@
 # Provider connections
 
+## Scoped OpenAI pilot gate
+
+Ordinary builds remain closed. No setting, environment variable, CLI flag or
+provider key enables this pilot. Its target is unset in every runtime constructor;
+only controlled tests set an instance/account/agent/current-model target. Live
+activation requires a separate reviewed patch and explicit owner authority.
+
+For that scoped path, the existing authenticated `ai/connection` API and
+`ai-connection --request-stdin` accept `pilot-review`, `pilot-allow` and
+`pilot-revoke`. Review binds the instance, boot, immutable account, agent,
+current model/tariff, credential epoch and workspace revision. Allow requires the
+exact digest and vault passphrase. Review/revoke carry no secret. The compact
+**Pilot** section appears in Providers only when the core reports this scope.
+
+The fixed allowance lasts 15 minutes: four attempts, split into three Chat
+replies and one separately reviewed one-run task; $0.50 total, $0.25 per lane,
+$0.10 per request, at most 2,000 input / 256 output tokens and five seconds.
+Existing Chat permission and task credential access are still required. Only
+synthetic local inputs are in scope; news/research and financial operations are
+excluded. One Models listing and one ordered model/count/create sequence per
+attempt are permitted, with no retry or fallback. Allocation is conservative:
+an attempted request never replenishes its pilot reservation, even when verified
+usage is lower. This is an app admission ceiling, not a provider invoice cap.
+
+Stop, revocation, lock, sign-out, expiry and clock rollback cannot reset attempts
+or allocated cost. Proven unsent queued work releases its journal hold;
+dispatched/unknown usage retains its durable hold. The allowance cannot be
+rearmed in the same boot. Restart restores no pilot permission or credential
+unlock and never replays requests; history, drafts, results and memory remain.
+
+## Current ordinary build
+
 This build accepts **disposable `fased-test-` keys only**, never real provider credentials. Normal and managed cores cannot execute provider calls. A standalone `serve --ai-fixture` core can authenticate a bound test connection to its compiled in-process fixture. The shared worker now has a fixed-origin HTTPS transport for the official OpenAI, Anthropic and xAI model/count/generation paths, but its production dispatch gate remains closed. Tests exercise that same transport with a loopback TLS dialer defined only in Go test files; no endpoint/CA override, real model call, subscription, wallet or public-update authority is exposed in the application.
 
 Open **Providers** from the toolbar or Agents settings. Choose **Add provider**, select OpenAI, Anthropic or xAI, name the account, and enter its disposable key and vault passphrase. Up to eight accounts have independent encryption, unlocks and task access. Saving or unlocking discovers models for that exact account; the refresh icon repeats discovery. Agent settings choose the account and model; Chat and Tasks inherit them, with explicit overrides. Supported official sign-in adapters will use the same connection/model flow; none is shipped in this build.

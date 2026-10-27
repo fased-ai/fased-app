@@ -103,6 +103,9 @@ func (s *Store) reviewTaskAccess(d agentDocument, c AIConnectionCommand, revisio
 		return a, errors.New("selected tasks exceed finite credential allowance")
 	}
 	a.ID = taskAccessDigest(a)
+	if !s.pilotGrantAllowedLocked(a.ConnectionRef, a.ProfileID, a.Model, a.ExpiresAt, a.MaxRequests, a.BudgetMicrousd, a.Limits, true) {
+		return a, errors.New("task access exceeds pilot allowance")
+	}
 	return a, nil
 }
 func (s *Store) changeTaskAccess(ctx context.Context, tx *sql.Tx, c AIConnectionCommand, v AIConnectionView) (AIConnectionView, error) {
@@ -196,6 +199,9 @@ func (s *Store) aiRequestConnectionValid(q AgentAIRequest) bool {
 	state := s.credentialLocked(q.ConnectionRef)
 	v, e := s.aiConnectionLocked(q.ConnectionRef)
 	if e != nil || v.Ref != q.ConnectionRef {
+		return false
+	}
+	if !s.pilotRequestLocked(q, q.pilotID != "") {
 		return false
 	}
 	if q.TaskID != "" {

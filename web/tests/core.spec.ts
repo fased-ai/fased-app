@@ -12073,3 +12073,137 @@ test("shared Add Provider binds native accounts and latest models across Chat an
     path: `.evidence/provider-adapters/native-task-${isMobile ? "mobile" : "desktop"}.png`,
   });
 });
+
+test("scoped pilot controls keep review allow and revoke exact while ordinary core stays closed (UI fixture)", async ({
+  page,
+  isMobile,
+}) => {
+  await stop();
+  await start(true);
+  await page.goto(url + "/#agents/settings");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const passphrase = "disposable-pilot-browser-password";
+  const account = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "save",
+    name: "Pilot fixture",
+    key: "fased-test-pilot-browser-key",
+    passphrase,
+  });
+  const before = await readFile(join(dir, "ai-credentials.json"));
+  await page
+    .getByRole("region", { name: "Agent settings", exact: true })
+    .getByRole("button", { name: "Providers", exact: true })
+    .click();
+  const editor = page.getByRole("dialog", { name: "Providers", exact: true });
+  await expect(editor.getByText("Pilot", { exact: true })).toHaveCount(0);
+  let permit: any;
+  let state = "";
+  const commands: any[] = [];
+  await page.route("**/api/v1/ai/connection", async (route) => {
+    const decorate = (value: any): any => ({
+      ...value,
+      ...(value.ref === account.ref
+        ? {
+            pilotAvailable: true,
+            pilot: state ? permit : undefined,
+            pilotState: state || undefined,
+          }
+        : {}),
+      ...(value.connections
+        ? { connections: value.connections.map(decorate) }
+        : {}),
+    });
+    if (route.request().method() === "GET") {
+      const response = await route.fetch();
+      return route.fulfill({ response, json: decorate(await response.json()) });
+    }
+    const command = route.request().postDataJSON();
+    if (!command.action.startsWith("pilot-")) return route.continue();
+    commands.push(command);
+    if (command.action === "pilot-review") {
+      const now = Math.floor(Date.now() / 1000);
+      permit = {
+        id: "fixture-reviewed-pilot",
+        instanceId: "fixture-instance",
+        bootId: "fixture-boot",
+        connectionRef: account.ref,
+        connectionEpoch: 1,
+        accessEpoch: 0,
+        profileId: command.profileId,
+        model: "gpt-6.1-terra",
+        policyId: "fixture-current-policy",
+        revision: command.revision,
+        createdAt: now,
+        expiresAt: now + 900,
+        maxRequests: 4,
+        budgetMicrousd: 500000,
+        laneBudgetMicrousd: 250000,
+        limits: {
+          maxInputTokens: 2000,
+          maxOutputTokens: 256,
+          deadlineSeconds: 5,
+          budgetMicrousd: 100000,
+        },
+        usedRequests: 0,
+        allocatedMicrousd: 0,
+      };
+      return route.fulfill({
+        json: { ...decorate(account), pilotReview: permit },
+      });
+    }
+    if (command.action === "pilot-allow") {
+      expect(command.pilot).toEqual(permit);
+      expect(command.consentDigest).toBe(permit.id);
+      expect(command.passphrase).toBe(passphrase);
+      state = "active";
+    } else {
+      expect(command).toEqual({ action: "pilot-revoke", ref: account.ref });
+      state = "revoked";
+    }
+    return route.fulfill({ json: decorate(account) });
+  });
+  await page.evaluate(() =>
+    window.dispatchEvent(new Event("ai-connection-changed")),
+  );
+  await editor.getByText("Pilot", { exact: true }).click();
+  const pilot = editor
+    .locator("details")
+    .filter({ has: page.locator("summary", { hasText: /^Pilot$/ }) });
+  await pilot.getByRole("button", { name: "Review", exact: true }).click();
+  await expect(pilot).toContainText("$0.50");
+  await expect(pilot).toContainText("4 attempts");
+  await pilot.getByLabel("Vault passphrase", { exact: true }).fill(passphrase);
+  await pilot.getByRole("button", { name: "Allow pilot", exact: true }).click();
+  await expect(pilot.getByRole("status")).toHaveText("Active");
+  await expect(
+    pilot.getByLabel("Vault passphrase", { exact: true }),
+  ).toHaveCount(0);
+  await page.screenshot({
+    path: `.evidence/openai-pilot-gate/controls-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+  await pilot.getByRole("button", { name: "Revoke", exact: true }).click();
+  await expect(pilot.getByRole("status")).toHaveText("Stopped");
+  expect(commands.map((c) => c.action)).toEqual([
+    "pilot-review",
+    "pilot-allow",
+    "pilot-revoke",
+  ]);
+  expect(await readFile(join(dir, "ai-credentials.json"))).toEqual(before);
+  const ordinary = await privateCLI(["ai-connection"]);
+  expect(ordinary.pilot).toBeUndefined();
+  expect(ordinary.liveCallsEnabled).toBe(false);
+});

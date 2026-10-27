@@ -30,6 +30,7 @@ type Store struct {
 	aiProgress      map[string]string
 	newsMu          sync.Mutex
 	provider        providerState
+	pilot           openAIPilotState // No ordinary constructor configures a target.
 	db              *sql.DB
 	dir             string
 	instanceID      string

@@ -22,38 +22,43 @@ import (
 )
 
 type AIConnectionCommand struct {
-	Provider             string               `json:"provider,omitempty"`
-	Name                 string               `json:"name,omitempty"`
-	CredentialMode       string               `json:"credentialMode,omitempty"`
-	Revision             int64                `json:"revision,omitempty"`
-	ProfileID            string               `json:"profileId,omitempty"`
-	TaskIDs              []string             `json:"taskIds,omitempty"`
-	AuthorizationSeconds int64                `json:"authorizationSeconds,omitempty"`
-	Allowance            *TaskAccessAllowance `json:"allowance,omitempty"`
-	ConsentDigest        string               `json:"consentDigest,omitempty"`
-	Action               string               `json:"action"`
-	Ref                  string               `json:"ref,omitempty"`
-	Key                  string               `json:"key,omitempty"`
-	Passphrase           string               `json:"passphrase,omitempty"`
+	Pilot                *OpenAIPilotAllowance `json:"pilot,omitempty"`
+	Provider             string                `json:"provider,omitempty"`
+	Name                 string                `json:"name,omitempty"`
+	CredentialMode       string                `json:"credentialMode,omitempty"`
+	Revision             int64                 `json:"revision,omitempty"`
+	ProfileID            string                `json:"profileId,omitempty"`
+	TaskIDs              []string              `json:"taskIds,omitempty"`
+	AuthorizationSeconds int64                 `json:"authorizationSeconds,omitempty"`
+	Allowance            *TaskAccessAllowance  `json:"allowance,omitempty"`
+	ConsentDigest        string                `json:"consentDigest,omitempty"`
+	Action               string                `json:"action"`
+	Ref                  string                `json:"ref,omitempty"`
+	Key                  string                `json:"key,omitempty"`
+	Passphrase           string                `json:"passphrase,omitempty"`
 }
 type AIConnectionView struct {
-	Name                   string               `json:"name,omitempty"`
-	Connections            []AIConnectionView   `json:"connections,omitempty"`
-	Catalog                ProviderCatalog      `json:"catalog"`
-	CredentialModes        []string             `json:"credentialModes"`
-	CredentialMode         string               `json:"credentialMode"`
-	TaskAccess             *TaskAccessAllowance `json:"taskAccess,omitempty"`
-	AccessReview           *TaskAccessAllowance `json:"accessReview,omitempty"`
-	AdmissionPolicy        OpenAIModelPolicy    `json:"admissionPolicy"`
-	Ref                    string               `json:"ref"`
-	Provider               string               `json:"provider"`
-	Model                  string               `json:"model"`
-	Locked                 bool                 `json:"locked"`
-	UnlockExpires          int64                `json:"unlockExpires"`
-	TestOnly               bool                 `json:"testOnly"`
-	LiveCallsEnabled       bool                 `json:"liveCallsEnabled"`
-	InputMicrousdPerToken  int64                `json:"inputMicrousdPerToken,omitempty"`
-	OutputMicrousdPerToken int64                `json:"outputMicrousdPerToken,omitempty"`
+	PilotAvailable         bool                  `json:"pilotAvailable,omitempty"`
+	Pilot                  *OpenAIPilotAllowance `json:"pilot,omitempty"`
+	PilotReview            *OpenAIPilotAllowance `json:"pilotReview,omitempty"`
+	PilotState             string                `json:"pilotState,omitempty"`
+	Name                   string                `json:"name,omitempty"`
+	Connections            []AIConnectionView    `json:"connections,omitempty"`
+	Catalog                ProviderCatalog       `json:"catalog"`
+	CredentialModes        []string              `json:"credentialModes"`
+	CredentialMode         string                `json:"credentialMode"`
+	TaskAccess             *TaskAccessAllowance  `json:"taskAccess,omitempty"`
+	AccessReview           *TaskAccessAllowance  `json:"accessReview,omitempty"`
+	AdmissionPolicy        OpenAIModelPolicy     `json:"admissionPolicy"`
+	Ref                    string                `json:"ref"`
+	Provider               string                `json:"provider"`
+	Model                  string                `json:"model"`
+	Locked                 bool                  `json:"locked"`
+	UnlockExpires          int64                 `json:"unlockExpires"`
+	TestOnly               bool                  `json:"testOnly"`
+	LiveCallsEnabled       bool                  `json:"liveCallsEnabled"`
+	InputMicrousdPerToken  int64                 `json:"inputMicrousdPerToken,omitempty"`
+	OutputMicrousdPerToken int64                 `json:"outputMicrousdPerToken,omitempty"`
 }
 type aiVaultEnvelope struct {
 	Provider   string `json:"provider,omitempty"`
@@ -191,6 +196,7 @@ func (s *Store) clearAIConnectionLocked(refs ...string) {
 	if ref == "" {
 		return
 	}
+	s.revokePilotLocked(ref)
 	state := s.credentialLocked(ref)
 	s.provider.nextEpoch++
 	state.epoch = s.provider.nextEpoch
@@ -215,6 +221,7 @@ func (s *Store) lockAIConnection() {
 func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err error) {
 	v = AIConnectionView{CredentialMode: "test", AdmissionPolicy: openAIModelPolicy(), Provider: "openai", Model: fixtureAIModel, Locked: true, TestOnly: true, InputMicrousdPerToken: 1, OutputMicrousdPerToken: 4}
 	defer func() {
+		s.pilotViewLocked(&v)
 		d := modelDiscovery{}
 		if state := s.provider.accounts[v.Ref]; state != nil {
 			d = state.discovery
@@ -266,7 +273,7 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 		// admissionPolicy is authoritative for the actual model's fractional tariff.
 		v.InputMicrousdPerToken, v.OutputMicrousdPerToken = 0, 0
 	}
-	if !s.aiCredentialModeAllowed(v.CredentialMode) {
+	if !s.aiCredentialModeAllowed(v.CredentialMode) && !(s.pilotTargetLocked(v.Ref) && v.CredentialMode == "openai") {
 		s.clearAIConnectionLocked(env.Ref)
 
 		return v, nil
@@ -324,6 +331,12 @@ func (s *Store) aiConnectionValid(ref string) bool {
 	return e == nil && v.Ref == ref && !v.Locked
 }
 func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (AIConnectionView, error) {
+	if pilotAction(c.Action) {
+		return s.changeOpenAIPilot(ctx, c)
+	}
+	if c.Pilot != nil {
+		return AIConnectionView{}, errors.New("pilot requires a dedicated review")
+	}
 	if c.Action == "models-refresh" {
 		if c.Provider != "" || c.Ref == "" || c.Key != "" || c.Passphrase != "" || c.Name != "" || c.CredentialMode != "" || c.Allowance != nil || c.ProfileID != "" || c.Revision != 0 || len(c.TaskIDs) > 0 || c.AuthorizationSeconds != 0 || c.ConsentDigest != "" {
 			return AIConnectionView{}, errors.New("model refresh accepts an account only")
@@ -408,7 +421,7 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		v = AIConnectionView{}
 	}
 	if taskAccessAction(c.Action) {
-		if c.Action != "task-access-revoke" && !s.aiCredentialModeAllowed(v.CredentialMode) {
+		if c.Action != "task-access-revoke" && !s.aiCredentialModeAllowed(v.CredentialMode) && !(s.pilotTargetLocked(v.Ref) && v.CredentialMode == "openai") {
 			return v, errors.New("credential mode unavailable; real credentials disabled")
 		}
 		return s.changeTaskAccess(ctx, tx, c, v)
@@ -430,7 +443,7 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	if mode != "test" && mode != provider {
 		return v, errors.New("credential mode/provider mismatch")
 	}
-	if ((c.Action == "save" || c.Action == "add") && !s.aiCredentialModeAllowed(mode)) || (c.Action == "unlock" && !s.aiCredentialModeAllowed(v.CredentialMode)) {
+	if ((c.Action == "save" || c.Action == "add") && !s.aiCredentialModeAllowed(mode)) || (c.Action == "unlock" && !s.aiCredentialModeAllowed(v.CredentialMode) && !(s.pilotTargetLocked(v.Ref) && v.CredentialMode == "openai")) {
 		return v, errors.New("credential mode unavailable; real credentials disabled")
 	}
 	if !validPassword(c.Passphrase) || ((c.Action == "save" || c.Action == "add") && !validAICredential(mode, c.Key)) || (c.Action != "save" && c.Action != "add" && c.Key != "") {
@@ -559,6 +572,10 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 	if !allowed {
 		a.store.provider.mu.Unlock()
 		return nil, errors.New("connection locked or changed")
+	}
+	if !a.store.pilotExchangeLocked(a.request, a.ref, r, a.modelsOnly) {
+		a.store.provider.mu.Unlock()
+		return nil, errors.New("pilot scope or allowance unavailable")
 	}
 	key := append([]byte(nil), state.key...)
 	a.store.provider.mu.Unlock()
