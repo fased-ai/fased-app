@@ -1,12 +1,26 @@
 import { RefreshCw, Plus } from "../icons";
 import { useUI } from "../ui-preferences";
 import type { OpenAIModelPolicy, OpenAIAdmission } from "../agents";
+import { isPlanPolicy, planFailureDetails } from "../agents";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useCore } from "../core";
 import { TaskAccessSettings, type TaskAccessAllowance } from "./TaskAccess";
 import { OpenAIPilotSettings, type PilotAllowance } from "./OpenAIPilot";
 
 export type Connection = {
+  authMethod?: "api-key" | "sign-in";
+  planUse?: boolean;
+  planPaused?: boolean;
+  planFailure?: string;
+  signInAvailable?: boolean;
+  signIn?: {
+    id: string;
+    provider: string;
+    state: "waiting" | "callback-ready";
+    url: string;
+    expiresAt: number;
+    remote: boolean;
+  };
   pilotEnrollment?: boolean;
   pilotAvailable?: boolean;
   pilot?: PilotAllowance;
@@ -37,8 +51,10 @@ export type Connection = {
       availability: string;
     }[];
   };
-  credentialMode?: "test" | "openai" | "anthropic" | "xai";
-  credentialModes?: ("test" | "openai" | "anthropic" | "xai")[];
+  credentialMode?: "test" | "openai" | "anthropic" | "xai" | "openai-signin";
+  credentialModes?: (
+    "test" | "openai" | "anthropic" | "xai" | "openai-signin"
+  )[];
   taskAccess?: TaskAccessAllowance;
   accessReview?: TaskAccessAllowance;
   admissionPolicy: OpenAIModelPolicy;
@@ -114,13 +130,15 @@ export function ConnectionPicker({
           <option
             key={account.ref}
             value={account.ref}
-            disabled={account.locked}
+            disabled={account.locked || account.planPaused}
           >
             {account.name ||
               view?.catalog?.providers.find((p) => p.id === account.provider)
                 ?.name ||
               "OpenAI"}{" "}
-            · {uiText(account.locked ? "Locked" : "Unlocked")}
+            · {uiText(account.authMethod === "sign-in" ? "ChatGPT" : "API key")}
+            {(account.planPaused || account.locked) &&
+              ` · ${uiText(account.planPaused ? "Paused" : "Locked")}`}
           </option>
         ))}
         {value &&
@@ -135,11 +153,15 @@ export function ConnectionPicker({
     </label>
   );
 }
-export function AIConnectionSettings() {
+export function AIConnectionSettings({
+  startNew = false,
+}: { startNew?: boolean } = {}) {
   const { t: uiText } = useUI();
   const { view: root, setView, error, setError, core } = useAIConnection();
-  const [selected, setSelected] = useState("");
+  const [selected, setSelected] = useState(startNew ? "new" : "");
   const [newProvider, setNewProvider] = useState("openai");
+  const [newMethod, setNewMethod] = useState("api-key");
+  const [callback, setCallback] = useState("");
   const [name, setName] = useState("");
   const savedName =
     selected && selected !== "new"
@@ -155,8 +177,11 @@ export function AIConnectionSettings() {
         ? {
             ...root,
             provider: newProvider,
+            authMethod: newMethod as "api-key" | "sign-in",
             ref: "",
             locked: true,
+            planPaused: false,
+            planFailure: "",
             taskAccess: undefined,
           }
         : null
@@ -166,9 +191,23 @@ export function AIConnectionSettings() {
   const [key, setKey] = useState("");
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setKey("");
+    setPassphrase("");
+    setCallback("");
+  }, [core.instanceId]);
   const provider = view?.provider || "openai";
   const providerName =
     root?.catalog?.providers.find((p) => p.id === provider)?.name || "OpenAI";
+  const method = view?.ref ? view.authMethod || "api-key" : newMethod;
+  const signIn = root?.signIn;
+  const signInAvailable = root?.signInAvailable === true;
+  const pausedFailure = view?.planPaused
+    ? planFailureDetails(view.planFailure || "")
+    : null;
+  const hasSignIn = root?.catalog?.providers
+    .find((p) => p.id === provider)
+    ?.methods.some((m) => m.id === "sign-in");
   const apiMode =
     view?.credentialModes?.includes(
       provider as "openai" | "anthropic" | "xai",
@@ -185,7 +224,7 @@ export function AIConnectionSettings() {
     setKey("");
     setPassphrase("");
     try {
-      const next = await core.request<Connection>("ai/connection", "POST", {
+      const command = {
         action: action === "save" && selected === "new" ? "add" : action,
         name: action === "save" ? name : undefined,
         ref: view?.ref ?? "",
@@ -199,8 +238,35 @@ export function AIConnectionSettings() {
               credentialMode: apiMode ? provider : "test",
             }
           : {}),
-      });
-      setSelected(next.ref);
+      };
+      const signInCommand =
+        action === "sign-in-start"
+          ? {
+              action,
+              provider,
+              ref: view.ref,
+              name,
+              remote: core.connection?.location === "remote",
+            }
+          : action === "sign-in-complete"
+            ? {
+                action,
+                signInId: signIn?.id,
+                callback: callback || undefined,
+                passphrase: secret,
+              }
+            : action === "sign-in-cancel"
+              ? { action, signInId: signIn?.id }
+              : { action, ref: view.ref, passphrase: secret };
+      const next = await core.request<Connection>(
+        "ai/connection",
+        "POST",
+        action.startsWith("sign-in-") ? signInCommand : command,
+      );
+      if (action !== "sign-in-start" && action !== "sign-in-cancel") {
+        setSelected(next.ref);
+        setCallback("");
+      }
       setView(await core.request<Connection>("ai/connection"));
       window.dispatchEvent(new Event("ai-connection-changed"));
     } catch (e) {
@@ -221,10 +287,12 @@ export function AIConnectionSettings() {
           type="button"
           aria-label={uiText("Add provider")}
           title={uiText("Add provider")}
-          disabled={busy || root?.pilotEnrollment}
+          disabled={busy || !!signIn || root?.pilotEnrollment}
           onClick={() => {
             setSelected("new");
             setName("");
+            setNewMethod("api-key");
+            setCallback("");
             setKey("");
             setPassphrase("");
           }}
@@ -244,11 +312,12 @@ export function AIConnectionSettings() {
         <select
           aria-label={uiText("Account")}
           value={selected || root?.ref || ""}
-          disabled={busy}
+          disabled={busy || !!signIn}
           onChange={(e) => {
             setSelected(e.target.value);
             setKey("");
             setPassphrase("");
+            setCallback("");
             setName(
               root?.connections?.find((a) => a.ref === e.target.value)?.name ||
                 "",
@@ -263,7 +332,8 @@ export function AIConnectionSettings() {
               {a.name ||
                 root?.catalog?.providers.find((p) => p.id === a.provider)
                   ?.name ||
-                "OpenAI"}
+                "OpenAI"}{" "}
+              · {uiText(a.authMethod === "sign-in" ? "ChatGPT" : "API key")}
             </option>
           ))}
           {selected &&
@@ -282,9 +352,10 @@ export function AIConnectionSettings() {
             <select
               aria-label={uiText("Provider")}
               value={newProvider}
-              disabled={busy}
+              disabled={busy || !!signIn}
               onChange={(e) => {
                 setNewProvider(e.target.value);
+                setNewMethod("api-key");
                 setKey("");
                 setPassphrase("");
               }}
@@ -297,11 +368,37 @@ export function AIConnectionSettings() {
             </select>
           </label>
         )}
+        {!view?.ref && hasSignIn && (
+          <label>
+            {uiText("Connection")}
+            <select
+              aria-label={uiText("Connection")}
+              value={newMethod}
+              disabled={busy || !!signIn}
+              onChange={(e) => {
+                setNewMethod(e.target.value);
+                setKey("");
+                setPassphrase("");
+                setCallback("");
+              }}
+            >
+              <option value="api-key">{uiText("API key")}</option>
+              <option value="sign-in" disabled={!signInAvailable}>
+                {uiText("Continue with ChatGPT")}
+              </option>
+            </select>
+          </label>
+        )}
         <p className="connection-status" role="status">
           {view?.ref
-            ? `${uiText(view.locked ? "Locked" : "Unlocked")} · ${providerName}`
+            ? `${uiText(view.planPaused ? "Paused" : view.locked ? "Locked" : "Unlocked")} · ${providerName}`
             : uiText("No connection saved")}
         </p>
+        {view?.planPaused && (
+          <p role="status">
+            {uiText(pausedFailure?.summary || "ChatGPT request failed")}
+          </p>
+        )}
         {error && <p role="alert">{error}</p>}
         {view?.catalog?.state === "failed" && (
           <p role="alert">{uiText("Models unavailable")}</p>
@@ -316,9 +413,13 @@ export function AIConnectionSettings() {
             }
           />
         )}
-        <details className="connection-options">
+        <details
+          className="connection-options"
+          key={selected || view?.ref || "new"}
+          open={!view?.ref}
+        >
           <summary>{uiText("Credentials")}</summary>
-          {!apiMode && (
+          {!apiMode && method !== "sign-in" && (
             <p>
               {uiText("Disposable fased-test- keys only. No real API calls.")}
             </p>
@@ -326,7 +427,7 @@ export function AIConnectionSettings() {
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              void change("save");
+              void change(method === "sign-in" ? "sign-in-complete" : "save");
             }}
             autoComplete="off"
           >
@@ -338,16 +439,49 @@ export function AIConnectionSettings() {
                 onChange={(e) => setName(e.target.value)}
               />
             </label>
-            <label>
-              {uiText(apiMode ? "API key" : "Test key")}
-              <input
-                type="password"
-                autoComplete="off"
-                value={key}
-                maxLength={256}
-                onChange={(e) => setKey(e.target.value)}
-              />
-            </label>
+            {method !== "sign-in" && (
+              <label>
+                {uiText(apiMode ? "API key" : "Test key")}
+                <input
+                  type="password"
+                  autoComplete="off"
+                  value={key}
+                  maxLength={256}
+                  onChange={(e) => setKey(e.target.value)}
+                />
+              </label>
+            )}
+            {method === "sign-in" && signIn && (
+              <>
+                <p role="status">
+                  {uiText(
+                    signIn.state === "callback-ready"
+                      ? "Ready"
+                      : "Waiting for sign-in",
+                  )}
+                </p>
+                <a
+                  className="secondary"
+                  href={signIn.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {uiText("Open sign-in")}
+                </a>
+                {signIn.remote && (
+                  <label>
+                    {uiText("Redirect URL")}
+                    <input
+                      aria-label={uiText("Redirect URL")}
+                      value={callback}
+                      maxLength={4096}
+                      autoComplete="off"
+                      onChange={(e) => setCallback(e.target.value)}
+                    />
+                  </label>
+                )}
+              </>
+            )}
             <label>
               {uiText("Vault passphrase")}
               <input
@@ -359,46 +493,118 @@ export function AIConnectionSettings() {
               />
             </label>
             <div className="agent-actions">
-              <button
-                className="primary"
-                disabled={
-                  busy ||
-                  !view ||
-                  !key ||
-                  passphrase.length < 12 ||
-                  (view.pilotEnrollment && !!view.ref)
-                }
-              >
-                {view?.ref ? uiText("Replace") : uiText("Save")}
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                disabled={busy || !view?.ref || passphrase.length < 12}
-                onClick={() => void change("unlock")}
-              >
-                {uiText("Unlock")}
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                disabled={busy || !view?.ref}
-                onClick={() => void change("lock")}
-              >
-                {uiText("Lock")}
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                disabled={busy || !view?.ref || passphrase.length < 12}
-                onClick={() => void change("remove")}
-              >
-                {uiText("Remove")}
-              </button>
+              {method === "sign-in" ? (
+                <>
+                  {!signIn ? (
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={busy || !view || !signInAvailable}
+                      onClick={() => void change("sign-in-start")}
+                    >
+                      {uiText(
+                        view?.ref ? "Reconnect" : "Continue with ChatGPT",
+                      )}
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        className="primary"
+                        disabled={
+                          busy ||
+                          passphrase.length < 12 ||
+                          (signIn.remote
+                            ? !callback
+                            : signIn.state !== "callback-ready")
+                        }
+                      >
+                        {uiText("Finish")}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={busy}
+                        onClick={() => void change("sign-in-cancel")}
+                      >
+                        {uiText("Cancel")}
+                      </button>
+                    </>
+                  )}
+                  {view?.ref && !signIn && (
+                    <>
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={busy || passphrase.length < 12}
+                        onClick={() => void change("sign-in-refresh")}
+                      >
+                        {uiText("Refresh")}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={busy || passphrase.length < 12}
+                        onClick={() => void change("sign-in-disconnect")}
+                      >
+                        {uiText("Disconnect")}
+                      </button>
+                    </>
+                  )}
+                </>
+              ) : (
+                <button
+                  className="primary"
+                  disabled={
+                    busy ||
+                    !view ||
+                    !key ||
+                    passphrase.length < 12 ||
+                    (view.pilotEnrollment && !!view.ref)
+                  }
+                >
+                  {view?.ref ? uiText("Replace") : uiText("Save")}
+                </button>
+              )}
+              {(view?.ref || (selected && selected !== "new")) && (
+                <>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy || !view?.ref || passphrase.length < 12}
+                    onClick={() => void change("unlock")}
+                  >
+                    {uiText(view?.planPaused ? "Review access" : "Unlock")}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy || !view?.ref}
+                    onClick={() => void change("lock")}
+                  >
+                    {uiText("Lock")}
+                  </button>
+                  {method !== "sign-in" && (
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={busy || !view?.ref || passphrase.length < 12}
+                      onClick={() => void change("remove")}
+                    >
+                      {uiText("Remove")}
+                    </button>
+                  )}
+                </>
+              )}
             </div>
           </form>
           <details className="connection-inspection">
             <summary>{uiText("Recovery")}</summary>
+            {view?.planFailure && (
+              <details>
+                <summary>{uiText("Provider response")}</summary>
+                <pre>{pausedFailure?.details || view.planFailure}</pre>
+              </details>
+            )}
             <p>
               {uiText(
                 "Encrypted with your separate vault passphrase. Unlock lasts 15 minutes; lock, sign-out and restart end it. An unlocked key is accessible to the running core.",
@@ -503,6 +709,39 @@ export function AIAdmissionReview({
 }) {
   const { t: uiText } = useUI();
   if (!policy) return null;
+  if (isPlanPolicy(policy))
+    return (
+      <details className="ai-admission">
+        <summary>{uiText("Plan usage")}</summary>
+        <p>
+          {uiText("ChatGPT")} · {policy.model}
+        </p>
+        {admission && (
+          <dl>
+            <dt>{uiText("Input bound")}</dt>
+            <dd>{admission.inputTokens}</dd>
+            <dt>{uiText("Admission: ")}</dt>
+            <dd>{admission.state}</dd>
+          </dl>
+        )}
+      </details>
+    );
+  if (policy.wireVersion === "openai-signin-v1")
+    return (
+      <details className="ai-admission">
+        <summary>{uiText("Model")}</summary>
+        <p>{policy.model}</p>
+        <p>{uiText("Fixture allowance")}</p>
+        {admission && (
+          <dl>
+            <dt>{uiText("Input bound")}</dt>
+            <dd>{admission.inputTokens}</dd>
+            <dt>{uiText("Admission: ")}</dt>
+            <dd>{admission.state}</dd>
+          </dl>
+        )}
+      </details>
+    );
   const price = (value: number) => `$${(value / 1000000).toFixed(2)}`;
   return (
     <details className="ai-admission">

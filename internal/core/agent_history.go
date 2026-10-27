@@ -265,7 +265,7 @@ func historySnapshot(ctx context.Context, tx snapshotReader) (string, error) {
 }
 
 func finalManualAI(q AgentAIRequest) bool {
-	return (q.State == "completed" || q.State == "cancelled" || q.State == "failed") && q.HeldMicrousd == 0 && q.TaskID == "" && q.ResearchTurnID == ""
+	return (q.State == "completed" || q.State == "cancelled" || q.State == "failed") && !aiHasUsageHold(q) && q.TaskID == "" && q.ResearchTurnID == ""
 }
 func parseArchivedEntry(raw, hash, profile, id, kind string) (TaskHistoryEntry, error) {
 	if kind == "tasks" {

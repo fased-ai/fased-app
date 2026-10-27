@@ -3,6 +3,8 @@ package core
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -64,8 +66,9 @@ func partialAIAnswer(raw string) string {
 	}
 	return ""
 }
-func readAIStream(body io.Reader, model string, onDelta func(string)) ([]byte, error) {
-	scanner := bufio.NewScanner(io.LimitReader(body, 262145))
+func readAIStream(body io.Reader, model string, onDelta func(string), planModes ...bool) ([]byte, error) {
+	streamHash := sha256.New()
+	scanner := bufio.NewScanner(io.LimitReader(io.TeeReader(body, streamHash), 262145))
 	scanner.Buffer(make([]byte, 4096), 32768)
 	var data, event, identity, output string
 	var completed []byte
@@ -73,7 +76,16 @@ func readAIStream(body io.Reader, model string, onDelta func(string)) ([]byte, e
 	sequence := int64(-1)
 	total := 0
 	seenCreated, seenDone := false, false
+	plan := len(planModes) > 0 && planModes[0]
+	var terminal *planProviderFailure
 	fail := func() ([]byte, error) {
+		if terminal != nil {
+			terminal.SHA256 = hex.EncodeToString(streamHash.Sum(nil))
+			return nil, terminal
+		}
+		if plan {
+			return nil, &planProviderFailure{Status: 200, Body: "sse", Code: "stream_unverified", SHA256: hex.EncodeToString(streamHash.Sum(nil)), Late: true}
+		}
 		return nil, errors.New("provider stream incomplete or invalid; reservation retained")
 	}
 	consume := func() bool {
@@ -97,11 +109,34 @@ func readAIStream(body io.Reader, model string, onDelta func(string)) ([]byte, e
 			ContentIndex int             `json:"content_index"`
 			Response     json.RawMessage `json:"response"`
 		}
-		if json.Unmarshal([]byte(data), &frame) != nil || frame.Type == "" || (event != "" && event != frame.Type) || frame.Sequence == nil || *frame.Sequence != sequence+1 {
+		if json.Unmarshal([]byte(data), &frame) != nil || frame.Type == "" || (event != "" && event != frame.Type) {
+			return false
+		}
+		if plan && frame.Type == "error" {
+			terminal = planStreamFailure([]byte(data), []byte(data))
+			return false
+		}
+		if frame.Sequence == nil || *frame.Sequence != sequence+1 {
 			return false
 		}
 		sequence = *frame.Sequence
 		switch frame.Type {
+		case "response.failed", "response.incomplete":
+			if !plan || !seenCreated {
+				return false
+			}
+			var failed struct{ ID, Model, Status string }
+			if json.Unmarshal(frame.Response, &failed) != nil || failed.ID != identity || failed.Model != "" && failed.Model != model || failed.Status != strings.TrimPrefix(frame.Type, "response.") {
+				return false
+			}
+			terminal = planStreamFailure(frame.Response, []byte(data))
+			if failed.Model == model {
+				terminal.usage = readPlanTerminalUsage(frame.Response)
+			}
+			if terminal.Code == "" {
+				terminal.Code = strings.ReplaceAll(frame.Type, ".", "_")
+			}
+			return false
 		case "response.created":
 			if seenCreated || sequence != 0 {
 				return false

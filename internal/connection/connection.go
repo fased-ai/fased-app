@@ -8,6 +8,7 @@ import (
 	"errors"
 	"github.com/fased-ai/fased-app/internal/core"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -77,19 +78,36 @@ func probe(ctx context.Context, value, expected string, client *http.Client) (Re
 		return Result{}, errors.New("cannot verify this Fased instance; check its address, private access and TLS")
 	}
 	defer response.Body.Close()
-	if response.StatusCode != 200 || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/json") {
-		return Result{}, errors.New("destination is not a compatible Fased instance")
+	h, e := ReadHealth(response, expected)
+	if e != nil {
+		return Result{}, e
+	}
+	return Result{URL: origin, InstanceID: h.InstanceID, Location: h.Connection.Location, Transport: h.Connection.Transport}, nil
+}
+
+// ReadHealth applies the same instance readiness contract to ordinary Connect
+// and installation's private HTTPS verification. The caller closes the body.
+func ReadHealth(response *http.Response, expected string) (core.Health, error) {
+	if expected != "" && !identity.MatchString(expected) {
+		return core.Health{}, errors.New("invalid expected instance identity")
+	}
+	if response == nil || response.Body == nil {
+		return core.Health{}, errors.New("invalid instance response")
+	}
+	kind, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if response.StatusCode != 200 || err != nil || kind != "application/json" || response.Header.Get("Content-Encoding") != "" {
+		return core.Health{}, errors.New("destination is not a compatible Fased instance")
 	}
 	b, e := io.ReadAll(io.LimitReader(response.Body, 16*1024+1))
 	if e != nil || len(b) > 16*1024 {
-		return Result{}, errors.New("invalid instance response")
+		return core.Health{}, errors.New("invalid instance response")
 	}
 	var h core.Health
 	if json.Unmarshal(b, &h) != nil || h.Status != "ok" || h.APIVersion != core.APIVersion || !identity.MatchString(h.InstanceID) || h.Connection == nil || (h.Connection.Location != "local" && h.Connection.Location != "remote") || (h.Connection.Transport != "loopback" && h.Connection.Transport != "private-https") {
-		return Result{}, errors.New("destination is not a compatible Fased instance")
+		return core.Health{}, errors.New("destination is not a compatible Fased instance")
 	}
 	if expected != "" && h.InstanceID != expected {
-		return Result{}, errors.New("instance identity changed; no connection opened")
+		return core.Health{}, errors.New("instance identity changed; no connection opened")
 	}
-	return Result{URL: origin, InstanceID: h.InstanceID, Location: h.Connection.Location, Transport: h.Connection.Transport}, nil
+	return h, nil
 }

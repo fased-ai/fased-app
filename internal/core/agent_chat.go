@@ -60,8 +60,14 @@ func validChatPermission(p ChatPermission, stored ...bool) bool {
 		modelOK = validProviderModelID(p.Model)
 		reservation = 0
 	}
+	limitsOK := validAILimits(p.Limits)
+	if len(stored) > 0 && stored[0] && p.ConnectionRef != "" && p.Limits.BudgetMicrousd == 0 && p.BudgetMicrousd == 0 && p.AllocatedMicrousd == 0 {
+		// Structural storage admission is not execution authority. Every runtime
+		// consumer below also resolves the immutable account's auth method.
+		limitsOK = validPolicyLimits(p.Limits, &OpenAIModelPolicy{WireVersion: planSignInWire})
+	}
 	return len(p.ID) == 64 && len(p.PersonaDigest) == 64 && len(p.BootID) == 32 && (len(p.ConnectionRef) == 0 || len(p.ConnectionRef) == 43) && (p.Model == fixtureAIModel || p.ConnectionRef != "") && p.ID == chatDigest(p) && p.ProfileID != "" && p.SessionID != "" && len(p.BootID) > 0 && p.Revision >= 0 && p.CreatedAt > 0 && p.ExpiresAt >= p.CreatedAt+60 && p.ExpiresAt <= p.CreatedAt+86400 &&
-		(p.MemoryMode == "relevant" || p.MemoryMode == "none") && modelOK && validAILimits(p.Limits) && p.MaxRequests >= 1 && p.MaxRequests <= 20 && p.Limits.BudgetMicrousd >= reservation && p.BudgetMicrousd >= reservation && p.BudgetMicrousd <= 20000000 && p.UsedRequests >= 0 && p.UsedRequests <= p.MaxRequests && p.AllocatedMicrousd >= 0 && p.AllocatedMicrousd <= p.BudgetMicrousd
+		(p.MemoryMode == "relevant" || p.MemoryMode == "none") && modelOK && limitsOK && p.MaxRequests >= 1 && p.MaxRequests <= 20 && p.Limits.BudgetMicrousd >= reservation && p.BudgetMicrousd >= reservation && p.BudgetMicrousd <= 20000000 && p.UsedRequests >= 0 && p.UsedRequests <= p.MaxRequests && p.AllocatedMicrousd >= 0 && p.AllocatedMicrousd <= p.BudgetMicrousd
 }
 func chatModelPolicy(model string) *OpenAIModelPolicy {
 	if _, ok := currentProviderModel(model); ok || model == legacyOpenAIModel {
@@ -69,6 +75,64 @@ func chatModelPolicy(model string) *OpenAIModelPolicy {
 		return &p
 	}
 	return nil
+}
+func chatModelPolicyForMethod(model, method string) *OpenAIModelPolicy {
+	p := chatModelPolicy(model)
+	if method == "" || method == "api-key" {
+		return p
+	}
+	m, current := currentProviderModel(model)
+	if method != "sign-in" || p == nil || !current || modelProvider(m) != "openai" {
+		return nil
+	}
+	copy := *p
+	copy.ID += ":sign-in-plan-v2"
+	copy.WireVersion = planSignInWire
+	copy.CacheMode = ""
+	copy.InputMicrousdPerMillion, copy.CachedMicrousdPerMillion, copy.OutputMicrousdPerMillion = 0, 0, 0
+	copy.TariffSource = "https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference"
+	copy.TokenSource = "https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations"
+	return &copy
+}
+func legacySignInModelPolicy(model string) *OpenAIModelPolicy {
+	p := chatModelPolicy(model)
+	m, current := currentProviderModel(model)
+	if p == nil || !current || modelProvider(m) != "openai" {
+		return nil
+	}
+	copy := *p
+	copy.ID += ":sign-in-fixture"
+	copy.WireVersion = "openai-signin-v1"
+	copy.CacheMode = ""
+	copy.TariffSource = "local:synthetic-fixture-allocation"
+	copy.TokenSource = "local:conservative-signin-fixture-bound"
+	return &copy
+}
+func (s *Store) chatPolicy(p ChatPermission) *OpenAIModelPolicy {
+	method := "api-key"
+	if p.ConnectionRef != "" {
+		connection, err := s.AIConnection(p.ConnectionRef)
+		if err != nil || connection.Ref != p.ConnectionRef {
+			return nil
+		}
+		method = connection.AuthMethod
+	}
+	return chatModelPolicyForMethod(p.Model, method)
+}
+func validChatPermissionPolicy(p ChatPermission, policy *OpenAIModelPolicy) bool {
+	if !planSignInPolicy(policy) {
+		return validChatPermission(p)
+	}
+	return validChatPermission(p, true) && p.Limits.BudgetMicrousd == 0 && p.BudgetMicrousd == 0 && p.AllocatedMicrousd == 0 && validPolicyLimits(p.Limits, policy)
+}
+func (s *Store) validChatPermission(p ChatPermission) bool {
+	return validChatPermissionPolicy(p, s.chatPolicy(p))
+}
+func (s *Store) chatPermissionReason(d agentDocument, p *ChatPermission, now int64) string {
+	if p == nil {
+		return "permission-required"
+	}
+	return chatPermissionReason(d, p, s.bootID, now, s.chatPolicy(*p))
 }
 func chatSession(d agentDocument, profile, id string) int {
 	for i, s := range d.Sessions {
@@ -78,11 +142,15 @@ func chatSession(d agentDocument, profile, id string) int {
 	}
 	return -1
 }
-func chatPermissionReason(d agentDocument, p *ChatPermission, boot string, now int64) string {
+func chatPermissionReason(d agentDocument, p *ChatPermission, boot string, now int64, policies ...*OpenAIModelPolicy) string {
 	if p == nil {
 		return "permission-required"
 	}
-	if !validChatPermission(*p) || p.Revoked {
+	policy := chatModelPolicy(p.Model)
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
+	if !validChatPermissionPolicy(*p, policy) || p.Revoked {
 		return "revoked"
 	}
 	if p.BootID != boot {
@@ -95,7 +163,7 @@ func chatPermissionReason(d agentDocument, p *ChatPermission, boot string, now i
 	if pi < 0 || p.PersonaDigest != personaDigest(d.Profiles[pi]) {
 		return "scope-changed"
 	}
-	cost := aiRequestReservation(AgentAIRequest{Model: p.Model, Policy: chatModelPolicy(p.Model), Limits: p.Limits})
+	cost := aiRequestReservation(AgentAIRequest{Model: p.Model, Policy: policy, Limits: p.Limits})
 	if p.UsedRequests >= p.MaxRequests || p.AllocatedMicrousd+cost > p.BudgetMicrousd {
 		return "exhausted"
 	}
@@ -106,7 +174,7 @@ func (s *Store) chatReview(d agentDocument, c AgentCommand, profile string, revi
 		return ChatPermission{}, errors.New("review one conversation, memory scope, finite request/time/cost limits and no external inputs")
 	}
 	for _, q := range d.AIRequests {
-		if q.ProfileID == profile && q.HeldMicrousd > 0 {
+		if q.ProfileID == profile && aiHasUsageHold(q) {
 			return ChatPermission{}, errors.New("profile has pending or uncertain usage; inspect it before another reply")
 		}
 	}
@@ -118,7 +186,7 @@ func (s *Store) chatReview(d agentDocument, c AgentCommand, profile string, revi
 	p.AccessEpoch = s.chatEpoch.Load()
 	p.ConnectionEpoch = s.connectionAccessEpoch(p.ConnectionRef)
 	p.ID = chatDigest(p)
-	if !validChatPermission(p) || validateAIModelPolicy(AgentAIRequest{Model: p.Model, ConnectionRef: p.ConnectionRef, Policy: chatModelPolicy(p.Model), Limits: p.Limits}, now) != nil || !s.aiConnectionValid(p.ConnectionRef) || !s.pilotGrantAllowed(p.ConnectionRef, profile, p.Model, p.ExpiresAt, p.MaxRequests, p.BudgetMicrousd, p.Limits, false) {
+	if !s.validChatPermission(p) || validateAIModelPolicy(AgentAIRequest{Model: p.Model, ConnectionRef: p.ConnectionRef, Policy: chatModelPolicyForMethod(p.Model, c.providerAuthMethod), Limits: p.Limits}, now) != nil || !s.aiConnectionValid(p.ConnectionRef) || !s.pilotGrantAllowed(p.ConnectionRef, profile, p.Model, p.ExpiresAt, p.MaxRequests, p.BudgetMicrousd, p.Limits, false) {
 		return p, errors.New("invalid Chat limits or locked connection")
 	}
 	return p, nil
@@ -135,11 +203,11 @@ func (s *Store) changeChat(d *agentDocument, c AgentCommand, profile, id string,
 		if p != nil && !s.pilotGrantAllowed(p.ConnectionRef, profile, p.Model, p.ExpiresAt, p.MaxRequests, p.BudgetMicrousd, p.Limits, false) {
 			return errors.New("Chat exceeds pilot allowance")
 		}
-		if p == nil || !validChatPermission(*p) || p.ID != c.ConsentDigest || p.ProfileID != profile || p.SessionID != c.ID || p.BootID != s.bootID || !s.chatAccessCurrent(p) || p.Revision != revision || p.CreatedAt > now || now-p.CreatedAt > 300 || p.ExpiresAt <= now || p.UsedRequests != 0 || p.AllocatedMicrousd != 0 || p.Revoked || p.PersonaDigest != personaDigest(d.Profiles[agentProfile(*d, profile)]) || !s.aiConnectionValid(p.ConnectionRef) {
+		if p == nil || !s.validChatPermission(*p) || p.ID != c.ConsentDigest || p.ProfileID != profile || p.SessionID != c.ID || p.BootID != s.bootID || !s.chatAccessCurrent(p) || p.Revision != revision || p.CreatedAt > now || now-p.CreatedAt > 300 || p.ExpiresAt <= now || p.UsedRequests != 0 || p.AllocatedMicrousd != 0 || p.Revoked || p.PersonaDigest != personaDigest(d.Profiles[agentProfile(*d, profile)]) || !s.aiConnectionValid(p.ConnectionRef) {
 			return errors.New("Chat scope changed; review permission again")
 		}
 		for _, q := range d.AIRequests {
-			if q.ProfileID == profile && q.HeldMicrousd > 0 {
+			if q.ProfileID == profile && aiHasUsageHold(q) {
 				return errors.New("pending or uncertain usage must remain held before new permission")
 			}
 		}
@@ -167,11 +235,11 @@ func (s *Store) changeChat(d *agentDocument, c AgentCommand, profile, id string,
 		if !fixture {
 			return errors.New("provider execution unavailable")
 		}
-		if p == nil || c.ConsentDigest != p.ID || (chatPermissionReason(*d, p, s.bootID, now) != "ready" || !s.chatAccessCurrent(p)) || !s.aiConnectionValid(p.ConnectionRef) {
+		if p == nil || c.ConsentDigest != p.ID || (s.chatPermissionReason(*d, p, now) != "ready" || !s.chatAccessCurrent(p)) || !s.aiConnectionValid(p.ConnectionRef) {
 			return errors.New("Chat permission unavailable; review current scope and connection")
 		}
 		for _, q := range d.AIRequests {
-			if q.ProfileID == profile && q.HeldMicrousd > 0 {
+			if q.ProfileID == profile && aiHasUsageHold(q) {
 				return errors.New("profile has pending or uncertain usage; inspect it before another reply")
 			}
 		}
@@ -179,6 +247,13 @@ func (s *Store) changeChat(d *agentDocument, c AgentCommand, profile, id string,
 			return errors.New("Chat capacity reached; archive a settled conversation in History; linked or uncertain records stay protected")
 		}
 		cmd := AgentCommand{Action: "ai-prepare", ID: c.ID, Text: c.Text, Model: p.Model, ConnectionRef: p.ConnectionRef, Limits: &p.Limits, MemorySelection: &AIMemorySelection{Mode: p.MemoryMode}}
+		if p.ConnectionRef != "" {
+			connection, err := s.AIConnection(p.ConnectionRef)
+			if err != nil || connection.Ref != p.ConnectionRef {
+				return errors.New("selected Chat account unavailable")
+			}
+			cmd.providerAuthMethod = connection.AuthMethod
+		}
 		if e := changeAgentAI(d, cmd, profile, id, now, true, nil); e != nil {
 			return e
 		}
@@ -210,7 +285,7 @@ func (s *Store) chatRequestValid(d agentDocument, q AgentAIRequest, now int64) b
 	}
 	p := d.Sessions[si].Chat
 	// Exhaustion prevents new sends, not the already reserved final request.
-	return p != nil && validChatPermission(*p) && !p.Revoked && p.ID == q.ChatPermissionID && p.BootID == s.bootID && s.chatAccessCurrent(p) && now >= p.CreatedAt && now < p.ExpiresAt && p.PersonaDigest == personaDigest(d.Profiles[agentProfile(d, q.ProfileID)]) && p.ConnectionRef == q.ConnectionRef && p.Model == q.Model && p.Limits == q.Limits && q.Stream && p.UsedRequests > 0
+	return p != nil && s.validChatPermission(*p) && !p.Revoked && p.ID == q.ChatPermissionID && p.BootID == s.bootID && s.chatAccessCurrent(p) && now >= p.CreatedAt && now < p.ExpiresAt && p.PersonaDigest == personaDigest(d.Profiles[agentProfile(d, q.ProfileID)]) && p.ConnectionRef == q.ConnectionRef && p.Model == q.Model && p.Limits == q.Limits && q.Stream && p.UsedRequests > 0
 }
 func validateChatStorage(raw []byte, d agentDocument) error {
 	var root struct {
@@ -304,7 +379,7 @@ func (s *Store) chatView(v AgentView) AgentView {
 	d := agentDocument{Profiles: v.Profiles, Sessions: v.Sessions}
 	v.ChatReadiness = map[string]string{}
 	for _, ss := range v.Sessions {
-		reason := chatPermissionReason(d, ss.Chat, s.bootID, s.now().Unix())
+		reason := s.chatPermissionReason(d, ss.Chat, s.now().Unix())
 		if ss.Chat != nil && !s.chatAccessCurrent(ss.Chat) {
 			reason = "locked"
 		}

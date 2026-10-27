@@ -6,14 +6,18 @@ package bundle
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/fased-ai/fased-app/internal/update"
 )
+
+const maxFileBytes = 128 * 1024 * 1024
+const maxManifestBytes = 32 * 1024
 
 type File struct {
 	SHA256 string `json:"sha256"`
@@ -45,45 +49,71 @@ func PlatformFiles() map[string]string {
 	return map[string]string{"bwrap-userns-restrict": "packaging/linux/apparmor/bwrap-userns-restrict", "APPARMOR-COPYING": "packaging/linux/apparmor/COPYING", "APPARMOR-COPYRIGHT": "packaging/linux/apparmor/ubuntu-copyright", "APPARMOR-SOURCE.md": "packaging/linux/apparmor/README.md"}
 }
 func Inspect(path string) (File, error) {
-	i, e := os.Lstat(path)
-	if e != nil {
-		return File{}, e
-	}
-	if !i.Mode().IsRegular() || i.Size() > 128*1024*1024 {
-		return File{}, errors.New("bundle file must be a regular file at most 128 MiB")
-	}
-	f, e := os.Open(path)
+	f, size, e := openRegular(path, maxFileBytes)
 	if e != nil {
 		return File{}, e
 	}
 	defer f.Close()
 	h := sha256.New()
-	n, e := io.Copy(h, f)
+	n, e := io.Copy(h, io.LimitReader(f, maxFileBytes+1))
+	if n != size || n > maxFileBytes {
+		return File{}, errors.New("bundle file changed size or exceeds 128 MiB")
+	}
 	return File{hex.EncodeToString(h.Sum(nil)), n}, e
 }
+
+func openRegular(path string, limit int64) (*os.File, int64, error) {
+	i, err := os.Lstat(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !i.Mode().IsRegular() || i.Size() > limit {
+		return nil, 0, errors.New("bundle input must be a bounded regular file")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	opened, err := f.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(i, opened) || opened.Size() != i.Size() {
+		f.Close()
+		return nil, 0, errors.New("bundle input changed while opening")
+	}
+	return f, i.Size(), nil
+}
+
 func Verify(dir string) (Manifest, error) {
+	return VerifyPinned(dir, "")
+}
+
+// VerifyPinned binds the exact manifest bytes when an independently obtained
+// digest is supplied. It does not establish a publisher identity or release
+// channel, and never promotes an engineering bundle into a public release.
+func VerifyPinned(dir, manifestSHA256 string) (Manifest, error) {
 	var m Manifest
-	p := filepath.Join(dir, "bundle.json")
-	i, e := os.Lstat(p)
-	if e != nil {
-		return m, e
+	if manifestSHA256 != "" {
+		b, err := hex.DecodeString(manifestSHA256)
+		if err != nil || len(b) != sha256.Size || hex.EncodeToString(b) != manifestSHA256 {
+			return m, errors.New("bundle digest must be 64 lowercase hexadecimal characters")
+		}
 	}
-	if !i.Mode().IsRegular() || i.Size() > 32*1024 {
-		return m, errors.New("invalid bundle manifest file")
-	}
-	f, e := os.Open(p)
+	f, size, e := openRegular(filepath.Join(dir, "bundle.json"), maxManifestBytes)
 	if e != nil {
 		return m, e
 	}
 	defer f.Close()
-	d := json.NewDecoder(f)
-	d.DisallowUnknownFields()
-	if e = d.Decode(&m); e != nil {
-		return m, e
+	b, e := io.ReadAll(io.LimitReader(f, maxManifestBytes+1))
+	if e != nil || int64(len(b)) != size || len(b) > maxManifestBytes {
+		return m, errors.New("invalid or changed bundle manifest size")
 	}
-	var extra any
-	if d.Decode(&extra) != io.EOF {
-		return m, errors.New("trailing bundle data")
+	if manifestSHA256 != "" {
+		sum := sha256.Sum256(b)
+		if hex.EncodeToString(sum[:]) != manifestSHA256 {
+			return m, errors.New("bundle manifest does not match the independently obtained digest")
+		}
+	}
+	if e = update.StrictJSON(b, &m); e != nil {
+		return m, e
 	}
 	if m.Schema != 1 || m.Platform != runtime.GOOS || m.Arch != runtime.GOARCH || m.Version == "" || !m.UnsignedEngineering {
 		return m, errors.New("unsupported bundle identity or release mode")
@@ -96,6 +126,9 @@ func Verify(dir string) (Manifest, error) {
 	if m.Desktop {
 		allowed[desktop] = true
 	}
+	if _, present := m.Files["INSTALL.txt"]; present {
+		allowed["INSTALL.txt"] = true
+	}
 	if len(allowed) != len(m.Files) {
 		return m, errors.New("incomplete or unexpected bundle inventory")
 	}
@@ -107,6 +140,25 @@ func Verify(dir string) (Manifest, error) {
 		if e != nil || got != want {
 			return m, fmt.Errorf("bundle file %s is corrupt or mismatched", name)
 		}
+	}
+	entries, e := os.ReadDir(dir)
+	if e != nil {
+		return m, e
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == "bundle.json" || allowed[name] {
+			continue
+		}
+		// Older engineering archives included this non-executable guide outside
+		// the inventory. Retain read compatibility without following symlinks.
+		if name == "INSTALL.txt" {
+			guide, err := Inspect(filepath.Join(dir, name))
+			if err == nil && guide.Bytes <= maxManifestBytes {
+				continue
+			}
+		}
+		return m, errors.New("unclassified entry in bundle directory")
 	}
 	return m, nil
 }

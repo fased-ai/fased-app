@@ -43,12 +43,29 @@ try {
     execFileSync("tar", ["-xf", "-", "-C", dir], { input: bytes });
     return dir;
   };
-  assert.equal(
-    execFileSync(
-      "git",
-      ["diff", prior, "--", "package.json", "package-lock.json"],
-      { encoding: "utf8" },
+  // These two commands do not build the predecessor UI or change its runtime
+  // dependencies. Every other package field and the lockfile must still match.
+  const packageInputs = (value) => {
+    const inputs = structuredClone(value);
+    delete inputs.scripts["build:installer"];
+    delete inputs.scripts["test:core"];
+    return inputs;
+  };
+  assert.deepEqual(
+    packageInputs(JSON.parse(await readFile("package.json", "utf8"))),
+    packageInputs(
+      JSON.parse(
+        execFileSync("git", ["show", prior + ":package.json"], {
+          encoding: "utf8",
+        }),
+      ),
     ),
+    "predecessor package inputs changed outside installer-build/core-test commands",
+  );
+  assert.equal(
+    execFileSync("git", ["diff", prior, "--", "package-lock.json"], {
+      encoding: "utf8",
+    }),
     "",
     "predecessor dependencies changed; install a separately pinned dependency tree before building its UI",
   );

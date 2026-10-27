@@ -1,4 +1,9 @@
-import { AIConnectionSettings } from "../pages/AIConnection";
+import {
+  AIConnectionSettings,
+  AIModelPicker,
+  useAIConnection,
+} from "../pages/AIConnection";
+import { useState } from "react";
 import { useUI } from "../ui-preferences";
 import { InstanceSummary, RemoteConnection } from "./InstanceConnection";
 import {
@@ -49,14 +54,42 @@ export function WorkspaceDialogs() {
     notify,
   } = useWorkspace();
   const connected = core.mode === "ready";
+  const { view: connections, refresh: refreshConnections } = useAIConnection();
+  const [newAccount, setNewAccount] = useState("");
+  const [newModel, setNewModel] = useState("");
+  const [instructions, setInstructions] = useState("");
+  const [resumeAgent, setResumeAgent] = useState(false);
+  const accounts =
+    connections?.connections ?? (connections?.ref ? [connections] : []);
+  const account = accounts.find((item) => item.ref === newAccount);
+  const accountProvider = account?.provider;
+  const creationProvider =
+    accountProvider === "openai" ||
+    accountProvider === "anthropic" ||
+    accountProvider === "xai"
+      ? accountProvider
+      : undefined;
+  const modelReady =
+    !!creationProvider &&
+    account?.catalog?.models.some(
+      (item) =>
+        item.id === newModel &&
+        item.connectionRef === newAccount &&
+        item.selectable,
+    );
+  const closeProviders = () => {
+    setProvidersOpen(false);
+    if (resumeAgent) {
+      setResumeAgent(false);
+      setProfileOpen(true);
+      void refreshConnections();
+    }
+  };
   return (
     <>
       {providersOpen && connected && (
-        <Dialog
-          title={uiText("Providers")}
-          onClose={() => setProvidersOpen(false)}
-        >
-          <AIConnectionSettings />
+        <Dialog title={uiText("Providers")} onClose={closeProviders}>
+          <AIConnectionSettings startNew={resumeAgent} />
         </Dialog>
       )}
       {setupOpen &&
@@ -505,22 +538,32 @@ export function WorkspaceDialogs() {
       )}
       {profileOpen && (
         <Dialog
-          title={uiText("Create an agent profile")}
+          title={uiText("New agent")}
           onClose={() => setProfileOpen(false)}
         >
           <form
             onSubmit={async (e) => {
               e.preventDefault();
-              if (!profileName.trim()) return;
+              if (
+                !profileName.trim() ||
+                (connected && newAccount && !modelReady)
+              )
+                return;
               if (connected) {
                 if (
                   await agents.change({
                     action: "profile-create",
                     name: profileName,
-                    text: "Custom research profile",
+                    text: instructions,
+                    provider: newAccount ? creationProvider : "none",
+                    accountRef: newAccount,
+                    model: newAccount ? newModel : "",
                   })
                 ) {
                   setProfileName("");
+                  setNewAccount("");
+                  setNewModel("");
+                  setInstructions("");
                   setProfileOpen(false);
                   navigate("agents/chat");
                 }
@@ -551,6 +594,88 @@ export function WorkspaceDialogs() {
                 onChange={(e) => setProfileName(e.target.value)}
                 placeholder={uiText("e.g. Portfolio Researcher")}
               />
+              {connected && (
+                <>
+                  <label>
+                    {uiText("Account")}
+                    <select
+                      aria-label={uiText("Account")}
+                      value={newAccount}
+                      disabled={agents.busy}
+                      onFocus={() => void refreshConnections()}
+                      onChange={(e) => {
+                        const ref = e.target.value;
+                        const chosen = accounts.find(
+                          (item) => item.ref === ref,
+                        );
+                        setNewAccount(ref);
+                        setNewModel(
+                          chosen?.catalog?.models.find(
+                            (item) => item.selectable && item.recommended,
+                          )?.id || "",
+                        );
+                      }}
+                    >
+                      <option value="">{uiText("No AI")}</option>
+                      {accounts.map((item) => (
+                        <option
+                          key={item.ref}
+                          value={item.ref}
+                          disabled={item.locked}
+                        >
+                          {item.name ||
+                            connections?.catalog?.providers.find(
+                              (provider) => provider.id === item.provider,
+                            )?.name ||
+                            item.provider}{" "}
+                          ·{" "}
+                          {uiText(
+                            item.authMethod === "sign-in"
+                              ? "ChatGPT"
+                              : "API key",
+                          )}
+                        </option>
+                      ))}
+                      {newAccount && !account && (
+                        <option value={newAccount} disabled>
+                          {uiText("Unavailable")}
+                        </option>
+                      )}
+                    </select>
+                  </label>
+                  {newAccount && (
+                    <AIModelPicker
+                      value={newModel}
+                      onChange={setNewModel}
+                      connectionRef={newAccount}
+                      allowDemo={false}
+                      disabled={agents.busy}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={agents.busy}
+                    onClick={() => {
+                      setResumeAgent(true);
+                      setProfileOpen(false);
+                      setProvidersOpen(true);
+                    }}
+                  >
+                    {uiText("Connect provider")}
+                  </button>
+                  <details>
+                    <summary>{uiText("Instructions")}</summary>
+                    <textarea
+                      aria-label={uiText("Instructions")}
+                      maxLength={4000}
+                      value={instructions}
+                      disabled={agents.busy}
+                      onChange={(e) => setInstructions(e.target.value)}
+                    />
+                  </details>
+                </>
+              )}
               <p className="subtle">
                 {agents.error && <span role="alert">{agents.error}</span>}
               </p>
@@ -569,7 +694,7 @@ export function WorkspaceDialogs() {
                   !profileName.trim() ||
                   state.profiles.length >= 30 ||
                   agents.busy ||
-                  (connected && !agents.view)
+                  (connected && (!agents.view || (!!newAccount && !modelReady)))
                 }
               >
                 {uiText("Create agent")}

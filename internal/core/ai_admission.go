@@ -121,8 +121,25 @@ func validateAIModelPolicy(q AgentAIRequest, now int64) error {
 		return nil
 	}
 	p := openAIModelPolicy(q.Model)
+	if q.Policy != nil && q.Policy.WireVersion == "openai-signin-v1" {
+		selected := legacySignInModelPolicy(q.Model)
+		if selected == nil {
+			return errors.New("sign-in model policy unavailable")
+		}
+		p = *selected
+	}
+	if planSignInRequest(q) {
+		selected := chatModelPolicyForMethod(q.Model, "sign-in")
+		if selected == nil {
+			return errors.New("plan model policy unavailable")
+		}
+		p = *selected
+	}
 	if q.Policy == nil || *q.Policy != p || q.Model != p.Model || q.ConnectionRef == "" || now < p.ReviewedAt || now >= p.ExpiresAt || q.Limits.MaxInputTokens+q.Limits.MaxOutputTokens > p.ContextTokens || q.Limits.MaxOutputTokens > p.OutputTokens {
 		return errors.New("model, token or tariff policy unavailable/expired; review supported admission with an unlocked test connection")
+	}
+	if planSignInRequest(q) && !validPolicyLimits(q.Limits, q.Policy) {
+		return errors.New("plan requests require zero monetary fields and finite token/time acceptance limits")
 	}
 	return nil
 }
@@ -294,6 +311,70 @@ func admitOpenAI(ctx context.Context, q *AgentAIRequest, rt http.RoundTripper, n
 	a.State = "admitted"
 	// Set before crossing the creation boundary. Unverified outcomes retain hold.
 	a.GenerationAttempted = true
+	return true
+}
+
+func signInRequest(q AgentAIRequest) bool {
+	return q.Policy != nil && policyProvider(q.Policy) == "openai" && (q.Policy.WireVersion == "openai-signin-v1" || q.Policy.WireVersion == planSignInWire)
+}
+
+// Sign-in preview does not expose the API-key token-count contract. This local
+// conservative bound verifies the connected fixture journey only. Production
+// admission remains refused even if another release gate changes later.
+func controlledSignInAdmission(rt http.RoundTripper, q AgentAIRequest) bool {
+	switch value := rt.(type) {
+	case aiMemoryReviewTransport:
+		return controlledSignInAdmission(value.next, q)
+	case authenticatedAITransport:
+		if value.store == nil || value.request == nil || value.ref != q.ConnectionRef || value.request.ID != q.ID {
+			return false
+		}
+		value.store.provider.mu.Lock()
+		allowed := value.store.providerFixture || value.store.provider.signInTransport != nil
+		value.store.provider.mu.Unlock()
+		return allowed
+	}
+	return false
+}
+
+func admitSignInFixture(ctx context.Context, q *AgentAIRequest, rt http.RoundTripper, now func() time.Time) bool {
+	wire, err := aiWire(*q)
+	a := &OpenAIAdmission{State: "checking", WireSHA256: newsHash(wire)}
+	q.Admission = a
+	refuse := func() bool {
+		a.State = "refused"
+		q.State, q.HeldMicrousd = "failed", 0
+		q.Failure = "Sign-in fixture admission unavailable; no response attempted. Live subscription admission stays held."
+		return false
+	}
+	if err != nil || !signInRequest(*q) || planSignInRequest(*q) || !controlledSignInAdmission(rt, *q) || validateAIModelPolicy(*q, now().Unix()) != nil {
+		return refuse()
+	}
+	client := &http.Client{Transport: rt, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("sign-in redirect refused") }}
+	discovery := fetchProviderModelList(ctx, client, "openai", now(), "sign-in")
+	found := false
+	for _, model := range discovery.Models {
+		if model.ID == q.Model && model.Shutdown == nil {
+			found = true
+		}
+	}
+	if discovery.State != "ready" || !found || discovery.ExpiresAt <= now().Unix() {
+		return refuse()
+	}
+	a.AccessAt, a.ModelRecordSHA256 = now().Unix(), discovery.SHA256
+	// Include the entire submitted JSON plus a fixed envelope allowance. Never
+	// claim this synthetic estimate came from a provider token-count endpoint.
+	estimate := int64(len(wire)) + 256
+	if estimate > q.Limits.MaxInputTokens || ctx.Err() != nil || aiRequestReservation(*q) > q.Limits.BudgetMicrousd {
+		return refuse()
+	}
+	a.CountedAt, a.InputTokens = now().Unix(), estimate
+	a.CountPayloadSHA256 = newsHash(wire)
+	a.CountResponseSHA256 = newsHash([]byte(fmt.Sprintf("sign-in-fixture-byte-bound-v1:%d", estimate)))
+	if a.CountedAt < a.AccessAt || validateAIModelPolicy(*q, now().Unix()) != nil {
+		return refuse()
+	}
+	a.State, a.GenerationAttempted = "admitted", true
 	return true
 }
 

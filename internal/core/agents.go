@@ -164,6 +164,7 @@ type AgentView struct {
 // Optional fields are inert data for a fixed action; unknown fields/actions are
 // rejected. No arbitrary callback, URL, model tool or shell can be submitted.
 type AgentCommand struct {
+	providerAuthMethod   string               // Resolved only by the core, never accepted from JSON.
 	AccountRef           *string              `json:"accountRef,omitempty"`
 	UseAgentDefaults     bool                 `json:"useAgentDefaults,omitempty"`
 	ChatPermission       *ChatPermission      `json:"chatPermission,omitempty"`
@@ -518,6 +519,7 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		if err != nil {
 			return AgentView{}, err
 		}
+		c.providerAuthMethod = connection.AuthMethod
 		if c.Model != "" && c.Model != fixtureAIModel {
 			if _, ok := currentProviderModel(c.Model); !ok {
 				return AgentView{}, errors.New("select an available current model; older drafts remain unchanged")
@@ -644,8 +646,12 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		if !validAgentText(c.Name, 80, true) || len(d.Profiles) >= 30 {
 			return AgentView{}, errors.New("profile name required or profile limit reached")
 		}
+		created, err := s.configuredAgent(c, id)
+		if err != nil {
+			return AgentView{}, err
+		}
 		profile = id
-		d.Profiles = append(d.Profiles, AgentProfile{ID: id, Name: strings.TrimSpace(c.Name), Persona: c.Text, Provider: "none"})
+		d.Profiles = append(d.Profiles, created)
 	case "profile-update":
 		if !validAgentText(c.Name, 80, true) || (c.Provider != "none" && c.Provider != "openai" && c.Provider != "anthropic" && c.Provider != "xai") {
 			return AgentView{}, errors.New("name and supported provider preference required")

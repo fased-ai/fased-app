@@ -66,8 +66,8 @@ try {
   );
   pass(
     "schemaPauseAndApprovalFeatures",
-    contracts[0].state[0].versions.min === 25 &&
-      contracts[0].state[0].versions.max === 25 &&
+    contracts[0].state[0].versions.min === 26 &&
+      contracts[0].state[0].versions.max === 26 &&
       contracts[0].state[0].features.includes("agents-playbooks-v1") &&
       contracts[0].state[0].features.includes("agents-cron-v1") &&
       contracts[0].state[0].features.includes("agents-history-v1") &&
@@ -77,6 +77,7 @@ try {
       contracts[0].state[0].features.includes("agents-ai-accounts-v1") &&
       contracts[0].state[0].features.includes("agents-current-models-v1") &&
       contracts[0].state[0].features.includes("agents-native-providers-v1") &&
+      contracts[0].state[0].features.includes("agents-signin-plan-v2") &&
       contracts[0].state[0].features.includes("agents-local-v1") &&
       contracts[0].state[0].features.includes("agents-wen-paper-v1") &&
       contracts[0].state[0].features.includes("wen-research-v1") &&

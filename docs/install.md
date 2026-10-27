@@ -67,7 +67,7 @@ documents profile operation.
 
 ## Choose Local or Remote
 
-The terminal installer offers **Local** (install on this computer), **Remote** (install on this server) and **Connect** (open an existing instance). Connect verifies the selected Fased API/instance and opens its browser UI; it never installs or starts a local engine. Remote installation retains the `--vps` CLI alias and requires Linux autostart plus explicit SSH or Tailscale access. Tailscale enrollment, HTTPS and operator permissions remain owner prerequisites; no tailnet, SSH or firewall policy is reset.
+The terminal installer offers **Local** (install on this computer), **Remote** (install on this server) and **Connect** (open an existing instance). Connect verifies the selected Fased API/instance and opens its browser UI; it never installs or starts a local engine. Local asks whether to start at login, off by default. Remote asks whether to keep running after logout/reboot, on by default after confirmation; Linux autostart and lingering readiness are still required. Remote retains the `--vps` CLI alias and requires explicit SSH or Tailscale access. Tailscale enrollment, HTTPS and operator permissions remain owner prerequisites; no tailnet, SSH or firewall policy is reset.
 
 For an existing instance:
 
@@ -79,9 +79,74 @@ Use `--print` to verify/print without opening a browser, and optional `--instanc
 
 HTTPS is required for network destinations. HTTP is admitted only for explicit loopback/localhost SSH-forwarding addresses. Credentials, paths, query strings, fragments, redirects, incompatible APIs/identities, oversized responses and untrusted TLS fail before connection. CLI/native opening carries the verified public instance ID to the destination UI; the UI checks health before showing owner setup/sign-in or sending a password. Public health discovery omits credentials. Browser-to-browser connection opens the selected origin in a separate tab with no opener or copied session; its UI verifies its own runtime before sign-in. No local credential, conversation or setup preference is forwarded.
 
+Tailscale setup uses the same readiness check as Connect: the private URL must reach the healthy, compatible instance with its Local/Remote descriptor. An incompatible response leaves setup pending; retry verifies the recorded route without replacing it or touching instance data.
+
 The connection row follows the runtime profile and access transport, with the public instance ID under Instance details. Private HTTPS is displayed as Remote; a server installed as Remote also reports Remote through an SSH loopback connection. The stored deployment preference remains compatible metadata and is inspectable only in Diagnostics. Changing it does not move the runtime or change connection state. Existing owner data and authentication are reused across same-instance restart; connecting elsewhere leaves them on the original instance.
 
 ## Install
+
+### Independent verification before the bundle runs
+
+The separate `fased-install` verifier now implements an explicit development-only
+first-install path. Build it from the reviewed checkout with `npm run build:installer`
+or `go build -trimpath -o fased-install ./cmd/fased-install`. It runs without Node,
+Git or a Go toolchain. Authenticate this verifier and its public seed independently
+before using them; the downloaded app does not authenticate its own first launch.
+There is no public installer URL, production seed or signing identity configured.
+This development command is for controlled acceptance, not retail distribution.
+
+```sh
+./fased-install --development --seed-file /private/seed.json \
+  --seed-sha256 "INDEPENDENT_SEED_SHA256" --output /private/new-download
+```
+
+Use the actual independently obtained digest in place of the placeholder. The
+output must be absent under a real current-user-owned directory with mode0700.
+Controlled HTTPS fixtures may supply `--tls-ca-file /private/fixture-ca.pem`;
+TLS verification stays enabled. No proxy credentials, cookies, redirects or
+downloaded replacement roots are accepted. No app data is opened by verification.
+
+The seed locks the development purpose, repository, channel, Linux amd64 target,
+HTTPS origin, initial root and minimum release sequence. The pinned TUF library
+checks two distinct signatures from three separate root keys, two from three
+different targets keys, separate online roles, expiry and snapshot/target hashes.
+The signed descriptor binds the archive, inner manifest, version and source.
+Existing update/rehearsal receipts cannot authorize this first-install path.
+
+Downloaded bytes stay non-executable until the complete archive and extracted
+inventory pass verification. Extraction rejects unsafe paths/types, duplicate
+entries, oversized expansion and trailing data. Verification alone never runs
+the app. Add `--install` to explicitly open the existing Local/Remote wizard:
+
+```sh
+./fased-install --development --seed-file /private/seed.json \
+  --seed-sha256 "INDEPENDENT_SEED_SHA256" --output /private/new-download \
+  --install
+```
+
+The verifier rechecks expiry, archive/bundle bytes and the held executable before
+calling the original installer. Its normal installation/data defaults are resolved
+and checked for overlap with the verified download. Optional `--prefix`, `--data-dir`
+and `--start=false` are forwarded as fixed arguments; there is no arbitrary command
+or automatic retry. Existing installer/private-access/owner-authentication behavior
+continues below. Interrupted downloads never resume as trusted input: preserve
+unclassified residue and retry into a new absent output directory. The verifier
+does not delete application records, enable wallets or install an updater.
+
+The production-capable GitHub transport now has a separate version-2 controlled
+seed/descriptor profile and TLS/DNS fixture acceptance. Its policy is pinned in
+the seed and release/asset locator authorized by TUF, then the same archive and
+installer checks apply. Ordinary GitHub activation stays disabled; CLI/JSON cannot
+select a fixture resolver, dialer or test CA for that profile. Version 1 above
+retains its no-redirect transport. No production seed/endpoint/binding is created.
+
+Production initial-verifier authentication, publisher/provenance bindings and real
+GitHub delivery remain release gates. Disposable TUF keys and controlled HTTPS
+acceptance do not establish a trusted public installer or real Ubuntu/VPS/Tailscale
+acceptance. The production operations contract remains in
+[updates.md](updates.md#production-release-trust-operations-specification).
+
+### Install an already acquired engineering bundle
 
 Extract an acquired package into its own directory. On Linux, from the extracted
 directory, run:
@@ -91,9 +156,30 @@ directory, run:
 ```
 
 The wizard chooses Local/Remote installation or an existing Remote connection, private access and login autostart. It verifies the
-package's platform and file inventory before installation. This detects mixed
-or corrupt package files; a checksum in the package is **not** independent proof
-of who published it. Public bootstrap trust is a separate release requirement.
+package's platform, version and complete file inventory before host preparation.
+The running core and any desktop binary must belong to that package. Ambiguous
+JSON, extra files, symlinks and corrupt/mixed files are refused. New packages
+include `INSTALL.txt` in the inventory; older engineering packages may have a
+regular, bounded, unlisted guide, which is never executed by the installer.
+
+If you obtained the exact `bundle.json` SHA-256 independently, you can pin it:
+
+```sh
+./fased-app install --bundle . --bundle-sha256 "INDEPENDENT_BUNDLE_JSON_SHA256" --interactive
+```
+
+Use the real 64-character lowercase digest in place of the placeholder. The
+development package receipt records `manifestIdentity` for controlled verification.
+A digest copied from the same untrusted package is not independent trust. These
+checks run inside the already started core; they do **not** authenticate that
+initial executable, supply a signed public bootstrap or establish publisher
+identity. Public acquisition/signing remains a separate release requirement.
+
+The CLI passes the verified core/desktop hashes to the existing installer, which
+checks them before changing installation or instance directories. Each copied
+file is verified in staging before publication. Changed input is refused without
+publishing a bad target; restoring the same verified bundle permits retry with
+the same installation identity and preserved instance data.
 
 When installation finishes, the wizard prints the selected connection steps and
 commands using the installed executable and exact state directory; adding Fased

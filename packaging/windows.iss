@@ -15,17 +15,27 @@ SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayName=Fased App Engineering (keeps workspace data)
 [Files]
-Source: "{#Payload}\*"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Payload}\*"; DestDir: "{app}\bundle"; Flags: ignoreversion
 [Icons]
-Name: "{group}\Fased App"; Filename: "{app}\fased-desktop.exe"
+Name: "{group}\Fased App"; Filename: "{app}\bundle\fased-desktop.exe"
 Name: "{group}\Uninstall Fased App"; Filename: "{uninstallexe}"
 [Run]
-Filename: "{app}\fased-desktop.exe"; Description: "Open Fased App"; Flags: postinstall nowait skipifsilent
+Filename: "{app}\bundle\fased-desktop.exe"; Description: "Open Fased App"; Flags: postinstall nowait skipifsilent
 [Code]
+var
+  CoreInstallAttempted: Boolean;
+  CoreInstallConfirmed: Boolean;
+
+function GetCustomSetupExitCode(): Integer;
+begin
+  Result := 0;
+  if CoreInstallAttempted and (not CoreInstallConfirmed) then Result := 1;
+end;
+
 function InitializeUninstall(): Boolean;
 var Code: Integer;
 begin
-  Result := Exec(ExpandConstant('{app}\fased-app.exe'), 'uninstall', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Result := Exec(ExpandConstant('{app}\bundle\fased-app.exe'), 'uninstall', '', SW_HIDE, ewWaitUntilTerminated, Code);
   if Result then Result := Code = 0;
   if (not Result) and (not UninstallSilent) then
     MsgBox('Fased core removal was refused. Application and instance data are preserved. Inspect the CLI uninstall error before retrying.', mbError, MB_OK);
@@ -35,6 +45,16 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var Code: Integer;
 begin
   if CurStep = ssPostInstall then
-    if (not Exec(ExpandConstant('{app}\fased-app.exe'), 'install --bundle "' + ExpandConstant('{app}') + '"', '', SW_HIDE, ewWaitUntilTerminated, Code)) or (Code <> 0) then
+  begin
+    CoreInstallAttempted := True;
+    Code := 0;
+    CoreInstallConfirmed := Exec(ExpandConstant('{app}\bundle\fased-app.exe'), 'install --bundle "' + ExpandConstant('{app}\bundle') + '"', '', SW_HIDE, ewWaitUntilTerminated, Code);
+    if CoreInstallConfirmed then CoreInstallConfirmed := Code = 0;
+    if not CoreInstallConfirmed then
+    begin
+      Log('Fased core installation was not confirmed (exit code ' + IntToStr(Code) + ').');
       RaiseException('Fased core installation was not confirmed. Existing workspace data is preserved; inspect the CLI installation error before retrying.');
+    end;
+    Log('Fased core installation confirmed.');
+  end;
 end;

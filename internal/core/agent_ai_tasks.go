@@ -159,14 +159,14 @@ func taskAIRequestValid(d agentDocument, q AgentAIRequest, now int64) error {
 }
 func changeTaskAI(d *agentDocument, c AgentCommand, profile, id string, now int64, fixture bool) error {
 	if c.Action == "task-ai-prepare" {
-		if !validAgentText(c.Name, 80, true) || !validAgentText(c.Text, 1000, true) || c.IntervalSeconds < 60 || c.IntervalSeconds > 604800 || c.MaxRuns < 1 || c.MaxRuns > 10 || c.AuthorizationSeconds < 60 || c.AuthorizationSeconds > 604800 || c.TotalBudgetMicrousd < 1 || c.TotalBudgetMicrousd > maxModelBudget(c.Model) || len(d.Tasks) >= 100 {
+		if !validAgentText(c.Name, 80, true) || !validAgentText(c.Text, 1000, true) || c.IntervalSeconds < 60 || c.IntervalSeconds > 604800 || c.MaxRuns < 1 || c.MaxRuns > 10 || c.AuthorizationSeconds < 60 || c.AuthorizationSeconds > 604800 || !validPolicyTotal(chatModelPolicyForMethod(c.Model, c.providerAuthMethod), c.TotalBudgetMicrousd) || len(d.Tasks) >= 100 {
 			return errors.New("bounded AI task name/prompt/schedule/authorization and total budget required")
 		}
 		// Reuse the exact request validator and complete wire disclosure, then reserve
 		// all future request slots rather than publishing a disposable preview request.
 		copy := *d
 		copy.AIRequests = append([]AgentAIRequest{}, d.AIRequests...)
-		if e := changeAgentAI(&copy, AgentCommand{Model: c.Model, ConnectionRef: c.ConnectionRef, Action: "ai-prepare", ID: c.ID, Text: c.Text, Limits: c.Limits}, profile, id, now, false, nil); e != nil {
+		if e := changeAgentAI(&copy, AgentCommand{providerAuthMethod: c.providerAuthMethod, Model: c.Model, ConnectionRef: c.ConnectionRef, Action: "ai-prepare", ID: c.ID, Text: c.Text, Limits: c.Limits}, profile, id, now, false, nil); e != nil {
 			return e
 		}
 		q := copy.AIRequests[len(copy.AIRequests)-1]
@@ -264,7 +264,7 @@ func evaluateTaskAfterNews(d *agentDocument, i int, now int64, fixture bool) err
 		if q.TaskID == t.ID {
 			used += q.SpentMicrousd + q.HeldMicrousd
 		}
-		if q.ProfileID == t.ProfileID && q.HeldMicrousd > 0 {
+		if q.ProfileID == t.ProfileID && aiHasUsageHold(q) {
 			if q.State == "queued" || q.State == "running" {
 				d.Tasks[i].NextAt = now + 1
 				return nil

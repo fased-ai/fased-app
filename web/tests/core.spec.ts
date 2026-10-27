@@ -1141,7 +1141,11 @@ test("normal Chat grants bounded replies, streams Send and retains scoped histor
     exact: true,
   });
   await expect(provider).toBeVisible();
-  await provider.getByText("Credentials", { exact: true }).click();
+  await revealControl(
+    page,
+    provider.getByLabel("Vault passphrase", { exact: true }),
+    "",
+  );
   await provider
     .getByLabel("Test key")
     .fill("fased-test-normal-chat-disposable-key");
@@ -10685,7 +10689,7 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
   await expect(connection.getByRole("status")).toHaveText(
     "No connection saved",
   );
-  await connection.locator(".connection-options > summary").click();
+  await revealControl(page, connection.getByLabel("Test key"), "");
   await expect(
     connection.getByRole("button", {
       name: "Save",
@@ -11298,7 +11302,11 @@ test("compact agent pages share one provider editor and keep feed settings off t
     .click();
   const provider = page.getByRole("dialog", { name: "Providers", exact: true });
   await expect(provider.locator(".ai-connection")).toHaveCount(1);
-  await provider.getByText("Credentials", { exact: true }).click();
+  await revealControl(
+    page,
+    provider.getByLabel("Vault passphrase", { exact: true }),
+    "",
+  );
   await provider
     .getByLabel("Test key", { exact: true })
     .fill("fased-test-discarded-editor");
@@ -11307,7 +11315,11 @@ test("compact agent pages share one provider editor and keep feed settings off t
     .getByRole("button", { name: "Providers", exact: true })
     .last()
     .click();
-  await provider.getByText("Credentials", { exact: true }).click();
+  await revealControl(
+    page,
+    provider.getByLabel("Vault passphrase", { exact: true }),
+    "",
+  );
   await expect(provider.getByLabel("Test key", { exact: true })).toHaveValue(
     "",
   );
@@ -11413,7 +11425,11 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     .click();
   const editor = page.getByRole("dialog", { name: "Providers", exact: true });
   await expect(instance).not.toBeVisible();
-  await editor.getByText("Credentials", { exact: true }).click();
+  await revealControl(
+    page,
+    editor.getByLabel("Vault passphrase", { exact: true }),
+    "",
+  );
   await editor
     .getByLabel("Test key", { exact: true })
     .fill("fased-test-dashboard-disposable-key");
@@ -11720,7 +11736,11 @@ test("provider editor follows core credential admission without enabling live ca
     .getByRole("button", { name: "Providers", exact: true })
     .click();
   const editor = page.getByRole("dialog", { name: "Providers", exact: true });
-  await editor.getByText("Credentials", { exact: true }).click();
+  await revealControl(
+    page,
+    editor.getByLabel("Vault passphrase", { exact: true }),
+    "",
+  );
   await editor
     .getByLabel("API key", { exact: true })
     .fill("disposable-api-input-not-issued-by-any-provider");
@@ -11737,7 +11757,11 @@ test("provider editor follows core credential admission without enabling live ca
     .getByRole("dialog", { name: "Instance", exact: true })
     .getByRole("button", { name: "Providers", exact: true })
     .click();
-  await editor.getByText("Credentials", { exact: true }).click();
+  await revealControl(
+    page,
+    editor.getByLabel("Vault passphrase", { exact: true }),
+    "",
+  );
   await expect(editor.getByLabel("Test key", { exact: true })).toBeVisible();
   await expect(editor.getByRole("status")).toContainText("No connection saved");
 });
@@ -11858,13 +11882,494 @@ test("multiple accounts keep scheduled agent selection and refuse a stale provid
   await expect(editor.getByLabel("Account", { exact: true })).toHaveValue(
     b.ref,
   );
-  await editor.getByText("Credentials", { exact: true }).click();
+  await revealControl(
+    page,
+    editor.getByLabel("Vault passphrase", { exact: true }),
+    "",
+  );
   await expect(
     editor.getByRole("button", { name: "Lock", exact: true }),
   ).toBeDisabled();
   expect((await privateCLI(["ai-connection"])).ref).toBe(a.ref);
   expect((await privateCLI(["ai-connection"])).locked).toBe(false);
   expect((await read()).tasks[0].ai.connectionRef).toBe(b.ref);
+});
+
+for (const location of ["local", "remote"]) {
+  test(`provider sign-in ${location} keeps its account route through configured Chat`, async ({
+    page,
+  }) => {
+    test.setTimeout(90000);
+    await stop();
+    await start(true);
+    // Runtime fixtures stay standalone/Local. Simulate only the public SSH
+    // Remote descriptor to verify its UI consumer; this is not VPS acceptance.
+    if (location === "remote")
+      await page.route("**/api/v1/health", async (route) => {
+        const response = await route.fetch();
+        const body = await response.json();
+        body.connection = { location: "remote", transport: "loopback" };
+        await route.fulfill({ response, json: body });
+      });
+    const external: string[] = [];
+    const signInStarts: { remote?: boolean }[] = [];
+    page.on("request", (r) => {
+      const host = new URL(r.url()).hostname;
+      if (host !== "127.0.0.1" && host !== "localhost") external.push(r.url());
+      if (
+        r.method() === "POST" &&
+        new URL(r.url()).pathname === "/api/v1/ai/connection"
+      ) {
+        const body = r.postDataJSON();
+        if (body.action === "sign-in-start") signInStarts.push(body);
+      }
+    });
+    await page.goto(url + "/#agents/settings");
+    const claim = JSON.parse(
+      await readFile(join(dir, "claim-code.json"), "utf8"),
+    );
+    await page.getByLabel("One-use claim code").fill(claim.code);
+    await page.getByLabel("Create owner password").fill(fixturePassword);
+    await page
+      .getByRole("button", { name: "Claim workspace", exact: true })
+      .click();
+    await expect(
+      page.getByRole("button", { name: "Sign out", exact: true }),
+    ).toBeVisible();
+    const login = spawn(binary, [
+      "login",
+      "--data-dir",
+      dir,
+      "--password-stdin",
+    ]);
+    login.stdin!.end(fixturePassword + "\n");
+    expect((await once(login, "exit"))[0]).toBe(0);
+    const passphrase = "disposable-sign-in-ui-vault";
+    const original = await privateCLI(["ai-connection", "--request-stdin"], {
+      action: "save",
+      key: "fased-test-sign-in-ui-primary",
+      passphrase,
+    });
+    const before = await privateCLI(["agents"]);
+    await page.goto(url + "/#agents/chat");
+    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    const creation = page.getByRole("dialog", {
+      name: "New agent",
+      exact: true,
+    });
+    await creation.getByLabel("Name", { exact: true }).fill("Plan researcher");
+    await creation
+      .getByRole("button", { name: "Connect provider", exact: true })
+      .click();
+    const editor = page.getByRole("dialog", { name: "Providers", exact: true });
+    await editor
+      .getByRole("button", { name: "Add provider", exact: true })
+      .click();
+    await editor
+      .getByLabel("Connection", { exact: true })
+      .selectOption("sign-in");
+    await editor.getByLabel("Name", { exact: true }).fill("ChatGPT research");
+    await editor
+      .getByRole("button", { name: "Continue with ChatGPT", exact: true })
+      .click();
+    if (location === "remote") expect(signInStarts.at(-1)?.remote).toBe(true);
+    const link = editor.getByRole("link", {
+      name: "Open sign-in",
+      exact: true,
+    });
+    await expect(link).toBeVisible();
+    if (location === "remote") {
+      await editor
+        .getByLabel("Redirect URL", { exact: true })
+        .fill((await link.getAttribute("href"))!);
+    } else {
+      const opened = page.waitForEvent("popup");
+      await link.click();
+      const popup = await opened;
+      await popup.waitForLoadState("domcontentloaded");
+      await popup.close();
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    }
+    await editor
+      .getByLabel("Vault passphrase", { exact: true })
+      .fill(passphrase);
+    await expect(
+      editor.getByRole("button", { name: "Finish", exact: true }),
+    ).toBeEnabled();
+    await editor.getByRole("button", { name: "Finish", exact: true }).click();
+    await expect
+      .poll(
+        async () => (await privateCLI(["ai-connection"])).connections.length,
+      )
+      .toBe(2);
+    const accounts = await privateCLI(["ai-connection"]);
+    expect(accounts.ref).toBe(original.ref);
+    const account = accounts.connections.find(
+      (a: any) => a.authMethod === "sign-in",
+    );
+    expect(account).toMatchObject({
+      name: "ChatGPT research",
+      provider: "openai",
+      authMethod: "sign-in",
+      planUse: true,
+      liveCallsEnabled: false,
+    });
+    expect((await privateCLI(["agents"])).revision).toBe(before.revision);
+    await editor
+      .getByRole("button", { name: "Close dialog", exact: true })
+      .click();
+    await expect(creation).toBeVisible();
+    await expect(creation.getByLabel("Name", { exact: true })).toHaveValue(
+      "Plan researcher",
+    );
+    await creation
+      .getByLabel("Account", { exact: true })
+      .selectOption(account.ref);
+    await creation
+      .getByLabel("Model", { exact: true })
+      .selectOption("gpt-6.1-terra");
+    await creation
+      .getByRole("button", { name: "Create agent", exact: true })
+      .click();
+    await expect(creation).not.toBeVisible();
+    const profile = (await privateCLI(["agents"])).profiles.find(
+      (p: any) => p.name === "Plan researcher",
+    );
+    expect(profile.connectionRef).toBe(account.ref);
+    const read = () => privateCLI(["agents", "--profile", profile.id]);
+    await page.getByRole("button", { name: "Start chat", exact: true }).click();
+    await page
+      .getByLabel("Message", { exact: true })
+      .fill("Summarize this synthetic note");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    const replyReview = page.getByRole("dialog", {
+      name: "Allow replies",
+      exact: true,
+    });
+    await expect(
+      replyReview.getByText("App limits", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      replyReview.getByText("Maximum cost", { exact: true }),
+    ).toHaveCount(0);
+    await replyReview
+      .getByRole("button", { name: "Allow and send", exact: true })
+      .click();
+    await expect
+      .poll(async () => (await read()).aiRequests.at(-1)?.state)
+      .toBe("completed");
+    const reply = (await read()).aiRequests.at(-1);
+    expect(reply).toMatchObject({
+      connectionRef: account.ref,
+      costBasis: "chatgpt-plan-reported-usage",
+      spentMicrousd: 0,
+      heldMicrousd: 0,
+      limits: { budgetMicrousd: 0 },
+      policy: { wireVersion: "openai-signin-v2" },
+    });
+    expect(reply.inputTokens).toBeGreaterThan(0);
+    expect(reply.outputTokens).toBeGreaterThan(0);
+    if (location === "local") {
+      await page.goto(url + "/#agents/tasks");
+      await openAISchedules(page);
+      const schedule = page.getByRole("region", {
+        name: "Scheduled AI steps",
+        exact: true,
+      });
+      await revealControl(page, schedule.getByLabel("AI task title"), "");
+      await schedule.getByLabel("AI task title").fill("Plan summary");
+      await schedule
+        .getByLabel("AI context conversation")
+        .selectOption((await read()).sessions[0].id);
+      await schedule
+        .getByLabel("AI analysis prompt")
+        .fill("Summarize one fictional event");
+      await schedule.getByLabel("AI run count").fill("1");
+      await expect(
+        schedule.getByLabel("Per-call cost cap (micro USD)"),
+      ).toHaveCount(0);
+      await schedule
+        .getByRole("button", { name: "Prepare AI task review", exact: true })
+        .click();
+      const task = schedule.getByRole("article", {
+        name: "AI task Plan summary",
+        exact: true,
+      });
+      await expect(task).toBeVisible();
+      const savedTask = (await read()).tasks.at(-1);
+      expect(savedTask.ai).toMatchObject({
+        connectionRef: account.ref,
+        budgetMicrousd: 0,
+        limits: { budgetMicrousd: 0 },
+        policy: { wireVersion: "openai-signin-v2" },
+      });
+      await task
+        .getByText("Review AI task disclosure", { exact: true })
+        .click();
+      await task
+        .getByLabel("Allow this frozen context, schedule and limits")
+        .check();
+      await task
+        .getByRole("button", { name: "Authorize task", exact: true })
+        .click();
+      await expect(task.getByText("scheduled", { exact: true })).toBeVisible();
+      await page.goto(url + "/#agents/settings");
+      await page
+        .getByRole("region", { name: "Agent settings", exact: true })
+        .getByRole("button", { name: "Providers", exact: true })
+        .click();
+      const accessEditor = page.getByRole("dialog", {
+        name: "Providers",
+        exact: true,
+      });
+      await accessEditor
+        .getByLabel("Account", { exact: true })
+        .selectOption(account.ref);
+      const background = accessEditor
+        .getByText("Background access", { exact: true })
+        .locator("..");
+      await background.locator(":scope > summary").click();
+      await background.getByLabel("Plan summary", { exact: true }).check();
+      await background
+        .getByRole("button", { name: "Review access", exact: true })
+        .click();
+      await background
+        .getByLabel("Vault passphrase", { exact: true })
+        .fill(passphrase);
+      await background
+        .getByRole("button", { name: "Allow task access", exact: true })
+        .click();
+      await expect
+        .poll(
+          async () =>
+            (await privateCLI(["ai-connection"])).connections.find(
+              (c: any) => c.ref === account.ref,
+            )?.taskAccess?.budgetMicrousd,
+        )
+        .toBe(0);
+      await accessEditor
+        .getByRole("button", { name: "Close dialog", exact: true })
+        .click();
+      await page.goto(url + "/#agents/tasks");
+      await openAISchedules(page);
+      await schedule
+        .getByRole("article", { name: "AI task Plan summary", exact: true })
+        .getByRole("button", { name: "Evaluate now", exact: true })
+        .click();
+      await expect
+        .poll(async () => (await read()).tasks.at(-1)?.state)
+        .toBe("completed");
+      const result = (await read()).aiRequests.at(-1);
+      expect(result).toMatchObject({
+        taskId: savedTask.id,
+        connectionRef: account.ref,
+        costBasis: "chatgpt-plan-reported-usage",
+        spentMicrousd: 0,
+        heldMicrousd: 0,
+      });
+      await page
+        .getByRole("navigation", { name: "Task views", exact: true })
+        .getByRole("button", { name: "Results", exact: true })
+        .click();
+      await page
+        .getByRole("region", { name: "Run results", exact: true })
+        .getByRole("button", { name: "Discuss", exact: true })
+        .click();
+      const source = (await read()).messages.at(-1);
+      await page
+        .getByRole("button", { name: "Remember this", exact: true })
+        .last()
+        .click();
+      await page
+        .getByLabel("Fact", { exact: true })
+        .fill("Keep fictional event summaries brief");
+      await page
+        .getByRole("button", { name: "Save memory", exact: true })
+        .click();
+      await expect.poll(async () => (await read()).memories.length).toBe(1);
+      expect(JSON.stringify((await read()).memories[0])).toContain(source.id);
+      expect(
+        (await privateCLI(["agents", "--profile", "news-researcher"])).memories,
+      ).toHaveLength(0);
+    }
+    expect(external).toEqual([]);
+  });
+}
+
+test("configured agent joins account Chat task result and memory without partial setup", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(90000);
+  await stop();
+  await start(true);
+  const external: string[] = [];
+  const origins = new Set([new URL(url).origin]);
+  page.on("request", (r) => {
+    if (!origins.has(new URL(r.url()).origin)) external.push(r.url());
+  });
+  await page.goto(url + "/#agents/chat");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const passphrase = "disposable-configured-agent-vault";
+  const primary = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "save",
+    name: "Primary",
+    key: "fased-test-configured-primary-key",
+    passphrase,
+  });
+  const account = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "add",
+    provider: "openai",
+    name: "Research",
+    key: "fased-test-configured-research-key",
+    passphrase,
+  });
+  const before = await privateCLI(["agents"]);
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption("news-researcher");
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  const creation = page.getByRole("dialog", { name: "New agent", exact: true });
+  await creation
+    .getByLabel("Name", { exact: true })
+    .fill("Configured researcher");
+  await creation
+    .getByLabel("Account", { exact: true })
+    .selectOption(account.ref);
+  await creation
+    .getByLabel("Model", { exact: true })
+    .selectOption("gpt-6.1-terra");
+  await creation
+    .getByRole("button", { name: "Create agent", exact: true })
+    .click();
+  await expect(creation).not.toBeVisible();
+  const current = await privateCLI(["agents"]);
+  const profile = current.profiles.find(
+    (p: any) => p.name === "Configured researcher",
+  );
+  expect(current.profiles.length).toBe(before.profiles.length + 1);
+  expect(profile).toMatchObject({
+    provider: "openai",
+    model: "gpt-6.1-terra",
+    connectionRef: account.ref,
+  });
+  expect(profile.connectionRef).not.toBe(primary.ref);
+  const read = () => privateCLI(["agents", "--profile", profile.id]);
+  expect((await read()).aiRequests).toHaveLength(0);
+  expect((await read()).tasks).toHaveLength(0);
+  await expect(page.getByLabel("Agent", { exact: true })).toHaveValue(
+    profile.id,
+  );
+  await page.waitForResponse(
+    (r) =>
+      r.request().method() === "GET" &&
+      new URL(r.url()).pathname === "/api/v1/agents",
+  );
+  await expect(page.getByLabel("Agent", { exact: true })).toHaveValue(
+    profile.id,
+  );
+  await page.getByRole("button", { name: "Start chat", exact: true }).click();
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Help me draft a reminder to inspect SOL risk");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "Allow replies", exact: true })
+    .getByRole("button", { name: "Allow and send", exact: true })
+    .click();
+  await expect
+    .poll(async () => (await read()).aiRequests.at(-1)?.state)
+    .toBe("completed");
+  const request = (await read()).aiRequests.at(-1);
+  expect(request).toMatchObject({
+    connectionRef: account.ref,
+    model: profile.model,
+    profileId: profile.id,
+  });
+  await page.getByRole("button", { name: "Review task", exact: true }).click();
+  await page
+    .getByLabel("Reminder task name", { exact: true })
+    .fill("Configured risk review");
+  await page
+    .getByLabel("Reminder text", { exact: true })
+    .fill("Inspect the saved SOL risk limits");
+  await page
+    .getByRole("button", { name: "Review schedule", exact: true })
+    .click();
+  await page.getByRole("checkbox", { name: /reviewed.*reminder/i }).check();
+  await page.getByRole("button", { name: "Create task", exact: true }).click();
+  await expect.poll(async () => (await read()).tasks.length).toBe(1);
+  await page.getByRole("button", { name: "Open Tasks", exact: true }).click();
+  await page
+    .getByRole("button", {
+      name: "Run now: Configured risk review",
+      exact: true,
+    })
+    .click();
+  await expect.poll(async () => (await read()).runs.length).toBe(1);
+  expect((await read()).runs[0].outcome).toBe("reminded");
+  await page.getByRole("button", { name: "Discuss", exact: true }).click();
+  const source = (await read()).messages.at(-1);
+  expect(source.text).toContain((await read()).runs[0].id);
+  await page
+    .getByRole("button", { name: "Remember this", exact: true })
+    .last()
+    .click();
+  await page
+    .getByLabel("Fact", { exact: true })
+    .fill("Prefer daily SOL risk summaries");
+  await page.getByRole("button", { name: "Save memory", exact: true }).click();
+  await expect.poll(async () => (await read()).memories.length).toBe(1);
+  await page.getByRole("button", { name: "Memory", exact: true }).click();
+  await expect(
+    page.getByText("Prefer daily SOL risk summaries", { exact: true }),
+  ).toBeVisible();
+  const retained = await read();
+  expect(JSON.stringify(retained.memories[0])).toContain(source.id);
+  expect(
+    (await privateCLI(["agents", "--profile", "news-researcher"])).memories,
+  ).toHaveLength(0);
+  await page.screenshot({
+    path: test
+      .info()
+      .outputPath(`joined-memory-${isMobile ? "mobile" : "desktop"}.png`),
+  });
+  await stop();
+  await start(true);
+  origins.add(new URL(url).origin);
+  const restartLogin = spawn(binary, [
+    "login",
+    "--data-dir",
+    dir,
+    "--password-stdin",
+  ]);
+  restartLogin.stdin!.end(fixturePassword + "\n");
+  expect((await once(restartLogin, "exit"))[0]).toBe(0);
+  const restored = await read();
+  for (const field of ["profiles", "tasks", "runs", "memories", "aiRequests"])
+    expect(restored[field]).toEqual(retained[field]);
+  const health = await (await page.request.get(url + "/api/v1/health")).json();
+  for (const name of [
+    "aiConnections",
+    "walletSigner",
+    "financialExecution",
+    "updater",
+  ])
+    expect(health.capabilities[name]).toBe(false);
+  expect(external).toEqual([]);
 });
 
 test("shared Add Provider binds native accounts and latest models across Chat and tasks", async ({
@@ -11907,7 +12412,17 @@ test("shared Add Provider binds native accounts and latest models across Chat an
       .getByRole("button", { name: "Add provider", exact: true })
       .click();
     await editor.getByLabel("Provider", { exact: true }).selectOption(provider);
-    await revealControl(page, editor.getByLabel("Name", { exact: true }), "");
+    await expect(editor.getByLabel("Test key", { exact: true })).toBeVisible();
+    await expect(
+      editor.getByRole("button", { name: "Unlock", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      editor.getByRole("button", { name: "Lock", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      editor.getByRole("button", { name: "Remove", exact: true }),
+    ).toHaveCount(0);
+
     await editor
       .getByLabel("Name", { exact: true })
       .fill(provider === "anthropic" ? "Claude research" : "Grok research");
@@ -11933,6 +12448,7 @@ test("shared Add Provider binds native accounts and latest models across Chat an
     await expect(editor.getByLabel("Name", { exact: true })).toHaveValue(
       account.name,
     );
+    await revealControl(page, editor.getByLabel("Name", { exact: true }), "");
     await editor
       .getByLabel("Name", { exact: true })
       .fill("Unsaved provider name");

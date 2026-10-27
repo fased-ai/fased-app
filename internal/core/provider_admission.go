@@ -34,6 +34,12 @@ func (s *Store) providerRequestAllowed(q AgentAIRequest, fixture bool) bool {
 	if q.Model != fixtureAIModel && s.providerModelSuperseded(q.ConnectionRef, q.Model) {
 		return false
 	}
+	if q.ConnectionRef != "" {
+		v, err := s.AIConnection(q.ConnectionRef)
+		if err != nil || v.Ref != q.ConnectionRef || v.PlanPaused {
+			return false
+		}
+	}
 	if fixture {
 		return true
 	}
@@ -41,7 +47,13 @@ func (s *Store) providerRequestAllowed(q AgentAIRequest, fixture bool) bool {
 		return false
 	}
 	v, err := s.AIConnection(q.ConnectionRef)
-	return err == nil && v.Ref == q.ConnectionRef && v.Provider == policyProvider(q.Policy) && v.CredentialMode == v.Provider
+	if err != nil || v.Ref != q.ConnectionRef || v.Provider != policyProvider(q.Policy) || v.PlanPaused {
+		return false
+	}
+	if v.AuthMethod == "sign-in" {
+		return v.CredentialMode == "openai-signin" && v.PlanUse && q.Policy != nil && q.Policy.WireVersion == "openai-signin-v2"
+	}
+	return v.CredentialMode == v.Provider && !signInRequest(q)
 }
 
 func (s *Store) providerTaskAllowed(task AgentTask, fixture bool) bool {
@@ -84,7 +96,11 @@ func (s *Store) providerActionAllowed(d agentDocument, c AgentCommand, profile s
 		for _, session := range d.Sessions {
 			if session.ProfileID == profile && session.ID == c.ID && session.Chat != nil {
 				p := session.Chat
-				return s.providerRequestAllowed(AgentAIRequest{ConnectionRef: p.ConnectionRef, Model: p.Model, Policy: chatModelPolicy(p.Model)}, false)
+				account, err := s.AIConnection(p.ConnectionRef)
+				if err != nil || account.Ref != p.ConnectionRef {
+					return false
+				}
+				return s.providerRequestAllowed(AgentAIRequest{ConnectionRef: p.ConnectionRef, Model: p.Model, Policy: chatModelPolicyForMethod(p.Model, account.AuthMethod)}, false)
 			}
 		}
 	case "ai-start":

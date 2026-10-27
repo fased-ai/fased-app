@@ -89,6 +89,15 @@ func run() error {
 		}
 		m.Files[n] = id
 	}
+	guide := []byte("Unsigned engineering package; not a public signed release.\nTerminal: ./" + en + " install --bundle . --interactive\nRemote: ./" + en + " install --bundle . --vps --autostart --access ssh\nOptional: --bundle-sha256 <independently obtained bundle.json SHA-256>.\nDesktop: open the bundled Fased desktop client; approve installation for this OS user.\nNo Git, Go, npm, RPC, AI or wallet account is needed at runtime.\nSee https://github.com/fased-ai/fased-app for supported-host and release status.\n")
+	if e := os.WriteFile(filepath.Join(payload, "INSTALL.txt"), guide, 0600); e != nil {
+		return e
+	}
+	guideID, e := bundle.Inspect(filepath.Join(payload, "INSTALL.txt"))
+	if e != nil {
+		return e
+	}
+	m.Files["INSTALL.txt"] = guideID
 	b, e := json.MarshalIndent(m, "", "  ")
 	if e != nil {
 		return e
@@ -97,10 +106,6 @@ func run() error {
 		return e
 	}
 	if _, e = bundle.Verify(payload); e != nil {
-		return e
-	}
-	guide := []byte("Unsigned engineering package; not a public signed release.\nTerminal: ./" + en + " install --bundle . --interactive\nVPS: ./" + en + " install --bundle . --vps --autostart --access ssh\nDesktop: open the bundled Fased desktop client; approve installation for this OS user.\nNo Git, Go, npm, RPC, AI or wallet account is needed at runtime.\nSee https://github.com/fased-ai/fased-app for supported-host and release status.\n")
-	if e = os.WriteFile(filepath.Join(stage, "INSTALL.txt"), guide, 0600); e != nil {
 		return e
 	}
 	ext := ".tar.gz"
@@ -181,7 +186,11 @@ func run() error {
 	if e != nil {
 		return e
 	}
-	receipt := map[string]any{"archive": target, "identity": id, "manifest": m, "publicRelease": false}
+	manifestID, e := bundle.Inspect(filepath.Join(payload, "bundle.json"))
+	if e != nil {
+		return e
+	}
+	receipt := map[string]any{"archive": target, "identity": id, "manifestIdentity": manifestID, "manifest": m, "publicRelease": false}
 	b, e = json.MarshalIndent(receipt, "", "  ")
 	if e != nil {
 		return e

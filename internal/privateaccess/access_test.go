@@ -77,7 +77,7 @@ func TestConditionalRouteRecoveryAndForeignConfiguration(t *testing.T) {
 		if r.URL.String() != p.Origin+"/api/v1/health" {
 			t.Fatal("unexpected probe", r.URL)
 		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"instanceId":"` + probeID + `","apiVersion":"1"}`)), Header: make(http.Header)}, nil
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"status":"ok","instanceId":"` + probeID + `","apiVersion":"1","connection":{"location":"remote","transport":"private-https"}}`)), Header: http.Header{"Content-Type": []string{"application/json"}}}, nil
 	})}}
 	if e := m.Enable(t.Context(), root, p, "fixture-instance"); e == nil {
 		t.Fatal("interrupted write reported success")
@@ -134,5 +134,47 @@ func TestConcurrentOwnerRouteChangeIsNotOverwritten(t *testing.T) {
 	r, e := load(root)
 	if e != nil || r.Phase != "preparing" {
 		t.Fatal("recovery intent lost", e)
+	}
+}
+
+func TestPrivateAccessReadinessRequiresHealthyCompatibleInstance(t *testing.T) {
+	valid := `{"status":"ok","instanceId":"fixture-instance","apiVersion":"1","connection":{"location":"remote","transport":"private-https"}}`
+	for _, tc := range []struct {
+		name, body, contentType string
+	}{
+		{"missing runtime", `{"status":"ok","instanceId":"fixture-instance","apiVersion":"1"}`, "application/json"},
+		{"unhealthy runtime", strings.Replace(valid, `"status":"ok"`, `"status":"starting"`, 1), "application/json"},
+		{"wrong media", valid, "text/html"},
+		{"trailing content", valid + `{}`, "application/json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := fixture(t)
+			plan := Plan{Mode: "tailscale", Origin: "https://node.owner.ts.net", Target: "http://127.0.0.1:7331"}
+			cfg, writes := []byte(`{}`), 0
+			body, contentType := tc.body, tc.contentType
+			manager := Manager{
+				GetConfig: func(context.Context) ([]byte, string, error) { return cfg, "revision", nil },
+				SetConfig: func(_ context.Context, next []byte, _ string) error { cfg = next; writes++; return nil },
+				Client: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+					if r.URL.String() != plan.Origin+"/api/v1/health" || r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" {
+						t.Fatal("unexpected private probe")
+					}
+					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{"Content-Type": []string{contentType}}}, nil
+				})},
+			}
+			if err := manager.Enable(t.Context(), root, plan, "fixture-instance"); err == nil {
+				t.Fatal("incompatible private app reported ready")
+			}
+			if receipt, err := load(root); err != nil || receipt.Phase != "preparing" {
+				t.Fatal("recovery receipt lost", receipt, err)
+			}
+			body, contentType = valid, "application/json; charset=utf-8"
+			if err := manager.Enable(t.Context(), root, plan, "fixture-instance"); err != nil {
+				t.Fatal("same-instance recovery failed", err)
+			}
+			if receipt, err := load(root); err != nil || receipt.Phase != "ready" || writes != 1 {
+				t.Fatal("retry changed the route or failed readiness", receipt, writes, err)
+			}
+		})
 	}
 }

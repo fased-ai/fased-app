@@ -62,12 +62,29 @@ try {
       "historical health projection plus current public connection descriptor",
     httpSHA256: sha(await readFile(httpPath)),
   };
-  // UI is inert in this predecessor journey; the current bundle can be reused.
-  // Its hash is recorded independently; no historical UI equivalence is claimed.
+  // Installer-build and core-test commands do not produce this inert UI.
+  // Keep every other package field, UI input and lockfile bound to the baseline.
+  const packageInputs = (value) => {
+    const inputs = structuredClone(value);
+    delete inputs.scripts["build:installer"];
+    delete inputs.scripts["test:core"];
+    return inputs;
+  };
+  assert.deepEqual(
+    packageInputs(JSON.parse(await readFile("package.json", "utf8"))),
+    packageInputs(
+      JSON.parse(
+        execFileSync("git", ["show", ref + ":package.json"], {
+          encoding: "utf8",
+        }),
+      ),
+    ),
+  );
+  // Hash the reused current bundle separately; it is not historical UI proof.
   assert.equal(
     execFileSync(
       "git",
-      ["diff", ref, "--", "ui", "package.json", "package-lock.json", "ui.go"],
+      ["diff", ref, "--", "ui", "package-lock.json", "ui.go"],
       { encoding: "utf8" },
     ),
     "",
