@@ -461,6 +461,9 @@ func (s *Store) ChangeAgents(ctx context.Context, c AgentCommand) (AgentView, er
 	return s.changeAgents(ctx, c, false)
 }
 func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) (AgentView, error) {
+	if s.pilotSyntheticOnly() && ((strings.HasPrefix(c.Action, "news-") && c.Action != "news-source-disable" && c.Action != "news-cancel") || c.NewsSourceID != "") {
+		return AgentView{}, errors.New("pilot accepts synthetic local inputs only")
+	}
 	if c.ChatPermission != nil && c.Action != "chat-allow" {
 		return AgentView{}, errors.New("Chat permission requires its own approval")
 	}

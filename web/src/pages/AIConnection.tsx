@@ -7,6 +7,7 @@ import { TaskAccessSettings, type TaskAccessAllowance } from "./TaskAccess";
 import { OpenAIPilotSettings, type PilotAllowance } from "./OpenAIPilot";
 
 export type Connection = {
+  pilotEnrollment?: boolean;
   pilotAvailable?: boolean;
   pilot?: PilotAllowance;
   pilotReview?: PilotAllowance;
@@ -220,7 +221,7 @@ export function AIConnectionSettings() {
           type="button"
           aria-label={uiText("Add provider")}
           title={uiText("Add provider")}
-          disabled={busy}
+          disabled={busy || root?.pilotEnrollment}
           onClick={() => {
             setSelected("new");
             setName("");
@@ -360,7 +361,13 @@ export function AIConnectionSettings() {
             <div className="agent-actions">
               <button
                 className="primary"
-                disabled={busy || !view || !key || passphrase.length < 12}
+                disabled={
+                  busy ||
+                  !view ||
+                  !key ||
+                  passphrase.length < 12 ||
+                  (view.pilotEnrollment && !!view.ref)
+                }
               >
                 {view?.ref ? uiText("Replace") : uiText("Save")}
               </button>

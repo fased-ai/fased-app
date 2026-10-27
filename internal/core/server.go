@@ -53,6 +53,9 @@ func startModes(ctx context.Context, dir, listen, publicOrigin string, assets fs
 	if err != nil || !isLoopbackHost(host) {
 		return nil, errors.New("listen address must be an explicit loopback IP and port")
 	}
+	if err = preflightOpenAIPilotBinding(dir, compiledOpenAIPilotBinding, openAIPilotActivationEnabled); err != nil {
+		return nil, err
+	}
 	if err = privateDir(dir); err != nil {
 		return nil, err
 	}
@@ -74,6 +77,9 @@ func startModes(ctx context.Context, dir, listen, publicOrigin string, assets fs
 			lock.Close()
 		}
 	}()
+	if store.pilot.binding != nil && !pilotStandaloneOptionsAllowed(fixture, sessionFixture, publicOrigin, custodyConfig) {
+		return nil, errors.New("pilot requires standalone Local core without fixture, signer or remote modes")
+	}
 	if len(custodyConfig) > 1 {
 		return nil, errors.New("one signer configuration required")
 	}
@@ -130,7 +136,7 @@ func (s *Server) startAgentTasks() {
 		defer ticker.Stop()
 		lastError := ""
 		var newsRT http.RoundTripper = newPublicNewsTransport()
-		var aiRT http.RoundTripper = newOpenAITransport()
+		var aiRT http.RoundTripper = s.Store.providerRuntimeTransport()
 		if s.agentFixture {
 			newsRT = fixtureNewsTransport{now: s.Store.now}
 			aiRT = fixtureAITransport{}
@@ -201,6 +207,9 @@ func (s *Server) Close(ctx context.Context) error {
 func (s *Server) ConfigureConnection(location string) error {
 	if location != "local" && location != "remote" {
 		return errors.New("instance location must be local or remote")
+	}
+	if s.Store != nil && s.Store.pilot.binding != nil && location != "local" {
+		return errors.New("pilot is bound to Local mode")
 	}
 	s.HTTP.Handler.(*HTTPHandler).instanceLocation = location
 	return nil

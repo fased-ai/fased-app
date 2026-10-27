@@ -38,6 +38,7 @@ type AIConnectionCommand struct {
 	Passphrase           string                `json:"passphrase,omitempty"`
 }
 type AIConnectionView struct {
+	PilotEnrollment        bool                  `json:"pilotEnrollment,omitempty"`
 	PilotAvailable         bool                  `json:"pilotAvailable,omitempty"`
 	Pilot                  *OpenAIPilotAllowance `json:"pilot,omitempty"`
 	PilotReview            *OpenAIPilotAllowance `json:"pilotReview,omitempty"`
@@ -222,11 +223,32 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 	v = AIConnectionView{CredentialMode: "test", AdmissionPolicy: openAIModelPolicy(), Provider: "openai", Model: fixtureAIModel, Locked: true, TestOnly: true, InputMicrousdPerToken: 1, OutputMicrousdPerToken: 4}
 	defer func() {
 		s.pilotViewLocked(&v)
+		if s.pilotBindingActiveLocked() {
+			v.PilotEnrollment = true
+			v.CredentialModes = []string{"openai"}
+			v.LiveCallsEnabled = v.Ref == s.pilot.binding.ConnectionRef && s.pilotCurrentLocked()
+		}
 		d := modelDiscovery{}
 		if state := s.provider.accounts[v.Ref]; state != nil {
 			d = state.discovery
 		}
 		v.Catalog = discoveredProviderCatalog(v, d, s.now().Unix())
+		if s.pilotBindingActiveLocked() {
+			providers := v.Catalog.Providers[:0]
+			for _, p := range v.Catalog.Providers {
+				if p.ID == "openai" {
+					providers = append(providers, p)
+				}
+			}
+			v.Catalog.Providers = providers
+			models := v.Catalog.Models[:0]
+			for _, m := range v.Catalog.Models {
+				if m.ID == s.pilot.binding.Model {
+					models = append(models, m)
+				}
+			}
+			v.Catalog.Models = models
+		}
 		if state := s.provider.accounts[v.Ref]; state != nil {
 			for i, m := range v.Catalog.Models {
 				if state.superseded[m.ID] {
@@ -332,7 +354,11 @@ func (s *Store) aiConnectionValid(ref string) bool {
 }
 func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (AIConnectionView, error) {
 	if pilotAction(c.Action) {
-		return s.changeOpenAIPilot(ctx, c)
+		v, e := s.changeOpenAIPilot(ctx, c)
+		if e == nil && c.Action == "pilot-allow" && s.pilotTransport(c.Ref) != nil {
+			return s.refreshProviderModels(ctx, c.Ref, s.providerModelTransport(c.Ref))
+		}
+		return v, e
 	}
 	if c.Pilot != nil {
 		return AIConnectionView{}, errors.New("pilot requires a dedicated review")
@@ -347,12 +373,15 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	if err != nil {
 		return v, err
 	}
-	if (c.Action == "save" || c.Action == "add" || c.Action == "unlock") && v.Ref != "" {
+	if (c.Action == "save" || c.Action == "add" || c.Action == "unlock") && v.Ref != "" && !s.deferPilotDiscovery() {
 		return s.refreshProviderModels(ctx, v.Ref, s.providerModelTransport(v.Ref))
 	}
 	return v, nil
 }
 func (s *Store) providerModelTransport(ref string) http.RoundTripper {
+	if t := s.pilotTransport(ref); t != nil {
+		return t
+	}
 	if s.providerFixture {
 		return fixtureAITransport{}
 	}
@@ -443,7 +472,11 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	if mode != "test" && mode != provider {
 		return v, errors.New("credential mode/provider mismatch")
 	}
-	if ((c.Action == "save" || c.Action == "add") && !s.aiCredentialModeAllowed(mode)) || (c.Action == "unlock" && !s.aiCredentialModeAllowed(v.CredentialMode) && !(s.pilotTargetLocked(v.Ref) && v.CredentialMode == "openai")) {
+	bootstrap := s.pilotBootstrapAllowedLocked(c, provider, mode)
+	if s.pilotBindingActiveLocked() && (c.Action == "save" || c.Action == "add") && !bootstrap {
+		return v, errors.New("pilot permits one initial OpenAI account; preserve the existing vault")
+	}
+	if ((c.Action == "save" || c.Action == "add") && !s.aiCredentialModeAllowed(mode) && !bootstrap) || (c.Action == "unlock" && !s.aiCredentialModeAllowed(v.CredentialMode) && !(s.pilotTargetLocked(v.Ref) && v.CredentialMode == "openai")) {
 		return v, errors.New("credential mode unavailable; real credentials disabled")
 	}
 	if !validPassword(c.Passphrase) || ((c.Action == "save" || c.Action == "add") && !validAICredential(mode, c.Key)) || (c.Action != "save" && c.Action != "add" && c.Key != "") {
@@ -508,6 +541,9 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	if env.Ref, e = randomToken(); e != nil {
 		return v, e
 	}
+	if bootstrap {
+		env.Ref = s.pilot.binding.ConnectionRef
+	}
 	if _, e = rand.Read(env.Salt); e != nil {
 		return v, e
 	}
@@ -532,8 +568,14 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	if col.Default == c.Ref && c.Action != "add" {
 		col.Default = env.Ref
 	}
+	if bootstrap {
+		col.Default = env.Ref
+	}
 	if e = s.writeAIVaultCollection(col); e != nil {
 		return v, errors.New("credential storage failed; inspect vault before retry")
+	}
+	if bootstrap {
+		s.pilot.bootstrap = false
 	}
 	s.clearAIConnectionLocked(c.Ref)
 	delete(s.provider.accounts, c.Ref)

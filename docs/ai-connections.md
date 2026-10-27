@@ -4,8 +4,8 @@
 
 Ordinary builds remain closed. No setting, environment variable, CLI flag or
 provider key enables this pilot. Its target is unset in every runtime constructor;
-only controlled tests set an instance/account/agent/current-model target. Live
-activation requires a separate reviewed patch and explicit owner authority.
+a separately reviewed source patch is required to bind one directory/instance/account/agent/current model. Live
+activation requires explicit owner authority. The shipped compiled flag remains false with an empty binding.
 
 For that scoped path, the existing authenticated `ai/connection` API and
 `ai-connection --request-stdin` accept `pilot-review`, `pilot-allow` and
@@ -29,6 +29,41 @@ or allocated cost. Proven unsent queued work releases its journal hold;
 dispatched/unknown usage retains its durable hold. The allowance cannot be
 rearmed in the same boot. Restart restores no pilot permission or credential
 unlock and never replays requests; history, drafts, results and memory remain.
+
+## Activation preparation — maintainer only
+
+The existing engine can prepare a new isolated target without starting a server:
+
+```sh
+mkdir -m 700 ./pilot-preparation
+fased-app pilot prepare \
+  --instance-dir "$PWD/pilot-preparation/instance" \
+  --review-dir "$PWD/pilot-preparation/review"
+```
+
+Both directories must be new. Preparation refuses existing instance/review paths,
+root execution and an already activated build. It creates fresh SQLite metadata
+with the existing core and reserves an account reference. It creates no owner
+password, provider key, permit, listener or service. Existing data is never adopted.
+
+`review/review.json` records the exact directory, instance, agent, reserved account,
+current model/tariff, limits and patch hash. `review/activation.patch` is an
+**unapplied** source patch for `internal/core/openai_pilot_target.go`. The review
+JSON is not configuration and cannot activate anything. The actual source still
+ships `openAIPilotActivationEnabled = false` and an empty binding. Do not apply,
+build an enabled candidate, enter real credentials or make calls without separate
+authority and review of that exact target and candidate. Preparation does not
+verify a real account's model access or billing.
+
+The prepared path, when separately approved, checks its canonical directory and
+read-only database identity/schema before normal startup writes. It permits only
+standalone Local mode, one initial OpenAI key into the reserved encrypted slot,
+and the existing finite pilot consent. First key entry does not dispatch or fetch
+models; Allow pilot admits its one bounded listing. Other providers, extra or
+replacement accounts, signer/Remote/fixture modes, RSS and external research are
+refused. UI and CLI share this policy. Active and immutable archived conversation
+records prevent rearming the one-time pilot, including zero-cost failed attempts.
+Normal installations retain their existing behavior and closed live gate.
 
 ## Current ordinary build
 

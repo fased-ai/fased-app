@@ -30,6 +30,9 @@ func main() {
 	}
 }
 func run(args []string, in *os.File, out, errOut io.Writer) error {
+	if len(args) > 1 && args[0] == "pilot" && args[1] == "prepare" {
+		return pilotPrepareCommand(args[2:], out, errOut)
+	}
 	if len(args) > 0 && args[0] == "connect" {
 		return connectCommand(args[1:], out, errOut)
 	}

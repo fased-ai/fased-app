@@ -18,6 +18,8 @@ export async function currentStorageFixture(archivedRoot) {
     "provider_models.json",
     "openai_transport.go",
     "openai_pilot.go",
+    "openai_pilot_activation.go",
+    "openai_pilot_target.go",
     "provider_admission.go",
     "account_rpc_storage.go",
     "agent_reminders.go",
