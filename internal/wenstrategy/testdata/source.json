@@ -1,0 +1,18 @@
+{
+  "schema": "wen-strategy-testdata-provenance/1",
+  "sourcePackage": "wen-strategy-contract",
+  "sourceVersion": "0.1.0",
+  "purpose": "Inert conformance and canonical-preview input fixtures; no execution authority",
+  "files": [
+    {
+      "file": "conformance.json",
+      "source": "wen/packages/strategy-contract/fixtures/conformance.json",
+      "sha256": "3cf7e2336fbd4a119b617bb9174f5b735476510b533e55eae1973cdf9273cc3e"
+    },
+    {
+      "file": "preview-strategy.json",
+      "source": "wen/packages/strategy-contract/fixtures/preview-strategy.json",
+      "sha256": "38330b126d5ea216553bff626b6e402748066da87a09a7f8f2781e64dee14493"
+    }
+  ]
+}
