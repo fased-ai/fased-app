@@ -1,5 +1,5 @@
-// Package bootstrap independently verifies a first-install development bundle.
-// It never enables production trust, an update service or financial authority.
+// Package bootstrap independently verifies first-install bundles. Production
+// admission is implemented but ordinary dispatch remains disabled.
 package bootstrap
 
 import (
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/releaseops"
+	"github.com/fased-ai/fased-app/internal/releaseprovenance"
 	"github.com/fased-ai/fased-app/internal/update"
 	"github.com/theupdateframework/go-tuf/v2/metadata"
 	"github.com/theupdateframework/go-tuf/v2/metadata/trustedmetadata"
@@ -19,6 +20,7 @@ import (
 
 const Purpose = "fased-app-first-install-development:v1"
 const GitHubPurpose = "fased-app-first-install-github-controlled:v1"
+const ProductionPurpose = "fased-app-first-install-production:v1"
 const descriptorTarget = "bootstrap/descriptor.json"
 const archiveTarget = "fased-app-linux-amd64.tar.gz"
 const maxArchiveBytes = 128 << 20
@@ -34,17 +36,20 @@ type Binding struct {
 
 func (b Binding) valid() bool {
 	profile := b.Version == 1 && b.Purpose == Purpose || b.Version == 2 && b.Purpose == GitHubPurpose
-	return profile && b.DevelopmentOnly && b.Repository == "fased-ai/fased-app" && b.Channel == "development" && b.Target == (update.Target{OS: "linux", Arch: "amd64"})
+	development := profile && b.DevelopmentOnly && b.Channel == "development"
+	production := b.Version == 3 && b.Purpose == ProductionPurpose && !b.DevelopmentOnly && b.Channel == "stable"
+	return (development || production) && b.Repository == "fased-ai/fased-app" && b.Target == (update.Target{OS: "linux", Arch: "amd64"})
 }
 
 type Seed struct {
 	Binding
-	Origin          string                  `json:"origin"`
-	Root            []byte                  `json:"root"`
-	CreatedAt       int64                   `json:"createdAt"`
-	ExpiresAt       int64                   `json:"expiresAt"`
-	MinimumSequence uint64                  `json:"minimumSequence,string"`
-	GitHub          releaseops.GitHubPolicy `json:"github,omitzero"`
+	Origin          string                    `json:"origin"`
+	Root            []byte                    `json:"root"`
+	CreatedAt       int64                     `json:"createdAt"`
+	ExpiresAt       int64                     `json:"expiresAt"`
+	MinimumSequence uint64                    `json:"minimumSequence,string"`
+	GitHub          releaseops.GitHubPolicy   `json:"github,omitzero"`
+	Provenance      *releaseprovenance.Policy `json:"provenance,omitempty"`
 }
 
 type Descriptor struct {
@@ -55,6 +60,7 @@ type Descriptor struct {
 	BundleSHA256   string                 `json:"bundleSha256"`
 	Archive        update.Artifact        `json:"archive"`
 	GitHub         releaseops.GitHubAsset `json:"github,omitzero"`
+	Release        ProductionRelease      `json:"release,omitzero"`
 }
 
 func digest(b []byte) string { v := sha256.Sum256(b); return hex.EncodeToString(v[:]) }
@@ -112,7 +118,14 @@ func metadataShape(b []byte, kind string) error {
 func parseSeed(b []byte, pin string, now time.Time) (Seed, error) {
 	var seed Seed
 	if !hashOK(pin) || digest(b) != pin || update.StrictJSON(b, &seed) != nil || !seed.Binding.valid() || seed.CreatedAt <= 0 || seed.CreatedAt > now.Unix() || seed.ExpiresAt <= now.Unix() || seed.ExpiresAt-seed.CreatedAt > 365*86400 || seed.MinimumSequence == 0 || len(seed.Root) > update.MaxDocument {
-		return seed, errors.New("current independently pinned first-install development seed required")
+		return seed, errors.New("current independently pinned first-install seed required")
+	}
+	if seed.Version == 3 {
+		if seed.Provenance == nil || seed.Provenance.Validate() != nil || seed.Provenance.Repository != seed.Repository || seed.Provenance.RepositoryID != seed.GitHub.RepositoryID {
+			return seed, errors.New("production seed requires pinned matching provenance trust and repository identity")
+		}
+	} else if seed.Provenance != nil {
+		return seed, errors.New("development seed cannot acquire production provenance authority")
 	}
 	if seed.Version == 1 {
 		u, err := update.DevelopmentAcquisitionURL(seed.Origin)
@@ -120,7 +133,7 @@ func parseSeed(b []byte, pin string, now time.Time) (Seed, error) {
 			return seed, errors.New("version1 seed must lock an exact development HTTPS origin only")
 		}
 	} else if seed.Origin != "" || seed.GitHub.Validate() != nil {
-		return seed, errors.New("version2 seed requires one explicit pinned GitHub policy and no legacy origin")
+		return seed, errors.New("GitHub seed requires one explicit pinned policy and no legacy origin")
 	}
 	if err := metadataShape(seed.Root, "root"); err != nil {
 		return seed, err
@@ -198,13 +211,13 @@ func initialChain(seed Seed, timestamp, snapshot, targets []byte, now time.Time)
 		return nil, err
 	}
 	t := chain.Targets["targets"]
-	if len(t.Signed.Targets) != 2 || !t.Signed.Expires.After(now) || t.Signed.Expires.After(now.Add(30*24*time.Hour)) {
+	if len(t.Signed.Targets) != len(targetNames(seed)) || !t.Signed.Expires.After(now) || t.Signed.Expires.After(now.Add(30*24*time.Hour)) {
 		return nil, errors.New("exact descriptor/archive TUF targets required")
 	}
-	for _, name := range []string{descriptorTarget, archiveTarget} {
+	for _, name := range targetNames(seed) {
 		v := t.Signed.Targets[name]
 		limit := int64(update.MaxDocument)
-		if name == archiveTarget {
+		if name == archiveTarget || name == productionArchiveTarget {
 			limit = maxArchiveBytes
 		}
 		if v == nil || v.Length <= 0 || v.Length > limit || len(v.Hashes) != 1 || len(v.Hashes["sha256"]) != sha256.Size {
@@ -221,17 +234,28 @@ func metaBound(m *metadata.MetaFiles) bool {
 func verifyDescriptor(b []byte, seed Seed, chain *trustedmetadata.TrustedMetadata) (Descriptor, error) {
 	var d Descriptor
 	targets := chain.Targets["targets"].Signed.Targets
-	if err := targets[descriptorTarget].VerifyLengthHashes(b); err != nil {
+	descriptorName, archiveName := descriptorTarget, archiveTarget
+	if seed.Version == 3 {
+		descriptorName, archiveName = productionDescriptorTarget, productionArchiveTarget
+	}
+	if err := targets[descriptorName].VerifyLengthHashes(b); err != nil {
 		return d, err
 	}
-	if update.StrictJSON(b, &d) != nil || d.Binding != seed.Binding || d.Sequence < seed.MinimumSequence || d.ProductVersion == "" || len(d.ProductVersion) > 80 || d.Source == "" || len(d.Source) > 160 || strings.ContainsAny(d.ProductVersion+d.Source, "\r\n\x00") || !hashOK(d.BundleSHA256) || d.Archive.File != archiveTarget || d.Archive.Size != targets[archiveTarget].Length || d.Archive.SHA256 != hex.EncodeToString(targets[archiveTarget].Hashes["sha256"]) {
+	if update.StrictJSON(b, &d) != nil || d.Binding != seed.Binding || d.Sequence < seed.MinimumSequence || d.ProductVersion == "" || len(d.ProductVersion) > 80 || d.Source == "" || len(d.Source) > 160 || strings.ContainsAny(d.ProductVersion+d.Source, "\r\n\x00") || !hashOK(d.BundleSHA256) || d.Archive.File != archiveTarget || d.Archive.Size != targets[archiveName].Length || d.Archive.SHA256 != hex.EncodeToString(targets[archiveName].Hashes["sha256"]) {
 		return d, errors.New("first-install descriptor differs from pinned policy or signed targets")
 	}
 	if seed.Version == 1 && d.GitHub != (releaseops.GitHubAsset{}) {
 		return d, errors.New("version1 descriptor cannot acquire GitHub authority")
 	}
-	if seed.Version == 2 && (d.GitHub.Validate(seed.GitHub) != nil || d.GitHub.Name != d.Archive.File || d.GitHub.Size != d.Archive.Size || d.GitHub.SHA256 != d.Archive.SHA256) {
+	if seed.Version >= 2 && (d.GitHub.Validate(seed.GitHub) != nil || d.GitHub.Name != d.Archive.File || d.GitHub.Size != d.Archive.Size || d.GitHub.SHA256 != d.Archive.SHA256) {
 		return d, errors.New("signed GitHub locator differs from authorized archive")
+	}
+	if seed.Version == 3 {
+		if err := validateProductionDescriptor(d, targets[productionProvenanceTarget]); err != nil {
+			return d, err
+		}
+	} else if d.Release != (ProductionRelease{}) {
+		return d, errors.New("development descriptor cannot acquire production release authority")
 	}
 	return d, nil
 }

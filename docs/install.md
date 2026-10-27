@@ -146,6 +146,27 @@ acceptance do not establish a trusted public installer or real Ubuntu/VPS/Tailsc
 acceptance. The production operations contract remains in
 [updates.md](updates.md#production-release-trust-operations-specification).
 
+### Production first-install admission (not activated)
+
+A distinct version-3 stable seed/profile now verifies the production release unit
+through the same independent bootstrap. It requires threshold-signed descriptor,
+archive and offline Sigstore provenance, exact pinned publisher/build identity and
+schema-2 headless Ubuntu bundle integrity. The provenance check precedes download
+output and is repeated with retained original evidence before explicit installation.
+This is not a signer installation, an update permit or an alternate wallet flow.
+
+Version-1/2 development profiles retain their restrictions and cannot consume the
+new release-bundle format. The ordinary CLI exposes no test transport or verifier
+factory; public GitHub activation remains compiled off. No production seed, trust
+root or endpoint is supplied automatically, and native signing/real VPS acceptance
+is not implied. See [the frozen policy](updates.md#production-ubuntu-first-install-policy-v1).
+
+The package producer supports explicit `--ubuntu-release-format` for this schema.
+It requires Linux amd64, a canonical source commit and no desktop payload before
+creating output. The resulting receipt still has `publicRelease=false`: producing
+the format does not authenticate or publish it. The current engineering version
+cannot pass stable-release admission.
+
 ### Install an already acquired engineering bundle
 
 Extract an acquired package into its own directory. On Linux, from the extracted

@@ -5,6 +5,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -25,11 +26,27 @@ func main() {
 	}
 }
 func run() error {
-	engine := flag.String("engine", ".evidence/bin/fased-app", "native core binary")
-	desktop := flag.String("desktop", "", "optional matching native desktop binary")
-	out := flag.String("out", ".evidence/packages", "generated package output directory")
-	source := flag.String("source", "working-tree", "source revision identity")
-	flag.Parse()
+	return runArgs(os.Args[1:])
+}
+func runArgs(args []string) error {
+	packageFlags := flag.NewFlagSet("fased-package", flag.ContinueOnError)
+	engine := packageFlags.String("engine", ".evidence/bin/fased-app", "native core binary")
+	desktop := packageFlags.String("desktop", "", "optional matching native desktop binary")
+	out := packageFlags.String("out", ".evidence/packages", "generated package output directory")
+	source := packageFlags.String("source", "working-tree", "source revision identity")
+	releaseFormat := packageFlags.Bool("ubuntu-release-format", false, "headless Ubuntu schema2 format only; no publisher authentication or publication")
+	if err := packageFlags.Parse(args); err != nil {
+		return err
+	}
+	if packageFlags.NArg() != 0 {
+		return fmt.Errorf("unexpected packaging argument")
+	}
+	if *releaseFormat {
+		commit, err := hex.DecodeString(*source)
+		if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || *desktop != "" || err != nil || len(commit) != 20 || hex.EncodeToString(commit) != *source {
+			return fmt.Errorf("release format requires headless Linux amd64 and an explicit canonical source commit")
+		}
+	}
 	if e := os.MkdirAll(*out, 0700); e != nil {
 		return e
 	}
@@ -64,6 +81,9 @@ func run() error {
 		files[dn] = *desktop
 	}
 	m := bundle.Manifest{Schema: 1, Platform: runtime.GOOS, Arch: runtime.GOARCH, Version: core.Version, Source: *source, Desktop: *desktop != "", UnsignedEngineering: true, Files: map[string]bundle.File{}}
+	if *releaseFormat {
+		m.Schema, m.UnsignedEngineering = 2, false
+	}
 	for n, p := range files {
 		src, e := os.Open(p)
 		if e != nil {
@@ -90,6 +110,9 @@ func run() error {
 		m.Files[n] = id
 	}
 	guide := []byte("Unsigned engineering package; not a public signed release.\nTerminal: ./" + en + " install --bundle . --interactive\nRemote: ./" + en + " install --bundle . --vps --autostart --access ssh\nOptional: --bundle-sha256 <independently obtained bundle.json SHA-256>.\nDesktop: open the bundled Fased desktop client; approve installation for this OS user.\nNo Git, Go, npm, RPC, AI or wallet account is needed at runtime.\nSee https://github.com/fased-ai/fased-app for supported-host and release status.\n")
+	if *releaseFormat {
+		guide = []byte("Ubuntu release-format package; this format establishes no publisher authentication or publication.\nVerify the production descriptor, provenance and exact archive through an independently trusted fased-install before execution.\nStable version/source eligibility and release approval are separate admission requirements.\nNo signer, wallet, update service or permission is installed by packaging.\n")
+	}
 	if e := os.WriteFile(filepath.Join(payload, "INSTALL.txt"), guide, 0600); e != nil {
 		return e
 	}

@@ -31,22 +31,25 @@ type Options struct {
 }
 
 type Report struct {
-	Version          int           `json:"version"`
-	DevelopmentOnly  bool          `json:"developmentOnly"`
-	Purpose          string        `json:"purpose"`
-	MetadataVerified bool          `json:"metadataVerified"`
-	ArchiveVerified  bool          `json:"archiveVerified"`
-	BundleVerified   bool          `json:"bundleVerified"`
-	InstallerInvoked bool          `json:"installerInvoked"`
-	Sequence         uint64        `json:"sequence,string"`
-	Target           update.Target `json:"target"`
-	SeedSHA256       string        `json:"seedSha256"`
-	DescriptorSHA256 string        `json:"descriptorSha256"`
-	ArchiveSHA256    string        `json:"archiveSha256"`
-	BundleSHA256     string        `json:"bundleSha256"`
-	BundleDirectory  string        `json:"bundleDirectory"`
-	PublicActivation bool          `json:"publicActivation"`
-	GitHubTransport  bool          `json:"githubTransport,omitzero"`
+	Version            int           `json:"version"`
+	DevelopmentOnly    bool          `json:"developmentOnly"`
+	Purpose            string        `json:"purpose"`
+	MetadataVerified   bool          `json:"metadataVerified"`
+	ArchiveVerified    bool          `json:"archiveVerified"`
+	BundleVerified     bool          `json:"bundleVerified"`
+	InstallerInvoked   bool          `json:"installerInvoked"`
+	Sequence           uint64        `json:"sequence,string"`
+	Target             update.Target `json:"target"`
+	SeedSHA256         string        `json:"seedSha256"`
+	DescriptorSHA256   string        `json:"descriptorSha256"`
+	ArchiveSHA256      string        `json:"archiveSha256"`
+	BundleSHA256       string        `json:"bundleSha256"`
+	BundleDirectory    string        `json:"bundleDirectory"`
+	PublicActivation   bool          `json:"publicActivation"`
+	GitHubTransport    bool          `json:"githubTransport,omitzero"`
+	ProvenanceVerified bool          `json:"provenanceVerified,omitzero"`
+	ProvenanceSHA256   string        `json:"provenanceSha256,omitzero"`
+	TrustPolicySHA256  string        `json:"trustPolicySha256,omitzero"`
 }
 
 // Prepared is deliberately not a JSON-install permit. Run revalidates its
@@ -116,13 +119,16 @@ func privateDirectory(path string) (os.FileInfo, error) {
 // Prepare has no defaults for trust, endpoint or output. It neither reads app
 // state nor installs/executes anything. Old update/rehearsal seeds are refused.
 func Prepare(ctx context.Context, o Options) (prepared *Prepared, err error) {
-	if !o.Development || runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || os.Geteuid() == 0 {
-		return nil, errors.New("explicit ordinary-user Linux amd64 development bootstrap required; public bootstrap is disabled")
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || os.Geteuid() == 0 {
+		return nil, errors.New("ordinary-user Linux amd64 first-install bootstrap required")
 	}
 	o.Seed, o.TLSCA = append([]byte(nil), o.Seed...), append([]byte(nil), o.TLSCA...)
 	seed, err := parseSeed(o.Seed, o.SeedSHA256, o.clock())
 	if err != nil {
 		return nil, err
+	}
+	if o.Development != seed.DevelopmentOnly {
+		return nil, errors.New("bootstrap mode differs from independently pinned seed purpose")
 	}
 	if !filepath.IsAbs(o.Directory) || filepath.Clean(o.Directory) != o.Directory {
 		return nil, errors.New("absolute clean exclusive bootstrap output required")
@@ -186,12 +192,26 @@ func Prepare(ctx context.Context, o Options) (prepared *Prepared, err error) {
 		return nil, err
 	}
 	targets := chain.Targets["targets"].Signed.Targets
-	descriptorPath := "targets/bootstrap/" + hex.EncodeToString(targets[descriptorTarget].Hashes["sha256"]) + ".descriptor.json"
-	docs["descriptor.json"], err = source.metadata(ctx, descriptorPath, targets[descriptorTarget].Length)
+	descriptorName := descriptorTarget
+	if seed.Version == 3 {
+		descriptorName = productionDescriptorTarget
+	}
+	docs["descriptor.json"], err = source.metadata(ctx, descriptorPath(seed, targets[descriptorName].Hashes["sha256"]), targets[descriptorName].Length)
 	if err != nil {
 		return nil, err
 	}
 	descriptor, err := verifyDescriptor(docs["descriptor.json"], seed, chain)
+	if err != nil {
+		return nil, err
+	}
+	if seed.Version == 3 {
+		proof := descriptor.Release.Provenance
+		docs["provenance.sigstore.json"], err = source.metadata(ctx, "targets/provenance/"+proof.SHA256+".sigstore.json", proof.Size)
+		if err != nil {
+			return nil, err
+		}
+	}
+	decision, err := productionProof(seed, descriptor, docs["provenance.sigstore.json"], o.clock())
 	if err != nil {
 		return nil, err
 	}
@@ -244,6 +264,9 @@ func Prepare(ctx context.Context, o Options) (prepared *Prepared, err error) {
 	if m.Version != descriptor.ProductVersion || m.Source != descriptor.Source {
 		return prepared, errors.New("inner bundle version/source differs from signed descriptor")
 	}
+	if err = verifyBundleProfile(seed, m); err != nil {
+		return prepared, err
+	}
 	engine, _ := bundle.Names()
 	prepared.engine = m.Files[engine]
 	if err = prepared.revalidate(); err != nil {
@@ -260,7 +283,7 @@ func Prepare(ctx context.Context, o Options) (prepared *Prepared, err error) {
 	if err = writeNew(root, "seed.json", o.Seed); err != nil {
 		return prepared, err
 	}
-	prepared.report = Report{Version: seed.Version, DevelopmentOnly: true, Purpose: seed.Purpose, MetadataVerified: true, ArchiveVerified: true, BundleVerified: true, Sequence: descriptor.Sequence, Target: descriptor.Target, SeedSHA256: o.SeedSHA256, DescriptorSHA256: digest(docs["descriptor.json"]), ArchiveSHA256: descriptor.Archive.SHA256, BundleSHA256: descriptor.BundleSHA256, BundleDirectory: filepath.Join(o.Directory, "bundle"), GitHubTransport: seed.Version == 2}
+	prepared.report = Report{Version: seed.Version, DevelopmentOnly: seed.DevelopmentOnly, Purpose: seed.Purpose, MetadataVerified: true, ArchiveVerified: true, BundleVerified: true, Sequence: descriptor.Sequence, Target: descriptor.Target, SeedSHA256: o.SeedSHA256, DescriptorSHA256: digest(docs["descriptor.json"]), ArchiveSHA256: descriptor.Archive.SHA256, BundleSHA256: descriptor.BundleSHA256, BundleDirectory: filepath.Join(o.Directory, "bundle"), GitHubTransport: seed.Version >= 2, ProvenanceVerified: seed.Version == 3, ProvenanceSHA256: decision.BundleSHA256, TrustPolicySHA256: decision.PolicySHA256}
 	b, err := json.Marshal(prepared.report)
 	if err != nil {
 		return prepared, err
@@ -292,6 +315,9 @@ func (p *Prepared) revalidate() error {
 	if err != nil || d != p.descriptor {
 		return errors.New("bootstrap descriptor identity changed")
 	}
+	if _, err = productionProof(seed, d, p.metadata["provenance.sigstore.json"], now); err != nil {
+		return err
+	}
 	archive, err := bundle.Inspect(filepath.Join(p.options.Directory, "download.tar.gz"))
 	if err != nil || archive.SHA256 != d.Archive.SHA256 || archive.Bytes != d.Archive.Size {
 		return errors.New("bootstrap archive changed after verification")
@@ -303,5 +329,5 @@ func (p *Prepared) revalidate() error {
 	if m.Version != d.ProductVersion || m.Source != d.Source {
 		return fmt.Errorf("bootstrap source/version changed")
 	}
-	return nil
+	return verifyBundleProfile(seed, m)
 }
