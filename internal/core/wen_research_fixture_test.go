@@ -105,6 +105,8 @@ func TestWENResearchFixtureSourceChanges(t *testing.T) {
 	for _, phase := range []string{"before-dispatch", "before-count", "before-create", "in-flight", "completion", "library-completion", "deadline-completion", "clock-completion"} {
 		t.Run(phase, func(t *testing.T) {
 			s, _, _, selection := readBatchFixture(t)
+			fixtureNow := time.Unix(openAIModelPolicy(admittedOpenAIModel).ReviewedAt+3600, 0)
+			s.now = func() time.Time { return fixtureNow }
 			in := researchInput(t, selection)
 			in.Model = admittedOpenAIModel
 			connection := saveTestConnection(t, s)

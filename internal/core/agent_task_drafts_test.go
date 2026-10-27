@@ -101,7 +101,7 @@ func TestReminderTaskDraftCreateRestartAndOriginalCounters(t *testing.T) {
 	}
 	defer n.Close()
 	n.now = func() time.Time { return now }
-	v = agentApply(t, n, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Trading Analyst", Provider: "xai", Model: "preference-only"})
+	v = fixtureProfileProvider(t, n, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Trading Analyst", Provider: "xai"})
 	if len(v.Tasks) != 2 || v.Tasks[0] != original || v.Tasks[1] != copy || len(v.Runs) != 1 || len(v.AIRequests) != 0 {
 		t.Fatal("restart/provider change ran or modified a task")
 	}
@@ -184,7 +184,7 @@ func TestReminderTaskDraftStaleAndConcurrentCreation(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Action, c.ConsentDigest, c.ExpiresAt = "task-reminder-create", reviewed.TaskReminderReview.Digest, reviewed.TaskReminderReview.ExpiresAt
-	v = agentApply(t, s, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Trading Analyst", Provider: "xai"})
+	v = fixtureProfileProvider(t, s, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Trading Analyst", Provider: "xai"})
 	if _, err = s.ChangeAgents(t.Context(), c); err == nil {
 		t.Fatal("stale preview accepted after provider/source revision change")
 	}

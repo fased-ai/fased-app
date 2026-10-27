@@ -33,7 +33,7 @@ func TestWENPaperContextCapture(t *testing.T) {
 		t.Fatal("manual AI disclosure lost snapshot", err)
 	}
 	agentApply(t, s, AgentCommand{Action: "wen-paper-cancel", ID: task.ID})
-	v = agentApply(t, s, AgentCommand{Action: "profile-update", Name: "Changed preference", Provider: "xai", Model: "preference-only"})
+	v = fixtureProfileProvider(t, s, AgentCommand{Action: "profile-update", Name: "Changed preference", Provider: "xai"})
 	if v.Messages[0].Text != message.Text {
 		t.Fatal("snapshot changed with task/provider")
 	}

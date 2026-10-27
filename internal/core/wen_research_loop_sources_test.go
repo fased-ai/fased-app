@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 )
 
 // Exercise the v2 root/context branch through the same access/count/create
@@ -12,6 +13,8 @@ func TestWENResearchLoopProviderSources(t *testing.T) {
 	for _, phase := range []string{"before-dispatch", "before-count", "before-create", "in-flight", "completion"} {
 		t.Run(phase, func(t *testing.T) {
 			s, _, _, c := readBatchFixture(t)
+			fixtureNow := time.Unix(openAIModelPolicy(admittedOpenAIModel).ReviewedAt+3600, 0)
+			s.now = func() time.Time { return fixtureNow }
 			in := researchInput(t, c)
 			in.Schema = "wen-research-ai-prepare/2"
 			in.Model = admittedOpenAIModel

@@ -1569,6 +1569,26 @@ async function privateCLI(args: string[], input?: unknown) {
   if (code !== 0) throw new Error(error);
   return JSON.parse(output);
 }
+// Explicit fixture setup; never normalize production/negative request payloads.
+async function fixtureProviderSelection(
+  provider: "openai" | "anthropic" | "xai",
+) {
+  const account = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "add",
+    provider,
+    name: "Preference fixture",
+    key: `fased-test-${provider}-browser-preference-key`,
+    passphrase: "disposable-browser-preference-vault",
+  });
+  const model = account.catalog.models.find(
+    (m: { recommended: boolean; provider: string }) =>
+      m.recommended && m.provider === provider,
+  );
+  expect(model).toBeTruthy();
+  expect(account.liveCallsEnabled).toBe(false);
+  return { provider, model: model.id, accountRef: account.ref };
+}
+
 test.beforeEach(async () => {
   const root = resolve(".evidence/core-browser-fixtures");
   await mkdir(root, { recursive: true, mode: 0o700 });
@@ -2209,8 +2229,7 @@ test("reviewed memory restoration shares inert UI CLI drafts, expiry, current-on
   await command({
     action: "profile-update",
     name: "Trading Analyst",
-    provider: "xai",
-    model: "preference-only",
+    ...(await fixtureProviderSelection("xai")),
   });
   const cliRestore = await draft(original.id, 1);
   expect(cliRestore.selected.text).toBe("Current owner preference");
@@ -3244,8 +3263,7 @@ test("reminder task draft shares inert inspection edited review and bounded crea
   v = await command({
     action: "profile-update",
     name: "Trading Analyst",
-    provider: "xai",
-    model: "preference-only",
+    ...(await fixtureProviderSelection("xai")),
   });
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(panel.getByRole("alert")).toHaveText(
@@ -3884,8 +3902,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     action: "profile-update",
     name: "Trading Analyst",
     text: "Review saved sources",
-    provider: "xai",
-    model: "preference-only",
+    ...(await fixtureProviderSelection("xai")),
   });
   const frozen = await read();
   await stop();
@@ -5976,11 +5993,11 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
   await page.reload();
   await revealControl(page, page.getByLabel("Provider", { exact: true }), "");
   await expect(page.getByLabel("Provider", { exact: true })).toHaveValue(
-    "anthropic",
+    "openai",
   );
   await revealControl(page, page.getByLabel("Model", { exact: true }), "");
   await expect(page.getByLabel("Model", { exact: true })).toHaveValue(
-    "preference-only",
+    "gpt-6.1-sol",
   );
   await page.getByRole("button", { name: "Save agent", exact: true }).click();
   await expect
@@ -6730,8 +6747,7 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
     action: "profile-update",
     name: "WEN snapshot operator",
     text: "Keep scoped history",
-    provider: "xai",
-    model: "preference-only",
+    ...(await fixtureProviderSelection("xai")),
   });
   await stop();
   await start(true);
@@ -6982,8 +6998,7 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
     action: "profile-update",
     name: "Trading Analyst",
     text: "Scoped research",
-    provider: "xai",
-    model: "preference-only",
+    ...(await fixtureProviderSelection("xai")),
   });
   await stop();
   await start(false);
@@ -7247,8 +7262,7 @@ test("chat memory requires explicit source-backed UI and CLI save and survives r
   await command({
     action: "profile-update",
     name: "Trading Analyst",
-    provider: "xai",
-    model: "preference-only",
+    ...(await fixtureProviderSelection("xai")),
     text: "Research",
   });
   v = await read();
@@ -7518,8 +7532,7 @@ test("task run chat shares historical UI and CLI capture, explicit fixture expla
     action: "profile-update",
     name: "Trading Analyst",
     text: "Changed persona",
-    provider: "xai",
-    model: "preference-only",
+    ...(await fixtureProviderSelection("xai")),
   });
   await stop();
   await start();
@@ -7822,8 +7835,7 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
     action: "profile-update",
     name: "Trading Analyst",
     text: "Changed persona",
-    provider: "xai",
-    model: "preference-only",
+    ...(await fixtureProviderSelection("xai")),
   });
   const requests = v.aiRequests;
   expect({
@@ -8139,8 +8151,7 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
     action: "profile-update",
     name: "Trading Analyst",
     text: "Updated persona",
-    provider: "xai",
-    model: "preference-only",
+    ...(await fixtureProviderSelection("xai")),
   });
   await stop();
   await start();
@@ -9495,7 +9506,7 @@ test("local agent evidence inspection shares UI/CLI sources, inert reads and res
     action: "profile-update",
     name: p.name,
     text: p.persona,
-    provider: "xai",
+    ...(await fixtureProviderSelection("xai")),
   });
   await stop();
   await start();

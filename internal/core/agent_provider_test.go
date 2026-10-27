@@ -6,6 +6,16 @@ import (
 	"testing"
 )
 
+// Preference changes use an explicit disposable account/current model. They do
+// not authorize requests; history/holds assertions stay independent of providers.
+func fixtureProfileProvider(t *testing.T, s *Store, c AgentCommand) AgentView {
+	t.Helper()
+	account := addNativeAccount(t, s, c.Provider, false)
+	c.Model = registryForProvider(c.Provider).Models[0].ID
+	c.AccountRef = &account.Ref
+	return agentApply(t, s, c)
+}
+
 func TestProviderCatalogTracksConnectionWithoutEntitlementClaims(t *testing.T) {
 	s := fixtureStore(t)
 	v, err := s.AIConnection()

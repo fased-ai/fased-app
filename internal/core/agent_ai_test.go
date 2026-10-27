@@ -600,7 +600,7 @@ func TestAgentAISearchHistorySurvivesProviderChangesAndRestart(t *testing.T) {
 	}
 	check(s)
 	for _, provider := range []string{"openai", "anthropic", "xai"} {
-		agentApply(t, s, AgentCommand{Action: "profile-update", ProfileID: profile, Name: "Trading Analyst", Text: "Paper research", Provider: provider, Model: "preference-only"})
+		fixtureProfileProvider(t, s, AgentCommand{Action: "profile-update", ProfileID: profile, Name: "Trading Analyst", Text: "Paper research", Provider: provider})
 		check(s)
 	}
 	if e := s.Close(); e != nil {

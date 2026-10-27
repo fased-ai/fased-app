@@ -163,7 +163,7 @@ func TestManagedKeyMigrationPreservesAndRejectsUnprotectedState(t *testing.T) {
 			var schema int
 			s.db.QueryRow("SELECT document FROM accounts WHERE id=1").Scan(&after)
 			s.db.QueryRow("PRAGMA user_version").Scan(&schema)
-			if before != after || schema != 22 {
+			if before != after || schema != StateSchema {
 				t.Fatal("migration changed records or missed reader floor")
 			}
 		})

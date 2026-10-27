@@ -412,7 +412,7 @@ func TestAgentMemoryRecallRestartProviderAndDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer n.Close()
-	agentApply(t, n, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Trading Analyst", Provider: "xai", Model: "preference-only"})
+	fixtureProfileProvider(t, n, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Trading Analyst", Provider: "xai"})
 	got, err := n.AgentMemories(t.Context(), v.ProfileID, "", id)
 	if err != nil || !reflect.DeepEqual(original.Source, got.Source) || !reflect.DeepEqual(original.Memories, got.Memories) {
 		t.Fatal("restart/provider changed recall", got, err)

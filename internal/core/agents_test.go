@@ -52,7 +52,7 @@ func TestAgentRunChatCaptureRestartAndMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer n.Close()
-	v = agentApply(t, n, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Trading Analyst", Provider: "xai", Model: "preference-only"})
+	v = fixtureProfileProvider(t, n, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Trading Analyst", Provider: "xai"})
 	if len(v.Messages) != 1 || v.Messages[0] != m || len(v.AIRequests) != 0 {
 		t.Fatal("restart/provider change lost snapshot or called AI")
 	}
@@ -164,7 +164,7 @@ func TestAgentsDurableScopedConversationAndMemory(t *testing.T) {
 	if len(v.Memories[0].History) != 1 || v.Memories[0].History[0].Text != "Prefer short answers" {
 		t.Fatal("lost correction")
 	}
-	v = agentApply(t, s, AgentCommand{Action: "profile-update", ProfileID: p, Name: "Renamed", Text: "Revised persona", Provider: "openai", Model: "configured-later"})
+	v = fixtureProfileProvider(t, s, AgentCommand{Action: "profile-update", ProfileID: p, Name: "Renamed", Text: "Revised persona", Provider: "openai"})
 	if len(v.Messages) != 2 || v.Profiles[len(v.Profiles)-1].Provider != "openai" || v.ProviderCallsEnabled || v.FinancialExecution {
 		t.Fatal("preference lost history or enabled execution")
 	}
@@ -569,7 +569,7 @@ func TestChatMemoryCorrectionExpiryRestartAndDelete(t *testing.T) {
 	if len(v.Memories[0].History) != 1 || v.Memories[0].History[0].Text != note.Text || v.Memories[0].History[0].Source != note.Source {
 		t.Fatal("lost correction evidence")
 	}
-	v = agentApply(t, s, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Analyst", Provider: "xai", Text: "Research"})
+	v = fixtureProfileProvider(t, s, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Analyst", Provider: "xai", Text: "Research"})
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}

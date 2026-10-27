@@ -84,7 +84,7 @@ func TestNewsChatCaptureHistoryRestartAndMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer n.Close()
-	v = agentApply(t, n, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Trading Analyst", Provider: "xai", Model: "preference-only"})
+	v = fixtureProfileProvider(t, n, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Trading Analyst", Provider: "xai"})
 	if len(v.Messages) != 2 || v.Messages[0] != message || v.Messages[1] != stale || len(v.AIRequests) != 0 {
 		t.Fatal("restart/provider change lost history or called AI")
 	}

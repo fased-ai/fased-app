@@ -340,7 +340,7 @@ func TestAgentAIEvidenceRestartProviderDraftAndHolds(t *testing.T) {
 					profile = p
 				}
 			}
-			agentApply(t, n, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: profile.Name, Text: profile.Persona, Provider: "anthropic", Model: "preference-only"})
+			fixtureProfileProvider(t, n, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: profile.Name, Text: profile.Persona, Provider: "anthropic"})
 			draft, err := n.AgentAIRequestDraft(t.Context(), v.ProfileID, q.ID)
 			if err != nil || draft.EvidenceSelection == nil || !reflect.DeepEqual(draft.EvidenceSelection, c.EvidenceSelection) {
 				t.Fatal("restart/provider lost draft", err)
