@@ -1172,6 +1172,9 @@ test("normal Chat grants bounded replies, streams Send and retains scoped histor
   await expect(picker).not.toBeVisible();
   await revealControl(page, picker);
   await picker.selectOption(connection.ref);
+  await chat
+    .getByRole("combobox", { name: "Model", exact: true, includeHidden: true })
+    .selectOption("");
   await chat.locator(".reply-model-menu > summary").click();
   await chat
     .getByLabel("Message", { exact: true })
@@ -6218,6 +6221,19 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
   });
   expect(connection.testOnly).toBe(true);
   expect(connection.liveCallsEnabled).toBe(false);
+  const registry = JSON.parse(
+    await readFile("internal/core/provider_models.json", "utf8"),
+  );
+  const currentModel = registry.models.find(
+    (m: { id: string }) => m.id === connection.admissionPolicy.model,
+  );
+  expect(currentModel).toBeTruthy();
+  expect(connection.admissionPolicy).toMatchObject({
+    inputMicrousdPerMillion: currentModel.input,
+    cachedMicrousdPerMillion: currentModel.cached,
+    outputMicrousdPerMillion: currentModel.output,
+  });
+  const price = (n: number) => `$${(n / 1000000).toFixed(2)}`;
   await page.goto(url + "/#agents/chat");
   await revealControl(
     page,
@@ -6275,7 +6291,7 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
   );
   await review.getByText("Model and tariff admission", { exact: true }).click();
   await expect(review).toContainText(
-    "input $0.40, cached input $0.10, output $1.60",
+    `input ${price(currentModel.input)}, cached input ${price(currentModel.cached)}, output ${price(currentModel.output)}`,
   );
   await expect(review).toContainText("All three API operations are simulated");
   await revealControl(
@@ -6296,7 +6312,12 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
   expect(manual.admission.inputTokens).toBe(256);
   expect(manual.admission.generationAttempted).toBe(true);
   expect(manual.admission.wireSha256).toMatch(/^[a-f0-9]{64}$/);
-  expect(manual.spentMicrousd).toBe(308);
+  expect(manual.inputTokens).toBe(256);
+  expect(manual.outputTokens).toBe(128);
+  expect(manual.cachedInputTokens || 0).toBe(0);
+  expect(manual.spentMicrousd).toBe(
+    Math.ceil((256 * currentModel.input + 128 * currentModel.output) / 1000000),
+  );
   expect(manual.heldMicrousd).toBe(0);
   expect(
     (await privateCLI(["agents", "--profile", "news-researcher"])).aiRequests,
