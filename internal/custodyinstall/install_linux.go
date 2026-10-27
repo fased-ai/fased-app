@@ -131,7 +131,7 @@ func account(ctx context.Context, name, id, role string, s *System) (Identity, e
 	return lookup()
 }
 func identityConfig(m Manifest) signer.Config {
-	return signer.Config{Version: 1, Mode: signer.FixtureNetwork, SignerID: m.ID, OwnerUID: m.Owner, AppUID: m.App.UID, SignerUID: m.Signer.UID, StateDir: m.Root + "/signer-state", SocketDir: m.Root + "/signer-ipc"}
+	return signer.Config{Version: m.Version, Mode: m.Mode, Network: m.Network, SignerID: m.ID, OwnerUID: m.Owner, AppUID: m.App.UID, SignerUID: m.Signer.UID, StateDir: m.Root + "/signer-state", SocketDir: m.Root + "/signer-ipc"}
 }
 
 func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
@@ -146,6 +146,13 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 	if e != nil || !bytes.Contains(osRelease, []byte("ID=ubuntu\n")) || !bytes.Contains(osRelease, []byte("VERSION_ID=\"24.04\"")) {
 		return m, errors.New("managed fixture installation currently requires Ubuntu 24.04")
 	}
+	versionNumber := 1
+	if o.Network != "" {
+		versionNumber = 2
+	}
+	if !custodyMode(versionNumber, modeFor(o.Network), o.Network) {
+		return m, errors.New("unsupported disposable custody network")
+	}
 	if !validListen(o.Listen) {
 		return m, errors.New("choose 127.0.0.1 and an explicit unprivileged port")
 	}
@@ -157,7 +164,11 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 	if e != nil {
 		return m, e
 	}
-	version, e := exec.CommandContext(ctx, o.Signer, "fixture-version").Output()
+	probe := "fixture-version"
+	if o.Network != "" {
+		probe = "custody-version"
+	}
+	version, e := exec.CommandContext(ctx, o.Signer, probe).Output()
 	if e != nil {
 		return m, errors.New("signer fixture version probe failed")
 	}
@@ -167,7 +178,7 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 		Mode         string `json:"mode"`
 		WalletSigner bool   `json:"walletSigner"`
 	}
-	if strict(version, &protocol) != nil || protocol.Protocol != 1 || protocol.OwnerFlow != 1 || protocol.Mode != signer.FixtureNetwork || protocol.WalletSigner {
+	if strict(version, &protocol) != nil || protocol.Protocol != versionNumber || protocol.OwnerFlow != 1 || protocol.Mode != modeFor(o.Network) || protocol.WalletSigner {
 		return m, errors.New("incompatible fixture signer")
 	}
 	jdir, e := ownerJournal()
@@ -180,7 +191,7 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 	}
 	defer lock.Close()
 	uid := os.Getuid()
-	j := journal{Version: 1, Owner: uid, CoreHash: sum(coreBytes), SignerHash: sum(signerBytes), Listen: o.Listen}
+	j := journal{Version: versionNumber, Network: o.Network, Owner: uid, CoreHash: sum(coreBytes), SignerHash: sum(signerBytes), Listen: o.Listen}
 	haveIntent := false
 	existing, loadErr := Load(uid)
 	if loadErr == nil {
@@ -198,7 +209,7 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 	}
 	if b, re := core.ReadPrivateFile(jdir + "/intent.json"); re == nil {
 		var old journal
-		if strict(b, &old) != nil || old.validate(uid) != nil || old.CoreHash != j.CoreHash || old.SignerHash != j.SignerHash || old.Listen != j.Listen {
+		if strict(b, &old) != nil || old.validate(uid) != nil || old.CoreHash != j.CoreHash || old.SignerHash != j.SignerHash || old.Listen != j.Listen || old.Network != j.Network || old.Version != j.Version {
 			return m, errors.New("installer intent conflicts with requested inputs; preserving it")
 		}
 		j = old
@@ -207,7 +218,7 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 		return m, re
 	}
 	if loadErr == nil {
-		if existing.CoreHash != j.CoreHash || existing.SignerHash != j.SignerHash || existing.Listen != j.Listen || (j.ID != "" && existing.ID != j.ID) {
+		if existing.CoreHash != j.CoreHash || existing.SignerHash != j.SignerHash || existing.Listen != j.Listen || existing.Network != j.Network || existing.Version != j.Version || (j.ID != "" && existing.ID != j.ID) {
 			return m, errors.New("existing installation differs; automatic replacement/update is unavailable")
 		}
 		j.ID = existing.ID
@@ -247,7 +258,7 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 		if e != nil {
 			return m, e
 		}
-		m = Manifest{Version: 1, Mode: signer.FixtureNetwork, ID: j.ID, Owner: uid, Root: root, Listen: o.Listen, CoreHash: j.CoreHash, SignerHash: j.SignerHash, App: app, Signer: key}
+		m = Manifest{Version: versionNumber, Mode: modeFor(o.Network), Network: o.Network, ID: j.ID, Owner: uid, Root: root, Listen: o.Listen, CoreHash: j.CoreHash, SignerHash: j.SignerHash, App: app, Signer: key}
 		if e = m.validate(); e != nil {
 			return m, e
 		}

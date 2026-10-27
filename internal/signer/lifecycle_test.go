@@ -33,7 +33,14 @@ func intentFixture(t *testing.T, v *Vault, sequence uint64) update.IntentRequest
 	}
 	now := time.Now().Unix()
 	m := update.Manifest{Version: 1, Product: "fased-app", Channel: "development", Sequence: sequence, IssuedAt: now - 1, ExpiresAt: now + 600, Target: update.Target{OS: runtime.GOOS, Arch: runtime.GOARCH}}
-	for _, contract := range []update.Contract{core, UpdateContract()} {
+	sc := UpdateContract()
+	if v.network != "" {
+		sc = ManagedUpdateContract()
+		core.PeerProtocol = update.Range{Min: 2, Max: 2}
+		core.Features = append(core.Features, "managed-custody-updates-v2")
+		core.RequiresPeer = []string{"managed-custody-updates-v2"}
+	}
+	for _, contract := range []update.Contract{core, sc} {
 		m.Components = append(m.Components, update.Component{Version: "0.0.0-fixture.1", Artifact: update.Artifact{File: contract.Component, Size: 1, SHA256: update.SnapshotDigest("artifact", contract.Component)}, Contract: contract})
 	}
 	mb, _ := json.Marshal(m)

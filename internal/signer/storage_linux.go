@@ -14,6 +14,7 @@ import (
 var errAbsent = os.ErrNotExist
 
 type storage struct {
+	network  string
 	dir      int
 	lock     int
 	readOnly bool
@@ -24,11 +25,14 @@ type storage struct {
 func openStorage(dir string) (*storage, error)         { return openStorageMode(dir, false) }
 func openStorageReadonly(dir string) (*storage, error) { return openStorageMode(dir, true) }
 func openStorageMode(dir string, readOnly bool) (*storage, error) {
+	return openNetworkStorage(dir, readOnly, "")
+}
+func openNetworkStorage(dir string, readOnly bool, network string) (*storage, error) {
 	fd, err := unix.Open(dir, unix.O_DIRECTORY|unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
-	s := &storage{dir: fd, lock: -1, readOnly: readOnly}
+	s := &storage{network: network, dir: fd, lock: -1, readOnly: readOnly}
 	ok := false
 	defer func() {
 		if !ok {
@@ -114,6 +118,9 @@ func (s *storage) recoverPublication() error {
 	if err = e.validate("vault"); err != nil {
 		return err
 	}
+	if !envelopeForNetwork(e, s.network) {
+		return ErrUnavailable
+	}
 	if err = s.ensureInitialHistory(e); err != nil {
 		return err
 	}
@@ -144,6 +151,10 @@ func (s *storage) checkpoint(phase string) error {
 }
 
 func (s *storage) create(data []byte) (result error) {
+	var candidate envelope
+	if decode(data, &candidate) != nil || candidate.validate("vault") != nil || !envelopeForNetwork(candidate, s.network) {
+		return ErrUnavailable
+	}
 	if s.readOnly {
 		return errors.New("cold inspection cannot write")
 	}

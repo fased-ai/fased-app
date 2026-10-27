@@ -13,8 +13,8 @@ import (
 )
 
 type Options struct {
-	Core, Signer, Listen    string
-	PrepareHost, Disposable bool
+	Core, Signer, Listen, Network string
+	PrepareHost, Disposable       bool
 }
 type Identity struct {
 	Name string `json:"name"`
@@ -22,6 +22,7 @@ type Identity struct {
 	GID  int    `json:"gid"`
 }
 type Manifest struct {
+	Network          string   `json:"network,omitempty"`
 	InspectionBridge string   `json:"inspectionBridge,omitempty"`
 	Version          int      `json:"version"`
 	Mode             string   `json:"mode"`
@@ -35,6 +36,7 @@ type Manifest struct {
 	Signer           Identity `json:"signer"`
 }
 type journal struct {
+	Network    string `json:"network,omitempty"`
 	Version    int    `json:"version"`
 	ID         string `json:"id"`
 	Owner      int    `json:"owner"`
@@ -60,10 +62,10 @@ func validListen(s string) bool {
 	return e == nil && n >= 1024 && n <= 65535 && strconv.Itoa(n) == p
 }
 func (m Manifest) validate() error {
-	if m.InspectionBridge != "" && !validHex(m.InspectionBridge, 16) {
+	if m.InspectionBridge != "" && (m.Version != 1 || !validHex(m.InspectionBridge, 16)) {
 		return errors.New("invalid fixture reader bridge")
 	}
-	if m.Version != 1 || m.Mode != "disposable-fixture:v1" || m.Owner <= 0 || m.Root != Root(m.Owner) || !validHex(m.ID, 16) || !validHex(m.CoreHash, 32) || !validHex(m.SignerHash, 32) || !validListen(m.Listen) {
+	if !custodyMode(m.Version, m.Mode, m.Network) || m.Owner <= 0 || m.Root != Root(m.Owner) || !validHex(m.ID, 16) || !validHex(m.CoreHash, 32) || !validHex(m.SignerHash, 32) || !validListen(m.Listen) {
 		return errors.New("invalid managed fixture manifest")
 	}
 	for _, pair := range []struct {
@@ -80,7 +82,7 @@ func (m Manifest) validate() error {
 	return nil
 }
 func (j journal) validate(uid int) error {
-	if j.Version != 1 || j.Owner != uid || !validHex(j.ID, 16) || !validHex(j.CoreHash, 32) || !validHex(j.SignerHash, 32) || !validListen(j.Listen) {
+	if !custodyMode(j.Version, modeFor(j.Network), j.Network) || j.Owner != uid || !validHex(j.ID, 16) || !validHex(j.CoreHash, 32) || !validHex(j.SignerHash, 32) || !validListen(j.Listen) {
 		return errors.New("invalid installer intent; preserve and investigate it")
 	}
 	return nil
@@ -115,4 +117,14 @@ func definitions(m Manifest) map[string][]byte {
 		"fased-app.service":    unit(m.App, m.Root+"/fased-app serve --data-dir "+m.Root+"/app-state --listen "+m.Listen+" --require-sandbox --installation-root "+m.Root+" --custody-config "+m.Root+"/identity.json", m.Root+"/app-state", "AF_UNIX AF_INET AF_INET6"),
 		"fased-signer.service": unit(m.Signer, m.Root+"/fased-signer serve --config "+m.Root+"/identity.json --disposable-fixture", m.Root+"/signer-state "+m.Root+"/signer-ipc", "AF_UNIX"),
 	}
+}
+
+func modeFor(network string) string {
+	if network == "" {
+		return "disposable-fixture:v1"
+	}
+	return "disposable-custody:v2"
+}
+func custodyMode(version int, mode, network string) bool {
+	return version == 1 && mode == "disposable-fixture:v1" && network == "" || version == 2 && mode == "disposable-custody:v2" && (network == "devnet" || network == "mainnet-beta")
 }

@@ -44,7 +44,18 @@ try:
      except ProcessLookupError:pass
      interrupted=True;break
   p,status=os.waitpid(pid,os.WNOHANG)
-  if p:done=os.waitstatus_to_exitcode(status);break
+  if p:
+   done=os.waitstatus_to_exitcode(status)
+   # Exit notification can arrive before the final PTY bytes are consumed.
+   drain_until=time.monotonic()+1
+   while time.monotonic()<drain_until:
+    ready,_,_=select.select([fd],[],[],.05)
+    if not ready:break
+    try:last=os.read(fd,65536)
+    except OSError:break
+    if not last:break
+    seen+=last
+   break
 finally:
  if done is None:
   if time.time()>=deadline:
@@ -93,7 +104,9 @@ export async function fixtureInspectionJourney({
     installedVMReboot:
       "BLOCKED: hosted Ubuntu service manager is not a reboot-capable VM",
   };
-  const pass = (name, v) => {
+  const pass = (name, v, details) => {
+    if (!v && details)
+      console.error(JSON.stringify({ fixtureCheck: name, details }));
     check("inspection:" + name, v);
     report.checks[name] = true;
   };
@@ -326,6 +339,7 @@ export async function fixtureInspectionJourney({
         (await readFile(root + "/install.json", "utf8").then(
           (s) => !s.includes("inspectionBridge"),
         )),
+      cancelled,
     );
     if (stopAt) env.FASED_TEST_BRIDGE_STOP = stopAt;
     const result = terminal("provision", "approve", stopAt);

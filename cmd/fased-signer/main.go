@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/signer"
+	"github.com/fased-ai/fased-app/internal/update"
 	"golang.org/x/term"
 )
 
@@ -33,8 +34,14 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	if len(args) > 0 && (args[0] == "fixture-inspection-compatibility" || args[0] == "fixture-reader-guard" || args[0] == "fixture-inspection-empty" || args[0] == "fixture-inspection-init" || args[0] == "fixture-inspection-cold") {
 		return inspectionFixtureCommand(args, input, out, errOut)
 	}
+	if len(args) == 1 && args[0] == "custody-compatibility" {
+		return json.NewEncoder(out).Encode(signer.ManagedUpdateContract())
+	}
 	if len(args) == 1 && args[0] == "fixture-compatibility" {
 		return json.NewEncoder(out).Encode(signer.UpdateContract())
+	}
+	if len(args) == 1 && args[0] == "custody-version" {
+		return json.NewEncoder(out).Encode(map[string]any{"protocol": 2, "ownerFlow": 1, "mode": signer.ManagedFixtureMode, "walletSigner": false})
 	}
 	if len(args) == 1 && args[0] == "fixture-version" {
 		return json.NewEncoder(out).Encode(map[string]any{"protocol": 1, "ownerFlow": 1, "mode": signer.FixtureNetwork, "walletSigner": false})
@@ -50,6 +57,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	approvalStdin := flags.Bool("approval-stdin", false, "fixture CI only: approval challenge line from stdin")
 	passwordStdin := flags.Bool("password-stdin", false, "fixture automation only: password lines from private stdin")
 	documentPath := flags.String("file", "", "exclusive owner output or encrypted restore input")
+	seedPath := flags.String("seed-file", "", "private owner file containing a disposable 32-byte seed")
 	lifetime := flags.Duration("unlock-for", 15*time.Minute, "manual unlock lifetime, at most one hour")
 	requestStdin := flags.Bool("request-stdin", false, "public typed fixture policy/intent JSON from stdin; no credentials")
 	intentID := flags.String("intent-id", "", "exact disposable installation intent for cold inspection")
@@ -92,7 +100,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		<-ctx.Done()
 		return nil
 	}
-	if args[0] != "owner" && args[0] != "app" && args[0] != "setup" && args[0] != "recover" && args[0] != "approve" {
+	if args[0] != "owner" && args[0] != "app" && args[0] != "setup" && args[0] != "recover" && args[0] != "approve" && args[0] != "import" {
 		return errors.New("unsupported fixture command")
 	}
 	owner := args[0] != "app"
@@ -106,7 +114,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	}
 	r := signer.Request{Action: *action}
 	if *requestStdin {
-		if *passwordStdin || args[0] == "setup" || args[0] == "recover" {
+		if *passwordStdin || args[0] == "setup" || args[0] == "recover" || args[0] == "import" {
 			return errors.New("public fixture input cannot carry credentials")
 		}
 		document, e := io.ReadAll(io.LimitReader(input, 16*1024+1))
@@ -178,10 +186,21 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 			return signer.Call(ctx, c, true, r)
 		})
 	}
+	if args[0] == "import" {
+		importAction := "import-fixture-seed"
+		if c.Version == 2 {
+			importAction = "import-managed-seed"
+		}
+		return conductImportAction(ctx, *seedPath, *documentPath, password, out, func(ctx context.Context, r signer.Request) (signer.Response, error) {
+			return signer.Call(ctx, c, true, r)
+		}, importAction)
+	}
 	if args[0] == "setup" || args[0] == "recover" {
 		return ownerFlow(ctx, c, args[0], *documentPath, password, out)
 	}
 	switch r.Action {
+	case "fixture-update-inventory":
+		r.ProbeID = update.NewProbe()
 	case "status", "lock":
 	case "fixture-approvals", "fixture-state", "fixture-policy", "fixture-grant", "fixture-revoke", "fixture-recover-authority", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation":
 	case "create", "unlock", "backup":
@@ -192,12 +211,17 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 			}
 			r.UnlockSeconds = int(*lifetime / time.Second)
 		}
-	case "restore":
+	case "import-fixture-seed", "import-managed-seed":
+		r.Document, err = readOwnerFile(*documentPath)
+		if err == nil {
+			r.Password, err = password("New fixture unlock password", true)
+		}
+	case "restore", "verify-backup":
 		r.Document, err = readOwnerFile(*documentPath)
 		if err == nil {
 			r.Password, err = password("Backup password", false)
 		}
-		if err == nil {
+		if err == nil && r.Action == "restore" {
 			r.NewPassword, err = password("New fixture unlock password", true)
 		}
 	case "export-fixture-seed":
@@ -226,5 +250,5 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	if len(r.Action) >= 8 && r.Action[:8] == "fixture-" {
 		return json.NewEncoder(out).Encode(response)
 	}
-	return json.NewEncoder(out).Encode(response.Status)
+	return json.NewEncoder(out).Encode(response.Status.PublicView())
 }

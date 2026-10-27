@@ -1,110 +1,101 @@
+import {
+  InstanceSummary,
+  RemoteConnection,
+} from "../components/InstanceConnection";
+import { AppearanceSettings, useUI } from "../ui-preferences";
 import { ArrowRight } from "../icons";
 import { UpdateStatusPanel } from "../components/UpdateStatusPanel";
 import { UpdatePreferencesPanel } from "../components/UpdatePreferencesPanel";
-import { providerNames } from "../state";
 import { Badge, SectionHead } from "../components/shared";
 import { useWorkspace } from "../workspace";
 export function Settings() {
-  const { core, state, dispatch, setSetupOpen, setResetOpen, notify } =
+  const { t: uiText } = useUI();
+  const t = uiText;
+  const { core, state, setSetupOpen, setResetOpen, setProvidersOpen } =
     useWorkspace();
   return (
     <>
-      <SectionHead
-        eyebrow="WORKSPACE PREFERENCES"
-        title="Settings"
-        description="Connections when you need them. A small, explicit configuration surface."
-      />
-      <div className="two-col">
-        <section className="panel">
-          <div className="panel-heading">
-            <h2>Instance</h2>
-            <Badge>
-              {core.mode === "ready" ? "PRIVATE CORE" : "SIMULATED"}
-            </Badge>
-          </div>
-          <div className="settings-body">
-            <label htmlFor="instance-host">Deployment preference</label>
-            <select
-              id="instance-host"
-              value={state.setup.host}
-              onChange={(e) =>
-                dispatch({
-                  type: "setup",
-                  patch: { host: e.target.value as "local" | "vps" },
-                })
-              }
-            >
-              <option value="local">Local computer</option>
-              <option value="vps">Private VPS</option>
-            </select>
-            <p className="subtle">
-              {core.mode === "ready"
-                ? "Saved to this instance. This preference does not change the machine or networking."
-                : "This changes a prototype preference, not the machine or its networking."}
-            </p>
-            <button className="secondary" onClick={() => setSetupOpen(true)}>
-              Review setup <ArrowRight size={14} />
-            </button>
-          </div>
-        </section>
-        <UpdateStatusPanel />
-      </div>
-      <UpdatePreferencesPanel />
-      <section className="panel">
-        <div className="panel-heading">
-          <h2>AI connections</h2>
-          <Badge>OPTIONAL</Badge>
-        </div>
-        {Object.entries(providerNames)
-          .filter(([id]) => id !== "none")
-          .map(([id, name]) => (
-            <div className="provider-row" key={id}>
-              <span className="provider-mark">{name[0]}</span>
-              <div>
-                <strong>{name}</strong>
-                <p>
-                  {id === "xai"
-                    ? "Optional X / web research through supported API tools"
-                    : id === "openai"
-                      ? "API first; optional official subscription connector later"
-                      : "API or a separately verified official subscription connector"}
-                </p>
-              </div>
-              <Badge>NOT CONNECTED</Badge>
-              <button
-                className="secondary"
-                onClick={() =>
-                  notify(
-                    `${name} connection preview`,
-                    "Real authentication belongs to a later phase. This prototype does not accept API keys or subscription credentials.",
-                  )
-                }
-              >
-                View setup <ArrowRight size={13} />
+      <SectionHead title={t("Settings")} />
+      <div className="settings-workspace">
+        <div className="settings-primary">
+          <section className="panel">
+            <div className="panel-heading">
+              <h2>{t("Preferences")}</h2>
+            </div>
+            <AppearanceSettings />
+          </section>
+          <section className="panel">
+            <div className="panel-heading">
+              <h2>{uiText("Instance")}</h2>
+              <Badge>
+                {core.mode === "ready"
+                  ? uiText("CONNECTED")
+                  : uiText("SIMULATED")}
+              </Badge>
+            </div>
+            <div className="settings-body">
+              <InstanceSummary />
+              <RemoteConnection />
+              {core.mode === "ready" && (
+                <details className="instance-diagnostics">
+                  <summary>{uiText("Diagnostics")}</summary>
+                  <dl>
+                    <dt>{uiText("Saved deployment preference")}</dt>
+                    <dd data-testid="saved-deployment-preference">
+                      {state.setup.host === "vps"
+                        ? uiText("Remote")
+                        : uiText("Local")}
+                    </dd>
+                  </dl>
+                </details>
+              )}
+              <button className="secondary" onClick={() => setSetupOpen(true)}>
+                {core.mode === "ready"
+                  ? uiText("Setup")
+                  : uiText("Review setup")}{" "}
+                <ArrowRight size={14} />
               </button>
             </div>
-          ))}
-      </section>
-      <section className="panel">
-        <div className="panel-heading">
-          <h2>Prototype data</h2>
-          <Badge>THIS BROWSER ONLY</Badge>
+          </section>
+          {core.mode === "ready" && (
+            <button
+              className="panel provider-entry"
+              onClick={() => setProvidersOpen(true)}
+            >
+              <span>{uiText("Providers")}</span>
+              <ArrowRight size={16} />
+            </button>
+          )}
+          <section className="panel">
+            <div className="panel-heading">
+              <h2>{uiText("Browser demo data")}</h2>
+              <Badge>{uiText("THIS BROWSER ONLY")}</Badge>
+            </div>
+            <div className="panel-footer">
+              <p>
+                {core.mode === "ready"
+                  ? uiText(
+                      "Reset clears browser demo preferences. Saved core records are preserved.",
+                    )
+                  : uiText(
+                      "Reset clears this browser’s prototype setup, profiles, notes and inbox.",
+                    )}
+              </p>
+              <button
+                className="secondary danger"
+                onClick={() => setResetOpen(true)}
+              >
+                {uiText("Reset prototype")}
+              </button>
+            </div>
+          </section>
         </div>
-        <div className="panel-footer">
-          <p>
-            {core.mode === "ready"
-              ? "Profiles, notes and inbox events remain browser demo data. Setup is saved separately in your private core."
-              : "Setup choices, profiles, notes and inbox events are saved locally."}
-            Chat messages are temporary. Do not enter sensitive information.
-          </p>
-          <button
-            className="secondary danger"
-            onClick={() => setResetOpen(true)}
-          >
-            Reset prototype
-          </button>
-        </div>
-      </section>
+        <details className="panel settings-advanced update-settings">
+          <summary>{uiText("Updates and recovery")}</summary>
+          <UpdateStatusPanel />
+          <UpdatePreferencesPanel />
+        </details>
+      </div>
     </>
   );
 }

@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { readFile, mkdir, stat, lstat, writeFile } from "node:fs/promises";
-import { watch } from "node:fs";
+import { watch, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 const target = "/etc/apparmor.d/fased-app-bwrap-v1";
@@ -15,6 +15,26 @@ const os = (args, input) =>
     encoding: "utf8",
     timeout: 30000,
   });
+
+// Consume receipt notifications synchronously: an asynchronous read plus a
+// busy flag can drop the published event while the installer advances to ready.
+export function publicationObserver(state, onPublished) {
+  let observed = false;
+  return () => {
+    if (observed) return;
+    try {
+      const receipt = JSON.parse(
+        readFileSync(join(state, "host-preparation.json"), "utf8"),
+      );
+      if (receipt.phase === "published") {
+        observed = true;
+        onPublished();
+      }
+    } catch {
+      // Atomic replacement can notify before the first receipt is available.
+    }
+  };
+}
 export async function checkUbuntuPreparation(binary, args, state, report) {
   assert.equal(process.env.GITHUB_ACTIONS, "true");
   assert.equal(process.platform, "linux");
@@ -59,29 +79,20 @@ export async function checkUbuntuPreparation(binary, args, state, report) {
   }
   assert.ok(denied, "missing host prerequisites were silently accepted");
   await mkdir(state, { recursive: true, mode: 0o700 });
-  const child = spawn(binary, [...args, "--prepare-host"], {
+  let child;
+  let output = "",
+    killed = false;
+  const watcher = watch(
+    state,
+    publicationObserver(state, () => {
+      killed = child.kill("SIGKILL");
+    }),
+  );
+  child = spawn(binary, [...args, "--prepare-host"], {
     stdio: ["ignore", "pipe", "pipe"],
   });
-  let output = "",
-    killed = false,
-    checking = false;
   child.stdout.on("data", (b) => (output += String(b)));
   child.stderr.on("data", (b) => (output += String(b)));
-  const watcher = watch(state, async () => {
-    if (checking || killed) return;
-    checking = true;
-    try {
-      const r = JSON.parse(
-        await readFile(join(state, "host-preparation.json"), "utf8"),
-      );
-      if (r.phase === "published") {
-        killed = child.kill("SIGKILL");
-      }
-    } catch {
-    } finally {
-      checking = false;
-    }
-  });
   const timeout = setTimeout(() => child.kill("SIGKILL"), 8 * 60 * 1000);
   let code;
   try {

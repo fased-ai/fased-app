@@ -1,6 +1,7 @@
 package core
 
 import (
+	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -20,14 +21,17 @@ import (
 const sessionCookie = "fased_session"
 
 type HTTPHandler struct {
-	agentFixture bool
-	store        *Store
-	origins      map[string]bool
-	hosts        map[string]bool
-	publicHost   string
-	assets       fs.FS
-	authSlots    chan struct{}
-	limiter      struct {
+	wenResearchOrigin string
+	wenResearchKey    [32]byte
+	agentFixture      bool
+	store             *Store
+	origins           map[string]bool
+	hosts             map[string]bool
+	publicHost        string
+	instanceLocation  string
+	assets            fs.FS
+	authSlots         chan struct{}
+	limiter           struct {
 		sync.Mutex
 		start    time.Time
 		attempts int
@@ -35,7 +39,10 @@ type HTTPHandler struct {
 }
 
 func NewHTTPHandler(store *Store, baseURL, publicOrigin string, assets fs.FS) (*HTTPHandler, error) {
-	h := &HTTPHandler{store: store, origins: map[string]bool{}, hosts: map[string]bool{}, assets: assets, authSlots: make(chan struct{}, 2)}
+	h := &HTTPHandler{store: store, origins: map[string]bool{}, hosts: map[string]bool{}, assets: assets, authSlots: make(chan struct{}, 2), instanceLocation: "local"}
+	if _, err := rand.Read(h.wenResearchKey[:]); err != nil {
+		return nil, err
+	}
 	base, err := url.Parse(baseURL)
 	if err != nil || base.Scheme != "http" || !isLoopbackHost(base.Hostname()) {
 		return nil, errors.New("core listener must use an explicit loopback address")
@@ -91,7 +98,13 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 405, "method not allowed")
 			return
 		}
-		writeJSON(w, 200, h.store.Health())
+		health := h.store.Health()
+		location, transport := h.instanceLocation, "loopback"
+		if h.publicHost != "" && r.Host == h.publicHost {
+			location, transport = "remote", "private-https"
+		}
+		health.Connection = &ConnectionInfo{Location: location, Transport: transport}
+		writeJSON(w, 200, health)
 		return
 	case "/api/v1/auth/state":
 		if r.Method != http.MethodGet {
@@ -158,6 +171,58 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
+	case "/api/v1/wen/sessions":
+		h.wenSessionsAPI(w, r, token, "view")
+		return
+	case "/api/v1/wen/session-runs":
+		h.wenFixtureRunsAPI(w, r, token, "view")
+	case "/api/v1/wen/session-runs/review", "/api/v1/wen/session-runs/start", "/api/v1/wen/session-runs/control", "/api/v1/wen/session-runs/reconcile":
+		h.wenFixtureRunsAPI(w, r, token, strings.TrimPrefix(r.URL.Path, "/api/v1/wen/session-runs/"))
+	case "/api/v1/wen/sessions/review", "/api/v1/wen/sessions/create", "/api/v1/wen/sessions/step", "/api/v1/wen/sessions/action-review", "/api/v1/wen/sessions/control":
+		h.wenSessionsAPI(w, r, token, strings.TrimPrefix(r.URL.Path, "/api/v1/wen/sessions/"))
+		return
+	case "/api/v1/wen/research/ai-prepare-next":
+		h.wenResearchAIAPI(w, r, token, "next")
+		return
+	case "/api/v1/wen/research/ai-start":
+		h.wenResearchAIAPI(w, r, token, "start")
+		return
+	case "/api/v1/wen/research/ai-prepare":
+		h.wenResearchAIAPI(w, r, token, "prepare")
+		return
+	case "/api/v1/wen/research/ai-inspect":
+		h.wenResearchAIAPI(w, r, token, "inspect")
+		return
+	case "/api/v1/wen/research/ai-cancel":
+		h.wenResearchAIAPI(w, r, token, "cancel")
+		return
+	case "/api/v1/wen/research/read":
+		h.wenResearchReadAPI(w, r, token)
+		return
+	case "/api/v1/wen/research/proposal-review":
+		h.wenRevisionAPI(w, r, token, false, true)
+		return
+	case "/api/v1/wen/research/proposal-save":
+		h.wenRevisionAPI(w, r, token, true, true)
+		return
+	case "/api/v1/wen/research/revision-review":
+		h.wenStrategyRevisionAPI(w, r, token, false)
+		return
+	case "/api/v1/wen/research/revision-save":
+		h.wenStrategyRevisionAPI(w, r, token, true)
+		return
+	case "/api/v1/wen/research/chat-review":
+		h.wenSavedChatReviewAPI(w, r, token)
+		return
+	case "/api/v1/ai/connection":
+		h.aiConnectionAPI(w, r, token)
+		return
+	case "/api/v1/wen/market-data":
+		h.wenMarketDataAPI(w, r)
+		return
+	case "/api/v1/wen/research":
+		h.wenResearchAPI(w, r, token)
+		return
 	case "/api/v1/agents":
 		h.agentsAPI(w, r, token)
 		return
@@ -192,6 +257,63 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, 200, v)
+		return
+	case "/api/v1/accounts/rpc-credential":
+		if r.Method != http.MethodPut {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.mutation(w, r) || !h.csrf(w, r, token) {
+			return
+		}
+		var input RPCCredentialCommand
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		result, err := h.store.RPCCredential(r.Context(), input)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, 200, result)
+		return
+	case "/api/v1/accounts/rpc":
+		if r.Method != http.MethodPut {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.mutation(w, r) || !h.csrf(w, r, token) {
+			return
+		}
+		var input RPCConfigInput
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		result, err := h.store.ConfigureAccountRPC(r.Context(), input)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, 200, result)
+		return
+	case "/api/v1/accounts/rpc-check":
+		if r.Method != http.MethodPost {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.mutation(w, r) || !h.csrf(w, r, token) {
+			return
+		}
+		var input RPCCheckRequest
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		result, err := h.store.CheckAccountRPC(r.Context(), input)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, 200, result)
 		return
 	case "/api/v1/accounts":
 		if r.Method == http.MethodGet {

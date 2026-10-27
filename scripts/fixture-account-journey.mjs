@@ -34,7 +34,7 @@ export async function fixtureAccountJourney({
     await page.getByLabel("Owner password", { exact: true }).fill(appPassword);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await page
-      .getByRole("heading", { name: "Public account records", exact: true })
+      .getByRole("heading", { name: "Wallets", level: 1, exact: true })
       .waitFor();
     await page.getByLabel("Name", { exact: true }).fill("Disposable UI watch");
     await page
@@ -95,14 +95,17 @@ export async function fixtureAccountJourney({
       .click();
     await page
       .getByRole("heading", {
-        name: "Disposable operating account",
-        exact: true,
+        // This journey also runs the pinned predecessor UI during bootstrap.
+        name: /^(Wallet|Disposable operating account)$/,
       })
       .waitFor();
     current = JSON.parse(cli(["accounts", "--prepare-host"]));
     const managed = current.record.accounts.find(
       (a) => a.mode === "fixture-managed",
     );
+    await page
+      .getByRole("heading", { name: managed.name, exact: true })
+      .waitFor();
     check(
       "accounts:realConfiguredPublicReference",
       managed.signer.epoch === account.epoch &&

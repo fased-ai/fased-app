@@ -1,0 +1,68 @@
+.f4-rehearsal {
+  min-width: 0;
+}
+.f4-rehearsal .f4-composer {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-block: 16px;
+}
+.f4-rehearsal label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.f4-rehearsal select,
+.f4-rehearsal input {
+  width: 100%;
+  min-width: 0;
+}
+.f4-rehearsal pre {
+  max-height: 26rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.f4-rehearsal dl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 8px 16px;
+}
+.f4-rehearsal dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.f4-rehearsal table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.f4-rehearsal th,
+.f4-rehearsal td {
+  text-align: left;
+  padding: 8px;
+  border-bottom: 1px solid var(--border, #35313f);
+  overflow-wrap: anywhere;
+}
+.f4-rehearsal .f4-session {
+  border-top: 1px solid var(--border, #35313f);
+  padding-top: 18px;
+  margin-top: 24px;
+}
+.f4-rehearsal .agent-inline {
+  flex-wrap: wrap;
+}
+.f4-rehearsal details {
+  margin-block: 12px;
+}
+.f4-rehearsal .f4-history {
+  overflow-x: auto;
+}
+@media (max-width: 640px) {
+  .f4-rehearsal .f4-composer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .f4-rehearsal dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

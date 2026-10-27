@@ -41,7 +41,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	f.SetOutput(errOut)
 	root := f.String("prefix", paths.Root, "private application installation directory")
 	data := f.String("data-dir", paths.Data, "private instance state; preserved by uninstall")
-	listen := f.String("listen", "127.0.0.1:7331", "private core listener")
+	listen := f.String("listen", "127.0.0.1:7331", "loopback instance listener")
 	origin := f.String("public-origin", "", "exact private HTTPS reverse-proxy origin")
 	desktop := f.String("desktop-binary", "", "optional matching native desktop binary")
 	start := f.Bool("start", true, "start the user service after installation")
@@ -75,26 +75,44 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			}
 			r := bufio.NewReader(os.Stdin)
 			wizard = r
-			fmt.Fprint(errOut, "Install on this computer or a VPS? [local/vps, default local]: ")
-			choice, _ := r.ReadString('\n')
-			choice = strings.TrimSpace(choice)
-			if choice != "" && choice != "local" && choice != "vps" {
-				return errors.New("choose local or vps")
+			choice, e := installationChoice(r, errOut)
+			if e != nil {
+				return e
 			}
-			*vps = choice == "vps"
+			if choice == "connect" {
+				address, e := installationAnswer(r, errOut, "Existing instance URL: ")
+				if e != nil {
+					return e
+				}
+				return connectCommand([]string{"--url", address}, out, errOut)
+			}
+			*vps = choice == "remote"
 			if *vps {
-				fmt.Fprint(errOut, "Private access [tailscale/ssh, default tailscale]: ")
-				choice, _ = r.ReadString('\n')
-				*access = strings.TrimSpace(choice)
+				value, e := installationAnswer(r, errOut, "Private access [tailscale/ssh, default tailscale]: ")
+				if e != nil {
+					return e
+				}
+				*access = value
 				if *access == "" {
 					*access = "tailscale"
 				}
+				if *access != "tailscale" && *access != "ssh" {
+					return errors.New("choose tailscale or ssh")
+				}
 			}
-			fmt.Fprint(errOut, "Enable background execution at login (VPS requires it)? [y/N]: ")
-			choice, _ = r.ReadString('\n')
-			*autostart = strings.EqualFold(strings.TrimSpace(choice), "y")
+			answer, e := installationAnswer(r, errOut, "Start Fased at login (required for Remote)? [y/N]: ")
+			if e != nil {
+				return e
+			}
+			if answer != "" && !strings.EqualFold(answer, "y") && !strings.EqualFold(answer, "n") {
+				return errors.New("choose y or n")
+			}
+			*autostart = strings.EqualFold(answer, "y")
 		}
 		if *vps {
+			if *access != "ssh" && *access != "tailscale" {
+				return errors.New("Remote installation requires --access ssh or tailscale")
+			}
 			if runtime.GOOS != "linux" || !*autostart {
 				return errors.New("VPS installation requires Linux and explicit --autostart")
 			}
@@ -141,7 +159,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		if err = desktopRuntime(ctx, *desktop, *packageDir, *data, *installRuntime, *prepareHost, os.Stdin, errOut); err != nil {
 			return err
 		}
-		m, err := localinstall.Install(ctx, paths, localinstall.Options{Engine: engine, Desktop: *desktop, Listen: *listen, PublicOrigin: *origin, Start: *start, Autostart: *autostart})
+		m, err := localinstall.Install(ctx, paths, localinstall.Options{Engine: engine, Desktop: *desktop, Listen: *listen, PublicOrigin: *origin, Start: *start, Autostart: *autostart, Location: installLocation(*vps)})
 		if err != nil {
 			return err
 		}
@@ -164,7 +182,10 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 				url = plan.Origin
 			}
 		}
-		return json.NewEncoder(out).Encode(map[string]any{"installed": true, "application": filepath.Join(m.Root, localinstall.EngineName()), "data": m.Data, "autostart": m.Autostart, "url": url, "access": plan, "walletsConnected": false})
+		if *interactive {
+			installationHandoff(errOut, m, plan, url)
+		}
+		return json.NewEncoder(out).Encode(map[string]any{"location": installLocation(*vps), "installed": true, "application": filepath.Join(m.Root, localinstall.EngineName()), "data": m.Data, "autostart": m.Autostart, "url": url, "access": plan, "walletsConnected": false})
 	case "uninstall":
 		if err = localinstall.Uninstall(ctx, paths); err != nil {
 			return err
@@ -237,6 +258,51 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	}
 	return errors.New("unknown installation command")
 }
+
+// Keep the terminal handoff on the installed engine and its existing state.
+// Access instructions are produced by the same planner that configured it.
+func installationHandoff(out io.Writer, m localinstall.Manifest, plan privateaccess.Plan, readyURL string) {
+	engine := filepath.Join(m.Root, localinstall.EngineName())
+	service := func(action string) string {
+		return installationCommand(engine, "service", action, "--prefix", m.Root, "--data-dir", m.Data)
+	}
+	fmt.Fprintln(out, "Fased is installed.")
+	if readyURL == "" {
+		fmt.Fprintln(out, "Start the installed instance:")
+		fmt.Fprintln(out, service("start"))
+		if plan.Mode == "tailscale" {
+			fmt.Fprintln(out, "Then enable private access:")
+			fmt.Fprintln(out, installationCommand(engine, "access", "enable", "--prefix", m.Root, "--data-dir", m.Data))
+		}
+	} else {
+		for _, instruction := range plan.Instructions {
+			fmt.Fprintln(out, instruction)
+		}
+		fmt.Fprintln(out, "First visit: run this on the installed host for an owner setup code, then choose your password in the private UI:")
+		fmt.Fprintln(out, installationCommand(engine, "claim-code", "--data-dir", m.Data))
+		fmt.Fprintln(out, "Already set up? Sign in with your existing owner password.")
+	}
+	fmt.Fprintln(out, "Check this instance:")
+	fmt.Fprintln(out, service("status"))
+}
+
+// Quote every argument for the platform's normal terminal; paths may contain
+// spaces, quotes or shell syntax. This only renders commands, never runs them.
+func installationCommand(args ...string) string {
+	quoted := make([]string, len(args))
+	for i, arg := range args {
+		if runtime.GOOS == "windows" {
+			quoted[i] = "'" + strings.ReplaceAll(arg, "'", "''") + "'"
+		} else {
+			quoted[i] = "'" + strings.ReplaceAll(arg, "'", "'\"'\"'") + "'"
+		}
+	}
+	command := strings.Join(quoted, " ")
+	if runtime.GOOS == "windows" {
+		return "& " + command
+	}
+	return command
+}
 func waitForCore(ctx context.Context, dir string) (string, error) {
 	deadline, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
@@ -254,5 +320,38 @@ func waitForCore(ctx context.Context, dir string) (string, error) {
 			return "", errors.New("core did not become ready; inspect the user service journal")
 		case <-ticker.C:
 		}
+	}
+}
+
+func installLocation(remote bool) string {
+	if remote {
+		return "remote"
+	}
+	return "local"
+}
+func installationAnswer(r *bufio.Reader, out io.Writer, prompt string) (string, error) {
+	fmt.Fprint(out, prompt)
+	s, e := r.ReadString('\n')
+	if e != nil {
+		return "", errors.New("installation cancelled before saving")
+	}
+	return strings.TrimSpace(s), nil
+}
+func installationChoice(r *bufio.Reader, out io.Writer) (string, error) {
+	fmt.Fprintln(out, "Fased\n  Local   — install on this computer\n  Remote  — install on this server\n  Connect — use an existing Remote instance")
+	for {
+		s, e := installationAnswer(r, out, "Choose [local/remote/connect, default local]: ")
+		if e != nil {
+			return "", e
+		}
+		switch strings.ToLower(s) {
+		case "", "local":
+			return "local", nil
+		case "remote", "vps":
+			return "remote", nil
+		case "connect":
+			return "connect", nil
+		}
+		fmt.Fprintln(out, "Choose local, remote or connect.")
 	}
 }

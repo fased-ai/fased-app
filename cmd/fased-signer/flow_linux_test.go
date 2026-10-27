@@ -36,6 +36,8 @@ func flowCall(v *signer.Vault) ownerCall {
 		case "status":
 		case "lock":
 			v.Lock()
+		case "import-fixture-seed":
+			e = v.ImportFixtureSeed(r.Document, r.Password)
 		case "create":
 			e = v.Create(r.Password)
 		case "unlock":
@@ -172,5 +174,82 @@ func TestOwnerCancellationAndDamagedBackupStayLocked(t *testing.T) {
 	empty := flowVault(t)
 	if conductFlow(context.Background(), "recover", file, flowAsk(flowBackup, flowUnlock), &bytes.Buffer{}, flowCall(empty)) == nil || empty.Status().Account != nil {
 		t.Fatal("corrupt restore changed key state")
+	}
+}
+
+func TestProtectedImportFlow(t *testing.T) {
+	v := flowVault(t)
+	dir := ownerFixture(t)
+	seedPath := filepath.Join(dir, "seed")
+	backupPath := filepath.Join(dir, "backup.json")
+	seed := bytes.Repeat([]byte{0x42}, 32)
+	if e := os.WriteFile(seedPath, seed, 0600); e != nil {
+		t.Fatal(e)
+	}
+	var out bytes.Buffer
+	if e := conductImport(context.Background(), seedPath, backupPath, flowAsk(flowBackup, flowUnlock), &out, flowCall(v)); e != nil {
+		t.Fatal(e)
+	}
+	before := v.Status()
+	if !before.Locked || !before.RecoveryRequired || before.WalletSigner || !bytes.Contains(out.Bytes(), []byte(`"backupVerified":true`)) || bytes.Contains(out.Bytes(), seed) {
+		t.Fatal("unsafe import completion")
+	}
+	if e := conductImport(context.Background(), seedPath, backupPath, flowAsk(flowBackup, flowUnlock), &out, flowCall(v)); e == nil {
+		t.Fatal("overwrite allowed")
+	}
+	after, _ := os.ReadFile(seedPath)
+	if !bytes.Equal(seed, after) || *before.Account != *v.Status().Account {
+		t.Fatal("owner data changed")
+	}
+}
+func TestProtectedImportFailureLocksAndPreserves(t *testing.T) {
+	for _, kind := range []string{"public", "symlink", "malformed", "existing-backup", "backup-failure"} {
+		t.Run(kind, func(t *testing.T) {
+			v := flowVault(t)
+			dir := ownerFixture(t)
+			seed := filepath.Join(dir, "seed")
+			backup := filepath.Join(dir, "backup")
+			if e := os.WriteFile(seed, bytes.Repeat([]byte{7}, 32), 0600); e != nil {
+				t.Fatal(e)
+			}
+			switch kind {
+			case "public":
+				os.Chmod(seed, 0644)
+			case "symlink":
+				os.Rename(seed, seed+"-real")
+				os.Symlink(seed+"-real", seed)
+			case "malformed":
+				os.WriteFile(seed, []byte("bad"), 0600)
+			case "existing-backup":
+				os.WriteFile(backup, []byte("preserve"), 0600)
+			}
+			call := flowCall(v)
+			wrapped := func(ctx context.Context, r signer.Request) (signer.Response, error) {
+				if kind == "backup-failure" && r.Action == "backup" {
+					return signer.Response{}, errors.New("injected backup failure")
+				}
+				return call(ctx, r)
+			}
+			if e := conductImport(context.Background(), seed, backup, flowAsk(flowBackup, flowUnlock), &bytes.Buffer{}, wrapped); e == nil {
+				t.Fatal("expected refusal")
+			}
+			if !v.Status().Locked {
+				t.Fatal("failure left unlocked")
+			}
+			if kind == "backup-failure" {
+				if v.Status().Account == nil || !v.Status().RecoveryRequired {
+					t.Fatal("lost interrupted import")
+				}
+				before := *v.Status().Account
+				if e := conductFlow(context.Background(), "setup", backup, flowAsk(flowBackup, flowUnlock), &bytes.Buffer{}, call); e != nil {
+					t.Fatal(e)
+				}
+				if *v.Status().Account != before {
+					t.Fatal("retry replaced import")
+				}
+			} else if v.Status().Account != nil {
+				t.Fatal("refused input created wallet")
+			}
+		})
 	}
 }

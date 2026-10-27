@@ -70,6 +70,7 @@ func TestPublicAccountsRevisionRestartAndMigration(t *testing.T) {
 		t.Fatal(e)
 	}
 	// A typed disposable schema-1 DB with the exact preceding tables/data.
+	dropEmptyHistoryFixture(t, s)
 	if _, e = s.db.Exec("DROP TABLE agent_workspace; DROP TRIGGER update_pause_instance; DROP TABLE update_pause; DROP TABLE accounts; PRAGMA user_version=1;"); e != nil {
 		t.Fatal(e)
 	}
@@ -134,6 +135,9 @@ func TestAccountsBindLiveEpochAndNeverTrustAppApproval(t *testing.T) {
 	v, e := s.UpdateAccounts(t.Context(), r)
 	if e != nil {
 		t.Fatal(e)
+	}
+	if v.Fixture.Status.PublicIdentity == nil || v.Fixture.Status.PublicIdentity.Chain != "solana" || v.Fixture.Status.WalletSigner {
+		t.Fatal("public identity lost or conferred authority")
 	}
 	if v.Proposals[0].Receipt.State != "not-approved" {
 		t.Fatal("draft conferred authority")

@@ -240,6 +240,8 @@ try {
   for (const [name, user, mode] of [
     ["state", signer, "0700"],
     ["sockets", signer, "0755"],
+    ["import-state", signer, "0700"],
+    ["import-sockets", signer, "0755"],
     ["restored-state", signer, "0700"],
     ["restored-sockets", signer, "0755"],
     ["owner-backups", owner, "0700"],
@@ -331,6 +333,13 @@ try {
       !initial.financialExecution &&
       !initial.unattendedUnlock,
   );
+  check(
+    "solanaPublicIdentityWhileLocked",
+    initial.publicIdentity?.chain === "solana" &&
+      initial.publicIdentity?.fixtureOnly === true &&
+      initial.publicIdentity?.network === config.mode &&
+      /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(initial.publicIdentity?.address),
+  );
   // Bypass the client role guard. The daemon must enforce actual kernel UID,
   // even when a malicious app constructs the owner protocol itself.
   const probe = String.raw`
@@ -343,7 +352,7 @@ s=socket.socket(socket.AF_UNIX); s.connect(c['socketDir']+'/owner.sock'); result
 s=socket.socket(socket.AF_UNIX); s.connect(c['socketDir']+'/app.sock'); f=s.makefile('rwb'); hello=json.loads(f.readline())
 f.write((json.dumps({'version':1,'signerId':c['signerId'],'challenge':hello['challenge'],'request':{'action':'export-fixture-seed'}})+'\n').encode()); f.flush()
 r=json.loads(f.readline()); result['rawExportDenied']=bool(r.get('error')) and not r.get('document'); s.close()
-for action in ['fixture-policy','fixture-grant','fixture-revoke','fixture-recover-authority','fixture-approve-proposal','fixture-update-inventory','fixture-update-status','fixture-update-prepare','fixture-update-abort','fixture-update-stage-status','fixture-update-stage-write','fixture-update-stage-finish','fixture-update-preflight','fixture-install-controller']:
+for action in ['import-fixture-seed','verify-backup','fixture-policy','fixture-grant','fixture-revoke','fixture-recover-authority','fixture-approve-proposal','fixture-update-inventory','fixture-update-status','fixture-update-prepare','fixture-update-abort','fixture-update-stage-status','fixture-update-stage-write','fixture-update-stage-finish','fixture-update-preflight','fixture-install-controller']:
  s=socket.socket(socket.AF_UNIX);s.connect(c['socketDir']+'/app.sock');f=s.makefile('rwb');h=json.loads(f.readline());f.write((json.dumps({'version':1,'signerId':c['signerId'],'challenge':h['challenge'],'request':{'action':action}})+'\n').encode());f.flush();v=json.loads(f.readline());result['raw:'+action]=v.get('error')=='owner administration denied';s.close()
 print(json.dumps(result))
 `;
@@ -355,7 +364,10 @@ print(json.dumps(result))
   const view = invoke(app, configPath, "app", "status");
   check(
     "appSeesPublicReferenceOnly",
-    view.account.publicKey === initial.account.publicKey && !view.walletSigner,
+    view.account.publicKey === initial.account.publicKey &&
+      JSON.stringify(view.publicIdentity) ===
+        JSON.stringify(initial.publicIdentity) &&
+      !view.walletSigner,
   );
   check(
     "appCannotUseOwnerHelper",
@@ -378,6 +390,49 @@ print(json.dumps(result))
     `${backupPassword}\n${backupPassword}\n`,
     ["--password-stdin", "--file", backup],
   );
+  const verified = invoke(
+    owner,
+    configPath,
+    "owner",
+    "verify-backup",
+    `${backupPassword}\n`,
+    ["--password-stdin", "--file", backup],
+  );
+  check(
+    "ownerRechecksSavedBackup",
+    verified.account.walletId === initial.account.walletId &&
+      !verified.walletSigner,
+  );
+  check(
+    "backupCheckRejectsWrongPassword",
+    fails(() =>
+      invoke(
+        owner,
+        configPath,
+        "owner",
+        "verify-backup",
+        "wrong disposable password\n",
+        ["--password-stdin", "--file", backup],
+      ),
+    ),
+  );
+  invoke(owner, configPath, "owner", "lock");
+  check(
+    "backupCheckRequiresUnlock",
+    fails(() =>
+      invoke(
+        owner,
+        configPath,
+        "owner",
+        "verify-backup",
+        `${backupPassword}\n`,
+        ["--password-stdin", "--file", backup],
+      ),
+    ),
+  );
+  invoke(owner, configPath, "owner", "unlock", `${unlock}\n`, [
+    "--password-stdin",
+  ]);
   invoke(owner, configPath, "owner", "export-fixture-seed", undefined, [
     "--file",
     seed,
@@ -430,6 +485,74 @@ print(json.dumps(result))
     ),
   );
   await stop(server);
+  const importConfig = {
+    ...config,
+    signerId: randomBytes(16).toString("hex"),
+    stateDir: `${root}/import-state`,
+    socketDir: `${root}/import-sockets`,
+  };
+  const importPath = await publishConfig("import-identity.json", importConfig);
+  server = await start(signer, importPath);
+  const importBackup = `${root}/owner-backups/import.json`;
+  const importArgs = [
+    "--seed-file",
+    seed,
+    "--file",
+    importBackup,
+    "--password-stdin",
+  ];
+  const importPasswords = `${replacement}\n${replacement}\n${backupPassword}\n${backupPassword}\n`;
+  check(
+    "appCannotImport",
+    fails(() =>
+      invoke(app, importPath, "import", "status", importPasswords, importArgs),
+    ),
+  );
+  const imported = invoke(
+    owner,
+    importPath,
+    "import",
+    "status",
+    importPasswords,
+    importArgs,
+  );
+  check(
+    "protectedImportBackupLocked",
+    imported.backupVerified &&
+      imported.status.locked &&
+      imported.status.recoveryRequired &&
+      !imported.status.walletSigner &&
+      imported.status.account.publicKey === initial.account.publicKey &&
+      imported.status.account.walletId !== initial.account.walletId &&
+      imported.status.account.epoch !== initial.account.epoch,
+  );
+  check(
+    "importCannotOverwrite",
+    fails(() =>
+      invoke(
+        owner,
+        importPath,
+        "import",
+        "status",
+        importPasswords,
+        importArgs,
+      ),
+    ),
+  );
+  check(
+    "appCannotReadImportBackup",
+    fails(() => as(app, "/usr/bin/cat", [importBackup])),
+  );
+  await stop(server);
+  server = await start(signer, importPath);
+  const importRestart = invoke(owner, importPath, "owner", "status");
+  check(
+    "importRestartPreservesHold",
+    importRestart.locked &&
+      importRestart.recoveryRequired &&
+      importRestart.account.walletId === imported.status.account.walletId,
+  );
+  await stop(server);
   const restoredConfig = {
     ...config,
     signerId: randomBytes(16).toString("hex"),
@@ -467,6 +590,7 @@ print(json.dumps(result))
     restored.locked &&
       restored.recoveryRequired &&
       restored.account.publicKey === initial.account.publicKey &&
+      restored.publicIdentity?.address === initial.publicIdentity?.address &&
       restored.account.walletId === initial.account.walletId &&
       restored.account.epoch !== initial.account.epoch &&
       restored.account.signerId !== initial.account.signerId &&
@@ -498,6 +622,172 @@ print(json.dumps(result))
   check(
     "recoveryHoldCannotClear",
     fails(() => invoke(owner, restoredPath, "owner", "clear-recovery-hold")),
+  );
+  await stop(server);
+  // Network-bound keys reuse the same protected helper and kernel UID boundary.
+  // They never receive funds or any transaction-signing capability.
+  for (const name of [
+    "network-state",
+    "network-restored-state",
+    "network-sockets",
+    "network-restored-sockets",
+  ]) {
+    privileged("/usr/bin/install", [
+      "-d",
+      "-m",
+      name.endsWith("sockets") ? "0755" : "0700",
+      "-o",
+      signer.name,
+      "-g",
+      signer.name,
+      `${root}/${name}`,
+    ]);
+  }
+  const networkConfig = {
+    ...config,
+    version: 2,
+    mode: "disposable-custody:v2",
+    network: "devnet",
+    signerId: randomBytes(16).toString("hex"),
+    stateDir: `${root}/network-state`,
+    socketDir: `${root}/network-sockets`,
+  };
+  const networkPath = await publishConfig(
+    "network-identity.json",
+    networkConfig,
+  );
+  const networkBackup = `${root}/owner-backups/network.json`;
+  server = await start(signer, networkPath);
+  const oldNetworkClient = {
+    ...networkConfig,
+    version: 1,
+    mode: "disposable-fixture:v1",
+  };
+  delete oldNetworkClient.network;
+  const oldNetworkPath = await publishConfig(
+    "network-old-client.json",
+    oldNetworkClient,
+  );
+  check(
+    "network:oldWireRefused",
+    fails(
+      () =>
+        invoke(
+          owner,
+          oldNetworkPath,
+          "owner",
+          "create",
+          `${unlock}\n${unlock}\n`,
+          ["--password-stdin"],
+        ),
+      /identity\/challenge mismatch/,
+    ),
+  );
+  check(
+    "network:oldWireDidNotCreateKey",
+    !invoke(app, networkPath, "app", "status").account,
+  );
+  const networkArgs = [
+    "--seed-file",
+    seed,
+    "--file",
+    networkBackup,
+    "--password-stdin",
+  ];
+  check(
+    "network:appCannotImport",
+    fails(() =>
+      invoke(
+        app,
+        networkPath,
+        "import",
+        "status",
+        importPasswords,
+        networkArgs,
+      ),
+    ),
+  );
+  const networkWallet = invoke(
+    owner,
+    networkPath,
+    "import",
+    "status",
+    importPasswords,
+    networkArgs,
+  );
+  check(
+    "network:protectedImportAndBackup",
+    networkWallet.backupVerified &&
+      networkWallet.status.locked &&
+      networkWallet.status.recoveryRequired &&
+      networkWallet.status.account.version === 2 &&
+      networkWallet.status.account.network === "devnet" &&
+      networkWallet.status.publicIdentity.version === 2 &&
+      networkWallet.status.publicIdentity.fixtureOnly &&
+      !networkWallet.status.walletSigner,
+  );
+  check(
+    "network:appReadOnlyStatus",
+    invoke(app, networkPath, "app", "status").account.epoch ===
+      networkWallet.status.account.epoch,
+  );
+  check(
+    "network:appCannotUnlock",
+    fails(() =>
+      invoke(app, networkPath, "app", "unlock", `${replacement}\n`, [
+        "--password-stdin",
+      ]),
+    ),
+  );
+  check(
+    "network:noFixtureAuthority",
+    fails(() => invoke(owner, networkPath, "owner", "fixture-state")),
+  );
+  check(
+    "network:noRawExport",
+    fails(() =>
+      invoke(owner, networkPath, "owner", "export-fixture-seed", undefined, [
+        "--file",
+        `${root}/owner-backups/forbidden-network-seed`,
+      ]),
+    ),
+  );
+  await stop(server);
+  server = await start(signer, networkPath);
+  const networkRestart = invoke(app, networkPath, "app", "status");
+  check(
+    "network:restartLocked",
+    networkRestart.locked &&
+      networkRestart.account.epoch === networkWallet.status.account.epoch,
+  );
+  await stop(server);
+  const networkRestorePath = await publishConfig("network-restored.json", {
+    ...networkConfig,
+    signerId: randomBytes(16).toString("hex"),
+    stateDir: `${root}/network-restored-state`,
+    socketDir: `${root}/network-restored-sockets`,
+  });
+  server = await start(signer, networkRestorePath);
+  const networkRecovered = invoke(
+    owner,
+    networkRestorePath,
+    "recover",
+    "status",
+    `${backupPassword}\n${replacement}\n${replacement}\n`,
+    ["--password-stdin", "--file", networkBackup],
+  );
+  check(
+    "network:protectedRecovery",
+    networkRecovered.backupVerified &&
+      networkRecovered.status.locked &&
+      networkRecovered.status.recoveryRequired &&
+      networkRecovered.status.account.walletId ===
+        networkWallet.status.account.walletId &&
+      networkRecovered.status.account.epoch !==
+        networkWallet.status.account.epoch &&
+      networkRecovered.status.account.publicKey ===
+        networkWallet.status.account.publicKey &&
+      !networkRecovered.status.financialExecution,
   );
   await stop(server);
   check("allProjectProcessesUnprivileged", true);

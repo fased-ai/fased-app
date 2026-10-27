@@ -31,17 +31,21 @@ func (s *Store) UpdateSnapshot(ctx context.Context, probe string) (update.CoreSn
 
 type snapshotReader interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
 func (s *Store) snapshotTx(ctx context.Context, tx snapshotReader, probe string) (update.CoreSnapshot, error) {
 	var e error
 	var v struct {
+		History                         string
 		Schema                          int
 		Instance, Setup, Accounts       string
 		SetupRevision, AccountsRevision int64
 		PasswordSalt, PasswordHash      []byte
 		Agents                          string
 		AgentsRevision                  int64
+		Research                        string
+		ResearchRevision                int64
 	}
 	if e = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v.Schema); e != nil {
 		return update.CoreSnapshot{}, e
@@ -56,6 +60,13 @@ func (s *Store) snapshotTx(ctx context.Context, tx snapshotReader, probe string)
 		return update.CoreSnapshot{}, e
 	}
 	if e = tx.QueryRowContext(ctx, "SELECT document,revision FROM agent_workspace WHERE id=1").Scan(&v.Agents, &v.AgentsRevision); e != nil {
+		return update.CoreSnapshot{}, e
+	}
+	if e = tx.QueryRowContext(ctx, "SELECT document,revision FROM wen_research WHERE id=1").Scan(&v.Research, &v.ResearchRevision); e != nil {
+		return update.CoreSnapshot{}, e
+	}
+	v.History, e = historySnapshot(ctx, tx)
+	if e != nil {
 		return update.CoreSnapshot{}, e
 	}
 	contract := UpdateContract()

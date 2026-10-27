@@ -8,6 +8,9 @@ import (
 )
 
 func (v *Vault) updateSnapshot(probe string) (update.SignerSnapshot, error) {
+	if v.network != "" {
+		return v.managedUpdateSnapshot(probe)
+	}
 	if !update.IDOK(probe) || v.closed || v.store.failedState() || v.record == nil || v.ledger == nil {
 		return update.SignerSnapshot{}, ErrUnavailable
 	}

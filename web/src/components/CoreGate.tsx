@@ -1,7 +1,11 @@
+import { useUI } from "../ui-preferences";
+import { InstanceSummary, RemoteConnection } from "./InstanceConnection";
+import logo from "../assets/fased-logo.svg";
 import { useState, type FormEvent, type ReactNode } from "react";
-import { ArrowRight, LockKeyhole, ShieldCheck } from "../icons";
+import { ArrowRight, ShieldCheck } from "../icons";
 import { useCore } from "../core";
 export function CoreGate({ children }: { children: ReactNode }) {
+  const { t: uiText } = useUI();
   const core = useCore();
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -43,45 +47,41 @@ export function CoreGate({ children }: { children: ReactNode }) {
     <main className="core-gate">
       <section className="core-auth panel">
         <div className="core-auth-brand">
-          <span className="brand-mark">
-            f<i />
-          </span>
-          <strong>fased app</strong>
-          <span className="badge lime">PRIVATE CORE</span>
+          <img src={logo} alt="" width="28" height="28" />
+          <strong>Fased</strong>
         </div>
+        <InstanceSummary />
         {core.mode === "loading" ? (
           <div className="empty-state" role="status">
             <ShieldCheck size={28} />
-            <h1>Opening your workspace</h1>
-            <p>Checking the local core.</p>
+            <h1>{uiText("Opening your workspace")}</h1>
+            <p>{uiText("Connecting to Fased…")}</p>
           </div>
         ) : core.mode === "error" ? (
           <div className="settings-body">
-            <h1>Core connection unavailable</h1>
-            <p role="alert">{core.error}</p>
+            <h1>
+              {native
+                ? uiText("Connect to Fased")
+                : uiText("Connection unavailable")}
+            </h1>
+            {!native && <p role="alert">{core.error}</p>}
             <button className="primary" onClick={() => void core.retry()}>
-              Retry connection
+              {uiText("Retry connection")}
             </button>
           </div>
         ) : (
           <form onSubmit={submit}>
             <div className="settings-body">
-              <span className="feature-icon lime">
-                <LockKeyhole size={23} />
-              </span>
               <h1>
                 {core.mode === "unclaimed"
-                  ? "Claim this workspace"
-                  : "Welcome back"}
+                  ? uiText("Claim this workspace")
+                  : uiText("Sign in")}
               </h1>
-              <p>
-                {core.mode === "unclaimed"
-                  ? "Establish owner access before configuring this instance. No wallet or AI account is required."
-                  : "Sign in to your private core. Your setup is stored with this instance."}
-              </p>
               {core.mode === "unclaimed" && (
                 <>
-                  <label htmlFor="owner-code">One-use claim code</label>
+                  <label htmlFor="owner-code">
+                    {uiText("One-use claim code")}
+                  </label>
                   <input
                     id="owner-code"
                     type="password"
@@ -90,17 +90,23 @@ export function CoreGate({ children }: { children: ReactNode }) {
                     value={code}
                     onChange={(e) => setCode(e.target.value)}
                   />
-                  <p className="subtle">
-                    Run <code>fased-app claim-code</code> as the instance owner
-                    on this host. Codes expire after 15 minutes.
-                  </p>
+                  <details>
+                    <summary>{uiText("Get setup code")}</summary>
+                    <p>
+                      {uiText("Run ")}
+                      <code>fased-app claim-code</code>
+                      {uiText(
+                        " on this instance. Codes expire after 15 minutes.",
+                      )}
+                    </p>
+                  </details>
                   {native && (
                     <button
                       type="button"
                       className="secondary"
                       onClick={() => void useLocalCode()}
                     >
-                      Use this computer’s setup code
+                      {uiText("Use this computer’s setup code")}
                     </button>
                   )}
                   {claimError && <p role="alert">{claimError}</p>}
@@ -108,12 +114,13 @@ export function CoreGate({ children }: { children: ReactNode }) {
               )}
               <label htmlFor="owner-password">
                 {core.mode === "unclaimed"
-                  ? "Create owner password"
-                  : "Owner password"}
+                  ? uiText("Create owner password")
+                  : uiText("Owner password")}
               </label>
               <input
                 id="owner-password"
                 type="password"
+                autoFocus={core.mode === "locked"}
                 autoComplete={
                   core.mode === "unclaimed"
                     ? "new-password"
@@ -125,12 +132,6 @@ export function CoreGate({ children }: { children: ReactNode }) {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />
-              {core.mode === "unclaimed" && (
-                <p className="subtle">
-                  At least 12 characters. This protects app access; it is not a
-                  wallet unlock credential.
-                </p>
-              )}
               {core.error && (
                 <p className="core-error" role="alert">
                   {core.error}
@@ -138,17 +139,17 @@ export function CoreGate({ children }: { children: ReactNode }) {
               )}
               <button className="primary" disabled={core.saving}>
                 {core.saving
-                  ? "Checking…"
+                  ? uiText("Checking…")
                   : core.mode === "unclaimed"
-                    ? "Claim workspace"
-                    : "Sign in"}
+                    ? uiText("Claim workspace")
+                    : uiText("Sign in")}
                 <ArrowRight size={15} />
               </button>
-              <p className="subtle">
-                Wallets, providers and financial terminals remain unconnected.
-              </p>
             </div>
           </form>
+        )}
+        {core.mode !== "loading" && (
+          <RemoteConnection expanded={native && core.mode === "error"} />
         )}
       </section>
     </main>

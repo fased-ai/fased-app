@@ -20,10 +20,11 @@ import (
 
 type Paths struct{ Root, Data string }
 type Options struct {
-	Engine, Desktop, Listen, PublicOrigin string
-	Start, Autostart                      bool
+	Engine, Desktop, Listen, PublicOrigin, Location string
+	Start, Autostart                                bool
 }
 type Manifest struct {
+	Location     string            `json:"location,omitempty"`
 	Schema       int               `json:"schema"`
 	Phase        string            `json:"phase"`
 	Version      string            `json:"version"`
@@ -38,6 +39,7 @@ type State struct {
 	Installed bool   `json:"installed"`
 	Active    bool   `json:"active"`
 	Autostart bool   `json:"autostart"`
+	Location  string `json:"location,omitempty"`
 	URL       string `json:"url,omitempty"`
 }
 
@@ -113,7 +115,7 @@ func Load(paths Paths) (Manifest, error) {
 		return Manifest{}, err
 	}
 	var m Manifest
-	if json.Unmarshal(data, &m) != nil || m.Schema != 1 || m.Root != p.Root || m.Data != p.Data || (m.Phase != "preparing" && m.Phase != "ready" && m.Phase != "removing") {
+	if json.Unmarshal(data, &m) != nil || m.Schema != 1 || (m.Location != "" && m.Location != "local" && m.Location != "remote") || m.Root != p.Root || m.Data != p.Data || (m.Phase != "preparing" && m.Phase != "ready" && m.Phase != "removing") {
 		return m, errors.New("unknown installation receipt; refusing mutation")
 	}
 	for name := range m.Files {
@@ -201,7 +203,7 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 				return m, errors.New("installation directory contains unclassified files; refusing adoption")
 			}
 		}
-		m = Manifest{Schema: 1, Phase: "preparing", Version: core.Version, Root: p.Root, Data: p.Data, Files: files, Listen: options.Listen, PublicOrigin: options.PublicOrigin}
+		m = Manifest{Schema: 1, Phase: "preparing", Version: core.Version, Root: p.Root, Data: p.Data, Files: files, Listen: options.Listen, PublicOrigin: options.PublicOrigin, Location: options.Location}
 		if err = core.WritePrivateJSON(filepath.Join(p.Root, "install.json"), m); err != nil {
 			return m, err
 		}
@@ -353,7 +355,9 @@ func Status(ctx context.Context, paths Paths) (State, error) {
 	if err = verify(m); err != nil {
 		return State{}, err
 	}
-	return status(ctx, m)
+	result, e := status(ctx, m)
+	result.Location = m.Location
+	return result, e
 }
 func Uninstall(ctx context.Context, paths Paths) error {
 	m, err := Load(paths)

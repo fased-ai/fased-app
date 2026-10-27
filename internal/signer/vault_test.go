@@ -336,3 +336,49 @@ func TestStorageRefusesUnsafePathsAndConflicts(t *testing.T) {
 		t.Fatal("rejected recovery altered original")
 	}
 }
+
+func TestOwnerBackupVerificationPreservesAuthority(t *testing.T) {
+	v := openFixture(t, fixtureDir(t))
+	if err := v.Create(fixturePassword); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Unlock(fixturePassword, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	backup, err := v.Backup(backupPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wipe(backup)
+	before, _ := json.Marshal(v.Status())
+	check := func(document, password []byte, owner bool, wantError bool) {
+		t.Helper()
+		response := execute(v, Request{Action: "verify-backup", Document: document, Password: append([]byte(nil), password...)}, owner)
+		if (response.Error != "") != wantError || len(response.Document) != 0 {
+			t.Fatalf("unexpected verification outcome: %s", response.Error)
+		}
+		after, _ := json.Marshal(v.Status())
+		if !bytes.Equal(before, after) {
+			t.Fatal("backup check changed authority")
+		}
+	}
+	check(backup, backupPassword, true, false)
+	check(backup, []byte("wrong disposable password"), true, true)
+	check(backup, backupPassword, false, true)
+	other := openFixture(t, fixtureDir(t))
+	if err := other.Create(fixturePassword); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Unlock(fixturePassword, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := other.Backup(backupPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wipe(foreign)
+	check(foreign, backupPassword, true, true)
+	v.Lock()
+	before, _ = json.Marshal(v.Status())
+	check(backup, backupPassword, true, true)
+}

@@ -1,0 +1,47 @@
+.wen-chat-revision {
+  display: grid;
+  gap: 14px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin-block: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel, var(--bg));
+}
+.wen-chat-revision h4,
+.wen-chat-revision dl,
+.wen-chat-revision dd {
+  margin: 0;
+}
+.wen-chat-revision > dl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+.wen-chat-revision dt {
+  color: var(--muted);
+}
+.wen-chat-revision dd,
+.wen-chat-revision pre {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.wen-chat-revision pre {
+  white-space: pre-wrap;
+}
+.wen-chat-revision .wr {
+  min-height: 0;
+  min-width: 0;
+  max-width: 100%;
+}
+.wen-chat-revision textarea {
+  min-height: 220px;
+}
+@media (min-width: 720px) {
+  .wen-chat-revision > dl {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+    gap: 10px 16px;
+  }
+}

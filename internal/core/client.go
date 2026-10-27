@@ -102,6 +102,9 @@ func (c *Client) Do(ctx context.Context, method, route string, input, output any
 		if route == "/api/v1/agents" || strings.HasPrefix(route, "/api/v1/agents?") {
 			limit = agentDocumentLimit + 32*1024
 		}
+		if route == "/api/v1/wen/sessions" || strings.HasPrefix(route, "/api/v1/wen/sessions?") || strings.HasPrefix(route, "/api/v1/wen/sessions/") || route == "/api/v1/wen/session-runs" || strings.HasPrefix(route, "/api/v1/wen/session-runs?") || strings.HasPrefix(route, "/api/v1/wen/session-runs/") {
+			limit = WENSessionResponseLimit
+		}
 		if err = json.NewDecoder(io.LimitReader(response.Body, limit)).Decode(output); err != nil {
 			return errors.New("invalid core response")
 		}

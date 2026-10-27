@@ -3,7 +3,6 @@ import {
   Bot,
   Clock3,
   LayoutDashboard,
-  Shield,
   TerminalSquare,
   Wallet,
   Zap,
@@ -17,20 +16,12 @@ export const navigation = [
 ];
 export const terminalData = [
   {
-    id: "asset",
-    name: "WEN Asset Mining",
-    category: "WEN GAME",
-    desc: "Explore districts, allocation and mining orders.",
+    id: "satcoin",
+    name: "Mining",
+    category: "WEN",
+    desc: "Preview BTC ranges, bounded SOL sessions, results and claims.",
     icon: Zap,
     color: "lime",
-  },
-  {
-    id: "loss",
-    name: "WEN Loss Mining",
-    category: "WEN GAME",
-    desc: "Review arena positions and eligible loss rewards.",
-    icon: Shield,
-    color: "peach",
   },
   {
     id: "hyperliquid",
@@ -42,7 +33,7 @@ export const terminalData = [
   },
   {
     id: "jupiter",
-    name: "Solana / Jupiter",
+    name: "Onchain",
     category: "TRADING",
     desc: "Swaps, watchlists and supported limit orders.",
     icon: ArrowUpRight,

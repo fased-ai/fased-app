@@ -85,13 +85,15 @@ form.agent-inline {
 .local-agents small {
   overflow-wrap: anywhere;
 }
-.local-agents .memory-card {
+.local-agents .memory-card,
+.wen-paper .memory-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   padding: 18px 0;
 }
-.local-agents .memory-card p {
+.local-agents .memory-card p,
+.wen-paper .memory-card p {
   margin: 0;
 }
 .local-agents .panel,
@@ -119,20 +121,23 @@ form.agent-inline {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.ai-review pre {
+.ai-review pre,
+.scheduled-ai pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-size: 12px;
   max-height: 260px;
   overflow: auto;
 }
-.ai-review .ai-consent {
+.ai-review .ai-consent,
+.scheduled-ai .ai-consent {
   display: flex;
   align-items: start;
   gap: 10px;
   margin: 16px 0;
 }
-.ai-review .ai-consent input {
+.ai-review .ai-consent input,
+.scheduled-ai .ai-consent input {
   width: auto;
   margin-top: 3px;
 }
@@ -145,4 +150,70 @@ form.agent-inline {
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 12px;
   min-width: 0;
+}
+
+.news-inputs p,
+.news-inputs strong,
+.news-inputs summary,
+.news-provenance {
+  overflow-wrap: anywhere;
+}
+
+/* Memory is a compact library; editing and provenance stay on demand. */
+.memory-library .memory-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  padding: 12px 0;
+}
+.memory-library .memory-card > p {
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.memory-library .memory-card > .agent-inline {
+  grid-column: 2;
+  grid-row: 1;
+  gap: 4px;
+  align-self: start;
+}
+.memory-library .memory-card > details,
+.memory-library .memory-card > section {
+  grid-column: 1 / -1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.task-history-list {
+  display: flex;
+  flex-direction: column;
+  margin: 12px 0;
+}
+.task-history-list > .memory-row {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  padding: 12px 0;
+}
+.task-history-list > .memory-row:hover {
+  background: var(--wt-raised);
+}
+.task-history-list > .memory-row strong {
+  overflow-wrap: anywhere;
+}
+.task-archive pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }

@@ -51,6 +51,29 @@ async function hashes(dir) {
   }
   return result;
 }
+async function waitForSQLiteClose(dir) {
+  // launchctl bootout can return before the terminated process closes SQLite.
+  // Keep every data-file hash check; wait for graceful checkpoint/sidecar removal.
+  for (let i = 0; i < 100; i++) {
+    const live = await Promise.all(
+      ["core.sqlite-wal", "core.sqlite-shm"].map(async (name) => {
+        try {
+          await stat(join(dir, name));
+          return true;
+        } catch (error) {
+          if (error.code === "ENOENT") return false;
+          throw error;
+        }
+      }),
+    );
+    if (!live.some(Boolean)) return;
+    await pause(50);
+  }
+  throw new Error(
+    "SQLite did not close after service stop; preservation snapshot refused",
+  );
+}
+
 try {
   if (archive) {
     const unpack = join(root, "unpacked");
@@ -210,6 +233,7 @@ try {
   assert.notEqual(replay.status, 200);
   report.checks.claimReplayRejected = "PASS";
   cli(["service", "stop", ...flags]);
+  if (process.platform === "darwin") await waitForSQLiteClose(state);
   const preserved = await hashes(state);
   await writeFile(
     join(app, "owner-note.txt"),

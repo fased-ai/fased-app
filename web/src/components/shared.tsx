@@ -1,4 +1,5 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useUI } from "../ui-preferences";
 import { X } from "../icons";
 import { type Profile } from "../state";
 export function Badge({
@@ -73,7 +74,9 @@ export function Dialog({
   onClose: () => void;
   wide?: boolean;
 }) {
+  const { t } = useUI();
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
   useEffect(() => {
     const el = ref.current;
     el?.showModal();
@@ -89,13 +92,13 @@ export function Dialog({
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
-      aria-labelledby="dialog-title"
+      aria-labelledby={titleId}
     >
       <div className="dialog-heading">
-        <h2 id="dialog-title">{title}</h2>
+        <h2 id={titleId}>{title}</h2>
         <button
           className="icon-button"
-          aria-label="Close dialog"
+          aria-label={t("Close dialog")}
           onClick={onClose}
         >
           <X size={18} />
@@ -106,16 +109,20 @@ export function Dialog({
   );
 }
 export function DemoChart() {
+  const { t: uiText } = useUI();
   return (
-    <div className="chart" aria-label="Illustrative chart, not market data">
+    <div
+      className="chart"
+      aria-label={uiText("Illustrative chart, not market data")}
+    >
       <div className="chart-grid" />
       <div className="chart-label">
-        ILLUSTRATIVE DATA · NO MARKET CONNECTION
+        {uiText("ILLUSTRATIVE DATA · NO MARKET CONNECTION")}
       </div>
       <svg
         viewBox="0 0 800 210"
         role="img"
-        aria-label="Illustrative market price line"
+        aria-label={uiText("Illustrative market price line")}
         preserveAspectRatio="none"
       >
         <defs>

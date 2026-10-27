@@ -3,6 +3,7 @@ package desktop
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -100,6 +101,51 @@ func TestNativeTransportDoesNotSupplyAuthority(t *testing.T) {
 	}
 	if got := request("GET", "/api/v1/setup", "", "", session.Token, ""); got.Code != 200 {
 		t.Fatal("authenticated native request failed")
+	}
+
+	for _, path := range []string{"/api/v1/ai/connection", "/api/v1/agents?profile=news-researcher", "/api/v1/agents?profile=trading-analyst&memory-search=retained", "/api/v1/accounts", "/api/v1/updates/status"} {
+		if got := request("GET", path, "", "", session.Token, ""); got.Code != 200 {
+			t.Fatalf("native flow %s: %d %s", path, got.Code, got.Body)
+		}
+	}
+	if got := request("POST", "/api/v1/ai/connection", `{"action":"lock"}`, "http://wails.localhost", session.Token, session.CSRF); got.Code != 200 {
+		t.Fatalf("provider control: %d %s", got.Code, got.Body)
+	}
+	got := request("GET", "/api/v1/agents?profile=news-researcher", "", "", session.Token, "")
+	var view core.AgentView
+	if json.Unmarshal(got.Body.Bytes(), &view) != nil || view.ProfileID != "news-researcher" {
+		t.Fatal("profile query dropped")
+	}
+	command := `{"action":"session-create","profileId":"news-researcher","name":"Native conversation","revision":` + fmt.Sprint(view.Revision) + `}`
+	if got := request("POST", "/api/v1/agents", command, "http://wails.localhost", session.Token, ""); got.Code != 403 {
+		t.Fatal("agent CSRF bypass")
+	}
+	if got := request("POST", "/api/v1/agents", command, "http://wails.localhost", session.Token, session.CSRF); got.Code != 200 {
+		t.Fatalf("agent mutation: %d %s", got.Code, got.Body)
+	}
+	// A real retained view can exceed the old 32 KiB bridge limit.
+	for i := 0; i < 10; i++ {
+		current, err := server.Store.Agents(t.Context(), "news-researcher", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = server.Store.ChangeAgents(t.Context(), core.AgentCommand{Action: "memory-put", Revision: current.Revision, ProfileID: current.ProfileID, Text: strings.Repeat("n", 3900), Source: "owner"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := request("GET", "/api/v1/agents?profile=news-researcher", "", "", session.Token, ""); got.Code != 200 || got.Body.Len() <= 32*1024 {
+		t.Fatal("retained view truncated", got.Code, got.Body.Len())
+	}
+	if got := request("POST", "/api/v1/agents", strings.Repeat(" ", 16*1024+1), "http://wails.localhost", session.Token, session.CSRF); got.Code != 413 {
+		t.Fatal("request bound lost")
+	}
+	if got := request("POST", "/api/v1/ai/connection", `{"action":"save","key":"fased-test-disposable-native-key","passphrase":"disposable-native-passphrase"}`, "http://wails.localhost", session.Token, session.CSRF); got.Code != 200 {
+		t.Fatalf("provider save: %d %s", got.Code, got.Body)
+	}
+	for _, path := range []string{"/api/v1/agents?profile=a&profile=b", "/api/v1/agents?url=https://evil.example", "/api/v1/ai/connection?profile=a"} {
+		if got := request("GET", path, "", "", session.Token, ""); got.Code != 404 {
+			t.Fatal("unbounded query accepted", path, got.Code)
+		}
 	}
 	for _, csrf := range []string{"", session.CSRF} {
 		r := httptest.NewRequest("PUT", "wails://wails/api/v1/setup", strings.NewReader(`{"revision":0,"settings":{"step":0,"complete":false,"host":"vps","walletMode":"skip","provider":"none"}}`))

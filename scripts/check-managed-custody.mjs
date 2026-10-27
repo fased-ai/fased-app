@@ -199,7 +199,10 @@ async function readySigner() {
   }
   throw new Error("signer owner RPC did not become ready after restart");
 }
+const network = process.env.FASED_MANAGED_NETWORK ?? "";
+assert.ok(["", "devnet", "mainnet-beta"].includes(network));
 const installArgs = ["install", "--signer-binary", signer, "--prepare-host"];
+if (network) installArgs.push("--network", network);
 let listen;
 async function freePort() {
   const server = net.createServer();
@@ -480,7 +483,149 @@ try {
       !initial.walletSigner &&
       !initial.financialExecution,
   );
-  const probe = String.raw`
+  if (network) {
+    check(
+      "network:installedIdentity",
+      manifest.version === 2 &&
+        manifest.network === network &&
+        initial.account.version === 2 &&
+        initial.account.network === network,
+    );
+    const wrongArgs = [...installArgs];
+    wrongArgs[wrongArgs.indexOf("--network") + 1] =
+      network === "devnet" ? "mainnet-beta" : "devnet";
+    check(
+      "network:retryCannotRetarget",
+      fails(() => cli(wrongArgs), /conflicts|differs/),
+    );
+    const inspect = () =>
+      fixtureOwner("fixture-update-inventory").updateInventory;
+    const firstInventory = inspect();
+    check(
+      "network:heldInventory",
+      firstInventory.version === 2 &&
+        firstInventory.recoveryHold &&
+        firstInventory.states.length === 2 &&
+        firstInventory.states[0].version === 2,
+    );
+    check(
+      "network:noUpdateAuthority",
+      fails(() => fixtureOwner("fixture-update-prepare")),
+    );
+    check(
+      "network:appCannotInspectOwnerInventory",
+      fails(() =>
+        fixtureApp(manifest.app, "fixture-update-inventory", {
+          probeId: manifest.id,
+        }),
+      ),
+    );
+    const beforeKey = sha(
+      osTool("/usr/bin/cat", [root + "/signer-state/vault.json"], {
+        encoding: null,
+      }),
+    );
+    osTool("/usr/bin/systemctl", ["stop", units[1]]);
+    const cold = JSON.parse(
+      as(manifest.signer, root + "/fased-signer", [
+        "fixture-update-inspect",
+        "--config",
+        root + "/identity.json",
+        "--disposable-fixture",
+      ]),
+    );
+    check(
+      "network:coldInspection",
+      cold.updateInventory.version === 2 &&
+        cold.updateInventory.authoritySha256 ===
+          firstInventory.authoritySha256 &&
+        cold.status.locked &&
+        cold.status.recoveryRequired,
+    );
+    check(
+      "network:inspectionPreservesKey",
+      sha(
+        osTool("/usr/bin/cat", [root + "/signer-state/vault.json"], {
+          encoding: null,
+        }),
+      ) === beforeKey,
+    );
+    // Only this generated disposable key is lost, after its verified backup.
+    osTool("/usr/bin/rm", [
+      "--",
+      root + "/signer-state/vault.json",
+      root + "/signer-state/vault.lock",
+    ]);
+    osTool("/usr/bin/systemctl", ["start", units[1]]);
+    await readySigner();
+    const recovered = JSON.parse(
+      cli(
+        ["recover", "--backup-file", backup, "--password-stdin"],
+        `${backupPassword}\n${replacement}\n${replacement}\n`,
+      ),
+    );
+    const afterInventory = inspect();
+    check(
+      "network:recoveryKeepsNetworkAndKey",
+      recovered.backupVerified &&
+        recovered.status.locked &&
+        recovered.status.recoveryRequired &&
+        recovered.status.account.network === network &&
+        recovered.status.account.publicKey === initial.account.publicKey &&
+        recovered.status.account.epoch !== initial.account.epoch,
+    );
+    check(
+      "network:recoveryInvalidatesInventory",
+      afterInventory.authoritySha256 !== firstInventory.authoritySha256 &&
+        afterInventory.recoveryHold,
+    );
+    check(
+      "network:recoveredUpdateRefused",
+      fails(() => fixtureOwner("fixture-update-prepare")),
+    );
+    cli(["login", "--prepare-host", "--password-stdin"], appPassword + "\n");
+    await fixtureUpdateIntentJourney({
+      engine,
+      root,
+      cli,
+      ownerStatus: secretStatus,
+      ownerUnlock: unlockFixture,
+      walletPassword: replacement,
+      stopServices: () => {
+        for (const unit of units) osTool("/usr/bin/systemctl", ["stop", unit]);
+      },
+      restartSigner: () => osTool("/usr/bin/systemctl", ["restart", units[1]]),
+      restartApp: () => osTool("/usr/bin/systemctl", ["restart", units[0]]),
+      backups,
+      check,
+      fails,
+      env,
+      url: "http://" + listen,
+      appPassword,
+      networkMode: true,
+    });
+    check(
+      "network:updateKeepsRecoveryHold",
+      secretStatus().locked &&
+        secretStatus().recoveryRequired &&
+        secretStatus().account.publicKey === initial.account.publicKey,
+    );
+    const protectedHashes = () =>
+      ["vault.json", "operations.log"].map((name) =>
+        sha(
+          osTool("/usr/bin/cat", [root + "/signer-state/" + name], {
+            encoding: null,
+          }),
+        ),
+      );
+    const beforeRemove = protectedHashes();
+    cli(["remove", "--prepare-host"]);
+    check(
+      "network:removePreservesKey",
+      protectedHashes().every((hash, index) => hash === beforeRemove[index]),
+    );
+  } else {
+    const probe = String.raw`
 import os,socket,json,sys
 c=json.loads(sys.argv[1]);r={}
 try: os.open(c['stateDir']+'/vault.json',os.O_RDONLY);r['keyReadDenied']=False
@@ -494,349 +639,364 @@ for name in ['operations.log','mock-receipts.log']:
  except PermissionError: r['read:'+name]=True
 print(json.dumps(r))
 `;
-  const cfg = JSON.parse(await readFile(root + "/identity.json", "utf8"));
-  for (const [name, v] of Object.entries(
-    JSON.parse(
-      as(manifest.app, "/usr/bin/python3", ["-c", probe, JSON.stringify(cfg)]),
-    ),
-  ))
-    check(name, v);
-  check(
-    "appCannotRunOwnerHelper",
-    fails(
-      () =>
-        as(manifest.app, root + "/fased-signer", [
-          "setup",
-          "--config",
-          root + "/identity.json",
-          "--disposable-fixture",
-          "--file",
-          backup,
+    const cfg = JSON.parse(await readFile(root + "/identity.json", "utf8"));
+    for (const [name, v] of Object.entries(
+      JSON.parse(
+        as(manifest.app, "/usr/bin/python3", [
+          "-c",
+          probe,
+          JSON.stringify(cfg),
         ]),
-      /owner administration denied/,
-    ),
-  );
-  check(
-    "ownerCannotRunManagedCore",
-    fails(
-      () =>
-        execFileSync(
-          root + "/fased-app",
-          [
-            "serve",
-            "--data-dir",
-            root + "/app-state",
-            "--installation-root",
-            root,
-            "--require-sandbox",
-            "--custody-config",
+      ),
+    ))
+      check(name, v);
+    check(
+      "appCannotRunOwnerHelper",
+      fails(
+        () =>
+          as(manifest.app, root + "/fased-signer", [
+            "setup",
+            "--config",
             root + "/identity.json",
-          ],
-          { encoding: "utf8", timeout: 10000 },
-        ),
-      /managed core identity/,
-    ),
-  );
-  osTool("/usr/bin/systemctl", ["restart", units[1]]);
-  const restartedSigner = await readySigner();
-  check(
-    "signerRestartLocked",
-    restartedSigner.locked &&
-      restartedSigner.account.publicKey === initial.account.publicKey,
-  );
-  unlockFixture(unlock);
-  const policyJourney = fixturePolicyJourney({
-    account: initial.account,
-    check,
-    fails,
-    owner: fixtureOwner,
-    app: (action, body) => fixtureApp(manifest.app, action, body),
-  });
-  execFileSync(
-    root + "/fased-signer",
-    [
-      "owner",
-      "--config",
-      root + "/identity.json",
-      "--disposable-fixture",
-      "--action",
-      "lock",
-    ],
-    { encoding: "utf8" },
-  );
-  const keyHash = sha(
-    osTool("/usr/bin/cat", [root + "/signer-state/vault.json"], {
-      encoding: null,
-    }),
-  );
-  check(
-    "recoveryCannotOverwriteExistingWallet",
-    fails(
-      () =>
-        cli(
-          ["recover", "--backup-file", backup, "--password-stdin"],
-          "unused\n",
-        ),
-      /existing wallets are preserved/,
-    ),
-  );
-  check(
-    "overwriteRefusalPreservesKey",
-    sha(
+            "--disposable-fixture",
+            "--file",
+            backup,
+          ]),
+        /owner administration denied/,
+      ),
+    );
+    check(
+      "ownerCannotRunManagedCore",
+      fails(
+        () =>
+          execFileSync(
+            root + "/fased-app",
+            [
+              "serve",
+              "--data-dir",
+              root + "/app-state",
+              "--installation-root",
+              root,
+              "--require-sandbox",
+              "--custody-config",
+              root + "/identity.json",
+            ],
+            { encoding: "utf8", timeout: 10000 },
+          ),
+        /managed core identity/,
+      ),
+    );
+    osTool("/usr/bin/systemctl", ["restart", units[1]]);
+    const restartedSigner = await readySigner();
+    check(
+      "signerRestartLocked",
+      restartedSigner.locked &&
+        restartedSigner.account.publicKey === initial.account.publicKey,
+    );
+    unlockFixture(unlock);
+    const policyJourney = fixturePolicyJourney({
+      account: initial.account,
+      check,
+      fails,
+      owner: fixtureOwner,
+      app: (action, body) => fixtureApp(manifest.app, action, body),
+    });
+    execFileSync(
+      root + "/fased-signer",
+      [
+        "owner",
+        "--config",
+        root + "/identity.json",
+        "--disposable-fixture",
+        "--action",
+        "lock",
+      ],
+      { encoding: "utf8" },
+    );
+    const keyHash = sha(
       osTool("/usr/bin/cat", [root + "/signer-state/vault.json"], {
         encoding: null,
       }),
-    ) === keyHash,
-  );
-  // Explicitly simulate loss of this disposable key, after a verified encrypted
-  // backup. Product uninstall never performs either of these deletions.
-  osTool("/usr/bin/systemctl", ["stop", units[1]]);
-  osTool("/usr/bin/rm", [
-    "--",
-    root + "/signer-state/vault.json",
-    root + "/signer-state/vault.lock",
-  ]);
-  osTool("/usr/bin/systemctl", ["start", units[1]]);
-  await readySigner();
-  check(
-    "wrongRecoveryCredentialDenied",
-    fails(
-      () =>
-        cli(
-          ["recover", "--backup-file", backup, "--password-stdin"],
-          `Wrong disposable password\n${replacement}\n${replacement}\n`,
-        ),
-      /invalid credential/,
-    ),
-  );
-  check("failedRecoveryRemainsEmpty", !secretStatus().account);
-  const recovered = JSON.parse(
-    cli(
-      ["recover", "--backup-file", backup, "--password-stdin"],
-      `${backupPassword}\n${replacement}\n${replacement}\n`,
-    ),
-  );
-  check(
-    "recoveredSameKeyWithHold",
-    recovered.backupVerified &&
-      recovered.status.locked &&
-      recovered.status.recoveryRequired &&
-      recovered.status.account.publicKey === initial.account.publicKey &&
-      recovered.status.account.epoch !== initial.account.epoch &&
-      !recovered.status.walletSigner,
-  );
-  const recoveredHash = sha(
-    osTool("/usr/bin/cat", [root + "/signer-state/vault.json"], {
-      encoding: null,
-    }),
-  );
-  await ownerTerminal();
-  await healthy();
-  const revoked = await fetch("http://" + listen + "/api/v1/setup", {
-    headers: { Origin: "http://" + listen, Authorization: "Bearer " + session },
-  });
-  check("oldAppSessionRevoked", revoked.status === 401);
-  check(
-    "appPasswordRecoveryPreservesSigner",
-    secretStatus().recoveryRequired &&
-      secretStatus().locked &&
+    );
+    check(
+      "recoveryCannotOverwriteExistingWallet",
+      fails(
+        () =>
+          cli(
+            ["recover", "--backup-file", backup, "--password-stdin"],
+            "unused\n",
+          ),
+        /existing wallets are preserved/,
+      ),
+    );
+    check(
+      "overwriteRefusalPreservesKey",
       sha(
         osTool("/usr/bin/cat", [root + "/signer-state/vault.json"], {
           encoding: null,
         }),
-      ) === recoveredHash,
-  );
-  const oldLogin = await fetch("http://" + listen + "/api/v1/auth/login", {
-    method: "POST",
-    headers: { Origin: "http://" + listen, "Content-Type": "application/json" },
-    body: JSON.stringify({ password: appPassword }),
-  });
-  assert.equal(oldLogin.status, 401);
-  const newLogin = await fetch("http://" + listen + "/api/v1/auth/login", {
-    method: "POST",
-    headers: { Origin: "http://" + listen, "Content-Type": "application/json" },
-    body: JSON.stringify({ password: appPassword + " replacement" }),
-  });
-  assert.equal(newLogin.status, 200);
-  check("appPasswordRecoveryUsesNewCredential", true);
-  unlockFixture(replacement);
-  const recoveredReservation = fixtureRecoveryJourney({
-    account: recovered.status.account,
-    previous: policyJourney,
-    owner: fixtureOwner,
-    app: (action, body) => fixtureApp(manifest.app, action, body),
-    check,
-    fails,
-  });
-  execFileSync(
-    root + "/fased-signer",
-    [
-      "owner",
-      "--config",
-      root + "/identity.json",
-      "--disposable-fixture",
-      "--action",
-      "lock",
-    ],
-    { encoding: "utf8" },
-  );
-  const journalHashes = Object.fromEntries(
-    ["operations.log", "mock-receipts.log"].map((name) => [
-      name,
-      sha(
-        osTool("/usr/bin/cat", [root + "/signer-state/" + name], {
-          encoding: null,
-        }),
+      ) === keyHash,
+    );
+    // Explicitly simulate loss of this disposable key, after a verified encrypted
+    // backup. Product uninstall never performs either of these deletions.
+    osTool("/usr/bin/systemctl", ["stop", units[1]]);
+    osTool("/usr/bin/rm", [
+      "--",
+      root + "/signer-state/vault.json",
+      root + "/signer-state/vault.lock",
+    ]);
+    osTool("/usr/bin/systemctl", ["start", units[1]]);
+    await readySigner();
+    check(
+      "wrongRecoveryCredentialDenied",
+      fails(
+        () =>
+          cli(
+            ["recover", "--backup-file", backup, "--password-stdin"],
+            `Wrong disposable password\n${replacement}\n${replacement}\n`,
+          ),
+        /invalid credential/,
       ),
-    ]),
-  );
-  // A changed managed unit must abort removal without stopping either service.
-  const appUnit = "/etc/systemd/system/" + units[0];
-  const original = await readFile(appUnit);
-  osTool("/usr/bin/tee", [appUnit], {
-    input: Buffer.concat([
-      original,
-      Buffer.from("\n# owned mutation fixture\n"),
-    ]),
-  });
-  check(
-    "alteredUnitRemovalDenied",
-    fails(
-      () => cli(["remove", "--prepare-host"]),
-      /foreign installed unit|changed/,
-    ),
-  );
-  osTool("/usr/bin/install", [
-    "-m",
-    "0644",
-    "-o",
-    "root",
-    "-g",
-    "root",
-    root + "/fased-app.service",
-    appUnit,
-  ]);
-  osTool("/usr/bin/systemctl", ["daemon-reload"]);
-  for (const name of units) osTool("/usr/bin/systemctl", ["stop", name]);
-  const stoppedDB = sha(
-    osTool("/usr/bin/cat", [root + "/app-state/core.sqlite"], {
-      encoding: null,
-    }),
-  );
-  cli(["remove", "--prepare-host"]);
-  check(
-    "removePreservesDataAndIdentities",
-    sha(
-      osTool("/usr/bin/cat", [root + "/app-state/core.sqlite"], {
+    );
+    check("failedRecoveryRemainsEmpty", !secretStatus().account);
+    const recovered = JSON.parse(
+      cli(
+        ["recover", "--backup-file", backup, "--password-stdin"],
+        `${backupPassword}\n${replacement}\n${replacement}\n`,
+      ),
+    );
+    check(
+      "recoveredSameKeyWithHold",
+      recovered.backupVerified &&
+        recovered.status.locked &&
+        recovered.status.recoveryRequired &&
+        recovered.status.account.publicKey === initial.account.publicKey &&
+        recovered.status.account.epoch !== initial.account.epoch &&
+        !recovered.status.walletSigner,
+    );
+    const recoveredHash = sha(
+      osTool("/usr/bin/cat", [root + "/signer-state/vault.json"], {
         encoding: null,
       }),
-    ) === stoppedDB &&
-      sha(
-        osTool("/usr/bin/cat", [root + "/signer-state/vault.json"], {
-          encoding: null,
-        }),
-      ) === recoveredHash,
-  );
-  cli(["remove", "--prepare-host"]);
-  const reinstated = JSON.parse(cli(installArgs));
-  check(
-    "reinstallKeepsIdentityAndReconciledAuthority",
-    reinstated.manifest.id === manifest.id &&
-      !secretStatus().recoveryRequired &&
-      secretStatus().account.epoch === recovered.status.account.epoch &&
-      (await healthy()).instanceId === health.instanceId,
-  );
-  check(
-    "fixture:removalAndReinstallPreserveJournals",
-    Object.entries(journalHashes).every(
-      ([name, hash]) =>
+    );
+    await ownerTerminal();
+    await healthy();
+    const revoked = await fetch("http://" + listen + "/api/v1/setup", {
+      headers: {
+        Origin: "http://" + listen,
+        Authorization: "Bearer " + session,
+      },
+    });
+    check("oldAppSessionRevoked", revoked.status === 401);
+    check(
+      "appPasswordRecoveryPreservesSigner",
+      secretStatus().recoveryRequired &&
+        secretStatus().locked &&
+        sha(
+          osTool("/usr/bin/cat", [root + "/signer-state/vault.json"], {
+            encoding: null,
+          }),
+        ) === recoveredHash,
+    );
+    const oldLogin = await fetch("http://" + listen + "/api/v1/auth/login", {
+      method: "POST",
+      headers: {
+        Origin: "http://" + listen,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ password: appPassword }),
+    });
+    assert.equal(oldLogin.status, 401);
+    const newLogin = await fetch("http://" + listen + "/api/v1/auth/login", {
+      method: "POST",
+      headers: {
+        Origin: "http://" + listen,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ password: appPassword + " replacement" }),
+    });
+    assert.equal(newLogin.status, 200);
+    check("appPasswordRecoveryUsesNewCredential", true);
+    unlockFixture(replacement);
+    const recoveredReservation = fixtureRecoveryJourney({
+      account: recovered.status.account,
+      previous: policyJourney,
+      owner: fixtureOwner,
+      app: (action, body) => fixtureApp(manifest.app, action, body),
+      check,
+      fails,
+    });
+    execFileSync(
+      root + "/fased-signer",
+      [
+        "owner",
+        "--config",
+        root + "/identity.json",
+        "--disposable-fixture",
+        "--action",
+        "lock",
+      ],
+      { encoding: "utf8" },
+    );
+    const journalHashes = Object.fromEntries(
+      ["operations.log", "mock-receipts.log"].map((name) => [
+        name,
         sha(
           osTool("/usr/bin/cat", [root + "/signer-state/" + name], {
             encoding: null,
           }),
-        ) === hash,
-    ),
-  );
-  const preservedSummary = fixtureApp(manifest.app, "fixture-state").fixture;
-  check(
-    "fixture:reinstallPreservesSpentAndHeldBudget",
-    preservedSummary.spent === "70" &&
-      preservedSummary.held === "30" &&
-      secretStatus().locked,
-  );
-  await fixtureAccountJourney({
-    url: "http://" + listen,
-    engine,
-    cli,
-    app: (action, body) => fixtureApp(manifest.app, action, body),
-    ownerUnlock: unlockFixture,
-    ownerLock: () => fixtureOwner("lock"),
-    ownerStatus: secretStatus,
-    check,
-    fails,
-    account: recovered.status.account,
-    appPassword: appPassword + " replacement",
-    walletPassword: replacement,
-    backups,
-    evidence,
-    env,
-  });
-  const updateJourney =
-    process.env.FASED_BOOTSTRAP_ACCEPTANCE === "1"
-      ? fixtureBootstrapJourney
-      : fixtureUpdateIntentJourney;
-  await updateJourney({
-    engine,
-    root,
-    cli,
-    ownerStatus: secretStatus,
-    ownerUnlock: unlockFixture,
-    walletPassword: replacement,
-    stopServices: () => osTool("/usr/bin/systemctl", ["stop", ...units]),
-    restartSigner: () => osTool("/usr/bin/systemctl", ["restart", units[1]]),
-    restartApp: () => osTool("/usr/bin/systemctl", ["restart", units[0]]),
-    backups,
-    check,
-    fails,
-    env,
-    url: "http://" + listen,
-    appPassword: appPassword + " replacement",
-  });
-  if (process.env.FASED_INSPECTION_ACCEPTANCE === "1") {
-    const reconciled = fixtureApp(manifest.app, "fixture-reconcile", {
-      operationId: recoveredReservation.operationId,
+        ),
+      ]),
+    );
+    // A changed managed unit must abort removal without stopping either service.
+    const appUnit = "/etc/systemd/system/" + units[0];
+    const original = await readFile(appUnit);
+    osTool("/usr/bin/tee", [appUnit], {
+      input: Buffer.concat([
+        original,
+        Buffer.from("\n# owned mutation fixture\n"),
+      ]),
     });
     check(
-      "inspection:knownUnsubmittedFixtureReservationReconciled",
-      reconciled.operation.state === "not-submitted" &&
-        fixtureApp(manifest.app, "fixture-state").fixture.held === "0",
+      "alteredUnitRemovalDenied",
+      fails(
+        () => cli(["remove", "--prepare-host"]),
+        /foreign installed unit|changed/,
+      ),
     );
-    await fixtureInspectionJourney({
-      root,
-      env,
-      check,
+    osTool("/usr/bin/install", [
+      "-m",
+      "0644",
+      "-o",
+      "root",
+      "-g",
+      "root",
+      root + "/fased-app.service",
+      appUnit,
+    ]);
+    osTool("/usr/bin/systemctl", ["daemon-reload"]);
+    for (const name of units) osTool("/usr/bin/systemctl", ["stop", name]);
+    const stoppedDB = sha(
+      osTool("/usr/bin/cat", [root + "/app-state/core.sqlite"], {
+        encoding: null,
+      }),
+    );
+    cli(["remove", "--prepare-host"]);
+    check(
+      "removePreservesDataAndIdentities",
+      sha(
+        osTool("/usr/bin/cat", [root + "/app-state/core.sqlite"], {
+          encoding: null,
+        }),
+      ) === stoppedDB &&
+        sha(
+          osTool("/usr/bin/cat", [root + "/signer-state/vault.json"], {
+            encoding: null,
+          }),
+        ) === recoveredHash,
+    );
+    cli(["remove", "--prepare-host"]);
+    const reinstated = JSON.parse(cli(installArgs));
+    check(
+      "reinstallKeepsIdentityAndReconciledAuthority",
+      reinstated.manifest.id === manifest.id &&
+        !secretStatus().recoveryRequired &&
+        secretStatus().account.epoch === recovered.status.account.epoch &&
+        (await healthy()).instanceId === health.instanceId,
+    );
+    check(
+      "fixture:removalAndReinstallPreserveJournals",
+      Object.entries(journalHashes).every(
+        ([name, hash]) =>
+          sha(
+            osTool("/usr/bin/cat", [root + "/signer-state/" + name], {
+              encoding: null,
+            }),
+          ) === hash,
+      ),
+    );
+    const preservedSummary = fixtureApp(manifest.app, "fixture-state").fixture;
+    check(
+      "fixture:reinstallPreservesSpentAndHeldBudget",
+      preservedSummary.spent === "70" &&
+        preservedSummary.held === "30" &&
+        secretStatus().locked,
+    );
+    await fixtureAccountJourney({
+      url: "http://" + listen,
+      engine,
+      cli,
+      app: (action, body) => fixtureApp(manifest.app, action, body),
+      ownerUnlock: unlockFixture,
+      ownerLock: () => fixtureOwner("lock"),
       ownerStatus: secretStatus,
-      restartSigner: () => osTool("/usr/bin/systemctl", ["restart", units[1]]),
-      restartApp: () => osTool("/usr/bin/systemctl", ["restart", units[0]]),
-    });
-  }
-  if (process.env.FASED_PORTABLE_ACCEPTANCE === "1") {
-    await fixturePortableRecovery({
-      root,
-      manifest,
-      osTool,
-      as,
       check,
       fails,
-      ownerStatus: secretStatus,
-      fixtureOwner,
+      account: recovered.status.account,
+      appPassword: appPassword + " replacement",
       walletPassword: replacement,
-      stopSigner: () => osTool("/usr/bin/systemctl", ["stop", units[1]]),
-      restartSigner: async () => {
-        osTool("/usr/bin/systemctl", ["restart", units[1]]);
-        return await readySigner();
-      },
+      backups,
+      evidence,
+      env,
     });
+    const updateJourney =
+      process.env.FASED_BOOTSTRAP_ACCEPTANCE === "1"
+        ? fixtureBootstrapJourney
+        : fixtureUpdateIntentJourney;
+    await updateJourney({
+      engine,
+      root,
+      cli,
+      ownerStatus: secretStatus,
+      ownerUnlock: unlockFixture,
+      walletPassword: replacement,
+      stopServices: () => osTool("/usr/bin/systemctl", ["stop", ...units]),
+      restartSigner: () => osTool("/usr/bin/systemctl", ["restart", units[1]]),
+      restartApp: () => osTool("/usr/bin/systemctl", ["restart", units[0]]),
+      backups,
+      check,
+      fails,
+      env,
+      url: "http://" + listen,
+      appPassword: appPassword + " replacement",
+    });
+    if (process.env.FASED_INSPECTION_ACCEPTANCE === "1") {
+      const reconciled = fixtureApp(manifest.app, "fixture-reconcile", {
+        operationId: recoveredReservation.operationId,
+      });
+      check(
+        "inspection:knownUnsubmittedFixtureReservationReconciled",
+        reconciled.operation.state === "not-submitted" &&
+          fixtureApp(manifest.app, "fixture-state").fixture.held === "0",
+      );
+      await fixtureInspectionJourney({
+        root,
+        env,
+        check,
+        ownerStatus: secretStatus,
+        restartSigner: () =>
+          osTool("/usr/bin/systemctl", ["restart", units[1]]),
+        restartApp: () => osTool("/usr/bin/systemctl", ["restart", units[0]]),
+      });
+    }
+    if (process.env.FASED_PORTABLE_ACCEPTANCE === "1") {
+      await fixturePortableRecovery({
+        root,
+        manifest,
+        osTool,
+        as,
+        check,
+        fails,
+        ownerStatus: secretStatus,
+        fixtureOwner,
+        walletPassword: replacement,
+        stopSigner: () => osTool("/usr/bin/systemctl", ["stop", units[1]]),
+        restartSigner: async () => {
+          osTool("/usr/bin/systemctl", ["restart", units[1]]);
+          return await readySigner();
+        },
+      });
+    }
   }
   report.identities = {
     owner: uid,

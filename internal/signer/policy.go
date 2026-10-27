@@ -202,6 +202,30 @@ func (l *ledger) authorize(i FixtureIntent, at int64) error {
 // apply validates the transition as well as its recorded time. Replay uses the
 // same checks as live append; no persisted app counter is trusted.
 func (l *ledger) apply(r journalRecord) error {
+	if l.ref.Version == 2 {
+		expected := journalRecord{Version: r.Version, Sequence: r.Sequence, Previous: r.Previous, Hash: r.Hash, At: r.At, Kind: r.Kind}
+		switch r.Kind {
+		case "update-prepare":
+			if r.Update == nil || r.Update.Signer.Version != 2 || !r.Update.Signer.RecoveryHold {
+				return errors.New("managed maintenance intent required")
+			}
+			expected.Update = r.Update
+		case "update-abort":
+			expected.ID = r.ID
+		case "update-staged":
+			expected.ID = r.ID
+			expected.OriginalHash = r.OriginalHash
+		case "update-install":
+			expected.ID = r.ID
+			expected.Installation = r.Installation
+		default:
+			return errors.New("managed key history admits maintenance only")
+		}
+		if recordHash(expected) != recordHash(r) {
+			return errors.New("unexpected managed maintenance fields")
+		}
+	}
+
 	if r.At < l.lastTime {
 		return errors.New("fixture clock moved backwards")
 	}
@@ -393,6 +417,9 @@ func (l *ledger) append(v *Vault, r journalRecord) error {
 }
 
 func (v *Vault) openLedger() error {
+	if v.network != "" {
+		return v.openManagedHistory()
+	}
 	main, rs, err := v.store.readJournal("operations.log")
 	mock, ms, me := v.store.readJournal("mock-receipts.log")
 	if errors.Is(err, os.ErrNotExist) && errors.Is(me, os.ErrNotExist) {
@@ -442,6 +469,9 @@ func (v *Vault) openLedger() error {
 // Thus a crash during first setup preserves the encrypted original and cannot
 // be mistaken for permission to reset an existing wallet's counters.
 func (s *storage) ensureInitialHistory(e envelope) error {
+	if e.Version == 2 {
+		return s.ensureManagedHistory(e)
+	}
 	_, _, err := s.readJournal("operations.log")
 	mock, ms, me := s.readJournal("mock-receipts.log")
 	if err == nil && me == nil {
@@ -469,10 +499,10 @@ func (s *storage) ensureInitialHistory(e envelope) error {
 }
 
 func (v *Vault) recoveryRequired() bool {
-	return v.record != nil && (v.ledger == nil || v.ledger.ref != v.record.Ref || v.ledger.missingHistory)
+	return v.record != nil && (v.network != "" || v.ledger == nil || v.ledger.ref != v.record.Ref || v.ledger.missingHistory)
 }
 func (v *Vault) fixtureReady(unlock bool) error {
-	if v.closed || v.store.failedState() || v.record == nil || v.ledger == nil {
+	if v.network != "" || v.closed || v.store.failedState() || v.record == nil || v.ledger == nil {
 		return ErrUnavailable
 	}
 	if v.ledger.activeUpdate != "" {
@@ -490,7 +520,7 @@ func (v *Vault) fixtureReady(unlock bool) error {
 func (v *Vault) FixtureState() (*FixtureSummary, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.closed || v.ledger == nil {
+	if v.network != "" || v.closed || v.ledger == nil {
 		return nil, ErrUnavailable
 	}
 	l := v.ledger
@@ -654,7 +684,7 @@ func (v *Vault) ReconcileFixture(id string) (*FixtureOperation, error) {
 func (v *Vault) RecoverFixtureAuthority(ref AccountRef) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.closed || v.store.failedState() || v.record == nil || v.ledger == nil || !v.unlocked() {
+	if v.network != "" || v.closed || v.store.failedState() || v.record == nil || v.ledger == nil || !v.unlocked() {
 		return ErrLocked
 	}
 	l := v.ledger

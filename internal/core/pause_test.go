@@ -274,6 +274,7 @@ func TestCorePauseActualProcessTermination(t *testing.T) {
 func TestCorePauseSchemaTwoMigrationPreservesOwnerMetadata(t *testing.T) {
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
+	dropEmptyHistoryFixture(t, s)
 	dir := s.dir
 	before, e := s.Accounts(t.Context())
 	if e != nil {

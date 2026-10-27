@@ -8,7 +8,10 @@ import (
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
+const ManagedFixtureMode = "disposable-custody:v2"
+
 type Config struct {
+	Network   string `json:"network,omitempty"`
 	Version   int    `json:"version"`
 	Mode      string `json:"mode"`
 	SignerID  string `json:"signerId"`
@@ -20,7 +23,8 @@ type Config struct {
 }
 
 func (c Config) Validate() error {
-	if c.Version != 1 || c.Mode != FixtureNetwork || !validID(c.SignerID) || c.OwnerUID <= 0 || c.AppUID <= 0 || c.SignerUID <= 0 ||
+	modeOK := c.Version == 1 && c.Mode == FixtureNetwork && c.Network == "" || c.Version == 2 && c.Mode == ManagedFixtureMode && managedNetwork(c.Network)
+	if !modeOK || !validID(c.SignerID) || c.OwnerUID <= 0 || c.AppUID <= 0 || c.SignerUID <= 0 ||
 		c.OwnerUID == c.AppUID || c.OwnerUID == c.SignerUID || c.AppUID == c.SignerUID || c.StateDir == c.SocketDir {
 		return errors.New("fixture requires a versioned identity and three distinct non-root UIDs")
 	}
@@ -60,12 +64,24 @@ type Response struct {
 func execute(v *Vault, r Request, owner bool) Response {
 	defer wipe(r.Password)
 	defer wipe(r.NewPassword)
+	if r.Action == "import-fixture-seed" || r.Action == "import-managed-seed" {
+		defer wipe(r.Document)
+	}
 	var document []byte
 	var err error
 	if !owner && !AppActionAllowed(r.Action) {
 		return Response{Error: "owner administration denied"}
 	}
+	if v.network != "" {
+		switch r.Action {
+		case "status", "create", "import-managed-seed", "unlock", "lock", "backup", "verify-backup", "restore", "fixture-update-inventory", "fixture-update-status", "fixture-update-prepare", "fixture-update-abort", "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish", "fixture-update-preflight", "fixture-install-controller":
+		default:
+			return Response{Error: ErrUnavailable.Error()}
+		}
+	}
 	switch r.Action {
+	case "import-managed-seed":
+		err = v.importManagedSeed(r.Document, r.Password)
 	case "fixture-install-controller":
 		if r.Install == nil {
 			return Response{Error: "bound installation command required"}
@@ -130,6 +146,8 @@ func execute(v *Vault, r Request, owner bool) Response {
 		}
 		return out
 	case "status":
+	case "import-fixture-seed":
+		err = v.ImportFixtureSeed(r.Document, r.Password)
 	case "create":
 		err = v.Create(r.Password)
 	case "unlock":

@@ -11,6 +11,7 @@ import (
 
 	"github.com/fased-ai/fased-app/desktop/internal/window"
 	"github.com/fased-ai/fased-app/internal/bundle"
+	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/wailsapp/wails/v2"
@@ -20,10 +21,11 @@ import (
 func main() {
 	dir, err := core.DefaultDataDir()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot locate private core state")
+		fmt.Fprintln(os.Stderr, "Cannot locate Fased instance data")
 		os.Exit(1)
 	}
 	state := flag.String("data-dir", dir, "private instance state directory")
+	remote := flag.String("connect", "", "open an existing Remote Fased instance without installing locally")
 	version := flag.Bool("version", false, "show version")
 	flag.Parse()
 	if *version {
@@ -33,6 +35,19 @@ func main() {
 	if flag.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "unexpected arguments")
 		os.Exit(1)
+	}
+	if *remote != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		target, e := connection.Probe(ctx, *remote, "")
+		if e == nil {
+			e = connection.OpenBrowser(target.URL, target.InstanceID)
+		}
+		if e != nil {
+			fmt.Fprintln(os.Stderr, e)
+			os.Exit(1)
+		}
+		return
 	}
 	var firstPackage string
 	if paths, err := localinstall.DefaultPaths(); err == nil && paths.Data == *state {
@@ -56,9 +71,12 @@ func main() {
 		options.OnStartup = func(ctx context.Context) {
 			// Linux and Windows question dialogs return Yes/No and ignore
 			// custom button labels; use those supported responses on all OSes.
-			answer, e := wailsruntime.MessageDialog(ctx, wailsruntime.MessageDialogOptions{Type: wailsruntime.QuestionDialog, Title: "Install Fased App", Message: "Install the private core for this OS user and start it in the background? No wallet, RPC or AI account is required. Closing the window leaves the engine running. Login autostart is off. This is an unsigned engineering package." + hostPreparationNotice(), Buttons: []string{"Yes", "No"}, DefaultButton: "No", CancelButton: "No"})
-			if e != nil || answer != "Yes" {
+			answer, e := wailsruntime.MessageDialog(ctx, wailsruntime.MessageDialogOptions{Type: wailsruntime.QuestionDialog, Title: "Set up Fased", Message: "Install Fased on this computer? Choose Yes for Local installation or No to connect to an existing Remote instance. Local installation starts Fased in the background. Login autostart is off. This is an unsigned engineering package." + hostPreparationNotice(), Buttons: []string{"Yes", "No"}, DefaultButton: "No", CancelButton: "No"})
+			if e != nil {
 				wailsruntime.Quit(ctx)
+				return
+			}
+			if answer != "Yes" {
 				return
 			}
 			paths, e := localinstall.DefaultPaths()
@@ -66,7 +84,7 @@ func main() {
 			if e == nil {
 				terminal, e = prepareDesktopHost(ctx, firstPackage, paths)
 				if e == nil && !terminal {
-					_, e = localinstall.Install(ctx, paths, localinstall.Options{Engine: filepath.Join(firstPackage, localinstall.EngineName()), Desktop: filepath.Join(firstPackage, localinstall.DesktopName()), Listen: "127.0.0.1:7331", Start: true})
+					_, e = localinstall.Install(ctx, paths, localinstall.Options{Engine: filepath.Join(firstPackage, localinstall.EngineName()), Desktop: filepath.Join(firstPackage, localinstall.DesktopName()), Listen: "127.0.0.1:7331", Start: true, Location: "local"})
 				}
 			}
 			if e != nil {

@@ -1,0 +1,27 @@
+.f4-automatic .f4-runs {
+  min-width: 0;
+}
+.f4-automatic .f4-history {
+  max-height: 26rem;
+}
+.f4-automatic .f4-history table {
+  min-width: 48rem;
+  table-layout: fixed;
+}
+.f4-automatic th:first-child {
+  width: 3rem;
+}
+.f4-automatic th:nth-child(2) {
+  width: 5rem;
+}
+.f4-automatic th:nth-child(3) {
+  width: 18rem;
+}
+.f4-automatic th {
+  white-space: nowrap;
+}
+.f4-automatic th:last-child,
+.f4-automatic td:last-child {
+  min-width: 13rem;
+  font-variant-numeric: tabular-nums;
+}

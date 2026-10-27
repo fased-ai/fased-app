@@ -33,7 +33,7 @@ func BackupBinding(p Preflight) (RecoveryBinding, error) {
 	want := p.BindingSHA256
 	p.BindingSHA256 = ""
 	r := p.Pause.Request
-	if p.Version != 1 || !p.Verified || p.InstallAllowed || p.ResumeAllowed || p.FinancialExecution || want != SnapshotDigest("preflight:v1", p) || r == nil || !ValidPauseRequest(*r) || p.IntentID != r.IntentID || p.Sequence != r.Sequence || p.ManifestSHA256 != r.ManifestSHA256 || p.Pause.State != "paused" || p.Pause.Version != 1 || !IDOK(p.Pause.PauseID) || !IDOK(p.Pause.Core.BootID) || !IDOK(p.Pause.Core.ProbeID) || !SameCoreMetadata(p.Pause.Core, r.Expected) || p.Signer.Version != 1 || !IDOK(p.Signer.BootID) || p.Signer.ProbeID != p.Pause.Core.ProbeID || p.Signer.ActiveIntentID != p.IntentID || p.Signer.SequenceFloor != p.Sequence || !hashOK(p.Signer.AuthoritySHA256) || len(p.Signer.States) != 3 || len(p.Files) != 2 {
+	if p.Version != 1 || !p.Verified || p.InstallAllowed || p.ResumeAllowed || p.FinancialExecution || want != SnapshotDigest("preflight:v1", p) || r == nil || !ValidPauseRequest(*r) || p.IntentID != r.IntentID || p.Sequence != r.Sequence || p.ManifestSHA256 != r.ManifestSHA256 || p.Pause.State != "paused" || p.Pause.Version != 1 || !IDOK(p.Pause.PauseID) || !IDOK(p.Pause.Core.BootID) || !IDOK(p.Pause.Core.ProbeID) || !SameCoreMetadata(p.Pause.Core, r.Expected) || !validHeldSignerShape(p.Signer) || !IDOK(p.Signer.BootID) || p.Signer.ProbeID != p.Pause.Core.ProbeID || p.Signer.ActiveIntentID != p.IntentID || p.Signer.SequenceFloor != p.Sequence || !hashOK(p.Signer.AuthoritySHA256) || len(p.Files) != 2 {
 		return b, errors.New("verified current held preflight required for metadata backup")
 	}
 	seen := map[string]bool{}
@@ -54,3 +54,10 @@ func ValidRecoveryIndex(i RecoveryIndex, b RecoveryBinding) bool {
 }
 
 const MaxMetadataBackup = 64 << 20
+
+func validHeldSignerShape(s SignerSnapshot) bool {
+	if s.Version == 1 {
+		return len(s.States) == 3
+	}
+	return s.Version == 2 && len(s.States) == 2 && s.States[0].Name == "vault" && s.States[0].Version == 2 && s.States[1].Name == "operations" && s.States[1].Version == 1 && s.RecoveryHold && s.Spent == 0 && s.Held == 0 && s.Pending == 0 && s.Unknown == 0
+}

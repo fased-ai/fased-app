@@ -12,8 +12,12 @@ func main() {
 	if os.Geteuid() == 0 {
 		os.Exit(90)
 	}
-	if len(os.Args) == 3 && os.Args[1] == "updates" && os.Args[2] == "compatibility" {
-		json.NewEncoder(os.Stdout).Encode(map[string]any{"version": 1, "contract": core.UpdateContract(), "walletSigner": false, "financialExecution": false, "updaterEnabled": false})
+	if len(os.Args) == 3 && os.Args[1] == "updates" && (os.Args[2] == "compatibility" || os.Args[2] == "custody-compatibility") {
+		c := core.UpdateContract()
+		if os.Args[2] == "custody-compatibility" {
+			c = core.ManagedUpdateContract()
+		}
+		json.NewEncoder(os.Stdout).Encode(map[string]any{"version": 1, "contract": c, "walletSigner": false, "financialExecution": false, "updaterEnabled": false})
 		return
 	}
 	os.Exit(42)

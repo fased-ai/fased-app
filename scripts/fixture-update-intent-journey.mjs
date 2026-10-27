@@ -29,9 +29,12 @@ export async function fixtureUpdateIntentJourney({
   env,
   url,
   appPassword,
+  networkMode = false,
 }) {
   assert(process.getuid() > 0);
-  const evidence = path.resolve(".evidence/p4-complete");
+  const evidence = path.resolve(
+    networkMode ? ".evidence/p4-network-complete" : ".evidence/p4-complete",
+  );
   await mkdir(evidence, { recursive: true });
   const checks = {};
   const pass = (name, value) => {
@@ -158,6 +161,7 @@ export async function fixtureUpdateIntentJourney({
         .getByLabel("Owner password", { exact: true })
         .fill(appPassword);
       await page.getByRole("button", { name: "Sign in", exact: true }).click();
+      await page.locator("details.update-settings > summary").click();
       const panel = page.getByRole("region", {
         name: "Update preferences & proposals",
       });
@@ -269,6 +273,7 @@ export async function fixtureUpdateIntentJourney({
         .getByLabel("Owner password", { exact: true })
         .fill(appPassword);
       await page.getByRole("button", { name: "Sign in", exact: true }).click();
+      await page.locator("details.update-settings > summary").click();
       const panel = page.getByRole("region", { name: "Updates & recovery" });
       await expect(
         panel.getByText(status.core.phase, { exact: true }),
@@ -329,16 +334,24 @@ export async function fixtureUpdateIntentJourney({
   }
   const contracts = [
     JSON.parse(
-      execFileSync(root + "/fased-app", ["updates", "compatibility"], {
-        encoding: "utf8",
-        env,
-      }),
+      execFileSync(
+        root + "/fased-app",
+        ["updates", networkMode ? "custody-compatibility" : "compatibility"],
+        {
+          encoding: "utf8",
+          env,
+        },
+      ),
     ).contract,
     JSON.parse(
-      execFileSync(root + "/fased-signer", ["fixture-compatibility"], {
-        encoding: "utf8",
-        env,
-      }),
+      execFileSync(
+        root + "/fased-signer",
+        [networkMode ? "custody-compatibility" : "fixture-compatibility"],
+        {
+          encoding: "utf8",
+          env,
+        },
+      ),
     ),
   ];
   const manifest = {
@@ -417,6 +430,7 @@ try:
  if not done:done,status=os.waitpid(pid,0)
  code=os.waitstatus_to_exitcode(status)
  assert sent,'no protected terminal review: '+seen.decode(errors='replace')
+ if choice in ('interrupt','resume-interrupt'):assert interrupted,'interruption boundary not reached: '+seen.decode(errors='replace')
  assert (code==0)==(choice=='approve'),'unexpected exit: '+seen.decode(errors='replace')
  if operation=='prepare':assert b'No installation or resume is authorized' in seen and b'"sha256"' in seen and b'"spent"' in seen and b'"held"' in seen,'incomplete review'
  print(json.dumps({'terminal':True,'operation':operation,'choice':choice,'exitCode':code,'completeReview':True,'interrupted':interrupted,'concurrentDenied':concurrentDenied}))
@@ -456,7 +470,7 @@ finally:
     const baselineCoreHash = sha(await readFile(root + "/fased-app"));
     pass(
       "serviceInventoryHasActualCoreAndSigner",
-      before.core.state.version === 5 &&
+      before.core.state.version === 22 &&
         before.core.state.features.includes("agents-local-v1") &&
         before.signer.sequenceFloor === "0" &&
         before.core.probeId === before.signer.probeId &&
@@ -843,8 +857,12 @@ finally:
         current.signer.unknown === before.signer.unknown &&
         current.signer.states.find((s) => s.name === "vault").anchor ===
           before.signer.states.find((s) => s.name === "vault").anchor &&
-        current.signer.states.find((s) => s.name === "mock-receipts").anchor ===
-          before.signer.states.find((s) => s.name === "mock-receipts").anchor,
+        (networkMode
+          ? current.signer.states.every((s) => s.name !== "mock-receipts")
+          : current.signer.states.find((s) => s.name === "mock-receipts")
+              .anchor ===
+            before.signer.states.find((s) => s.name === "mock-receipts")
+              .anchor),
     );
     await saveManifest(1);
     pass(
@@ -1061,7 +1079,9 @@ finally:
     );
     pass(
       "installerRecordsConvergeToExactInstalledPair",
-      rootIntent.coreHash === installedManifest.coreHash &&
+      rootIntent.version === installedManifest.version &&
+        rootIntent.network === installedManifest.network &&
+        rootIntent.coreHash === installedManifest.coreHash &&
         rootIntent.signerHash === installedManifest.signerHash &&
         JSON.stringify(rootIntent) === JSON.stringify(ownerIntent) &&
         readyRecord.manifest ===
@@ -1104,6 +1124,9 @@ finally:
             root + "/fased-signer",
             "--listen",
             installedManifest.listen,
+            ...(installedManifest.network
+              ? ["--network", installedManifest.network]
+              : []),
           ],
           { encoding: "utf8", env, timeout: 30000 },
         ),
