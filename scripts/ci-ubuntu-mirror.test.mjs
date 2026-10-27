@@ -25,6 +25,25 @@ test("only the Azure archive URI changes; suites, security and signing stay inta
     ),
   );
 });
+test("VM prerequisites use the same trusted archive without extending the job", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/inspection-acceptance.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(workflow, /timeout-minutes: 35\n/);
+  const prerequisites = workflow
+    .split("- name: Disposable VM prerequisites")[1]
+    .split("- uses: actions/cache")[0];
+  assert.match(prerequisites, /node --test scripts\/ci-ubuntu-mirror.test.mjs/);
+  assert.match(
+    prerequisites,
+    /node scripts\/ci-ubuntu-mirror.mjs\n\s+sudo install -m 0644 .evidence\/ubuntu.sources \/etc\/apt\/sources.list.d\/ubuntu.sources\n\s+sudo apt-get update/,
+  );
+  assert.doesNotMatch(
+    prerequisites,
+    /sudo (?:node|npm|bash)|allow-unauthenticated|trusted=yes/,
+  );
+});
 test("the official runner mirror-list source bypasses Azure without changing trust", () => {
   const mirrorList = source.replace(
     "http://azure.archive.ubuntu.com/ubuntu/",
