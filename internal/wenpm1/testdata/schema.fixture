@@ -1,0 +1,230 @@
+{
+  "name": "wen-pm1-fixture-v1",
+  "version": 1,
+  "fixtureOnly": true,
+  "flag": 1,
+  "magics": {
+    "instruction": "WENPM1IX",
+    "account": "WENPM1AC",
+    "receipt": "WENPM1RC"
+  },
+  "maxFrame": 131072,
+  "maxInstruction": 256,
+  "types": {
+    "Binding": {
+      "program": "key",
+      "ledger": "key",
+      "network": "hash",
+      "economy": "hash",
+      "terms": "hash"
+    },
+    "Vote": {
+      "price": "u64",
+      "source_time": "i64",
+      "sequence": "u64"
+    },
+    "Entry": {
+      "owner": "key",
+      "nonce": "u64",
+      "amount": "u64",
+      "commitment": "hash",
+      "selection": {
+        "option": "u8"
+      },
+      "principal": "u64",
+      "sat": "u64",
+      "miner_input": "u64",
+      "sol_claimed": "bool",
+      "sat_claimed": "bool",
+      "credit_ppm": "u64",
+      "exact": "bool",
+      "forfeiture": "u64",
+      "winner_fee": "u64"
+    },
+    "Round": {
+      "slot": "u64",
+      "start": "i64",
+      "hold": "u64",
+      "entries": {
+        "vec": "Entry",
+        "max": 1024
+      },
+      "observations": {
+        "array": {
+          "array": {
+            "option": "Vote"
+          },
+          "len": 3
+        },
+        "len": 14
+      },
+      "settled": "bool",
+      "outcome": {
+        "option": "u8"
+      },
+      "allocations": {
+        "array": "u64",
+        "len": 6
+      },
+      "carry_input": "u64",
+      "total_stake": "u64",
+      "forfeitures": "u64",
+      "winner_fees": "u64",
+      "credit_weight": "u128",
+      "max_credit_ppm": "u64",
+      "released_miner_input": "u64",
+      "exact_winning_stake": "u64",
+      "incorrect_stake": "u64"
+    },
+    "Ledger": {
+      "binding": "Binding",
+      "epoch": "i64",
+      "recorders": {
+        "array": "key",
+        "len": 3
+      },
+      "mint": "key",
+      "eligible_stake": "u64",
+      "lifetime_committed": "u64",
+      "annual": {
+        "map": "u64",
+        "value": "u64",
+        "max": 8192
+      },
+      "rounds": {
+        "vec": "Round",
+        "max": 1024
+      }
+    },
+    "Receipt": {
+      "binding": "Binding",
+      "slot": "u64",
+      "entry": "u32",
+      "owner": "key",
+      "nonce": "u64",
+      "amount": "u64",
+      "selection": {
+        "option": "u8"
+      },
+      "settled": "bool",
+      "outcome": {
+        "option": "u8"
+      },
+      "principal": "u64",
+      "sat": "u64",
+      "miner_input": "u64",
+      "sol_claimed": "bool",
+      "sat_claimed": "bool",
+      "credit_ppm": "u64",
+      "exact": "bool",
+      "forfeiture": "u64",
+      "winner_fee": "u64"
+    }
+  },
+  "instructions": [
+    {
+      "id": 1,
+      "name": "Open",
+      "fields": {
+        "slot": "u64"
+      },
+      "accounts": [
+        "ledger:w"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Commit",
+      "fields": {
+        "slot": "u64",
+        "amount": "u64",
+        "nonce": "u64",
+        "commitment": "hash"
+      },
+      "accounts": [
+        "ledger:w",
+        "owner:sw",
+        "system:"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Reveal",
+      "fields": {
+        "slot": "u64",
+        "entry": "u32",
+        "selection": "u8",
+        "salt": "hash"
+      },
+      "accounts": [
+        "ledger:w"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Observe",
+      "fields": {
+        "slot": "u64",
+        "sample": "u8",
+        "vote": "Vote"
+      },
+      "accounts": [
+        "ledger:w",
+        "recorder:s"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "Settle",
+      "fields": {
+        "slot": "u64"
+      },
+      "accounts": [
+        "ledger:w"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "ClaimSol",
+      "fields": {
+        "slot": "u64",
+        "entry": "u32"
+      },
+      "accounts": [
+        "ledger:w",
+        "beneficiary:w"
+      ]
+    },
+    {
+      "id": 7,
+      "name": "ClaimSat",
+      "fields": {
+        "slot": "u64",
+        "entry": "u32"
+      },
+      "accounts": [
+        "ledger:w",
+        "mint:w",
+        "destination:w",
+        "authority:",
+        "token:"
+      ]
+    }
+  ],
+  "unsupported": [
+    "bootstrap/Genesis/LP",
+    "full prepare/admit",
+    "authenticated external oracle report",
+    "staking",
+    "conversion/recovery",
+    "carry/daily competition",
+    "treasury execution",
+    "live execution"
+  ],
+  "compiler": "1.96.0",
+  "wellKnownPrograms": {
+    "system": "0000000000000000000000000000000000000000000000000000000000000000",
+    "token": "06ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a9"
+  },
+  "stateModel": "owner-adopted-partial-credit-2026-10-22"
+}

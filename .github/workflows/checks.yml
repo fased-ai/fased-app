@@ -1,17 +1,13 @@
 name: Checks
-
 on:
   push:
     branches: [main]
   pull_request:
-
 permissions:
   contents: read
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
-
 jobs:
   documentation:
     runs-on: ubuntu-latest
@@ -23,18 +19,456 @@ jobs:
           node-version: "24"
       - name: Verify documentation validator failure cases
         run: node --test --test-isolation=none scripts/check-docs.test.mjs
-      - name: Validate tracked foundation and documentation
-        run: node scripts/check-docs.mjs
+      - name: Validate documentation without certifying runtime
+        run: node scripts/check-docs.mjs --documentation
       - name: Check whitespace
         run: git show --format= --check HEAD
-
+  classify:
+    runs-on: ubuntu-latest
+    outputs:
+      core: ${{ steps.route.outputs.core }}
+      desktop: ${{ steps.route.outputs.desktop }}
+      signer: ${{ steps.route.outputs.signer }}
+      handoff: ${{ steps.route.outputs.handoff }}
+      handoff_uid: ${{ steps.route.outputs.handoff_uid }}
+      inspection: ${{ steps.route.outputs.inspection }}
+      vm: ${{ steps.route.outputs.vm }}
+      scope: ${{ steps.route.outputs.scope }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: node --test scripts/ci-routing.test.mjs
+      - id: route
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          FULL_RUN: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          mkdir -p .evidence
+          if [[ "$BASE_SHA" =~ ^[a-f0-9]{40}$ ]] && git show "$BASE_SHA:scripts/ci-routing.mjs" > .evidence/trusted-ci-routing.mjs; then
+            node .evidence/trusted-ci-routing.mjs plan
+          else
+            # Policy installation or unavailable base: require every lane.
+            for lane in core desktop signer handoff handoff_uid inspection vm; do echo "$lane=true" >> "$GITHUB_OUTPUT"; done
+            echo "scope=full" >> "$GITHUB_OUTPUT"
+          fi
+  core:
+    needs: classify
+    if: needs.classify.outputs.core == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - run: node scripts/source-evidence.mjs
+      - run: npm run check
+      - run: go mod verify
+      - run: test -z "$(gofmt -l cmd internal desktop ui.go)"
+      - if: needs.classify.outputs.scope == 'full'
+        run: npm run test:core
+      - if: needs.classify.outputs.scope == 'rpc'
+        run: go test -race ./internal/core -run 'Test(RPC|AccountRPC|PublicRPC|ProviderRPC)'
+      - run: npm run build:core
+      - name: Headless Windows compilation
+        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o .evidence/bin/windows.exe ./cmd/fased-app
+      - name: Headless macOS compilation
+        run: GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o .evidence/bin/macos ./cmd/fased-app
+      # Same runner libraries and headless browser as the managed signer UI proof.
+      - run: npx playwright install --only-shell chromium
+      - run: npm run test:ui
+      - if: needs.classify.outputs.scope != 'rpc'
+        run: npm run test:core-ui
+      - if: needs.classify.outputs.scope == 'rpc'
+        run: npm run test:core-ui -- --grep 'public account records share UI/CLI state without wallet authority'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: core-failure-evidence
+          include-hidden-files: true
+          path: |
+            .evidence/*.json
+            .evidence/*.png
+            .evidence/browser/
+            .evidence/core-browser/
+          retention-days: 7
+  desktop:
+    needs: classify
+    if: needs.classify.outputs.desktop == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache-dependency-path: |
+            go.sum
+            desktop/go.sum
+      - run: npm ci
+      - run: npm run build
+      - name: Native Linux build prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          node --test scripts/ci-ubuntu-mirror.test.mjs
+          node scripts/ci-ubuntu-mirror.mjs
+          sudo install -m 0644 .evidence/ubuntu.sources /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev xvfb dbus-x11 xterm xdotool scrot
+      - name: Windows task encoding contracts
+        if: runner.os == 'Windows'
+        run: go test ./internal/localinstall
+      - run: go -C desktop mod verify
+      - run: npm run build:desktop
+      - run: npm run build:core
+      - run: npm run package:native
+      - name: Prepare missing Ubuntu runtime acceptance
+        if: runner.os == 'Linux'
+        run: |
+          go -C desktop build -trimpath -tags production,webkit2_41 -o ../.evidence/bin/fased-native-smoke ./smoke
+          sudo apt-get remove -y --no-auto-remove bubblewrap libwebkit2gtk-4.1-0
+          echo "FASED_TEST_HOST_PREPARE=1" >> "$GITHUB_ENV"
+      - name: Prepare Ubuntu user service manager
+        if: runner.os == 'Linux'
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl start "user@$(id -u).service"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+      - name: Installed platform package journey
+        shell: bash
+        run: |
+          platform="${{ runner.os }}"
+          case "$platform" in
+            Linux) archive="$(find .evidence/packages -name '*.tar.gz')" ;;
+            Windows) archive="$(find .evidence/packages -name '*.zip')" ;;
+            macOS) archive="$(find .evidence/packages -name '*.zip')" ;;
+          esac
+          FASED_PACKAGE_ARCHIVE="$archive" npm run test:platform-install
+      - name: Windows setup executable journey
+        if: runner.os == 'Windows'
+        run: node scripts/check-windows-setup.mjs
+      - name: Linux service failure diagnostics
+        if: failure() && runner.os == 'Linux'
+        run: |
+          systemctl --user show fased-app.service --property=LoadState,ActiveState,FragmentPath,Result,ExecMainStatus || true
+          sudo journalctl --no-pager _SYSTEMD_USER_UNIT=fased-app.service -n 40 || true
+          sudo journalctl --no-pager -u "user@$(id -u).service" -n 40 || true
+          sudo journalctl --no-pager -k -g 'apparmor.*DENIED' -n 12 || true
+      - name: Native Linux window and separate-core journey
+        if: runner.os == 'Linux'
+        run: |
+          dbus-run-session -- npm run test:native-window
+      - name: Packaged Ubuntu desktop first-launch preparation
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node scripts/check-native-first-launch.mjs
+      - name: Remove owned Ubuntu acceptance policy after native window
+        if: always() && runner.os == 'Linux'
+        run: node --input-type=module -e "const m = await import('./scripts/ubuntu-preparation.mjs'); await m.cleanupUbuntuPreparation();"
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os == 'Linux'
+        with:
+          name: ubuntu-native-first-launch
+          include-hidden-files: true
+          path: |
+            .evidence/native-first-launch-result.json
+            .evidence/native-first-launch.png
+            .evidence/native-first-consent.png
+            .evidence/native-first-launch.log
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: desktop-failure-${{ matrix.os }}
+          include-hidden-files: true
+          path: |
+            .evidence/*.json
+            .evidence/*.log
+          retention-days: 7
+  signer:
+    needs: classify
+    if: needs.classify.outputs.signer == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - run: mkdir -p .evidence/bin && go build -trimpath -o .evidence/bin/fased-signer ./cmd/fased-signer
+      - name: Disposable three-UID signer boundary and recovery
+        run: node scripts/check-signer-isolation.mjs
+      - name: Build managed disposable core
+        run: |
+          npm ci --prefer-offline --no-audit --no-fund
+          npm run build
+          go build -trimpath -o .evidence/bin/fased-app ./cmd/fased-app
+      - name: Build deliberately unhealthy disposable candidate
+        run: go build -trimpath -o .evidence/bin/fased-unhealthy-core ./internal/custodyinstall/testdata/unhealthy-core
+      - name: Portable encrypted history and quarantined recovery checks
+        run: node scripts/check-portable-recovery.mjs
+      - name: Read-only signed development manifest and compatibility journey
+        env:
+          FASED_UPDATE_EVIDENCE: .evidence/p4-complete
+        run: node scripts/check-update-manifest.mjs
+      - name: Development HTTPS acquisition and independently pinned bootstrap trust
+        run: node scripts/check-update-acquisition.mjs
+      - name: Disposable TUF trust and read-only CLI rehearsal
+        env:
+          FASED_TRUST_CORE: ${{ github.workspace }}/.evidence/bin/fased-app
+          FASED_TRUST_EVIDENCE: ${{ github.workspace }}/.evidence/p4-trust-rehearsal
+        run: |
+          mkdir -p .evidence/p4-trust-rehearsal
+          go test -v ./internal/update -run '^TestTrustRehearsalCompiledCLI$' > .evidence/p4-trust-rehearsal/trust-cli.log 2>&1
+          cat .evidence/p4-trust-rehearsal/trust-cli.log
+      - name: Compiled private core state inventory journey
+        env:
+          FASED_STATE_EVIDENCE: .evidence/p4-complete
+        run: node scripts/check-update-state.mjs
+      - name: Inert release-unit and fixture provenance admission
+        env:
+          FASED_ADMISSION_CORE: ${{ github.workspace }}/.evidence/bin/fased-app
+          FASED_ADMISSION_EVIDENCE: ${{ github.workspace }}/.evidence/p4-release-admission
+        run: |
+          mkdir -p .evidence/p4-release-admission
+          go test -v ./internal/update -run '^TestReleaseAdmissionCompiledCLI$' > .evidence/p4-release-admission/admission-cli.log 2>&1
+          cat .evidence/p4-release-admission/admission-cli.log
+      - name: Managed account UI browser prerequisite
+        # The Ubuntu runner supplies the shared libraries; actual browser launch checks them.
+        run: npx playwright install --only-shell chromium
+      - name: Installer-managed identities and protected owner recovery
+        env:
+          FASED_PORTABLE_ACCEPTANCE: "1"
+        run: node scripts/check-managed-custody.mjs
+      - name: Compile pinned predecessor and bad-health bootstrap fixtures
+        run: node scripts/build-bootstrap-fixtures.mjs
+      - name: Actual older-helper bootstrap and subsequent coordinated update
+        env:
+          FASED_BOOTSTRAP_ACCEPTANCE: "1"
+          FASED_MANAGED_CORE: .evidence/p4-bootstrap/fased-app-lifecycle3
+          FASED_MANAGED_SIGNER: .evidence/p4-bootstrap/fased-signer-lifecycle3
+          FASED_MANAGED_EVIDENCE: .evidence/p4-bootstrap/managed
+        run: node scripts/check-managed-custody.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: signer-isolation
+          include-hidden-files: true
+          path: |
+            .evidence/p4-release-admission/admission-cli-result.json
+            .evidence/p4-release-admission/admission-cli.log
+            .evidence/p4-trust-rehearsal/trust-cli-result.json
+            .evidence/p4-trust-rehearsal/trust-cli.log
+            .evidence/p4-acquisition/acquisition-cli-result.json
+            .evidence/p4-acquisition/acquisition-cli.log
+            .evidence/p4-bootstrap/fixture-builds.json
+            .evidence/p4-bootstrap/managed-bootstrap-result.json
+            .evidence/p4-bootstrap/managed/managed-install-result.json
+            .evidence/p4-bootstrap/managed/managed-install.log
+            .evidence/p3-signer/isolation-result.json
+            .evidence/p3-signer/isolation.log
+            .evidence/p4-portable-recovery/local-result.json
+            .evidence/p4-portable-recovery/tests.jsonl
+            .evidence/p4-portable-recovery/stderr.log
+            .evidence/p4-portable-recovery/source-inputs.json
+            .evidence/p4-portable-recovery/installed-result.json
+            .evidence/p4-portable-recovery/target-config.json
+            .evidence/p3-managed/managed-install-result.json
+            .evidence/p3-managed/managed-install.log
+            .evidence/p3-managed/accounts-ui-*.png
+            .evidence/p4-updates/manifest-cli-result.json
+            .evidence/p4-updates/manifest-cli.log
+            .evidence/p4-intents/core-cli-result.json
+            .evidence/p4-intents/core-cli.log
+            .evidence/p4-intents/managed-intent-result.json
+            .evidence/p4-intents/manifest-cli-result.json
+            .evidence/p4-intents/manifest-cli.log
+            .evidence/p4-staging/managed-staging-result.json
+            .evidence/p4-staging/manifest-cli-result.json
+            .evidence/p4-staging/manifest-cli.log
+            .evidence/p4-staging/core-cli-result.json
+            .evidence/p4-staging/core-cli.log
+            .evidence/p4-complete/managed-completion-result.json
+            .evidence/p4-complete/shared-status-*.png
+            .evidence/p4-complete/shared-policy-*.png
+            .evidence/p4-complete/manifest-cli-result.json
+            .evidence/p4-complete/manifest-cli.log
+            .evidence/p4-complete/core-cli-result.json
+            .evidence/p4-complete/core-cli.log
+            .evidence/p4-install/managed-install-controller-result.json
+            .evidence/p4-install/manifest-cli-result.json
+            .evidence/p4-install/manifest-cli.log
+            .evidence/p4-install/core-cli-result.json
+            .evidence/p4-install/core-cli.log
+            .evidence/p4-backup/managed-backup-result.json
+            .evidence/p4-backup/manifest-cli-result.json
+            .evidence/p4-backup/manifest-cli.log
+            .evidence/p4-backup/core-cli-result.json
+            .evidence/p4-backup/core-cli.log
+            .evidence/p4-preflight/managed-preflight-result.json
+            .evidence/p4-preflight/manifest-cli-result.json
+            .evidence/p4-preflight/manifest-cli.log
+            .evidence/p4-preflight/core-cli-result.json
+            .evidence/p4-preflight/core-cli.log
+          retention-days: 7
+  handoff:
+    needs: classify
+    if: needs.classify.outputs.handoff == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - name: Fixture owner/signer handshake and combined checkpoints
+        env:
+          FASED_HANDOFF_EVIDENCE: .evidence/p4-handoff-model
+        run: node scripts/check-update-handoff.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: handoff-model
+          include-hidden-files: true
+          path: |
+            .evidence/p4-handoff-model/handoff-model-result.json
+            .evidence/p4-handoff-model/handoff-tests.jsonl
+            .evidence/p4-handoff-model/handoff-stderr.log
+            .evidence/p4-handoff-model/handoff-test-list.log
+            .evidence/p4-handoff-model/handoff-source-inputs.json
+          retention-days: 7
+  handoff-uid:
+    needs: classify
+    if: needs.classify.outputs.handoff_uid == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - name: Compile and verify isolated local fixture peers
+        env:
+          FASED_HANDOFF_TRANSPORT_FIXTURE: "1"
+        run: node scripts/check-update-handoff-transport.mjs
+      - name: Disposable three-UID compiled transport and crash recovery
+        env:
+          FASED_HANDOFF_UID_CI: "1"
+        run: node scripts/check-update-handoff-uid.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: handoff-transport-uid
+          include-hidden-files: true
+          path: |
+            .evidence/p4-handoff-transport/*.json
+            .evidence/p4-handoff-transport/*.jsonl
+            .evidence/p4-handoff-transport/*.log
+            .evidence/p4-handoff-uid/*.json
+            .evidence/p4-handoff-uid/*.log
+          retention-days: 7
+  inspection-installed:
+    needs: classify
+    if: needs.classify.outputs.inspection == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - run: npm ci
+      - run: npm run build && npm run build:core
+      - run: go build -o .evidence/bin/fased-signer ./cmd/fased-signer
+      - run: go build -o .evidence/bin/fased-unhealthy-core ./internal/custodyinstall/testdata/unhealthy-core
+      - run: node scripts/build-inspection-predecessor.mjs
+      # Reuse the headless browser/runtime proven by the core job.
+      - run: npx playwright install --only-shell chromium
+      - name: Actual disposable installed inspection and guarded bridge
+        env:
+          FASED_INSTALLED_INSPECTION_FIXTURE: "1"
+          FASED_INSPECTION_ACCEPTANCE: "1"
+          FASED_MANAGED_CORE: .evidence/p4-installed-inspection/predecessor-app
+          FASED_MANAGED_SIGNER: .evidence/p4-installed-inspection/predecessor-signer
+          FASED_MANAGED_EVIDENCE: .evidence/p4-installed-inspection/managed
+        run: node scripts/check-installed-inspection-fixture.mjs
+      - name: Installed network custody and reviewed replacement recovery
+        env:
+          FASED_MANAGED_NETWORK: "devnet"
+          FASED_MANAGED_EVIDENCE: .evidence/p3-network-managed
+        run: node scripts/check-managed-custody.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installed-inspection-fixture
+          include-hidden-files: true
+          path: |
+            .evidence/p4-installed-inspection/*.json
+            .evidence/p4-installed-inspection/*.stdout
+            .evidence/p4-installed-inspection/*.stderr
+            .evidence/p4-installed-inspection/*.log
+            .evidence/p4-installed-inspection/managed/**
+            .evidence/p3-network-managed/*.json
+            .evidence/p3-network-managed/*.log
+            .evidence/p4-network-complete/*.json
+          retention-days: 7
   prototype:
     if: always()
-    needs: [documentation]
+    needs:
+      [
+        documentation,
+        classify,
+        core,
+        desktop,
+        signer,
+        handoff,
+        handoff-uid,
+        inspection-installed,
+      ]
     runs-on: ubuntu-latest
-    timeout-minutes: 3
     steps:
-      - name: Require the actual documentation check
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Required aggregate check
         env:
-          DOCUMENTATION_RESULT: ${{ needs.documentation.result }}
-        run: test "$DOCUMENTATION_RESULT" = success
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: node scripts/ci-routing.mjs gate

@@ -1,0 +1,14 @@
+{
+  "schema": "wen-design-artifact/1",
+  "version": "0.1.0",
+  "source": "wen/packages/strategy-terminal/src/style.css",
+  "sourceRevision": "191b3efc6f6ccd3cee2b2b2e6a26c2ab427828b8",
+  "sourceWorkingTree": true,
+  "sourceSHA256": "7c3ef8bf94c8a26a07d67680bf5a8d0007a656800b5eb8d841a5f18350a0f817",
+  "files": {
+    "style.css": "7c3ef8bf94c8a26a07d67680bf5a8d0007a656800b5eb8d841a5f18350a0f817"
+  },
+  "scope": "Canonical shared WEN presentation only; no terminal JavaScript, data, scheduler or execution adapter",
+  "license": "Private owner-controlled WEN source, reused with owner authorization; no new distribution grant. Fased PolyForm Perimeter terms remain unchanged.",
+  "generation": "Exact byte copy of canonical source; regenerate by copying that file and refreshing both SHA-256 fields. Never edit the imported copy."
+}

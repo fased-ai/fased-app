@@ -1,0 +1,58 @@
+{
+  "schema": "wen-strategy/1",
+  "name": "Fixture session draft",
+  "description": "Fixture only. Execution disabled.",
+  "market": {
+    "networkGenesisHash": "fixture-network",
+    "programId": "fixture-program",
+    "economyId": "fixture-economy",
+    "assetMint": "fixture-mint",
+    "termsHash": "fixture-terms",
+    "interfaceVersion": "fixture-v1"
+  },
+  "research": {
+    "thesis": "custom",
+    "horizonMinutes": 60,
+    "conditions": [],
+    "outlook": null
+  },
+  "allocation": {
+    "preset": "wide",
+    "weightsBps": [
+      2000,
+      2000,
+      2000,
+      2000,
+      2000
+    ],
+    "mode": "fixed",
+    "rules": []
+  },
+  "schedule": {
+    "startsAt": "2026-10-22T00:00:00Z",
+    "expiresAt": "2026-10-22T04:00:00Z",
+    "everyNthRound": 3,
+    "anchorRound": "0",
+    "utcWindows": [],
+    "selectedRoundIds": [],
+    "skipRoundIds": [],
+    "maxRoundsTotal": 8,
+    "maxRoundsPerUtcDay": 8,
+    "cooldownRounds": 0,
+    "randomSelection": null
+  },
+  "limits": {
+    "perRoundLamports": "5000000000",
+    "totalTurnoverLamports": "40000000000",
+    "dailyTurnoverLamports": "40000000000",
+    "maxUnsettledLamports": "10000000000",
+    "maxLossLamports": "4000000000",
+    "maxUserFeesLamports": "10000000",
+    "maxUserFeesPerRoundLamports": "1000000"
+  },
+  "execution": {
+    "mode": "review",
+    "runner": "browser",
+    "mandateId": null
+  }
+}

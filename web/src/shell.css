@@ -1,0 +1,852 @@
+/* Shared Fased shell. Meteora reference geometry; original Fased identity.
+   This owns shell layout and theme tokens; page layouts stay in wen-app.css. */
+@font-face {
+  font-family: "Fased Inter";
+  src: url("./assets/fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+:root.wt {
+  --wt-bg: #191922;
+  --wt-surface: #1e1e2a;
+  --wt-raised: #252534;
+  --wt-border: #353545;
+  --wt-text: #f9f9fb;
+  --wt-muted: #aaaac0;
+  --wt-coral: #ff647c;
+  --wt-cyan: #27c5da;
+  --wt-violet: #ad96ff;
+  --shell-header: #19161e;
+  --shell-input: #15151a;
+  --shell-hover: #2d2d40;
+  --shell-primary-text: #231118;
+  --shell-primary-hover: #ff7a8e;
+  --shell-active: #ff647c1a;
+  --shell-shadow: #0004;
+  color-scheme: dark;
+  font-family: "Fased Inter", Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 14px;
+  --radius: 8px;
+  scroll-padding-top: 58px;
+}
+:root.wt[data-theme="light"] {
+  --wt-bg: #f3f3f8;
+  --wt-surface: #fff;
+  --wt-raised: #ececf4;
+  --wt-border: #d7d7e4;
+  --wt-text: #242231;
+  --wt-muted: #626177;
+  --wt-coral: #b51e43;
+  --wt-cyan: #087786;
+  --wt-violet: #6640bd;
+  --shell-header: #faf9fc;
+  --shell-input: #f7f7fb;
+  --shell-hover: #e4e2ef;
+  --shell-primary-text: #fff;
+  --shell-primary-hover: #9d1637;
+  --shell-active: #b51e4310;
+  --shell-shadow: #24223120;
+  color-scheme: light;
+}
+.wt body {
+  background: var(--wt-bg);
+  color: var(--wt-text);
+  font-family: inherit;
+}
+.wt .workspace-shell {
+  display: grid;
+  grid-template-columns: 50px minmax(0, 1fr);
+  grid-template-rows: 50px minmax(0, 1fr);
+  min-height: 100dvh;
+}
+.wt .workspace-shell.rail-hidden {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+.wt .shell-header {
+  grid-column: 1/-1;
+  grid-row: 1;
+  position: sticky;
+  top: 0;
+  z-index: 45;
+  height: 50px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  background: var(--shell-header);
+  min-width: 0;
+}
+.wt .shell-header button,
+.wt .shell-rail button {
+  border-color: transparent;
+  box-shadow: none;
+}
+.wt .shell-brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 18px;
+  font-weight: 600;
+  flex-shrink: 0;
+  color: var(--wt-text);
+}
+.wt .shell-brand img {
+  object-fit: contain;
+}
+.wt .shell-top-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.wt .shell-top-nav > a,
+.wt .shell-more-toggle {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  gap: 6px;
+  padding: 8px 10px;
+  color: var(--wt-muted);
+  font-size: 14px;
+  font-weight: 500;
+  background: transparent;
+  border: 0;
+}
+.wt .shell-top-nav > a:hover,
+.wt .shell-top-nav > a[aria-current="page"],
+.wt button.shell-more-toggle:hover {
+  color: var(--wt-text);
+  background: transparent;
+}
+.wt .shell-more-wrap {
+  position: relative;
+}
+.wt .shell-more {
+  position: absolute;
+  top: 43px;
+  left: 0;
+  width: 244px;
+  max-height: calc(100dvh - 66px);
+  overflow-y: auto;
+  padding: 5px;
+  background: var(--wt-surface);
+  border: 1px solid var(--wt-border);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px var(--shell-shadow);
+  z-index: 60;
+}
+.wt .shell-more :is(a, button) {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  height: auto;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wt-text);
+  font-size: 14px;
+}
+.wt .shell-more :is(a, button):hover {
+  background: var(--shell-hover);
+}
+.wt .shell-more :is(a, button) svg {
+  color: var(--wt-muted);
+}
+.wt .shell-more hr {
+  height: 1px;
+  background: var(--wt-border);
+  border: 0;
+  margin: 5px 8px;
+}
+.wt .shell-more .shell-overflow-route,
+.wt .shell-more .shell-mobile-utility {
+  display: none;
+}
+.wt .shell-search {
+  margin-left: auto;
+  flex: 1;
+  max-width: 450px;
+  min-width: 90px;
+  height: 36px;
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 14px;
+  border: 1px solid var(--wt-border);
+  border-radius: 999px;
+  background: var(--shell-input);
+  color: var(--wt-muted);
+}
+.wt .shell-tools {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+}
+.wt .shell-desktop-utility {
+  position: relative;
+  display: flex;
+}
+.wt .shell-unread {
+  position: absolute;
+  top: 6px;
+  right: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--wt-coral);
+}
+.wt button.shell-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  padding: 8px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--wt-muted);
+  background: transparent;
+  position: relative;
+}
+.wt button.shell-icon:hover {
+  color: var(--wt-text);
+  background: var(--shell-hover);
+}
+.wt .shell-instance {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--wt-coral);
+  background: var(--shell-active);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+.wt .shell-body {
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+}
+.wt .shell-body .main-content {
+  padding: 6px;
+  margin: 0;
+  width: 100%;
+  max-width: none;
+}
+.wt .shell-rail {
+  grid-column: 1;
+  grid-row: 2;
+  position: sticky;
+  top: 50px;
+  height: calc(100dvh - 50px);
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 4px;
+  background: var(--shell-header);
+  z-index: 30;
+}
+.wt .shell-rail > a,
+.wt .shell-rail-bottom > a {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  color: var(--wt-muted);
+  position: relative;
+  border-radius: 6px;
+}
+.wt .shell-rail a:hover {
+  background: var(--shell-hover);
+  color: var(--wt-text);
+}
+.wt .shell-rail a[aria-current="page"] {
+  color: var(--wt-coral);
+}
+.wt .shell-rail a[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  height: 20px;
+  width: 2px;
+  background: var(--wt-coral);
+}
+.wt .shell-rail-bottom {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 6px;
+}
+.wt [data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 5px 8px;
+  background: var(--wt-surface);
+  border: 1px solid var(--wt-border);
+  border-radius: 5px;
+  color: var(--wt-text);
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 400;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  z-index: 70;
+}
+.wt [data-tooltip]:is(:hover, :focus)::after {
+  opacity: 1;
+  visibility: visible;
+}
+.wt .shell-rail [data-tooltip]::after {
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+}
+.wt .shell-header .shell-tools > button:last-child::after,
+.wt .agent-header-actions > button[data-tooltip]:last-child::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+.wt .shell-search-field {
+  margin: 16px 0;
+}
+.wt .shell-search-results {
+  display: grid;
+  gap: 4px;
+}
+.wt .shell-search-results a {
+  padding: 10px 12px;
+  border-radius: 6px;
+}
+.wt .shell-search-results a:hover {
+  background: var(--shell-hover);
+}
+.wt .appearance-settings {
+  padding: 18px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.wt .appearance-settings label {
+  font-size: 13px;
+}
+.wt .appearance-settings p {
+  grid-column: 1/-1;
+}
+.wt .dialog .appearance-settings {
+  padding: 18px 24px;
+}
+.wt .dialog > .text-button {
+  margin: 0 17px 14px;
+  color: var(--wt-muted);
+  font-size: 13px;
+}
+.wt .dialog {
+  background: var(--wt-surface);
+  color: var(--wt-text);
+  border-color: var(--wt-border);
+  border-radius: 8px;
+}
+.wt .dialog-heading {
+  background: var(--wt-surface);
+  color: var(--wt-text);
+  border-color: var(--wt-border);
+}
+.wt .dialog-footer {
+  background: var(--wt-surface);
+  border-color: var(--wt-border);
+}
+.wt .review-list > div {
+  border-color: var(--wt-border);
+  font-size: 13px;
+  padding: 10px 0;
+}
+.wt .review-list dt {
+  color: var(--wt-muted);
+}
+.wt .review-list dd {
+  color: var(--wt-text);
+}
+.wt .dialog-heading .icon-button {
+  color: var(--wt-muted);
+  background: var(--wt-raised);
+}
+.wt input::placeholder,
+.wt textarea::placeholder {
+  color: var(--wt-muted);
+  opacity: 1;
+}
+.wt [data-tooltip] {
+  position: relative;
+}
+.wt .shell-header > .shell-icon::after {
+  left: 0;
+  transform: none;
+}
+.wt .primary {
+  color: var(--shell-primary-text);
+}
+.wt button.primary:hover:not(:disabled) {
+  background: var(--shell-primary-hover);
+}
+.wt .secondary:hover {
+  background: var(--shell-hover);
+  border-color: var(--wt-muted);
+}
+.wt :is(input, select, textarea) {
+  color-scheme: inherit;
+}
+.wt .panel {
+  border-radius: 8px;
+}
+.wt .agent-chat {
+  gap: 6px;
+  background: var(--wt-bg);
+  border: 0;
+}
+.wt .agent-chat > :is(.conversation-rail, .chat-workspace) {
+  background: var(--wt-surface);
+  border-radius: 8px;
+  border: 0;
+}
+.wt .context-panel {
+  background: var(--wt-surface);
+  color: var(--wt-text);
+  border-color: var(--wt-border);
+  z-index: 44;
+  top: 50px;
+}
+@media (max-width: 1100px) {
+  .wt .shell-header {
+    gap: 6px;
+    padding: 0 8px;
+  }
+  .wt .shell-top-nav > a {
+    padding: 8px;
+  }
+  .wt .shell-search {
+    display: none;
+  }
+}
+@media (max-width: 760px) {
+  .wt .workspace-shell {
+    grid-template-columns: 46px minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .wt .shell-header {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 50px;
+    padding: 4px 6px;
+    gap: 3px;
+  }
+  .wt .shell-top-nav > .shell-top-extra,
+  .wt .shell-desktop-utility {
+    display: none;
+  }
+  .wt .shell-more .shell-overflow-route,
+  .wt .shell-more .shell-mobile-utility {
+    display: flex;
+  }
+  .wt .shell-more-wrap {
+    position: static;
+  }
+  .wt .shell-more {
+    top: 100%;
+    left: 8px;
+    right: 8px;
+    width: auto;
+  }
+  .wt .shell-brand {
+    font-size: 16px;
+    gap: 4px;
+  }
+  .wt .shell-top-nav > a,
+  .wt .shell-more-toggle {
+    font-size: 13px;
+    padding: 6px;
+  }
+  .wt .shell-rail {
+    padding: 8px 2px;
+  }
+  .wt .shell-instance {
+    padding: 5px;
+    font-size: 12px;
+  }
+  .wt .shell-instance svg {
+    display: none;
+  }
+  .wt .shell-body .main-content {
+    padding: 4px;
+  }
+  .wt .appearance-settings {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .wt .agent-header-actions {
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-start;
+  }
+  .wt .profile-select {
+    max-width: 100%;
+  }
+}
+@media (pointer: coarse) {
+  .wt .shell-header button,
+  .wt .shell-header a,
+  .wt .shell-rail a,
+  .wt .shell-rail button {
+    min-height: 44px;
+  }
+}
+/* Connected agent controls share the compact Meteora toolbar. */
+.wt .shell-demo {
+  color: var(--wt-muted);
+  font-size: 11px;
+  padding: 3px 6px;
+  border: 1px solid var(--wt-border);
+  border-radius: 4px;
+}
+.wt .chat-workspace .chat-composer {
+  position: relative;
+}
+.wt .chat-composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.wt .reply-model-menu,
+.wt .message-options {
+  position: relative;
+  min-width: 0;
+}
+.wt .reply-model-menu > summary,
+.wt .message-options > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: 12px;
+  min-height: 30px;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px 7px;
+  color: var(--wt-muted);
+  border-radius: 6px;
+}
+.wt .reply-model-menu > summary::-webkit-details-marker,
+.wt .message-options > summary::-webkit-details-marker {
+  display: none;
+}
+.wt .reply-model-panel,
+.wt .message-options[open] {
+  z-index: 30;
+}
+.wt .reply-model-panel {
+  position: absolute;
+  bottom: 36px;
+  left: 0;
+  min-width: 240px;
+  max-width: min(360px, 75vw);
+  padding: 12px;
+  background: var(--wt-raised);
+  border: 1px solid var(--wt-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 30px var(--shell-shadow);
+}
+.wt .reply-model-panel label {
+  display: block;
+  margin: 0 0 10px;
+  font-size: 12px;
+}
+.wt .reply-model-panel label select {
+  display: block;
+  width: 100%;
+  margin-top: 5px;
+}
+.wt .chat-composer-toolbar > .message-options[open] {
+  position: absolute;
+  bottom: 44px;
+  right: 8px;
+  width: min(480px, calc(100% - 16px));
+  max-height: min(65dvh, 540px);
+  overflow: auto;
+  background: var(--wt-raised);
+  border: 1px solid var(--wt-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 30px var(--shell-shadow);
+  padding: 10px;
+}
+.wt .chat-composer-toolbar > .message-options[open] > summary {
+  margin-left: auto;
+}
+.wt .reply-unavailable {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--wt-muted);
+}
+.wt .agent-header-actions .profile-select {
+  display: block;
+}
+.wt .agent-header-actions .profile-select select {
+  max-width: 210px;
+  padding: 5px 8px;
+}
+.wt .chat-input > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+@media (max-width: 600px) {
+  .wt .reply-model-menu > summary {
+    max-width: 170px;
+  }
+  .wt .agent-header-actions .profile-select select {
+    max-width: 160px;
+  }
+}
+
+@media (max-width: 480px) {
+  .wt .shell-top-nav > a[href="#overview"] {
+    display: none;
+  }
+}
+
+/* Compact agent utilities share the existing Meteora surfaces and controls. */
+.wt .provider-entry {
+  display: flex;
+  min-height: 44px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 14px 18px;
+  color: var(--wt-text);
+  text-align: left;
+}
+.wt .provider-editor.panel {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.wt .provider-editor .panel-heading {
+  padding-top: 4px;
+}
+.wt .news-toolbar {
+  gap: 8px;
+}
+.wt .news-toolbar select {
+  min-width: 0;
+  max-width: 280px;
+  margin-right: auto;
+}
+.wt .news-headlines {
+  padding: 0 18px;
+}
+.wt .news-headline {
+  padding: 17px 0;
+  border-bottom: 1px solid var(--wt-border);
+}
+.wt .news-headline:last-child {
+  border-bottom: 0;
+}
+.wt .news-headline-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+  color: var(--wt-muted);
+  font-size: 12px;
+}
+.wt .news-title {
+  display: block;
+  color: var(--wt-text);
+  font-size: 15px;
+  line-height: 1.5;
+  font-weight: 600;
+  padding: 8px 0;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+.wt .news-title:hover {
+  color: var(--wt-coral);
+}
+.wt .news-headline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 18px;
+}
+.wt .news-details {
+  min-width: 0;
+  flex: 1;
+}
+.wt .news-details summary {
+  padding: 7px 0;
+  color: var(--wt-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.wt .news-details p,
+.wt .news-source p,
+.wt .news-source dd {
+  overflow-wrap: anywhere;
+}
+.wt .news-fresh {
+  color: var(--wt-text);
+  font-weight: 600;
+}
+.wt .news-empty {
+  min-height: 200px;
+  display: grid;
+  place-items: center;
+  color: var(--wt-muted);
+  font-size: 13px;
+}
+.wt .news-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--wt-border);
+  font-size: 13px;
+}
+.wt .news-source-settings {
+  padding: 8px 18px 18px;
+}
+.wt .news-source-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+.wt .news-source-form {
+  display: grid;
+  gap: 12px;
+  padding: 12px 0 16px;
+}
+.wt .news-source {
+  border-bottom: 1px solid var(--wt-border);
+  padding: 10px 0;
+}
+.wt .news-source-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  cursor: pointer;
+  font-size: 13px;
+}
+.wt .news-source-heading span {
+  color: var(--wt-muted);
+  font-size: 12px;
+}
+.wt .news-source-url {
+  color: var(--wt-muted);
+  font-size: 12px;
+}
+.wt .news-fetch,
+.wt .source-rules {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--wt-muted);
+}
+.wt .memory-search {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.wt .memory-search label {
+  flex: 1;
+  margin: 0;
+}
+.wt .memory-search input {
+  width: 100%;
+}
+.wt .memory-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 12px;
+  padding: 12px 0;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--wt-border);
+  border-radius: 0;
+  background: transparent;
+}
+.wt .memory-card > p {
+  margin: 0;
+  align-self: center;
+}
+.wt .memory-card > small {
+  grid-column: 1;
+}
+.wt .memory-card > details,
+.wt .memory-card > section {
+  grid-column: 1 / -1;
+}
+.wt .memory-actions {
+  grid-column: 2;
+  grid-row: 1;
+  gap: 2px;
+  margin: 0;
+}
+.wt .memory-actions button {
+  min-width: 30px;
+  min-height: 30px;
+  padding: 5px;
+}
+@media (max-width: 600px) {
+  .wt .news-headlines {
+    padding: 0 12px;
+  }
+  .wt .news-toolbar {
+    flex-wrap: wrap;
+  }
+  .wt .news-toolbar select {
+    flex: 1;
+    width: 120px;
+  }
+  .wt .memory-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .wt .memory-actions {
+    grid-column: 1;
+    grid-row: auto;
+  }
+}
+@media (pointer: coarse) {
+  .wt .memory-actions button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+.wt .agent-settings-workspace {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 880px;
+}

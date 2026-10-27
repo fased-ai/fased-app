@@ -1,0 +1,45 @@
+{
+  "name": "fased-app",
+  "version": "0.0.0-core.1",
+  "private": true,
+  "license": "PolyForm-Perimeter-1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:ui": "playwright test",
+    "build:core": "node scripts/build-core.mjs",
+    "build:desktop": "node scripts/build-desktop.mjs",
+    "test:core": "go test -race ./internal/... ./cmd/fased-app ./cmd/fased-signer",
+    "test:core-ui": "playwright test --config playwright.core.config.ts",
+    "test:native-window": "node scripts/check-native-window.mjs",
+    "check": "npm run test && npm run build && npm run format:check",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "package": "go run ./cmd/fased-package",
+    "package:native": "node scripts/package-native.mjs",
+    "test:platform-install": "node scripts/check-platform-install.mjs"
+  },
+  "dependencies": {
+    "lucide-react": "1.59.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/node": "26.6.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "prettier": "3.9.10",
+    "typescript": "7.0.2",
+    "vite": "8.3.4",
+    "vitest": "5.0.5"
+  }
+}
