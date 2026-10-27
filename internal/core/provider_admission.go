@@ -6,6 +6,11 @@ package core
 const providerActivationEnabled = false
 
 func (s *Store) aiExecutionAvailable(fixture bool) bool {
+	s.provider.mu.Lock()
+	defer s.provider.mu.Unlock()
+	if s.pilot.target != nil {
+		return s.pilotCurrentLocked()
+	}
 	return fixture || s.provider.apiCredentials
 }
 
@@ -14,6 +19,15 @@ func (s *Store) aiExecutionAvailable(fixture bool) bool {
 // run. In ordinary provider mode neither synthetic models nor research dispatch
 // can borrow permission from the development fixture path.
 func (s *Store) providerRequestAllowed(q AgentAIRequest, fixture bool) bool {
+	s.provider.mu.Lock()
+	scoped, pilot := s.pilot.target != nil, s.pilotTargetLocked(q.ConnectionRef)
+	if scoped {
+		pilot = pilot && q.Model == s.pilot.target.model && (q.ProfileID == "" || q.ProfileID == s.pilot.target.profile)
+	}
+	s.provider.mu.Unlock()
+	if scoped && !pilot {
+		return false
+	}
 	if q.Model != fixtureAIModel && !currentModelRequest(q) {
 		return false
 	}
@@ -23,7 +37,7 @@ func (s *Store) providerRequestAllowed(q AgentAIRequest, fixture bool) bool {
 	if fixture {
 		return true
 	}
-	if !s.provider.apiCredentials || q.ConnectionRef == "" || !currentModelRequest(q) || isResearchAI(q) {
+	if (!s.provider.apiCredentials && !pilot) || q.ConnectionRef == "" || !currentModelRequest(q) || isResearchAI(q) {
 		return false
 	}
 	v, err := s.AIConnection(q.ConnectionRef)
@@ -53,6 +67,15 @@ func (s *Store) providerDispatchAllowed(d agentDocument, q AgentAIRequest, fixtu
 }
 
 func (s *Store) providerActionAllowed(d agentDocument, c AgentCommand, profile string, fixture bool) bool {
+	s.provider.mu.Lock()
+	wrongPilot := s.pilot.target != nil && (profile != s.pilot.target.profile || c.Action == "ai-start")
+	if s.pilot.target != nil && !s.pilotCurrentLocked() {
+		wrongPilot = true
+	}
+	s.provider.mu.Unlock()
+	if wrongPilot {
+		return false
+	}
 	if fixture {
 		return true
 	}

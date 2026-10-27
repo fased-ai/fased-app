@@ -38,6 +38,7 @@ type AIActionCard struct {
 	Review string `json:"review"`
 }
 type AgentAIRequest struct {
+	pilotID           string // Transient; durable journal/holds are unchanged.
 	taskAccessID      string
 	ChatPermissionID  string             `json:"chatPermissionId,omitempty"`
 	Stream            bool               `json:"stream,omitempty"`
@@ -719,7 +720,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, fixtur
 				return e
 			}
 		}
-		if !enabled && q.TaskID != "" && q.State == "queued" {
+		if !enabled && (q.TaskID != "" || q.ChatPermissionID != "") && q.State == "queued" {
 			q.State = "cancelled"
 			q.HeldMicrousd = 0
 			q.Failure = "Development fixture disabled before dispatch."
@@ -745,6 +746,14 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, fixtur
 				continue
 			}
 			if !s.reserveTaskAccess(q) {
+				continue
+			}
+			if !s.reservePilot(q) {
+				q.State, q.HeldMicrousd, q.Failure = "cancelled", 0, "Pilot unavailable or exhausted; review required."
+				if e = settleTaskAI(&d, q.TaskID, s.now().Unix()); e != nil {
+					return e
+				}
+				changed = true
 				continue
 			}
 			q.State = "running"

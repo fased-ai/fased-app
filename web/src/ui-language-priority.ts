@@ -1,5 +1,22 @@
 // Product UI vocabulary; records and protocol identifiers remain unchanged.
 export const priorityCopy = {
+  Pilot: ["Пилот", "Piloto", "试用", "파일럿"],
+  "Allow pilot": [
+    "Разрешить пилот",
+    "Permitir piloto",
+    "授权试用",
+    "파일럿 허용",
+  ],
+  "{count} attempts · {minutes} minutes": [
+    "{count} попытки · {minutes} минут",
+    "{count} intentos · {minutes} minutos",
+    "{count} 次 · {minutes} 分钟",
+    "{count}회 · {minutes}분",
+  ],
+  "Chat / task": ["Чат / задача", "Chat / tarea", "聊天 / 任务", "채팅 / 작업"],
+  "Per request": ["На запрос", "Por solicitud", "每次请求", "요청당"],
+  Expires: ["Истекает", "Vence", "到期", "만료"],
+  Used: ["Использовано", "Usado", "已用", "사용량"],
   Queued: ["В очереди", "En cola", "排队中", "대기 중"],
   Loading: ["Загрузка", "Cargando", "加载中", "불러오는 중"],
   Completed: ["Завершено", "Completado", "已完成", "완료"],

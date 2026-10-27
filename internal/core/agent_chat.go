@@ -118,7 +118,7 @@ func (s *Store) chatReview(d agentDocument, c AgentCommand, profile string, revi
 	p.AccessEpoch = s.chatEpoch.Load()
 	p.ConnectionEpoch = s.connectionAccessEpoch(p.ConnectionRef)
 	p.ID = chatDigest(p)
-	if !validChatPermission(p) || validateAIModelPolicy(AgentAIRequest{Model: p.Model, ConnectionRef: p.ConnectionRef, Policy: chatModelPolicy(p.Model), Limits: p.Limits}, now) != nil || !s.aiConnectionValid(p.ConnectionRef) {
+	if !validChatPermission(p) || validateAIModelPolicy(AgentAIRequest{Model: p.Model, ConnectionRef: p.ConnectionRef, Policy: chatModelPolicy(p.Model), Limits: p.Limits}, now) != nil || !s.aiConnectionValid(p.ConnectionRef) || !s.pilotGrantAllowed(p.ConnectionRef, profile, p.Model, p.ExpiresAt, p.MaxRequests, p.BudgetMicrousd, p.Limits, false) {
 		return p, errors.New("invalid Chat limits or locked connection")
 	}
 	return p, nil
@@ -132,6 +132,9 @@ func (s *Store) changeChat(d *agentDocument, c AgentCommand, profile, id string,
 	switch c.Action {
 	case "chat-allow":
 		p := c.ChatPermission
+		if p != nil && !s.pilotGrantAllowed(p.ConnectionRef, profile, p.Model, p.ExpiresAt, p.MaxRequests, p.BudgetMicrousd, p.Limits, false) {
+			return errors.New("Chat exceeds pilot allowance")
+		}
 		if p == nil || !validChatPermission(*p) || p.ID != c.ConsentDigest || p.ProfileID != profile || p.SessionID != c.ID || p.BootID != s.bootID || !s.chatAccessCurrent(p) || p.Revision != revision || p.CreatedAt > now || now-p.CreatedAt > 300 || p.ExpiresAt <= now || p.UsedRequests != 0 || p.AllocatedMicrousd != 0 || p.Revoked || p.PersonaDigest != personaDigest(d.Profiles[agentProfile(*d, profile)]) || !s.aiConnectionValid(p.ConnectionRef) {
 			return errors.New("Chat scope changed; review permission again")
 		}

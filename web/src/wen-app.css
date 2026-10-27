@@ -1240,6 +1240,24 @@
 .wt .connection-options {
   padding: 10px 12px;
 }
+.wt .pilot-facts {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 8px 12px;
+  font-size: 12px;
+}
+.wt .pilot-facts dt {
+  color: var(--wt-muted);
+}
+.wt .pilot-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.wt .pilot-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
 .wt .playbook-limits[open] {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
