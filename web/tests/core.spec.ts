@@ -12118,6 +12118,7 @@ test("scoped pilot controls keep review allow and revoke exact while ordinary co
       ...(value.ref === account.ref
         ? {
             pilotAvailable: true,
+            pilotEnrollment: true,
             pilot: state ? permit : undefined,
             pilotState: state || undefined,
           }
@@ -12178,6 +12179,25 @@ test("scoped pilot controls keep review allow and revoke exact while ordinary co
   await page.evaluate(() =>
     window.dispatchEvent(new Event("ai-connection-changed")),
   );
+  await expect(
+    editor.getByRole("button", { name: "Add provider", exact: true }),
+  ).toBeDisabled();
+  const credentials = editor
+    .locator("details.connection-options")
+    .filter({ has: page.locator("summary", { hasText: /^Credentials$/ }) });
+  await credentials.getByText("Credentials", { exact: true }).click();
+  await credentials
+    .getByLabel("Test key", { exact: true })
+    .fill("fased-test-pilot-replacement-refused");
+  await credentials
+    .getByLabel("Vault passphrase", { exact: true })
+    .fill(passphrase);
+  await expect(
+    credentials.getByRole("button", { name: "Replace", exact: true }),
+  ).toBeDisabled();
+  await credentials.getByLabel("Test key", { exact: true }).fill("");
+  await credentials.getByLabel("Vault passphrase", { exact: true }).fill("");
+  await credentials.getByText("Credentials", { exact: true }).click();
   await editor.getByText("Pilot", { exact: true }).click();
   const pilot = editor
     .locator("details")

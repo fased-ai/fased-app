@@ -442,6 +442,9 @@ func changeNews(d *agentDocument, c AgentCommand, profile, id string, now int64)
 	return errors.New("profile news operation unavailable")
 }
 func (s *Store) advanceAgentNews(ctx context.Context, rt http.RoundTripper, fixture bool) error {
+	if s.pilotSyntheticOnly() {
+		return nil
+	}
 	if !s.newsMu.TryLock() {
 		return nil
 	}

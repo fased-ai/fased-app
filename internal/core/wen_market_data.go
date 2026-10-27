@@ -17,6 +17,9 @@ func (s *Server) ConfigureWENResearch(origin string) error {
 	if origin == "" {
 		return nil
 	}
+	if s.Store != nil && s.Store.pilot.binding != nil {
+		return errors.New("pilot permits synthetic inputs only; external research remains disabled")
+	}
 	u, e := url.Parse(origin)
 	if e != nil || u.Scheme != "http" || u.Hostname() != "127.0.0.1" || u.Port() == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 		return errors.New("WEN research requires exact loopback HTTP origin")

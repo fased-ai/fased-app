@@ -300,7 +300,7 @@ func migrateAgentChat(ctx context.Context, db *sql.DB) error {
 }
 func (s *Store) chatView(v AgentView) AgentView {
 	v.AIExecutionAvailable = s.aiExecutionAvailable(false)
-	v.ProviderCallsEnabled = providerActivationEnabled && s.provider.apiCredentials
+	v.ProviderCallsEnabled = s.providerLiveEnabled()
 	d := agentDocument{Profiles: v.Profiles, Sessions: v.Sessions}
 	v.ChatReadiness = map[string]string{}
 	for _, ss := range v.Sessions {

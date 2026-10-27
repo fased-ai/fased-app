@@ -48,6 +48,9 @@ func OpenStore(dir string) (_ *Store, resultErr error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = preflightOpenAIPilotBinding(dir, compiledOpenAIPilotBinding, openAIPilotActivationEnabled); err != nil {
+		return nil, err
+	}
 	if err = privateDir(dir); err != nil {
 		return nil, err
 	}
@@ -258,6 +261,9 @@ PRAGMA user_version=1;`)
 		return nil, err
 	}
 	if err = store.recoverWENFixtureRuns(ctx); err != nil {
+		return nil, err
+	}
+	if err = store.bindOpenAIPilot(compiledOpenAIPilotBinding, openAIPilotActivationEnabled); err != nil {
 		return nil, err
 	}
 	return store, nil

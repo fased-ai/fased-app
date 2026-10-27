@@ -44,13 +44,16 @@ type openAIPilotEntry struct {
 	stage  int
 }
 type openAIPilotState struct {
-	target  *openAIPilotTarget
-	permit  *OpenAIPilotAllowance
-	entries map[string]openAIPilotEntry
-	last    int64
-	used    bool
-	revoked bool
-	listed  bool
+	binding   *pilotActivationBinding
+	bootstrap bool
+	transport *openAITransport
+	target    *openAIPilotTarget
+	permit    *OpenAIPilotAllowance
+	entries   map[string]openAIPilotEntry
+	last      int64
+	used      bool
+	revoked   bool
+	listed    bool
 }
 
 func pilotDigest(p OpenAIPilotAllowance) string {
@@ -134,6 +137,19 @@ func (s *Store) changeOpenAIPilot(ctx context.Context, c AIConnectionCommand) (A
 	d, revision, e := readAgents(ctx, tx)
 	if e != nil {
 		return AIConnectionView{}, e
+	}
+	if c.Action == "pilot-review" || c.Action == "pilot-allow" {
+		profile := c.ProfileID
+		if c.Action == "pilot-allow" && c.Pilot != nil {
+			profile = c.Pilot.ProfileID
+		}
+		archived, err := pilotProfileHasHistory(ctx, tx, profile)
+		if err != nil {
+			return AIConnectionView{}, err
+		}
+		if archived {
+			return AIConnectionView{}, errors.New("pilot requires an unused profile without immutable conversation history")
+		}
 	}
 	s.provider.mu.Lock()
 	defer s.provider.mu.Unlock()
