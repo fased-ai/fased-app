@@ -7,7 +7,7 @@ import {
   AIAdmissionReview,
   ConnectionPicker,
 } from "./AIConnection";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useWorkspace } from "../workspace";
 import type { AgentView } from "../agents";
 const money = (n: number) => `$${(n / 1_000_000).toFixed(6)}`;
@@ -18,15 +18,25 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
   const [prompt, setPrompt] = useState("");
   const [newsSourceId, setNewsSourceId] = useState("");
   const [newsAge, setNewsAge] = useState(3600);
-  const { view: access } = useAIConnection();
+  const { view: accounts } = useAIConnection();
   const agent = v.profiles.find((p) => p.id === v.profileId)!;
+  const access = agent.connectionRef
+    ? (accounts?.connections?.find((a) => a.ref === agent.connectionRef) ??
+      null)
+    : accounts;
   const inherited = agentReplyDefaults(
     agent,
     access
       ? {
           ref: access.ref,
+          provider: access.provider,
           locked: access.locked,
-          model: access.admissionPolicy?.model,
+          model: access.catalog?.models.find(
+            (m) =>
+              m.selectable &&
+              m.connectionRef === access.ref &&
+              m.id === agent.model,
+          )?.id,
         }
       : null,
   );
@@ -48,6 +58,32 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
   const [deadline, setDeadline] = useState(3);
   const [budget, setBudget] = useState(60000);
   const [perCall, setPerCall] = useState(30000);
+  const budgetModel = useRef("");
+  useEffect(() => {
+    const identity = connectionRef + ":" + model;
+    if (budgetModel.current === identity) return;
+    const a =
+      accounts?.connections?.find((a) => a.ref === connectionRef) ??
+      (accounts?.ref === connectionRef ? accounts : null);
+    const p = a?.catalog?.models.find((m) => m.id === model)?.policy;
+    if (!p) return;
+    budgetModel.current = identity;
+    const ceiling = Math.ceil(
+      (input * p.inputMicrousdPerMillion +
+        Math.max(output, p.billableOutputTokens || 0) *
+          p.outputMicrousdPerMillion) /
+        1000000,
+    );
+    setPerCall((b) =>
+      Math.min(p.maxRequestBudgetMicrousd || 1000000, Math.max(b, ceiling)),
+    );
+    setBudget((b) =>
+      Math.min(
+        p.maxRequestBudgetMicrousd || 1000000,
+        Math.max(b, ceiling * runs),
+      ),
+    );
+  }, [model, connectionRef, input, output, runs, accounts]);
   const [consent, setConsent] = useState("");
   const sessionID =
     v.sessions.find((s) => s.id === session)?.id ?? v.sessions[0]?.id ?? "";
@@ -325,6 +361,13 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
           onChange={(ref) => {
             setOverridden(true);
             setConnectionRef(ref);
+            const a = accounts?.connections?.find((a) => a.ref === ref);
+            setModel(
+              ref
+                ? a?.catalog?.models.find((m) => m.selectable && m.recommended)
+                    ?.id || ""
+                : "",
+            );
           }}
         />
         <AIModelPicker
@@ -467,7 +510,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                 type="number"
                 required
                 min={1}
-                max={1000000}
+                max={model.startsWith("grok-") ? 10000000 : 1000000}
                 value={budget}
                 onChange={(e) => setBudget(e.target.valueAsNumber)}
               />
@@ -511,7 +554,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                 type="number"
                 required
                 min={1}
-                max={1000000}
+                max={model.startsWith("grok-") ? 10000000 : 1000000}
                 value={perCall}
                 onChange={(e) => setPerCall(e.target.valueAsNumber)}
               />

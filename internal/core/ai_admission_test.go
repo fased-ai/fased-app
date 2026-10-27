@@ -14,13 +14,13 @@ import (
 func TestOpenAIAdmissionPolicyAndIntegerTariff(t *testing.T) {
 	p := openAIModelPolicy()
 	q := AgentAIRequest{Model: p.Model, Policy: &p, ConnectionRef: "disposable-connection", Limits: AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024}}
-	if e := validateAIModelPolicy(q, time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC).Unix()); e != nil {
+	if e := validateAIModelPolicy(q, time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC).Unix()); e != nil {
 		t.Fatal(e)
 	}
-	if aiRequestReservation(q) != 11239 {
+	if aiRequestReservation(q) != 29120 {
 		t.Fatal("fractional tariff must round upward once", aiRequestReservation(q))
 	}
-	if aiUsageCost(q, 1, 0, 0) != 1 || aiUsageCost(q, 10, 10, 1) != 3 {
+	if aiUsageCost(q, 1, 0, 0) != 1 || aiUsageCost(q, 10, 10, 1) != 6 {
 		t.Fatal("input/cache/output integer tariff")
 	}
 	if validateAIModelPolicy(q, p.ExpiresAt) == nil {
@@ -34,15 +34,15 @@ func TestOpenAIAdmissionPolicyAndIntegerTariff(t *testing.T) {
 
 func admissionStore(t *testing.T) (*Store, AIConnectionView) {
 	s := fixtureStore(t)
-	s.now = func() time.Time { return time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC) }
+	s.now = func() time.Time { return time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC) }
 	return s, saveTestConnection(t, s)
 }
 func admissionPlan(t *testing.T, s *Store, ref string, scheduled bool) AgentView {
 	t.Helper()
 	v := agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: "trading-analyst", Name: "Admission review"})
-	c := AgentCommand{Model: admittedOpenAIModel, ConnectionRef: ref, Action: "ai-prepare", ProfileID: v.ProfileID, ID: v.Sessions[len(v.Sessions)-1].ID, Text: "Compare untrusted research", Limits: &AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024, DeadlineSeconds: 3, BudgetMicrousd: 12000}}
+	c := AgentCommand{Model: admittedOpenAIModel, ConnectionRef: ref, Action: "ai-prepare", ProfileID: v.ProfileID, ID: v.Sessions[len(v.Sessions)-1].ID, Text: "Compare untrusted research", Limits: &AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024, DeadlineSeconds: 3, BudgetMicrousd: 30000}}
 	if scheduled {
-		c.Action, c.Name, c.IntervalSeconds, c.MaxRuns, c.AuthorizationSeconds, c.TotalBudgetMicrousd = "task-ai-prepare", "Admitted schedule", 60, 2, 600, 24000
+		c.Action, c.Name, c.IntervalSeconds, c.MaxRuns, c.AuthorizationSeconds, c.TotalBudgetMicrousd = "task-ai-prepare", "Admitted schedule", 60, 2, 600, 60000
 	}
 	return agentApply(t, s, c)
 }
@@ -113,7 +113,7 @@ func TestOpenAIAdmissionHTTPSJoinedTaskAndRestart(t *testing.T) {
 	}
 	v, _ = s.Agents(t.Context(), v.ProfileID, "")
 	q := v.AIRequests[0]
-	if q.State != "completed" || q.HeldMicrousd != 0 || q.SpentMicrousd != 976 || q.CachedInputTokens != 100 || q.Admission == nil || q.Admission.InputTokens != 2001 || q.Admission.State != "admitted" || !q.Admission.GenerationAttempted || len(q.Admission.CountPayloadSHA256) != 64 || len(paths) != 3 || v.Tasks[0].Runs != 1 || v.Runs[0].AIRequestID != q.ID {
+	if q.State != "completed" || q.HeldMicrousd != 0 || q.SpentMicrousd != 2546 || q.CachedInputTokens != 100 || q.Admission == nil || q.Admission.InputTokens != 2001 || q.Admission.State != "admitted" || !q.Admission.GenerationAttempted || len(q.Admission.CountPayloadSHA256) != 64 || len(paths) != 3 || v.Tasks[0].Runs != 1 || v.Runs[0].AIRequestID != q.ID {
 		t.Fatal("joined admission/usage/dependency", q, paths)
 	}
 	if e := s.advanceAgentAI(t.Context(), rt, true); e != nil || len(paths) != 3 {
@@ -132,7 +132,7 @@ func TestOpenAIAdmissionHTTPSJoinedTaskAndRestart(t *testing.T) {
 	}
 	defer n.Close()
 	got, _ := n.Agents(t.Context(), v.ProfileID, "")
-	if *got.AIRequests[0].Admission != *q.Admission || *got.AIRequests[0].Policy != *q.Policy || got.AIRequests[0].SpentMicrousd != 976 {
+	if *got.AIRequests[0].Admission != *q.Admission || *got.AIRequests[0].Policy != *q.Policy || got.AIRequests[0].SpentMicrousd != 2546 {
 		t.Fatal("restart lost admission provenance")
 	}
 	if conn, _ := n.AIConnection(); !conn.Locked || conn.LiveCallsEnabled {
@@ -269,7 +269,7 @@ func TestOpenAIAdmissionUsageMismatchKeepsReservation(t *testing.T) {
 			}
 			v, _ = s.Agents(t.Context(), v.ProfileID, "")
 			q := v.AIRequests[0]
-			if q.State != "unknown" || q.HeldMicrousd != 11239 || q.Admission == nil || !q.Admission.GenerationAttempted || q.SpentMicrousd != 0 {
+			if q.State != "unknown" || q.HeldMicrousd != 29120 || q.Admission == nil || !q.Admission.GenerationAttempted || q.SpentMicrousd != 0 {
 				t.Fatal("unverified usage released hold", q)
 			}
 		})
@@ -399,7 +399,7 @@ func TestOpenAIAdmissionPauseRecoveryWithoutReplay(t *testing.T) {
 	}
 	v, _ = s.Agents(t.Context(), v.ProfileID, "")
 	q := v.AIRequests[0]
-	if q.State != "unknown" || q.HeldMicrousd != 11239 || calls.Load() != 2 {
+	if q.State != "unknown" || q.HeldMicrousd != 29120 || calls.Load() != 2 {
 		t.Fatal("interrupted admission stranded or replayed", q.State, calls.Load())
 	}
 }

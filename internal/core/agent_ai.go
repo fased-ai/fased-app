@@ -308,7 +308,7 @@ func changeAgentAI(d *agentDocument, c AgentCommand, profile, id string, now int
 			return errors.New("explicit request limits required; maximum ten retained AI requests")
 		}
 		l := *c.Limits
-		if l.MaxInputTokens < 1000 || l.MaxInputTokens > 32000 || l.MaxOutputTokens < 128 || l.MaxOutputTokens > 1024 || l.DeadlineSeconds < 1 || l.DeadlineSeconds > 5 || l.BudgetMicrousd < 1 || l.BudgetMicrousd > 1000000 {
+		if l.MaxInputTokens < 1000 || l.MaxInputTokens > 32000 || l.MaxOutputTokens < 128 || l.MaxOutputTokens > 1024 || l.DeadlineSeconds < 1 || l.DeadlineSeconds > 5 || l.BudgetMicrousd < 1 || l.BudgetMicrousd > maxModelBudget(c.Model) {
 			return errors.New("invalid token/time limits or insufficient fixture budget")
 		}
 		context, e := aiContextWithMemory(*d, profile, c.ID, c.Text, now, c.MemorySelection)
@@ -317,7 +317,7 @@ func changeAgentAI(d *agentDocument, c AgentCommand, profile, id string, now int
 		}
 		q := AgentAIRequest{ConnectionRef: c.ConnectionRef, ID: id, ProfileID: profile, SessionID: c.ID, Prompt: c.Text, Model: fixtureAIModel, Context: context, Limits: l, State: "prepared", CreatedAt: now, Cards: []AIActionCard{}}
 		if c.Model != "" && c.Model != fixtureAIModel {
-			p := openAIModelPolicy()
+			p := openAIModelPolicy(c.Model)
 			q.Model, q.Policy = c.Model, &p
 		}
 		if e := validateAIModelPolicy(q, now); e != nil {
@@ -428,6 +428,13 @@ func aiWire(q AgentAIRequest) ([]byte, error) {
 	if q.Policy != nil {
 		wire["truncation"] = "disabled"
 	}
+	if q.Policy != nil && policyProvider(q.Policy) != "openai" {
+		return nativeRequestWire(q, wire)
+	}
+	if q.Policy != nil && q.Policy.CacheMode != "" {
+		wire["prompt_cache_options"] = map[string]string{"mode": q.Policy.CacheMode}
+		wire["reasoning"] = map[string]string{"effort": q.Policy.Reasoning}
+	}
 	return json.Marshal(wire)
 }
 
@@ -455,7 +462,13 @@ func callReviewedAgentAIStreamAt(ctx context.Context, q AgentAIRequest, rt http.
 		bounded, stop := context.WithTimeout(ctx, time.Duration(q.Limits.DeadlineSeconds)*time.Second)
 		defer stop()
 		ctx = bounded
-		if !admitOpenAI(ctx, &q, rt, now) {
+		admitted := false
+		if policyProvider(q.Policy) == "openai" {
+			admitted = admitOpenAI(ctx, &q, rt, now)
+		} else {
+			admitted = admitNativeProvider(ctx, &q, rt, now)
+		}
+		if !admitted {
 			return q, nil
 		}
 	}
@@ -464,7 +477,7 @@ func callReviewedAgentAIStreamAt(ctx context.Context, q AgentAIRequest, rt http.
 		return q, errors.New("fixture unavailable")
 	}
 	client := &http.Client{Transport: rt, Timeout: time.Duration(q.Limits.DeadlineSeconds) * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect refused") }}
-	req, e := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.openai.com/v1/responses", bytes.NewReader(b))
+	req, e := http.NewRequestWithContext(ctx, http.MethodPost, providerGenerationURL(q.Policy), bytes.NewReader(b))
 	if e != nil {
 		return q, e
 	}
@@ -475,7 +488,11 @@ func callReviewedAgentAIStreamAt(ctx context.Context, q AgentAIRequest, rt http.
 	}
 	defer res.Body.Close()
 	if q.Stream && res.StatusCode == 200 && strings.Split(res.Header.Get("Content-Type"), ";")[0] == "text/event-stream" {
-		b, e = readAIStream(res.Body, q.Model, onDelta)
+		if policyProvider(q.Policy) == "anthropic" {
+			b, e = readAnthropicStream(res.Body, onDelta)
+		} else {
+			b, e = readAIStream(res.Body, q.Model, onDelta)
+		}
 	} else if q.Stream {
 		return q, errors.New("provider stream unavailable; reservation retained")
 	} else {
@@ -483,6 +500,12 @@ func callReviewedAgentAIStreamAt(ctx context.Context, q AgentAIRequest, rt http.
 	}
 	if e != nil || len(b) > 16384 || res.StatusCode != 200 {
 		return q, errors.New("provider response refused; reservation retained")
+	}
+	if q.Policy != nil && policyProvider(q.Policy) != "openai" {
+		b, e = normalizeNativeResponse(policyProvider(q.Policy), q, b)
+		if e != nil {
+			return q, errors.New("native response identity/usage unverified; reservation retained")
+		}
 	}
 	if q.Policy != nil && !uniqueAIJSON(b) {
 		return q, errors.New("ambiguous provider JSON; reservation retained")
@@ -517,12 +540,16 @@ func callReviewedAgentAIStreamAt(ctx context.Context, q AgentAIRequest, rt http.
 		return q, errors.New("provider usage missing; reservation retained")
 	}
 	input, output, total := *u.Input, *u.Output, *u.Total
-	if input < 0 || output < 0 || input > q.Limits.MaxInputTokens || output > q.Limits.MaxOutputTokens || total != input+output {
+	maxOutput := q.Limits.MaxOutputTokens
+	if q.Policy != nil && q.Policy.BillableOutputTokens > maxOutput {
+		maxOutput = q.Policy.BillableOutputTokens
+	}
+	if input < 0 || output < 0 || input > q.Limits.MaxInputTokens || output > maxOutput || total != input+output {
 		return q, errors.New("provider usage outside reviewed limits; reservation retained")
 	}
 	cached := int64(0)
 	if q.Policy != nil {
-		if q.Admission == nil || input != q.Admission.InputTokens {
+		if q.Admission == nil || policyProvider(q.Policy) == "openai" && input != q.Admission.InputTokens {
 			return q, errors.New("usage differs from admitted token count; reservation retained")
 		}
 		if u.InputDetails != nil {
@@ -542,6 +569,21 @@ func callReviewedAgentAIStreamAt(ctx context.Context, q AgentAIRequest, rt http.
 	q.HeldMicrousd = 0
 	q.State = "failed"
 	q.Failure = "Response was incomplete, refused or failed validation. No action was executed."
+	if _, current := currentProviderModel(q.Model); current {
+		// Reasoning metadata is never surfaced or interpreted as an action. The one
+		// assistant message remains the only admissible answer.
+		if len(wire.Output) > 8 {
+			return q, nil
+		}
+		messages := wire.Output[:0]
+		for _, item := range wire.Output {
+			if item.Type == "reasoning" {
+				continue
+			}
+			messages = append(messages, item)
+		}
+		wire.Output = messages
+	}
 	if wire.Status != "completed" || len(wire.Output) != 1 {
 		return q, nil
 	}
@@ -870,11 +912,28 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, fixtur
 type fixtureAITransport struct{}
 
 func (fixtureAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Host == "api.anthropic.com" {
+		return nativeFixtureResponse(r, "anthropic")
+	}
+	if r.URL.Host == "api.x.ai" {
+		return nativeFixtureResponse(r, "xai")
+	}
 	if e := r.Context().Err(); e != nil {
 		return nil, e
 	}
-	if r.Method == "GET" && r.URL.String() == "https://api.openai.com/v1/models/"+admittedOpenAIModel {
-		return fixtureAdmissionResponse(r, map[string]any{"id": admittedOpenAIModel, "object": "model", "owned_by": "openai", "created": 1744588800}), nil
+	if r.Method == "GET" && r.URL.String() == "https://api.openai.com/v1/models" {
+		rows := []map[string]any{}
+		for _, m := range currentModels.Models {
+			rows = append(rows, map[string]any{"id": m.ID, "object": "model", "owned_by": "openai", "created": 1744588800})
+		}
+		return fixtureAdmissionResponse(r, map[string]any{"object": "list", "data": rows}), nil
+	}
+	if r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v1/models/") {
+		id := strings.TrimPrefix(r.URL.Path, "/v1/models/")
+		if _, ok := currentProviderModel(id); !ok {
+			return nil, errors.New("fixture model unavailable")
+		}
+		return fixtureAdmissionResponse(r, map[string]any{"id": id, "object": "model", "owned_by": "openai", "created": 1744588800}), nil
 	}
 	b, e := io.ReadAll(io.LimitReader(r.Body, 65537))
 	if e != nil || len(b) > 65536 {
@@ -885,14 +944,14 @@ func (fixtureAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		Input  string `json:"input"`
 		Stream bool   `json:"stream"`
 	}
-	if json.Unmarshal(b, &request) != nil || !openAIRequestAllowed(r) || (request.Model != fixtureAIModel && request.Model != admittedOpenAIModel) {
+	if json.Unmarshal(b, &request) != nil || !openAIRequestAllowed(r) || (request.Model != fixtureAIModel && chatModelPolicy(request.Model) == nil) {
 		return nil, errors.New("compiled fixture request refused")
 	}
 	if r.URL.Path == "/v1/responses/input_tokens" {
 		return fixtureAdmissionResponse(r, map[string]any{"object": "response.input_tokens", "input_tokens": 256}), nil
 	}
 	inputTokens := len(b)
-	if request.Model == admittedOpenAIModel {
+	if _, ok := currentProviderModel(request.Model); ok {
 		inputTokens = 256
 	}
 	output, _ := json.Marshal(map[string]any{"answer": "Development fixture response. Compare the fixed paper inputs and inspect the journal before changing a strategy. No model, market feed or wallet was contacted.", "cards": []any{map[string]string{"kind": "reminder-draft", "title": "Review paper journal", "text": "Draft only: review the recorded paper outcomes. Create any task separately after checking its limits."}}})
@@ -988,7 +1047,7 @@ func (s *Store) AgentAIRequestDraft(ctx context.Context, profile, id string) (Ag
 	l := q.Limits
 	if err != nil || string(wire) != q.Disclosure || aiDigest(q) != q.Digest || !aiWireWithinBound(q, wire) ||
 		!validAgentText(q.Prompt, 2000, true) || !validAgentText(q.Model, 200, true) || !validAgentText(q.ConnectionRef, 200, false) ||
-		l.MaxInputTokens < 1000 || l.MaxInputTokens > 32000 || l.MaxOutputTokens < 128 || l.MaxOutputTokens > 1024 || l.DeadlineSeconds < 1 || l.DeadlineSeconds > 5 || l.BudgetMicrousd < 1 || l.BudgetMicrousd > 1000000 {
+		l.MaxInputTokens < 1000 || l.MaxInputTokens > 32000 || l.MaxOutputTokens < 128 || l.MaxOutputTokens > 1024 || l.DeadlineSeconds < 1 || l.DeadlineSeconds > 5 || l.BudgetMicrousd < 1 || l.BudgetMicrousd > 10000000 {
 		return v, errors.New("saved request integrity invalid; preserve the original")
 	}
 	selection, err := draftMemorySelection(q)

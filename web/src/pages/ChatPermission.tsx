@@ -1,14 +1,18 @@
 import { Dialog } from "../components/shared";
-import type { ChatPermission } from "../agents";
+import type { ChatPermission, OpenAIModelPolicy } from "../agents";
 import { useUI } from "../ui-preferences";
 
 export function ChatPermissionReview({
   permission: p,
+  providerName,
+  policy,
   busy,
   onAllow,
   onClose,
 }: {
   permission: ChatPermission;
+  providerName: string;
+  policy?: OpenAIModelPolicy;
   busy: boolean;
   onAllow: () => void;
   onClose: () => void;
@@ -31,8 +35,16 @@ export function ChatPermissionReview({
           </div>
           <div>
             <dt>{t("Provider")}</dt>
-            <dd>{p.connectionRef ? t("OpenAI") : t("Demo")}</dd>
+            <dd>{providerName}</dd>
           </div>
+          {!!policy?.billableOutputTokens && (
+            <div>
+              <dt>{t("Output reserve")}</dt>
+              <dd title={t("Includes reasoning tokens")}>
+                {policy.billableOutputTokens.toLocaleString()} {t("tokens")}
+              </dd>
+            </div>
+          )}
           <div>
             <dt>{t("Allowance")}</dt>
             <dd>

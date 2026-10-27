@@ -6,6 +6,54 @@ import (
 	"testing"
 )
 
+// Preference changes use an explicit disposable account/current model. They do
+// not authorize requests; history/holds assertions stay independent of providers.
+func fixtureProfileProvider(t *testing.T, s *Store, c AgentCommand) AgentView {
+	t.Helper()
+	account := addNativeAccount(t, s, c.Provider, false)
+	c.Model = registryForProvider(c.Provider).Models[0].ID
+	c.AccountRef = &account.Ref
+	return agentApply(t, s, c)
+}
+
+func TestProviderCatalogTracksConnectionWithoutEntitlementClaims(t *testing.T) {
+	s := fixtureStore(t)
+	v, err := s.AIConnection()
+	if err != nil || v.Catalog.Version != 1 || len(v.Catalog.Providers) != 3 || len(v.Catalog.Models) != 3 {
+		t.Fatalf("catalog: %+v %v", v.Catalog, err)
+	}
+	for i, id := range []string{"openai", "anthropic", "xai"} {
+		p := v.Catalog.Providers[i]
+		if p.ID != id || len(p.Methods) != 1 || p.Methods[0].ID != "api-key" {
+			t.Fatal("provider methods must describe only implemented API adapters", p)
+		}
+	}
+	if m := v.Catalog.Models[0]; m.Selectable || m.Availability != "disconnected" || m.ID != admittedOpenAIModel {
+		t.Fatal("missing account offered a usable model", m)
+	}
+	v = saveTestConnection(t, s)
+	if m := v.Catalog.Models[0]; !m.Selectable || m.Availability != "fixture" || m.ConnectionRef != v.Ref || !m.Recommended {
+		t.Fatal("controlled connection not bound to catalog", m)
+	}
+	if v.Catalog.Providers[0].Methods[0].ID != "api-key" || v.LiveCallsEnabled {
+		t.Fatal("authentication route or live hold changed")
+	}
+	s.lockAIConnection()
+	v, err = s.AIConnection()
+	if err != nil || v.Catalog.Models[0].Selectable || v.Catalog.Models[0].Availability != "locked" {
+		t.Fatal("locked credential offered as ready", err)
+	}
+	policy := openAIModelPolicy()
+	catalog := providerCatalog(AIConnectionView{Ref: "retained", TestOnly: true}, policy.ExpiresAt)
+	if catalog.Models[0].Selectable || catalog.Models[0].Availability != "expired" {
+		t.Fatal("expired admission offered")
+	}
+	catalog = providerCatalog(AIConnectionView{Ref: "retained", CredentialMode: "openai"}, policy.ReviewedAt+1)
+	if catalog.Models[0].Selectable || catalog.Models[0].Availability != "unverified" {
+		t.Fatal("catalog enabled ordinary live dispatch")
+	}
+}
+
 func TestAgentProviderSharedReviewSelection(t *testing.T) {
 	s := fixtureStore(t)
 	connection := saveTestConnection(t, s)
@@ -60,7 +108,12 @@ func TestAgentProviderSharedReviewSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, provider := range []string{"xai", "anthropic"} {
-		v = agentApply(t, s, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Analyst", Provider: provider, Model: "unavailable"})
+		rewriteReminderFixture(t, s, func(d *agentDocument) {
+			i := agentProfile(*d, v.ProfileID)
+			d.Profiles[i].Provider = provider
+			d.Profiles[i].Model = "unavailable"
+		})
+		v, _ = s.Agents(t.Context(), v.ProfileID, "")
 		review.Revision = v.Revision
 		if _, err = s.ChangeAgents(t.Context(), review); err == nil {
 			t.Fatal("unsupported provider fell back", provider)

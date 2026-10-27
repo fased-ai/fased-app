@@ -4,7 +4,7 @@ import { useUI } from "../ui-preferences";
 import { useCore } from "../core";
 import { NewsInputs } from "./NewsInputs";
 import { modelForProviderChange } from "../agent-defaults";
-import { useAIConnection } from "./AIConnection";
+import { AIModelPicker, useAIConnection } from "./AIConnection";
 import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { BookOpen, Bot, Plus, Settings2, History } from "../icons";
 import { Badge, SectionHead, Dialog } from "../components/shared";
@@ -173,6 +173,7 @@ function LocalAgentEditor({
   const [persona, setPersona] = useState(profile.persona);
   const [provider, setProvider] = useState(profile.provider);
   const [model, setModel] = useState(profile.model);
+  const [accountRef, setAccountRef] = useState(profile.connectionRef || "");
   const [botName, setBotName] = useState("");
   const [quantity, setQuantity] = useState(1);
   const [price, setPrice] = useState(100);
@@ -185,6 +186,7 @@ function LocalAgentEditor({
     setPersona(profile.persona);
     setProvider(profile.provider);
     setModel(profile.model);
+    setAccountRef(profile.connectionRef || "");
     profileRevision.current = v.revision;
   }
   useLayoutEffect(() => {
@@ -572,6 +574,7 @@ function LocalAgentEditor({
                     name,
                     text: persona,
                     provider,
+                    accountRef,
                     model,
                   })
                 )
@@ -607,36 +610,91 @@ function LocalAgentEditor({
                     aria-label={uiText("Provider")}
                     onChange={(e) => {
                       setProvider(e.target.value as Provider);
+                      const a =
+                        connection?.connections?.find(
+                          (a) => a.provider === e.target.value,
+                        ) ??
+                        (connection?.provider === e.target.value
+                          ? connection
+                          : null);
+                      setAccountRef(a?.ref || "");
                       setModel(
                         modelForProviderChange(
                           e.target.value,
-                          connection?.admissionPolicy?.model,
+                          a?.catalog?.models.find((m) => m.recommended)?.id ||
+                            connection?.catalog?.models.find(
+                              (m) =>
+                                m.provider === e.target.value && m.recommended,
+                            )?.id,
                         ),
                       );
                     }}
                   >
-                    {Object.entries(providerNames).map(([id, title]) => (
-                      <option key={id} value={id}>
-                        {title}
+                    <option value="none">{uiText("Demo")}</option>
+                    {connection?.catalog?.providers.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
                       </option>
                     ))}
+                    {provider !== "none" &&
+                      !connection?.catalog?.providers.some(
+                        (item) => item.id === provider,
+                      ) && (
+                        <option value={provider} disabled>
+                          {providerNames[provider]}
+                        </option>
+                      )}
                   </select>
                 </label>
-                <label>
-                  {uiText("Model")}
-                  <input
-                    list="agent-models"
-                    disabled={agents.busy}
-                    maxLength={120}
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
-                  />
-                </label>
-                <datalist id="agent-models">
-                  {connection?.admissionPolicy && (
-                    <option value={connection.admissionPolicy.model} />
-                  )}
-                </datalist>
+                {provider !== "none" && (
+                  <label>
+                    {uiText("Account")}
+                    <select
+                      aria-label={uiText("Account")}
+                      value={accountRef}
+                      disabled={agents.busy}
+                      onChange={(e) => setAccountRef(e.target.value)}
+                    >
+                      <option value="">
+                        {uiText(provider === "openai" ? "Default" : "Select")}
+                      </option>
+                      {connection?.connections
+                        ?.filter((a) => a.provider === provider)
+                        .map((a) => (
+                          <option key={a.ref} value={a.ref}>
+                            {a.name ||
+                              connection?.catalog?.providers.find(
+                                (p) => p.id === a.provider,
+                              )?.name ||
+                              "OpenAI"}
+                          </option>
+                        ))}
+                      {accountRef &&
+                        !connection?.connections?.some(
+                          (a) => a.ref === accountRef,
+                        ) && (
+                          <option value={accountRef} disabled>
+                            {uiText("Unavailable")}
+                          </option>
+                        )}
+                    </select>
+                  </label>
+                )}
+                <AIModelPicker
+                  value={model}
+                  onChange={setModel}
+                  connectionRef={
+                    provider !== "none"
+                      ? accountRef ||
+                        (connection?.provider === provider
+                          ? connection.ref
+                          : "") ||
+                        ""
+                      : ""
+                  }
+                  allowDemo={provider === "none"}
+                  disabled={agents.busy}
+                />
               </details>
               <button className="primary" disabled={agents.busy}>
                 {uiText("Save agent")}

@@ -1,5 +1,10 @@
 type AgentDefaults = { provider: string; model: string };
-type Access = { ref?: string; locked: boolean; model?: string } | null;
+type Access = {
+  ref?: string;
+  provider?: string;
+  locked: boolean;
+  model?: string;
+} | null;
 // Empty preferences mean explicit Demo mode. Unavailable provider preferences
 // never become Demo or a different model. Permission remains server-enforced.
 export function agentReplyDefaults(agent: AgentDefaults, access: Access) {
@@ -9,10 +14,11 @@ export function agentReplyDefaults(agent: AgentDefaults, access: Access) {
   )
     return { connectionRef: "", model: "", ready: true };
   return {
-    connectionRef: agent.provider === "openai" ? access?.ref || "" : "",
+    connectionRef: agent.provider !== "none" ? access?.ref || "" : "",
     model: agent.model,
     ready:
-      agent.provider === "openai" &&
+      ["openai", "anthropic", "xai"].includes(agent.provider) &&
+      (access?.provider || "openai") === agent.provider &&
       !!agent.model &&
       !!access?.ref &&
       !access.locked &&
@@ -26,5 +32,13 @@ export function modelForProviderChange(
   provider: string,
   admittedModel?: string,
 ) {
-  return provider === "openai" ? admittedModel || "" : "";
+  const prefix =
+    provider === "openai"
+      ? "gpt-"
+      : provider === "anthropic"
+        ? "claude-"
+        : provider === "xai"
+          ? "grok-"
+          : "";
+  return prefix && admittedModel?.startsWith(prefix) ? admittedModel : "";
 }

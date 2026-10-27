@@ -2,6 +2,47 @@ package core
 
 import "errors"
 
+// The catalogue describes selection, not authority. Only the existing admission,
+// credential and reviewed-request checks may authorize a provider operation.
+type ProviderMethod struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+type ProviderEntry struct {
+	ID      string           `json:"id"`
+	Name    string           `json:"name"`
+	Methods []ProviderMethod `json:"methods"`
+}
+type ProviderModel struct {
+	Tier          string             `json:"tier,omitempty"`
+	Policy        *OpenAIModelPolicy `json:"policy,omitempty"`
+	ID            string             `json:"id"`
+	Name          string             `json:"name"`
+	Provider      string             `json:"provider"`
+	Method        string             `json:"method"`
+	ConnectionRef string             `json:"connectionRef"`
+	Recommended   bool               `json:"recommended"`
+	Selectable    bool               `json:"selectable"`
+	Availability  string             `json:"availability"`
+}
+type ProviderCatalog struct {
+	Policy    string          `json:"policy"`
+	State     string          `json:"state"`
+	FetchedAt int64           `json:"fetchedAt,omitempty"`
+	ExpiresAt int64           `json:"expiresAt,omitempty"`
+	SHA256    string          `json:"sha256,omitempty"`
+	Source    string          `json:"source,omitempty"`
+	Version   int             `json:"version"`
+	Providers []ProviderEntry `json:"providers"`
+	Models    []ProviderModel `json:"models"`
+}
+
+func providerCatalog(v AIConnectionView, now int64) ProviderCatalog {
+	// Status without discovered evidence still shows the reviewed current set,
+	// never an older model or account-inferred entitlement.
+	return discoveredProviderCatalog(v, modelDiscovery{}, now)
+}
+
 // Resolve saved preferences only while preparing a new review. The resulting
 // concrete connection/model are bound by existing consent, never re-resolved
 // during authorization, dispatch, retry or restart.
@@ -12,14 +53,26 @@ func (s *Store) resolveAgentProvider(c *AgentCommand, profile AgentProfile) erro
 		if profile.Model != "" && profile.Model != fixtureAIModel {
 			return errors.New("agent model unavailable")
 		}
-	case "openai":
-		policy := openAIModelPolicy()
-		if profile.Model != policy.Model || policy.ExpiresAt <= s.now().Unix() {
+	case "openai", "anthropic", "xai":
+		policy := openAIModelPolicy(profile.Model)
+		if !currentModelRequest(AgentAIRequest{Model: profile.Model, Policy: &policy}) || profile.Model != policy.Model || policy.ExpiresAt <= s.now().Unix() {
 			return errors.New("agent model unavailable")
 		}
-		connection, err := s.AIConnection()
-		if err != nil || connection.Ref == "" || connection.Locked {
+		if profile.Provider != "openai" && profile.ConnectionRef == "" {
+			return errors.New("select this provider account")
+		}
+		connection, err := s.AIConnection(profile.ConnectionRef)
+		if err != nil || connection.Ref == "" || connection.Locked || connection.Provider != profile.Provider || policyProvider(&policy) != profile.Provider {
 			return errors.New("unlock the selected connection first")
+		}
+		available := false
+		for _, m := range connection.Catalog.Models {
+			if m.ID == profile.Model && m.Selectable {
+				available = true
+			}
+		}
+		if !available {
+			return errors.New("refresh this account and select an available current model")
 		}
 		ref, model = connection.Ref, profile.Model
 	default:

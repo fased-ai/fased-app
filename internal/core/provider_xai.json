@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "policy": "latest-only",
+  "reviewedAt": 1793059200,
+  "expiresAt": 1795651200,
+  "provider": "xai",
+  "sources": {
+    "models": "https://docs.x.ai/developers/models",
+    "pricing": "https://docs.x.ai/developers/pricing",
+    "authentication": "https://docs.x.ai/developers/rest-api-reference/inference/responses",
+    "discovery": "https://docs.x.ai/developers/rest-api-reference/inference/models",
+    "caching": "https://docs.x.ai/developers/advanced-api-usage/prompt-caching",
+    "contract": "https://docs.x.ai/developers/rest-api-reference/inference/responses"
+  },
+  "models": [
+    {
+      "provider": "xai",
+      "id": "grok-4.7",
+      "name": "Grok 4.7",
+      "tier": "Balanced",
+      "input": 2000000,
+      "cached": 500000,
+      "output": 6000000,
+      "contextTokens": 500000,
+      "outputTokens": 500000,
+      "source": "https://docs.x.ai/developers/models/grok-4.7",
+      "reasoning": "low",
+      "billableOutputTokens": 500000
+    }
+  ]
+}

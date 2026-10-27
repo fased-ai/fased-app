@@ -41,3 +41,13 @@
 Cut taglines, helper text and secondary labels. If a screen needs them to make sense, fix the layout.
 
 Make the best decision that will elevate all three: the user experience (UX), developer experience (DX), and agent experience (AX) always, without breaking anything.
+
+## Provider model rule
+
+Offer and execute only current models in the reviewed provider registry. Refresh
+account availability separately from registry review; model listing is not
+capability or tariff approval. Retain older choices in history/drafts as
+unavailable, require explicit current-model review, and never silently upgrade
+approved requests or switch accounts/billing routes. Maintain provider sources,
+authentication/discovery and model/tariff definitions through one reviewable
+provider update path. Ordinary live and public update gates stay closed.

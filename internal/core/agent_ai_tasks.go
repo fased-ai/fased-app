@@ -159,7 +159,7 @@ func taskAIRequestValid(d agentDocument, q AgentAIRequest, now int64) error {
 }
 func changeTaskAI(d *agentDocument, c AgentCommand, profile, id string, now int64, fixture bool) error {
 	if c.Action == "task-ai-prepare" {
-		if !validAgentText(c.Name, 80, true) || !validAgentText(c.Text, 1000, true) || c.IntervalSeconds < 60 || c.IntervalSeconds > 604800 || c.MaxRuns < 1 || c.MaxRuns > 10 || c.AuthorizationSeconds < 60 || c.AuthorizationSeconds > 604800 || c.TotalBudgetMicrousd < 1 || c.TotalBudgetMicrousd > 1000000 || len(d.Tasks) >= 100 {
+		if !validAgentText(c.Name, 80, true) || !validAgentText(c.Text, 1000, true) || c.IntervalSeconds < 60 || c.IntervalSeconds > 604800 || c.MaxRuns < 1 || c.MaxRuns > 10 || c.AuthorizationSeconds < 60 || c.AuthorizationSeconds > 604800 || c.TotalBudgetMicrousd < 1 || c.TotalBudgetMicrousd > maxModelBudget(c.Model) || len(d.Tasks) >= 100 {
 			return errors.New("bounded AI task name/prompt/schedule/authorization and total budget required")
 		}
 		// Reuse the exact request validator and complete wire disclosure, then reserve

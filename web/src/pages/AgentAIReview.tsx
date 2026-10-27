@@ -90,19 +90,25 @@ function AgentAIForm({
   }
   const [newsSourceId, setNewsSourceId] = useState("");
   const [newsAge, setNewsAge] = useState(3600);
-  const { view: access, refresh: refreshAccess } = useAIConnection();
+  const { view: accounts, refresh: refreshAccess } = useAIConnection();
   const agent = view.profiles.find((p) => p.id === view.profileId)!;
+  const access = agent.connectionRef
+    ? (accounts?.connections?.find((a) => a.ref === agent.connectionRef) ??
+      null)
+    : accounts;
   const inherited = agentReplyDefaults(
     agent,
     access
       ? {
           ref: access.ref,
+          provider: access.provider,
           locked: access.locked,
-          model:
-            access.admissionPolicy &&
-            access.admissionPolicy.expiresAt * 1000 > Date.now()
-              ? access.admissionPolicy.model
-              : undefined,
+          model: access.catalog?.models.find(
+            (m) =>
+              m.selectable &&
+              m.connectionRef === access.ref &&
+              m.id === agent.model,
+          )?.id,
         }
       : null,
   );
@@ -130,14 +136,44 @@ function AgentAIForm({
     setConnectionRef(inherited.connectionRef);
     setModel(inherited.model);
   }, [inherited.connectionRef, inherited.model, overridden, draftSource]);
+  const selectedAccess =
+    accounts?.connections?.find((a) => a.ref === connectionRef) ??
+    (accounts?.ref === connectionRef ? accounts : null);
   const replyReady =
     overridden || draftSource
       ? (!connectionRef && !model) ||
         (!!connectionRef &&
-          access?.ref === connectionRef &&
-          !access.locked &&
-          (!model || access.admissionPolicy?.model === model))
+          selectedAccess?.ref === connectionRef &&
+          !selectedAccess.locked &&
+          ((!model && selectedAccess.testOnly) ||
+            selectedAccess.catalog?.models.some(
+              (m) =>
+                m.selectable &&
+                m.connectionRef === connectionRef &&
+                m.id === model,
+            )))
       : inherited.ready;
+
+  const budgetModel = useRef("");
+  useEffect(() => {
+    if (draftSource) return;
+    const identity = connectionRef + ":" + model;
+    if (budgetModel.current === identity) return;
+    const p = selectedAccess?.catalog?.models.find(
+      (m) => m.id === model,
+    )?.policy;
+    if (!p) return;
+    budgetModel.current = identity;
+    const ceiling = Math.ceil(
+      (input * p.inputMicrousdPerMillion +
+        Math.max(output, p.billableOutputTokens || 0) *
+          p.outputMicrousdPerMillion) /
+        1000000,
+    );
+    setBudget((b) =>
+      Math.min(p.maxRequestBudgetMicrousd || 1000000, Math.max(b, ceiling)),
+    );
+  }, [model, connectionRef, draftSource, input, output, accounts]);
 
   const [legacyDraft, setLegacyDraft] = useState(false);
   const [draftBusy, setDraftBusy] = useState(false);
@@ -342,11 +378,26 @@ function AgentAIForm({
     setEvidencePreview(null);
     setConsent("");
   }
+  const permissionAccount =
+    accounts?.connections?.find(
+      (a) => a.ref === permissionReview?.connectionRef,
+    ) ?? (accounts?.ref === permissionReview?.connectionRef ? accounts : null);
+  const permissionPolicy = permissionAccount?.catalog?.models.find(
+    (m) => m.id === permissionReview?.model,
+  )?.policy;
+  const permissionProvider =
+    accounts?.catalog?.providers.find(
+      (p) => p.id === permissionAccount?.provider,
+    )?.name || tr("Unavailable");
   return (
     <>
       {permissionReview && (
         <ChatPermissionReview
           permission={permissionReview}
+          providerName={
+            permissionReview.connectionRef ? permissionProvider : tr("Demo")
+          }
+          policy={permissionPolicy}
           busy={agents.busy || draftBusy}
           onClose={() => setPermissionReview(undefined)}
           onAllow={() =>
@@ -487,7 +538,10 @@ function AgentAIForm({
                   preparing.current = false;
                   return;
                 }
-                if (current.ref !== connectionRef || current.locked)
+                const selected =
+                  current.connections?.find((a) => a.ref === connectionRef) ??
+                  (current.ref === connectionRef ? current : null);
+                if (!selected || selected.locked)
                   throw new Error(tr("Provider unavailable"));
               } catch (err) {
                 if (epoch === generation.current)
@@ -537,7 +591,7 @@ function AgentAIForm({
                       },
                       maxRuns: 20,
                       authorizationSeconds: 900,
-                      totalBudgetMicrousd: 600000,
+                      totalBudgetMicrousd: Math.max(600000, budget),
                     },
                   );
                   if (epoch === generation.current && reviewed.chatReview) {
@@ -743,6 +797,14 @@ function AgentAIForm({
                   onChange={(ref) => {
                     setOverridden(true);
                     setConnectionRef(ref);
+                    const a = accounts?.connections?.find((a) => a.ref === ref);
+                    setModel(
+                      ref
+                        ? a?.catalog?.models.find(
+                            (m) => m.selectable && m.recommended,
+                          )?.id || ""
+                        : "",
+                    );
                     if (!ref) setModel("");
                   }}
                 />
@@ -957,7 +1019,11 @@ function AgentAIForm({
                     type="number"
                     min={0.000001}
                     step="0.000001"
-                    max={1}
+                    max={
+                      (selectedAccess?.catalog?.models.find(
+                        (m) => m.id === model,
+                      )?.policy?.maxRequestBudgetMicrousd || 1000000) / 1000000
+                    }
                     required
                     value={budget / 1_000_000}
                     onChange={(e) =>

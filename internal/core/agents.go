@@ -23,12 +23,13 @@ WHEN (SELECT phase FROM update_pause WHERE id=1)='paused' BEGIN SELECT RAISE(ABO
 PRAGMA user_version=4;`
 
 type AgentProfile struct {
-	HistoryDays int    `json:"historyDays,omitempty"`
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Persona     string `json:"persona"`
-	Provider    string `json:"provider"`
-	Model       string `json:"model"`
+	ConnectionRef string `json:"connectionRef,omitempty"`
+	HistoryDays   int    `json:"historyDays,omitempty"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Persona       string `json:"persona"`
+	Provider      string `json:"provider"`
+	Model         string `json:"model"`
 }
 type AgentSession struct {
 	Chat      *ChatPermission `json:"chat,omitempty"`
@@ -163,6 +164,7 @@ type AgentView struct {
 // Optional fields are inert data for a fixed action; unknown fields/actions are
 // rejected. No arbitrary callback, URL, model tool or shell can be submitted.
 type AgentCommand struct {
+	AccountRef           *string              `json:"accountRef,omitempty"`
 	UseAgentDefaults     bool                 `json:"useAgentDefaults,omitempty"`
 	ChatPermission       *ChatPermission      `json:"chatPermission,omitempty"`
 	HistoryDays          int                  `json:"historyDays,omitempty"`
@@ -509,11 +511,25 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		}
 	}
 	if (c.Action == "chat-review" || c.Action == "ai-prepare" || c.Action == "task-ai-prepare") && c.ConnectionRef != "" {
-		connection, err := s.AIConnection()
+		connection, err := s.AIConnection(c.ConnectionRef)
 		if err != nil {
 			return AgentView{}, err
 		}
-		if connection.Ref == c.ConnectionRef && connection.CredentialMode == "openai" && c.Model != admittedOpenAIModel {
+		if c.Model != "" && c.Model != fixtureAIModel {
+			if _, ok := currentProviderModel(c.Model); !ok {
+				return AgentView{}, errors.New("select an available current model; older drafts remain unchanged")
+			}
+			selectable := false
+			for _, m := range connection.Catalog.Models {
+				if m.ID == c.Model && m.Selectable {
+					selectable = true
+				}
+			}
+			if !selectable {
+				return AgentView{}, errors.New("refresh this account and select an available current model")
+			}
+		}
+		if connection.Ref == c.ConnectionRef && connection.CredentialMode != "test" && chatModelPolicy(c.Model) == nil {
 			return AgentView{}, errors.New("select the admitted provider model")
 		}
 	}
@@ -631,7 +647,33 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		if !validAgentText(c.Name, 80, true) || (c.Provider != "none" && c.Provider != "openai" && c.Provider != "anthropic" && c.Provider != "xai") {
 			return AgentView{}, errors.New("name and supported provider preference required")
 		}
-		d.Profiles[pi] = AgentProfile{ID: profile, Name: strings.TrimSpace(c.Name), Persona: c.Text, Provider: c.Provider, Model: c.Model, HistoryDays: d.Profiles[pi].HistoryDays}
+		if c.Model != "" && c.Model != fixtureAIModel {
+			if _, ok := currentProviderModel(c.Model); !ok && c.Model != d.Profiles[pi].Model {
+				return AgentView{}, errors.New("select a current model")
+			}
+		}
+		accountRef := d.Profiles[pi].ConnectionRef
+		if c.AccountRef != nil {
+			accountRef = *c.AccountRef
+		}
+		if accountRef != "" {
+			if !validConnectionRef(accountRef) {
+				return AgentView{}, errors.New("invalid agent connection")
+			}
+			connection, err := s.AIConnection(accountRef)
+			if err != nil || connection.Ref != accountRef || connection.Provider != c.Provider {
+				return AgentView{}, errors.New("agent connection unavailable")
+			}
+		}
+		if (c.Provider == "anthropic" || c.Provider == "xai") && accountRef == "" {
+			return AgentView{}, errors.New("select a provider account")
+		}
+		if c.Model != "" && c.Model != fixtureAIModel {
+			if model, ok := currentProviderModel(c.Model); ok && modelProvider(model) != c.Provider {
+				return AgentView{}, errors.New("provider/model mismatch")
+			}
+		}
+		d.Profiles[pi] = AgentProfile{ConnectionRef: accountRef, ID: profile, Name: strings.TrimSpace(c.Name), Persona: c.Text, Provider: c.Provider, Model: c.Model, HistoryDays: d.Profiles[pi].HistoryDays}
 	case "session-create":
 		if !validAgentText(c.Name, 80, true) || len(d.Sessions) >= 100 {
 			return AgentView{}, errors.New("session name required or session limit reached")

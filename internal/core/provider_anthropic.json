@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "policy": "latest-only",
+  "reviewedAt": 1793059200,
+  "expiresAt": 1795651200,
+  "provider": "anthropic",
+  "sources": {
+    "models": "https://platform.claude.com/docs/en/models/overview",
+    "pricing": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "authentication": "https://platform.claude.com/docs/en/api/overview",
+    "discovery": "https://platform.claude.com/docs/en/api/models/list",
+    "caching": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+    "contract": "https://platform.claude.com/docs/en/api/messages/create"
+  },
+  "models": [
+    {
+      "provider": "anthropic",
+      "line": "haiku",
+      "id": "claude-haiku-5-5",
+      "name": "Claude Haiku 5.5",
+      "tier": "Fast",
+      "input": 100000,
+      "cached": 10000,
+      "output": 500000,
+      "contextTokens": 1000000,
+      "outputTokens": 128000,
+      "source": "https://platform.claude.com/docs/en/models/haiku-5-5/overview",
+      "reasoning": "low"
+    },
+    {
+      "provider": "anthropic",
+      "line": "sonnet",
+      "id": "claude-sonnet-5-5",
+      "name": "Claude Sonnet 5.5",
+      "tier": "Balanced",
+      "input": 2000000,
+      "cached": 100000,
+      "output": 10000000,
+      "contextTokens": 1000000,
+      "outputTokens": 128000,
+      "source": "https://platform.claude.com/docs/en/models/sonnet-5-5/overview",
+      "reasoning": "low"
+    },
+    {
+      "provider": "anthropic",
+      "line": "opus",
+      "id": "claude-opus-5-5",
+      "name": "Claude Opus 5.5",
+      "tier": "Deep",
+      "input": 4000000,
+      "cached": 200000,
+      "output": 20000000,
+      "contextTokens": 1000000,
+      "outputTokens": 128000,
+      "source": "https://platform.claude.com/docs/en/models/opus-5-5/overview",
+      "reasoning": "low"
+    },
+    {
+      "provider": "anthropic",
+      "line": "fable",
+      "id": "claude-fable-5-1",
+      "name": "Claude Fable 5.1",
+      "tier": "Deep",
+      "input": 10000000,
+      "cached": 250000,
+      "output": 50000000,
+      "contextTokens": 1000000,
+      "outputTokens": 128000,
+      "source": "https://platform.claude.com/docs/en/models/fable-5-1/overview",
+      "reasoning": "low"
+    }
+  ]
+}

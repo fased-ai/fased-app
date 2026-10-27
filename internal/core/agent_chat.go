@@ -15,6 +15,7 @@ import (
 )
 
 type ChatPermission struct {
+	ConnectionEpoch   uint64   `json:"connectionEpoch,omitempty"`
 	AccessEpoch       uint64   `json:"accessEpoch"`
 	ID                string   `json:"id"`
 	ProfileID         string   `json:"profileId"`
@@ -49,15 +50,22 @@ func personaDigest(p AgentProfile) string {
 	return hex.EncodeToString(h[:])
 }
 func validAILimits(l AILimits) bool {
-	return l.MaxInputTokens >= 1000 && l.MaxInputTokens <= 32000 && l.MaxOutputTokens >= 128 && l.MaxOutputTokens <= 1024 && l.DeadlineSeconds >= 1 && l.DeadlineSeconds <= 5 && l.BudgetMicrousd >= 1 && l.BudgetMicrousd <= 1000000
+	return l.MaxInputTokens >= 1000 && l.MaxInputTokens <= 32000 && l.MaxOutputTokens >= 128 && l.MaxOutputTokens <= 1024 && l.DeadlineSeconds >= 1 && l.DeadlineSeconds <= 5 && l.BudgetMicrousd >= 1 && l.BudgetMicrousd <= 10000000
 }
-func validChatPermission(p ChatPermission) bool {
-	return len(p.ID) == 64 && len(p.PersonaDigest) == 64 && len(p.BootID) == 32 && (len(p.ConnectionRef) == 0 || len(p.ConnectionRef) == 43) && (p.Model != admittedOpenAIModel || p.ConnectionRef != "") && p.ID == chatDigest(p) && p.ProfileID != "" && p.SessionID != "" && len(p.BootID) > 0 && p.Revision >= 0 && p.CreatedAt > 0 && p.ExpiresAt >= p.CreatedAt+60 && p.ExpiresAt <= p.CreatedAt+86400 &&
-		(p.MemoryMode == "relevant" || p.MemoryMode == "none") && (p.Model == fixtureAIModel || p.Model == admittedOpenAIModel) && validAILimits(p.Limits) && p.MaxRequests >= 1 && p.MaxRequests <= 20 && p.Limits.BudgetMicrousd >= aiRequestReservation(AgentAIRequest{Model: p.Model, Policy: chatModelPolicy(p.Model), Limits: p.Limits}) && p.BudgetMicrousd >= aiRequestReservation(AgentAIRequest{Model: p.Model, Limits: p.Limits, Policy: chatModelPolicy(p.Model)}) && p.BudgetMicrousd <= 20000000 && p.UsedRequests >= 0 && p.UsedRequests <= p.MaxRequests && p.AllocatedMicrousd >= 0 && p.AllocatedMicrousd <= p.BudgetMicrousd
+func validChatPermission(p ChatPermission, stored ...bool) bool {
+	_, current := currentProviderModel(p.Model)
+	modelOK := (p.Model == fixtureAIModel || current) && p.Limits.BudgetMicrousd <= maxModelBudget(p.Model)
+	reservation := aiRequestReservation(AgentAIRequest{Model: p.Model, Policy: chatModelPolicy(p.Model), Limits: p.Limits})
+	if len(stored) > 0 && stored[0] {
+		modelOK = validProviderModelID(p.Model)
+		reservation = 0
+	}
+	return len(p.ID) == 64 && len(p.PersonaDigest) == 64 && len(p.BootID) == 32 && (len(p.ConnectionRef) == 0 || len(p.ConnectionRef) == 43) && (p.Model == fixtureAIModel || p.ConnectionRef != "") && p.ID == chatDigest(p) && p.ProfileID != "" && p.SessionID != "" && len(p.BootID) > 0 && p.Revision >= 0 && p.CreatedAt > 0 && p.ExpiresAt >= p.CreatedAt+60 && p.ExpiresAt <= p.CreatedAt+86400 &&
+		(p.MemoryMode == "relevant" || p.MemoryMode == "none") && modelOK && validAILimits(p.Limits) && p.MaxRequests >= 1 && p.MaxRequests <= 20 && p.Limits.BudgetMicrousd >= reservation && p.BudgetMicrousd >= reservation && p.BudgetMicrousd <= 20000000 && p.UsedRequests >= 0 && p.UsedRequests <= p.MaxRequests && p.AllocatedMicrousd >= 0 && p.AllocatedMicrousd <= p.BudgetMicrousd
 }
 func chatModelPolicy(model string) *OpenAIModelPolicy {
-	if model == admittedOpenAIModel {
-		p := openAIModelPolicy()
+	if _, ok := currentProviderModel(model); ok || model == legacyOpenAIModel {
+		p := openAIModelPolicy(model)
 		return &p
 	}
 	return nil
@@ -108,6 +116,7 @@ func (s *Store) chatReview(d agentDocument, c AgentCommand, profile string, revi
 	}
 	p := ChatPermission{ProfileID: profile, SessionID: c.ID, ConnectionRef: c.ConnectionRef, Model: model, MemoryMode: c.MemorySelection.Mode, PersonaDigest: personaDigest(d.Profiles[agentProfile(d, profile)]), BootID: s.bootID, Revision: revision, CreatedAt: now, ExpiresAt: now + c.AuthorizationSeconds, Limits: *c.Limits, MaxRequests: c.MaxRuns, BudgetMicrousd: c.TotalBudgetMicrousd}
 	p.AccessEpoch = s.chatEpoch.Load()
+	p.ConnectionEpoch = s.connectionAccessEpoch(p.ConnectionRef)
 	p.ID = chatDigest(p)
 	if !validChatPermission(p) || validateAIModelPolicy(AgentAIRequest{Model: p.Model, ConnectionRef: p.ConnectionRef, Policy: chatModelPolicy(p.Model), Limits: p.Limits}, now) != nil || !s.aiConnectionValid(p.ConnectionRef) {
 		return p, errors.New("invalid Chat limits or locked connection")
@@ -123,7 +132,7 @@ func (s *Store) changeChat(d *agentDocument, c AgentCommand, profile, id string,
 	switch c.Action {
 	case "chat-allow":
 		p := c.ChatPermission
-		if p == nil || !validChatPermission(*p) || p.ID != c.ConsentDigest || p.ProfileID != profile || p.SessionID != c.ID || p.BootID != s.bootID || p.AccessEpoch != s.chatEpoch.Load() || p.Revision != revision || p.CreatedAt > now || now-p.CreatedAt > 300 || p.ExpiresAt <= now || p.UsedRequests != 0 || p.AllocatedMicrousd != 0 || p.Revoked || p.PersonaDigest != personaDigest(d.Profiles[agentProfile(*d, profile)]) || !s.aiConnectionValid(p.ConnectionRef) {
+		if p == nil || !validChatPermission(*p) || p.ID != c.ConsentDigest || p.ProfileID != profile || p.SessionID != c.ID || p.BootID != s.bootID || !s.chatAccessCurrent(p) || p.Revision != revision || p.CreatedAt > now || now-p.CreatedAt > 300 || p.ExpiresAt <= now || p.UsedRequests != 0 || p.AllocatedMicrousd != 0 || p.Revoked || p.PersonaDigest != personaDigest(d.Profiles[agentProfile(*d, profile)]) || !s.aiConnectionValid(p.ConnectionRef) {
 			return errors.New("Chat scope changed; review permission again")
 		}
 		for _, q := range d.AIRequests {
@@ -155,7 +164,7 @@ func (s *Store) changeChat(d *agentDocument, c AgentCommand, profile, id string,
 		if !fixture {
 			return errors.New("provider execution unavailable")
 		}
-		if p == nil || c.ConsentDigest != p.ID || (chatPermissionReason(*d, p, s.bootID, now) != "ready" || p.AccessEpoch != s.chatEpoch.Load()) || !s.aiConnectionValid(p.ConnectionRef) {
+		if p == nil || c.ConsentDigest != p.ID || (chatPermissionReason(*d, p, s.bootID, now) != "ready" || !s.chatAccessCurrent(p)) || !s.aiConnectionValid(p.ConnectionRef) {
 			return errors.New("Chat permission unavailable; review current scope and connection")
 		}
 		for _, q := range d.AIRequests {
@@ -198,7 +207,7 @@ func (s *Store) chatRequestValid(d agentDocument, q AgentAIRequest, now int64) b
 	}
 	p := d.Sessions[si].Chat
 	// Exhaustion prevents new sends, not the already reserved final request.
-	return p != nil && validChatPermission(*p) && !p.Revoked && p.ID == q.ChatPermissionID && p.BootID == s.bootID && p.AccessEpoch == s.chatEpoch.Load() && now >= p.CreatedAt && now < p.ExpiresAt && p.PersonaDigest == personaDigest(d.Profiles[agentProfile(d, q.ProfileID)]) && p.ConnectionRef == q.ConnectionRef && p.Model == q.Model && p.Limits == q.Limits && q.Stream && p.UsedRequests > 0
+	return p != nil && validChatPermission(*p) && !p.Revoked && p.ID == q.ChatPermissionID && p.BootID == s.bootID && s.chatAccessCurrent(p) && now >= p.CreatedAt && now < p.ExpiresAt && p.PersonaDigest == personaDigest(d.Profiles[agentProfile(d, q.ProfileID)]) && p.ConnectionRef == q.ConnectionRef && p.Model == q.Model && p.Limits == q.Limits && q.Stream && p.UsedRequests > 0
 }
 func validateChatStorage(raw []byte, d agentDocument) error {
 	var root struct {
@@ -211,14 +220,14 @@ func validateChatStorage(raw []byte, d agentDocument) error {
 		for key, value := range ss {
 			if strings.EqualFold(key, "chat") {
 				var p ChatPermission
-				if key != "chat" || update.StrictJSON(value, &p) != nil || !validChatPermission(p) {
+				if key != "chat" || update.StrictJSON(value, &p) != nil || !validChatPermission(p, true) {
 					return errors.New("unsupported Chat permission; preserve records")
 				}
 			}
 		}
 	}
 	for _, ss := range d.Sessions {
-		if ss.Chat != nil && (ss.Chat.ProfileID != ss.ProfileID || ss.Chat.SessionID != ss.ID || !validChatPermission(*ss.Chat)) {
+		if ss.Chat != nil && (ss.Chat.ProfileID != ss.ProfileID || ss.Chat.SessionID != ss.ID || !validChatPermission(*ss.Chat, true)) {
 			return errors.New("invalid Chat permission binding; preserve records")
 		}
 	}
@@ -293,7 +302,7 @@ func (s *Store) chatView(v AgentView) AgentView {
 	v.ChatReadiness = map[string]string{}
 	for _, ss := range v.Sessions {
 		reason := chatPermissionReason(d, ss.Chat, s.bootID, s.now().Unix())
-		if ss.Chat != nil && ss.Chat.AccessEpoch != s.chatEpoch.Load() {
+		if ss.Chat != nil && !s.chatAccessCurrent(ss.Chat) {
 			reason = "locked"
 		}
 		if reason == "ready" && !s.aiConnectionValid(ss.Chat.ConnectionRef) {
@@ -310,4 +319,8 @@ func (s *Store) chatView(v AgentView) AgentView {
 		}
 	}
 	return v
+}
+
+func (s *Store) chatAccessCurrent(p *ChatPermission) bool {
+	return p != nil && p.AccessEpoch == s.chatEpoch.Load() && p.ConnectionEpoch == s.connectionAccessEpoch(p.ConnectionRef)
 }

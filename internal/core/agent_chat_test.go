@@ -91,7 +91,11 @@ func TestChatPermissionRevocationRestartAndScope(t *testing.T) {
 	for _, mode := range []string{"stop", "revoke", "lock", "logout", "expire", "persona", "rotation", "restart"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
-			v, p := chatPermission(t, s)
+			ref := ""
+			if mode == "rotation" {
+				ref = saveTestConnection(t, s).Ref
+			}
+			v, p := chatPermission(t, s, ref)
 			v = chatSend(t, s, v, p, "Do not replay this reply")
 			switch mode {
 			case "stop":
@@ -114,7 +118,9 @@ func TestChatPermissionRevocationRestartAndScope(t *testing.T) {
 			case "persona":
 				v = agentApply(t, s, AgentCommand{Action: "profile-update", Name: "Changed", Text: "Changed disclosure", Provider: "none"})
 			case "rotation":
-				saveTestConnection(t, s)
+				if _, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "save", Ref: ref, Key: "fased-test-rotated-connection-key", Passphrase: testVaultPassword}); err != nil {
+					t.Fatal(err)
+				}
 			case "restart":
 				if e := s.Close(); e != nil {
 					t.Fatal(e)

@@ -1,5 +1,38 @@
 // Static interface copy; user records, model output and raw receipts are never catalog keys.
 export const pageCopy = {
+  "Output reserve": [
+    "Резерв вывода",
+    "Reserva de salida",
+    "输出预留",
+    "출력 예약량",
+  ],
+  "Includes reasoning tokens": [
+    "Включает токены рассуждений",
+    "Incluye tokens de razonamiento",
+    "包含推理令牌",
+    "추론 토큰 포함",
+  ],
+  tokens: ["токенов", "tokens", "令牌", "토큰"],
+  "Add provider": [
+    "Добавить провайдера",
+    "Añadir proveedor",
+    "添加提供商",
+    "공급자 추가",
+  ],
+  "Models unavailable": [
+    "Модели недоступны",
+    "Modelos no disponibles",
+    "模型不可用",
+    "모델을 사용할 수 없습니다",
+  ],
+  Recommended: ["Рекомендуемые", "Recomendados", "推荐", "추천"],
+  "All models": ["Все модели", "Todos los modelos", "全部模型", "모든 모델"],
+  "Refresh models": [
+    "Обновить модели",
+    "Actualizar modelos",
+    "刷新模型",
+    "모델 새로고침",
+  ],
   "Allow replies": [
     "Разрешить ответы",
     "Permitir respuestas",

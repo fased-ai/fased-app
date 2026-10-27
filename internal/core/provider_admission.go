@@ -14,14 +14,20 @@ func (s *Store) aiExecutionAvailable(fixture bool) bool {
 // run. In ordinary provider mode neither synthetic models nor research dispatch
 // can borrow permission from the development fixture path.
 func (s *Store) providerRequestAllowed(q AgentAIRequest, fixture bool) bool {
+	if q.Model != fixtureAIModel && !currentModelRequest(q) {
+		return false
+	}
+	if q.Model != fixtureAIModel && s.providerModelSuperseded(q.ConnectionRef, q.Model) {
+		return false
+	}
 	if fixture {
 		return true
 	}
-	if !s.provider.apiCredentials || q.ConnectionRef == "" || q.Model != admittedOpenAIModel || q.Policy == nil || isResearchAI(q) {
+	if !s.provider.apiCredentials || q.ConnectionRef == "" || !currentModelRequest(q) || isResearchAI(q) {
 		return false
 	}
-	v, err := s.AIConnection()
-	return err == nil && v.Ref == q.ConnectionRef && v.CredentialMode == "openai"
+	v, err := s.AIConnection(q.ConnectionRef)
+	return err == nil && v.Ref == q.ConnectionRef && v.Provider == policyProvider(q.Policy) && v.CredentialMode == v.Provider
 }
 
 func (s *Store) providerTaskAllowed(task AgentTask, fixture bool) bool {

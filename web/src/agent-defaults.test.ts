@@ -34,7 +34,7 @@ describe("Agent reply defaults", () => {
 
 describe("Provider changes", () => {
   it("selects the connected model, clears Demo, and never carries a foreign model", () => {
-    const model = "gpt-4.1-mini-2025-04-14";
+    const model = "gpt-6.1-terra";
     expect(modelForProviderChange("openai", model)).toBe(model);
     expect(modelForProviderChange("none", model)).toBe("");
     expect(modelForProviderChange("xai", model)).toBe("");
@@ -46,4 +46,29 @@ describe("Provider changes", () => {
       ).ready,
     ).toBe(true);
   });
+});
+
+it("binds native provider defaults without carrying another provider or model", () => {
+  for (const [provider, model] of [
+    ["anthropic", "claude-sonnet-5-5"],
+    ["xai", "grok-4.7"],
+  ]) {
+    const access = {
+      ref: provider + "-account",
+      provider,
+      model,
+      locked: false,
+    };
+    expect(agentReplyDefaults({ provider, model }, access).ready).toBe(true);
+    expect(
+      agentReplyDefaults({ provider, model }, { ...access, provider: "openai" })
+        .ready,
+    ).toBe(false);
+    expect(
+      agentReplyDefaults({ provider, model }, { ...access, locked: true })
+        .ready,
+    ).toBe(false);
+    expect(modelForProviderChange(provider, model)).toBe(model);
+    expect(modelForProviderChange(provider, "gpt-6.1-terra")).toBe("");
+  }
 });

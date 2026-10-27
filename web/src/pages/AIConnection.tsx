@@ -1,3 +1,4 @@
+import { RefreshCw, Plus } from "../icons";
 import { useUI } from "../ui-preferences";
 import type { OpenAIModelPolicy, OpenAIAdmission } from "../agents";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -5,8 +6,33 @@ import { useCore } from "../core";
 import { TaskAccessSettings, type TaskAccessAllowance } from "./TaskAccess";
 
 export type Connection = {
-  credentialMode?: "test" | "openai";
-  credentialModes?: ("test" | "openai")[];
+  provider?: string;
+  name?: string;
+  connections?: Connection[];
+  catalog?: {
+    version: number;
+    state?: string;
+    policy?: string;
+    providers: {
+      id: string;
+      name: string;
+      methods: { id: string; name: string }[];
+    }[];
+    models: {
+      id: string;
+      name: string;
+      tier?: string;
+      policy?: OpenAIModelPolicy;
+      provider: string;
+      method: string;
+      connectionRef: string;
+      recommended: boolean;
+      selectable: boolean;
+      availability: string;
+    }[];
+  };
+  credentialMode?: "test" | "openai" | "anthropic" | "xai";
+  credentialModes?: ("test" | "openai" | "anthropic" | "xai")[];
   taskAccess?: TaskAccessAllowance;
   accessReview?: TaskAccessAllowance;
   admissionPolicy: OpenAIModelPolicy;
@@ -78,29 +104,74 @@ export function ConnectionPicker({
         onFocus={() => void refresh()}
       >
         <option value="">{uiText("Demo")}</option>
-        {view?.ref && (
-          <option value={view.ref} disabled={view.locked}>
-            {uiText("OpenAI · ")}
-            {view.locked ? uiText("locked") : uiText("ready")}
+        {(view?.connections ?? (view?.ref ? [view] : [])).map((account) => (
+          <option
+            key={account.ref}
+            value={account.ref}
+            disabled={account.locked}
+          >
+            {account.name ||
+              view?.catalog?.providers.find((p) => p.id === account.provider)
+                ?.name ||
+              "OpenAI"}{" "}
+            · {uiText(account.locked ? "Locked" : "Unlocked")}
           </option>
-        )}
-        {value && value !== view?.ref && (
-          <option value={value} disabled>
-            {uiText("Previous connection unavailable")}
-          </option>
-        )}
+        ))}
+        {value &&
+          !(view?.connections ?? (view?.ref ? [view] : [])).some(
+            (a) => a.ref === value,
+          ) && (
+            <option value={value} disabled>
+              {uiText("Previous connection unavailable")}
+            </option>
+          )}
       </select>
     </label>
   );
 }
 export function AIConnectionSettings() {
   const { t: uiText } = useUI();
-  const { view, setView, error, setError, core } = useAIConnection();
+  const { view: root, setView, error, setError, core } = useAIConnection();
+  const [selected, setSelected] = useState("");
+  const [newProvider, setNewProvider] = useState("openai");
+  const [name, setName] = useState("");
+  const savedName =
+    selected && selected !== "new"
+      ? root?.connections?.find((a) => a.ref === selected)?.name || ""
+      : root?.name || "";
+  useEffect(() => {
+    setName(selected === "new" ? "" : savedName);
+  }, [selected, savedName]);
+
+  const view =
+    selected === "new" || (!root?.ref && !root?.connections?.length)
+      ? root
+        ? {
+            ...root,
+            provider: newProvider,
+            ref: "",
+            locked: true,
+            taskAccess: undefined,
+          }
+        : null
+      : selected
+        ? (root?.connections?.find((a) => a.ref === selected) ?? null)
+        : root;
   const [key, setKey] = useState("");
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
-  const apiMode = view?.credentialModes?.includes("openai") ?? false;
+  const provider = view?.provider || "openai";
+  const providerName =
+    root?.catalog?.providers.find((p) => p.id === provider)?.name || "OpenAI";
+  const apiMode =
+    view?.credentialModes?.includes(
+      provider as "openai" | "anthropic" | "xai",
+    ) ?? false;
   async function change(action: string) {
+    if (!view) {
+      setError(uiText("Previous connection unavailable"));
+      return;
+    }
     setBusy(true);
     setError("");
     const secret = passphrase,
@@ -109,14 +180,22 @@ export function AIConnectionSettings() {
     setPassphrase("");
     try {
       const next = await core.request<Connection>("ai/connection", "POST", {
-        action,
+        action: action === "save" && selected === "new" ? "add" : action,
+        name: action === "save" ? name : undefined,
         ref: view?.ref ?? "",
-        ...(action !== "lock" ? { passphrase: secret } : {}),
+        ...(["save", "unlock", "remove"].includes(action)
+          ? { passphrase: secret }
+          : {}),
         ...(action === "save"
-          ? { key: credential, credentialMode: apiMode ? "openai" : "test" }
+          ? {
+              provider,
+              key: credential,
+              credentialMode: apiMode ? provider : "test",
+            }
           : {}),
       });
-      setView(next);
+      setSelected(next.ref);
+      setView(await core.request<Connection>("ai/connection"));
       window.dispatchEvent(new Event("ai-connection-changed"));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Credential operation failed");
@@ -130,15 +209,97 @@ export function AIConnectionSettings() {
       aria-label={uiText("Providers")}
     >
       <div className="panel-heading">
-        <h3>OpenAI</h3>
+        <h3>{providerName}</h3>
+        <button
+          className="shell-icon"
+          type="button"
+          aria-label={uiText("Add provider")}
+          title={uiText("Add provider")}
+          disabled={busy}
+          onClick={() => {
+            setSelected("new");
+            setName("");
+            setKey("");
+            setPassphrase("");
+          }}
+        >
+          <Plus size={16} />
+        </button>
+        <button
+          type="button"
+          className="shell-icon"
+          aria-label={uiText("Refresh models")}
+          title={uiText("Refresh models")}
+          disabled={busy || !view?.ref || view.locked}
+          onClick={() => void change("models-refresh")}
+        >
+          <RefreshCw size={16} />
+        </button>
+        <select
+          aria-label={uiText("Account")}
+          value={selected || root?.ref || ""}
+          disabled={busy}
+          onChange={(e) => {
+            setSelected(e.target.value);
+            setKey("");
+            setPassphrase("");
+            setName(
+              root?.connections?.find((a) => a.ref === e.target.value)?.name ||
+                "",
+            );
+          }}
+        >
+          {(!root?.ref || selected === "new") && (
+            <option value={selected === "new" ? "new" : ""}>—</option>
+          )}
+          {root?.connections?.map((a) => (
+            <option key={a.ref} value={a.ref}>
+              {a.name ||
+                root?.catalog?.providers.find((p) => p.id === a.provider)
+                  ?.name ||
+                "OpenAI"}
+            </option>
+          ))}
+          {selected &&
+            selected !== "new" &&
+            !root?.connections?.some((a) => a.ref === selected) && (
+              <option value={selected} disabled>
+                {uiText("Unavailable")}
+              </option>
+            )}
+        </select>
       </div>
       <div className="agent-record-body">
+        {!view?.ref && (
+          <label>
+            {uiText("Provider")}
+            <select
+              aria-label={uiText("Provider")}
+              value={newProvider}
+              disabled={busy}
+              onChange={(e) => {
+                setNewProvider(e.target.value);
+                setKey("");
+                setPassphrase("");
+              }}
+            >
+              {root?.catalog?.providers.map((p) => (
+                <option value={p.id} key={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <p className="connection-status" role="status">
           {view?.ref
-            ? `${uiText(view.locked ? "Locked" : "Unlocked")} · ${uiText("OpenAI")}`
+            ? `${uiText(view.locked ? "Locked" : "Unlocked")} · ${providerName}`
             : uiText("No connection saved")}
         </p>
         {error && <p role="alert">{error}</p>}
+        {view?.catalog?.state === "failed" && (
+          <p role="alert">{uiText("Models unavailable")}</p>
+        )}
         {view?.ref && (
           <TaskAccessSettings
             key={`${view.ref}:${core.instanceId}`}
@@ -162,6 +323,14 @@ export function AIConnectionSettings() {
             }}
             autoComplete="off"
           >
+            <label>
+              {uiText("Name")}
+              <input
+                value={name}
+                maxLength={80}
+                onChange={(e) => setName(e.target.value)}
+              />
+            </label>
             <label>
               {uiText(apiMode ? "API key" : "Test key")}
               <input
@@ -242,42 +411,72 @@ export function AIModelPicker({
   value,
   onChange,
   connectionRef,
+  allowDemo = true,
+  disabled = false,
 }: {
   value: string;
   onChange: (v: string) => void;
   connectionRef: string;
+  allowDemo?: boolean;
+  disabled?: boolean;
 }) {
   const { t: uiText } = useUI();
   const { view } = useAIConnection();
+  const selected = connectionRef
+    ? (view?.connections?.find((a) => a.ref === connectionRef) ??
+      (view?.ref === connectionRef ? view : null))
+    : view;
+  const models =
+    selected?.catalog?.version === 1 ? selected.catalog.models : [];
   return (
     <label>
       <span>{uiText("Model")}</span>
       <select
         aria-label={uiText("Model")}
+        disabled={disabled}
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >
-        <option value="">{uiText("Demo")}</option>
-        {value && value !== view?.admissionPolicy?.model && (
+        {allowDemo &&
+          (!connectionRef ||
+            selected?.provider === "openai" ||
+            !selected?.provider) && <option value="">{uiText("Demo")}</option>}
+        {!allowDemo && !value && (
+          <option value="" disabled>
+            {uiText("Model")}
+          </option>
+        )}
+        {value && !models.some((model) => model.id === value) && (
           <option value={value} disabled>
             {uiText("Unavailable model: ")}
             {value}
           </option>
         )}
-        {view?.admissionPolicy && (
-          <option
-            value={view.admissionPolicy.model}
-            disabled={
-              !connectionRef ||
-              view.locked ||
-              view.ref !== connectionRef ||
-              Date.now() / 1000 >= view.admissionPolicy.expiresAt
-            }
-          >
-            {view.admissionPolicy.model}
-            {uiText("")}
-          </option>
-        )}
+        {[true, false].map((recommended) => {
+          const group = models.filter((m) => m.recommended === recommended);
+          if (!group.length) return null;
+          return (
+            <optgroup
+              key={String(recommended)}
+              label={uiText(recommended ? "Recommended" : "All models")}
+            >
+              {group.map((model) => (
+                <option
+                  key={model.id}
+                  value={model.id}
+                  disabled={
+                    !connectionRef ||
+                    !model.selectable ||
+                    model.connectionRef !== connectionRef
+                  }
+                  title={model.selectable ? model.id : uiText("Unavailable")}
+                >
+                  {model.name}
+                </option>
+              ))}
+            </optgroup>
+          );
+        })}
       </select>
     </label>
   );
@@ -310,6 +509,12 @@ export function AIAdmissionReview({
           ". Reserve the uncached ceiling with upward integer rounding. Accounting is not a provider invoice.",
         )}
       </p>
+      {!!policy.billableOutputTokens && (
+        <p title={uiText("Includes reasoning tokens")}>
+          {uiText("Output reserve")}:{" "}
+          {policy.billableOutputTokens.toLocaleString()} {uiText("tokens")}
+        </p>
+      )}
       <p>
         {uiText("Policy ")}
         {policy.id}

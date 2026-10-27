@@ -44,13 +44,19 @@ func TestProviderAdmissionRemainsClosedAndReportsCapabilities(t *testing.T) {
 		if agents.AIExecutionAvailable != admitted || agents.AIFixtureAvailable || agents.ProviderCallsEnabled || agents.FinancialExecution || connection.LiveCallsEnabled {
 			t.Fatal("capability confused with fixture or live authority")
 		}
-		mode := "test"
+		modes := []string{"test"}
 		if admitted {
-			mode = "openai"
+			modes = []string{"openai", "anthropic", "xai"}
 		}
-		if len(connection.CredentialModes) != 1 || connection.CredentialModes[0] != mode {
+		if len(connection.CredentialModes) != len(modes) {
 			t.Fatal("credential editor disagrees with runtime admission")
 		}
+		for i, mode := range modes {
+			if connection.CredentialModes[i] != mode {
+				t.Fatal("credential editor disagrees with runtime admission")
+			}
+		}
+
 	}
 }
 

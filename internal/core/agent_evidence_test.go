@@ -217,7 +217,7 @@ func TestAgentEvidenceReadOnlyFreshnessAndRestart(t *testing.T) {
 	if err != nil || headline.Freshness != "disabled" || !headline.Historical {
 		t.Fatal("disabled history hidden or made current", err)
 	}
-	agentApply(t, s, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Trading Analyst", Provider: "xai", Text: v.Profiles[agentProfile(agentDocument{Profiles: v.Profiles}, v.ProfileID)].Persona})
+	fixtureProfileProvider(t, s, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Trading Analyst", Provider: "xai", Text: v.Profiles[agentProfile(agentDocument{Profiles: v.Profiles}, v.ProfileID)].Persona})
 	clock := s.now
 	if err = s.Close(); err != nil {
 		t.Fatal(err)
