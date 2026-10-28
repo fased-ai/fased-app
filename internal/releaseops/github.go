@@ -152,6 +152,11 @@ func metadataPath(name string) (root bool, ok bool) {
 	if strings.HasPrefix(name, pre) && strings.HasSuffix(name, suffix) {
 		return false, hashOK(strings.TrimSuffix(strings.TrimPrefix(name, pre), suffix))
 	}
+	for prefix, suffix := range map[string]string{"targets/production-bootstrap/": ".descriptor.json", "targets/provenance/": ".sigstore.json"} {
+		if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, suffix) {
+			return false, hashOK(strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix))
+		}
+	}
 	return false, false
 }
 

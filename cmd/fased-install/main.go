@@ -1,5 +1,5 @@
 // Independent initial verifier. No public seed, endpoint, key or activation is
-// compiled in; disposable development trust must be supplied independently.
+// compiled in; first-install trust must be supplied independently.
 package main
 
 import (
@@ -25,7 +25,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	f := flag.NewFlagSet("fased-install", flag.ContinueOnError)
 	f.SetOutput(errOut)
 	development := f.Bool("development", false, "explicit disposable-trust development bootstrap")
-	seed := f.String("seed-file", "", "independently obtained development seed")
+	seed := f.String("seed-file", "", "independently obtained first-install seed")
 	pin := f.String("seed-sha256", "", "independently authenticated seed SHA-256")
 	directory := f.String("output", "", "absent absolute output under private0700 parent")
 	ca := f.String("tls-ca-file", "", "optional controlled HTTPS fixture CA")
@@ -36,8 +36,8 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	if err := f.Parse(args); err != nil {
 		return err
 	}
-	if !*development || *seed == "" || *pin == "" || *directory == "" || f.NArg() != 0 {
-		return errors.New("public bootstrap is disabled; explicit development seed, independent pin and exclusive output are required")
+	if *seed == "" || *pin == "" || *directory == "" || f.NArg() != 0 {
+		return errors.New("independent seed, authenticated pin and exclusive output are required; public activation remains disabled")
 	}
 	if !*install && (*prefix != "" || *data != "" || !*start) {
 		return errors.New("installation options require explicit --install")

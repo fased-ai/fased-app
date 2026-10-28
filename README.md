@@ -1,6 +1,6 @@
 # Fased App
 
-A focused financial automation workspace. **P2 engineering foundation**: Go serves the production React interface, owns setup in SQLite, authenticates the instance owner, and exposes the same setup to the CLI. A thin native client, ordinary-user platform installers, private-access helpers and unsigned engineering packages are implemented. Ubuntu runtime and sandbox preparation use explicit OS authorization in the terminal wizard or `--prepare-host`. Public trust/signing and supported-host acceptance remain unfinished. Wallet signing, financial execution, AI connections and updates are later phases.
+A financial automation workspace. The Go core serves the React interface, owns private SQLite state, authenticates the instance owner and shares setup with the CLI and native client. Engineering packages include ordinary-user installation, Ubuntu prerequisite preparation and Local/Remote/Connect setup. Public acquisition trust, native signing and real supported-host acceptance remain unfinished. Real wallets, financial execution, live provider use and automatic/public updates remain disabled.
 
 The interface includes shared navigation, resumable setup, wallet-mode and permission previews, persistent local agent profiles/conversations, scoped memory with corrections/expiry, bounded tasks, a durable notification inbox, paper examples, and four labelled terminal mockups. WEN Asset Mining and Loss Mining remain prototypes while their independent contracts are developed. Provider/wallet selections save preferences only; they create no account or authority. P5 now includes test-only OpenAI connection management and a passphrase-encrypted API credential vault; see [AI connections](docs/ai-connections.md). Pinned OpenAI model/token/tariff/access admission is also implemented and exercised only with controlled fixtures. Live provider calls and real credentials remain disabled.
 
@@ -13,9 +13,7 @@ independent tasks. All acceptance uses controlled HTTPS fixtures.
 
 P3's separate Linux [disposable signer](docs/signer.md) adds installer-managed identities, protected owner backup/recovery, independent bounded fixture grants, reservations and a durable mock-operation journal. It cannot sign real transactions, accepts no real wallet import, and is excluded from ordinary installation. The connected Wallets UI and `accounts` CLI share revision-checked disposable public account records and permission proposals. Protected owner terminal approval remains separate; balances, on-chain reads and real execution stay unavailable.
 
-P4 starts with [signed development manifest and compatibility inspection](docs/updates.md). It checks explicit test trust, complete local binary hashes, protocol/features and state formats, including approval journals. The read-only plan never authorizes installation, resume or real wallets; automatic updates remain disabled.
-
-Managed disposable fixtures also expose authenticated service snapshots and protected owner update intents. The signer owns exclusion and a durable reserved-sequence floor; abort/restart preserve financial history and holds. There is still no installation, migration or automatic resume transition.
+The [controlled update flow](docs/updates.md) checks explicit development trust, binary hashes, protocol/features and state compatibility. Managed disposable installations add protected owner intents and a binary-replacement controller; the signer preserves exclusion, release floors and recovery holds. These engineering paths do not enable ordinary/public updates or automatic resume.
 
 ## Develop
 
@@ -68,37 +66,26 @@ npm run test:core-ui
 
 Browser tests require Playwright's Chromium (`npx playwright install chromium`). Core browser tests launch disposable instances and exercise UI/CLI edits, restart, logout and API failure on desktop/mobile. Screenshots, results and traces go to ignored `.evidence/`. Cross-compilation checks are source evidence, not installed OS acceptance.
 
-## Engineering installation on Linux
+## Engineering installation
 
-The built core can install itself as the current user's service. This is an offline development path; release acquisition and verified updates are not implemented yet. Run it as an ordinary user:
-
-```sh
-./.evidence/bin/fased-app install
-```
-
-It installs under `~/.local/share/fased-app`, keeps data separately in the OS configuration directory, starts the loopback-only service and prints its URL. Login autostart is off. Explicit `--autostart` enables it; `--start=false` only installs files. A different existing binary is refused rather than overwritten. Partial first-copy staging can resume, and unknown files are never adopted. No wallet, RPC, AI account or root permission is required.
+From an already acquired engineering bundle, run as an ordinary OS user:
 
 ```sh
-~/.local/share/fased-app/fased-app open
-~/.local/share/fased-app/fased-app claim-code
-~/.local/share/fased-app/fased-app service status
-~/.local/share/fased-app/fased-app service stop
-~/.local/share/fased-app/fased-app service start
+./fased-app install --bundle . --interactive
 ```
 
-`open` starts the same installed engine and opens the native client if it was bundled, otherwise the default browser. `open --print` returns the verified loopback URL. Obtain the one-use claim code in a private terminal, then establish your owner password in the UI. Closing a window leaves the engine running. Reinstalling the identical input preserves settings and existing files; changed binaries must wait for the verified update flow.
+Choose **Local** to install on this computer, **Remote** to install on the server
+where the command is running, or **Connect** to open an existing instance. The
+wizard checks the bundle, requests explicit authorization for needed Ubuntu
+prerequisites, and prints commands for the installed executable and exact state
+directory. Remote requires prepared SSH or Tailscale access and Linux always-on
+service readiness.
 
-Use the originally downloaded/built core to remove the application:
-
-```sh
-./.evidence/bin/fased-app uninstall
-```
-
-Uninstall first verifies the installed inventory and service identity, then stops/unregisters only its own service and removes its known application files. All instance data and unknown application files are preserved. `--prefix` and `--data-dir` are available for explicitly selected engineering instances; repeat them consistently across commands.
-
-The user service uses the current OS identity, `NoNewPrivileges`, read-only system/home mounts, private temporary space and a writable exception for its private state. The service definition alone is not evidence of enforcement: the local acceptance runner tests actual write-open permissions through the process mount namespace. This is application containment, not the future isolated wallet-custody boundary.
-
-On a VPS, a user service alone does not guarantee operation after logout or boot. The private-access/host setup must verify the service manager and the owner's linger or system-service policy. This installer changes no login/linger policy automatically. macOS uses a user LaunchAgent; Windows uses a limited interactive-user background task. These do not provide execution after OS logout.
+Follow [installation, private access and recovery](docs/install.md) for prerequisites,
+owner setup, deferred start, service commands and removal. This is the current
+engineering route; no trusted public download command is available yet. The
+separate development bootstrap and controlled signer/update paths are documented
+there and are not required for ordinary installation.
 
 ## Native window source
 
@@ -108,7 +95,7 @@ The separate `desktop/` Go module pins Wails, keeping desktop dependencies out o
 npm run build:desktop
 ```
 
-Linux needs GTK3/WebKitGTK 4.1 development packages; macOS needs Xcode; Windows execution needs WebView2. These are [Wails platform prerequisites](https://v2.wails.io/docs/gettingstarted/installation/). End-user runtime packaging is still a release gate. No global Wails CLI is required by this build. A matching Linux binary can be included with `install --desktop-binary /absolute/path/to/fased-desktop`.
+Linux needs GTK3/WebKitGTK 4.1 development packages; macOS needs Xcode; Windows execution needs WebView2. These are [Wails platform prerequisites](https://v2.wails.io/docs/gettingstarted/installation/). Native signing and real supported-host acceptance remain release gates. No global Wails CLI is required by this build. A matching Linux binary can be included with `install --desktop-binary /absolute/path/to/fased-desktop`.
 
 The window serves the same production UI and forwards only allowlisted API methods over the protected local IPC transport. It inherits no CLI session, supplies no owner credentials, pins instance identity per window and keeps bearer/CSRF checks. Its native custom-scheme origin handling is separate from the browser listener. There are no generic application Go bindings, file controls or shell tools; file-drop navigation is disabled. Window close never stops the engine.
 
@@ -118,11 +105,11 @@ Linux CI uses a real WebKit window under Xvfb to exercise owner claim and privat
 
 The HTTP listener accepts explicit loopback IPs only (default `127.0.0.1:7331`). CLI traffic uses a Unix socket or Windows named pipe protected for the instance's OS user, and verifies instance/API identity before sending credentials. Browser mutations require an allowed origin and authenticated CSRF token; foreign hosts/origins, unsupported fields and oversized bodies are rejected. Concurrent stale setup writes return 409 and require review.
 
-Local HTTP uses an origin-scoped bearer in tab session storage, never local storage or an HTTP cookie shared between ports. An explicitly configured private HTTPS origin uses a Secure, HttpOnly, SameSite=Strict cookie. Sessions expire after 12 hours and logout revokes them. Passwords use Argon2id; claim/session tokens are stored hashed in SQLite. This is app access authentication, not the future wallet-administration ceremony.
+Local HTTP uses an origin-scoped bearer in tab session storage, never local storage or an HTTP cookie shared between ports. An explicitly configured private HTTPS origin uses a Secure, HttpOnly, SameSite=Strict cookie. Sessions expire after 12 hours and logout revokes them. Passwords use Argon2id; claim/session tokens are stored hashed in SQLite. App access and protected signer administration use separate authority.
 
-For a VPS, retain the loopback listener and use private access. An owner-established SSH tunnel can forward it; a trusted local HTTPS proxy such as Tailscale Serve can forward it with `serve --public-origin https://<exact-private-host>`. No proxy is installed automatically yet. This option only allowlists that exact origin; it does not establish private networking, validate tailnet policy or make public exposure safe. The core changes no SSH, firewall or Tailscale settings.
+For Remote, retain the loopback listener and follow the [SSH or Tailscale installation route](docs/install.md#private-access). The Linux helper can configure private Tailscale Serve after owner enrollment, HTTPS and operator permission are in place. Installation preserves SSH, firewall, enrollment and tailnet policy. Dedicated Ubuntu hosts can then use the separate [guarded lockdown](docs/install.md#secure-a-dedicated-vps) after private sign-in and console recovery work.
 
-State defaults to the OS user's configuration directory under `fased-app`; `--data-dir` selects another private directory. Unix directories must be owner-only (0700), files owner-only (0600); broad permissions and final-path symlinks are rejected. Windows uses a protected current-user/SYSTEM DACL and named pipe. SQLite owns durable ownership/settings/sessions; schema downgrade is refused. Endpoint and CLI-session files are atomically replaced. No password reset or financial backup/restore workflow is implemented yet. Preserve state; do not delete it as an upgrade method.
+State defaults to the OS user's configuration directory under `fased-app`; `--data-dir` selects another private directory. Unix directories must be owner-only (0700), files owner-only (0600); broad permissions and final-path symlinks are rejected. Windows uses a protected current-user/SYSTEM DACL and named pipe. SQLite owns durable ownership/settings/sessions; schema downgrade is refused. Endpoint and CLI-session files are atomically replaced. OS-owner [password recovery](docs/install.md#recovery-and-removal) requires a stopped engine and revokes app sessions while preserving instance state. Separate disposable wallet backup/recovery is documented in [signer.md](docs/signer.md); it grants no live wallet authority. Preserve state; do not delete it as an upgrade method.
 
 ## Data and scope
 
@@ -337,7 +324,7 @@ snapshot/backup identity. Schema-3 instances migrate only outside an update hold
 older binaries refuse schema 4. This is not a supported public upgrade/downgrade
 path. Existing P4 production/native/VPS/retail/recovery blockers remain open.
 
-Remaining P2 acceptance includes the platform package journeys, retail signing/trust and runtime prerequisites, and an authorized real Ubuntu VPS/private-access journey. Current engineering package/private-access/recovery instructions are in `docs/install.md`. The Go wallet signer, its independent policy/recovery storage, and a restricted update helper follow in P3/P4. The signer status API reports unavailable and the health API explicitly disables financial/provider/update capabilities.
+Installation acceptance still requires independently trusted public acquisition, native signing and authorized real Ubuntu/VPS/private-access journeys. Implemented engineering prerequisite, installation and recovery paths are documented in [install.md](docs/install.md); separate controlled custody and update paths are documented in [signer.md](docs/signer.md) and [updates.md](docs/updates.md). Ordinary installation does not enable a signer, real wallets, live providers or automatic updates.
 
 The controlling product/implementation/checkpoint documents are maintained in the separate `fased-ai/docs` repository under `fased/` (local workspace: `../docs/fased/`). Source commands and boundaries live in [AGENTS.md](AGENTS.md). The old Fased and network server are independent repositories, not runtime dependencies.
 
@@ -511,7 +498,7 @@ Schema 15 protects automatic run/consent history and shares capacity/accounting 
 
 ### Local and Remote connection
 
-From an extracted engineering package, run `./fased-app install --bundle . --interactive`. Choose Local for this computer, Remote for the server being installed, or Connect for an existing instance. Existing instances also open with `fased-app connect --url https://your-instance.ts.net`; `--print` verifies without opening a browser and `--instance-id ID` binds a known identity. Remote access uses its own browser origin/session; it creates no local engine. [Installation and private access](docs/install.md#choose-local-or-remote) retains prerequisites, platform gates and recovery instructions.
+From an extracted engineering package, run `./fased-app install --bundle . --interactive`. Choose Local for this computer, Remote for the server being installed, or Connect for an existing instance. Existing instances also open with `fased-app connect --url https://your-instance.ts.net`; `--print` verifies without opening a browser and `--instance-id ID` binds a known identity. Remote access uses its own browser origin/session; it creates no local engine. [Installation and private access](docs/install.md#install-an-acquired-engineering-bundle) retains prerequisites, platform gates and recovery instructions.
 
 Setup/sign-in and Settings show actual instance identity/location. A saved deployment preference does not change the connection. First-run does not ask for a wallet/RPC/provider. Real AI, wallets, mining execution and automatic/public updates remain disabled; current package and trust acceptance is engineering-only.
 

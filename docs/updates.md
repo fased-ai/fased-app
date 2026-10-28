@@ -243,6 +243,68 @@ before implementation. A valid provenance statement cannot replace targets-quoru
 release authorization or prove absence of malicious code. No attestation credentials
 or workflow are created now.
 
+### Production Ubuntu first-install policy v1
+
+This package implements one production-capable admission policy; ordinary dispatch
+remains disabled. It does not create a publisher credential, release workflow,
+public seed or download endpoint. The independently authenticated verifier and seed
+remain deployment prerequisites, not something a downloaded program can vouch for.
+
+- Seed/binding version 3 uses `fased-app-first-install-production:v1`, repository
+  `fased-ai/fased-app`, channel `stable` and Linux amd64. Development versions 1/2
+  keep their original purposes, bytes and restrictions. A changed boolean or
+  channel cannot promote a development record. Release tags must be canonical
+  `vMAJOR.MINOR.PATCH`; prerelease, build-metadata and leading-zero variants are
+  refused, including when their signatures and identity bindings otherwise match.
+- The seed pins explicit repository/owner numeric IDs, the local
+  `.github/workflows/release.yml` identity and the complete offline Sigstore trusted
+  root bytes. There are no root/ID defaults, remote trust discovery, identity
+  regexes, custom public CA switches or fallback signers. A future release pipeline
+  must use that reviewed workflow; none is created or run here.
+- Existing distinct TUF root/targets quorum authorizes exactly three production
+  targets: descriptor, Ubuntu archive and Sigstore provenance bundle. Production
+  logical target names differ from development names. Exact lengths/SHA256 bind
+  every referenced byte and the immutable GitHub release/asset locator.
+- Provenance is Sigstore bundle v0.3 with certificate-backed DSSE, in-toto
+  Statement/v1, SLSA provenance/v1 and the canonical
+  `https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1` build type.
+  The pinned `sigstore-go` verifier checks the certificate chain, signed certificate
+  timestamp and offline log inclusion. At least one authenticated observer time is
+  required: a Rekor v1 signed entry timestamp or an RFC3161 timestamp from a pinned
+  TSA. Rekor v2's unsigned integrated time cannot supply that authority. No online
+  lookup or current-time fallback is enabled. Reject unrecognized/future verified
+  timestamps.
+- Require exact GitHub OIDC issuer, one workflow URI, public repository/owner IDs,
+  github-hosted runner, tag/ref, source commit, local workflow commit and run/attempt
+  in the verified certificate and statement. The first policy admits a non-reusable
+  local workflow at the release source commit. Require one exact archive subject and
+  sha256, the corresponding source dependency and matching invocation. API responses
+  cannot authorize these identities.
+- The signed descriptor separately approves source tree, immutable tag-object and
+  package-lock/go.sum digests. Standard GitHub provenance proves the archive,
+  source/workflow/ref and invocation bindings; do not claim that it contains tree
+  or dependency-lock fields that it does not actually attest.
+- Only the distinct schema-2 headless Ubuntu bundle format is admitted by this
+  production profile. Its guide is inventoried and it contains no desktop, signer,
+  custody installer, arbitrary destination or hook. Schema validation alone is
+  integrity evidence, not publisher authentication. Provenance must pass before
+  output/archive acquisition; retained original evidence, metadata freshness and
+  exact archive/bundle identities are checked again before the existing explicit,
+  single-use installer handoff. No app database, recovery state or permission is
+  migrated by admission. The package producer requires explicit
+  `--ubuntu-release-format`, Linux amd64, a canonical source commit and no desktop
+  payload. It emits this integrity format with `publicRelease=false`; it does not
+  authenticate, publish or make an engineering version eligible for stable admission.
+
+The choice follows the official [GitHub attest action](https://github.com/actions/attest),
+[GitHub workflow build type](https://github.com/slsa-framework/github-actions-buildtypes/blob/main/workflow/v1/README.md),
+[Sigstore verifier](https://github.com/sigstore/sigstore-go/blob/v1.3.0/docs/verification.md)
+and [timestamp model](https://docs.sigstore.dev/cosign/verifying/timestamps/).
+Valid provenance does not replace release quorum approval or prove code safety.
+Actual publisher bindings, authenticated public verifier/seed, real delivery and
+host acceptance remain separate gates. Controlled signed fixtures prove code paths,
+not production identity or a published release.
+
 ### Client trust state and lifecycle handoff
 
 Use a dedicated private, owner-controlled trust store, separate from app-owned

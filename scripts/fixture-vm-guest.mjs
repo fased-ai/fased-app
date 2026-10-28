@@ -95,6 +95,16 @@ finally:
 assert done==0 and sent,seen.decode(errors='replace')
 print(json.dumps({'exitCode':done,'review':True}))`;
 const [mode, arg] = process.argv.slice(2);
+if (mode === "managed-remote") {
+  assert.equal(arg, undefined);
+  run(core, ["-test.run=^TestManagedRemoteUbuntuVM$", "-test.v"]);
+  const result = JSON.parse(
+    await readFile(evidence + "/managed-remote.json", "utf8"),
+  );
+  assert.equal(result.result, "PASS");
+  assert.equal(result.fixtureOnly, true);
+  process.exit(0);
+}
 if (mode === "setup") {
   const installed = JSON.parse(
     cli([

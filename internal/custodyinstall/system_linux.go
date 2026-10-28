@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"syscall"
 
@@ -19,10 +20,11 @@ import (
 )
 
 type System struct {
-	In           io.Reader
-	Out          io.Writer
-	authorized   bool
-	installFault func(string) error // Tests only; never configuration/IPC.
+	In            io.Reader
+	Out           io.Writer
+	Authorization string // Optional fixed caller-owned ceremony; empty retains custody wording.
+	authorized    bool
+	installFault  func(string) error // Tests only; never configuration/IPC.
 }
 type hostFile struct {
 	Data    []byte
@@ -71,6 +73,11 @@ func known(f hostFile, b []byte, mode os.FileMode) bool {
 	return f.UID == 0 && f.Regular && f.Mode == mode && bytes.Equal(f.Data, b)
 }
 
+var networkNftInput = regexp.MustCompile(`^/var/lib/fased-app-vps-network-[1-9][0-9]*/attempt-[0-9a-f]{32}/(rules|rollback)\.nft$`)
+var networkOutcomeInput = regexp.MustCompile(`^/var/lib/fased-app-vps-network-[1-9][0-9]*/attempt-[0-9a-f]{32}/(commit\.token|outcome)$`)
+var networkSSHContext = regexp.MustCompile(`^user=[a-z_][a-z0-9_-]*\$?,addr=[0-9a-fA-F:.]+,laddr=[0-9a-fA-F:.]+,lport=22$`)
+var networkNftTable = regexp.MustCompile(`^fased_vps_[1-9][0-9]*_[0-9a-f]{12}_[0-9a-f]{32}$`)
+
 func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte, error) {
 	if os.Geteuid() == 0 || os.Getuid() == 0 {
 		return nil, errors.New("Fased must run as an ordinary owner; only trusted OS utilities are elevated")
@@ -80,6 +87,27 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 	}
 	switch args[0] {
 	case "/usr/bin/install", "/usr/bin/mkdir", "/usr/bin/ln", "/usr/bin/mv", "/usr/bin/sync", "/usr/bin/rm", "/usr/bin/cat", "/usr/bin/systemctl", "/usr/bin/setpriv", "/usr/sbin/useradd":
+	case "/usr/sbin/nft":
+		allowed := len(args) == 2 && args[1] == "--version" || len(args) == 3 && args[1] == "list" && args[2] == "tables" || len(args) == 6 && (args[1] == "--stateless" || args[1] == "--json") && args[2] == "list" && args[3] == "table" && args[4] == "inet" && networkNftTable.MatchString(args[5]) || len(args) == 3 && args[1] == "--file" && networkNftInput.MatchString(args[2]) || len(args) == 4 && args[1] == "--check" && args[2] == "--file" && networkNftInput.MatchString(args[3])
+		if !allowed {
+			return nil, errors.New("only fixed owned Remote nftables operations are allowed")
+		}
+	case "/usr/bin/flock":
+		if len(args) != 2 || args[1] != "--version" {
+			return nil, errors.New("only OS lock-tool inspection is allowed by the caller")
+		}
+	case "/usr/sbin/sshd":
+		if !(len(args) == 2 && (args[1] == "-t" || args[1] == "-T") || len(args) == 4 && args[1] == "-T" && args[2] == "-C" && networkSSHContext.MatchString(args[3])) {
+			return nil, errors.New("only SSH policy validation is allowed")
+		}
+	case "/usr/bin/cmp":
+		if len(args) != 5 || args[1] != "--silent" || args[2] != "--" || !networkOutcomeInput.MatchString(args[3]) || !networkOutcomeInput.MatchString(args[4]) {
+			return nil, errors.New("only owned Remote outcome comparison is allowed")
+		}
+	case "/usr/bin/passwd":
+		if len(args) != 3 || args[1] != "-S" || args[2] == "" || args[2][0] == '-' {
+			return nil, errors.New("only fixed-account password lock status is allowed")
+		}
 	default:
 		return nil, errors.New("unknown custody OS tool")
 	}
@@ -101,7 +129,11 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 		}
 	}
 	if !s.authorized {
-		fmt.Fprintln(s.Out, "Authorize disposable custody installation: dedicated locked OS accounts, root-owned files and system services. Fased itself remains unprivileged. No real wallets are enabled.")
+		prompt := s.Authorization
+		if prompt == "" {
+			prompt = "Authorize disposable custody installation: dedicated locked OS accounts, root-owned files and system services. Fased itself remains unprivileged. No real wallets are enabled."
+		}
+		fmt.Fprintln(s.Out, prompt)
 		c := exec.CommandContext(ctx, "/usr/bin/sudo", "-v")
 		c.Stdin = s.In
 		c.Stdout = s.Out

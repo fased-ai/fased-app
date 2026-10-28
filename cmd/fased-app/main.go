@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/signer"
+	"github.com/fased-ai/fased-app/internal/vpsinstall"
 	"golang.org/x/term"
 )
 
@@ -32,6 +34,9 @@ func main() {
 func run(args []string, in *os.File, out, errOut io.Writer) error {
 	if len(args) > 1 && args[0] == "pilot" && args[1] == "prepare" {
 		return pilotPrepareCommand(args[2:], out, errOut)
+	}
+	if len(args) > 0 && args[0] == "vps" {
+		return vpsCommand(args[1:], in, out, errOut)
 	}
 	if len(args) > 0 && args[0] == "connect" {
 		return connectCommand(args[1:], out, errOut)
@@ -122,6 +127,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	publicOrigin := flags.String("public-origin", "", "exact private HTTPS origin behind a trusted local proxy")
 	requireSandbox := flags.Bool("require-sandbox", false, "require installed Linux mount isolation before starting")
 	installationRoot := flags.String("installation-root", "", "immutable installed application directory")
+	remoteConfig := flags.String("remote-config", "", "immutable managed Remote installation identity")
 	custodyConfig := flags.String("custody-config", "", "root-owned managed fixture identity; never enables real wallets")
 	passwordStdin := flags.Bool("password-stdin", false, "read password from stdin instead of a terminal")
 	aiFixture := flags.Bool("ai-fixture", false, "development-only in-process provider fixtures; test credentials only, no live API")
@@ -148,6 +154,9 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	if *aiFixture && args[0] != "serve" {
 		return errors.New("AI fixture is a serve-only development option")
 	}
+	if *remoteConfig != "" && (args[0] != "serve" || *custodyConfig != "" || !*requireSandbox || *instanceLocation != "remote" || *aiFixture || *sessionFixture || *researchOrigin != "") {
+		return errors.New("managed Remote requires its installed service, sandbox and remote identity")
+	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
@@ -158,6 +167,21 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	ctx := context.Background()
 	switch args[0] {
 	case "serve":
+		ownerUID := 0
+		if runtime.GOOS != "windows" {
+			if err = validateRuntimeUID(os.Getuid(), os.Geteuid()); err != nil {
+				return err
+			}
+		}
+		if *remoteConfig != "" {
+			if err = vpsinstall.CheckApplication(*remoteConfig, *installationRoot, *dir, *listen, *publicOrigin); err != nil {
+				return err
+			}
+			ownerUID, err = managedRemoteOwner(*installationRoot)
+			if err != nil {
+				return err
+			}
+		}
 		if *custodyConfig != "" {
 			if !*requireSandbox {
 				return errors.New("managed custody core requires its installed sandbox")
@@ -167,7 +191,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 			}
 		}
 		if *requireSandbox {
-			if *custodyConfig != "" {
+			if *custodyConfig != "" || *remoteConfig != "" {
 				err = localinstall.CheckManagedSandbox(*installationRoot, *dir)
 			} else {
 				err = localinstall.CheckSandbox(*installationRoot, *dir)
@@ -189,7 +213,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 			}
 			return serveAgentFixture(*dir, *listen, out)
 		}
-		return serveRuntime(*dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, out, *custodyConfig)
+		return serveRuntime(*dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, ownerUID, out, *custodyConfig)
 	case "claim-code":
 		store, err := core.OpenStore(*dir)
 		if err != nil {
@@ -323,14 +347,14 @@ func serve(dir, listen, publicOrigin string, out io.Writer, custodyConfig ...str
 	return serveWithResearch(dir, listen, publicOrigin, "", out, custodyConfig...)
 }
 func serveWithResearch(dir, listen, publicOrigin, researchOrigin string, out io.Writer, custodyConfig ...string) error {
-	return serveRuntime(dir, listen, publicOrigin, researchOrigin, "local", out, custodyConfig...)
+	return serveRuntime(dir, listen, publicOrigin, researchOrigin, "local", 0, out, custodyConfig...)
 }
-func serveRuntime(dir, listen, publicOrigin, researchOrigin, location string, out io.Writer, custodyConfig ...string) error {
+func serveRuntime(dir, listen, publicOrigin, researchOrigin, location string, ownerUID int, out io.Writer, custodyConfig ...string) error {
 	server, err := core.Start(context.Background(), dir, listen, publicOrigin, fasedapp.UI(), custodyConfig...)
 	if err != nil {
 		return err
 	}
-	if err = server.ConfigureConnection(location); err == nil {
+	if err = server.ConfigureConnection(location, ownerUID); err == nil {
 		err = server.ConfigureWENResearch(researchOrigin)
 	}
 	if err != nil {

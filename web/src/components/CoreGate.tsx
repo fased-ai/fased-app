@@ -10,6 +10,14 @@ export function CoreGate({ children }: { children: ReactNode }) {
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [claimError, setClaimError] = useState("");
+  const ownerUid = core.connection?.ownerUid ?? 0;
+  const instanceCommand =
+    ownerUid > 0 ? `/var/lib/fased-app-vps-${ownerUid}/fased-app vps` : null;
+  const recoveryCommands = instanceCommand
+    ? ["stop", "recover", "start"].map(
+        (command) => `${instanceCommand} ${command}`,
+      )
+    : [];
   const native = ["wails", "wails.localhost"].includes(
     window.location.hostname,
   );
@@ -92,13 +100,23 @@ export function CoreGate({ children }: { children: ReactNode }) {
                   />
                   <details>
                     <summary>{uiText("Get setup code")}</summary>
-                    <p>
-                      {uiText("Run ")}
-                      <code>fased-app claim-code</code>
-                      {uiText(
-                        " on this instance. Codes expire after 15 minutes.",
-                      )}
-                    </p>
+                    {instanceCommand ? (
+                      <p>
+                        {uiText("Run ")}
+                        <code style={{ overflowWrap: "anywhere" }}>
+                          {instanceCommand} claim-code
+                        </code>
+                        {uiText(
+                          " on this instance. Codes expire after 15 minutes.",
+                        )}
+                      </p>
+                    ) : (
+                      <p>
+                        {uiText(
+                          "Use the setup command printed by the installer.",
+                        )}
+                      </p>
+                    )}
                   </details>
                   {native && (
                     <button
@@ -145,6 +163,28 @@ export function CoreGate({ children }: { children: ReactNode }) {
                     : uiText("Sign in")}
                 <ArrowRight size={15} />
               </button>
+              {core.mode === "locked" && (
+                <details>
+                  <summary>{uiText("Recovery")}</summary>
+                  {instanceCommand ? (
+                    <>
+                      <p>{uiText("Run on this instance")}</p>
+                      <pre
+                        style={{
+                          whiteSpace: "pre-wrap",
+                          overflowWrap: "anywhere",
+                        }}
+                      >
+                        <code>{recoveryCommands.join("\n")}</code>
+                      </pre>
+                    </>
+                  ) : (
+                    <p>
+                      {uiText("Use this installation’s recovery commands.")}
+                    </p>
+                  )}
+                </details>
+              )}
             </div>
           </form>
         )}

@@ -50,6 +50,51 @@ func TestPlansAndOwnerBoundaries(t *testing.T) {
 		t.Fatal("unenrolled device accepted")
 	}
 }
+
+func TestVerifyPrivateRouteReadOnlyAndNoFunnel(t *testing.T) {
+	p := Plan{Mode: "tailscale", Origin: "https://node.owner.ts.net", Target: "http://127.0.0.1:7331"}
+	for _, scenario := range []string{"good", "funnel", "extra route", "wrong target", "no conditional identity", "wrong instance"} {
+		t.Run(scenario, func(t *testing.T) {
+			cfg := expected(p)
+			etag, identity := "version", "fixture-instance"
+			switch scenario {
+			case "funnel":
+				cfg["AllowFunnel"] = map[string]any{"node.owner.ts.net:443": true}
+			case "extra route":
+				cfg["extra"] = true
+			case "wrong target":
+				cfg = expected(Plan{Mode: "tailscale", Origin: p.Origin, Target: "http://127.0.0.1:9999"})
+			case "no conditional identity":
+				etag = ""
+			case "wrong instance":
+				identity = "different-instance"
+			}
+			requests := 0
+			m := Manager{
+				GetConfig: func(context.Context) ([]byte, string, error) { data, _ := json.Marshal(cfg); return data, etag, nil },
+				SetConfig: func(context.Context, []byte, string) error {
+					t.Fatal("verification mutated private access")
+					return nil
+				},
+				Client: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+					requests++
+					if r.Method != "GET" || r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" {
+						t.Fatal("unexpected authenticated/mutating request")
+					}
+					body := `{"status":"ok","apiVersion":"1","instanceId":"` + identity + `","connection":{"location":"remote","transport":"private-https"}}`
+					return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+				})},
+			}
+			err := m.Verify(t.Context(), p, "fixture-instance")
+			if (err == nil) != (scenario == "good") {
+				t.Fatal(scenario, err)
+			}
+			if requests > 1 {
+				t.Fatal("unexpected retries")
+			}
+		})
+	}
+}
 func TestConditionalRouteRecoveryAndForeignConfiguration(t *testing.T) {
 	root := fixture(t)
 	p := Plan{Mode: "tailscale", Origin: "https://node.owner.ts.net", Target: "http://127.0.0.1:7331"}

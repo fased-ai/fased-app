@@ -204,13 +204,24 @@ func (s *Server) Close(ctx context.Context) error {
 
 // ConfigureConnection is called before Serve using the installed service's host
 // profile. A browser preference can never change this runtime descriptor.
-func (s *Server) ConfigureConnection(location string) error {
+func (s *Server) ConfigureConnection(location string, owner ...int) error {
 	if location != "local" && location != "remote" {
 		return errors.New("instance location must be local or remote")
 	}
 	if s.Store != nil && s.Store.pilot.binding != nil && location != "local" {
 		return errors.New("pilot is bound to Local mode")
 	}
-	s.HTTP.Handler.(*HTTPHandler).instanceLocation = location
+	uid := 0
+	if len(owner) > 1 {
+		return errors.New("one installed owner identity is required")
+	}
+	if len(owner) == 1 {
+		uid = owner[0]
+	}
+	if uid < 0 || int64(uid) > 4294967294 || (uid > 0 && location != "remote") {
+		return errors.New("dedicated owner identity requires Remote mode and a valid UID")
+	}
+	h := s.HTTP.Handler.(*HTTPHandler)
+	h.instanceLocation, h.instanceOwnerUID = location, uid
 	return nil
 }

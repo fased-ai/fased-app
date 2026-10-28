@@ -13,6 +13,7 @@ export type InstanceConnection = {
   instanceId: string;
   location: "local" | "remote";
   transport: "loopback" | "private-https";
+  ownerUid?: number;
 };
 type Health = {
   status: string;
@@ -22,6 +23,7 @@ type Health = {
   connection: {
     location: "local" | "remote";
     transport: "loopback" | "private-https";
+    ownerUid?: number;
   };
 };
 type Mode =
@@ -135,7 +137,14 @@ function useCoreState() {
       !/^[A-Za-z0-9_-]{16,128}$/.test(health.instanceId) ||
       !health.connection ||
       !["local", "remote"].includes(health.connection.location) ||
-      !["loopback", "private-https"].includes(health.connection.transport)
+      !["loopback", "private-https"].includes(health.connection.transport) ||
+      (health.connection.ownerUid !== undefined &&
+        (typeof health.connection.ownerUid !== "number" ||
+          !Number.isInteger(health.connection.ownerUid) ||
+          health.connection.ownerUid < 0 ||
+          health.connection.ownerUid > 4294967294 ||
+          (health.connection.ownerUid > 0 &&
+            health.connection.location !== "remote")))
     )
       throw new Error("This address is not a compatible Fased instance.");
     if (connectedID.current && connectedID.current !== health.instanceId)
@@ -149,6 +158,14 @@ function useCoreState() {
     const epoch = authGeneration.current;
     try {
       const health = await inspect();
+      const verifiedConnection: InstanceConnection = {
+        instanceId: health.instanceId,
+        location: health.connection.location,
+        transport: health.connection.transport,
+        ...(health.connection.ownerUid === undefined
+          ? {}
+          : { ownerUid: health.connection.ownerUid }),
+      };
       const auth = await request<{
         claimed: boolean;
         authenticated: boolean;
@@ -156,20 +173,20 @@ function useCoreState() {
       }>("auth/state");
       if (epoch !== authGeneration.current) return;
       if (!auth.claimed) {
-        setConnection({ instanceId: health.instanceId, ...health.connection });
+        setConnection(verifiedConnection);
         setMode("unclaimed");
         return;
       }
       if (!auth.authenticated) {
         lock();
-        setConnection({ instanceId: health.instanceId, ...health.connection });
+        setConnection(verifiedConnection);
         return;
       }
       csrf.current = auth.csrfToken ?? "";
       const current = await request<CoreSetup>("setup");
       if (epoch !== authGeneration.current) return;
       record.current = current;
-      setConnection({ instanceId: health.instanceId, ...health.connection });
+      setConnection(verifiedConnection);
       setSetup(current);
       setInstanceId(health.instanceId);
       setVersion(health.version);
