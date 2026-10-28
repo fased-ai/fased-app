@@ -146,3 +146,71 @@ test("documentation cannot be absent or skipped in the required aggregate", () =
   n.documentation = { result: "skipped" };
   assert.throws(() => verifyGate(n));
 });
+
+test("ordinary recovery checks leave signer time for privileged bootstrap without losing coverage", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const workflow = await readFile(
+    new URL("../.github/workflows/checks.yml", import.meta.url),
+    "utf8",
+  );
+  const core = workflow.slice(
+    workflow.indexOf("  core:\n"),
+    workflow.indexOf("  desktop:\n"),
+  );
+  const signer = workflow.slice(
+    workflow.indexOf("  signer:\n"),
+    workflow.indexOf("  handoff:\n"),
+  );
+  for (const [name, command] of [
+    [
+      "Portable encrypted history and quarantined recovery checks",
+      "node scripts/check-portable-recovery.mjs",
+    ],
+    [
+      "Disposable TUF trust and read-only CLI rehearsal",
+      "go test -v ./internal/update -run '^TestTrustRehearsalCompiledCLI$'",
+    ],
+  ]) {
+    assert.equal(
+      workflow.split(command).length,
+      2,
+      `one required execution: ${name}`,
+    );
+    assert.ok(
+      !signer.includes(command),
+      `ordinary check clogs privileged job: ${name}`,
+    );
+    const start = core.indexOf(`      - name: ${name}\n`);
+    assert.ok(
+      start > core.indexOf("      - run: npm run build:core"),
+      `core binary must exist: ${name}`,
+    );
+    const rest = core.slice(start + 1),
+      end = rest.indexOf("\n      - ");
+    const step = rest.slice(0, end < 0 ? rest.length : end);
+    assert.ok(
+      step.includes("if: needs.classify.outputs.signer == 'true'"),
+      `only selected custody changes: ${name}`,
+    );
+  }
+  assert.match(signer, /timeout-minutes: 5/);
+  assert.match(
+    signer,
+    /Actual older-helper bootstrap and subsequent coordinated update/,
+  );
+  assert.match(core, /name: core-recovery-evidence/);
+  for (const path of [
+    ".evidence/p4-portable-recovery/local-result.json",
+    ".evidence/p4-trust-rehearsal/trust-cli-result.json",
+  ])
+    assert.ok(core.includes(path), `retain evidence: ${path}`);
+  for (const paths of [
+    ["internal/vpsinstall/install_linux.go"],
+    ["go.mod"],
+    [".github/workflows/checks.yml"],
+  ]) {
+    const plan = classify(paths);
+    assert.equal(plan.signer, true);
+    assert.equal(plan.core, true);
+  }
+});
