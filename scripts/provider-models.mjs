@@ -9,7 +9,7 @@ export const digest = (value) =>
 export function validateRegistry(r) {
   assert.equal(r.version, 1);
   assert.equal(r.policy, "latest-only");
-  assert.ok(["openai", "anthropic", "xai"].includes(r.provider));
+  assert.ok(["openai", "anthropic", "xai", "local"].includes(r.provider));
   assert.ok(
     r.expiresAt > r.reviewedAt && r.expiresAt - r.reviewedAt <= 31 * 86400,
   );
@@ -18,11 +18,13 @@ export function validateRegistry(r) {
   for (const m of r.models) {
     assert.match(
       m.id,
-      r.provider === "openai"
-        ? /^gpt-\d+(?:\.\d+)?-(?:sol|terra|astra)$/
-        : r.provider === "anthropic"
-          ? /^claude-(?:haiku|sonnet|opus|fable)-\d+-\d+$/
-          : /^grok-\d+(?:\.\d+)?$/,
+      r.provider === "local"
+        ? /^gemma\d+:e[24]b$/
+        : r.provider === "openai"
+          ? /^gpt-\d+(?:\.\d+)?-(?:sol|terra|astra)$/
+          : r.provider === "anthropic"
+            ? /^claude-(?:haiku|sonnet|opus|fable)-\d+-\d+$/
+            : /^grok-\d+(?:\.\d+)?$/,
     );
     if (r.provider !== "openai") assert.equal(m.provider, r.provider);
     if (r.provider === "xai")
@@ -32,8 +34,9 @@ export function validateRegistry(r) {
     assert.ok(
       m.contextTokens >= 32000 &&
         m.outputTokens >= 1024 &&
-        m.input > 0 &&
-        m.output > 0 &&
+        (r.provider === "local"
+          ? m.input === 0 && m.output === 0 && m.cached === 0
+          : m.input > 0 && m.output > 0) &&
         m.cached >= 0 &&
         m.cached <= m.input,
     );
@@ -51,6 +54,15 @@ export function validateRegistry(r) {
 function sourceAllowed(provider, source) {
   const u = new URL(source);
   assert.ok(!u.username && !u.password && !u.search && !u.hash);
+  if (provider === "local") {
+    assert.ok(
+      (u.origin === "https://ollama.com" &&
+        (u.pathname.startsWith("/library/") || u.pathname === "/search")) ||
+        (u.origin === "https://docs.ollama.com" &&
+          u.pathname === "/api/openai-compatibility"),
+    );
+    return;
+  }
   const origin = {
     openai: "https://developers.openai.com",
     anthropic: "https://platform.claude.com",
@@ -162,6 +174,7 @@ export async function checkProviders(
   { fetcher = fetch, now = Date.now() } = {},
 ) {
   validateRegistry(r);
+  if (r.provider === "local") return checkLocalModels(r, raw, { fetcher, now });
   const snapshots = {};
   for (const url of new Set([
     ...Object.values(r.sources),
@@ -310,6 +323,102 @@ export async function checkProviders(
     candidateRegistry: candidate,
   };
 }
+export async function checkLocalModels(
+  r,
+  raw,
+  { fetcher = fetch, now = Date.now() } = {},
+) {
+  validateRegistry(r);
+  const snapshots = {};
+  for (const url of new Set([
+    ...Object.values(r.sources),
+    ...r.models.map((m) => m.source),
+  ])) {
+    sourceAllowed("local", url);
+    const response = await fetcher(url, {
+      redirect: "error",
+      signal: AbortSignal.timeout(10000),
+      headers: { accept: "text/html,text/markdown" },
+    });
+    assert.equal(response.status, 200, "Local model source unavailable");
+    const reader = response.body.getReader();
+    const parts = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.length;
+        assert.ok(size <= 1048576, "Local model source too large");
+        parts.push(value);
+      }
+    } finally {
+      await reader.cancel();
+    }
+    const body = Buffer.concat(parts).toString("utf8");
+    snapshots[url] = { body, sha256: digest(body), retrievedFrom: url };
+  }
+  const doc = snapshots[r.sources.discovery].body;
+  assert.ok(
+    doc.includes("/v1/responses") &&
+      doc.includes("/v1/models") &&
+      /streaming/i.test(doc),
+    "Local adapter contract changed",
+  );
+  const catalogue = snapshots[r.sources.models].body;
+  const newer = [
+    ...new Set(snapshots[r.sources.families].body.match(/gemma\d+/g) ?? []),
+  ].filter((id) =>
+    r.models.some(
+      (m) => Number(id.slice(5)) > Number(m.id.match(/^gemma(\d+)/)[1]),
+    ),
+  );
+  const removals = r.models
+    .filter((m) => !catalogue.includes(m.id) || newer.length)
+    .map((m) => m.id);
+  const candidate = structuredClone(r);
+  candidate.reviewedAt = Math.floor(now / 86400000) * 86400;
+  candidate.expiresAt = candidate.reviewedAt + 30 * 86400;
+  candidate.models = candidate.models.filter((m) => !removals.includes(m.id));
+  for (const m of candidate.models) {
+    assert.ok(
+      snapshots[m.source].body.includes(m.id),
+      "Local model identity changed",
+    );
+    // Never invent a remote API price or increase installed-server limits.
+    assert.equal(m.input, 0);
+    assert.equal(m.output, 0);
+    assert.equal(m.cached, 0);
+  }
+  const sources = Object.fromEntries(
+    Object.entries(snapshots).map(([url, s]) => [
+      url,
+      {
+        sha256: s.sha256,
+        retrievedFrom: s.retrievedFrom,
+        changed: r.sourceHashes?.[url] !== s.sha256,
+      },
+    ]),
+  );
+  candidate.sourceHashes = Object.fromEntries(
+    Object.entries(sources).map(([url, s]) => [url, s.sha256]),
+  );
+  return {
+    version: 1,
+    provider: "local",
+    policy: r.policy,
+    beforeSHA256: digest(raw),
+    checkedAt: Math.floor(now / 1000),
+    status:
+      newer.length || removals.length
+        ? "adapter-review-required"
+        : "review-required",
+    newModelIDs: newer,
+    remove: removals,
+    sources,
+    candidateRegistry: candidate,
+  };
+}
 export async function applyReviewed(proposal, raw) {
   assert.equal(proposal.version, 1);
   assert.equal(
@@ -334,6 +443,7 @@ const registryPaths = {
   openai: "internal/core/provider_models.json",
   anthropic: "internal/core/provider_anthropic.json",
   xai: "internal/core/provider_xai.json",
+  local: "internal/core/provider_local.json",
 };
 async function main() {
   const records = await Promise.all(

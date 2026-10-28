@@ -75,7 +75,7 @@ jobs:
       - run: node scripts/source-evidence.mjs
       - run: npm run check
       - name: Verify reviewed provider maintenance contracts
-        run: node --test --test-isolation=none scripts/provider-models.test.mjs
+        run: node --test --test-isolation=none scripts/provider-models.test.mjs scripts/provider-models-local.test.mjs
       - run: go mod verify
       - run: test -z "$(gofmt -l cmd internal desktop ui.go)"
       - if: needs.classify.outputs.scope == 'full'

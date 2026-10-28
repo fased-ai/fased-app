@@ -17,7 +17,7 @@ export function agentReplyDefaults(agent: AgentDefaults, access: Access) {
     connectionRef: agent.provider !== "none" ? access?.ref || "" : "",
     model: agent.model,
     ready:
-      ["openai", "anthropic", "xai"].includes(agent.provider) &&
+      ["openai", "anthropic", "xai", "local"].includes(agent.provider) &&
       (access?.provider || "openai") === agent.provider &&
       !!agent.model &&
       !!access?.ref &&
@@ -39,6 +39,8 @@ export function modelForProviderChange(
         ? "claude-"
         : provider === "xai"
           ? "grok-"
-          : "";
+          : provider === "local"
+            ? "gemma"
+            : "";
   return prefix && admittedModel?.startsWith(prefix) ? admittedModel : "";
 }

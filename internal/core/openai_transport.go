@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/localprovider"
 )
 
 // This transport implements the official origin only. Production activation is
@@ -36,6 +38,9 @@ func newOpenAITransport() *openAITransport {
 func (t *openAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if t == nil || !t.enabled || t.wire == nil {
 		return nil, errors.New("provider execution disabled")
+	}
+	if t.provider == "local" {
+		return (&localprovider.Transport{Enabled: t.enabled, Wire: t.wire}).RoundTrip(r)
 	}
 	provider := t.provider
 	if provider == "" {
@@ -98,5 +103,8 @@ func (b *openAIResponseBody) Close() error {
 func newNativeProviderTransport(provider string) *openAITransport {
 	t := newOpenAITransport()
 	t.provider = provider
+	if provider == "local" {
+		t.wire.ResponseHeaderTimeout = 120 * time.Second
+	}
 	return t
 }

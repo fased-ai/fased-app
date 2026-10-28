@@ -26,8 +26,28 @@ export function isPlanPolicy(policy?: OpenAIModelPolicy) {
   return policy?.wireVersion === "openai-signin-v2";
 }
 
+export function isUnmeteredPolicy(policy?: OpenAIModelPolicy) {
+  return (
+    isPlanPolicy(policy) ||
+    (policy?.wireVersion === "local-responses-v1" &&
+      policy.provider === "local")
+  );
+}
+
+export function hasReportedProviderUsage(costBasis?: string) {
+  return (
+    costBasis === "chatgpt-plan-reported-usage" ||
+    costBasis === "local-reported-usage"
+  );
+}
+
 export function planFailureDetails(failure: string) {
-  const prefix = "OpenAI plan request stopped. Diagnostics: ";
+  const local = failure.startsWith(
+    "Local model request stopped. Diagnostics: ",
+  );
+  const prefix = local
+    ? "Local model request stopped. Diagnostics: "
+    : "OpenAI plan request stopped. Diagnostics: ";
   if (!failure.startsWith(prefix)) return null;
   const details = failure.slice(prefix.length);
   let status = 0;
@@ -55,7 +75,13 @@ export function planFailureDetails(failure: string) {
                 : status >= 500
                   ? "ChatGPT unavailable"
                   : "ChatGPT request failed";
-  return { summary, details };
+  return {
+    summary:
+      local && summary.startsWith("ChatGPT")
+        ? summary.replace("ChatGPT", "Local model")
+        : summary,
+    details,
+  };
 }
 export type OpenAIAdmission = {
   state: string;

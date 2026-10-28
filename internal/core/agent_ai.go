@@ -310,7 +310,7 @@ func changeAgentAI(d *agentDocument, c AgentCommand, profile, id string, now int
 		}
 		l := *c.Limits
 		selectedPolicy := chatModelPolicyForMethod(c.Model, c.providerAuthMethod)
-		if !validPolicyLimits(l, selectedPolicy) || !planSignInPolicy(selectedPolicy) && l.BudgetMicrousd > maxModelBudget(c.Model) {
+		if !validPolicyLimits(l, selectedPolicy) || !unmeteredPolicy(selectedPolicy) && l.BudgetMicrousd > maxModelBudget(c.Model) {
 			return errors.New("invalid token/time limits or insufficient fixture budget")
 		}
 		context, e := aiContextWithMemory(*d, profile, c.ID, c.Text, now, c.MemorySelection)
@@ -474,7 +474,9 @@ func callReviewedAgentAIStreamAt(ctx context.Context, q AgentAIRequest, rt http.
 		defer stop()
 		ctx = bounded
 		admitted := false
-		if planSignInRequest(q) {
+		if localRequest(q) {
+			admitted = admitLocal(ctx, &q, rt, now)
+		} else if planSignInRequest(q) {
 			admitted = admitSignIn(ctx, &q, rt, now)
 		} else if signInRequest(q) {
 			admitted = admitSignInFixture(ctx, &q, rt, now)
@@ -499,13 +501,13 @@ func callReviewedAgentAIStreamAt(ctx context.Context, q AgentAIRequest, rt http.
 	req.Header.Set("Content-Type", "application/json")
 	res, e := client.Do(req)
 	if e != nil {
-		if planSignInRequest(q) {
+		if unmeteredRequest(q) {
 			return reconcilePlanFailure(q, e, "")
 		}
 		return q, errors.New("provider result unavailable; reservation retained")
 	}
 	defer res.Body.Close()
-	if planSignInRequest(q) && res.StatusCode != 200 {
+	if unmeteredRequest(q) && res.StatusCode != 200 {
 		raw, readErr := io.ReadAll(io.LimitReader(res.Body, 16385))
 		if readErr != nil || len(raw) > 16384 {
 			return reconcilePlanFailure(q, &planProviderFailure{Status: res.StatusCode, Body: "invalid", Code: "response_unverified"}, res.Header.Get("X-Request-Id"))
@@ -517,10 +519,10 @@ func callReviewedAgentAIStreamAt(ctx context.Context, q AgentAIRequest, rt http.
 		if policyProvider(q.Policy) == "anthropic" {
 			b, e = readAnthropicStream(res.Body, onDelta)
 		} else {
-			b, e = readAIStream(res.Body, q.Model, onDelta, planSignInRequest(q))
+			b, e = readAIStream(res.Body, q.Model, onDelta, unmeteredRequest(q))
 		}
 	} else if streaming {
-		if planSignInRequest(q) {
+		if unmeteredRequest(q) {
 			return reconcilePlanFailure(q, &planProviderFailure{Status: res.StatusCode, Body: "invalid", Code: "stream_required"}, res.Header.Get("X-Request-Id"))
 		}
 		return q, errors.New("provider stream unavailable; reservation retained")
@@ -528,19 +530,19 @@ func callReviewedAgentAIStreamAt(ctx context.Context, q AgentAIRequest, rt http.
 		b, e = io.ReadAll(io.LimitReader(res.Body, 16385))
 	}
 	if e != nil || len(b) > 16384 || res.StatusCode != 200 {
-		if planSignInRequest(q) {
+		if unmeteredRequest(q) {
 			return reconcilePlanFailure(q, e, res.Header.Get("X-Request-Id"))
 		}
 		return q, errors.New("provider response refused; reservation retained")
 	}
-	if q.Policy != nil && policyProvider(q.Policy) != "openai" {
+	if q.Policy != nil && policyProvider(q.Policy) != "openai" && !localRequest(q) {
 		b, e = normalizeNativeResponse(policyProvider(q.Policy), q, b)
 		if e != nil {
 			return q, errors.New("native response identity/usage unverified; reservation retained")
 		}
 	}
 	if q.Policy != nil && !uniqueAIJSON(b) {
-		if planSignInRequest(q) {
+		if unmeteredRequest(q) {
 			return reconcilePlanFailure(q, planFailure(200, "application/json", res.Header.Get("X-Request-Id"), b, true), res.Header.Get("X-Request-Id"))
 		}
 		return q, errors.New("ambiguous provider JSON; reservation retained")
@@ -567,15 +569,15 @@ func callReviewedAgentAIStreamAt(ctx context.Context, q AgentAIRequest, rt http.
 			} `json:"content"`
 		} `json:"output"`
 	}
-	if json.Unmarshal(b, &wire) != nil || wire.Model != q.Model || !planSignInRequest(q) && wire.ServiceTier != "default" || wire.Usage == nil {
-		if planSignInRequest(q) {
+	if json.Unmarshal(b, &wire) != nil || wire.Model != q.Model || !unmeteredRequest(q) && wire.ServiceTier != "default" || wire.Usage == nil {
+		if unmeteredRequest(q) {
 			return reconcilePlanFailure(q, planFailure(200, "application/json", res.Header.Get("X-Request-Id"), b, true), res.Header.Get("X-Request-Id"))
 		}
 		return q, errors.New("provider identity/usage unverified; reservation retained")
 	}
 	u := wire.Usage
 	if u.Input == nil || u.Output == nil || u.Total == nil {
-		if planSignInRequest(q) {
+		if unmeteredRequest(q) {
 			return reconcilePlanFailure(q, planFailure(200, "application/json", res.Header.Get("X-Request-Id"), b, true), res.Header.Get("X-Request-Id"))
 		}
 		return q, errors.New("provider usage missing; reservation retained")
@@ -585,21 +587,21 @@ func callReviewedAgentAIStreamAt(ctx context.Context, q AgentAIRequest, rt http.
 	if q.Policy != nil && q.Policy.BillableOutputTokens > maxOutput {
 		maxOutput = q.Policy.BillableOutputTokens
 	}
-	if planSignInRequest(q) && input >= 0 && output >= 0 && total == input+output && input <= q.Policy.ContextTokens && output <= q.Policy.OutputTokens {
-		q.InputTokens, q.OutputTokens, q.CostBasis, q.SpentMicrousd, q.HeldMicrousd = input, output, planUsageCostBasis, 0, 0
+	if unmeteredRequest(q) && input >= 0 && output >= 0 && total == input+output && input <= q.Policy.ContextTokens && output <= q.Policy.OutputTokens {
+		q.InputTokens, q.OutputTokens, q.CostBasis, q.SpentMicrousd, q.HeldMicrousd = input, output, reportedUsageBasis(q), 0, 0
 		if input > q.Limits.MaxInputTokens || output > maxOutput {
 			return planOutputLimitFailure(q), nil
 		}
 	}
 	if input < 0 || output < 0 || input > q.Limits.MaxInputTokens || output > maxOutput || total != input+output {
-		if planSignInRequest(q) {
+		if unmeteredRequest(q) {
 			return reconcilePlanFailure(q, planFailure(200, "application/json", res.Header.Get("X-Request-Id"), b, true), res.Header.Get("X-Request-Id"))
 		}
 		return q, errors.New("provider usage outside reviewed limits; reservation retained")
 	}
 	cached := int64(0)
 	if q.Policy != nil {
-		if q.Admission == nil || policyProvider(q.Policy) == "openai" && !signInRequest(q) && input != q.Admission.InputTokens || signInRequest(q) && !planSignInRequest(q) && input > q.Admission.InputTokens {
+		if q.Admission == nil || policyProvider(q.Policy) == "openai" && !signInRequest(q) && input != q.Admission.InputTokens || signInRequest(q) && !unmeteredRequest(q) && input > q.Admission.InputTokens {
 			return q, errors.New("usage differs from admitted token count; reservation retained")
 		}
 		if u.InputDetails != nil {
@@ -611,8 +613,8 @@ func callReviewedAgentAIStreamAt(ctx context.Context, q AgentAIRequest, rt http.
 		} else {
 			q.CostBasis = "uncached-standard-tariff-ceiling"
 		}
-		if planSignInRequest(q) {
-			q.CostBasis = planUsageCostBasis
+		if unmeteredRequest(q) {
+			q.CostBasis = reportedUsageBasis(q)
 		} else if signInRequest(q) {
 			q.CostBasis = "synthetic-signin-fixture-allocation"
 		}
@@ -929,14 +931,14 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, fixtur
 				// Preserve owner Stop and every original scope/authority field. A
 				// verified receipt settles usage only; it can never revive output.
 				q.InputTokens, q.OutputTokens, q.CachedInputTokens = result.InputTokens, result.OutputTokens, result.CachedInputTokens
-				q.CostBasis, q.HeldMicrousd, q.SpentMicrousd = planUsageCostBasis, 0, 0
+				q.CostBasis, q.HeldMicrousd, q.SpentMicrousd = reportedUsageBasis(q), 0, 0
 				q.Answer, q.PartialAnswer, q.Cards = "", "", []AIActionCard{}
 			} else if callErr != nil {
 				q.Admission = result.Admission
 				q.State = "unknown"
 				q.Failure = "Provider result unavailable or unverified; reservation retained. No retry or fallback."
-				if planSignInRequest(q) {
-					q.Failure = (&planProviderFailure{Body: "transport", Code: "response_unverified"}).Error()
+				if unmeteredRequest(q) {
+					q.Failure = providerFailureText(q, &planProviderFailure{Body: "transport", Code: "response_unverified"})
 				}
 			} else {
 				q = result
@@ -950,7 +952,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, fixtur
 					}
 				}
 			}
-			if planSignInRequest(q) && q.State != "completed" && q.Failure != "" {
+			if unmeteredRequest(q) && q.State != "completed" && q.Failure != "" {
 				s.pauseSignInAccount(q.ConnectionRef, q.Failure)
 			}
 			if isResearchAI(q) {
@@ -983,7 +985,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, fixtur
 }
 
 func cancelledPlanUsageMatches(stored, dispatch, result AgentAIRequest) bool {
-	if stored.State != "cancelled" || !planSignInRequest(stored) || isResearchAI(stored) || !planSignInRequest(result) || result.Policy == nil || stored.Policy == nil || *stored.Policy != *result.Policy || result.CostBasis != planUsageCostBasis || (result.State != "failed" && result.State != "completed") || result.Admission == nil || !result.Admission.GenerationAttempted {
+	if stored.State != "cancelled" || !unmeteredRequest(stored) || isResearchAI(stored) || !unmeteredRequest(result) || result.Policy == nil || stored.Policy == nil || *stored.Policy != *result.Policy || result.CostBasis != reportedUsageBasis(result) || (result.State != "failed" && result.State != "completed") || result.Admission == nil || !result.Admission.GenerationAttempted {
 		return false
 	}
 	if stored.ID != dispatch.ID || result.ID != stored.ID || stored.DispatchBoot == "" || stored.DispatchBoot != dispatch.DispatchBoot || result.DispatchBoot != stored.DispatchBoot || stored.ConnectionRef != dispatch.ConnectionRef || result.ConnectionRef != stored.ConnectionRef || stored.Model != dispatch.Model || result.Model != stored.Model || stored.Digest != dispatch.Digest || result.Digest != stored.Digest || aiDigest(result) != stored.Digest || result.Disclosure != stored.Disclosure || result.Stream != stored.Stream {
@@ -995,8 +997,8 @@ func cancelledPlanUsageMatches(stored, dispatch, result AgentAIRequest) bool {
 // A completion-time rejection removes usable output, not evidence of unsettled
 // usage. In particular zero monetary rates do not settle a dispatched plan call.
 func rejectAICompletion(q *AgentAIRequest, reason string) {
-	uncertain := planSignInRequest(*q) && q.CostBasis != planUsageCostBasis && aiHasUsageHold(*q)
-	retainDiagnostic := planSignInRequest(*q) && q.State != "completed" && q.Failure != ""
+	uncertain := unmeteredRequest(*q) && q.CostBasis != reportedUsageBasis(*q) && aiHasUsageHold(*q)
+	retainDiagnostic := unmeteredRequest(*q) && q.State != "completed" && q.Failure != ""
 	q.State = "failed"
 	if uncertain {
 		q.State = "unknown"
@@ -1004,7 +1006,7 @@ func rejectAICompletion(q *AgentAIRequest, reason string) {
 	if !retainDiagnostic {
 		q.Failure = reason
 		if uncertain {
-			q.Failure = (&planProviderFailure{Body: "local", Code: "completion_scope_changed", Late: true}).Error()
+			q.Failure = providerFailureText(*q, &planProviderFailure{Body: "local", Code: "completion_scope_changed", Late: true})
 		}
 	}
 	q.Answer, q.Cards = "", []AIActionCard{}
@@ -1013,6 +1015,9 @@ func rejectAICompletion(q *AgentAIRequest, reason string) {
 type fixtureAITransport struct{}
 
 func (fixtureAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Host == "local.fased.invalid" {
+		return localFixtureResponse(r)
+	}
 	if r.URL.Host == "api.anthropic.com" {
 		return nativeFixtureResponse(r, "anthropic")
 	}

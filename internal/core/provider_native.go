@@ -23,6 +23,8 @@ func providerDefinitionFor(id string) (providerDefinition, bool) {
 		return providerDefinition{"openai", "OpenAI", "api.openai.com", ""}, true
 	case "anthropic":
 		return providerDefinition{"anthropic", "Anthropic", "api.anthropic.com", "2026-10-21"}, true
+	case "local":
+		return providerDefinition{"local", "Local server", "local.fased.invalid", ""}, true
 	case "xai":
 		return providerDefinition{"xai", "xAI", "api.x.ai", ""}, true
 	}
@@ -42,9 +44,12 @@ func policyProvider(p *OpenAIModelPolicy) string {
 }
 func providerEntries() []ProviderEntry {
 	out := []ProviderEntry{}
-	for _, id := range []string{"openai", "anthropic", "xai"} {
+	for _, id := range []string{"openai", "anthropic", "xai", "local"} {
 		p, _ := providerDefinitionFor(id)
 		methods := []ProviderMethod{{ID: "api-key", Name: "API key"}}
+		if id == "local" {
+			methods = []ProviderMethod{{ID: "local", Name: "Local server"}}
+		}
 		if id == "openai" {
 			methods = append(methods, ProviderMethod{ID: "sign-in", Name: "Continue with ChatGPT"})
 		}
@@ -127,6 +132,18 @@ func nativeRequestWire(q AgentAIRequest, wire map[string]any) ([]byte, error) {
 		return nil, errors.New("native policy missing")
 	}
 	id := policyProvider(p)
+	if id == "local" {
+		schema, err := json.Marshal(wire["text"])
+		if err != nil {
+			return nil, errors.New("local output contract unavailable")
+		}
+		instruction, _ := wire["instructions"].(string)
+		wire["instructions"] = instruction + " Return exactly one JSON object matching this output contract: " + string(schema) + ". Include answer and cards; no markdown fences or surrounding prose."
+		for _, key := range []string{"background", "service_tier", "text", "prompt_cache_options"} {
+			delete(wire, key)
+		}
+		return json.Marshal(wire)
+	}
 	if id == "xai" {
 		wire["reasoning"] = map[string]string{"effort": p.Reasoning}
 		return json.Marshal(wire)
@@ -620,6 +637,9 @@ var nativeRegistries = func() map[string]modelRegistry {
 }()
 
 func registryForProvider(id string) modelRegistry {
+	if id == "local" {
+		return localRegistry()
+	}
 	if id == "" || id == "openai" {
 		return currentModels
 	}
@@ -630,10 +650,11 @@ func allProviderModels() []currentModel {
 	for _, id := range []string{"anthropic", "xai"} {
 		out = append(out, nativeRegistries[id].Models...)
 	}
+	out = append(out, localRegistry().Models...)
 	return out
 }
 func parseProviderModelList(provider string, raw []byte, object *string, rows *[]discoveredModel) error {
-	if provider == "openai" {
+	if provider == "openai" || provider == "local" {
 		var v struct {
 			Object string
 			Data   []discoveredModel
@@ -642,6 +663,13 @@ func parseProviderModelList(provider string, raw []byte, object *string, rows *[
 			return errors.New("list refused")
 		}
 		*object = v.Object
+		if provider == "local" {
+			for i := range v.Data {
+				if v.Data[i].OwnedBy == "library" || v.Data[i].OwnedBy == "local" {
+					v.Data[i].OwnedBy = "local"
+				}
+			}
+		}
 		*rows = v.Data
 		return nil
 	}
@@ -712,6 +740,9 @@ func newerProviderRecordForID(id string, r discoveredModel, all []discoveredMode
 }
 func newerProviderRecord(m currentModel, r discoveredModel, all []discoveredModel) bool {
 	switch modelProvider(m) {
+	case "local":
+		a, b := strings.SplitN(r.ID, ":", 2)[0], strings.SplitN(m.ID, ":", 2)[0]
+		return strings.HasPrefix(a, "gemma") && strings.HasPrefix(b, "gemma") && newerProviderGeneration("gpt-"+strings.TrimPrefix(a, "gemma")+"-gemma", "gpt-"+strings.TrimPrefix(b, "gemma")+"-gemma")
 	case "anthropic":
 		if r.Line == "" || r.Line != m.Line || r.ID == m.ID {
 			return false

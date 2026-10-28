@@ -51,3 +51,5 @@ unavailable, require explicit current-model review, and never silently upgrade
 approved requests or switch accounts/billing routes. Maintain provider sources,
 authentication/discovery and model/tariff definitions through one reviewable
 provider update path. Ordinary live and public update gates stay closed.
+
+- Schema 27 protects local-provider profile/policy semantics. Version-6 encrypted provider envelopes bind the instance, connection, local mode and fixture/live class; endpoint and optional key are encrypted together. Local configuration is a typed loopback-only Responses connector, not a cloud endpoint/CA override. Ordinary admission/dispatch remain held; controlled fixtures use the same account/agent/Chat/task grants and retain nonmonetary uncertain usage. Local-only owner deadlines are finite (1–120s); cloud limits remain unchanged. Preserve schema26 history, raw vault bytes on migration and recovery holds.

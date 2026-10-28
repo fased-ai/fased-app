@@ -22,13 +22,16 @@ func planSignInPolicy(policy *OpenAIModelPolicy) bool {
 }
 func planSignInRequest(q AgentAIRequest) bool { return planSignInPolicy(q.Policy) }
 func validPolicyLimits(l AILimits, p *OpenAIModelPolicy) bool {
-	if !planSignInPolicy(p) {
+	if localPolicy(p) {
+		return l.MaxInputTokens >= 1000 && l.MaxInputTokens <= 32000 && l.MaxOutputTokens >= 128 && l.MaxOutputTokens <= 1024 && l.DeadlineSeconds >= 1 && l.DeadlineSeconds <= 120 && l.BudgetMicrousd == 0
+	}
+	if !unmeteredPolicy(p) {
 		return validAILimits(l)
 	}
 	return l.MaxInputTokens >= 1000 && l.MaxInputTokens <= 32000 && l.MaxOutputTokens >= 128 && l.MaxOutputTokens <= 1024 && l.DeadlineSeconds >= 1 && l.DeadlineSeconds <= 5 && l.BudgetMicrousd == 0
 }
 func validPolicyTotal(p *OpenAIModelPolicy, budget int64) bool {
-	if planSignInPolicy(p) {
+	if unmeteredPolicy(p) {
 		return budget == 0
 	}
 	model := ""
@@ -44,10 +47,10 @@ func aiHasUsageHold(q AgentAIRequest) bool {
 	if q.HeldMicrousd > 0 {
 		return true
 	}
-	if !planSignInRequest(q) {
+	if !unmeteredRequest(q) {
 		return false
 	}
-	return q.State == "queued" || q.State == "running" || q.State == "unknown" || q.State == "cancelled" && q.DispatchBoot != "" && q.CostBasis != planUsageCostBasis
+	return q.State == "queued" || q.State == "running" || q.State == "unknown" || q.State == "cancelled" && q.DispatchBoot != "" && q.CostBasis != reportedUsageBasis(q)
 }
 
 type planProviderFailure struct {
@@ -271,16 +274,24 @@ func reconcilePlanFailure(q AgentAIRequest, err error, requestID string) (AgentA
 	if copy.definitive {
 		q.State = "failed"
 	}
-	if u := copy.usage; planSignInRequest(q) && u != nil && u.input <= q.Policy.ContextTokens && u.output <= q.Policy.OutputTokens {
+	if u := copy.usage; unmeteredRequest(q) && u != nil && u.input <= q.Policy.ContextTokens && u.output <= q.Policy.OutputTokens {
 		q.InputTokens, q.OutputTokens, q.CachedInputTokens = u.input, u.output, u.cached
-		q.CostBasis, q.State = planUsageCostBasis, "failed"
+		q.CostBasis, q.State = reportedUsageBasis(q), "failed"
 	}
-	q.Failure = copy.Error()
+	q.Failure = providerFailureText(q, &copy)
 	return q, nil
 }
 
 func planOutputLimitFailure(q AgentAIRequest) AgentAIRequest {
 	q.State, q.Answer, q.Cards = "failed", "", []AIActionCard{}
-	q.Failure = localPlanFailure("reported_usage_exceeds_acceptance_limit", "output").Error()
+	q.Failure = providerFailureText(q, localPlanFailure("reported_usage_exceeds_acceptance_limit", "output"))
 	return q
+}
+
+func providerFailureText(q AgentAIRequest, failure *planProviderFailure) string {
+	text := failure.Error()
+	if localRequest(q) {
+		return strings.Replace(text, planFailurePrefix, "Local model request stopped. Diagnostics: ", 1)
+	}
+	return text
 }

@@ -29,7 +29,7 @@ import type {
   AIEvidenceSelection,
   AgentEvidenceView,
 } from "../agents";
-import { isPlanPolicy } from "../agents";
+import { isUnmeteredPolicy } from "../agents";
 import { useWorkspace } from "../workspace";
 
 export function AgentAIReview({
@@ -143,7 +143,7 @@ function AgentAIForm({
   const selectedPolicy = selectedAccess?.catalog?.models.find(
     (item) => item.id === model,
   )?.policy;
-  const planUsage = isPlanPolicy(selectedPolicy);
+  const planUsage = isUnmeteredPolicy(selectedPolicy);
   const requestBudget = planUsage ? 0 : budget;
   const replyReady =
     overridden || draftSource
@@ -169,7 +169,10 @@ function AgentAIForm({
     const p = selectedPolicy;
     if (!p) return;
     budgetModel.current = identity;
-    if (isPlanPolicy(p)) return;
+    if (isUnmeteredPolicy(p)) {
+      if (p.provider === "local") setDeadline(60);
+      return;
+    }
     const ceiling = Math.ceil(
       (input * p.inputMicrousdPerMillion +
         Math.max(output, p.billableOutputTokens || 0) *
@@ -409,8 +412,8 @@ function AgentAIForm({
         <ChatPermissionReview
           permission={permissionReview}
           providerName={
-            isPlanPolicy(permissionPolicy)
-              ? tr("ChatGPT")
+            isUnmeteredPolicy(permissionPolicy)
+              ? tr("Usage")
               : permissionReview.connectionRef
                 ? permissionProvider
                 : tr("Demo")
@@ -1027,7 +1030,7 @@ function AgentAIForm({
                   <input
                     type="number"
                     min={1}
-                    max={5}
+                    max={selectedPolicy?.provider === "local" ? 120 : 5}
                     required
                     value={deadline}
                     onChange={(e) => setDeadline(e.target.valueAsNumber)}

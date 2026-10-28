@@ -1,5 +1,30 @@
 // Product UI vocabulary; records and protocol identifiers remain unchanged.
 export const priorityCopy = {
+  "Local server": [
+    "Локальный сервер",
+    "Servidor local",
+    "本地服务器",
+    "로컬 서버",
+  ],
+  "Local model unavailable": [
+    "Локальная модель недоступна",
+    "Modelo local no disponible",
+    "本地模型不可用",
+    "로컬 모델을 사용할 수 없습니다",
+  ],
+  "Local model request failed": [
+    "Ошибка локальной модели",
+    "Error de solicitud local",
+    "本地模型请求失败",
+    "로컬 모델 요청 실패",
+  ],
+  Endpoint: ["Адрес", "Dirección", "端点", "엔드포인트"],
+  "API key (optional)": [
+    "API-ключ (необязательно)",
+    "Clave API (opcional)",
+    "API 密钥（可选）",
+    "API 키 (선택)",
+  ],
   "I reviewed this context and these limits": [
     "Я проверил контекст и лимиты",
     "He revisado el contexto y los límites",

@@ -102,7 +102,7 @@ func (s *Store) reviewTaskAccess(d agentDocument, c AIConnectionCommand, revisio
 	plan := len(a.Tasks) > 0 && a.BudgetMicrousd == 0
 	if plan {
 		for _, task := range d.Tasks {
-			if selected[task.ID] && (task.AI == nil || !planSignInPolicy(task.AI.Policy)) {
+			if selected[task.ID] && (task.AI == nil || !unmeteredPolicy(task.AI.Policy)) {
 				plan = false
 			}
 		}

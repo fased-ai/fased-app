@@ -19,9 +19,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/localprovider"
 )
 
 type AIConnectionCommand struct {
+	Endpoint             string                `json:"endpoint,omitempty"`
 	SignInID             string                `json:"signInId,omitempty"`
 	Callback             string                `json:"callback,omitempty"`
 	Remote               bool                  `json:"remote,omitempty"`
@@ -41,6 +44,7 @@ type AIConnectionCommand struct {
 	Passphrase           string                `json:"passphrase,omitempty"`
 }
 type AIConnectionView struct {
+	Endpoint               string                `json:"endpoint,omitempty"`
 	AuthMethod             string                `json:"authMethod"`
 	PlanUse                bool                  `json:"planUse"`
 	PlanPaused             bool                  `json:"planPaused"`
@@ -262,6 +266,14 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 		v.SignInAvailable = s.providerSignInAvailableLocked()
 		v.SignIn = s.providerSignInViewLocked()
 		v.AuthMethod = "api-key"
+		if v.Provider == "local" {
+			v.AuthMethod = "local"
+			if state := s.provider.accounts[v.Ref]; state != nil {
+				if c, e := localprovider.ParseCredential(state.key); e == nil {
+					v.Endpoint = c.Endpoint
+				}
+			}
+		}
 		if v.CredentialMode == "openai-signin" {
 			v.AuthMethod = "sign-in"
 			if policy := chatModelPolicyForMethod(v.Model, "sign-in"); policy != nil {
@@ -310,8 +322,11 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 		}
 	}()
 	v.CredentialModes = []string{"test"}
+	if s.providerFixture {
+		v.CredentialModes = append(v.CredentialModes, "local")
+	}
 	if s.provider.apiCredentials {
-		v.CredentialModes = []string{"openai", "anthropic", "xai"}
+		v.CredentialModes = []string{"openai", "anthropic", "xai", "local"}
 	}
 	v.LiveCallsEnabled = providerActivationEnabled && s.provider.apiCredentials
 	env, e := s.readAIVault(refs...)
@@ -334,7 +349,7 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 	v.Ref = env.Ref
 	v.PlanPaused, v.PlanFailure = state.planPaused, state.planFailure
 	v.CredentialMode = aiVaultMode(env)
-	v.TestOnly = v.CredentialMode == "test" || env.Version == 5 && env.TestOnly
+	v.TestOnly = v.CredentialMode == "test" || (env.Version == 5 || env.Version == 6) && env.TestOnly
 	if env.Version == 5 {
 		v.Model, v.AdmissionPolicy = admittedOpenAIModel, openAIModelPolicy(admittedOpenAIModel)
 	}
@@ -408,13 +423,13 @@ func (s *Store) aiConnectionValid(ref string) bool {
 	return e == nil && v.Ref == ref && !v.Locked && !v.PlanPaused
 }
 
-// A plan failure revokes permissions for this account without deleting its
+// An unmetered-provider failure revokes permissions without deleting its
 // credentials. Only an explicit successful owner unlock clears this pause.
 func (s *Store) pauseSignInAccount(ref, failure string) {
 	s.provider.mu.Lock()
 	defer s.provider.mu.Unlock()
 	env, err := s.readAIVault(ref)
-	if err != nil || env.Ref != ref || env.Version != 5 || aiVaultMode(env) != "openai-signin" {
+	if err != nil || env.Ref != ref || !(env.Version == 5 && aiVaultMode(env) == "openai-signin" || env.Version == 6 && env.Provider == "local" && aiVaultMode(env) == "local") {
 		return
 	}
 	state := s.credentialLocked(ref)
@@ -422,12 +437,32 @@ func (s *Store) pauseSignInAccount(ref, failure string) {
 	state.epoch = s.provider.nextEpoch
 	state.taskAccess, state.taskAccessLast = nil, 0
 	state.planPaused = true
-	if len(failure) > 2048 {
+	if len(failure) == 0 || len(failure) > 2048 {
 		failure = "Plan access paused; inspect the request."
+		if env.Provider == "local" {
+			failure = "Local model access paused; inspect the request."
+		}
 	}
 	state.planFailure = failure
 }
 func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (AIConnectionView, error) {
+	if c.Endpoint != "" && (c.Provider != "local" || (c.Action != "save" && c.Action != "add")) {
+		return AIConnectionView{}, errors.New("endpoint belongs to a local connection")
+	}
+	if c.Provider == "local" && (c.Action == "save" || c.Action == "add") {
+		if c.CredentialMode != "" && c.CredentialMode != "local" {
+			return AIConnectionView{}, errors.New("local connection mode required")
+		}
+		if s.providerFixture && !s.provider.apiCredentials && c.Key != "" && !testAICredential(c.Key) {
+			return AIConnectionView{}, errors.New("disposable local key required")
+		}
+		encoded, err := localprovider.NewCredential(c.Endpoint, c.Key)
+		if err != nil {
+			return AIConnectionView{}, err
+		}
+		c.Key, c.CredentialMode, c.Endpoint = string(encoded), "local", ""
+	}
+
 	if strings.HasPrefix(c.Action, "sign-in-") {
 		return s.changeProviderSignIn(ctx, c)
 	}
@@ -480,7 +515,7 @@ func (s *Store) providerModelTransport(ref string) http.RoundTripper {
 func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (AIConnectionView, error) {
 	// Empty mode preserves existing test-vault clients. Mode selection never
 	// enables a provider or changes the saved vault format/credential authority.
-	if c.CredentialMode != "" && ((c.Action != "save" && c.Action != "add") || (c.CredentialMode != "test" && c.CredentialMode != "openai" && c.CredentialMode != "anthropic" && c.CredentialMode != "xai")) {
+	if c.CredentialMode != "" && ((c.Action != "save" && c.Action != "add") || (c.CredentialMode != "test" && c.CredentialMode != "openai" && c.CredentialMode != "anthropic" && c.CredentialMode != "xai" && c.CredentialMode != "local")) {
 		return AIConnectionView{}, errors.New("credential mode unavailable; real credentials disabled")
 	}
 	if c.Provider != "" {
@@ -552,6 +587,9 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	}
 	if provider == "" {
 		provider = "openai"
+	}
+	if provider == "local" && (c.Action == "save" || c.Action == "add") && c.Provider != "local" {
+		return v, errors.New("local replacement requires explicit provider and endpoint")
 	}
 	mode := c.CredentialMode
 	if mode == "" {
@@ -626,6 +664,9 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	}
 	if provider != "openai" {
 		env.Version, env.Provider, env.Mode = 4, provider, mode
+		if provider == "local" {
+			env.Version, env.TestOnly = 6, s.providerFixture && !s.provider.apiCredentials
+		}
 	}
 	if env.Ref, e = randomToken(); e != nil {
 		return v, e
@@ -721,6 +762,18 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 		return nil, errors.New("pilot scope or allowance unavailable")
 	}
 	key := append([]byte(nil), state.key...)
+	var local *localprovider.Credential
+	if v.Provider == "local" {
+		value, e := localprovider.ParseCredential(key)
+		if e != nil {
+			clear(key)
+			a.store.provider.mu.Unlock()
+			return nil, errors.New("local connection unavailable")
+		}
+		local = &value
+		clear(key)
+		key = []byte(value.APIKey)
+	}
 	if v.AuthMethod == "sign-in" {
 		credential, ok := parseProviderSignInCredential(key)
 		if !ok || !credential.planUse() || credential.ExpiresAt <= a.store.now().Unix() {
@@ -747,6 +800,9 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 	} else {
 		copy.Header.Set("Authorization", "Bearer "+string(key))
 	}
+	if local != nil {
+		copy = localprovider.Bind(copy, *local)
+	}
 	defer copy.Header.Del("Authorization")
 	defer copy.Header.Del("x-api-key")
 	res, e := a.next.RoundTrip(copy)
@@ -757,13 +813,16 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 	// request IDs, but never persist an echoed credential through an error header.
 	res.Header = res.Header.Clone()
 	for _, value := range res.Header.Values("X-Request-Id") {
-		if bytes.Contains([]byte(value), key) {
+		if len(key) > 0 && bytes.Contains([]byte(value), key) {
 			res.Header.Del("X-Request-Id")
 			break
 		}
 	}
-	if strings.Split(res.Header.Get("Content-Type"), ";")[0] == "text/event-stream" {
+	if len(key) > 0 && strings.Split(res.Header.Get("Content-Type"), ";")[0] == "text/event-stream" {
 		res.Body = &guardedAIBody{body: res.Body, key: append([]byte(nil), key...)}
+		return res, nil
+	}
+	if len(key) == 0 && strings.Split(res.Header.Get("Content-Type"), ";")[0] == "text/event-stream" {
 		return res, nil
 	}
 	limit := int64(16384)
@@ -772,7 +831,7 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 	}
 	body, e := io.ReadAll(io.LimitReader(res.Body, limit+1))
 	res.Body.Close()
-	if e != nil || int64(len(body)) > limit || bytes.Contains(body, key) {
+	if e != nil || int64(len(body)) > limit || len(key) > 0 && bytes.Contains(body, key) {
 		return nil, errors.New("provider response refused")
 	}
 	res.Body = io.NopCloser(bytes.NewReader(body))
@@ -780,6 +839,9 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 }
 
 func validAIVaultMode(v aiVaultEnvelope) bool {
+	if v.Version == 6 {
+		return v.Mode == "local" && v.Provider == "local"
+	}
 	if v.Version == 5 {
 		return v.Mode == "openai-signin" && v.Provider == "openai"
 	}
@@ -807,6 +869,9 @@ func aiVaultMode(v aiVaultEnvelope) string {
 	return v.Mode
 }
 func (s *Store) aiCredentialModeAllowed(mode string) bool {
+	if mode == "local" {
+		return s.providerFixture || s.provider.apiCredentials
+	}
 	if mode == "openai-signin" {
 		return s.provider.apiCredentials || s.providerFixture || s.provider.signInTransport != nil
 	}
@@ -814,6 +879,10 @@ func (s *Store) aiCredentialModeAllowed(mode string) bool {
 	return mode == "test" || (ok && mode != "" && s.provider.apiCredentials)
 }
 func validAICredential(mode, key string) bool {
+	if mode == "local" {
+		_, e := localprovider.ParseCredential([]byte(key))
+		return e == nil
+	}
 	if mode == "openai-signin" {
 		_, ok := parseProviderSignInCredential([]byte(key))
 		return ok
@@ -832,6 +901,13 @@ func validAICredential(mode, key string) bool {
 	return true
 }
 func (s *Store) aiVaultAAD(v aiVaultEnvelope) []byte {
+	if v.Version == 6 {
+		kind := "live"
+		if v.TestOnly {
+			kind = "fixture"
+		}
+		return []byte("fased-local-provider-v6:" + s.instanceID + ":" + v.Provider + ":" + v.Mode + ":" + v.Ref + ":" + kind)
+	}
 	if v.Version == 5 {
 		kind := "live"
 		if v.TestOnly {

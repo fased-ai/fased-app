@@ -72,3 +72,21 @@ it("binds native provider defaults without carrying another provider or model", 
     expect(modelForProviderChange(provider, "gpt-6.1-terra")).toBe("");
   }
 });
+
+it("uses a local account for inherited replies without becoming Demo or cloud access", () => {
+  const p = { provider: "local", model: "gemma4:e2b" };
+  const a = {
+    ref: "local-ref",
+    provider: "local",
+    model: p.model,
+    locked: false,
+  };
+  expect(agentReplyDefaults(p, a)).toEqual({
+    connectionRef: "local-ref",
+    model: p.model,
+    ready: true,
+  });
+  expect(agentReplyDefaults(p, { ...a, provider: "openai" }).ready).toBe(false);
+  expect(agentReplyDefaults(p, { ...a, locked: true }).ready).toBe(false);
+  expect(modelForProviderChange("local", p.model)).toBe(p.model);
+});

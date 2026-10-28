@@ -2,7 +2,7 @@ package core
 
 import "github.com/fased-ai/fased-app/internal/update"
 
-const StateSchema = 26
+const StateSchema = 27
 
 // UpdateContract advertises formats, not update authority.
 func UpdateContract() update.Contract {

@@ -25,6 +25,45 @@ Lock ends local access. Reconnecting an API key changes its connection reference
 preserving history and uncertain usage holds. Removing a connection deletes its
 local credential; provider-side key revocation remains a separate owner action.
 
+## Local models
+
+Choose **Local server**, enter its `/v1` endpoint and save with a vault passphrase.
+An API key is optional. The endpoint and key are encrypted together; neither is
+stored in agent instructions, chat or task records. This uses the same account
+selector, current-model catalogue, configured agent, Chat and Tasks as cloud
+providers. Setup never generates an answer.
+
+The first supported connector is an OpenAI-compatible **Responses** server on
+an explicit loopback IP and port, such as `http://127.0.0.1:11434/v1`.
+Local means the machine running the selected core: a Remote connection uses
+that server's loopback, not the browser's machine. DNS names, nonloopback hosts,
+proxy routing, redirects and arbitrary custom gateways are refused. The app does
+not install or download a model server. The supported current models are
+`gemma4:e2b` and `gemma4:e4b`, intersected with the account's installed models.
+Newer model families require reviewed adapter/catalogue updates; old or unknown
+models do not become selectable through a failed refresh.
+
+Chat and tasks use finite request, duration and input/output limits. Local
+requests have no API-dollar allowance and report only verified token usage;
+unknown dispatched usage remains held without replay. This makes no claim about
+hardware or electricity costs. Stop, lock, revoke and restart retain the same
+credential and task boundaries. Local requests may allow up to 120 seconds;
+cloud request limits are unchanged. Optional bearer credentials are sent only
+to the explicitly bound endpoint.
+
+Local credentials use vault envelope version 6. Schema 27 preserves idle schema
+26 documents, revisions and existing credential bytes; paused recovery must
+finish before migration. Older readers refuse new authority. Ordinary builds
+still refuse local and cloud dispatch while activation is held. Tests use only
+in-process and controlled loopback HTTP(S) fixtures, not an installed model or a
+real provider account.
+
+The existing `node scripts/provider-models.mjs --check` and reviewed application
+path maintain the local registry alongside the three cloud registries. Source
+changes produce review proposals, never remote code or automatic model adoption.
+See [Ollama's Responses compatibility](https://docs.ollama.com/api/openai-compatibility)
+and the [current Gemma 4 models](https://ollama.com/library/gemma4/tags).
+
 ## ChatGPT sign-in
 
 In a standalone `serve --ai-fixture` core, choose OpenAI → Continue with ChatGPT.
