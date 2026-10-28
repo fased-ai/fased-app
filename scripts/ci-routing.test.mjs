@@ -214,3 +214,67 @@ test("ordinary recovery checks leave signer time for privileged bootstrap withou
     assert.equal(plan.core, true);
   }
 });
+
+test("full UI projects share existing required jobs while focused paths retain both projects", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const workflow = await readFile(
+    new URL("../.github/workflows/checks.yml", import.meta.url),
+    "utf8",
+  );
+  const core = workflow.slice(
+    workflow.indexOf("  core:\n"),
+    workflow.indexOf("  desktop:\n"),
+  );
+  const desktop = workflow.slice(
+    workflow.indexOf("  desktop:\n"),
+    workflow.indexOf("  signer:\n"),
+  );
+  assert.match(
+    core,
+    /if: needs.classify.outputs.scope == 'full'\n\s+run: npm run test:core-ui -- --project=desktop\n/,
+  );
+  assert.match(
+    core,
+    /if: needs.classify.outputs.scope == 'ui'\n\s+run: npm run test:core-ui\n/,
+  );
+  assert.match(
+    core,
+    /if: needs.classify.outputs.scope == 'rpc'\n\s+run: npm run test:core-ui -- --grep/,
+  );
+  assert.match(
+    desktop,
+    /if: runner.os == 'Linux' && needs.classify.outputs.scope == 'full'\n\s+run: npm run test:core-ui -- --project=mobile\n/,
+  );
+  assert.equal(
+    workflow.split("npm run test:core-ui -- --project=desktop").length,
+    2,
+  );
+  assert.equal(
+    workflow.split("npm run test:core-ui -- --project=mobile").length,
+    2,
+  );
+  assert.match(desktop, /npx playwright install --only-shell chromium/);
+  for (const job of [core, desktop])
+    assert.ok(
+      job.includes("if: failure() || cancelled()"),
+      "retain failure traces when job deadline cancels the suite",
+    );
+  assert.match(desktop, /\.evidence\/core-browser\//);
+  assert.ok(
+    desktop.includes(".evidence/*.png"),
+    "retain moved mobile screenshots",
+  );
+  assert.match(core, /timeout-minutes: 20/);
+  assert.match(desktop, /timeout-minutes: 15/);
+  const full = classify([".github/workflows/checks.yml"]);
+  assert.equal(full.core, true);
+  assert.equal(full.desktop, true);
+  for (const paths of [
+    ["web/src/pages/Agents.tsx"],
+    ["internal/core/rpc_check.go"],
+  ]) {
+    const plan = classify(paths);
+    assert.equal(plan.core, true);
+    assert.equal(plan.desktop, false);
+  }
+});
