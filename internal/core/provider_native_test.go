@@ -133,7 +133,7 @@ func TestNativeProvidersEveryCurrentModelUsesSharedChat(t *testing.T) {
 			t.Run(model.ID, func(t *testing.T) {
 				s := fixtureStore(t)
 				a := addNativeAccount(t, s, provider, false)
-				if !modelChoice(a, model.ID).Selectable || len(a.Catalog.Providers) != 3 {
+				if !modelChoice(a, model.ID).Selectable || len(a.Catalog.Providers) != 4 {
 					t.Fatal("native discovery absent", a.Catalog)
 				}
 				v, p := nativePermission(t, s, a, model.ID)

@@ -71,6 +71,9 @@ func openAIModelPolicy(ids ...string) OpenAIModelPolicy {
 	if id == legacyOpenAIModel {
 		return legacyOpenAIModelPolicy()
 	}
+	if m, ok := currentProviderModel(id); ok && modelProvider(m) == "local" {
+		return localModelPolicy(id)
+	}
 	m, ok := currentProviderModel(id)
 	if !ok {
 		return OpenAIModelPolicy{}
@@ -138,7 +141,7 @@ func validateAIModelPolicy(q AgentAIRequest, now int64) error {
 	if q.Policy == nil || *q.Policy != p || q.Model != p.Model || q.ConnectionRef == "" || now < p.ReviewedAt || now >= p.ExpiresAt || q.Limits.MaxInputTokens+q.Limits.MaxOutputTokens > p.ContextTokens || q.Limits.MaxOutputTokens > p.OutputTokens {
 		return errors.New("model, token or tariff policy unavailable/expired; review supported admission with an unlocked test connection")
 	}
-	if planSignInRequest(q) && !validPolicyLimits(q.Limits, q.Policy) {
+	if unmeteredRequest(q) && !validPolicyLimits(q.Limits, q.Policy) {
 		return errors.New("plan requests require zero monetary fields and finite token/time acceptance limits")
 	}
 	return nil

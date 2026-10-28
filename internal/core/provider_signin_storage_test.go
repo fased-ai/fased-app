@@ -75,7 +75,7 @@ func TestSignInPlanSchemaMigrationPreservesRecordsAndHolds(t *testing.T) {
 			if err = probe.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&schema); err != nil {
 				t.Fatal(err)
 			}
-			wantSchema := 26
+			wantSchema := StateSchema
 			if phase == "paused" {
 				wantSchema = 25
 			}

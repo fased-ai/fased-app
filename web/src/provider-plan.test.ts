@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   isPlanPolicy,
+  hasReportedProviderUsage,
+  isUnmeteredPolicy,
   planFailureDetails,
   type OpenAIModelPolicy,
 } from "./agents";
@@ -51,4 +53,24 @@ describe("plan presentation", () => {
       planFailureDetails("OpenAI plan request stopped. Diagnostics: {broken"),
     ).toEqual({ summary: "ChatGPT request failed", details: "{broken" });
   });
+});
+
+// Local usage shares limits, but cannot turn an API or unknown route into free usage.
+describe("Local provider usage", () => {
+  const policy = (wireVersion: string) =>
+    ({ wireVersion }) as OpenAIModelPolicy;
+  it("keeps the no-tariff path bound to the local protocol and provider", () => {
+    const p = { ...policy("local-responses-v1"), provider: "local" };
+    expect(isUnmeteredPolicy(p)).toBe(true);
+    expect(isUnmeteredPolicy({ ...p, provider: "openai" })).toBe(false);
+    expect(isUnmeteredPolicy(policy("openai-responses-v1"))).toBe(false);
+  });
+});
+
+it("shows verified local and ChatGPT usage without treating unknown usage as reported", () => {
+  expect(hasReportedProviderUsage("local-reported-usage")).toBe(true);
+  expect(hasReportedProviderUsage("chatgpt-plan-reported-usage")).toBe(true);
+  expect(hasReportedProviderUsage("")).toBe(false);
+  expect(hasReportedProviderUsage(undefined)).toBe(false);
+  expect(hasReportedProviderUsage("estimated")).toBe(false);
 });

@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "policy": "latest-only",
+  "provider": "local",
+  "reviewedAt": 1793059200,
+  "expiresAt": 1795651200,
+  "sources": {
+    "models": "https://ollama.com/library/gemma4/tags",
+    "families": "https://ollama.com/search",
+    "discovery": "https://docs.ollama.com/api/openai-compatibility",
+    "pricing": "https://docs.ollama.com/api/openai-compatibility"
+  },
+  "models": [
+    {
+      "id": "gemma4:e2b",
+      "name": "Gemma 4 E2B",
+      "provider": "local",
+      "tier": "Fast",
+      "input": 0,
+      "cached": 0,
+      "output": 0,
+      "contextTokens": 131072,
+      "outputTokens": 8192,
+      "source": "https://ollama.com/library/gemma4:e2b",
+      "reasoning": "none"
+    },
+    {
+      "id": "gemma4:e4b",
+      "name": "Gemma 4 E4B",
+      "provider": "local",
+      "tier": "Balanced",
+      "input": 0,
+      "cached": 0,
+      "output": 0,
+      "contextTokens": 131072,
+      "outputTokens": 8192,
+      "source": "https://ollama.com/library/gemma4:e4b",
+      "reasoning": "none"
+    }
+  ]
+}

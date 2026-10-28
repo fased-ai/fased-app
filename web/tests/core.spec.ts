@@ -12743,3 +12743,109 @@ test("scoped pilot controls keep review allow and revoke exact while ordinary co
   expect(ordinary.pilot).toBeUndefined();
   expect(ordinary.liveCallsEnabled).toBe(false);
 });
+
+test("local provider connects in UI and shares configured agent Chat without API billing", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(90000);
+  page.setDefaultTimeout(10000);
+  await stop();
+  await start(true);
+  await page.goto(url + "/#agents/chat");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  if (isMobile) await page.goto(url + "/#agents/settings");
+  await page
+    .getByRole("button", { name: "Providers", exact: true })
+    .first()
+    .click();
+  const editor = page.getByRole("dialog", { name: "Providers", exact: true });
+  await editor.getByLabel("Provider", { exact: true }).selectOption("local");
+  await expect(editor.getByLabel("Endpoint", { exact: true })).toHaveValue(
+    "http://127.0.0.1:11434/v1",
+  );
+  await editor.getByLabel("Name", { exact: true }).fill("Browser local");
+  await expect(
+    editor.getByLabel("API key (optional)", { exact: true }),
+  ).toHaveValue("");
+  await editor
+    .getByLabel("Vault passphrase", { exact: true })
+    .fill("disposable-local-browser-vault");
+  await editor.getByRole("button", { name: "Save", exact: true }).click();
+  await expect
+    .poll(
+      async () =>
+        (await privateCLI(["ai-connection"])).connections?.find(
+          (a: any) => a.provider === "local",
+        )?.locked,
+    )
+    .toBe(false);
+  const account = (await privateCLI(["ai-connection"])).connections.find(
+    (a: any) => a.provider === "local",
+  );
+  expect(account.authMethod).toBe("local");
+  expect(
+    account.catalog.models.find((m: any) => m.id === "gemma4:e2b")?.selectable,
+  ).toBe(true);
+  await editor
+    .getByRole("button", { name: "Close dialog", exact: true })
+    .click();
+  let view = await privateCLI(["agents"]);
+  view = await privateCLI(["agents", "--request-stdin"], {
+    action: "profile-create",
+    revision: view.revision,
+    name: "Local browser analyst",
+    provider: "local",
+    accountRef: account.ref,
+    model: "gemma4:e2b",
+  });
+  const profile = view.profileId;
+  view = await privateCLI(["agents", "--request-stdin"], {
+    action: "session-create",
+    revision: view.revision,
+    profileId: profile,
+    name: "Local browser conversation",
+  });
+  await page.goto(url + "/#agents/chat");
+  await page.reload();
+  await page.getByLabel("Agent", { exact: true }).selectOption(profile);
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Explain this synthetic local note.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const review = page.getByRole("dialog", {
+    name: "Allow replies",
+    exact: true,
+  });
+  await expect(review).toContainText("gemma4:e2b");
+  await expect(review).not.toContainText("$");
+  await review
+    .getByRole("button", { name: "Allow and send", exact: true })
+    .click();
+  await expect
+    .poll(
+      async () =>
+        (await privateCLI(["agents", "--profile", profile])).aiRequests.at(-1)
+          ?.state,
+    )
+    .toBe("completed");
+  const result = (
+    await privateCLI(["agents", "--profile", profile])
+  ).aiRequests.at(-1);
+  expect(result.connectionRef).toBe(account.ref);
+  expect(result.costBasis).toBe("local-reported-usage");
+  expect(result.spentMicrousd).toBe(0);
+});

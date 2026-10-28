@@ -1,14 +1,17 @@
 import { RefreshCw, Plus } from "../icons";
 import { useUI } from "../ui-preferences";
 import type { OpenAIModelPolicy, OpenAIAdmission } from "../agents";
-import { isPlanPolicy, planFailureDetails } from "../agents";
+import { isUnmeteredPolicy, planFailureDetails } from "../agents";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useCore } from "../core";
 import { TaskAccessSettings, type TaskAccessAllowance } from "./TaskAccess";
 import { OpenAIPilotSettings, type PilotAllowance } from "./OpenAIPilot";
 
+const defaultLocalEndpoint = "http://127.0.0.1:11434/v1";
+
 export type Connection = {
-  authMethod?: "api-key" | "sign-in";
+  authMethod?: "api-key" | "sign-in" | "local";
+  endpoint?: string;
   planUse?: boolean;
   planPaused?: boolean;
   planFailure?: string;
@@ -51,9 +54,10 @@ export type Connection = {
       availability: string;
     }[];
   };
-  credentialMode?: "test" | "openai" | "anthropic" | "xai" | "openai-signin";
+  credentialMode?:
+    "test" | "openai" | "anthropic" | "xai" | "openai-signin" | "local";
   credentialModes?: (
-    "test" | "openai" | "anthropic" | "xai" | "openai-signin"
+    "test" | "openai" | "anthropic" | "xai" | "openai-signin" | "local"
   )[];
   taskAccess?: TaskAccessAllowance;
   accessReview?: TaskAccessAllowance;
@@ -136,7 +140,14 @@ export function ConnectionPicker({
               view?.catalog?.providers.find((p) => p.id === account.provider)
                 ?.name ||
               "OpenAI"}{" "}
-            · {uiText(account.authMethod === "sign-in" ? "ChatGPT" : "API key")}
+            ·{" "}
+            {uiText(
+              account.authMethod === "sign-in"
+                ? "ChatGPT"
+                : account.authMethod === "local"
+                  ? "Local"
+                  : "API key",
+            )}
             {(account.planPaused || account.locked) &&
               ` · ${uiText(account.planPaused ? "Paused" : "Locked")}`}
           </option>
@@ -177,7 +188,7 @@ export function AIConnectionSettings({
         ? {
             ...root,
             provider: newProvider,
-            authMethod: newMethod as "api-key" | "sign-in",
+            authMethod: newMethod as "api-key" | "sign-in" | "local",
             ref: "",
             locked: true,
             planPaused: false,
@@ -189,6 +200,7 @@ export function AIConnectionSettings({
         ? (root?.connections?.find((a) => a.ref === selected) ?? null)
         : root;
   const [key, setKey] = useState("");
+  const [endpoint, setEndpoint] = useState(defaultLocalEndpoint);
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -197,9 +209,29 @@ export function AIConnectionSettings({
     setCallback("");
   }, [core.instanceId]);
   const provider = view?.provider || "openai";
+  const isLocal = provider === "local";
+  useEffect(() => {
+    setEndpoint(
+      isLocal && view?.ref && !view.locked && view.endpoint
+        ? view.endpoint
+        : defaultLocalEndpoint,
+    );
+  }, [
+    core.instanceId,
+    selected,
+    isLocal,
+    view?.ref,
+    view?.locked,
+    view?.endpoint,
+  ]);
   const providerName =
-    root?.catalog?.providers.find((p) => p.id === provider)?.name || "OpenAI";
-  const method = view?.ref ? view.authMethod || "api-key" : newMethod;
+    root?.catalog?.providers.find((p) => p.id === provider)?.name ||
+    (isLocal ? uiText("Local") : "OpenAI");
+  const method = isLocal
+    ? "local"
+    : view?.ref
+      ? view.authMethod || "api-key"
+      : newMethod;
   const signIn = root?.signIn;
   const signInAvailable = root?.signInAvailable === true;
   const pausedFailure = view?.planPaused
@@ -210,7 +242,7 @@ export function AIConnectionSettings({
     ?.methods.some((m) => m.id === "sign-in");
   const apiMode =
     view?.credentialModes?.includes(
-      provider as "openai" | "anthropic" | "xai",
+      provider as "openai" | "anthropic" | "xai" | "local",
     ) ?? false;
   async function change(action: string) {
     if (!view) {
@@ -234,8 +266,10 @@ export function AIConnectionSettings({
         ...(action === "save"
           ? {
               provider,
-              key: credential,
-              credentialMode: apiMode ? provider : "test",
+              ...(isLocal
+                ? { endpoint, ...(credential ? { key: credential } : {}) }
+                : { key: credential }),
+              credentialMode: isLocal ? "local" : apiMode ? provider : "test",
             }
           : {}),
       };
@@ -291,9 +325,10 @@ export function AIConnectionSettings({
           onClick={() => {
             setSelected("new");
             setName("");
-            setNewMethod("api-key");
+            setNewMethod(newProvider === "local" ? "local" : "api-key");
             setCallback("");
             setKey("");
+            setEndpoint(defaultLocalEndpoint);
             setPassphrase("");
           }}
         >
@@ -333,7 +368,14 @@ export function AIConnectionSettings({
                 root?.catalog?.providers.find((p) => p.id === a.provider)
                   ?.name ||
                 "OpenAI"}{" "}
-              · {uiText(a.authMethod === "sign-in" ? "ChatGPT" : "API key")}
+              ·{" "}
+              {uiText(
+                a.authMethod === "sign-in"
+                  ? "ChatGPT"
+                  : a.authMethod === "local"
+                    ? "Local"
+                    : "API key",
+              )}
             </option>
           ))}
           {selected &&
@@ -355,14 +397,14 @@ export function AIConnectionSettings({
               disabled={busy || !!signIn}
               onChange={(e) => {
                 setNewProvider(e.target.value);
-                setNewMethod("api-key");
+                setNewMethod(e.target.value === "local" ? "local" : "api-key");
                 setKey("");
                 setPassphrase("");
               }}
             >
               {root?.catalog?.providers.map((p) => (
                 <option value={p.id} key={p.id}>
-                  {p.name}
+                  {uiText(p.name)}
                 </option>
               ))}
             </select>
@@ -396,7 +438,12 @@ export function AIConnectionSettings({
         </p>
         {view?.planPaused && (
           <p role="status">
-            {uiText(pausedFailure?.summary || "ChatGPT request failed")}
+            {uiText(
+              pausedFailure?.summary ||
+                (view.provider === "local"
+                  ? "Local model request failed"
+                  : "ChatGPT request failed"),
+            )}
           </p>
         )}
         {error && <p role="alert">{error}</p>}
@@ -419,7 +466,7 @@ export function AIConnectionSettings({
           open={!view?.ref}
         >
           <summary>{uiText("Credentials")}</summary>
-          {!apiMode && method !== "sign-in" && (
+          {!apiMode && !isLocal && method !== "sign-in" && (
             <p>
               {uiText("Disposable fased-test- keys only. No real API calls.")}
             </p>
@@ -439,9 +486,27 @@ export function AIConnectionSettings({
                 onChange={(e) => setName(e.target.value)}
               />
             </label>
+            {isLocal && (
+              <label>
+                {uiText("Endpoint")}
+                <input
+                  type="url"
+                  value={endpoint}
+                  maxLength={256}
+                  spellCheck={false}
+                  onChange={(e) => setEndpoint(e.target.value)}
+                />
+              </label>
+            )}
             {method !== "sign-in" && (
               <label>
-                {uiText(apiMode ? "API key" : "Test key")}
+                {uiText(
+                  isLocal
+                    ? "API key (optional)"
+                    : apiMode
+                      ? "API key"
+                      : "Test key",
+                )}
                 <input
                   type="password"
                   autoComplete="off"
@@ -557,7 +622,7 @@ export function AIConnectionSettings({
                   disabled={
                     busy ||
                     !view ||
-                    !key ||
+                    (isLocal ? !endpoint : !key) ||
                     passphrase.length < 12 ||
                     (view.pilotEnrollment && !!view.ref)
                   }
@@ -709,12 +774,13 @@ export function AIAdmissionReview({
 }) {
   const { t: uiText } = useUI();
   if (!policy) return null;
-  if (isPlanPolicy(policy))
+  if (isUnmeteredPolicy(policy))
     return (
       <details className="ai-admission">
-        <summary>{uiText("Plan usage")}</summary>
+        <summary>{uiText("Usage")}</summary>
         <p>
-          {uiText("ChatGPT")} · {policy.model}
+          {uiText(policy.provider === "local" ? "Local" : "ChatGPT")} ·{" "}
+          {policy.model}
         </p>
         {admission && (
           <dl>

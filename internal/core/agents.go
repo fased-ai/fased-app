@@ -653,7 +653,7 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		profile = id
 		d.Profiles = append(d.Profiles, created)
 	case "profile-update":
-		if !validAgentText(c.Name, 80, true) || (c.Provider != "none" && c.Provider != "openai" && c.Provider != "anthropic" && c.Provider != "xai") {
+		if !validAgentText(c.Name, 80, true) || (c.Provider != "none" && c.Provider != "openai" && c.Provider != "anthropic" && c.Provider != "xai" && c.Provider != "local") {
 			return AgentView{}, errors.New("name and supported provider preference required")
 		}
 		if c.Model != "" && c.Model != fixtureAIModel {

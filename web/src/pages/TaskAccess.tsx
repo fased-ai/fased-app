@@ -190,8 +190,10 @@ export function TaskAccessSettings({
               minutes: Math.floor((review.expiresAt - review.createdAt) / 60),
             })}{" "}
             ·{" "}
-            {connection.authMethod === "sign-in" && review.budgetMicrousd === 0
-              ? t("ChatGPT")
+            {(connection.authMethod === "sign-in" ||
+              connection.authMethod === "local") &&
+            review.budgetMicrousd === 0
+              ? t("Usage")
               : `$${(review.budgetMicrousd / 1_000_000).toFixed(2)}`}
           </p>
           <p>

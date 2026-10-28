@@ -10,7 +10,11 @@ import {
 import { useState, useEffect, useRef } from "react";
 import { useWorkspace } from "../workspace";
 import type { AgentView } from "../agents";
-import { isPlanPolicy, planFailureDetails } from "../agents";
+import {
+  isUnmeteredPolicy,
+  planFailureDetails,
+  hasReportedProviderUsage,
+} from "../agents";
 const money = (n: number) => `$${(n / 1_000_000).toFixed(6)}`;
 export function ScheduledAITasks({ view: v }: { view: AgentView }) {
   const { t: uiText } = useUI();
@@ -65,7 +69,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
   const selectedPolicy = selectedAccount?.catalog?.models.find(
     (item) => item.id === model,
   )?.policy;
-  const planUsage = isPlanPolicy(selectedPolicy);
+  const planUsage = isUnmeteredPolicy(selectedPolicy);
   const budgetModel = useRef("");
   useEffect(() => {
     const identity = connectionRef + ":" + model + ":" + selectedPolicy?.id;
@@ -73,7 +77,10 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
     const p = selectedPolicy;
     if (!p) return;
     budgetModel.current = identity;
-    if (isPlanPolicy(p)) return;
+    if (isUnmeteredPolicy(p)) {
+      if (p.provider === "local") setDeadline(60);
+      return;
+    }
     const ceiling = Math.ceil(
       (input * p.inputMicrousdPerMillion +
         Math.max(output, p.billableOutputTokens || 0) *
@@ -100,7 +107,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
     >
       <div className="panel-heading">
         <h2>{uiText("Scheduled AI steps")}</h2>
-        <span>{uiText(planUsage ? "ChatGPT" : "DEVELOPMENT FIXTURES")}</span>
+        <span>{uiText(planUsage ? "Usage" : "DEVELOPMENT FIXTURES")}</span>
       </div>
       <div className="agent-record-body">
         {!planUsage && (
@@ -117,9 +124,9 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
             const requests = v.aiRequests.filter((q) => q.taskId === t.id);
             const spent = requests.reduce((n, q) => n + q.spentMicrousd, 0);
             const held = requests.reduce((n, q) => n + q.heldMicrousd, 0);
-            const taskPlanUsage = isPlanPolicy(a.policy);
-            const reported = requests.filter(
-              (q) => q.costBasis === "chatgpt-plan-reported-usage",
+            const taskPlanUsage = isUnmeteredPolicy(a.policy);
+            const reported = requests.filter((q) =>
+              hasReportedProviderUsage(q.costBasis),
             );
             return (
               <article
@@ -136,7 +143,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                 </p>
                 {taskPlanUsage ? (
                   <p>
-                    {uiText("ChatGPT")}
+                    {uiText("Usage")}
                     {!!reported.length && (
                       <>
                         {" "}
@@ -340,7 +347,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                   </p>
                 )}
                 {requests.map((q) => {
-                  const planFailure = isPlanPolicy(q.policy)
+                  const planFailure = isUnmeteredPolicy(q.policy)
                     ? planFailureDetails(q.failure)
                     : null;
                   return (
@@ -599,7 +606,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                 type="number"
                 required
                 min={1}
-                max={5}
+                max={selectedPolicy?.provider === "local" ? 120 : 5}
                 value={deadline}
                 onChange={(e) => setDeadline(e.target.valueAsNumber)}
               />

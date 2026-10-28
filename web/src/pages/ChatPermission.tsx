@@ -1,6 +1,6 @@
 import { Dialog } from "../components/shared";
 import type { ChatPermission, OpenAIModelPolicy } from "../agents";
-import { isPlanPolicy } from "../agents";
+import { isUnmeteredPolicy } from "../agents";
 import { useUI } from "../ui-preferences";
 
 export function ChatPermissionReview({
@@ -20,7 +20,7 @@ export function ChatPermissionReview({
 }) {
   const { t } = useUI();
   const planUsage =
-    isPlanPolicy(policy) &&
+    isUnmeteredPolicy(policy) &&
     p.budgetMicrousd === 0 &&
     p.limits.budgetMicrousd === 0;
   return (
@@ -63,7 +63,7 @@ export function ChatPermissionReview({
             <>
               <div>
                 <dt>{t("Usage")}</dt>
-                <dd>{t("ChatGPT")}</dd>
+                <dd>{t(policy?.provider === "local" ? "Local" : "ChatGPT")}</dd>
               </div>
               <div>
                 <dt>{t("App limits")}</dt>

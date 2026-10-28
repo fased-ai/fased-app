@@ -87,7 +87,7 @@ func (s *Store) resolveAgentProvider(c *AgentCommand, profile AgentProfile) erro
 		if profile.Model != "" && profile.Model != fixtureAIModel {
 			return errors.New("agent model unavailable")
 		}
-	case "openai", "anthropic", "xai":
+	case "openai", "anthropic", "xai", "local":
 		policy := openAIModelPolicy(profile.Model)
 		if !currentModelRequest(AgentAIRequest{Model: profile.Model, Policy: &policy}) || profile.Model != policy.Model || policy.ExpiresAt <= s.now().Unix() {
 			return errors.New("agent model unavailable")

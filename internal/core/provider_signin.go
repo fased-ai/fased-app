@@ -84,12 +84,18 @@ func validSignInValue(value string, bound int) bool {
 	return true
 }
 func aiVaultCiphertextBound(v aiVaultEnvelope) int {
+	if v.Version == 6 {
+		return 2048 + 16
+	}
 	if v.Version == 5 {
 		return providerSignInMaxCiphertext
 	}
 	return 512
 }
 func (s *Store) aiVaultModeAllowed(v aiVaultEnvelope) bool {
+	if v.Version == 6 {
+		return v.TestOnly && s.providerFixture || !v.TestOnly && s.provider.apiCredentials
+	}
 	if v.Version == 5 {
 		return v.TestOnly && s.providerFixture || !v.TestOnly && s.provider.apiCredentials || s.provider.signInTransport != nil
 	}

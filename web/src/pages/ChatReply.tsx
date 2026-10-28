@@ -1,6 +1,10 @@
 import { useUI } from "../ui-preferences";
 import type { AgentAIRequest, AgentView } from "../agents";
-import { isPlanPolicy, planFailureDetails } from "../agents";
+import {
+  isUnmeteredPolicy,
+  planFailureDetails,
+  hasReportedProviderUsage,
+} from "../agents";
 import { useWorkspace } from "../workspace";
 import { ResearchTurnReview } from "./ResearchTurnReview";
 import { ChatMemoryReview } from "./ChatMemoryReview";
@@ -29,8 +33,8 @@ export function ChatReply({
 }) {
   const { t: uiText } = useUI();
   const { agents } = useWorkspace();
-  const planUsage = isPlanPolicy(q.policy);
-  const reportedUsage = q.costBasis === "chatgpt-plan-reported-usage";
+  const planUsage = isUnmeteredPolicy(q.policy);
+  const reportedUsage = hasReportedProviderUsage(q.costBasis);
   const planFailure = planUsage ? planFailureDetails(q.failure) : null;
   return (
     <article className="ai-request" key={q.id}>
@@ -63,7 +67,7 @@ export function ChatReply({
         <strong>{uiText(q.state)}</strong>
         <small>
           {planUsage ? (
-            uiText("ChatGPT")
+            uiText(q.policy?.provider === "local" ? "Local" : "ChatGPT")
           ) : (
             <>
               {uiText("Demo · ")}

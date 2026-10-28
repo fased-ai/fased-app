@@ -64,7 +64,7 @@ func validChatPermission(p ChatPermission, stored ...bool) bool {
 	if len(stored) > 0 && stored[0] && p.ConnectionRef != "" && p.Limits.BudgetMicrousd == 0 && p.BudgetMicrousd == 0 && p.AllocatedMicrousd == 0 {
 		// Structural storage admission is not execution authority. Every runtime
 		// consumer below also resolves the immutable account's auth method.
-		limitsOK = validPolicyLimits(p.Limits, &OpenAIModelPolicy{WireVersion: planSignInWire})
+		limitsOK = validPolicyLimits(p.Limits, &OpenAIModelPolicy{Provider: "local", WireVersion: localWire})
 	}
 	return len(p.ID) == 64 && len(p.PersonaDigest) == 64 && len(p.BootID) == 32 && (len(p.ConnectionRef) == 0 || len(p.ConnectionRef) == 43) && (p.Model == fixtureAIModel || p.ConnectionRef != "") && p.ID == chatDigest(p) && p.ProfileID != "" && p.SessionID != "" && len(p.BootID) > 0 && p.Revision >= 0 && p.CreatedAt > 0 && p.ExpiresAt >= p.CreatedAt+60 && p.ExpiresAt <= p.CreatedAt+86400 &&
 		(p.MemoryMode == "relevant" || p.MemoryMode == "none") && modelOK && limitsOK && p.MaxRequests >= 1 && p.MaxRequests <= 20 && p.Limits.BudgetMicrousd >= reservation && p.BudgetMicrousd >= reservation && p.BudgetMicrousd <= 20000000 && p.UsedRequests >= 0 && p.UsedRequests <= p.MaxRequests && p.AllocatedMicrousd >= 0 && p.AllocatedMicrousd <= p.BudgetMicrousd
@@ -78,7 +78,7 @@ func chatModelPolicy(model string) *OpenAIModelPolicy {
 }
 func chatModelPolicyForMethod(model, method string) *OpenAIModelPolicy {
 	p := chatModelPolicy(model)
-	if method == "" || method == "api-key" {
+	if method == "" || method == "api-key" || method == "local" && localPolicy(p) {
 		return p
 	}
 	m, current := currentProviderModel(model)
@@ -120,7 +120,7 @@ func (s *Store) chatPolicy(p ChatPermission) *OpenAIModelPolicy {
 	return chatModelPolicyForMethod(p.Model, method)
 }
 func validChatPermissionPolicy(p ChatPermission, policy *OpenAIModelPolicy) bool {
-	if !planSignInPolicy(policy) {
+	if !unmeteredPolicy(policy) {
 		return validChatPermission(p)
 	}
 	return validChatPermission(p, true) && p.Limits.BudgetMicrousd == 0 && p.BudgetMicrousd == 0 && p.AllocatedMicrousd == 0 && validPolicyLimits(p.Limits, policy)
