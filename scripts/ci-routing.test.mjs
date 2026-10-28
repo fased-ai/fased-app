@@ -215,7 +215,7 @@ test("ordinary recovery checks leave signer time for privileged bootstrap withou
   }
 });
 
-test("full UI projects share existing required jobs while focused paths retain both projects", async () => {
+test("full UI journey uses the existing Linux job while focused paths retain core coverage", async () => {
   const { readFile } = await import("node:fs/promises");
   const workflow = await readFile(
     new URL("../.github/workflows/checks.yml", import.meta.url),
@@ -229,9 +229,9 @@ test("full UI projects share existing required jobs while focused paths retain b
     workflow.indexOf("  desktop:\n"),
     workflow.indexOf("  signer:\n"),
   );
-  assert.match(
+  assert.doesNotMatch(
     core,
-    /if: needs.classify.outputs.scope == 'full'\n\s+run: npm run test:core-ui -- --project=desktop\n/,
+    /if: needs.classify.outputs.scope == 'full'\n\s+run: npm run test:core-ui/,
   );
   assert.match(
     core,
@@ -243,27 +243,20 @@ test("full UI projects share existing required jobs while focused paths retain b
   );
   assert.match(
     desktop,
-    /if: runner.os == 'Linux' && needs.classify.outputs.scope == 'full'\n\s+run: npm run test:core-ui -- --project=mobile\n/,
+    /if: runner.os == 'Linux' && needs.classify.outputs.scope == 'full'\n\s+run: npm run test:core-ui\n/,
   );
-  assert.equal(
-    workflow.split("npm run test:core-ui -- --project=desktop").length,
-    2,
-  );
-  assert.equal(
-    workflow.split("npm run test:core-ui -- --project=mobile").length,
-    2,
+  assert.ok(
+    !workflow.includes("--project="),
+    "every selected journey retains desktop and mobile",
   );
   assert.match(desktop, /npx playwright install --only-shell chromium/);
   for (const job of [core, desktop])
     assert.ok(
       job.includes("if: failure() || cancelled()"),
-      "retain failure traces when job deadline cancels the suite",
+      "retain traces on failure or job cancellation",
     );
   assert.match(desktop, /\.evidence\/core-browser\//);
-  assert.ok(
-    desktop.includes(".evidence/*.png"),
-    "retain moved mobile screenshots",
-  );
+  assert.ok(desktop.includes(".evidence/*.png"), "retain moved screenshots");
   assert.match(core, /timeout-minutes: 20/);
   assert.match(desktop, /timeout-minutes: 15/);
   const full = classify([".github/workflows/checks.yml"]);

@@ -116,8 +116,6 @@ jobs:
       # Same runner libraries and headless browser as the managed signer UI proof.
       - run: npx playwright install --only-shell chromium
       - run: npm run test:ui
-      - if: needs.classify.outputs.scope == 'full'
-        run: npm run test:core-ui -- --project=desktop
       - if: needs.classify.outputs.scope == 'ui'
         run: npm run test:core-ui
       - if: needs.classify.outputs.scope == 'rpc'
@@ -211,12 +209,12 @@ jobs:
       - name: Packaged Ubuntu desktop first-launch preparation
         if: runner.os == 'Linux'
         run: xvfb-run -a node scripts/check-native-first-launch.mjs
-      - name: Prepare joined mobile UI browser
+      - name: Prepare joined UI browser
         if: runner.os == 'Linux' && needs.classify.outputs.scope == 'full'
         run: npx playwright install --only-shell chromium
-      - name: Joined mobile UI and CLI journey
+      - name: Joined UI and CLI journey
         if: runner.os == 'Linux' && needs.classify.outputs.scope == 'full'
-        run: npm run test:core-ui -- --project=mobile
+        run: npm run test:core-ui
       - name: Remove owned Ubuntu acceptance policy after native window
         if: always() && runner.os == 'Linux'
         run: node --input-type=module -e "const m = await import('./scripts/ubuntu-preparation.mjs'); await m.cleanupUbuntuPreparation();"

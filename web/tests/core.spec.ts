@@ -12037,6 +12037,20 @@ for (const location of ["local", "remote"]) {
     );
     expect(profile.connectionRef).toBe(account.ref);
     const read = () => privateCLI(["agents", "--profile", profile.id]);
+    // Model a completed worker journal arriving before the browser's next
+    // snapshot. CLI completion alone must not make a stale UI ready to write.
+    let delayCompletedView = location === "local";
+    await page.route("**/api/v1/agents?**", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      if (
+        delayCompletedView &&
+        body.profileId === profile.id &&
+        body.aiRequests?.some((q: { state: string }) => q.state === "completed")
+      )
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      await route.fulfill({ response, json: body });
+    });
     await page.getByRole("button", { name: "Start chat", exact: true }).click();
     await page
       .getByLabel("Message", { exact: true })
@@ -12059,6 +12073,13 @@ for (const location of ["local", "remote"]) {
       .poll(async () => (await read()).aiRequests.at(-1)?.state)
       .toBe("completed");
     const reply = (await read()).aiRequests.at(-1);
+    // The backend may finish between browser polls. Await the UI's completed
+    // view before creating a task; never rebase/retry a stale mutation.
+    await expect(
+      page.getByRole("button", { name: "Stop", exact: true }),
+    ).toHaveCount(0);
+    await expect(page.locator(".ai-answer").last()).toHaveText(reply.answer);
+    delayCompletedView = false;
     expect(reply).toMatchObject({
       connectionRef: account.ref,
       costBasis: "chatgpt-plan-reported-usage",
