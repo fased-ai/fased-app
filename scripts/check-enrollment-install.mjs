@@ -319,9 +319,10 @@ async function controlledInterruption(args, instance) {
       stage,
     ]);
     const marker = "disposable enrollment foreign-stage fixture";
-    osTool(
-      "/usr/bin/install",
-      [
+    const markerFile = join(evidence, `foreign-${observed.id}.fixture`);
+    await writeFile(markerFile, marker, { mode: 0o600, flag: "wx" });
+    try {
+      osTool("/usr/bin/install", [
         "-m",
         "0600",
         "-o",
@@ -329,11 +330,12 @@ async function controlledInterruption(args, instance) {
         "-g",
         String(observed.target.app.gid),
         "--",
-        "/dev/stdin",
+        markerFile,
         stage + "/foreign",
-      ],
-      marker,
-    );
+      ]);
+    } finally {
+      await rm(markerFile);
+    }
     current.kill("SIGKILL");
     const exit = await done;
     child = null;
