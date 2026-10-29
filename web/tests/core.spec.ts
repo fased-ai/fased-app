@@ -1,5 +1,8 @@
 import { expect, test, type Request, type Route } from "@playwright/test";
-import { revealFixtureAccountEntry } from "../../scripts/fixture-account-journey.mjs";
+import {
+  refreshFixtureAccounts,
+  revealFixtureAccountEntry,
+} from "../../scripts/fixture-account-journey.mjs";
 
 test.use({ colorScheme: "dark" });
 import { spawn, type ChildProcess } from "node:child_process";
@@ -4858,17 +4861,28 @@ test("managed account entry supports current and predecessor layouts", async ({
 }) => {
   page.setDefaultTimeout(1500);
   await page.setContent(
-    "<details><summary>Advanced</summary><label>Name<input></label></details>",
+    `<details><summary>Advanced</summary><label>Name<input></label></details><button onclick="this.dataset.refreshed='yes'">Refresh</button>`,
   );
   await revealFixtureAccountEntry(page);
   await expect(page.getByLabel("Name", { exact: true })).toBeVisible();
   await expect(page.locator("details")).toHaveAttribute("open", "");
+  await refreshFixtureAccounts(page);
+  await expect(
+    page.getByRole("button", { name: "Refresh", exact: true }),
+  ).toHaveAttribute("data-refreshed", "yes");
   await page.setContent(
-    "<label>Name<input></label><details><summary>Advanced</summary><p>Other controls</p></details>",
+    `<label>Name<input></label><details><summary>Advanced</summary><p>Other controls</p></details><button onclick="this.dataset.refreshed='yes'">Refresh accounts and approvals</button>`,
   );
   await revealFixtureAccountEntry(page);
   await expect(page.getByLabel("Name", { exact: true })).toBeVisible();
   await expect(page.locator("details")).not.toHaveAttribute("open", "");
+  await refreshFixtureAccounts(page);
+  await expect(
+    page.getByRole("button", {
+      name: "Refresh accounts and approvals",
+      exact: true,
+    }),
+  ).toHaveAttribute("data-refreshed", "yes");
   await page.setContent("<main></main>");
   await page.evaluate(() => {
     window.setTimeout(() => {
@@ -4920,6 +4934,7 @@ test("public account records share UI/CLI state without wallet authority", async
   let state = JSON.parse(
     (await exec(binary, ["accounts", "--data-dir", dir])).stdout,
   );
+  await refreshFixtureAccounts(page);
   expect(state.record.accounts[0].name).toBe("Disposable watch");
   expect(state.fixture.available).toBe(false);
   await page.getByRole("button", { name: "RPC", exact: true }).click();

@@ -14,6 +14,12 @@ export async function revealFixtureAccountEntry(page) {
   await name.waitFor({ state: "visible" });
 }
 
+export async function refreshFixtureAccounts(page) {
+  await page
+    .getByRole("button", { name: /^(Refresh|Refresh accounts and approvals)$/ })
+    .click();
+}
+
 export async function fixtureAccountJourney({
   url,
   engine,
@@ -92,9 +98,7 @@ export async function fixtureAccountJourney({
       ["accounts", "--prepare-host", "--request-stdin"],
       JSON.stringify(current.record),
     );
-    await page
-      .getByRole("button", { name: "Refresh accounts and approvals" })
-      .click();
+    await refreshFixtureAccounts(page);
     await page
       .getByRole("heading", { name: "CLI external manual", exact: true })
       .waitFor();
@@ -205,9 +209,7 @@ finally:
       terminal("approve").passwordEcho === false,
     );
     check("accounts:approvalCompletionLocksVault", ownerStatus().locked);
-    await page
-      .getByRole("button", { name: "Refresh accounts and approvals" })
-      .click();
+    await refreshFixtureAccounts(page);
     await page.getByText("approved", { exact: true }).waitFor();
     current = JSON.parse(cli(["accounts", "--prepare-host"]));
     check(
