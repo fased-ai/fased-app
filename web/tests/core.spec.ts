@@ -13057,7 +13057,11 @@ test("Providers page preserves agent drafts and shares account models without ge
     page.getByRole("dialog", { name: "Providers", exact: true }),
   ).toHaveCount(0);
   await expect(
-    providers.getByRole("heading", { name: "Providers", exact: true }),
+    providers.getByRole("heading", {
+      name: "Providers",
+      level: 1,
+      exact: true,
+    }),
   ).toBeVisible();
   await expect(providers.locator(".provider-editor")).toHaveCSS(
     "background-color",
