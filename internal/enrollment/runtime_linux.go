@@ -149,9 +149,13 @@ func (h *runtimeHost) export(ctx context.Context, m custodyinstall.Manifest, s s
 	reader := bufio.NewReader(p.Output)
 	raw, err := readEnrollmentLine(reader, core.MaxEnrollmentEncodedBytes)
 	var image core.EnrollmentImage
-	if err != nil || len(raw) > core.MaxEnrollmentEncodedBytes || update.StrictJSON(raw, &image) != nil || core.ValidateEnrollmentImage(image) != nil || image.InstanceID != s.ExpectedInstanceID {
+	if err != nil || len(raw) > core.MaxEnrollmentEncodedBytes || update.StrictJSON(raw, &image) != nil {
 		_ = close()
-		return nil, errState
+		return nil, fmt.Errorf("enrollment source helper frame: %w", errState)
+	}
+	if core.ValidateEnrollmentImage(image) != nil || image.InstanceID != s.ExpectedInstanceID {
+		_ = close()
+		return nil, fmt.Errorf("enrollment source payload validation: %w", errState)
 	}
 	acquisition.Stop()
 	digest := core.EnrollmentImageDigest(image)

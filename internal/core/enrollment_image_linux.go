@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/url"
 	"os"
@@ -233,7 +234,7 @@ func exportEnrollmentImage(ctx context.Context, dir string) (_ EnrollmentImage, 
 	}
 	lock, err := enrollmentSource(dir)
 	if err != nil {
-		return out, nil, err
+		return out, nil, fmt.Errorf("enrollment source lock: %w", err)
 	}
 	defer func() {
 		if resultErr != nil {
@@ -242,7 +243,7 @@ func exportEnrollmentImage(ctx context.Context, dir string) (_ EnrollmentImage, 
 	}()
 	before, err := enrollmentScan(ctx, int(lock.root.Fd()))
 	if err != nil {
-		return out, nil, err
+		return out, nil, fmt.Errorf("enrollment source inventory: %w", err)
 	}
 	var heldLock unix.Stat_t
 	if unix.Fstat(int(lock.file.Fd()), &heldLock) != nil || !enrollmentSameStat(heldLock, before["instance.lock"].stat) {
@@ -254,7 +255,7 @@ func exportEnrollmentImage(ctx context.Context, dir string) (_ EnrollmentImage, 
 	}
 	serialized, id, err := enrollmentSQLite(ctx, db.data, before["core.sqlite-wal"].data, true)
 	if err != nil {
-		return out, nil, err
+		return out, nil, fmt.Errorf("enrollment source snapshot: %w", err)
 	}
 	out = EnrollmentImage{Version: 1, InstanceID: id, Schema: StateSchema}
 	for path, entry := range before {
@@ -269,7 +270,7 @@ func exportEnrollmentImage(ctx context.Context, dir string) (_ EnrollmentImage, 
 	}
 	sort.Slice(out.Files, func(i, j int) bool { return out.Files[i].Path < out.Files[j].Path })
 	if err = validateEnrollmentImage(out); err != nil {
-		return EnrollmentImage{}, nil, err
+		return EnrollmentImage{}, nil, fmt.Errorf("enrollment source validation: %w", err)
 	}
 	after, err := enrollmentScan(ctx, int(lock.root.Fd()))
 	if err != nil || len(before) != len(after) {

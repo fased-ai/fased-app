@@ -178,6 +178,76 @@ function snapshot(identity, data, hold = false) {
   );
 }
 
+async function failureInventory() {
+  const detail = {};
+  const statCode = String.raw`
+import errno,json,os,stat,sys
+assert os.geteuid()!=0
+root=sys.argv[1];out=[]
+def visit(path,name,depth):
+    if len(out)>=256:return
+    try:s=os.lstat(path)
+    except OSError as e:
+        out.append({'name':name,'errno':e.errno});return
+    kind=('dir' if stat.S_ISDIR(s.st_mode) else 'file' if stat.S_ISREG(s.st_mode) else 'link' if stat.S_ISLNK(s.st_mode) else 'socket' if stat.S_ISSOCK(s.st_mode) else 'other')
+    out.append({'name':name,'type':kind,'mode':format(stat.S_IMODE(s.st_mode),'04o'),'uid':s.st_uid,'gid':s.st_gid,'nlink':s.st_nlink,'size':s.st_size})
+    if kind!='dir' or depth>=4:return
+    try:
+        with os.scandir(path) as entries:names=sorted(e.name for e in entries)
+    except OSError as e:
+        out.append({'name':name,'errno':e.errno});return
+    for item in names[:256]:visit(os.path.join(path,item),item if name=='.' else name+'/'+item,depth+1)
+visit(root,'.',0)
+print(json.dumps(out,separators=(',',':')))
+`;
+  const inventory = (identity, path) =>
+    JSON.parse(normal(identity, "/usr/bin/python3", ["-c", statCode, path]));
+  if (source?.identity) {
+    try {
+      detail.source = inventory(source.identity, source.data);
+    } catch {
+      detail.source = { unavailable: true };
+    }
+  }
+  try {
+    const bytes = await readFile(
+      join(config, "fased-app-enrollment", "state.json"),
+    );
+    assert.ok(bytes.length <= 16384);
+    const journal = JSON.parse(bytes);
+    assert.match(journal.id, /^[a-f0-9]{32}$/);
+    assert.match(journal.phase, /^[a-z-]{1,64}$/);
+    detail.journal = { id: journal.id, phase: journal.phase };
+    const target = journal.target;
+    assert.equal(target.owner, uid);
+    assert.equal(target.root, custodyRoot);
+    assert.match(target.id, /^[a-f0-9]{32}$/);
+    for (const identity of [target.app, target.signer])
+      assert.ok(
+        Number.isSafeInteger(identity.uid) &&
+          identity.uid > 0 &&
+          identity.uid !== uid &&
+          Number.isSafeInteger(identity.gid) &&
+          identity.gid > 0,
+      );
+    detail.target = {
+      id: target.id,
+      owner: target.owner,
+      appUid: target.app.uid,
+      appGid: target.app.gid,
+      signerUid: target.signer.uid,
+      signerGid: target.signer.gid,
+    };
+    detail.stage = inventory(
+      target.app,
+      `${custodyRoot}/enrollment-${journal.id}.stage`,
+    );
+  } catch {
+    detail.journalUnavailable = true;
+  }
+  return detail;
+}
+
 async function browserProof(url, profile, instance) {
   const ctx = await browser.newContext({
     viewport: { width: 1360, height: 900 },
@@ -349,7 +419,7 @@ async function controlledInterruption(args, instance) {
     log += scrub(refusal) + "\n";
     check(
       "local:foreignStageRefused",
-      /invalid or conflicting enrollment image; preserve original state/.test(
+      /enrollment import stage: invalid or conflicting enrollment image; preserve original state/.test(
         refusal,
       ),
     );
@@ -595,6 +665,7 @@ try {
       mode === "local"
         ? identity
         : { uid: identity.appUid, gid: identity.appGid };
+    source.identity = sourceIdentity;
     const claim =
       mode === "local"
         ? JSON.parse(await readFile(source.data + "/claim-code.json", "utf8"))
@@ -757,6 +828,7 @@ try {
   report.result = "PASS";
 } catch (e) {
   report.error = scrub(e.stack || e.message);
+  report.failure = await failureInventory();
   throw e;
 } finally {
   const cleanup = [];

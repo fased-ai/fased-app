@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -97,7 +98,7 @@ func enrollmentImageCommand(ctx context.Context, args []string, in io.Reader, ou
 			return e
 		}
 		if e := core.ImportEnrollmentImage(ctx, *dir, image); e != nil {
-			return e
+			return fmt.Errorf("enrollment import stage: %w", e)
 		}
 		return enrollmentImageResult(out, image)
 	}
