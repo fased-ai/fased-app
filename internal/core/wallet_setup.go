@@ -13,6 +13,8 @@ import (
 // WalletSetup is public, non-persistent onboarding state. Owner key operations
 // stay exclusively in the existing immutable owner helper, not this API.
 type WalletSetup struct {
+	InstanceID          string `json:"instanceId"`
+	Source              string `json:"source,omitempty"`
 	Version             int    `json:"version"`
 	Network             string `json:"network"`
 	State               string `json:"state"`
@@ -32,6 +34,13 @@ type AccountSetupCommand struct {
 
 func (s *Store) walletSetup(live FixtureView) WalletSetup {
 	v := WalletSetup{Version: 1, Network: s.custodyNetwork, State: "not-installed", FixtureOnly: true, NetworkWatchEnabled: s.rpcAdmission, OwnerSupported: runtime.GOOS == "linux"}
+	v.InstanceID = s.instanceID
+	switch s.installationSource.Load() {
+	case 1:
+		v.Source = "local"
+	case 2:
+		v.Source = "remote"
+	}
 	if s.fixture == nil && s.custodyNetwork == "" {
 		return v
 	}

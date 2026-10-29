@@ -30,6 +30,7 @@ type HTTPHandler struct {
 	publicHost        string
 	instanceLocation  string
 	instanceOwnerUID  int
+	instanceOwnerKind string
 	assets            fs.FS
 	authSlots         chan struct{}
 	limiter           struct {
@@ -104,7 +105,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		if h.publicHost != "" && r.Host == h.publicHost {
 			location, transport = "remote", "private-https"
 		}
-		health.Connection = &ConnectionInfo{Location: location, Transport: transport, OwnerUID: h.instanceOwnerUID}
+		health.Connection = &ConnectionInfo{Location: location, Transport: transport, OwnerUID: h.instanceOwnerUID, OwnerKind: h.instanceOwnerKind}
 		writeJSON(w, 200, health)
 		return
 	case "/api/v1/auth/state":

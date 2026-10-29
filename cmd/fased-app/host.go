@@ -17,6 +17,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/bundle"
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
 	"golang.org/x/term"
@@ -77,6 +78,25 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
+	if command == "service" || command == "open" || command == "uninstall" || command == "install" {
+		target, found, e := enrolledTarget(paths.Data)
+		if e != nil {
+			return e
+		}
+		if found {
+			if command == "install" {
+				return errors.New("this instance is enrolled; use open or service management; original installation is preserved")
+			}
+			operation := action
+			if command == "open" {
+				operation = "open"
+			}
+			if command == "uninstall" {
+				operation = "remove"
+			}
+			return enrolledLifecycle(ctx, target, operation, *prepareHost, *printOnly, out, enrolledSystem(&custodyinstall.System{In: os.Stdin, Out: errOut}))
+		}
+	}
 	switch command {
 	case "install":
 		var wizard *bufio.Reader

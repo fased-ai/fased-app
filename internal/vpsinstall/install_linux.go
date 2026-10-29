@@ -31,18 +31,21 @@ type hostFile struct {
 	Link               string
 }
 type hostOps struct {
-	uid, euid, gid int
-	read           func(string) (hostFile, error)
-	list           func(string) ([]string, error)
-	run            func(context.Context, []byte, ...string) ([]byte, error)
-	command        func(context.Context, ...string) ([]byte, error)
-	helper         func(context.Context, []string, io.Writer) error
-	readJournal    func(string) ([]byte, error)
-	writeJournal   func(string, any) error
-	lock           func() (io.Closer, error)
-	runtime        func() error
-	executable     func() (string, error)
-	groups         func() ([]int, error)
+	uid, euid, gid    int
+	read              func(string) (hostFile, error)
+	list              func(string) ([]string, error)
+	run               func(context.Context, []byte, ...string) ([]byte, error)
+	command           func(context.Context, ...string) ([]byte, error)
+	helper            func(context.Context, []string, io.Writer) error
+	readJournal       func(string) ([]byte, error)
+	writeJournal      func(string, any) error
+	lock              func() (io.Closer, error)
+	runtime           func() error
+	executable        func() (string, error)
+	groups            func() ([]int, error)
+	enrollmentJournal func() ([]byte, error) // Fixed owner journal; no runtime override.
+	enrolledTarget    func(string, int) (custodyinstall.Manifest, error)
+	custodyTarget     func(int) (custodyinstall.Manifest, error)
 }
 type intent struct {
 	Version                          int    `json:"version"`
@@ -91,6 +94,7 @@ func ownerJournal() (string, error) {
 }
 func liveOps(s *custodyinstall.System) hostOps {
 	o := hostOps{uid: os.Getuid(), euid: os.Geteuid(), gid: os.Getgid(), read: file, executable: os.Executable, groups: os.Getgroups}
+	bindEnrollmentOps(&o)
 	o.list = func(p string) ([]string, error) {
 		es, e := os.ReadDir(p)
 		var names []string
@@ -265,7 +269,9 @@ func manifestAt(o hostOps, owner int) (Manifest, error) {
 	return m, nil
 }
 func Load(owner int) (Manifest, error) {
-	o := liveOps(nil)
+	return load(liveOps(nil), owner)
+}
+func load(o hostOps, owner int) (Manifest, error) {
 	if e := ordinary(o); e != nil {
 		return Manifest{}, e
 	}
@@ -276,7 +282,7 @@ func Load(owner int) (Manifest, error) {
 	if e != nil {
 		return m, e
 	}
-	return m, verifyFiles(o, m)
+	return m, verifyEnrollmentFiles(o, m, true)
 }
 func checkDirectory(o hostOps, path string, uid, gid int, mode os.FileMode) error {
 	f, e := o.read(path)
@@ -402,6 +408,15 @@ func intentFor(m Manifest) intent {
 	return intent{Version: 1, ID: m.ID, OwnerUID: m.OwnerUID, OwnerGID: m.OwnerGID, CoreSHA256: m.CoreSHA256, Listen: m.Listen, PublicOrigin: m.PublicOrigin}
 }
 func verifyFiles(o hostOps, m Manifest) error {
+	if e := verifyImmutableFiles(o, m); e != nil {
+		return e
+	}
+	if e := checkDirectory(o, m.Data, m.AppUID, m.AppGID, 0700); e != nil {
+		return e
+	}
+	return verifyRootInventory(o, m, "")
+}
+func verifyImmutableFiles(o hostOps, m Manifest) error {
 	if e := m.validate(); e != nil {
 		return e
 	}
@@ -410,9 +425,6 @@ func verifyFiles(o hostOps, m Manifest) error {
 		return errors.New("Remote root manifest changed")
 	}
 	if e = checkDirectory(o, m.Root, 0, 0, 0755); e != nil {
-		return e
-	}
-	if e = checkDirectory(o, m.Data, m.AppUID, m.AppGID, 0700); e != nil {
 		return e
 	}
 	probe, e := o.read(m.Root + "/app-readonly-probe")
@@ -433,11 +445,17 @@ func verifyFiles(o hostOps, m Manifest) error {
 	if e != nil || binary.Mode.Perm() != 0755 || hash(binary.Data) != m.CoreSHA256 {
 		return errors.New("Remote installed executable changed")
 	}
+	return nil
+}
+func verifyRootInventory(o hostOps, m Manifest, sibling string) error {
 	names, e := o.list(m.Root)
 	if e != nil {
 		return e
 	}
 	allowed := map[string]bool{"fased-app": true, "install.json": true, "intent.json": true, "app-state": true, "app-readonly-probe": true, m.Unit: true}
+	if sibling != "" {
+		allowed[sibling] = true
+	}
 	for _, name := range names {
 		if !allowed[name] {
 			return errors.New("unclassified Remote installation file; preserving it")
@@ -452,6 +470,9 @@ func verify(ctx context.Context, o hostOps, m Manifest) error {
 	if e := verifyFiles(o, m); e != nil {
 		return e
 	}
+	return verifyAccount(ctx, o, m)
+}
+func verifyAccount(ctx context.Context, o hostOps, m Manifest) error {
 	uid, gid, e := account(ctx, o, intentFor(m), false)
 	if e != nil {
 		return e

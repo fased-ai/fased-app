@@ -39,6 +39,8 @@ export type AccountsRecord = {
 export type AccountsView = {
   setup?: {
     version: 1;
+    instanceId?: string;
+    source?: "local" | "remote";
     network: string;
     state:
       | "not-installed"
@@ -128,6 +130,8 @@ export function walletSetupLabel(view: AccountsView): string {
     "update-held": "Update held",
     legacy: "Upgrade signer",
   };
+  if (view.setup?.state === "not-installed" && !view.setup.source)
+    return "Install app";
   return view.setup ? labels[view.setup.state] : "Signer unavailable";
 }
 // Only the exact public identity reported by the current v2 signer may attach.
@@ -170,11 +174,17 @@ export function walletOwnerCommands(
     !["not-installed", "empty"].includes(setup.state)
   )
     return [];
-  if (setup.state === "not-installed")
+  if (setup.state === "not-installed") {
+    if (
+      !["local", "remote"].includes(setup.source ?? "") ||
+      !/^[A-Za-z0-9_-]{43}$/.test(setup.instanceId ?? "")
+    )
+      return [];
     return [
-      `fased-app custody install --network ${network} --signer-binary /absolute/path/to/fased-signer --disposable-fixture --prepare-host`,
+      `fased-app custody enroll --source ${setup.source} --expected-instance ${setup.instanceId} --network ${network} --signer-binary /absolute/path/to/fased-signer --disposable-fixture --prepare-host`,
       "fased-app custody status --disposable-fixture",
     ];
+  }
   return [
     `fased-app custody ${mode === "create" ? "setup" : "import"} --disposable-fixture --backup-file /absolute/private/wallet-backup.json${mode === "import" ? " --seed-file /absolute/private/wallet-seed.bin" : ""}`,
   ];

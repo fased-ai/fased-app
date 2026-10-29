@@ -466,6 +466,10 @@ jobs:
           FASED_MANAGED_NETWORK: "devnet"
           FASED_MANAGED_EVIDENCE: .evidence/p3-network-managed
         run: node scripts/check-managed-custody.mjs
+      - name: Installed Local and Remote same-instance enrollment
+        env:
+          FASED_ENROLLMENT_ACCEPTANCE: "1"
+        run: node scripts/check-enrollment-install.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -480,6 +484,9 @@ jobs:
             .evidence/p3-network-managed/*.json
             .evidence/p3-network-managed/*.log
             .evidence/p4-network-complete/*.json
+            .evidence/b05-enrollment-installed/*.json
+            .evidence/b05-enrollment-installed/*.log
+            .evidence/b05-enrollment-installed/*.png
           retention-days: 7
   prototype:
     if: always()

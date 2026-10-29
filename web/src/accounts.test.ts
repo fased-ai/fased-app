@@ -110,6 +110,8 @@ function setupView(): AccountsView {
   return {
     setup: {
       version: 1,
+      instanceId: "a".repeat(43),
+      source: "local",
       network: "devnet",
       state: "locked",
       fixtureOnly: true,
@@ -188,7 +190,7 @@ it("keeps network choice on install and private file placeholders on protected c
   view.setup!.state = "not-installed";
   const [install, status] = walletOwnerCommands(view, "create", "mainnet-beta");
   expect(install).toBe(
-    "fased-app custody install --network mainnet-beta --signer-binary /absolute/path/to/fased-signer --disposable-fixture --prepare-host",
+    `fased-app custody enroll --source local --expected-instance ${"a".repeat(43)} --network mainnet-beta --signer-binary /absolute/path/to/fased-signer --disposable-fixture --prepare-host`,
   );
   expect(status).toBe("fased-app custody status --disposable-fixture");
   expect(walletOwnerCommands(view, "import", "mainnet-beta")).toEqual([
@@ -262,4 +264,30 @@ it("translates the wallet setup actions and held states in all shipped languages
       expect(translate(language, key)).not.toBe(key);
       expect(translate(language, key).length).toBeGreaterThan(0);
     }
+});
+
+it("enrolls the exact installed source and never creates a second blank instance", () => {
+  const view = setupView();
+  view.setup!.state = "not-installed";
+  view.setup!.source = "remote";
+  expect(walletOwnerCommands(view, "create", "devnet")[0]).toContain(
+    "--source remote --expected-instance " + "a".repeat(43),
+  );
+  expect(walletOwnerCommands(view, "create", "devnet").join(" ")).not.toContain(
+    "custody install",
+  );
+  for (const id of [
+    undefined,
+    "",
+    "a".repeat(42),
+    "x;$(id)",
+    "a".repeat(43) + "\n",
+  ]) {
+    view.setup!.instanceId = id;
+    expect(walletOwnerCommands(view, "create", "devnet")).toEqual([]);
+  }
+  view.setup!.instanceId = "a".repeat(43);
+  delete view.setup!.source;
+  expect(walletOwnerCommands(view, "create", "devnet")).toEqual([]);
+  expect(walletSetupLabel(view)).toBe("Install app");
 });

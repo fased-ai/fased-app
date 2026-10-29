@@ -61,7 +61,10 @@ func InspectNetwork(ctx context.Context, m Manifest, s *custodyinstall.System) (
 	return n.inspect(ctx, m)
 }
 func (n networkController) guard(ctx context.Context, m Manifest) error {
-	if e := verify(ctx, n.ops, m); e != nil {
+	return n.guardEnrollment(ctx, m, false)
+}
+func (n networkController) guardEnrollment(ctx context.Context, m Manifest, recovery bool) error {
+	if e := verifyNetworkInstallation(ctx, n.ops, m, recovery); e != nil {
 		return e
 	}
 	release, e := osRelease(n.ops)
@@ -75,6 +78,9 @@ func (n networkController) guard(ctx context.Context, m Manifest) error {
 	return nil
 }
 func (n networkController) withLock(ctx context.Context, m Manifest, f func() (NetworkStatus, error)) (NetworkStatus, error) {
+	return n.withLockEnrollment(ctx, m, false, f)
+}
+func (n networkController) withLockEnrollment(ctx context.Context, m Manifest, recovery bool, f func() (NetworkStatus, error)) (NetworkStatus, error) {
 	if e := ownedBy(n.ops, m); e != nil {
 		return NetworkStatus{}, e
 	}
@@ -83,7 +89,7 @@ func (n networkController) withLock(ctx context.Context, m Manifest, f func() (N
 		return NetworkStatus{}, e
 	}
 	defer l.Close()
-	if e = n.guard(ctx, m); e != nil {
+	if e = n.guardEnrollment(ctx, m, recovery); e != nil {
 		return NetworkStatus{}, e
 	}
 	return f()
@@ -659,7 +665,7 @@ func (n networkController) rollbackAttempt(ctx context.Context, m Manifest, a ne
 	return st, runErr
 }
 func (n networkController) rollback(ctx context.Context, m Manifest) (NetworkStatus, error) {
-	return n.withLock(ctx, m, func() (NetworkStatus, error) {
+	return n.withLockEnrollment(ctx, m, true, func() (NetworkStatus, error) {
 		a, e := n.load(m)
 		if errors.Is(e, os.ErrNotExist) {
 			return NetworkStatus{Phase: "none"}, nil
@@ -671,7 +677,7 @@ func (n networkController) rollback(ctx context.Context, m Manifest) (NetworkSta
 	})
 }
 func (n networkController) inspect(ctx context.Context, m Manifest) (NetworkStatus, error) {
-	return n.withLock(ctx, m, func() (NetworkStatus, error) {
+	return n.withLockEnrollment(ctx, m, true, func() (NetworkStatus, error) {
 		a, e := n.load(m)
 		if errors.Is(e, os.ErrNotExist) {
 			return NetworkStatus{Phase: "none"}, nil

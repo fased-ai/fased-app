@@ -607,7 +607,7 @@ export function AccountManagement() {
                         ))}
                         {view.setup?.state === "not-installed" && (
                           <span className="subtle">
-                            {uiText("Open the installed instance URL")}
+                            {uiText("Return here, then refresh")}
                           </span>
                         )}
                       </div>

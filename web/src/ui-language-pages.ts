@@ -73,11 +73,17 @@ export const pageCopy = {
     "实例终端",
     "인스턴스 터미널",
   ],
-  "Open the installed instance URL": [
-    "Откройте URL установленного экземпляра",
-    "Abre la URL de la instancia instalada",
-    "打开已安装实例的 URL",
-    "설치된 인스턴스 URL 열기",
+  "Return here, then refresh": [
+    "Вернитесь и обновите",
+    "Vuelve aquí y actualiza",
+    "返回此处并刷新",
+    "돌아와서 새로고침",
+  ],
+  "Install app": [
+    "Установить приложение",
+    "Instalar app",
+    "安装应用",
+    "앱 설치",
   ],
   "Refresh status": [
     "Обновить статус",

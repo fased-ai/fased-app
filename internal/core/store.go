@@ -21,6 +21,8 @@ import (
 )
 
 type Store struct {
+	installationSource atomic.Uint32 // Verified installer class, never a browser preference.
+
 	rpcCheckFixture func(context.Context, RPCCheckRequest) (RPCCheckResult, error) // Tests only; never configuration or IPC.
 	providerFixture bool
 	rpcAdmission    bool // Disabled in ordinary constructors; tests only.

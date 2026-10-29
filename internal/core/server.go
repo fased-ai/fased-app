@@ -218,10 +218,35 @@ func (s *Server) ConfigureConnection(location string, owner ...int) error {
 	if len(owner) == 1 {
 		uid = owner[0]
 	}
-	if uid < 0 || int64(uid) > 4294967294 || (uid > 0 && location != "remote") {
-		return errors.New("dedicated owner identity requires Remote mode and a valid UID")
+	managedLocal := location == "local" && s.Store != nil && s.Store.fixture != nil && s.Store.custodyNetwork != ""
+	if uid < 0 || int64(uid) > 4294967294 || (uid > 0 && location != "remote" && !managedLocal) {
+		return errors.New("dedicated owner identity requires a verified managed profile and a valid UID")
 	}
 	h := s.HTTP.Handler.(*HTTPHandler)
 	h.instanceLocation, h.instanceOwnerUID = location, uid
+	h.instanceOwnerKind = ""
+	if uid > 0 && s.Store != nil && s.Store.fixture != nil && s.Store.custodyNetwork != "" {
+		h.instanceOwnerKind = "custody"
+	}
+	return nil
+}
+
+// ConfigureInstallationSource is called only after main verifies its installed
+// sandbox/configuration. Preferences, account metadata and HTTP cannot set it.
+func (s *Server) ConfigureInstallationSource(source string) error {
+	var value uint32
+	switch source {
+	case "":
+	case "local":
+		value = 1
+	case "remote":
+		value = 2
+	default:
+		return errors.New("unknown installation source")
+	}
+	if s.Store == nil {
+		return errors.New("core store unavailable")
+	}
+	s.Store.installationSource.Store(value)
 	return nil
 }
