@@ -88,7 +88,8 @@ and CLI. Through `fased-app agents --request-stdin`, submit `task-review` with
 `botId` and `newsSourceId`/`newsMaxAgeSeconds` select existing same-profile inputs.
 Inspect `taskReview`, then submit exactly those inputs as `task-reviewed-create`
 with its `consentDigest` and `expiresAt`. Changed settings, profile, revision or
-expiry refuse without writing. No AI, wallet, tool or mining grant is accepted.
+expiry refuse without writing. Plain reminders accept no AI, wallet, tool or
+mining grant. The separate **Analysis** choice below uses the same commands.
 The older explicit `task-create` CLI command remains compatible.
 
 A single run starts after the chosen delay; repeated runs use the same interval.
@@ -102,8 +103,9 @@ For one reminder at a specific date, choose **At a date & time**. The UI offers
 your browser's timezone and UTC. Nonexistent or repeated daylight-saving wall
 times require correction or an explicit UTC time. Review displays the named
 zone and UTC offset; the stored instant never depends on the server's timezone.
-Dates must be 1 minute–366 days ahead at review/creation. This first calendar
-version accepts plain reminders only, with one run and no bot/news/AI binding.
+Dates must be 1 minute–366 days ahead at review/creation. A plain reminder
+uses one run; analysis and news watches have their own reviewed input and
+permission boundaries.
 
 The same CLI `task-review` command uses `maxRuns: 1`, no interval, and:
 
@@ -122,11 +124,13 @@ actual request. Create with the exact reviewed digest/expiry as above. Direct
 `task-create` does not bypass calendar review. Pause retains the original date;
 resume or restart runs an overdue scheduled reminder once. **Run now** completes
 it early and prevents a second run on that date. Completed reminders do not
-restart. Choose **New task** for another date. Cron remains unavailable.
+restart. Choose **New task** for another date. Recurring tasks can use the
+existing reviewed cron calendar in the same task engine.
 
-Schema 17 protects calendar fields. Migration from schema 16 changes only the
-schema marker and preserves documents/revisions. Older binaries refuse schema 17. Recovery to a schema-16 binary needs its matching pre-migration backup;
-never clear the schema marker or point the old binary at newer state.
+Calendar fields were introduced in schema 17; the current schema floor is 29.
+Format-only migrations preserve original documents and revisions. Older
+binaries refuse newer state. Recovery to an older reader requires its matching
+pre-migration backup; never clear the schema marker or point it at newer state.
 
 This fixture workspace retains history and has finite capacity: 100 tasks,
 200 allocated evaluations, 200 results, 200 notices and 512 KiB including other
@@ -134,3 +138,62 @@ agent records and reserved future output. Limits are workspace-wide and are not
 reset by marking notifications read or completing a task. No automatic pruning,
 archive or unbounded unattended-operation claim is made. Inspect and preserve
 records on a capacity error; do not delete the instance or raise limits.
+
+## Analysis tasks
+
+In Tasks → **New task**, choose **Analysis**, describe the job and set its timing
+and finite limits. The attached agent supplies its selected account and model;
+an explicit override remains possible. Review shows the exact choices and
+prompt. **Create** saves the reviewed job without making a model request or
+granting background credential access. Review alone saves no task or conversation.
+No reminder or paper action is required for an analysis result.
+
+Before a required AI run, use the existing **Review access** flow to grant finite
+background credential access for the selected task/account/model. Connecting a
+provider or unlocking it for Chat does not grant this access. Execution rechecks
+the reviewed context, account/model, consent, limits and credential permission.
+This implementation is verified with fixtures only; live use remains disabled.
+
+The private CLI uses the same transient review and atomic creation:
+
+```json
+{
+  "action": "task-review",
+  "profileId": "PROFILE",
+  "revision": 12,
+  "name": "Research summary",
+  "text": "Summarize the selected evidence without proposing actions",
+  "analysis": { "version": "task-analysis-v1", "failure": "required" },
+  "useAgentDefaults": true,
+  "memorySelection": { "mode": "relevant" },
+  "intervalSeconds": 300,
+  "maxRuns": 2,
+  "authorizationSeconds": 3600,
+  "totalBudgetMicrousd": 60000,
+  "limits": {
+    "maxInputTokens": 24000,
+    "maxOutputTokens": 1024,
+    "deadlineSeconds": 1,
+    "budgetMicrousd": 30000
+  }
+}
+```
+
+Replace the revision/profile with the current instance values. The agent must
+already have an admitted account/model. Inspect `taskReview.ai`, then send
+exactly the same inputs as `task-reviewed-create`, adding `consentDigest` and
+`expiresAt` from that review. These illustrative fixture limits are not a live
+API test or spending authorization. At most ten runs are allowed; a calendar
+object can replace the interval, with its first run inside the AI permission.
+An existing same-profile conversation can be selected through `sessionId`.
+Otherwise Create retains a private context for the job. Relevant memories are
+bound by review; changed context requires fresh consent rather than silently
+changing the saved task.
+
+Run controls and results are shared with the UI. Failed required analysis holds
+dependent work. A completed result retains its answer and request/source
+identity; **Discuss** copies that saved result into Chat without another AI
+request, and **Remember this** requires an explicit memory action. Completion
+does not silently add memories. Pause/restart preserve runs and unknown-usage
+holds without replay. For a watch with optional analysis and deterministic
+continuation, see [News watch](news-inputs.md#optional-analysis).

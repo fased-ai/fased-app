@@ -119,7 +119,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
           </p>
         )}
         {v.tasks
-          .filter((t) => t.ai)
+          .filter((t) => t.ai && !t.ai.analysis)
           .map((t) => {
             const a = t.ai!;
             const requests = v.aiRequests.filter((q) => q.taskId === t.id);

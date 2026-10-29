@@ -472,7 +472,7 @@ func (s *Store) advanceAgentNews(ctx context.Context, rt http.RoundTripper, fixt
 		if f.State == "fetching" {
 			f.State = "unknown"
 			f.Failure = "News dispatch was interrupted; outcome unknown, no replay."
-			if e = settleNewsTask(&d, *f, s.now().Unix(), fixture); e != nil {
+			if e = settleNewsTask(&d, *f, s.now().Unix(), s.newsTaskAIAllowed(d, *f, fixture)); e != nil {
 				return e
 			}
 			changed = true
@@ -482,7 +482,7 @@ func (s *Store) advanceAgentNews(ctx context.Context, rt http.RoundTripper, fixt
 			if err != nil || source.URL != f.URL || !newsTaskPending(d, *f) {
 				f.State = "cancelled"
 				f.Failure = "News source disabled or dependent task stopped."
-				if e = settleNewsTask(&d, *f, s.now().Unix(), fixture); e != nil {
+				if e = settleNewsTask(&d, *f, s.now().Unix(), s.newsTaskAIAllowed(d, *f, fixture)); e != nil {
 					return e
 				}
 				changed = true
@@ -560,7 +560,7 @@ func (s *Store) advanceAgentNews(ctx context.Context, rt http.RoundTripper, fixt
 				result.Failure = "News source disabled or task stopped."
 			}
 			d.NewsFetches[i] = result
-			if e = settleNewsTask(&d, result, s.now().Unix(), fixture); e != nil {
+			if e = settleNewsTask(&d, result, s.now().Unix(), s.newsTaskAIAllowed(d, result, fixture)); e != nil {
 				return e
 			}
 			if e = saveAgents(finish, tx, d, r); e != nil {

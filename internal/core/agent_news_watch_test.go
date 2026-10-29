@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -339,7 +340,7 @@ func TestNewsWatchStorageAndMigrationProtectOriginals(t *testing.T) {
 		t.Fatal("format migration rewrote originals")
 	}
 	var schema int
-	if err = n.db.QueryRow("PRAGMA user_version").Scan(&schema); err != nil || schema != 28 {
+	if err = n.db.QueryRow("PRAGMA user_version").Scan(&schema); err != nil || schema != StateSchema {
 		t.Fatal("missing schema protection", schema, err)
 	}
 	v, _ = n.Agents(t.Context(), v.ProfileID, "")
@@ -397,7 +398,7 @@ func TestNewsWatchStorageAndMigrationProtectOriginals(t *testing.T) {
 			}
 		})
 	}
-	if _, err = n.db.Exec("PRAGMA user_version=28"); err != nil {
+	if _, err = n.db.Exec("PRAGMA user_version=" + strconv.Itoa(StateSchema)); err != nil {
 		t.Fatal(err)
 	}
 	p := pauseCommand(t, n, 1)

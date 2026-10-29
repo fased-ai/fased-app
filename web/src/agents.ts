@@ -217,6 +217,7 @@ export type PaperBot = {
   spentCents: number;
 };
 export type TaskAIStep = {
+  analysis?: TaskAnalysis;
   model?: string;
   policy?: OpenAIModelPolicy;
   connectionRef?: string;
@@ -277,6 +278,15 @@ export type TaskCalendar = {
   timeZone: string;
 };
 export type NewsWatchRule = { version: "news-watch-v1"; contains: string };
+export type TaskAnalysis = {
+  version: "task-analysis-v1";
+  failure: "required" | "optional";
+};
+export type TaskAnalysisResult = {
+  version: "task-analysis-v1";
+  state: "completed" | "skipped";
+  reason?: string;
+};
 export type NewsWatchResult = {
   rule: NewsWatchRule;
   matched: number;
@@ -301,6 +311,7 @@ export type AgentTask = {
   state: string;
 };
 export type AgentRun = {
+  analysis?: TaskAnalysisResult;
   watch?: NewsWatchResult;
   wen?: WENPaperResult;
   news?: NewsEvidence;
@@ -505,6 +516,7 @@ export type AgentView = {
   financialExecution: false;
 };
 export type TaskReview = {
+  ai?: TaskAIStep;
   watch?: NewsWatchRule;
   calendar?: TaskCalendar;
   version: "task-review-v1";
@@ -606,6 +618,7 @@ export type AgentEvidenceView = {
     }
 );
 export type AgentCommand = {
+  analysis?: TaskAnalysis;
   watch?: NewsWatchRule;
   accountRef?: string;
   useAgentDefaults?: boolean;

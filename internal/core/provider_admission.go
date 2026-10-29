@@ -60,6 +60,9 @@ func (s *Store) providerRequestAllowed(q AgentAIRequest, fixture bool) bool {
 }
 
 func (s *Store) providerTaskAllowed(task AgentTask, fixture bool) bool {
+	if typedAnalysis(task) && task.AI.ConnectionRef != "" && !s.analysisTaskCredentials(task) {
+		return false
+	}
 	if fixture {
 		return true
 	}
@@ -91,6 +94,13 @@ func (s *Store) providerActionAllowed(d agentDocument, c AgentCommand, profile s
 	if wrongPilot {
 		return false
 	}
+	if c.Action == "task-run" || c.Action == "task-resume" {
+		for _, t := range d.Tasks {
+			if t.ID == c.ID && t.ProfileID == profile && typedAnalysis(t) {
+				return s.providerTaskAllowed(t, fixture)
+			}
+		}
+	}
 	if fixture {
 		return true
 	}
@@ -111,6 +121,10 @@ func (s *Store) providerActionAllowed(d agentDocument, c AgentCommand, profile s
 			if q.ProfileID == profile && q.ID == c.ID {
 				return s.providerRequestAllowed(q, false)
 			}
+		}
+	case "task-reviewed-create":
+		if c.Analysis != nil && c.ConnectionRef != "" {
+			return s.providerRequestAllowed(AgentAIRequest{ConnectionRef: c.ConnectionRef, Model: c.Model, Policy: chatModelPolicyForMethod(c.Model, c.providerAuthMethod)}, false)
 		}
 	case "task-ai-authorize", "task-run", "task-resume":
 		for _, task := range d.Tasks {
