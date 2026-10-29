@@ -262,6 +262,11 @@ PRAGMA user_version=1;`)
 			return nil, err
 		}
 	}
+	if schema <= 28 {
+		if err = migrateTaskAnalysis(ctx, db); err != nil {
+			return nil, err
+		}
+	}
 	if _, _, err = readAgents(ctx, db); err != nil {
 		return nil, err
 	}

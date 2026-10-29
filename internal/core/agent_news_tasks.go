@@ -104,7 +104,7 @@ func evaluateAgentTask(d *agentDocument, i int, now int64, fixture bool) error {
 	if t.WEN != nil {
 		return runWENPaper(d, i, now)
 	}
-	if t.AI != nil {
+	if t.AI != nil && !typedAnalysis(t) {
 		if !fixture {
 			return taskAIHeld(d, i, "", "ai-disabled", now)
 		}
@@ -221,7 +221,13 @@ func aiRequestContext(d agentDocument, q AgentAIRequest, now int64) (string, err
 		return "", errors.New("invalid retained AI context")
 	}
 	if envelope.Version != "" || envelope.Selection != nil {
-		if envelope.Version != aiMemoryContextVersion || envelope.Selection == nil || q.TaskID != "" {
+		selectedTask := false
+		for _, task := range d.Tasks {
+			if typedAnalysis(task) && task.ID == q.TaskID && task.ProfileID == q.ProfileID && task.AI.SessionID == q.SessionID && task.AI.Digest == q.TaskDigest && task.AI.Digest == taskAIDigest(task) {
+				selectedTask = true
+			}
+		}
+		if envelope.Version != aiMemoryContextVersion || envelope.Selection == nil || (q.TaskID != "" && !selectedTask) {
 			return "", errors.New("unsupported manual AI memory context; prepare a fresh review")
 		}
 	}

@@ -14863,3 +14863,280 @@ test("provider-free News watch reviews rules deduplicates across restart and joi
   });
   expect(external).toEqual([]);
 });
+
+test("normal Tasks joins optional News analysis and granted analysis-only results across UI CLI restart and memory", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(120000);
+  page.setDefaultTimeout(12000);
+  await stop();
+  await start(true);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
+  });
+  await page.goto(url + "/#agents/tasks");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const profileId = "trading-analyst";
+  await page.getByLabel("Agent", { exact: true }).selectOption(profileId);
+  const read = () => privateCLI(["agents", "--profile", profileId]);
+  const command = async (c: object) =>
+    privateCLI(["agents", "--request-stdin"], {
+      profileId,
+      revision: (await read()).revision,
+      ...c,
+    });
+  const selected = await fixtureProviderSelection("openai");
+  await command({
+    action: "profile-update",
+    name: "Trading Analyst",
+    provider: selected.provider,
+    model: selected.model,
+    accountRef: selected.accountRef,
+  });
+  await command({
+    action: "news-source-add",
+    name: "Paper feed",
+    source: "https://news.fased.invalid/headlines.xml",
+    newsMaxAgeSeconds: 600,
+  });
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  let editor = page.getByRole("complementary", {
+    name: "Create a task",
+    exact: true,
+  });
+  await editor
+    .getByLabel("Task name", { exact: true })
+    .fill("Keep reminder draft");
+  await editor
+    .getByLabel("Reminder text", { exact: true })
+    .fill("Preserve this unfinished reminder");
+  await editor.getByLabel("Type", { exact: true }).selectOption("analysis");
+  await editor
+    .getByLabel("Task name", { exact: true })
+    .fill("Keep analysis draft");
+  await editor
+    .getByLabel("Prompt", { exact: true })
+    .fill("Summarize synthetic evidence");
+  await editor.getByLabel("Type", { exact: true }).selectOption("reminder");
+  await expect(editor.getByLabel("Task name", { exact: true })).toHaveValue(
+    "Keep reminder draft",
+  );
+  await expect(editor.getByLabel("Reminder text", { exact: true })).toHaveValue(
+    "Preserve this unfinished reminder",
+  );
+  await page.getByRole("button", { name: "Watch news", exact: true }).click();
+  await editor
+    .getByLabel("Task name", { exact: true })
+    .fill("Optional paper analysis");
+  await editor
+    .getByLabel("News source", { exact: true })
+    .selectOption({ label: "Paper feed" });
+  await editor.getByLabel("Contains", { exact: true }).fill("paper");
+  await editor.getByRole("checkbox", { name: "Analyze", exact: true }).check();
+  await editor
+    .getByLabel("Prompt", { exact: true })
+    .fill("Summarize the selected synthetic headlines");
+  await editor
+    .getByLabel("If analysis fails", { exact: true })
+    .selectOption("optional");
+  const before = await read();
+  await editor
+    .getByRole("button", { name: "Review task", exact: true })
+    .click();
+  let review = page.getByRole("complementary", {
+    name: "Review task",
+    exact: true,
+  });
+  await expect(review).toContainText("Keep news result");
+  let v = await read();
+  expect(v.tasks).toEqual(before.tasks);
+  expect(v.sessions).toEqual(before.sessions);
+  await review
+    .getByRole("button", { name: "Create task", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).tasks.length).toBe(1);
+  await page
+    .getByRole("button", {
+      name: "Run now: Optional paper analysis",
+      exact: true,
+    })
+    .click();
+  await expect
+    .poll(async () => (await read()).tasks[0].state)
+    .toBe("completed");
+  v = await read();
+  expect(v.aiRequests).toHaveLength(0);
+  expect(v.runs[0].analysis.state).toBe("skipped");
+  expect(v.runs[0].watch.newIds).toHaveLength(1);
+  let result = page.getByRole("article", {
+    name: `Run ${v.runs[0].id}`,
+    exact: true,
+  });
+  await expect(result).toContainText("Analysis skipped");
+  await expect(result).toContainText("New matches: 1");
+  await page.screenshot({
+    path: `.evidence/b04-task-analysis/optional-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: false,
+  });
+  await result.getByRole("button", { name: "Discuss", exact: true }).click();
+  await expect(page).toHaveURL(/#agents\/chat/);
+  let message = page
+    .locator(".chat-message")
+    .filter({ hasText: "Optional paper analysis" })
+    .last();
+  await expect(message).toContainText("Analysis skipped");
+  await message
+    .getByRole("button", { name: "Remember this", exact: true })
+    .click();
+  let memory = page.getByRole("dialog", { name: "Memory", exact: true });
+  await memory
+    .getByLabel("Fact", { exact: true })
+    .fill(
+      "Paper watch keeps its result when optional analysis is unavailable.",
+    );
+  await memory
+    .getByRole("button", { name: "Save memory", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).memories.length).toBe(1);
+  await page.goto(url + "/#agents/tasks");
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  editor = page.getByRole("complementary", {
+    name: "Create a task",
+    exact: true,
+  });
+  await editor.getByLabel("Type", { exact: true }).selectOption("analysis");
+  await editor
+    .getByLabel("Task name", { exact: true })
+    .fill("Routine analysis");
+  await editor
+    .getByLabel("Prompt", { exact: true })
+    .fill("Summarize the saved synthetic evidence");
+  await expect(
+    editor.getByLabel("Step after validated AI response", { exact: true }),
+  ).not.toBeVisible();
+  const beforeAnalysis = await read();
+  await editor
+    .getByRole("button", { name: "Review task", exact: true })
+    .click();
+  review = page.getByRole("complementary", {
+    name: "Review task",
+    exact: true,
+  });
+  await expect(review).toContainText("Routine analysis");
+  v = await read();
+  expect(v.tasks).toEqual(beforeAnalysis.tasks);
+  expect(v.sessions).toEqual(beforeAnalysis.sessions);
+  await review
+    .getByRole("button", { name: "Create task", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).tasks.length).toBe(2);
+  const run = page.getByRole("button", {
+    name: "Run now: Routine analysis",
+    exact: true,
+  });
+  await expect(run).toBeDisabled();
+  const detail = page.locator(".task-detail");
+  await detail.getByText("Background access", { exact: true }).click();
+  await detail
+    .getByRole("checkbox", { name: "Routine analysis", exact: true })
+    .check();
+  await detail
+    .getByRole("button", { name: "Review access", exact: true })
+    .click();
+  await detail
+    .getByLabel("Vault passphrase", { exact: true })
+    .fill("disposable-browser-preference-vault");
+  await detail
+    .getByRole("button", { name: "Allow task access", exact: true })
+    .click();
+  await expect(run).toBeEnabled();
+  await run.click();
+  await expect
+    .poll(async () => (await read()).tasks[1].state)
+    .toBe("completed");
+  v = await read();
+  expect(v.aiRequests).toHaveLength(1);
+  expect(v.aiRequests[0].connectionRef).toBe(selected.accountRef);
+  expect(v.aiRequests[0].model).toBe(selected.model);
+  expect(v.runs[1].strategy).toBe("analysis-v1");
+  expect(v.runs[1].analysis.state).toBe("completed");
+  result = page.getByRole("article", {
+    name: `Run ${v.runs[1].id}`,
+    exact: true,
+  });
+  await expect(result).toContainText(v.aiRequests[0].answer);
+  await result.getByRole("button", { name: "Discuss", exact: true }).click();
+  message = page
+    .locator(".chat-message")
+    .filter({ hasText: "Routine analysis" })
+    .last();
+  await expect(message).toContainText(v.aiRequests[0].answer);
+  await message
+    .getByRole("button", { name: "Remember this", exact: true })
+    .click();
+  memory = page.getByRole("dialog", { name: "Memory", exact: true });
+  await memory
+    .getByLabel("Fact", { exact: true })
+    .fill(
+      "Synthetic analysis is a saved result, not a reminder or trading authority.",
+    );
+  await memory
+    .getByRole("button", { name: "Save memory", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).memories.length).toBe(2);
+  const saved = await read();
+  expect(saved.tasks).toEqual(v.tasks);
+  expect(saved.runs).toEqual(v.runs);
+  expect(saved.providerCallsEnabled).toBe(false);
+  expect(saved.financialExecution).toBe(false);
+  await page.screenshot({
+    path: `.evidence/b04-task-analysis/analysis-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: false,
+  });
+  await stop();
+  await start(true);
+  await page.goto(url + "/#agents/tasks");
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const relogin = spawn(binary, [
+    "login",
+    "--data-dir",
+    dir,
+    "--password-stdin",
+  ]);
+  relogin.stdin!.end(fixturePassword + "\n");
+  expect((await once(relogin, "exit"))[0]).toBe(0);
+  await page.getByLabel("Agent", { exact: true }).selectOption(profileId);
+  const restarted = await read();
+  expect(restarted.tasks).toEqual(saved.tasks);
+  expect(restarted.runs).toEqual(saved.runs);
+  expect(restarted.memories).toEqual(saved.memories);
+  expect(restarted.aiRequests).toEqual(saved.aiRequests);
+  const foreign = await privateCLI(["agents", "--profile", "news-researcher"]);
+  expect(foreign.tasks).toHaveLength(0);
+  expect(foreign.messages).toHaveLength(0);
+  expect(foreign.memories).toHaveLength(0);
+  expect(external).toEqual([]);
+});

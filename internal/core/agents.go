@@ -92,22 +92,23 @@ type AgentTask struct {
 	State           string          `json:"state"`
 }
 type AgentRun struct {
-	Watch        *NewsWatchResult `json:"watch,omitempty"`
-	WEN          *WENPaperResult  `json:"wen,omitempty"`
-	News         *NewsEvidence    `json:"news,omitempty"`
-	AIRequestID  string           `json:"aiRequestId,omitempty"`
-	AIDigest     string           `json:"aiDigest,omitempty"`
-	ID           string           `json:"id"`
-	ProfileID    string           `json:"profileId"`
-	TaskID       string           `json:"taskId"`
-	BotID        string           `json:"botId"`
-	Strategy     string           `json:"strategy"`
-	At           int64            `json:"at"`
-	Outcome      string           `json:"outcome"`
-	Quantity     int64            `json:"quantity"`
-	PriceCents   int64            `json:"priceCents"`
-	CostCents    int64            `json:"costCents"`
-	BudgetBefore int64            `json:"budgetBefore"`
+	Analysis     *TaskAnalysisResult `json:"analysis,omitempty"`
+	Watch        *NewsWatchResult    `json:"watch,omitempty"`
+	WEN          *WENPaperResult     `json:"wen,omitempty"`
+	News         *NewsEvidence       `json:"news,omitempty"`
+	AIRequestID  string              `json:"aiRequestId,omitempty"`
+	AIDigest     string              `json:"aiDigest,omitempty"`
+	ID           string              `json:"id"`
+	ProfileID    string              `json:"profileId"`
+	TaskID       string              `json:"taskId"`
+	BotID        string              `json:"botId"`
+	Strategy     string              `json:"strategy"`
+	At           int64               `json:"at"`
+	Outcome      string              `json:"outcome"`
+	Quantity     int64               `json:"quantity"`
+	PriceCents   int64               `json:"priceCents"`
+	CostCents    int64               `json:"costCents"`
+	BudgetBefore int64               `json:"budgetBefore"`
 }
 type AgentNotice struct {
 	ID        string `json:"id"`
@@ -166,6 +167,7 @@ type AgentView struct {
 // Optional fields are inert data for a fixed action; unknown fields/actions are
 // rejected. No arbitrary callback, URL, model tool or shell can be submitted.
 type AgentCommand struct {
+	Analysis             *TaskAnalysisPolicy  `json:"analysis,omitempty"`
 	Watch                *NewsWatchRule       `json:"watch,omitempty"`
 	providerAuthMethod   string               // Resolved only by the core, never accepted from JSON.
 	AccountRef           *string              `json:"accountRef,omitempty"`
@@ -285,6 +287,9 @@ func readAgents(ctx context.Context, r snapshotReader) (agentDocument, int64, er
 	if e == nil {
 		e = validateNewsWatchStorage([]byte(b), d)
 	}
+	if e == nil {
+		e = validateTaskAnalysisStorage([]byte(b), d)
+	}
 	return d, revision, e
 }
 func agentProfile(d agentDocument, id string) int {
@@ -403,6 +408,9 @@ func validAgentText(v string, max int, required bool) bool {
 }
 func agentCapacity(d agentDocument) error {
 	raw, _ := json.Marshal(d)
+	if e := validateTaskAnalysisStorage(raw, d); e != nil {
+		return e
+	}
 	if e := validateNewsWatchStorage(raw, d); e != nil {
 		return e
 	}
@@ -471,7 +479,8 @@ func (s *Store) ChangeAgents(ctx context.Context, c AgentCommand) (AgentView, er
 	return s.changeAgents(ctx, c, false)
 }
 func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) (AgentView, error) {
-	if c.Watch != nil && c.Action != "task-review" && c.Action != "task-reviewed-create" {
+	analysisReview := c.Analysis != nil && (c.Action == "task-review" || c.Action == "task-reviewed-create")
+	if (c.Watch != nil || c.Analysis != nil) && c.Action != "task-review" && c.Action != "task-reviewed-create" {
 		return AgentView{}, errors.New("review the news watch before creating it; watch fields are not valid for this action")
 	}
 	if s.pilotSyntheticOnly() && ((strings.HasPrefix(c.Action, "news-") && c.Action != "news-source-disable" && c.Action != "news-cancel") || c.NewsSourceID != "") {
@@ -486,13 +495,13 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 	if c.Calendar != nil && c.Action != "task-review" && c.Action != "task-reviewed-create" {
 		return AgentView{}, errors.New("calendar settings require reviewed task creation")
 	}
-	if (c.PlaybookVersion != 0 || c.SessionID != "") && !strings.HasPrefix(c.Action, "playbook-") {
+	if (c.PlaybookVersion != 0 || c.SessionID != "" && !analysisReview) && !strings.HasPrefix(c.Action, "playbook-") {
 		return AgentView{}, errors.New("playbook selectors require a playbook action")
 	}
 	if c.EvidenceSelection != nil && c.Action != "ai-prepare" {
 		return AgentView{}, errors.New("evidence selection is only supported for a manual AI review")
 	}
-	if c.MemorySelection != nil && c.Action != "ai-prepare" && c.Action != "chat-review" {
+	if c.MemorySelection != nil && c.Action != "ai-prepare" && c.Action != "chat-review" && !analysisReview {
 		return AgentView{}, errors.New("memory selection is only supported for a manual AI review")
 	}
 	tx, e := s.db.BeginTx(ctx, nil)
@@ -518,15 +527,16 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 	if pi < 0 {
 		return AgentView{}, errors.New("profile not found")
 	}
+
 	if c.UseAgentDefaults {
-		if c.Action != "chat-review" && c.Action != "ai-prepare" && c.Action != "task-ai-prepare" {
+		if c.Action != "chat-review" && c.Action != "ai-prepare" && c.Action != "task-ai-prepare" && !analysisReview {
 			return AgentView{}, errors.New("agent provider selection requires a new review")
 		}
 		if e = s.resolveAgentProvider(&c, d.Profiles[pi]); e != nil {
 			return AgentView{}, e
 		}
 	}
-	if (c.Action == "chat-review" || c.Action == "ai-prepare" || c.Action == "task-ai-prepare") && c.ConnectionRef != "" {
+	if (c.Action == "chat-review" || c.Action == "ai-prepare" || c.Action == "task-ai-prepare" || analysisReview) && c.ConnectionRef != "" {
 		connection, err := s.AIConnection(c.ConnectionRef)
 		if err != nil {
 			return AgentView{}, err
@@ -555,7 +565,7 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		return AgentView{}, e
 	}
 	now := s.now().Unix()
-	if c.Action == "ai-prepare" || c.Action == "task-ai-prepare" {
+	if c.Action == "ai-prepare" || c.Action == "task-ai-prepare" || analysisReview {
 		if c.ConnectionRef != "" && !s.aiConnectionValid(c.ConnectionRef) {
 			return AgentView{}, errors.New("unlock the selected connection first")
 		}
@@ -815,7 +825,12 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		if c.ConsentDigest != review.Digest {
 			return AgentView{}, errors.New("task review changed; review again")
 		}
-		if e = appendAgentTask(&d, c, profile, id, now); e != nil {
+		if c.Analysis != nil {
+			e = createReviewedTaskAnalysis(&d, c, profile, revision, now, providerAllowed)
+		} else {
+			e = appendAgentTask(&d, c, profile, id, now)
+		}
+		if e != nil {
 			return AgentView{}, e
 		}
 	case "task-create":
@@ -859,7 +874,8 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 				if cronTask(t) && now > t.Calendar.Until {
 					return AgentView{}, errors.New("schedule ended; create a new reviewed task")
 				}
-				if t.AI != nil && (t.State != "paused" || !providerAllowed || validateTaskAI(d, t, now) != nil) {
+				optionalWatch := typedAnalysis(t) && t.Watch != nil && t.AI.Analysis.Failure == "optional"
+				if t.AI != nil && (t.State != "paused" || (!optionalWatch && (!providerAllowed || validateTaskAI(d, t, now) != nil))) {
 					return AgentView{}, errors.New("AI task requires provider access and unchanged unexpired consent")
 				}
 				d.Tasks[i].State = "scheduled"
@@ -932,12 +948,17 @@ func captureAgentRunContext(d *agentDocument, profile, runID, id string, revisio
 			ID, Strategy, Outcome, AIDigest string
 			At                              int64
 			News                            *NewsEvidence       `json:",omitempty"`
+			Analysis                        *TaskAnalysisResult `json:",omitempty"`
 			Watch                           *NewsWatchResult    `json:",omitempty"`
 			Headlines                       []NewsWatchHeadline `json:",omitempty"`
 		}
 		AI *recordedAgentAI `json:",omitempty"`
 	}{Version: "agent-run-chat-v1", ProfileID: profile, CapturedAt: now, WorkspaceRevision: revision, AI: ai}
 	snapshot.Task.ID, snapshot.Task.Name, snapshot.Task.Text = task.ID, task.Name, task.Text
+	if typedAnalysis(*task) {
+		snapshot.Version = "agent-analysis-run-chat-v1"
+		snapshot.Run.Analysis = r.Analysis
+	}
 	if r.Watch != nil {
 		snapshot.Version = "news-watch-run-chat-v1"
 	}
@@ -959,6 +980,9 @@ func captureAgentRunContext(d *agentDocument, profile, runID, id string, revisio
 		return err
 	}
 	prefix := "Historical reminder run"
+	if typedAnalysis(*task) {
+		prefix = "Historical analysis result"
+	}
 	if r.Watch != nil {
 		prefix = "Historical news watch result"
 	}
@@ -1038,6 +1062,11 @@ func runAgentTask(d *agentDocument, i int, now int64) error {
 		}
 	}
 	text := t.Name + ": " + t.Text
+	if typedAnalysis(*t) && t.Watch == nil {
+		run.Strategy = "analysis-v1"
+		run.Outcome = "analyzed"
+		text = t.Name + ": analysis saved"
+	}
 	if run.Watch != nil {
 		text = watchNotice(t.Name, len(run.Watch.NewIDs))
 	}
@@ -1247,13 +1276,17 @@ func retainedAgentRun(d agentDocument, profile, runID string, now int64) (*Agent
 		return nil, nil, nil, refused
 	}
 	watch := task.Watch != nil && r.Strategy == newsWatchVersion && r.Watch != nil && r.Watch.Rule == task.Watch.Rule
+	analysis := typedAnalysis(*task) && r.Analysis != nil
 	plain := r.Strategy == "reminder-v1"
 	success := r.Strategy == "ai-step-v1/reminder-v1"
 	held := r.Strategy == "ai-step-v1" && strings.HasPrefix(r.Outcome, "ai-")
-	if (!plain && !success && !held && !watch) || ((plain || success) && r.Outcome != "reminded") {
+	if (!plain && !success && !held && !watch && !analysis) || ((plain || success) && r.Outcome != "reminded") {
 		return nil, nil, nil, refused
 	}
 	expectedNotice := task.Name + ": " + task.Text
+	if analysis && task.Watch == nil {
+		expectedNotice = task.Name + ": analysis saved"
+	}
 	if watch {
 		expectedNotice = ""
 		if len(r.Watch.NewIDs) > 0 {
@@ -1278,7 +1311,7 @@ func retainedAgentRun(d agentDocument, profile, runID string, now int64) (*Agent
 	// Whitelist public historical fields; never serialize TaskAIStep or the
 	// request itself (both contain private connection/context/disclosure data).
 	var ai *recordedAgentAI
-	if plain || watch {
+	if (plain || watch) && !analysis {
 		if task.AI != nil || r.AIRequestID != "" || r.AIDigest != "" {
 			return nil, nil, nil, refused
 		}
@@ -1287,7 +1320,7 @@ func retainedAgentRun(d agentDocument, profile, runID string, now int64) (*Agent
 			return nil, nil, nil, refused
 		}
 		if r.AIRequestID == "" {
-			if !held {
+			if !held && !(analysis && r.Analysis.State == "skipped") {
 				return nil, nil, nil, refused
 			}
 		} else {
@@ -1308,7 +1341,7 @@ func retainedAgentRun(d agentDocument, profile, runID string, now int64) (*Agent
 			default:
 				return nil, nil, nil, refused
 			}
-			if success && q.State != "completed" {
+			if (success || analysis && r.Analysis.State == "completed") && q.State != "completed" {
 				return nil, nil, nil, refused
 			}
 			sessions := 0

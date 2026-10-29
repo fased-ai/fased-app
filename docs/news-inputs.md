@@ -84,7 +84,8 @@ publication time; a changed article is a distinct item. A successful check with
 no new matches still saves a result, without another notification. The task's
 cursor survives pause, resume and restart. Source failure, stale data or an
 interrupted fetch holds only dependent work; resume is explicit and consumes the
-remaining run allowance. No cached fallback, retry or AI interpretation occurs.
+remaining run allowance. With **Analyze** off, there is no cached fallback,
+retry or AI interpretation.
 No provider, API key, model or background AI access is required, including when
 the attached agent has a locked provider. Headlines remain untrusted data.
 
@@ -116,11 +117,35 @@ Replace the example revision and identities with your instance's values. Inspect
 existing `calendar` object instead of an interval. Direct `task-create` refuses
 watch rules. Use `task-run`, `task-pause` and `task-resume` with the saved task ID;
 `task-run-explain` takes a run ID. Every command retains normal authentication,
-profile scope, revision and capacity checks. Schema 28 and
-`agents-news-watch-v1` protect typed rules, run results and notification cursors;
-schema-27 readers refuse newer state. Migration changes only the schema floor,
+profile scope, revision and capacity checks. Schema 29, `agents-news-watch-v1`
+and `agents-task-analysis-v1` protect typed rules, analysis policies, run results
+and notification cursors; schema-28 readers refuse newer state. Migration changes only the schema floor,
 preserving original documents, revisions and encrypted credentials. Retained
 source/run capacity remains finite; a watch is not an unlimited background feed.
+
+### Optional analysis
+
+In the same watch editor, enable **Analyze**, enter a prompt and choose **If
+analysis fails**: **Keep news result** or **Hold task**. Review binds the source,
+rule, prompt, selected account/model, context and finite run/token/time/budget
+limits. Analysis watches allow at most ten runs. Creating a task does not grant
+background credential access; use the existing task access review separately.
+
+Each run fetches fresh news first. No new matching items means no model request.
+**Hold task** requires successful, still-authorized analysis before committing
+the watch result and cursor. **Keep news result** retains the deterministic
+watch result if AI access is unavailable or analysis fails, with analysis marked
+skipped. It never substitutes another model, fabricates an answer or removes
+unknown-usage holds. Source failure still holds dependent work. Explicit pause
+or cancellation stops the job rather than continuing its optional steps.
+
+The CLI adds `analysis: {"version":"task-analysis-v1","failure":"optional"}`
+or `failure: "required"` to the same review/create commands, with `text` for the
+prompt and the bounded AI fields documented in [Analysis tasks](chat-reminders.md#analysis-tasks).
+Opening or reviewing a task makes no model request. A paused optional watch can
+resume its deterministic work after AI access expires; dispatch still rechecks
+AI consent and credentials before any model request. Held, cancelled and review
+states retain the fresh-review requirement for AI tasks.
 
 Schema 8 and `agents-news-v1` prevent older readers from dropping news evidence
 and dependencies. Paused schema-7 state must finish update recovery before

@@ -48,13 +48,16 @@ func validateCalendarCommand(c AgentCommand, now int64) error {
 	if !validCalendar(calendar) || calendar.At < now+60 || calendar.At > now+366*86400 || (calendar.Version == "cron-v1" && calendar.Until > now+366*86400) {
 		return errors.New("choose a valid timezone and a date 1 minute–366 days ahead")
 	}
-	if c.IntervalSeconds != 0 || (calendar.Version == "once-at-v1" && c.MaxRuns != 1) || c.BotID != "" || (c.Watch == nil && (c.NewsSourceID != "" || c.NewsMaxAgeSeconds != 0)) {
+	if c.IntervalSeconds != 0 || (calendar.Version == "once-at-v1" && c.MaxRuns != 1) || c.BotID != "" || (c.Watch == nil && c.Analysis == nil && (c.NewsSourceID != "" || c.NewsMaxAgeSeconds != 0)) {
 		return errors.New("calendar schedules support plain reminders without interval, bot or news inputs")
 	}
 	return nil
 }
 
 func validCalendarTask(t AgentTask) bool {
+	if typedAnalysis(t) {
+		return validAnalysisCalendar(t)
+	}
 	if t.Watch != nil {
 		return validWatchCalendar(t)
 	}

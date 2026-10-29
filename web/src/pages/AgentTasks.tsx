@@ -29,6 +29,9 @@ import {
   type CronSettings,
 } from "./TaskCronFields";
 import { NewsSourcePicker } from "./NewsInputs";
+import { AIModelPicker, useAIConnection } from "./AIConnection";
+import { isUnmeteredPolicy } from "../agents";
+import { TaskAccessSettings } from "./TaskAccess";
 
 const displayLocale = () =>
   typeof document === "undefined" ? "en" : document.documentElement.lang;
@@ -92,11 +95,14 @@ export function AgentTasks({
   const { t: uiText } = useUI();
   const tr = uiText;
   const { agents, focusedTask, setFocusedTask } = useWorkspace();
+  const { view: connections } = useAIConnection();
   const [editing, setEditing] = useState(false);
   const [watchMode, setWatchMode] = useState(false);
   const [selected, setSelected] = useState("");
   const [resultId, setResultId] = useState("");
   const [reuse, setReuse] = useState("");
+  const [reviewTask, setReviewTask] = useState<AgentTask>();
+  const [createdFrom, setCreatedFrom] = useState<string[]>();
   const advanced = useRef<HTMLDetailsElement>(null);
   const runCards = useRef(new Map<string, HTMLElement>());
   const tasks = v.tasks.filter((t) => !t.wen);
@@ -105,6 +111,7 @@ export function AgentTasks({
     if (!focusedTask) return;
     setPanel("automations");
     if (focusedTask === "new") {
+      setReviewTask(undefined);
       setWatchMode(false);
       setEditing(true);
     } else if (tasks.some((t) => t.id === focusedTask))
@@ -112,6 +119,14 @@ export function AgentTasks({
     setFocusedTask("");
   }, [focusedTask, tasks, setFocusedTask, setPanel]);
   const selectedRun = v.runs.filter((r) => r.taskId === selected).at(-1);
+  useEffect(() => {
+    if (!createdFrom) return;
+    const created = tasks.find((task) => !createdFrom.includes(task.id));
+    if (created) {
+      setSelected(created.id);
+      setCreatedFrom(undefined);
+    }
+  }, [createdFrom, tasks]);
   function reviewAI() {
     if (advanced.current) {
       advanced.current.open = true;
@@ -130,12 +145,30 @@ export function AgentTasks({
   function actions(t: AgentTask) {
     const needsReview =
       !!t.ai && ["review", "held", "cancelled"].includes(t.state);
+    const account =
+      connections?.connections?.find(
+        (item) => item.ref === t.ai?.connectionRef,
+      ) ?? (connections?.ref === t.ai?.connectionRef ? connections : null);
+    const access = account?.taskAccess;
+    const needsAccess =
+      !!t.ai?.analysis &&
+      t.ai.analysis.failure === "required" &&
+      !!t.ai.connectionRef &&
+      (!access ||
+        account?.planPaused ||
+        access.profileId !== v.profileId ||
+        access.expiresAt * 1000 <= Date.now() ||
+        access.usedRequests >= access.maxRequests ||
+        !access.tasks.some(
+          (item) => item.id === t.id && item.digest === t.ai?.digest,
+        ));
     return (
       <div className="row-actions">
-        {!t.ai && (
+        {(!t.ai || t.ai.analysis) && (
           <button
             className="text-button"
-            disabled={agents.busy || t.state !== "scheduled"}
+            disabled={agents.busy || t.state !== "scheduled" || needsAccess}
+            title={needsAccess ? uiText("Background access") : undefined}
             aria-label={`${uiText("Run now")}: ${t.name}`}
             onClick={async () => {
               if (await agents.change({ action: "task-run", id: t.id })) {
@@ -148,7 +181,18 @@ export function AgentTasks({
           </button>
         )}
         {needsReview ? (
-          <button className="text-button" onClick={reviewAI}>
+          <button
+            className="text-button"
+            onClick={() => {
+              if (!t.ai?.analysis) {
+                reviewAI();
+                return;
+              }
+              setReviewTask(t);
+              setWatchMode(!!t.watch);
+              setEditing(true);
+            }}
+          >
             {uiText("Review")}
           </button>
         ) : (
@@ -210,6 +254,10 @@ export function AgentTasks({
         : undefined;
     const notice = v.notices.find((n) => n.runId === run.id);
     const answer = v.aiRequests.find((q) => q.id === run.aiRequestId)?.answer;
+    const typedAnalysis =
+      run.strategy === "analysis-v1" || !!task?.ai?.analysis;
+    const acceptedAnswer =
+      typedAnalysis && run.analysis?.state !== "completed" ? undefined : answer;
     return (
       <article
         className="memory-card task-run"
@@ -227,7 +275,13 @@ export function AgentTasks({
               ? uiText("Latest result")
               : (task?.name ?? uiText("Task unavailable"))}
           </strong>
-          <Badge>{run.watch ? uiText("News watch") : run.outcome}</Badge>
+          <Badge>
+            {run.watch
+              ? uiText("News watch")
+              : run.analysis
+                ? uiText("Analysis")
+                : run.outcome}
+          </Badge>
         </header>
         <time dateTime={new Date(run.at * 1000).toISOString()}>
           {date(run.at)}
@@ -235,8 +289,25 @@ export function AgentTasks({
         <p className="task-result-text">
           {run.watch
             ? uiText("New matches: {count}", { count: run.watch.newIds.length })
-            : answer || notice?.text || task?.text || uiText("Saved result")}
+            : run.analysis?.state === "skipped"
+              ? uiText("Analysis skipped")
+              : acceptedAnswer ||
+                notice?.text ||
+                task?.text ||
+                uiText("Saved result")}
         </p>
+        {run.watch && run.analysis?.state === "completed" && answer && (
+          <p className="ai-answer">{answer}</p>
+        )}
+        {run.watch && run.analysis?.state === "skipped" && (
+          <p role="status">
+            {uiText(
+              run.analysis.reason === "no-new-matches"
+                ? "Nothing new to analyze"
+                : "Analysis skipped",
+            )}
+          </p>
+        )}
         {run.watch && (
           <ul className="watch-headlines">
             {run.watch.newIds.map((id) => {
@@ -260,6 +331,7 @@ export function AgentTasks({
             "ai-step-v1/reminder-v1",
             "ai-step-v1",
             "news-watch-v1",
+            "analysis-v1",
           ].includes(run.strategy) && (
             <button
               className="secondary"
@@ -276,6 +348,24 @@ export function AgentTasks({
             {uiText(" · Run ")}
             {run.id}
           </p>
+          {run.analysis && (
+            <dl className="task-facts">
+              <dt>{uiText("Analysis")}</dt>
+              <dd>
+                {uiText(
+                  run.analysis.state === "completed"
+                    ? "Completed"
+                    : "Analysis skipped",
+                )}
+              </dd>
+              {run.analysis.reason && (
+                <>
+                  <dt>{uiText("Reason")}</dt>
+                  <dd>{run.analysis.reason}</dd>
+                </>
+              )}
+            </dl>
+          )}
           {run.botId && (
             <p>
               {uiText("Quantity ")}
@@ -346,6 +436,7 @@ export function AgentTasks({
             className="primary"
             onClick={() => {
               setPanel("automations");
+              setReviewTask(undefined);
               setWatchMode(false);
               setEditing(true);
               setReuse("");
@@ -357,6 +448,7 @@ export function AgentTasks({
             className="secondary"
             onClick={() => {
               setPanel("automations");
+              setReviewTask(undefined);
               setWatchMode(true);
               setEditing(true);
               setReuse("");
@@ -430,10 +522,15 @@ export function AgentTasks({
           </div>
           {editing ? (
             <TaskComposer
-              key={v.profileId}
+              key={`${v.profileId}:${reviewTask?.id || "new"}`}
               view={v}
+              seed={reviewTask}
               watchMode={watchMode}
               close={() => setEditing(false)}
+              created={() => {
+                setCreatedFrom(tasks.map((task) => task.id));
+                setEditing(false);
+              }}
             />
           ) : reuse ? (
             <aside className="task-detail">
@@ -515,6 +612,9 @@ export function AgentTasks({
                               "Check the selected news source, then resume.",
                             ))}
                     </p>
+                  )}
+                  {selectedTask.ai?.analysis && (
+                    <AnalysisTaskAccess view={v} task={selectedTask} />
                   )}
                   {selectedRun ? (
                     panel === "automations" ? (
@@ -645,11 +745,48 @@ export function AgentTasks({
           </p>
         )}
       </details>
-      <details className="scheduled-ai-disclosure" ref={advanced}>
-        <summary>{uiText("AI tasks")}</summary>
-        <ScheduledAITasks key={v.profileId} view={v} />
-      </details>
+      {v.tasks.some((task) => task.ai && !task.ai.analysis) && (
+        <details className="scheduled-ai-disclosure" ref={advanced}>
+          <summary>{uiText("Legacy tasks")}</summary>
+          <ScheduledAITasks key={v.profileId} view={v} />
+        </details>
+      )}
     </div>
+  );
+}
+
+function AnalysisTaskAccess({
+  view,
+  task,
+}: {
+  view: AgentView;
+  task: AgentTask;
+}) {
+  const { t } = useUI();
+  const { setProvidersOpen } = useWorkspace();
+  const { view: connections, refresh } = useAIConnection();
+  const account =
+    connections?.connections?.find(
+      (item) => item.ref === task.ai?.connectionRef,
+    ) ?? (connections?.ref === task.ai?.connectionRef ? connections : null);
+  if (!account)
+    return (
+      <p role="status">
+        {t("Provider unavailable")}{" "}
+        <button className="text-button" onClick={() => setProvidersOpen(true)}>
+          {t("Providers")}
+        </button>
+      </p>
+    );
+  return (
+    <TaskAccessSettings
+      key={`${view.profileId}:${task.id}:${account.ref}`}
+      connection={account}
+      onChanged={() => {
+        void refresh();
+        window.dispatchEvent(new Event("ai-connection-changed"));
+      }}
+    />
   );
 }
 
@@ -657,42 +794,190 @@ function TaskComposer({
   view: v,
   watchMode,
   close,
+  created,
+  seed,
 }: {
   view: AgentView;
   watchMode: boolean;
   close: () => void;
+  created: () => void;
+  seed?: AgentTask;
 }) {
   const { t: uiText } = useUI();
   const tr = uiText;
   const core = useCore();
-  const { agents } = useWorkspace();
-  const [name, setName] = useState("");
-  const [watchName, setWatchName] = useState(uiText("News watch"));
-  const [watchSource, setWatchSource] = useState("");
-  const [watchAge, setWatchAge] = useState(3600);
-  const [contains, setContains] = useState("");
-  const [text, setText] = useState("");
-  const [bot, setBot] = useState("");
-  const [news, setNews] = useState("");
-  const [age, setAge] = useState(3600);
-  const [seconds, setSeconds] = useState(60);
-  const [unit, setUnit] = useState(60);
-  const [runs, setRuns] = useState(1);
-  const [calendarMode, setCalendarMode] = useState(false);
-  const [cronMode, setCronMode] = useState(false);
+  const { agents, setProvidersOpen } = useWorkspace();
   const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const [zone, setZone] = useState(localZone);
-  const [cron, setCron] = useState<CronSettings>({
-    preset: "daily",
-    time: "09:00",
-    weekday: "1",
-    expression: "0 9 * * 1-5",
-    timeZone: localZone,
-    until: calendarInput(Date.now() / 1000 + 30 * 86400, localZone),
+  const freshDraft = () => ({
+    name: "",
+    text: "",
+    prompt: "",
+    bot: "",
+    news: "",
+    age: 3600,
+    contains: "",
+    seconds: 60,
+    unit: 60,
+    runs: 1,
+    calendarMode: false,
+    cronMode: false,
+    zone: localZone,
+    cron: {
+      preset: "daily",
+      time: "09:00",
+      weekday: "1",
+      expression: "0 9 * * 1-5",
+      timeZone: localZone,
+      until: calendarInput(Date.now() / 1000 + 30 * 86400, localZone),
+    } as CronSettings,
+    at: calendarInput(Date.now() / 1000 + 1800, localZone),
+    analyze: false,
+    failure: "required" as "required" | "optional",
+    overridden: false,
+    connectionRef: "",
+    model: "",
+    session: "",
+    input: 24000,
+    output: 1024,
+    deadline: undefined as number | undefined,
+    perCall: undefined as number | undefined,
+    budget: undefined as number | undefined,
+    minutes: 60,
   });
-  const [at, setAt] = useState(() =>
-    calendarInput(Date.now() / 1000 + 1800, localZone),
+  type Draft = ReturnType<typeof freshDraft>;
+  const [kind, setKind] = useState<"reminder" | "analysis">(
+    seed?.ai?.analysis && !seed.watch ? "analysis" : "reminder",
   );
+  const mode = watchMode ? "watch" : kind;
+  const [drafts, setDrafts] = useState(() => {
+    const initial = {
+      reminder: freshDraft(),
+      analysis: freshDraft(),
+      watch: { ...freshDraft(), name: uiText("News watch") },
+    };
+    if (seed?.ai?.analysis) {
+      const old = seed.ai;
+      const copy = {
+        ...freshDraft(),
+        name: seed.name,
+        prompt: seed.text,
+        news: seed.news?.sourceId || "",
+        age: seed.news?.maxAgeSeconds || 3600,
+        contains: seed.watch?.rule.contains || "",
+        analyze: true,
+        failure: old.analysis!.failure,
+        seconds: seed.intervalSeconds || 60,
+        runs: Math.max(1, Math.min(10, seed.maxRuns - seed.runs)),
+        overridden: true,
+        connectionRef: old.connectionRef || "",
+        model: old.model || "",
+        session: old.sessionId,
+        input: old.limits.maxInputTokens,
+        output: old.limits.maxOutputTokens,
+        deadline: old.limits.deadlineSeconds,
+        perCall: old.limits.budgetMicrousd,
+        budget: old.budgetMicrousd,
+      };
+      if (seed.calendar) {
+        copy.zone = seed.calendar.timeZone;
+        copy.calendarMode = seed.calendar.version === "once-at-v1";
+        copy.cronMode = seed.calendar.version === "cron-v1";
+        copy.at = calendarInput(seed.calendar.at, seed.calendar.timeZone);
+        if (copy.cronMode)
+          copy.cron = {
+            ...copy.cron,
+            preset: "custom",
+            expression: seed.calendar.expression || "",
+            timeZone: seed.calendar.timeZone,
+            until: calendarInput(seed.calendar.until!, seed.calendar.timeZone),
+          };
+      }
+      initial[seed.watch ? "watch" : "analysis"] = copy;
+    }
+    return initial;
+  });
+  const draft = drafts[mode];
+  const patch = (change: Partial<Draft>) =>
+    setDrafts((saved) => ({
+      ...saved,
+      [mode]: { ...saved[mode], ...change },
+    }));
+  const {
+    name,
+    text,
+    bot,
+    news,
+    age,
+    contains,
+    seconds,
+    unit,
+    runs,
+    calendarMode,
+    cronMode,
+    zone,
+    cron,
+    at,
+  } = draft;
+  const watchName = name,
+    watchSource = news,
+    watchAge = age;
+  const setName = (name: string) => patch({ name });
+  const setWatchName = setName;
+  const setText = (text: string) => patch({ text });
+  const setBot = (bot: string) => patch({ bot });
+  const setNews = (news: string) => patch({ news });
+  const setWatchSource = setNews;
+  const setAge = (age: number) => patch({ age });
+  const setWatchAge = setAge;
+  const setContains = (contains: string) => patch({ contains });
+  const setSeconds = (seconds: number) => patch({ seconds });
+  const setUnit = (unit: number) => patch({ unit });
+  const setRuns = (runs: number) => patch({ runs });
+  const setCalendarMode = (calendarMode: boolean) => patch({ calendarMode });
+  const setCronMode = (cronMode: boolean) => patch({ cronMode });
+  const setZone = (zone: string) => patch({ zone });
+  const setCron = (cron: CronSettings) => patch({ cron });
+  const setAt = (at: string) => patch({ at });
+  const aiEnabled = mode === "analysis" || (mode === "watch" && draft.analyze);
+  const { view: connections } = useAIConnection();
+  const accounts =
+    connections?.connections ?? (connections?.ref ? [connections] : []);
+  const agent = v.profiles.find((item) => item.id === v.profileId);
+  const connectionRef = draft.overridden
+    ? draft.connectionRef
+    : agent?.connectionRef || "";
+  const model = draft.overridden ? draft.model : agent?.model || "";
+  const account = accounts.find((item) => item.ref === connectionRef);
+  const entry = account?.catalog?.models.find(
+    (item) => item.id === model && item.connectionRef === connectionRef,
+  );
+  const policy = entry?.policy;
+  const unmetered = isUnmeteredPolicy(policy);
+  const interactiveOnly = policy?.provider === "kimi-code";
+  const aiReady =
+    !!account &&
+    !account.locked &&
+    !account.planPaused &&
+    !!entry?.selectable &&
+    !interactiveOnly;
+  const local = policy?.provider === "local";
+  const deadline = draft.deadline ?? (local ? 60 : 3);
+  const ceiling = policy
+    ? Math.ceil(
+        (draft.input * policy.inputMicrousdPerMillion +
+          Math.max(draft.output, policy.billableOutputTokens || 0) *
+            policy.outputMicrousdPerMillion) /
+          1000000,
+      )
+    : 30000;
+  const perCall = unmetered ? 0 : (draft.perCall ?? Math.max(30000, ceiling));
+  const totalBudget = unmetered
+    ? 0
+    : (draft.budget ??
+      Math.min(
+        policy?.maxRequestBudgetMicrousd || 1000000,
+        perCall * (calendarMode ? 1 : runs),
+      ));
   const [review, setReview] = useState<TaskReview>();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -719,10 +1004,15 @@ function TaskComposer({
     generation.current++;
     setReview(undefined);
     setError("");
-  }, [watchMode]);
+  }, [mode, connectionRef, model, policy?.id]);
   const stale =
     !!review &&
-    (review.revision !== v.revision || review.expiresAt * 1000 <= now);
+    (review.revision !== v.revision ||
+      review.expiresAt * 1000 <= now ||
+      (!!review.ai &&
+        (!aiReady ||
+          review.ai.connectionRef !== connectionRef ||
+          review.ai.model !== model)));
   let calendar: TaskCalendar | undefined;
   let calendarError = "";
   if (calendarMode || cronMode) {
@@ -737,8 +1027,8 @@ function TaskComposer({
     profileId: v.profileId,
     revision: v.revision,
     name: (watchMode ? watchName : name).trim(),
-    text: watchMode ? "" : text.trim(),
-    botId: watchMode ? "" : bot,
+    text: aiEnabled ? draft.prompt.trim() : watchMode ? "" : text.trim(),
+    botId: watchMode || aiEnabled ? "" : bot,
     newsSourceId: watchMode ? watchSource : news,
     newsMaxAgeSeconds: watchMode
       ? watchSource
@@ -753,6 +1043,27 @@ function TaskComposer({
     calendar,
     intervalSeconds: calendarMode || cronMode ? 0 : seconds,
     maxRuns: calendarMode ? 1 : runs,
+    ...(aiEnabled
+      ? {
+          analysis: {
+            version: "task-analysis-v1",
+            failure: watchMode ? draft.failure : "required",
+          },
+          useAgentDefaults: !draft.overridden,
+          connectionRef,
+          model,
+          sessionId: draft.session || undefined,
+          memorySelection: { mode: "relevant" },
+          limits: {
+            maxInputTokens: draft.input,
+            maxOutputTokens: draft.output,
+            deadlineSeconds: deadline,
+            budgetMicrousd: perCall,
+          },
+          totalBudgetMicrousd: totalBudget,
+          authorizationSeconds: draft.minutes * 60,
+        }
+      : {}),
   };
   async function prepare() {
     const attempt = ++generation.current;
@@ -761,6 +1072,7 @@ function TaskComposer({
     setReview(undefined);
     try {
       if (calendarError) throw Error(calendarError);
+      if (aiEnabled && !aiReady) throw Error(uiText("Provider unavailable"));
       const next = await core.request<AgentView>("agents", "POST", command);
       if (attempt === generation.current) {
         if (!next.taskReview) throw Error("Task review unavailable");
@@ -839,14 +1151,56 @@ function TaskComposer({
               <dd>
                 {review.news
                   ? `${v.newsSources.find((s) => s.id === review.news?.sourceId)?.name ?? "Selected source"} · fresh within ${taskInterval(review.news.maxAgeSeconds)}`
-                  : uiText("Saved task only")}
+                  : review.ai
+                    ? uiText("Relevant memory")
+                    : uiText("Saved task only")}
               </dd>
+              {review.ai && (
+                <>
+                  <dt>{uiText("Analysis")}</dt>
+                  <dd>
+                    {uiText(
+                      review.ai.analysis?.failure === "optional"
+                        ? "Optional"
+                        : "Required",
+                    )}
+                  </dd>
+                  <dt>{uiText("If analysis fails")}</dt>
+                  <dd>
+                    {uiText(
+                      review.ai.analysis?.failure === "optional"
+                        ? "Keep news result"
+                        : "Hold task",
+                    )}
+                  </dd>
+                  {review.watch && (
+                    <>
+                      <dt>{uiText("Prompt")}</dt>
+                      <dd>{review.text}</dd>
+                    </>
+                  )}
+                  <dt>{uiText("Model")}</dt>
+                  <dd>{review.ai.model}</dd>
+                  <dt>{uiText("Account")}</dt>
+                  <dd>{account?.name || account?.provider}</dd>
+                  {!isUnmeteredPolicy(review.ai.policy) && (
+                    <>
+                      <dt>{uiText("Maximum cost")}</dt>
+                      <dd>
+                        ${(review.ai.budgetMicrousd / 1000000).toFixed(2)}
+                      </dd>
+                    </>
+                  )}
+                </>
+              )}
             </dl>
-            <p className="task-review-boundary">
-              {review.bot
-                ? uiText("Paper only · no market orders")
-                : uiText("No AI or wallet access")}
-            </p>
+            {!review.ai && (
+              <p className="task-review-boundary">
+                {review.bot
+                  ? uiText("Paper only · no market orders")
+                  : uiText("No AI or wallet access")}
+              </p>
+            )}
             {stale && (
               <p role="alert">
                 {uiText("Records changed or review expired. Review again.")}
@@ -883,7 +1237,7 @@ function TaskComposer({
                         consentDigest: review.digest,
                       })
                     )
-                      close();
+                      created();
                   }}
                 >
                   {tr("Create task")}
@@ -903,6 +1257,23 @@ function TaskComposer({
             }}
           >
             <fieldset disabled={busy}>
+              {!watchMode && (
+                <label>
+                  {uiText("Type")}
+                  <select
+                    aria-label={uiText("Type")}
+                    value={kind}
+                    onChange={(e) =>
+                      edit(() =>
+                        setKind(e.target.value as "reminder" | "analysis"),
+                      )
+                    }
+                  >
+                    <option value="reminder">{uiText("Reminder")}</option>
+                    <option value="analysis">{uiText("Analysis")}</option>
+                  </select>
+                </label>
+              )}
               <label>
                 {tr("Task name")}
                 <input
@@ -936,9 +1307,253 @@ function TaskComposer({
                       onChange={(e) => edit(() => setContains(e.target.value))}
                     />
                   </label>
+                  <label className="ai-consent">
+                    <input
+                      type="checkbox"
+                      checked={draft.analyze}
+                      onChange={(e) =>
+                        edit(() => patch({ analyze: e.target.checked }))
+                      }
+                    />
+                    {uiText("Analyze")}
+                  </label>
                 </>
               )}
-              {!watchMode && !bot && (
+              {aiEnabled && (
+                <>
+                  <label>
+                    {uiText("Prompt")}
+                    <textarea
+                      aria-label={uiText("Prompt")}
+                      required
+                      rows={3}
+                      maxLength={1000}
+                      value={draft.prompt}
+                      onChange={(e) =>
+                        edit(() => patch({ prompt: e.target.value }))
+                      }
+                    />
+                  </label>
+                  {mode === "analysis" && (
+                    <NewsSourcePicker
+                      view={v}
+                      value={news}
+                      onChange={(news) => edit(() => setNews(news))}
+                      age={age}
+                      onAge={(age) => edit(() => setAge(age))}
+                    />
+                  )}
+                  {watchMode && (
+                    <label>
+                      {uiText("If analysis fails")}
+                      <select
+                        aria-label={uiText("If analysis fails")}
+                        value={draft.failure}
+                        onChange={(e) =>
+                          edit(() =>
+                            patch({
+                              failure: e.target.value as
+                                "required" | "optional",
+                            }),
+                          )
+                        }
+                      >
+                        <option value="required">{uiText("Hold task")}</option>
+                        <option value="optional">
+                          {uiText("Keep news result")}
+                        </option>
+                      </select>
+                    </label>
+                  )}
+                  {!aiReady && (
+                    <p role="status">
+                      {uiText("Provider unavailable")}{" "}
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={() => setProvidersOpen(true)}
+                      >
+                        {uiText("Providers")}
+                      </button>
+                    </p>
+                  )}
+                  <details className="task-inspection">
+                    <summary>{uiText("Model & limits")}</summary>
+                    <label>
+                      {uiText("Account")}
+                      <select
+                        aria-label={uiText("Account")}
+                        value={connectionRef}
+                        onChange={(e) =>
+                          edit(() => {
+                            const ref = e.target.value;
+                            const next = accounts.find(
+                              (item) => item.ref === ref,
+                            );
+                            patch({
+                              overridden: true,
+                              connectionRef: ref,
+                              model:
+                                next?.catalog?.models.find(
+                                  (item) => item.selectable && item.recommended,
+                                )?.id || "",
+                            });
+                          })
+                        }
+                      >
+                        <option value="" disabled>
+                          {uiText("Select")}
+                        </option>
+                        {accounts.map((item) => (
+                          <option
+                            key={item.ref}
+                            value={item.ref}
+                            disabled={item.locked || item.planPaused}
+                          >
+                            {item.name || item.provider} ·{" "}
+                            {uiText(
+                              item.authMethod === "sign-in"
+                                ? "ChatGPT"
+                                : item.authMethod === "oauth"
+                                  ? "Google"
+                                  : item.provider === "local"
+                                    ? "Local"
+                                    : "API key",
+                            )}
+                          </option>
+                        ))}
+                        {!!connectionRef && !account && (
+                          <option value={connectionRef} disabled>
+                            {uiText("Unavailable")}
+                          </option>
+                        )}
+                      </select>
+                    </label>
+                    <AIModelPicker
+                      value={model}
+                      onChange={(model) =>
+                        edit(() =>
+                          patch({ overridden: true, connectionRef, model }),
+                        )
+                      }
+                      connectionRef={connectionRef}
+                      allowDemo={false}
+                    />
+                    <label>
+                      {uiText("Context")}
+                      <select
+                        aria-label={uiText("Context")}
+                        value={draft.session}
+                        onChange={(e) =>
+                          edit(() => patch({ session: e.target.value }))
+                        }
+                      >
+                        <option value="">{uiText("Relevant memory")}</option>
+                        {v.sessions.map((session) => (
+                          <option key={session.id} value={session.id}>
+                            {session.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="agent-form-grid">
+                      <label>
+                        {uiText("Input tokens")}
+                        <input
+                          type="number"
+                          required
+                          min={1000}
+                          max={32000}
+                          value={draft.input}
+                          onChange={(e) =>
+                            edit(() => patch({ input: e.target.valueAsNumber }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        {uiText("Output tokens")}
+                        <input
+                          type="number"
+                          required
+                          min={128}
+                          max={1024}
+                          value={draft.output}
+                          onChange={(e) =>
+                            edit(() =>
+                              patch({ output: e.target.valueAsNumber }),
+                            )
+                          }
+                        />
+                      </label>
+                      <label>
+                        {uiText("Deadline (seconds)")}
+                        <input
+                          type="number"
+                          required
+                          min={1}
+                          max={local ? 60 : 5}
+                          value={deadline}
+                          onChange={(e) =>
+                            edit(() =>
+                              patch({ deadline: e.target.valueAsNumber }),
+                            )
+                          }
+                        />
+                      </label>
+                      <label>
+                        {uiText("Access (minutes)")}
+                        <input
+                          type="number"
+                          required
+                          min={1}
+                          max={10080}
+                          value={draft.minutes}
+                          onChange={(e) =>
+                            edit(() =>
+                              patch({ minutes: e.target.valueAsNumber }),
+                            )
+                          }
+                        />
+                      </label>
+                      {!unmetered && (
+                        <>
+                          <label>
+                            {uiText("Per-call cost cap (micro USD)")}
+                            <input
+                              type="number"
+                              required
+                              min={1}
+                              max={policy?.maxRequestBudgetMicrousd || 1000000}
+                              value={perCall}
+                              onChange={(e) =>
+                                edit(() =>
+                                  patch({ perCall: e.target.valueAsNumber }),
+                                )
+                              }
+                            />
+                          </label>
+                          <label>
+                            {uiText("AI total cost cap (micro USD)")}
+                            <input
+                              type="number"
+                              required
+                              min={1}
+                              max={policy?.maxRequestBudgetMicrousd || 1000000}
+                              value={totalBudget}
+                              onChange={(e) =>
+                                edit(() =>
+                                  patch({ budget: e.target.valueAsNumber }),
+                                )
+                              }
+                            />
+                          </label>
+                        </>
+                      )}
+                    </div>
+                  </details>
+                </>
+              )}
+              {!watchMode && !aiEnabled && !bot && (
                 <label>
                   {tr("Reminder text")}
                   <textarea
@@ -1083,7 +1698,7 @@ function TaskComposer({
                     type="number"
                     required
                     min={cronMode ? 1 : 2}
-                    max={20}
+                    max={aiEnabled ? 10 : 20}
                     value={runs}
                     onChange={(e) =>
                       edit(() => setRuns(Number(e.target.value)))
@@ -1091,7 +1706,7 @@ function TaskComposer({
                   />
                 </label>
               )}
-              {!watchMode && !calendarMode && !cronMode && (
+              {!watchMode && !aiEnabled && !calendarMode && !cronMode && (
                 <details className="task-inspection">
                   <summary>{uiText("Options")}</summary>
                   <label>
@@ -1136,7 +1751,7 @@ function TaskComposer({
                         type="number"
                         required
                         min={1}
-                        max={20}
+                        max={aiEnabled ? 10 : 20}
                         value={runs}
                         onChange={(e) =>
                           edit(() => setRuns(Number(e.target.value)))
@@ -1146,7 +1761,10 @@ function TaskComposer({
                   )}
                 </details>
               )}
-              <button className="primary" disabled={busy}>
+              <button
+                className="primary"
+                disabled={busy || (aiEnabled && !aiReady)}
+              >
                 {tr("Review task")}
               </button>
             </fieldset>

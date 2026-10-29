@@ -13,20 +13,21 @@ import (
 const taskAICompletionReserve = 8192
 
 type TaskAIStep struct {
-	Model          string             `json:"model,omitempty"`
-	Policy         *OpenAIModelPolicy `json:"policy,omitempty"`
-	ConnectionRef  string             `json:"connectionRef,omitempty"`
-	SessionID      string             `json:"sessionId"`
-	Context        string             `json:"context"`
-	Disclosure     string             `json:"disclosure"`
-	Limits         AILimits           `json:"limits"`
-	BudgetMicrousd int64              `json:"budgetMicrousd"`
-	CreatedAt      int64              `json:"createdAt"`
-	ExpiresAt      int64              `json:"expiresAt"`
-	Digest         string             `json:"digest"`
-	Authorized     bool               `json:"authorized"`
-	PendingID      string             `json:"pendingId"`
-	Bot            *PaperBot          `json:"bot,omitempty"`
+	Analysis       *TaskAnalysisPolicy `json:"analysis,omitempty"`
+	Model          string              `json:"model,omitempty"`
+	Policy         *OpenAIModelPolicy  `json:"policy,omitempty"`
+	ConnectionRef  string              `json:"connectionRef,omitempty"`
+	SessionID      string              `json:"sessionId"`
+	Context        string              `json:"context"`
+	Disclosure     string              `json:"disclosure"`
+	Limits         AILimits            `json:"limits"`
+	BudgetMicrousd int64               `json:"budgetMicrousd"`
+	CreatedAt      int64               `json:"createdAt"`
+	ExpiresAt      int64               `json:"expiresAt"`
+	Digest         string              `json:"digest"`
+	Authorized     bool                `json:"authorized"`
+	PendingID      string              `json:"pendingId"`
+	Bot            *PaperBot           `json:"bot,omitempty"`
 }
 
 func migrateTaskAI(ctx context.Context, db *sql.DB) error {
@@ -106,8 +107,10 @@ func taskAIDigest(t AgentTask) string {
 		MaxRuns                        int
 		Playbook                       *PlaybookOrigin `json:",omitempty"`
 		News                           *TaskNewsInput
+		Calendar                       *TaskCalendar  `json:",omitempty"`
+		Watch                          *NewsWatchRule `json:",omitempty"`
 		AI                             TaskAIStep
-	}{t.ID, t.ProfileID, t.Name, t.Text, t.BotID, t.IntervalSeconds, t.MaxRuns, t.Playbook, newsPolicyForDigest(t.News), a})
+	}{t.ID, t.ProfileID, t.Name, t.Text, t.BotID, t.IntervalSeconds, t.MaxRuns, t.Playbook, newsPolicyForDigest(t.News), t.Calendar, watchRule(t), a})
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
@@ -122,7 +125,16 @@ func validateTaskAI(d agentDocument, t AgentTask, now int64) error {
 	if e != nil || string(wire) != t.AI.Disclosure {
 		return errors.New("AI wire contract changed; review a fresh plan")
 	}
-	context, e := aiContext(d, t.ProfileID, t.AI.SessionID, t.Text, now)
+	var context string
+	if typedAnalysis(t) {
+		selection, err := draftMemorySelection(taskAIRequest(t, now))
+		if err != nil {
+			return err
+		}
+		context, e = aiContextWithMemory(d, t.ProfileID, t.AI.SessionID, t.Text, now, selection)
+	} else {
+		context, e = aiContext(d, t.ProfileID, t.AI.SessionID, t.Text, now)
+	}
 	if e != nil || context != t.AI.Context {
 		return errors.New("task context changed; review a fresh plan")
 	}
@@ -165,14 +177,14 @@ func changeTaskAI(d *agentDocument, c AgentCommand, profile, id string, now int6
 		if m, ok := currentProviderModel(c.Model); ok && modelProvider(m) == "kimi-code" {
 			return errors.New("Kimi Code is interactive only; choose a Platform API account for tasks")
 		}
-		if !validAgentText(c.Name, 80, true) || !validAgentText(c.Text, 1000, true) || c.IntervalSeconds < 60 || c.IntervalSeconds > 604800 || c.MaxRuns < 1 || c.MaxRuns > 10 || c.AuthorizationSeconds < 60 || c.AuthorizationSeconds > 604800 || !validPolicyTotal(chatModelPolicyForMethod(c.Model, c.providerAuthMethod), c.TotalBudgetMicrousd) || len(d.Tasks) >= 100 {
+		if !validAgentText(c.Name, 80, true) || !validAgentText(c.Text, 1000, true) || (c.Calendar == nil && (c.IntervalSeconds < 60 || c.IntervalSeconds > 604800)) || c.MaxRuns < 1 || c.MaxRuns > 10 || c.AuthorizationSeconds < 60 || c.AuthorizationSeconds > 604800 || !validPolicyTotal(chatModelPolicyForMethod(c.Model, c.providerAuthMethod), c.TotalBudgetMicrousd) || len(d.Tasks) >= 100 {
 			return errors.New("bounded AI task name/prompt/schedule/authorization and total budget required")
 		}
 		// Reuse the exact request validator and complete wire disclosure, then reserve
 		// all future request slots rather than publishing a disposable preview request.
 		copy := *d
 		copy.AIRequests = append([]AgentAIRequest{}, d.AIRequests...)
-		if e := changeAgentAI(&copy, AgentCommand{providerAuthMethod: c.providerAuthMethod, Model: c.Model, ConnectionRef: c.ConnectionRef, Action: "ai-prepare", ID: c.ID, Text: c.Text, Limits: c.Limits}, profile, id, now, false, nil); e != nil {
+		if e := changeAgentAI(&copy, AgentCommand{providerAuthMethod: c.providerAuthMethod, Model: c.Model, ConnectionRef: c.ConnectionRef, Action: "ai-prepare", ID: c.ID, Text: c.Text, Limits: c.Limits, MemorySelection: c.MemorySelection}, profile, id, now, false, nil); e != nil {
 			return e
 		}
 		q := copy.AIRequests[len(copy.AIRequests)-1]
@@ -186,7 +198,7 @@ func changeTaskAI(d *agentDocument, c AgentCommand, profile, id string, now int6
 		if runs > 200 {
 			return errors.New("local scheduled evaluation capacity reached")
 		}
-		a := &TaskAIStep{Model: q.Model, Policy: q.Policy, ConnectionRef: c.ConnectionRef, SessionID: c.ID, Context: q.Context, Disclosure: q.Disclosure, Limits: q.Limits, BudgetMicrousd: c.TotalBudgetMicrousd, CreatedAt: now, ExpiresAt: now + c.AuthorizationSeconds}
+		a := &TaskAIStep{Analysis: c.Analysis, Model: q.Model, Policy: q.Policy, ConnectionRef: c.ConnectionRef, SessionID: c.ID, Context: q.Context, Disclosure: q.Disclosure, Limits: q.Limits, BudgetMicrousd: c.TotalBudgetMicrousd, CreatedAt: now, ExpiresAt: now + c.AuthorizationSeconds}
 		if c.BotID != "" {
 			for _, bot := range d.Bots {
 				if bot.ID == c.BotID && bot.ProfileID == profile {
@@ -202,7 +214,11 @@ func changeTaskAI(d *agentDocument, c AgentCommand, profile, id string, now int6
 		if e != nil {
 			return e
 		}
-		t := AgentTask{News: news, ID: id, ProfileID: profile, Name: c.Name, Text: c.Text, BotID: c.BotID, IntervalSeconds: c.IntervalSeconds, MaxRuns: c.MaxRuns, State: "review", AI: a}
+		var watch *TaskNewsWatch
+		if c.Watch != nil {
+			watch = &TaskNewsWatch{Rule: *c.Watch, Seen: []string{}}
+		}
+		t := AgentTask{Watch: watch, Calendar: c.Calendar, News: news, ID: id, ProfileID: profile, Name: c.Name, Text: c.Text, BotID: c.BotID, IntervalSeconds: c.IntervalSeconds, MaxRuns: c.MaxRuns, State: "review", AI: a}
 		a.Digest = taskAIDigest(t)
 		d.Tasks = append(d.Tasks, t)
 		return nil
@@ -226,6 +242,9 @@ func changeTaskAI(d *agentDocument, c AgentCommand, profile, id string, now int6
 			d.Tasks[i].AI.Authorized = true
 			d.Tasks[i].State = "scheduled"
 			d.Tasks[i].NextAt = now + t.IntervalSeconds
+			if t.Calendar != nil {
+				d.Tasks[i].NextAt = t.Calendar.At
+			}
 			return nil
 		case "task-ai-cancel":
 			if t.News != nil && t.News.PendingID != "" {
@@ -246,7 +265,15 @@ func taskAIHeld(d *agentDocument, i int, requestID, outcome string, now int64) e
 	}
 	t := &d.Tasks[i]
 	id := fmt.Sprintf("%s:%d", t.ID, t.Runs+1)
-	d.Runs = append(d.Runs, AgentRun{ID: id, ProfileID: t.ProfileID, TaskID: t.ID, BotID: t.BotID, Strategy: "ai-step-v1", At: now, Outcome: outcome, AIRequestID: requestID, AIDigest: t.AI.Digest})
+	run := AgentRun{ID: id, ProfileID: t.ProfileID, TaskID: t.ID, BotID: t.BotID, Strategy: "ai-step-v1", At: now, Outcome: outcome, AIRequestID: requestID, AIDigest: t.AI.Digest}
+	if typedAnalysis(*t) && t.News != nil {
+		for _, f := range d.NewsFetches {
+			if f.ID == t.News.FetchID && f.ProfileID == t.ProfileID {
+				run.News = newsEvidence(f)
+			}
+		}
+	}
+	d.Runs = append(d.Runs, run)
 	d.Notices = append(d.Notices, AgentNotice{ID: id, ProfileID: t.ProfileID, Text: t.Name + ": " + outcome + "; dependent step stopped. Review a new task plan.", RunID: id, At: now})
 	t.Runs++
 	t.State = "held"
@@ -259,11 +286,14 @@ func evaluateTaskAfterNews(d *agentDocument, i int, now int64, fixture bool) err
 	if t.AI == nil {
 		return runAgentTask(d, i, now)
 	}
+	if typedAnalysis(t) && noNewAnalysisMatches(*d, t, now) {
+		return finishTaskAnalysis(d, i, now, "", "skipped", "no-new-matches")
+	}
 	if !fixture {
-		return taskAIHeld(d, i, "", "ai-disabled", now)
+		return holdOrSkipTaskAI(d, i, "", "ai-disabled", now)
 	}
 	if validateTaskAI(*d, t, now) != nil {
-		return taskAIHeld(d, i, "", "ai-consent-invalid", now)
+		return holdOrSkipTaskAI(d, i, "", "ai-consent-invalid", now)
 	}
 	used := int64(0)
 	for _, q := range d.AIRequests {
@@ -272,14 +302,16 @@ func evaluateTaskAfterNews(d *agentDocument, i int, now int64, fixture bool) err
 		}
 		if q.ProfileID == t.ProfileID && aiHasUsageHold(q) {
 			if q.State == "queued" || q.State == "running" {
-				d.Tasks[i].NextAt = now + 1
+				if t.Calendar == nil {
+					d.Tasks[i].NextAt = now + 1
+				}
 				return nil
 			}
-			return taskAIHeld(d, i, "", "ai-profile-held", now)
+			return holdOrSkipTaskAI(d, i, "", "ai-profile-held", now)
 		}
 	}
 	if used+aiRequestReservation(taskAIRequest(t, now)) > t.AI.BudgetMicrousd || len(d.AIRequests) >= 10 {
-		return taskAIHeld(d, i, "", "ai-budget-blocked", now)
+		return holdOrSkipTaskAI(d, i, "", "ai-budget-blocked", now)
 	}
 	q := taskAIRequest(t, now)
 	if t.News != nil {
@@ -313,10 +345,13 @@ func settleTaskAI(d *agentDocument, taskID string, now int64) error {
 				return nil
 			}
 			if q.State != "completed" {
-				return taskAIHeld(d, i, q.ID, "ai-"+q.State, now)
+				return holdOrSkipTaskAI(d, i, q.ID, "ai-"+q.State, now)
 			}
 			if validateTaskAI(*d, t, now) != nil {
-				return taskAIHeld(d, i, q.ID, "ai-consent-invalid", now)
+				return holdOrSkipTaskAI(d, i, q.ID, "ai-consent-invalid", now)
+			}
+			if typedAnalysis(t) {
+				return finishTaskAnalysis(d, i, now, q.ID, "completed", "")
 			}
 			if e := runAgentTask(d, i, now); e != nil {
 				return e
@@ -354,6 +389,13 @@ func cancelTaskAI(d *agentDocument, i int, now int64) error {
 			if q.State == "queued" || q.State == "running" {
 				q.State = "cancelled"
 				q.Failure = "Task stopped locally; a dispatched reservation remains held."
+			}
+			if typedAnalysis(t) {
+				if err := taskAIHeld(d, i, q.ID, "ai-cancelled", now); err != nil {
+					return err
+				}
+				d.Tasks[i].State = "cancelled"
+				return nil
 			}
 			return settleTaskAI(d, t.ID, now)
 		}

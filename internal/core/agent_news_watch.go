@@ -141,11 +141,15 @@ func validateNewsWatchStorage(raw []byte, d agentDocument) error {
 		if t.Watch == nil {
 			continue
 		}
-		if !validWatchRule(t.Watch.Rule) || t.News == nil || t.AI != nil || t.BotID != "" || t.WEN != nil || t.Playbook != nil || t.Text != "" || t.Watch.Seen == nil || t.MaxRuns < 1 || t.MaxRuns > 20 || t.Runs < 0 || t.Runs > t.MaxRuns || len(t.Watch.Seen) > t.Runs*5 || !sort.StringsAreSorted(t.Watch.Seen) {
+		if !validWatchRule(t.Watch.Rule) || t.News == nil || (t.AI != nil && !typedAnalysis(t)) || t.BotID != "" || t.WEN != nil || t.Playbook != nil || (!typedAnalysis(t) && t.Text != "") || t.Watch.Seen == nil || t.MaxRuns < 1 || t.MaxRuns > 20 || t.Runs < 0 || t.Runs > t.MaxRuns || len(t.Watch.Seen) > t.Runs*5 || !sort.StringsAreSorted(t.Watch.Seen) {
 			return errors.New("unsupported watch task; preserve records")
 		}
 		switch t.State {
 		case "scheduled", "paused", "waiting-news", "held", "completed":
+		case "review", "waiting-ai", "cancelled":
+			if !typedAnalysis(t) {
+				return errors.New("unsupported watch state")
+			}
 		default:
 			return errors.New("unsupported watch state")
 		}
@@ -161,7 +165,7 @@ func validateNewsWatchStorage(raw []byte, d agentDocument) error {
 				continue
 			}
 			w := run.Watch
-			if run.ProfileID != t.ProfileID || run.Strategy != newsWatchVersion || run.AIRequestID != "" || run.AIDigest != "" || run.News == nil || w.Rule != t.Watch.Rule || w.NewIDs == nil || len(w.NewIDs) > 5 || w.Matched < 0 || w.Matched > 5 {
+			if run.ProfileID != t.ProfileID || run.Strategy != newsWatchVersion || (!typedAnalysis(t) && (run.AIRequestID != "" || run.AIDigest != "")) || run.News == nil || w.Rule != t.Watch.Rule || w.NewIDs == nil || len(w.NewIDs) > 5 || w.Matched < 0 || w.Matched > 5 {
 				return errors.New("unsupported watch result; preserve records")
 			}
 			var f *NewsFetch
@@ -280,6 +284,9 @@ func migrateNewsWatch(ctx context.Context, db *sql.DB) error {
 }
 
 func validWatchCalendar(t AgentTask) bool {
+	if typedAnalysis(t) {
+		return validAnalysisCalendar(t)
+	}
 	if !validCalendar(t.Calendar) || t.IntervalSeconds != 0 || t.MaxRuns < 1 || t.MaxRuns > 20 || t.Runs < 0 || t.Runs > t.MaxRuns {
 		return false
 	}

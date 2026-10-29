@@ -66,8 +66,9 @@ try {
   );
   pass(
     "schemaPauseAndApprovalFeatures",
-    contracts[0].state[0].versions.min === 28 &&
-      contracts[0].state[0].versions.max === 28 &&
+    contracts[0].state[0].versions.min === 29 &&
+      contracts[0].state[0].versions.max === 29 &&
+      contracts[0].state[0].features.includes("agents-task-analysis-v1") &&
       contracts[0].state[0].features.includes("agents-playbooks-v1") &&
       contracts[0].state[0].features.includes("agents-cron-v1") &&
       contracts[0].state[0].features.includes("agents-history-v1") &&
