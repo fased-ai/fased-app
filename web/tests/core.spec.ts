@@ -5278,6 +5278,7 @@ test("proposal form uses explicit fixture labels (UI mock only)", async ({
     page.getByRole("button", { name: "Sign out", exact: true }),
   ).toBeVisible();
   await page.goto(url + "/#wallets/accounts");
+  await revealFixtureAccountEntry(page);
   await expect(page.getByLabel("Fixture account", { exact: true })).toBeVisible(
     { timeout: 1000 },
   );
@@ -10518,10 +10519,16 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
         })),
       ),
     ).toBe(true);
-    const columns = await layout.evaluate(
-      (el) => getComputedStyle(el).gridTemplateColumns.split(" ").length,
-    );
-    expect(columns).toBe(isMobile ? 1 : selector === ".dashboard-grid" ? 3 : 2);
+    if (selector === ".wallet-workspace") {
+      await expect(layout).toHaveCSS("display", "block");
+    } else {
+      const columns = await layout.evaluate(
+        (el) => getComputedStyle(el).gridTemplateColumns.split(" ").length,
+      );
+      expect(columns).toBe(
+        isMobile ? 1 : selector === ".dashboard-grid" ? 3 : 2,
+      );
+    }
     if (isMobile) {
       const small = await layout
         .locator("button, select, input:not([type=checkbox])")
@@ -10561,12 +10568,16 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
     page.getByLabel("Conversation name", { exact: true }),
   ).toBeVisible();
   await page.goto(url + "/#wallets/accounts");
+  await revealFixtureAccountEntry(page);
+  const walletCapabilities = await (
+    await page.request.get(url + "/api/v1/health")
+  ).json();
+  expect(walletCapabilities.capabilities.walletSigner).toBe(false);
+  expect(walletCapabilities.capabilities.financialExecution).toBe(false);
   await expect(
     page.getByRole("heading", { name: "Wallets", exact: true }),
   ).toBeVisible();
-  await expect(
-    page.getByText("REAL WALLETS DISABLED", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("Test only", { exact: true })).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Record disposable signer", exact: true }),
   ).toBeDisabled();
@@ -10576,11 +10587,7 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
       exact: true,
     }),
   ).toBeDisabled();
-  await expect(page.locator(".account-safety")).toHaveCSS(
-    "background-color",
-    "rgb(30, 30, 42)",
-  );
-  await checkLayout("wallets", ".account-columns");
+  await checkLayout("wallets", ".wallet-workspace");
   await page.goto(url + "/#settings");
   await openUpdateSettings(page);
   await expect(

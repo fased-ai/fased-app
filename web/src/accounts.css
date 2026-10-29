@@ -62,6 +62,9 @@
   align-items: end;
 }
 @media (max-width: 900px) {
+  .wallet-workspace .section-head button {
+    min-height: 44px;
+  }
   .account-columns {
     grid-template-columns: 1fr;
   }
