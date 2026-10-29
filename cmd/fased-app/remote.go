@@ -223,6 +223,38 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 		ctx, cancel = context.WithTimeout(ctx, remoteOperationTimeout)
 	}
 	defer cancel()
+	target, enrolled, e := vpsEnrollmentTarget(action, m.Data, enrolledTarget)
+	if e != nil {
+		return e
+	}
+	if enrolled {
+		switch action {
+		case "status", "start", "stop", "claim-code", "recover", "access", "remove":
+			if action == "remove" {
+				dir, e := remoteAccessDirectory()
+				if e != nil {
+					return e
+				}
+				if e = privateaccess.System().Remove(ctx, dir); e != nil {
+					return e
+				}
+			}
+			if action == "start" || action == "access" {
+				// Preserve the original private HTTPS mapping and its exact instance ID.
+				var sink io.Writer = io.Discard
+				if e = enrolledLifecycle(ctx, target, action, true, true, sink, enrolledSystem(system)); e != nil {
+					return e
+				}
+				url, e := enableEnrolledRemoteAccess(ctx, m, target)
+				if e != nil {
+					return e
+				}
+				fmt.Fprintln(out, url)
+				return nil
+			}
+			return enrolledLifecycle(ctx, target, action, true, true, out, enrolledSystem(system))
+		}
+	}
 	switch action {
 	case "harden", "confirm", "rollback", "network":
 		var status vpsinstall.NetworkStatus
@@ -296,4 +328,43 @@ func validateRuntimeUID(uid, euid int) error {
 		return errors.New("run Fased as an ordinary OS user; use the installer for privileged OS preparation")
 	}
 	return nil
+}
+
+func enableEnrolledRemoteAccess(ctx context.Context, source vpsinstall.Manifest, target custodyinstall.Manifest) (string, error) {
+	if target.Location != "remote" || target.Listen != source.Listen || target.PublicOrigin != source.PublicOrigin || target.Owner != source.OwnerUID {
+		return "", errors.New("Remote enrollment binding changed")
+	}
+	commit, e := custodyinstall.ReadEnrollmentCommit(target)
+	if e != nil {
+		return "", e
+	}
+	if target.PublicOrigin == "" {
+		return enrolledURL(target), nil
+	}
+	manager := privateaccess.System()
+	plan, e := manager.Plan(ctx, "tailscale", target.Listen)
+	if e != nil {
+		return "", e
+	}
+	if plan.Origin != target.PublicOrigin {
+		return "", errors.New("Tailscale identity changed; original private origin is preserved")
+	}
+	dir, e := remoteAccessDirectory()
+	if e != nil {
+		return "", e
+	}
+	if e = manager.Enable(ctx, dir, plan, commit.InstanceID); e != nil {
+		return "", e
+	}
+	return plan.Origin, nil
+}
+
+// Network recovery owns its pending-fence guard. A lifecycle redirect must not
+// prevent that recovery path from reaching its original policy controller.
+func vpsEnrollmentTarget(action, data string, lookup func(string) (custodyinstall.Manifest, bool, error)) (custodyinstall.Manifest, bool, error) {
+	switch action {
+	case "harden", "confirm", "rollback", "network":
+		return custodyinstall.Manifest{}, false, nil
+	}
+	return lookup(data)
 }

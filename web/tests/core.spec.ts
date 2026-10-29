@@ -1,4 +1,8 @@
 import { expect, test, type Request, type Route } from "@playwright/test";
+import {
+  refreshFixtureAccounts,
+  revealFixtureAccountEntry,
+} from "../../scripts/fixture-account-journey.mjs";
 
 test.use({ colorScheme: "dark" });
 import { spawn, type ChildProcess } from "node:child_process";
@@ -4852,6 +4856,43 @@ test("production UI fails closed when the core API is unavailable", async ({
   await expect(page.getByRole("button", { name: "Setup" })).toHaveCount(0);
 });
 
+test("managed account entry supports current and predecessor layouts", async ({
+  page,
+}) => {
+  page.setDefaultTimeout(1500);
+  await page.setContent(
+    `<details><summary>Advanced</summary><label>Name<input></label></details><button onclick="this.dataset.refreshed='yes'">Refresh</button>`,
+  );
+  await revealFixtureAccountEntry(page);
+  await expect(page.getByLabel("Name", { exact: true })).toBeVisible();
+  await expect(page.locator("details")).toHaveAttribute("open", "");
+  await refreshFixtureAccounts(page);
+  await expect(
+    page.getByRole("button", { name: "Refresh", exact: true }),
+  ).toHaveAttribute("data-refreshed", "yes");
+  await page.setContent(
+    `<label>Name<input></label><details><summary>Advanced</summary><p>Other controls</p></details><button onclick="this.dataset.refreshed='yes'">Refresh accounts and approvals</button>`,
+  );
+  await revealFixtureAccountEntry(page);
+  await expect(page.getByLabel("Name", { exact: true })).toBeVisible();
+  await expect(page.locator("details")).not.toHaveAttribute("open", "");
+  await refreshFixtureAccounts(page);
+  await expect(
+    page.getByRole("button", {
+      name: "Refresh accounts and approvals",
+      exact: true,
+    }),
+  ).toHaveAttribute("data-refreshed", "yes");
+  await page.setContent("<main></main>");
+  await page.evaluate(() => {
+    window.setTimeout(() => {
+      document.querySelector("main")!.innerHTML = "<label>Name<input></label>";
+    }, 300);
+  });
+  await revealFixtureAccountEntry(page);
+  await expect(page.getByLabel("Name", { exact: true })).toBeVisible();
+});
+
 test("public account records share UI/CLI state without wallet authority", async ({
   page,
 }) => {
@@ -4866,6 +4907,7 @@ test("public account records share UI/CLI state without wallet authority", async
   await page.getByRole("button", { name: "Claim workspace" }).click();
   await page.goto(url + "/#wallets/accounts");
   await expect(page.getByRole("heading", { name: "Wallets" })).toBeVisible();
+  await revealFixtureAccountEntry(page);
   await revealControl(page, page.getByLabel("Name", { exact: true }), "");
   await page.getByLabel("Name", { exact: true }).fill("Disposable watch");
   await revealControl(
@@ -4892,23 +4934,29 @@ test("public account records share UI/CLI state without wallet authority", async
   let state = JSON.parse(
     (await exec(binary, ["accounts", "--data-dir", dir])).stdout,
   );
+  await refreshFixtureAccounts(page);
   expect(state.record.accounts[0].name).toBe("Disposable watch");
   expect(state.fixture.available).toBe(false);
   await page.getByRole("button", { name: "RPC", exact: true }).click();
-  await page.getByRole("button", { name: "Check RPC", exact: true }).click();
+  const rpcBounds = await page.getByRole("dialog").boundingBox();
+  const inputBounds = await page
+    .getByLabel("RPC URL", { exact: true })
+    .boundingBox();
+  expect(inputBounds!.x - rpcBounds!.x).toBeGreaterThanOrEqual(16);
+  await page.getByRole("button", { name: "Check", exact: true }).click();
   await expect(
-    page.getByText("RPC verified (demo)", { exact: true }),
+    page.getByText("Verified (test)", { exact: true }),
   ).toBeVisible();
   await page
     .getByLabel("RPC URL", { exact: true })
     .fill("https://127.0.0.1/private");
-  await page.getByRole("button", { name: "Check RPC", exact: true }).click();
+  await page.getByRole("button", { name: "Check", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText(
     "only the disposable RPC",
   );
-  await expect(
-    page.getByText("RPC verified (demo)", { exact: true }),
-  ).toHaveCount(0);
+  await expect(page.getByText("Verified (test)", { exact: true })).toHaveCount(
+    0,
+  );
   await page.getByRole("button", { name: "Close dialog" }).click();
   const rpc = await privateCLI(["accounts", "--check-rpc-stdin"], {
     endpoint: "https://rpc.fased.invalid/solana",
@@ -4950,9 +4998,9 @@ test("public account records share UI/CLI state without wallet authority", async
   await expect(page.getByLabel("RPC URL", { exact: true })).toHaveValue(
     state.record.accounts[0].rpc.endpoint,
   );
-  await expect(
-    page.getByText("RPC verified (demo)", { exact: true }),
-  ).toHaveCount(0);
+  await expect(page.getByText("Verified (test)", { exact: true })).toHaveCount(
+    0,
+  );
   await page.getByText("API key", { exact: true }).first().click();
   await page
     .getByLabel("RPC API key", { exact: true })
@@ -4965,6 +5013,9 @@ test("public account records share UI/CLI state without wallet authority", async
     page.getByRole("button", { name: "Remove key", exact: true }),
   ).toBeVisible();
   await expect(page.getByLabel("RPC API key", { exact: true })).toHaveValue("");
+  await page.screenshot({
+    path: `.evidence/b05-wallet-setup/rpc-layout-${test.info().project.name}.png`,
+  });
   const credential = await privateCLI(["accounts", "--rpc-credential-stdin"], {
     accountId: state.record.accounts[0].id,
     revision: state.record.revision,
@@ -5122,15 +5173,15 @@ test("public account records share UI/CLI state without wallet authority", async
   change.stdin.end(JSON.stringify(state.record));
   await once(change, "exit");
   expect(change.exitCode).toBe(0);
-  await page
-    .getByRole("button", { name: "Refresh accounts and approvals" })
-    .click();
+  await page.getByRole("button", { name: "Refresh" }).click();
   await expect(
     page.getByRole("heading", { name: "External manual fixture", exact: true }),
   ).toBeVisible();
-  await expect(
-    page.getByText("REAL WALLETS DISABLED", { exact: true }),
-  ).toBeVisible();
+  const heldCapabilities = await (
+    await page.request.get(url + "/api/v1/health")
+  ).json();
+  expect(heldCapabilities.capabilities.walletSigner).toBe(false);
+  expect(heldCapabilities.capabilities.financialExecution).toBe(false);
   await page.screenshot({
     path: `.evidence/p3-accounts/public-accounts-${test.info().project.name}.png`,
     fullPage: true,
@@ -5227,6 +5278,7 @@ test("proposal form uses explicit fixture labels (UI mock only)", async ({
     page.getByRole("button", { name: "Sign out", exact: true }),
   ).toBeVisible();
   await page.goto(url + "/#wallets/accounts");
+  await revealFixtureAccountEntry(page);
   await expect(page.getByLabel("Fixture account", { exact: true })).toBeVisible(
     { timeout: 1000 },
   );
@@ -10467,10 +10519,16 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
         })),
       ),
     ).toBe(true);
-    const columns = await layout.evaluate(
-      (el) => getComputedStyle(el).gridTemplateColumns.split(" ").length,
-    );
-    expect(columns).toBe(isMobile ? 1 : selector === ".dashboard-grid" ? 3 : 2);
+    if (selector === ".wallet-workspace") {
+      await expect(layout).toHaveCSS("display", "block");
+    } else {
+      const columns = await layout.evaluate(
+        (el) => getComputedStyle(el).gridTemplateColumns.split(" ").length,
+      );
+      expect(columns).toBe(
+        isMobile ? 1 : selector === ".dashboard-grid" ? 3 : 2,
+      );
+    }
     if (isMobile) {
       const small = await layout
         .locator("button, select, input:not([type=checkbox])")
@@ -10510,12 +10568,16 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
     page.getByLabel("Conversation name", { exact: true }),
   ).toBeVisible();
   await page.goto(url + "/#wallets/accounts");
+  await revealFixtureAccountEntry(page);
+  const walletCapabilities = await (
+    await page.request.get(url + "/api/v1/health")
+  ).json();
+  expect(walletCapabilities.capabilities.walletSigner).toBe(false);
+  expect(walletCapabilities.capabilities.financialExecution).toBe(false);
   await expect(
     page.getByRole("heading", { name: "Wallets", exact: true }),
   ).toBeVisible();
-  await expect(
-    page.getByText("REAL WALLETS DISABLED", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("Test only", { exact: true })).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Record disposable signer", exact: true }),
   ).toBeDisabled();
@@ -10525,11 +10587,7 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
       exact: true,
     }),
   ).toBeDisabled();
-  await expect(page.locator(".account-safety")).toHaveCSS(
-    "background-color",
-    "rgb(30, 30, 42)",
-  );
-  await checkLayout("wallets", ".account-columns");
+  await checkLayout("wallets", ".wallet-workspace");
   await page.goto(url + "/#settings");
   await openUpdateSettings(page);
   await expect(
@@ -11749,9 +11807,9 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
   ).toBeVisible();
   await page.getByRole("button", { name: "RPC", exact: true }).click();
   await expect(page.getByLabel("Network", { exact: true })).toHaveValue("Demo");
-  await page.getByRole("button", { name: "Check RPC", exact: true }).click();
+  await page.getByRole("button", { name: "Check", exact: true }).click();
   await expect(
-    page.getByText("RPC verified (demo)", { exact: true }),
+    page.getByText("Verified (test)", { exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect
@@ -11844,6 +11902,16 @@ test("provider editor follows core credential admission without enabling live ca
   await expect(
     page.getByRole("heading", { name: "Dashboard", exact: true }),
   ).toBeVisible();
+  const token = await page.evaluate(() =>
+    sessionStorage.getItem("fased.core.session.v1"),
+  );
+  const status = await page.request.get(url + "/api/v1/ai/connection", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(status.ok()).toBe(true);
+  const connection = await status.json();
+  expect(connection.liveCallsEnabled).toBe(false);
+  expect(connection.credentialModes).toEqual(["test"]);
   let saved: Record<string, unknown> | undefined;
   // UI-only capability injection. POST is intercepted and never reaches a vault,
   // model endpoint or live admission path. Ordinary server remains closed.
@@ -11862,12 +11930,9 @@ test("provider editor follows core credential admission without enabling live ca
       });
       return;
     }
-    const response = await route.fetch();
-    const connection = await response.json();
-    expect(connection.liveCallsEnabled).toBe(false);
-    expect(connection.credentialModes).toEqual(["test"]);
+    // Reuse the immutable core status; refreshing the editor can cancel GETs.
+    // Do not leave a second upstream fetch racing that UI cancellation.
     await route.fulfill({
-      response,
       json: { ...connection, credentialModes: ["openai"] },
     });
   });
@@ -15141,3 +15206,352 @@ test("normal Tasks joins optional News analysis and granted analysis-only result
   expect(foreign.memories).toHaveLength(0);
   expect(external).toEqual([]);
 });
+
+for (const method of ["create", "import"] as const) {
+  test(`Wallets network ${method} joins protected owner public reference RPC and restart`, async ({
+    page,
+    isMobile,
+  }) => {
+    test.skip(
+      !process.env.FASED_WALLET_BROWSER_BINARY ||
+        !process.env.FASED_WALLET_OWNER_BINARY,
+      "explicit compiled test-only wallet drivers required",
+    );
+    test.setTimeout(90000);
+    page.setDefaultTimeout(10000);
+    await stop();
+    const fixtureBase = resolve(".evidence/b5-fixtures");
+    await mkdir(fixtureBase, { recursive: true, mode: 0o700 });
+    const root = await mkdtemp(join(fixtureBase, "f-"));
+    await writeFile(
+      join(root, "disposable.json"),
+      "unfunded-reconstructible-wallet-fixture\n",
+      { mode: 0o600 },
+    );
+    const dataDir = join(root, "core");
+    const coreDriver = resolve(process.env.FASED_WALLET_BROWSER_BINARY!);
+    const ownerDriver = resolve(process.env.FASED_WALLET_OWNER_BINARY!);
+    let fixture: ChildProcess | undefined;
+    let fixtureLog = "";
+    let endpoint = "";
+    const forbidden: string[] = [];
+    const bodies: string[] = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).hostname !== "127.0.0.1")
+        forbidden.push(request.url());
+      if (request.method() === "PUT" || request.method() === "POST")
+        bodies.push(request.postData() ?? "");
+    });
+    const startFixture = async () => {
+      await rm(join(root, "ready.json"), { force: true });
+      fixture = spawn(
+        coreDriver,
+        ["-test.run=^TestWalletBrowserFixtureDriver$", "-test.timeout=3m"],
+        {
+          cwd: resolve("internal/core"),
+          env: {
+            ...process.env,
+            FASED_WALLET_BROWSER_FIXTURE: "1",
+            FASED_WALLET_FIXTURE_ROOT: root,
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      fixture.stdout!.on("data", (b) => {
+        fixtureLog += b.toString();
+      });
+      fixture.stderr!.on("data", (b) => {
+        fixtureLog += b.toString();
+      });
+      await expect
+        .poll(async () => {
+          if (fixture!.exitCode !== null) throw new Error(fixtureLog);
+          try {
+            endpoint = JSON.parse(
+              await readFile(join(root, "ready.json"), "utf8"),
+            ).url;
+            return endpoint;
+          } catch {
+            return "";
+          }
+        })
+        .not.toBe("");
+    };
+    const stopFixture = async () => {
+      if (!fixture || fixture.exitCode !== null) return;
+      const exiting = once(fixture, "exit");
+      fixture.kill("SIGTERM");
+      const result = await Promise.race([
+        exiting,
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("wallet fixture failed to stop")),
+            8000,
+          ),
+        ),
+      ]);
+      expect(result[0]).toBe(0);
+      fixture = undefined;
+    };
+    const cli = async (args: string[], input?: unknown) => {
+      const child = spawn(binary, [...args, "--data-dir", dataDir], {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let output = "",
+        error = "";
+      child.stdout!.on("data", (b) => {
+        output += b.toString();
+      });
+      child.stderr!.on("data", (b) => {
+        error += b.toString();
+      });
+      child.stdin!.end(input === undefined ? "" : JSON.stringify(input));
+      const result = await once(child, "exit");
+      if (result[0] !== 0) throw new Error(error);
+      return JSON.parse(output);
+    };
+    const owner = async (action: string, ownerDir = "owner") =>
+      exec(ownerDriver, ["-test.run=^TestWalletOwnerFixtureDriver$"], {
+        cwd: resolve("internal/signer"),
+        env: {
+          ...process.env,
+          FASED_WALLET_OWNER_FIXTURE: "1",
+          FASED_WALLET_FIXTURE_ROOT: root,
+          FASED_WALLET_OWNER_ACTION: action,
+          FASED_WALLET_OWNER_DIR: ownerDir,
+        },
+      });
+    try {
+      await startFixture();
+      await page.goto(endpoint + "/#wallets/accounts");
+      const claim = JSON.parse(
+        await readFile(join(dataDir, "claim-code.json"), "utf8"),
+      );
+      await page.getByLabel("One-use claim code").fill(claim.code);
+      await page.getByLabel("Create owner password").fill(fixturePassword);
+      await page
+        .getByRole("button", { name: "Claim workspace", exact: true })
+        .click();
+      await expect(
+        page.getByRole("button", { name: "Sign out", exact: true }),
+      ).toBeVisible();
+      const login = spawn(binary, [
+        "login",
+        "--data-dir",
+        dataDir,
+        "--password-stdin",
+      ]);
+      login.stdin!.end(fixturePassword + "\n");
+      expect((await once(login, "exit"))[0]).toBe(0);
+      await page.goto(endpoint + "/#wallets/accounts");
+      await expect(
+        page.getByRole("heading", { name: "Wallets", exact: true }),
+      ).toBeVisible();
+      await page
+        .getByRole("button", { name: "Add wallet", exact: true })
+        .click();
+      let dialog = page.getByRole("dialog", {
+        name: "Add wallet",
+        exact: true,
+      });
+      await dialog.getByLabel("Wallet name").fill("Watch");
+      await dialog
+        .getByLabel("Network", { exact: true })
+        .selectOption("devnet");
+      await dialog.getByLabel("Public address").fill("0".repeat(32));
+      await dialog.getByRole("button", { name: "Save", exact: true }).click();
+      await expect(dialog.getByRole("alert")).toContainText(
+        "valid Solana public address",
+      );
+      expect((await cli(["accounts"])).record.accounts).toHaveLength(0);
+      await dialog.getByLabel("Public address").fill("1".repeat(32));
+      await dialog.getByRole("button", { name: "Save", exact: true }).click();
+      await expect(dialog).toHaveCount(0);
+      const original = (await cli(["accounts"])).record.accounts[0];
+      expect(original.version).toBe(2);
+      expect(original.mode).toBe("watch");
+      await page
+        .getByRole("button", { name: "Add wallet", exact: true })
+        .click();
+      dialog = page.getByRole("dialog", { name: "Add wallet", exact: true });
+      await dialog
+        .getByRole("button", {
+          name: method === "create" ? "Create" : "Import",
+          exact: true,
+        })
+        .click();
+      await dialog.getByLabel("Wallet name").fill(`Vault ${method}`);
+      await expect(
+        dialog.getByLabel("Network", { exact: true }),
+      ).toBeDisabled();
+      await expect(dialog).toContainText(
+        `fased-app custody ${method === "create" ? "setup" : "import"}`,
+      );
+      expect(await dialog.locator('input[type="password"]').count()).toBe(0);
+      await expect(
+        dialog.getByRole("button", { name: "Attach", exact: true }),
+      ).toBeDisabled();
+      expect((await cli(["accounts"])).record.accounts).toHaveLength(1);
+      await owner(method);
+      await dialog
+        .getByRole("button", { name: "Refresh status", exact: true })
+        .click();
+      await expect(dialog.getByLabel("Wallet name")).toHaveValue(
+        `Vault ${method}`,
+      );
+      await expect(dialog).toContainText("Recovery required");
+      await dialog.getByRole("button", { name: "Attach", exact: true }).click();
+      await expect(dialog).toHaveCount(0);
+      let state = await cli(["accounts"]);
+      expect(state.record.accounts[0]).toEqual(original);
+      expect(state.record.accounts).toHaveLength(2);
+      const managed = state.record.accounts.find((a: any) => a.version === 3);
+      expect(managed.signer.version).toBe(2);
+      expect(managed.network).toBe("devnet");
+      expect(state.fixture.status.locked).toBe(true);
+      expect(state.fixture.status.recoveryRequired).toBe(true);
+      const row = page.getByRole("article", {
+        name: `Account Vault ${method}`,
+        exact: true,
+      });
+      await row.getByRole("button", { name: "RPC", exact: true }).click();
+      const rpc = page.getByRole("dialog", {
+        name: `RPC · Vault ${method}`,
+        exact: true,
+      });
+      await expect(rpc.getByLabel("RPC URL", { exact: true })).toHaveValue("");
+      await rpc
+        .getByLabel("RPC URL", { exact: true })
+        .fill("https://devnet.helius-rpc.com");
+      await rpc.getByRole("button", { name: "Check", exact: true }).click();
+      await expect(
+        rpc.getByText("Verified (test)", { exact: true }),
+      ).toBeVisible();
+      await rpc.getByRole("button", { name: "Save", exact: true }).click();
+      await expect(
+        rpc.getByRole("button", { name: "Remove", exact: true }),
+      ).toBeVisible();
+      state = await cli(["accounts"]);
+      const saved = state.record.accounts.find((a: any) => a.id === managed.id);
+      expect(saved.rpc.network).toBe("devnet");
+      const check = await cli(["accounts", "--check-rpc-stdin"], {
+        accountId: managed.id,
+        accountRevision: state.record.revision,
+      });
+      expect(check.fixtureOnly).toBe(true);
+      expect(check.liveRPC).toBe(false);
+      await rpc
+        .locator("summary")
+        .filter({ hasText: /^API key$/ })
+        .click();
+      const rpcKey = "disposable-provider-input-not-issued-123456";
+      await rpc.getByLabel("RPC API key", { exact: true }).fill(rpcKey);
+      await rpc
+        .getByLabel("Vault password", { exact: true })
+        .fill("Disposable wallet RPC password 123");
+      await rpc.getByRole("button", { name: "Save key", exact: true }).click();
+      await expect(
+        rpc.getByRole("button", { name: "Remove key", exact: true }),
+      ).toBeVisible();
+      expect(
+        await readFile(
+          join(dataDir, `rpc-credential-${managed.id}.json`),
+          "utf8",
+        ),
+      ).not.toContain(rpcKey);
+      await page.screenshot({
+        path: `.evidence/b05-wallet-setup/${method}-${isMobile ? "mobile" : "desktop"}.png`,
+      });
+      const beforeRestart = state.record;
+      await stopFixture();
+      await startFixture();
+      await page.goto(endpoint + "/#wallets/accounts");
+      await page
+        .getByLabel("Owner password", { exact: true })
+        .fill(fixturePassword);
+      await page.getByRole("button", { name: "Sign in", exact: true }).click();
+      await expect(
+        page.getByRole("button", { name: "Sign out", exact: true }),
+      ).toBeVisible();
+      await page.goto(endpoint + "/#wallets/accounts");
+      await expect(
+        page.getByRole("article", {
+          name: `Account Vault ${method}`,
+          exact: true,
+        }),
+      ).toBeVisible();
+      expect((await cli(["accounts"])).record).toEqual(beforeRestart);
+      const credential = await cli(["accounts", "--rpc-credential-stdin"], {
+        accountId: managed.id,
+        revision: state.record.revision,
+        action: "status",
+        ref: "",
+      });
+      expect(credential.saved).toBe(true);
+      expect(credential.locked).toBe(true);
+      expect(credential.liveRPC).toBe(false);
+      await owner("recover", "recovered");
+      const recovered = await cli(["accounts"]);
+      expect(recovered.accountStates[managed.id]).toBe("stale");
+      expect(recovered.fixture.status.recoveryRequired).toBe(true);
+      expect(recovered.fixture.status.account.publicKey).toBe(
+        managed.publicKey,
+      );
+      expect(recovered.fixture.status.account.epoch).not.toBe(
+        managed.signer.epoch,
+      );
+      const stale = await cli(["accounts", "--rpc-credential-stdin"], {
+        accountId: managed.id,
+        revision: state.record.revision,
+        action: "status",
+        ref: "",
+      });
+      expect(stale.stale).toBe(true);
+      expect(stale.locked).toBe(true);
+      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await expect(
+        page
+          .getByRole("article", {
+            name: `Account Vault ${method}`,
+            exact: true,
+          })
+          .getByText("Reconnect", { exact: true }),
+      ).toBeVisible();
+      await page
+        .getByRole("button", { name: "Add wallet", exact: true })
+        .click();
+      const recoveryDialog = page.getByRole("dialog", {
+        name: "Add wallet",
+        exact: true,
+      });
+      await recoveryDialog
+        .getByRole("button", {
+          name: method === "create" ? "Create" : "Import",
+          exact: true,
+        })
+        .click();
+      await recoveryDialog.getByLabel("Wallet name").fill("Recovered wallet");
+      await recoveryDialog
+        .getByRole("button", { name: "Attach", exact: true })
+        .click();
+      await expect(recoveryDialog).toHaveCount(0);
+      const rebound = await cli(["accounts"]);
+      expect(rebound.record.accounts).toHaveLength(3);
+      expect(
+        rebound.record.accounts.find((a: any) => a.id === managed.id),
+      ).toEqual(saved);
+      expect(rebound.fixture.status.recoveryRequired).toBe(true);
+      expect(forbidden).toEqual([]);
+      expect(bodies.join("\n")).not.toContain("disposable-wallet-owner-unlock");
+      expect(bodies.join("\n")).not.toContain("disposable-wallet-owner-backup");
+      expect(bodies.join("\n")).not.toContain("42".repeat(32));
+    } finally {
+      await writeFile(
+        `.evidence/b05-wallet-setup/${method}-${isMobile ? "mobile" : "desktop"}-fixture.log`,
+        fixtureLog,
+      );
+      await stopFixture();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}

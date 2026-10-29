@@ -30,6 +30,7 @@ type HTTPHandler struct {
 	publicHost        string
 	instanceLocation  string
 	instanceOwnerUID  int
+	instanceOwnerKind string
 	assets            fs.FS
 	authSlots         chan struct{}
 	limiter           struct {
@@ -104,7 +105,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		if h.publicHost != "" && r.Host == h.publicHost {
 			location, transport = "remote", "private-https"
 		}
-		health.Connection = &ConnectionInfo{Location: location, Transport: transport, OwnerUID: h.instanceOwnerUID}
+		health.Connection = &ConnectionInfo{Location: location, Transport: transport, OwnerUID: h.instanceOwnerUID, OwnerKind: h.instanceOwnerKind}
 		writeJSON(w, 200, health)
 		return
 	case "/api/v1/auth/state":
@@ -277,6 +278,29 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, 200, result)
+		return
+	case "/api/v1/accounts/setup":
+		if r.Method != http.MethodPut {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.mutation(w, r) || !h.csrf(w, r, token) {
+			return
+		}
+		var input AccountSetupCommand
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		v, err := h.store.SetupAccount(r.Context(), input)
+		if errors.Is(err, ErrConflict) || errors.Is(err, ErrCorePaused) {
+			writeError(w, 409, err.Error())
+			return
+		}
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, 200, v)
 		return
 	case "/api/v1/accounts/rpc":
 		if r.Method != http.MethodPut {

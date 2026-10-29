@@ -321,3 +321,25 @@ func TestLifecycleTwoIntentsRequireJournalReadFeature(t *testing.T) {
 		t.Fatal("legacy journal reader can admit lifecycle-2 intent records")
 	}
 }
+
+func TestStrictStateJSONKeepsSignedDocumentBound(t *testing.T) {
+	var value struct {
+		Version int    `json:"version"`
+		Text    string `json:"text"`
+	}
+	raw := []byte(`{"version":1,"text":"` + strings.Repeat("x", update.MaxDocument) + `"}`)
+	if update.StrictJSON(raw, &value) == nil {
+		t.Fatal("signed-document size bound changed")
+	}
+	if err := update.StrictJSONBounded(raw, &value, len(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if update.StrictJSONBounded(raw, &value, len(raw)-1) == nil {
+		t.Fatal("caller state bound ignored")
+	}
+	for _, bad := range []string{`{"version":1,"version":2}`, `{"Version":1}`, `{"version":1,"unknown":true}`, `{} {}`} {
+		if update.StrictJSONBounded([]byte(bad), &value, len(raw)) == nil {
+			t.Fatal("state ambiguity accepted", bad)
+		}
+	}
+}

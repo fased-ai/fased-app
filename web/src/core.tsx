@@ -1,3 +1,4 @@
+import { validOwnerHandoff } from "./owner-handoff";
 import {
   createContext,
   useCallback,
@@ -14,6 +15,7 @@ export type InstanceConnection = {
   location: "local" | "remote";
   transport: "loopback" | "private-https";
   ownerUid?: number;
+  ownerKind?: "custody";
 };
 type Health = {
   status: string;
@@ -24,6 +26,7 @@ type Health = {
     location: "local" | "remote";
     transport: "loopback" | "private-https";
     ownerUid?: number;
+    ownerKind?: "custody";
   };
 };
 type Mode =
@@ -138,13 +141,7 @@ function useCoreState() {
       !health.connection ||
       !["local", "remote"].includes(health.connection.location) ||
       !["loopback", "private-https"].includes(health.connection.transport) ||
-      (health.connection.ownerUid !== undefined &&
-        (typeof health.connection.ownerUid !== "number" ||
-          !Number.isInteger(health.connection.ownerUid) ||
-          health.connection.ownerUid < 0 ||
-          health.connection.ownerUid > 4294967294 ||
-          (health.connection.ownerUid > 0 &&
-            health.connection.location !== "remote")))
+      !validOwnerHandoff(health.connection)
     )
       throw new Error("This address is not a compatible Fased instance.");
     if (connectedID.current && connectedID.current !== health.instanceId)
@@ -165,6 +162,9 @@ function useCoreState() {
         ...(health.connection.ownerUid === undefined
           ? {}
           : { ownerUid: health.connection.ownerUid }),
+        ...(health.connection.ownerKind === undefined
+          ? {}
+          : { ownerKind: health.connection.ownerKind }),
       };
       const auth = await request<{
         claimed: boolean;

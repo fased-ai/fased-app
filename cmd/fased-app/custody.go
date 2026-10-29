@@ -19,6 +19,9 @@ import (
 )
 
 func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result error) {
+	if len(args) > 0 && args[0] == "enroll" {
+		return enrollmentCommand(args[1:], in, out, errOut)
+	}
 	if len(args) > 0 && args[0] == "updates" {
 		return custodyUpdatesCommand(args[1:], in, out, errOut)
 	}
@@ -26,7 +29,7 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 		return bootstrapCommand(args[1:], in, out, errOut)
 	}
 	if len(args) == 0 {
-		return errors.New("usage: fased-app custody install|status|setup|import|recover|approve|updates|accounts|login|remove --disposable-fixture [options]")
+		return errors.New("usage: fased-app custody enroll|install|status|claim-code|reset-app-password|setup|import|recover|approve|updates|accounts|login|remove --disposable-fixture [options]")
 	}
 	if runtime.GOOS != "linux" || os.Getuid() <= 0 || os.Getuid() != os.Geteuid() {
 		return errors.New("custody fixture requires an ordinary Linux owner; real wallets remain disabled")
@@ -74,7 +77,7 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 		if e != nil {
 			return e
 		}
-		return json.NewEncoder(out).Encode(map[string]any{"installed": true, "manifest": m, "url": "http://" + m.Listen, "fixtureOnly": true, "walletSigner": false, "financialExecution": false, "autostart": false})
+		return json.NewEncoder(out).Encode(map[string]any{"installed": true, "manifest": m, "url": enrolledURL(m), "fixtureOnly": true, "walletSigner": false, "financialExecution": false, "autostart": false})
 	}
 	m, e := custodyinstall.Load(os.Getuid())
 	if e != nil {
@@ -93,7 +96,7 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 	switch args[0] {
 	case "status":
 		active := custodyinstall.Runtime(m) == nil
-		return json.NewEncoder(out).Encode(map[string]any{"installed": true, "active": active, "manifest": m, "url": "http://" + m.Listen, "walletSigner": false, "financialExecution": false})
+		return json.NewEncoder(out).Encode(map[string]any{"installed": true, "active": active, "manifest": m, "url": enrolledURL(m), "walletSigner": false, "financialExecution": false})
 	case "remove":
 		if !*prepare {
 			return errors.New("removing system service definitions requires explicit --prepare-host consent")

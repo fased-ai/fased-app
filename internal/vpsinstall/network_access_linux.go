@@ -169,6 +169,20 @@ func checkNetworkSession(value string, sid int, addrs []net.Addr, data []byte, o
 }
 
 func checkPrivateApplication(ctx context.Context, m Manifest, client *http.Client) (string, error) {
+	expected := ""
+	if m.Data != "" && m.OwnerUID > 0 {
+		o := liveOps(nil)
+		if checkDirectory(o, m.Data, m.AppUID, m.AppGID, 0700) != nil {
+			f, err := committedEnrollment(o, m)
+			if err != nil {
+				return "", errors.New("completed same-instance enrollment is required for private application proof")
+			}
+			expected = f.Source.ExpectedInstanceID
+		}
+	}
+	return checkPrivateApplicationBound(ctx, m, client, expected)
+}
+func checkPrivateApplicationBound(ctx context.Context, m Manifest, client *http.Client, expectedInstance string) (string, error) {
 	health := func(origin, expected string) (string, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin+"/api/v1/health", nil)
 		if err != nil {
@@ -180,12 +194,12 @@ func checkPrivateApplication(ctx context.Context, m Manifest, client *http.Clien
 		}
 		defer response.Body.Close()
 		h, err := connection.ReadHealth(response, expected)
-		if err != nil || h.Connection == nil || h.Connection.Location != "remote" {
+		if err != nil || h.Connection == nil || h.Connection.Location != "remote" || h.Connection.OwnerUID != m.OwnerUID {
 			return "", errors.New("private HTTPS must reach this installed Remote instance")
 		}
 		return h.InstanceID, nil
 	}
-	identity, err := health("http://"+m.Listen, "")
+	identity, err := health("http://"+m.Listen, expectedInstance)
 	if err != nil {
 		return "", err
 	}

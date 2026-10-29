@@ -62,6 +62,9 @@
   align-items: end;
 }
 @media (max-width: 900px) {
+  .wallet-workspace .section-head button {
+    min-height: 44px;
+  }
   .account-columns {
     grid-template-columns: 1fr;
   }
@@ -90,4 +93,53 @@
 }
 .account-panel h2 {
   font-size: 16px;
+}
+.wallet-workspace .section-head .account-actions {
+  margin-top: 0;
+}
+.account-status,
+.account-mode {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.wallet-setup .account-mode > button {
+  flex: 1;
+}
+.wallet-terminal {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.wallet-terminal code {
+  margin-top: 10px;
+  user-select: all;
+}
+.account-details,
+.account-advanced {
+  margin-top: 18px;
+}
+.account-details > summary,
+.account-advanced > summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+.account-advanced > .account-panel {
+  margin-top: 16px;
+}
+.wallet-rpc {
+  padding: 20px;
+}
+.wallet-rpc .account-form {
+  margin: 0;
+  gap: 12px;
+}
+.wallet-rpc > details {
+  margin-top: 16px;
+}
+.wallet-rpc .account-actions {
+  margin-top: 0;
 }

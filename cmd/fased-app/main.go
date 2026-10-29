@@ -32,6 +32,11 @@ func main() {
 	}
 }
 func run(args []string, in *os.File, out, errOut io.Writer) error {
+	if len(args) > 0 && args[0] == "enrollment-image" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return enrollmentImageCommand(ctx, args[1:], in, out, errOut)
+	}
 	if len(args) > 1 && args[0] == "pilot" && args[1] == "prepare" {
 		return pilotPrepareCommand(args[2:], out, errOut)
 	}
@@ -189,6 +194,13 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 			if err = signer.CheckApplication(*custodyConfig, *installationRoot, *dir); err != nil {
 				return err
 			}
+			config, e := signer.LoadConfig(*custodyConfig)
+			if e != nil {
+				return e
+			}
+			if config.Version == 2 || *instanceLocation == "remote" {
+				ownerUID = config.OwnerUID
+			}
 		}
 		if *requireSandbox {
 			if *custodyConfig != "" || *remoteConfig != "" {
@@ -213,7 +225,14 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 			}
 			return serveAgentFixture(*dir, *listen, out)
 		}
-		return serveRuntime(*dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, ownerUID, out, *custodyConfig)
+		source := ""
+		if *requireSandbox && *installationRoot != "" && *custodyConfig == "" {
+			source = "local"
+			if *remoteConfig != "" {
+				source = "remote"
+			}
+		}
+		return serveInstalledRuntime(*dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, source, ownerUID, out, *custodyConfig)
 	case "claim-code":
 		store, err := core.OpenStore(*dir)
 		if err != nil {
@@ -350,11 +369,17 @@ func serveWithResearch(dir, listen, publicOrigin, researchOrigin string, out io.
 	return serveRuntime(dir, listen, publicOrigin, researchOrigin, "local", 0, out, custodyConfig...)
 }
 func serveRuntime(dir, listen, publicOrigin, researchOrigin, location string, ownerUID int, out io.Writer, custodyConfig ...string) error {
+	return serveInstalledRuntime(dir, listen, publicOrigin, researchOrigin, location, "", ownerUID, out, custodyConfig...)
+}
+func serveInstalledRuntime(dir, listen, publicOrigin, researchOrigin, location, source string, ownerUID int, out io.Writer, custodyConfig ...string) error {
 	server, err := core.Start(context.Background(), dir, listen, publicOrigin, fasedapp.UI(), custodyConfig...)
 	if err != nil {
 		return err
 	}
 	if err = server.ConfigureConnection(location, ownerUID); err == nil {
+		err = server.ConfigureInstallationSource(source)
+	}
+	if err == nil {
 		err = server.ConfigureWENResearch(researchOrigin)
 	}
 	if err != nil {

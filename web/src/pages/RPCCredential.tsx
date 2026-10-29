@@ -94,6 +94,7 @@ export function RPCCredential({
     <details>
       <summary>{t("API key")}</summary>
       <form
+        className="account-form"
         onSubmit={(e) => {
           e.preventDefault();
           void change("save");
@@ -123,34 +124,38 @@ export function RPCCredential({
             onChange={(e) => setPassword(e.target.value)}
           />
         </label>
-        <button disabled={busy || !status || !key || !password || !configured}>
-          {t("Save key")}
-        </button>
-        {status?.saved && (
-          <>
-            <button
-              type="button"
-              disabled={busy || !password || status.stale}
-              onClick={() => void change("verify")}
-            >
-              {t("Verify key")}
-            </button>
-            <button
-              type="button"
-              disabled={busy || !password || status.stale || !configured}
-              onClick={() => void change("check")}
-            >
-              {t("Check connection")}
-            </button>
-            <button
-              type="button"
-              disabled={busy || !password}
-              onClick={() => void change("remove")}
-            >
-              {t("Remove key")}
-            </button>
-          </>
-        )}
+        <div className="account-actions">
+          <button
+            disabled={busy || !status || !key || !password || !configured}
+          >
+            {t("Save key")}
+          </button>
+          {status?.saved && (
+            <>
+              <button
+                type="button"
+                disabled={busy || !password || status.stale}
+                onClick={() => void change("verify")}
+              >
+                {t("Verify key")}
+              </button>
+              <button
+                type="button"
+                disabled={busy || !password || status.stale || !configured}
+                onClick={() => void change("check")}
+              >
+                {t("Check connection")}
+              </button>
+              <button
+                type="button"
+                disabled={busy || !password}
+                onClick={() => void change("remove")}
+              >
+                {t("Remove key")}
+              </button>
+            </>
+          )}
+        </div>
         <details>
           <summary>{t("Recovery")}</summary>
           <label>

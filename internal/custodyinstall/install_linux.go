@@ -156,6 +156,9 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 	if !validListen(o.Listen) {
 		return m, errors.New("choose 127.0.0.1 and an explicit unprivileged port")
 	}
+	if !validLocation(o.Location, o.PublicOrigin) || o.StageOnly && o.Location == "" {
+		return m, errors.New("choose the original Local or Remote profile")
+	}
 	coreBytes, e := source(o.Core)
 	if e != nil {
 		return m, e
@@ -191,7 +194,7 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 	}
 	defer lock.Close()
 	uid := os.Getuid()
-	j := journal{Version: versionNumber, Network: o.Network, Owner: uid, CoreHash: sum(coreBytes), SignerHash: sum(signerBytes), Listen: o.Listen}
+	j := journal{Version: versionNumber, Network: o.Network, Owner: uid, CoreHash: sum(coreBytes), SignerHash: sum(signerBytes), Listen: o.Listen, Enrollment: o.StageOnly, Location: o.Location, PublicOrigin: o.PublicOrigin}
 	haveIntent := false
 	existing, loadErr := Load(uid)
 	if loadErr == nil {
@@ -209,7 +212,7 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 	}
 	if b, re := core.ReadPrivateFile(jdir + "/intent.json"); re == nil {
 		var old journal
-		if strict(b, &old) != nil || old.validate(uid) != nil || old.CoreHash != j.CoreHash || old.SignerHash != j.SignerHash || old.Listen != j.Listen || old.Network != j.Network || old.Version != j.Version {
+		if strict(b, &old) != nil || old.validate(uid) != nil || old.CoreHash != j.CoreHash || old.SignerHash != j.SignerHash || old.Listen != j.Listen || old.Network != j.Network || old.Version != j.Version || old.Enrollment != j.Enrollment || old.Location != j.Location || old.PublicOrigin != j.PublicOrigin {
 			return m, errors.New("installer intent conflicts with requested inputs; preserving it")
 		}
 		j = old
@@ -218,7 +221,7 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 		return m, re
 	}
 	if loadErr == nil {
-		if existing.CoreHash != j.CoreHash || existing.SignerHash != j.SignerHash || existing.Listen != j.Listen || existing.Network != j.Network || existing.Version != j.Version || (j.ID != "" && existing.ID != j.ID) {
+		if existing.CoreHash != j.CoreHash || existing.SignerHash != j.SignerHash || existing.Listen != j.Listen || existing.Network != j.Network || existing.Version != j.Version || existing.Enrollment != j.Enrollment || existing.Location != j.Location || existing.PublicOrigin != j.PublicOrigin || (j.ID != "" && existing.ID != j.ID) {
 			return m, errors.New("existing installation differs; automatic replacement/update is unavailable")
 		}
 		j.ID = existing.ID
@@ -258,7 +261,7 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 		if e != nil {
 			return m, e
 		}
-		m = Manifest{Version: versionNumber, Mode: modeFor(o.Network), Network: o.Network, ID: j.ID, Owner: uid, Root: root, Listen: o.Listen, CoreHash: j.CoreHash, SignerHash: j.SignerHash, App: app, Signer: key}
+		m = Manifest{Version: versionNumber, Mode: modeFor(o.Network), Network: o.Network, ID: j.ID, Owner: uid, Root: root, Listen: o.Listen, CoreHash: j.CoreHash, SignerHash: j.SignerHash, App: app, Signer: key, Enrollment: j.Enrollment, Location: j.Location, PublicOrigin: j.PublicOrigin}
 		if e = m.validate(); e != nil {
 			return m, e
 		}
@@ -313,6 +316,9 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 	}
 	if e = Verify(m); e != nil {
 		return m, e
+	}
+	if o.StageOnly {
+		return m, nil
 	}
 	for _, role := range []string{"signer", "app"} {
 		name := "fased-" + role + ".service"
@@ -539,6 +545,11 @@ func loadedUnitPolicy(m Manifest, role string, wanted []byte, image string) erro
 }
 
 func Control(ctx context.Context, m Manifest, role, action string, s *System) error {
+	if m.Enrollment && action == "start" {
+		if _, e := ReadEnrollmentCommit(m); e != nil {
+			return e
+		}
+	}
 	if e := noActiveController(m); e != nil {
 		return e
 	}

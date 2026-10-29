@@ -1,3 +1,4 @@
+import { ownerHandoff } from "../owner-handoff";
 import { useUI } from "../ui-preferences";
 import { InstanceSummary, RemoteConnection } from "./InstanceConnection";
 import logo from "../assets/fased-logo.svg";
@@ -10,14 +11,8 @@ export function CoreGate({ children }: { children: ReactNode }) {
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [claimError, setClaimError] = useState("");
-  const ownerUid = core.connection?.ownerUid ?? 0;
-  const instanceCommand =
-    ownerUid > 0 ? `/var/lib/fased-app-vps-${ownerUid}/fased-app vps` : null;
-  const recoveryCommands = instanceCommand
-    ? ["stop", "recover", "start"].map(
-        (command) => `${instanceCommand} ${command}`,
-      )
-    : [];
+  const handoff = ownerHandoff(core.connection);
+  const recoveryCommands = handoff?.recovery ?? [];
   const native = ["wails", "wails.localhost"].includes(
     window.location.hostname,
   );
@@ -100,11 +95,11 @@ export function CoreGate({ children }: { children: ReactNode }) {
                   />
                   <details>
                     <summary>{uiText("Get setup code")}</summary>
-                    {instanceCommand ? (
+                    {handoff ? (
                       <p>
                         {uiText("Run ")}
                         <code style={{ overflowWrap: "anywhere" }}>
-                          {instanceCommand} claim-code
+                          {handoff.claim}
                         </code>
                         {uiText(
                           " on this instance. Codes expire after 15 minutes.",
@@ -166,7 +161,7 @@ export function CoreGate({ children }: { children: ReactNode }) {
               {core.mode === "locked" && (
                 <details>
                   <summary>{uiText("Recovery")}</summary>
-                  {instanceCommand ? (
+                  {handoff ? (
                     <>
                       <p>{uiText("Run on this instance")}</p>
                       <pre

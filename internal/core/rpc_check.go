@@ -155,6 +155,9 @@ func (fixtureRPCTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 // CheckAccountRPC binds a diagnostic to a saved public account and checks the
 // signer epoch both before and after the request. It grants no wallet authority.
 func (s *Store) CheckAccountRPC(ctx context.Context, input RPCCheckRequest) (RPCCheckResult, error) {
+	if s.rpcCheckFixture != nil {
+		return s.checkAccountRPC(ctx, input, s.rpcCheckFixture)
+	}
 	return s.checkAccountRPC(ctx, input, CheckFixtureRPC)
 }
 func (s *Store) checkAccountRPC(ctx context.Context, input RPCCheckRequest, check func(context.Context, RPCCheckRequest) (RPCCheckResult, error)) (RPCCheckResult, error) {

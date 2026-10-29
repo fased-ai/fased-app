@@ -64,7 +64,8 @@ type SetupRecord struct {
 type ConnectionInfo struct {
 	Location  string `json:"location"`
 	Transport string `json:"transport"`
-	OwnerUID  int    `json:"ownerUid,omitempty"` // Dedicated Remote terminal handoff; never authorization.
+	OwnerUID  int    `json:"ownerUid,omitempty"` // Protected owner terminal handoff; never authorization.
+	OwnerKind string `json:"ownerKind,omitempty"`
 }
 
 type Health struct {

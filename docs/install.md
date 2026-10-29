@@ -5,11 +5,12 @@ trusted public download command exists yet. Do not bypass Gatekeeper, SmartScree
 or signature warnings to make a development build appear production-ready. The compiled app
 needs no Git, Go, npm, database server, RPC, AI or wallet account at runtime.
 
-P3's [managed disposable signer mode](signer.md#explicit-managed-fixture-installation)
-is a separate, explicit Ubuntu engineering installation. Ordinary packages do
-not enable it. It manages dedicated identities and protected owner setup/recovery
-while keeping real wallets disabled. Wallet fields remain preferences/prototypes;
-physical-host/native custody and later permission/reconciliation gates stay open.
+The [disposable Go signer](signer.md#wallets-setup) requires explicit Ubuntu
+engineering enrollment or a standalone managed installation. Ordinary packages do
+not provision wallet keys. Wallets setup uses protected owner Create/Import, public
+account records and encrypted RPC settings; real credentials/dispatch stay disabled.
+Privileged same-instance, physical-host/native custody and later
+permission/reconciliation acceptance gates stay open.
 
 ## Ubuntu prerequisites
 
@@ -145,8 +146,12 @@ On Windows, the unsigned engineering setup executable supplies Start-menu
 entries and installs for the current user. A least-privilege Task Scheduler job
 owns the background engine, stores no OS password and runs only while that user
 is logged in. It is not a Windows system service or an always-on Windows VPS.
-The separate disposable signer requires its explicit managed installation and
-protected owner administration; ordinary installation does not enable it.
+The disposable signer requires explicit protected installation or same-instance
+Ubuntu enrollment (`custody enroll`, documented in [signer setup](signer.md#wallets-setup));
+ordinary install does not provision wallet keys. Enrollment preserves the original
+instance and data, and its privileged acceptance remains open. The standalone
+managed fixture retains protected owner administration; ordinary installation
+does not enable wallet authority.
 
 On macOS, the DMG contains `Fased App.app`; place it in the user's Applications
 folder. Its first launch asks before installing/starting the Local instance as a

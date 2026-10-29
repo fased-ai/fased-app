@@ -1,8 +1,8 @@
 # P3 signer identity and recovery
 
-This is an engineering fixture for disposable keys. It is separate from the
-installed app, has no chain/RPC adapter, and cannot sign transactions or arbitrary
-messages. Never fund its public keys. P2's installed app still reports wallet
+This is an engineering fixture for disposable keys. Explicit Ubuntu enrollment
+can move an existing installed instance into the isolated app/signer topology.
+It has no transaction adapter and cannot sign transactions or arbitrary messages. Never fund its public keys. P2's installed app still reports wallet
 signing and financial execution unavailable. Ordinary packages never install a
 signer automatically. The explicit Ubuntu fixture installer below manages both
 services and their distinct identities.
@@ -17,8 +17,9 @@ signer directory is private to its UID. Root/host administrator compromise is
 outside this isolation boundary.
 
 P2's ordinary desktop core runs as the owner. The separate managed fixture runs
-the app and signer under installer-created locked system accounts. It uses a new
-instance and never migrates P2/legacy data. Root-owned binaries/configuration and
+the app and signer under installer-created locked system accounts. Standalone
+`custody install` creates a separate instance; `custody enroll` preserves the
+existing instance identity and app data through a protected cutover. Root-owned binaries/configuration and
 systemd sandboxing protect both services; the core checks its actual UID,
 NoNewPrivs, read-only installation and writable private state before opening its
 database or listener. The browser must never receive private keys or unlock
@@ -116,10 +117,97 @@ check. No profile, app record or RPC credential grants signer authority.
 Provider credential admission and real RPC dispatch remain disabled; controlled
 tests alone admit disposable provider strings and HTTPS fixtures.
 
-The ordinary update contract still covers version-1 signer custody only. Network
-custody installer generation, recovery-aware update/inspection compatibility,
-and real-wallet acceptance remain open; do not enable or roll out this mode as
-a supported customer installation.
+The ordinary update contract still covers version-1 signer custody only. The
+explicit managed engineering installer and recovery-aware v2 maintenance path
+remain disposable-only. Same-instance Ubuntu enrollment is implemented below;
+privileged Ubuntu, native, real-host and real-wallet acceptance remain open.
+Do not roll out this mode as an accepted customer installation.
+
+## Wallets setup
+
+**Wallets → Add wallet** provides **Watch**, **Create** and **Import**. Select
+Devnet or Mainnet and a name. Watch accepts a canonical Solana public address;
+only public metadata is saved. Existing network account versions and encrypted
+vault formats are unchanged. Opening setup or refreshing status creates nothing.
+
+Create and Import use the existing protected instance-terminal owner helper.
+The UI displays its command and public status, never a seed/private-key/unlock
+password field. Import takes a private **raw 32-byte disposable seed file**;
+a JSON array or 64-byte keypair file is not this engineering import format.
+Setup/import derive the immutable installed network; `--network` belongs only
+to custody installation. A missing/legacy/unavailable signer is a prerequisite,
+not a wallet or successful connection. Native owner custody remains Linux-only.
+
+When the signer is absent on a verified installed Ubuntu instance, Wallets shows
+`custody enroll --source local|remote --expected-instance <current ID>` with the
+chosen network, matching signer binary and explicit disposable/host consent.
+Run it on the instance machine (SSH for Remote), then return to the same URL and
+refresh. A standalone preview cannot enroll an installation. Custom Local paths
+also require the original `--prefix` and `--data-dir`. Use the current compiled
+engineering binary; the retained older launcher cannot gain new commands.
+
+Enrollment stops/disables the original engine, holds its instance lock, transfers
+only bounded app metadata and encrypted credentials, fences the original data and
+publishes the complete staged target before activation. It preserves the original
+instance ID, Local/Remote profile, listener/private origin, records/drafts, vault
+bindings, usage and recovery holds. No signer key is transferred; an existing
+foreign or funded target is not adopted. Owner/app/signer UIDs remain distinct.
+Original installation files and archived data remain retained. Completed owner-bound
+host-preparation records stay in that retained source; they are not transferred
+to the app UID. Enrollment holds their existing lock and refuses unfinished,
+foreign or replaced preparation state.
+
+Retry interruption with the same complete enrollment command, binary pair,
+source ID and network. Once fencing begins, recovery proceeds forward; never
+restart or copy the old data over the target. Conflicting state or proven loss of
+the source lock holds recovery without publication; preserve both copies for
+inspection. Ordinary `open`, `service start|stop|status` and Remote commands route
+to the committed instance and refuse pending/foreign enrollment. Protected
+service changes require OS authorization. Local opens its private browser URL;
+native custody acceptance remains open. The sign-in screen uses the immutable
+managed core for setup-code and app-password recovery. `custody reset-app-password`
+recovers app access; `custody recover --backup-file ...` remains wallet recovery. Existing Remote private-access and
+firewall policy identities stay bound to the original instance; unfinished
+network lockdown must be resolved before enrolling. Verified executable updates
+retain enrollment identity without weakening current installed-pair verification.
+
+After protected creation/import and verified encrypted backup, **Refresh status**
+then **Attach** records the exact current version-2 signer reference for that
+network. Attachment grants no signing, unlock or permission. Locked/recovery
+states remain held. A recovered epoch may be explicitly attached as a new public
+record while retaining the old record and its stale encrypted credential binding;
+no old identity, key, hold or RPC vault is silently rewritten or removed.
+
+**RPC** uses the saved account's network. Network accounts start with an empty
+endpoint. Check and Save reuse the existing bounded endpoint/network checks;
+API keys use the separate encrypted credential editor. A recovered/unavailable
+signer makes its old saved credential publicly stale/locked. Public-address
+formatting and an RPC health result do not establish a balance or signing right.
+Ordinary constructors keep network-watch admission, provider credentials and
+live RPC disabled; only controlled tests inject disposable admission/HTTPS.
+No production CA/endpoint override, owner administration route or new service is
+introduced. Installation, real-host and live-key acceptance remain separate.
+
+The same owner-authenticated revision-bound operation is available through
+`fased-app accounts --data-dir /private/instance --setup-stdin`:
+
+```json
+{
+  "revision": 0,
+  "action": "watch",
+  "name": "Research",
+  "network": "devnet",
+  "address": "11111111111111111111111111111111"
+}
+```
+
+This is synthetic public fixture data, not a funding address. Ordinary held
+builds refuse its network admission. `action: "attach"` replaces `address` with
+`reference`, the exact public `fixture.status.account` returned by `accounts`.
+The server rechecks revision, network, current signer identity and maintenance
+hold before saving. `create`, `import`, secret fields, stale references and
+network retargets are refused. Legacy raw records remain inspectable in
+**Advanced** and through the existing `--request-stdin` path.
 
 ## Engineering commands
 
