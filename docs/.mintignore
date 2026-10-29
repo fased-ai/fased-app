@@ -1,8 +1,4 @@
-# Preserve historical source without publishing obsolete product instructions.
-legacy/
-migration-manifest.json
-legacy-source-license.txt
-# Existing engineering originals remain unchanged; current public guides live in guide/.
+# Existing development/engineering records; public current-product guides live in guide/.
 /install.md
 /ai-connections.md
 /chat-reminders.md
@@ -11,3 +7,5 @@ legacy-source-license.txt
 /signer.md
 /updates.md
 /wen-paper.md
+# License retained for the reused Fased branding asset.
+/assets/fased-branding-license.txt

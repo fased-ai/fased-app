@@ -43,50 +43,18 @@
       },
       {
         "label": "GitHub",
-        "href": "https://github.com/fased-ai/fased"
+        "href": "https://github.com/fased-ai/fased-app"
       }
     ]
   },
   "redirects": [
     {
-      "source": "/start/getting-started",
-      "destination": "/guide/install"
-    },
-    {
       "source": "/getting-started",
       "destination": "/guide/install"
     },
     {
-      "source": "/start/federation",
-      "destination": "/guide/network"
-    },
-    {
       "source": "/network",
       "destination": "/guide/network"
-    },
-    {
-      "source": "/start/marketplace-personas-roadmap",
-      "destination": "/guide/network-roadmap"
-    },
-    {
-      "source": "/reference/roadmap",
-      "destination": "/reference/status"
-    },
-    {
-      "source": "/wen/index",
-      "destination": "/wen/automation"
-    },
-    {
-      "source": "/web/dashboard",
-      "destination": "/guide/settings"
-    },
-    {
-      "source": "/guide/everyday",
-      "destination": "/guide/chat"
-    },
-    {
-      "source": "/guide/maintenance",
-      "destination": "/guide/settings"
     }
   ],
   "navigation": {
@@ -128,8 +96,7 @@
       {
         "group": "Manage",
         "pages": [
-          "guide/settings",
-          "reference/migration"
+          "guide/settings"
         ]
       }
     ]

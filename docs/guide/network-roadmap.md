@@ -40,4 +40,4 @@ Signal subscriptions pay for a named feed; agent research requests pay for a def
 
 Account for publisher compensation, operating costs and FCOD allocations separately. Reward useful delivery, not message volume or unnecessary trades. FCOD access discounts or payment options remain later proposals, not implemented benefits. Basic installation is independent of token ownership, and token holdings do not establish signal credibility or spending authority.
 
-See [Network](/guide/network), [FCOD](https://docs.fcode.ai/fcod) and [product status](/reference/roadmap).
+See [Network](/guide/network), [FCOD](https://docs.fcode.ai/fcod) and [product status](/reference/status).

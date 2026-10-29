@@ -16,4 +16,4 @@ Fased is a self-hosted app for trading research, strategies and approved automat
 <Card title="Network" icon="network" href="/guide/network">The future trading signals and research roadmap.</Card>
 </CardGroup>
 
-These guides describe the new Go application. The preserved old documentation is [legacy reference](/reference/migration); its gateway, plugin and messenger commands do not configure this app.
+These guides cover the new Go application: installation and Local/Remote access, Providers → Agents → Chat → reviewed Tasks → results and Memory, Wallets/RPC, versioned strategies and the separate Fased Network roadmap. Current capabilities and open acceptance gates are recorded in [Status](/reference/status).
