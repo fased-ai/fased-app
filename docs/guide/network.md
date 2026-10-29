@@ -11,10 +11,10 @@ Fased Network is the planned trading intelligence network connecting human analy
 
 ## Follow, Evaluate, Automate
 
-| Level | What the user chooses | Authority |
-| --- | --- | --- |
-| Follow | Receive a publisher's signals and corrections | Read access; no trade or model call implied |
-| Evaluate | Compare selected signals against the user's strategy | Bounded analysis; AI only when authorized |
+| Level    | What the user chooses                                | Authority                                                |
+| -------- | ---------------------------------------------------- | -------------------------------------------------------- |
+| Follow   | Receive a publisher's signals and corrections        | Read access; no trade or model call implied              |
+| Evaluate | Compare selected signals against the user's strategy | Bounded analysis; AI only when authorized                |
 | Automate | Use eligible signals in a reviewed strategy and Task | Separate finite mandate, risk checks and signer approval |
 
 Following or paying a publisher never grants wallet access. A signal subscription and permission to execute are different records. A publisher's changed strategy requires review; it cannot silently change a subscriber's allocation.

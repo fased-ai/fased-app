@@ -123,3 +123,98 @@ test("documentation mode checks docs without certifying application source", () 
     ),
   );
 });
+
+function mint(extra = {}) {
+  return foundation({
+    "docs/docs.json": JSON.stringify({
+      navigation: { groups: [{ pages: ["index", "guide/chat"] }] },
+      logo: { dark: "/assets/logo.svg" },
+      redirects: [{ source: "/old", destination: "/guide/chat" }],
+    }),
+    "docs/index.md":
+      '---\ntitle: "Fased"\n---\n\n[Chat](/guide/chat#messages)\n<Card href="/guide/chat">Chat</Card>\n',
+    "docs/guide/chat.md":
+      '---\ntitle: "Chat"\n---\n\n## Messages\n\n![Logo](/assets/logo.svg)\n',
+    "docs/assets/logo.svg": "<svg/>",
+    ...extra,
+  });
+}
+
+test("Mintlify frontmatter, page routes, navigation, redirects and assets resolve", () => {
+  assert.deepEqual(validateDocumentation(mint()), []);
+  const files = mint();
+  files.set("docs/guide/chat.mdx", files.get("docs/guide/chat.md"));
+  files.delete("docs/guide/chat.md");
+  assert.deepEqual(validateDocumentation(files), []);
+});
+
+test("Mintlify rejects missing pages/assets, ambiguous routes, fragments and broken config", () => {
+  for (const name of ["docs/guide/chat.md", "docs/assets/logo.svg"]) {
+    const files = mint();
+    files.delete(name);
+    assert.ok(
+      validateDocumentation(files).some((e) => e.includes("missing target")),
+    );
+  }
+  assert.ok(
+    validateDocumentation(mint({ "docs/guide/chat.mdx": "# Chat\n" })).some(
+      (e) => e.includes("ambiguous target"),
+    ),
+  );
+  assert.ok(
+    validateDocumentation(
+      mint({
+        "docs/index.md":
+          '---\ntitle: "Fased"\n---\n\n[Chat](/guide/chat#absent)\n',
+      }),
+    ).some((e) => e.includes("missing heading")),
+  );
+  assert.ok(
+    validateDocumentation(mint({ "docs/docs.json": "{bad" })).some((e) =>
+      e.includes("invalid JSON"),
+    ),
+  );
+  assert.ok(
+    validateDocumentation(
+      mint({
+        "docs/docs.json": JSON.stringify({
+          navigation: { groups: [{ pages: ["absent"] }] },
+        }),
+      }),
+    ).some((e) => e.includes("missing target absent")),
+  );
+});
+
+test("Mintlify title support retains malformed title, private-link and traversal checks", () => {
+  for (const text of [
+    '---\ntitle: ""\n---\n',
+    '---\ntitle: "Unclosed"\n',
+    "title: Outside\n",
+  ])
+    assert.ok(
+      validateDocumentation(mint({ "docs/index.md": text })).some((e) =>
+        e.includes("missing top-level heading"),
+      ),
+    );
+  for (const link of [
+    "/home/fc/secret",
+    "file:///secret",
+    "/%2e%2e/LICENSE",
+    "../../LICENSE",
+  ]) {
+    const errors = validateDocumentation(
+      mint({
+        "docs/index.md": `---\ntitle: "Fased"\n---\n\n<Card href="${link}">Bad</Card>\n`,
+      }),
+    );
+    assert.ok(
+      errors.some((e) => /private or unsupported|escapes repository/.test(e)),
+      link,
+    );
+  }
+  assert.ok(
+    validateDocumentation(
+      foundation({ "README.md": '---\ntitle: "Fased"\n---\n' }),
+    ).some((e) => e.includes("missing top-level heading")),
+  );
+});

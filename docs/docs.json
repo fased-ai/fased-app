@@ -61,11 +61,7 @@
     "groups": [
       {
         "group": "Start",
-        "pages": [
-          "index",
-          "guide/install",
-          "reference/status"
-        ]
+        "pages": ["index", "guide/install", "reference/status"]
       },
       {
         "group": "Use Fased",
@@ -80,24 +76,15 @@
       },
       {
         "group": "Trading",
-        "pages": [
-          "guide/wallets",
-          "guide/trading",
-          "wen/automation"
-        ]
+        "pages": ["guide/wallets", "guide/trading", "wen/automation"]
       },
       {
         "group": "Network roadmap",
-        "pages": [
-          "guide/network",
-          "guide/network-roadmap"
-        ]
+        "pages": ["guide/network", "guide/network-roadmap"]
       },
       {
         "group": "Manage",
-        "pages": [
-          "guide/settings"
-        ]
+        "pages": ["guide/settings"]
       }
     ]
   }
