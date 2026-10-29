@@ -720,9 +720,13 @@ export function useAgents(core: ReturnType<typeof useCore>) {
     void load();
     let ticks = 0;
     const timer = setInterval(() => {
-      const active = current.current?.aiRequests.some(
-        (q) => q.state === "queued" || q.state === "running",
-      );
+      const active =
+        current.current?.aiRequests.some(
+          (q) => q.state === "queued" || q.state === "running",
+        ) ||
+        current.current?.newsFetches.some(
+          (f) => f.state === "queued" || f.state === "fetching",
+        );
       if (!writing.current && (active || ++ticks % 10 === 0)) void load();
     }, 500);
     return () => {

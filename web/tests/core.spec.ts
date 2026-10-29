@@ -6687,8 +6687,9 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
   const external: string[] = [];
+  const fixtureOrigins = new Set([new URL(url).origin]);
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!fixtureOrigins.has(new URL(r.url()).origin)) external.push(r.url());
   });
   const command = async (c: object) => {
     const v = await privateCLI(["agents"]);
@@ -6812,6 +6813,10 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
   });
   await stop();
   await start(true);
+  // The old page may still issue an in-flight read during restart. Only the
+  // exact two disposable core origins belong to this fixture, never arbitrary
+  // loopback or external services.
+  fixtureOrigins.add(new URL(url).origin);
   await page.goto(url + "/#agents/chat");
   await revealControl(
     page,
