@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeftRight,
-  LayoutDashboard,
+  BookOpen,
   Bell,
   Bot,
   ChevronDown,
@@ -28,11 +28,11 @@ import { AppearanceSettings, useUI } from "../ui-preferences";
 import { Dialog } from "./shared";
 
 export const shellPages = [
-  { name: "Dashboard", path: "overview", icon: LayoutDashboard },
   { name: "Chat", path: "agents/chat", icon: MessageSquare },
   { name: "Tasks", path: "agents/tasks", icon: Clock3 },
   { name: "Agents", path: "agents/settings", icon: Bot },
   { name: "News", path: "agents/news", icon: Newspaper },
+  { name: "Memory", path: "agents/memory", icon: BookOpen },
   { name: "Mining", path: "terminals/satcoin", icon: Pickaxe },
   { name: "Onchain", path: "terminals/jupiter", icon: ArrowLeftRight },
   { name: "Hyperliquid", path: "terminals/hyperliquid", icon: TrendingUp },
@@ -132,16 +132,12 @@ export function ShellNavigation() {
           Fased
         </a>
         <nav className="shell-top-nav" aria-label={t("Main navigation")}>
-          {shellPages.slice(0, 4).map((p) => (
+          {shellPages.slice(0, 3).map((p) => (
             <a
               key={p.path}
               href={`#${p.path}`}
               aria-current={route === p.path ? "page" : undefined}
-              className={
-                p.name !== "Chat" && p.name !== "Dashboard"
-                  ? "shell-top-extra"
-                  : undefined
-              }
+              className={p.name !== "Chat" ? "shell-top-extra" : undefined}
             >
               {t(p.name)}
             </a>
@@ -153,6 +149,11 @@ export function ShellNavigation() {
               aria-expanded={more}
               aria-controls="shell-more"
               className="shell-more-toggle"
+              data-active={
+                shellPages.slice(3).some((p) => p.path === route) ||
+                ["activity", "settings", "providers"].includes(route) ||
+                route.startsWith("wallets/")
+              }
               onClick={() => setMore(!more)}
             >
               {t("More")}
@@ -164,14 +165,7 @@ export function ShellNavigation() {
                 className="shell-more"
                 aria-label={t("More pages")}
               >
-                <a
-                  href="#overview"
-                  className="shell-overflow-route"
-                  onClick={closeMore}
-                >
-                  {t("Dashboard")}
-                </a>
-                {links(shellPages.slice(2))}
+                {links(shellPages.slice(1))}
                 <hr />
                 <a href="#activity" onClick={closeMore}>
                   <History size={18} />
@@ -181,6 +175,15 @@ export function ShellNavigation() {
                   <Wallet size={18} />
                   {t("Wallets")}
                 </a>
+                <button
+                  onClick={() => {
+                    closeMore();
+                    setProvidersOpen(true);
+                  }}
+                >
+                  <Plug size={18} />
+                  {t("Providers")}
+                </button>
                 <a href="#settings" onClick={closeMore}>
                   <Settings2 size={18} />
                   {t("Settings")}
@@ -279,10 +282,7 @@ export function ShellNavigation() {
         hidden={!preferences.rail}
         aria-label={t("Page shortcuts")}
       >
-        {links(
-          shellPages.filter((page) => page.path !== "overview"),
-          true,
-        )}
+        {links(shellPages, true)}
         <div className="shell-rail-bottom">
           {utility(
             contextOpen ? "Close context panel" : "Open context panel",

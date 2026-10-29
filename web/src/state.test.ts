@@ -59,3 +59,10 @@ describe("prototype state boundaries", () => {
     );
   });
 });
+
+it("preserves local provider preferences without resetting browser records", () => {
+  const state = initialState();
+  state.setup.provider = "local";
+  state.profiles[0].provider = "local";
+  expect(restoreState(JSON.stringify(state))).toEqual(state);
+});

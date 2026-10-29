@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "policy": "latest-only",
+  "provider": "opencode",
+  "reviewedAt": 1793145600,
+  "expiresAt": 1795737600,
+  "sources": {
+    "models": "https://opencode.ai/v2/docs/console/models/",
+    "pricing": "https://opencode.ai/v2/docs/console/models/",
+    "contract": "https://opencode.ai/v2/docs/console/models/"
+  },
+  "models": [
+    {
+      "provider": "opencode",
+      "id": "opencode/deepseek-v4.1-flash",
+      "name": "DeepSeek V4.1 Flash",
+      "tier": "Balanced",
+      "input": 300000,
+      "cached": 6000,
+      "output": 1200000,
+      "currency": "USD",
+      "contextTokens": 1048576,
+      "outputTokens": 8192,
+      "source": "https://opencode.ai/v2/docs/console/models/",
+      "reasoning": "none"
+    }
+  ]
+}

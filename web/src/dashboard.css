@@ -306,3 +306,22 @@
     min-height: 44px;
   }
 }
+
+.wt .dashboard-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--wt-border);
+  border-radius: 8px;
+  background: var(--wt-surface);
+}
+.wt .dashboard-status span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.wt .dashboard-status button {
+  flex-shrink: 0;
+}

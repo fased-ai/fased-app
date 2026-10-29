@@ -19,7 +19,7 @@ func fixtureProfileProvider(t *testing.T, s *Store, c AgentCommand) AgentView {
 func TestProviderCatalogTracksConnectionWithoutEntitlementClaims(t *testing.T) {
 	s := fixtureStore(t)
 	v, err := s.AIConnection()
-	if err != nil || v.Catalog.Version != 1 || len(v.Catalog.Providers) != 4 || len(v.Catalog.Models) != 3 {
+	if err != nil || v.Catalog.Version != 1 || len(v.Catalog.Providers) != 12 || len(v.Catalog.Models) != 3 {
 		t.Fatalf("catalog: %+v %v", v.Catalog, err)
 	}
 	for i, id := range []string{"openai", "anthropic", "xai"} {

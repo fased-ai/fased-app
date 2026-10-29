@@ -12,9 +12,12 @@ type ProviderMethod struct {
 	Name string `json:"name"`
 }
 type ProviderEntry struct {
-	ID      string           `json:"id"`
-	Name    string           `json:"name"`
-	Methods []ProviderMethod `json:"methods"`
+	Family  string              `json:"family,omitempty"`
+	Route   string              `json:"route,omitempty"`
+	ID      string              `json:"id"`
+	Name    string              `json:"name"`
+	Methods []ProviderMethod    `json:"methods"`
+	Servers []LocalServerPreset `json:"servers,omitempty"`
 }
 type ProviderModel struct {
 	Tier          string             `json:"tier,omitempty"`
@@ -87,7 +90,7 @@ func (s *Store) resolveAgentProvider(c *AgentCommand, profile AgentProfile) erro
 		if profile.Model != "" && profile.Model != fixtureAIModel {
 			return errors.New("agent model unavailable")
 		}
-	case "openai", "anthropic", "xai", "local":
+	case "openai", "anthropic", "xai", "moonshot", "moonshot-intl", "kimi-code", "ollama-cloud", "google", "openrouter", "qwen", "opencode", "local":
 		policy := openAIModelPolicy(profile.Model)
 		if !currentModelRequest(AgentAIRequest{Model: profile.Model, Policy: &policy}) || profile.Model != policy.Model || policy.ExpiresAt <= s.now().Unix() {
 			return errors.New("agent model unavailable")

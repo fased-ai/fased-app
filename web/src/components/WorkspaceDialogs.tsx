@@ -1,9 +1,6 @@
-import {
-  AIConnectionSettings,
-  AIModelPicker,
-  useAIConnection,
-} from "../pages/AIConnection";
-import { useState } from "react";
+import { NoticeResult } from "./NoticeResult";
+import { AIModelPicker, useAIConnection } from "../pages/AIConnection";
+import { useEffect, useRef, useState } from "react";
 import { useUI } from "../ui-preferences";
 import { InstanceSummary, RemoteConnection } from "./InstanceConnection";
 import {
@@ -20,6 +17,7 @@ import {
 } from "../icons";
 import {
   providerNames,
+  isProvider,
   walletNames,
   type Provider,
   type WalletMode,
@@ -64,9 +62,7 @@ export function WorkspaceDialogs() {
   const account = accounts.find((item) => item.ref === newAccount);
   const accountProvider = account?.provider;
   const creationProvider =
-    accountProvider === "openai" ||
-    accountProvider === "anthropic" ||
-    accountProvider === "xai"
+    isProvider(accountProvider) && accountProvider !== "none"
       ? accountProvider
       : undefined;
   const modelReady =
@@ -77,21 +73,23 @@ export function WorkspaceDialogs() {
         item.connectionRef === newAccount &&
         item.selectable,
     );
-  const closeProviders = () => {
-    setProvidersOpen(false);
-    if (resumeAgent) {
-      setResumeAgent(false);
-      setProfileOpen(true);
-      void refreshConnections();
+  const visitedProviders = useRef(false);
+  useEffect(() => {
+    if (profileOpen && connected) void refreshConnections();
+  }, [profileOpen, connected, refreshConnections]);
+  useEffect(() => {
+    if (providersOpen) visitedProviders.current = true;
+    else if (visitedProviders.current) {
+      visitedProviders.current = false;
+      if (resumeAgent) {
+        setResumeAgent(false);
+        setProfileOpen(true);
+        void refreshConnections();
+      }
     }
-  };
+  }, [providersOpen, resumeAgent, refreshConnections, setProfileOpen]);
   return (
     <>
-      {providersOpen && connected && (
-        <Dialog title={uiText("Providers")} onClose={closeProviders}>
-          <AIConnectionSettings startNew={resumeAgent} />
-        </Dialog>
-      )}
       {setupOpen &&
         (connected ? (
           <Dialog
@@ -456,9 +454,11 @@ export function WorkspaceDialogs() {
           onClose={() => setNoticesOpen(false)}
         >
           <div className="notice-tools">
-            <p className="subtle">
-              {uiText("Durable prototype events. No external deliveries.")}
-            </p>
+            {core.mode !== "ready" && (
+              <p className="subtle">
+                {uiText("Durable prototype events. No external deliveries.")}
+              </p>
+            )}
             <button
               className="text-button"
               onClick={() => dispatch({ type: "read-notices" })}
@@ -473,7 +473,8 @@ export function WorkspaceDialogs() {
                 <span className="dot" />
                 <div>
                   <strong>{n.title}</strong>
-                  <p>{n.detail}</p>
+                  {core.mode !== "ready" && <p>{n.detail}</p>}
+                  <NoticeResult noticeId={n.id} />
                 </div>
               </article>
             ))}
@@ -630,9 +631,13 @@ export function WorkspaceDialogs() {
                             item.provider}{" "}
                           ·{" "}
                           {uiText(
-                            item.authMethod === "sign-in"
-                              ? "ChatGPT"
-                              : "API key",
+                            item.authMethod === "oauth"
+                              ? "Google"
+                              : item.authMethod === "sign-in"
+                                ? "ChatGPT"
+                                : item.authMethod === "local"
+                                  ? "Server"
+                                  : "API key",
                           )}
                         </option>
                       ))}

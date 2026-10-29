@@ -809,10 +809,10 @@ function AgentAIForm({
             <details className="reply-model-menu">
               <summary
                 aria-label={tr("Reply model")}
-                title={model || tr("Demo")}
+                title={model || tr("No AI")}
               >
                 {model.replace(/-\d{4}-\d{2}-\d{2}$/, "") ||
-                  tr(replyReady ? "Demo" : "Provider")}
+                  tr(replyReady ? "No AI" : "Provider")}
               </summary>
               <div className="reply-model-panel">
                 <ConnectionPicker

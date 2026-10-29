@@ -84,6 +84,9 @@ func validSignInValue(value string, bound int) bool {
 	return true
 }
 func aiVaultCiphertextBound(v aiVaultEnvelope) int {
+	if v.Version == 7 {
+		return 1024 + 16
+	}
 	if v.Version == 6 {
 		return 2048 + 16
 	}
@@ -105,6 +108,7 @@ func (s *Store) aiVaultModeAllowed(v aiVaultEnvelope) bool {
 type providerSignInAttempt struct {
 	view                                                          ProviderSignInView
 	state, nonce, verifier, redirect, client, ref, name, callback string
+	google                                                        *googleOAuthCredential
 	expected                                                      *providerSignInCredential
 	digest                                                        [32]byte
 	epoch                                                         uint64
@@ -126,7 +130,7 @@ func (s *Store) cancelProviderSignInLocked() {
 		if a.server != nil {
 			a.server.Close()
 		}
-		a.verifier, a.nonce, a.callback, a.expected = "", "", "", nil
+		a.verifier, a.nonce, a.callback, a.expected, a.google = "", "", "", nil, nil
 		s.provider.signIn = nil
 	}
 }
@@ -144,6 +148,30 @@ func (s *Store) providerSignInViewLocked() *ProviderSignInView {
 }
 
 func (s *Store) changeProviderSignIn(ctx context.Context, c AIConnectionCommand) (AIConnectionView, error) {
+	if c.Action == "sign-in-start" && c.Provider == "anthropic" {
+		return AIConnectionView{}, errors.New("Claude subscription sign-in is not supported in third-party apps; use an Anthropic API key")
+	}
+	if c.Action == "sign-in-start" && (c.Provider == "moonshot" || c.Provider == "moonshot-intl" || c.Provider == "kimi-code") {
+		return AIConnectionView{}, errors.New("Kimi sign-in needs a supported Fased client contract; use a Platform API or Code membership key")
+	}
+	// The official current Qwen auth menu removed portal OAuth on 2026-04-15.
+	// Legacy OpenClaw/Fased plugin code is not proof of a supported auth route.
+	// Keep API credentials, any unrelated pending login and work records intact.
+	// https://github.com/QwenLM/qwen-code/blob/main/docs/users/configuration/auth.md
+	if c.Action == "sign-in-start" && c.Provider == "qwen" {
+		return AIConnectionView{}, errors.New("Qwen portal sign-in was discontinued on 2026-04-15; use an API key.")
+	}
+
+	// The public Grok Build OAuth flow does not establish a supported Fased
+	// client/inference entitlement. API keys and all existing login state remain
+	// unchanged; never substitute a borrowed CLI registration or API tariff.
+	if c.Action == "sign-in-start" && c.Provider == "xai" {
+		return AIConnectionView{}, errors.New("xAI sign-in requires a supported Fased client and inference contract; use an API key.")
+	}
+
+	if c.GoogleProject != "" && (c.Action != "sign-in-start" || c.Provider != "google") {
+		return AIConnectionView{}, errors.New("project selection requires Google sign-in")
+	}
 	if c.Key != "" || c.CredentialMode != "" || c.Pilot != nil || c.Allowance != nil || c.Revision != 0 || c.ProfileID != "" || len(c.TaskIDs) > 0 || c.AuthorizationSeconds != 0 || c.ConsentDigest != "" {
 		return AIConnectionView{}, errors.New("sign-in accepts no API key, task grant or pilot")
 	}
@@ -162,8 +190,8 @@ func (s *Store) changeProviderSignIn(ctx context.Context, c AIConnectionCommand)
 	s.provider.mu.Unlock()
 	switch c.Action {
 	case "sign-in-start":
-		if c.SignInID != "" || c.Callback != "" || c.Passphrase != "" || c.Provider != "openai" || !validAgentText(c.Name, 80, false) {
-			return AIConnectionView{}, errors.New("select OpenAI and an optional existing unlocked sign-in account")
+		if c.SignInID != "" || c.Callback != "" || c.Passphrase != "" || (c.Provider != "openai" && c.Provider != "openrouter" && c.Provider != "google") || !validAgentText(c.Name, 80, false) {
+			return AIConnectionView{}, errors.New("select a supported sign-in provider")
 		}
 		return s.startProviderSignIn(c)
 	case "sign-in-cancel":
@@ -194,6 +222,12 @@ func (s *Store) changeProviderSignIn(ctx context.Context, c AIConnectionCommand)
 }
 
 func (s *Store) startProviderSignIn(c AIConnectionCommand) (AIConnectionView, error) {
+	if c.Provider == "google" {
+		return s.startGoogleSignIn(c)
+	}
+	if c.Provider == "openrouter" {
+		return s.startRouterSignIn(c)
+	}
 	s.provider.mu.Lock()
 	defer s.provider.mu.Unlock()
 	if !s.providerSignInAvailableLocked() {
@@ -236,34 +270,10 @@ func (s *Store) startProviderSignIn(c AIConnectionCommand) (AIConnectionView, er
 		return AIConnectionView{}, err
 	}
 	a.view = ProviderSignInView{ID: id, Provider: "openai", State: "waiting", ExpiresAt: s.now().Add(5 * time.Minute).Unix(), Remote: c.Remote}
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	listener, err := s.listenProviderSignInLocked(a)
 	if err != nil {
-		return AIConnectionView{}, errors.New("private sign-in callback unavailable")
+		return AIConnectionView{}, err
 	}
-	a.redirect = "http://" + listener.Addr().String() + "/auth/callback"
-	a.server = &http.Server{ReadHeaderTimeout: 2 * time.Second, MaxHeaderBytes: 4096, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
-		if r.Method != "GET" || r.URL.Path != "/auth/callback" || r.Host != listener.Addr().String() || len(r.URL.RawQuery) > 4096 {
-			http.Error(w, "Invalid callback", 400)
-			return
-		}
-		s.provider.mu.Lock()
-		defer s.provider.mu.Unlock()
-		if s.provider.signIn != a || a.busy || a.view.Remote || a.view.ExpiresAt <= s.now().Unix() || a.callback != "" {
-			http.Error(w, "Return to Fased", 409)
-			return
-		}
-		callback := a.redirect + "?" + r.URL.RawQuery
-		if _, _, err := providerSignInCallback(a, callback); err != nil {
-			http.Error(w, "Return to Fased and retry sign-in", 400)
-			return
-		}
-		a.callback, a.view.State = callback, "callback-ready"
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		io.WriteString(w, "Return to Fased to finish connecting your account.")
-	})}
 	hostHash := sha256.Sum256([]byte("fased-provider-host:" + s.instanceID))
 	hostID := fmt.Sprintf("urn:uuid:%x-%x-%x-%x-%x", hostHash[0:4], hostHash[4:6], hostHash[6:8], hostHash[8:10], hostHash[10:16])
 	challenge := sha256.Sum256([]byte(a.verifier))
@@ -300,7 +310,48 @@ func (s *Store) startProviderSignIn(c AIConnectionCommand) (AIConnectionView, er
 	return s.aiConnectionLocked(c.Ref)
 }
 
+// One callback implementation for each supported public-client flow.
+func (s *Store) listenProviderSignInLocked(a *providerSignInAttempt) (net.Listener, error) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		return nil, errors.New("private sign-in callback unavailable")
+	}
+	a.redirect = "http://" + listener.Addr().String() + "/auth/callback"
+	a.server = &http.Server{ReadHeaderTimeout: 2 * time.Second, MaxHeaderBytes: 4096, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+		if r.Method != "GET" || r.URL.Path != "/auth/callback" || r.Host != listener.Addr().String() || len(r.URL.RawQuery) > 4096 {
+			http.Error(w, "Invalid callback", 400)
+			return
+		}
+		s.provider.mu.Lock()
+		defer s.provider.mu.Unlock()
+		if s.provider.signIn != a || a.busy || a.view.Remote && a.view.Provider != "google" || a.view.ExpiresAt <= s.now().Unix() || a.callback != "" {
+			http.Error(w, "Return to Fased", 409)
+			return
+		}
+		callback := a.redirect + "?" + r.URL.RawQuery
+		if _, _, err := providerSignInCallback(a, callback); err != nil {
+			http.Error(w, "Return to Fased and retry sign-in", 400)
+			return
+		}
+		a.callback, a.view.State = callback, "callback-ready"
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		io.WriteString(w, "Return to Fased to finish connecting your account.")
+	})}
+	return listener, nil
+}
+
 func providerSignInCallback(a *providerSignInAttempt, callback string) (string, string, error) {
+	if a.view.Provider == "google" {
+		code, err := googleSignInCallback(a, callback)
+		return code, a.client, err
+	}
+	if a.view.Provider == "openrouter" {
+		code, err := routerSignInCallback(a, callback)
+		return code, "", err
+	}
 	u, err := url.Parse(callback)
 	base, _ := url.Parse(a.redirect)
 	if err != nil || len(callback) > 4096 || u.Scheme != base.Scheme || u.Host != base.Host || u.Path != base.Path || u.RawPath != "" || u.User != nil || u.Fragment != "" {
@@ -337,6 +388,14 @@ func (s *Store) completeProviderSignIn(ctx context.Context, c AIConnectionComman
 	if a == nil || a.view.ID != c.SignInID || a.busy || a.view.ExpiresAt <= s.now().Unix() {
 		s.provider.mu.Unlock()
 		return AIConnectionView{}, ErrConflict
+	}
+	if a.view.Provider == "google" {
+		s.provider.mu.Unlock()
+		return s.completeGoogleSignIn(ctx, c)
+	}
+	if a.view.Provider == "openrouter" {
+		s.provider.mu.Unlock()
+		return s.completeRouterSignIn(ctx, c)
 	}
 	callback := c.Callback
 	if callback == "" {
@@ -393,18 +452,26 @@ func (s *Store) completeProviderSignIn(ctx context.Context, c AIConnectionComman
 }
 
 func (s *Store) saveProviderSignInLocked(c providerSignInCredential, passphrase, ref, name string, fixture bool, expected [32]byte) (AIConnectionView, error) {
+	raw, _ := json.Marshal(c)
+	defer clear(raw)
+	if _, ok := parseProviderSignInCredential(raw); !ok {
+		return AIConnectionView{}, errors.New("invalid sign-in credential")
+	}
+	return s.persistSignInCredentialLocked(raw, passphrase, ref, name, "openai", "openai-signin", fixture, expected)
+}
+func (s *Store) persistSignInCredentialLocked(raw []byte, passphrase, ref, name, provider, mode string, fixture bool, expected [32]byte) (AIConnectionView, error) {
 	col, err := s.readAIVaultCollection()
 	if errors.Is(err, os.ErrNotExist) {
 		col = aiVaultCollection{Version: 3}
 	} else if err != nil {
 		return AIConnectionView{}, err
 	}
-	if ref == "" && len(col.Accounts) >= 8 {
+	if ref == "" && len(col.Accounts) >= aiMaxAccounts {
 		return AIConnectionView{}, errors.New("connection limit reached")
 	}
 	if ref != "" {
 		env, err := s.readAIVault(ref)
-		if err != nil || env.Version != 5 {
+		if err != nil || env.Version != 5 || env.Provider != provider || env.Mode != mode {
 			return AIConnectionView{}, ErrConflict
 		}
 		encoded, _ := json.Marshal(env)
@@ -417,12 +484,7 @@ func (s *Store) saveProviderSignInLocked(c providerSignInCredential, passphrase,
 			return AIConnectionView{}, err
 		}
 	}
-	raw, _ := json.Marshal(c)
-	defer clear(raw)
-	if _, ok := parseProviderSignInCredential(raw); !ok {
-		return AIConnectionView{}, errors.New("invalid sign-in credential")
-	}
-	env := aiVaultEnvelope{Version: 5, Provider: "openai", Mode: "openai-signin", TestOnly: fixture, Ref: ref, Name: name, Salt: make([]byte, 16), Nonce: make([]byte, 12)}
+	env := aiVaultEnvelope{Version: 5, Provider: provider, Mode: mode, TestOnly: fixture, Ref: ref, Name: name, Salt: make([]byte, 16), Nonce: make([]byte, 12)}
 	if ref == "" {
 		env.Ref, err = randomToken()
 		if err != nil {
@@ -582,6 +644,9 @@ func exchangeProviderSignIn(ctx context.Context, wire http.RoundTripper, form ur
 }
 
 func validateSignInIDToken(ctx context.Context, wire http.RoundTripper, jwks, token, client, nonce string, now int64) (string, error) {
+	return validateOIDCIDToken(ctx, wire, jwks, token, client, nonce, now, signInIssuer, signInHTTP)
+}
+func validateOIDCIDToken(ctx context.Context, wire http.RoundTripper, jwks, token, client, nonce string, now int64, issuer string, fetch func(context.Context, http.RoundTripper, string, string, url.Values, any) error) (string, error) {
 	refused := errors.New("sign-in identity verification failed")
 	if len(token) > 16384 {
 		return "", refused
@@ -606,7 +671,7 @@ func validateSignInIDToken(ctx context.Context, wire http.RoundTripper, jwks, to
 	var keys struct {
 		Keys []struct{ Kty, Kid, Alg, Use, N, E string }
 	}
-	if signInHTTP(ctx, wire, "GET", jwks, nil, &keys) != nil || len(keys.Keys) > 32 {
+	if fetch(ctx, wire, "GET", jwks, nil, &keys) != nil || len(keys.Keys) > 32 {
 		return "", refused
 	}
 	var public *rsa.PublicKey
@@ -654,7 +719,7 @@ func validateSignInIDToken(ctx context.Context, wire http.RoundTripper, jwks, to
 		Aud             json.RawMessage
 		Exp, Iat        int64
 	}
-	if json.Unmarshal(claims, &c) != nil || c.Iss != signInIssuer || !validSignInValue(c.Sub, 512) || c.Exp <= now || c.Iat > now+30 || c.Iat < now-86400 || nonce != "" && c.Nonce != nonce {
+	if json.Unmarshal(claims, &c) != nil || (c.Iss != issuer && !(issuer == googleIssuer && c.Iss == "accounts.google.com")) || !validSignInValue(c.Sub, 512) || c.Exp <= now || c.Iat > now+30 || c.Iat < now-86400 || nonce != "" && c.Nonce != nonce {
 		return "", refused
 	}
 	var audience string
@@ -672,6 +737,12 @@ func validateSignInIDToken(ctx context.Context, wire http.RoundTripper, jwks, to
 }
 
 func (s *Store) renewProviderSignIn(ctx context.Context, c AIConnectionCommand) (AIConnectionView, error) {
+	s.provider.mu.Lock()
+	envelope, googleErr := s.readAIVault(c.Ref)
+	s.provider.mu.Unlock()
+	if googleErr == nil && envelope.Version == 5 && envelope.Provider == "google" {
+		return s.renewGoogleSignIn(ctx, c)
+	}
 	s.provider.mu.Lock()
 	if s.provider.signInRenewals == nil {
 		s.provider.signInRenewals = map[string]bool{}

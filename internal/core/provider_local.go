@@ -23,10 +23,18 @@ const localUsageCostBasis = "local-reported-usage"
 func localPolicy(p *OpenAIModelPolicy) bool {
 	return p != nil && p.Provider == "local" && p.WireVersion == localWire
 }
-func localRequest(q AgentAIRequest) bool        { return localPolicy(q.Policy) }
-func unmeteredPolicy(p *OpenAIModelPolicy) bool { return localPolicy(p) || planSignInPolicy(p) }
-func unmeteredRequest(q AgentAIRequest) bool    { return unmeteredPolicy(q.Policy) }
+func localRequest(q AgentAIRequest) bool { return localPolicy(q.Policy) }
+func unmeteredPolicy(p *OpenAIModelPolicy) bool {
+	return localPolicy(p) || planSignInPolicy(p) || kimiCodePolicy(p) || ollamaCloudPolicy(p)
+}
+func unmeteredRequest(q AgentAIRequest) bool { return unmeteredPolicy(q.Policy) }
 func reportedUsageBasis(q AgentAIRequest) string {
+	if ollamaCloudPolicy(q.Policy) || ollamaRelayPolicy(q.Policy) {
+		return "ollama-cloud-reported-usage"
+	}
+	if kimiCodePolicy(q.Policy) {
+		return "kimi-code-reported-usage"
+	}
 	if localRequest(q) {
 		return localUsageCostBasis
 	}
@@ -51,12 +59,40 @@ var currentLocalModels = func() modelRegistry {
 	return r
 }()
 
+// Presets are setup defaults, not vendor attestation or additional authority.
+// All saved endpoints/keys use the same v6 loopback-only encrypted connector.
+type LocalServerPreset struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Endpoint string `json:"endpoint"`
+}
+
+func localServerPresets() []LocalServerPreset {
+	return []LocalServerPreset{
+		{"ollama", "Ollama", "http://127.0.0.1:11434/v1"},
+		{"lmstudio", "LM Studio", "http://127.0.0.1:1234/v1"},
+		{"vllm", "vLLM", "http://127.0.0.1:8000/v1"},
+	}
+}
+func localServerPreset(id string) (LocalServerPreset, bool) {
+	for _, p := range localServerPresets() {
+		if p.ID == id {
+			return p, true
+		}
+	}
+	return LocalServerPreset{}, false
+}
+
 func localRegistry() modelRegistry { return currentLocalModels }
 func localModelPolicy(model string) OpenAIModelPolicy {
 	r := localRegistry()
 	for _, m := range r.Models {
 		if m.ID == model {
-			return OpenAIModelPolicy{Provider: "local", WireVersion: localWire, ID: "local-current-v1:" + model, Model: model, ReviewedAt: r.ReviewedAt, ExpiresAt: r.ExpiresAt, ContextTokens: m.ContextTokens, OutputTokens: m.OutputTokens, ModelSource: m.Source, TariffSource: r.Sources["pricing"], TokenSource: r.Sources["discovery"], Reasoning: "none"}
+			contract, pricing := r.Sources["discovery"], r.Sources["pricing"]
+			if m.Contract != "" {
+				contract, pricing = m.Contract, m.Contract
+			}
+			return OpenAIModelPolicy{Provider: "local", WireVersion: localWire, ID: "local-current-v1:" + model, Model: model, ReviewedAt: r.ReviewedAt, ExpiresAt: r.ExpiresAt, ContextTokens: m.ContextTokens, OutputTokens: m.OutputTokens, ModelSource: m.Source, TariffSource: pricing, TokenSource: contract, Reasoning: "none"}
 		}
 	}
 	return OpenAIModelPolicy{}

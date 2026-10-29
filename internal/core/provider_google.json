@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "policy": "latest-only",
+  "provider": "google",
+  "reviewedAt": 1793145600,
+  "expiresAt": 1795737600,
+  "sources": {
+    "models": "https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash",
+    "pricing": "https://ai.google.dev/gemini-api/docs/pricing",
+    "contract": "https://ai.google.dev/gemini-api/docs/openai",
+    "authentication": "https://ai.google.dev/gemini-api/docs/oauth",
+    "client": "https://developers.google.com/identity/protocols/oauth2/native-app",
+    "legacy": "https://geminicli.com/docs/resources/tos-privacy/"
+  },
+  "models": [
+    {
+      "provider": "google",
+      "id": "gemini-3.8-flash",
+      "name": "Gemini 3.8 Flash",
+      "tier": "Balanced",
+      "input": 750000,
+      "cached": 75000,
+      "output": 3750000,
+      "currency": "USD",
+      "contextTokens": 1048576,
+      "outputTokens": 8192,
+      "source": "https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash",
+      "reasoning": "low"
+    }
+  ]
+}

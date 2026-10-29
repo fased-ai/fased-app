@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "policy": "latest-only",
+  "provider": "openrouter",
+  "reviewedAt": 1793145600,
+  "expiresAt": 1795737600,
+  "sources": {
+    "models": "https://openrouter.ai/google/gemini-3.8-flash",
+    "pricing": "https://openrouter.ai/api/v1/models",
+    "contract": "https://openrouter.ai/docs/api/api-reference/chat/send-chat-completion-request"
+  },
+  "models": [
+    {
+      "provider": "openrouter",
+      "id": "google/gemini-3.8-flash",
+      "name": "Gemini 3.8 Flash",
+      "tier": "Balanced",
+      "input": 825000,
+      "cached": 82500,
+      "output": 4125000,
+      "currency": "USD",
+      "contextTokens": 1048576,
+      "outputTokens": 8192,
+      "source": "https://openrouter.ai/google/gemini-3.8-flash",
+      "reasoning": "low"
+    }
+  ]
+}

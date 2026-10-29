@@ -1,3 +1,4 @@
+import { NoticeResult } from "./components/NoticeResult";
 import { ShellNavigation } from "./components/ShellNavigation";
 import { UIProvider, useUI } from "./ui-preferences";
 import { BookOpen, Check, CheckCheck, MessageSquare, X } from "./icons";
@@ -5,6 +6,7 @@ import { providerNames } from "./state";
 import { Badge, Avatar, SectionHead } from "./components/shared";
 import { useWorkspace, WorkspaceProvider } from "./workspace";
 import { WorkspaceDialogs } from "./components/WorkspaceDialogs";
+import { AIConnectionSettings } from "./pages/AIConnection";
 import { Overview } from "./pages/Overview";
 import { Wallets } from "./pages/Wallets";
 import { Agents } from "./pages/Agents";
@@ -74,6 +76,8 @@ function WorkspaceShell() {
               )
             ) : section === "terminals" ? (
               <Terminals />
+            ) : section === "providers" ? (
+              <AIConnectionSettings />
             ) : section === "settings" ? (
               <Settings />
             ) : (
@@ -114,7 +118,8 @@ function WorkspaceShell() {
                           </span>
                           <div>
                             <strong>{n.title}</strong>
-                            <p>{n.detail}</p>
+                            {core.mode !== "ready" && <p>{n.detail}</p>}
+                            <NoticeResult noticeId={n.id} />
                           </div>
                           <Badge>
                             {core.mode === "ready"

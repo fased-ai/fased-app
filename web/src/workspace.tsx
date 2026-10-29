@@ -36,7 +36,7 @@ function getRoute() {
   const route = aliases[raw] ?? raw;
   if (route === "terminals/asset" || route === "terminals/loss")
     return "terminals/satcoin";
-  return /^(overview|activity|settings|terminals(\/(satcoin|hyperliquid|jupiter))?|agents\/(chat|bots|tasks|news|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
+  return /^(overview|activity|settings|providers|terminals(\/(satcoin|hyperliquid|jupiter))?|agents\/(chat|bots|tasks|news|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
     route,
   )
     ? route
@@ -118,8 +118,14 @@ function useWorkspaceState() {
   const [focusedTask, setFocusedTask] = useState("");
   const [chatDrafts, setChatDrafts] = useState(new Map<string, string>());
   const [setupOpen, setSetupOpen] = useState(false);
-  const [providersOpen, setProvidersOpen] = useState(false);
-  useEffect(() => setProvidersOpen(false), [core.mode, core.instanceId, route]);
+  const providersOpen = route === "providers";
+  const [providerReturn, setProviderReturn] = useState("agents/settings");
+  function setProvidersOpen(open: boolean) {
+    if (open) {
+      if (route !== "providers") setProviderReturn(route);
+      navigate("providers");
+    } else navigate(providerReturn);
+  }
   const [noticesOpen, setNoticesOpen] = useState(false);
   const [actionOpen, setActionOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);

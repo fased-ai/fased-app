@@ -516,7 +516,9 @@ func callReviewedAgentAIStreamAt(ctx context.Context, q AgentAIRequest, rt http.
 	}
 	streaming := q.Stream || signInRequest(q)
 	if streaming && res.StatusCode == 200 && strings.Split(res.Header.Get("Content-Type"), ";")[0] == "text/event-stream" {
-		if policyProvider(q.Policy) == "anthropic" {
+		if compatibleProvider(policyProvider(q.Policy)) {
+			b, e = readCompatibleStream(res.Body, q, onDelta)
+		} else if policyProvider(q.Policy) == "anthropic" {
 			b, e = readAnthropicStream(res.Body, onDelta)
 		} else {
 			b, e = readAIStream(res.Body, q.Model, onDelta, unmeteredRequest(q))
@@ -1015,6 +1017,13 @@ func rejectAICompletion(q *AgentAIRequest, reason string) {
 type fixtureAITransport struct{}
 
 func (fixtureAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	for _, id := range []string{"moonshot", "moonshot-intl", "kimi-code", "ollama-cloud", "google", "openrouter", "qwen", "opencode"} {
+		p, _ := providerDefinitionFor(id)
+		if r.URL.Host == p.Host {
+			return compatibleFixtureResponse(r, id)
+		}
+	}
+
 	if r.URL.Host == "local.fased.invalid" {
 		return localFixtureResponse(r)
 	}

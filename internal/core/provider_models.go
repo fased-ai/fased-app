@@ -20,6 +20,8 @@ import (
 var providerModelSource []byte
 
 type currentModel struct {
+	CacheWrite           int64  `json:"cacheWrite,omitempty"`
+	Contract             string `json:"contract,omitempty"`
 	Provider             string `json:"provider,omitempty"`
 	Line                 string `json:"line,omitempty"`
 	BillableOutputTokens int64  `json:"billableOutputTokens,omitempty"`
@@ -33,6 +35,7 @@ type currentModel struct {
 	OutputTokens         int64  `json:"outputTokens"`
 	Source               string `json:"source"`
 	Reasoning            string `json:"reasoning"`
+	Currency             string `json:"currency,omitempty"`
 }
 type modelRegistry struct {
 	Version    int               `json:"version"`
@@ -146,10 +149,17 @@ func (s *Store) refreshProviderModels(ctx context.Context, ref string, rt http.R
 
 func fetchProviderModelList(ctx context.Context, client *http.Client, provider string, now time.Time, method string) modelDiscovery {
 	failed := modelDiscovery{State: "failed"}
-	path := "/v1/models"
+	path := providerModelsPath(provider)
 	if provider == "anthropic" {
 		path += "?limit=100"
 	}
+	if provider == "openrouter" {
+		path += "?limit=500&offset=0"
+	}
+	if provider == "qwen" {
+		path = qwenModelsPagePath(1)
+	}
+	qwenTotal := -1
 	rows := []discoveredModel{}
 	hashes := []string{}
 	seen, cursors := map[string]bool{}, map[string]bool{}
@@ -159,10 +169,10 @@ func fetchProviderModelList(ctx context.Context, client *http.Client, provider s
 		if err != nil {
 			return failed
 		}
-		raw, readErr := io.ReadAll(io.LimitReader(response.Body, 262145))
+		raw, readErr := io.ReadAll(io.LimitReader(response.Body, providerModelBodyLimit(provider)+1))
 		response.Body.Close()
 		kind, _, mediaErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
-		if readErr != nil || len(raw) > 262144 || response.StatusCode != 200 || mediaErr != nil || kind != "application/json" || response.Header.Get("Content-Encoding") != "" || !uniqueAIJSON(raw, 32768) {
+		if readErr != nil || int64(len(raw)) > providerModelBodyLimit(provider) || response.StatusCode != 200 || mediaErr != nil || kind != "application/json" || response.Header.Get("Content-Encoding") != "" || !uniqueAIJSON(raw, providerJSONNodes(provider)) {
 			return failed
 		}
 		var records []discoveredModel
@@ -171,33 +181,56 @@ func fetchProviderModelList(ctx context.Context, client *http.Client, provider s
 			records, err = parseProviderSignInModels(raw, now.Unix())
 		} else if provider == "anthropic" {
 			records, cursor, err = parseAnthropicModelPage(raw)
+		} else if provider == "qwen" {
+			var total int
+			records, total, err = parseQwenModelPage(raw, page+1)
+			if qwenTotal >= 0 && total != qwenTotal {
+				return failed
+			}
+			qwenTotal = total
+			if (page+1)*100 < total {
+				cursor = strconv.Itoa(page + 2)
+			}
 		} else {
 			err = parseProviderModelList(provider, raw, &object, &records)
 		}
-		if err != nil || object != "list" || records == nil || len(rows)+len(records) > 512 {
+		if err != nil || object != "list" || records == nil || len(rows)+len(records) > 2048 {
 			return failed
 		}
 		for _, m := range records {
-			if !validProviderModelID(m.ID) || seen[m.ID] || m.Object != "model" || m.Created <= 0 || m.Created > now.Unix() || len(m.OwnedBy) < 1 || len(m.OwnedBy) > 128 {
+			if !validProviderModelID(m.ID) || seen[m.ID] || m.Object != "model" || (m.Created <= 0 && !compatibleProvider(provider) && provider != "local") || m.Created < 0 || m.Created > now.Unix() || len(m.OwnedBy) < 1 || len(m.OwnedBy) > 128 {
 				return failed
 			}
 			seen[m.ID] = true
 		}
 		rows = append(rows, records...)
 		hashes = append(hashes, newsHash(raw))
+		if provider == "openrouter" && len(records) == 500 {
+			cursor = strconv.Itoa(len(rows))
+		}
 		if cursor == "" {
 			hash := hashes[0]
 			if len(hashes) > 1 {
 				encoded, _ := json.Marshal(hashes)
 				hash = newsHash(encoded)
 			}
-			return modelDiscovery{State: "ready", FetchedAt: now.Unix(), ExpiresAt: now.Add(15 * time.Minute).Unix(), SHA256: hash, Source: providerOrigin(provider) + "/v1/models", Models: rows}
+			source := providerOrigin(provider) + providerModelsPath(provider)
+			if provider == "qwen" {
+				source = providerOrigin(provider) + qwenModelsPagePath(1)
+			}
+			return modelDiscovery{State: "ready", FetchedAt: now.Unix(), ExpiresAt: now.Add(15 * time.Minute).Unix(), SHA256: hash, Source: source, Models: rows}
 		}
 		if cursors[cursor] {
 			return failed
 		}
 		cursors[cursor] = true
 		path = "/v1/models?after_id=" + cursor + "&limit=100"
+		if provider == "openrouter" {
+			path = providerModelsPath(provider) + "?limit=500&offset=" + cursor
+		}
+		if provider == "qwen" {
+			path = qwenModelsPagePath(page + 2)
+		}
 	}
 	return failed
 }
@@ -215,6 +248,9 @@ func discoveredProviderCatalog(v AIConnectionView, d modelDiscovery, now int64) 
 	}
 	for _, entry := range registry.Models {
 		m := ProviderModel{ID: entry.ID, Name: entry.Name, Provider: provider, Method: "api-key", ConnectionRef: v.Ref, Recommended: true, Tier: entry.Tier, Policy: chatModelPolicy(entry.ID)}
+		if v.AuthMethod == "oauth" {
+			m.Method = "oauth"
+		}
 		if v.AuthMethod == "sign-in" {
 			m.Method = "sign-in"
 			m.Policy = chatModelPolicyForMethod(entry.ID, "sign-in")
@@ -227,6 +263,9 @@ func discoveredProviderCatalog(v AIConnectionView, d modelDiscovery, now int64) 
 			}
 		}
 		switch {
+		case entry.Currency != "" && entry.Currency != "USD":
+			m.Policy = nil
+			m.Availability = "currency-unsupported"
 		case v.AuthMethod == "sign-in" && !v.PlanUse && !v.Locked:
 			m.Availability = "plan-access-required"
 		case now < registry.ReviewedAt || now >= registry.ExpiresAt:

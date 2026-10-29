@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "policy": "latest-only",
+  "provider": "ollama-cloud",
+  "reviewedAt": 1793145600,
+  "expiresAt": 1795737600,
+  "sources": {
+    "models": "https://ollama.com/library/gemma4",
+    "contract": "https://docs.ollama.com/api/openai-compatibility",
+    "access": "https://docs.ollama.com/cloud",
+    "authentication": "https://docs.ollama.com/api/authentication",
+    "structuredOutputs": "https://docs.ollama.com/capabilities/structured-outputs",
+    "terms": "https://ollama.com/terms"
+  },
+  "models": [
+    {
+      "provider": "ollama-cloud",
+      "id": "ollama-cloud/gemma4:31b",
+      "name": "Gemma 4 31B",
+      "tier": "Balanced",
+      "input": 0,
+      "cached": 0,
+      "output": 0,
+      "contextTokens": 262144,
+      "outputTokens": 8192,
+      "source": "https://ollama.com/library/gemma4",
+      "reasoning": "none"
+    }
+  ]
+}

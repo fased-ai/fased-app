@@ -27,42 +27,59 @@ local credential; provider-side key revocation remains a separate owner action.
 
 ## Local models
 
-Choose **Local server**, enter its `/v1` endpoint and save with a vault passphrase.
-An API key is optional. The endpoint and key are encrypted together; neither is
-stored in agent instructions, chat or task records. This uses the same account
-selector, current-model catalogue, configured agent, Chat and Tasks as cloud
-providers. Setup never generates an answer.
+Providers → Local server offers **Ollama**, **LM Studio** and **vLLM** address presets. Each uses the same encrypted account, `/v1/models` discovery and stateless `/v1/responses` engine. An API key is optional. Presets fill the address; they do not install a server or attest its implementation. Models must be present in both the reviewed registry and that server's response. Setup never generates an answer.
 
-The first supported connector is an OpenAI-compatible **Responses** server on
-an explicit loopback IP and port, such as `http://127.0.0.1:11434/v1`.
-Local means the machine running the selected core: a Remote connection uses
-that server's loopback, not the browser's machine. DNS names, nonloopback hosts,
-proxy routing, redirects and arbitrary custom gateways are refused. The app does
-not install or download a model server. The supported current models are
-`gemma4:e2b` and `gemma4:e4b`, intersected with the account's installed models.
-Newer model families require reviewed adapter/catalogue updates; old or unknown
-models do not become selectable through a failed refresh.
+Local means the machine running the selected core: a Remote instance connects to that server's loopback, not the browser's machine. Only explicit loopback IPs/ports are accepted; DNS, proxy routing, redirects and cloud/custom gateways remain refused. Endpoint/key bytes are encrypted together in the unchanged v6 envelope. A locked saved account conceals its address until unlock; it never displays a guessed replacement address.
 
-Chat and tasks use finite request, duration and input/output limits. Local
-requests have no API-dollar allowance and report only verified token usage;
-unknown dispatched usage remains held without replay. This makes no claim about
-hardware or electricity costs. Stop, lock, revoke and restart retain the same
-credential and task boundaries. Local requests may allow up to 120 seconds;
-cloud request limits are unchanged. Optional bearer credentials are sent only
-to the explicitly bound endpoint.
+The private CLI command accepts `action: "add"`, `provider: "local"`, `server: "ollama"`, `"lmstudio"` or `"vllm"` and `passphrase`. Optional `endpoint` overrides the preset address; optional `key` is encrypted with it. Send JSON through `ai-connection --request-stdin`, never secret arguments. Server presets are valid only for local add/save. Replacing a connection revokes the old binding and requires explicit agent/task review.
 
-Local credentials use vault envelope version 6. Schema 27 preserves idle schema
-26 documents, revisions and existing credential bytes; paused recovery must
-finish before migration. Older readers refuse new authority. Ordinary builds
-still refuse local and cloud dispatch while activation is held. Tests use only
-in-process and controlled loopback HTTP(S) fixtures, not an installed model or a
-real provider account.
+| Server    | Default address             | Reviewed current model IDs                       |
+| --------- | --------------------------- | ------------------------------------------------ |
+| Ollama    | `http://127.0.0.1:11434/v1` | `gemma4:e2b`, `gemma4:e4b`                       |
+| LM Studio | `http://127.0.0.1:1234/v1`  | `google/gemma-4-e2b`, `google/gemma-4-e4b`       |
+| vLLM      | `http://127.0.0.1:8000/v1`  | `google/gemma-4-E2B-it`, `google/gemma-4-E4B-it` |
 
-The existing `node scripts/provider-models.mjs --check` and reviewed application
-path maintain the local registry alongside the three cloud registries. Source
-changes produce review proposals, never remote code or automatic model adoption.
-See [Ollama's Responses compatibility](https://docs.ollama.com/api/openai-compatibility)
-and the [current Gemma 4 models](https://ollama.com/library/gemma4/tags).
+Identifiers are not automatically aliased. Unavailable/older models remain unavailable; a newly observed Gemma generation invalidates older choices without switching saved profiles or erasing history. The existing `node scripts/provider-models.mjs --check` path records official source hashes and requires manual policy review for the differing server documentation formats; discovery cannot renew admission policy. A registry revision requires fresh review of affected saved permissions; original records/holds are preserved.
+
+Chat/tasks retain finite requests, duration and input/output limits, with no API-dollar allowance or claim about hardware/electricity cost. Optional bearer keys go only to the bound loopback endpoint. Stop, lock, revoke and restart preserve uncertainty holds and never replay dispatched work. Local deadlines remain 1–120 seconds; cloud limits are unchanged. Schema 27/v6 storage and migration boundaries are unchanged. Ordinary dispatch and all live features stay held. Controlled protocol/UI evidence does not claim installed-vendor runtime or real-VPS acceptance.
+
+Sources: [Ollama](https://docs.ollama.com/api/openai-compatibility), [LM Studio Responses](https://lmstudio.ai/docs/developer/openai-compat/responses), [LM Studio models](https://lmstudio.ai/docs/developer/openai-compat/models), [vLLM](https://docs.vllm.ai/en/latest/serving/online_serving/) and [Google Gemma](https://huggingface.co/google/gemma-4-E2B-it).
+
+## Google API sign-in
+
+Providers → Google retains **API key** and adds **Sign in** for the Gemini developer API. Select the Google Cloud quota **Project**, continue in an external browser, and finish with the private vault passphrase. Sign-in and model discovery never generate a response. The resulting account shares the reviewed Gemini 3.8 Flash model, agent assignment, Chat and finite task grants with the existing API-key adapter. It retains standard API allocation/billing; it is not a Gemini consumer subscription or a free Code Assist quota.
+
+Old Fased's `google-gemini-cli-auth` could extract an installed Gemini CLI client identity and call Code Assist. Current [Gemini CLI terms](https://geminicli.com/docs/resources/tos-privacy/) explicitly prohibit third-party use of the services powering that login. Fased does not extract installed CLI credentials, borrow that client registration or call `cloudcode-pa`. This implementation follows the documented [Gemini API OAuth](https://ai.google.dev/gemini-api/docs/oauth) and [Desktop OAuth](https://developers.google.com/identity/protocols/oauth2/native-app) paths instead.
+
+**Production prerequisite, not created or activated here:** an appropriately registered Fased Desktop OAuth application/consent configuration, supplied to the core through `FASED_GOOGLE_OAUTH_CLIENT_ID` and `FASED_GOOGLE_OAUTH_CLIENT_SECRET`, plus the owner's quota project with Generative Language API access and appropriate IAM/billing. No production client ID/secret is bundled. Missing registration disables Google sign-in; API-key setup remains separate. Standalone fixture mode selects an internal disposable client and signing fixture without reading production application credentials or contacting Google.
+
+Local sign-in uses an ephemeral `127.0.0.1` callback with state, nonce and S256 PKCE. Remote uses the same private loopback callback, requiring private SSH forwarding of that callback port before browser completion; the port is present in the authorization URL's `redirect_uri`. No public listener, deprecated out-of-band code flow, borrowed CLI identity or automatic tunnel setup is added. Local/Remote protocol fixtures pass; real Remote/native-browser and production-registration acceptance remain open.
+
+The shared v5 encrypted vault binds provider, mode, account reference and fixture/live class. Google OAuth has its own typed credential (`google-oauth`) and `oauth` account method; it never becomes ChatGPT plan access or a raw API-key import. Tokens, refresh token, application client secret and quota project stay encrypted. Only the account's access token and exact project reach the fixed Google API route; the sanitizing transport deliberately preserves `X-Goog-User-Project` only for this typed OAuth path. Refresh, reconnect and remote revocation use fixed Google OAuth endpoints; reconnect preserves the account/project/subject and explicit refresh revokes previous grants.
+
+An expiring access token may refresh in memory only while the account is unlocked or the exact current task grant permits that request. This does not extend unlock, scope, attempts, deadlines or budget; it never rewrites the encrypted vault. A rotated refresh token requires the explicit passphrase-protected Refresh operation. Expired/ungranted/signed-out accounts cannot refresh or fall back to an API key. Restart locks credentials and drops transient grants while preserving records, results, memory and holds. All ordinary live features remain disabled.
+
+## Kimi regions and billing
+
+Providers → Kimi offers **China · CNY** and **International · USD** as explicit separate API accounts. An existing mainland account stays on `api.moonshot.cn`; it is never changed into an international account. To use the reviewed USD path, add an international API account with its own key. The shared CLI accepts `provider: "moonshot-intl"` through private `ai-connection --request-stdin`; there is no arbitrary cloud endpoint override. Account setup refreshes models only and cannot queue generation.
+
+The international connector uses the official [`api.moonshot.ai/v1` contract](https://platform.kimi.ai/docs/api/chat), [authenticated model list](https://platform.kimi.ai/docs/api/list-models) and latest Kimi K3.1 Pro. Its internal model ID is `moonshot-intl/kimi-k3.1-pro`; only the wire strips the region namespace. Encrypted account identity, agent assignment, review/consent, Chat, finite task grants and result history keep that regional binding. A key/model/endpoint failure cannot fall back to the other region or account.
+
+**USD tariff reviewed 28 October 2026:** the [international pricing page](https://platform.kimi.ai/) lists $2 input, $0.20 cache hit and $10 output per million tokens, with $2 cache writes for the reviewed five-minute cache. The connector explicitly pins `prompt_cache_options` to `implicit` / `5m` and reasoning effort to `low`. Under the [cache contract](https://platform.kimi.ai/docs/guide/context-caching), uncached input, cache reads and cache writes are mutually exclusive portions of total input. Since the five-minute write price equals the input price, existing integer USD accounting charges the noncached portion once at the input rate and the read portion at the cache rate; it does not add a second input charge. Missing, negative or overlapping cache counters retain the unknown usage hold. No FX conversion or synthetic zero-cost subscription allowance is used.
+
+The original mainland CNY model/tariff remains inspectable but unselectable for execution in the USD-only budget engine. Its keys, selected model, drafts, completed results and holds remain intact. Native-CNY accounting is not implemented by this international route. Provider maintenance includes international model, tariff, cache, discovery and billing sources; review cannot change currency/region, silently renew policy or enable inference. Kimi memberships/Code subscriptions and browser sign-in are distinct from this API-key package. Live use remains disabled.
+
+## Qwen authentication
+
+Qwen's current official [authentication guide](https://github.com/QwenLM/qwen-code/blob/main/docs/users/configuration/auth.md) and [quickstart](https://github.com/QwenLM/qwen-code/blob/main/docs/users/quickstart.md) mark portal OAuth discontinued on April 15, 2026. Old Fased's `qwen-portal-auth` plugin is a legacy reference, not an available new-account sign-in method. Fased therefore shows the supported API-key method for Qwen; explicit legacy sign-in requests return the reason without exchanging tokens or changing accounts, drafts or permissions.
+
+The Qwen editor identifies **ModelStudio · Singapore**. Existing encrypted accounts retain that provider, host and billing identity. Account refresh and pre-generation admission use ModelStudio's documented [native model listing](https://www.alibabacloud.com/help/en/model-studio/list-models), not an assumed OpenAI `/models` route: authenticated `GET /api/v1/models?page_no=1&page_size=100&providers=qwen`. Up to four complete, consistent pages are accepted; errors, duplicate IDs, incomplete pages, changing totals and larger catalogs fail closed. Offline notices disable that model. The account list remains intersected with the compiled latest-only model/price policy; discovery does not grant new model or spending authority, and adding an account cannot generate a response.
+
+QwenCloud is a separate API product with region/workspace-specific [keys](https://docs.qwencloud.com/developer-guides/administration/api-keys) and [endpoints](https://docs.qwencloud.com/developer-guides/getting-started/regions). Its generation routes are documented, but an authenticated account-model discovery contract was not established in this package. Fased does not silently migrate ModelStudio accounts, expose an unverified QwenCloud route, or infer a key's region from the interface language. Other regions require separately reviewed routes, models and tariffs.
+
+**Subscription exception, reviewed 28 October 2026:** the detailed terms for Token Plan [Personal](https://docs.qwencloud.com/token-plan/personal/token-plan-personal-overview) and [Team](https://docs.qwencloud.com/token-plan/team/token-plan-team-overview) restrict use to interactive compatible tools and prohibit automated scripts/application backends. ModelStudio [Coding Plan](https://www.alibabacloud.com/help/en/model-studio/coding-plan) likewise prohibits noninteractive automation. These products are not offered for Fased's backend/unattended tasks. Their `sk-sp-` keys are rejected before account creation/replacement, and never transmitted from older saved records through the standard API route. Refusal preserves encrypted records and drafts; there is no pay-as-you-go fallback. Broad compatibility statements on overview pages do not override these specific terms.
+
+The existing provider maintenance proposal now includes the native discovery and subscription terms as official sources alongside authentication/model/protocol/pricing sources. Changes require reviewed policy work, never automatic activation. Live inference stays disabled.
 
 ## ChatGPT sign-in
 
@@ -135,11 +152,7 @@ Provider route review, 27 October 2026:
   prohibit collecting/intermediating Claude subscription tokens in a third-party
   application. Keep API keys here. Running its unmodified Claude Code binary is
   a separate integration, not the old app's direct OAuth-token route.
-- **xAI:** the old Fased OAuth route reused a Grok CLI client registration. The
-  [official Grok CLI authentication source](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md)
-  establishes that CLI's browser/device flow, not a Fased client registration.
-  Keep API keys until Fased's own supported registration/API scope is established;
-  do not borrow another application's client ID.
+- **xAI — sign-in BLOCKED, source review 28 October 2026:** old Fased's `src/commands/xai-oauth.ts` defaults to a Grok CLI client identifier and CLI-specific scope. The [official CLI authentication guide](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md) describes that application's browser/device flows. The [enterprise documentation](https://docs.x.ai/build/enterprise) distinguishes OAuth inference on `cli-chat-proxy.grok.com` from the API-key path on `api.x.ai`. The public [issuer metadata](https://auth.x.ai/.well-known/openid-configuration) advertises PKCE, device authorization and ES256 ID tokens, but no dynamic client-registration endpoint. It does not establish a supported Fased client, permitted inference route, account model-discovery contract, entitlement/accounting or unattended-task rights. This is an unresolved integration prerequisite, not a claim that xAI forbids every third-party client. No CLI identity/token import, proxy impersonation, API-key substitution or simulated working login is added. Explicit `sign-in-start` for xAI returns that reason before exchange/attempt creation, preserving keys, records, drafts and unrelated pending logins. The existing API-key → current model → agent → Chat/tasks route is retained; the UI offers only its implemented API method. Revisit sign-in when xAI provides the Fased registration and associated API/proxy/usage contract, not after another fixture milestone or real API probe.
 
 The CLI uses the same authenticated `ai-connection --request-stdin` interface:
 `sign-in-start` takes `provider:"openai"`, optional `ref`/`name` and `remote`;
@@ -320,3 +333,35 @@ records prevent rearming the one-time pilot, including zero-cost failed attempts
 Normal installations retain their existing behavior and closed live gate.
 
 </details>
+
+## Kimi Code membership
+
+Providers → Kimi → **Code · Interactive** adds a separate membership API-key account. Use a Code console `sk-kimi-` key; Platform API keys and Code keys are not interchangeable. The private CLI uses `provider: "kimi-code"` and `credentialMode: "kimi-code"` for API keys, through the existing stdin credential command. Fixture builds continue using disposable test credentials. No account setup generates a response.
+
+The connector pins `https://api.kimi.ai/coding/v1`, sends its true `Fased` client identity and discovers account models through `/models`. Only current reviewed `kimi-code/k3.1-pro` and `kimi-code/k3.1-pro-highspeed` are selectable; wire IDs omit the namespace. The application uses a conservative 256K context ceiling and its existing finite reply token/time/request limits, with thinking enabled at `low`. It never substitutes older aliases, a different region, Platform API or another account.
+
+[Kimi's official third-party guide](https://www.kimi.com/code/docs/en/third-party-tools/hermes.html) documents the membership-key Chat Completions route. [Current guidelines](https://www.kimi.com/en/help/kimi-code/community-guidelines) restrict subscriptions to personal interactive use and exclude non-interactive automation and reselling access. Therefore this account supports explicitly permitted **Chat**, but not scheduled/background AI tasks or task credential grants. The same task engine enforces that boundary, including direct CLI and dispatch paths; Providers hides Background access. Choose a separately configured Platform API account for unattended tasks. Fased never switches accounts automatically.
+
+Membership requests consume the user's subscription quota. No API dollar tariff or remaining-quota figure is invented. Verified token usage, finite reply permission, uncertain-usage holds, lock/reconnect and restart behavior reuse the shared core and encrypted v4 account envelope. Existing Platform accounts, drafts and journals are preserved. Model/terms updates use the existing provider review command and require manual policy review. Live requests remain disabled; local fixture verification is not vendor/live acceptance.
+
+## Anthropic API workspaces
+
+Providers → Anthropic keeps **API key** authentication. Workspace-scoped keys need no extra setting. For a personal or service-account key that is not workspace-scoped, open **Options → Workspace** and enter its `wrkspc_…` ID from Claude Console. The private CLI uses `workspace` on the existing `ai-connection --request-stdin` add/save command. Setup only discovers models; it cannot generate a response.
+
+The [current official API-key contract](https://platform.claude.com/docs/en/manage-claude/authentication) requires `anthropic-workspace-id` for unscoped keys. Fased encrypts that ID together with the key in a version-7 account envelope; the associated data binds instance/provider/mode/reference. Old v4 workspace-scoped accounts retain their bytes. A v7 replacement requires explicit workspace selection and creates a new reference, revoking old authority. Locked accounts conceal the workspace; protected unlock/reconnect restores it. Older readers refuse the new envelope version.
+
+The same bound workspace travels through authenticated model discovery, token admission, Chat and separately granted Tasks. The sanitizer drops ambient workspace headers and forwards only the credential-derived private binding. No workspace discovery/admin permission, different workspace, model, key or API region is silently substituted. Existing model/tariff/consent/result/memory rules remain authoritative. Explicit API-key expiry/revocation failures need reconnect; the app does not retry or mint a replacement key.
+
+Claude subscription OAuth/setup tokens are excluded under [Anthropic's current credential rules](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use). API-key entry refuses the recognizable subscription-token format and cannot import a typed credential JSON. Sign-in attempts explain the API-key alternative without touching accounts, pending sign-ins or work. WIF/App Attest and hosted unmodified Claude Code are separate enterprise/native integrations, not required additions to this retail self-hosted provider package. All live execution remains disabled.
+
+## Ollama Cloud access
+
+**Ollama Cloud → API key** uses the documented fixed `https://ollama.com/v1` endpoint without installing Ollama. Private CLI setup uses `provider: "ollama-cloud"`; the same encrypted v4 account, model review, configured agent, Chat and finite task grants are reused. Selectable direct-cloud model: current `ollama-cloud/gemma4:31b`. Namespace removal happens only on the wire; local/server accounts cannot be silently changed into Cloud accounts.
+
+For server-mediated access, sign into the user's own Ollama installation through its official app or `ollama signin`, and make its `gemma4:cloud` alias available. Connect that loopback server through the existing **Local server → Ollama** preset. Fased admits the cloud alias only when the server advertises it; it never reads/copies Ollama's login files, tokens or CLI client identity. The existing stateless Responses adapter already avoids server-enforced schema options, so the same account/agent/Chat/task engine handles the advertised cloud alias. Actual vendor login/installed-server acceptance is not claimed by fixtures.
+
+The [official cloud guide](https://docs.ollama.com/cloud) distinguishes direct key names from server cloud aliases, and [authentication](https://docs.ollama.com/api/authentication) leaves server sign-in with Ollama. [Cloud structured outputs are unsupported](https://docs.ollama.com/capabilities/structured-outputs). Direct Chat Completions therefore omits `response_format`, and both routes validate prompted output locally before saving answers/cards. No tools, retries or model/account fallback are granted. Malformed/incomplete use keeps the existing hold.
+
+Usage is subscription quota, not an app-invented API dollar price or an asserted free service. Finite time/token/request/task allowances and reported-token reconciliation remain mandatory. Both direct and server cloud routes are labelled Ollama Cloud in usage/failure inspection. Source/model updates use the existing manual reviewed-provider update path. Fixtures verify the supported transports and consumers; all real inference remains disabled.
+
+Unmetered-provider rejection or uncertain usage pauses the shared account across profiles, invalidates existing Chat permissions and revokes task credential grants. Model refresh does not resume it. Explicit protected unlock clears the account pause but requires fresh permissions; uncertain request records and encrypted credentials remain intact.

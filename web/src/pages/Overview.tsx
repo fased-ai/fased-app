@@ -142,6 +142,12 @@ export function Overview() {
     open("agents/tasks");
   }
   function body(id: WidgetID) {
+    if (
+      core.mode === "ready" &&
+      !view &&
+      ["agents", "tasks", "news", "activity"].includes(id)
+    )
+      return null;
     if (id === "agents")
       return (
         <div className="dashboard-rows">
@@ -263,13 +269,11 @@ export function Overview() {
               <button
                 className="dashboard-row"
                 key={n.id}
-                onClick={() =>
-                  n.runId
-                    ? task(
-                        view.runs.find((r) => r.id === n.runId)?.taskId || "",
-                      )
-                    : open("activity")
-                }
+                onClick={() => {
+                  const run = view.runs.find((r) => r.id === n.runId);
+                  if (run) task(run.taskId);
+                  else open("activity");
+                }}
               >
                 <span className="dashboard-copy">
                   <strong>{n.text}</strong>
@@ -345,6 +349,22 @@ export function Overview() {
           </button>
         </div>
       </div>
+      {core.mode === "ready" && (agents.error || !view) && (
+        <div
+          className="dashboard-status"
+          role={agents.error ? "alert" : "status"}
+        >
+          <span>{agents.error || t("Loading…")}</span>
+          {agents.error && (
+            <button
+              className="secondary"
+              onClick={() => void agents.refresh().catch(() => {})}
+            >
+              {t("Reload")}
+            </button>
+          )}
+        </div>
+      )}
       {storageError && (
         <p role="status">{t("Layout cannot be saved in this browser.")}</p>
       )}

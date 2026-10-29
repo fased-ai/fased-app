@@ -78,6 +78,9 @@ func chatModelPolicy(model string) *OpenAIModelPolicy {
 }
 func chatModelPolicyForMethod(model, method string) *OpenAIModelPolicy {
 	p := chatModelPolicy(model)
+	if method == "oauth" && p != nil && policyProvider(p) == "google" {
+		return p
+	}
 	if method == "" || method == "api-key" || method == "local" && localPolicy(p) {
 		return p
 	}

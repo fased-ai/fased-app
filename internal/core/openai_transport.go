@@ -69,8 +69,27 @@ func (t *openAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	// Do not inherit cookies, routing headers, idempotency keys or ambient auth.
 	copy.Header = make(http.Header)
 	copy.Header.Set(header, auth[0])
+	if provider == "google" && r.Context().Value(providerMethodContextKey{}) == "oauth" {
+		project := r.Header.Values("X-Goog-User-Project")
+		if len(project) != 1 || !validGoogleProject(project[0]) {
+			cancel()
+			return nil, errors.New("Google quota project required")
+		}
+		copy.Header.Set("X-Goog-User-Project", project[0])
+	}
 	if provider == "anthropic" {
+		if workspace, ok := r.Context().Value(anthropicWorkspaceContextKey{}).(string); ok {
+			values := r.Header.Values("anthropic-workspace-id")
+			if !validAnthropicWorkspace(workspace) || len(values) != 1 || values[0] != workspace {
+				cancel()
+				return nil, errors.New("Anthropic workspace binding changed")
+			}
+			copy.Header.Set("anthropic-workspace-id", workspace)
+		}
 		copy.Header.Set("anthropic-version", "2026-10-21")
+	}
+	if provider == "kimi-code" {
+		copy.Header.Set("User-Agent", "Fased")
 	}
 	copy.Header.Set("Content-Type", "application/json")
 	copy.Header.Set("Accept", "application/json, text/event-stream")

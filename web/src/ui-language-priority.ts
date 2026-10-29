@@ -1,5 +1,65 @@
 // Product UI vocabulary; records and protocol identifiers remain unchanged.
 export const priorityCopy = {
+  "Workspace (optional)": [
+    "Рабочая область (необязательно)",
+    "Espacio de trabajo (opcional)",
+    "工作区（可选）",
+    "워크스페이스 (선택 사항)",
+  ],
+  "Code · Interactive": [
+    "Code · Чат",
+    "Code · Interactivo",
+    "Code · 交互式",
+    "Code · 대화형",
+  ],
+  "Chat only. Choose an API account for tasks.": [
+    "Только чат. Для задач выберите API-аккаунт.",
+    "Solo chat. Elige una cuenta API para tareas.",
+    "仅限聊天。请为任务选择 API 账户。",
+    "채팅 전용입니다. 작업에는 API 계정을 선택하세요.",
+  ],
+  Project: ["Проект", "Proyecto", "项目", "프로젝트"],
+  "Continue with Google": [
+    "Продолжить с Google",
+    "Continuar con Google",
+    "使用 Google 继续",
+    "Google로 계속",
+  ],
+  "Google Cloud project": [
+    "Проект Google Cloud",
+    "Proyecto de Google Cloud",
+    "Google Cloud 项目",
+    "Google Cloud 프로젝트",
+  ],
+  Region: ["Регион", "Región", "地区", "지역"],
+  "China · CNY": ["Китай · CNY", "China · CNY", "中国 · CNY", "중국 · CNY"],
+  "International · USD": [
+    "Международный · USD",
+    "Internacional · USD",
+    "国际 · USD",
+    "국제 · USD",
+  ],
+  "ModelStudio · Singapore": [
+    "ModelStudio · Сингапур",
+    "ModelStudio · Singapur",
+    "ModelStudio · 新加坡",
+    "ModelStudio · 싱가포르",
+  ],
+  Code: ["Код", "Código", "授权码", "인증 코드"],
+  "Pricing unavailable": [
+    "Цена недоступна",
+    "Precio no disponible",
+    "价格不可用",
+    "요금 확인 필요",
+  ],
+  "Add account": ["Добавить аккаунт", "Añadir cuenta", "添加账户", "계정 추가"],
+  "Search providers": [
+    "Поиск провайдеров",
+    "Buscar proveedores",
+    "搜索提供商",
+    "제공업체 검색",
+  ],
+  Server: ["Сервер", "Servidor", "服务器", "서버"],
   "Local server": [
     "Локальный сервер",
     "Servidor local",

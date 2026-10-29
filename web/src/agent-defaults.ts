@@ -1,3 +1,4 @@
+import { isProvider } from "./state";
 type AgentDefaults = { provider: string; model: string };
 type Access = {
   ref?: string;
@@ -17,7 +18,8 @@ export function agentReplyDefaults(agent: AgentDefaults, access: Access) {
     connectionRef: agent.provider !== "none" ? access?.ref || "" : "",
     model: agent.model,
     ready:
-      ["openai", "anthropic", "xai", "local"].includes(agent.provider) &&
+      isProvider(agent.provider) &&
+      agent.provider !== "none" &&
       (access?.provider || "openai") === agent.provider &&
       !!agent.model &&
       !!access?.ref &&
@@ -32,6 +34,8 @@ export function modelForProviderChange(
   provider: string,
   admittedModel?: string,
 ) {
+  if (provider === "local" && admittedModel?.startsWith("google/gemma-"))
+    return admittedModel;
   const prefix =
     provider === "openai"
       ? "gpt-"
@@ -39,8 +43,24 @@ export function modelForProviderChange(
         ? "claude-"
         : provider === "xai"
           ? "grok-"
-          : provider === "local"
-            ? "gemma"
-            : "";
+          : provider === "ollama-cloud"
+            ? "ollama-cloud/"
+            : provider === "kimi-code"
+              ? "kimi-code/"
+              : provider === "moonshot-intl"
+                ? "moonshot-intl/kimi-"
+                : provider === "moonshot"
+                  ? "kimi-"
+                  : provider === "google"
+                    ? "gemini-"
+                    : provider === "openrouter"
+                      ? "google/"
+                      : provider === "qwen"
+                        ? "qwen"
+                        : provider === "opencode"
+                          ? "opencode/"
+                          : provider === "local"
+                            ? "gemma"
+                            : "";
   return prefix && admittedModel?.startsWith(prefix) ? admittedModel : "";
 }

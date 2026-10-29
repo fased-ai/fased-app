@@ -184,7 +184,7 @@ func (s *Store) changeTaskAccess(ctx context.Context, tx *sql.Tx, c AIConnection
 	return s.aiConnectionLocked(c.Ref)
 }
 func (s *Store) taskAccessMatches(q AgentAIRequest, a *TaskAccessAllowance, allocated bool, state *providerCredential) bool {
-	if !s.taskAccessCurrent(a, state) || q.TaskID == "" || q.ProfileID != a.ProfileID || q.Model != a.Model || q.ConnectionRef != a.ConnectionRef || q.Limits.MaxInputTokens > a.Limits.MaxInputTokens || q.Limits.MaxOutputTokens > a.Limits.MaxOutputTokens || q.Limits.DeadlineSeconds > a.Limits.DeadlineSeconds || q.Limits.BudgetMicrousd > a.Limits.BudgetMicrousd {
+	if kimiCodePolicy(q.Policy) || !s.taskAccessCurrent(a, state) || q.TaskID == "" || q.ProfileID != a.ProfileID || q.Model != a.Model || q.ConnectionRef != a.ConnectionRef || q.Limits.MaxInputTokens > a.Limits.MaxInputTokens || q.Limits.MaxOutputTokens > a.Limits.MaxOutputTokens || q.Limits.DeadlineSeconds > a.Limits.DeadlineSeconds || q.Limits.BudgetMicrousd > a.Limits.BudgetMicrousd {
 		return false
 	}
 	if allocated {
