@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fased Release Manager"
+  short_description: "Route all Fased work efficiently and safely"
+  default_prompt: "Use $fased-release-manager to resume the active checkpoint with focused verification and authorized protected Git delivery; load lifecycle or release details only when needed."

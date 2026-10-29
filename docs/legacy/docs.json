@@ -1,0 +1,975 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "Fased",
+  "description": "Your guide to installing and using Fased, a self-hosted personal agent.",
+  "theme": "mint",
+  "modeToggle": {
+    "default": "dark"
+  },
+  "icons": {
+    "library": "lucide"
+  },
+  "logo": {
+    "light": "/assets/fased-mark-color.svg",
+    "dark": "/assets/fased-mark-color.svg"
+  },
+  "fonts": {
+    "body": {
+      "family": "Fragment Mono"
+    },
+    "heading": {
+      "family": "DM Sans"
+    }
+  },
+  "favicon": "/assets/fased-mark-color.svg",
+  "colors": {
+    "primary": "#FF5A36",
+    "dark": "#FF5A36",
+    "light": "#FF8A6B"
+  },
+  "styling": {
+    "codeblocks": {
+      "theme": {
+        "dark": "min-dark",
+        "light": "min-light"
+      }
+    }
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "Fased Agent",
+        "href": "https://fased.ai"
+      },
+      {
+        "label": "GitHub",
+        "href": "https://github.com/fased-ai/fased"
+      }
+    ]
+  },
+  "redirects": [
+    {
+      "source": "/official-links",
+      "destination": "/links"
+    },
+    {
+      "source": "/link-hub",
+      "destination": "/links"
+    },
+    {
+      "source": "/socials",
+      "destination": "/links"
+    },
+    {
+      "source": "/messages",
+      "destination": "/concepts/messages"
+    },
+    {
+      "source": "/context",
+      "destination": "/concepts/context"
+    },
+    {
+      "source": "/compaction",
+      "destination": "/concepts/compaction"
+    },
+    {
+      "source": "/cron",
+      "destination": "/cron-jobs"
+    },
+    {
+      "source": "/brave-search",
+      "destination": "/tools/web#getting-a-brave-api-key"
+    },
+    {
+      "source": "/perplexity",
+      "destination": "/tools/web#using-perplexity-direct-or-via-openrouter"
+    },
+    {
+      "source": "/date-time",
+      "destination": "/concepts/date-time"
+    },
+    {
+      "source": "/logging",
+      "destination": "/gateway/logging"
+    },
+    {
+      "source": "/network",
+      "destination": "/gateway/network"
+    },
+    {
+      "source": "/onboarding-operations-guide",
+      "destination": "/start/onboarding-operations-guide"
+    },
+    {
+      "source": "/pi-dev",
+      "destination": "/reference/pi-development"
+    },
+    {
+      "source": "/pi",
+      "destination": "/reference/pi-integration"
+    },
+    {
+      "source": "/prose",
+      "destination": "/plugins/open-prose"
+    },
+    {
+      "source": "/security-baseline-checklist",
+      "destination": "/security/baseline-checklist"
+    },
+    {
+      "source": "/tts",
+      "destination": "/tools/tts"
+    },
+    {
+      "source": "/vps",
+      "destination": "/install/vps"
+    },
+    {
+      "source": "/ci",
+      "destination": "/reference/ci"
+    },
+    {
+      "source": "/minimax",
+      "destination": "/providers/minimax"
+    },
+    {
+      "source": "/xiaomi",
+      "destination": "/providers/xiaomi"
+    },
+    {
+      "source": "/openai",
+      "destination": "/providers/openai"
+    },
+    {
+      "source": "/openai/",
+      "destination": "/providers/openai"
+    },
+    {
+      "source": "/anthropic",
+      "destination": "/providers/anthropic"
+    },
+    {
+      "source": "/anthropic/",
+      "destination": "/providers/anthropic"
+    },
+    {
+      "source": "/moonshot",
+      "destination": "/providers/moonshot"
+    },
+    {
+      "source": "/mistral",
+      "destination": "/providers/mistral"
+    },
+    {
+      "source": "/openrouter",
+      "destination": "/providers/openrouter"
+    },
+    {
+      "source": "/opencode",
+      "destination": "/providers/opencode"
+    },
+    {
+      "source": "/qianfan",
+      "destination": "/providers/qianfan"
+    },
+    {
+      "source": "/mattermost",
+      "destination": "/channels/mattermost"
+    },
+    {
+      "source": "/line",
+      "destination": "/channels/line"
+    },
+    {
+      "source": "/glm",
+      "destination": "/providers/zai"
+    },
+    {
+      "source": "/providers/glm",
+      "destination": "/providers/zai"
+    },
+    {
+      "source": "/providers/deepgram",
+      "destination": "/nodes/audio"
+    },
+    {
+      "source": "/providers/bedrock",
+      "destination": "/concepts/model-providers"
+    },
+    {
+      "source": "/zai",
+      "destination": "/providers/zai"
+    },
+    {
+      "source": "/message",
+      "destination": "/cli/message"
+    },
+    {
+      "source": "/providers/discord",
+      "destination": "/channels/discord"
+    },
+    {
+      "source": "/providers/googlechat",
+      "destination": "/channels/googlechat"
+    },
+    {
+      "source": "/providers/grammy",
+      "destination": "/channels/telegram"
+    },
+    {
+      "source": "/providers/imessage",
+      "destination": "/channels/imessage"
+    },
+    {
+      "source": "/providers/location",
+      "destination": "/channels/location"
+    },
+    {
+      "source": "/providers/mattermost",
+      "destination": "/channels/mattermost"
+    },
+    {
+      "source": "/providers/msteams",
+      "destination": "/channels/msteams"
+    },
+    {
+      "source": "/providers/line",
+      "destination": "/channels/line"
+    },
+    {
+      "source": "/providers/signal",
+      "destination": "/channels/signal"
+    },
+    {
+      "source": "/providers/slack",
+      "destination": "/channels/slack"
+    },
+    {
+      "source": "/providers/telegram",
+      "destination": "/channels/telegram"
+    },
+    {
+      "source": "/providers/troubleshooting",
+      "destination": "/channels/troubleshooting"
+    },
+    {
+      "source": "/providers/zalo",
+      "destination": "/channels/zalo"
+    },
+    {
+      "source": "/providers/whatsapp",
+      "destination": "/channels/whatsapp"
+    },
+    {
+      "source": "/sandbox",
+      "destination": "/cli/sandbox"
+    },
+    {
+      "source": "/sandboxing",
+      "destination": "/gateway/sandboxing"
+    },
+    {
+      "source": "/AGENTS.default",
+      "destination": "/reference/AGENTS.default"
+    },
+    {
+      "source": "/RELEASING",
+      "destination": "/reference/RELEASING"
+    },
+    {
+      "source": "/RELEASE_NOTES_TEMPLATE",
+      "destination": "/reference/release-notes-template"
+    },
+    {
+      "source": "/DISCLAIMER",
+      "destination": "/legal/disclaimer"
+    },
+    {
+      "source": "/PLUGIN_LICENSE_POLICY",
+      "destination": "/reference/plugin-license-policy"
+    },
+    {
+      "source": "/VISION",
+      "destination": "/reference/vision"
+    },
+    {
+      "source": "/agent",
+      "destination": "/concepts/agent"
+    },
+    {
+      "source": "/agent-loop",
+      "destination": "/concepts/agent-loop"
+    },
+    {
+      "source": "/agent-send",
+      "destination": "/tools/agent-send"
+    },
+    {
+      "source": "/agent-workspace",
+      "destination": "/concepts/agent-workspace"
+    },
+    {
+      "source": "/android",
+      "destination": "/platforms/android"
+    },
+    {
+      "source": "/architecture",
+      "destination": "/concepts/architecture"
+    },
+    {
+      "source": "/audio",
+      "destination": "/nodes/audio"
+    },
+    {
+      "source": "/background-process",
+      "destination": "/gateway/background-process"
+    },
+    {
+      "source": "/bash",
+      "destination": "/tools/exec"
+    },
+    {
+      "source": "/tools/bash",
+      "destination": "/tools/exec"
+    },
+    {
+      "source": "/bonjour",
+      "destination": "/gateway/bonjour"
+    },
+    {
+      "source": "/browser",
+      "destination": "/tools/browser"
+    },
+    {
+      "source": "/browser-linux-troubleshooting",
+      "destination": "/tools/browser-linux-troubleshooting"
+    },
+    {
+      "source": "/bun",
+      "destination": "/install/bun"
+    },
+    {
+      "source": "/auth-monitoring",
+      "destination": "/automation/auth-monitoring"
+    },
+    {
+      "source": "/camera",
+      "destination": "/nodes/camera"
+    },
+    {
+      "source": "/clawd",
+      "destination": "/start/fased"
+    },
+    {
+      "source": "/start/clawd",
+      "destination": "/start/fased"
+    },
+    {
+      "source": "/start/clawd/",
+      "destination": "/start/fased"
+    },
+    {
+      "source": "/start/pairing",
+      "destination": "/channels/pairing"
+    },
+    {
+      "source": "/clawhub",
+      "destination": "/tools/clawhub"
+    },
+    {
+      "source": "/clawdhub",
+      "destination": "/tools/clawhub"
+    },
+    {
+      "source": "/tools/clawdhub",
+      "destination": "/tools/clawhub"
+    },
+    {
+      "source": "/configuration",
+      "destination": "/gateway/configuration"
+    },
+    {
+      "source": "/control-ui",
+      "destination": "/web/control-ui"
+    },
+    {
+      "source": "/cron-jobs",
+      "destination": "/automation/cron-jobs"
+    },
+    {
+      "source": "/cron-vs-heartbeat",
+      "destination": "/automation/cron-vs-heartbeat"
+    },
+    {
+      "source": "/dashboard",
+      "destination": "/web/dashboard"
+    },
+    {
+      "source": "/device-models",
+      "destination": "/reference/device-models"
+    },
+    {
+      "source": "/discord",
+      "destination": "/channels/discord"
+    },
+    {
+      "source": "/discovery",
+      "destination": "/gateway/discovery"
+    },
+    {
+      "source": "/docker",
+      "destination": "/install/docker"
+    },
+    {
+      "source": "/podman",
+      "destination": "/install/podman"
+    },
+    {
+      "source": "/doctor",
+      "destination": "/gateway/doctor"
+    },
+    {
+      "source": "/elevated",
+      "destination": "/tools/elevated"
+    },
+    {
+      "source": "/faq",
+      "destination": "/help/faq"
+    },
+    {
+      "source": "/gateway-lock",
+      "destination": "/gateway/gateway-lock"
+    },
+    {
+      "source": "/getting-started",
+      "destination": "/start/getting-started"
+    },
+    {
+      "source": "/quickstart",
+      "destination": "/start/getting-started"
+    },
+    {
+      "source": "/plugins/crypto/wallet-embedded-keystore-vps",
+      "destination": "/plugins/crypto/wallet-self-hosted-vps"
+    },
+    {
+      "source": "/start/quickstart",
+      "destination": "/start/getting-started"
+    },
+    {
+      "source": "/gmail-pubsub",
+      "destination": "/automation/gmail-pubsub"
+    },
+    {
+      "source": "/grammy",
+      "destination": "/channels/telegram"
+    },
+    {
+      "source": "/channels/grammy",
+      "destination": "/channels/telegram"
+    },
+    {
+      "source": "/group-messages",
+      "destination": "/channels/group-messages"
+    },
+    {
+      "source": "/groups",
+      "destination": "/channels/groups"
+    },
+    {
+      "source": "/health",
+      "destination": "/gateway/health"
+    },
+    {
+      "source": "/heartbeat",
+      "destination": "/gateway/heartbeat"
+    },
+    {
+      "source": "/hubs",
+      "destination": "/start/hubs"
+    },
+    {
+      "source": "/images",
+      "destination": "/nodes/images"
+    },
+    {
+      "source": "/imessage",
+      "destination": "/channels/imessage"
+    },
+    {
+      "source": "/ios",
+      "destination": "/platforms/ios"
+    },
+    {
+      "source": "/linux",
+      "destination": "/platforms/linux"
+    },
+    {
+      "source": "/location",
+      "destination": "/channels/location"
+    },
+    {
+      "source": "/location-command",
+      "destination": "/nodes/location-command"
+    },
+    {
+      "source": "/mac/bun",
+      "destination": "/platforms/mac/bundled-gateway"
+    },
+    {
+      "source": "/platforms/mac/bun",
+      "destination": "/platforms/mac/bundled-gateway"
+    },
+    {
+      "source": "/mac/canvas",
+      "destination": "/platforms/mac/canvas"
+    },
+    {
+      "source": "/mac/child-process",
+      "destination": "/platforms/mac/child-process"
+    },
+    {
+      "source": "/mac/dev-setup",
+      "destination": "/platforms/mac/dev-setup"
+    },
+    {
+      "source": "/mac/health",
+      "destination": "/platforms/mac/health"
+    },
+    {
+      "source": "/mac/icon",
+      "destination": "/platforms/mac/icon"
+    },
+    {
+      "source": "/mac/logging",
+      "destination": "/platforms/mac/logging"
+    },
+    {
+      "source": "/mac/menu-bar",
+      "destination": "/platforms/mac/menu-bar"
+    },
+    {
+      "source": "/mac/peekaboo",
+      "destination": "/platforms/mac/peekaboo"
+    },
+    {
+      "source": "/mac/permissions",
+      "destination": "/platforms/mac/permissions"
+    },
+    {
+      "source": "/mac/release",
+      "destination": "/platforms/mac/release"
+    },
+    {
+      "source": "/mac/remote",
+      "destination": "/platforms/mac/remote"
+    },
+    {
+      "source": "/mac/signing",
+      "destination": "/platforms/mac/signing"
+    },
+    {
+      "source": "/mac/skills",
+      "destination": "/platforms/mac/skills"
+    },
+    {
+      "source": "/mac/voice-overlay",
+      "destination": "/platforms/mac/voice-overlay"
+    },
+    {
+      "source": "/mac/voicewake",
+      "destination": "/platforms/mac/voicewake"
+    },
+    {
+      "source": "/mac/webchat",
+      "destination": "/platforms/mac/webchat"
+    },
+    {
+      "source": "/mac/xpc",
+      "destination": "/platforms/mac/xpc"
+    },
+    {
+      "source": "/macos",
+      "destination": "/platforms/macos"
+    },
+    {
+      "source": "/model-failover",
+      "destination": "/concepts/model-failover"
+    },
+    {
+      "source": "/model",
+      "destination": "/models"
+    },
+    {
+      "source": "/model/",
+      "destination": "/models"
+    },
+    {
+      "source": "/models",
+      "destination": "/concepts/models"
+    },
+    {
+      "source": "/multi-agent",
+      "destination": "/concepts/multi-agent"
+    },
+    {
+      "source": "/nix",
+      "destination": "/install/nix"
+    },
+    {
+      "source": "/onboarding",
+      "destination": "/start/onboarding"
+    },
+    {
+      "source": "/onboarding-config-protocol",
+      "destination": "/start/onboarding"
+    },
+    {
+      "source": "/pairing",
+      "destination": "/channels/pairing"
+    },
+    {
+      "source": "/experiments/plans/cron-add-hardening",
+      "destination": "/automation/cron-jobs"
+    },
+    {
+      "source": "/experiments/plans/group-policy-hardening",
+      "destination": "/channels/groups"
+    },
+    {
+      "source": "/poll",
+      "destination": "/automation/poll"
+    },
+    {
+      "source": "/presence",
+      "destination": "/concepts/presence"
+    },
+    {
+      "source": "/proposals/model-config",
+      "destination": "/concepts/models"
+    },
+    {
+      "source": "/provider-routing",
+      "destination": "/channels/channel-routing"
+    },
+    {
+      "source": "/concepts/provider-routing",
+      "destination": "/channels/channel-routing"
+    },
+    {
+      "source": "/queue",
+      "destination": "/concepts/queue"
+    },
+    {
+      "source": "/remote",
+      "destination": "/gateway/remote"
+    },
+    {
+      "source": "/remote-gateway-readme",
+      "destination": "/gateway/remote-gateway-readme"
+    },
+    {
+      "source": "/research/memory",
+      "destination": "/concepts/memory"
+    },
+    {
+      "source": "/rpc",
+      "destination": "/reference/rpc"
+    },
+    {
+      "source": "/session",
+      "destination": "/concepts/session"
+    },
+    {
+      "source": "/session-tool",
+      "destination": "/concepts/session-tool"
+    },
+    {
+      "source": "/sessions",
+      "destination": "/concepts/session"
+    },
+    {
+      "source": "/concepts/sessions",
+      "destination": "/concepts/session"
+    },
+    {
+      "source": "/setup",
+      "destination": "/start/setup"
+    },
+    {
+      "source": "/signal",
+      "destination": "/channels/signal"
+    },
+    {
+      "source": "/skills",
+      "destination": "/tools/skills"
+    },
+    {
+      "source": "/skills-config",
+      "destination": "/tools/skills-config"
+    },
+    {
+      "source": "/slack",
+      "destination": "/channels/slack"
+    },
+    {
+      "source": "/slash-commands",
+      "destination": "/tools/slash-commands"
+    },
+    {
+      "source": "/subagents",
+      "destination": "/tools/subagents"
+    },
+    {
+      "source": "/tailscale",
+      "destination": "/gateway/tailscale"
+    },
+    {
+      "source": "/talk",
+      "destination": "/nodes/talk"
+    },
+    {
+      "source": "/telegram",
+      "destination": "/channels/telegram"
+    },
+    {
+      "source": "/templates/AGENTS",
+      "destination": "/reference/templates/AGENTS"
+    },
+    {
+      "source": "/templates/BOOT",
+      "destination": "/reference/templates/BOOT"
+    },
+    {
+      "source": "/templates/BOOTSTRAP",
+      "destination": "/reference/templates/BOOTSTRAP"
+    },
+    {
+      "source": "/templates/HEARTBEAT",
+      "destination": "/reference/templates/HEARTBEAT"
+    },
+    {
+      "source": "/templates/IDENTITY",
+      "destination": "/reference/templates/IDENTITY"
+    },
+    {
+      "source": "/templates/SOUL",
+      "destination": "/reference/templates/SOUL"
+    },
+    {
+      "source": "/templates/TOOLS",
+      "destination": "/reference/templates/TOOLS"
+    },
+    {
+      "source": "/templates/USER",
+      "destination": "/reference/templates/USER"
+    },
+    {
+      "source": "/test",
+      "destination": "/reference/test"
+    },
+    {
+      "source": "/thinking",
+      "destination": "/tools/thinking"
+    },
+    {
+      "source": "/timezone",
+      "destination": "/concepts/timezone"
+    },
+    {
+      "source": "/troubleshooting",
+      "destination": "/help/troubleshooting"
+    },
+    {
+      "source": "/tui",
+      "destination": "/web/tui"
+    },
+    {
+      "source": "/typebox",
+      "destination": "/concepts/typebox"
+    },
+    {
+      "source": "/updating",
+      "destination": "/install/updating"
+    },
+    {
+      "source": "/voicewake",
+      "destination": "/nodes/voicewake"
+    },
+    {
+      "source": "/webchat",
+      "destination": "/web/webchat"
+    },
+    {
+      "source": "/webhook",
+      "destination": "/automation/webhook"
+    },
+    {
+      "source": "/whatsapp",
+      "destination": "/channels/whatsapp"
+    },
+    {
+      "source": "/windows",
+      "destination": "/platforms/windows"
+    },
+    {
+      "source": "/wizard",
+      "destination": "/start/wizard"
+    },
+    {
+      "source": "/start/wizard-cli-flow",
+      "destination": "/start/wizard-cli-reference"
+    },
+    {
+      "source": "/start/wizard-cli-auth",
+      "destination": "/start/wizard-cli-reference"
+    },
+    {
+      "source": "/start/wizard-cli-outputs",
+      "destination": "/start/wizard-cli-reference"
+    },
+    {
+      "source": "/start/faq",
+      "destination": "/help/faq"
+    },
+    {
+      "source": "/oauth",
+      "destination": "/concepts/oauth"
+    },
+    {
+      "source": "/plugin",
+      "destination": "/tools/plugin"
+    },
+    {
+      "source": "/plugins",
+      "destination": "/plugins/manifest"
+    },
+    {
+      "source": "/render",
+      "destination": "/install/render"
+    },
+    {
+      "source": "/gcp",
+      "destination": "/install/gcp"
+    },
+    {
+      "source": "/platforms/fly",
+      "destination": "/install/fly"
+    },
+    {
+      "source": "/platforms/hetzner",
+      "destination": "/install/hetzner"
+    },
+    {
+      "source": "/platforms/gcp",
+      "destination": "/install/gcp"
+    },
+    {
+      "source": "/platforms/macos-vm",
+      "destination": "/install/macos-vm"
+    },
+    {
+      "source": "/platforms/exe-dev",
+      "destination": "/install/vps"
+    },
+    {
+      "source": "/install/exe-dev",
+      "destination": "/install/vps"
+    },
+    {
+      "source": "/install/ansible",
+      "destination": "/install/vps"
+    },
+    {
+      "source": "/platforms/render",
+      "destination": "/install/render"
+    },
+    {
+      "source": "/gateway/trusted-proxy",
+      "destination": "/gateway/trusted-proxy-auth"
+    },
+    {
+      "source": "/plugins/crypto/wallet-passkey-autonomous-seed-protection",
+      "destination": "/plugins/crypto/wallet-autonomous-security"
+    },
+    {
+      "source": "/plugins/crypto/wallet-passkey-autonomous-implementation-plan",
+      "destination": "/plugins/crypto/wallet-autonomous-sessions"
+    },
+    {
+      "source": "/start/bond-operator-economy",
+      "destination": "/wen/index"
+    },
+    {
+      "source": "/start/offers-marketplace",
+      "destination": "/guide/network"
+    }
+  ],
+  "navigation": {
+    "languages": [
+      {
+        "language": "en",
+        "groups": [
+          {
+            "group": "Start",
+            "pages": [
+              "index",
+              "start/getting-started"
+            ]
+          },
+          {
+            "group": "Install",
+            "pages": [
+              "install/index",
+              "install/vps",
+              "guide/maintenance"
+            ]
+          },
+          {
+            "group": "Everyday use",
+            "pages": [
+              "guide/everyday",
+              "guide/network",
+              "guide/network-roadmap"
+            ]
+          },
+          {
+            "group": "Tools",
+            "pages": [
+              "guide/tools"
+            ]
+          },
+          {
+            "group": "Wallet safety",
+            "pages": [
+              "guide/wallets"
+            ]
+          },
+          {
+            "group": "Satcoin Mining · Planned",
+            "pages": [
+              "wen/index",
+              "wen/automation",
+              "plugins/crypto/mining-page",
+              "plugins/crypto/mining-troubleshooting"
+            ]
+          },
+          {
+            "group": "Troubleshooting",
+            "pages": [
+              "guide/help"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "guide/reference",
+              "install/installer",
+              "plugins/crypto/wallet-roles-and-policies"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

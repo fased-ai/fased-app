@@ -1,0 +1,137 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "Fased",
+  "description": "The Go application for trading research, reviewed automation and the planned Fased Network.",
+  "theme": "mint",
+  "modeToggle": {
+    "default": "dark"
+  },
+  "icons": {
+    "library": "lucide"
+  },
+  "logo": {
+    "light": "/assets/fased-mark-color.svg",
+    "dark": "/assets/fased-mark-color.svg"
+  },
+  "fonts": {
+    "body": {
+      "family": "Fragment Mono"
+    },
+    "heading": {
+      "family": "DM Sans"
+    }
+  },
+  "favicon": "/assets/fased-mark-color.svg",
+  "colors": {
+    "primary": "#FF5A36",
+    "dark": "#FF5A36",
+    "light": "#FF8A6B"
+  },
+  "styling": {
+    "codeblocks": {
+      "theme": {
+        "dark": "min-dark",
+        "light": "min-light"
+      }
+    }
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "Fased Agent",
+        "href": "https://fased.ai"
+      },
+      {
+        "label": "GitHub",
+        "href": "https://github.com/fased-ai/fased"
+      }
+    ]
+  },
+  "redirects": [
+    {
+      "source": "/start/getting-started",
+      "destination": "/guide/install"
+    },
+    {
+      "source": "/getting-started",
+      "destination": "/guide/install"
+    },
+    {
+      "source": "/start/federation",
+      "destination": "/guide/network"
+    },
+    {
+      "source": "/network",
+      "destination": "/guide/network"
+    },
+    {
+      "source": "/start/marketplace-personas-roadmap",
+      "destination": "/guide/network-roadmap"
+    },
+    {
+      "source": "/reference/roadmap",
+      "destination": "/reference/status"
+    },
+    {
+      "source": "/wen/index",
+      "destination": "/wen/automation"
+    },
+    {
+      "source": "/web/dashboard",
+      "destination": "/guide/settings"
+    },
+    {
+      "source": "/guide/everyday",
+      "destination": "/guide/chat"
+    },
+    {
+      "source": "/guide/maintenance",
+      "destination": "/guide/settings"
+    }
+  ],
+  "navigation": {
+    "groups": [
+      {
+        "group": "Start",
+        "pages": [
+          "index",
+          "guide/install",
+          "reference/status"
+        ]
+      },
+      {
+        "group": "Use Fased",
+        "pages": [
+          "guide/providers",
+          "guide/agents",
+          "guide/chat",
+          "guide/tasks",
+          "guide/news",
+          "guide/memory"
+        ]
+      },
+      {
+        "group": "Trading",
+        "pages": [
+          "guide/wallets",
+          "guide/trading",
+          "wen/automation"
+        ]
+      },
+      {
+        "group": "Network roadmap",
+        "pages": [
+          "guide/network",
+          "guide/network-roadmap"
+        ]
+      },
+      {
+        "group": "Manage",
+        "pages": [
+          "guide/settings",
+          "reference/migration"
+        ]
+      }
+    ]
+  }
+}
