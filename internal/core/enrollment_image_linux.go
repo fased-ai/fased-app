@@ -468,7 +468,7 @@ func validateEnrollmentImage(image EnrollmentImage) error {
 func enrollmentCredential(name string, data []byte) error {
 	if name == "ai-credentials.json" {
 		var head map[string]json.RawMessage
-		if update.StrictJSON(data, &head) != nil {
+		if update.StrictJSONBounded(data, &head, aiVaultMaxSerializedBytes) != nil {
 			return errEnrollmentImage
 		}
 		var version int
@@ -477,12 +477,12 @@ func enrollmentCredential(name string, data []byte) error {
 		}
 		var col aiVaultCollection
 		if version == 3 {
-			if update.StrictJSON(data, &col) != nil {
+			if update.StrictJSONBounded(data, &col, aiVaultMaxSerializedBytes) != nil {
 				return errEnrollmentImage
 			}
 		} else {
 			var vault aiVaultEnvelope
-			if update.StrictJSON(data, &vault) != nil {
+			if update.StrictJSONBounded(data, &vault, aiVaultMaxSerializedBytes) != nil {
 				return errEnrollmentImage
 			}
 			col = aiVaultCollection{Version: 3, Default: vault.Ref, Accounts: []aiVaultEnvelope{vault}}
@@ -492,7 +492,7 @@ func enrollmentCredential(name string, data []byte) error {
 		}
 	} else if strings.HasPrefix(name, "rpc-credential-") {
 		var vault rpcVault
-		if update.StrictJSON(data, &vault) != nil || !validRPCVault(vault) {
+		if update.StrictJSONBounded(data, &vault, aiVaultMaxSerializedBytes) != nil || !validRPCVault(vault) {
 			return errEnrollmentImage
 		}
 	}

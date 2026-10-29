@@ -148,8 +148,8 @@ func (h *runtimeHost) export(ctx context.Context, m custodyinstall.Manifest, s s
 	close := func() error { cancel(); return p.Close() }
 	reader := bufio.NewReader(p.Output)
 	raw, err := readEnrollmentLine(reader, core.MaxEnrollmentEncodedBytes)
-	var image core.EnrollmentImage
-	if err != nil || len(raw) > core.MaxEnrollmentEncodedBytes || update.StrictJSON(raw, &image) != nil {
+	image, frameErr := decodeEnrollmentFrame(raw)
+	if err != nil || frameErr != nil {
 		_ = close()
 		return nil, fmt.Errorf("enrollment source helper frame: %w", errState)
 	}
@@ -538,4 +538,8 @@ func readEnrollmentLine(r *bufio.Reader, limit int) ([]byte, error) {
 		}
 		return line, err
 	}
+}
+
+func decodeEnrollmentFrame(raw []byte) (core.EnrollmentImage, error) {
+	return core.DecodeEnrollmentImage(raw)
 }

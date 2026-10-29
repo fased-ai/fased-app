@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"io"
+
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 // Enrollment images contain app-owned data and encrypted credentials, never
@@ -44,6 +46,17 @@ func EnrollmentImageDigest(image EnrollmentImage) string {
 		write(f.Data)
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// DecodeEnrollmentImage reads a bounded private app-state frame. Callers must
+// still validate its full schema/content and bind its instance and digest.
+func DecodeEnrollmentImage(raw []byte) (EnrollmentImage, error) {
+	var image EnrollmentImage
+	err := update.StrictJSONBounded(raw, &image, MaxEnrollmentEncodedBytes)
+	if err != nil {
+		return EnrollmentImage{}, err
+	}
+	return image, nil
 }
 
 func ExportEnrollmentImage(ctx context.Context, dir string) (EnrollmentImage, io.Closer, error) {

@@ -101,6 +101,13 @@ func StrictJSON(b []byte, v any) error {
 	return strictJSONBounded(b, v, MaxDocument)
 }
 
+// StrictJSONBounded retains StrictJSON's field and ambiguity checks for a state
+// schema with its own fixed byte bound. Never derive limit from input or options;
+// signed release documents must continue to use StrictJSON and MaxDocument.
+func StrictJSONBounded(b []byte, v any, limit int) error {
+	return strictJSONBounded(b, v, limit)
+}
+
 func strictJSONBounded(b []byte, v any, limit int) error {
 	if len(b) == 0 || len(b) > limit || !utf8.Valid(b) {
 		return errors.New("invalid document size or encoding")

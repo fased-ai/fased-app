@@ -5,6 +5,8 @@ package core
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fased-ai/fased-app/internal/update"
 )
@@ -544,5 +547,82 @@ func TestEnrollmentImageRejectsChangedHostPreparationLock(t *testing.T) {
 				t.Fatal("unheld host preparation lock admitted")
 			}
 		})
+	}
+}
+
+func TestEnrollmentImagePreservesLargeEncryptedVault(t *testing.T) {
+	s := fixtureStore(t)
+	credential := providerSignInCredential{Version: 1, Issuer: signInIssuer, Subject: "disposable-enrollment-user", ClientID: "oaiapp_disposable_enrollment", AccessToken: strings.Repeat("a", 4096), RefreshToken: strings.Repeat("r", 4096), IDToken: strings.Repeat("i", 4000), Scope: signInScope, ExpiresAt: s.now().Add(time.Hour).Unix()}
+	raw, err := json.Marshal(credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := parseProviderSignInCredential(raw); !ok {
+		t.Fatal("invalid disposable credential fixture")
+	}
+	salt := bytes.Repeat([]byte{0x42}, 16)
+	key := passwordHash(testVaultPassword, salt)
+	block, err := aes.NewCipher(key)
+	clear(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	col := aiVaultCollection{Version: 3}
+	for i := 0; i < 8; i++ {
+		ref, err := randomToken()
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := aiVaultEnvelope{Version: 5, Provider: "openai", Mode: "openai-signin", TestOnly: true, Ref: ref, Name: "Disposable enrollment account", Salt: append([]byte(nil), salt...), Nonce: make([]byte, 12)}
+		env.Nonce[0] = byte(i)
+		env.Ciphertext = gcm.Seal(nil, env.Nonce, raw, s.aiVaultAAD(env))
+		col.Accounts = append(col.Accounts, env)
+	}
+	col.Default = col.Accounts[0].Ref
+	if err = s.writeAIVaultCollection(col); err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.ReadFile(s.aiVaultPath())
+	if err != nil || len(original) <= update.MaxDocument {
+		t.Fatal("large vault fixture missing", len(original), err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	image, lease, err := ExportEnrollmentImage(t.Context(), s.dir)
+	if err != nil {
+		t.Fatal("valid large vault rejected", err)
+	}
+	defer lease.Close()
+	stage := enrollmentStage(t)
+	if err = ImportEnrollmentImage(t.Context(), stage, image); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(stage, "ai-credentials.json"))
+	if err != nil || !bytes.Equal(got, original) {
+		t.Fatal("vault bytes changed", err)
+	}
+	restored, err := OpenStore(stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	recovered, err := restored.readAIVaultCollection()
+	if err != nil || len(recovered.Accounts) != 8 {
+		t.Fatal("account collection changed", err)
+	}
+	for _, env := range recovered.Accounts {
+		plain, err := restored.openAIVault(env, testVaultPassword)
+		if err != nil || !bytes.Equal(plain, raw) {
+			t.Fatal("encrypted account failed after enrollment", err)
+		}
+		clear(plain)
+	}
+	if enrollmentCredential("ai-credentials.json", bytes.Repeat([]byte(" "), aiVaultMaxSerializedBytes+1)) == nil {
+		t.Fatal("vault size bound ignored")
 	}
 }

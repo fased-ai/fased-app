@@ -83,14 +83,15 @@ func enrollmentImageCommand(ctx context.Context, args []string, in io.Reader, ou
 	if action == "import" {
 		// The parent owns a finite private pipe/file. Never accept a second frame or
 		// unbounded input, and validate everything before creating a stage file.
-		d := json.NewDecoder(io.LimitReader(in, core.MaxEnrollmentEncodedBytes+1))
-		d.DisallowUnknownFields()
-		if e := d.Decode(&image); e != nil {
+		raw, e := io.ReadAll(io.LimitReader(in, core.MaxEnrollmentEncodedBytes+1))
+		if e != nil {
 			return errors.New("invalid private enrollment image")
 		}
-		if d.Decode(new(any)) != io.EOF {
-			return errors.New("trailing enrollment image data")
+		image, e = core.DecodeEnrollmentImage(raw)
+		if e != nil {
+			return errors.New("invalid private enrollment image")
 		}
+
 		if image.InstanceID != *expected || core.EnrollmentImageDigest(image) != *digest {
 			return errors.New("enrollment image identity changed")
 		}
