@@ -93,6 +93,7 @@ export function AgentTasks({
   const tr = uiText;
   const { agents, focusedTask, setFocusedTask } = useWorkspace();
   const [editing, setEditing] = useState(false);
+  const [watchMode, setWatchMode] = useState(false);
   const [selected, setSelected] = useState("");
   const [resultId, setResultId] = useState("");
   const [reuse, setReuse] = useState("");
@@ -103,8 +104,11 @@ export function AgentTasks({
   useEffect(() => {
     if (!focusedTask) return;
     setPanel("automations");
-    if (focusedTask === "new") setEditing(true);
-    else if (tasks.some((t) => t.id === focusedTask)) setSelected(focusedTask);
+    if (focusedTask === "new") {
+      setWatchMode(false);
+      setEditing(true);
+    } else if (tasks.some((t) => t.id === focusedTask))
+      setSelected(focusedTask);
     setFocusedTask("");
   }, [focusedTask, tasks, setFocusedTask, setPanel]);
   const selectedRun = v.runs.filter((r) => r.taskId === selected).at(-1);
@@ -223,19 +227,40 @@ export function AgentTasks({
               ? uiText("Latest result")
               : (task?.name ?? uiText("Task unavailable"))}
           </strong>
-          <Badge>{run.outcome}</Badge>
+          <Badge>{run.watch ? uiText("News watch") : run.outcome}</Badge>
         </header>
         <time dateTime={new Date(run.at * 1000).toISOString()}>
           {date(run.at)}
         </time>
         <p className="task-result-text">
-          {answer || notice?.text || task?.text || uiText("Saved result")}
+          {run.watch
+            ? uiText("New matches: {count}", { count: run.watch.newIds.length })
+            : answer || notice?.text || task?.text || uiText("Saved result")}
         </p>
+        {run.watch && (
+          <ul className="watch-headlines">
+            {run.watch.newIds.map((id) => {
+              const item = v.newsFetches
+                .find((f) => f.id === run.news?.fetchId)
+                ?.items?.find((n) => n.id === id);
+              return item ? (
+                <li key={id}>
+                  <a href={item.url} target="_blank" rel="noreferrer noopener">
+                    {item.title}
+                  </a>
+                </li>
+              ) : null;
+            })}
+          </ul>
+        )}
         {!run.wen &&
           !run.botId &&
-          ["reminder-v1", "ai-step-v1/reminder-v1", "ai-step-v1"].includes(
-            run.strategy,
-          ) && (
+          [
+            "reminder-v1",
+            "ai-step-v1/reminder-v1",
+            "ai-step-v1",
+            "news-watch-v1",
+          ].includes(run.strategy) && (
             <button
               className="secondary"
               disabled={agents.busy}
@@ -321,11 +346,23 @@ export function AgentTasks({
             className="primary"
             onClick={() => {
               setPanel("automations");
+              setWatchMode(false);
               setEditing(true);
               setReuse("");
             }}
           >
             {tr("New task")}
+          </button>
+          <button
+            className="secondary"
+            onClick={() => {
+              setPanel("automations");
+              setWatchMode(true);
+              setEditing(true);
+              setReuse("");
+            }}
+          >
+            {uiText("Watch news")}
           </button>
         </div>
       </div>
@@ -395,6 +432,7 @@ export function AgentTasks({
             <TaskComposer
               key={v.profileId}
               view={v}
+              watchMode={watchMode}
               close={() => setEditing(false)}
             />
           ) : reuse ? (
@@ -424,7 +462,9 @@ export function AgentTasks({
                 </div>
                 <div className="task-detail-body">
                   <p className="task-result-text">
-                    {selectedTask.text || uiText("Fixed paper evaluation")}
+                    {selectedTask.watch
+                      ? `${uiText("Contains")}: ${selectedTask.watch.rule.contains}`
+                      : selectedTask.text || uiText("Fixed paper evaluation")}
                   </p>
                   <dl className="task-facts">
                     <dt>{uiText("Schedule")}</dt>
@@ -615,9 +655,11 @@ export function AgentTasks({
 
 function TaskComposer({
   view: v,
+  watchMode,
   close,
 }: {
   view: AgentView;
+  watchMode: boolean;
   close: () => void;
 }) {
   const { t: uiText } = useUI();
@@ -625,6 +667,10 @@ function TaskComposer({
   const core = useCore();
   const { agents } = useWorkspace();
   const [name, setName] = useState("");
+  const [watchName, setWatchName] = useState(uiText("News watch"));
+  const [watchSource, setWatchSource] = useState("");
+  const [watchAge, setWatchAge] = useState(3600);
+  const [contains, setContains] = useState("");
   const [text, setText] = useState("");
   const [bot, setBot] = useState("");
   const [news, setNews] = useState("");
@@ -669,6 +715,11 @@ function TaskComposer({
     setError("");
     fn();
   }
+  useEffect(() => {
+    generation.current++;
+    setReview(undefined);
+    setError("");
+  }, [watchMode]);
   const stale =
     !!review &&
     (review.revision !== v.revision || review.expiresAt * 1000 <= now);
@@ -685,11 +736,20 @@ function TaskComposer({
     action: "task-review",
     profileId: v.profileId,
     revision: v.revision,
-    name: name.trim(),
-    text: text.trim(),
-    botId: bot,
-    newsSourceId: news,
-    newsMaxAgeSeconds: news ? age : undefined,
+    name: (watchMode ? watchName : name).trim(),
+    text: watchMode ? "" : text.trim(),
+    botId: watchMode ? "" : bot,
+    newsSourceId: watchMode ? watchSource : news,
+    newsMaxAgeSeconds: watchMode
+      ? watchSource
+        ? watchAge
+        : undefined
+      : news
+        ? age
+        : undefined,
+    watch: watchMode
+      ? { version: "news-watch-v1", contains: contains.trim() }
+      : undefined,
     calendar,
     intervalSeconds: calendarMode || cronMode ? 0 : seconds,
     maxRuns: calendarMode ? 1 : runs,
@@ -721,7 +781,13 @@ function TaskComposer({
       aria-label={review ? uiText("Review task") : uiText("Create a task")}
     >
       <div className="panel-heading">
-        <h3>{review ? tr("Review task") : tr("New task")}</h3>
+        <h3>
+          {review
+            ? tr("Review task")
+            : watchMode
+              ? uiText("Watch news")
+              : tr("New task")}
+        </h3>
         <button type="button" className="text-button" onClick={close}>
           {uiText("Cancel task")}
         </button>
@@ -732,9 +798,11 @@ function TaskComposer({
           <>
             <h3>{review.name}</h3>
             <p className="task-result-text">
-              {review.bot
-                ? `Paper evaluation · ${review.bot.name}`
-                : review.text}
+              {review.watch
+                ? `${uiText("Contains")}: ${review.watch.contains}`
+                : review.bot
+                  ? `Paper evaluation · ${review.bot.name}`
+                  : review.text}
             </p>
             <dl className="task-facts">
               <dt>{uiText("Agent")}</dt>
@@ -840,11 +908,37 @@ function TaskComposer({
                 <input
                   required
                   maxLength={80}
-                  value={name}
-                  onChange={(e) => edit(() => setName(e.target.value))}
+                  value={watchMode ? watchName : name}
+                  onChange={(e) =>
+                    edit(() =>
+                      watchMode
+                        ? setWatchName(e.target.value)
+                        : setName(e.target.value),
+                    )
+                  }
                 />
               </label>
-              {!bot && (
+              {watchMode && (
+                <>
+                  <NewsSourcePicker
+                    view={v}
+                    value={watchSource}
+                    onChange={(value) => edit(() => setWatchSource(value))}
+                    age={watchAge}
+                    onAge={(value) => edit(() => setWatchAge(value))}
+                  />
+                  <label>
+                    {uiText("Contains")}
+                    <input
+                      required
+                      maxLength={120}
+                      value={contains}
+                      onChange={(e) => edit(() => setContains(e.target.value))}
+                    />
+                  </label>
+                </>
+              )}
+              {!watchMode && !bot && (
                 <label>
                   {tr("Reminder text")}
                   <textarea
@@ -997,7 +1091,7 @@ function TaskComposer({
                   />
                 </label>
               )}
-              {!calendarMode && !cronMode && (
+              {!watchMode && !calendarMode && !cronMode && (
                 <details className="task-inspection">
                   <summary>{uiText("Options")}</summary>
                   <label>

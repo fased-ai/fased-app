@@ -26,6 +26,9 @@ type TaskReminderReview struct {
 }
 
 func plainReminderBindings(c AgentCommand) error {
+	if c.Watch != nil {
+		return errors.New("news watch cannot become a plain reminder")
+	}
 	if c.BotID != "" || c.WEN != nil || c.NewsSourceID != "" || c.NewsMaxAgeSeconds != 0 || c.ConnectionRef != "" || c.Limits != nil || c.TotalBudgetMicrousd != 0 || c.AuthorizationSeconds != 0 || c.Provider != "" || c.Model != "" || c.Quantity != 0 || c.PriceCents != 0 || c.BudgetCents != 0 || c.Source != "" {
 		return errors.New("plain reminders cannot attach AI, news, bots or financial operations")
 	}

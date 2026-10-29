@@ -572,7 +572,10 @@ func (s *Store) advanceAgentNews(ctx context.Context, rt http.RoundTripper, fixt
 	return nil
 }
 
-type fixtureNewsTransport struct{ now func() time.Time }
+type fixtureNewsTransport struct {
+	now   func() time.Time
+	store *Store
+}
 
 func (f fixtureNewsTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if r.Context().Err() != nil {
@@ -586,6 +589,20 @@ func (f fixtureNewsTransport) RoundTrip(r *http.Request) (*http.Response, error)
 		now = f.now()
 	}
 	published := now.Add(-time.Minute)
+	// Keep one compiled article's identity stable across fetches and restarts.
+	// Only fixture mode supplies this Store; production transport is unchanged.
+	if f.store != nil {
+		d, _, err := readAgents(r.Context(), f.store.db)
+		if err != nil {
+			return nil, err
+		}
+		for _, saved := range d.NewsFetches {
+			if saved.URL == r.URL.String() && saved.State == "completed" && len(saved.Items) > 0 {
+				published = time.Unix(saved.Items[0].PublishedAt, 0)
+				break
+			}
+		}
+	}
 	status := 200
 	if r.URL.Path == "/unavailable.xml" {
 		status = 503

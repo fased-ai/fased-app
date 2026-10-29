@@ -276,7 +276,14 @@ export type TaskCalendar = {
   at: number;
   timeZone: string;
 };
+export type NewsWatchRule = { version: "news-watch-v1"; contains: string };
+export type NewsWatchResult = {
+  rule: NewsWatchRule;
+  matched: number;
+  newIds: string[];
+};
 export type AgentTask = {
+  watch?: { rule: NewsWatchRule; seen: string[] };
   calendar?: TaskCalendar;
   playbook?: { id: string; version: number; sha256: string };
   wen?: WENPaperPlan;
@@ -294,6 +301,7 @@ export type AgentTask = {
   state: string;
 };
 export type AgentRun = {
+  watch?: NewsWatchResult;
   wen?: WENPaperResult;
   news?: NewsEvidence;
   aiRequestId?: string;
@@ -497,6 +505,7 @@ export type AgentView = {
   financialExecution: false;
 };
 export type TaskReview = {
+  watch?: NewsWatchRule;
   calendar?: TaskCalendar;
   version: "task-review-v1";
   revision: number;
@@ -597,6 +606,7 @@ export type AgentEvidenceView = {
     }
 );
 export type AgentCommand = {
+  watch?: NewsWatchRule;
   accountRef?: string;
   useAgentDefaults?: boolean;
   chatPermission?: ChatPermission;

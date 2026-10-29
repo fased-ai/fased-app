@@ -103,7 +103,7 @@ func validateAgentTask(d agentDocument, c AgentCommand, profile string) (*TaskNe
 		if !found {
 			return nil, errors.New("profile paper bot not found")
 		}
-	} else if !validAgentText(c.Text, 4000, true) {
+	} else if c.Watch == nil && !validAgentText(c.Text, 4000, true) {
 		return nil, errors.New("reminder text required")
 	}
 	reserved := c.MaxRuns
@@ -115,6 +115,9 @@ func validateAgentTask(d agentDocument, c AgentCommand, profile string) (*TaskNe
 	}
 	news, e := taskNewsPolicy(d, c, profile)
 	if e != nil {
+		return nil, e
+	}
+	if e := watchInput(c, news); e != nil {
 		return nil, e
 	}
 	return news, nil
@@ -134,6 +137,10 @@ func appendAgentTask(d *agentDocument, c AgentCommand, profile, id string, now i
 		copy := *normalizedCalendar(c.Calendar, now)
 		calendar, next = &copy, copy.At
 	}
-	d.Tasks = append(d.Tasks, AgentTask{Calendar: calendar, News: news, ID: id, ProfileID: profile, Name: c.Name, Text: c.Text, BotID: c.BotID, IntervalSeconds: c.IntervalSeconds, MaxRuns: c.MaxRuns, NextAt: next, State: "scheduled"})
+	var watch *TaskNewsWatch
+	if c.Watch != nil {
+		watch = &TaskNewsWatch{Rule: *c.Watch, Seen: []string{}}
+	}
+	d.Tasks = append(d.Tasks, AgentTask{Watch: watch, Calendar: calendar, News: news, ID: id, ProfileID: profile, Name: c.Name, Text: c.Text, BotID: c.BotID, IntervalSeconds: c.IntervalSeconds, MaxRuns: c.MaxRuns, NextAt: next, State: "scheduled"})
 	return nil
 }

@@ -118,7 +118,7 @@ try {
     a.version === 1 &&
       a.probeId === probe &&
       a.state.name === "core-db" &&
-      a.state.version === 27 &&
+      a.state.version === 28 &&
       a.state.features.includes("agents-playbooks-v1") &&
       a.state.features.includes("agents-cron-v1") &&
       a.state.features.includes("agents-history-v1") &&
@@ -458,7 +458,7 @@ try {
       { encoding: "utf8", timeout: 10000 },
     );
     check(
-      "previousSchemaTwoCoreRefusesDowngrade",
+      "previousCoreRefusesNewerSchema",
       older.status !== 0 && /schema is newer/.test(older.stderr),
     );
   }
