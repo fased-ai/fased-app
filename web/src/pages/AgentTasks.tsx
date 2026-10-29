@@ -745,12 +745,10 @@ export function AgentTasks({
           </p>
         )}
       </details>
-      {v.tasks.some((task) => task.ai && !task.ai.analysis) && (
-        <details className="scheduled-ai-disclosure" ref={advanced}>
-          <summary>{uiText("Legacy tasks")}</summary>
-          <ScheduledAITasks key={v.profileId} view={v} />
-        </details>
-      )}
+      <details className="scheduled-ai-disclosure" ref={advanced}>
+        <summary>{uiText("Advanced")}</summary>
+        <ScheduledAITasks key={v.profileId} view={v} />
+      </details>
     </div>
   );
 }

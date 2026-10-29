@@ -126,7 +126,7 @@ it("localizes the new analysis controls in every shipped language", () => {
     "Required",
     "Analysis skipped",
     "Nothing new to analyze",
-    "Legacy tasks",
+    "Advanced",
   ];
   for (const language of ["ru", "es", "zh", "ko"] as const) {
     for (const key of keys) expect(translate(language, key)).not.toBe(key);

@@ -1551,6 +1551,7 @@ async function openUpdateSettings(page: import("@playwright/test").Page) {
 
 async function openAISchedules(page: import("@playwright/test").Page) {
   const pane = page.locator(".scheduled-ai-disclosure");
+  await expect(pane).toBeAttached();
   if ((await pane.getAttribute("open")) === null)
     await pane.locator(":scope > summary").click();
 }

@@ -68,12 +68,7 @@ export const pageCopy = {
   Queued: ["В очереди", "En cola", "排队中", "대기 중"],
   Running: ["Выполняется", "En ejecución", "运行中", "실행 중"],
   Reason: ["Причина", "Motivo", "原因", "이유"],
-  "Legacy tasks": [
-    "Прежние задачи",
-    "Tareas anteriores",
-    "旧版任务",
-    "이전 작업",
-  ],
+  Advanced: ["Дополнительно", "Avanzado", "高级", "고급"],
   "Watch news": [
     "Следить за новостями",
     "Seguir noticias",
