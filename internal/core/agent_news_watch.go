@@ -212,8 +212,8 @@ func validateNewsWatchStorage(raw []byte, d agentDocument) error {
 		if len(union) != len(t.Watch.Seen) {
 			return errors.New("watch cursor changed; preserve records")
 		}
-		for _, id := range t.Watch.Seen {
-			if !union[id] {
+		for i, id := range t.Watch.Seen {
+			if !union[id] || (i > 0 && id == t.Watch.Seen[i-1]) {
 				return errors.New("watch cursor changed; preserve records")
 			}
 		}

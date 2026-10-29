@@ -441,3 +441,44 @@ func TestNewsWatchConcurrentTicksAndFetchCommitOnce(t *testing.T) {
 		t.Fatal("duplicate dispatch/commit", err, calls.Load())
 	}
 }
+
+func TestNewsWatchRejectsDuplicateCursorWithoutErasingRecords(t *testing.T) {
+	s := newsTestStore(t)
+	v := newsAdd(t, s, "trading-analyst")
+	v = agentApply(t, s, watchReview(t, s, v, 3))
+	v = agentApply(t, s, AgentCommand{Action: "task-run", ProfileID: v.ProfileID, ID: v.Tasks[0].ID})
+	body := watchBody(s.now().Unix())
+	start, end := strings.Index(body, "<item>"), strings.Index(body, "</item>")+len("</item>")
+	second := strings.ReplaceAll(body[start:end], "Controlled paper-news headline", "Second paper headline")
+	second = strings.ReplaceAll(second, "https://example.com/story", "https://example.com/second-story")
+	body = strings.Replace(body, "</channel>", second+"</channel>", 1)
+	v = finishWatch(t, s, body, new(atomic.Int32))
+	if len(v.Tasks[0].Watch.Seen) != 2 {
+		t.Fatal("fixture needs two distinct matching items")
+	}
+	var original string
+	if err := s.db.QueryRow("SELECT document FROM agent_workspace WHERE id=1").Scan(&original); err != nil {
+		t.Fatal(err)
+	}
+	var d agentDocument
+	if err := json.Unmarshal([]byte(original), &d); err != nil {
+		t.Fatal(err)
+	}
+	// Same length, still sorted, all entries are known: uniqueness is essential
+	// to prevent a duplicate from concealing a previously notified item.
+	d.Tasks[0].Watch.Seen[1] = d.Tasks[0].Watch.Seen[0]
+	bad, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.db.Exec("UPDATE agent_workspace SET document=? WHERE id=1", string(bad)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = readAgents(t.Context(), s.db); err == nil {
+		t.Fatal("duplicate cursor accepted while another seen item was omitted")
+	}
+	var after string
+	if err = s.db.QueryRow("SELECT document FROM agent_workspace WHERE id=1").Scan(&after); err != nil || after != string(bad) {
+		t.Fatal("refusal erased records", err)
+	}
+}
