@@ -235,7 +235,7 @@ test("full UI journey uses the existing Linux job while focused paths retain cor
   );
   assert.match(
     core,
-    /if: needs.classify.outputs.scope == 'ui'\n\s+run: npm run test:core-ui\n/,
+    /if: needs.classify.outputs.scope == 'ui'\n\s+env:[\s\S]*?run: \|[\s\S]*?npm run test:core-ui\n/,
   );
   assert.match(
     core,
@@ -243,13 +243,33 @@ test("full UI journey uses the existing Linux job while focused paths retain cor
   );
   assert.match(
     desktop,
-    /if: runner.os == 'Linux' && needs.classify.outputs.scope == 'full'\n\s+run: npm run test:core-ui\n/,
+    /if: runner.os == 'Linux' && needs.classify.outputs.scope == 'full'\n\s+env:[\s\S]*?run: \|[\s\S]*?npm run test:core-ui\n/,
   );
   assert.ok(
     !workflow.includes("--project="),
     "every selected journey retains desktop and mobile",
   );
   assert.match(desktop, /npx playwright install --only-shell chromium/);
+  for (const job of [core, desktop]) {
+    for (const [env, binary, pkg] of [
+      ["FASED_WALLET_BROWSER_BINARY", "wallet-core.test", "core"],
+      ["FASED_WALLET_OWNER_BINARY", "wallet-owner.test", "signer"],
+    ]) {
+      assert.ok(job.includes(`${env}: .evidence/bin/${binary}`));
+      assert.ok(
+        job.includes(`go test -c -o .evidence/bin/${binary} ./internal/${pkg}`),
+      );
+    }
+  }
+  const coreSteps = core.split("\n      - ");
+  assert.ok(
+    !coreSteps.some(
+      (step) =>
+        step.includes("scope == 'full'") &&
+        step.includes("npm run test:core-ui"),
+    ),
+    "full joined UI stays in the existing Linux desktop job",
+  );
   for (const job of [core, desktop])
     assert.ok(
       job.includes("if: failure() || cancelled()"),

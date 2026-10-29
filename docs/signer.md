@@ -116,10 +116,71 @@ check. No profile, app record or RPC credential grants signer authority.
 Provider credential admission and real RPC dispatch remain disabled; controlled
 tests alone admit disposable provider strings and HTTPS fixtures.
 
-The ordinary update contract still covers version-1 signer custody only. Network
-custody installer generation, recovery-aware update/inspection compatibility,
-and real-wallet acceptance remain open; do not enable or roll out this mode as
-a supported customer installation.
+The ordinary update contract still covers version-1 signer custody only. The
+explicit managed engineering installer and recovery-aware v2 maintenance path
+above do not enroll an existing ordinary installation. Ordinary-instance
+enrollment/migration and real-wallet acceptance remain open; do not enable or
+roll out this mode as a supported customer installation.
+
+## Wallets setup
+
+**Wallets → Add wallet** provides **Watch**, **Create** and **Import**. Select
+Devnet or Mainnet and a name. Watch accepts a canonical Solana public address;
+only public metadata is saved. Existing network account versions and encrypted
+vault formats are unchanged. Opening setup or refreshing status creates nothing.
+
+Create and Import use the existing protected instance-terminal owner helper.
+The UI displays its command and public status, never a seed/private-key/unlock
+password field. Import takes a private **raw 32-byte disposable seed file**;
+a JSON array or 64-byte keypair file is not this engineering import format.
+Setup/import derive the immutable installed network; `--network` belongs only
+to custody installation. A missing/legacy/unavailable signer is a prerequisite,
+not a wallet or successful connection. Native owner custody remains Linux-only.
+
+When the signer is not installed, the commands install the existing managed
+fixture instance and print its URL with `custody status`. Open/connect that
+instance before continuing Create/Import. Installation does not pair the current
+ordinary instance or move its records/drafts. Direct signer enrollment into an
+existing ordinary installation remains a separate installation gap; this setup
+does not silently adopt its data or key ownership.
+
+After protected creation/import and verified encrypted backup, **Refresh status**
+then **Attach** records the exact current version-2 signer reference for that
+network. Attachment grants no signing, unlock or permission. Locked/recovery
+states remain held. A recovered epoch may be explicitly attached as a new public
+record while retaining the old record and its stale encrypted credential binding;
+no old identity, key, hold or RPC vault is silently rewritten or removed.
+
+**RPC** uses the saved account's network. Network accounts start with an empty
+endpoint. Check and Save reuse the existing bounded endpoint/network checks;
+API keys use the separate encrypted credential editor. A recovered/unavailable
+signer makes its old saved credential publicly stale/locked. Public-address
+formatting and an RPC health result do not establish a balance or signing right.
+Ordinary constructors keep network-watch admission, provider credentials and
+live RPC disabled; only controlled tests inject disposable admission/HTTPS.
+No production CA/endpoint override, owner administration route or new service is
+introduced. Installation, real-host and live-key acceptance remain separate.
+
+The same owner-authenticated revision-bound operation is available through
+`fased-app accounts --data-dir /private/instance --setup-stdin`:
+
+```json
+{
+  "revision": 0,
+  "action": "watch",
+  "name": "Research",
+  "network": "devnet",
+  "address": "11111111111111111111111111111111"
+}
+```
+
+This is synthetic public fixture data, not a funding address. Ordinary held
+builds refuse its network admission. `action: "attach"` replaces `address` with
+`reference`, the exact public `fixture.status.account` returned by `accounts`.
+The server rechecks revision, network, current signer identity and maintenance
+hold before saving. `create`, `import`, secret fields, stale references and
+network retargets are refused. Legacy raw records remain inspectable in
+**Advanced** and through the existing `--request-stdin` path.
 
 ## Engineering commands
 

@@ -117,7 +117,13 @@ jobs:
       - run: npx playwright install --only-shell chromium
       - run: npm run test:ui
       - if: needs.classify.outputs.scope == 'ui'
-        run: npm run test:core-ui
+        env:
+          FASED_WALLET_BROWSER_BINARY: .evidence/bin/wallet-core.test
+          FASED_WALLET_OWNER_BINARY: .evidence/bin/wallet-owner.test
+        run: |
+          go test -c -o .evidence/bin/wallet-core.test ./internal/core
+          go test -c -o .evidence/bin/wallet-owner.test ./internal/signer
+          npm run test:core-ui
       - if: needs.classify.outputs.scope == 'rpc'
         run: npm run test:core-ui -- --grep 'public account records share UI/CLI state without wallet authority'
       - uses: actions/upload-artifact@v4
@@ -214,7 +220,13 @@ jobs:
         run: npx playwright install --only-shell chromium
       - name: Joined UI and CLI journey
         if: runner.os == 'Linux' && needs.classify.outputs.scope == 'full'
-        run: npm run test:core-ui
+        env:
+          FASED_WALLET_BROWSER_BINARY: .evidence/bin/wallet-core.test
+          FASED_WALLET_OWNER_BINARY: .evidence/bin/wallet-owner.test
+        run: |
+          go test -c -o .evidence/bin/wallet-core.test ./internal/core
+          go test -c -o .evidence/bin/wallet-owner.test ./internal/signer
+          npm run test:core-ui
       - name: Remove owned Ubuntu acceptance policy after native window
         if: always() && runner.os == 'Linux'
         run: node --input-type=module -e "const m = await import('./scripts/ubuntu-preparation.mjs'); await m.cleanupUbuntuPreparation();"

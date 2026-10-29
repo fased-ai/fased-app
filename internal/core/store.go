@@ -21,6 +21,7 @@ import (
 )
 
 type Store struct {
+	rpcCheckFixture func(context.Context, RPCCheckRequest) (RPCCheckResult, error) // Tests only; never configuration or IPC.
 	providerFixture bool
 	rpcAdmission    bool // Disabled in ordinary constructors; tests only.
 	sessionFixture  bool
@@ -40,6 +41,7 @@ type Store struct {
 	now             func() time.Time
 	authMu          sync.Mutex
 	fixture         func(context.Context, signer.Request) (signer.Response, error)
+	custodyNetwork  string                                                             // Public immutable v2 configuration; no key material.
 	researchRead    func(context.Context, researchFactResult) (json.RawMessage, error) // Test-only local projection fault; never configuration/IPC.
 }
 

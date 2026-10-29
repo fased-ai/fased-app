@@ -175,6 +175,12 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		view.Ref = v.Ref
 		view.Saved = true
 		view.Stale = account.RPC == nil || v.Binding != rpcBinding(*account)
+		if account.Mode == "fixture-managed" {
+			live := s.fixtureView(ctx)
+			// The saved metadata may still name the pre-recovery epoch. Public
+			// status must not present its encrypted credential as current.
+			view.Stale = view.Stale || !live.Available || account.Signer == nil || live.Status == nil || live.Status.Account == nil || *live.Status.Account != *account.Signer
+		}
 	}
 	if c.Action == "status" {
 		return view, nil

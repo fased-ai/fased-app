@@ -26,6 +26,7 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	rpcConfig := flags.Bool("rpc-stdin", false, "save/remove disposable wallet RPC settings from JSON")
 	rpcCheck := flags.Bool("check-rpc-stdin", false, "check disposable RPC endpoint/network JSON; no saving or live calls")
 	update := flags.Bool("request-stdin", false, "revision-checked public account record JSON from stdin; no secrets")
+	setup := flags.Bool("setup-stdin", false, "add a network public address or verified signer reference from JSON; no secrets")
 	if e = flags.Parse(args); e != nil {
 		return e
 	}
@@ -43,6 +44,26 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	defer c.Close()
 	if e = c.LoadSession(ctx, *dir); e != nil {
 		return e
+	}
+	if *setup {
+		if *rpcSecret || *rpcConfig || *rpcCheck || *update || *backupOut != "" {
+			return errors.New("choose one account operation")
+		}
+		b, err := io.ReadAll(io.LimitReader(in, 2049))
+		if err != nil || len(b) > 2048 {
+			return errors.New("invalid public account setup")
+		}
+		var input core.AccountSetupCommand
+		d := json.NewDecoder(bytes.NewReader(b))
+		d.DisallowUnknownFields()
+		if d.Decode(&input) != nil || d.Decode(new(any)) != io.EOF {
+			return errors.New("invalid public account setup; no key or password fields accepted")
+		}
+		var result core.AccountsView
+		if err = c.Do(ctx, http.MethodPut, "/api/v1/accounts/setup", input, &result); err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(result)
 	}
 	if *rpcSecret {
 		if *rpcConfig || *rpcCheck || *update {

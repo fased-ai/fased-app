@@ -45,6 +45,8 @@ type ProposalView struct {
 	Receipt signer.ApprovalReceipt `json:"receipt"`
 }
 type AccountsView struct {
+	Setup         WalletSetup       `json:"setup"`
+	Addresses     map[string]string `json:"addresses"`
 	Record        AccountsRecord    `json:"record"`
 	Fixture       FixtureView       `json:"fixture"`
 	AccountStates map[string]string `json:"accountStates"`
@@ -93,6 +95,9 @@ func (s *Store) configureSigner(path string) error {
 		defer cancel()
 		return signer.Call(ctx, c, false, r)
 	}
+	if c.Version == 2 {
+		s.custodyNetwork = c.Network
+	}
 	return nil
 }
 func (s *Store) fixtureView(ctx context.Context) FixtureView {
@@ -124,7 +129,14 @@ func (s *Store) Accounts(ctx context.Context) (AccountsView, error) {
 		return AccountsView{}, e
 	}
 	v := AccountsView{Record: r, Fixture: s.fixtureView(ctx), AccountStates: map[string]string{}, Proposals: []ProposalView{}}
+	v.Setup = s.walletSetup(v.Fixture)
+	v.Addresses = map[string]string{}
 	for _, a := range r.Accounts {
+		if (a.Version == 2 || a.Version == 3) && solanaGenesis(a.Network) != "" {
+			if address, err := signer.FormatPublicKey(a.PublicKey); err == nil {
+				v.Addresses[a.ID] = address
+			}
+		}
 		state := "public-record-only"
 		if a.Mode == "fixture-managed" {
 			state = "unverified"
@@ -193,7 +205,7 @@ func validateAccounts(r AccountsRecord, old AccountsRecord, live FixtureView, no
 			}
 			prior, ok := oldAccounts[a.ID]
 			if !ok || prior.Signer == nil || *prior.Signer != *a.Signer {
-				if live.Status == nil || live.Status.Account == nil || *live.Status.Account != *a.Signer || !live.Status.FixtureOnly || live.Status.WalletSigner || live.Status.FinancialExecution {
+				if live.Status == nil || live.Status.Account == nil || *live.Status.Account != *a.Signer || !live.Status.FixtureOnly || live.Status.WalletSigner || live.Status.FinancialExecution || live.Status.UpdateHeld {
 					return errors.New("stale or unavailable signer reference; refresh before recording it")
 				}
 			}
