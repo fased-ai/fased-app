@@ -257,6 +257,11 @@ PRAGMA user_version=1;`)
 			return nil, err
 		}
 	}
+	if schema <= 27 {
+		if err = migrateNewsWatch(ctx, db); err != nil {
+			return nil, err
+		}
+	}
 	if _, _, err = readAgents(ctx, db); err != nil {
 		return nil, err
 	}

@@ -14678,3 +14678,188 @@ test("Ollama Cloud key joins models agent Chat and task access without an invent
     fullPage: true,
   });
 });
+
+test("provider-free News watch reviews rules deduplicates across restart and joins Chat memory through UI CLI", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(90000);
+  page.setDefaultTimeout(10000);
+  await stop();
+  await start(true);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
+  });
+  await page.goto(url + "/#agents/tasks");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const profileId = "trading-analyst";
+  await page.getByLabel("Agent", { exact: true }).selectOption(profileId);
+  const read = () => privateCLI(["agents", "--profile", profileId]);
+  const command = async (c: object) =>
+    privateCLI(["agents", "--request-stdin"], {
+      profileId,
+      revision: (await read()).revision,
+      ...c,
+    });
+  await command({
+    action: "news-source-add",
+    name: "Paper feed",
+    source: "https://news.fased.invalid/headlines.xml",
+    newsMaxAgeSeconds: 600,
+  });
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await page.getByRole("button", { name: "Watch news", exact: true }).click();
+  const editor = page.getByRole("complementary", {
+    name: "Create a task",
+    exact: true,
+  });
+  await editor.getByLabel("Task name", { exact: true }).fill("Paper headlines");
+  await editor
+    .getByLabel("News source", { exact: true })
+    .selectOption({ label: "Paper feed" });
+  await editor.getByLabel("Contains", { exact: true }).fill("paper");
+  await editor.getByLabel("Schedule", { exact: true }).selectOption("repeat");
+  await editor.getByLabel("Maximum evaluations", { exact: true }).fill("3");
+  await editor
+    .getByRole("button", { name: "Review task", exact: true })
+    .click();
+  const review = page.getByRole("complementary", {
+    name: "Review task",
+    exact: true,
+  });
+  await expect(review).toContainText("Contains: paper");
+  await expect(review).toContainText("Paper feed");
+  expect((await read()).tasks).toHaveLength(0);
+  await review
+    .getByRole("button", { name: "Create task", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).tasks.length).toBe(1);
+  const run = page.getByRole("button", {
+    name: "Run now: Paper headlines",
+    exact: true,
+  });
+  await run.click();
+  await expect.poll(async () => (await read()).runs.length).toBe(1);
+  let v = await read();
+  expect(v.runs[0].watch.newIds).toHaveLength(1);
+  expect(v.notices).toHaveLength(1);
+  await expect(
+    page.getByRole("article", { name: `Run ${v.runs[0].id}`, exact: true }),
+  ).toContainText("New matches: 1");
+  await expect(
+    page.getByRole("link", {
+      name: "Controlled paper-news headline",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await run.click();
+  await expect.poll(async () => (await read()).runs.length).toBe(2);
+  v = await read();
+  expect(v.runs[1].watch.newIds).toHaveLength(0);
+  expect(v.notices).toHaveLength(1);
+  await expect(
+    page.getByRole("article", { name: `Run ${v.runs[1].id}`, exact: true }),
+  ).toContainText("New matches: 0");
+  await page
+    .getByRole("button", { name: "Pause: Paper headlines", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).tasks[0].state).toBe("paused");
+  const state = await read();
+  await page.screenshot({
+    path: `.evidence/b04-news-watch/watch-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: false,
+  });
+  await stop();
+  await start(true);
+  await page.goto(url + "/#agents/tasks");
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const relogin = spawn(binary, [
+    "login",
+    "--data-dir",
+    dir,
+    "--password-stdin",
+  ]);
+  relogin.stdin!.end(fixturePassword + "\n");
+  expect((await once(relogin, "exit"))[0]).toBe(0);
+  await page.getByLabel("Agent", { exact: true }).selectOption(profileId);
+  v = await read();
+  expect(v.tasks).toEqual(state.tasks);
+  expect(v.runs).toEqual(state.runs);
+  await page
+    .getByRole("button", { name: "Resume: Paper headlines", exact: true })
+    .click();
+  await run.click();
+  await expect
+    .poll(async () => (await read()).tasks[0].state)
+    .toBe("completed");
+  v = await read();
+  expect(v.runs).toHaveLength(3);
+  expect(v.runs[2].watch.newIds).toHaveLength(0);
+  expect(v.tasks[0].watch.seen).toHaveLength(1);
+  expect(v.notices).toHaveLength(1);
+  const result = page.getByRole("article", {
+    name: `Run ${v.runs[2].id}`,
+    exact: true,
+  });
+  await expect(result).toContainText("New matches: 0");
+  await page.getByRole("button", { name: "Results", exact: true }).click();
+  await page
+    .getByRole("article", { name: `Run ${v.runs[0].id}`, exact: true })
+    .getByRole("button", { name: "Discuss", exact: true })
+    .click();
+  await expect(page).toHaveURL(/#agents\/chat/);
+  const message = page
+    .locator(".chat-message")
+    .filter({ hasText: "Paper headlines" })
+    .last();
+  await expect(message).toContainText("New matches: 1");
+  await expect(message.locator(".watch-headlines")).toContainText(
+    "Controlled paper-news headline",
+  );
+  await message
+    .getByRole("button", { name: "Remember this", exact: true })
+    .click();
+  const memory = page.getByRole("dialog", { name: "Memory", exact: true });
+  await memory
+    .getByLabel("Fact", { exact: true })
+    .fill("Paper feed: repeated headlines do not notify again.");
+  await memory
+    .getByRole("button", { name: "Save memory", exact: true })
+    .click();
+  await expect.poll(async () => (await read()).memories.length).toBe(1);
+  const final = await read();
+  expect(final.tasks).toEqual(v.tasks);
+  expect(final.runs).toEqual(v.runs);
+  expect(final.aiRequests).toHaveLength(0);
+  expect(final.providerCallsEnabled).toBe(false);
+  expect(final.financialExecution).toBe(false);
+  const foreign = await privateCLI(["agents", "--profile", "news-researcher"]);
+  expect(foreign.tasks).toHaveLength(0);
+  expect(foreign.memories).toHaveLength(0);
+  await page.screenshot({
+    path: `.evidence/b04-news-watch/chat-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: false,
+  });
+  expect(external).toEqual([]);
+});

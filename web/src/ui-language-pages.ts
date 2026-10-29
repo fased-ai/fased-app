@@ -1,5 +1,24 @@
 // Static interface copy; user records, model output and raw receipts are never catalog keys.
 export const pageCopy = {
+  "Watch news": [
+    "Следить за новостями",
+    "Seguir noticias",
+    "关注新闻",
+    "뉴스 모니터링",
+  ],
+  "News watch": [
+    "Мониторинг новостей",
+    "Monitor de noticias",
+    "新闻监控",
+    "뉴스 모니터",
+  ],
+  Contains: ["Содержит", "Contiene", "包含", "포함"],
+  "New matches: {count}": [
+    "Новых совпадений: {count}",
+    "{count} coincidencias nuevas",
+    "{count} 条新匹配",
+    "새 일치 항목 {count}개",
+  ],
   "Output reserve": [
     "Резерв вывода",
     "Reserva de salida",

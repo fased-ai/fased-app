@@ -71,7 +71,9 @@ func queueTaskNews(d *agentDocument, i int, now int64) error {
 		return holdNewsTask(d, i, NewsFetch{State: "source-disabled"}, now)
 	}
 	if newsBusy(*d, source.ID) {
-		t.NextAt = now + 1
+		if t.Calendar == nil {
+			t.NextAt = now + 1
+		}
 		return nil
 	}
 	if len(d.NewsFetches) >= newsFetchLimit {
@@ -94,6 +96,11 @@ func queueTaskNews(d *agentDocument, i int, now int64) error {
 }
 func evaluateAgentTask(d *agentDocument, i int, now int64, fixture bool) error {
 	t := d.Tasks[i]
+	if t.Watch != nil && cronTask(t) && now > t.Calendar.Until {
+		d.Tasks[i].State = "completed"
+		d.Tasks[i].NextAt = 0
+		return nil
+	}
 	if t.WEN != nil {
 		return runWENPaper(d, i, now)
 	}

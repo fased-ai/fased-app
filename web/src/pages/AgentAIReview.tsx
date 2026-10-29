@@ -10,6 +10,7 @@ type ChatComposer = {
 import { AgentEvidenceInspector } from "./AgentEvidence";
 import { ChatPermissionReview } from "./ChatPermission";
 import { ChatReply } from "./ChatReply";
+import { NewsWatchMessage } from "./NewsWatchMessage";
 import { SlidersHorizontal, BookOpen } from "../icons";
 import type { ResearchSelection } from "./ResearchReadPanel";
 import { ChatMemoryReview } from "./ChatMemoryReview";
@@ -482,7 +483,7 @@ function AgentAIForm({
                   {entry.message.role === "system" ? (
                     <details>
                       <summary>{uiText("Saved locally")}</summary>
-                      <p>{entry.message.text}</p>
+                      <NewsWatchMessage text={entry.message.text} />
                     </details>
                   ) : (
                     <>
@@ -492,7 +493,7 @@ function AgentAIForm({
                           : uiText("Record")}{" "}
                         · {new Date(entry.at * 1000).toLocaleString()}
                       </small>
-                      <p>{entry.message.text}</p>
+                      <NewsWatchMessage text={entry.message.text} />
                     </>
                   )}
                   {entry.message.role === "user" && (

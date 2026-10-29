@@ -70,6 +70,58 @@ object with the current `revision` and `profileId`:
 task and journal records used by the UI. Use the existing task controls for
 pause/resume; the CLI grants no additional financial or model authority.
 
+## News watch
+
+In Tasks, choose **Watch news**, a source and **Contains**. The rule matches a
+literal phrase in headline titles, without case sensitivity. Choose an interval,
+a date or a recurring calendar, and a maximum of 1–20 runs. Review the source,
+rule, timing and limit, then create the task. Review alone saves nothing.
+
+Each run fetches a fresh bounded snapshot. The first successful run reports all
+matching items as new. Later runs notify the local Inbox only for matching item
+identities the task has not seen. Identity includes source, title, link and
+publication time; a changed article is a distinct item. A successful check with
+no new matches still saves a result, without another notification. The task's
+cursor survives pause, resume and restart. Source failure, stale data or an
+interrupted fetch holds only dependent work; resume is explicit and consumes the
+remaining run allowance. No cached fallback, retry or AI interpretation occurs.
+No provider, API key, model or background AI access is required, including when
+the attached agent has a locked provider. Headlines remain untrusted data.
+
+Open a result to see its new headlines and retained source details. **Discuss**
+copies the saved result to Chat without rerunning it or fetching news. **Remember
+this** uses the existing reviewed memory flow; it never saves a note silently.
+
+The CLI uses the same review and execution commands. After `agents --profile
+PROFILE` returns the current revision and selected source ID, send this JSON to
+`fased-app agents --data-dir /private/instance --request-stdin`:
+
+```json
+{
+  "action": "task-review",
+  "profileId": "PROFILE",
+  "revision": 12,
+  "name": "Market headlines",
+  "newsSourceId": "SOURCE_ID",
+  "newsMaxAgeSeconds": 300,
+  "watch": { "version": "news-watch-v1", "contains": "bitcoin" },
+  "intervalSeconds": 300,
+  "maxRuns": 3
+}
+```
+
+Replace the example revision and identities with your instance's values. Inspect
+`taskReview`, then submit the same inputs as `task-reviewed-create`, adding its
+`revision`, `expiresAt` and `digest` as `consentDigest`. Calendar rules use the
+existing `calendar` object instead of an interval. Direct `task-create` refuses
+watch rules. Use `task-run`, `task-pause` and `task-resume` with the saved task ID;
+`task-run-explain` takes a run ID. Every command retains normal authentication,
+profile scope, revision and capacity checks. Schema 28 and
+`agents-news-watch-v1` protect typed rules, run results and notification cursors;
+schema-27 readers refuse newer state. Migration changes only the schema floor,
+preserving original documents, revisions and encrypted credentials. Retained
+source/run capacity remains finite; a watch is not an unlimited background feed.
+
 Schema 8 and `agents-news-v1` prevent older readers from dropping news evidence
 and dependencies. Paused schema-7 state must finish update recovery before
 migration. Existing records remain intact. The revised scheduled-AI consent

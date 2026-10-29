@@ -48,13 +48,16 @@ func validateCalendarCommand(c AgentCommand, now int64) error {
 	if !validCalendar(calendar) || calendar.At < now+60 || calendar.At > now+366*86400 || (calendar.Version == "cron-v1" && calendar.Until > now+366*86400) {
 		return errors.New("choose a valid timezone and a date 1 minute–366 days ahead")
 	}
-	if c.IntervalSeconds != 0 || (calendar.Version == "once-at-v1" && c.MaxRuns != 1) || c.BotID != "" || c.NewsSourceID != "" || c.NewsMaxAgeSeconds != 0 {
+	if c.IntervalSeconds != 0 || (calendar.Version == "once-at-v1" && c.MaxRuns != 1) || c.BotID != "" || (c.Watch == nil && (c.NewsSourceID != "" || c.NewsMaxAgeSeconds != 0)) {
 		return errors.New("calendar schedules support plain reminders without interval, bot or news inputs")
 	}
 	return nil
 }
 
 func validCalendarTask(t AgentTask) bool {
+	if t.Watch != nil {
+		return validWatchCalendar(t)
+	}
 	policy := (cronTask(t) && validCronTask(t)) || (!cronTask(t) && validCalendar(t.Calendar) && t.MaxRuns == 1 && t.Runs >= 0 && t.Runs <= 1 && t.NextAt == t.Calendar.At && ((t.State == "completed") == (t.Runs == 1)))
 	return policy && t.IntervalSeconds == 0 && t.AI == nil && t.News == nil && t.BotID == "" && t.WEN == nil && t.Playbook == nil && validAgentText(t.Text, 4000, true) &&
 		(t.State == "scheduled" || t.State == "paused" || t.State == "completed")

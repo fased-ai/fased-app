@@ -138,7 +138,7 @@ func (s *Server) startAgentTasks() {
 		var newsRT http.RoundTripper = newPublicNewsTransport()
 		var aiRT http.RoundTripper = s.Store.providerRuntimeTransport()
 		if s.agentFixture {
-			newsRT = fixtureNewsTransport{now: s.Store.now}
+			newsRT = fixtureNewsTransport{now: s.Store.now, store: s.Store}
 			aiRT = fixtureAITransport{}
 		}
 		for {
