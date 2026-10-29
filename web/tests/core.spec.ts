@@ -20,7 +20,8 @@ test("agent memory and archives keep recall sources journals and results through
   await start(true);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#agents/chat");
   const claim = JSON.parse(
@@ -269,7 +270,8 @@ test("reviewed recurring tasks preserve named zones bounds CLI results pause and
   page.setDefaultTimeout(10000);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#agents/tasks");
   const claim = JSON.parse(
@@ -405,7 +407,8 @@ test("existing pages localize controls and keep owner drafts records and Meteora
   page.setDefaultTimeout(10000);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#agents/chat");
   const claim = JSON.parse(
@@ -558,7 +561,8 @@ test("Meteora shell preserves drafts and records through navigation theme langua
   page.setDefaultTimeout(10000);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.emulateMedia({ colorScheme: "dark" });
   await page.goto(url + "/#chat");
@@ -750,7 +754,7 @@ test.describe("calendar reminders", () => {
     test.setTimeout(75000);
     const external: string[] = [];
     page.on("request", (r) => {
-      if (new URL(r.url()).origin !== new URL(url).origin)
+      if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
         external.push(r.url());
     });
     await page.goto(url + "/#agents/tasks");
@@ -973,7 +977,8 @@ test("compact Tasks reviews without writes and preserves bounded runs across UI 
   page.setDefaultTimeout(10000);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#agents/tasks");
   const claim = JSON.parse(
@@ -1135,7 +1140,8 @@ test("normal Chat grants bounded replies, streams Send and retains scoped histor
   await start(true);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#settings");
   const claim = JSON.parse(
@@ -1558,6 +1564,9 @@ let dir: string;
 let child: ChildProcess | undefined;
 let url: string;
 let output = "";
+// Only this test's spawned cores are trusted. Keep their earlier ports during
+// restart; unrelated loopback and external origins remain disallowed.
+const ownedFixtureOrigins = new Set<string>();
 
 async function start(
   aiFixture = false,
@@ -1589,6 +1598,7 @@ async function start(
     throw Error(`Fixture core startup failed:\n${output}\n${String(error)}`);
   }
   url = JSON.parse(output.trim().split("\n")[0]).url;
+  ownedFixtureOrigins.add(new URL(url).origin);
 }
 async function stop() {
   if (!child || child.exitCode !== null) return;
@@ -1633,6 +1643,7 @@ async function fixtureProviderSelection(
 }
 
 test.beforeEach(async () => {
+  ownedFixtureOrigins.clear();
   const root = resolve(".evidence/core-browser-fixtures");
   await mkdir(root, { recursive: true, mode: 0o700 });
   // Disposable, reconstructible state; keep IPC independent of checkout length.
@@ -1657,7 +1668,8 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
   await start(true);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#agents/tasks");
 
@@ -1983,7 +1995,7 @@ test("reviewed memory restoration shares inert UI CLI drafts, expiry, current-on
   const external: string[] = [];
   const writes: Record<string, unknown>[] = [];
   page.on("request", (request) => {
-    if (new URL(request.url()).origin !== new URL(url).origin)
+    if (!ownedFixtureOrigins.has(new URL(request.url()).origin))
       external.push(request.url());
     if (
       request.method() === "POST" &&
@@ -2301,7 +2313,7 @@ test("expired owner access returns to sign-in without replay or stale-session re
   const external: string[] = [];
   const writes: string[] = [];
   page.on("request", (request) => {
-    if (new URL(request.url()).origin !== new URL(url).origin)
+    if (!ownedFixtureOrigins.has(new URL(request.url()).origin))
       external.push(request.url());
     if (request.method() !== "GET")
       writes.push(`${request.method()} ${new URL(request.url()).pathname}`);
@@ -2531,7 +2543,8 @@ test("periodic refresh follows the requested profile while a selection is pendin
   const writes: string[] = [];
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
     if (new URL(r.url()).pathname === "/api/v1/agents" && r.method() !== "GET")
       writes.push(r.method());
   });
@@ -2643,7 +2656,8 @@ test("chat drafts stay with their conversation through search switching and a pe
   const external: string[] = [];
   const writes: Record<string, unknown>[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
     if (new URL(r.url()).pathname === "/api/v1/agents" && r.method() === "POST")
       writes.push(r.postDataJSON());
   });
@@ -2859,7 +2873,8 @@ test("agent selection survives reload and core restart with scoped preference fa
   const external: string[] = [];
   const writes: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
     if (new URL(r.url()).pathname === "/api/v1/agents" && r.method() !== "GET")
       writes.push(r.method());
   });
@@ -2998,7 +3013,8 @@ test("task inbox opens the exact named run without writes across profiles and re
   page.setDefaultTimeout(10000);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url);
   const claim = JSON.parse(
@@ -3462,7 +3478,8 @@ test("conversation search follows matching records and closes hidden conversatio
   page.setDefaultTimeout(10000);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url);
   const claim = JSON.parse(
@@ -4765,7 +4782,7 @@ test("Satcoin prototype preserves legacy links and disabled authority across cor
   const external: string[] = [];
   const mutations: string[] = [];
   page.on("request", (request) => {
-    if (new URL(request.url()).origin !== new URL(url).origin)
+    if (!ownedFixtureOrigins.has(new URL(request.url()).origin))
       external.push(request.url());
     if (!["GET", "HEAD"].includes(request.method()))
       mutations.push(request.url());
@@ -6528,7 +6545,8 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
   expect((await once(login, "exit"))[0]).toBe(0);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#terminals/satcoin");
   const journey = page.getByRole("region", { name: "WEN paper journey" });
@@ -6897,7 +6915,8 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
   const sessionId = v.sessions[0].id;
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#agents/chat");
   await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
@@ -7200,7 +7219,8 @@ test("chat memory requires explicit source-backed UI and CLI save and survives r
   const message = v.messages[0];
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#agents/chat");
   await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
@@ -7466,7 +7486,8 @@ test("task run chat shares historical UI and CLI capture, explicit fixture expla
   };
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#agents/tasks");
   await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
@@ -7681,7 +7702,8 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
   await command({ action: "session-create", name: "Older conversation" });
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#agents/chat");
   await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
@@ -13020,7 +13042,8 @@ test("Providers page preserves agent drafts and shares account models without ge
   await start(true);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#agents/settings");
   const claim = JSON.parse(
@@ -13146,7 +13169,8 @@ test("New cloud accounts use the Providers page and shared agent Chat without ge
   await start(true);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#providers");
   const claim = JSON.parse(
@@ -13363,7 +13387,8 @@ test("Named local servers share setup models and agent Chat without retargeting 
   await start(true);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#providers");
   const claim = JSON.parse(
@@ -13518,7 +13543,8 @@ test("Qwen API keeps its region and model through Providers, agent and Chat", as
   await start(true);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#providers");
   const claim = JSON.parse(
@@ -13678,7 +13704,8 @@ test("Kimi regional USD account shares agent Chat and preserves mainland records
   await start(true);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#providers");
   const claim = JSON.parse(
@@ -13856,7 +13883,8 @@ test("Google API sign-in uses project models in agent Chat and preserves its API
   await start(true);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#providers");
   const claim = JSON.parse(
@@ -14037,7 +14065,8 @@ test("Kimi Code membership connects models agent and normal Chat without task au
   await start(true);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#providers");
   const claim = JSON.parse(
@@ -14221,7 +14250,8 @@ test("Anthropic workspace account joins models agent Chat and preserves existing
   await start(true);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#providers");
   const claim = JSON.parse(
@@ -14394,7 +14424,8 @@ test("Ollama Cloud key joins models agent Chat and task access without an invent
   await start(true);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#providers");
   const claim = JSON.parse(
