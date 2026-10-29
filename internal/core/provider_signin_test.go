@@ -383,7 +383,7 @@ func TestProviderSignInVaultMaximumAccountsAndOversizePreservation(t *testing.T)
 	clear(key)
 	gcm, _ := cipher.NewGCM(block)
 	col := aiVaultCollection{Version: 3}
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 16; i++ {
 		ref, err := randomToken()
 		if err != nil {
 			t.Fatal(err)
@@ -404,7 +404,7 @@ func TestProviderSignInVaultMaximumAccountsAndOversizePreservation(t *testing.T)
 		t.Fatal("not exercising former file limit", len(original), err)
 	}
 	read, err := s.readAIVaultCollection()
-	if err != nil || len(read.Accounts) != 8 {
+	if err != nil || len(read.Accounts) != 16 {
 		t.Fatal("writer produced unreadable maximum collection", err)
 	}
 	for _, env := range read.Accounts {
@@ -430,11 +430,11 @@ func TestProviderSignInVaultMaximumAccountsAndOversizePreservation(t *testing.T)
 		copy.Accounts = append([]aiVaultEnvelope(nil), col.Accounts...)
 		return copy
 	}
-	ninth := clone()
+	overflow := clone()
 	extra := col.Accounts[0]
 	extra.Ref, _ = randomToken()
-	ninth.Accounts = append(ninth.Accounts, extra)
-	assertPreserved(ninth)
+	overflow.Accounts = append(overflow.Accounts, extra)
+	assertPreserved(overflow)
 	oversize := clone()
 	oversize.Accounts[0].Ciphertext = append(append([]byte(nil), col.Accounts[0].Ciphertext...), 0)
 	assertPreserved(oversize)

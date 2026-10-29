@@ -10510,11 +10510,11 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
       .getByRole("button", { name: "Refresh update status" }),
   ).toBeVisible();
   await expect(
-    page.getByText(
-      "Reset clears browser demo preferences. Saved core records are preserved.",
-      { exact: true },
-    ),
-  ).toBeVisible();
+    page.getByRole("button", { name: "Reset prototype", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "Browser demo data", exact: true }),
+  ).toHaveCount(0);
   const notices = page.getByLabel("Show notices for pending proposals");
   await expect(notices).toBeChecked();
   const checkbox = await notices.evaluate((input) => {
@@ -10818,9 +10818,9 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
     activity.getByRole("list", { name: "Activity events", exact: true }),
   ).toBeVisible();
   await expect(activity).toContainText("V3 activity reminder");
-  await expect(activity).toContainText(
-    "Saved by the local task engine. No financial execution.",
-  );
+  await expect(
+    activity.getByRole("button", { name: "Result", exact: true }),
+  ).toBeVisible();
   await expect(activity.getByText("UNREAD", { exact: true })).toBeVisible();
   expect(
     await page.evaluate(
@@ -11528,7 +11528,7 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
   const primary = await privateCLI(["ai-connection"]);
   expect(primary.ref).not.toBe("");
   await editor
-    .getByRole("button", { name: "Add account", exact: true })
+    .getByRole("button", { name: "Add provider", exact: true })
     .click();
   await editor.getByLabel("Name", { exact: true }).fill("Research");
   await editor
@@ -11865,11 +11865,8 @@ test("provider editor follows core credential admission without enabling live ca
   await expect(editor.getByLabel("API key", { exact: true })).toHaveValue("");
   await page.unrouteAll({ behavior: "wait" });
   await page.reload();
-  await page.getByRole("button", { name: "Setup", exact: true }).click();
-  await page
-    .getByRole("dialog", { name: "Instance", exact: true })
-    .getByRole("button", { name: "Providers", exact: true })
-    .click();
+  await expect(page).toHaveURL(/#providers$/);
+  await expect(editor).toBeVisible();
   await revealControl(
     page,
     editor.getByLabel("Vault passphrase", { exact: true }),
@@ -12076,7 +12073,7 @@ for (const location of ["local", "remote"]) {
       .click();
     const editor = page.getByRole("region", { name: "Providers", exact: true });
     await editor
-      .getByRole("button", { name: "Add account", exact: true })
+      .getByRole("button", { name: "Add provider", exact: true })
       .click();
     await editor.getByRole("button", { name: "Sign in", exact: true }).click();
     await editor.getByLabel("Name", { exact: true }).fill("ChatGPT research");
@@ -12535,7 +12532,7 @@ test("shared Add Provider binds native accounts and latest models across Chat an
   const editor = page.getByRole("region", { name: "Providers", exact: true });
   for (const provider of ["anthropic", "xai"]) {
     await editor
-      .getByRole("button", { name: "Add account", exact: true })
+      .getByRole("button", { name: "Add provider", exact: true })
       .click();
     await editor.locator(`[data-provider=${provider}] > button`).click();
     await expect(editor.getByLabel("API key", { exact: true })).toBeVisible();
@@ -12820,7 +12817,7 @@ test("scoped pilot controls keep review allow and revoke exact while ordinary co
     window.dispatchEvent(new Event("ai-connection-changed")),
   );
   await expect(
-    editor.getByRole("button", { name: "Add account", exact: true }),
+    editor.getByRole("button", { name: "Add provider", exact: true }),
   ).toBeDisabled();
   const credentials = editor
     .locator("details.connection-options")

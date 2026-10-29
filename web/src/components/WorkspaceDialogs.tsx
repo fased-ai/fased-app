@@ -57,6 +57,7 @@ export function WorkspaceDialogs() {
   const [newModel, setNewModel] = useState("");
   const [instructions, setInstructions] = useState("");
   const [resumeAgent, setResumeAgent] = useState(false);
+  const [creationReady, setCreationReady] = useState(false);
   const accounts =
     connections?.connections ?? (connections?.ref ? [connections] : []);
   const account = accounts.find((item) => item.ref === newAccount);
@@ -75,8 +76,21 @@ export function WorkspaceDialogs() {
     );
   const visitedProviders = useRef(false);
   useEffect(() => {
-    if (profileOpen && connected) void refreshConnections();
-  }, [profileOpen, connected, refreshConnections]);
+    let active = true;
+    setCreationReady(false);
+    if (profileOpen && connected) {
+      // CLI account changes and finished replies may advance the workspace.
+      // Read both snapshots before enabling creation; keep the owner's draft.
+      void Promise.all([refreshConnections(), agents.refresh()])
+        .then(([connections]) => {
+          if (active && connections) setCreationReady(true);
+        })
+        .catch(() => {});
+    }
+    return () => {
+      active = false;
+    };
+  }, [profileOpen, connected, refreshConnections, agents.refresh]);
   useEffect(() => {
     if (providersOpen) visitedProviders.current = true;
     else if (visitedProviders.current) {
@@ -547,7 +561,7 @@ export function WorkspaceDialogs() {
               e.preventDefault();
               if (
                 !profileName.trim() ||
-                (connected && newAccount && !modelReady)
+                (connected && (!creationReady || (newAccount && !modelReady)))
               )
                 return;
               if (connected) {
@@ -699,7 +713,10 @@ export function WorkspaceDialogs() {
                   !profileName.trim() ||
                   state.profiles.length >= 30 ||
                   agents.busy ||
-                  (connected && (!agents.view || (!!newAccount && !modelReady)))
+                  (connected &&
+                    (!creationReady ||
+                      !agents.view ||
+                      (!!newAccount && !modelReady)))
                 }
               >
                 {uiText("Create agent")}
