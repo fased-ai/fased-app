@@ -50,6 +50,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	interactive := f.Bool("interactive", false, "guide installation in this terminal")
 	access := f.String("access", "local", "local, ssh or tailscale private access")
 	vps := f.Bool("vps", false, "require always-on Linux VPS readiness")
+	managedRemote := f.Bool("managed-remote", false, "install Ubuntu Remote using a dedicated locked application account")
 	packageDir := f.String("bundle", "", "verify and install this platform package inventory")
 	packageSHA256 := f.String("bundle-sha256", "", "independently obtained SHA-256 of exact bundle.json bytes")
 	installRuntime := f.Bool("install-runtime", false, "authorize Ubuntu 24.04's OS package manager to install missing desktop runtime libraries")
@@ -64,6 +65,12 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		return errors.New("--bundle-sha256 requires install --bundle")
 	}
 	paths = localinstall.Paths{Root: *root, Data: *data}
+	if *managedRemote && command != "install" {
+		return errors.New("--managed-remote is an installation option")
+	}
+	if *managedRemote && !*interactive {
+		*vps = true
+	}
 	budget := 30 * time.Second
 	if command == "install" {
 		budget = 15 * time.Minute
@@ -104,11 +111,30 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 					return errors.New("choose tailscale or ssh")
 				}
 			}
+			*managedRemote = false
+			if *vps {
+				dedicated, e := installationManagedRemote(r, errOut)
+				if e != nil {
+					return e
+				}
+				*managedRemote = dedicated
+			}
 			autostartChoice, e := installationAutostart(r, errOut, *vps)
 			if e != nil {
 				return e
 			}
 			*autostart = autostartChoice
+		}
+		if *managedRemote {
+			explicitPaths := false
+			f.Visit(func(value *flag.Flag) {
+				if value.Name == "prefix" || value.Name == "data-dir" {
+					explicitPaths = true
+				}
+			})
+			if err := validateManagedRemote(*packageDir, *desktop != "", *autostart, explicitPaths); err != nil {
+				return err
+			}
 		}
 		engine, err := os.Executable()
 		if err != nil {
@@ -126,6 +152,9 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 				*desktop = filepath.Join(canonical, localinstall.DesktopName())
 			}
 		}
+		if *managedRemote && inventory.Desktop {
+			return errors.New("managed Remote requires a verified headless bundle")
+		}
 		if *vps {
 			if *access != "ssh" && *access != "tailscale" {
 				return errors.New("Remote installation requires --access ssh or tailscale")
@@ -133,8 +162,10 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			if runtime.GOOS != "linux" || !*autostart {
 				return errors.New("VPS installation requires Linux and explicit --autostart")
 			}
-			if err = checkLinger(ctx); err != nil {
-				return err
+			if !*managedRemote {
+				if err = checkLinger(ctx); err != nil {
+					return err
+				}
 			}
 		}
 		plan, err := privateaccess.System().Plan(ctx, *access, *listen)
@@ -147,13 +178,23 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			}
 			*origin = plan.Origin
 		}
+		if *managedRemote && plan.Mode != "tailscale" && *origin != "" {
+			return errors.New("managed Remote HTTPS origin is set by the Tailscale access choice")
+		}
 		if err = localinstall.Validate(paths, localinstall.Options{Listen: *listen, PublicOrigin: *origin}); err != nil {
 			return err
 		}
-		if *interactive && !*prepareHost && needsHostPreparation(*desktop) {
-			fmt.Fprint(errOut, "Ubuntu needs OS prerequisites and its restrictive Bubblewrap policy. Authorize automatic preparation with sudo? [y/N]: ")
+		if *interactive && !*prepareHost && (needsHostPreparation(*desktop) || *managedRemote) {
+			prompt := "Authorize required Ubuntu preparation with sudo? [y/N]: "
+			if *managedRemote {
+				prompt = "Authorize Ubuntu preparation, a locked app account and a system service with sudo? [y/N]: "
+			}
+			fmt.Fprint(errOut, prompt)
 			choice, _ := wizard.ReadString('\n')
 			*prepareHost = strings.EqualFold(strings.TrimSpace(choice), "y")
+		}
+		if *managedRemote {
+			return managedRemoteInstall(ctx, engine, inventory.Files[localinstall.EngineName()].SHA256, *listen, plan, *prepareHost, *start, out, errOut)
 		}
 		if err = desktopRuntime(ctx, *desktop, *packageDir, *data, *installRuntime, *prepareHost, os.Stdin, errOut); err != nil {
 			return err

@@ -37,7 +37,7 @@ func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.root == nil || p.closed || p.invoked || !p.report.BundleVerified || os.Geteuid() == 0 {
-		return errors.New("fresh verified development bootstrap and explicit owner invocation required")
+		return errors.New("fresh verified first-install bootstrap and explicit owner invocation required")
 	}
 	defaults, err := localinstall.DefaultPaths()
 	if err != nil {

@@ -11,6 +11,24 @@ export type Language = keyof typeof languages;
 // Interface copy only. Never translate user records, model output or server receipts.
 const rows = {
   Recovery: ["Восстановление", "Recuperación", "恢复", "복구"],
+  "Run on this instance": [
+    "Выполните на этом экземпляре",
+    "Ejecuta en esta instancia",
+    "在此实例执行",
+    "이 인스턴스에서 실행",
+  ],
+  "Use the setup command printed by the installer.": [
+    "Используйте команду настройки, выданную установщиком.",
+    "Usa el comando de configuración que mostró el instalador.",
+    "请使用安装程序显示的设置命令。",
+    "설치 프로그램에 표시된 설정 명령을 사용하세요.",
+  ],
+  "Use this installation’s recovery commands.": [
+    "Используйте команды восстановления этой установки.",
+    "Usa los comandos de recuperación de esta instalación.",
+    "请使用此安装的恢复命令。",
+    "이 설치의 복구 명령을 사용하세요.",
+  ],
   Restore: ["Восстановить", "Restaurar", "恢复", "복원"],
   "Backup file": [
     "Файл резервной копии",

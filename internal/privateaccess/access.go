@@ -205,6 +205,30 @@ func (m Manager) Enable(ctx context.Context, root string, p Plan, instanceID str
 	if !reflect.DeepEqual(cfg, expected(p)) {
 		return errors.New("Serve/Funnel configuration differs; no reset or overwrite was attempted")
 	}
+	if err = m.verifyEndpoint(ctx, p, instanceID); err != nil {
+		return err
+	}
+	r.Phase = "ready"
+	return core.WritePrivateJSON(filepath.Join(root, "private-access.json"), r)
+}
+
+// Verify checks the existing private route without changing Serve or owner state.
+// The exact inventory excludes Funnel and unrelated/foreign endpoints.
+func (m Manager) Verify(ctx context.Context, p Plan, instanceID string) error {
+	if p.Mode != "tailscale" || !strings.HasPrefix(p.Origin, "https://") || !dnsName.MatchString(strings.TrimPrefix(p.Origin, "https://")) {
+		return errors.New("private Tailscale HTTPS route required")
+	}
+	cfg, _, err := m.config(ctx)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(cfg, expected(p)) {
+		return errors.New("Serve/Funnel configuration changed; preserve access and inspect it before lockdown")
+	}
+	return m.verifyEndpoint(ctx, p, instanceID)
+}
+
+func (m Manager) verifyEndpoint(ctx context.Context, p Plan, instanceID string) error {
 	client := &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("private access redirected") }}
 	if m.Client != nil {
 		client = m.Client
@@ -221,8 +245,7 @@ func (m Manager) Enable(ctx context.Context, root string, p Plan, instanceID str
 	if _, err = connection.ReadHealth(resp, instanceID); err != nil {
 		return errors.New("private HTTPS reached a different or incompatible app; route remains recorded for recovery")
 	}
-	r.Phase = "ready"
-	return core.WritePrivateJSON(filepath.Join(root, "private-access.json"), r)
+	return nil
 }
 func (m Manager) Remove(ctx context.Context, root string) error {
 	r, err := load(root)

@@ -83,6 +83,32 @@ jobs:
       - if: needs.classify.outputs.scope == 'rpc'
         run: go test -race ./internal/core -run 'Test(RPC|AccountRPC|PublicRPC|ProviderRPC)'
       - run: npm run build:core
+      - name: Portable encrypted history and quarantined recovery checks
+        if: needs.classify.outputs.signer == 'true'
+        run: node scripts/check-portable-recovery.mjs
+      - name: Disposable TUF trust and read-only CLI rehearsal
+        if: needs.classify.outputs.signer == 'true'
+        env:
+          FASED_TRUST_CORE: ${{ github.workspace }}/.evidence/bin/fased-app
+          FASED_TRUST_EVIDENCE: ${{ github.workspace }}/.evidence/p4-trust-rehearsal
+        run: |
+          mkdir -p .evidence/p4-trust-rehearsal
+          go test -v ./internal/update -run '^TestTrustRehearsalCompiledCLI$' > .evidence/p4-trust-rehearsal/trust-cli.log 2>&1
+          cat .evidence/p4-trust-rehearsal/trust-cli.log
+      - name: Retain selected recovery evidence
+        if: always() && needs.classify.outputs.signer == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-recovery-evidence
+          include-hidden-files: true
+          path: |
+            .evidence/p4-portable-recovery/local-result.json
+            .evidence/p4-portable-recovery/tests.jsonl
+            .evidence/p4-portable-recovery/stderr.log
+            .evidence/p4-portable-recovery/source-inputs.json
+            .evidence/p4-trust-rehearsal/trust-cli-result.json
+            .evidence/p4-trust-rehearsal/trust-cli.log
+          retention-days: 7
       - name: Headless Windows compilation
         run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o .evidence/bin/windows.exe ./cmd/fased-app
       - name: Headless macOS compilation
@@ -90,12 +116,12 @@ jobs:
       # Same runner libraries and headless browser as the managed signer UI proof.
       - run: npx playwright install --only-shell chromium
       - run: npm run test:ui
-      - if: needs.classify.outputs.scope != 'rpc'
+      - if: needs.classify.outputs.scope == 'ui'
         run: npm run test:core-ui
       - if: needs.classify.outputs.scope == 'rpc'
         run: npm run test:core-ui -- --grep 'public account records share UI/CLI state without wallet authority'
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: failure() || cancelled()
         with:
           name: core-failure-evidence
           include-hidden-files: true
@@ -183,6 +209,12 @@ jobs:
       - name: Packaged Ubuntu desktop first-launch preparation
         if: runner.os == 'Linux'
         run: xvfb-run -a node scripts/check-native-first-launch.mjs
+      - name: Prepare joined UI browser
+        if: runner.os == 'Linux' && needs.classify.outputs.scope == 'full'
+        run: npx playwright install --only-shell chromium
+      - name: Joined UI and CLI journey
+        if: runner.os == 'Linux' && needs.classify.outputs.scope == 'full'
+        run: npm run test:core-ui
       - name: Remove owned Ubuntu acceptance policy after native window
         if: always() && runner.os == 'Linux'
         run: node --input-type=module -e "const m = await import('./scripts/ubuntu-preparation.mjs'); await m.cleanupUbuntuPreparation();"
@@ -198,13 +230,15 @@ jobs:
             .evidence/native-first-launch.log
           retention-days: 7
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: failure() || cancelled()
         with:
           name: desktop-failure-${{ matrix.os }}
           include-hidden-files: true
           path: |
             .evidence/*.json
+            .evidence/*.png
             .evidence/*.log
+            .evidence/core-browser/
           retention-days: 7
   signer:
     needs: classify
@@ -231,22 +265,12 @@ jobs:
           go build -trimpath -o .evidence/bin/fased-app ./cmd/fased-app
       - name: Build deliberately unhealthy disposable candidate
         run: go build -trimpath -o .evidence/bin/fased-unhealthy-core ./internal/custodyinstall/testdata/unhealthy-core
-      - name: Portable encrypted history and quarantined recovery checks
-        run: node scripts/check-portable-recovery.mjs
       - name: Read-only signed development manifest and compatibility journey
         env:
           FASED_UPDATE_EVIDENCE: .evidence/p4-complete
         run: node scripts/check-update-manifest.mjs
       - name: Development HTTPS acquisition and independently pinned bootstrap trust
         run: node scripts/check-update-acquisition.mjs
-      - name: Disposable TUF trust and read-only CLI rehearsal
-        env:
-          FASED_TRUST_CORE: ${{ github.workspace }}/.evidence/bin/fased-app
-          FASED_TRUST_EVIDENCE: ${{ github.workspace }}/.evidence/p4-trust-rehearsal
-        run: |
-          mkdir -p .evidence/p4-trust-rehearsal
-          go test -v ./internal/update -run '^TestTrustRehearsalCompiledCLI$' > .evidence/p4-trust-rehearsal/trust-cli.log 2>&1
-          cat .evidence/p4-trust-rehearsal/trust-cli.log
       - name: Compiled private core state inventory journey
         env:
           FASED_STATE_EVIDENCE: .evidence/p4-complete
@@ -283,8 +307,6 @@ jobs:
           path: |
             .evidence/p4-release-admission/admission-cli-result.json
             .evidence/p4-release-admission/admission-cli.log
-            .evidence/p4-trust-rehearsal/trust-cli-result.json
-            .evidence/p4-trust-rehearsal/trust-cli.log
             .evidence/p4-acquisition/acquisition-cli-result.json
             .evidence/p4-acquisition/acquisition-cli.log
             .evidence/p4-bootstrap/fixture-builds.json
@@ -293,10 +315,6 @@ jobs:
             .evidence/p4-bootstrap/managed/managed-install.log
             .evidence/p3-signer/isolation-result.json
             .evidence/p3-signer/isolation.log
-            .evidence/p4-portable-recovery/local-result.json
-            .evidence/p4-portable-recovery/tests.jsonl
-            .evidence/p4-portable-recovery/stderr.log
-            .evidence/p4-portable-recovery/source-inputs.json
             .evidence/p4-portable-recovery/installed-result.json
             .evidence/p4-portable-recovery/target-config.json
             .evidence/p3-managed/managed-install-result.json

@@ -88,7 +88,8 @@ func Verify(dir string) (Manifest, error) {
 
 // VerifyPinned binds the exact manifest bytes when an independently obtained
 // digest is supplied. It does not establish a publisher identity or release
-// channel, and never promotes an engineering bundle into a public release.
+// channel. Schema 2 is a distinct release-format integrity contract, not proof
+// of publisher trust; that authorization belongs to the independent bootstrap.
 func VerifyPinned(dir, manifestSHA256 string) (Manifest, error) {
 	var m Manifest
 	if manifestSHA256 != "" {
@@ -115,8 +116,15 @@ func VerifyPinned(dir, manifestSHA256 string) (Manifest, error) {
 	if e = update.StrictJSON(b, &m); e != nil {
 		return m, e
 	}
-	if m.Schema != 1 || m.Platform != runtime.GOOS || m.Arch != runtime.GOARCH || m.Version == "" || !m.UnsignedEngineering {
+	engineering := m.Schema == 1 && m.UnsignedEngineering
+	release := m.Schema == 2 && !m.UnsignedEngineering && !m.Desktop && m.Platform == "linux" && m.Arch == "amd64"
+	if (!engineering && !release) || m.Platform != runtime.GOOS || m.Arch != runtime.GOARCH || m.Version == "" {
 		return m, errors.New("unsupported bundle identity or release mode")
+	}
+	if release {
+		if _, present := m.Files["INSTALL.txt"]; !present {
+			return m, errors.New("release bundle requires the guide in its verified inventory")
+		}
 	}
 	engine, desktop := Names()
 	allowed := map[string]bool{engine: true, "LICENSE": true, "NOTICE": true}
@@ -152,7 +160,7 @@ func VerifyPinned(dir, manifestSHA256 string) (Manifest, error) {
 		}
 		// Older engineering archives included this non-executable guide outside
 		// the inventory. Retain read compatibility without following symlinks.
-		if name == "INSTALL.txt" {
+		if name == "INSTALL.txt" && engineering {
 			guide, err := Inspect(filepath.Join(dir, name))
 			if err == nil && guide.Bytes <= maxManifestBytes {
 				continue
