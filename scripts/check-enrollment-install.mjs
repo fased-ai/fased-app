@@ -13,6 +13,10 @@ import {
   seedEnrollmentSource,
   snapshotCode,
 } from "./fixture-enrollment-state.mjs";
+import {
+  readEnrollmentObservation,
+  removeEnrollmentUnitLink,
+} from "./fixture-enrollment-observer.mjs";
 
 assert.equal(
   process.env.FASED_ENROLLMENT_ACCEPTANCE,
@@ -214,6 +218,7 @@ async function controlledInterruption(args, instance) {
   await mkdir(dir, { mode: 0o700 });
   let paused = false,
     busy = false,
+    journalDurable = false,
     observed,
     interruptionError,
     current;
@@ -236,7 +241,11 @@ async function controlledInterruption(args, instance) {
       return;
     busy = true;
     try {
-      const j = JSON.parse(await readFile(join(dir, "state.json"), "utf8"));
+      const j = await readEnrollmentObservation(join(dir, "state.json"), {
+        durable: journalDurable,
+      });
+      if (j === undefined) return;
+      journalDurable = true;
       if (
         preFence.has(j.phase) &&
         j.target.id &&
@@ -251,8 +260,9 @@ async function controlledInterruption(args, instance) {
         }
         const status = await readFile(`/proc/${current.pid}/status`, "utf8");
         assert.match(status, /^State:\s+T/m, "coordinator did not stop");
-        const stable = JSON.parse(
-          await readFile(join(dir, "state.json"), "utf8"),
+        const stable = await readEnrollmentObservation(
+          join(dir, "state.json"),
+          { durable: true },
         );
         assert.ok(
           preFence.has(stable.phase) &&
@@ -390,7 +400,7 @@ async function cleanProfile(source) {
         "--now",
         "fased-app.service",
       ]);
-      await rm(userUnit);
+      await removeEnrollmentUnitLink(userUnit);
       execute("/usr/bin/systemctl", ["--user", "daemon-reload"]);
     }
   });
