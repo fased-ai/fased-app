@@ -152,7 +152,10 @@ publishes the complete staged target before activation. It preserves the origina
 instance ID, Local/Remote profile, listener/private origin, records/drafts, vault
 bindings, usage and recovery holds. No signer key is transferred; an existing
 foreign or funded target is not adopted. Owner/app/signer UIDs remain distinct.
-Original installation files and archived data remain retained.
+Original installation files and archived data remain retained. Completed owner-bound
+host-preparation records stay in that retained source; they are not transferred
+to the app UID. Enrollment holds their existing lock and refuses unfinished,
+foreign or replaced preparation state.
 
 Retry interruption with the same complete enrollment command, binary pair,
 source ID and network. Once fencing begins, recovery proceeds forward; never

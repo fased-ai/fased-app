@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,13 +33,18 @@ type enrollmentEntry struct {
 type enrollmentSourceLock struct {
 	root *os.File
 	file *os.File
+	host *os.File
 	once sync.Once
 	err  error
 }
 
 func (l *enrollmentSourceLock) Close() error {
 	l.once.Do(func() {
-		l.err = errors.Join(unix.Flock(int(l.file.Fd()), unix.LOCK_UN), l.file.Close(), l.root.Close())
+		var hostErr error
+		if l.host != nil {
+			hostErr = errors.Join(unix.Flock(int(l.host.Fd()), unix.LOCK_UN), l.host.Close())
+		}
+		l.err = errors.Join(hostErr, unix.Flock(int(l.file.Fd()), unix.LOCK_UN), l.file.Close(), l.root.Close())
 	})
 	return l.err
 }
@@ -84,7 +90,20 @@ func enrollmentSource(dir string) (*enrollmentSourceLock, error) {
 		r.Close()
 		return nil, errors.New("enrollment requires the stopped instance and exclusive source lock")
 	}
-	return &enrollmentSourceLock{root: r, file: f}, nil
+	lease := &enrollmentSourceLock{root: r, file: f}
+	hostFD, e := unix.Openat(int(r.Fd()), "host-preparation.lock", unix.O_RDWR|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if e == nil {
+		lease.host = os.NewFile(uintptr(hostFD), "host-preparation.lock")
+		var hostStat unix.Stat_t
+		if unix.Fstat(hostFD, &hostStat) != nil || !enrollmentRegular(hostStat, 0) || unix.Flock(hostFD, unix.LOCK_EX|unix.LOCK_NB) != nil {
+			lease.Close()
+			return nil, errors.New("finish host preparation before enrollment")
+		}
+	} else if !errors.Is(e, unix.ENOENT) {
+		lease.Close()
+		return nil, errEnrollmentImage
+	}
+	return lease, nil
 }
 
 func enrollmentRegular(st unix.Stat_t, max int64) bool {
@@ -103,8 +122,10 @@ func enrollmentPath(name string) (included bool, max int64, ok bool) {
 		return false, MaxEnrollmentFileBytes, true
 	case "endpoint.json", "claim-code.json", "cli-session.json":
 		return false, 64 << 10, true
-	case "instance.lock":
+	case "instance.lock", "host-preparation.lock":
 		return false, 0, true
+	case "host-preparation.json":
+		return false, 4096, true
 	case "core.sock":
 		return false, 0, true
 	}
@@ -227,6 +248,34 @@ func enrollmentScan(ctx context.Context, fd int) (map[string]enrollmentEntry, er
 	return out, err
 }
 
+func enrollmentHostPreparation(lock *enrollmentSourceLock, entries map[string]enrollmentEntry) error {
+	host, hasReceipt := entries["host-preparation.json"]
+	hostLock, hasHostLock := entries["host-preparation.lock"]
+	if hasReceipt != hasHostLock {
+		return errors.New("incomplete owner host preparation state; finish preparation before enrollment")
+	}
+	if hasReceipt {
+		var held unix.Stat_t
+		if lock.host == nil || unix.Fstat(int(lock.host.Fd()), &held) != nil || !enrollmentSameStat(held, hostLock.stat) {
+			return errors.New("host preparation lock identity changed; preserve original state")
+		}
+		var receipt struct {
+			Schema int    `json:"schema"`
+			Stage  string `json:"stage"`
+			Phase  string `json:"phase"`
+		}
+		if update.StrictJSON(host.data, &receipt) != nil {
+			return errEnrollmentImage
+		}
+		prefix := ".fased-app-bwrap-" + strconv.Itoa(os.Geteuid()) + "-"
+		token := strings.TrimSuffix(strings.TrimPrefix(receipt.Stage, prefix), ".pending")
+		if receipt.Schema != 1 || receipt.Phase != "ready" || !hexValue(token, 16) || receipt.Stage != prefix+token+".pending" {
+			return errors.New("finish source-bound host preparation before enrollment")
+		}
+	}
+	return nil
+}
+
 func exportEnrollmentImage(ctx context.Context, dir string) (_ EnrollmentImage, closer io.Closer, resultErr error) {
 	var out EnrollmentImage
 	if err := ctx.Err(); err != nil {
@@ -244,6 +293,9 @@ func exportEnrollmentImage(ctx context.Context, dir string) (_ EnrollmentImage, 
 	before, err := enrollmentScan(ctx, int(lock.root.Fd()))
 	if err != nil {
 		return out, nil, fmt.Errorf("enrollment source inventory: %w", err)
+	}
+	if err := enrollmentHostPreparation(lock, before); err != nil {
+		return out, nil, err
 	}
 	var heldLock unix.Stat_t
 	if unix.Fstat(int(lock.file.Fd()), &heldLock) != nil || !enrollmentSameStat(heldLock, before["instance.lock"].stat) {

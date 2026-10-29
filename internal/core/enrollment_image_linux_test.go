@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -387,5 +388,161 @@ func TestEnrollmentImageRejectsUnclassifiedDatabaseState(t *testing.T) {
 	if _, lock, err := ExportEnrollmentImage(t.Context(), s.dir); err == nil {
 		lock.Close()
 		t.Fatal("unclassified current-version database state admitted")
+	}
+}
+
+func TestEnrollmentImageRetainsOnlyReadyOwnerHostPreparation(t *testing.T) {
+	s := fixtureStore(t)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	receipt := []byte(fmt.Sprintf(`{"schema":1,"stage":".fased-app-bwrap-%d-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.pending","phase":"ready"}`, os.Getuid()))
+	if err := os.WriteFile(filepath.Join(s.dir, "host-preparation.json"), receipt, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.dir, "host-preparation.lock"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	image, lease, err := ExportEnrollmentImage(t.Context(), s.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Close()
+	for _, file := range image.Files {
+		if strings.HasPrefix(file.Path, "host-preparation") {
+			t.Fatal("owner host receipt transferred to app UID")
+		}
+	}
+	after, err := os.ReadFile(filepath.Join(s.dir, "host-preparation.json"))
+	if err != nil || !bytes.Equal(after, receipt) {
+		t.Fatal("owner host receipt changed", err)
+	}
+}
+
+func TestEnrollmentImageRejectsUnfinishedOrBusyHostPreparation(t *testing.T) {
+	for _, mode := range []string{"staging", "published", "foreign-owner", "unknown-schema", "extra-field", "receipt-only", "lock-only", "busy"} {
+		t.Run(mode, func(t *testing.T) {
+			s := fixtureStore(t)
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			receipt := map[string]any{"schema": 1, "stage": fmt.Sprintf(".fased-app-bwrap-%d-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.pending", os.Getuid()), "phase": "ready"}
+			switch mode {
+			case "staging", "published":
+				receipt["phase"] = mode
+			case "foreign-owner":
+				receipt["stage"] = ".fased-app-bwrap-0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.pending"
+			case "unknown-schema":
+				receipt["schema"] = 2
+			case "extra-field":
+				receipt["grant"] = true
+			}
+			data, _ := json.Marshal(receipt)
+			receiptPath := filepath.Join(s.dir, "host-preparation.json")
+			lockPath := filepath.Join(s.dir, "host-preparation.lock")
+			if mode != "lock-only" {
+				if err := os.WriteFile(receiptPath, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode != "receipt-only" {
+				if err := os.WriteFile(lockPath, nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "busy" {
+				guard, err := LockInstance(lockPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer guard.Close()
+			}
+			image, lease, err := ExportEnrollmentImage(t.Context(), s.dir)
+			if err == nil || lease != nil || len(image.Files) != 0 {
+				if lease != nil {
+					lease.Close()
+				}
+				t.Fatal("unfinished/foreign preparation accepted", mode)
+			}
+			if mode != "lock-only" {
+				after, e := os.ReadFile(receiptPath)
+				if e != nil || !bytes.Equal(after, data) {
+					t.Fatal("original receipt changed", e)
+				}
+			}
+		})
+	}
+}
+
+func TestEnrollmentImageKeepsHostPreparationLeaseUntilFence(t *testing.T) {
+	s := fixtureStore(t)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte(fmt.Sprintf(`{"schema":1,"stage":".fased-app-bwrap-%d-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.pending","phase":"ready"}`, os.Getuid()))
+	if err := os.WriteFile(filepath.Join(s.dir, "host-preparation.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(s.dir, "host-preparation.lock")
+	if err := os.WriteFile(path, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, lease, err := ExportEnrollmentImage(t.Context(), s.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if guard, e := LockInstance(path); e == nil {
+		guard.Close()
+		lease.Close()
+		t.Fatal("host preparation raced source image lease")
+	}
+	if err = lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	guard, err := LockInstance(path)
+	if err != nil {
+		t.Fatal("host preparation lease leaked", err)
+	}
+	guard.Close()
+}
+
+func TestEnrollmentImageRejectsChangedHostPreparationLock(t *testing.T) {
+	for _, mode := range []string{"created-after-lock", "replaced-lock"} {
+		t.Run(mode, func(t *testing.T) {
+			s := fixtureStore(t)
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(s.dir, "host-preparation.lock")
+			if mode == "replaced-lock" {
+				if err := os.WriteFile(path, nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			lease, err := enrollmentSource(s.dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lease.Close()
+			if mode == "replaced-lock" {
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(path, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			data := []byte(fmt.Sprintf(`{"schema":1,"stage":".fased-app-bwrap-%d-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.pending","phase":"ready"}`, os.Getuid()))
+			if err := os.WriteFile(filepath.Join(s.dir, "host-preparation.json"), data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			entries, err := enrollmentScan(t.Context(), int(lease.root.Fd()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := enrollmentHostPreparation(lease, entries); err == nil {
+				t.Fatal("unheld host preparation lock admitted")
+			}
+		})
 	}
 }

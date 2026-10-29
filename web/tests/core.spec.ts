@@ -11902,6 +11902,16 @@ test("provider editor follows core credential admission without enabling live ca
   await expect(
     page.getByRole("heading", { name: "Dashboard", exact: true }),
   ).toBeVisible();
+  const token = await page.evaluate(() =>
+    sessionStorage.getItem("fased.core.session.v1"),
+  );
+  const status = await page.request.get(url + "/api/v1/ai/connection", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(status.ok()).toBe(true);
+  const connection = await status.json();
+  expect(connection.liveCallsEnabled).toBe(false);
+  expect(connection.credentialModes).toEqual(["test"]);
   let saved: Record<string, unknown> | undefined;
   // UI-only capability injection. POST is intercepted and never reaches a vault,
   // model endpoint or live admission path. Ordinary server remains closed.
@@ -11920,12 +11930,9 @@ test("provider editor follows core credential admission without enabling live ca
       });
       return;
     }
-    const response = await route.fetch();
-    const connection = await response.json();
-    expect(connection.liveCallsEnabled).toBe(false);
-    expect(connection.credentialModes).toEqual(["test"]);
+    // Reuse the immutable core status; refreshing the editor can cancel GETs.
+    // Do not leave a second upstream fetch racing that UI cancellation.
     await route.fulfill({
-      response,
       json: { ...connection, credentialModes: ["openai"] },
     });
   });
