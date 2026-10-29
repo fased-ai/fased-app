@@ -52,6 +52,12 @@ it("binds native provider defaults without carrying another provider or model", 
   for (const [provider, model] of [
     ["anthropic", "claude-sonnet-5-5"],
     ["xai", "grok-4.7"],
+    ["moonshot", "kimi-k3.1-pro"],
+    ["moonshot-intl", "moonshot-intl/kimi-k3.1-pro"],
+    ["google", "gemini-3.8-flash"],
+    ["openrouter", "google/gemini-3.8-flash"],
+    ["qwen", "qwen3.8-flash"],
+    ["opencode", "opencode/deepseek-v4.1-flash"],
   ]) {
     const access = {
       ref: provider + "-account",
@@ -90,3 +96,16 @@ it("uses a local account for inherited replies without becoming Demo or cloud ac
   expect(agentReplyDefaults(p, { ...a, locked: true }).ready).toBe(false);
   expect(modelForProviderChange("local", p.model)).toBe(p.model);
 });
+
+for (const model of ["google/gemma-4-e2b", "google/gemma-4-E2B-it"]) {
+  it(`retains the exact local model ID ${model}`, () => {
+    expect(modelForProviderChange("local", model)).toBe(model);
+    expect(
+      agentReplyDefaults(
+        { provider: "local", model },
+        { provider: "local", model, ref: "local-account", locked: false },
+      ).ready,
+    ).toBe(true);
+    expect(modelForProviderChange("openai", model)).toBe("");
+  });
+}

@@ -74,3 +74,32 @@ it("shows verified local and ChatGPT usage without treating unknown usage as rep
   expect(hasReportedProviderUsage(undefined)).toBe(false);
   expect(hasReportedProviderUsage("estimated")).toBe(false);
 });
+
+it("Kimi Code keeps personal quota and failures distinct from ChatGPT and API prices", () => {
+  const p = { wireVersion: "kimi-code-chat-v1", provider: "kimi-code" };
+  expect(isUnmeteredPolicy(p as OpenAIModelPolicy)).toBe(true);
+  expect(
+    isUnmeteredPolicy({ ...p, provider: "moonshot-intl" } as OpenAIModelPolicy),
+  ).toBe(false);
+  expect(hasReportedProviderUsage("kimi-code-reported-usage")).toBe(true);
+  expect(
+    planFailureDetails(
+      'Kimi Code request stopped. Diagnostics: {"status":429}',
+    ),
+  )?.toMatchObject({ summary: "Kimi Code limit reached" });
+});
+
+it("Ollama Cloud quota is separate from local inference and API dollars", () => {
+  const p = {
+    provider: "ollama-cloud",
+    wireVersion: "ollama-cloud-chat-v1",
+  } as OpenAIModelPolicy;
+  expect(isUnmeteredPolicy(p)).toBe(true);
+  expect(isUnmeteredPolicy({ ...p, provider: "local" })).toBe(false);
+  expect(hasReportedProviderUsage("ollama-cloud-reported-usage")).toBe(true);
+  expect(
+    planFailureDetails(
+      'Ollama Cloud request stopped. Diagnostics: {"status":429}',
+    ),
+  ).toMatchObject({ summary: "Ollama Cloud limit reached" });
+});

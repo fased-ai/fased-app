@@ -27,6 +27,22 @@ func providerDefinitionFor(id string) (providerDefinition, bool) {
 		return providerDefinition{"local", "Local server", "local.fased.invalid", ""}, true
 	case "xai":
 		return providerDefinition{"xai", "xAI", "api.x.ai", ""}, true
+	case "ollama-cloud":
+		return providerDefinition{"ollama-cloud", "Ollama Cloud", "ollama.com", ""}, true
+	case "kimi-code":
+		return providerDefinition{"kimi-code", "Kimi Code", "api.kimi.ai", ""}, true
+	case "moonshot-intl":
+		return providerDefinition{"moonshot-intl", "Kimi International", "api.moonshot.ai", ""}, true
+	case "moonshot":
+		return providerDefinition{"moonshot", "Moonshot / Kimi", "api.moonshot.cn", ""}, true
+	case "google":
+		return providerDefinition{"google", "Google", "generativelanguage.googleapis.com", ""}, true
+	case "openrouter":
+		return providerDefinition{"openrouter", "OpenRouter", "openrouter.ai", ""}, true
+	case "qwen":
+		return providerDefinition{"qwen", "Qwen", "dashscope-intl.aliyuncs.com", ""}, true
+	case "opencode":
+		return providerDefinition{"opencode", "OpenCode Zen", "opencode.ai", ""}, true
 	}
 	return providerDefinition{}, false
 }
@@ -44,16 +60,36 @@ func policyProvider(p *OpenAIModelPolicy) string {
 }
 func providerEntries() []ProviderEntry {
 	out := []ProviderEntry{}
-	for _, id := range []string{"openai", "anthropic", "xai", "local"} {
+	for _, id := range []string{"openai", "anthropic", "xai", "moonshot", "moonshot-intl", "kimi-code", "ollama-cloud", "google", "openrouter", "qwen", "opencode", "local"} {
 		p, _ := providerDefinitionFor(id)
 		methods := []ProviderMethod{{ID: "api-key", Name: "API key"}}
 		if id == "local" {
 			methods = []ProviderMethod{{ID: "local", Name: "Local server"}}
 		}
-		if id == "openai" {
-			methods = append(methods, ProviderMethod{ID: "sign-in", Name: "Continue with ChatGPT"})
+		if id == "openai" || id == "openrouter" || id == "google" {
+			label := "Sign in"
+			if id == "openai" {
+				label = "Continue with ChatGPT"
+			}
+			methods = append(methods, ProviderMethod{ID: "sign-in", Name: label})
 		}
-		out = append(out, ProviderEntry{ID: id, Name: p.Name, Methods: methods})
+		entry := ProviderEntry{ID: id, Name: p.Name, Methods: methods}
+		if id == "local" {
+			entry.Servers = localServerPresets()
+		}
+		if id == "moonshot" {
+			entry.Name, entry.Family, entry.Route = "Kimi", "moonshot", "China · CNY"
+		}
+		if id == "moonshot-intl" {
+			entry.Family, entry.Route = "moonshot", "International · USD"
+		}
+		if id == "kimi-code" {
+			entry.Family, entry.Route = "moonshot", "Code · Interactive"
+		}
+		if id == "qwen" {
+			entry.Route = "ModelStudio · Singapore"
+		}
+		out = append(out, entry)
 	}
 	return out
 }
@@ -68,6 +104,9 @@ func providerRequestAllowed(id string, r *http.Request) bool {
 	p, ok := providerDefinitionFor(id)
 	if !ok || r == nil || r.URL == nil || r.URL.Scheme != "https" || r.URL.Host != p.Host || r.URL.User != nil || r.URL.Opaque != "" || r.URL.RawPath != "" || r.URL.Fragment != "" || r.URL.ForceQuery || (r.Host != "" && r.Host != p.Host) {
 		return false
+	}
+	if compatibleProvider(id) {
+		return compatibleRequestAllowed(id, r)
 	}
 	q := r.URL.Query()
 	if len(q) > 0 {
@@ -102,6 +141,9 @@ func providerRequestAllowed(id string, r *http.Request) bool {
 }
 func providerGenerationURL(p *OpenAIModelPolicy) string {
 	id := policyProvider(p)
+	if compatibleProvider(id) {
+		return providerOrigin(id) + providerBasePath(id) + "/chat/completions"
+	}
 	path := "/v1/responses"
 	if id == "anthropic" {
 		path = "/v1/messages"
@@ -132,6 +174,9 @@ func nativeRequestWire(q AgentAIRequest, wire map[string]any) ([]byte, error) {
 		return nil, errors.New("native policy missing")
 	}
 	id := policyProvider(p)
+	if compatibleProvider(id) {
+		return compatibleWire(q, wire)
+	}
 	if id == "local" {
 		schema, err := json.Marshal(wire["text"])
 		if err != nil {
@@ -175,7 +220,7 @@ func providerJSON(ctx context.Context, rt http.RoundTripper, provider, method, p
 	defer res.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(res.Body, bound+1))
 	kind, _, mediaErr := mime.ParseMediaType(res.Header.Get("Content-Type"))
-	if err != nil || int64(len(raw)) > bound || res.StatusCode != 200 || mediaErr != nil || kind != "application/json" || res.Header.Get("Content-Encoding") != "" || !uniqueAIJSON(raw, 32768) {
+	if err != nil || int64(len(raw)) > bound || res.StatusCode != 200 || mediaErr != nil || kind != "application/json" || res.Header.Get("Content-Encoding") != "" || !uniqueAIJSON(raw, providerJSONNodes(provider)) {
 		return "", errors.New("provider JSON refused")
 	}
 	if json.Unmarshal(raw, target) != nil {
@@ -184,6 +229,9 @@ func providerJSON(ctx context.Context, rt http.RoundTripper, provider, method, p
 	return newsHash(raw), nil
 }
 func admitNativeProvider(ctx context.Context, q *AgentAIRequest, rt http.RoundTripper, now func() time.Time) bool {
+	if compatibleProvider(policyProvider(q.Policy)) {
+		return admitCompatible(ctx, q, rt, now)
+	}
 	wire, _ := aiWire(*q)
 	p := q.Policy
 	provider := policyProvider(p)
@@ -278,6 +326,9 @@ func admitNativeProvider(ctx context.Context, q *AgentAIRequest, rt http.RoundTr
 }
 
 func normalizeNativeResponse(provider string, q AgentAIRequest, raw []byte) ([]byte, error) {
+	if compatibleProvider(provider) {
+		return normalizeCompatible(q, raw)
+	}
 	if q.Policy == nil || !uniqueAIJSON(raw, 32768) {
 		return nil, errors.New("ambiguous native response")
 	}
@@ -619,15 +670,37 @@ var anthropicModelSource []byte
 
 //go:embed provider_xai.json
 var xaiModelSource []byte
+
+//go:embed provider_moonshot.json
+var moonshotModelSource []byte
+
+//go:embed provider_moonshot_intl.json
+var moonshotIntlModelSource []byte
+
+//go:embed provider_google.json
+var googleModelSource []byte
+
+//go:embed provider_openrouter.json
+var openrouterModelSource []byte
+
+//go:embed provider_qwen.json
+var qwenModelSource []byte
+
+//go:embed provider_opencode.json
+var opencodeModelSource []byte
+
 var nativeRegistries = func() map[string]modelRegistry {
 	out := map[string]modelRegistry{}
-	for id, raw := range map[string][]byte{"anthropic": anthropicModelSource, "xai": xaiModelSource} {
+	for id, raw := range map[string][]byte{"anthropic": anthropicModelSource, "xai": xaiModelSource, "moonshot": moonshotModelSource, "moonshot-intl": moonshotIntlModelSource, "google": googleModelSource, "openrouter": openrouterModelSource, "qwen": qwenModelSource, "opencode": opencodeModelSource} {
 		var r modelRegistry
 		if json.Unmarshal(raw, &r) != nil || r.Version != 1 || r.Provider != id || r.Policy != "latest-only" || len(r.Models) == 0 || len(r.Models) > 16 || r.ExpiresAt <= r.ReviewedAt {
 			panic("invalid native registry")
 		}
 		for _, m := range r.Models {
-			if modelProvider(m) != id || !validProviderModelID(m.ID) || m.Input <= 0 || m.Output <= 0 || m.Cached < 0 || m.Cached > m.Input || m.ContextTokens < 32000 || m.OutputTokens < 1024 || m.BillableOutputTokens > m.ContextTokens {
+			if id == "moonshot-intl" && (m.Currency != "USD" || m.CacheWrite != m.Input || !strings.HasPrefix(m.ID, "moonshot-intl/")) {
+				panic("invalid Kimi region/cache policy")
+			}
+			if modelProvider(m) != id || !validProviderModelID(m.ID) || m.Input <= 0 || m.Output <= 0 || m.Cached < 0 || m.Cached > m.Input || m.ContextTokens < 32000 || m.OutputTokens < 1024 || m.BillableOutputTokens > m.ContextTokens || compatibleProvider(id) && (m.Currency != "USD" && m.Currency != "CNY") || id == "opencode" && !strings.HasPrefix(m.ID, "opencode/") {
 				panic("invalid native model policy")
 			}
 		}
@@ -637,6 +710,12 @@ var nativeRegistries = func() map[string]modelRegistry {
 }()
 
 func registryForProvider(id string) modelRegistry {
+	if id == "ollama-cloud" {
+		return currentOllamaCloudModels
+	}
+	if id == "kimi-code" {
+		return currentKimiCodeModels
+	}
 	if id == "local" {
 		return localRegistry()
 	}
@@ -647,13 +726,16 @@ func registryForProvider(id string) modelRegistry {
 }
 func allProviderModels() []currentModel {
 	out := append([]currentModel(nil), currentModels.Models...)
-	for _, id := range []string{"anthropic", "xai"} {
-		out = append(out, nativeRegistries[id].Models...)
+	for _, id := range []string{"anthropic", "xai", "moonshot", "moonshot-intl", "kimi-code", "ollama-cloud", "google", "openrouter", "qwen", "opencode"} {
+		out = append(out, registryForProvider(id).Models...)
 	}
 	out = append(out, localRegistry().Models...)
 	return out
 }
 func parseProviderModelList(provider string, raw []byte, object *string, rows *[]discoveredModel) error {
+	if compatibleProvider(provider) {
+		return parseCompatibleModels(provider, raw, object, rows)
+	}
 	if provider == "openai" || provider == "local" {
 		var v struct {
 			Object string
@@ -665,7 +747,7 @@ func parseProviderModelList(provider string, raw []byte, object *string, rows *[
 		*object = v.Object
 		if provider == "local" {
 			for i := range v.Data {
-				if v.Data[i].OwnedBy == "library" || v.Data[i].OwnedBy == "local" {
+				if v.Data[i].OwnedBy == "library" || v.Data[i].OwnedBy == "local" || v.Data[i].OwnedBy == "vllm" || v.Data[i].OwnedBy == "organization_owner" || v.Data[i].OwnedBy == "lmstudio" || v.Data[i].OwnedBy == "lmstudio-community" {
 					v.Data[i].OwnedBy = "local"
 				}
 			}
@@ -739,10 +821,23 @@ func newerProviderRecordForID(id string, r discoveredModel, all []discoveredMode
 	return ok && newerProviderRecord(m, r, all)
 }
 func newerProviderRecord(m currentModel, r discoveredModel, all []discoveredModel) bool {
+	if compatibleProvider(modelProvider(m)) {
+		return newerCompatibleGeneration(r.ID, m.ID)
+	}
 	switch modelProvider(m) {
 	case "local":
-		a, b := strings.SplitN(r.ID, ":", 2)[0], strings.SplitN(m.ID, ":", 2)[0]
-		return strings.HasPrefix(a, "gemma") && strings.HasPrefix(b, "gemma") && newerProviderGeneration("gpt-"+strings.TrimPrefix(a, "gemma")+"-gemma", "gpt-"+strings.TrimPrefix(b, "gemma")+"-gemma")
+		// Same local Gemma family across documented Ollama/LM Studio/HF IDs.
+		family := func(id string) string {
+			id = strings.ToLower(strings.TrimPrefix(id, "google/"))
+			id = strings.ReplaceAll(id, "gemma-", "gemma")
+			end := strings.IndexAny(strings.TrimPrefix(id, "gemma"), "-:")
+			if !strings.HasPrefix(id, "gemma") || end < 1 {
+				return ""
+			}
+			return "gpt-" + strings.TrimPrefix(id, "gemma")[:end] + "-gemma"
+		}
+		x, y := family(r.ID), family(m.ID)
+		return x != "" && y != "" && newerProviderGeneration(x, y)
 	case "anthropic":
 		if r.Line == "" || r.Line != m.Line || r.ID == m.ID {
 			return false

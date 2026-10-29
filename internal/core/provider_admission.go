@@ -50,6 +50,9 @@ func (s *Store) providerRequestAllowed(q AgentAIRequest, fixture bool) bool {
 	if err != nil || v.Ref != q.ConnectionRef || v.Provider != policyProvider(q.Policy) || v.PlanPaused {
 		return false
 	}
+	if v.AuthMethod == "oauth" {
+		return v.Provider == "google" && v.CredentialMode == "google-oauth" && !signInRequest(q)
+	}
 	if v.AuthMethod == "sign-in" {
 		return v.CredentialMode == "openai-signin" && v.PlanUse && q.Policy != nil && q.Policy.WireVersion == "openai-signin-v2"
 	}

@@ -56,18 +56,26 @@ func TestLocalProviderConnectionAndAssignment(t *testing.T) {
 }
 
 func TestLocalProviderChatTaskAndRestart(t *testing.T) {
+	for server, model := range map[string]string{"ollama": "gemma4:e2b", "lmstudio": "google/gemma-4-e2b", "vllm": "google/gemma-4-E2B-it"} {
+		t.Run(server, func(t *testing.T) { localProviderJoinedJourney(t, server, model) })
+	}
+}
+func localProviderJoinedJourney(t *testing.T, server, model string) {
 	s := fixtureStore(t)
 	existing := addNativeAccount(t, s, "openai", false)
 	oldVault, err := s.readAIVault(existing.Ref)
 	if err != nil {
 		t.Fatal(err)
 	}
-	account := addLocalFixtureAccount(t, s)
+	account, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "add", Provider: "local", Server: server, Passphrase: testVaultPassword})
+	if err != nil {
+		t.Fatal(err)
+	}
 	current, err := s.readAIVault(existing.Ref)
 	if err != nil || !reflect.DeepEqual(current, oldVault) {
 		t.Fatal("adding local replaced existing account", err)
 	}
-	view := agentApply(t, s, AgentCommand{Action: "profile-create", Name: "Local analyst", Provider: "local", AccountRef: &account.Ref, Model: "gemma4:e2b"})
+	view := agentApply(t, s, AgentCommand{Action: "profile-create", Name: "Local analyst", Provider: "local", AccountRef: &account.Ref, Model: model})
 	profile := view.ProfileID
 	view = agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: profile, Name: "Local research"})
 	session := view.Sessions[len(view.Sessions)-1].ID
@@ -86,7 +94,7 @@ func TestLocalProviderChatTaskAndRestart(t *testing.T) {
 	}
 	view, _ = s.Agents(t.Context(), profile, "")
 	response := view.AIRequests[len(view.AIRequests)-1]
-	if response.State != "completed" || response.Answer == "" || response.ConnectionRef != account.Ref || response.CostBasis != localUsageCostBasis || response.SpentMicrousd != 0 || response.HeldMicrousd != 0 {
+	if response.State != "completed" || response.Answer == "" || response.ConnectionRef != account.Ref || response.CostBasis != reportedUsageBasis(response) || response.SpentMicrousd != 0 || response.HeldMicrousd != 0 {
 		t.Fatal("local Chat incomplete", response.State, response.Failure, response.CostBasis)
 	}
 	view = agentApply(t, s, AgentCommand{Action: "task-ai-prepare", ProfileID: profile, ID: session, UseAgentDefaults: true, Name: "Local digest", Text: "Summarize a fictional note", IntervalSeconds: 60, MaxRuns: 1, AuthorizationSeconds: 900, Limits: limits})
@@ -105,7 +113,7 @@ func TestLocalProviderChatTaskAndRestart(t *testing.T) {
 	}
 	view, _ = s.Agents(t.Context(), profile, "")
 	result := view.AIRequests[len(view.AIRequests)-1]
-	if result.State != "completed" || result.TaskID != task.ID || result.ConnectionRef != account.Ref || result.CostBasis != localUsageCostBasis || len(view.Runs) != 1 || view.Tasks[len(view.Tasks)-1].State != "completed" {
+	if result.State != "completed" || result.TaskID != task.ID || result.ConnectionRef != account.Ref || result.CostBasis != reportedUsageBasis(result) || len(view.Runs) != 1 || view.Tasks[len(view.Tasks)-1].State != "completed" {
 		t.Fatal("local task result incomplete", result.State, result.Failure)
 	}
 	for _, p := range paths {

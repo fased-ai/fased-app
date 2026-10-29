@@ -180,6 +180,15 @@ function LocalAgentEditor({
   const [budget, setBudget] = useState(500);
   const profileRevision = useRef(v.revision);
   const profileInitialized = useRef(false);
+  const profileBaseline = useRef(
+    JSON.stringify([
+      profile.name,
+      profile.persona,
+      profile.provider,
+      profile.model,
+      profile.connectionRef || "",
+    ]),
+  );
   const memoryRevision = useRef(v.revision);
   function reloadProfile() {
     setName(profile.name);
@@ -188,10 +197,24 @@ function LocalAgentEditor({
     setModel(profile.model);
     setAccountRef(profile.connectionRef || "");
     profileRevision.current = v.revision;
+    profileBaseline.current = JSON.stringify([
+      profile.name,
+      profile.persona,
+      profile.provider,
+      profile.model,
+      profile.connectionRef || "",
+    ]);
   }
   useLayoutEffect(() => {
     if (tab !== "settings") {
-      profileInitialized.current = false;
+      // Leaving for Providers must not discard edits or adopt a newer revision.
+      // Clean forms may load fresh records next time; dirty forms require Save
+      // against their original revision or explicit Reload.
+      if (
+        profileBaseline.current ===
+        JSON.stringify([name, persona, provider, model, accountRef])
+      )
+        profileInitialized.current = false;
       return;
     }
     // A preceding save may still be awaiting its response as this tab opens.
@@ -577,8 +600,16 @@ function LocalAgentEditor({
                     accountRef,
                     model,
                   })
-                )
+                ) {
                   profileRevision.current++;
+                  profileBaseline.current = JSON.stringify([
+                    name,
+                    persona,
+                    provider,
+                    model,
+                    accountRef,
+                  ]);
+                }
               })}
             >
               <label>
@@ -630,7 +661,7 @@ function LocalAgentEditor({
                       );
                     }}
                   >
-                    <option value="none">{uiText("Demo")}</option>
+                    <option value="none">{uiText("No AI")}</option>
                     {connection?.catalog?.providers.map((item) => (
                       <option key={item.id} value={item.id}>
                         {item.name}

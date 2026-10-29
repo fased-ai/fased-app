@@ -75,7 +75,7 @@ func openAIModelPolicy(ids ...string) OpenAIModelPolicy {
 		return localModelPolicy(id)
 	}
 	m, ok := currentProviderModel(id)
-	if !ok {
+	if !ok || m.Currency != "" && m.Currency != "USD" {
 		return OpenAIModelPolicy{}
 	}
 	p := OpenAIModelPolicy{ID: fmt.Sprintf("%s-latest-v%d-%d:%s", modelProvider(m), registryForProvider(modelProvider(m)).Version, registryForProvider(modelProvider(m)).ReviewedAt, id), Model: id, Reasoning: m.Reasoning, ReviewedAt: registryForProvider(modelProvider(m)).ReviewedAt, ExpiresAt: registryForProvider(modelProvider(m)).ExpiresAt, ContextTokens: m.ContextTokens, OutputTokens: m.OutputTokens, InputMicrousdPerMillion: m.Input, CachedMicrousdPerMillion: m.Cached, OutputMicrousdPerMillion: m.Output, ModelSource: m.Source, TariffSource: registryForProvider(modelProvider(m)).Sources["pricing"]}
@@ -86,6 +86,20 @@ func openAIModelPolicy(ids ...string) OpenAIModelPolicy {
 		p.Provider = modelProvider(m)
 		p.MaxRequestBudgetMicrousd = maxModelBudget(id)
 		p.WireVersion = p.Provider + "-responses-v1"
+		if compatibleProvider(p.Provider) {
+			if p.Provider == "moonshot-intl" {
+				p.CacheMode = "kimi-implicit-5m"
+			}
+			p.WireVersion = p.Provider + "-chat-v1"
+			// Router cache discounts vary by endpoint. Reserve/reconcile at the
+			// reviewed uncached ceiling while retaining reported cached-token usage.
+			if p.Provider == "openrouter" {
+				p.CachedMicrousdPerMillion = p.InputMicrousdPerMillion
+			}
+			p.TokenSource = registryForProvider(p.Provider).Sources["contract"]
+			return p
+		}
+
 		if p.Provider == "anthropic" {
 			p.WireVersion = "anthropic-messages-v1"
 			p.APIVersion = "2026-10-21"

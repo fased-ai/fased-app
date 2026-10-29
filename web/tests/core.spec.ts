@@ -20,7 +20,8 @@ test("agent memory and archives keep recall sources journals and results through
   await start(true);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#agents/chat");
   const claim = JSON.parse(
@@ -269,7 +270,8 @@ test("reviewed recurring tasks preserve named zones bounds CLI results pause and
   page.setDefaultTimeout(10000);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#agents/tasks");
   const claim = JSON.parse(
@@ -405,7 +407,8 @@ test("existing pages localize controls and keep owner drafts records and Meteora
   page.setDefaultTimeout(10000);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#agents/chat");
   const claim = JSON.parse(
@@ -506,6 +509,10 @@ test("existing pages localize controls and keep owner drafts records and Meteora
         location.hash = hash;
       }, route);
       if (expected) await expect(page.locator("main")).toContainText(expected);
+      if (route === "settings")
+        await expect(page.locator(".settings-primary > section")).toHaveCount(
+          2,
+        );
       if (route === "agents/chat")
         await expect(page.locator(".chat-input textarea")).toHaveValue(
           "Owner draft — 250 SOL",
@@ -554,7 +561,8 @@ test("Meteora shell preserves drafts and records through navigation theme langua
   page.setDefaultTimeout(10000);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.emulateMedia({ colorScheme: "dark" });
   await page.goto(url + "/#chat");
@@ -610,6 +618,20 @@ test("Meteora shell preserves drafts and records through navigation theme langua
   await expect(
     more.getByRole("link", { name: "Onchain", exact: true }),
   ).toBeVisible();
+  await expect(
+    more.getByRole("link", { name: "Memory", exact: true }),
+  ).toBeVisible();
+  if (isMobile) {
+    await more.getByRole("link", { name: "Tasks", exact: true }).click();
+    await expect(page.locator(".shell-more-toggle")).toHaveCSS(
+      "color",
+      "rgb(255, 100, 124)",
+    );
+    await page.getByRole("button", { name: "More", exact: true }).click();
+  }
+  await more.getByRole("link", { name: "Memory", exact: true }).click();
+  await expect(page).toHaveURL(/#agents\/memory$/);
+  await page.getByRole("button", { name: "More", exact: true }).click();
   await page.keyboard.press("Escape");
   await expect(
     page.getByRole("button", { name: "More", exact: true }),
@@ -732,7 +754,7 @@ test.describe("calendar reminders", () => {
     test.setTimeout(75000);
     const external: string[] = [];
     page.on("request", (r) => {
-      if (new URL(r.url()).origin !== new URL(url).origin)
+      if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
         external.push(r.url());
     });
     await page.goto(url + "/#agents/tasks");
@@ -955,7 +977,8 @@ test("compact Tasks reviews without writes and preserves bounded runs across UI 
   page.setDefaultTimeout(10000);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#agents/tasks");
   const claim = JSON.parse(
@@ -1117,7 +1140,8 @@ test("normal Chat grants bounded replies, streams Send and retains scoped histor
   await start(true);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#settings");
   const claim = JSON.parse(
@@ -1147,7 +1171,7 @@ test("normal Chat grants bounded replies, streams Send and retains scoped histor
     "",
   );
   await provider
-    .getByLabel("Test key")
+    .getByLabel("API key")
     .fill("fased-test-normal-chat-disposable-key");
   await provider
     .getByLabel("Vault passphrase")
@@ -1378,14 +1402,32 @@ test("normal Chat keeps a draft when its selected connection locks and stops a p
 });
 
 async function openProviders(page: import("@playwright/test").Page) {
-  const dialog = page.getByRole("dialog", { name: "Providers", exact: true });
-  if (!(await dialog.isVisible()))
-    await page
+  const providers = page.getByRole("region", {
+    name: "Providers",
+    exact: true,
+  });
+  if (!(await providers.isVisible())) {
+    let opened = false;
+    for (const button of await page
       .getByRole("button", { name: "Providers", exact: true })
-      .last()
-      .click();
-  await expect(dialog).toBeVisible();
+      .all()) {
+      if (await button.isVisible()) {
+        await button.click();
+        opened = true;
+        break;
+      }
+    }
+    if (!opened) {
+      await page.getByRole("button", { name: "More", exact: true }).click();
+      await page
+        .getByRole("navigation", { name: "More pages", exact: true })
+        .getByRole("button", { name: "Providers", exact: true })
+        .click();
+    }
+  }
+  await expect(providers).toBeVisible();
 }
+
 async function openNewsSources(
   page: import("@playwright/test").Page,
   add = false,
@@ -1522,6 +1564,9 @@ let dir: string;
 let child: ChildProcess | undefined;
 let url: string;
 let output = "";
+// Only this test's spawned cores are trusted. Keep their earlier ports during
+// restart; unrelated loopback and external origins remain disallowed.
+const ownedFixtureOrigins = new Set<string>();
 
 async function start(
   aiFixture = false,
@@ -1553,6 +1598,7 @@ async function start(
     throw Error(`Fixture core startup failed:\n${output}\n${String(error)}`);
   }
   url = JSON.parse(output.trim().split("\n")[0]).url;
+  ownedFixtureOrigins.add(new URL(url).origin);
 }
 async function stop() {
   if (!child || child.exitCode !== null) return;
@@ -1597,6 +1643,7 @@ async function fixtureProviderSelection(
 }
 
 test.beforeEach(async () => {
+  ownedFixtureOrigins.clear();
   const root = resolve(".evidence/core-browser-fixtures");
   await mkdir(root, { recursive: true, mode: 0o700 });
   // Disposable, reconstructible state; keep IPC independent of checkout length.
@@ -1621,7 +1668,8 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
   await start(true);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#agents/tasks");
 
@@ -1947,7 +1995,7 @@ test("reviewed memory restoration shares inert UI CLI drafts, expiry, current-on
   const external: string[] = [];
   const writes: Record<string, unknown>[] = [];
   page.on("request", (request) => {
-    if (new URL(request.url()).origin !== new URL(url).origin)
+    if (!ownedFixtureOrigins.has(new URL(request.url()).origin))
       external.push(request.url());
     if (
       request.method() === "POST" &&
@@ -2265,7 +2313,7 @@ test("expired owner access returns to sign-in without replay or stale-session re
   const external: string[] = [];
   const writes: string[] = [];
   page.on("request", (request) => {
-    if (new URL(request.url()).origin !== new URL(url).origin)
+    if (!ownedFixtureOrigins.has(new URL(request.url()).origin))
       external.push(request.url());
     if (request.method() !== "GET")
       writes.push(`${request.method()} ${new URL(request.url()).pathname}`);
@@ -2495,7 +2543,8 @@ test("periodic refresh follows the requested profile while a selection is pendin
   const writes: string[] = [];
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
     if (new URL(r.url()).pathname === "/api/v1/agents" && r.method() !== "GET")
       writes.push(r.method());
   });
@@ -2607,7 +2656,8 @@ test("chat drafts stay with their conversation through search switching and a pe
   const external: string[] = [];
   const writes: Record<string, unknown>[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
     if (new URL(r.url()).pathname === "/api/v1/agents" && r.method() === "POST")
       writes.push(r.postDataJSON());
   });
@@ -2823,7 +2873,8 @@ test("agent selection survives reload and core restart with scoped preference fa
   const external: string[] = [];
   const writes: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
     if (new URL(r.url()).pathname === "/api/v1/agents" && r.method() !== "GET")
       writes.push(r.method());
   });
@@ -2962,7 +3013,8 @@ test("task inbox opens the exact named run without writes across profiles and re
   page.setDefaultTimeout(10000);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url);
   const claim = JSON.parse(
@@ -3426,7 +3478,8 @@ test("conversation search follows matching records and closes hidden conversatio
   page.setDefaultTimeout(10000);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url);
   const claim = JSON.parse(
@@ -4729,7 +4782,7 @@ test("Satcoin prototype preserves legacy links and disabled authority across cor
   const external: string[] = [];
   const mutations: string[] = [];
   page.on("request", (request) => {
-    if (new URL(request.url()).origin !== new URL(url).origin)
+    if (!ownedFixtureOrigins.has(new URL(request.url()).origin))
       external.push(request.url());
     if (!["GET", "HEAD"].includes(request.method()))
       mutations.push(request.url());
@@ -5675,13 +5728,13 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
   await expect(panel.getByRole("status")).toHaveText("No connection saved");
   const key = "fased-test-browser-disposable-key";
   const passphrase = "disposable-browser-vault-passphrase";
-  await revealControl(page, panel.getByLabel("Test key"), "");
-  await panel.getByLabel("Test key").fill(key);
+  await revealControl(page, panel.getByLabel("API key"), "");
+  await panel.getByLabel("API key").fill(key);
   await revealControl(page, panel.getByLabel("Vault passphrase"), "");
   await panel.getByLabel("Vault passphrase").fill(passphrase);
   await panel.getByRole("button", { name: "Save" }).click();
   await expect(panel.getByRole("status")).toContainText("Unlocked");
-  await expect(panel.getByLabel("Test key")).toHaveValue("");
+  await expect(panel.getByLabel("API key")).toHaveValue("");
   await expect(panel.getByLabel("Vault passphrase")).toHaveValue("");
   let connection = await privateCLI(["ai-connection"]);
   expect(connection.locked).toBe(false);
@@ -6492,7 +6545,8 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
   expect((await once(login, "exit"))[0]).toBe(0);
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#terminals/satcoin");
   const journey = page.getByRole("region", { name: "WEN paper journey" });
@@ -6651,8 +6705,9 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
   const external: string[] = [];
+  const fixtureOrigins = new Set([new URL(url).origin]);
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!fixtureOrigins.has(new URL(r.url()).origin)) external.push(r.url());
   });
   const command = async (c: object) => {
     const v = await privateCLI(["agents"]);
@@ -6776,6 +6831,10 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
   });
   await stop();
   await start(true);
+  // The old page may still issue an in-flight read during restart. Only the
+  // exact two disposable core origins belong to this fixture, never arbitrary
+  // loopback or external services.
+  fixtureOrigins.add(new URL(url).origin);
   await page.goto(url + "/#agents/chat");
   await revealControl(
     page,
@@ -6856,7 +6915,8 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
   const sessionId = v.sessions[0].id;
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#agents/chat");
   await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
@@ -7159,7 +7219,8 @@ test("chat memory requires explicit source-backed UI and CLI save and survives r
   const message = v.messages[0];
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#agents/chat");
   await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
@@ -7425,7 +7486,8 @@ test("task run chat shares historical UI and CLI capture, explicit fixture expla
   };
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#agents/tasks");
   await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
@@ -7640,7 +7702,8 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
   await command({ action: "session-create", name: "Older conversation" });
   const external: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).origin !== new URL(url).origin) external.push(r.url());
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
   });
   await page.goto(url + "/#agents/chat");
   await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
@@ -10474,11 +10537,11 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
       .getByRole("button", { name: "Refresh update status" }),
   ).toBeVisible();
   await expect(
-    page.getByText(
-      "Reset clears browser demo preferences. Saved core records are preserved.",
-      { exact: true },
-    ),
-  ).toBeVisible();
+    page.getByRole("button", { name: "Reset prototype", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "Browser demo data", exact: true }),
+  ).toHaveCount(0);
   const notices = page.getByLabel("Show notices for pending proposals");
   await expect(notices).toBeChecked();
   const checkbox = await notices.evaluate((input) => {
@@ -10689,17 +10752,17 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
   await expect(connection.getByRole("status")).toHaveText(
     "No connection saved",
   );
-  await revealControl(page, connection.getByLabel("Test key"), "");
+  await revealControl(page, connection.getByLabel("API key"), "");
   await expect(
     connection.getByRole("button", {
       name: "Save",
       exact: true,
     }),
   ).toBeDisabled();
-  await expect(connection.getByLabel("Test key")).toHaveValue("");
+  await expect(connection.getByLabel("API key")).toHaveValue("");
   await page
-    .getByRole("dialog", { name: "Providers", exact: true })
-    .getByRole("button", { name: "Close dialog", exact: true })
+    .getByRole("region", { name: "Providers", exact: true })
+    .getByRole("button", { name: "Back", exact: true })
     .click();
   await layout("settings", ".agent-settings-workspace");
   if (!isMobile) {
@@ -10782,9 +10845,9 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
     activity.getByRole("list", { name: "Activity events", exact: true }),
   ).toBeVisible();
   await expect(activity).toContainText("V3 activity reminder");
-  await expect(activity).toContainText(
-    "Saved by the local task engine. No financial execution.",
-  );
+  await expect(
+    activity.getByRole("button", { name: "Result", exact: true }),
+  ).toBeVisible();
   await expect(activity.getByText("UNREAD", { exact: true })).toBeVisible();
   expect(
     await page.evaluate(
@@ -11178,6 +11241,16 @@ test("Dashboard drag and resize autosave without a duplicate home rail shortcut"
   isMobile,
 }) => {
   page.setDefaultTimeout(10000);
+  let unavailable = true;
+  await page.route("**/api/v1/agents?**", async (route) => {
+    if (unavailable)
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "Controlled workspace outage" }),
+      });
+    else await route.continue();
+  });
   await page.goto(url);
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
@@ -11189,6 +11262,20 @@ test("Dashboard drag and resize autosave without a duplicate home rail shortcut"
     .click();
   const board = page.locator(".dashboard-grid");
   await expect(board).toBeVisible();
+  const dashboard = page.locator(".dashboard-screen");
+  await expect(dashboard.getByRole("alert").first()).toContainText(
+    "Controlled workspace outage",
+  );
+  await expect(board.locator(".dashboard-row")).toHaveCount(0);
+  unavailable = false;
+  await dashboard
+    .getByRole("button", { name: "Reload", exact: true })
+    .first()
+    .click();
+  await expect(board.locator(".dashboard-row").first()).toBeVisible();
+  await expect(
+    page.locator('.shell-top-nav > a[href="#overview"]'),
+  ).toHaveCount(0);
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
@@ -11236,6 +11323,35 @@ test("Dashboard drag and resize autosave without a duplicate home rail shortcut"
   await expect(board.locator("[data-widget]").first()).toHaveAttribute(
     "data-widget",
     "tasks",
+  );
+  const geometry = await page.evaluate(() => {
+    const style = (selector: string) =>
+      getComputedStyle(document.querySelector(selector)!);
+    return {
+      viewport: { width: innerWidth, height: innerHeight },
+      headerHeight: document
+        .querySelector(".shell-header")!
+        .getBoundingClientRect().height,
+      navFontSize: style(".shell-top-nav > a").fontSize,
+      gridGap: style(".dashboard-grid").gap,
+      surface: style(".dashboard-widget").backgroundColor,
+      border: style(".dashboard-widget").borderTopColor,
+      font: style(".shell-header").fontFamily,
+    };
+  });
+  expect(geometry.gridGap).toBe("8px");
+  expect(geometry.surface).toBe("rgb(30, 30, 42)");
+  expect(geometry.border).toBe("rgb(46, 46, 62)");
+  if (!isMobile) {
+    expect(geometry.headerHeight).toBe(50);
+    expect(geometry.navFontSize).toBe("14px");
+  }
+  await mkdir(resolve(".evidence/b02-workspace"), { recursive: true });
+  await writeFile(
+    resolve(
+      `.evidence/b02-workspace/geometry-${isMobile ? "mobile" : "desktop"}.json`,
+    ),
+    JSON.stringify(geometry, null, 2),
   );
   await page.screenshot({
     path: `.evidence/dashboard-home-${isMobile ? "mobile" : "desktop"}.png`,
@@ -11300,7 +11416,7 @@ test("compact agent pages share one provider editor and keep feed settings off t
     .getByRole("button", { name: "Providers", exact: true })
     .last()
     .click();
-  const provider = page.getByRole("dialog", { name: "Providers", exact: true });
+  const provider = page.getByRole("region", { name: "Providers", exact: true });
   await expect(provider.locator(".ai-connection")).toHaveCount(1);
   await revealControl(
     page,
@@ -11308,9 +11424,9 @@ test("compact agent pages share one provider editor and keep feed settings off t
     "",
   );
   await provider
-    .getByLabel("Test key", { exact: true })
+    .getByLabel("API key", { exact: true })
     .fill("fased-test-discarded-editor");
-  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
   await page
     .getByRole("button", { name: "Providers", exact: true })
     .last()
@@ -11320,10 +11436,8 @@ test("compact agent pages share one provider editor and keep feed settings off t
     provider.getByLabel("Vault passphrase", { exact: true }),
     "",
   );
-  await expect(provider.getByLabel("Test key", { exact: true })).toHaveValue(
-    "",
-  );
-  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await expect(provider.getByLabel("API key", { exact: true })).toHaveValue("");
+  await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(instructions).toHaveValue(
     "Preserve these unsaved agent instructions",
   );
@@ -11423,7 +11537,7 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
   await instance
     .getByRole("button", { name: "Providers", exact: true })
     .click();
-  const editor = page.getByRole("dialog", { name: "Providers", exact: true });
+  const editor = page.getByRole("region", { name: "Providers", exact: true });
   await expect(instance).not.toBeVisible();
   await revealControl(
     page,
@@ -11431,7 +11545,7 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     "",
   );
   await editor
-    .getByLabel("Test key", { exact: true })
+    .getByLabel("API key", { exact: true })
     .fill("fased-test-dashboard-disposable-key");
   await editor
     .getByLabel("Vault passphrase", { exact: true })
@@ -11445,7 +11559,7 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     .click();
   await editor.getByLabel("Name", { exact: true }).fill("Research");
   await editor
-    .getByLabel("Test key", { exact: true })
+    .getByLabel("API key", { exact: true })
     .fill("fased-test-second-dashboard-key");
   await editor
     .getByLabel("Vault passphrase", { exact: true })
@@ -11460,9 +11574,7 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
   );
   expect(providerAccounts.ref).toBe(primary.ref);
   expect(connection.ref).not.toBe(primary.ref);
-  await editor
-    .getByRole("button", { name: "Close dialog", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
   await (
     await openSetup()
   )
@@ -11587,6 +11699,34 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     .locator('[data-widget="tasks"] button.dashboard-row')
     .filter({ hasText: "Daily SOL review" })
     .click();
+  await expect(
+    page.getByRole("complementary", { name: "Task details", exact: true }),
+  ).toContainText("Daily SOL review");
+  if (isMobile)
+    await page.getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("button", { name: /Notifications, \d+ unread/ }).click();
+  const inbox = page.getByRole("dialog", {
+    name: "Notification inbox",
+    exact: true,
+  });
+  await expect(inbox).not.toContainText("Durable prototype events");
+  await inbox
+    .getByRole("button", { name: "Result", exact: true })
+    .last()
+    .click();
+  await expect(inbox).toBeHidden();
+  await expect(
+    page.getByRole("complementary", { name: "Task details", exact: true }),
+  ).toContainText("Daily SOL review");
+  await page.evaluate(() => {
+    location.hash = "activity";
+  });
+  await page
+    .locator("main")
+    .getByRole("button", { name: "Result", exact: true })
+    .last()
+    .click();
+  await expect(page).toHaveURL(/#agents\/tasks$/);
   await expect(
     page.getByRole("complementary", { name: "Task details", exact: true }),
   ).toContainText("Daily SOL review");
@@ -11735,7 +11875,7 @@ test("provider editor follows core credential admission without enabling live ca
     .getByRole("dialog", { name: "Instance", exact: true })
     .getByRole("button", { name: "Providers", exact: true })
     .click();
-  const editor = page.getByRole("dialog", { name: "Providers", exact: true });
+  const editor = page.getByRole("region", { name: "Providers", exact: true });
   await revealControl(
     page,
     editor.getByLabel("Vault passphrase", { exact: true }),
@@ -11752,17 +11892,14 @@ test("provider editor follows core credential admission without enabling live ca
   await expect(editor.getByLabel("API key", { exact: true })).toHaveValue("");
   await page.unrouteAll({ behavior: "wait" });
   await page.reload();
-  await page.getByRole("button", { name: "Setup", exact: true }).click();
-  await page
-    .getByRole("dialog", { name: "Instance", exact: true })
-    .getByRole("button", { name: "Providers", exact: true })
-    .click();
+  await expect(page).toHaveURL(/#providers$/);
+  await expect(editor).toBeVisible();
   await revealControl(
     page,
     editor.getByLabel("Vault passphrase", { exact: true }),
     "",
   );
-  await expect(editor.getByLabel("Test key", { exact: true })).toBeVisible();
+  await expect(editor.getByLabel("API key", { exact: true })).toBeVisible();
   await expect(editor.getByRole("status")).toContainText("No connection saved");
 });
 
@@ -11869,8 +12006,8 @@ test("multiple accounts keep scheduled agent selection and refuse a stale provid
     .getByRole("region", { name: "Agent settings", exact: true })
     .getByRole("button", { name: "Providers", exact: true })
     .click();
-  const editor = page.getByRole("dialog", { name: "Providers", exact: true });
-  await editor.getByLabel("Account", { exact: true }).selectOption(b.ref);
+  const editor = page.getByRole("region", { name: "Providers", exact: true });
+  await editor.locator(`[data-account="${b.ref}"]`).click();
   await privateCLI(["ai-connection", "--request-stdin"], {
     action: "remove",
     ref: b.ref,
@@ -11879,8 +12016,8 @@ test("multiple accounts keep scheduled agent selection and refuse a stale provid
   await page.evaluate(() =>
     window.dispatchEvent(new Event("ai-connection-changed")),
   );
-  await expect(editor.getByLabel("Account", { exact: true })).toHaveValue(
-    b.ref,
+  await expect(editor.getByRole("alert")).toContainText(
+    "Previous connection unavailable",
   );
   await revealControl(
     page,
@@ -11961,13 +12098,11 @@ for (const location of ["local", "remote"]) {
     await creation
       .getByRole("button", { name: "Connect provider", exact: true })
       .click();
-    const editor = page.getByRole("dialog", { name: "Providers", exact: true });
+    const editor = page.getByRole("region", { name: "Providers", exact: true });
     await editor
       .getByRole("button", { name: "Add provider", exact: true })
       .click();
-    await editor
-      .getByLabel("Connection", { exact: true })
-      .selectOption("sign-in");
+    await editor.getByRole("button", { name: "Sign in", exact: true }).click();
     await editor.getByLabel("Name", { exact: true }).fill("ChatGPT research");
     await editor
       .getByRole("button", { name: "Continue with ChatGPT", exact: true })
@@ -12015,9 +12150,7 @@ for (const location of ["local", "remote"]) {
       liveCallsEnabled: false,
     });
     expect((await privateCLI(["agents"])).revision).toBe(before.revision);
-    await editor
-      .getByRole("button", { name: "Close dialog", exact: true })
-      .click();
+    await page.getByRole("button", { name: "Back", exact: true }).click();
     await expect(creation).toBeVisible();
     await expect(creation.getByLabel("Name", { exact: true })).toHaveValue(
       "Plan researcher",
@@ -12139,13 +12272,11 @@ for (const location of ["local", "remote"]) {
         .getByRole("region", { name: "Agent settings", exact: true })
         .getByRole("button", { name: "Providers", exact: true })
         .click();
-      const accessEditor = page.getByRole("dialog", {
+      const accessEditor = page.getByRole("region", {
         name: "Providers",
         exact: true,
       });
-      await accessEditor
-        .getByLabel("Account", { exact: true })
-        .selectOption(account.ref);
+      await accessEditor.locator(`[data-account="${account.ref}"]`).click();
       const background = accessEditor
         .getByText("Background access", { exact: true })
         .locator("..");
@@ -12168,9 +12299,7 @@ for (const location of ["local", "remote"]) {
             )?.taskAccess?.budgetMicrousd,
         )
         .toBe(0);
-      await accessEditor
-        .getByRole("button", { name: "Close dialog", exact: true })
-        .click();
+      await page.getByRole("button", { name: "Back", exact: true }).click();
       await page.goto(url + "/#agents/tasks");
       await openAISchedules(page);
       await schedule
@@ -12427,13 +12556,13 @@ test("shared Add Provider binds native accounts and latest models across Chat an
     .getByRole("region", { name: "Agent settings", exact: true })
     .getByRole("button", { name: "Providers", exact: true })
     .click();
-  const editor = page.getByRole("dialog", { name: "Providers", exact: true });
+  const editor = page.getByRole("region", { name: "Providers", exact: true });
   for (const provider of ["anthropic", "xai"]) {
     await editor
       .getByRole("button", { name: "Add provider", exact: true })
       .click();
-    await editor.getByLabel("Provider", { exact: true }).selectOption(provider);
-    await expect(editor.getByLabel("Test key", { exact: true })).toBeVisible();
+    await editor.locator(`[data-provider=${provider}] > button`).click();
+    await expect(editor.getByLabel("API key", { exact: true })).toBeVisible();
     await expect(
       editor.getByRole("button", { name: "Unlock", exact: true }),
     ).toHaveCount(0);
@@ -12448,7 +12577,7 @@ test("shared Add Provider binds native accounts and latest models across Chat an
       .getByLabel("Name", { exact: true })
       .fill(provider === "anthropic" ? "Claude research" : "Grok research");
     await editor
-      .getByLabel("Test key", { exact: true })
+      .getByLabel("API key", { exact: true })
       .fill(`fased-test-${provider}-disposable-ui-key`);
     await editor
       .getByLabel("Vault passphrase", { exact: true })
@@ -12509,9 +12638,7 @@ test("shared Add Provider binds native accounts and latest models across Chat an
   await page.screenshot({
     path: `.evidence/provider-adapters/add-provider-${isMobile ? "mobile" : "desktop"}.png`,
   });
-  await editor
-    .getByRole("button", { name: "Close dialog", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
   const profileId = "trading-analyst",
     read = () => privateCLI(["agents", "--profile", profileId]);
   const command = async (c: Record<string, unknown>) =>
@@ -12644,7 +12771,7 @@ test("scoped pilot controls keep review allow and revoke exact while ordinary co
     .getByRole("region", { name: "Agent settings", exact: true })
     .getByRole("button", { name: "Providers", exact: true })
     .click();
-  const editor = page.getByRole("dialog", { name: "Providers", exact: true });
+  const editor = page.getByRole("region", { name: "Providers", exact: true });
   await expect(editor.getByText("Pilot", { exact: true })).toHaveCount(0);
   let permit: any;
   let state = "";
@@ -12724,7 +12851,7 @@ test("scoped pilot controls keep review allow and revoke exact while ordinary co
     .filter({ has: page.locator("summary", { hasText: /^Credentials$/ }) });
   await credentials.getByText("Credentials", { exact: true }).click();
   await credentials
-    .getByLabel("Test key", { exact: true })
+    .getByLabel("API key", { exact: true })
     .fill("fased-test-pilot-replacement-refused");
   await credentials
     .getByLabel("Vault passphrase", { exact: true })
@@ -12732,7 +12859,7 @@ test("scoped pilot controls keep review allow and revoke exact while ordinary co
   await expect(
     credentials.getByRole("button", { name: "Replace", exact: true }),
   ).toBeDisabled();
-  await credentials.getByLabel("Test key", { exact: true }).fill("");
+  await credentials.getByLabel("API key", { exact: true }).fill("");
   await credentials.getByLabel("Vault passphrase", { exact: true }).fill("");
   await credentials.getByText("Credentials", { exact: true }).click();
   await editor.getByText("Pilot", { exact: true }).click();
@@ -12788,13 +12915,14 @@ test("local provider connects in UI and shares configured agent Chat without API
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
+  await fixtureProviderSelection("openai");
   if (isMobile) await page.goto(url + "/#agents/settings");
   await page
     .getByRole("button", { name: "Providers", exact: true })
     .first()
     .click();
-  const editor = page.getByRole("dialog", { name: "Providers", exact: true });
-  await editor.getByLabel("Provider", { exact: true }).selectOption("local");
+  const editor = page.getByRole("region", { name: "Providers", exact: true });
+  await editor.locator('[data-provider="local"] > button').click();
   await expect(editor.getByLabel("Endpoint", { exact: true })).toHaveValue(
     "http://127.0.0.1:11434/v1",
   );
@@ -12821,28 +12949,61 @@ test("local provider connects in UI and shares configured agent Chat without API
   expect(
     account.catalog.models.find((m: any) => m.id === "gemma4:e2b")?.selectable,
   ).toBe(true);
-  await editor
-    .getByRole("button", { name: "Close dialog", exact: true })
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  const creation = page.getByRole("dialog", { name: "New agent", exact: true });
+  await creation
+    .getByLabel("Name", { exact: true })
+    .fill("Local browser analyst");
+  await creation
+    .getByLabel("Account", { exact: true })
+    .selectOption(account.ref);
+  await expect(creation.getByLabel("Model", { exact: true })).toHaveValue(
+    "gemma4:e2b",
+  );
+  await creation
+    .getByRole("button", { name: "Create agent", exact: true })
     .click();
-  let view = await privateCLI(["agents"]);
-  view = await privateCLI(["agents", "--request-stdin"], {
-    action: "profile-create",
-    revision: view.revision,
-    name: "Local browser analyst",
+  await expect(creation).toBeHidden();
+  const view = await privateCLI(["agents"]);
+  const created = view.profiles.find(
+    (p: any) => p.name === "Local browser analyst",
+  );
+  const profile = created.id;
+  await expect(page.getByLabel("Agent", { exact: true })).toHaveValue(profile);
+  expect(created).toMatchObject({
     provider: "local",
-    accountRef: account.ref,
+    connectionRef: account.ref,
     model: "gemma4:e2b",
   });
-  const profile = view.profileId;
-  view = await privateCLI(["agents", "--request-stdin"], {
-    action: "session-create",
-    revision: view.revision,
-    profileId: profile,
-    name: "Local browser conversation",
-  });
-  await page.goto(url + "/#agents/chat");
+  if (isMobile)
+    await page.getByRole("button", { name: "More", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Providers", exact: true })
+    .first()
+    .click();
   await page.reload();
-  await page.getByLabel("Agent", { exact: true }).selectOption(profile);
+  await expect(
+    editor.locator(`[data-account="${account.ref}"]`),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    editor.getByRole("heading", { name: "Local server", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .getByRole("link", { name: "Chat", exact: true })
+    .click();
+  await openConversationList(page);
+  await page
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Local browser conversation");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
   await page
     .getByLabel("Message", { exact: true })
     .fill("Explain this synthetic local note.");
@@ -12869,4 +13030,1651 @@ test("local provider connects in UI and shares configured agent Chat without API
   expect(result.connectionRef).toBe(account.ref);
   expect(result.costBasis).toBe("local-reported-usage");
   expect(result.spentMicrousd).toBe(0);
+});
+
+test("Providers page preserves agent drafts and shares account models without generating during setup", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(90000);
+  page.setDefaultTimeout(10000);
+  await stop();
+  await start(true);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
+  });
+  await page.goto(url + "/#agents/settings");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  await page
+    .getByRole("textbox", { name: "Instructions", exact: true })
+    .fill("Preserve this unsaved agent draft");
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  const creation = page.getByRole("dialog", { name: "New agent", exact: true });
+  await creation
+    .getByLabel("Name", { exact: true })
+    .fill("Research account draft");
+  await creation
+    .getByRole("button", { name: "Connect provider", exact: true })
+    .click();
+  const providers = page.getByRole("region", {
+    name: "Providers",
+    exact: true,
+  });
+  await expect(page).toHaveURL(/#providers$/);
+  await expect(
+    page.getByRole("dialog", { name: "Providers", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    providers.getByRole("heading", {
+      name: "Providers",
+      level: 1,
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(providers.locator(".provider-editor")).toHaveCSS(
+    "background-color",
+    "rgb(30, 30, 42)",
+  );
+  await expect(providers.locator(".provider-editor")).toHaveCSS(
+    "border-radius",
+    "8px",
+  );
+
+  await providers.locator('[data-provider="anthropic"] > button').click();
+  await expect(
+    providers.getByRole("heading", { name: "Anthropic", exact: true }),
+  ).toBeVisible();
+  await providers.getByLabel("Name", { exact: true }).fill("Claude research");
+  await providers
+    .getByLabel("API key", { exact: true })
+    .fill("fased-test-anthropic-page-disposable");
+  await providers
+    .getByLabel("Vault passphrase", { exact: true })
+    .fill("disposable-full-page-vault-password");
+  await providers.getByRole("button", { name: "Save", exact: true }).click();
+  await expect
+    .poll(async () => (await privateCLI(["ai-connection"])).connections.length)
+    .toBe(1);
+  const account = (await privateCLI(["ai-connection"])).connections[0];
+  await expect(
+    providers.getByRole("region", { name: "Models", exact: true }),
+  ).toContainText(account.catalog.models.find((m: any) => m.selectable).name);
+  expect((await privateCLI(["agents"])).aiRequests).toHaveLength(0);
+  if (isMobile)
+    expect(
+      await providers
+        .locator(".provider-brand-button")
+        .first()
+        .evaluate((e) => e.getBoundingClientRect().height),
+    ).toBeGreaterThanOrEqual(44);
+  await page.evaluate(() => scrollTo(0, 0));
+  await page.screenshot({
+    path: `.evidence/b03-providers/page-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+  await providers.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(creation).toBeVisible();
+  await expect(creation.getByLabel("Name", { exact: true })).toHaveValue(
+    "Research account draft",
+  );
+  await creation
+    .getByLabel("Account", { exact: true })
+    .selectOption(account.ref);
+  await expect(creation.getByLabel("Model", { exact: true })).toHaveValue(
+    account.catalog.models.find((m: any) => m.recommended && m.selectable).id,
+  );
+  await creation
+    .getByRole("button", { name: "Close dialog", exact: true })
+    .click();
+  await expect(
+    page.getByRole("textbox", { name: "Instructions", exact: true }),
+  ).toHaveValue("Preserve this unsaved agent draft");
+  const health = await (await page.request.get(url + "/api/v1/health")).json();
+  for (const key of [
+    "aiConnections",
+    "financialExecution",
+    "walletSigner",
+    "updater",
+  ])
+    expect(health.capabilities[key]).toBe(false);
+  expect(external).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+});
+
+test("New cloud accounts use the Providers page and shared agent Chat without generation at setup", async ({
+  page,
+}) => {
+  test.setTimeout(90000);
+  page.setDefaultTimeout(10000);
+  await stop();
+  await start(true);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
+  });
+  await page.goto(url + "/#providers");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const providers = page.getByRole("region", {
+    name: "Providers",
+    exact: true,
+  });
+  const accounts: any[] = [];
+  for (const provider of [
+    "moonshot",
+    "google",
+    "openrouter",
+    "qwen",
+    "opencode",
+  ]) {
+    await providers.locator(`[data-provider="${provider}"] > button`).click();
+    await providers
+      .getByLabel("Name", { exact: true })
+      .fill(provider + " browser");
+    await providers
+      .getByLabel("API key", { exact: true })
+      .fill(`fased-test-${provider}-disposable-ui-key`);
+    await providers
+      .getByLabel("Vault passphrase", { exact: true })
+      .fill("disposable-five-provider-vault");
+    await providers.getByRole("button", { name: "Save", exact: true }).click();
+    await expect
+      .poll(
+        async () => (await privateCLI(["ai-connection"])).connections?.length,
+      )
+      .toBe(accounts.length + 1);
+    const account = (await privateCLI(["ai-connection"])).connections.find(
+      (a: any) => a.provider === provider,
+    );
+    accounts.push(account);
+    const models = providers.getByRole("region", {
+      name: "Models",
+      exact: true,
+    });
+    await expect(models).toContainText(account.catalog.models[0].name);
+    if (provider === "moonshot") {
+      await expect(models).toContainText("Pricing unavailable");
+      expect(account.catalog.models[0].selectable).toBe(false);
+    } else expect(account.catalog.models[0].selectable).toBe(true);
+    expect((await privateCLI(["agents"])).aiRequests).toHaveLength(0);
+  }
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  const creation = page.getByRole("dialog", { name: "New agent", exact: true });
+  await creation
+    .getByLabel("Name", { exact: true })
+    .fill("Google browser analyst");
+  const account = accounts.find((a) => a.provider === "google");
+  for (const a of accounts.filter((a) => a.provider !== "moonshot")) {
+    await creation.getByLabel("Account", { exact: true }).selectOption(a.ref);
+    await expect(creation.getByLabel("Model", { exact: true })).toHaveValue(
+      a.catalog.models[0].id,
+    );
+    await expect(
+      creation.getByRole("button", { name: "Create agent", exact: true }),
+    ).toBeEnabled();
+  }
+  await creation
+    .getByLabel("Account", { exact: true })
+    .selectOption(account.ref);
+  await creation
+    .getByRole("button", { name: "Create agent", exact: true })
+    .click();
+  await expect(creation).toBeHidden();
+  const profile = (await privateCLI(["agents"])).profiles.find(
+    (p: any) => p.name === "Google browser analyst",
+  );
+  expect(profile).toMatchObject({
+    provider: "google",
+    connectionRef: account.ref,
+    model: account.catalog.models[0].id,
+  });
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .getByRole("link", { name: "Chat", exact: true })
+    .click();
+  await openConversationList(page);
+  await page
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Synthetic Google conversation");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Explain this synthetic note.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const review = page.getByRole("dialog", {
+    name: "Allow replies",
+    exact: true,
+  });
+  await expect(review).toContainText(account.catalog.models[0].id);
+  await review
+    .getByRole("button", { name: "Allow and send", exact: true })
+    .click();
+  await expect
+    .poll(
+      async () =>
+        (await privateCLI(["agents", "--profile", profile.id])).aiRequests.at(
+          -1,
+        )?.state,
+    )
+    .toBe("completed");
+  const request = (
+    await privateCLI(["agents", "--profile", profile.id])
+  ).aiRequests.at(-1);
+  expect(request.connectionRef).toBe(account.ref);
+  expect(request.heldMicrousd).toBe(0);
+  await expect(
+    page.getByRole("textbox", { name: "Message", exact: true }),
+  ).toBeEnabled();
+  expect(external).toEqual([]);
+  const health = await (await page.request.get(url + "/api/v1/health")).json();
+  for (const key of [
+    "aiConnections",
+    "financialExecution",
+    "walletSigner",
+    "updater",
+  ])
+    expect(health.capabilities[key]).toBe(false);
+});
+
+test("OpenRouter Remote sign-in accepts a code and returns an ordinary encrypted API account", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  page.setDefaultTimeout(10000);
+  await stop();
+  await start(true);
+  // Only the public Remote descriptor is simulated; fixture runtime stays Local.
+  await page.route("**/api/v1/health", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.connection = { location: "remote", transport: "loopback" };
+    await route.fulfill({ response, json: body });
+  });
+  await page.goto(url + "/#providers");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const providers = page.getByRole("region", {
+    name: "Providers",
+    exact: true,
+  });
+  await providers.locator('[data-provider="openrouter"] > button').click();
+  await providers
+    .getByRole("button", { name: "Sign in", exact: true })
+    .first()
+    .click();
+  await providers
+    .getByRole("button", { name: "Continue", exact: true })
+    .click();
+  await expect(providers.getByLabel("Code", { exact: true })).toBeVisible();
+  await providers
+    .getByLabel("Code", { exact: true })
+    .fill("fixture-router-code");
+  await providers
+    .getByLabel("Vault passphrase", { exact: true })
+    .fill("disposable-router-browser-vault");
+  await providers.getByRole("button", { name: "Finish", exact: true }).click();
+  await expect(
+    providers.getByRole("region", { name: "Models", exact: true }),
+  ).toContainText("Gemini 3.8 Flash");
+  const account = (await privateCLI(["ai-connection"])).connections[0];
+  expect(account).toMatchObject({
+    provider: "openrouter",
+    authMethod: "api-key",
+    credentialMode: "test",
+    liveCallsEnabled: false,
+    locked: false,
+  });
+  expect(account.planUse).not.toBe(true);
+  expect((await privateCLI(["agents"])).aiRequests).toHaveLength(0);
+});
+
+test("Named local servers share setup models and agent Chat without retargeting locked accounts", async ({
+  page,
+}) => {
+  test.setTimeout(90000);
+  page.setDefaultTimeout(10000);
+  await stop();
+  await start(true);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
+  });
+  await page.goto(url + "/#providers");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const editor = page.getByRole("region", { name: "Providers", exact: true });
+  const accounts: any[] = [];
+  for (const [name, port] of [
+    ["Ollama", 11434],
+    ["LM Studio", 1234],
+    ["vLLM", 8000],
+  ] as const) {
+    await editor
+      .locator('[data-provider="local"] > .provider-brand-button')
+      .click();
+    await editor.getByRole("button", { name, exact: true }).click();
+    await expect(
+      editor.getByRole("button", { name, exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(editor.getByLabel("Endpoint", { exact: true })).toHaveValue(
+      `http://127.0.0.1:${port}/v1`,
+    );
+    await editor
+      .getByLabel("Vault passphrase", { exact: true })
+      .fill("disposable-local-preset-vault");
+    await editor.getByRole("button", { name: "Save", exact: true }).click();
+    await expect
+      .poll(
+        async () => (await privateCLI(["ai-connection"])).connections?.length,
+      )
+      .toBe(accounts.length + 1);
+    const account = (await privateCLI(["ai-connection"])).connections.find(
+      (a: any) => a.name === name,
+    );
+    accounts.push(account);
+    expect(account).toMatchObject({
+      provider: "local",
+      name,
+      endpoint: `http://127.0.0.1:${port}/v1`,
+      authMethod: "local",
+      locked: false,
+      liveCallsEnabled: false,
+    });
+  }
+  expect((await privateCLI(["agents"])).aiRequests).toHaveLength(0);
+  const account = accounts[1],
+    model = "google/gemma-4-e2b";
+  await editor.locator(`[data-account="${account.ref}"]`).click();
+  await editor.getByText("Credentials", { exact: true }).click();
+  await editor.getByRole("button", { name: "Lock", exact: true }).click();
+  await expect(editor.getByLabel("Endpoint", { exact: true })).toHaveValue("");
+  await expect(
+    editor.getByRole("button", { name: "Replace", exact: true }),
+  ).toBeDisabled();
+  await editor
+    .getByLabel("Vault passphrase", { exact: true })
+    .fill("disposable-local-preset-vault");
+  await editor.getByRole("button", { name: "Unlock", exact: true }).click();
+  await expect(editor.getByLabel("Endpoint", { exact: true })).toHaveValue(
+    "http://127.0.0.1:1234/v1",
+  );
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  const creation = page.getByRole("dialog", { name: "New agent", exact: true });
+  await creation.getByLabel("Name", { exact: true }).fill("LM Studio analyst");
+  await creation
+    .getByLabel("Account", { exact: true })
+    .selectOption(account.ref);
+  await creation.getByLabel("Model", { exact: true }).selectOption(model);
+  await creation
+    .getByRole("button", { name: "Create agent", exact: true })
+    .click();
+  await expect(creation).toBeHidden();
+  const profile = (await privateCLI(["agents"])).profiles.find(
+    (p: any) => p.name === "LM Studio analyst",
+  );
+  expect(profile).toMatchObject({
+    provider: "local",
+    connectionRef: account.ref,
+    model,
+  });
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .getByRole("link", { name: "Chat", exact: true })
+    .click();
+  await openConversationList(page);
+  await page
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Named local conversation");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Summarize this synthetic local note.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const review = page.getByRole("dialog", {
+    name: "Allow replies",
+    exact: true,
+  });
+  await expect(review).toContainText(model);
+  await expect(review).not.toContainText("$");
+  await review
+    .getByRole("button", { name: "Allow and send", exact: true })
+    .click();
+  await expect
+    .poll(
+      async () =>
+        (await privateCLI(["agents", "--profile", profile.id])).aiRequests.at(
+          -1,
+        )?.state,
+    )
+    .toBe("completed");
+  const request = (
+    await privateCLI(["agents", "--profile", profile.id])
+  ).aiRequests.at(-1);
+  expect(request).toMatchObject({
+    model,
+    connectionRef: account.ref,
+    costBasis: "local-reported-usage",
+    spentMicrousd: 0,
+    heldMicrousd: 0,
+  });
+  await page.screenshot({
+    path: `.evidence/b03-local-servers/local-${test.info().project.name}.png`,
+    fullPage: true,
+  });
+  expect(external).toEqual([]);
+});
+
+test("Qwen API keeps its region and model through Providers, agent and Chat", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(60000);
+  page.setDefaultTimeout(10000);
+  await stop();
+  await start(true);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
+  });
+  await page.goto(url + "/#providers");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const providers = page.getByRole("region", {
+    name: "Providers",
+    exact: true,
+  });
+  await providers
+    .locator('[data-provider="qwen"] > .provider-brand-button')
+    .click();
+  await expect(
+    providers.getByText("ModelStudio · Singapore", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    providers.getByRole("button", { name: "Sign in", exact: true }),
+  ).toHaveCount(0);
+  await providers.getByLabel("Name", { exact: true }).fill("Qwen Singapore");
+  await providers
+    .getByLabel("API key", { exact: true })
+    .fill("fased-test-qwen-region-disposable-key");
+  await providers
+    .getByLabel("Vault passphrase", { exact: true })
+    .fill("disposable-qwen-region-vault");
+  await providers.getByRole("button", { name: "Save", exact: true }).click();
+  await expect
+    .poll(async () => (await privateCLI(["ai-connection"])).connections.length)
+    .toBe(1);
+  const account = (await privateCLI(["ai-connection"])).connections[0];
+  expect(account.catalog.source).toBe(
+    "https://dashscope-intl.aliyuncs.com/api/v1/models?page_no=1&page_size=100&providers=qwen",
+  );
+  expect(
+    account.catalog.models.find((m: any) => m.id === "qwen3.8-flash")
+      .selectable,
+  ).toBe(true);
+  expect((await privateCLI(["agents"])).aiRequests).toHaveLength(0);
+  await page.reload();
+  // No agent is assigned yet; inspect the saved account rather than assuming
+  // that account creation silently changed the workspace's default account.
+  await providers.locator(`[data-account="${account.ref}"]`).click();
+  await expect(
+    providers.getByText("ModelStudio · Singapore", { exact: true }),
+  ).toBeVisible();
+  await providers.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  const creation = page.getByRole("dialog", { name: "New agent", exact: true });
+  await creation
+    .getByLabel("Name", { exact: true })
+    .fill("Qwen regional analyst");
+  await creation
+    .getByLabel("Account", { exact: true })
+    .selectOption(account.ref);
+  await expect(creation.getByLabel("Model", { exact: true })).toHaveValue(
+    "qwen3.8-flash",
+  );
+  await creation
+    .getByRole("button", { name: "Create agent", exact: true })
+    .click();
+  await expect(creation).toBeHidden();
+  const profile = (await privateCLI(["agents"])).profiles.find(
+    (p: any) => p.name === "Qwen regional analyst",
+  );
+  expect(profile).toMatchObject({
+    provider: "qwen",
+    connectionRef: account.ref,
+    model: "qwen3.8-flash",
+  });
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .getByRole("link", { name: "Chat", exact: true })
+    .click();
+  await openConversationList(page);
+  await page
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Synthetic Qwen note");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Summarize this synthetic note.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const review = page.getByRole("dialog", {
+    name: "Allow replies",
+    exact: true,
+  });
+  await expect(review).toContainText("qwen3.8-flash");
+  await review
+    .getByRole("button", { name: "Allow and send", exact: true })
+    .click();
+  await expect
+    .poll(
+      async () =>
+        (await privateCLI(["agents", "--profile", profile.id])).aiRequests.at(
+          -1,
+        )?.state,
+    )
+    .toBe("completed");
+  const request = (
+    await privateCLI(["agents", "--profile", profile.id])
+  ).aiRequests.at(-1);
+  expect(request).toMatchObject({
+    model: "qwen3.8-flash",
+    connectionRef: account.ref,
+    heldMicrousd: 0,
+  });
+  expect(external).toEqual([]);
+  const health = await (await page.request.get(url + "/api/v1/health")).json();
+  for (const key of [
+    "aiConnections",
+    "financialExecution",
+    "walletSigner",
+    "updater",
+  ])
+    expect(health.capabilities[key]).toBe(false);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.goto(url + "/#providers");
+  await expect(
+    providers.locator(`[data-account="${account.ref}"]`),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    providers.getByText("ModelStudio · Singapore", { exact: true }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: `.evidence/b03-qwen-api/providers-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+});
+
+test("Kimi regional USD account shares agent Chat and preserves mainland records", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(60000);
+  page.setDefaultTimeout(10000);
+  await stop();
+  await start(true);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
+  });
+  await page.goto(url + "/#providers");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const mainland = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "add",
+    provider: "moonshot",
+    name: "Existing CNY account",
+    key: "fased-test-kimi-mainland-preserved",
+    passphrase: "disposable-kimi-mainland-vault",
+  });
+  expect(mainland.catalog.models[0].selectable).toBe(false);
+  const providers = page.getByRole("region", {
+    name: "Providers",
+    exact: true,
+  });
+  await providers
+    .locator('[data-provider="moonshot"] > .provider-brand-button')
+    .click();
+  await providers
+    .getByRole("button", { name: "International · USD", exact: true })
+    .click();
+  await expect(providers.locator(".provider-route")).toHaveText(
+    "International · USD",
+  );
+  await expect(providers.locator(".provider-brand-button")).toHaveCount(10);
+  await expect(
+    providers.getByRole("button", { name: "Sign in", exact: true }),
+  ).toHaveCount(0);
+  await providers
+    .getByLabel("Name", { exact: true })
+    .fill("Kimi International");
+  await providers
+    .getByLabel("API key", { exact: true })
+    .fill("fased-test-kimi-region-disposable-key");
+  await providers
+    .getByLabel("Vault passphrase", { exact: true })
+    .fill("disposable-kimi-region-vault");
+  await providers.getByRole("button", { name: "Save", exact: true }).click();
+  await expect
+    .poll(async () => (await privateCLI(["ai-connection"])).connections.length)
+    .toBe(2);
+  const account = (await privateCLI(["ai-connection"])).connections.find(
+    (a: any) => a.provider === "moonshot-intl",
+  );
+  expect(account.catalog.source).toBe("https://api.moonshot.ai/v1/models");
+  expect(
+    account.catalog.models.find(
+      (m: any) => m.id === "moonshot-intl/kimi-k3.1-pro",
+    ).selectable,
+  ).toBe(true);
+  expect((await privateCLI(["agents"])).aiRequests).toHaveLength(0);
+  await page.reload();
+  // No agent is assigned yet; inspect the saved account rather than assuming
+  // that account creation silently changed the workspace's default account.
+  await providers.locator(`[data-account="${account.ref}"]`).click();
+  await expect(providers.locator(".provider-route")).toHaveText(
+    "International · USD",
+  );
+  await providers.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  const creation = page.getByRole("dialog", { name: "New agent", exact: true });
+  await creation
+    .getByLabel("Name", { exact: true })
+    .fill("Kimi international analyst");
+  await creation
+    .getByLabel("Account", { exact: true })
+    .selectOption(account.ref);
+  await expect(creation.getByLabel("Model", { exact: true })).toHaveValue(
+    "moonshot-intl/kimi-k3.1-pro",
+  );
+  await creation
+    .getByRole("button", { name: "Create agent", exact: true })
+    .click();
+  await expect(creation).toBeHidden();
+  const profile = (await privateCLI(["agents"])).profiles.find(
+    (p: any) => p.name === "Kimi international analyst",
+  );
+  expect(profile).toMatchObject({
+    provider: "moonshot-intl",
+    connectionRef: account.ref,
+    model: "moonshot-intl/kimi-k3.1-pro",
+  });
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .getByRole("link", { name: "Chat", exact: true })
+    .click();
+  await openConversationList(page);
+  await page
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Synthetic Kimi note");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Summarize this synthetic note.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const review = page.getByRole("dialog", {
+    name: "Allow replies",
+    exact: true,
+  });
+  await expect(review).toContainText("moonshot-intl/kimi-k3.1-pro");
+  await review
+    .getByRole("button", { name: "Allow and send", exact: true })
+    .click();
+  await expect
+    .poll(
+      async () =>
+        (await privateCLI(["agents", "--profile", profile.id])).aiRequests.at(
+          -1,
+        )?.state,
+    )
+    .toBe("completed");
+  const request = (
+    await privateCLI(["agents", "--profile", profile.id])
+  ).aiRequests.at(-1);
+  expect(request).toMatchObject({
+    model: "moonshot-intl/kimi-k3.1-pro",
+    connectionRef: account.ref,
+    heldMicrousd: 0,
+  });
+  expect(external).toEqual([]);
+  const health = await (await page.request.get(url + "/api/v1/health")).json();
+  for (const key of [
+    "aiConnections",
+    "financialExecution",
+    "walletSigner",
+    "updater",
+  ])
+    expect(health.capabilities[key]).toBe(false);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.goto(url + "/#providers");
+  await expect(
+    providers.locator(`[data-account="${account.ref}"]`),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(providers.locator(".provider-route")).toBeVisible();
+  expect(
+    (await privateCLI(["ai-connection"])).connections.find(
+      (a: any) => a.ref === mainland.ref,
+    ).provider,
+  ).toBe("moonshot");
+  await page.screenshot({
+    path: `.evidence/b03-kimi/providers-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+});
+
+test("Google API sign-in uses project models in agent Chat and preserves its API key account", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(60000);
+  page.setDefaultTimeout(10000);
+  await stop();
+  await start(true);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
+  });
+  await page.goto(url + "/#providers");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const old = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "add",
+    provider: "google",
+    name: "Preserved API account",
+    key: "fased-test-google-original-browser",
+    passphrase: "disposable-google-original-vault",
+  });
+  await page.reload();
+  const providers = page.getByRole("region", {
+    name: "Providers",
+    exact: true,
+  });
+  await providers
+    .locator('[data-provider="google"] > .provider-brand-button')
+    .click();
+  await providers.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(providers.getByLabel("API key", { exact: true })).toHaveCount(0);
+  await providers
+    .getByLabel("Name", { exact: true })
+    .fill("Google OAuth project");
+  await providers
+    .getByLabel("Project", { exact: true })
+    .fill("fased-fixture-project");
+  await providers
+    .getByRole("button", { name: "Continue with Google", exact: true })
+    .click();
+  const link = providers.getByRole("link", {
+    name: "Open sign-in",
+    exact: true,
+  });
+  await expect(link).toBeVisible();
+  const callback = await link.getAttribute("href");
+  expect(callback).toMatch(/^http:\/\/127\.0\.0\.1:/);
+  expect((await page.request.get(callback!)).status()).toBe(200);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(providers.getByText("Ready", { exact: true })).toBeVisible();
+  await providers
+    .getByLabel("Vault passphrase", { exact: true })
+    .fill("disposable-google-oauth-vault");
+  await providers.getByRole("button", { name: "Finish", exact: true }).click();
+  await expect
+    .poll(async () => (await privateCLI(["ai-connection"])).connections.length)
+    .toBe(2);
+  const all = (await privateCLI(["ai-connection"])).connections;
+  const account = all.find((a: any) => a.authMethod === "oauth");
+  expect(account).toMatchObject({
+    provider: "google",
+    googleProject: "fased-fixture-project",
+    planUse: false,
+    liveCallsEnabled: false,
+  });
+  expect(all.find((a: any) => a.ref === old.ref).authMethod).toBe("api-key");
+  expect(
+    account.catalog.models.find((m: any) => m.id === "gemini-3.8-flash"),
+  ).toMatchObject({ method: "oauth", selectable: true });
+  expect((await privateCLI(["agents"])).aiRequests).toHaveLength(0);
+  await expect(providers.locator(".provider-route")).toHaveText(
+    "fased-fixture-project",
+  );
+  await providers.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  const creation = page.getByRole("dialog", { name: "New agent", exact: true });
+  await creation
+    .getByLabel("Name", { exact: true })
+    .fill("Google OAuth analyst");
+  await creation
+    .getByLabel("Account", { exact: true })
+    .selectOption(account.ref);
+  await expect(creation.getByLabel("Model", { exact: true })).toHaveValue(
+    "gemini-3.8-flash",
+  );
+  await creation
+    .getByRole("button", { name: "Create agent", exact: true })
+    .click();
+  await expect(creation).toBeHidden();
+  const profile = (await privateCLI(["agents"])).profiles.find(
+    (p: any) => p.name === "Google OAuth analyst",
+  );
+  expect(profile).toMatchObject({
+    provider: "google",
+    connectionRef: account.ref,
+    model: "gemini-3.8-flash",
+  });
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .getByRole("link", { name: "Chat", exact: true })
+    .click();
+  await openConversationList(page);
+  await page
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Synthetic Google OAuth note");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Summarize this synthetic note.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const review = page.getByRole("dialog", {
+    name: "Allow replies",
+    exact: true,
+  });
+  await expect(review).toContainText("gemini-3.8-flash");
+  await expect(review).not.toContainText("ChatGPT");
+  await review
+    .getByRole("button", { name: "Allow and send", exact: true })
+    .click();
+  await expect
+    .poll(
+      async () =>
+        (await privateCLI(["agents", "--profile", profile.id])).aiRequests.at(
+          -1,
+        )?.state,
+    )
+    .toBe("completed");
+  const result = (
+    await privateCLI(["agents", "--profile", profile.id])
+  ).aiRequests.at(-1);
+  expect(result).toMatchObject({
+    connectionRef: account.ref,
+    model: "gemini-3.8-flash",
+    heldMicrousd: 0,
+  });
+  expect(result.spentMicrousd).toBeGreaterThan(0);
+  expect(external).toEqual([]);
+  const health = await (await page.request.get(url + "/api/v1/health")).json();
+  for (const key of [
+    "aiConnections",
+    "financialExecution",
+    "walletSigner",
+    "updater",
+  ])
+    expect(health.capabilities[key]).toBe(false);
+  await page.goto(url + "/#providers");
+  await expect(
+    providers.locator(`[data-account="${account.ref}"]`),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(providers.locator(".provider-route")).toHaveText(
+    "fased-fixture-project",
+  );
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: `.evidence/b03-google-oauth/providers-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+});
+
+test("Kimi Code membership connects models agent and normal Chat without task authority", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(60000);
+  page.setDefaultTimeout(10000);
+  await stop();
+  await start(true);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
+  });
+  await page.goto(url + "/#providers");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const mainland = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "add",
+    provider: "moonshot",
+    name: "Existing CNY account",
+    key: "fased-test-kimi-mainland-preserved",
+    passphrase: "disposable-kimi-mainland-vault",
+  });
+  expect(mainland.catalog.models[0].selectable).toBe(false);
+  const providers = page.getByRole("region", {
+    name: "Providers",
+    exact: true,
+  });
+  await providers
+    .locator('[data-provider="moonshot"] > .provider-brand-button')
+    .click();
+  await providers
+    .getByRole("button", { name: "Code · Interactive", exact: true })
+    .click();
+  await expect(providers.locator(".provider-route")).toHaveText(
+    "Code · Interactive",
+  );
+  await expect(providers.locator(".provider-brand-button")).toHaveCount(10);
+  await expect(
+    providers.getByRole("button", { name: "Sign in", exact: true }),
+  ).toHaveCount(0);
+  await providers
+    .getByLabel("Name", { exact: true })
+    .fill("Personal Kimi Code");
+  await providers
+    .getByLabel("API key", { exact: true })
+    .fill("fased-test-kimi-region-disposable-key");
+  await providers
+    .getByLabel("Vault passphrase", { exact: true })
+    .fill("disposable-kimi-region-vault");
+  await providers.getByRole("button", { name: "Save", exact: true }).click();
+  await expect
+    .poll(async () => (await privateCLI(["ai-connection"])).connections.length)
+    .toBe(2);
+  const account = (await privateCLI(["ai-connection"])).connections.find(
+    (a: any) => a.provider === "kimi-code",
+  );
+  expect(account.catalog.source).toBe("https://api.kimi.ai/coding/v1/models");
+  expect(
+    account.catalog.models.find((m: any) => m.id === "kimi-code/k3.1-pro")
+      .selectable,
+  ).toBe(true);
+  expect((await privateCLI(["agents"])).aiRequests).toHaveLength(0);
+  await page.reload();
+  // No agent is assigned yet; inspect the saved account rather than assuming
+  // that account creation silently changed the workspace's default account.
+  await providers.locator(`[data-account="${account.ref}"]`).click();
+  await expect(providers.locator(".provider-route")).toHaveText(
+    "Code · Interactive",
+  );
+  await providers.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  const creation = page.getByRole("dialog", { name: "New agent", exact: true });
+  await creation
+    .getByLabel("Name", { exact: true })
+    .fill("Personal Kimi analyst");
+  await creation
+    .getByLabel("Account", { exact: true })
+    .selectOption(account.ref);
+  await expect(creation.getByLabel("Model", { exact: true })).toHaveValue(
+    "kimi-code/k3.1-pro",
+  );
+  await creation
+    .getByRole("button", { name: "Create agent", exact: true })
+    .click();
+  await expect(creation).toBeHidden();
+  const profile = (await privateCLI(["agents"])).profiles.find(
+    (p: any) => p.name === "Personal Kimi analyst",
+  );
+  expect(profile).toMatchObject({
+    provider: "kimi-code",
+    connectionRef: account.ref,
+    model: "kimi-code/k3.1-pro",
+  });
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .getByRole("link", { name: "Chat", exact: true })
+    .click();
+  await openConversationList(page);
+  await page
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Synthetic Kimi note");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Summarize this synthetic note.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const review = page.getByRole("dialog", {
+    name: "Allow replies",
+    exact: true,
+  });
+  await expect(review).toContainText("kimi-code/k3.1-pro");
+  await expect(review).toContainText("Kimi Code");
+  await expect(review).not.toContainText("Maximum cost");
+  await review
+    .getByRole("button", { name: "Allow and send", exact: true })
+    .click();
+  await expect
+    .poll(
+      async () =>
+        (await privateCLI(["agents", "--profile", profile.id])).aiRequests.at(
+          -1,
+        )?.state,
+    )
+    .toBe("completed");
+  const request = (
+    await privateCLI(["agents", "--profile", profile.id])
+  ).aiRequests.at(-1);
+  expect(request.spentMicrousd).toBe(0);
+  expect(request.costBasis).toBe("kimi-code-reported-usage");
+  expect(request).toMatchObject({
+    model: "kimi-code/k3.1-pro",
+    connectionRef: account.ref,
+    heldMicrousd: 0,
+  });
+  expect(external).toEqual([]);
+  const health = await (await page.request.get(url + "/api/v1/health")).json();
+  for (const key of [
+    "aiConnections",
+    "financialExecution",
+    "walletSigner",
+    "updater",
+  ])
+    expect(health.capabilities[key]).toBe(false);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.goto(url + "/#providers");
+  await expect(
+    providers.locator(`[data-account="${account.ref}"]`),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(providers.locator(".provider-route")).toBeVisible();
+  await expect(
+    providers.getByText("Background access", { exact: true }),
+  ).toHaveCount(0);
+  expect(
+    (await privateCLI(["ai-connection"])).connections.find(
+      (a: any) => a.ref === mainland.ref,
+    ).provider,
+  ).toBe("moonshot");
+  await page.screenshot({
+    path: `.evidence/b03-kimi-code/providers-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+});
+
+test("Anthropic workspace account joins models agent Chat and preserves existing keys", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(60000);
+  page.setDefaultTimeout(10000);
+  await stop();
+  await start(true);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
+  });
+  await page.goto(url + "/#providers");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const mainland = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "add",
+    provider: "anthropic",
+    name: "Existing workspace-scoped key",
+    key: "fased-test-kimi-mainland-preserved",
+    passphrase: "disposable-kimi-mainland-vault",
+  });
+  expect(mainland.catalog.models[0].selectable).toBe(true);
+  const providers = page.getByRole("region", {
+    name: "Providers",
+    exact: true,
+  });
+  await providers
+    .locator('[data-provider="anthropic"] > .provider-brand-button')
+    .click();
+  await expect(providers.locator(".provider-brand-button")).toHaveCount(10);
+  await expect(
+    providers.getByRole("button", { name: "Sign in", exact: true }),
+  ).toHaveCount(0);
+  await providers
+    .getByLabel("Name", { exact: true })
+    .fill("Anthropic workspace");
+  await providers
+    .getByLabel("API key", { exact: true })
+    .fill("fased-test-kimi-region-disposable-key");
+  await providers
+    .getByLabel("Vault passphrase", { exact: true })
+    .fill("disposable-kimi-region-vault");
+  await providers.getByText("Options", { exact: true }).click();
+  await providers
+    .getByLabel("Workspace (optional)", { exact: true })
+    .fill("wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ");
+  await providers.getByRole("button", { name: "Save", exact: true }).click();
+  await expect
+    .poll(async () => (await privateCLI(["ai-connection"])).connections.length)
+    .toBe(2);
+  const account = (await privateCLI(["ai-connection"])).connections.find(
+    (a: any) => a.provider === "anthropic" && a.ref !== mainland.ref,
+  );
+  expect(account.workspace).toBe("wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ");
+  expect(account.catalog.source).toBe("https://api.anthropic.com/v1/models");
+  expect(
+    account.catalog.models.find((m: any) => m.id === "claude-haiku-5-5")
+      .selectable,
+  ).toBe(true);
+  expect((await privateCLI(["agents"])).aiRequests).toHaveLength(0);
+  await page.reload();
+  // No agent is assigned yet; inspect the saved account rather than assuming
+  // that account creation silently changed the workspace's default account.
+  await providers.locator(`[data-account="${account.ref}"]`).click();
+  await providers.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  const creation = page.getByRole("dialog", { name: "New agent", exact: true });
+  await creation.getByLabel("Name", { exact: true }).fill("Workspace analyst");
+  await creation
+    .getByLabel("Account", { exact: true })
+    .selectOption(account.ref);
+  await expect(creation.getByLabel("Model", { exact: true })).toHaveValue(
+    "claude-haiku-5-5",
+  );
+  await creation
+    .getByRole("button", { name: "Create agent", exact: true })
+    .click();
+  await expect(creation).toBeHidden();
+  const profile = (await privateCLI(["agents"])).profiles.find(
+    (p: any) => p.name === "Workspace analyst",
+  );
+  expect(profile).toMatchObject({
+    provider: "anthropic",
+    connectionRef: account.ref,
+    model: "claude-haiku-5-5",
+  });
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .getByRole("link", { name: "Chat", exact: true })
+    .click();
+  await openConversationList(page);
+  await page
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Synthetic Kimi note");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Summarize this synthetic note.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const review = page.getByRole("dialog", {
+    name: "Allow replies",
+    exact: true,
+  });
+  await expect(review).toContainText("claude-haiku-5-5");
+  await expect(review).toContainText("Anthropic");
+  await review
+    .getByRole("button", { name: "Allow and send", exact: true })
+    .click();
+  await expect
+    .poll(
+      async () =>
+        (await privateCLI(["agents", "--profile", profile.id])).aiRequests.at(
+          -1,
+        )?.state,
+    )
+    .toBe("completed");
+  const request = (
+    await privateCLI(["agents", "--profile", profile.id])
+  ).aiRequests.at(-1);
+  expect(request.spentMicrousd).toBeGreaterThan(0);
+  expect(request).toMatchObject({
+    model: "claude-haiku-5-5",
+    connectionRef: account.ref,
+    heldMicrousd: 0,
+  });
+  expect(external).toEqual([]);
+  const health = await (await page.request.get(url + "/api/v1/health")).json();
+  for (const key of [
+    "aiConnections",
+    "financialExecution",
+    "walletSigner",
+    "updater",
+  ])
+    expect(health.capabilities[key]).toBe(false);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.goto(url + "/#providers");
+  await expect(
+    providers.locator(`[data-account="${account.ref}"]`),
+  ).toHaveAttribute("aria-pressed", "true");
+
+  expect(
+    (await privateCLI(["ai-connection"])).connections.find(
+      (a: any) => a.ref === mainland.ref,
+    ).provider,
+  ).toBe("anthropic");
+  await page.screenshot({
+    path: `.evidence/b03-methods/providers-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+});
+
+test("Ollama Cloud key joins models agent Chat and task access without an invented tariff", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(60000);
+  page.setDefaultTimeout(10000);
+  await stop();
+  await start(true);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
+      external.push(r.url());
+  });
+  await page.goto(url + "/#providers");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await page.getByLabel("One-use claim code").fill(claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const mainland = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "add",
+    provider: "moonshot",
+    name: "Existing CNY account",
+    key: "fased-test-kimi-mainland-preserved",
+    passphrase: "disposable-kimi-mainland-vault",
+  });
+  expect(mainland.catalog.models[0].selectable).toBe(false);
+  const providers = page.getByRole("region", {
+    name: "Providers",
+    exact: true,
+  });
+  await providers
+    .locator('[data-provider="ollama-cloud"] > .provider-brand-button')
+    .click();
+  await expect(providers.locator(".provider-brand-button")).toHaveCount(10);
+  await expect(
+    providers.getByRole("button", { name: "Sign in", exact: true }),
+  ).toHaveCount(0);
+  await providers
+    .getByLabel("Name", { exact: true })
+    .fill("Ollama Cloud account");
+  await providers
+    .getByLabel("API key", { exact: true })
+    .fill("fased-test-kimi-region-disposable-key");
+  await providers
+    .getByLabel("Vault passphrase", { exact: true })
+    .fill("disposable-kimi-region-vault");
+  await providers.getByRole("button", { name: "Save", exact: true }).click();
+  await expect
+    .poll(async () => (await privateCLI(["ai-connection"])).connections.length)
+    .toBe(2);
+  const account = (await privateCLI(["ai-connection"])).connections.find(
+    (a: any) => a.provider === "ollama-cloud",
+  );
+  expect(account.catalog.source).toBe("https://ollama.com/v1/models");
+  expect(
+    account.catalog.models.find((m: any) => m.id === "ollama-cloud/gemma4:31b")
+      .selectable,
+  ).toBe(true);
+  expect((await privateCLI(["agents"])).aiRequests).toHaveLength(0);
+  await page.reload();
+  // No agent is assigned yet; inspect the saved account rather than assuming
+  // that account creation silently changed the workspace's default account.
+  await providers.locator(`[data-account="${account.ref}"]`).click();
+  await providers.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  const creation = page.getByRole("dialog", { name: "New agent", exact: true });
+  await creation.getByLabel("Name", { exact: true }).fill("Cloud analyst");
+  await creation
+    .getByLabel("Account", { exact: true })
+    .selectOption(account.ref);
+  await expect(creation.getByLabel("Model", { exact: true })).toHaveValue(
+    "ollama-cloud/gemma4:31b",
+  );
+  await creation
+    .getByRole("button", { name: "Create agent", exact: true })
+    .click();
+  await expect(creation).toBeHidden();
+  const profile = (await privateCLI(["agents"])).profiles.find(
+    (p: any) => p.name === "Cloud analyst",
+  );
+  expect(profile).toMatchObject({
+    provider: "ollama-cloud",
+    connectionRef: account.ref,
+    model: "ollama-cloud/gemma4:31b",
+  });
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .getByRole("link", { name: "Chat", exact: true })
+    .click();
+  await openConversationList(page);
+  await page
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Synthetic Kimi note");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Summarize this synthetic note.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const review = page.getByRole("dialog", {
+    name: "Allow replies",
+    exact: true,
+  });
+  await expect(review).toContainText("ollama-cloud/gemma4:31b");
+  await expect(review).toContainText("Ollama Cloud");
+  await expect(review).not.toContainText("Maximum cost");
+  await review
+    .getByRole("button", { name: "Allow and send", exact: true })
+    .click();
+  await expect
+    .poll(
+      async () =>
+        (await privateCLI(["agents", "--profile", profile.id])).aiRequests.at(
+          -1,
+        )?.state,
+    )
+    .toBe("completed");
+  const request = (
+    await privateCLI(["agents", "--profile", profile.id])
+  ).aiRequests.at(-1);
+  expect(request.spentMicrousd).toBe(0);
+  expect(request.costBasis).toBe("ollama-cloud-reported-usage");
+  expect(request).toMatchObject({
+    model: "ollama-cloud/gemma4:31b",
+    connectionRef: account.ref,
+    heldMicrousd: 0,
+  });
+
+  const relayAccount = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "add",
+    provider: "local",
+    server: "ollama",
+    name: "Owned Ollama server",
+    passphrase: "disposable-ollama-server-vault",
+  });
+  expect(
+    relayAccount.catalog.models.find((m: any) => m.id === "gemma4:cloud")
+      .selectable,
+  ).toBe(true);
+  await page.goto(url + "/#providers");
+  {
+    await providers.getByRole("button", { name: "Back", exact: true }).click();
+    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    const creation = page.getByRole("dialog", {
+      name: "New agent",
+      exact: true,
+    });
+    await creation
+      .getByLabel("Name", { exact: true })
+      .fill("Ollama server cloud analyst");
+    await creation
+      .getByLabel("Account", { exact: true })
+      .selectOption(relayAccount.ref);
+    await creation
+      .getByLabel("Model", { exact: true })
+      .selectOption("gemma4:cloud");
+    await expect(creation.getByLabel("Model", { exact: true })).toHaveValue(
+      "gemma4:cloud",
+    );
+    await creation
+      .getByRole("button", { name: "Create agent", exact: true })
+      .click();
+    await expect(creation).toBeHidden();
+    const profile = (await privateCLI(["agents"])).profiles.find(
+      (p: any) => p.name === "Ollama server cloud analyst",
+    );
+    expect(profile).toMatchObject({
+      provider: "local",
+      connectionRef: relayAccount.ref,
+      model: "gemma4:cloud",
+    });
+    await page
+      .getByRole("navigation", { name: "Main navigation", exact: true })
+      .getByRole("link", { name: "Chat", exact: true })
+      .click();
+    await openConversationList(page);
+    await page
+      .getByRole("button", { name: "New conversation", exact: true })
+      .click();
+    await page
+      .getByLabel("Conversation name", { exact: true })
+      .fill("Synthetic Kimi note");
+    await page
+      .getByRole("button", { name: "Create conversation", exact: true })
+      .click();
+    await page
+      .getByLabel("Message", { exact: true })
+      .fill("Summarize this synthetic note.");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    const review = page.getByRole("dialog", {
+      name: "Allow replies",
+      exact: true,
+    });
+    await expect(review).toContainText("gemma4:cloud");
+    await expect(review).toContainText("Ollama Cloud");
+    await expect(review).not.toContainText("Maximum cost");
+    await review
+      .getByRole("button", { name: "Allow and send", exact: true })
+      .click();
+    await expect
+      .poll(
+        async () =>
+          (await privateCLI(["agents", "--profile", profile.id])).aiRequests.at(
+            -1,
+          )?.state,
+      )
+      .toBe("completed");
+    const request = (
+      await privateCLI(["agents", "--profile", profile.id])
+    ).aiRequests.at(-1);
+    expect(request.spentMicrousd).toBe(0);
+    expect(request.costBasis).toBe("ollama-cloud-reported-usage");
+    expect(request).toMatchObject({
+      model: "gemma4:cloud",
+      connectionRef: relayAccount.ref,
+      heldMicrousd: 0,
+    });
+  }
+
+  expect(external).toEqual([]);
+  const health = await (await page.request.get(url + "/api/v1/health")).json();
+  for (const key of [
+    "aiConnections",
+    "financialExecution",
+    "walletSigner",
+    "updater",
+  ])
+    expect(health.capabilities[key]).toBe(false);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.goto(url + "/#providers");
+  await expect(
+    providers.locator(`[data-account="${relayAccount.ref}"]`),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    providers.getByText("Background access", { exact: true }),
+  ).toHaveCount(1);
+  expect(
+    (await privateCLI(["ai-connection"])).connections.find(
+      (a: any) => a.ref === mainland.ref,
+    ).provider,
+  ).toBe("moonshot");
+  await page.screenshot({
+    path: `.evidence/b03-methods/providers-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
 });

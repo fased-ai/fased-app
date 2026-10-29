@@ -2,13 +2,18 @@
   "version": 1,
   "policy": "latest-only",
   "provider": "local",
-  "reviewedAt": 1793059200,
-  "expiresAt": 1795651200,
+  "reviewedAt": 1793145600,
+  "expiresAt": 1795737600,
   "sources": {
     "models": "https://ollama.com/library/gemma4/tags",
     "families": "https://ollama.com/search",
     "discovery": "https://docs.ollama.com/api/openai-compatibility",
-    "pricing": "https://docs.ollama.com/api/openai-compatibility"
+    "pricing": "https://docs.ollama.com/api/openai-compatibility",
+    "lmstudio": "https://lmstudio.ai/docs/developer/openai-compat/responses",
+    "lmstudioModels": "https://lmstudio.ai/docs/developer/openai-compat/models",
+    "vllm": "https://docs.vllm.ai/en/latest/serving/online_serving/",
+    "cloudAuthentication": "https://docs.ollama.com/api/authentication",
+    "cloud": "https://docs.ollama.com/cloud"
   },
   "models": [
     {
@@ -36,6 +41,76 @@
       "outputTokens": 8192,
       "source": "https://ollama.com/library/gemma4:e4b",
       "reasoning": "none"
+    },
+    {
+      "id": "google/gemma-4-e2b",
+      "name": "Gemma 4 E2B \u00b7 LM Studio",
+      "provider": "local",
+      "tier": "Fast",
+      "input": 0,
+      "cached": 0,
+      "output": 0,
+      "contextTokens": 131072,
+      "outputTokens": 8192,
+      "source": "https://lmstudio.ai/models/google/gemma-4-e2b",
+      "reasoning": "none",
+      "contract": "https://lmstudio.ai/docs/developer/openai-compat/responses"
+    },
+    {
+      "id": "google/gemma-4-e4b",
+      "name": "Gemma 4 E4B \u00b7 LM Studio",
+      "provider": "local",
+      "tier": "Balanced",
+      "input": 0,
+      "cached": 0,
+      "output": 0,
+      "contextTokens": 131072,
+      "outputTokens": 8192,
+      "source": "https://lmstudio.ai/models/google/gemma-4-e4b",
+      "reasoning": "none",
+      "contract": "https://lmstudio.ai/docs/developer/openai-compat/responses"
+    },
+    {
+      "id": "google/gemma-4-E2B-it",
+      "name": "Gemma 4 E2B \u00b7 vLLM",
+      "provider": "local",
+      "tier": "Fast",
+      "input": 0,
+      "cached": 0,
+      "output": 0,
+      "contextTokens": 131072,
+      "outputTokens": 8192,
+      "source": "https://huggingface.co/google/gemma-4-E2B-it",
+      "reasoning": "none",
+      "contract": "https://docs.vllm.ai/en/latest/serving/online_serving/"
+    },
+    {
+      "id": "google/gemma-4-E4B-it",
+      "name": "Gemma 4 E4B \u00b7 vLLM",
+      "provider": "local",
+      "tier": "Balanced",
+      "input": 0,
+      "cached": 0,
+      "output": 0,
+      "contextTokens": 131072,
+      "outputTokens": 8192,
+      "source": "https://huggingface.co/google/gemma-4-E4B-it",
+      "reasoning": "none",
+      "contract": "https://docs.vllm.ai/en/latest/serving/online_serving/"
+    },
+    {
+      "id": "gemma4:cloud",
+      "name": "Gemma 4 Cloud \u00b7 Ollama",
+      "provider": "local",
+      "tier": "Balanced",
+      "input": 0,
+      "cached": 0,
+      "output": 0,
+      "contextTokens": 262144,
+      "outputTokens": 8192,
+      "source": "https://ollama.com/library/gemma4",
+      "reasoning": "none",
+      "contract": "https://docs.ollama.com/api/openai-compatibility"
     }
   ]
 }

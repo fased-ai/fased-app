@@ -24,6 +24,9 @@ import (
 )
 
 type AIConnectionCommand struct {
+	Workspace            string                `json:"workspace,omitempty"`
+	GoogleProject        string                `json:"googleProject,omitempty"`
+	Server               string                `json:"server,omitempty"`
 	Endpoint             string                `json:"endpoint,omitempty"`
 	SignInID             string                `json:"signInId,omitempty"`
 	Callback             string                `json:"callback,omitempty"`
@@ -44,6 +47,9 @@ type AIConnectionCommand struct {
 	Passphrase           string                `json:"passphrase,omitempty"`
 }
 type AIConnectionView struct {
+	Workspace              string                `json:"workspace,omitempty"`
+	GoogleProject          string                `json:"googleProject,omitempty"`
+	GoogleSignInAvailable  bool                  `json:"googleSignInAvailable"`
 	Endpoint               string                `json:"endpoint,omitempty"`
 	AuthMethod             string                `json:"authMethod"`
 	PlanUse                bool                  `json:"planUse"`
@@ -121,9 +127,10 @@ type aiVaultCollection struct {
 	Accounts []aiVaultEnvelope `json:"accounts"`
 }
 
-// Eight maximum sign-in envelopes include base64 expansion and JSON metadata.
+// Sixteen maximum sign-in envelopes include base64 expansion and JSON metadata.
 // Reader and atomic writer enforce the same serialized byte limit.
-const aiVaultMaxSerializedBytes = 256 * 1024
+const aiVaultMaxSerializedBytes = 512 * 1024
+const aiMaxAccounts = 16
 
 func validConnectionRef(ref string) bool {
 	if len(ref) != 43 {
@@ -154,7 +161,7 @@ func (s *Store) readAIVaultCollection() (aiVaultCollection, error) {
 		return col, errors.New("invalid credential vault")
 	}
 	if legacy.Version == 3 {
-		if json.Unmarshal(b, &col) != nil || len(col.Accounts) > 8 {
+		if json.Unmarshal(b, &col) != nil || len(col.Accounts) > aiMaxAccounts {
 			return col, errors.New("invalid credential collection")
 		}
 	} else {
@@ -166,7 +173,7 @@ func (s *Store) readAIVaultCollection() (aiVaultCollection, error) {
 	return col, nil
 }
 func validateAIVaultCollection(col aiVaultCollection) error {
-	if col.Version != 3 || len(col.Accounts) > 8 {
+	if col.Version != 3 || len(col.Accounts) > aiMaxAccounts {
 		return errors.New("invalid credential collection")
 	}
 	seen := map[string]bool{}
@@ -266,11 +273,27 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 		v.SignInAvailable = s.providerSignInAvailableLocked()
 		v.SignIn = s.providerSignInViewLocked()
 		v.AuthMethod = "api-key"
+		if v.Provider == "anthropic" {
+			if state := s.provider.accounts[v.Ref]; state != nil {
+				if c, ok := parseAnthropicWorkspace(state.key, v.CredentialMode); ok {
+					v.Workspace = c.Workspace
+				}
+			}
+		}
 		if v.Provider == "local" {
 			v.AuthMethod = "local"
 			if state := s.provider.accounts[v.Ref]; state != nil {
 				if c, e := localprovider.ParseCredential(state.key); e == nil {
 					v.Endpoint = c.Endpoint
+				}
+			}
+		}
+		v.GoogleSignInAvailable = s.providerSignInAvailableLocked() && s.googleClient().ClientID != ""
+		if v.CredentialMode == "google-oauth" {
+			v.AuthMethod = "oauth"
+			if state := s.provider.accounts[v.Ref]; state != nil {
+				if c, ok := parseGoogleCredential(state.key); ok {
+					v.GoogleProject = c.Project
 				}
 			}
 		}
@@ -326,7 +349,7 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 		v.CredentialModes = append(v.CredentialModes, "local")
 	}
 	if s.provider.apiCredentials {
-		v.CredentialModes = []string{"openai", "anthropic", "xai", "local"}
+		v.CredentialModes = []string{"openai", "anthropic", "xai", "moonshot", "moonshot-intl", "kimi-code", "ollama-cloud", "google", "openrouter", "qwen", "opencode", "local"}
 	}
 	v.LiveCallsEnabled = providerActivationEnabled && s.provider.apiCredentials
 	env, e := s.readAIVault(refs...)
@@ -429,7 +452,8 @@ func (s *Store) pauseSignInAccount(ref, failure string) {
 	s.provider.mu.Lock()
 	defer s.provider.mu.Unlock()
 	env, err := s.readAIVault(ref)
-	if err != nil || env.Ref != ref || !(env.Version == 5 && aiVaultMode(env) == "openai-signin" || env.Version == 6 && env.Provider == "local" && aiVaultMode(env) == "local") {
+	quotaAPI := env.Version == 4 && (env.Provider == "kimi-code" || env.Provider == "ollama-cloud") && (env.Mode == "test" || env.Mode == env.Provider)
+	if err != nil || env.Ref != ref || !(quotaAPI || env.Version == 5 && aiVaultMode(env) == "openai-signin" || env.Version == 6 && env.Provider == "local" && aiVaultMode(env) == "local") {
 		return
 	}
 	state := s.credentialLocked(ref)
@@ -446,6 +470,23 @@ func (s *Store) pauseSignInAccount(ref, failure string) {
 	state.planFailure = failure
 }
 func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (AIConnectionView, error) {
+	if c.Workspace != "" && (c.Provider != "anthropic" || (c.Action != "add" && c.Action != "save") || !validAnthropicWorkspace(c.Workspace)) {
+		return AIConnectionView{}, errors.New("workspace belongs to Anthropic API-key setup")
+	}
+	if c.Server != "" {
+		preset, ok := localServerPreset(c.Server)
+		if !ok || c.Provider != "local" || (c.Action != "add" && c.Action != "save") {
+			return AIConnectionView{}, errors.New("server preset belongs to local account setup")
+		}
+		if c.Endpoint == "" {
+			c.Endpoint = preset.Endpoint
+		}
+		if c.Name == "" {
+			c.Name = preset.Name
+		}
+		c.Server = ""
+	}
+
 	if c.Endpoint != "" && (c.Provider != "local" || (c.Action != "save" && c.Action != "add")) {
 		return AIConnectionView{}, errors.New("endpoint belongs to a local connection")
 	}
@@ -475,6 +516,9 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 			return s.refreshProviderModels(ctx, c.Ref, s.providerModelTransport(c.Ref))
 		}
 		return v, e
+	}
+	if c.GoogleProject != "" && !strings.HasPrefix(c.Action, "sign-in-") {
+		return AIConnectionView{}, errors.New("project selection requires Google sign-in")
 	}
 	if c.Pilot != nil {
 		return AIConnectionView{}, errors.New("pilot requires a dedicated review")
@@ -515,7 +559,7 @@ func (s *Store) providerModelTransport(ref string) http.RoundTripper {
 func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (AIConnectionView, error) {
 	// Empty mode preserves existing test-vault clients. Mode selection never
 	// enables a provider or changes the saved vault format/credential authority.
-	if c.CredentialMode != "" && ((c.Action != "save" && c.Action != "add") || (c.CredentialMode != "test" && c.CredentialMode != "openai" && c.CredentialMode != "anthropic" && c.CredentialMode != "xai" && c.CredentialMode != "local")) {
+	if c.CredentialMode != "" && ((c.Action != "save" && c.Action != "add") || !validCredentialModeName(c.CredentialMode)) {
 		return AIConnectionView{}, errors.New("credential mode unavailable; real credentials disabled")
 	}
 	if c.Provider != "" {
@@ -560,10 +604,15 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	if c.Action != "add" && c.Ref != v.Ref {
 		return v, ErrConflict
 	}
+	if c.Action == "save" && v.Ref != "" {
+		if old, err := s.readAIVault(v.Ref); err == nil && old.Version == 7 && c.Workspace == "" {
+			return v, errors.New("workspace required when replacing this account")
+		}
+	}
 	if c.Action == "save" && v.Ref != "" && c.Provider != "" && c.Provider != v.Provider {
 		return v, errors.New("add a separate provider connection")
 	}
-	if (c.Action == "save" || c.Action == "remove") && v.AuthMethod == "sign-in" {
+	if (c.Action == "save" || c.Action == "remove") && (v.AuthMethod == "sign-in" || v.AuthMethod == "oauth") {
 		return v, errors.New("reconnect this sign-in account or add a separate API-key account")
 	}
 	if c.Action == "add" {
@@ -604,6 +653,9 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	}
 	if ((c.Action == "save" || c.Action == "add") && !s.aiCredentialModeAllowed(mode) && !bootstrap) || (c.Action == "unlock" && !s.aiCredentialModeAllowed(v.CredentialMode) && !(s.pilotTargetLocked(v.Ref) && v.CredentialMode == "openai")) {
 		return v, errors.New("credential mode unavailable; real credentials disabled")
+	}
+	if provider == "qwen" && (c.Action == "save" || c.Action == "add") && strings.HasPrefix(c.Key, "sk-sp-") {
+		return v, errors.New("Qwen subscription keys cannot be used with ModelStudio API access")
 	}
 	if !validPassword(c.Passphrase) || ((c.Action == "save" || c.Action == "add") && !validAICredential(mode, c.Key)) || (c.Action != "save" && c.Action != "add" && c.Key != "") {
 		return v, errors.New("invalid credential or vault passphrase")
@@ -652,12 +704,21 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		delete(s.provider.accounts, c.Ref)
 		return s.aiConnectionLocked()
 	}
-	if (c.Action == "add" || c.Ref == "") && len(col.Accounts) >= 8 {
+	if (c.Action == "add" || c.Ref == "") && len(col.Accounts) >= aiMaxAccounts {
 		return v, errors.New("connection limit reached")
 	}
 	if !validAgentText(c.Name, 80, false) {
 		return v, errors.New("invalid connection name")
 	}
+	return s.persistAIConnectionLocked(c, col, provider, mode, bootstrap)
+}
+
+// Caller holds the metadata transaction and credential mutex, and has validated
+// authority, key class and account identity. OAuth-issued API keys use the same
+// encrypted envelope as manually entered API keys, never ChatGPT plan authority.
+func (s *Store) persistAIConnectionLocked(c AIConnectionCommand, col aiVaultCollection, provider, mode string, bootstrap bool) (AIConnectionView, error) {
+	var v AIConnectionView
+	var e error
 	env := aiVaultEnvelope{Name: strings.TrimSpace(c.Name), Version: 1, Salt: make([]byte, 16), Nonce: make([]byte, 12)}
 	if mode == "openai" {
 		env.Version, env.Mode = 2, mode
@@ -668,6 +729,12 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 			env.Version, env.TestOnly = 6, s.providerFixture && !s.provider.apiCredentials
 		}
 	}
+	plain := []byte(c.Key)
+	if provider == "anthropic" && c.Workspace != "" {
+		env.Version = 7
+		plain, _ = json.Marshal(anthropicWorkspaceCredential{Version: 1, APIKey: c.Key, Workspace: c.Workspace})
+	}
+	defer clear(plain)
 	if env.Ref, e = randomToken(); e != nil {
 		return v, e
 	}
@@ -684,7 +751,7 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	block, _ := aes.NewCipher(key)
 	clear(key)
 	gcm, _ := cipher.NewGCM(block)
-	env.Ciphertext = gcm.Seal(nil, env.Nonce, []byte(c.Key), s.aiVaultAAD(env))
+	env.Ciphertext = gcm.Seal(nil, env.Nonce, plain, s.aiVaultAAD(env))
 	replaced := false
 	for i, a := range col.Accounts {
 		if a.Ref == c.Ref {
@@ -712,7 +779,7 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	state := s.credentialLocked(env.Ref)
 	encoded, _ := json.Marshal(env)
 	state.digest = sha256.Sum256(encoded)
-	state.ref, state.key, state.expires = env.Ref, []byte(c.Key), s.now().Add(15*time.Minute).Unix()
+	state.ref, state.key, state.expires = env.Ref, append([]byte(nil), plain...), s.now().Add(15*time.Minute).Unix()
 	return s.aiConnectionLocked(env.Ref)
 }
 
@@ -727,13 +794,20 @@ type authenticatedAITransport struct {
 }
 
 func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	if a.next == nil || a.modelsOnly && (r.Method != "GET" || r.URL.Path != "/v1/models") {
+	if err := a.ensureGoogleAccess(r); err != nil {
+		return nil, err
+	}
+	if a.next == nil || a.modelsOnly && (r.Method != "GET" || !strings.HasSuffix(r.URL.Path, "/models") && !strings.HasSuffix(r.URL.Path, "/models/user")) {
 		return nil, errors.New("provider transport unavailable")
 	}
 	a.store.provider.mu.Lock()
 	v, e := a.store.aiConnectionLocked(a.ref)
 	state := a.store.credentialLocked(a.ref)
 	allowed := e == nil && !v.Locked && v.Ref == a.ref
+	if a.modelsOnly && (r.URL.Path != providerModelsPath(v.Provider) || r.Method != "GET" || !providerRequestAllowed(v.Provider, r)) {
+		allowed = false
+	}
+
 	if a.request != nil && a.request.TaskID != "" {
 		allowed = e == nil && v.Ref == a.ref && a.store.taskAccessMatches(*a.request, state.taskAccess, true, state)
 	}
@@ -762,6 +836,30 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 		return nil, errors.New("pilot scope or allowance unavailable")
 	}
 	key := append([]byte(nil), state.key...)
+	workspace := ""
+	if v.Provider == "anthropic" && len(key) > 0 && key[0] == '{' {
+		value, ok := parseAnthropicWorkspace(key, v.CredentialMode)
+		if !ok {
+			clear(key)
+			a.store.provider.mu.Unlock()
+			return nil, errors.New("Anthropic workspace credential unavailable")
+		}
+		workspace = value.Workspace
+		clear(key)
+		key = []byte(value.APIKey)
+	}
+	project := ""
+	if v.AuthMethod == "oauth" {
+		c, ok := parseGoogleCredential(key)
+		if !ok || c.SignedOut || c.ExpiresAt <= a.store.now().Unix() {
+			clear(key)
+			a.store.provider.mu.Unlock()
+			return nil, errors.New("Google sign-in expired; refresh or reconnect")
+		}
+		project = c.Project
+		clear(key)
+		key = []byte(c.AccessToken)
+	}
 	var local *localprovider.Credential
 	if v.Provider == "local" {
 		value, e := localprovider.ParseCredential(key)
@@ -786,6 +884,18 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 	}
 	a.store.provider.mu.Unlock()
 	defer clear(key)
+	if v.Provider == "anthropic" && strings.HasPrefix(string(key), "sk-ant-oat") {
+		return nil, errors.New("Claude subscription tokens cannot use API-key access")
+	}
+	if v.Provider == "kimi-code" && (v.CredentialMode != "test" && !strings.HasPrefix(string(key), "sk-kimi-") || !a.modelsOnly && (a.request == nil || a.request.TaskID != "" || a.request.TaskDigest != "" || a.request.ChatPermissionID == "")) {
+		return nil, errors.New("Kimi Code requires a membership key and personal interactive Chat")
+	}
+	if (v.Provider == "moonshot" || v.Provider == "moonshot-intl") && strings.HasPrefix(string(key), "sk-kimi-") {
+		return nil, errors.New("Kimi Code membership key cannot use the Platform API")
+	}
+	if v.Provider == "qwen" && strings.HasPrefix(string(key), "sk-sp-") {
+		return nil, errors.New("Qwen subscription key cannot use ModelStudio API access")
+	}
 	if !providerRequestAllowed(v.Provider, r) {
 		return nil, errors.New("provider origin refused")
 	}
@@ -794,6 +904,15 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 	copy.Header.Del("Authorization")
 	copy.Header.Del("x-api-key")
 	copy.Header.Del("anthropic-version")
+	copy.Header.Del("x-goog-user-project")
+	copy.Header.Del("anthropic-workspace-id")
+	if workspace != "" {
+		copy = copy.WithContext(context.WithValue(copy.Context(), anthropicWorkspaceContextKey{}, workspace))
+		copy.Header.Set("anthropic-workspace-id", workspace)
+	}
+	if project != "" {
+		copy.Header.Set("x-goog-user-project", project)
+	}
 	if v.Provider == "anthropic" {
 		copy.Header.Set("x-api-key", string(key))
 		copy.Header.Set("anthropic-version", "2026-10-21")
@@ -826,8 +945,8 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 		return res, nil
 	}
 	limit := int64(16384)
-	if a.modelsOnly {
-		limit = 262144
+	if a.modelsOnly || r.Method == "GET" && r.URL.Path == providerModelsPath(v.Provider) {
+		limit = providerModelBodyLimit(v.Provider)
 	}
 	body, e := io.ReadAll(io.LimitReader(res.Body, limit+1))
 	res.Body.Close()
@@ -839,11 +958,14 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 }
 
 func validAIVaultMode(v aiVaultEnvelope) bool {
+	if v.Version == 7 {
+		return v.Provider == "anthropic" && !v.TestOnly && (v.Mode == "test" || v.Mode == "anthropic")
+	}
 	if v.Version == 6 {
 		return v.Mode == "local" && v.Provider == "local"
 	}
 	if v.Version == 5 {
-		return v.Mode == "openai-signin" && v.Provider == "openai"
+		return v.Mode == "openai-signin" && v.Provider == "openai" || v.Mode == "google-oauth" && v.Provider == "google"
 	}
 	if v.TestOnly {
 		return false
@@ -854,7 +976,7 @@ func validAIVaultMode(v aiVaultEnvelope) bool {
 	if v.Version == 2 {
 		return v.Mode == "openai" && v.Provider == ""
 	}
-	return v.Version == 4 && (v.Provider == "anthropic" || v.Provider == "xai") && (v.Mode == "test" || v.Mode == v.Provider)
+	return v.Version == 4 && (v.Provider == "anthropic" || v.Provider == "xai" || compatibleProvider(v.Provider)) && (v.Mode == "test" || v.Mode == v.Provider)
 }
 func aiVaultProvider(v aiVaultEnvelope) string {
 	if v.Version < 4 {
@@ -872,6 +994,9 @@ func (s *Store) aiCredentialModeAllowed(mode string) bool {
 	if mode == "local" {
 		return s.providerFixture || s.provider.apiCredentials
 	}
+	if mode == "google-oauth" {
+		return s.provider.apiCredentials || s.providerFixture || s.provider.signInTransport != nil
+	}
 	if mode == "openai-signin" {
 		return s.provider.apiCredentials || s.providerFixture || s.provider.signInTransport != nil
 	}
@@ -879,6 +1004,22 @@ func (s *Store) aiCredentialModeAllowed(mode string) bool {
 	return mode == "test" || (ok && mode != "" && s.provider.apiCredentials)
 }
 func validAICredential(mode, key string) bool {
+	if mode == "anthropic" && (strings.HasPrefix(key, "sk-ant-oat") || strings.HasPrefix(key, "{")) {
+		return false
+	}
+	if mode == "google-oauth" {
+		_, ok := parseGoogleCredential([]byte(key))
+		return ok
+	}
+	if mode == "kimi-code" && !strings.HasPrefix(key, "sk-kimi-") {
+		return false
+	}
+	if (mode == "moonshot" || mode == "moonshot-intl") && strings.HasPrefix(key, "sk-kimi-") {
+		return false
+	}
+	if mode == "qwen" && strings.HasPrefix(key, "sk-sp-") {
+		return false
+	}
 	if mode == "local" {
 		_, e := localprovider.ParseCredential([]byte(key))
 		return e == nil
@@ -901,6 +1042,9 @@ func validAICredential(mode, key string) bool {
 	return true
 }
 func (s *Store) aiVaultAAD(v aiVaultEnvelope) []byte {
+	if v.Version == 7 {
+		return []byte("fased-anthropic-workspace-v7:" + s.instanceID + ":" + v.Provider + ":" + v.Mode + ":" + v.Ref)
+	}
 	if v.Version == 6 {
 		kind := "live"
 		if v.TestOnly {
@@ -932,7 +1076,11 @@ func (s *Store) openAIVault(v aiVaultEnvelope, passphrase string) ([]byte, error
 	clear(key)
 	gcm, _ := cipher.NewGCM(block)
 	plain, err := gcm.Open(nil, v.Nonce, v.Ciphertext, s.aiVaultAAD(v))
-	if err != nil || !validAICredential(aiVaultMode(v), string(plain)) {
+	valid := validAICredential(aiVaultMode(v), string(plain))
+	if v.Version == 7 {
+		_, valid = parseAnthropicWorkspace(plain, aiVaultMode(v))
+	}
+	if err != nil || !valid {
 		clear(plain)
 		return nil, errors.New("vault unlock failed")
 	}
@@ -996,4 +1144,9 @@ func (s *Store) connectionAccessEpoch(ref string) uint64 {
 		return state.epoch
 	}
 	return 0
+}
+
+func validCredentialModeName(mode string) bool {
+	_, ok := providerDefinitionFor(mode)
+	return mode == "test" || mode != "" && ok
 }

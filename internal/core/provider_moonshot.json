@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "policy": "latest-only",
+  "provider": "moonshot",
+  "reviewedAt": 1793145600,
+  "expiresAt": 1795737600,
+  "sources": {
+    "models": "https://platform.kimi.com/docs/guide/kimi-k3-1-pro-quickstart",
+    "pricing": "https://platform.kimi.com/docs/pricing/chat",
+    "contract": "https://platform.kimi.com/docs/api/chat"
+  },
+  "models": [
+    {
+      "provider": "moonshot",
+      "id": "kimi-k3.1-pro",
+      "name": "Kimi K3.1 Pro",
+      "tier": "Balanced",
+      "input": 13000000,
+      "cached": 1300000,
+      "output": 68000000,
+      "currency": "CNY",
+      "contextTokens": 1048576,
+      "outputTokens": 8192,
+      "source": "https://platform.kimi.com/docs/guide/kimi-k3-1-pro-quickstart",
+      "reasoning": "low"
+    }
+  ]
+}

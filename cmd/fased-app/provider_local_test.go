@@ -14,6 +14,11 @@ import (
 )
 
 func TestLocalProviderCLIPrivateRoundTrip(t *testing.T) {
+	for preset, model := range map[string]string{"ollama": "gemma4:e2b", "lmstudio": "google/gemma-4-e2b", "vllm": "google/gemma-4-E2B-it"} {
+		t.Run(preset, func(t *testing.T) { localProviderCLIPrivateRoundTrip(t, preset, model) })
+	}
+}
+func localProviderCLIPrivateRoundTrip(t *testing.T, preset, expectedModel string) {
 	root := filepath.Join(".evidence", "connected-agent-cli")
 	if err := os.MkdirAll(root, 0700); err != nil {
 		t.Fatal(err)
@@ -56,19 +61,30 @@ func TestLocalProviderCLIPrivateRoundTrip(t *testing.T) {
 	if err = client.SaveSession(dir); err != nil {
 		t.Fatal(err)
 	}
-	account, err := server.Store.ChangeAIConnection(t.Context(), core.AIConnectionCommand{Action: "add", Provider: "local", CredentialMode: "local", Endpoint: "http://127.0.0.1:11434/v1", Passphrase: "disposable-agent-vault-password"})
+
+	connectionRaw, _ := json.Marshal(core.AIConnectionCommand{Action: "add", Provider: "local", Server: preset, Passphrase: "disposable-agent-vault-password"})
+	connectionIn, connectionOut, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer connectionIn.Close()
+	go func() { _, _ = connectionOut.Write(connectionRaw); _ = connectionOut.Close() }()
+	var connectionResult bytes.Buffer
+	if err = aiConnectionCommand([]string{"--data-dir", dir, "--request-stdin"}, connectionIn, &connectionResult, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var account core.AIConnectionView
+	if err = json.Unmarshal(connectionResult.Bytes(), &account); err != nil || account.Provider != "local" || account.Locked || account.LiveCallsEnabled {
+		t.Fatal("CLI account setup", err)
+	}
 	model := ""
 	for _, m := range account.Catalog.Models {
-		if m.Selectable && m.Provider == account.Provider {
+		if m.Selectable && m.ID == expectedModel {
 			model = m.ID
-			break
 		}
 	}
 	if model == "" {
-		t.Fatal("fixture account has no current model")
+		t.Fatal("named server model missing")
 	}
 	v, err := server.Store.Agents(t.Context(), "trading-analyst", "")
 	if err != nil {

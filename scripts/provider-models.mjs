@@ -4,28 +4,52 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+const compatible = [
+  "moonshot",
+  "moonshot-intl",
+  "kimi-code",
+  "ollama-cloud",
+  "google",
+  "openrouter",
+  "qwen",
+  "opencode",
+];
 export const digest = (value) =>
   createHash("sha256").update(value).digest("hex");
 export function validateRegistry(r) {
   assert.equal(r.version, 1);
   assert.equal(r.policy, "latest-only");
-  assert.ok(["openai", "anthropic", "xai", "local"].includes(r.provider));
+  assert.ok(
+    ["openai", "anthropic", "xai", "local", ...compatible].includes(r.provider),
+  );
   assert.ok(
     r.expiresAt > r.reviewedAt && r.expiresAt - r.reviewedAt <= 31 * 86400,
   );
   assert.ok(r.models.length > 0 && r.models.length <= 16);
   const ids = new Set();
   for (const m of r.models) {
-    assert.match(
-      m.id,
-      r.provider === "local"
-        ? /^gemma\d+:e[24]b$/
-        : r.provider === "openai"
-          ? /^gpt-\d+(?:\.\d+)?-(?:sol|terra|astra)$/
-          : r.provider === "anthropic"
-            ? /^claude-(?:haiku|sonnet|opus|fable)-\d+-\d+$/
-            : /^grok-\d+(?:\.\d+)?$/,
-    );
+    const patterns = {
+      local:
+        /^(?:gemma\d+:(?:e[24]b|cloud)|google\/gemma-\d+-(?:e[24]b|E[24]B-it))$/,
+      openai: /^gpt-\d+(?:\.\d+)?-(?:sol|terra|astra)$/,
+      anthropic: /^claude-(?:haiku|sonnet|opus|fable)-\d+-\d+$/,
+      xai: /^grok-\d+(?:\.\d+)?$/,
+      moonshot: /^kimi-k\d+(?:\.\d+)?-pro$/,
+      "ollama-cloud": /^ollama-cloud\/gemma\d+(?:\.\d+)?:31b$/,
+      "kimi-code": /^kimi-code\/k\d+(?:\.\d+)?-pro(?:-highspeed)?$/,
+      "moonshot-intl": /^moonshot-intl\/kimi-k\d+(?:\.\d+)?-pro$/,
+      google: /^gemini-\d+(?:\.\d+)?-flash$/,
+      openrouter: /^google\/gemini-\d+(?:\.\d+)?-flash$/,
+      qwen: /^qwen\d+(?:\.\d+)?-flash$/,
+      opencode: /^opencode\/deepseek-v\d+(?:\.\d+)?-flash$/,
+    };
+    assert.match(m.id, patterns[r.provider]);
+    if (
+      compatible.includes(r.provider) &&
+      !["kimi-code", "ollama-cloud"].includes(r.provider)
+    )
+      assert.equal(m.currency, r.provider === "moonshot" ? "CNY" : "USD");
+    if (r.provider === "moonshot-intl") assert.equal(m.cacheWrite, m.input);
     if (r.provider !== "openai") assert.equal(m.provider, r.provider);
     if (r.provider === "xai")
       assert.equal(m.billableOutputTokens, m.contextTokens);
@@ -34,7 +58,7 @@ export function validateRegistry(r) {
     assert.ok(
       m.contextTokens >= 32000 &&
         m.outputTokens >= 1024 &&
-        (r.provider === "local"
+        (["local", "kimi-code", "ollama-cloud"].includes(r.provider)
           ? m.input === 0 && m.output === 0 && m.cached === 0
           : m.input > 0 && m.output > 0) &&
         m.cached >= 0 &&
@@ -47,6 +71,7 @@ export function validateRegistry(r) {
         "https://developers.openai.com/api/docs/models/" + m.id + ".md",
       );
     sourceAllowed(r.provider, m.source);
+    if (m.contract) sourceAllowed(r.provider, m.contract);
   }
   for (const source of Object.values(r.sources))
     sourceAllowed(r.provider, source);
@@ -56,10 +81,69 @@ function sourceAllowed(provider, source) {
   assert.ok(!u.username && !u.password && !u.search && !u.hash);
   if (provider === "local") {
     assert.ok(
-      (u.origin === "https://ollama.com" &&
-        (u.pathname.startsWith("/library/") || u.pathname === "/search")) ||
+      (u.origin === "https://lmstudio.ai" &&
+        (u.pathname.startsWith("/models/google/gemma-") ||
+          u.pathname.startsWith("/docs/developer/openai-compat/"))) ||
+        (u.origin === "https://huggingface.co" &&
+          /^\/google\/gemma-\d+-E[24]B-it$/.test(u.pathname)) ||
+        (u.origin === "https://docs.vllm.ai" &&
+          u.pathname === "/en/latest/serving/online_serving/") ||
+        (u.origin === "https://ollama.com" &&
+          (u.pathname.startsWith("/library/") || u.pathname === "/search")) ||
         (u.origin === "https://docs.ollama.com" &&
-          u.pathname === "/api/openai-compatibility"),
+          [
+            "/api/openai-compatibility",
+            "/api/authentication",
+            "/cloud",
+          ].includes(u.pathname)),
+    );
+    return;
+  }
+  if (
+    provider === "qwen" &&
+    u.origin === "https://raw.githubusercontent.com" &&
+    u.pathname === "/QwenLM/qwen-code/main/docs/users/configuration/auth.md"
+  )
+    return;
+  if (
+    provider === "xai" &&
+    ((u.origin === "https://auth.x.ai" &&
+      u.pathname === "/.well-known/openid-configuration") ||
+      (u.origin === "https://docs.x.ai" &&
+        (u.pathname === "/build/enterprise" ||
+          u.pathname === "/build/enterprise.md")) ||
+      (u.origin === "https://raw.githubusercontent.com" &&
+        u.pathname ===
+          "/xai-org/grok-build/main/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md"))
+  )
+    return;
+  if (
+    provider === "anthropic" &&
+    u.origin === "https://code.claude.com" &&
+    [
+      "/docs/en/legal-and-compliance",
+      "/docs/en/legal-and-compliance.md",
+    ].includes(u.pathname)
+  )
+    return;
+  if (compatible.includes(provider)) {
+    const origins = {
+      moonshot: ["https://platform.kimi.com", "https://www.kimi.com"],
+      "moonshot-intl": ["https://platform.kimi.ai"],
+      "kimi-code": ["https://www.kimi.com"],
+      "ollama-cloud": ["https://docs.ollama.com", "https://ollama.com"],
+      google: [
+        "https://ai.google.dev",
+        "https://developers.google.com",
+        "https://geminicli.com",
+      ],
+      openrouter: ["https://openrouter.ai"],
+      qwen: ["https://www.alibabacloud.com", "https://docs.qwencloud.com"],
+      opencode: ["https://opencode.ai"],
+    };
+    assert.ok(
+      origins[provider].includes(u.origin),
+      "Unofficial provider source",
     );
     return;
   }
@@ -174,7 +258,12 @@ export async function checkProviders(
   { fetcher = fetch, now = Date.now() } = {},
 ) {
   validateRegistry(r);
-  if (r.provider === "local") return checkLocalModels(r, raw, { fetcher, now });
+  if (r.provider === "local")
+    return r.models.some((m) => m.contract)
+      ? checkCompatibleModels(r, raw, { fetcher, now })
+      : checkLocalModels(r, raw, { fetcher, now });
+  if (compatible.includes(r.provider))
+    return checkCompatibleModels(r, raw, { fetcher, now });
   const snapshots = {};
   for (const url of new Set([
     ...Object.values(r.sources),
@@ -182,7 +271,11 @@ export async function checkProviders(
   ])) {
     // Native documentation publishes its machine-readable page at the official .md link.
     const retrievedFrom =
-      r.provider !== "openai" && !url.endsWith(".md") ? url + ".md" : url;
+      r.provider !== "openai" &&
+      !url.endsWith(".md") &&
+      new URL(url).origin !== "https://auth.x.ai"
+        ? url + ".md"
+        : url;
     sourceAllowed(r.provider, retrievedFrom);
     let response;
     try {
@@ -323,6 +416,65 @@ export async function checkProviders(
     candidateRegistry: candidate,
   };
 }
+// Different documentation formats and currencies need explicit model/tariff
+// review. Source refresh must never renew a compiled policy merely because a
+// page still mentions a model ID. All providers use this same proposal command.
+export async function checkCompatibleModels(
+  r,
+  raw,
+  { fetcher = fetch, now = Date.now() } = {},
+) {
+  validateRegistry(r);
+  const sources = {};
+  for (const url of new Set([
+    ...Object.values(r.sources),
+    ...r.models.map((m) => m.source),
+    ...r.models.map((m) => m.contract).filter(Boolean),
+  ])) {
+    sourceAllowed(r.provider, url);
+    const response = await fetcher(url, {
+      redirect: "error",
+      signal: AbortSignal.timeout(10000),
+      headers: { accept: "text/html,text/markdown,application/json" },
+    });
+    assert.equal(response.status, 200, "Official source unavailable: " + url);
+    const reader = response.body.getReader();
+    const chunks = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.length;
+        assert.ok(size <= 1048576, "Official source too large");
+        chunks.push(value);
+      }
+    } finally {
+      await reader.cancel();
+    }
+    const body = Buffer.concat(chunks).toString("utf8"),
+      sha256 = digest(body);
+    assert.ok(body.trim().length, "Empty official source");
+    sources[url] = {
+      sha256,
+      retrievedFrom: url,
+      changed: r.sourceHashes?.[url] !== sha256,
+    };
+  }
+  return {
+    version: 1,
+    provider: r.provider,
+    policy: r.policy,
+    beforeSHA256: digest(raw),
+    checkedAt: Math.floor(now / 1000),
+    status: "manual-policy-review-required",
+    newModelIDs: [],
+    remove: [],
+    sources,
+    candidateRegistry: structuredClone(r),
+  };
+}
+
 export async function checkLocalModels(
   r,
   raw,
@@ -444,6 +596,14 @@ const registryPaths = {
   anthropic: "internal/core/provider_anthropic.json",
   xai: "internal/core/provider_xai.json",
   local: "internal/core/provider_local.json",
+  moonshot: "internal/core/provider_moonshot.json",
+  "moonshot-intl": "internal/core/provider_moonshot_intl.json",
+  "kimi-code": "internal/core/provider_kimi_code.json",
+  "ollama-cloud": "internal/core/provider_ollama_cloud.json",
+  google: "internal/core/provider_google.json",
+  openrouter: "internal/core/provider_openrouter.json",
+  qwen: "internal/core/provider_qwen.json",
+  opencode: "internal/core/provider_opencode.json",
 };
 async function main() {
   const records = await Promise.all(

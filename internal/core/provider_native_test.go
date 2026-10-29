@@ -37,7 +37,7 @@ func addNativeAccount(t *testing.T, s *Store, provider string, api bool) AIConne
 // Account setup is discovery/credential management. It must never authorize or
 // queue generation; only an explicit Chat/task action may do that.
 func TestProviderSetupNeverQueuesGeneration(t *testing.T) {
-	for _, provider := range []string{"openai", "anthropic", "xai"} {
+	for _, provider := range []string{"openai", "anthropic", "xai", "moonshot", "google", "openrouter", "qwen", "opencode"} {
 		t.Run(provider, func(t *testing.T) {
 			s := fixtureStore(t)
 			agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: "trading-analyst", Name: "Preserved conversation"})
@@ -115,6 +115,10 @@ func nativePermission(t *testing.T, s *Store, account AIConnectionView, model st
 	v := agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: "trading-analyst", Name: "Native Chat"})
 	v = agentApply(t, s, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Analyst", Provider: account.Provider, Model: model, AccountRef: &account.Ref})
 	budget := int64(500000)
+	policy := openAIModelPolicy(model)
+	if unmeteredPolicy(&policy) {
+		budget = 0
+	}
 	if account.Provider == "xai" {
 		budget = 3100000
 	}
@@ -133,7 +137,7 @@ func TestNativeProvidersEveryCurrentModelUsesSharedChat(t *testing.T) {
 			t.Run(model.ID, func(t *testing.T) {
 				s := fixtureStore(t)
 				a := addNativeAccount(t, s, provider, false)
-				if !modelChoice(a, model.ID).Selectable || len(a.Catalog.Providers) != 4 {
+				if !modelChoice(a, model.ID).Selectable || len(a.Catalog.Providers) != 12 {
 					t.Fatal("native discovery absent", a.Catalog)
 				}
 				v, p := nativePermission(t, s, a, model.ID)
@@ -161,7 +165,7 @@ func TestNativeProvidersEveryCurrentModelUsesSharedChat(t *testing.T) {
 	}
 }
 func TestNativeProvidersControlledHTTPSAndTaskGrant(t *testing.T) {
-	for _, provider := range []string{"anthropic", "xai"} {
+	for _, provider := range []string{"anthropic", "xai", "google", "openrouter", "qwen", "opencode", "moonshot-intl"} {
 		t.Run(provider, func(t *testing.T) {
 			s := fixtureStore(t)
 			old := saveTestConnection(t, s)
@@ -178,13 +182,19 @@ func TestNativeProvidersControlledHTTPSAndTaskGrant(t *testing.T) {
 						t.Error("wrong Messages credentials")
 					}
 				} else if r.Header.Get("Authorization") != "Bearer "+disposableAPIInput || r.Header.Get("X-Api-Key") != "" {
-					t.Error("wrong xAI credentials")
+					t.Error("wrong Bearer credentials")
 				}
 				copy := r.Clone(r.Context())
 				u := *r.URL
 				u.Scheme, u.Host = "https", p.Host
 				copy.URL = &u
-				res, err := nativeFixtureResponse(copy, provider)
+				var res *http.Response
+				var err error
+				if compatibleProvider(provider) {
+					res, err = compatibleFixtureResponse(copy, provider)
+				} else {
+					res, err = nativeFixtureResponse(copy, provider)
+				}
 				if err != nil {
 					t.Error(err)
 					w.WriteHeader(400)
@@ -205,7 +215,11 @@ func TestNativeProvidersControlledHTTPSAndTaskGrant(t *testing.T) {
 				t.Fatal(err)
 			}
 			v, _ = s.Agents(t.Context(), v.ProfileID, "")
-			if calls != 4 || v.AIRequests[0].State != "completed" {
+			expectedCalls := 4
+			if compatibleProvider(provider) {
+				expectedCalls = 3
+			}
+			if calls != expectedCalls || v.AIRequests[0].State != "completed" {
 				t.Fatal("controlled native completion", calls, v.AIRequests[0].State, v.AIRequests[0].Failure)
 			}
 			// The same account/policy and core task worker execute after interactive expiry.
@@ -236,6 +250,29 @@ func TestNativeProvidersControlledHTTPSAndTaskGrant(t *testing.T) {
 			primary, _ := s.AIConnection(old.Ref)
 			if status.TaskAccess == nil || status.TaskAccess.UsedRequests != 1 || primary.TaskAccess != nil {
 				t.Fatal("grant crossed accounts")
+			}
+			if provider == "moonshot-intl" {
+				if last.Policy.Provider != provider || last.SpentMicrousd != aiUsageCost(last, last.InputTokens, last.CachedInputTokens, last.OutputTokens) || last.SpentMicrousd <= 0 {
+					t.Fatal("international USD result disconnected")
+				}
+				v = agentApply(t, s, AgentCommand{Action: "task-run-explain", ProfileID: v.ProfileID, ID: v.Runs[0].ID})
+				v = agentApply(t, s, AgentCommand{Action: "memory-chat-save", ProfileID: v.ProfileID, Source: "message", ID: v.Messages[len(v.Messages)-1].ID, Text: "Keep this synthetic international Kimi result."})
+				vault, _ := ReadPrivateFile(s.aiVaultPath())
+				dir := s.dir
+				if err := s.Close(); err != nil {
+					t.Fatal(err)
+				}
+				reopened, err := OpenStore(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer reopened.Close()
+				locked, _ := reopened.AIConnection(a.Ref)
+				after, _ := ReadPrivateFile(reopened.aiVaultPath())
+				restored, err := reopened.Agents(t.Context(), v.ProfileID, "")
+				if err != nil || !locked.Locked || !bytes.Equal(vault, after) || len(restored.Memories) != 1 || len(restored.Runs) != 1 || restored.AIRequests[len(restored.AIRequests)-1].Model != model {
+					t.Fatal("restart lost regional account/results/memory", err)
+				}
 			}
 		})
 	}

@@ -10,7 +10,9 @@
     "authentication": "https://platform.claude.com/docs/en/api/overview",
     "discovery": "https://platform.claude.com/docs/en/api/models/list",
     "caching": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
-    "contract": "https://platform.claude.com/docs/en/api/messages/create"
+    "contract": "https://platform.claude.com/docs/en/api/messages/create",
+    "workspaceAuthentication": "https://platform.claude.com/docs/en/manage-claude/authentication",
+    "subscriptionTerms": "https://code.claude.com/docs/en/legal-and-compliance"
   },
   "models": [
     {

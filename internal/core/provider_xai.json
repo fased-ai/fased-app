@@ -10,7 +10,10 @@
     "authentication": "https://docs.x.ai/developers/rest-api-reference/inference/responses",
     "discovery": "https://docs.x.ai/developers/rest-api-reference/inference/models",
     "caching": "https://docs.x.ai/developers/advanced-api-usage/prompt-caching",
-    "contract": "https://docs.x.ai/developers/rest-api-reference/inference/responses"
+    "contract": "https://docs.x.ai/developers/rest-api-reference/inference/responses",
+    "signIn": "https://docs.x.ai/build/enterprise",
+    "oauthMetadata": "https://auth.x.ai/.well-known/openid-configuration",
+    "cliAuthentication": "https://raw.githubusercontent.com/xai-org/grok-build/main/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md"
   },
   "models": [
     {

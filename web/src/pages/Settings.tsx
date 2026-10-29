@@ -66,29 +66,27 @@ export function Settings() {
               <ArrowRight size={16} />
             </button>
           )}
-          <section className="panel">
-            <div className="panel-heading">
-              <h2>{uiText("Browser demo data")}</h2>
-              <Badge>{uiText("THIS BROWSER ONLY")}</Badge>
-            </div>
-            <div className="panel-footer">
-              <p>
-                {core.mode === "ready"
-                  ? uiText(
-                      "Reset clears browser demo preferences. Saved core records are preserved.",
-                    )
-                  : uiText(
-                      "Reset clears this browser’s prototype setup, profiles, notes and inbox.",
-                    )}
-              </p>
-              <button
-                className="secondary danger"
-                onClick={() => setResetOpen(true)}
-              >
-                {uiText("Reset prototype")}
-              </button>
-            </div>
-          </section>
+          {core.mode !== "ready" && (
+            <section className="panel">
+              <div className="panel-heading">
+                <h2>{uiText("Browser demo data")}</h2>
+                <Badge>{uiText("THIS BROWSER ONLY")}</Badge>
+              </div>
+              <div className="panel-footer">
+                <p>
+                  {uiText(
+                    "Reset clears this browser’s prototype setup, profiles, notes and inbox.",
+                  )}
+                </p>
+                <button
+                  className="secondary danger"
+                  onClick={() => setResetOpen(true)}
+                >
+                  {uiText("Reset prototype")}
+                </button>
+              </div>
+            </section>
+          )}
         </div>
         <details className="panel settings-advanced update-settings">
           <summary>{uiText("Updates and recovery")}</summary>

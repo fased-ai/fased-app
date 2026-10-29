@@ -22,7 +22,7 @@ func planSignInPolicy(policy *OpenAIModelPolicy) bool {
 }
 func planSignInRequest(q AgentAIRequest) bool { return planSignInPolicy(q.Policy) }
 func validPolicyLimits(l AILimits, p *OpenAIModelPolicy) bool {
-	if localPolicy(p) {
+	if localPolicy(p) || kimiCodePolicy(p) || ollamaCloudPolicy(p) {
 		return l.MaxInputTokens >= 1000 && l.MaxInputTokens <= 32000 && l.MaxOutputTokens >= 128 && l.MaxOutputTokens <= 1024 && l.DeadlineSeconds >= 1 && l.DeadlineSeconds <= 120 && l.BudgetMicrousd == 0
 	}
 	if !unmeteredPolicy(p) {
@@ -290,6 +290,12 @@ func planOutputLimitFailure(q AgentAIRequest) AgentAIRequest {
 
 func providerFailureText(q AgentAIRequest, failure *planProviderFailure) string {
 	text := failure.Error()
+	if ollamaCloudPolicy(q.Policy) || ollamaRelayPolicy(q.Policy) {
+		return strings.Replace(text, planFailurePrefix, "Ollama Cloud request stopped. Diagnostics: ", 1)
+	}
+	if kimiCodePolicy(q.Policy) {
+		return strings.Replace(text, planFailurePrefix, "Kimi Code request stopped. Diagnostics: ", 1)
+	}
 	if localRequest(q) {
 		return strings.Replace(text, planFailurePrefix, "Local model request stopped. Diagnostics: ", 1)
 	}

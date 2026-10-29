@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "policy": "latest-only",
+  "provider": "qwen",
+  "reviewedAt": 1793145600,
+  "expiresAt": 1795737600,
+  "sources": {
+    "models": "https://www.alibabacloud.com/help/en/model-studio/qwen3-8-flash",
+    "pricing": "https://www.alibabacloud.com/help/en/model-studio/qwen3-8-flash",
+    "contract": "https://www.alibabacloud.com/help/en/model-studio/compatibility-of-openai-with-dashscope",
+    "authentication": "https://raw.githubusercontent.com/QwenLM/qwen-code/main/docs/users/configuration/auth.md",
+    "discovery": "https://www.alibabacloud.com/help/en/model-studio/list-models",
+    "subscription": "https://docs.qwencloud.com/token-plan/personal/token-plan-personal-overview",
+    "teamSubscription": "https://docs.qwencloud.com/token-plan/team/token-plan-team-overview",
+    "codingSubscription": "https://www.alibabacloud.com/help/en/model-studio/coding-plan"
+  },
+  "models": [
+    {
+      "provider": "qwen",
+      "id": "qwen3.8-flash",
+      "name": "Qwen3.8 Flash",
+      "tier": "Balanced",
+      "input": 150000,
+      "cached": 16000,
+      "output": 470000,
+      "currency": "USD",
+      "contextTokens": 1048576,
+      "outputTokens": 8192,
+      "source": "https://www.alibabacloud.com/help/en/model-studio/qwen3-8-flash",
+      "reasoning": "none"
+    }
+  ]
+}

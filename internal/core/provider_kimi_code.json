@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "policy": "latest-only",
+  "provider": "kimi-code",
+  "reviewedAt": 1793145600,
+  "expiresAt": 1795737600,
+  "sources": {
+    "models": "https://www.kimi.com/code/docs/en/kimi-code/models.html",
+    "contract": "https://www.kimi.com/code/docs/en/third-party-tools/hermes.html",
+    "terms": "https://www.kimi.com/en/help/kimi-code/community-guidelines",
+    "access": "https://www.kimi.com/en/help/kimi-code/membership-guide"
+  },
+  "models": [
+    {
+      "provider": "kimi-code",
+      "id": "kimi-code/k3.1-pro",
+      "name": "Kimi K3.1 Pro",
+      "tier": "Balanced",
+      "input": 0,
+      "cached": 0,
+      "output": 0,
+      "contextTokens": 262144,
+      "outputTokens": 8192,
+      "source": "https://www.kimi.com/code/docs/en/kimi-code/models.html",
+      "reasoning": "low"
+    },
+    {
+      "provider": "kimi-code",
+      "id": "kimi-code/k3.1-pro-highspeed",
+      "name": "Kimi K3.1 Pro Highspeed",
+      "tier": "Fast",
+      "input": 0,
+      "cached": 0,
+      "output": 0,
+      "contextTokens": 262144,
+      "outputTokens": 8192,
+      "source": "https://www.kimi.com/code/docs/en/kimi-code/models.html",
+      "reasoning": "low"
+    }
+  ]
+}

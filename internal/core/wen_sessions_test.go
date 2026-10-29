@@ -515,8 +515,10 @@ func TestWENSessionRehearsalGuards(t *testing.T) {
 			}
 			v = sessionStep(t, h, v, id)
 			if mode == "backward-clock" {
-				now := s.now()
-				s.now = func() time.Time { return now.Add(-time.Second) }
+				// Compare with the stored floor, not elapsed test wall time.
+				// Crossing a real second must not make this a forward clock.
+				floor := v.Sessions[0].LastWallAt
+				s.now = func() time.Time { return time.Unix(floor-1, 0) }
 			}
 			if mode == "action-expiry" {
 				now := s.now()

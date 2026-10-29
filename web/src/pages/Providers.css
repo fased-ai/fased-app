@@ -1,0 +1,169 @@
+/* Providers is a workspace page, sharing the Meteora shell and account vault. */
+.wt .providers-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  margin-bottom: 6px;
+}
+.wt .providers-heading h1 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+}
+.wt .providers-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+.wt .providers-list {
+  padding: 8px;
+  position: sticky;
+  top: 56px;
+}
+.wt .providers-search {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--wt-border);
+  margin-bottom: 8px;
+  color: var(--wt-muted);
+}
+.wt .providers-search input {
+  min-width: 0;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  padding: 6px 0;
+}
+.wt .provider-brand-button,
+.wt .provider-account {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  font-size: 14px;
+  border-radius: 8px;
+}
+.wt .provider-account {
+  padding-left: 22px;
+  color: var(--wt-muted);
+}
+.wt .provider-account span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.wt .provider-account small {
+  font-size: 11px;
+}
+.wt .provider-account[aria-pressed="true"],
+.wt .provider-brand-button[aria-pressed="true"] {
+  background: var(--shell-active);
+  color: var(--wt-coral);
+}
+.wt .provider-account:hover,
+.wt .provider-brand-button:hover {
+  background: var(--shell-hover);
+}
+.wt .provider-editor {
+  min-width: 0;
+}
+.wt .provider-editor > .agent-record-body {
+  max-width: 680px;
+}
+.wt .provider-methods {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.wt .provider-methods button[aria-pressed="true"] {
+  border-color: var(--wt-coral);
+  color: var(--wt-coral);
+}
+.wt .provider-models {
+  border-top: 1px solid var(--wt-border);
+  padding: 14px 18px;
+}
+.wt .provider-models h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+.wt .provider-models ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.wt .provider-models li {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--wt-border);
+  font-size: 13px;
+}
+.wt .provider-models small {
+  color: var(--wt-muted);
+}
+@media (max-width: 760px) {
+  .wt .providers-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .wt .providers-list {
+    position: static;
+    max-height: 240px;
+    overflow: auto;
+  }
+  .wt .providers-list:focus-within {
+    scroll-padding: 8px;
+  }
+  .wt .provider-models li {
+    flex-wrap: wrap;
+  }
+}
+
+.wt .providers-layout > .provider-editor {
+  background: var(--wt-surface);
+  border: 1px solid var(--wt-border);
+  border-radius: 8px;
+}
+
+@media (pointer: coarse) {
+  .wt .provider-brand-button,
+  .wt .provider-account {
+    min-height: 44px;
+  }
+  .wt .providers-heading .shell-icon {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+.wt .provider-servers {
+  flex-wrap: wrap;
+}
+.wt .provider-servers button {
+  min-height: 44px;
+}
+
+.wt .provider-route {
+  color: var(--wt-muted);
+  font-size: 0.75rem;
+  margin-inline-end: auto;
+}
+
+.wt .provider-editor > .panel-heading:has(.provider-route) {
+  flex-wrap: wrap;
+  gap: 8px;
+}

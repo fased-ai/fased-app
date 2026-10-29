@@ -112,6 +112,9 @@ func taskAIDigest(t AgentTask) string {
 	return hex.EncodeToString(h[:])
 }
 func validateTaskAI(d agentDocument, t AgentTask, now int64) error {
+	if t.AI != nil && kimiCodePolicy(t.AI.Policy) {
+		return errors.New("Kimi Code is interactive only; choose a Platform API account for tasks")
+	}
 	if t.AI == nil || validateAIModelPolicy(taskAIRequest(t, now), now) != nil || !t.AI.Authorized || t.AI.Digest != taskAIDigest(t) || now < t.AI.CreatedAt || now >= t.AI.ExpiresAt {
 		return errors.New("task consent missing, changed or expired")
 	}
@@ -159,6 +162,9 @@ func taskAIRequestValid(d agentDocument, q AgentAIRequest, now int64) error {
 }
 func changeTaskAI(d *agentDocument, c AgentCommand, profile, id string, now int64, fixture bool) error {
 	if c.Action == "task-ai-prepare" {
+		if m, ok := currentProviderModel(c.Model); ok && modelProvider(m) == "kimi-code" {
+			return errors.New("Kimi Code is interactive only; choose a Platform API account for tasks")
+		}
 		if !validAgentText(c.Name, 80, true) || !validAgentText(c.Text, 1000, true) || c.IntervalSeconds < 60 || c.IntervalSeconds > 604800 || c.MaxRuns < 1 || c.MaxRuns > 10 || c.AuthorizationSeconds < 60 || c.AuthorizationSeconds > 604800 || !validPolicyTotal(chatModelPolicyForMethod(c.Model, c.providerAuthMethod), c.TotalBudgetMicrousd) || len(d.Tasks) >= 100 {
 			return errors.New("bounded AI task name/prompt/schedule/authorization and total budget required")
 		}

@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { checkProviders, applyReviewed } from "./provider-models.mjs";
 const raw = await readFile("internal/core/provider_local.json", "utf8");
-const registry = JSON.parse(raw);
+const fullRegistry = JSON.parse(raw);
+// Retained Ollama-only policy path; named-server formats require explicit review.
+const registry = {
+  ...fullRegistry,
+  models: fullRegistry.models.filter((m) => !m.contract),
+};
 function sources(newer = false) {
   return async (url, opts) => {
     assert.equal(opts.redirect, "error");
@@ -44,5 +49,22 @@ test("missing local model or changed Responses contract cannot be renewed silent
     checkProviders(registry, raw, {
       fetcher: async () => new Response("empty", { status: 200 }),
     }),
+  );
+});
+
+test("named local-server sources share review but cannot silently renew policy", async () => {
+  const proposal = await checkProviders(fullRegistry, raw, {
+    fetcher: sources(),
+  });
+  assert.equal(proposal.status, "manual-policy-review-required");
+  assert.deepEqual(proposal.candidateRegistry, fullRegistry);
+  assert.equal(proposal.candidateRegistry.models.length, 7);
+  await assert.rejects(applyReviewed(proposal, raw));
+  const withoutOne = async (url, options) =>
+    url === fullRegistry.sources.lmstudio
+      ? new Response("", { status: 404 })
+      : sources()(url, options);
+  await assert.rejects(
+    checkProviders(fullRegistry, raw, { fetcher: withoutOne }),
   );
 });

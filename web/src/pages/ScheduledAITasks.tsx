@@ -70,6 +70,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
     (item) => item.id === model,
   )?.policy;
   const planUsage = isUnmeteredPolicy(selectedPolicy);
+  const interactiveOnly = selectedPolicy?.provider === "kimi-code";
   const budgetModel = useRef("");
   useEffect(() => {
     const identity = connectionRef + ":" + model + ":" + selectedPolicy?.id;
@@ -439,6 +440,11 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
           }}
           connectionRef={connectionRef}
         />
+        {interactiveOnly && (
+          <p role="status">
+            {uiText("Chat only. Choose an API account for tasks.")}
+          </p>
+        )}
         <NewsSourcePicker
           view={v}
           value={newsSourceId}
@@ -449,6 +455,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
         <form
           onSubmit={(e) => {
             e.preventDefault();
+            if (interactiveOnly) return;
             void agents
               .change({
                 action: "task-ai-prepare",
@@ -632,7 +639,10 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
               )}
             </p>
           )}
-          <button className="secondary" disabled={agents.busy || !sessionID}>
+          <button
+            className="secondary"
+            disabled={agents.busy || !sessionID || interactiveOnly}
+          >
             {uiText("Prepare AI task review")}
           </button>
         </form>

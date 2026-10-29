@@ -11,7 +11,7 @@
   --wt-bg: #191922;
   --wt-surface: #1e1e2a;
   --wt-raised: #252534;
-  --wt-border: #353545;
+  --wt-border: #2e2e3e;
   --wt-text: #f9f9fb;
   --wt-muted: #aaaac0;
   --wt-coral: #ff647c;
@@ -117,6 +117,15 @@
 .wt button.shell-more-toggle:hover {
   color: var(--wt-text);
   background: transparent;
+}
+/* Selected destinations stay visible when the icon rail is hidden. */
+.wt .shell-top-nav > a[aria-current="page"],
+.wt .shell-more-toggle[data-active="true"] {
+  color: var(--wt-coral);
+}
+.wt .shell-more a[aria-current="page"] {
+  color: var(--wt-coral);
+  background: var(--shell-active);
 }
 .wt .shell-more-wrap {
   position: relative;
@@ -455,6 +464,11 @@
     padding: 4px 6px;
     gap: 3px;
   }
+  .wt
+    .shell-top-nav:has(> .shell-top-extra[aria-current="page"])
+    .shell-more-toggle {
+    color: var(--wt-coral);
+  }
   .wt .shell-top-nav > .shell-top-extra,
   .wt .shell-desktop-utility {
     display: none;
@@ -645,15 +659,6 @@
   padding: 14px 18px;
   color: var(--wt-text);
   text-align: left;
-}
-.wt .provider-editor.panel {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-.wt .provider-editor .panel-heading {
-  padding-top: 4px;
 }
 .wt .news-toolbar {
   gap: 8px;
@@ -849,4 +854,12 @@
 .wt .agent-settings-workspace {
   grid-template-columns: minmax(0, 1fr);
   max-width: 880px;
+}
+
+.wt .notice-result {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--wt-coral);
 }

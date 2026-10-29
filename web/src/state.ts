@@ -1,6 +1,27 @@
 export type WalletMode = "watch" | "external" | "automation" | "skip";
 export type Host = "local" | "vps";
-export type Provider = "none" | "openai" | "anthropic" | "xai";
+export const providerValues = [
+  "none",
+  "openai",
+  "anthropic",
+  "xai",
+  "moonshot",
+  "moonshot-intl",
+  "kimi-code",
+  "ollama-cloud",
+  "google",
+  "openrouter",
+  "qwen",
+  "opencode",
+  "local",
+] as const;
+export type Provider = (typeof providerValues)[number];
+export function isProvider(value: unknown): value is Provider {
+  return (
+    typeof value === "string" &&
+    (providerValues as readonly string[]).includes(value)
+  );
+}
 export type Profile = {
   id: string;
   name: string;
@@ -44,6 +65,15 @@ export const providerNames: Record<Provider, string> = {
   openai: "OpenAI",
   anthropic: "Claude",
   xai: "Grok / xAI",
+  moonshot: "Kimi",
+  "moonshot-intl": "Kimi International",
+  "kimi-code": "Kimi Code",
+  "ollama-cloud": "Ollama Cloud",
+  google: "Google",
+  openrouter: "OpenRouter",
+  qwen: "Qwen",
+  opencode: "OpenCode Zen",
+  local: "Local server",
 };
 export const walletNames: Record<WalletMode, string> = {
   watch: "Watch-only",
@@ -126,7 +156,7 @@ export function initialState(): PrototypeState {
 }
 const hostValues = ["local", "vps"];
 const modeValues = ["watch", "external", "automation", "skip"];
-const providerValues = ["none", "openai", "anthropic", "xai"];
+
 export function restoreState(raw: string | null): PrototypeState {
   const fallback = initialState();
   if (!raw) return fallback;
@@ -137,7 +167,7 @@ export function restoreState(raw: string | null): PrototypeState {
       !parsed.setup ||
       !hostValues.includes(parsed.setup.host) ||
       !modeValues.includes(parsed.setup.walletMode) ||
-      !providerValues.includes(parsed.setup.provider) ||
+      !isProvider(parsed.setup.provider) ||
       !Number.isInteger(parsed.setup.step) ||
       parsed.setup.step < 0 ||
       parsed.setup.step > 3 ||
@@ -154,7 +184,7 @@ export function restoreState(raw: string | null): PrototypeState {
           typeof p.role === "string" &&
           typeof p.initials === "string" &&
           ["lime", "blue", "peach"].includes(p.color) &&
-          providerValues.includes(p.provider),
+          isProvider(p.provider),
       ) ||
       !parsed.profiles.some((p) => p.id === parsed.selectedProfile) ||
       !Array.isArray(parsed.memories) ||

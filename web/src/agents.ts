@@ -29,6 +29,10 @@ export function isPlanPolicy(policy?: OpenAIModelPolicy) {
 export function isUnmeteredPolicy(policy?: OpenAIModelPolicy) {
   return (
     isPlanPolicy(policy) ||
+    (policy?.provider === "ollama-cloud" &&
+      policy.wireVersion === "ollama-cloud-chat-v1") ||
+    (policy?.provider === "kimi-code" &&
+      policy.wireVersion === "kimi-code-chat-v1") ||
     (policy?.wireVersion === "local-responses-v1" &&
       policy.provider === "local")
   );
@@ -37,7 +41,9 @@ export function isUnmeteredPolicy(policy?: OpenAIModelPolicy) {
 export function hasReportedProviderUsage(costBasis?: string) {
   return (
     costBasis === "chatgpt-plan-reported-usage" ||
-    costBasis === "local-reported-usage"
+    costBasis === "local-reported-usage" ||
+    costBasis === "kimi-code-reported-usage" ||
+    costBasis === "ollama-cloud-reported-usage"
   );
 }
 
@@ -45,9 +51,17 @@ export function planFailureDetails(failure: string) {
   const local = failure.startsWith(
     "Local model request stopped. Diagnostics: ",
   );
-  const prefix = local
-    ? "Local model request stopped. Diagnostics: "
-    : "OpenAI plan request stopped. Diagnostics: ";
+  const ollama = failure.startsWith(
+    "Ollama Cloud request stopped. Diagnostics: ",
+  );
+  const kimi = failure.startsWith("Kimi Code request stopped. Diagnostics: ");
+  const prefix = ollama
+    ? "Ollama Cloud request stopped. Diagnostics: "
+    : kimi
+      ? "Kimi Code request stopped. Diagnostics: "
+      : local
+        ? "Local model request stopped. Diagnostics: "
+        : "OpenAI plan request stopped. Diagnostics: ";
   if (!failure.startsWith(prefix)) return null;
   const details = failure.slice(prefix.length);
   let status = 0;
@@ -77,8 +91,11 @@ export function planFailureDetails(failure: string) {
                   : "ChatGPT request failed";
   return {
     summary:
-      local && summary.startsWith("ChatGPT")
-        ? summary.replace("ChatGPT", "Local model")
+      (local || kimi || ollama) && summary.startsWith("ChatGPT")
+        ? summary.replace(
+            "ChatGPT",
+            ollama ? "Ollama Cloud" : kimi ? "Kimi Code" : "Local model",
+          )
         : summary,
     details,
   };
@@ -703,9 +720,13 @@ export function useAgents(core: ReturnType<typeof useCore>) {
     void load();
     let ticks = 0;
     const timer = setInterval(() => {
-      const active = current.current?.aiRequests.some(
-        (q) => q.state === "queued" || q.state === "running",
-      );
+      const active =
+        current.current?.aiRequests.some(
+          (q) => q.state === "queued" || q.state === "running",
+        ) ||
+        current.current?.newsFetches.some(
+          (f) => f.state === "queued" || f.state === "fetching",
+        );
       if (!writing.current && (active || ++ticks % 10 === 0)) void load();
     }, 500);
     return () => {
