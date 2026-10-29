@@ -1,4 +1,5 @@
 import { expect, test, type Request, type Route } from "@playwright/test";
+import { revealFixtureAccountEntry } from "../../scripts/fixture-account-journey.mjs";
 
 test.use({ colorScheme: "dark" });
 import { spawn, type ChildProcess } from "node:child_process";
@@ -4852,6 +4853,32 @@ test("production UI fails closed when the core API is unavailable", async ({
   await expect(page.getByRole("button", { name: "Setup" })).toHaveCount(0);
 });
 
+test("managed account entry supports current and predecessor layouts", async ({
+  page,
+}) => {
+  page.setDefaultTimeout(1500);
+  await page.setContent(
+    "<details><summary>Advanced</summary><label>Name<input></label></details>",
+  );
+  await revealFixtureAccountEntry(page);
+  await expect(page.getByLabel("Name", { exact: true })).toBeVisible();
+  await expect(page.locator("details")).toHaveAttribute("open", "");
+  await page.setContent(
+    "<label>Name<input></label><details><summary>Advanced</summary><p>Other controls</p></details>",
+  );
+  await revealFixtureAccountEntry(page);
+  await expect(page.getByLabel("Name", { exact: true })).toBeVisible();
+  await expect(page.locator("details")).not.toHaveAttribute("open", "");
+  await page.setContent("<main></main>");
+  await page.evaluate(() => {
+    window.setTimeout(() => {
+      document.querySelector("main")!.innerHTML = "<label>Name<input></label>";
+    }, 300);
+  });
+  await revealFixtureAccountEntry(page);
+  await expect(page.getByLabel("Name", { exact: true })).toBeVisible();
+});
+
 test("public account records share UI/CLI state without wallet authority", async ({
   page,
 }) => {
@@ -4866,7 +4893,7 @@ test("public account records share UI/CLI state without wallet authority", async
   await page.getByRole("button", { name: "Claim workspace" }).click();
   await page.goto(url + "/#wallets/accounts");
   await expect(page.getByRole("heading", { name: "Wallets" })).toBeVisible();
-  await page.getByText("Advanced", { exact: true }).click();
+  await revealFixtureAccountEntry(page);
   await revealControl(page, page.getByLabel("Name", { exact: true }), "");
   await page.getByLabel("Name", { exact: true }).fill("Disposable watch");
   await revealControl(
@@ -11758,9 +11785,9 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
   ).toBeVisible();
   await page.getByRole("button", { name: "RPC", exact: true }).click();
   await expect(page.getByLabel("Network", { exact: true })).toHaveValue("Demo");
-  await page.getByRole("button", { name: "Check RPC", exact: true }).click();
+  await page.getByRole("button", { name: "Check", exact: true }).click();
   await expect(
-    page.getByText("RPC verified (demo)", { exact: true }),
+    page.getByText("Verified (test)", { exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect

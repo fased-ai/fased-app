@@ -6,6 +6,14 @@ import { readFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { chromium } from "@playwright/test";
 
+export async function revealFixtureAccountEntry(page) {
+  const name = page.getByLabel("Name", { exact: true });
+  await name.waitFor({ state: "attached" });
+  if (!(await name.isVisible()))
+    await page.getByText("Advanced", { exact: true }).click();
+  await name.waitFor({ state: "visible" });
+}
+
 export async function fixtureAccountJourney({
   url,
   engine,
@@ -36,6 +44,7 @@ export async function fixtureAccountJourney({
     await page
       .getByRole("heading", { name: "Wallets", level: 1, exact: true })
       .waitFor();
+    await revealFixtureAccountEntry(page);
     await page.getByLabel("Name", { exact: true }).fill("Disposable UI watch");
     await page
       .getByLabel("Disposable public key (64 lowercase hex)")
