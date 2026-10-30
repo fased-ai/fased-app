@@ -19,4 +19,4 @@ Fased is in development. These guides explain the product experience; a guide or
 
 Do not send funds to development addresses or enter real credentials into a test installation. Public releases will identify supported platforms, setup instructions and available features.
 
-Read [Install](/guide/install), [Wallets](/guide/wallets) and the [Network roadmap](/guide/network-roadmap).
+Read [Install](/guide/install), [Wallets](/guide/wallets) and the [Network guide](/guide/network).

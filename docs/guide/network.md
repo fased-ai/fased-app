@@ -43,8 +43,10 @@ WEN users can participate in the planned research experience without installing 
 
 Private conversations, wallet credentials and portfolio details are not public by default. Sharing research or results is a deliberate choice. Receiving a signal never grants its author permission to trade, claim rewards or withdraw funds.
 
-## Sustainable participation
+## Services and participation
 
-Potential services include signal subscriptions, research requests and application access plans. Publisher compensation, operating costs and any funded FCOD rewards have distinct terms. WEN rewards continue to follow WEN's own economics; Network membership creates no additional mining entitlement.
+Planned services include signal subscriptions, defined research requests and application access plans. Each offering will publish its price, access period and cancellation terms. Publisher compensation rewards useful delivered work; ratings distinguish forecast quality, service reliability, simulated results and verified live performance.
 
-See the [Network roadmap](/guide/network-roadmap), [WEN connection](/wen/automation) and [FCOD](https://docs.fcode.ai/fcod).
+Available business income may support explicitly funded FCOD pools after publisher payments, expenses and obligations. No fixed return or automatic share of all income is promised. FCOD ownership is optional for basic Fased use and WEN participation. WEN rewards follow WEN's own economics; Network membership creates no additional mining entitlement.
+
+Explore the [Network roadmap](https://docs.fcode.ai/network-roadmap), [WEN connection](/wen/automation) and [FCOD](https://docs.fcode.ai/fcod).
