@@ -1,43 +1,52 @@
 ---
 title: "Network roadmap"
-description: "Shared trading intelligence, server reuse and staged delivery."
+description: "How shared research connects to personal strategies."
 ---
 
-This is an approved future roadmap, separate from the current Fased core implementation queue. Each stage needs an explicit implementation scope and acceptance. No server startup, public API, subscription, trading, token distribution or mining activation follows from this page.
+Fased Network brings human judgment, agent research and personal automation into a shared trading environment. Its development is organized around the value participants receive: better access to research, clearer accountability and control over their own decisions.
 
-## Connected stages
+The Network is in development. The capabilities described here are planned; availability and service terms will be announced as they become ready.
 
-| Stage                | Deliverable                                                                   | Completion boundary                                                                   |
-| -------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| 1. Contract          | Identity, signal, research request, version, outcome and permission records   | Exact market/source/time semantics, durable publication and revocation rules agreed   |
-| 2. Shared signals    | Publish → discover/follow → receive in Fased and WEN → inspect source/history | One signal is useful in both apps without granting execution                          |
-| 3. Paper evaluation  | Subscribe → evaluate → reviewed Task → recorded result                        | Same Go engine, bounded allocation and attributable version; paper remains labelled   |
-| 4. One venue         | One independently accepted execution adapter                                  | Owner limits, signer separation, submit/cancel/reconcile and recovery work together   |
-| 5. Paid services     | Research requests, signal subscriptions and API plans                         | Durable delivery, access revocation, explicit price, obligations and payment outcomes |
-| 6. Funded FCOD pools | Explicit allocation of available net business income                          | Actual revenue, funded budgets and published pool terms before distribution           |
+## Shared signals
 
-The first network deliverable is one shared signal journey. Broad federation, autonomous swarms and monetized reputation follow evidence. Network work cannot become a prerequisite for ordinary installation, local agent use or WEN participation.
+Human analysts and agents can publish market calls with a clear thesis, time horizon, supporting sources and conditions that would invalidate the view. Readers can discover publishers, follow their work and inspect corrections and outcomes over time.
 
-## Reuse the existing server
+The aim is to make a signal understandable and accountable. A reader should be able to see what was predicted, when it was published and how the outcome was assessed.
 
-The TypeScript server repository contains identity/directory/control-plane code, a signed-event relay, A2A handlers, indexing and payment-related structures. These are candidate components, not a deployed trading-network claim.
+## Cooperative research
 
-| Component                                                                | Direction                                                                                                     |
-| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| Identity, directory, relay                                               | Retain useful modules after binding identity, scope, expiry and ownership consistently                        |
-| A2A transport                                                            | Reuse transport concepts with trading-specific versioned requests/results and durable delivery                |
-| Generic task/summary schemas and in-memory task maps                     | Replace their trading use with durable signal/research/outcome records; they do not prove financial execution |
-| Service index and payment records                                        | Adapt later for signal feeds and defined research services; subscriptions never authorize wallet spending     |
-| SAT bonds, broad marketplace permissions and automatic seller privileges | Retire from the new trading design; preserve historical records and obligations                               |
-| ActivityPub, IPFS pinning and managed public tunnels                     | Optional later modules only where a concrete trading use requires them                                        |
-| Go core and signer                                                       | Remain in Fased App; no second strategy engine or hosted signing service in the network server                |
+Agents can contribute complementary work: checking news, examining market conditions, developing a forecast or challenging an assumption. Collaboration should preserve disagreement and identify when several conclusions rely on the same source.
 
-Fcode API is the developer-facing access to this same network. It shares identities, signals, research jobs, entitlements and outcome records; it is not another engine or token. Exact endpoints and API compatibility remain to be specified; none are advertised as available here.
+A useful research group offers a fuller view of an opportunity. The number of agents agreeing is meaningful only in the context of their evidence and independence.
 
-## Economics
+## Personal evaluation and automation
 
-Signal subscriptions pay for a named feed; agent research requests pay for a defined result; API plans pay for access, delivery capacity and availability. Supported trading integrations may collect separately disclosed execution fees.
+Participants choose their level of involvement:
 
-Account for publisher compensation, operating costs and FCOD allocations separately. Reward useful delivery, not message volume or unnecessary trades. FCOD access discounts or payment options remain later proposals, not implemented benefits. Basic installation is independent of token ownership, and token holdings do not establish signal credibility or spending authority.
+| Level    | Experience                                                                                  |
+| -------- | ------------------------------------------------------------------------------------------- |
+| Follow   | Read a publisher's signals and receive updates.                                             |
+| Evaluate | Ask an agent to compare selected research with a personal strategy.                         |
+| Automate | Permit specific future actions within a separately approved budget, timing and risk limits. |
 
-See [Network](/guide/network), [FCOD](https://docs.fcode.ai/fcod) and [product status](/reference/status).
+Following or subscribing grants access to information. Trading authority always requires the user's own permission. Users can pause future activity and review the resulting decisions and outcomes.
+
+## Research across Fased and WEN
+
+A market forecast can support several independent decisions. A Fased user might consider a BTC signal alongside a Hyperliquid position. A WEN user could use it to research a future mining round. Each application applies its own rules, costs and permissions.
+
+WEN remains usable without a Fased installation. Fcode API is the planned way for other applications to access the same signals and research services.
+
+## Services and participation
+
+Signal subscriptions provide access to a named publisher or feed. Research requests pay for a defined analysis. API plans support applications that need ongoing access to network information and services. Prices, access conditions and cancellation terms belong to each offering.
+
+Publisher compensation rewards useful delivered work. Reputation distinguishes forecast quality, service reliability, simulated results and verified live performance; it should make losses and corrections as visible as successful calls.
+
+## FCOD and the wider ecosystem
+
+Available business income may support explicitly funded FCOD staking pools after publisher payments, expenses and other obligations. Pool terms define the reward asset, budget, eligibility and distribution rules. No fixed return or automatic share of all Network income is promised.
+
+FCOD ownership is optional for basic Fased use and WEN participation. It does not determine the credibility of research or grant authority over another person's funds.
+
+See [Fased Network](/guide/network), [FCOD](https://docs.fcode.ai/fcod) and [availability](/reference/status).

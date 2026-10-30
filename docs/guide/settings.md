@@ -1,12 +1,12 @@
 ---
 title: "Settings and recovery"
-description: "Instance, access, appearance and preserved records."
+description: "Manage access, appearance and your saved workspace."
 ---
 
-Settings owns the actual Local/Remote connection, access, appearance, language, update status and recovery guidance. Verify the destination instance when connecting; a deployment label is not proof of connection.
+Use **Settings** to review the connected Local or Remote instance, manage access and choose appearance and language. Verify the destination before entering credentials.
 
-Dashboard widgets summarize existing records and link to their owning pages. Moving, resizing or removing a widget changes the layout, not the underlying Task, wallet or history. The Fased logo opens Dashboard.
+The Fased logo opens **Dashboard**. Its widgets summarize work and link to the relevant pages. Moving, resizing or removing a widget changes your layout without deleting its Tasks, wallet records or results.
 
-Use the installed lifecycle flow for start/stop, autostart, repair and data-preserving removal. App-password recovery and wallet recovery are different operations. Preserve encrypted credentials, backups and unknown-usage/recovery holds.
+Use the installed start/stop and autostart controls to manage the app. Removal should preserve your data. Keep backups and recovery instructions; recovering an app password and recovering a wallet are different operations.
 
-Update engineering includes authenticated compatibility checks and recoverable state handling. Public download trust, signing/distribution and owner acceptance remain open; automatic/public updates are disabled. See [Install](/guide/install) and [Status](/reference/status).
+Automatic updates are not enabled. Use the update instructions supplied with an available release, and keep your saved data when upgrading. See [Install](/guide/install) and [Availability](/reference/status).
