@@ -10,20 +10,21 @@ import (
 // TaskReview is an inert, expiring projection. Only the existing atomic task
 // creation writes state; revision and digest bind the reviewed policy.
 type TaskReview struct {
-	AI              *TaskAIStep    `json:"ai,omitempty"`
-	Watch           *NewsWatchRule `json:"watch,omitempty"`
-	Calendar        *TaskCalendar  `json:"calendar,omitempty"`
-	Version         string         `json:"version"`
-	Revision        int64          `json:"revision"`
-	ProfileID       string         `json:"profileId"`
-	Name            string         `json:"name"`
-	Text            string         `json:"text"`
-	Bot             *PaperBot      `json:"bot,omitempty"`
-	News            *TaskNewsInput `json:"news,omitempty"`
-	IntervalSeconds int64          `json:"intervalSeconds"`
-	MaxRuns         int            `json:"maxRuns"`
-	ExpiresAt       int64          `json:"expiresAt"`
-	Digest          string         `json:"digest"`
+	StrategyPlan    *StrategyTaskPolicy `json:"strategyPlan,omitempty"`
+	AI              *TaskAIStep         `json:"ai,omitempty"`
+	Watch           *NewsWatchRule      `json:"watch,omitempty"`
+	Calendar        *TaskCalendar       `json:"calendar,omitempty"`
+	Version         string              `json:"version"`
+	Revision        int64               `json:"revision"`
+	ProfileID       string              `json:"profileId"`
+	Name            string              `json:"name"`
+	Text            string              `json:"text"`
+	Bot             *PaperBot           `json:"bot,omitempty"`
+	News            *TaskNewsInput      `json:"news,omitempty"`
+	IntervalSeconds int64               `json:"intervalSeconds"`
+	MaxRuns         int                 `json:"maxRuns"`
+	ExpiresAt       int64               `json:"expiresAt"`
+	Digest          string              `json:"digest"`
 }
 
 type TaskCapacity struct {
@@ -44,6 +45,9 @@ func agentTaskCapacity(d agentDocument) TaskCapacity {
 }
 
 func reviewAgentTask(d agentDocument, c AgentCommand, profile string, revision, now int64) (*TaskReview, error) {
+	if c.StrategyID != "" {
+		return reviewStrategyTask(d, c, profile, revision, now)
+	}
 	if err := validateCalendarCommand(c, now); err != nil {
 		return nil, err
 	}

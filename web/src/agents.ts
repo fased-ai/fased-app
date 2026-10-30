@@ -292,7 +292,66 @@ export type NewsWatchResult = {
   matched: number;
   newIds: string[];
 };
+export type StrategyPlan = {
+  version: "paper-limit-buy-v1";
+  accountId: string;
+  network: string;
+  market: "SOL/USDC";
+  quantityAtoms: number;
+  limitPriceMicros: number;
+  orderBudgetMicros: number;
+  totalBudgetMicros: number;
+};
+export type StrategyBinding = {
+  accountId: string;
+  network: string;
+  publicKey: string;
+  referenceSha256: string;
+};
+export type StrategyVersion = {
+  version: number;
+  name: string;
+  createdAt: number;
+  plan: StrategyPlan;
+  binding: StrategyBinding;
+  digest: string;
+  spentMicros: number;
+};
+export type AgentStrategy = {
+  id: string;
+  profileId: string;
+  name: string;
+  versions: StrategyVersion[];
+};
+export type StrategyTaskPolicy = {
+  version: string;
+  strategyId: string;
+  strategyVersion: number;
+  strategySha256: string;
+  plan: StrategyPlan;
+  binding: StrategyBinding;
+  expiresAt: number;
+  digest: string;
+};
+export type StrategyPaperResult = {
+  version: string;
+  strategyId: string;
+  strategyVersion: number;
+  strategySha256: string;
+  consentDigest: string;
+  market: string;
+  network: string;
+  accountId: string;
+  quantityAtoms: number;
+  priceMicros: number;
+  costMicros: number;
+  budgetBeforeMicros: number;
+  budgetAfterMicros: number;
+  source: string;
+  observedAt: number;
+};
 export type AgentTask = {
+  strategyPlan?: StrategyTaskPolicy;
   watch?: { rule: NewsWatchRule; seen: string[] };
   calendar?: TaskCalendar;
   playbook?: { id: string; version: number; sha256: string };
@@ -311,6 +370,7 @@ export type AgentTask = {
   state: string;
 };
 export type AgentRun = {
+  paper?: StrategyPaperResult;
   analysis?: TaskAnalysisResult;
   watch?: NewsWatchResult;
   wen?: WENPaperResult;
@@ -482,6 +542,8 @@ export type PlaybookReview = {
   command: AgentCommand;
 };
 export type AgentView = {
+  strategies?: AgentStrategy[];
+  paperExecutionAvailable?: boolean;
   chatReview?: ChatPermission;
   chatReadiness?: Record<string, string>;
   archivedAISpentMicrousd?: number;
@@ -516,6 +578,7 @@ export type AgentView = {
   financialExecution: false;
 };
 export type TaskReview = {
+  strategyPlan?: StrategyTaskPolicy;
   ai?: TaskAIStep;
   watch?: NewsWatchRule;
   calendar?: TaskCalendar;
@@ -618,6 +681,9 @@ export type AgentEvidenceView = {
     }
 );
 export type AgentCommand = {
+  strategy?: StrategyPlan;
+  strategyId?: string;
+  strategyVersion?: number;
   analysis?: TaskAnalysis;
   watch?: NewsWatchRule;
   accountRef?: string;

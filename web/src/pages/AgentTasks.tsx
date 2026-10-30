@@ -32,6 +32,12 @@ import { NewsSourcePicker } from "./NewsInputs";
 import { AIModelPicker, useAIConnection } from "./AIConnection";
 import { isUnmeteredPolicy } from "../agents";
 import { TaskAccessSettings } from "./TaskAccess";
+import {
+  AgentStrategies,
+  PaperResultFacts,
+  StrategyFacts,
+  paperOutcome,
+} from "./AgentStrategies";
 
 const displayLocale = () =>
   typeof document === "undefined" ? "en" : document.documentElement.lang;
@@ -78,6 +84,14 @@ const nextRun = (t: AgentTask) =>
   t.nextAt && t.calendar
     ? calendarLabel({ ...t.calendar, version: "once-at-v1", at: t.nextAt })
     : date(t.nextAt);
+const taskStateTitles: Record<string, string> = {
+  scheduled: "Scheduled",
+  paused: "Paused",
+  held: "Held",
+  completed: "Completed",
+  review: "Review",
+  cancelled: "Cancelled",
+};
 const finished = (t: AgentTask) =>
   t.state === "completed" || t.runs >= t.maxRuns || t.state === "cancelled";
 
@@ -93,6 +107,7 @@ export function AgentTasks({
   onDiscuss: () => void;
 }) {
   const { t: uiText } = useUI();
+  const { instanceId } = useCore();
   const tr = uiText;
   const { agents, focusedTask, setFocusedTask } = useWorkspace();
   const { view: connections } = useAIConnection();
@@ -103,6 +118,7 @@ export function AgentTasks({
   const [reuse, setReuse] = useState("");
   const [reviewTask, setReviewTask] = useState<AgentTask>();
   const [createdFrom, setCreatedFrom] = useState<string[]>();
+  const [strategyRequest, setStrategyRequest] = useState<string>();
   const advanced = useRef<HTMLDetailsElement>(null);
   const runCards = useRef(new Map<string, HTMLElement>());
   const tasks = v.tasks.filter((t) => !t.wen);
@@ -143,8 +159,15 @@ export function AgentTasks({
     });
   }
   function actions(t: AgentTask) {
+    const latestStrategy = v.strategies
+      ?.find((s) => s.id === t.strategyPlan?.strategyId)
+      ?.versions.at(-1);
     const needsReview =
-      !!t.ai && ["review", "held", "cancelled"].includes(t.state);
+      (!!t.strategyPlan &&
+        (["review", "held", "cancelled"].includes(t.state) ||
+          (t.state === "paused" &&
+            latestStrategy?.version !== t.strategyPlan.strategyVersion))) ||
+      (!!t.ai && ["review", "held", "cancelled"].includes(t.state));
     const account =
       connections?.connections?.find(
         (item) => item.ref === t.ai?.connectionRef,
@@ -167,7 +190,12 @@ export function AgentTasks({
         {(!t.ai || t.ai.analysis) && (
           <button
             className="text-button"
-            disabled={agents.busy || t.state !== "scheduled" || needsAccess}
+            disabled={
+              agents.busy ||
+              t.state !== "scheduled" ||
+              needsAccess ||
+              (!!t.strategyPlan && !v.paperExecutionAvailable)
+            }
             title={needsAccess ? uiText("Background access") : undefined}
             aria-label={`${uiText("Run now")}: ${t.name}`}
             onClick={async () => {
@@ -184,6 +212,11 @@ export function AgentTasks({
           <button
             className="text-button"
             onClick={() => {
+              if (t.strategyPlan) {
+                setStrategyRequest(t.strategyPlan.strategyId);
+                setPanel("strategies");
+                return;
+              }
               if (!t.ai?.analysis) {
                 reviewAI();
                 return;
@@ -198,7 +231,13 @@ export function AgentTasks({
         ) : (
           <button
             className="text-button"
-            disabled={agents.busy || finished(t)}
+            disabled={
+              agents.busy ||
+              finished(t) ||
+              (!!t.strategyPlan &&
+                t.state === "paused" &&
+                !v.paperExecutionAvailable)
+            }
             aria-label={`${uiText(t.state === "paused" || t.state === "held" ? "Resume" : "Pause")}: ${t.name}`}
             onClick={() =>
               void agents.change({
@@ -226,7 +265,7 @@ export function AgentTasks({
         >
           {tr("Result")}
         </button>
-        {!t.calendar && !t.news && !t.botId && !t.ai && (
+        {!t.calendar && !t.news && !t.botId && !t.ai && !t.strategyPlan && (
           <button
             className="text-button"
             aria-label={`${uiText("Reuse")}: ${t.name}`}
@@ -256,6 +295,10 @@ export function AgentTasks({
     const answer = v.aiRequests.find((q) => q.id === run.aiRequestId)?.answer;
     const typedAnalysis =
       run.strategy === "analysis-v1" || !!task?.ai?.analysis;
+    const paper =
+      !!run.paper ||
+      !!task?.strategyPlan ||
+      run.strategy === "paper-limit-buy-v1";
     const acceptedAnswer =
       typedAnalysis && run.analysis?.state !== "completed" ? undefined : answer;
     return (
@@ -276,26 +319,33 @@ export function AgentTasks({
               : (task?.name ?? uiText("Task unavailable"))}
           </strong>
           <Badge>
-            {run.watch
-              ? uiText("News watch")
-              : run.analysis
-                ? uiText("Analysis")
-                : run.outcome}
+            {paper
+              ? uiText("Paper")
+              : run.watch
+                ? uiText("News watch")
+                : run.analysis
+                  ? uiText("Analysis")
+                  : run.outcome}
           </Badge>
         </header>
         <time dateTime={new Date(run.at * 1000).toISOString()}>
           {date(run.at)}
         </time>
         <p className="task-result-text">
-          {run.watch
-            ? uiText("New matches: {count}", { count: run.watch.newIds.length })
-            : run.analysis?.state === "skipped"
-              ? uiText("Analysis skipped")
-              : acceptedAnswer ||
-                notice?.text ||
-                task?.text ||
-                uiText("Saved result")}
+          {paper
+            ? uiText(paperOutcome(run.outcome))
+            : run.watch
+              ? uiText("New matches: {count}", {
+                  count: run.watch.newIds.length,
+                })
+              : run.analysis?.state === "skipped"
+                ? uiText("Analysis skipped")
+                : acceptedAnswer ||
+                  notice?.text ||
+                  task?.text ||
+                  uiText("Saved result")}
         </p>
+        {run.paper && <PaperResultFacts result={run.paper} />}
         {run.watch && run.analysis?.state === "completed" && answer && (
           <p className="ai-answer">{answer}</p>
         )}
@@ -326,13 +376,14 @@ export function AgentTasks({
         )}
         {!run.wen &&
           !run.botId &&
-          [
-            "reminder-v1",
-            "ai-step-v1/reminder-v1",
-            "ai-step-v1",
-            "news-watch-v1",
-            "analysis-v1",
-          ].includes(run.strategy) && (
+          (paper ||
+            [
+              "reminder-v1",
+              "ai-step-v1/reminder-v1",
+              "ai-step-v1",
+              "news-watch-v1",
+              "analysis-v1",
+            ].includes(run.strategy)) && (
             <button
               className="secondary"
               disabled={agents.busy}
@@ -364,6 +415,18 @@ export function AgentTasks({
                   <dd>{run.analysis.reason}</dd>
                 </>
               )}
+            </dl>
+          )}
+          {run.paper && (
+            <dl className="task-facts">
+              <dt>{uiText("Source")}</dt>
+              <dd>{run.paper.source}</dd>
+              <dt>{uiText("Observed")}</dt>
+              <dd>{date(run.paper.observedAt)}</dd>
+              <dt>{uiText("Digest")}</dt>
+              <dd>
+                <code className="account-key">{run.paper.consentDigest}</code>
+              </dd>
             </dl>
           )}
           {run.botId && (
@@ -399,30 +462,36 @@ export function AgentTasks({
     <div className="tasks-screen">
       <div className="tasks-toolbar">
         <nav className="task-views tabs" aria-label={uiText("Task views")}>
-          {["automations", "history", "inbox", "playbooks", "archive"].map(
-            (t) => (
-              <button
-                key={t}
-                aria-pressed={panel === t}
-                onClick={() => {
-                  setPanel(t);
-                  if (t === "history") setResultId("");
-                }}
-              >
-                {uiText(
-                  (
-                    {
-                      automations: "Tasks",
-                      history: "Results",
-                      inbox: "Inbox",
-                      playbooks: "Templates",
-                      archive: "Archive",
-                    } as Record<string, string>
-                  )[t],
-                )}
-              </button>
-            ),
-          )}
+          {[
+            "automations",
+            "strategies",
+            "history",
+            "inbox",
+            "playbooks",
+            "archive",
+          ].map((t) => (
+            <button
+              key={t}
+              aria-pressed={panel === t}
+              onClick={() => {
+                setPanel(t);
+                if (t === "history") setResultId("");
+              }}
+            >
+              {uiText(
+                (
+                  {
+                    automations: "Tasks",
+                    strategies: "Strategies",
+                    history: "Results",
+                    inbox: "Inbox",
+                    playbooks: "Templates",
+                    archive: "Archive",
+                  } as Record<string, string>
+                )[t],
+              )}
+            </button>
+          ))}
         </nav>
         <div className="row-actions">
           <button
@@ -457,6 +526,20 @@ export function AgentTasks({
             {uiText("Watch news")}
           </button>
         </div>
+      </div>
+      <div hidden={panel !== "strategies"}>
+        <AgentStrategies
+          key={`${v.profileId}:${instanceId}`}
+          view={v}
+          requested={strategyRequest}
+          handled={() => setStrategyRequest(undefined)}
+          created={() => {
+            setCreatedFrom(tasks.map((task) => task.id));
+            setEditing(false);
+            setReuse("");
+            setPanel("automations");
+          }}
+        />
       </div>
       <div hidden={panel !== "playbooks"}>
         <AgentPlaybooks key={v.profileId} view={v} />
@@ -504,7 +587,7 @@ export function AgentTasks({
                       </td>
                       <td>
                         <span className={`task-state ${t.state}`}>
-                          {t.state}
+                          {uiText(taskStateTitles[t.state] ?? "Unavailable")}
                         </span>
                       </td>
                       <td>
@@ -559,10 +642,18 @@ export function AgentTasks({
                 </div>
                 <div className="task-detail-body">
                   <p className="task-result-text">
-                    {selectedTask.watch
-                      ? `${uiText("Contains")}: ${selectedTask.watch.rule.contains}`
-                      : selectedTask.text || uiText("Fixed paper evaluation")}
+                    {selectedTask.strategyPlan
+                      ? uiText("Paper strategy")
+                      : selectedTask.watch
+                        ? `${uiText("Contains")}: ${selectedTask.watch.rule.contains}`
+                        : selectedTask.text || uiText("Fixed paper evaluation")}
                   </p>
+                  {selectedTask.strategyPlan && (
+                    <StrategyFacts
+                      plan={selectedTask.strategyPlan.plan}
+                      version={selectedTask.strategyPlan.strategyVersion}
+                    />
+                  )}
                   <dl className="task-facts">
                     <dt>{uiText("Schedule")}</dt>
                     <dd>{schedule(selectedTask)}</dd>
@@ -573,7 +664,11 @@ export function AgentTasks({
                         : "—"}
                     </dd>
                     <dt>{uiText("Status")}</dt>
-                    <dd>{selectedTask.state}</dd>
+                    <dd>
+                      {uiText(
+                        taskStateTitles[selectedTask.state] ?? "Unavailable",
+                      )}
+                    </dd>
                   </dl>
                   {selectedTask.state === "completed" &&
                     selectedTask.id.length === 43 &&
@@ -582,6 +677,7 @@ export function AgentTasks({
                     !selectedTask.news &&
                     !selectedTask.wen &&
                     !selectedTask.playbook &&
+                    !selectedTask.strategyPlan &&
                     !selectedTask.botId && (
                       <button
                         className="text-button"
@@ -606,11 +702,15 @@ export function AgentTasks({
                       {v.newsFetches
                         .filter((f) => f.taskId === selectedTask.id)
                         .at(-1)?.failure ||
-                        (selectedTask.ai
-                          ? uiText("Review a fresh AI plan before continuing.")
-                          : uiText(
-                              "Check the selected news source, then resume.",
-                            ))}
+                        (selectedTask.strategyPlan
+                          ? uiText("Review again")
+                          : selectedTask.ai
+                            ? uiText(
+                                "Review a fresh AI plan before continuing.",
+                              )
+                            : uiText(
+                                "Check the selected news source, then resume.",
+                              ))}
                     </p>
                   )}
                   {selectedTask.ai?.analysis && (

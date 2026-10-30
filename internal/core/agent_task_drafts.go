@@ -26,7 +26,7 @@ type TaskReminderReview struct {
 }
 
 func plainReminderBindings(c AgentCommand) error {
-	if c.Watch != nil {
+	if c.Strategy != nil || c.StrategyID != "" || c.StrategyVersion != 0 || c.Watch != nil {
 		return errors.New("news watch cannot become a plain reminder")
 	}
 	if c.BotID != "" || c.WEN != nil || c.NewsSourceID != "" || c.NewsMaxAgeSeconds != 0 || c.ConnectionRef != "" || c.Limits != nil || c.TotalBudgetMicrousd != 0 || c.AuthorizationSeconds != 0 || c.Provider != "" || c.Model != "" || c.Quantity != 0 || c.PriceCents != 0 || c.BudgetCents != 0 || c.Source != "" {
@@ -49,7 +49,7 @@ func savedPlainReminder(d agentDocument, profile, id string) (AgentTask, error) 
 			tasks++
 		}
 	}
-	if !validAgentText(id, 80, true) || !validAgentText(profile, 80, true) || !utf8.ValidString(id+profile) || profiles != 1 || tasks != 1 || source.ProfileID != profile || source.AI != nil || source.News != nil || source.WEN != nil || source.BotID != "" {
+	if !validAgentText(id, 80, true) || !validAgentText(profile, 80, true) || !utf8.ValidString(id+profile) || profiles != 1 || tasks != 1 || source.ProfileID != profile || source.StrategyPlan != nil || source.AI != nil || source.News != nil || source.WEN != nil || source.BotID != "" {
 		return AgentTask{}, errors.New("one same-profile saved plain reminder required")
 	}
 	if !validAgentText(source.Name, 80, true) || !validAgentText(source.Text, 4000, true) || !utf8.ValidString(source.Name+source.Text) || (source.Calendar == nil && (source.IntervalSeconds < 60 || source.IntervalSeconds > 604800)) || (source.Calendar != nil && !validCalendarTask(source)) || source.MaxRuns < 1 || source.MaxRuns > 20 || source.Runs < 0 || source.Runs > source.MaxRuns || source.NextAt < 0 ||
