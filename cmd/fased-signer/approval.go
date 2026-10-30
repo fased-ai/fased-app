@@ -62,8 +62,8 @@ func conductSwapApproval(ctx context.Context, p signer.SwapProposal, ask askPass
 	if e != nil {
 		return e
 	}
-	if status.Status.Account == nil || *status.Status.Account != p.Account || status.Status.RecoveryRequired {
-		return errors.New("wallet changed or recovery required")
+	if status.Status.Account == nil || *status.Status.Account != p.Account || status.Status.UpdateHeld || status.Status.RecoveryRequired && !(p.Account.Version == 2 && status.Status.SwapReady) {
+		return errors.New("wallet changed or protected swap history unavailable")
 	}
 	fmt.Fprintf(review, "Disposable swap\nWallet: %s\nNetwork: %s\nPay: %s\nReceive: %s (minimum %s)\nFee cap: %d lamports\nRent: %d lamports\nExpires: %s\nDigest: %s\n", p.Quote.Owner, p.Quote.Network, swapAmount(p.Quote.Amount, p.Quote.InputMint), swapAmount(p.Quote.Output, p.Quote.OutputMint), swapAmount(p.Quote.MinimumOutput, p.Quote.OutputMint), p.Quote.MaxFeeLamports, p.Quote.RentLamports, time.Unix(p.Quote.ExpiresAt, 0).UTC().Format(time.RFC3339), p.Digest)
 	if e = confirm("APPROVE " + p.Digest); e != nil {

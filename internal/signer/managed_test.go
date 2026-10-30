@@ -300,7 +300,7 @@ func TestManagedReadOnlyUpdateInventory(t *testing.T) {
 	}
 	probe := testSignerID
 	s, e := v.UpdateInventory(probe)
-	if e != nil || s.Version != 2 || !s.RecoveryHold || len(s.States) != 2 || s.States[0].Version != 2 || s.ActiveIntentID != "" {
+	if e != nil || s.Version != 2 || !s.RecoveryHold || len(s.States) != 2 || s.States[0].Version != 3 || s.ActiveIntentID != "" {
 		t.Fatal(s, e)
 	}
 

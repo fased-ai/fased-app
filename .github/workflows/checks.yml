@@ -449,6 +449,7 @@ jobs:
       - run: npm ci
       - run: npm run build && npm run build:core
       - run: go build -o .evidence/bin/fased-signer ./cmd/fased-signer
+      - run: go test -c -o .evidence/bin/wallet-core.test ./internal/core
       - run: go build -o .evidence/bin/fased-unhealthy-core ./internal/custodyinstall/testdata/unhealthy-core
       - run: node scripts/build-inspection-predecessor.mjs
       # Reuse the headless browser/runtime proven by the core job.

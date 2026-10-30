@@ -22,7 +22,7 @@ type SwapObserver interface {
 func (v *Vault) ConfigureSwapObserver(observer SwapObserver) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.closed || v.network != "" || observer == nil {
+	if v.closed || observer == nil {
 		return ErrUnavailable
 	}
 	v.swapObserver = observer
@@ -34,7 +34,7 @@ func (v *Vault) ApproveSwap(p SwapProposal) (*SwapReceipt, error) {
 	if v.swapObserver == nil {
 		return nil, ErrUnavailable
 	}
-	if e := v.fixtureReady(true); e != nil {
+	if e := v.swapReady(true); e != nil {
 		return nil, e
 	}
 	if p.Account != v.record.Ref {
@@ -93,7 +93,7 @@ func (v *Vault) SignSwap(id string) (*SwapReceipt, error) {
 	if v.swapObserver == nil {
 		return nil, ErrUnavailable
 	}
-	if e := v.fixtureReady(true); e != nil {
+	if e := v.swapReady(true); e != nil {
 		return nil, e
 	}
 	r, ok := v.ledger.swaps[id]
@@ -188,4 +188,40 @@ func (v *Vault) CancelSwap(id string) (*SwapReceipt, error) {
 	}
 	out := clone(v.ledger.swaps[id])
 	return &out, nil
+}
+
+// General recovery and legacy fixture grants remain held. This capability is
+// only a controlled, exact-message swap under its independent owner approval.
+func (v *Vault) managedSwapEligible() bool {
+	return v.network != "" && !v.closed && v.swapObserver != nil && v.record != nil && v.record.Version == 3 && v.record.FreshManaged && v.managedRef != nil && v.ledger != nil && v.ledger.managedFresh && *v.managedRef == v.record.Ref && v.ledger.ref == v.record.Ref && v.record.Ref.Network == v.network && !v.store.failedState() && v.ledger.activeUpdate == ""
+}
+func (v *Vault) swapReady(unlock bool) error {
+	if v.network == "" {
+		return v.fixtureReady(unlock)
+	}
+	if !v.managedSwapEligible() {
+		return ErrUnavailable
+	}
+	if unlock && !v.unlocked() {
+		return ErrLocked
+	}
+	return nil
+}
+
+// OpenManagedSwapFixture opens only disposable network-bound custody. The
+// observer is a trusted in-process dependency; no runtime URL/CA override.
+// Callers must still obtain owner consent for every inert-blockhash operation.
+func OpenManagedSwapFixture(dir, id, network string, observer SwapObserver) (*Vault, error) {
+	if !managedNetwork(network) || observer == nil {
+		return nil, ErrUnavailable
+	}
+	v, e := openVaultNetwork(dir, id, false, network)
+	if e != nil {
+		return nil, e
+	}
+	if e = v.ConfigureSwapObserver(observer); e != nil {
+		v.Close()
+		return nil, e
+	}
+	return v, nil
 }

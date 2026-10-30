@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	fasedapp "github.com/fased-ai/fased-app"
 	"github.com/fased-ai/fased-app/internal/signer"
@@ -34,7 +35,15 @@ func TestOnchainBrowserServer(t *testing.T) {
 	}
 	server.taskCancel()
 	<-server.taskDone
-	h := setupSwapHarness(t, server.Store)
+	var h *swapHarness
+	if os.Getenv("FASED_MANAGED_ONCHAIN_BROWSER") == "1" {
+		h = setupManagedSwapHarness(t, server.Store)
+		if e = h.vault.Unlock(h.password, 45*time.Second); e != nil {
+			t.Fatal(e)
+		}
+	} else {
+		h = setupSwapHarness(t, server.Store)
+	}
 	code, e := server.Store.IssueClaimCode(ctx)
 	if e != nil {
 		t.Fatal(e)

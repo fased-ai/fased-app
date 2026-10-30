@@ -88,6 +88,7 @@ type PublicInput struct {
 }
 
 type ledger struct {
+	managedFresh      bool
 	swaps             map[string]SwapReceipt
 	main, mock        *journal
 	ref               AccountRef
@@ -207,6 +208,14 @@ func (l *ledger) apply(r journalRecord) error {
 	if l.ref.Version == 2 {
 		expected := journalRecord{Version: r.Version, Sequence: r.Sequence, Previous: r.Previous, Hash: r.Hash, At: r.At, Kind: r.Kind}
 		switch r.Kind {
+		case "onchain-approve", "onchain-sign", "onchain-settled", "onchain-cancel":
+			if !l.managedFresh {
+				return errors.New("managed key recovery history is incomplete")
+			}
+			expected.Swap = r.Swap
+			expected.ID = r.ID
+			expected.Original = r.Original
+			expected.SwapObservation = r.SwapObservation
 		case "update-prepare":
 			if r.Update == nil || r.Update.Signer.Version != 2 || !r.Update.Signer.RecoveryHold {
 				return errors.New("managed maintenance intent required")
@@ -493,7 +502,7 @@ func (v *Vault) openLedger() error {
 // Thus a crash during first setup preserves the encrypted original and cannot
 // be mistaken for permission to reset an existing wallet's counters.
 func (s *storage) ensureInitialHistory(e envelope) error {
-	if e.Version == 2 {
+	if e.Version == 2 || e.Version == 3 {
 		return s.ensureManagedHistory(e)
 	}
 	_, _, err := s.readJournal("operations.log")

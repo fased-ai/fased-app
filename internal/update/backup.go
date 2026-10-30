@@ -59,5 +59,5 @@ func validHeldSignerShape(s SignerSnapshot) bool {
 	if s.Version == 1 {
 		return len(s.States) == 3
 	}
-	return s.Version == 2 && len(s.States) == 2 && s.States[0].Name == "vault" && s.States[0].Version == 2 && s.States[1].Name == "operations" && s.States[1].Version == 1 && s.RecoveryHold && s.Spent == 0 && s.Held == 0 && s.Pending == 0 && s.Unknown == 0
+	return validManagedSignerShape(s)
 }

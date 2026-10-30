@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 )
 
 func NewProbe() string {
@@ -74,7 +75,7 @@ type IntentRequest struct {
 func JoinSnapshots(c CoreSnapshot, s SignerSnapshot, target Target) (Inventory, error) {
 	snapshotOK := s.Version == 1 && len(s.States) == 3
 	if s.Version == 2 {
-		snapshotOK = len(s.States) == 2 && s.States[0].Name == "vault" && s.States[0].Version == 2 && s.States[1].Name == "operations" && s.States[1].Version == 1 && s.RecoveryHold && s.Spent == 0 && s.Held == 0 && s.Pending == 0 && s.Unknown == 0 && s.InstalledSequence <= s.SequenceFloor
+		snapshotOK = validManagedSignerShape(s) && s.InstalledSequence <= s.SequenceFloor
 	}
 	if c.Version != 1 || !snapshotOK || !IDOK(c.ProbeID) || c.ProbeID != s.ProbeID || !IDOK(c.BootID) || !IDOK(s.BootID) || !tokenOK(c.InstanceID) || !hashOK(s.AuthoritySHA256) || c.State.Name != "core-db" || s.ActiveIntentID != "" && !IDOK(s.ActiveIntentID) {
 		return Inventory{}, errors.New("invalid service snapshot identity")
@@ -103,4 +104,24 @@ func ValidateIntent(i Intent) error {
 		return errors.New("invalid intent state")
 	}
 	return nil
+}
+
+// Inventory preserves typed swap holds. Compatibility still refuses pending or
+// unknown operations before any update; legacy key-only shapes remain exact.
+func validManagedSignerShape(s SignerSnapshot) bool {
+	if s.Version != 2 || len(s.States) != 2 || s.States[0].Name != "vault" || s.States[1].Name != "operations" || s.States[1].Version != 1 || !s.RecoveryHold || s.Spent != 0 || s.Held != 0 {
+		return false
+	}
+	typed := slices.Contains(s.States[1].Features, "managed-swap-fixture-v1")
+	if s.States[0].Version == 3 {
+		if !typed || !slices.Contains(s.States[0].Features, "managed-fresh-history-v1") {
+			return false
+		}
+	} else if s.States[0].Version != 2 {
+		return false
+	}
+	if !typed {
+		return s.Pending == 0 && s.Unknown == 0
+	}
+	return s.Pending >= 0 && s.Pending <= 64 && s.Unknown >= 0 && s.Unknown <= s.Pending
 }

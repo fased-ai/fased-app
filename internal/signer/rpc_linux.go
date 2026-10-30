@@ -189,7 +189,19 @@ func CheckApplication(config, root, data string) error {
 }
 
 func Serve(ctx context.Context, c Config) (*Server, error) { return serveMode(ctx, c, false) }
+
+// ServeControlledSwapFixture preserves installed identity and kernel peer checks.
+// Only compiled fixture callers supply this dependency; ordinary Serve is closed.
+func ServeControlledSwapFixture(ctx context.Context, c Config, observer SwapObserver) (*Server, error) {
+	if c.Version != 2 || observer == nil {
+		return nil, ErrUnavailable
+	}
+	return serveConfigured(ctx, c, false, observer)
+}
 func serveMode(ctx context.Context, c Config, guarded bool) (*Server, error) {
+	return serveConfigured(ctx, c, guarded, nil)
+}
+func serveConfigured(ctx context.Context, c Config, guarded bool, observer SwapObserver) (*Server, error) {
 	if _, e := os.Lstat(filepath.Dir(c.StateDir) + "/fixture-inspection-v1/forward.json"); !os.IsNotExist(e) && !guarded {
 		return nil, errors.New("guarded fixture startup required before state access")
 	}
@@ -217,6 +229,12 @@ func serveMode(ctx context.Context, c Config, guarded bool) (*Server, error) {
 	v, err := openVaultNetwork(c.StateDir, c.SignerID, false, c.Network)
 	if err != nil {
 		return nil, err
+	}
+	if observer != nil {
+		if err = v.ConfigureSwapObserver(observer); err != nil {
+			v.Close()
+			return nil, err
+		}
 	}
 	return serveListeners(ctx, c, v)
 }
