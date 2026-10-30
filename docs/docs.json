@@ -1,0 +1,91 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "Fased",
+  "description": "The Go application for trading research, reviewed automation and the planned Fased Network.",
+  "theme": "mint",
+  "modeToggle": {
+    "default": "dark"
+  },
+  "icons": {
+    "library": "lucide"
+  },
+  "logo": {
+    "light": "/assets/fased-mark-color.svg",
+    "dark": "/assets/fased-mark-color.svg"
+  },
+  "fonts": {
+    "body": {
+      "family": "Fragment Mono"
+    },
+    "heading": {
+      "family": "DM Sans"
+    }
+  },
+  "favicon": "/assets/fased-mark-color.svg",
+  "colors": {
+    "primary": "#FF5A36",
+    "dark": "#FF5A36",
+    "light": "#FF8A6B"
+  },
+  "styling": {
+    "codeblocks": {
+      "theme": {
+        "dark": "min-dark",
+        "light": "min-light"
+      }
+    }
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "Fased Agent",
+        "href": "https://fased.ai"
+      },
+      {
+        "label": "GitHub",
+        "href": "https://github.com/fased-ai/fased-app"
+      }
+    ]
+  },
+  "redirects": [
+    {
+      "source": "/getting-started",
+      "destination": "/guide/install"
+    },
+    {
+      "source": "/network",
+      "destination": "/guide/network"
+    }
+  ],
+  "navigation": {
+    "groups": [
+      {
+        "group": "Start",
+        "pages": ["index", "guide/install", "reference/status"]
+      },
+      {
+        "group": "Use Fased",
+        "pages": [
+          "guide/providers",
+          "guide/agents",
+          "guide/chat",
+          "guide/tasks",
+          "guide/news",
+          "guide/memory"
+        ]
+      },
+      {
+        "group": "Trading",
+        "pages": ["guide/wallets", "guide/trading", "wen/automation"]
+      },
+      {
+        "group": "Network roadmap",
+        "pages": ["guide/network", "guide/network-roadmap"]
+      },
+      {
+        "group": "Manage",
+        "pages": ["guide/settings"]
+      }
+    ]
+  }
+}

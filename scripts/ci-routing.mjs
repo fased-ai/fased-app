@@ -21,7 +21,11 @@ export function classify(paths) {
   if (!paths.length) return full();
   for (const file of paths) {
     if (!file || file.includes("\n") || file.includes("\r")) return full();
-    if (/^(README\.md|AGENTS\.md|LICENSE|NOTICE|docs\/.*\.md)$/.test(file))
+    if (
+      /^(README\.md|AGENTS\.md|LICENSE|NOTICE|docs\/.*\.mdx?)$/.test(file) ||
+      /^(docs\/docs\.json|docs\/\.mintignore)$/.test(file) ||
+      /^docs\/assets\/[\w./-]+\.(svg|png|jpe?g|webp|ico|txt)$/.test(file)
+    )
       continue;
     if (
       /^internal\/core\/(rpc_check|rpc_public|rpc_authenticated)(_test)?\.go$/.test(

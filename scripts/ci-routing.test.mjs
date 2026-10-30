@@ -291,3 +291,28 @@ test("full UI journey uses the existing Linux job while focused paths retain cor
     assert.equal(plan.desktop, false);
   }
 });
+
+test("Mintlify configuration and static assets are docs, executable or mixed paths stay conservative", () => {
+  const docs = [
+    "docs/docs.json",
+    "docs/.mintignore",
+    "docs/guide/chat.mdx",
+    "docs/assets/logo.svg",
+    "docs/assets/screenshot.png",
+    "docs/assets/fased-branding-license.txt",
+  ];
+  assert.equal(classify(docs).scope, "none");
+  for (const lane of lanes) assert.equal(classify(docs)[lane], false);
+  for (const other of [
+    "docs/custom.js",
+    "docs/assets/script.js",
+    "docs/hooks.ts",
+    "scripts/check-docs.mjs",
+    "scripts/ci-routing.mjs",
+    "internal/core/server.go",
+  ]) {
+    const plan = classify([...docs, other]);
+    assert.equal(plan.scope, "full");
+    for (const lane of lanes) assert.equal(plan[lane], true);
+  }
+});
