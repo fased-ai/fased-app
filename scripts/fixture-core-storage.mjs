@@ -153,7 +153,7 @@ func ValidManagedAccountRef(r AccountRef) bool {
   await amend("policy.go", [
     [
       "type ledger struct {",
-      "type ledger struct {\n swaps map[string]SwapReceipt",
+      "type ledger struct {\n managedFresh bool\n swaps map[string]SwapReceipt",
     ],
     ["return &ledger{", "return &ledger{swaps:map[string]SwapReceipt{},"],
     ["next := *l", "next := *l\n next.swaps=clone(l.swaps)"],
@@ -185,6 +185,16 @@ func ValidManagedAccountRef(r AccountRef) bool {
   ]);
 
   for (const [file, marker, field] of [
+    [
+      "internal/signer/vault.go",
+      "type Status struct {",
+      'SwapReady bool `json:"swapReady,omitempty"`',
+    ],
+    [
+      "internal/signer/rpc.go",
+      "type Config struct {",
+      'Network string `json:"network,omitempty"`',
+    ],
     [
       "internal/signer/rpc.go",
       "type Response struct {",
@@ -319,11 +329,11 @@ func ValidManagedAccountRef(r AccountRef) bool {
       .replace('"sync"', '"sync"\n"sync/atomic"')
       .replace(
         "type Store struct {",
-        "type Store struct {\n\tonchain *onchainRuntime\n\tproviderFixture bool\n\tchatEpoch atomic.Uint64\n\tprogressMu sync.Mutex\n\taiProgress map[string]string\n\tsessionFixture bool\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState\n\tpilot openAIPilotState\n\tresearchRead func(context.Context, researchFactResult) (json.RawMessage, error)",
+        "type Store struct {\n\tcustodyNetwork string\n\tonchain *onchainRuntime\n\tproviderFixture bool\n\tchatEpoch atomic.Uint64\n\tprogressMu sync.Mutex\n\taiProgress map[string]string\n\tsessionFixture bool\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState\n\tpilot openAIPilotState\n\tresearchRead func(context.Context, researchFactResult) (json.RawMessage, error)",
       )
       .replace(
         marker,
-        "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }; if schema <= 6 { if err = migrateAIConnections(ctx, db); err != nil { return nil, err } }; if schema <= 7 { if err = migrateAgentNews(ctx, db); err != nil { return nil, err } }; if schema <= 8 { if err = migrateAIAdmission(ctx, db); err != nil { return nil, err } }; if schema <= 9 { if err = migrateWENPaper(ctx, db); err != nil { return nil, err } }; if schema <= 10 { if err = migrateWENResearch(ctx, db); err != nil { return nil, err } }; if schema <= 11 { if err = migrateWENResearchAI(ctx, db); err != nil { return nil, err } }; if schema <= 12 { if err = migrateWENResearchLoop(ctx, db); err != nil { return nil, err } }; if schema <= 13 { if err = migrateWENSessions(ctx, db); err != nil { return nil, err } }; if schema <= 14 { if err = migrateWENFixtureRuns(ctx, db); err != nil { return nil, err } }; if schema <= 15 { if err = migratePlaybooks(ctx, db); err != nil { return nil, err } }; if schema <= 16 { if err = migrateTaskCalendar(ctx, db); err != nil { return nil, err } }; if schema <= 17 { if err = migrateTaskCron(ctx, db); err != nil { return nil, err } }; if schema <= 18 { if err = migrateAgentChat(ctx, db); err != nil { return nil, err } }; if schema <= 19 { if err = migrateAccountRPC(ctx, db); err != nil { return nil, err } }; if schema <= 20 { if err = migrateProviderRPC(ctx, db); err != nil { return nil, err } }; if schema <= 21 { if err = migrateManagedKeys(ctx, db); err != nil { return nil, err } }; if schema <= 22 { if err = migrateProviderAccounts(ctx, db, dir); err != nil { return nil, err } }; if schema <= 23 { if err = migrateProviderModels(ctx, db); err != nil { return nil, err } }; if schema <= 24 { if err = migrateNativeProviders(ctx, db); err != nil { return nil, err } }; if schema <= 25 { if err = migrateSignInPlan(ctx, db); err != nil { return nil, err } }; if schema <= 26 { if err = migrateLocalProviders(ctx, db); err != nil { return nil, err } }; if schema <= 27 { if err = migrateNewsWatch(ctx, db); err != nil { return nil, err } }; if schema <= 28 { if err = migrateTaskAnalysis(ctx, db); err != nil { return nil, err } }; if schema <= 29 { if err = migrateStrategies(ctx, db); err != nil { return nil, err } }; if schema <= 30 { if err = migrateOnchain(ctx, db); err != nil { return nil, err } }\n" +
+        "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }; if schema <= 6 { if err = migrateAIConnections(ctx, db); err != nil { return nil, err } }; if schema <= 7 { if err = migrateAgentNews(ctx, db); err != nil { return nil, err } }; if schema <= 8 { if err = migrateAIAdmission(ctx, db); err != nil { return nil, err } }; if schema <= 9 { if err = migrateWENPaper(ctx, db); err != nil { return nil, err } }; if schema <= 10 { if err = migrateWENResearch(ctx, db); err != nil { return nil, err } }; if schema <= 11 { if err = migrateWENResearchAI(ctx, db); err != nil { return nil, err } }; if schema <= 12 { if err = migrateWENResearchLoop(ctx, db); err != nil { return nil, err } }; if schema <= 13 { if err = migrateWENSessions(ctx, db); err != nil { return nil, err } }; if schema <= 14 { if err = migrateWENFixtureRuns(ctx, db); err != nil { return nil, err } }; if schema <= 15 { if err = migratePlaybooks(ctx, db); err != nil { return nil, err } }; if schema <= 16 { if err = migrateTaskCalendar(ctx, db); err != nil { return nil, err } }; if schema <= 17 { if err = migrateTaskCron(ctx, db); err != nil { return nil, err } }; if schema <= 18 { if err = migrateAgentChat(ctx, db); err != nil { return nil, err } }; if schema <= 19 { if err = migrateAccountRPC(ctx, db); err != nil { return nil, err } }; if schema <= 20 { if err = migrateProviderRPC(ctx, db); err != nil { return nil, err } }; if schema <= 21 { if err = migrateManagedKeys(ctx, db); err != nil { return nil, err } }; if schema <= 22 { if err = migrateProviderAccounts(ctx, db, dir); err != nil { return nil, err } }; if schema <= 23 { if err = migrateProviderModels(ctx, db); err != nil { return nil, err } }; if schema <= 24 { if err = migrateNativeProviders(ctx, db); err != nil { return nil, err } }; if schema <= 25 { if err = migrateSignInPlan(ctx, db); err != nil { return nil, err } }; if schema <= 26 { if err = migrateLocalProviders(ctx, db); err != nil { return nil, err } }; if schema <= 27 { if err = migrateNewsWatch(ctx, db); err != nil { return nil, err } }; if schema <= 28 { if err = migrateTaskAnalysis(ctx, db); err != nil { return nil, err } }; if schema <= 29 { if err = migrateStrategies(ctx, db); err != nil { return nil, err } }; if schema <= 30 { if err = migrateOnchain(ctx, db); err != nil { return nil, err } }; if schema <= 31 { if err = migrateManagedSwaps(ctx, db); err != nil { return nil, err } }\n" +
           marker,
       ),
   );

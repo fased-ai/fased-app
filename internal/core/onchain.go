@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"os"
 	"strings"
 	"sync"
 
@@ -238,8 +239,16 @@ func (s *Store) changeOnchain(ctx context.Context, c AgentCommand) (OnchainView,
 			return OnchainView{}, e
 		}
 		status, e := s.swapSigner(ctx, signer.Request{Action: "status"})
-		if e != nil || status.Status.Account == nil || status.Status.Account.Version != 1 || status.Status.Account.PublicKey != a.PublicKey || status.Status.RecoveryRequired {
-			return OnchainView{}, errors.New("separately approved disposable signer required; managed recovery holds remain closed")
+		if e != nil || status.Status.Account == nil || status.Status.Account.PublicKey != a.PublicKey || status.Status.UpdateHeld {
+			return OnchainView{}, errors.New("protected wallet unavailable")
+		}
+		ref := *status.Status.Account
+		if ref.Version == 2 {
+			if !status.Status.SwapReady || !managedNetworkAccount(a) || a.Signer == nil || *a.Signer != ref || a.Network != ref.Network {
+				return OnchainView{}, errors.New("protected swap history unavailable")
+			}
+		} else if ref.Version != 1 || status.Status.RecoveryRequired {
+			return OnchainView{}, errors.New("wallet recovery required")
 		}
 		key, _ := hex.DecodeString(a.PublicKey)
 		input := c.Swap.Request
@@ -594,7 +603,7 @@ func validateOnchainStorage(d agentDocument) error {
 		}
 		p := t.Swap
 		q := p.Proposal.Quote
-		if p.Version != swapTaskVersion || p.Digest != swapPolicyDigest(*p) || p.Proposal.Digest != signer.SwapProposalDigest(p.Proposal) || !p.Proposal.FixtureOnly || onchain.ValidateQuote(q, 0) != nil || q.ProfileID != t.ProfileID || t.ID != swapPrefix+q.ID || t.MaxRuns != 1 || t.Runs != 1 || t.NextAt != 0 || t.AI != nil || t.News != nil || t.Calendar != nil || t.Watch != nil || t.WEN != nil || t.StrategyPlan != nil || t.BotID != "" || t.Playbook != nil || (t.State != "held" && t.State != "completed" && t.State != "paused") {
+		if p.Version != swapTaskVersion || signer.ValidateSwapHistory(p.Proposal) != nil || p.Digest != swapPolicyDigest(*p) || p.Proposal.Digest != signer.SwapProposalDigest(p.Proposal) || !p.Proposal.FixtureOnly || onchain.ValidateQuote(q, 0) != nil || q.ProfileID != t.ProfileID || t.ID != swapPrefix+q.ID || t.MaxRuns != 1 || t.Runs != 1 || t.NextAt != 0 || t.AI != nil || t.News != nil || t.Calendar != nil || t.Watch != nil || t.WEN != nil || t.StrategyPlan != nil || t.BotID != "" || t.Playbook != nil || (t.State != "held" && t.State != "completed" && t.State != "paused") {
 			return errors.New("swap task binding changed")
 		}
 		if _, ok := tasks[t.ID]; ok {
@@ -790,4 +799,21 @@ func validSwapTransition(a, b string) bool {
 		return b == "unknown" || b == "confirmed" || b == "failed"
 	}
 	return false
+}
+
+// configureInstalledSwapFixture attaches the existing core to the immutable
+// installed signer identity. Only trusted compiled fixture constructors call it;
+// ordinary startup has no venue, endpoint override, or financial dispatch.
+func (s *Store) configureInstalledSwapFixture(path string, venue func(Account) (swapVenue, error)) error {
+	c, e := signer.LoadConfig(path)
+	if e != nil {
+		return e
+	}
+	if c.Version != 2 || c.Network != s.custodyNetwork || os.Getuid() != c.AppUID || os.Geteuid() != c.AppUID || venue == nil {
+		return errors.New("installed wallet identity required")
+	}
+	s.onchain = &onchainRuntime{venue: venue, quotes: map[string]swapEntry{}, signer: func(ctx context.Context, r signer.Request) (signer.Response, error) {
+		return signer.Call(ctx, c, false, r)
+	}}
+	return nil
 }

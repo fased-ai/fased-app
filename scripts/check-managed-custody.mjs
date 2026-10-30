@@ -182,6 +182,230 @@ const secretStatus = () =>
       { encoding: "utf8", timeout: 10000 },
     ),
   );
+// Reuse this disposable installation and its three OS identities. Only compiled
+// test code constructs the inert observer; ordinary services remain closed.
+async function installedSwapJourney() {
+  const driver = root + "/onchain-fixture.test";
+  assert.equal(await exists(driver), false);
+  osTool("/usr/bin/install", [
+    "-o",
+    "root",
+    "-g",
+    "root",
+    "-m",
+    "0555",
+    resolve(".evidence/bin/wallet-core.test"),
+    driver,
+  ]);
+  const children = [];
+  const start = (identity, role) => {
+    const child = spawn(
+      "/usr/bin/sudo",
+      [
+        "-n",
+        "/usr/bin/setpriv",
+        "--reuid",
+        String(identity.uid),
+        "--regid",
+        String(identity.gid),
+        "--clear-groups",
+        "--no-new-privs",
+        "--inh-caps=-all",
+        "--ambient-caps=-all",
+        "--bounding-set=-all",
+        "--",
+        "/usr/bin/env",
+        "GITHUB_ACTIONS=true",
+        "FASED_INSTALLED_ONCHAIN_ROOT=" + root,
+        "FASED_INSTALLED_ONCHAIN_ROLE=" + role,
+        driver,
+        "-test.run=^TestOnchainInstalledAdapterDriver$",
+      ],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+    const item = {
+      child,
+      identity,
+      log: "",
+      events: [],
+      done: null,
+      closed: false,
+    };
+    child.stdin.on("error", (error) => {
+      item.log += "\nfixture stdin: " + error.code;
+    });
+    child.on("error", (error) => {
+      item.log += "\nfixture spawn: " + error.message;
+    });
+    item.done = new Promise((resolve) =>
+      child.once("close", (code) => {
+        item.closed = true;
+        resolve(code);
+      }),
+    );
+    let pending = "";
+    child.stdout.on("data", (b) => {
+      item.log += b;
+      pending += b;
+      const lines = pending.split("\n");
+      pending = lines.pop();
+      for (const line of lines) {
+        try {
+          item.events.push(JSON.parse(line));
+        } catch {}
+      }
+    });
+    child.stderr.on("data", (b) => {
+      item.log += b;
+    });
+    children.push(item);
+    return item;
+  };
+  const event = async (item, name) => {
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      const found = item.events.find((x) => x.event === name);
+      if (found) return found;
+      if (item.closed) throw new Error("installed fixture exited: " + item.log);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw new Error("installed fixture missing " + name + ": " + item.log);
+  };
+  const original = secretStatus().account;
+  try {
+    osTool("/usr/bin/systemctl", ["stop", ...units]);
+    const daemon = start(manifest.signer, "signer");
+    check(
+      "network:swapSignerUID",
+      (await event(daemon, "ready")).uid === manifest.signer.uid,
+    );
+    const app = start(manifest.app, "app");
+    const proposal = await event(app, "proposal");
+    check("network:swapAppUID", proposal.uid === manifest.app.uid);
+    const file = resolve(evidence, "installed-swap-proposal.json");
+    await writeFile(file, JSON.stringify(proposal.proposal), {
+      mode: 0o600,
+      flag: "wx",
+    });
+    // A valid owner proposal cannot be approved through the application channel.
+    check(
+      "network:swapAppCannotApprove",
+      fails(() =>
+        fixtureApp(manifest.app, "swap-approve", { swap: proposal.proposal }),
+      ),
+    );
+    const approval = execFileSync(
+      root + "/fased-signer",
+      [
+        "approve-swap",
+        "--config",
+        root + "/identity.json",
+        "--disposable-fixture",
+        "--file",
+        file,
+        "--approval-stdin",
+        "--password-stdin",
+      ],
+      {
+        input: "APPROVE " + proposal.proposal.digest + "\n" + unlock + "\n",
+        encoding: "utf8",
+        timeout: 15000,
+      },
+    );
+    check(
+      "network:swapOwnerExactApproval",
+      JSON.parse(approval).swap.proposal.digest === proposal.proposal.digest,
+    );
+    app.child.stdin.end("approved\n");
+    const result = await event(app, "result");
+    check(
+      "network:swapSingleResult",
+      result.uid === manifest.app.uid &&
+        result.submissions === 1 &&
+        result.run.swap.state === "confirmed" &&
+        result.liveExecution === false,
+    );
+    check("network:swapAppCleanExit", (await app.done) === 0);
+    const inventory = fixtureOwner("fixture-update-inventory").updateInventory;
+    check(
+      "network:swapRecoveryHoldPreserved",
+      secretStatus().recoveryRequired &&
+        inventory.recoveryHold &&
+        inventory.pending === 0 &&
+        inventory.unknown === 0,
+    );
+    await writeFile(
+      resolve(evidence, "installed-swap-result.json"),
+      JSON.stringify(
+        {
+          class:
+            "disposable installed UID/socket and owner approval with inert test-only oracle; no real RPC acceptance",
+          result,
+        },
+        null,
+        2,
+      ),
+      { mode: 0o600 },
+    );
+  } finally {
+    for (const item of children) {
+      if (!item.closed) {
+        if (!item.child.stdin.writableEnded && !item.child.stdin.destroyed)
+          item.child.stdin.end("stop\n");
+        await Promise.race([
+          item.done,
+          new Promise((r) => setTimeout(r, 2000)),
+        ]);
+        if (!item.closed) {
+          // Signal only our exact fixture executable under its own reserved UID.
+          // This reaches the role process, not merely the sudo monitor.
+          const pattern = "^" + driver.replaceAll(".", "[.]") + "( |$)";
+          try {
+            as(item.identity, "/usr/bin/pkill", [
+              "-KILL",
+              "-u",
+              String(item.identity.uid),
+              "-f",
+              pattern,
+            ]);
+          } catch (error) {
+            if (error.status !== 1) throw error;
+          }
+          await Promise.race([
+            item.done,
+            new Promise((r) => setTimeout(r, 2000)),
+          ]);
+          let remaining;
+          try {
+            remaining = osTool("/usr/bin/pgrep", [
+              "-u",
+              String(item.identity.uid),
+              "-f",
+              pattern,
+            ]);
+          } catch (error) {
+            if (error.status !== 1) throw error;
+          }
+          assert.ok(
+            !remaining,
+            "fixture role still running; preserve state before service recovery",
+          );
+          assert.ok(item.closed, "fixture monitor did not reap the role");
+        }
+      }
+      log += "\n" + item.log;
+    }
+    osTool("/usr/bin/rm", ["--", driver]);
+    osTool("/usr/bin/systemctl", ["start", ...units]);
+  }
+  const restored = await readySigner();
+  check(
+    "network:swapOrdinaryStartupClosed",
+    !restored.swapReady &&
+      JSON.stringify(restored.account) === JSON.stringify(original),
+  );
+}
+
 async function readySigner() {
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
@@ -506,8 +730,9 @@ try {
       firstInventory.version === 2 &&
         firstInventory.recoveryHold &&
         firstInventory.states.length === 2 &&
-        firstInventory.states[0].version === 2,
+        firstInventory.states[0].version === 3,
     );
+    await installedSwapJourney();
     check(
       "network:noUpdateAuthority",
       fails(() => fixtureOwner("fixture-update-prepare")),

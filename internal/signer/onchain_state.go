@@ -7,7 +7,7 @@ import (
 )
 
 // SwapProposal is one exact reviewed order, not an arbitrary signing request or
-// reusable grant. This development namespace cannot unlock managed-v2 keys.
+// reusable grant. Managed keys require a separate provenance-bound fixture capability.
 type SwapProposal struct {
 	Version     string        `json:"version"`
 	Account     AccountRef    `json:"account"`
@@ -23,19 +23,26 @@ type SwapReceipt struct {
 	Observation *onchain.Observation `json:"observation,omitempty"`
 }
 
+const ManagedSwapVersion = "managed-onchain-swap-fixture-v1"
+
 func SwapProposalDigest(p SwapProposal) string { p.Digest = ""; return onchain.Hash(p) }
 func NewSwapProposal(ref AccountRef, q onchain.Quote) SwapProposal {
 	p := SwapProposal{Version: onchain.Version, Account: ref, Quote: q, FixtureOnly: true}
+	if ref.Version == 2 {
+		p.Version = ManagedSwapVersion
+	}
 	p.Digest = SwapProposalDigest(p)
 	return p
 }
 func validateSwapProposal(p SwapProposal, now int64) error {
 	public, e := hex.DecodeString(p.Account.PublicKey)
-	if e != nil || !validRef(p.Account) || !p.FixtureOnly || p.Version != onchain.Version || p.Digest != SwapProposalDigest(p) || onchain.Base58(public) != p.Quote.Owner || p.Quote.Blockhash != onchain.ControlledBlockhash {
+	if e != nil || !validSwapRef(p.Account, p.Quote.Network, p.Version) || !p.FixtureOnly || p.Digest != SwapProposalDigest(p) || onchain.Base58(public) != p.Quote.Owner || p.Quote.Blockhash != onchain.ControlledBlockhash {
 		return errors.New("controlled, exact-wallet swap approval required")
 	}
 	return onchain.ValidateQuote(p.Quote, now)
 }
+
+func ValidateSwapHistory(p SwapProposal) error { return validateSwapProposal(p, p.Quote.CreatedAt) }
 
 func (l *ledger) applySwap(r journalRecord) error {
 	expected := journalRecord{Version: r.Version, Sequence: r.Sequence, Previous: r.Previous, Hash: r.Hash, At: r.At, Kind: r.Kind, ID: r.ID}
@@ -123,4 +130,12 @@ func (l *ledger) swapPending(now int64) (pending, unknown int) {
 		}
 	}
 	return
+}
+
+func validSwapRef(r AccountRef, network, version string) bool {
+	if r.Version == 1 {
+		return validRef(r) && version == onchain.Version
+	}
+	b, e := hex.DecodeString(r.PublicKey)
+	return r.Version == 2 && version == ManagedSwapVersion && (network == "devnet" || network == "mainnet-beta") && r.Network == network && validID(r.SignerID) && validID(r.WalletID) && validID(r.Epoch) && e == nil && len(b) == 32 && hex.EncodeToString(b) == r.PublicKey
 }

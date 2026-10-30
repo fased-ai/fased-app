@@ -17,6 +17,7 @@ type journal struct {
 }
 
 type journalRecord struct {
+	FreshManaged    bool                 `json:"freshManaged,omitempty"`
 	Swap            *SwapProposal        `json:"swap,omitempty"`
 	SwapObservation *onchain.Observation `json:"swapObservation,omitempty"`
 	Installation    *update.Installation `json:"installation,omitempty"`

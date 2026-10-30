@@ -43,6 +43,7 @@ type AccountRef struct {
 }
 
 type envelope struct {
+	FreshManaged     bool       `json:"freshManaged,omitempty"`
 	Version          int        `json:"version"`
 	Purpose          string     `json:"purpose"`
 	KDF              string     `json:"kdf"`
@@ -54,6 +55,7 @@ type envelope struct {
 }
 
 type Status struct {
+	SwapReady          bool        `json:"swapReady,omitempty"`
 	UpdateHeld         bool        `json:"updateHeld"`
 	FixtureOnly        bool        `json:"fixtureOnly"`
 	WalletSigner       bool        `json:"walletSigner"`
@@ -131,12 +133,19 @@ func validID(s string) bool {
 }
 
 func seal(seed, password []byte, ref AccountRef, purpose string, recovery bool) (envelope, error) {
+	return sealOrigin(seed, password, ref, purpose, recovery, false)
+}
+func sealOrigin(seed, password []byte, ref AccountRef, purpose string, recovery, fresh bool) (envelope, error) {
 	if !validPassword(password) {
 		return envelope{}, errors.New("use 12 or more characters, at most 1024 bytes")
 	}
 	e := envelope{Version: VaultFormat, Purpose: purpose, KDF: "argon2id-m65536-t3-p2-aes256gcm-v1", Ref: ref, RecoveryRequired: recovery, Salt: randomBytes(16), Nonce: randomBytes(12)}
 	if ref.Version == 2 {
 		e.Version = 2
+		if fresh && purpose == "vault" {
+			e.Version = 3
+			e.FreshManaged = true
+		}
 	}
 	key := argon2.IDKey(password, e.Salt, 3, 64*1024, 2, 32)
 	defer wipe(key)
@@ -265,7 +274,7 @@ func (v *Vault) unlocked() bool {
 func (v *Vault) Status() Status {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	s := Status{FixtureOnly: true, Locked: !v.unlocked(), UnlockUntil: v.until, UpdateHeld: v.store.failedState() || v.ledger != nil && v.ledger.activeUpdate != ""}
+	s := Status{SwapReady: v.managedSwapEligible(), FixtureOnly: true, Locked: !v.unlocked(), UnlockUntil: v.until, UpdateHeld: v.store.failedState() || v.ledger != nil && v.ledger.activeUpdate != ""}
 	if v.record != nil {
 		ref := v.record.Ref
 		s.Account = &ref
@@ -320,12 +329,13 @@ func (v *Vault) createSeed(seed, password []byte, recovery bool) error {
 	private := ed25519.NewKeyFromSeed(seed)
 	defer wipe(private)
 	ref := AccountRef{Version: 1, SignerID: v.signerID, WalletID: randomID(), Epoch: randomID(), Network: FixtureNetwork, PublicKey: hex.EncodeToString(private[ed25519.SeedSize:])}
+	fresh := v.network != "" && !recovery
 	if v.network != "" {
 		ref.Version = 2
 		ref.Network = v.network
 		recovery = true
 	}
-	e, err := seal(seed, password, ref, "vault", recovery)
+	e, err := sealOrigin(seed, password, ref, "vault", recovery, fresh)
 	if err != nil {
 		return err
 	}

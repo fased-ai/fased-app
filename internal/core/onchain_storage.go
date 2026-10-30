@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -99,4 +100,43 @@ func (s *Store) controlSwapTask(ctx context.Context, c AgentCommand) (AgentView,
 		return AgentView{}, e
 	}
 	return s.Agents(ctx, c.ProfileID, "")
+}
+
+// Format-only migration: preserve the original document and revision, while
+// preventing an older binary from interpreting managed swap authority.
+func migrateManagedSwaps(ctx context.Context, db *sql.DB) error {
+	tx, e := db.BeginTx(ctx, nil)
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	var phase, raw string
+	if e = tx.QueryRowContext(ctx, "SELECT phase FROM update_pause WHERE id=1").Scan(&phase); e != nil {
+		return e
+	}
+	if phase == "paused" {
+		return ErrCorePaused
+	}
+	if e = tx.QueryRowContext(ctx, "SELECT document FROM agent_workspace WHERE id=1").Scan(&raw); e != nil {
+		return e
+	}
+	if e = onchainFields([]byte(raw), false); e != nil {
+		return e
+	}
+	var d agentDocument
+	if e = json.Unmarshal([]byte(raw), &d); e != nil {
+		return e
+	}
+	for _, t := range d.Tasks {
+		if t.Swap != nil && t.Swap.Proposal.Account.Version == 2 {
+			return errors.New("unprotected managed swap policy")
+		}
+	}
+	if e = validateOnchainStorage(d); e != nil {
+		return e
+	}
+	if _, e = tx.ExecContext(ctx, "PRAGMA user_version=32"); e != nil {
+		return e
+	}
+	return tx.Commit()
 }
