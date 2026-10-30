@@ -220,3 +220,73 @@ func TestProtectedManagedSwapApprovalUsesScopedCapability(t *testing.T) {
 		t.Fatal("trusted review incomplete")
 	}
 }
+
+func TestProtectedCredentialSwapApprovalRenewsIndependentReader(t *testing.T) {
+	dir := t.TempDir()
+	if e := os.Chmod(dir, 0700); e != nil {
+		t.Fatal(e)
+	}
+	chain := &onchaintest.Chain{}
+	client := onchaintest.Client(chain)
+	v, e := signer.OpenManagedSwapCredentialsFixture(dir, strings.Repeat("e", 32), "mainnet-beta", func(onchain.CredentialAccess) (signer.SwapObserver, error) { return client, nil })
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer v.Close()
+	if e = v.Create(flowUnlock); e != nil {
+		t.Fatal(e)
+	}
+	binding, e := v.ProvisionReceiptRPC("https://mainnet.helius-rpc.com", []byte(strings.Repeat("x", 32)), flowUnlock)
+	if e != nil {
+		t.Fatal(e)
+	}
+	ref := *v.Status().Account
+	pub, _ := hex.DecodeString(ref.PublicKey)
+	now := time.Now().Unix()
+	q, e := client.Prepare(t.Context(), onchain.Quote{Version: onchain.Version, ID: strings.Repeat("1", 32), ProfileID: "trading-analyst", InstanceID: strings.Repeat("2", 32), AccountID: strings.Repeat("3", 32), Network: ref.Network, Owner: onchain.Base58(pub), RPCSHA256: strings.Repeat("4", 64), InputMint: onchain.USDC, OutputMint: onchain.SOL, Amount: "12500000", SlippageBPS: 50, MaxFeeLamports: 5000, CreatedAt: now, ExpiresAt: now + 45})
+	if e != nil {
+		t.Fatal(e)
+	}
+	p := signer.NewCredentialSwapProposal(ref, q, signer.ReceiptRPCBinding{Version: 1, Ref: binding.Ref, Origin: binding.Origin})
+	var actions []string
+	call := func(ctx context.Context, r signer.Request) (signer.Response, error) {
+		actions = append(actions, r.Action)
+		switch r.Action {
+		case "status":
+			return signer.Response{Status: v.Status()}, nil
+		case "unlock":
+			e := v.Unlock(r.Password, time.Duration(r.UnlockSeconds)*time.Second)
+			return signer.Response{Status: v.Status()}, e
+		case "receipt-rpc-unlock":
+			_, e := v.UnlockReceiptRPC(r.Password, time.Duration(r.UnlockSeconds)*time.Second)
+			return signer.Response{Status: v.Status()}, e
+		case "swap-approve":
+			x, e := v.ApproveSwap(*r.Swap)
+			return signer.Response{Swap: x, Status: v.Status()}, e
+		case "lock":
+			v.Lock()
+			return signer.Response{Status: v.Status()}, nil
+		}
+		return signer.Response{}, errors.New("unexpected operation")
+	}
+	var review, out bytes.Buffer
+	ask := func(string, bool) ([]byte, error) { return bytes.Clone(flowUnlock), nil }
+	if e = conductSwapApproval(t.Context(), p, ask, func(challenge string) error {
+		if challenge != "APPROVE "+p.Digest {
+			return errors.New("wrong challenge")
+		}
+		return nil
+	}, &review, &out, call); e != nil {
+		t.Fatal(e)
+	}
+	if strings.Join(actions, ",") != "status,unlock,receipt-rpc-unlock,swap-approve" {
+		t.Fatal("owner sequence", actions)
+	}
+	if _, e = v.SignSwap(q.ID); e != nil {
+		t.Fatal(e)
+	}
+	status := v.Status()
+	if status.ReceiptRPC == nil || status.ReceiptRPC.Locked || status.ReceiptRPC.UnlockUntil.Unix() > q.ExpiresAt || !status.RecoveryRequired {
+		t.Fatal(status)
+	}
+}

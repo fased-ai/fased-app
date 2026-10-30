@@ -1,3 +1,5 @@
+import { Copy } from "../icons";
+import { VenueCredential } from "./VenueCredential";
 import { RPCCredential } from "./RPCCredential";
 import { useState, useRef, useEffect } from "react";
 import { useCore } from "../core";
@@ -153,6 +155,38 @@ export function RPCCheck({
           revision={revision}
           configured={!!account.rpc}
         />
+        {account.version === 3 && (
+          <VenueCredential accountId={account.id} revision={revision} />
+        )}
+        {account.version === 3 &&
+          [
+            "https://mainnet.helius-rpc.com",
+            "https://devnet.helius-rpc.com",
+            "https://solana-mainnet.g.alchemy.com",
+            "https://solana-devnet.g.alchemy.com",
+          ].includes(account.rpc?.endpoint ?? "") && (
+            <details>
+              <summary>{t("Receipt reader")}</summary>
+              <div className="account-actions">
+                <code>
+                  fased-app custody receipt-rpc-save --rpc-origin{" "}
+                  {account.rpc!.endpoint} --disposable-fixture
+                </code>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  aria-label={t("Copy command")}
+                  onClick={() =>
+                    void navigator.clipboard.writeText(
+                      `fased-app custody receipt-rpc-save --rpc-origin ${account.rpc!.endpoint} --disposable-fixture`,
+                    )
+                  }
+                >
+                  <Copy size={14} />
+                </button>
+              </div>
+            </details>
+          )}
       </div>
     </Dialog>
   );

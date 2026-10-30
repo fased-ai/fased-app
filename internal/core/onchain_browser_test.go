@@ -36,7 +36,10 @@ func TestOnchainBrowserServer(t *testing.T) {
 	server.taskCancel()
 	<-server.taskDone
 	var h *swapHarness
-	if os.Getenv("FASED_MANAGED_ONCHAIN_BROWSER") == "1" {
+	credentialMode := os.Getenv("FASED_CREDENTIAL_ONCHAIN_BROWSER") == "1"
+	if credentialMode {
+		h, _, _ = setupCredentialSwapHarness(t, server.Store, false)
+	} else if os.Getenv("FASED_MANAGED_ONCHAIN_BROWSER") == "1" {
 		h = setupManagedSwapHarness(t, server.Store)
 		if e = h.vault.Unlock(h.password, 45*time.Second); e != nil {
 			t.Fatal(e)
@@ -61,6 +64,12 @@ func TestOnchainBrowserServer(t *testing.T) {
 		scanner.Buffer(make([]byte, 4096), 32768)
 		for scanner.Scan() {
 			p, e := signer.ParseSwapProposal(scanner.Bytes())
+			if e == nil && credentialMode {
+				e = h.vault.Unlock(h.password, 45*time.Second)
+				if e == nil {
+					_, e = h.vault.UnlockReceiptRPC(h.password, time.Minute)
+				}
+			}
 			if e == nil {
 				_, e = h.vault.ApproveSwap(p)
 			}

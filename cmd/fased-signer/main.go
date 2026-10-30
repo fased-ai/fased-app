@@ -53,6 +53,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	flags.SetOutput(errOut)
 	configPath := flags.String("config", "", "root-owned immutable fixture identity configuration")
 	fixture := flags.Bool("disposable-fixture", false, "confirm these are unfunded disposable test keys")
+	rpcOrigin := flags.String("rpc-origin", "", "canonical read-only receipt RPC origin; key is entered privately")
 	action := flags.String("action", "status", "owner administration or bounded fixture operation; app: status and fixture operations only")
 	approvalStdin := flags.Bool("approval-stdin", false, "fixture CI only: approval challenge line from stdin")
 	passwordStdin := flags.Bool("password-stdin", false, "fixture automation only: password lines from private stdin")
@@ -111,6 +112,9 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	}
 	if !owner && !signer.AppActionAllowed(*action) {
 		return errors.New("owner administration denied")
+	}
+	if *rpcOrigin != "" && *action != "receipt-rpc-save" {
+		return errors.New("RPC origin requires receipt-rpc-save")
 	}
 	r := signer.Request{Action: *action}
 	if *requestStdin {
@@ -208,6 +212,21 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		return ownerFlow(ctx, c, args[0], *documentPath, password, out)
 	}
 	switch r.Action {
+	case "receipt-rpc-save":
+		if !owner || *requestStdin || *rpcOrigin == "" {
+			return errors.New("protected owner RPC origin required")
+		}
+		r.RPCOrigin = *rpcOrigin
+		r.RPCKey, err = password("RPC API key", false)
+		if err == nil {
+			r.Password, err = password("Signer password", false)
+		}
+	case "receipt-rpc-unlock":
+		if !owner || *requestStdin || *lifetime < time.Second || *lifetime > signer.MaxReceiptRPCLease {
+			return errors.New("read-only receipt lease must be one second to fifteen minutes")
+		}
+		r.Password, err = password("Signer password", false)
+		r.UnlockSeconds = int(*lifetime / time.Second)
 	case "fixture-update-inventory":
 		r.ProbeID = update.NewProbe()
 	case "status", "lock":
@@ -237,6 +256,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	default:
 		return signer.ErrUnavailable
 	}
+	defer clear(r.RPCKey)
 	defer clear(r.Password)
 	defer clear(r.NewPassword)
 	defer clear(r.Document)

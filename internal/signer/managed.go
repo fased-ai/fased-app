@@ -146,6 +146,9 @@ func (v *Vault) managedUpdateSnapshot(probe string) (update.SignerSnapshot, erro
 	}
 	pending, unknown := v.ledger.swapPending(v.now().Unix())
 	features := []string{"managed-key-history-v1", "managed-maintenance-v2", "install-completion-v1"}
+	if v.ledger.receiptRPC != nil {
+		features = append(features, receiptRPCCredentialFeature)
+	}
 	vaultFeatures := []string{"managed-key-v2", "authority-epoch-v1"}
 	if v.ledger.managedFresh {
 		features = append(features, "managed-swap-fixture-v1")

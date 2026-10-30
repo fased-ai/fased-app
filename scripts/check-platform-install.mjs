@@ -218,6 +218,10 @@ try {
     if (!JSON.parse(cli(["service", "status", ...flags])).active) break;
     await pause(100);
   }
+  // launchctl can unload the job before the former process releases SQLite.
+  // Apply the same graceful-close predicate used before preservation/uninstall;
+  // a reported inactive launch agent alone is not evidence of process exit.
+  if (process.platform === "darwin") await waitForSQLiteClose(state);
   cli(["service", "start", ...flags]);
   assert.deepEqual(JSON.parse(cli(["setup", "--data-dir", state])), expected);
   assert.equal(
@@ -304,6 +308,30 @@ try {
       "WINDOWS FIXTURE DIAGNOSTIC",
       JSON.stringify(report.windowsDiagnostic),
     );
+  }
+  if (process.platform === "darwin") {
+    report.macosDiagnostic = {};
+    try {
+      report.macosDiagnostic.service = JSON.parse(
+        cli(["service", "status", ...flags]),
+      );
+      const detail = execFileSync(
+        "/bin/launchctl",
+        ["print", `gui/${process.getuid()}/org.fased.app`],
+        { encoding: "utf8", timeout: 5000, maxBuffer: 64 * 1024 },
+      );
+      // Capture only public lifecycle fields, never the launch environment.
+      report.macosDiagnostic.launchd = detail
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) =>
+          /^(state|pid|runs|last exit code|last terminating signal|program|path) = /.test(
+            line,
+          ),
+        );
+    } catch (diagnostic) {
+      report.macosDiagnostic.error = String(diagnostic);
+    }
   }
   if (process.platform === "linux") {
     try {

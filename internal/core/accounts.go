@@ -244,6 +244,7 @@ func (s *Store) UpdateAccounts(ctx context.Context, r AccountsRecord) (AccountsV
 	return s.updateAccounts(ctx, r, false)
 }
 func (s *Store) updateAccounts(ctx context.Context, r AccountsRecord, rpcChange bool) (AccountsView, error) {
+	s.lockVenueCredentials()
 	old, e := s.accountsRecord(ctx)
 	if e != nil {
 		return AccountsView{}, e

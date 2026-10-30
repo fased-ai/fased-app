@@ -23,9 +23,10 @@ type SwapCommand struct {
 	Request *onchain.Request `json:"request,omitempty"`
 }
 type SwapTaskPolicy struct {
-	Version  string              `json:"version"`
-	Proposal signer.SwapProposal `json:"proposal"`
-	Digest   string              `json:"digest"`
+	CredentialLease string              `json:"credentialLease,omitempty"`
+	Version         string              `json:"version"`
+	Proposal        signer.SwapProposal `json:"proposal"`
+	Digest          string              `json:"digest"`
 }
 type SwapEvent struct {
 	State    string `json:"state"`
@@ -67,14 +68,16 @@ type swapVenue interface {
 	Reconcile(context.Context, onchain.Quote, []byte) (onchain.Observation, error)
 }
 type swapEntry struct {
+	lease  string
 	review SwapReview
 	boot   string
 }
 type onchainRuntime struct {
-	mu     sync.Mutex
-	venue  func(Account) (swapVenue, error)
-	signer func(context.Context, signer.Request) (signer.Response, error)
-	quotes map[string]swapEntry
+	credentialLease bool
+	mu              sync.Mutex
+	venue           func(Account) (swapVenue, error)
+	signer          func(context.Context, signer.Request) (signer.Response, error)
+	quotes          map[string]swapEntry
 }
 
 func swapPolicyDigest(p SwapTaskPolicy) string { p.Digest = ""; return onchain.Hash(p) }
@@ -264,9 +267,18 @@ func (s *Store) changeOnchain(ctx context.Context, c AgentCommand) (OnchainView,
 		if onchain.ValidateQuote(q, s.now().Unix()) != nil {
 			return OnchainView{}, errors.New("swap quote expired during preparation")
 		}
-		review := SwapReview{Proposal: signer.NewSwapProposal(*status.Status.Account, q), Revision: revision, Approval: "required"}
+		proposal := signer.NewSwapProposal(*status.Status.Account, q)
+		lease := ""
+		if s.onchain.credentialLease {
+			lease = s.venueLeaseID(a)
+			if lease == "" || status.Status.ReceiptRPC == nil || status.Status.ReceiptRPC.Locked || status.Status.ReceiptRPC.Origin != a.RPC.Endpoint {
+				return OnchainView{}, errors.New("unlock connection keys and signer receipt reader")
+			}
+			proposal = signer.NewCredentialSwapProposal(*status.Status.Account, q, signer.ReceiptRPCBinding{Version: 1, Ref: status.Status.ReceiptRPC.Ref, Origin: a.RPC.Endpoint})
+		}
+		review := SwapReview{Proposal: proposal, Revision: revision, Approval: "required"}
 		review.Digest = swapReviewDigest(review, s.bootID)
-		s.onchain.quotes[q.ID] = swapEntry{review, s.bootID}
+		s.onchain.quotes[q.ID] = swapEntry{review: review, boot: s.bootID, lease: lease}
 		v := swapProjection(d, revision, c.ProfileID, true)
 		v.Review = &review
 		return v, nil
@@ -277,6 +289,16 @@ func (s *Store) changeOnchain(ctx context.Context, c AgentCommand) (OnchainView,
 		entry, ok := s.onchain.quotes[c.Swap.ID]
 		if !ok || entry.boot != s.bootID || entry.review.Proposal.Quote.ProfileID != c.ProfileID || entry.review.Revision != revision || c.Swap.Digest != entry.review.Digest || onchain.ValidateQuote(entry.review.Proposal.Quote, now) != nil {
 			return OnchainView{}, errors.New("review changed or expired; get a new quote")
+		}
+		if s.onchain.credentialLease {
+			r, e := s.accountsRecord(ctx)
+			if e != nil {
+				return OnchainView{}, e
+			}
+			a, e := swapAccount(r, entry.review.Proposal.Quote.AccountID)
+			if e != nil || entry.lease == "" || entry.lease != s.venueLeaseID(a) {
+				return OnchainView{}, errors.New("connection keys changed; review a fresh swap")
+			}
 		}
 		if e = s.swapCurrentAccount(ctx, entry.review.Proposal.Quote); e != nil {
 			return OnchainView{}, e
@@ -308,7 +330,7 @@ func (s *Store) changeOnchain(ctx context.Context, c AgentCommand) (OnchainView,
 		if len(d.Tasks) >= 100 || len(d.Runs) >= 190 || len(d.Notices) >= 190 {
 			return OnchainView{}, errors.New("task/result capacity reached")
 		}
-		p := &SwapTaskPolicy{Version: swapTaskVersion, Proposal: entry.review.Proposal}
+		p := &SwapTaskPolicy{Version: swapTaskVersion, Proposal: entry.review.Proposal, CredentialLease: entry.lease}
 		p.Digest = swapPolicyDigest(*p)
 		task := AgentTask{ID: swapPrefix + c.Swap.ID, ProfileID: c.ProfileID, Name: "Swap " + swapSymbol(p.Proposal.Quote.InputMint) + " / " + swapSymbol(p.Proposal.Quote.OutputMint), IntervalSeconds: 60, MaxRuns: 1, Runs: 1, State: "held", Swap: p}
 		run := AgentRun{ID: task.ID + ":1", TaskID: task.ID, ProfileID: c.ProfileID, Strategy: swapTaskVersion, At: now, Outcome: "swap-queued", Swap: &SwapExecution{Version: swapTaskVersion, ProposalDigest: p.Proposal.Digest, BootID: s.bootID}}
@@ -466,7 +488,7 @@ func (s *Store) advanceOnchain(ctx context.Context) error {
 		set := func(state string) error {
 			return s.writeSwap(ctx, r.ProfileID, r.TaskID, func(t *AgentTask, run *AgentRun) error { swapEvent(run.Swap, state, s.now().Unix()); return nil })
 		}
-		if onchain.ValidateQuote(q, s.now().Unix()) != nil || s.swapCurrentAccount(ctx, q) != nil {
+		if !s.validTaskCredential(ctx, t.Swap) || onchain.ValidateQuote(q, s.now().Unix()) != nil || s.swapCurrentAccount(ctx, q) != nil {
 			return set("expired")
 		}
 		if e = set("validating"); e != nil {
@@ -498,7 +520,7 @@ func (s *Store) advanceOnchain(ctx context.Context) error {
 		}); e != nil {
 			return e
 		}
-		if onchain.ValidateQuote(q, s.now().Unix()) != nil || s.swapCurrentAccount(ctx, q) != nil {
+		if !s.validTaskCredential(ctx, t.Swap) || onchain.ValidateQuote(q, s.now().Unix()) != nil || s.swapCurrentAccount(ctx, q) != nil {
 			return set("expired")
 		}
 		if e = s.writeSwap(ctx, r.ProfileID, r.TaskID, func(t *AgentTask, run *AgentRun) error {
@@ -603,7 +625,7 @@ func validateOnchainStorage(d agentDocument) error {
 		}
 		p := t.Swap
 		q := p.Proposal.Quote
-		if p.Version != swapTaskVersion || signer.ValidateSwapHistory(p.Proposal) != nil || p.Digest != swapPolicyDigest(*p) || p.Proposal.Digest != signer.SwapProposalDigest(p.Proposal) || !p.Proposal.FixtureOnly || onchain.ValidateQuote(q, 0) != nil || q.ProfileID != t.ProfileID || t.ID != swapPrefix+q.ID || t.MaxRuns != 1 || t.Runs != 1 || t.NextAt != 0 || t.AI != nil || t.News != nil || t.Calendar != nil || t.Watch != nil || t.WEN != nil || t.StrategyPlan != nil || t.BotID != "" || t.Playbook != nil || (t.State != "held" && t.State != "completed" && t.State != "paused") {
+		if p.Version != swapTaskVersion || (p.CredentialLease != "" && (!validConnectionRef(p.CredentialLease) || p.Proposal.Version != signer.ManagedCredentialSwapVersion)) || (p.Proposal.Version == signer.ManagedCredentialSwapVersion && p.CredentialLease == "") || signer.ValidateSwapHistory(p.Proposal) != nil || p.Digest != swapPolicyDigest(*p) || p.Proposal.Digest != signer.SwapProposalDigest(p.Proposal) || !p.Proposal.FixtureOnly || onchain.ValidateQuote(q, 0) != nil || q.ProfileID != t.ProfileID || t.ID != swapPrefix+q.ID || t.MaxRuns != 1 || t.Runs != 1 || t.NextAt != 0 || t.AI != nil || t.News != nil || t.Calendar != nil || t.Watch != nil || t.WEN != nil || t.StrategyPlan != nil || t.BotID != "" || t.Playbook != nil || (t.State != "held" && t.State != "completed" && t.State != "paused") {
 			return errors.New("swap task binding changed")
 		}
 		if _, ok := tasks[t.ID]; ok {

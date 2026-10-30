@@ -29,6 +29,7 @@ export type SwapQuote = {
   digest: string;
 };
 export type SwapProposal = {
+  receiptRPC?: { version: number; ref: string; origin: string };
   version: string;
   account: unknown;
   quote: SwapQuote;
@@ -42,6 +43,7 @@ export type SwapReview = {
   approval: string;
 };
 export type SwapTaskPolicy = {
+  credentialLease?: string;
   version: string;
   proposal: SwapProposal;
   digest: string;

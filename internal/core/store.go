@@ -21,6 +21,7 @@ import (
 )
 
 type Store struct {
+	venueCredentials   venueCredentials
 	onchain            *onchainRuntime // Explicit controlled constructor only; ordinary/live admission stays closed.
 	installationSource atomic.Uint32   // Verified installer class, never a browser preference.
 
@@ -287,6 +288,11 @@ PRAGMA user_version=1;`)
 			return nil, err
 		}
 	}
+	if schema <= 32 {
+		if err = migrateVenueCredentials(ctx, db); err != nil {
+			return nil, err
+		}
+	}
 	if _, _, err = readAgents(ctx, db); err != nil {
 		return nil, err
 	}
@@ -311,7 +317,7 @@ PRAGMA user_version=1;`)
 	}
 	return store, nil
 }
-func (s *Store) Close() error { s.lockAIConnection(); return s.db.Close() }
+func (s *Store) Close() error { s.closeVenueCredentials(); s.lockAIConnection(); return s.db.Close() }
 func randomToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {

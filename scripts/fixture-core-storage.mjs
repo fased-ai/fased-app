@@ -14,6 +14,13 @@ export async function currentStorageFixture(archivedRoot) {
     "agent_strategies.go",
     "onchain.go",
     "onchain_storage.go",
+    "venue_credentials.go",
+    "rpc_credentials.go",
+    "rpc_recovery.go",
+    "rpc_check.go",
+    "rpc_authenticated.go",
+    "rpc_public.go",
+    "rpc_providers.go",
     "agent_provider.go",
     "provider_models.go",
     "provider_native.go",
@@ -78,6 +85,8 @@ export async function currentStorageFixture(archivedRoot) {
         name !== "wen_paper.go",
     ),
   ]) {
+    // Exact current sources are composed without copying their routers or
+    // constructors. rpcAdmission remains its false zero value.
     const bytes = await readFile("internal/core/" + file);
     await writeFile(path.join(archivedRoot, "internal/core", file), bytes);
     storage[file] = sha(bytes);
@@ -116,6 +125,7 @@ func managedNetworkAccount(a Account) bool {
     signerPublic,
     `package signer
 import "encoding/hex"
+func managedRefValid(r AccountRef) bool { return ValidManagedAccountRef(r) }
 func ValidManagedAccountRef(r AccountRef) bool {
  b, err := hex.DecodeString(r.PublicKey)
  return r.Version == 2 && (r.Network == "devnet" || r.Network == "mainnet-beta") && validID(r.SignerID) && validID(r.WalletID) && validID(r.Epoch) && err == nil && len(b) == 32 && hex.EncodeToString(b) == r.PublicKey
@@ -132,6 +142,7 @@ func ValidManagedAccountRef(r AccountRef) bool {
   await mkdir(path.join(signerRoot, "testdata"), { recursive: true });
   for (const name of [
     "onchain_state.go",
+    "receipt_rpc_state.go",
     "onchain_state_test.go",
     "testdata/onchain-reader.json",
     "journal.go",
@@ -153,13 +164,16 @@ func ValidManagedAccountRef(r AccountRef) bool {
   await amend("policy.go", [
     [
       "type ledger struct {",
-      "type ledger struct {\n managedFresh bool\n swaps map[string]SwapReceipt",
+      "type ledger struct {\n managedFresh bool\n receiptRPC *receiptRPCEnvelope\n swaps map[string]SwapReceipt",
     ],
     ["return &ledger{", "return &ledger{swaps:map[string]SwapReceipt{},"],
-    ["next := *l", "next := *l\n next.swaps=clone(l.swaps)"],
+    [
+      "next := *l",
+      "next := *l\n next.receiptRPC=clone(l.receiptRPC)\n next.swaps=clone(l.swaps)",
+    ],
     [
       "switch r.Kind {",
-      'switch r.Kind {\n case "onchain-approve", "onchain-sign", "onchain-settled", "onchain-cancel": if e:=l.applySwap(r);e!=nil{return e}',
+      'switch r.Kind {\n case "onchain-rpc-credential": if e:=l.applyReceiptRPC(r);e!=nil{return e}\n case "onchain-approve", "onchain-sign", "onchain-settled", "onchain-cancel": if e:=l.applySwap(r);e!=nil{return e}',
     ],
     [
       'case "rebind":',
@@ -176,7 +190,7 @@ func ValidManagedAccountRef(r AccountRef) bool {
   await amend("lifecycle.go", [
     [
       "Features: append([]string{}, contract.Features...)",
-      "Features: l.swapStateFeatures(contract.Features)",
+      "Features: func() []string { features:=[]string{};for _,feature:=range l.swapStateFeatures(contract.Features) {if feature!=receiptRPCCredentialFeature || l.receiptRPC!=nil {features=append(features,feature)}};return features}()",
     ],
     [
       "return s, nil",
@@ -188,7 +202,7 @@ func ValidManagedAccountRef(r AccountRef) bool {
     [
       "internal/signer/vault.go",
       "type Status struct {",
-      'SwapReady bool `json:"swapReady,omitempty"`',
+      'SwapReady bool `json:"swapReady,omitempty"`\nReceiptRPC *ReceiptRPCStatus `json:"receiptRPC,omitempty"`',
     ],
     [
       "internal/signer/rpc.go",
@@ -328,12 +342,16 @@ func ValidManagedAccountRef(r AccountRef) bool {
     before
       .replace('"sync"', '"sync"\n"sync/atomic"')
       .replace(
+        "func (s *Store) Close() error { return s.db.Close() }",
+        "func (s *Store) Close() error { s.lockVenueCredentials(); return s.db.Close() }",
+      )
+      .replace(
         "type Store struct {",
-        "type Store struct {\n\tcustodyNetwork string\n\tonchain *onchainRuntime\n\tproviderFixture bool\n\tchatEpoch atomic.Uint64\n\tprogressMu sync.Mutex\n\taiProgress map[string]string\n\tsessionFixture bool\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState\n\tpilot openAIPilotState\n\tresearchRead func(context.Context, researchFactResult) (json.RawMessage, error)",
+        "type Store struct {\n\tvenueCredentials venueCredentials\n\trpcAdmission bool\n\trpcCheckFixture func(context.Context, RPCCheckRequest) (RPCCheckResult, error)\n\tcustodyNetwork string\n\tonchain *onchainRuntime\n\tproviderFixture bool\n\tchatEpoch atomic.Uint64\n\tprogressMu sync.Mutex\n\taiProgress map[string]string\n\tsessionFixture bool\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState\n\tpilot openAIPilotState\n\tresearchRead func(context.Context, researchFactResult) (json.RawMessage, error)",
       )
       .replace(
         marker,
-        "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }; if schema <= 6 { if err = migrateAIConnections(ctx, db); err != nil { return nil, err } }; if schema <= 7 { if err = migrateAgentNews(ctx, db); err != nil { return nil, err } }; if schema <= 8 { if err = migrateAIAdmission(ctx, db); err != nil { return nil, err } }; if schema <= 9 { if err = migrateWENPaper(ctx, db); err != nil { return nil, err } }; if schema <= 10 { if err = migrateWENResearch(ctx, db); err != nil { return nil, err } }; if schema <= 11 { if err = migrateWENResearchAI(ctx, db); err != nil { return nil, err } }; if schema <= 12 { if err = migrateWENResearchLoop(ctx, db); err != nil { return nil, err } }; if schema <= 13 { if err = migrateWENSessions(ctx, db); err != nil { return nil, err } }; if schema <= 14 { if err = migrateWENFixtureRuns(ctx, db); err != nil { return nil, err } }; if schema <= 15 { if err = migratePlaybooks(ctx, db); err != nil { return nil, err } }; if schema <= 16 { if err = migrateTaskCalendar(ctx, db); err != nil { return nil, err } }; if schema <= 17 { if err = migrateTaskCron(ctx, db); err != nil { return nil, err } }; if schema <= 18 { if err = migrateAgentChat(ctx, db); err != nil { return nil, err } }; if schema <= 19 { if err = migrateAccountRPC(ctx, db); err != nil { return nil, err } }; if schema <= 20 { if err = migrateProviderRPC(ctx, db); err != nil { return nil, err } }; if schema <= 21 { if err = migrateManagedKeys(ctx, db); err != nil { return nil, err } }; if schema <= 22 { if err = migrateProviderAccounts(ctx, db, dir); err != nil { return nil, err } }; if schema <= 23 { if err = migrateProviderModels(ctx, db); err != nil { return nil, err } }; if schema <= 24 { if err = migrateNativeProviders(ctx, db); err != nil { return nil, err } }; if schema <= 25 { if err = migrateSignInPlan(ctx, db); err != nil { return nil, err } }; if schema <= 26 { if err = migrateLocalProviders(ctx, db); err != nil { return nil, err } }; if schema <= 27 { if err = migrateNewsWatch(ctx, db); err != nil { return nil, err } }; if schema <= 28 { if err = migrateTaskAnalysis(ctx, db); err != nil { return nil, err } }; if schema <= 29 { if err = migrateStrategies(ctx, db); err != nil { return nil, err } }; if schema <= 30 { if err = migrateOnchain(ctx, db); err != nil { return nil, err } }; if schema <= 31 { if err = migrateManagedSwaps(ctx, db); err != nil { return nil, err } }\n" +
+        "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }; if schema <= 6 { if err = migrateAIConnections(ctx, db); err != nil { return nil, err } }; if schema <= 7 { if err = migrateAgentNews(ctx, db); err != nil { return nil, err } }; if schema <= 8 { if err = migrateAIAdmission(ctx, db); err != nil { return nil, err } }; if schema <= 9 { if err = migrateWENPaper(ctx, db); err != nil { return nil, err } }; if schema <= 10 { if err = migrateWENResearch(ctx, db); err != nil { return nil, err } }; if schema <= 11 { if err = migrateWENResearchAI(ctx, db); err != nil { return nil, err } }; if schema <= 12 { if err = migrateWENResearchLoop(ctx, db); err != nil { return nil, err } }; if schema <= 13 { if err = migrateWENSessions(ctx, db); err != nil { return nil, err } }; if schema <= 14 { if err = migrateWENFixtureRuns(ctx, db); err != nil { return nil, err } }; if schema <= 15 { if err = migratePlaybooks(ctx, db); err != nil { return nil, err } }; if schema <= 16 { if err = migrateTaskCalendar(ctx, db); err != nil { return nil, err } }; if schema <= 17 { if err = migrateTaskCron(ctx, db); err != nil { return nil, err } }; if schema <= 18 { if err = migrateAgentChat(ctx, db); err != nil { return nil, err } }; if schema <= 19 { if err = migrateAccountRPC(ctx, db); err != nil { return nil, err } }; if schema <= 20 { if err = migrateProviderRPC(ctx, db); err != nil { return nil, err } }; if schema <= 21 { if err = migrateManagedKeys(ctx, db); err != nil { return nil, err } }; if schema <= 22 { if err = migrateProviderAccounts(ctx, db, dir); err != nil { return nil, err } }; if schema <= 23 { if err = migrateProviderModels(ctx, db); err != nil { return nil, err } }; if schema <= 24 { if err = migrateNativeProviders(ctx, db); err != nil { return nil, err } }; if schema <= 25 { if err = migrateSignInPlan(ctx, db); err != nil { return nil, err } }; if schema <= 26 { if err = migrateLocalProviders(ctx, db); err != nil { return nil, err } }; if schema <= 27 { if err = migrateNewsWatch(ctx, db); err != nil { return nil, err } }; if schema <= 28 { if err = migrateTaskAnalysis(ctx, db); err != nil { return nil, err } }; if schema <= 29 { if err = migrateStrategies(ctx, db); err != nil { return nil, err } }; if schema <= 30 { if err = migrateOnchain(ctx, db); err != nil { return nil, err } }; if schema <= 31 { if err = migrateManagedSwaps(ctx, db); err != nil { return nil, err } }; if schema <= 32 { if err = migrateVenueCredentials(ctx, db); err != nil { return nil, err } }\n" +
           marker,
       ),
   );

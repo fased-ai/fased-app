@@ -91,7 +91,7 @@ export function RPCCredential({
     }
   }
   return (
-    <details>
+    <details name={`wallet-connection-${accountId}`}>
       <summary>{t("API key")}</summary>
       <form
         className="account-form"

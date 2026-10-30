@@ -1,4 +1,35 @@
 export const onchainCopy = {
+  "Receipt reader": [
+    "Проверка квитанций",
+    "Verificar recibos",
+    "回执验证",
+    "영수증 검증",
+  ],
+  Lock: ["Заблокировать", "Bloquear", "锁定", "잠금"],
+  "Jupiter API key": [
+    "API-ключ Jupiter",
+    "Clave API de Jupiter",
+    "Jupiter API 密钥",
+    "Jupiter API 키",
+  ],
+  "Connection password": [
+    "Пароль подключения",
+    "Contraseña de conexión",
+    "连接密码",
+    "연결 비밀번호",
+  ],
+  "Unlock keys": [
+    "Разблокировать ключи",
+    "Desbloquear claves",
+    "解锁密钥",
+    "키 잠금 해제",
+  ],
+  "Save an RPC key first": [
+    "Сначала сохраните ключ RPC",
+    "Guarda primero una clave RPC",
+    "请先保存 RPC 密钥",
+    "먼저 RPC 키를 저장하세요",
+  ],
   Amount: ["Сумма", "Importe", "数量", "수량"],
   Approval: ["Разрешение", "Autorización", "授权", "승인"],
   "Basis points": [

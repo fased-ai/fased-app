@@ -13,7 +13,12 @@ test("Onchain quote review protected approval submit and original result share U
   page,
 }, info) => {
   test.setTimeout(90000);
-  const root = resolve(".evidence/b06-onchain/browser");
+  const credentialMode = process.env.FASED_CREDENTIAL_ONCHAIN_BROWSER === "1";
+  const root = resolve(
+    credentialMode
+      ? ".evidence/b06-venue-credentials/browser"
+      : ".evidence/b06-onchain/browser",
+  );
   await mkdir(root, { recursive: true });
   const evidence = await mkdtemp(join(root, info.project.name + "-"));
   const dir = await mkdtemp(join(tmpdir(), "fased-swap-"));
@@ -105,6 +110,113 @@ test("Onchain quote review protected approval submit and original result share U
       page.getByRole("button", { name: "Sign out", exact: true }),
     ).toBeVisible();
     await execute(["login", "--password-stdin"], password + "\n");
+    if (credentialMode) {
+      await page.goto(url + "/#wallets/accounts");
+      const row = page.getByRole("article", {
+        name: "Account Wallet",
+        exact: true,
+      });
+      await row.getByRole("button", { name: "RPC", exact: true }).click();
+      const rpc = page.getByRole("dialog", {
+        name: "RPC · Wallet",
+        exact: true,
+      });
+      const rpcKeys = rpc
+        .locator("details")
+        .filter({ has: page.locator("summary", { hasText: /^API key$/ }) })
+        .first();
+      await rpcKeys.locator("summary").first().click();
+      await rpcKeys
+        .getByLabel("RPC API key", { exact: true })
+        .fill("r".repeat(32));
+      await rpcKeys
+        .getByLabel("Vault password", { exact: true })
+        .fill("disposable venue vault password 123");
+      await rpcKeys
+        .getByRole("button", { name: "Save key", exact: true })
+        .click();
+      await expect(
+        rpcKeys.getByRole("button", { name: "Remove key", exact: true }),
+      ).toBeVisible();
+      const jupiter = rpc
+        .locator("details")
+        .filter({ has: page.locator("summary", { hasText: /^Jupiter$/ }) })
+        .first();
+      await jupiter.locator("summary").first().click();
+      await jupiter
+        .getByLabel("Jupiter API key", { exact: true })
+        .fill("fased-test-onchain");
+      await jupiter
+        .getByLabel("Connection password", { exact: true })
+        .fill("disposable venue vault password 123");
+      await expect(
+        jupiter.getByRole("button", { name: "Save key", exact: true }),
+      ).toBeEnabled();
+      await jupiter
+        .getByRole("button", { name: "Save key", exact: true })
+        .click();
+      await expect(jupiter.getByText("Locked", { exact: true })).toBeVisible();
+      await expect(
+        jupiter.getByLabel("Jupiter API key", { exact: true }),
+      ).toHaveValue("");
+      // Explicit retirement preserves RPC readiness and allows reconnecting.
+      await jupiter
+        .getByLabel("Connection password", { exact: true })
+        .fill("disposable venue vault password 123");
+      await jupiter
+        .getByRole("button", { name: "Remove key", exact: true })
+        .click();
+      await expect(
+        jupiter.getByRole("button", { name: "Unlock keys", exact: true }),
+      ).toHaveCount(0);
+      await jupiter
+        .getByLabel("Jupiter API key", { exact: true })
+        .fill("fased-test-onchain");
+      await jupiter
+        .getByLabel("Connection password", { exact: true })
+        .fill("disposable venue vault password 123");
+      await expect(
+        jupiter.getByRole("button", { name: "Save key", exact: true }),
+      ).toBeEnabled();
+      await jupiter
+        .getByRole("button", { name: "Save key", exact: true })
+        .click();
+      await expect(jupiter.getByText("Locked", { exact: true })).toBeVisible();
+      await jupiter
+        .getByLabel("Connection password", { exact: true })
+        .fill("disposable venue vault password 123");
+      await jupiter
+        .getByRole("button", { name: "Unlock keys", exact: true })
+        .click();
+      await expect(
+        jupiter.getByText("Unlocked", { exact: true }),
+      ).toBeVisible();
+      const record = await execute(["accounts"]);
+      const wallet = record.record.accounts.find(
+        (a: any) => a.name === "Wallet",
+      );
+      const secret = await execute(["accounts", "--venue-credential-stdin"], {
+        accountId: wallet.id,
+        revision: record.record.revision,
+        ref: "",
+        action: "status",
+      });
+      expect(secret.saved).toBe(true);
+      expect(secret.locked).toBe(false);
+      expect(secret.liveExecution).toBe(false);
+      for (const file of [
+        `rpc-credential-${wallet.id}.json`,
+        `venue-credential-${wallet.id}.json`,
+      ]) {
+        const cipher = await readFile(join(dir, file), "utf8");
+        expect(cipher).not.toContain("r".repeat(32));
+        expect(cipher).not.toContain("fased-test-onchain");
+      }
+      await page.screenshot({
+        path: join(evidence, "encrypted-credentials.png"),
+      });
+      await page.goto(url + "/#terminals/jupiter");
+    }
     // Existing records/drafts must survive the new swap journey.
     await execute(["agents", "--request-stdin"], {
       action: "session-create",

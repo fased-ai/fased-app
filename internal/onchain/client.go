@@ -30,6 +30,8 @@ type Client struct {
 	key      string
 	http     *http.Client
 	sequence atomic.Uint64
+	network  string
+	valid    func() error
 }
 
 // ControlledTransport is a Go-only test dependency. It has fixed inert RPC
@@ -78,6 +80,9 @@ func NewClient(rpc, key string) (*Client, error) {
 	return &Client{rpc: rpc, key: key, http: &http.Client{Transport: t, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("swap redirects denied") }}}, nil
 }
 func (c *Client) request(ctx context.Context, method, target string, body []byte, key bool) ([]byte, error) {
+	if c.valid != nil && c.valid() != nil {
+		return nil, errors.New("swap credential access unavailable")
+	}
 	r, e := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(body))
 	if e != nil {
 		return nil, e
@@ -93,11 +98,16 @@ func (c *Client) request(ctx context.Context, method, target string, body []byte
 	defer response.Body.Close()
 	raw, e := io.ReadAll(io.LimitReader(response.Body, 512*1024+1))
 	if e != nil || response.StatusCode != 200 || len(raw) > 512*1024 {
+		clear(raw)
 		return nil, errors.New("swap service rejected bounded request")
 	}
 	var fields map[string]json.RawMessage
 	if update.StrictJSONBounded(raw, &fields, 512*1024) != nil {
 		return nil, errors.New("invalid or ambiguous swap response")
+	}
+	if c.valid != nil && c.valid() != nil {
+		clear(raw)
+		return nil, errors.New("swap credential access unavailable")
 	}
 	return raw, nil
 }
@@ -159,6 +169,9 @@ func (c *Client) token(ctx context.Context, address, owner, mint string, minimum
 	return true, nil
 }
 func (c *Client) Prepare(ctx context.Context, q Quote) (Quote, error) {
+	if e := c.admitNetwork(q); e != nil {
+		return q, e
+	}
 	if !ValidRequest(Request{q.AccountID, q.InputMint, q.OutputMint, q.Amount, q.SlippageBPS, q.MaxFeeLamports}) {
 		return q, errors.New("invalid swap request")
 	}
@@ -274,6 +287,9 @@ func (c *Client) Prepare(ctx context.Context, q Quote) (Quote, error) {
 	return q, nil
 }
 func (c *Client) Simulate(ctx context.Context, q Quote) (Simulation, error) {
+	if e := c.admitNetwork(q); e != nil {
+		return Simulation{}, e
+	}
 	packet, e := Unsigned(q)
 	if e != nil {
 		return Simulation{}, e
@@ -304,6 +320,9 @@ func VerifyPacket(q Quote, packet []byte) (string, error) {
 	return Base58(packet[1:65]), nil
 }
 func (c *Client) Send(ctx context.Context, q Quote, packet []byte) (bool, error) {
+	if e := c.admitNetwork(q); e != nil {
+		return false, e
+	}
 	signature, e := VerifyPacket(q, packet)
 	if e != nil {
 		return false, e
@@ -323,6 +342,9 @@ func (c *Client) Send(ctx context.Context, q Quote, packet []byte) (bool, error)
 	return true, nil
 }
 func (c *Client) Reconcile(ctx context.Context, q Quote, packet []byte) (Observation, error) {
+	if e := c.admitNetwork(q); e != nil {
+		return Observation{}, e
+	}
 	signature, e := VerifyPacket(q, packet)
 	if e != nil {
 		return Observation{}, e

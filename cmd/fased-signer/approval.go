@@ -89,6 +89,11 @@ func conductSwapApproval(ctx context.Context, p signer.SwapProposal, ask askPass
 			result = errors.Join(result, le)
 		}
 	}()
+	if p.ReceiptRPC != nil {
+		if _, e = call(ctx, signer.Request{Action: "receipt-rpc-unlock", Password: pw, UnlockSeconds: int(seconds)}); e != nil {
+			return e
+		}
+	}
 	r, e := call(ctx, signer.Request{Action: "swap-approve", PublicInput: signer.PublicInput{Swap: &p}})
 	if e != nil {
 		return e

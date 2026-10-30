@@ -129,6 +129,9 @@ try {
     "--others",
     "--exclude-standard",
     "-z",
+    "--",
+    ".",
+    ":(exclude)node_modules",
   ])
     .toString()
     .split("\0")
@@ -163,6 +166,46 @@ try {
   report.outputs[output] = createHash("sha256")
     .update(await readFile(output))
     .digest("hex");
+  // Compilation alone cannot establish a same-format bootstrap. Compare the
+  // actual reader contracts before any privileged fixture is installed.
+  const commandContract = (binary, component) => {
+    const value = JSON.parse(
+      execFileSync(
+        binary,
+        component === "core"
+          ? ["updates", "compatibility"]
+          : ["fixture-compatibility"],
+        { encoding: "utf8" },
+      ),
+    );
+    return component === "core" ? value.contract : value;
+  };
+  report.readerContracts = {};
+  for (const [component, predecessor, current] of [
+    ["core", path.join(root, "fased-app-lifecycle3"), output],
+    [
+      "signer",
+      path.join(root, "fased-signer-lifecycle3"),
+      path.resolve(".evidence/bin/fased-signer"),
+    ],
+  ]) {
+    const before = commandContract(predecessor, component);
+    const after = commandContract(current, component);
+    const normalized = structuredClone(after);
+    if (component === "core") normalized.lifecycle = before.lifecycle;
+    for (const state of normalized.state) {
+      if (state.name === "operations")
+        state.features = state.features.filter(
+          (feature) => feature !== "install-completion-v1",
+        );
+    }
+    assert.deepEqual(
+      normalized,
+      before,
+      component + " composed bootstrap reader changed state/protocol/authority",
+    );
+    report.readerContracts[component] = { before, after };
+  }
   report.predecessorTree = execFileSync(
     "git",
     ["rev-parse", prior + "^{tree}"],

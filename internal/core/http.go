@@ -167,6 +167,14 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"authenticated": true, "csrfToken": csrfToken(token), "sessionToken": token, "sessionMode": h.sessionMode(r)})
 		return
 	}
+	// Capture before session authentication/body decoding so an admitted slow
+	// request cannot cross sign-out and establish a new credential generation.
+	var credentialGeneration uint64
+	if r.URL.Path == "/api/v1/accounts/venue-credential" {
+		h.store.venueCredentials.mu.Lock()
+		credentialGeneration = h.store.venueCredentials.generation
+		h.store.venueCredentials.mu.Unlock()
+	}
 	token := h.session(r)
 	if !h.store.Session(r.Context(), token) {
 		writeError(w, 401, "owner authentication required")
@@ -259,6 +267,25 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, 200, v)
+		return
+	case "/api/v1/accounts/venue-credential":
+		if r.Method != http.MethodPut {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.mutation(w, r) || !h.csrf(w, r, token) {
+			return
+		}
+		var input VenueCredentialCommand
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		result, err := h.store.venueCredential(r.Context(), input, &credentialGeneration)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, 200, result)
 		return
 	case "/api/v1/accounts/rpc-credential":
 		if r.Method != http.MethodPut {

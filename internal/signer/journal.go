@@ -17,6 +17,7 @@ type journal struct {
 }
 
 type journalRecord struct {
+	ReceiptRPC      *receiptRPCEnvelope  `json:"receiptRPC,omitempty"`
 	FreshManaged    bool                 `json:"freshManaged,omitempty"`
 	Swap            *SwapProposal        `json:"swap,omitempty"`
 	SwapObservation *onchain.Observation `json:"swapObservation,omitempty"`

@@ -9,11 +9,12 @@ import (
 // SwapProposal is one exact reviewed order, not an arbitrary signing request or
 // reusable grant. Managed keys require a separate provenance-bound fixture capability.
 type SwapProposal struct {
-	Version     string        `json:"version"`
-	Account     AccountRef    `json:"account"`
-	Quote       onchain.Quote `json:"quote"`
-	FixtureOnly bool          `json:"fixtureOnly"`
-	Digest      string        `json:"digest"`
+	ReceiptRPC  *ReceiptRPCBinding `json:"receiptRPC,omitempty"`
+	Version     string             `json:"version"`
+	Account     AccountRef         `json:"account"`
+	Quote       onchain.Quote      `json:"quote"`
+	FixtureOnly bool               `json:"fixtureOnly"`
+	Digest      string             `json:"digest"`
 }
 type SwapReceipt struct {
 	Proposal    SwapProposal         `json:"proposal"`
@@ -24,6 +25,7 @@ type SwapReceipt struct {
 }
 
 const ManagedSwapVersion = "managed-onchain-swap-fixture-v1"
+const ManagedCredentialSwapVersion = "managed-credential-swap-fixture-v1"
 
 func SwapProposalDigest(p SwapProposal) string { p.Digest = ""; return onchain.Hash(p) }
 func NewSwapProposal(ref AccountRef, q onchain.Quote) SwapProposal {
@@ -34,7 +36,19 @@ func NewSwapProposal(ref AccountRef, q onchain.Quote) SwapProposal {
 	p.Digest = SwapProposalDigest(p)
 	return p
 }
+func NewCredentialSwapProposal(ref AccountRef, q onchain.Quote, binding ReceiptRPCBinding) SwapProposal {
+	p := SwapProposal{Version: ManagedCredentialSwapVersion, Account: ref, Quote: q, ReceiptRPC: &binding, FixtureOnly: true}
+	p.Digest = SwapProposalDigest(p)
+	return p
+}
 func validateSwapProposal(p SwapProposal, now int64) error {
+	if p.Version == ManagedCredentialSwapVersion {
+		if p.ReceiptRPC == nil || p.ReceiptRPC.Version != 1 || !validID(p.ReceiptRPC.Ref) || !receiptRPCOrigin(p.ReceiptRPC.Origin, p.Quote.Network) {
+			return errors.New("exact receipt RPC binding required")
+		}
+	} else if p.ReceiptRPC != nil {
+		return errors.New("unexpected receipt RPC binding")
+	}
 	public, e := hex.DecodeString(p.Account.PublicKey)
 	if e != nil || !validSwapRef(p.Account, p.Quote.Network, p.Version) || !p.FixtureOnly || p.Digest != SwapProposalDigest(p) || onchain.Base58(public) != p.Quote.Owner || p.Quote.Blockhash != onchain.ControlledBlockhash {
 		return errors.New("controlled, exact-wallet swap approval required")
@@ -51,6 +65,9 @@ func (l *ledger) applySwap(r journalRecord) error {
 		expected.Swap = r.Swap
 		if r.Swap == nil || r.ID != r.Swap.Quote.ID || r.Swap.Account != l.ref || validateSwapProposal(*r.Swap, r.At) != nil || len(l.swaps) >= 64 {
 			return errors.New("invalid swap approval history")
+		}
+		if b := r.Swap.ReceiptRPC; b != nil && (l.receiptRPC == nil || l.receiptRPC.Account != r.Swap.Account || l.receiptRPC.Ref != b.Ref || l.receiptRPC.Origin != b.Origin) {
+			return errors.New("swap receipt RPC history mismatch")
 		}
 		if _, ok := l.swaps[r.ID]; ok {
 			return errors.New("duplicate swap approval")
@@ -137,5 +154,5 @@ func validSwapRef(r AccountRef, network, version string) bool {
 		return validRef(r) && version == onchain.Version
 	}
 	b, e := hex.DecodeString(r.PublicKey)
-	return r.Version == 2 && version == ManagedSwapVersion && (network == "devnet" || network == "mainnet-beta") && r.Network == network && validID(r.SignerID) && validID(r.WalletID) && validID(r.Epoch) && e == nil && len(b) == 32 && hex.EncodeToString(b) == r.PublicKey
+	return r.Version == 2 && (version == ManagedSwapVersion || version == ManagedCredentialSwapVersion) && (network == "devnet" || network == "mainnet-beta") && r.Network == network && validID(r.SignerID) && validID(r.WalletID) && validID(r.Epoch) && e == nil && len(b) == 32 && hex.EncodeToString(b) == r.PublicKey
 }
