@@ -185,10 +185,7 @@ func ValidManagedAccountRef(r AccountRef) bool {
     ],
   ]);
   await amend("update.go", [
-    [
-      '"approvals-v1",',
-      '"approvals-v1", "onchain-swap-fixture-v1", "managed-receipt-rpc-v1",',
-    ],
+    ['"approvals-v1",', '"approvals-v1", "onchain-swap-fixture-v1",'],
   ]);
   await amend("lifecycle.go", [
     [
