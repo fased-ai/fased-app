@@ -74,41 +74,43 @@ type PaperBot struct {
 	SpentCents  int64  `json:"spentCents"`
 }
 type AgentTask struct {
-	Watch           *TaskNewsWatch  `json:"watch,omitempty"`
-	Calendar        *TaskCalendar   `json:"calendar,omitempty"`
-	Playbook        *PlaybookOrigin `json:"playbook,omitempty"`
-	WEN             *WENPaperPlan   `json:"wen,omitempty"`
-	News            *TaskNewsInput  `json:"news,omitempty"`
-	AI              *TaskAIStep     `json:"ai,omitempty"`
-	ID              string          `json:"id"`
-	ProfileID       string          `json:"profileId"`
-	Name            string          `json:"name"`
-	Text            string          `json:"text"`
-	BotID           string          `json:"botId"`
-	IntervalSeconds int64           `json:"intervalSeconds"`
-	MaxRuns         int             `json:"maxRuns"`
-	Runs            int             `json:"runs"`
-	NextAt          int64           `json:"nextAt"`
-	State           string          `json:"state"`
+	StrategyPlan    *StrategyTaskPolicy `json:"strategyPlan,omitempty"`
+	Watch           *TaskNewsWatch      `json:"watch,omitempty"`
+	Calendar        *TaskCalendar       `json:"calendar,omitempty"`
+	Playbook        *PlaybookOrigin     `json:"playbook,omitempty"`
+	WEN             *WENPaperPlan       `json:"wen,omitempty"`
+	News            *TaskNewsInput      `json:"news,omitempty"`
+	AI              *TaskAIStep         `json:"ai,omitempty"`
+	ID              string              `json:"id"`
+	ProfileID       string              `json:"profileId"`
+	Name            string              `json:"name"`
+	Text            string              `json:"text"`
+	BotID           string              `json:"botId"`
+	IntervalSeconds int64               `json:"intervalSeconds"`
+	MaxRuns         int                 `json:"maxRuns"`
+	Runs            int                 `json:"runs"`
+	NextAt          int64               `json:"nextAt"`
+	State           string              `json:"state"`
 }
 type AgentRun struct {
-	Analysis     *TaskAnalysisResult `json:"analysis,omitempty"`
-	Watch        *NewsWatchResult    `json:"watch,omitempty"`
-	WEN          *WENPaperResult     `json:"wen,omitempty"`
-	News         *NewsEvidence       `json:"news,omitempty"`
-	AIRequestID  string              `json:"aiRequestId,omitempty"`
-	AIDigest     string              `json:"aiDigest,omitempty"`
-	ID           string              `json:"id"`
-	ProfileID    string              `json:"profileId"`
-	TaskID       string              `json:"taskId"`
-	BotID        string              `json:"botId"`
-	Strategy     string              `json:"strategy"`
-	At           int64               `json:"at"`
-	Outcome      string              `json:"outcome"`
-	Quantity     int64               `json:"quantity"`
-	PriceCents   int64               `json:"priceCents"`
-	CostCents    int64               `json:"costCents"`
-	BudgetBefore int64               `json:"budgetBefore"`
+	Paper        *StrategyPaperResult `json:"paper,omitempty"`
+	Analysis     *TaskAnalysisResult  `json:"analysis,omitempty"`
+	Watch        *NewsWatchResult     `json:"watch,omitempty"`
+	WEN          *WENPaperResult      `json:"wen,omitempty"`
+	News         *NewsEvidence        `json:"news,omitempty"`
+	AIRequestID  string               `json:"aiRequestId,omitempty"`
+	AIDigest     string               `json:"aiDigest,omitempty"`
+	ID           string               `json:"id"`
+	ProfileID    string               `json:"profileId"`
+	TaskID       string               `json:"taskId"`
+	BotID        string               `json:"botId"`
+	Strategy     string               `json:"strategy"`
+	At           int64                `json:"at"`
+	Outcome      string               `json:"outcome"`
+	Quantity     int64                `json:"quantity"`
+	PriceCents   int64                `json:"priceCents"`
+	CostCents    int64                `json:"costCents"`
+	BudgetBefore int64                `json:"budgetBefore"`
 }
 type AgentNotice struct {
 	ID        string `json:"id"`
@@ -119,6 +121,7 @@ type AgentNotice struct {
 	Read      bool   `json:"read"`
 }
 type agentDocument struct {
+	Strategies              []AgentStrategy      `json:"strategies,omitempty"`
 	ArchivedAISpentMicrousd map[string]int64     `json:"archivedAISpentMicrousd,omitempty"`
 	Playbooks               []AgentPlaybook      `json:"playbooks,omitempty"`
 	NewsSources             []NewsSource         `json:"newsSources"`
@@ -136,6 +139,8 @@ type agentDocument struct {
 	WENRehearsal            *wenSessionWorkspace `json:"wenRehearsal,omitempty"`
 }
 type AgentView struct {
+	Strategies              []AgentStrategy     `json:"strategies,omitempty"`
+	PaperExecutionAvailable bool                `json:"paperExecutionAvailable"`
 	ChatReview              *ChatPermission     `json:"chatReview,omitempty"`
 	ChatReadiness           map[string]string   `json:"chatReadiness,omitempty"`
 	ArchivedAISpentMicrousd int64               `json:"archivedAISpentMicrousd,omitempty"`
@@ -167,6 +172,9 @@ type AgentView struct {
 // Optional fields are inert data for a fixed action; unknown fields/actions are
 // rejected. No arbitrary callback, URL, model tool or shell can be submitted.
 type AgentCommand struct {
+	Strategy             *StrategyPlan        `json:"strategy,omitempty"`
+	StrategyID           string               `json:"strategyId,omitempty"`
+	StrategyVersion      int                  `json:"strategyVersion,omitempty"`
 	Analysis             *TaskAnalysisPolicy  `json:"analysis,omitempty"`
 	Watch                *NewsWatchRule       `json:"watch,omitempty"`
 	providerAuthMethod   string               // Resolved only by the core, never accepted from JSON.
@@ -290,6 +298,9 @@ func readAgents(ctx context.Context, r snapshotReader) (agentDocument, int64, er
 	if e == nil {
 		e = validateTaskAnalysisStorage([]byte(b), d)
 	}
+	if e == nil {
+		e = validateStrategyStorage([]byte(b), d)
+	}
 	return d, revision, e
 }
 func agentProfile(d agentDocument, id string) int {
@@ -308,6 +319,11 @@ func agentView(d agentDocument, revision int64, profile, query string, now int64
 		return AgentView{}, errors.New("profile not found")
 	}
 	v := AgentView{ArchivedAISpentMicrousd: d.ArchivedAISpentMicrousd[profile], NewsSources: []NewsSource{}, NewsFetches: []NewsFetch{}, Revision: revision, ProfileID: profile, Profiles: d.Profiles, Sessions: []AgentSession{}, Messages: []AgentMessage{}, Memories: []AgentMemory{}, Bots: []PaperBot{}, Tasks: []AgentTask{}, Runs: []AgentRun{}, Notices: []AgentNotice{}, AIRequests: []AgentAIRequest{}}
+	for _, strategy := range d.Strategies {
+		if strategy.ProfileID == profile {
+			v.Strategies = append(v.Strategies, strategy)
+		}
+	}
 	v.Playbooks = []AgentPlaybook{}
 	v.TaskCapacity = agentTaskCapacity(d)
 	for _, p := range d.Playbooks {
@@ -401,6 +417,7 @@ func (s *Store) Agents(ctx context.Context, profile, query string) (AgentView, e
 		return AgentView{}, errors.New("search is too long")
 	}
 	v, e := agentView(d, r, profile, query, s.now().Unix())
+	v.PaperExecutionAvailable = s.providerFixture
 	return s.chatView(v), e
 }
 func validAgentText(v string, max int, required bool) bool {
@@ -408,6 +425,9 @@ func validAgentText(v string, max int, required bool) bool {
 }
 func agentCapacity(d agentDocument) error {
 	raw, _ := json.Marshal(d)
+	if e := validateStrategyStorage(raw, d); e != nil {
+		return e
+	}
 	if e := validateTaskAnalysisStorage(raw, d); e != nil {
 		return e
 	}
@@ -443,7 +463,7 @@ func agentCapacity(d agentDocument) error {
 	if err != nil {
 		return err
 	}
-	reserved := watchStorage(d) + taskAIFutureStorage(d) + newsStorage(d) + wenReserved + researchStorage(d) + sessionReserved
+	reserved := strategyFutureStorage(d) + watchStorage(d) + taskAIFutureStorage(d) + newsStorage(d) + wenReserved + researchStorage(d) + sessionReserved
 	for _, q := range d.AIRequests {
 		if q.State == "prepared" || q.State == "queued" || q.State == "running" {
 			reserved += agentAIResultReserve
@@ -478,7 +498,14 @@ func saveAgents(ctx context.Context, tx *sql.Tx, d agentDocument, revision int64
 func (s *Store) ChangeAgents(ctx context.Context, c AgentCommand) (AgentView, error) {
 	return s.changeAgents(ctx, c, false)
 }
-func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) (AgentView, error) {
+func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) (resultView AgentView, resultErr error) {
+	defer func() { resultView.PaperExecutionAvailable = s.providerFixture }()
+	if (c.Strategy != nil && c.Action != "strategy-save") || ((c.StrategyID != "" || c.StrategyVersion != 0) && c.Action != "task-review" && c.Action != "task-reviewed-create") {
+		return AgentView{}, errors.New("strategy fields require their own save or task review")
+	}
+	if c.StrategyID != "" && c.StrategyVersion < 1 {
+		return AgentView{}, errors.New("select an explicit strategy version")
+	}
 	analysisReview := c.Analysis != nil && (c.Action == "task-review" || c.Action == "task-reviewed-create")
 	if (c.Watch != nil || c.Analysis != nil) && c.Action != "task-review" && c.Action != "task-reviewed-create" {
 		return AgentView{}, errors.New("review the news watch before creating it; watch fields are not valid for this action")
@@ -584,6 +611,14 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 	}
 	providerAllowed := s.providerActionAllowed(d, c, profile, fixture)
 	switch c.Action {
+	case "strategy-save":
+		accounts, err := readStrategyAccounts(ctx, tx)
+		if err != nil {
+			return AgentView{}, err
+		}
+		if err = saveStrategy(&d, c, profile, id, now, accounts); err != nil {
+			return AgentView{}, err
+		}
 	case "chat-review":
 		p, err := s.chatReview(d, c, profile, revision, now)
 		if err != nil {
@@ -813,6 +848,20 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 			return AgentView{}, err
 		}
 	case "task-review", "task-reviewed-create":
+		if c.StrategyID != "" {
+			strategy := findStrategy(&d, profile, c.StrategyID)
+			if strategy == nil || c.StrategyVersion != len(strategy.Versions) {
+				return AgentView{}, errors.New("select current profile strategy version")
+			}
+			accounts, err := readStrategyAccounts(ctx, tx)
+			if err != nil {
+				return AgentView{}, err
+			}
+			binding, err := boundStrategyAccount(accounts, strategy.Versions[c.StrategyVersion-1].Plan)
+			if err != nil || binding != strategy.Versions[c.StrategyVersion-1].Binding {
+				return AgentView{}, errors.New("strategy wallet binding changed; save a new version")
+			}
+		}
 		review, err := reviewAgentTask(d, c, profile, revision, now)
 		if err != nil {
 			return AgentView{}, err
@@ -825,7 +874,12 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		if c.ConsentDigest != review.Digest {
 			return AgentView{}, errors.New("task review changed; review again")
 		}
-		if c.Analysis != nil {
+		if review.StrategyPlan != nil {
+			if !s.providerFixture {
+				return AgentView{}, errors.New("paper runs unavailable in this instance")
+			}
+			e = appendStrategyTask(&d, c, profile, id, now, review)
+		} else if c.Analysis != nil {
 			e = createReviewedTaskAnalysis(&d, c, profile, revision, now, providerAllowed)
 		} else {
 			e = appendAgentTask(&d, c, profile, id, now)
@@ -854,6 +908,25 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 			}
 			if t.State == "completed" || t.Runs >= t.MaxRuns {
 				return AgentView{}, errors.New("task evaluation limit reached; create a new bounded task")
+			}
+			if t.StrategyPlan != nil {
+				if t.State != "scheduled" && t.State != "paused" {
+					return AgentView{}, errors.New("review a new strategy task")
+				}
+				if c.Action == "task-resume" {
+					version, err := strategyPolicyVersion(&d, t, true, now)
+					if err != nil {
+						return AgentView{}, err
+					}
+					accounts, err := readStrategyAccounts(ctx, tx)
+					if err != nil {
+						return AgentView{}, err
+					}
+					binding, err := boundStrategyAccount(accounts, t.StrategyPlan.Plan)
+					if err != nil || binding != t.StrategyPlan.Binding || !s.providerFixture || version.SpentMicros >= version.Plan.TotalBudgetMicros {
+						return AgentView{}, errors.New("strategy binding, allocation or paper access changed; review again")
+					}
+				}
 			}
 			switch c.Action {
 			case "task-pause":
@@ -889,7 +962,12 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 				if t.State != "scheduled" {
 					return AgentView{}, errors.New("resume the paused task first")
 				}
-				if e = evaluateAgentTask(&d, i, now, providerAllowed); e != nil {
+				if t.StrategyPlan != nil {
+					e = s.evaluateStrategyTask(ctx, tx, &d, i, now)
+				} else {
+					e = evaluateAgentTask(&d, i, now, providerAllowed)
+				}
+				if e != nil {
 					return AgentView{}, e
 				}
 			}
@@ -941,20 +1019,27 @@ func captureAgentRunContext(d *agentDocument, profile, runID, id string, revisio
 		Task                          struct {
 			ID, Name, Text, StateAtCapture string
 			IntervalSeconds                int64
-			Calendar                       *TaskCalendar `json:",omitempty"`
+			Calendar                       *TaskCalendar       `json:",omitempty"`
+			StrategyPlan                   *StrategyTaskPolicy `json:",omitempty"`
 			MaxRuns, RunsAtCapture         int
 		}
 		Run struct {
 			ID, Strategy, Outcome, AIDigest string
 			At                              int64
-			News                            *NewsEvidence       `json:",omitempty"`
-			Analysis                        *TaskAnalysisResult `json:",omitempty"`
-			Watch                           *NewsWatchResult    `json:",omitempty"`
-			Headlines                       []NewsWatchHeadline `json:",omitempty"`
+			News                            *NewsEvidence        `json:",omitempty"`
+			Analysis                        *TaskAnalysisResult  `json:",omitempty"`
+			Watch                           *NewsWatchResult     `json:",omitempty"`
+			Paper                           *StrategyPaperResult `json:",omitempty"`
+			Headlines                       []NewsWatchHeadline  `json:",omitempty"`
 		}
 		AI *recordedAgentAI `json:",omitempty"`
 	}{Version: "agent-run-chat-v1", ProfileID: profile, CapturedAt: now, WorkspaceRevision: revision, AI: ai}
 	snapshot.Task.ID, snapshot.Task.Name, snapshot.Task.Text = task.ID, task.Name, task.Text
+	snapshot.Task.StrategyPlan = task.StrategyPlan
+	snapshot.Run.Paper = r.Paper
+	if r.Paper != nil {
+		snapshot.Version = "strategy-paper-run-chat-v1"
+	}
 	if typedAnalysis(*task) {
 		snapshot.Version = "agent-analysis-run-chat-v1"
 		snapshot.Run.Analysis = r.Analysis
@@ -1040,6 +1125,9 @@ func runAgentTask(d *agentDocument, i int, now int64) error {
 		return errors.New("local run/inbox capacity reached; no task executed")
 	}
 	t := &d.Tasks[i]
+	if t.StrategyPlan != nil || strings.HasPrefix(t.ID, strategyTaskPrefix) {
+		return errors.New("strategy task requires its reviewed evaluator")
+	}
 	if cronTask(*t) && now > t.Calendar.Until {
 		t.State = "completed"
 		t.NextAt = 0
@@ -1142,7 +1230,12 @@ func (s *Store) runAgentTasks(ctx context.Context, fixture bool) error {
 	for i, t := range d.Tasks {
 		if t.State == "scheduled" && t.Runs < t.MaxRuns && t.NextAt <= now {
 			allowed := s.providerTaskAllowed(t, fixture)
-			if e = evaluateAgentTask(&d, i, now, allowed); e != nil {
+			if t.StrategyPlan != nil {
+				e = s.evaluateStrategyTask(ctx, tx, &d, i, now)
+			} else {
+				e = evaluateAgentTask(&d, i, now, allowed)
+			}
+			if e != nil {
 				return e
 			}
 			changed = true
@@ -1275,15 +1368,25 @@ func retainedAgentRun(d agentDocument, profile, runID string, now int64) (*Agent
 	if err != nil || n < 1 || n > task.Runs || r.ID != fmt.Sprintf("%s:%d", task.ID, n) {
 		return nil, nil, nil, refused
 	}
+	paper := task.StrategyPlan != nil && r.Paper != nil && r.Strategy == strategyPlanVersion
+	if paper {
+		raw, _ := json.Marshal(d)
+		if validateStrategyStorage(raw, d) != nil {
+			return nil, nil, nil, refused
+		}
+	}
 	watch := task.Watch != nil && r.Strategy == newsWatchVersion && r.Watch != nil && r.Watch.Rule == task.Watch.Rule
 	analysis := typedAnalysis(*task) && r.Analysis != nil
 	plain := r.Strategy == "reminder-v1"
 	success := r.Strategy == "ai-step-v1/reminder-v1"
 	held := r.Strategy == "ai-step-v1" && strings.HasPrefix(r.Outcome, "ai-")
-	if (!plain && !success && !held && !watch && !analysis) || ((plain || success) && r.Outcome != "reminded") {
+	if (!plain && !success && !held && !watch && !analysis && !paper) || ((plain || success) && r.Outcome != "reminded") {
 		return nil, nil, nil, refused
 	}
 	expectedNotice := task.Name + ": " + task.Text
+	if paper {
+		expectedNotice = task.Name + ": " + r.Outcome
+	}
 	if analysis && task.Watch == nil {
 		expectedNotice = task.Name + ": analysis saved"
 	}
@@ -1311,7 +1414,7 @@ func retainedAgentRun(d agentDocument, profile, runID string, now int64) (*Agent
 	// Whitelist public historical fields; never serialize TaskAIStep or the
 	// request itself (both contain private connection/context/disclosure data).
 	var ai *recordedAgentAI
-	if (plain || watch) && !analysis {
+	if (plain || watch || paper) && !analysis {
 		if task.AI != nil || r.AIRequestID != "" || r.AIDigest != "" {
 			return nil, nil, nil, refused
 		}

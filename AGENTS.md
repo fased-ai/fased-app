@@ -36,6 +36,8 @@
 - Commit author and committer must both be `fcode-ai <155309118+fcode-ai@users.noreply.github.com>`. Verify `git var GIT_AUTHOR_IDENT` and `git var GIT_COMMITTER_IDENT` before committing; do not use the inherited former identity.
 - Never commit credentials, keys, user state or dependency/build outputs. Preserve unrelated edits.
 
+- Schema30 / `agents-versioned-strategies-v1` protects profile-owned immutable paper strategy versions, tagged reviewed tasks and their allocation/result ledger. Reuse the existing worker/UI/CLI; saving a version grants no execution, edits hold superseded tasks, and public wallet/network bindings and finite expiry/limits are rechecked. Compiled standalone fixtures alone supply paper prices; ordinary constructors, live quotes/signing and provider calls remain closed. Preserve legacy bots/tasks and schema29 bytes during migration; refuse unprotected fields/aliases, policy erasure, paused migration and older readers. Strategy tasks/results cannot become plain reminders or be archived out of their shared budget ledger.
+
 ## Design decisions
 
 Cut taglines, helper text and secondary labels. If a screen needs them to make sense, fix the layout.
