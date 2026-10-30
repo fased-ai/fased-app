@@ -111,10 +111,7 @@ func TestOnchainInstalledAdapterDriver(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	endpoint := "https://api.mainnet-beta.solana.com"
-	if c.Network == "devnet" {
-		endpoint = "https://api.devnet.solana.com"
-	}
+	endpoint := installedSwapRPCEndpoint(c.Network)
 	s.rpcAdmission = true
 	if _, e = s.ConfigureAccountRPC(t.Context(), RPCConfigInput{AccountID: id, Revision: records.Revision, Endpoint: endpoint, Network: c.Network}); e != nil {
 		t.Fatal(e)
@@ -151,4 +148,19 @@ func TestOnchainInstalledAdapterDriver(t *testing.T) {
 		t.Fatal("duplicate submission", e)
 	}
 	enc.Encode(map[string]any{"event": "result", "uid": os.Getuid(), "submissions": chain.Submissions, "run": run, "liveExecution": false})
+}
+
+func installedSwapRPCEndpoint(network string) string {
+	if network == "devnet" {
+		return "https://devnet.helius-rpc.com"
+	}
+	return "https://mainnet.helius-rpc.com"
+}
+func TestInstalledSwapRPCSelectionUsesAdmittedProviders(t *testing.T) {
+	for _, network := range []string{"devnet", "mainnet-beta"} {
+		t.Run(network, func(t *testing.T) {
+			s := fixtureStore(t)
+			providerAccount(t, s, installedSwapRPCEndpoint(network), network)
+		})
+	}
 }
