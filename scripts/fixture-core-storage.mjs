@@ -1,6 +1,7 @@
 // Compose an explicitly nonhistorical predecessor for same-schema reader tests.
 // Only archived disposable sources are changed, never an installed runtime.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -115,11 +116,6 @@ func managedNetworkAccount(a Account) bool {
     signerPublic,
     `package signer
 import "encoding/hex"
-import "github.com/fased-ai/fased-app/internal/onchain"
-type SwapProposal struct { Version string \`json:"version"\`; Account AccountRef \`json:"account"\`; Quote onchain.Quote \`json:"quote"\`; FixtureOnly bool \`json:"fixtureOnly"\`; Digest string \`json:"digest"\` }
-type SwapReceipt struct { Proposal SwapProposal \`json:"proposal"\`; State string \`json:"state"\`; Signed []byte \`json:"signed,omitempty"\`; Signature string \`json:"signature,omitempty"\`; Observation *onchain.Observation \`json:"observation,omitempty"\` }
-func SwapProposalDigest(p SwapProposal) string {p.Digest="";return onchain.Hash(p)}
-func NewSwapProposal(r AccountRef,q onchain.Quote) SwapProposal {p:=SwapProposal{Version:onchain.Version,Account:r,Quote:q,FixtureOnly:true};p.Digest=SwapProposalDigest(p);return p}
 func ValidManagedAccountRef(r AccountRef) bool {
  b, err := hex.DecodeString(r.PublicKey)
  return r.Version == 2 && (r.Network == "devnet" || r.Network == "mainnet-beta") && validID(r.SignerID) && validID(r.WalletID) && validID(r.Epoch) && err == nil && len(b) == 32 && hex.EncodeToString(b) == r.PublicKey
@@ -130,12 +126,65 @@ func ValidManagedAccountRef(r AccountRef) bool {
     await readFile(signerPublic),
   );
   storage["accounts.go"] = sha(await readFile(accounts));
-  for (const [file, marker, field] of [
+  // Read-only current swap-history backport. Preserve old protocol, lifecycle
+  // and dispatch: the composed helper gains no observer or signing commands.
+  const signerRoot = path.join(archivedRoot, "internal/signer");
+  await mkdir(path.join(signerRoot, "testdata"), { recursive: true });
+  for (const name of [
+    "onchain_state.go",
+    "onchain_state_test.go",
+    "testdata/onchain-reader.json",
+    "journal.go",
+  ]) {
+    const b = await readFile("internal/signer/" + name);
+    await writeFile(path.join(signerRoot, name), b);
+    storage["signer/" + name] = sha(b);
+  }
+  const amend = async (file, changes) => {
+    const target = path.join(signerRoot, file);
+    let b = await readFile(target, "utf8");
+    for (const [before, after] of changes) {
+      assert.ok(b.includes(before), file + ": missing reader marker " + before);
+      b = b.replace(before, after);
+    }
+    await writeFile(target, b);
+    storage["signer/" + file] = sha(Buffer.from(b));
+  };
+  await amend("policy.go", [
     [
-      "internal/signer/policy.go",
-      "type PublicInput struct {",
-      'Swap *SwapProposal `json:"swap,omitempty"`',
+      "type ledger struct {",
+      "type ledger struct {\n swaps map[string]SwapReceipt",
     ],
+    ["return &ledger{", "return &ledger{swaps:map[string]SwapReceipt{},"],
+    ["next := *l", "next := *l\n next.swaps=clone(l.swaps)"],
+    [
+      "switch r.Kind {",
+      'switch r.Kind {\n case "onchain-approve", "onchain-sign", "onchain-settled", "onchain-cancel": if e:=l.applySwap(r);e!=nil{return e}',
+    ],
+    [
+      'case "rebind":',
+      'case "rebind":\n for _,s:=range l.swaps {if s.State=="signed"{return ErrHeld}}',
+    ],
+    [
+      "l.ref = *r.Account\n\t\tl.policy = nil",
+      'for id,s:=range l.swaps{if s.State=="approved"{s.State="cancelled";l.swaps[id]=s}}\n l.ref = *r.Account\n\t\tl.policy = nil',
+    ],
+  ]);
+  await amend("update.go", [
+    ['"approvals-v1",', '"approvals-v1", "onchain-swap-fixture-v1",'],
+  ]);
+  await amend("lifecycle.go", [
+    [
+      "Features: append([]string{}, contract.Features...)",
+      "Features: l.swapStateFeatures(contract.Features)",
+    ],
+    [
+      "return s, nil",
+      "pending,unknown:=l.swapPending(v.now().Unix());s.Pending+=pending;s.Unknown+=unknown\n return s,nil",
+    ],
+  ]);
+
+  for (const [file, marker, field] of [
     ["internal/signer/rpc.go", "type Response struct {", "Swap *SwapReceipt"],
   ]) {
     const target = path.join(archivedRoot, file);
@@ -275,5 +324,16 @@ func ValidManagedAccountRef(r AccountRef) bool {
       ),
   );
   storage["store.go"] = sha(await readFile(store));
+  const readerLog = execFileSync(
+    "go",
+    ["test", "./internal/signer", "-run", "^TestSwapStateReader$"],
+    {
+      cwd: archivedRoot,
+      env: { ...process.env, FASED_COMPOSED_SWAP_READER: "1" },
+      encoding: "utf8",
+    },
+  );
+  storage["signer/reader-test-output"] = sha(Buffer.from(readerLog));
+
   return { fixtureOnly: true, exactHistoricalBinary: false, storage };
 }

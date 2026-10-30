@@ -416,3 +416,23 @@ func TestOnchainIncompleteSettlementKeepsBothOriginalsHeld(t *testing.T) {
 		t.Fatal("original not reconciled")
 	}
 }
+
+func TestOnchainProjectionOnlyAppearsForAvailableOrSavedSwaps(t *testing.T) {
+	s := fixtureStore(t)
+	v, e := s.Agents(t.Context(), "trading-analyst", "")
+	if e != nil || v.Onchain != nil {
+		t.Fatal("unused swap projection changed legacy view", e)
+	}
+	h := newSwapHarness(t)
+	v, e = h.store.Agents(t.Context(), h.profile, "")
+	if e != nil || v.Onchain == nil || !v.Onchain.Available {
+		t.Fatal("controlled swap availability missing", e)
+	}
+	p := h.quote(t)
+	h.submit(t, p)
+	h.store.onchain = nil
+	v, e = h.store.Agents(t.Context(), h.profile, "")
+	if e != nil || v.Onchain == nil || v.Onchain.Available || len(v.Onchain.Tasks) != 1 {
+		t.Fatal("saved swap history missing while dispatch is disabled", e)
+	}
+}

@@ -1,0 +1,106 @@
+{
+  "proposal": {
+    "version": "jupiter-build-swap-v1",
+    "account": {
+      "version": 1,
+      "signerId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "walletId": "1c673c595c091bcd58e544ec8e9da6c4",
+      "epoch": "97a3a623e1c7554bb2c88c27a568afcf",
+      "network": "disposable-fixture:v1",
+      "publicKey": "f7cdc6031782eb93db927ec4be154a68ee011d02433b02483a44bd2a738ef7a6"
+    },
+    "quote": {
+      "version": "jupiter-build-swap-v1",
+      "id": "df5ecce3c2433691c2ca9bda0eac668a",
+      "profileId": "trading-analyst",
+      "instanceId": "D2MfPkxjnUAWrPolgHtuyiOetzR7X6qQin2LawKdopM",
+      "accountId": "cccccccccccccccccccccccccccccccc",
+      "network": "mainnet-beta",
+      "owner": "HgKgvyp5U5bN22vaSMx2mKcSFh7pxbqDY4tVGd7rU8r9",
+      "rpcSha256": "c768422df940c6f4b792d93b7492ebf3d96f7077bd6084882044a771cbe79006",
+      "inputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "outputMint": "So11111111111111111111111111111111111111112",
+      "amount": "12500000",
+      "output": "100000000",
+      "minimumOutput": "99500000",
+      "slippageBps": 50,
+      "maxFeeLamports": "5000",
+      "feeLamports": "5000",
+      "rentLamports": "0",
+      "blockhash": "11111111111111111111111111111112",
+      "lastValidHeight": "100",
+      "observedSlot": "10",
+      "createdAt": 1793334715,
+      "expiresAt": 1793334760,
+      "instructions": [
+        {
+          "programId": "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+          "accounts": [
+            {
+              "pubkey": "HgKgvyp5U5bN22vaSMx2mKcSFh7pxbqDY4tVGd7rU8r9",
+              "isSigner": true,
+              "isWritable": false
+            },
+            {
+              "pubkey": "2zzMmKKiA4hBD2Ncy6EcHPeCH1Ajghox575y9ga7FNuN",
+              "isSigner": false,
+              "isWritable": true
+            },
+            {
+              "pubkey": "Ferm3CW5sVqdyg3qw5174uLFVQwYAtefFmpitVRM6SEv",
+              "isSigner": false,
+              "isWritable": true
+            },
+            {
+              "pubkey": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+              "isSigner": false,
+              "isWritable": false
+            },
+            {
+              "pubkey": "So11111111111111111111111111111111111111112",
+              "isSigner": false,
+              "isWritable": false
+            },
+            {
+              "pubkey": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+              "isSigner": false,
+              "isWritable": false
+            },
+            {
+              "pubkey": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+              "isSigner": false,
+              "isWritable": false
+            },
+            {
+              "pubkey": "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+              "isSigner": false,
+              "isWritable": false
+            },
+            {
+              "pubkey": "D8cy77BBepLMngZx6ZukaTff5hCt1HrWyKk3Hnd9oitf",
+              "isSigner": false,
+              "isWritable": false
+            },
+            {
+              "pubkey": "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+              "isSigner": false,
+              "isWritable": false
+            }
+          ],
+          "data": "u2T6zDHErxQgvL4AAAAAAADh9QUAAAAAMgAAAAAAAQAAAAAQJwAB"
+        }
+      ],
+      "transactionSha256": "aa5fe6cb959a8069c255a7d13d84e05cf724e676cce3851b270d077875a0dc30",
+      "digest": "301c6b1d081da066b3f70bac5a326199db4680873923a533cbcb2618c35841d0"
+    },
+    "fixtureOnly": true,
+    "digest": "baa9a37cb65d00079948502df38f951fb4ad170a2d2a169697ca953fde2a8450"
+  },
+  "signed": "AZg4Oyno08EprOrEy/hNW+0GrV5ZWpBAvRKZ71jSSKC1gaazwZ5oGxiS0Z9qBCbT8J4e0tAR4u3vTPRkxEB5hwmAAQAGCffNxgMXguuT25J+xL4VSmjuAR0CQzsCSDpEvSpzjvemHbal34v7hPUuRm3kI/vikTnVoCud1R0LSmkzlH6kNcHZtl6xdrNgOp8JdM7avy6Y7/jSx43lR7d77bC+P2QwMwMGRm/lIRcy/+ytunLDm+e8jOW7xfcSayxDmzpAAAAAtD/6J/XX9kp0wJsfKVh53ksJqzbfyd1RSzIap7OM5ejG+nrzvtutOj1l82qryXQxsbvkwtL24OR8pgIDRS9dYQR51VvyMcBu7nTFbs5oFQf9sbLeo/SOUQKxzaJWvBOPBpuIV/6rgYT7aH9jRhjANdrEOdwa6ztVmKDwAAAAAAEG3fbh12Whk9nL4UbO63msHLSF7V9bN5E6jPWFfv8AqQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAwMABQLAXBUAAwAJAwAAAAAAAAAABgoAAQIFBwgIBgQGJ7tk+swxxK8UILy+AAAAAAAA4fUFAAAAADIAAAAAAAEAAAAAECcAAQA=",
+  "observation": {
+    "state": "confirmed",
+    "slot": "11",
+    "input": "12500000",
+    "output": "100000000"
+  }
+}

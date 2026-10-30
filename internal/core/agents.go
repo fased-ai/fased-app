@@ -422,7 +422,9 @@ func (s *Store) Agents(ctx context.Context, profile, query string) (AgentView, e
 	}
 	v, e := agentView(d, r, profile, query, s.now().Unix())
 	projection := swapProjection(d, r, v.ProfileID, s.onchain != nil)
-	v.Onchain = &projection
+	if s.onchain != nil || len(projection.Tasks) > 0 || len(projection.Runs) > 0 {
+		v.Onchain = &projection
+	}
 	v.PaperExecutionAvailable = s.providerFixture
 	return s.chatView(v), e
 }
