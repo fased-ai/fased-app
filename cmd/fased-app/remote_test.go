@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
 	"github.com/fased-ai/fased-app/internal/vpsinstall"
 	"io"
@@ -115,5 +116,14 @@ func TestManagedRemoteWizardAndHandoff(t *testing.T) {
 	}
 	if remotePublicOrigin(privateaccess.Plan{Mode: "tailscale", Origin: "https://fixture.ts.net"}) != "https://fixture.ts.net" {
 		t.Fatal("private HTTPS origin lost")
+	}
+}
+
+func TestManagedRemotePendingAccessUsesInstalledCommand(t *testing.T) {
+	m := vpsinstall.Manifest{Core: "/opt/Fased app/fased-app"}
+	cause := errors.New("private HTTPS did not verify")
+	err := remoteAccessPending(m, cause)
+	if !errors.Is(err, cause) || !strings.Contains(err.Error(), installationCommand(m.Core, "vps", "access")) {
+		t.Fatal(err)
 	}
 }

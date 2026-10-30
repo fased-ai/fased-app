@@ -119,17 +119,11 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			}
 			*vps = choice == "remote"
 			if *vps {
-				value, e := installationAnswer(r, errOut, "Private access [tailscale/ssh, default tailscale]: ")
+				value, e := installationPrivateAccessChoice(r, errOut)
 				if e != nil {
 					return e
 				}
 				*access = value
-				if *access == "" {
-					*access = "tailscale"
-				}
-				if *access != "tailscale" && *access != "ssh" {
-					return errors.New("choose tailscale or ssh")
-				}
 			}
 			*managedRemote = false
 			if *vps {
@@ -188,10 +182,15 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 				}
 			}
 		}
-		plan, err := privateaccess.System().Plan(ctx, *access, *listen)
+		var accessWizard *bufio.Reader
+		if *vps {
+			accessWizard = wizard
+		}
+		plan, err := installationPrivateAccess(ctx, accessWizard, errOut, *access, *listen, privateaccess.System().Plan)
 		if err != nil {
 			return err
 		}
+		*access = plan.Mode
 		if *access == "tailscale" {
 			if *origin != "" && *origin != plan.Origin {
 				return errors.New("configured origin differs from this Tailscale device")
@@ -237,7 +236,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 				id := c.Endpoint.InstanceID
 				c.Close()
 				if e = privateaccess.System().Enable(ctx, m.Root, plan, id); e != nil {
-					return e
+					return installationAccessPending(m, e)
 				}
 				url = plan.Origin
 			}
@@ -475,4 +474,56 @@ func installationAutostart(r *bufio.Reader, out io.Writer, remote bool) (bool, e
 		}
 		fmt.Fprintln(out, "Choose yes or no.")
 	}
+}
+
+// Private access is planned before host preparation or installation. A changed
+// transport requires another explicit wizard choice, never an automatic fallback.
+func installationPrivateAccess(ctx context.Context, in *bufio.Reader, out io.Writer, mode, listen string, planner func(context.Context, string, string) (privateaccess.Plan, error)) (privateaccess.Plan, error) {
+	// Changing access cannot repair an invalid listener. Reuse the pure local
+	// planner's target validation before any readiness call or retry prompt.
+	if _, err := (privateaccess.Manager{}).Plan(ctx, "local", listen); err != nil {
+		return privateaccess.Plan{}, err
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return privateaccess.Plan{}, err
+		}
+		plan, err := planner(ctx, mode, listen)
+		if err == nil {
+			return plan, nil
+		}
+		if in == nil {
+			return privateaccess.Plan{}, err
+		}
+		if cancelErr := ctx.Err(); cancelErr != nil {
+			return privateaccess.Plan{}, cancelErr
+		}
+		fmt.Fprintln(out, "Private access is not ready:", err)
+		fmt.Fprintln(out, "Prepare Tailscale and retry, or choose SSH. Installation has not started.")
+		mode, err = installationPrivateAccessChoice(in, out)
+		if err != nil {
+			return privateaccess.Plan{}, err
+		}
+	}
+}
+
+func installationPrivateAccessChoice(in *bufio.Reader, out io.Writer) (string, error) {
+	for {
+		mode, err := installationAnswer(in, out, "Private access [tailscale/ssh, default tailscale]: ")
+		if err != nil {
+			return "", err
+		}
+		switch strings.ToLower(mode) {
+		case "", "tailscale":
+			return "tailscale", nil
+		case "ssh":
+			return "ssh", nil
+		}
+		fmt.Fprintln(out, "Choose tailscale or ssh.")
+	}
+}
+
+func installationAccessPending(m localinstall.Manifest, cause error) error {
+	retry := installationCommand(filepath.Join(m.Root, localinstall.EngineName()), "access", "enable", "--prefix", m.Root, "--data-dir", m.Data)
+	return fmt.Errorf("Fased is installed; private access is pending: %w; retry with %s", cause, retry)
 }

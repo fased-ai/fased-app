@@ -3,9 +3,11 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -193,5 +195,124 @@ func TestInstallationHandoffStoppedDoesNotOfferUnreadyUI(t *testing.T) {
 		if strings.Contains(text, "access") != (mode == "tailscale") {
 			t.Fatalf("missing or unexpected private endpoint setup: %s", text)
 		}
+	}
+}
+
+func TestInstallationPrivateAccessChoice(t *testing.T) {
+	for _, input := range []string{"\n", "TAILSCALE\n", "invalid\ntailscale\n"} {
+		var out bytes.Buffer
+		mode, err := installationPrivateAccessChoice(bufio.NewReader(strings.NewReader(input)), &out)
+		if err != nil || mode != "tailscale" {
+			t.Fatal(mode, err, out.String())
+		}
+	}
+	mode, err := installationPrivateAccessChoice(bufio.NewReader(strings.NewReader("SSH\n")), io.Discard)
+	if err != nil || mode != "ssh" {
+		t.Fatal(mode, err)
+	}
+	if _, err := installationPrivateAccessChoice(bufio.NewReader(strings.NewReader("")), io.Discard); err == nil {
+		t.Fatal("EOF selected private access")
+	}
+}
+
+func TestInstallationPrivateAccessRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+		succeedsAt  int
+		want        string
+	}{
+		{"explicit SSH fallback", "ssh\n", 0, "ssh"},
+		{"retry prepared Tailscale", "\n", 2, "tailscale"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			var modes []string
+			plan := func(ctx context.Context, mode, listen string) (privateaccess.Plan, error) {
+				if listen != "127.0.0.1:7441" {
+					t.Fatal("listener changed", listen)
+				}
+				modes = append(modes, mode)
+				if mode == "tailscale" && len(modes) != tc.succeedsAt {
+					return privateaccess.Plan{}, errors.New("Tailscale is not enrolled")
+				}
+				return privateaccess.Plan{Mode: mode, Origin: "fixture-origin", Target: "http://" + listen}, nil
+			}
+			got, err := installationPrivateAccess(t.Context(), bufio.NewReader(strings.NewReader(tc.input)), &out, "tailscale", "127.0.0.1:7441", plan)
+			if err != nil || got.Mode != tc.want || len(modes) != 2 || modes[0] != "tailscale" || modes[1] != tc.want {
+				t.Fatal(got, modes, err)
+			}
+			if !strings.Contains(out.String(), "Tailscale is not enrolled") || !strings.Contains(out.String(), "SSH") {
+				t.Fatal("missing actionable recovery", out.String())
+			}
+		})
+	}
+}
+
+func TestInstallationPrivateAccessNeverFallsBackWithoutConsent(t *testing.T) {
+	for _, interactive := range []bool{false, true} {
+		var in *bufio.Reader
+		if interactive {
+			in = bufio.NewReader(strings.NewReader(""))
+		}
+		var out bytes.Buffer
+		calls := 0
+		failure := errors.New("Tailscale is unavailable")
+		plan := func(ctx context.Context, mode, listen string) (privateaccess.Plan, error) {
+			calls++
+			if mode != "tailscale" {
+				t.Fatal("unapproved access change", mode)
+			}
+			return privateaccess.Plan{}, failure
+		}
+		if _, err := installationPrivateAccess(t.Context(), in, &out, "tailscale", "127.0.0.1:7441", plan); err == nil || calls != 1 {
+			t.Fatal(calls, err)
+		}
+		if !interactive && out.Len() != 0 {
+			t.Fatal("unattended install prompted", out.String())
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	calls := 0
+	_, err := installationPrivateAccess(ctx, bufio.NewReader(strings.NewReader("ssh\n")), io.Discard, "tailscale", "127.0.0.1:7441", func(ctx context.Context, mode, listen string) (privateaccess.Plan, error) {
+		calls++
+		return privateaccess.Plan{}, nil
+	})
+	if !errors.Is(err, context.Canceled) || calls != 0 {
+		t.Fatal("cancelled wizard continued", calls, err)
+	}
+}
+
+func TestInstallationPendingAccessUsesExactInstalledInstance(t *testing.T) {
+	m := localinstall.Manifest{Root: "/home/owner/Fased app", Data: "/home/owner/private state"}
+	cause := errors.New("private HTTPS did not verify")
+	err := installationAccessPending(m, cause)
+	want := installationCommand(filepath.Join(m.Root, localinstall.EngineName()), "access", "enable", "--prefix", m.Root, "--data-dir", m.Data)
+	if !errors.Is(err, cause) || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "installed") {
+		t.Fatal(err)
+	}
+	if strings.Contains(err.Error(), "claim-code") {
+		t.Fatal("unverified route advertised as ready", err)
+	}
+}
+
+func TestInstallationPrivateAccessRejectsInvalidListenerBeforePrompt(t *testing.T) {
+	for _, listen := range []string{"0.0.0.0:7331", "127.0.0.1:0", "127.0.0.1:65536", "invalid"} {
+		t.Run(listen, func(t *testing.T) {
+			in := bufio.NewReader(strings.NewReader("ssh\n"))
+			var out bytes.Buffer
+			calls := 0
+			_, err := installationPrivateAccess(t.Context(), in, &out, "tailscale", listen, func(ctx context.Context, mode, listen string) (privateaccess.Plan, error) {
+				calls++
+				return (privateaccess.Manager{}).Plan(ctx, mode, listen)
+			})
+			if err == nil || calls != 0 || out.Len() != 0 {
+				t.Fatal("immutable listener error reached access retry", calls, err, out.String())
+			}
+			remaining, err := in.ReadString('\n')
+			if err != nil || remaining != "ssh\n" {
+				t.Fatal("listener failure consumed transport consent", remaining, err)
+			}
+		})
 	}
 }

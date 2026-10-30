@@ -78,7 +78,7 @@ directory, run:
 ./fased-app install --bundle . --interactive
 ```
 
-The terminal installer offers **Local** (install on this computer), **Remote** (install on this server) and **Connect** (open an existing instance). Connect verifies the selected Fased API/instance and opens its browser UI; it never installs or starts a local engine. Local asks whether to start at login, off by default. Remote offers a dedicated locked app account, then asks whether to keep running after logout/reboot. The dedicated option uses a system service; the older current-user option still requires Linux user-service/linger readiness. Remote retains the `--vps` CLI alias and requires explicit SSH or Tailscale access. Tailscale enrollment, HTTPS and operator permissions remain owner prerequisites; no tailnet, SSH or firewall policy is reset.
+The terminal installer offers **Local** (install on this computer), **Remote** (install on this server) and **Connect** (open an existing instance). Connect verifies the selected Fased API/instance and opens its browser UI; it never installs or starts a local engine. Local asks whether to start at login, off by default. Remote offers a dedicated locked app account, then asks whether to keep running after logout/reboot. The dedicated option uses a system service; the older current-user option still requires Linux user-service/linger readiness. Remote retains the `--vps` CLI alias and requires explicit SSH or Tailscale access. Tailscale enrollment, HTTPS and operator permissions remain owner prerequisites; no tailnet, SSH or firewall policy is reset. If Tailscale is not ready, the wizard keeps your installation choices and lets you prepare it and retry, or explicitly choose SSH. It does not silently change access or begin installation before the selected access plan is ready. Invalid access choices are prompted again; cancelling leaves installation untouched.
 
 For Local or Remote installation, the wizard verifies the package's platform,
 version and complete file inventory before host preparation.
@@ -105,6 +105,8 @@ checks them before changing installation or instance directories. Each copied
 file is verified in staging before publication. Changed input is refused without
 publishing a bad target; restoring the same verified bundle permits retry with
 the same installation identity and preserved instance data.
+
+If private HTTPS cannot be verified after installation, Fased preserves the installed instance and reports private access as pending. The error prints the exact installed command to retry access, including custom installation/data paths where applicable; it does not require reinstalling or treating an unverified URL as ready.
 
 When installation finishes, the wizard prints the selected connection steps and
 commands using the installed executable and exact state directory; adding Fased

@@ -130,7 +130,7 @@ func managedRemoteInstall(ctx context.Context, corePath, hash, listen string, pl
 	if start {
 		url, err = enableRemoteAccess(ctx, m, system)
 		if err != nil {
-			return fmt.Errorf("Remote is installed; private access is pending: %w; retry with vps access", err)
+			return remoteAccessPending(m, err)
 		}
 	}
 	remoteHandoff(errOut, m, plan, start)
@@ -367,4 +367,8 @@ func vpsEnrollmentTarget(action, data string, lookup func(string) (custodyinstal
 		return custodyinstall.Manifest{}, false, nil
 	}
 	return lookup(data)
+}
+
+func remoteAccessPending(m vpsinstall.Manifest, cause error) error {
+	return fmt.Errorf("Remote is installed; private access is pending: %w; retry with %s", cause, installationCommand(m.Core, "vps", "access"))
 }
