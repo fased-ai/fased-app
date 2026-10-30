@@ -41,7 +41,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - run: node --test scripts/ci-routing.test.mjs
+      - run: node --test scripts/ci-routing.test.mjs scripts/ci-core-coverage.test.mjs
       - id: route
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -78,8 +78,16 @@ jobs:
         run: node --test --test-isolation=none scripts/provider-models.test.mjs scripts/provider-models-local.test.mjs
       - run: go mod verify
       - run: test -z "$(gofmt -l cmd internal desktop ui.go)"
-      - if: needs.classify.outputs.scope == 'full'
-        run: npm run test:core
+      - name: Full race coverage in bounded core groups
+        if: needs.classify.outputs.scope == 'full'
+        run: |
+          # Update unit coverage runs in the required handoff job on the same head.
+          go list ./internal/... ./cmd/fased-app ./cmd/fased-signer ./cmd/fased-install ./cmd/fased-package > .evidence/core-test-packages.txt
+          mapfile -t fased_other_packages < <(grep -vE '/internal/(core|update)$' .evidence/core-test-packages.txt)
+          test "${#fased_other_packages[@]}" -gt 0
+          go test -race -p 1 "${fased_other_packages[@]}"
+          go test -race -p 1 ./internal/core -skip '^Test(SwapRecovery|VenueCredential|.*WEN)'
+          go test -race -p 1 ./internal/core -run '^Test(SwapRecovery|VenueCredential|.*WEN)'
       - if: needs.classify.outputs.scope == 'rpc'
         run: go test -race ./internal/core -run 'Test(RPC|AccountRPC|PublicRPC|ProviderRPC)'
       - run: npm run build:core
@@ -174,6 +182,8 @@ jobs:
       - run: go -C desktop mod verify
       - run: npm run build:desktop
       - run: npm run build:core
+      - name: Verify bounded disk-image resource handling
+        run: node --test --test-isolation=none scripts/macos-dmg.test.mjs
       - run: npm run package:native
       - name: Prepare missing Ubuntu runtime acceptance
         if: runner.os == 'Linux'
@@ -381,6 +391,9 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: true
+      - name: Update unit race coverage
+        if: needs.classify.outputs.scope == 'full'
+        run: go test -race -p 1 ./internal/update
       - name: Fixture owner/signer handshake and combined checkpoints
         env:
           FASED_HANDOFF_EVIDENCE: .evidence/p4-handoff-model
