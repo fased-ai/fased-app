@@ -29,7 +29,7 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 		return bootstrapCommand(args[1:], in, out, errOut)
 	}
 	if len(args) == 0 {
-		return errors.New("usage: fased-app custody enroll|install|status|claim-code|reset-app-password|setup|import|recover|approve|updates|accounts|login|remove --disposable-fixture [options]")
+		return errors.New("usage: fased-app custody enroll|install|status|claim-code|reset-app-password|setup|import|recover|approve|approve-swap|updates|accounts|login|remove --disposable-fixture [options]")
 	}
 	if runtime.GOOS != "linux" || os.Getuid() <= 0 || os.Getuid() != os.Geteuid() {
 		return errors.New("custody fixture requires an ordinary Linux owner; real wallets remain disabled")
@@ -121,11 +121,11 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 			return errors.New("managed metadata requires --prepare-host for the OS identity switch; passwords are not accepted")
 		}
 		return system.UpdatePreferences(ctx, m, *requestStdin, out)
-	case "approve":
+	case "approve", "approve-swap":
 		if *proposalFile == "" {
 			return errors.New("choose --proposal-file containing a public proposal")
 		}
-		command := []string{"approve", "--config", m.Root + "/identity.json", "--disposable-fixture", "--file", *proposalFile}
+		command := []string{args[0], "--config", m.Root + "/identity.json", "--disposable-fixture", "--file", *proposalFile}
 		if *approvalStdin {
 			command = append(command, "--approval-stdin")
 		}

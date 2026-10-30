@@ -36,6 +36,11 @@ func plainReminderBindings(c AgentCommand) error {
 }
 
 func savedPlainReminder(d agentDocument, profile, id string) (AgentTask, error) {
+	for _, t := range d.Tasks {
+		if t.ID == id && t.Swap != nil {
+			return AgentTask{}, errors.New("swap cannot become a reminder")
+		}
+	}
 	var source AgentTask
 	profiles, tasks := 0, 0
 	for _, p := range d.Profiles {

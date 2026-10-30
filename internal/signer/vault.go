@@ -66,19 +66,20 @@ type Status struct {
 }
 
 type Vault struct {
-	mu         sync.Mutex
-	store      *storage
-	signerID   string
-	network    string
-	managedRef *AccountRef
-	record     *envelope
-	ledger     *ledger
-	seed       []byte
-	until      time.Time
-	timer      *time.Timer
-	now        func() time.Time
-	closed     bool
-	bootID     string
+	swapObserver SwapObserver
+	mu           sync.Mutex
+	store        *storage
+	signerID     string
+	network      string
+	managedRef   *AccountRef
+	record       *envelope
+	ledger       *ledger
+	seed         []byte
+	until        time.Time
+	timer        *time.Timer
+	now          func() time.Time
+	closed       bool
+	bootID       string
 }
 
 func validPassword(p []byte) bool { return utf8.Valid(p) && utf8.RuneCount(p) >= 12 && len(p) <= 1024 }

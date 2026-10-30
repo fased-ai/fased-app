@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/onchain"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -48,6 +49,7 @@ type Request struct {
 	PublicInput
 }
 type Response struct {
+	Swap            *SwapReceipt           `json:"swap,omitempty"`
 	Installation    *update.Installation   `json:"installation,omitempty"`
 	Preflight       *update.Preflight      `json:"preflight,omitempty"`
 	Stage           *update.StageStatus    `json:"stage,omitempty"`
@@ -72,6 +74,20 @@ func execute(v *Vault, r Request, owner bool) Response {
 	if !owner && !AppActionAllowed(r.Action) {
 		return Response{Error: "owner administration denied"}
 	}
+	if r.Swap != nil && r.Action != "swap-approve" {
+		return Response{Error: "unexpected swap approval fields"}
+	}
+	if r.Action == "swap-approve" || r.Action == "swap-sign" || r.Action == "swap-receipt" || r.Action == "swap-reconcile" || r.Action == "swap-cancel" {
+		expected := Request{Action: r.Action}
+		if r.Action == "swap-approve" {
+			expected.Swap = r.Swap
+		} else {
+			expected.OperationID = r.OperationID
+		}
+		if onchain.Hash(expected) != onchain.Hash(r) {
+			return Response{Error: "one typed swap action required"}
+		}
+	}
 	if v.network != "" {
 		switch r.Action {
 		case "status", "create", "import-managed-seed", "unlock", "lock", "backup", "verify-backup", "restore", "fixture-update-inventory", "fixture-update-status", "fixture-update-prepare", "fixture-update-abort", "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish", "fixture-update-preflight", "fixture-install-controller":
@@ -80,6 +96,36 @@ func execute(v *Vault, r Request, owner bool) Response {
 		}
 	}
 	switch r.Action {
+	case "swap-approve":
+		if r.Swap == nil {
+			return Response{Error: "swap approval document required"}
+		}
+		x, e := v.ApproveSwap(*r.Swap)
+		out := Response{Swap: x, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel":
+		var x *SwapReceipt
+		var e error
+		switch r.Action {
+		case "swap-cancel":
+			x, e = v.CancelSwap(r.OperationID)
+		case "swap-sign":
+			x, e = v.SignSwap(r.OperationID)
+		case "swap-receipt":
+			x, e = v.SwapReceipt(r.OperationID)
+		case "swap-reconcile":
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			x, e = v.ReconcileSwap(ctx, r.OperationID)
+		}
+		out := Response{Swap: x, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
 	case "import-managed-seed":
 		err = v.importManagedSeed(r.Document, r.Password)
 	case "fixture-install-controller":
@@ -237,7 +283,7 @@ func execute(v *Vault, r Request, owner bool) Response {
 // this allowlist after authenticating the actual kernel peer UID.
 func AppActionAllowed(action string) bool {
 	switch action {
-	case "status", "fixture-approvals", "fixture-state", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation":
+	case "status", "fixture-approvals", "fixture-state", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel":
 		return true
 	}
 	return false

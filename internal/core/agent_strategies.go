@@ -407,6 +407,9 @@ func strategyFields(raw []byte, unprotected bool) error {
 				return errors.New("invalid task records")
 			}
 			for _, row := range rows {
+				if err := onchainRowFields(row, key, unprotected); err != nil {
+					return err
+				}
 				if unprotected {
 					for field, body := range row {
 						if strings.EqualFold(field, "id") {
@@ -447,6 +450,9 @@ func strategyFields(raw []byte, unprotected bool) error {
 }
 func validateStrategyStorage(raw []byte, d agentDocument) error {
 	if err := strategyFields(raw, false); err != nil {
+		return err
+	}
+	if err := validateOnchainStorage(d); err != nil {
 		return err
 	}
 	if len(d.Strategies) > 16 {

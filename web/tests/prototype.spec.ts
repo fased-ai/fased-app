@@ -150,7 +150,7 @@ test("terminal mockups cannot execute and make no remote requests", async ({
   ).toBeVisible();
   await page.getByRole("button", { name: "Onchain", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "Execution unavailable" }),
+    page.getByRole("button", { name: "Quote", exact: true }),
   ).toBeDisabled();
   await page.goto("/#overview");
   await page.getByRole("button", { name: "Add widgets", exact: true }).click();

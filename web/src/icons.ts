@@ -21,6 +21,7 @@ export {
   CircleHelp,
   Clock3,
   Copy,
+  Download,
   ExternalLink,
   Eye,
   FlaskConical,

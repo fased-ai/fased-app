@@ -54,7 +54,17 @@ func (v *Vault) updateSnapshot(probe string) (update.SignerSnapshot, error) {
 				Hash     string
 			}{mock.seq, mock.hash})
 		}
-		s.States = append(s.States, update.State{Name: contract.Name, Version: contract.Versions.Min, Features: append([]string{}, contract.Features...), Anchor: anchor})
+		features := append([]string{}, contract.Features...)
+		if len(l.swaps) == 0 {
+			filtered := features[:0]
+			for _, f := range features {
+				if f != "onchain-swap-fixture-v1" {
+					filtered = append(filtered, f)
+				}
+			}
+			features = filtered
+		}
+		s.States = append(s.States, update.State{Name: contract.Name, Version: contract.Versions.Min, Features: features, Anchor: anchor})
 	}
 	for _, op := range l.ops {
 		switch op.State {
@@ -63,6 +73,15 @@ func (v *Vault) updateSnapshot(probe string) (update.SignerSnapshot, error) {
 		case "sending":
 			s.Pending++
 			s.Unknown++
+		}
+	}
+	for _, op := range l.swaps {
+		if op.State == "signed" {
+			s.Pending++
+			s.Unknown++
+		}
+		if op.State == "approved" && op.Proposal.Quote.ExpiresAt > v.now().Unix() {
+			s.Pending++
 		}
 	}
 	return s, nil

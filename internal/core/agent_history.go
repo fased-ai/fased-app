@@ -51,7 +51,7 @@ type TaskHistoryView struct {
 
 func validHistoryDays(days int) bool { return days == 0 || days == 7 || days == 30 || days == 90 }
 func archiveEligible(t AgentTask) bool {
-	return t.State == "completed" && t.MaxRuns >= 1 && t.MaxRuns <= 20 && t.Runs >= 0 && t.Runs <= t.MaxRuns && len(t.ID) == 43 && !strings.Contains(t.ID, ":") && t.StrategyPlan == nil && t.AI == nil && t.News == nil && t.WEN == nil && t.Playbook == nil && t.BotID == ""
+	return t.State == "completed" && t.MaxRuns >= 1 && t.MaxRuns <= 20 && t.Runs >= 0 && t.Runs <= t.MaxRuns && len(t.ID) == 43 && !strings.Contains(t.ID, ":") && t.Swap == nil && t.StrategyPlan == nil && t.AI == nil && t.News == nil && t.WEN == nil && t.Playbook == nil && t.BotID == ""
 }
 func splitTaskHistory(d agentDocument, profile, id string) (agentDocument, TaskHistoryEntry, error) {
 	out := d

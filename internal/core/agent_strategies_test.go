@@ -307,7 +307,7 @@ func TestStrategyMigrationPreserves29AndRefusesUnprotectedState(t *testing.T) {
 				t.Fatal(e)
 			}
 			next.db.QueryRow("PRAGMA user_version").Scan(&schema)
-			if schema != 30 || before != after || revision != got {
+			if schema != StateSchema || before != after || revision != got {
 				t.Fatal("format-only migration rewrote old records")
 			}
 			// No authoritative originals are stored under an ephemeral test path.

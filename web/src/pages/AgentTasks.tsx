@@ -1,3 +1,4 @@
+import { SwapResultFacts } from "./OnchainSwap";
 import { resolveLanguage, translate } from "../ui-language";
 import { useUI } from "../ui-preferences";
 import { useEffect, useRef, useState } from "react";
@@ -346,6 +347,12 @@ export function AgentTasks({
                   uiText("Saved result")}
         </p>
         {run.paper && <PaperResultFacts result={run.paper} />}
+        {run.swap && (
+          <SwapResultFacts
+            result={run.swap}
+            quote={task?.swap?.proposal.quote}
+          />
+        )}
         {run.watch && run.analysis?.state === "completed" && answer && (
           <p className="ai-answer">{answer}</p>
         )}
@@ -386,7 +393,7 @@ export function AgentTasks({
             ].includes(run.strategy)) && (
             <button
               className="secondary"
-              disabled={agents.busy}
+              disabled={agents.busy || !!run.swap}
               onClick={() => void discuss(run)}
             >
               {uiText("Discuss")}
