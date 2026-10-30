@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page, type TestInfo } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, mkdir, readFile, writeFile, rm, cp } from "node:fs/promises";
@@ -12,12 +12,25 @@ test.use({ colorScheme: "dark" });
 test("Onchain quote review protected approval submit and original result share UI and CLI", async ({
   page,
 }, info) => {
+  await swapJourney(false, page, info);
+});
+
+test("Onchain expired cancellation and locked receipt recovery share Tasks UI and CLI", async ({
+  page,
+}, info) => {
+  await swapJourney(true, page, info);
+});
+
+async function swapJourney(recoveryMode: boolean, page: Page, info: TestInfo) {
   test.setTimeout(90000);
-  const credentialMode = process.env.FASED_CREDENTIAL_ONCHAIN_BROWSER === "1";
+  const credentialMode =
+    process.env.FASED_CREDENTIAL_ONCHAIN_BROWSER === "1" && !recoveryMode;
   const root = resolve(
-    credentialMode
-      ? ".evidence/b06-venue-credentials/browser"
-      : ".evidence/b06-onchain/browser",
+    recoveryMode
+      ? ".evidence/b06-swap-recovery/browser"
+      : credentialMode
+        ? ".evidence/b06-venue-credentials/browser"
+        : ".evidence/b06-onchain/browser",
   );
   await mkdir(root, { recursive: true });
   const evidence = await mkdtemp(join(root, info.project.name + "-"));
@@ -72,7 +85,11 @@ test("Onchain quote review protected approval submit and original result share U
   }
   try {
     child = spawn(driver, ["-test.run=^TestOnchainBrowserServer$"], {
-      env: { ...process.env, FASED_ONCHAIN_BROWSER_DIR: dir },
+      env: {
+        ...process.env,
+        FASED_ONCHAIN_BROWSER_DIR: dir,
+        FASED_RECOVERY_ONCHAIN_BROWSER: recoveryMode ? "1" : "",
+      },
     });
     child.stdout!.on("data", (b) => (log += b));
     child.stderr!.on("data", (b) => (log += b));
@@ -248,32 +265,149 @@ test("Onchain quote review protected approval submit and original result share U
       review.getByRole("button", { name: "Submit", exact: true }),
     ).toBeDisabled();
     expect((await read()).tasks).toEqual(before.tasks);
-    await review.getByText("Owner approval", { exact: true }).click();
-    const downloadEvent = page.waitForEvent("download");
-    await review
-      .getByRole("button", { name: "Download approval", exact: true })
-      .click();
-    const download = await downloadEvent;
-    const publicFile = join(evidence, "approval.json");
-    await download.saveAs(publicFile);
-    const proposal: SwapProposal = JSON.parse(
-      await readFile(publicFile, "utf8"),
-    );
-    child.stdin!.write(JSON.stringify(proposal) + "\n");
-    await expect
-      .poll(() =>
-        events().find(
-          (x) => x.event === "approval" && x.digest === proposal.digest,
+    async function approve() {
+      if (
+        !(await review
+          .getByRole("button", { name: "Download approval", exact: true })
+          .isVisible())
+      ) {
+        await review.getByText("Owner approval", { exact: true }).click();
+      }
+      const downloadEvent = page.waitForEvent("download");
+      await review
+        .getByRole("button", { name: "Download approval", exact: true })
+        .click();
+      const download = await downloadEvent;
+      const publicFile = join(evidence, "approval.json");
+      await download.saveAs(publicFile);
+      const proposal: SwapProposal = JSON.parse(
+        await readFile(publicFile, "utf8"),
+      );
+      child.stdin!.write(JSON.stringify(proposal) + "\n");
+      await expect
+        .poll(() =>
+          events().find(
+            (x) => x.event === "approval" && x.digest === proposal.digest,
+          ),
+        )
+        .toBeTruthy();
+      await review
+        .getByRole("button", { name: "Check approval", exact: true })
+        .click();
+      await expect(
+        review.getByRole("button", { name: "Submit", exact: true }),
+      ).toBeEnabled();
+      await review.getByRole("button", { name: "Submit", exact: true }).click();
+      if (recoveryMode)
+        await expect
+          .poll(
+            async () =>
+              (await read()).onchain?.runs.find(
+                (r) => r.taskId === "onchain-task:" + proposal.quote.id,
+              )?.swap?.state,
+          )
+          .toBe("queued");
+    }
+    await approve();
+    if (recoveryMode) {
+      async function fixture(action: string) {
+        child!.stdin!.write(JSON.stringify({ fixtureAction: action }) + "\n");
+        await expect
+          .poll(() =>
+            events().find((x) => x.event === "fixture" && x.action === action),
+          )
+          .toBeTruthy();
+        expect(
+          events().find((x) => x.event === "fixture" && x.action === action)
+            ?.error,
+        ).toBeUndefined();
+      }
+      await fixture("expire");
+      await page.reload();
+      const expired = page.getByRole("row").filter({ hasText: "Expired" });
+      await expired
+        .getByRole("button", { name: "Cancel", exact: true })
+        .click();
+      await expect
+        .poll(async () => (await read()).onchain?.runs[0].swap?.state)
+        .toBe("cancelled");
+      const cancelled = await read();
+      expect(cancelled.onchain?.tasks[0].state).toBe("completed");
+      await fixture("reset-clock");
+      await editor.getByRole("button", { name: "Quote", exact: true }).click();
+      await expect(review).toBeVisible();
+      await approve();
+      await fixture("run-unknown");
+      const uncertain = await read();
+      const original = uncertain.onchain!.runs.at(-1)!.swap!;
+      expect(original.state).toBe("unknown");
+      expect(uncertain.onchain?.recovery?.at(-1)).toMatchObject({
+        status: "awaiting-receipt",
+        cancel: false,
+        reconcile: true,
+      });
+      await page.goto(url + "/#agents/tasks");
+      const row = page.getByRole("row").filter({ hasText: "Awaiting receipt" });
+      await expect(row).toBeVisible();
+      for (const name of ["Run", "Resume", "Reuse", "Cancel"])
+        await expect(
+          row.getByRole("button", { name, exact: true }),
+        ).toHaveCount(0);
+      await row.getByRole("button", { name: /^Result:/ }).click();
+      const run = page.getByRole("article", {
+        name: `Run ${uncertain.onchain!.runs.at(-1)!.id}`,
+        exact: true,
+      });
+      await expect(run).toContainText("Awaiting receipt");
+      await fixture("settle-locked");
+      await run.getByRole("button", { name: "Reconcile", exact: true }).click();
+      await expect(run).toContainText("Confirmed");
+      const done = await read();
+      expect(done.onchain?.runs.at(-1)?.swap?.signed).toEqual(original.signed);
+      expect(done.onchain?.runs.at(-1)?.swap?.signature).toBe(
+        original.signature,
+      );
+      expect(done.onchain?.tasks.at(-1)?.state).toBe("completed");
+      expect(done.sessions).toEqual(retained);
+      expect(done.onchain?.liveExecution).toBe(false);
+      await page.screenshot({
+        path: join(evidence, "tasks-confirmed.png"),
+        fullPage: true,
+      });
+      await page.goto(url + "/#terminals/jupiter");
+      await expect(
+        page.getByRole("row").filter({ hasText: "Confirmed" }),
+      ).toBeVisible();
+      await page.screenshot({
+        path: join(evidence, "onchain-recovered.png"),
+        fullPage: true,
+      });
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth > window.innerWidth + 1,
         ),
-      )
-      .toBeTruthy();
-    await review
-      .getByRole("button", { name: "Check approval", exact: true })
-      .click();
-    await expect(
-      review.getByRole("button", { name: "Submit", exact: true }),
-    ).toBeEnabled();
-    await review.getByRole("button", { name: "Submit", exact: true }).click();
+      ).toBe(false);
+      expect(outside).toEqual([]);
+      expect(errors).toEqual([]);
+      await writeFile(
+        join(evidence, "result.json"),
+        JSON.stringify(
+          {
+            result: "PASS",
+            fixtureOnly: true,
+            externalRequests: outside,
+            errors,
+            retainedSessions: retained.map((x) => x.id),
+            cancelled: cancelled.onchain,
+            view: done.onchain,
+          },
+          null,
+          2,
+        ),
+      );
+      passed = true;
+      return;
+    }
     await expect
       .poll(async () => (await read()).onchain?.runs.at(-1)?.swap?.state, {
         timeout: 12000,
@@ -350,4 +484,4 @@ test("Onchain quote review protected approval submit and original result share U
     if (passed) await rm(dir, { recursive: true, force: true });
     else await writeFile(join(evidence, "retained-fixture.txt"), dir + "\n");
   }
-});
+}

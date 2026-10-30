@@ -1,4 +1,5 @@
-import { SwapResultFacts } from "./OnchainSwap";
+import { swapState } from "../onchain";
+import { SwapResultFacts, SwapRecoveryActions } from "./OnchainSwap";
 import { resolveLanguage, translate } from "../ui-language";
 import { useUI } from "../ui-preferences";
 import { useEffect, useRef, useState } from "react";
@@ -160,6 +161,43 @@ export function AgentTasks({
     });
   }
   function actions(t: AgentTask) {
+    if (t.swap) {
+      const run = v.runs.find((r) => r.taskId === t.id);
+      const recovery = v.onchain?.recovery?.find((r) => r.taskId === t.id);
+      return (
+        <div className="row-actions">
+          <SwapRecoveryActions
+            recovery={recovery}
+            disabled={agents.busy}
+            onAction={(action, id) =>
+              void agents.change({ action, swap: { id } })
+            }
+          />
+          {(recovery?.pause || recovery?.resume) && (
+            <button
+              className="text-button"
+              disabled={agents.busy || !v.onchain?.available}
+              onClick={() =>
+                void agents.change({
+                  action: recovery.resume ? "task-resume" : "task-pause",
+                  id: t.id,
+                })
+              }
+            >
+              {uiText(recovery.resume ? "Resume" : "Pause")}
+            </button>
+          )}
+          <button
+            className="text-button"
+            disabled={!run}
+            aria-label={`${uiText("Result")}: ${t.name}`}
+            onClick={() => run && showRun(run.id)}
+          >
+            {uiText("Result")}
+          </button>
+        </div>
+      );
+    }
     const latestStrategy = v.strategies
       ?.find((s) => s.id === t.strategyPlan?.strategyId)
       ?.versions.at(-1);
@@ -281,6 +319,17 @@ export function AgentTasks({
       </div>
     );
   }
+  function status(task: AgentTask) {
+    return task.swap
+      ? uiText(
+          swapState(
+            v.onchain?.recovery?.find((r) => r.taskId === task.id)?.status ??
+              v.runs.find((r) => r.taskId === task.id)?.swap?.state ??
+              "",
+          ),
+        )
+      : uiText(taskStateTitles[task.state] ?? "Unavailable");
+  }
   async function discuss(run: AgentRun) {
     if (await agents.change({ action: "task-run-explain", id: run.id }))
       onDiscuss();
@@ -326,7 +375,15 @@ export function AgentTasks({
                 ? uiText("News watch")
                 : run.analysis
                   ? uiText("Analysis")
-                  : run.outcome}
+                  : run.swap
+                    ? uiText(
+                        swapState(
+                          v.onchain?.recovery?.find(
+                            (x) => x.taskId === run.taskId,
+                          )?.status ?? run.swap.state,
+                        ),
+                      )
+                    : run.outcome}
           </Badge>
         </header>
         <time dateTime={new Date(run.at * 1000).toISOString()}>
@@ -348,10 +405,26 @@ export function AgentTasks({
         </p>
         {run.paper && <PaperResultFacts result={run.paper} />}
         {run.swap && (
-          <SwapResultFacts
-            result={run.swap}
-            quote={task?.swap?.proposal.quote}
-          />
+          <>
+            <SwapResultFacts
+              result={run.swap}
+              quote={task?.swap?.proposal.quote}
+              recovery={v.onchain?.recovery?.find(
+                (x) => x.taskId === run.taskId,
+              )}
+            />
+            <div className="row-actions">
+              <SwapRecoveryActions
+                recovery={v.onchain?.recovery?.find(
+                  (x) => x.taskId === run.taskId,
+                )}
+                disabled={agents.busy}
+                onAction={(action, id) => {
+                  void agents.change({ action, swap: { id } });
+                }}
+              />
+            </div>
+          </>
         )}
         {run.watch && run.analysis?.state === "completed" && answer && (
           <p className="ai-answer">{answer}</p>
@@ -590,11 +663,11 @@ export function AgentTasks({
                         >
                           {t.name}
                         </button>
-                        <small>{schedule(t)}</small>
+                        <small>{t.swap ? uiText("Once") : schedule(t)}</small>
                       </td>
                       <td>
                         <span className={`task-state ${t.state}`}>
-                          {uiText(taskStateTitles[t.state] ?? "Unavailable")}
+                          {status(t)}
                         </span>
                       </td>
                       <td>
@@ -663,7 +736,11 @@ export function AgentTasks({
                   )}
                   <dl className="task-facts">
                     <dt>{uiText("Schedule")}</dt>
-                    <dd>{schedule(selectedTask)}</dd>
+                    <dd>
+                      {selectedTask.swap
+                        ? uiText("Once")
+                        : schedule(selectedTask)}
+                    </dd>
                     <dt>{uiText("Next run")}</dt>
                     <dd>
                       {selectedTask.state === "scheduled"
@@ -671,11 +748,7 @@ export function AgentTasks({
                         : "—"}
                     </dd>
                     <dt>{uiText("Status")}</dt>
-                    <dd>
-                      {uiText(
-                        taskStateTitles[selectedTask.state] ?? "Unavailable",
-                      )}
-                    </dd>
+                    <dd>{status(selectedTask)}</dd>
                   </dl>
                   {selectedTask.state === "completed" &&
                     selectedTask.id.length === 43 &&
@@ -685,6 +758,7 @@ export function AgentTasks({
                     !selectedTask.wen &&
                     !selectedTask.playbook &&
                     !selectedTask.strategyPlan &&
+                    !selectedTask.swap &&
                     !selectedTask.botId && (
                       <button
                         className="text-button"
@@ -704,7 +778,7 @@ export function AgentTasks({
                         {tr("Archive task")}
                       </button>
                     )}
-                  {selectedTask.state === "held" && (
+                  {selectedTask.state === "held" && !selectedTask.swap && (
                     <p role="status">
                       {v.newsFetches
                         .filter((f) => f.taskId === selectedTask.id)

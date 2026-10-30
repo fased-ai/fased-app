@@ -470,8 +470,9 @@ finally:
     const baselineCoreHash = sha(await readFile(root + "/fased-app"));
     pass(
       "serviceInventoryHasActualCoreAndSigner",
-      before.core.state.version === 33 &&
+      before.core.state.version === 34 &&
         before.core.state.features.includes("agents-venue-credentials-v1") &&
+        before.core.state.features.includes("agents-swap-recovery-v1") &&
         before.core.state.features.includes("agents-ai-accounts-v1") &&
         before.core.state.features.includes("agents-current-models-v1") &&
         before.core.state.features.includes("agents-native-providers-v1") &&

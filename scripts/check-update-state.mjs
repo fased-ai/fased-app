@@ -118,9 +118,10 @@ try {
     a.version === 1 &&
       a.probeId === probe &&
       a.state.name === "core-db" &&
-      a.state.version === 33 &&
+      a.state.version === 34 &&
       a.state.features.includes("agents-onchain-swaps-v1") &&
       a.state.features.includes("agents-venue-credentials-v1") &&
+      a.state.features.includes("agents-swap-recovery-v1") &&
       a.state.features.includes("agents-task-analysis-v1") &&
       a.state.features.includes("agents-versioned-strategies-v1") &&
       a.state.features.includes("agents-playbooks-v1") &&

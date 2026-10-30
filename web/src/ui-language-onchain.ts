@@ -1,4 +1,10 @@
 export const onchainCopy = {
+  "Awaiting receipt": [
+    "Ожидание квитанции",
+    "Esperando recibo",
+    "等待回执",
+    "영수증 대기",
+  ],
   "Receipt reader": [
     "Проверка квитанций",
     "Verificar recibos",

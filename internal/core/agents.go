@@ -421,7 +421,7 @@ func (s *Store) Agents(ctx context.Context, profile, query string) (AgentView, e
 		return AgentView{}, errors.New("search is too long")
 	}
 	v, e := agentView(d, r, profile, query, s.now().Unix())
-	projection := swapProjection(d, r, v.ProfileID, s.onchain != nil)
+	projection := s.swapProjection(d, r, v.ProfileID, s.onchain != nil)
 	if s.onchain != nil || len(projection.Tasks) > 0 || len(projection.Runs) > 0 {
 		v.Onchain = &projection
 	}
