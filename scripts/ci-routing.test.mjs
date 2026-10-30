@@ -215,6 +215,51 @@ test("ordinary recovery checks leave signer time for privileged bootstrap withou
   }
 });
 
+test("full race coverage keeps every package and requires delegated update tests", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const workflow = await readFile(
+    new URL("../.github/workflows/checks.yml", import.meta.url),
+    "utf8",
+  );
+  const core = workflow.slice(
+    workflow.indexOf("  core:\n"),
+    workflow.indexOf("  desktop:\n"),
+  );
+  const handoff = workflow.slice(
+    workflow.indexOf("  handoff:\n"),
+    workflow.indexOf("  handoff-uid:\n"),
+  );
+  assert.match(
+    core,
+    /go list \.\/internal\/\.\.\. \.\/cmd\/fased-app \.\/cmd\/fased-signer \.\/cmd\/fased-install \.\/cmd\/fased-package/,
+  );
+  assert.match(core, /grep -vE '\/internal\/\(core\|update\)\$'/);
+  assert.match(core, /go test -race -p 1 "\$\{fased_other_packages\[@\]\}"/);
+  for (const flag of ["skip", "run"])
+    assert.ok(
+      core.includes(
+        `go test -race -p 1 ./internal/core -${flag} '^Test(SwapRecovery|VenueCredential|.*WEN)'`,
+      ),
+    );
+  assert.match(
+    handoff,
+    /name: Update unit race coverage\n\s+if: needs.classify.outputs.scope == 'full'\n\s+run: go test -race -p 1 \.\/internal\/update/,
+  );
+  for (const path of [
+    "internal/core/onchain.go",
+    "internal/update/manifest.go",
+    ".github/workflows/checks.yml",
+  ]) {
+    const plan = classify([path]);
+    assert.equal(plan.scope, "full");
+    assert.equal(plan.core, true);
+    assert.equal(plan.handoff, true);
+    const incomplete = result(plan);
+    incomplete.handoff.result = "skipped";
+    assert.throws(() => verifyGate(incomplete));
+  }
+});
+
 test("full UI journey uses the existing Linux job while focused paths retain core coverage", async () => {
   const { readFile } = await import("node:fs/promises");
   const workflow = await readFile(
