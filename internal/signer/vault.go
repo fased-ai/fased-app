@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/fased-ai/fased-app/internal/onchain"
 	"github.com/fased-ai/fased-app/internal/update"
 
 	"golang.org/x/crypto/argon2"
@@ -55,33 +56,36 @@ type envelope struct {
 }
 
 type Status struct {
-	SwapReady          bool        `json:"swapReady,omitempty"`
-	UpdateHeld         bool        `json:"updateHeld"`
-	FixtureOnly        bool        `json:"fixtureOnly"`
-	WalletSigner       bool        `json:"walletSigner"`
-	FinancialExecution bool        `json:"financialExecution"`
-	Account            *AccountRef `json:"account,omitempty"`
-	Locked             bool        `json:"locked"`
-	UnlockUntil        time.Time   `json:"unlockUntil,omitempty"`
-	RecoveryRequired   bool        `json:"recoveryRequired"`
-	UnattendedUnlock   bool        `json:"unattendedUnlock"`
+	ReceiptRPC         *ReceiptRPCStatus `json:"receiptRPC,omitempty"`
+	SwapReady          bool              `json:"swapReady,omitempty"`
+	UpdateHeld         bool              `json:"updateHeld"`
+	FixtureOnly        bool              `json:"fixtureOnly"`
+	WalletSigner       bool              `json:"walletSigner"`
+	FinancialExecution bool              `json:"financialExecution"`
+	Account            *AccountRef       `json:"account,omitempty"`
+	Locked             bool              `json:"locked"`
+	UnlockUntil        time.Time         `json:"unlockUntil,omitempty"`
+	RecoveryRequired   bool              `json:"recoveryRequired"`
+	UnattendedUnlock   bool              `json:"unattendedUnlock"`
 }
 
 type Vault struct {
-	swapObserver SwapObserver
-	mu           sync.Mutex
-	store        *storage
-	signerID     string
-	network      string
-	managedRef   *AccountRef
-	record       *envelope
-	ledger       *ledger
-	seed         []byte
-	until        time.Time
-	timer        *time.Timer
-	now          func() time.Time
-	closed       bool
-	bootID       string
+	receiptRPCFactory func(onchain.CredentialAccess) (SwapObserver, error)
+	receiptRPCLease   *receiptRPCLease
+	swapObserver      SwapObserver
+	mu                sync.Mutex
+	store             *storage
+	signerID          string
+	network           string
+	managedRef        *AccountRef
+	record            *envelope
+	ledger            *ledger
+	seed              []byte
+	until             time.Time
+	timer             *time.Timer
+	now               func() time.Time
+	closed            bool
+	bootID            string
 }
 
 func validPassword(p []byte) bool { return utf8.Valid(p) && utf8.RuneCount(p) >= 12 && len(p) <= 1024 }
@@ -255,6 +259,7 @@ func (v *Vault) Close() error {
 	return v.store.close()
 }
 func (v *Vault) lock() {
+	v.lockReceiptRPC()
 	if v.timer != nil {
 		v.timer.Stop()
 		v.timer = nil
@@ -274,7 +279,8 @@ func (v *Vault) unlocked() bool {
 func (v *Vault) Status() Status {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	s := Status{SwapReady: v.managedSwapEligible(), FixtureOnly: true, Locked: !v.unlocked(), UnlockUntil: v.until, UpdateHeld: v.store.failedState() || v.ledger != nil && v.ledger.activeUpdate != ""}
+	locked := !v.unlocked()
+	s := Status{ReceiptRPC: v.receiptRPCStatus(), SwapReady: v.managedSwapEligible(), FixtureOnly: true, Locked: locked, UnlockUntil: v.until, UpdateHeld: v.store.failedState() || v.ledger != nil && v.ledger.activeUpdate != ""}
 	if v.record != nil {
 		ref := v.record.Ref
 		s.Account = &ref

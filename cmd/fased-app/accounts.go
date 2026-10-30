@@ -21,6 +21,7 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 		return e
 	}
 	dir := flags.String("data-dir", base, "private instance directory")
+	venueSecret := flags.Bool("venue-credential-stdin", false, "manage encrypted Jupiter/RPC connection lease from private JSON input")
 	backupOut := flags.String("rpc-backup-out", "", "new private encrypted RPC backup file")
 	rpcSecret := flags.Bool("rpc-credential-stdin", false, "manage disposable RPC credentials from private JSON input")
 	rpcConfig := flags.Bool("rpc-stdin", false, "save/remove disposable wallet RPC settings from JSON")
@@ -36,6 +37,9 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	if *backupOut != "" && !*rpcSecret {
 		return errors.New("backup output requires RPC credential input")
 	}
+	if *venueSecret && (*rpcSecret || *rpcConfig || *rpcCheck || *update || *setup || *backupOut != "") {
+		return errors.New("choose one account operation")
+	}
 	ctx := context.Background()
 	c, e := core.NewClient(ctx, *dir)
 	if e != nil {
@@ -44,6 +48,24 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	defer c.Close()
 	if e = c.LoadSession(ctx, *dir); e != nil {
 		return e
+	}
+	if *venueSecret {
+		b, err := io.ReadAll(io.LimitReader(in, 4097))
+		defer clear(b)
+		if err != nil || len(b) > 4096 {
+			return errors.New("invalid connection key input")
+		}
+		var input core.VenueCredentialCommand
+		d := json.NewDecoder(bytes.NewReader(b))
+		d.DisallowUnknownFields()
+		if d.Decode(&input) != nil || d.Decode(new(any)) != io.EOF {
+			return errors.New("invalid connection key input")
+		}
+		var result core.VenueCredentialView
+		if err = c.Do(ctx, http.MethodPut, "/api/v1/accounts/venue-credential", input, &result); err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(result)
 	}
 	if *setup {
 		if *rpcSecret || *rpcConfig || *rpcCheck || *update || *backupOut != "" {

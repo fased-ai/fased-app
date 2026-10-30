@@ -88,6 +88,7 @@ type PublicInput struct {
 }
 
 type ledger struct {
+	receiptRPC        *receiptRPCEnvelope
 	managedFresh      bool
 	swaps             map[string]SwapReceipt
 	main, mock        *journal
@@ -208,6 +209,8 @@ func (l *ledger) apply(r journalRecord) error {
 	if l.ref.Version == 2 {
 		expected := journalRecord{Version: r.Version, Sequence: r.Sequence, Previous: r.Previous, Hash: r.Hash, At: r.At, Kind: r.Kind}
 		switch r.Kind {
+		case "onchain-rpc-credential":
+			expected.ReceiptRPC = r.ReceiptRPC
 		case "onchain-approve", "onchain-sign", "onchain-settled", "onchain-cancel":
 			if !l.managedFresh {
 				return errors.New("managed key recovery history is incomplete")
@@ -244,6 +247,10 @@ func (l *ledger) apply(r journalRecord) error {
 		return errors.New("exclusive update intent blocks financial mutation")
 	}
 	switch r.Kind {
+	case "onchain-rpc-credential":
+		if e := l.applyReceiptRPC(r); e != nil {
+			return e
+		}
 	case "onchain-approve", "onchain-sign", "onchain-settled", "onchain-cancel":
 		if e := l.applySwap(r); e != nil {
 			return e

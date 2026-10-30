@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/fased-ai/fased-app/internal/onchain"
 	"io"
 	"net"
 	"os"
@@ -202,6 +203,18 @@ func serveMode(ctx context.Context, c Config, guarded bool) (*Server, error) {
 	return serveConfigured(ctx, c, guarded, nil)
 }
 func serveConfigured(ctx context.Context, c Config, guarded bool, observer SwapObserver) (*Server, error) {
+	return serveCredentialConfigured(ctx, c, guarded, observer, nil)
+}
+
+// ServeControlledSwapCredentialsFixture is available only to compiled disposable
+// identity acceptance. Ordinary startup never accepts a transport or credentials.
+func ServeControlledSwapCredentialsFixture(ctx context.Context, c Config, factory func(onchain.CredentialAccess) (SwapObserver, error)) (*Server, error) {
+	if c.Version != 2 || factory == nil {
+		return nil, ErrUnavailable
+	}
+	return serveCredentialConfigured(ctx, c, false, nil, factory)
+}
+func serveCredentialConfigured(ctx context.Context, c Config, guarded bool, observer SwapObserver, factory func(onchain.CredentialAccess) (SwapObserver, error)) (*Server, error) {
 	if _, e := os.Lstat(filepath.Dir(c.StateDir) + "/fixture-inspection-v1/forward.json"); !os.IsNotExist(e) && !guarded {
 		return nil, errors.New("guarded fixture startup required before state access")
 	}
@@ -229,6 +242,10 @@ func serveConfigured(ctx context.Context, c Config, guarded bool, observer SwapO
 	v, err := openVaultNetwork(c.StateDir, c.SignerID, false, c.Network)
 	if err != nil {
 		return nil, err
+	}
+	if factory != nil {
+		v.receiptRPCFactory = factory
+		v.swapObserver = closedReceiptObserver{}
 	}
 	if observer != nil {
 		if err = v.ConfigureSwapObserver(observer); err != nil {

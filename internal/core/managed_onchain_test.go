@@ -182,7 +182,7 @@ func TestManagedOnchainSchema31MigrationPreservesDataAndRefusesUnprotectedState(
 	var schema int
 	next.db.QueryRow("SELECT document,revision FROM agent_workspace WHERE id=1").Scan(&got, &revision)
 	next.db.QueryRow("PRAGMA user_version").Scan(&schema)
-	if got != raw || revision != rev || schema != 32 {
+	if got != raw || revision != rev || schema != StateSchema {
 		t.Fatal("migration changed owner records/revision")
 	}
 	h := setupManagedSwapHarness(t, fixtureStore(t))

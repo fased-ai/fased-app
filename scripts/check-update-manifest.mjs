@@ -66,10 +66,11 @@ try {
   );
   pass(
     "schemaPauseAndApprovalFeatures",
-    contracts[0].state[0].versions.min === 32 &&
-      contracts[0].state[0].versions.max === 32 &&
+    contracts[0].state[0].versions.min === 33 &&
+      contracts[0].state[0].versions.max === 33 &&
       contracts[0].state[0].features.includes("agents-task-analysis-v1") &&
       contracts[0].state[0].features.includes("agents-onchain-swaps-v1") &&
+      contracts[0].state[0].features.includes("agents-venue-credentials-v1") &&
       contracts[0].state[0].features.includes(
         "agents-versioned-strategies-v1",
       ) &&
@@ -241,6 +242,22 @@ try {
     pass(name, r.status !== 0 && r.stdout === "");
   };
   for (const [name, edit] of [
+    [
+      "schema32CoreReaderDenied",
+      (m) => {
+        m.components[0].contract.state[0].versions = { min: 32, max: 32 };
+      },
+    ],
+    [
+      "venueCredentialFeatureErasureDenied",
+      (m) => {
+        m.components[0].contract.state[0].features =
+          m.components[0].contract.state[0].features.filter(
+            (f) => f !== "agents-venue-credentials-v1",
+          );
+      },
+    ],
+
     [
       "schema14CoreReaderDenied",
       (m) => {

@@ -95,6 +95,9 @@ func (s *Store) RPCCredential(ctx context.Context, c RPCCredentialCommand) (RPCC
 	})
 }
 func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check func(context.Context, RPCCheckRequest, []byte, func() error) (RPCCheckResult, error)) (RPCCredentialView, error) {
+	if c.Action == "save" || c.Action == "remove" || c.Action == "restore" {
+		s.lockVenueCredentials()
+	}
 	fail := errors.New("RPC credential operation refused")
 	view := RPCCredentialView{Locked: true, TestOnly: true}
 	if !hexValue(c.AccountID, 16) || (c.Action != "status" && c.Action != "save" && c.Action != "verify" && c.Action != "check" && c.Action != "remove" && c.Action != "backup" && c.Action != "verify-backup" && c.Action != "restore") {

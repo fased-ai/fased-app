@@ -29,7 +29,7 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 		return bootstrapCommand(args[1:], in, out, errOut)
 	}
 	if len(args) == 0 {
-		return errors.New("usage: fased-app custody enroll|install|status|claim-code|reset-app-password|setup|import|recover|approve|approve-swap|updates|accounts|login|remove --disposable-fixture [options]")
+		return errors.New("usage: fased-app custody enroll|install|status|claim-code|reset-app-password|setup|import|recover|approve|approve-swap|receipt-rpc-save|receipt-rpc-unlock|updates|accounts|login|remove --disposable-fixture [options]")
 	}
 	if runtime.GOOS != "linux" || os.Getuid() <= 0 || os.Getuid() != os.Geteuid() {
 		return errors.New("custody fixture requires an ordinary Linux owner; real wallets remain disabled")
@@ -38,6 +38,7 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 	f.SetOutput(errOut)
 	disposable := f.Bool("disposable-fixture", false, "confirm unfunded disposable keys only")
 	prepare := f.Bool("prepare-host", false, "authorize dedicated locked OS identities, immutable files and system services")
+	rpcOrigin := f.String("rpc-origin", "", "canonical receipt RPC origin; key entered privately")
 	network := f.String("network", "", "disposable key network: devnet or mainnet-beta; install only")
 	key := f.String("signer-binary", "", "matching engineering fased-signer executable")
 	listen := f.String("listen", "127.0.0.1:7332", "managed private loopback listener")
@@ -55,6 +56,9 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 	}
 	if *network != "" && args[0] != "install" {
 		return errors.New("network is selected only during installation")
+	}
+	if *rpcOrigin != "" && args[0] != "receipt-rpc-save" {
+		return errors.New("RPC origin requires receipt-rpc-save")
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -121,6 +125,22 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 			return errors.New("managed metadata requires --prepare-host for the OS identity switch; passwords are not accepted")
 		}
 		return system.UpdatePreferences(ctx, m, *requestStdin, out)
+	case "receipt-rpc-save", "receipt-rpc-unlock":
+		command := []string{"owner", "--config", m.Root + "/identity.json", "--disposable-fixture", "--action", args[0]}
+		if args[0] == "receipt-rpc-save" {
+			if *rpcOrigin == "" {
+				return errors.New("choose a canonical --rpc-origin")
+			}
+			command = append(command, "--rpc-origin", *rpcOrigin)
+		}
+		if *passwordStdin {
+			command = append(command, "--password-stdin")
+		}
+		child := exec.CommandContext(ctx, m.Root+"/fased-signer", command...)
+		child.Stdin = in
+		child.Stdout = out
+		child.Stderr = errOut
+		return child.Run()
 	case "approve", "approve-swap":
 		if *proposalFile == "" {
 			return errors.New("choose --proposal-file containing a public proposal")

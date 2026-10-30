@@ -35,6 +35,8 @@ func (c Config) Validate() error {
 // Request is a closed set of owner and fixture operations. No real sign/submit.
 // Passwords are bytes so callers can clear their own buffers after use.
 type Request struct {
+	RPCOrigin     string                   `json:"rpcOrigin,omitempty"`
+	RPCKey        []byte                   `json:"rpcKey,omitempty"`
 	Install       *update.InstallRequest   `json:"install,omitempty"`
 	Preflight     *update.PreflightRequest `json:"preflight,omitempty"`
 	Stage         *update.StageRequest     `json:"stage,omitempty"`
@@ -64,6 +66,7 @@ type Response struct {
 }
 
 func execute(v *Vault, r Request, owner bool) Response {
+	defer wipe(r.RPCKey)
 	defer wipe(r.Password)
 	defer wipe(r.NewPassword)
 	if r.Action == "import-fixture-seed" || r.Action == "import-managed-seed" {
@@ -73,6 +76,20 @@ func execute(v *Vault, r Request, owner bool) Response {
 	var err error
 	if !owner && !AppActionAllowed(r.Action) {
 		return Response{Error: "owner administration denied"}
+	}
+	if r.RPCOrigin != "" || len(r.RPCKey) > 0 || r.Action == "receipt-rpc-save" || r.Action == "receipt-rpc-unlock" {
+		expected := Request{Action: r.Action, Password: r.Password}
+		if r.Action == "receipt-rpc-save" {
+			expected.RPCOrigin = r.RPCOrigin
+			expected.RPCKey = r.RPCKey
+		} else if r.Action == "receipt-rpc-unlock" {
+			expected.UnlockSeconds = r.UnlockSeconds
+		} else {
+			return Response{Error: "unexpected receipt RPC fields"}
+		}
+		if onchain.Hash(expected) != onchain.Hash(r) {
+			return Response{Error: "one typed owner receipt RPC action required"}
+		}
 	}
 	if r.Swap != nil && r.Action != "swap-approve" {
 		return Response{Error: "unexpected swap approval fields"}
@@ -90,12 +107,16 @@ func execute(v *Vault, r Request, owner bool) Response {
 	}
 	if v.network != "" {
 		switch r.Action {
-		case "swap-approve", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel", "status", "create", "import-managed-seed", "unlock", "lock", "backup", "verify-backup", "restore", "fixture-update-inventory", "fixture-update-status", "fixture-update-prepare", "fixture-update-abort", "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish", "fixture-update-preflight", "fixture-install-controller":
+		case "receipt-rpc-save", "receipt-rpc-unlock", "swap-approve", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel", "status", "create", "import-managed-seed", "unlock", "lock", "backup", "verify-backup", "restore", "fixture-update-inventory", "fixture-update-status", "fixture-update-prepare", "fixture-update-abort", "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish", "fixture-update-preflight", "fixture-install-controller":
 		default:
 			return Response{Error: ErrUnavailable.Error()}
 		}
 	}
 	switch r.Action {
+	case "receipt-rpc-save":
+		_, err = v.ProvisionReceiptRPC(r.RPCOrigin, r.RPCKey, r.Password)
+	case "receipt-rpc-unlock":
+		_, err = v.UnlockReceiptRPC(r.Password, time.Duration(r.UnlockSeconds)*time.Second)
 	case "swap-approve":
 		if r.Swap == nil {
 			return Response{Error: "swap approval document required"}

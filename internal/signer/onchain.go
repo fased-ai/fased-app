@@ -37,6 +37,9 @@ func (v *Vault) ApproveSwap(p SwapProposal) (*SwapReceipt, error) {
 	if e := v.swapReady(true); e != nil {
 		return nil, e
 	}
+	if e := v.validReceiptRPCBinding(p); e != nil {
+		return nil, e
+	}
 	if p.Account != v.record.Ref {
 		return nil, errors.New("swap wallet/epoch changed")
 	}
@@ -58,6 +61,9 @@ func (v *Vault) ApproveSwap(p SwapProposal) (*SwapReceipt, error) {
 		return nil, e
 	}
 	deadline := time.Unix(p.Quote.ExpiresAt, 0)
+	if p.ReceiptRPC != nil {
+		v.receiptRPCLease.cap(deadline)
+	}
 	if deadline.Before(v.until) {
 		if v.timer != nil {
 			v.timer.Stop()
@@ -99,6 +105,9 @@ func (v *Vault) SignSwap(id string) (*SwapReceipt, error) {
 	r, ok := v.ledger.swaps[id]
 	if !ok || r.Proposal.Account != v.record.Ref {
 		return nil, errors.New("swap approval or current epoch missing")
+	}
+	if e := v.validReceiptRPCBinding(r.Proposal); e != nil {
+		return nil, e
 	}
 	if len(r.Signed) > 0 {
 		out := clone(r)
@@ -142,11 +151,20 @@ func (v *Vault) ReconcileSwap(ctx context.Context, id string) (*SwapReceipt, err
 	if !ok || !sameWallet(r.Proposal.Account, v.record.Ref) || len(r.Signed) == 0 {
 		return nil, errors.New("signed swap original missing or epoch changed")
 	}
+	if (r.Proposal.ReceiptRPC != nil || v.ledger.receiptRPC != nil) && v.receiptRPCFactory == nil {
+		return nil, ErrUnavailable
+	}
 	if r.State == "confirmed" || r.State == "failed" {
 		out := clone(r)
 		return &out, nil
 	}
+	if v.receiptRPCFactory != nil && (v.receiptRPCLease == nil || v.receiptRPCLease.valid() != nil) {
+		return nil, ErrLocked
+	}
 	observation, e := v.swapObserver.Reconcile(ctx, r.Proposal.Quote, r.Signed)
+	if v.receiptRPCFactory != nil && (v.receiptRPCLease == nil || v.receiptRPCLease.valid() != nil) {
+		return nil, ErrLocked
+	}
 	if e != nil {
 		return nil, e
 	}
@@ -193,7 +211,7 @@ func (v *Vault) CancelSwap(id string) (*SwapReceipt, error) {
 // General recovery and legacy fixture grants remain held. This capability is
 // only a controlled, exact-message swap under its independent owner approval.
 func (v *Vault) managedSwapEligible() bool {
-	return v.network != "" && !v.closed && v.swapObserver != nil && v.record != nil && v.record.Version == 3 && v.record.FreshManaged && v.managedRef != nil && v.ledger != nil && v.ledger.managedFresh && *v.managedRef == v.record.Ref && v.ledger.ref == v.record.Ref && v.record.Ref.Network == v.network && !v.store.failedState() && v.ledger.activeUpdate == ""
+	return v.network != "" && !v.closed && v.swapObserver != nil && (v.ledger == nil || v.ledger.receiptRPC == nil || v.receiptRPCFactory != nil) && v.record != nil && v.record.Version == 3 && v.record.FreshManaged && v.managedRef != nil && v.ledger != nil && v.ledger.managedFresh && *v.managedRef == v.record.Ref && v.ledger.ref == v.record.Ref && v.record.Ref.Network == v.network && !v.store.failedState() && v.ledger.activeUpdate == ""
 }
 func (v *Vault) swapReady(unlock bool) error {
 	if v.network == "" {

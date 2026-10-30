@@ -129,6 +129,9 @@ func enrollmentPath(name string) (included bool, max int64, ok bool) {
 	case "core.sock":
 		return false, 0, true
 	}
+	if strings.HasPrefix(name, "venue-credential-") && strings.HasSuffix(name, ".json") && hexValue(strings.TrimSuffix(strings.TrimPrefix(name, "venue-credential-"), ".json"), 16) {
+		return true, 2048, true
+	}
 	if strings.HasPrefix(name, "rpc-credential-") && strings.HasSuffix(name, ".json") && hexValue(strings.TrimSuffix(strings.TrimPrefix(name, "rpc-credential-"), ".json"), 16) {
 		return true, 2048, true
 	}
@@ -488,6 +491,11 @@ func enrollmentCredential(name string, data []byte) error {
 			col = aiVaultCollection{Version: 3, Default: vault.Ref, Accounts: []aiVaultEnvelope{vault}}
 		}
 		if validateAIVaultCollection(col) != nil {
+			return errEnrollmentImage
+		}
+	} else if strings.HasPrefix(name, "venue-credential-") {
+		var vault venueEnvelope
+		if update.StrictJSONBounded(data, &vault, 2048) != nil || !validVenueEnvelope(vault) {
 			return errEnrollmentImage
 		}
 	} else if strings.HasPrefix(name, "rpc-credential-") {
