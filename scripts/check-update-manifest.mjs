@@ -66,11 +66,12 @@ try {
   );
   pass(
     "schemaPauseAndApprovalFeatures",
-    contracts[0].state[0].versions.min === 33 &&
-      contracts[0].state[0].versions.max === 33 &&
+    contracts[0].state[0].versions.min === 34 &&
+      contracts[0].state[0].versions.max === 34 &&
       contracts[0].state[0].features.includes("agents-task-analysis-v1") &&
       contracts[0].state[0].features.includes("agents-onchain-swaps-v1") &&
       contracts[0].state[0].features.includes("agents-venue-credentials-v1") &&
+      contracts[0].state[0].features.includes("agents-swap-recovery-v1") &&
       contracts[0].state[0].features.includes(
         "agents-versioned-strategies-v1",
       ) &&
@@ -242,6 +243,21 @@ try {
     pass(name, r.status !== 0 && r.stdout === "");
   };
   for (const [name, edit] of [
+    [
+      "schema33CoreReaderDenied",
+      (m) => {
+        m.components[0].contract.state[0].versions = { min: 33, max: 33 };
+      },
+    ],
+    [
+      "swapRecoveryFeatureErasureDenied",
+      (m) => {
+        m.components[0].contract.state[0].features =
+          m.components[0].contract.state[0].features.filter(
+            (f) => f !== "agents-swap-recovery-v1",
+          );
+      },
+    ],
     [
       "schema32CoreReaderDenied",
       (m) => {

@@ -140,3 +140,59 @@ func migrateManagedSwaps(ctx context.Context, db *sql.DB) error {
 	}
 	return tx.Commit()
 }
+
+// Protect recovery transitions without rewriting old records, revisions or
+// authority. Prior schemas could not complete a cancelled task or cancel an
+// expired/simulation-failed approval.
+func migrateSwapRecovery(ctx context.Context, db *sql.DB) error {
+	tx, e := db.BeginTx(ctx, nil)
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	var phase, raw string
+	if e = tx.QueryRowContext(ctx, "SELECT phase FROM update_pause WHERE id=1").Scan(&phase); e != nil {
+		return e
+	}
+	if phase == "paused" {
+		return ErrCorePaused
+	}
+	if e = tx.QueryRowContext(ctx, "SELECT document FROM agent_workspace WHERE id=1").Scan(&raw); e != nil {
+		return e
+	}
+	if e = onchainFields([]byte(raw), false); e != nil {
+		return e
+	}
+	var d agentDocument
+	if json.Unmarshal([]byte(raw), &d) != nil {
+		return errors.New("invalid recovery workspace")
+	}
+	for _, task := range d.Tasks {
+		if task.Swap != nil && task.State == "completed" {
+			for _, run := range d.Runs {
+				if run.TaskID == task.ID && run.Swap != nil && run.Swap.State == "cancelled" {
+					return errors.New("unprotected cancelled task completion")
+				}
+			}
+		}
+	}
+	for _, run := range d.Runs {
+		if run.Swap == nil {
+			continue
+		}
+		previous := ""
+		for _, event := range run.Swap.Events {
+			if (event.State == "cancelled" && (previous == "expired" || previous == "simulation-failed")) || previous == "validating" && event.State == "expired" {
+				return errors.New("unprotected swap recovery transition")
+			}
+			previous = event.State
+		}
+	}
+	if e = validateOnchainStorage(d); e != nil {
+		return e
+	}
+	if _, e = tx.ExecContext(ctx, "PRAGMA user_version=34"); e != nil {
+		return e
+	}
+	return tx.Commit()
+}

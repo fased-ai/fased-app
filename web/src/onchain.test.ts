@@ -19,6 +19,7 @@ describe("swap review amounts", () => {
         "Reconcile",
         "Download approval",
         "Network cost",
+        "Awaiting receipt",
       ]) {
         expect(translate(lang, text)).not.toBe(text);
       }

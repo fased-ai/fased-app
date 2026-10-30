@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -36,9 +37,10 @@ func TestOnchainBrowserServer(t *testing.T) {
 	server.taskCancel()
 	<-server.taskDone
 	var h *swapHarness
-	credentialMode := os.Getenv("FASED_CREDENTIAL_ONCHAIN_BROWSER") == "1"
+	recoveryMode := os.Getenv("FASED_RECOVERY_ONCHAIN_BROWSER") == "1"
+	credentialMode := os.Getenv("FASED_CREDENTIAL_ONCHAIN_BROWSER") == "1" || recoveryMode
 	if credentialMode {
-		h, _, _ = setupCredentialSwapHarness(t, server.Store, false)
+		h, _, _ = setupCredentialSwapHarness(t, server.Store, recoveryMode)
 	} else if os.Getenv("FASED_MANAGED_ONCHAIN_BROWSER") == "1" {
 		h = setupManagedSwapHarness(t, server.Store)
 		if e = h.vault.Unlock(h.password, 45*time.Second); e != nil {
@@ -51,7 +53,13 @@ func TestOnchainBrowserServer(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	server.startAgentTasks()
+	var clock atomic.Int64
+	clock.Store(time.Now().Unix())
+	if recoveryMode {
+		server.Store.now = func() time.Time { return time.Unix(clock.Load(), 0) }
+	} else {
+		server.startAgentTasks()
+	}
 	defer server.Close(context.Background())
 	go func() {
 		if e := server.Serve(); e != nil && ctx.Err() == nil {
@@ -60,9 +68,39 @@ func TestOnchainBrowserServer(t *testing.T) {
 	}()
 	json.NewEncoder(os.Stdout).Encode(map[string]any{"event": "listening", "url": server.URL, "claim": code.Code, "instanceId": server.Store.instanceID})
 	go func() {
+		var original signer.SwapProposal
 		scanner := bufio.NewScanner(os.Stdin)
 		scanner.Buffer(make([]byte, 4096), 32768)
 		for scanner.Scan() {
+			var control struct {
+				FixtureAction string `json:"fixtureAction"`
+			}
+			if recoveryMode && json.Unmarshal(scanner.Bytes(), &control) == nil && control.FixtureAction != "" {
+				var err error
+				switch control.FixtureAction {
+				case "expire":
+					clock.Store(original.Quote.ExpiresAt + 1)
+					err = server.Store.advanceOnchain(ctx)
+				case "reset-clock":
+					clock.Store(time.Now().Unix())
+				case "run-unknown":
+					h.chain.Unknown = true
+					err = server.Store.advanceOnchain(ctx)
+				case "settle-locked":
+					h.chain.Unknown = false
+					_, err = h.vault.ReconcileSwap(ctx, original.Quote.ID)
+					h.vault.Lock()
+					server.Store.lockVenueCredentials()
+				default:
+					err = fmt.Errorf("unsupported private fixture action")
+				}
+				result := map[string]string{"event": "fixture", "action": control.FixtureAction}
+				if err != nil {
+					result["error"] = err.Error()
+				}
+				json.NewEncoder(os.Stdout).Encode(result)
+				continue
+			}
 			p, e := signer.ParseSwapProposal(scanner.Bytes())
 			if e == nil && credentialMode {
 				e = h.vault.Unlock(h.password, 45*time.Second)
@@ -76,6 +114,7 @@ func TestOnchainBrowserServer(t *testing.T) {
 			if e != nil {
 				json.NewEncoder(os.Stdout).Encode(map[string]string{"event": "approval", "error": e.Error()})
 			} else {
+				original = p
 				json.NewEncoder(os.Stdout).Encode(map[string]string{"event": "approval", "digest": p.Digest})
 			}
 		}

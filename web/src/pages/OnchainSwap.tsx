@@ -8,6 +8,7 @@ import type {
   SwapReview,
   SwapExecution,
   SwapQuote,
+  SwapRecovery,
 } from "../onchain";
 import {
   atomic,
@@ -33,15 +34,17 @@ const emptyDraft: Draft = {
 export function SwapResultFacts({
   result,
   quote,
+  recovery,
 }: {
   result: SwapExecution;
   quote?: SwapQuote;
+  recovery?: SwapRecovery;
 }) {
   const { t } = useUI();
   return (
     <dl className="task-facts">
       <dt>{t("Status")}</dt>
-      <dd>{t(swapState(result.state))}</dd>
+      <dd>{t(swapState(recovery?.status ?? result.state))}</dd>
       {result.signature && (
         <>
           <dt>{t("Signature")}</dt>
@@ -61,6 +64,40 @@ export function SwapResultFacts({
         </>
       )}
     </dl>
+  );
+}
+export function SwapRecoveryActions({
+  recovery,
+  disabled,
+  onAction,
+}: {
+  recovery?: SwapRecovery;
+  disabled: boolean;
+  onAction: (action: "swap-cancel" | "swap-reconcile", id: string) => void;
+}) {
+  const { t } = useUI();
+  if (!recovery) return null;
+  return (
+    <>
+      {recovery.cancel && (
+        <button
+          className="text-button"
+          disabled={disabled}
+          onClick={() => onAction("swap-cancel", recovery.taskId)}
+        >
+          {t("Cancel")}
+        </button>
+      )}
+      {recovery.reconcile && (
+        <button
+          className="text-button"
+          disabled={disabled}
+          onClick={() => onAction("swap-reconcile", recovery.taskId)}
+        >
+          {t("Reconcile")}
+        </button>
+      )}
+    </>
   );
 }
 export function OnchainSwap() {
@@ -255,7 +292,17 @@ export function OnchainSwap() {
                           {units(q.amount, q.inputMint)} {symbol(q.inputMint)}
                         </td>
                         <td>
-                          <Badge>{t(swapState(r?.state ?? "unknown"))}</Badge>
+                          <Badge>
+                            {t(
+                              swapState(
+                                active?.recovery?.find(
+                                  (x) => x.taskId === task.id,
+                                )?.status ??
+                                  r?.state ??
+                                  "unknown",
+                              ),
+                            )}
+                          </Badge>
                         </td>
                         <td>
                           <div className="row-actions">
@@ -265,39 +312,15 @@ export function OnchainSwap() {
                             >
                               {t("Details")}
                             </button>
-                            {r && ["queued", "paused"].includes(r.state) && (
-                              <button
-                                className="text-button"
-                                disabled={busy}
-                                onClick={() =>
-                                  void command("swap-cancel", { id: task.id })
-                                }
-                              >
-                                {t("Cancel")}
-                              </button>
-                            )}
-                            {r &&
-                              ![
-                                "confirmed",
-                                "failed",
-                                "cancelled",
-                                "expired",
-                                "simulation-failed",
-                                "queued",
-                                "paused",
-                              ].includes(r.state) && (
-                                <button
-                                  className="text-button"
-                                  disabled={busy}
-                                  onClick={() =>
-                                    void command("swap-reconcile", {
-                                      id: task.id,
-                                    })
-                                  }
-                                >
-                                  {t("Reconcile")}
-                                </button>
+                            <SwapRecoveryActions
+                              recovery={active?.recovery?.find(
+                                (x) => x.taskId === task.id,
                               )}
+                              disabled={busy}
+                              onAction={(action, id) => {
+                                void command(action, { id });
+                              }}
+                            />
                           </div>
                         </td>
                       </tr>
@@ -313,7 +336,14 @@ export function OnchainSwap() {
               >
                 <div className="panel-heading">
                   <h3>{t("Result")}</h3>
-                  <Badge>{t(swapState(result.state))}</Badge>
+                  <Badge>
+                    {t(
+                      swapState(
+                        active?.recovery?.find((x) => x.taskId === order.id)
+                          ?.status ?? result.state,
+                      ),
+                    )}
+                  </Badge>
                 </div>
                 <dl className="task-facts">
                   <dt>{t("Wallet")}</dt>
@@ -337,6 +367,15 @@ export function OnchainSwap() {
                       : "—"}
                   </dd>
                 </dl>
+                <div className="row-actions">
+                  <SwapRecoveryActions
+                    recovery={active?.recovery?.find(
+                      (x) => x.taskId === order.id,
+                    )}
+                    disabled={busy}
+                    onAction={(action, id) => void command(action, { id })}
+                  />
+                </div>
                 {result.signature && (
                   <div className="row-actions">
                     <span className="mono" title={result.signature}>
