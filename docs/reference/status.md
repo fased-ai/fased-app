@@ -1,22 +1,22 @@
 ---
-title: "Status"
-description: "Implemented engineering, delivery and acceptance are distinct."
+title: "Availability"
+description: "What you can use and what is planned."
 ---
 
-Status snapshot: 29 October 2026. The new Go app is under development; this documentation is not a public release announcement.
+Fased is in development. These guides explain the product experience; a guide or visible control does not mean a live service is available.
 
-| Area                                    | Recorded status                                            | Open boundary                                                                       |
-| --------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Ubuntu core and secure Local/Remote     | Engineering delivered, controlled/Ubuntu evidence retained | Real VPS/Tailscale/private HTTPS, trusted public distribution and retail acceptance |
-| Providers → agents → Chat               | Supported-method engineering delivered through PR42        | Named unsupported method contracts and live/owner acceptance                        |
-| Tasks → News/results → memory           | Connected engineering delivered through PR43/44            | Owner visual/novice and live acceptance                                             |
-| Wallet/RPC and same-instance enrollment | Engineering delivered through PR46                         | Real keys, funds, live RPC/signing and owner acceptance                             |
-| Versioned paper strategies              | B06.1 locally implemented/verified, uncommitted package    | Delivery/required CI and owner acceptance                                           |
-| Onchain / Hyperliquid execution         | Independent integrations remain incomplete                 | Typed execution/signing/reconciliation and separate acceptance                      |
-| Fased Network                           | Approved roadmap; existing server is a reuse candidate     | Signal contract, durable delivery, outcomes and product implementation              |
-| Mining / five-user trial                | Deferred                                                   | Explicit resumption and canonical contracts                                         |
-| Automatic/public updates                | Disabled                                                   | Release trust, distribution and activation                                          |
+| Area                                 | Availability                                                                                        |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| Installation and Local/Remote access | Development setup is available to project testers. Public downloads are not released.               |
+| Agents, Chat, Tasks, News and Memory | Available in the development app with sample inputs.                                                |
+| Providers and models                 | Connection setup is under development; live AI requests are disabled.                               |
+| Wallets and RPC                      | Development setup is limited to test accounts. Real keys, funds, live RPC and signing are disabled. |
+| Strategies                           | Paper evaluation is in development. It does not place live orders.                                  |
+| Onchain and Hyperliquid              | Trading is not available.                                                                           |
+| Mining                               | Planned integration; participation through Fased is not available.                                  |
+| Fased Network                        | Planned signal sharing and research services.                                                       |
+| Automatic updates                    | Not enabled.                                                                                        |
 
-Installation is independent of providers, wallets and the Network. Documentation and code availability do not grant permission to activate a live feature.
+Do not send funds to development addresses or enter real credentials into a test installation. Public releases will identify supported platforms, setup instructions and available features.
 
-The internal active implementation plan and its Current checkpoint own execution order. Network stages remain separate from that core queue. See [Network roadmap](/guide/network-roadmap).
+Read [Install](/guide/install), [Wallets](/guide/wallets) and the [Network roadmap](/guide/network-roadmap).

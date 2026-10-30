@@ -9,4 +9,4 @@ Sources, saved headlines, reminder runs and selected memory can supply reviewed 
 
 A Task proposal opens a review. Confirming creates the Task; merely reading the proposal does not schedule work. Inspect a completed run from Tasks and discuss its recorded result in Chat. Use **Remember** for useful scoped context; financial results remain in their journal.
 
-Live provider requests remain disabled during this development stage. See [Providers](/guide/providers), [Tasks](/guide/tasks) and [Memory](/guide/memory).
+Live AI requests are disabled in the development app. See [Providers](/guide/providers), [Tasks](/guide/tasks) and [Memory](/guide/memory).

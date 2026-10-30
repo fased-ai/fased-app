@@ -1,14 +1,12 @@
 ---
 title: "Tasks"
-description: "One worker for deterministic work and optional AI."
+description: "Schedule work, review results and stay in control."
 ---
 
-Open **Tasks** to create a job, choose timing and limits, review it and confirm. Direct deterministic work needs no provider. AI analysis uses the selected permitted account/model and separately reviewed background access.
+Open **Tasks**, describe the job and choose its timing and limits. Review the proposal, then confirm it. Reminders and simple news watches need no AI provider; AI-assisted work uses the account and model you approve.
 
-The same core supports reminders, bounded News watches and reviewed analysis. Required input/analysis failure holds dependent work; an optional step may be omitted only according to the reviewed rule. Pause stops new work without deleting results. Restart must not duplicate an effect or silently retry an uncertain operation.
+Select a Task to see its runs and results. **Discuss** brings a result into Chat. **Remember** saves useful context to the selected agent's Memory. The original result remains available in its history.
 
-Select a Task to inspect its runs and source-backed result. **Discuss** brings the saved result into Chat. **Remember** stores useful scoped context without replacing the run journal.
+**Pause** stops new runs without deleting completed work. If a required source or analysis is unavailable, dependent work waits for review. A change to a Task's model, budget or permissions may require fresh approval.
 
-Versioned paper strategy work is locally verified and awaiting delivery: strategy → exact version review → finite Task → bounded paper result. A version's allocation is shared across its Tasks; editing holds older approvals. V1 is a controlled SOL/USDC limit-buy evaluation, not a live order or market simulator. See [Trading](/guide/trading).
-
-Future Network Follow/Evaluate/Automate and WEN actions join this worker. They do not introduce another scheduler or grant authority from a subscription.
+Paper strategies are in development. They are intended to connect a saved strategy version to a reviewed Task and a simulated result. A paper result is not a live trade. See [Strategies](/guide/trading) and [Availability](/reference/status).

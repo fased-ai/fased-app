@@ -1,12 +1,12 @@
 ---
 title: "News"
-description: "Sources, headlines and provider-free watches."
+description: "Follow sources and bring relevant headlines into your work."
 ---
 
-News keeps selected sources, retained headlines and their observation/publication provenance together. Add an admitted source, inspect its freshness and choose **Discuss** or create a News watch.
+Add a supported RSS source in **News** to keep headlines, publication times and source links together. Inspect a saved headline, choose **Discuss** to bring it into Chat, or create a news watch.
 
-A deterministic watch uses a literal title rule and finite timing/run limits. It reports new matches in the existing Inbox and run result, deduplicating repeats. No model is required. Failed or stale required input holds its dependent job; it does not fabricate a fresh headline.
+A simple watch checks titles against your chosen rule and timing. New matches appear in the Inbox and Task results. It does not need an AI provider. If required information is unavailable or stale, dependent work pauses.
 
-Optional AI analysis must be explicitly selected and reviewed. A news report is evidence; a [Network signal](/guide/network) is a separate attributed forecast or proposed action with its own horizon and invalidation conditions.
+AI analysis is optional and uses the account and limits you approve. A news report is source material; a [Network signal](/guide/network) is an attributed market view with a forecast horizon and conditions.
 
-The current source adapter is bounded public HTTPS RSS. Do not assume arbitrary sites, credentials, private URLs or live data are enabled by this guide. Development verification uses controlled inputs.
+The development app uses sample inputs. Supported sources and live availability are listed in the release information. See [Availability](/reference/status).

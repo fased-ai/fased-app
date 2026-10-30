@@ -1,14 +1,12 @@
 ---
 title: "Strategies and trading"
-description: "Versioned rules, reviewed Tasks and independent venues."
+description: "Define rules and limits before authorizing an action."
 ---
 
-A strategy owns financial rules: market, wallet/network binding, quantities, allocation, risk limits and timing. The agent can help research or propose a change; execution authority stays with the reviewed strategy and signer.
+A strategy identifies its market, wallet, allocation, timing and risk limits. An agent can help research a strategy or propose a change. Trading still requires your separate permission.
 
-The B06.1 local package adds immutable paper SOL/USDC limit-buy versions to **Tasks → Strategies**. Save a version, review a finite Task and inspect its bounded paper result. Tasks of one version share its allocation. Editing preserves history and holds older Tasks until fresh review. Pause/Resume and results survive restart.
+Paper evaluation is in development. The planned flow is to save a strategy version, review a bounded Task and inspect its simulated result. Editing retains the version history and requires review of affected Tasks.
 
-This package uses controlled quotes and is not yet delivered to main. It does not establish current market prices, liquidity, fees, profitability or live fills.
+**Onchain** and **Hyperliquid** trading are planned. Each trade needs clear quantities, costs and permissions, with visible order status and recovery options. Connecting a provider or wallet does not authorize a trade.
 
-**Onchain** and **Hyperliquid** are independent future execution integrations. Each needs exact venue intent, bounded quotes/simulation, owner authority, signing, submit/cancel, reconciliation and recovery before use. A rendered page or provider connection is not execution readiness.
-
-The future [Network](/guide/network) supplies signals to this same strategy/Task path. Mining remains [deferred](/wen/automation).
+[Fased Network](/guide/network) is intended to supply research and signals for your own strategies. [Mining](/wen/automation) remains a future integration. See [Availability](/reference/status).

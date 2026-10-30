@@ -1,60 +1,50 @@
 ---
 title: "Fased Network"
-description: "Trading signals, cooperative research and owner-controlled automation."
+description: "Signals and research for your trading decisions."
 ---
 
-Fased Network is the planned trading intelligence network connecting human analysts, agent publishers and trading applications. Participants share sourced signals, investigate opportunities and evaluate strategies. Fased App supplies the personal engine; WEN and other clients can consume the same network.
+Fased Network is a planned trading intelligence network for human analysts, agents and trading applications. Its purpose is to connect useful market research with the people and strategies that can evaluate it.
 
-<Note>Approved roadmap. The shared signal service, subscriptions and network-triggered trading are not released. This roadmap does not activate mining, live AI, wallets or updates.</Note>
+A signal carries a view of the market. A research request asks a defined question. A strategy decides whether that information is relevant to a user's objectives and limits. These activities connect without transferring control of the user's funds to a publisher.
 
-![Trading network: humans and agents publish signals; WEN, Fased App and API clients consume them. Fased execution passes owner limits and the separate signer. Outcome sharing is optional.](/assets/diagrams/fased-network-flow.svg)
+<Note>Fased Network is in development. Signal subscriptions, collaborative research services and Network-based automation are planned capabilities.</Note>
+
+![Humans and agents share signals and research through Fased Network. Fased, WEN and other applications evaluate them under their users' own permissions.](/assets/diagrams/fased-network-flow.svg)
 
 ## Follow, Evaluate, Automate
 
-| Level    | What the user chooses                                | Authority                                                |
-| -------- | ---------------------------------------------------- | -------------------------------------------------------- |
-| Follow   | Receive a publisher's signals and corrections        | Read access; no trade or model call implied              |
-| Evaluate | Compare selected signals against the user's strategy | Bounded analysis; AI only when authorized                |
-| Automate | Use eligible signals in a reviewed strategy and Task | Separate finite mandate, risk checks and signer approval |
+| Choice   | What it means                                                                |
+| -------- | ---------------------------------------------------------------------------- |
+| Follow   | Receive signals, updates and corrections from a publisher.                   |
+| Evaluate | Compare selected research with your strategy and market exposure.            |
+| Automate | Authorize specific actions within your own spending, timing and risk limits. |
 
-Following or paying a publisher never grants wallet access. A signal subscription and permission to execute are different records. A publisher's changed strategy requires review; it cannot silently change a subscriber's allocation.
+A subscription pays for access to research. It grants no wallet permission. A change in a publisher's view does not silently change a follower's allocation or strategy.
 
-## Calls and signals
+## Signals with context
 
-Human calls and agent signals use the same versioned record with clear authorship: author/agent identity; exact asset, market and applicable venue; observation and publication times; horizon and expiry; thesis and source evidence; forecast or proposed action; uncertainty and invalidation conditions; and later corrections/outcomes.
+A useful market call identifies its author, market, publication time and forecast horizon. It explains the thesis, supporting sources, uncertainty and conditions that would invalidate it. Corrections and outcomes remain visible alongside the call.
 
-Publication needs durable timestamps and visible revisions. Failed calls remain in the history. Receiving a signal does not establish its accuracy, fillability or financial authority. Private chats, credentials and portfolios are not published by default.
+Profiles bring this work together. Readers can explore a publisher's approach and track record while distinguishing a correct forecast from a profitable trade after fees, price impact and execution costs.
 
-Human profiles identify their published calls and owned agents. Agent profiles identify their owner, methods, capabilities and attributable history. A network identity key is separate from the wallet signing key.
+## Complementary intelligence
 
-## Cooperative research
+A research group can bring together news verification, market analysis, forecasting and critical review. Shared sources and related publishers need to remain visible: repeated information is not independent confirmation.
 
-A group can divide one bounded research job among complementary roles:
+Disagreement is useful context. Collaboration should help users understand competing explanations and the evidence behind them, rather than turn a vote count into a promise of success.
 
-- **News:** extract claims and verify sources.
-- **Market:** measure price, liquidity and positioning.
-- **Forecast:** propose a thesis and its horizon.
-- **Critic:** find contrary evidence and invalidation conditions.
-- **Risk:** deterministically check the owner's strategy and limits.
+## One signal, different decisions
 
-Use typed requests/results, deadlines and cost ceilings. Ten agents repeating one source are not ten independent confirmations. Preserve source overlap, related publishers and disagreement. Compare the group's decisions with a defined baseline before claiming an improvement. Ordinary deterministic checks do not require AI calls.
+A BTC forecast might help a Fased user assess a Hyperliquid position and a WEN user research a future mining round. Each participant makes an independent decision under the relevant product's rules. A published allocation revealed after a round closes cannot be copied into that same round.
 
-Reputation separates forecast calibration, delivery reliability, paper results and verified live results. Publish sample size, horizon and evaluation method. A correct prediction differs from a profitable fill after fees and slippage; paper history must not be labelled live performance.
+WEN users can participate in the planned research experience without installing Fased. Fcode API extends the same research and signal services to other applications.
 
-## WEN and other venues
+## Privacy and control
 
-A publisher could issue a BTC forecast for a defined future window. A Hyperliquid strategy evaluates it against its own exposure and rules. WEN can present the same forecast for an eligible future mining round, using WEN's canonical asset, terms, phase, costs and permissions. Each consumer makes its own decision. A revealed allocation cannot be copied into the same closed round.
+Private conversations, wallet credentials and portfolio details are not public by default. Sharing research or results is a deliberate choice. Receiving a signal never grants its author permission to trade, claim rewards or withdraw funds.
 
-WEN users should be able to read signals and follow publishers in WEN without installing Fased. Fased becomes useful for sustained personal automation. WEN remains independently usable; its keeper, mining rules and rewards stay under WEN's contracts. Network membership and FCOD holdings create no extra mining entitlement.
+## Sustainable participation
 
-Onchain and Hyperliquid execution each require their own accepted operation and reconciliation contract. Mining integration remains deferred. Signal delivery can be useful before any automated trading is enabled.
+Potential services include signal subscriptions, research requests and application access plans. Publisher compensation, operating costs and any funded FCOD rewards have distinct terms. WEN rewards continue to follow WEN's own economics; Network membership creates no additional mining entitlement.
 
-## One personal engine
-
-The network supplies permitted inputs to the existing Fased agent → strategy → reviewed Task → result flow. The Go core owns private strategy evaluation, Tasks, records and permissions; the separate signer owns execution authority. Local agents can cooperate without the public network.
-
-Subscribers can connect outward from their instance. The network does not need their wallet keys or a public management port. A network outage stops dependent new decisions while the local engine retains position/recovery duties and independent work.
-
-The initial service is planned as infrastructure operated by Fcode Lab. Broader federation follows demonstrated demand. Fased is an agentic trading network and execution layer; a separate exchange with its own matching/liquidity/settlement is a later product decision.
-
-See [Network roadmap](/guide/network-roadmap), [FCOD](https://docs.fcode.ai/fcod) and [WEN automation](/wen/automation).
+See the [Network roadmap](/guide/network-roadmap), [WEN connection](/wen/automation) and [FCOD](https://docs.fcode.ai/fcod).

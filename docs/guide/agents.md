@@ -1,12 +1,12 @@
 ---
 title: "Agents"
-description: "Instructions, models and context for the same core."
+description: "Choose the instructions, models and context for your work."
 ---
 
-An agent is a profile of instructions, permitted capabilities and context with optional default provider/model choices. It is not another server, wallet or scheduler.
+An agent brings together instructions, selected tools, a provider/model choice and private context. You can give different agents different roles while keeping their conversations and memory separate.
 
-Open **Agents**, create an agent and choose its instructions and available account/model. Returning from Providers preserves the agent draft. Provider changes keep the agent identity, conversations and memory; saved Tasks retain their reviewed bindings.
+Open **Agents**, create an agent and choose its instructions and an available account/model. If you need another account, open **Providers**; your agent draft is preserved.
 
-Use the agent's Chat, Tasks and Memory views to inspect the same records. Plain deterministic work can use the workspace scope without a provider or AI persona. Financial strategies and signer permissions remain separate.
+Use the agent in **Chat**, create reviewed **Tasks** and retain useful context in **Memory**. Changing a provider keeps the agent's identity and history. Existing Tasks keep the choices you reviewed until you approve a change.
 
-Future public agent profiles, publisher discovery and cooperative research belong to the [Network roadmap](/guide/network-roadmap). Creating a local agent publishes nothing.
+Creating an agent does not publish its conversations or grant wallet access. Future public profiles and shared research are described in the [Network roadmap](/guide/network-roadmap).
