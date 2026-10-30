@@ -185,7 +185,11 @@ func ValidManagedAccountRef(r AccountRef) bool {
   ]);
 
   for (const [file, marker, field] of [
-    ["internal/signer/rpc.go", "type Response struct {", "Swap *SwapReceipt"],
+    [
+      "internal/signer/rpc.go",
+      "type Response struct {",
+      'Swap *SwapReceipt `json:"swap,omitempty"`',
+    ],
   ]) {
     const target = path.join(archivedRoot, file);
     const b = await readFile(target, "utf8");

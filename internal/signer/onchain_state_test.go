@@ -11,6 +11,18 @@ import (
 // Public signed bytes use a disposable key and an inert blockhash. This same
 // reader test is copied into the explicitly composed historical fixtures.
 func TestSwapStateReader(t *testing.T) {
+	// An unused extension must preserve the old cold-helper wire. In
+	// particular the canonical current decoder must never see "Swap":null.
+	wire, _ := json.Marshal(Response{})
+	var fields map[string]json.RawMessage
+	json.Unmarshal(wire, &fields)
+	if _, ok := fields["Swap"]; ok {
+		t.Fatal("noncanonical swap response field")
+	}
+	if _, ok := fields["swap"]; ok {
+		t.Fatal("unused swap response field was not omitted")
+	}
+
 	var vector struct {
 		Proposal    SwapProposal        `json:"proposal"`
 		Signed      []byte              `json:"signed"`
