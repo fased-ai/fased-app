@@ -13,11 +13,13 @@ import { useWorkspace } from "../workspace";
 import { WENPaperJourney } from "./WENPaperJourney";
 import { WENSessionRehearsal } from "./WENSessionRehearsal";
 import { WENSessionAutomatic } from "./WENSessionAutomatic";
+import { OnchainSwap } from "./OnchainSwap";
 export function Terminals() {
   const { t: uiText } = useUI();
   const { tab, navigate } = useWorkspace();
   const active = terminalData.find((t) => t.id === tab);
   const mining = active?.id === "satcoin";
+  if (active?.id === "jupiter") return <OnchainSwap />;
   return (
     <>
       <SectionHead

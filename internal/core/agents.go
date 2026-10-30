@@ -74,6 +74,7 @@ type PaperBot struct {
 	SpentCents  int64  `json:"spentCents"`
 }
 type AgentTask struct {
+	Swap            *SwapTaskPolicy     `json:"swap,omitempty"`
 	StrategyPlan    *StrategyTaskPolicy `json:"strategyPlan,omitempty"`
 	Watch           *TaskNewsWatch      `json:"watch,omitempty"`
 	Calendar        *TaskCalendar       `json:"calendar,omitempty"`
@@ -93,6 +94,7 @@ type AgentTask struct {
 	State           string              `json:"state"`
 }
 type AgentRun struct {
+	Swap         *SwapExecution       `json:"swap,omitempty"`
 	Paper        *StrategyPaperResult `json:"paper,omitempty"`
 	Analysis     *TaskAnalysisResult  `json:"analysis,omitempty"`
 	Watch        *NewsWatchResult     `json:"watch,omitempty"`
@@ -139,6 +141,7 @@ type agentDocument struct {
 	WENRehearsal            *wenSessionWorkspace `json:"wenRehearsal,omitempty"`
 }
 type AgentView struct {
+	Onchain                 *OnchainView        `json:"onchain,omitempty"`
 	Strategies              []AgentStrategy     `json:"strategies,omitempty"`
 	PaperExecutionAvailable bool                `json:"paperExecutionAvailable"`
 	ChatReview              *ChatPermission     `json:"chatReview,omitempty"`
@@ -172,6 +175,7 @@ type AgentView struct {
 // Optional fields are inert data for a fixed action; unknown fields/actions are
 // rejected. No arbitrary callback, URL, model tool or shell can be submitted.
 type AgentCommand struct {
+	Swap                 *SwapCommand         `json:"swap,omitempty"`
 	Strategy             *StrategyPlan        `json:"strategy,omitempty"`
 	StrategyID           string               `json:"strategyId,omitempty"`
 	StrategyVersion      int                  `json:"strategyVersion,omitempty"`
@@ -417,6 +421,10 @@ func (s *Store) Agents(ctx context.Context, profile, query string) (AgentView, e
 		return AgentView{}, errors.New("search is too long")
 	}
 	v, e := agentView(d, r, profile, query, s.now().Unix())
+	projection := swapProjection(d, r, v.ProfileID, s.onchain != nil)
+	if s.onchain != nil || len(projection.Tasks) > 0 || len(projection.Runs) > 0 {
+		v.Onchain = &projection
+	}
 	v.PaperExecutionAvailable = s.providerFixture
 	return s.chatView(v), e
 }
@@ -463,7 +471,7 @@ func agentCapacity(d agentDocument) error {
 	if err != nil {
 		return err
 	}
-	reserved := strategyFutureStorage(d) + watchStorage(d) + taskAIFutureStorage(d) + newsStorage(d) + wenReserved + researchStorage(d) + sessionReserved
+	reserved := swapFutureStorage(d) + strategyFutureStorage(d) + watchStorage(d) + taskAIFutureStorage(d) + newsStorage(d) + wenReserved + researchStorage(d) + sessionReserved
 	for _, q := range d.AIRequests {
 		if q.State == "prepared" || q.State == "queued" || q.State == "running" {
 			reserved += agentAIResultReserve
@@ -499,6 +507,22 @@ func (s *Store) ChangeAgents(ctx context.Context, c AgentCommand) (AgentView, er
 	return s.changeAgents(ctx, c, false)
 }
 func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) (resultView AgentView, resultErr error) {
+	if strings.HasPrefix(c.Action, "swap-") {
+		view, e := s.changeOnchain(ctx, c)
+		if e != nil {
+			return AgentView{}, e
+		}
+		v, e := s.Agents(ctx, view.ProfileID, "")
+		v.Onchain = &view
+		return v, e
+	}
+	if c.Swap != nil {
+		return AgentView{}, errors.New("swap fields require their own action")
+	}
+	if strings.HasPrefix(c.ID, swapPrefix) && (c.Action == "task-run" || c.Action == "task-pause" || c.Action == "task-resume") {
+		return s.controlSwapTask(ctx, c)
+	}
+
 	defer func() { resultView.PaperExecutionAvailable = s.providerFixture }()
 	if (c.Strategy != nil && c.Action != "strategy-save") || ((c.StrategyID != "" || c.StrategyVersion != 0) && c.Action != "task-review" && c.Action != "task-reviewed-create") {
 		return AgentView{}, errors.New("strategy fields require their own save or task review")

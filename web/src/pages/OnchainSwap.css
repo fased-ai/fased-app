@@ -1,0 +1,7 @@
+.wt .onchain-workspace .task-composer {
+  position: static;
+}
+.wt .onchain-workspace .task-composer form {
+  display: grid;
+  gap: 14px;
+}

@@ -10,6 +10,7 @@ export default defineConfig({
     "session-rehearsal.spec.ts",
     "session-automatic.spec.ts",
     "strategies.spec.ts",
+    "onchain.spec.ts",
   ],
   outputDir: ".evidence/core-browser",
   reporter: [

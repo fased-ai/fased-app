@@ -54,7 +54,8 @@ func (v *Vault) updateSnapshot(probe string) (update.SignerSnapshot, error) {
 				Hash     string
 			}{mock.seq, mock.hash})
 		}
-		s.States = append(s.States, update.State{Name: contract.Name, Version: contract.Versions.Min, Features: append([]string{}, contract.Features...), Anchor: anchor})
+		features := l.swapStateFeatures(contract.Features)
+		s.States = append(s.States, update.State{Name: contract.Name, Version: contract.Versions.Min, Features: features, Anchor: anchor})
 	}
 	for _, op := range l.ops {
 		switch op.State {
@@ -65,6 +66,9 @@ func (v *Vault) updateSnapshot(probe string) (update.SignerSnapshot, error) {
 			s.Unknown++
 		}
 	}
+	pending, unknown := l.swapPending(v.now().Unix())
+	s.Pending += pending
+	s.Unknown += unknown
 	return s, nil
 }
 

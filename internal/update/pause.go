@@ -53,7 +53,7 @@ func PauseFor(i Intent) CorePauseRequest {
 	return CorePauseRequest{Version: 1, IntentID: i.ID, Sequence: i.Sequence, ManifestSHA256: i.ManifestSHA256, Expected: i.Core}
 }
 func ValidPauseRequest(r CorePauseRequest) bool {
-	return r.Version == 1 && IDOK(r.IntentID) && r.Sequence > 0 && hashOK(r.ManifestSHA256) && r.Expected.Version == 1 && IDOK(r.Expected.ProbeID) && IDOK(r.Expected.BootID) && tokenOK(r.Expected.InstanceID) && r.Expected.State.Name == "core-db" && r.Expected.State.Version > 0 && listOK(r.Expected.State.Features) && hashOK(r.Expected.State.Anchor)
+	return r.Version == 1 && IDOK(r.IntentID) && r.Sequence > 0 && hashOK(r.ManifestSHA256) && r.Expected.Version == 1 && IDOK(r.Expected.ProbeID) && IDOK(r.Expected.BootID) && tokenOK(r.Expected.InstanceID) && r.Expected.State.Name == "core-db" && r.Expected.State.Version > 0 && stateFeaturesOK(r.Expected.State.Features) && hashOK(r.Expected.State.Anchor)
 }
 func SameCoreMetadata(a, b CoreSnapshot) bool {
 	a.BootID = ""

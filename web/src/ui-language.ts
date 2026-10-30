@@ -1,3 +1,4 @@
+import { onchainCopy } from "./ui-language-onchain";
 import { priorityCopy } from "./ui-language-priority";
 import { pageCopy } from "./ui-language-pages";
 export const languages = {
@@ -98,6 +99,7 @@ const rows = {
     "RPC 확인됨 (데모)",
   ],
   ...pageCopy,
+  ...onchainCopy,
   ...priorityCopy,
   "No expiry": ["Без срока", "Sin caducidad", "无有效期限制", "만료 없음"],
   "Weekdays at {time}": [

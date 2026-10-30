@@ -21,7 +21,8 @@ import (
 )
 
 type Store struct {
-	installationSource atomic.Uint32 // Verified installer class, never a browser preference.
+	onchain            *onchainRuntime // Explicit controlled constructor only; ordinary/live admission stays closed.
+	installationSource atomic.Uint32   // Verified installer class, never a browser preference.
 
 	rpcCheckFixture func(context.Context, RPCCheckRequest) (RPCCheckResult, error) // Tests only; never configuration or IPC.
 	providerFixture bool
@@ -276,10 +277,18 @@ PRAGMA user_version=1;`)
 			return nil, err
 		}
 	}
+	if schema <= 30 {
+		if err = migrateOnchain(ctx, db); err != nil {
+			return nil, err
+		}
+	}
 	if _, _, err = readAgents(ctx, db); err != nil {
 		return nil, err
 	}
 	store := &Store{db: db, dir: dir, now: time.Now, bootID: update.NewProbe(), provider: providerState{apiCredentials: providerActivationEnabled}}
+	if err = store.recoverOnchain(ctx); err != nil {
+		return nil, err
+	}
 	if err = db.QueryRowContext(ctx, "SELECT instance_id FROM instance WHERE id=1").Scan(&store.instanceID); err != nil {
 		return nil, err
 	}

@@ -1,3 +1,9 @@
+import type {
+  OnchainView,
+  SwapCommand,
+  SwapTaskPolicy,
+  SwapExecution,
+} from "./onchain";
 export type OpenAIModelPolicy = {
   provider?: string;
   wireVersion?: string;
@@ -351,6 +357,7 @@ export type StrategyPaperResult = {
   observedAt: number;
 };
 export type AgentTask = {
+  swap?: SwapTaskPolicy;
   strategyPlan?: StrategyTaskPolicy;
   watch?: { rule: NewsWatchRule; seen: string[] };
   calendar?: TaskCalendar;
@@ -370,6 +377,7 @@ export type AgentTask = {
   state: string;
 };
 export type AgentRun = {
+  swap?: SwapExecution;
   paper?: StrategyPaperResult;
   analysis?: TaskAnalysisResult;
   watch?: NewsWatchResult;
@@ -542,6 +550,7 @@ export type PlaybookReview = {
   command: AgentCommand;
 };
 export type AgentView = {
+  onchain?: OnchainView;
   strategies?: AgentStrategy[];
   paperExecutionAvailable?: boolean;
   chatReview?: ChatPermission;
@@ -681,6 +690,7 @@ export type AgentEvidenceView = {
     }
 );
 export type AgentCommand = {
+  swap?: SwapCommand;
   strategy?: StrategyPlan;
   strategyId?: string;
   strategyVersion?: number;

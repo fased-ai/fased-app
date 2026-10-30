@@ -76,6 +76,7 @@ type FixtureSummary struct {
 // PublicInput is the only JSON accepted by the helper's --request-stdin flag.
 // Credentials, encrypted backups and authority booleans have no fields here.
 type PublicInput struct {
+	Swap        *SwapProposal    `json:"swap,omitempty"`
 	Account     *AccountRef      `json:"account,omitempty"`
 	Policy      *FixturePolicy   `json:"policy,omitempty"`
 	Grant       *FixtureGrant    `json:"grant,omitempty"`
@@ -87,6 +88,7 @@ type PublicInput struct {
 }
 
 type ledger struct {
+	swaps             map[string]SwapReceipt
 	main, mock        *journal
 	ref               AccountRef
 	missingHistory    bool
@@ -104,7 +106,7 @@ type ledger struct {
 }
 
 func newLedger() *ledger {
-	return &ledger{grants: map[string]FixtureGrant{}, ops: map[string]FixtureOperation{}, receipts: map[string]journalRecord{}, approvals: map[string]ApprovalReceipt{}, updates: map[string]update.Intent{}, installations: map[string]update.Installation{}}
+	return &ledger{swaps: map[string]SwapReceipt{}, grants: map[string]FixtureGrant{}, ops: map[string]FixtureOperation{}, receipts: map[string]journalRecord{}, approvals: map[string]ApprovalReceipt{}, updates: map[string]update.Intent{}, installations: map[string]update.Installation{}}
 }
 
 func validRef(r AccountRef) bool {
@@ -233,6 +235,10 @@ func (l *ledger) apply(r journalRecord) error {
 		return errors.New("exclusive update intent blocks financial mutation")
 	}
 	switch r.Kind {
+	case "onchain-approve", "onchain-sign", "onchain-settled", "onchain-cancel":
+		if e := l.applySwap(r); e != nil {
+			return e
+		}
 	case "update-install":
 		if e := l.applyInstallation(r); e != nil {
 			return e
@@ -267,6 +273,12 @@ func (l *ledger) apply(r journalRecord) error {
 	case "init":
 		if l.ref.Version != 0 || r.Account == nil || !validRef(*r.Account) {
 			return errors.New("invalid journal identity")
+		}
+		for id, s := range l.swaps {
+			if s.State == "approved" {
+				s.State = "cancelled"
+				l.swaps[id] = s
+			}
 		}
 		l.ref = *r.Account
 		l.missingHistory = r.MissingHistory
@@ -374,6 +386,11 @@ func (l *ledger) apply(r journalRecord) error {
 		}
 		l.approvals[p.ID] = ApprovalReceipt{ProposalID: p.ID, Digest: ProposalDigest(p), Account: p.Policy.Account, ApprovedAt: r.At}
 	case "rebind":
+		for _, s := range l.swaps {
+			if s.State == "signed" {
+				return ErrHeld
+			}
+		}
 		if r.Account == nil || !validRef(*r.Account) || !sameWallet(*r.Account, l.ref) || r.Account.Epoch == l.ref.Epoch || l.missingHistory {
 			return errors.New("recovery requires retained wallet history")
 		}
@@ -384,6 +401,12 @@ func (l *ledger) apply(r journalRecord) error {
 		for id, g := range l.grants {
 			g.Revoked = true
 			l.grants[id] = g
+		}
+		for id, s := range l.swaps {
+			if s.State == "approved" {
+				s.State = "cancelled"
+				l.swaps[id] = s
+			}
 		}
 		l.ref = *r.Account
 		l.policy = nil // New owner policy/grants, lifetime spent remains.
@@ -399,6 +422,7 @@ func (l *ledger) append(v *Vault, r journalRecord) error {
 		r.At = v.now().Unix()
 	}
 	next := *l
+	next.swaps = clone(l.swaps)
 	next.policy = clone(l.policy)
 	next.grants = clone(l.grants)
 	next.approvals = clone(l.approvals)

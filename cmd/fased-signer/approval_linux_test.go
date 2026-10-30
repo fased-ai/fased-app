@@ -5,7 +5,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
+	"github.com/fased-ai/fased-app/internal/onchain"
+	"github.com/fased-ai/fased-app/internal/onchaintest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,5 +96,63 @@ func TestPublicProposalFileDoesNotRelaxBackupPrivacy(t *testing.T) {
 	}
 	if _, e := readPublicProposal(link); e == nil {
 		t.Fatal("symlinked proposal")
+	}
+}
+
+func TestProtectedSwapApprovalConsentAndBoundedLease(t *testing.T) {
+	v := flowVault(t)
+	if e := v.Create(flowUnlock); e != nil {
+		t.Fatal(e)
+	}
+	chain := &onchaintest.Chain{}
+	client := onchaintest.Client(chain)
+	if e := v.ConfigureSwapObserver(client); e != nil {
+		t.Fatal(e)
+	}
+	ref := *v.Status().Account
+	public, _ := hex.DecodeString(ref.PublicKey)
+	now := time.Now().Unix()
+	q, e := client.Prepare(t.Context(), onchain.Quote{Version: onchain.Version, ID: strings.Repeat("1", 32), ProfileID: "trading-analyst", InstanceID: strings.Repeat("2", 32), AccountID: strings.Repeat("3", 32), Network: "mainnet-beta", Owner: onchain.Base58(public), RPCSHA256: strings.Repeat("4", 64), InputMint: onchain.USDC, OutputMint: onchain.SOL, Amount: "12500000", SlippageBPS: 50, MaxFeeLamports: 5000, CreatedAt: now, ExpiresAt: now + 45})
+	if e != nil {
+		t.Fatal(e)
+	}
+	p := signer.NewSwapProposal(ref, q)
+	var review, out bytes.Buffer
+	asked := false
+	base := flowCall(v)
+	call := func(ctx context.Context, r signer.Request) (signer.Response, error) {
+		if r.Action == "unlock" {
+			e := v.Unlock(r.Password, time.Duration(r.UnlockSeconds)*time.Second)
+			return signer.Response{Status: v.Status()}, e
+		}
+		if r.Action == "swap-approve" {
+			x, e := v.ApproveSwap(*r.Swap)
+			return signer.Response{Swap: x}, e
+		}
+		return base(ctx, r)
+	}
+	ask := func(string, bool) ([]byte, error) { asked = true; return bytes.Clone(flowUnlock), nil }
+	if e = conductSwapApproval(t.Context(), p, ask, func(string) error { return errors.New("cancel") }, &review, &out, call); e == nil || asked {
+		t.Fatal("cancel prompted for password")
+	}
+	if e = conductSwapApproval(t.Context(), p, ask, func(s string) error {
+		for _, text := range []string{q.Owner, q.Network, "12.5 USDC", "0.1 wSOL", "0.0995 wSOL", "Rent:", "5000 lamports"} {
+			if !strings.Contains(review.String(), text) {
+				return errors.New("trusted approval summary missing " + text)
+			}
+		}
+		if s != "APPROVE "+p.Digest {
+			return errors.New("digest differs")
+		}
+		return nil
+	}, &review, &out, call); e != nil {
+		t.Fatal(e)
+	}
+	status := v.Status()
+	if status.Locked || status.UnattendedUnlock || status.UnlockUntil.Unix() > q.ExpiresAt {
+		t.Fatal("unbounded lease")
+	}
+	if _, e = v.SignSwap(q.ID); e != nil {
+		t.Fatal(e)
 	}
 }

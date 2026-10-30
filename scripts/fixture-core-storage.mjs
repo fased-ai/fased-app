@@ -1,6 +1,7 @@
 // Compose an explicitly nonhistorical predecessor for same-schema reader tests.
 // Only archived disposable sources are changed, never an installed runtime.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -11,6 +12,8 @@ export async function currentStorageFixture(archivedRoot) {
   for (const file of [
     "agents.go",
     "agent_strategies.go",
+    "onchain.go",
+    "onchain_storage.go",
     "agent_provider.go",
     "provider_models.go",
     "provider_native.go",
@@ -88,7 +91,7 @@ export async function currentStorageFixture(archivedRoot) {
     accounts,
     accountBefore.replace(
       "type Account struct {",
-      'type Account struct {\n\tRPC *AccountRPC `json:"rpc,omitempty"`',
+      'type Account struct {\n\tRPC *AccountRPC \`json:"rpc,omitempty"`',
     ),
   );
   // This is an explicitly nonhistorical storage reader, not a vault/owner
@@ -123,6 +126,81 @@ func ValidManagedAccountRef(r AccountRef) bool {
     await readFile(signerPublic),
   );
   storage["accounts.go"] = sha(await readFile(accounts));
+  // Read-only current swap-history backport. Preserve old protocol, lifecycle
+  // and dispatch: the composed helper gains no observer or signing commands.
+  const signerRoot = path.join(archivedRoot, "internal/signer");
+  await mkdir(path.join(signerRoot, "testdata"), { recursive: true });
+  for (const name of [
+    "onchain_state.go",
+    "onchain_state_test.go",
+    "testdata/onchain-reader.json",
+    "journal.go",
+  ]) {
+    const b = await readFile("internal/signer/" + name);
+    await writeFile(path.join(signerRoot, name), b);
+    storage["signer/" + name] = sha(b);
+  }
+  const amend = async (file, changes) => {
+    const target = path.join(signerRoot, file);
+    let b = await readFile(target, "utf8");
+    for (const [before, after] of changes) {
+      assert.ok(b.includes(before), file + ": missing reader marker " + before);
+      b = b.replace(before, after);
+    }
+    await writeFile(target, b);
+    storage["signer/" + file] = sha(Buffer.from(b));
+  };
+  await amend("policy.go", [
+    [
+      "type ledger struct {",
+      "type ledger struct {\n swaps map[string]SwapReceipt",
+    ],
+    ["return &ledger{", "return &ledger{swaps:map[string]SwapReceipt{},"],
+    ["next := *l", "next := *l\n next.swaps=clone(l.swaps)"],
+    [
+      "switch r.Kind {",
+      'switch r.Kind {\n case "onchain-approve", "onchain-sign", "onchain-settled", "onchain-cancel": if e:=l.applySwap(r);e!=nil{return e}',
+    ],
+    [
+      'case "rebind":',
+      'case "rebind":\n for _,s:=range l.swaps {if s.State=="signed"{return ErrHeld}}',
+    ],
+    [
+      "l.ref = *r.Account\n\t\tl.policy = nil",
+      'for id,s:=range l.swaps{if s.State=="approved"{s.State="cancelled";l.swaps[id]=s}}\n l.ref = *r.Account\n\t\tl.policy = nil',
+    ],
+  ]);
+  await amend("update.go", [
+    ['"approvals-v1",', '"approvals-v1", "onchain-swap-fixture-v1",'],
+  ]);
+  await amend("lifecycle.go", [
+    [
+      "Features: append([]string{}, contract.Features...)",
+      "Features: l.swapStateFeatures(contract.Features)",
+    ],
+    [
+      "return s, nil",
+      "pending,unknown:=l.swapPending(v.now().Unix());s.Pending+=pending;s.Unknown+=unknown\n return s,nil",
+    ],
+  ]);
+
+  for (const [file, marker, field] of [
+    [
+      "internal/signer/rpc.go",
+      "type Response struct {",
+      'Swap *SwapReceipt `json:"swap,omitempty"`',
+    ],
+  ]) {
+    const target = path.join(archivedRoot, file);
+    const b = await readFile(target, "utf8");
+    await writeFile(target, b.replace(marker, marker + "\n" + field + "\n"));
+    storage[file] = sha(await readFile(target));
+  }
+  for (const name of ["go.mod", "go.sum"]) {
+    const b = await readFile(name);
+    await writeFile(path.join(archivedRoot, name), b);
+    storage[name] = sha(b);
+  }
   const localRoot = path.join(archivedRoot, "internal/localprovider");
   await mkdir(localRoot, { recursive: true });
   for (const file of (await readdir("internal/localprovider")).filter(
@@ -173,6 +251,26 @@ func ValidManagedAccountRef(r AccountRef) bool {
     await writeFile(path.join(pm1Root, file), bytes);
     storage["wenpm1/" + file] = sha(bytes);
   }
+  // State feature lists now exceed 32 entries. Protocol capabilities retain
+  // their original bound; backport only the bounded state-list reader.
+  for (const file of ["compatibility.go", "pause.go"]) {
+    const target = path.join(archivedRoot, "internal/update", file);
+    let b = await readFile(target, "utf8");
+    if (file === "compatibility.go")
+      b = b
+        .replace(
+          "func listOK(a []string) bool {\n\tif len(a) > 32 {",
+          "func listOK(a []string) bool { return boundedListOK(a,32) }\nfunc stateFeaturesOK(a []string) bool { return boundedListOK(a,64) }\nfunc boundedListOK(a []string,max int) bool {\n\tif len(a) > max {",
+        )
+        .replaceAll("!listOK(s.Features)", "!stateFeaturesOK(s.Features)");
+    else
+      b = b.replaceAll(
+        "listOK(r.Expected.State.Features)",
+        "stateFeaturesOK(r.Expected.State.Features)",
+      );
+    await writeFile(target, b);
+    storage["update/" + file] = sha(Buffer.from(b));
+  }
   const updateManifest = path.join(archivedRoot, "internal/update/manifest.go");
   let updateSource = await readFile(updateManifest, "utf8");
   if (!updateSource.includes("func strictJSONBounded(")) {
@@ -200,6 +298,15 @@ func ValidManagedAccountRef(r AccountRef) bool {
     );
   }
   storage["update/manifest.go"] = sha(await readFile(updateManifest));
+  for (const dir of ["internal/onchain"]) {
+    await mkdir(path.join(archivedRoot, dir), { recursive: true });
+    for (const name of await readdir(dir)) {
+      if (!name.endsWith(".go") || name.endsWith("_test.go")) continue;
+      const b = await readFile(path.join(dir, name));
+      await writeFile(path.join(archivedRoot, dir, name), b);
+      storage[dir + "/" + name] = sha(b);
+    }
+  }
   const store = path.join(archivedRoot, "internal/core/store.go");
   const before = await readFile(store, "utf8");
   const marker =
@@ -212,14 +319,25 @@ func ValidManagedAccountRef(r AccountRef) bool {
       .replace('"sync"', '"sync"\n"sync/atomic"')
       .replace(
         "type Store struct {",
-        "type Store struct {\n\tproviderFixture bool\n\tchatEpoch atomic.Uint64\n\tprogressMu sync.Mutex\n\taiProgress map[string]string\n\tsessionFixture bool\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState\n\tpilot openAIPilotState\n\tresearchRead func(context.Context, researchFactResult) (json.RawMessage, error)",
+        "type Store struct {\n\tonchain *onchainRuntime\n\tproviderFixture bool\n\tchatEpoch atomic.Uint64\n\tprogressMu sync.Mutex\n\taiProgress map[string]string\n\tsessionFixture bool\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState\n\tpilot openAIPilotState\n\tresearchRead func(context.Context, researchFactResult) (json.RawMessage, error)",
       )
       .replace(
         marker,
-        "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }; if schema <= 6 { if err = migrateAIConnections(ctx, db); err != nil { return nil, err } }; if schema <= 7 { if err = migrateAgentNews(ctx, db); err != nil { return nil, err } }; if schema <= 8 { if err = migrateAIAdmission(ctx, db); err != nil { return nil, err } }; if schema <= 9 { if err = migrateWENPaper(ctx, db); err != nil { return nil, err } }; if schema <= 10 { if err = migrateWENResearch(ctx, db); err != nil { return nil, err } }; if schema <= 11 { if err = migrateWENResearchAI(ctx, db); err != nil { return nil, err } }; if schema <= 12 { if err = migrateWENResearchLoop(ctx, db); err != nil { return nil, err } }; if schema <= 13 { if err = migrateWENSessions(ctx, db); err != nil { return nil, err } }; if schema <= 14 { if err = migrateWENFixtureRuns(ctx, db); err != nil { return nil, err } }; if schema <= 15 { if err = migratePlaybooks(ctx, db); err != nil { return nil, err } }; if schema <= 16 { if err = migrateTaskCalendar(ctx, db); err != nil { return nil, err } }; if schema <= 17 { if err = migrateTaskCron(ctx, db); err != nil { return nil, err } }; if schema <= 18 { if err = migrateAgentChat(ctx, db); err != nil { return nil, err } }; if schema <= 19 { if err = migrateAccountRPC(ctx, db); err != nil { return nil, err } }; if schema <= 20 { if err = migrateProviderRPC(ctx, db); err != nil { return nil, err } }; if schema <= 21 { if err = migrateManagedKeys(ctx, db); err != nil { return nil, err } }; if schema <= 22 { if err = migrateProviderAccounts(ctx, db, dir); err != nil { return nil, err } }; if schema <= 23 { if err = migrateProviderModels(ctx, db); err != nil { return nil, err } }; if schema <= 24 { if err = migrateNativeProviders(ctx, db); err != nil { return nil, err } }; if schema <= 25 { if err = migrateSignInPlan(ctx, db); err != nil { return nil, err } }; if schema <= 26 { if err = migrateLocalProviders(ctx, db); err != nil { return nil, err } }; if schema <= 27 { if err = migrateNewsWatch(ctx, db); err != nil { return nil, err } }; if schema <= 28 { if err = migrateTaskAnalysis(ctx, db); err != nil { return nil, err } }; if schema <= 29 { if err = migrateStrategies(ctx, db); err != nil { return nil, err } }\n" +
+        "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }; if schema <= 6 { if err = migrateAIConnections(ctx, db); err != nil { return nil, err } }; if schema <= 7 { if err = migrateAgentNews(ctx, db); err != nil { return nil, err } }; if schema <= 8 { if err = migrateAIAdmission(ctx, db); err != nil { return nil, err } }; if schema <= 9 { if err = migrateWENPaper(ctx, db); err != nil { return nil, err } }; if schema <= 10 { if err = migrateWENResearch(ctx, db); err != nil { return nil, err } }; if schema <= 11 { if err = migrateWENResearchAI(ctx, db); err != nil { return nil, err } }; if schema <= 12 { if err = migrateWENResearchLoop(ctx, db); err != nil { return nil, err } }; if schema <= 13 { if err = migrateWENSessions(ctx, db); err != nil { return nil, err } }; if schema <= 14 { if err = migrateWENFixtureRuns(ctx, db); err != nil { return nil, err } }; if schema <= 15 { if err = migratePlaybooks(ctx, db); err != nil { return nil, err } }; if schema <= 16 { if err = migrateTaskCalendar(ctx, db); err != nil { return nil, err } }; if schema <= 17 { if err = migrateTaskCron(ctx, db); err != nil { return nil, err } }; if schema <= 18 { if err = migrateAgentChat(ctx, db); err != nil { return nil, err } }; if schema <= 19 { if err = migrateAccountRPC(ctx, db); err != nil { return nil, err } }; if schema <= 20 { if err = migrateProviderRPC(ctx, db); err != nil { return nil, err } }; if schema <= 21 { if err = migrateManagedKeys(ctx, db); err != nil { return nil, err } }; if schema <= 22 { if err = migrateProviderAccounts(ctx, db, dir); err != nil { return nil, err } }; if schema <= 23 { if err = migrateProviderModels(ctx, db); err != nil { return nil, err } }; if schema <= 24 { if err = migrateNativeProviders(ctx, db); err != nil { return nil, err } }; if schema <= 25 { if err = migrateSignInPlan(ctx, db); err != nil { return nil, err } }; if schema <= 26 { if err = migrateLocalProviders(ctx, db); err != nil { return nil, err } }; if schema <= 27 { if err = migrateNewsWatch(ctx, db); err != nil { return nil, err } }; if schema <= 28 { if err = migrateTaskAnalysis(ctx, db); err != nil { return nil, err } }; if schema <= 29 { if err = migrateStrategies(ctx, db); err != nil { return nil, err } }; if schema <= 30 { if err = migrateOnchain(ctx, db); err != nil { return nil, err } }\n" +
           marker,
       ),
   );
   storage["store.go"] = sha(await readFile(store));
+  const readerLog = execFileSync(
+    "go",
+    ["test", "./internal/signer", "-run", "^TestSwapStateReader$"],
+    {
+      cwd: archivedRoot,
+      env: { ...process.env, FASED_COMPOSED_SWAP_READER: "1" },
+      encoding: "utf8",
+    },
+  );
+  storage["signer/reader-test-output"] = sha(Buffer.from(readerLog));
+
   return { fixtureOnly: true, exactHistoricalBinary: false, storage };
 }

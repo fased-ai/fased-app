@@ -165,6 +165,11 @@ func (s *Server) startAgentTasks() {
 					}
 				}
 				stop()
+				if e == nil && s.Store.onchain != nil {
+					onchainContext, done := context.WithTimeout(ctx, 15*time.Second)
+					e = s.Store.advanceOnchain(onchainContext)
+					done()
+				}
 				message := ""
 				if e != nil && !errors.Is(e, ErrCorePaused) && !errors.Is(e, context.Canceled) {
 					message = "local task scheduler held; inspect workspace capacity and core state"

@@ -100,7 +100,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		<-ctx.Done()
 		return nil
 	}
-	if args[0] != "owner" && args[0] != "app" && args[0] != "setup" && args[0] != "recover" && args[0] != "approve" && args[0] != "import" {
+	if args[0] != "owner" && args[0] != "app" && args[0] != "setup" && args[0] != "recover" && args[0] != "approve" && args[0] != "approve-swap" && args[0] != "import" {
 		return errors.New("unsupported fixture command")
 	}
 	owner := args[0] != "app"
@@ -159,15 +159,11 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		}
 		return p, nil
 	}
-	if args[0] == "approve" {
+	if args[0] == "approve" || args[0] == "approve-swap" {
 		if *requestStdin {
 			return errors.New("choose an owner proposal file")
 		}
 		b, e := readPublicProposal(*documentPath)
-		if e != nil {
-			return e
-		}
-		p, e := signer.ParseProposal(b)
 		if e != nil {
 			return e
 		}
@@ -181,6 +177,19 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 				return errors.New("approval cancelled; no permission granted")
 			}
 			return nil
+		}
+		if args[0] == "approve-swap" {
+			p, e := signer.ParseSwapProposal(b)
+			if e != nil {
+				return e
+			}
+			return conductSwapApproval(ctx, p, password, confirm, errOut, out, func(ctx context.Context, r signer.Request) (signer.Response, error) {
+				return signer.Call(ctx, c, true, r)
+			})
+		}
+		p, e := signer.ParseProposal(b)
+		if e != nil {
+			return e
 		}
 		return conductApproval(ctx, p, password, confirm, errOut, out, func(ctx context.Context, r signer.Request) (signer.Response, error) {
 			return signer.Call(ctx, c, true, r)

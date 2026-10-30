@@ -128,8 +128,10 @@ func managedComponents(cs []Component) bool {
 	return ManagedContracts(c)
 }
 
-func listOK(a []string) bool {
-	if len(a) > 32 {
+func listOK(a []string) bool          { return boundedListOK(a, 32) }
+func stateFeaturesOK(a []string) bool { return boundedListOK(a, 64) }
+func boundedListOK(a []string, max int) bool {
+	if len(a) > max {
 		return false
 	}
 	seen := map[string]bool{}
@@ -182,7 +184,7 @@ func validateComponentsFor(cs []Component, lifecycle func(*LifecycleContract) bo
 		files[strings.ToLower(a.File)] = true
 		states := map[string]bool{}
 		for _, s := range x.State {
-			if owners[s.Name] != x.Component || states[s.Name] || !s.Versions.valid() || !listOK(s.Features) {
+			if owners[s.Name] != x.Component || states[s.Name] || !s.Versions.valid() || !stateFeaturesOK(s.Features) {
 				return errors.New("invalid state contract")
 			}
 			states[s.Name] = true
@@ -238,7 +240,7 @@ func Compatible(m Manifest, sha string, inv Inventory) (Plan, error) {
 	seen := map[string]bool{}
 	for _, s := range inv.States {
 		x, ok := support[s.Name]
-		if !ok || seen[s.Name] || !hashOK(s.Anchor) || !listOK(s.Features) || !containsAll(s.Features, required[s.Name]) || !x.Versions.has(s.Version) || !containsAll(x.Features, s.Features) {
+		if !ok || seen[s.Name] || !hashOK(s.Anchor) || !stateFeaturesOK(s.Features) || !containsAll(s.Features, required[s.Name]) || !x.Versions.has(s.Version) || !containsAll(x.Features, s.Features) {
 			return p, fmt.Errorf("incompatible durable state: %s", s.Name)
 		}
 		seen[s.Name] = true
