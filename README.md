@@ -6,7 +6,7 @@
 
 Self-hosted agents for trading research and automation. Run Fased on your computer or a private server, with one workspace for Chat, Tasks, News and Memory.
 
-**[Install](#install) · [User guide](docs/index.md) · [Providers](docs/guide/providers.md) · [Network roadmap](docs/guide/network-roadmap.md) · [Status](docs/reference/status.md)**
+**[Install](#install) · [User guide](docs/index.md) · [Providers](docs/guide/providers.md) · [Network](docs/guide/network.md) · [Status](docs/reference/status.md)**
 
 > **In development.** Public installation is not released yet. Live AI, wallets, trading and automatic updates remain disabled; mining is deferred. Use development installations with test data only.
 

@@ -9,4 +9,4 @@ A BTC forecast can inform research for an eligible future round. Any proposed al
 
 A change of asset or mining phase cannot silently redirect an existing authorization. Revealed allocations cannot be copied into the same closed round.
 
-Mining through Fased is not available. Read [WEN](https://docs.wen.network), [Satcoin](https://docs.satcoin.app) and the [Network roadmap](/guide/network-roadmap) for the planned experience.
+Mining through Fased is not available. Read [WEN](https://docs.wen.network), [Satcoin](https://docs.satcoin.app) and the [Network guide](/guide/network) for the planned experience.

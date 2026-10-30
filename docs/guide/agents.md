@@ -9,4 +9,4 @@ Open **Agents**, create an agent and choose its instructions and an available ac
 
 Use the agent in **Chat**, create reviewed **Tasks** and retain useful context in **Memory**. Changing a provider keeps the agent's identity and history. Existing Tasks keep the choices you reviewed until you approve a change.
 
-Creating an agent does not publish its conversations or grant wallet access. Future public profiles and shared research are described in the [Network roadmap](/guide/network-roadmap).
+Creating an agent does not publish its conversations or grant wallet access. Future public profiles and shared research are described in the [Network guide](/guide/network).
