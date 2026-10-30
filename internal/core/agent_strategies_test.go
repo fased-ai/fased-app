@@ -482,3 +482,40 @@ func TestStrategyAliasedContainerRefusesAndKeepsSchema(t *testing.T) {
 		t.Fatal("migration refusal changed source")
 	}
 }
+
+func TestStrategyWorkspaceRejectsAmbiguousProtectedContainers(t *testing.T) {
+	for _, raw := range []string{
+		`{"tasks":[],"tasks":[]}`,
+		`{"strategies":[],"\u0073trategies":[]}`,
+		`{"tasks":[],"Tasks":[]}`,
+		`{"runs":[],"Runs":[]}`,
+		`{"tasks":[{"id":"x","id":"y"}]}`,
+		`{"runs":[{"id":"x","\u0069d":"y"}]}`,
+		`{"strategies":[{"id":"x","id":"y"}]}`,
+		`{} {}`,
+		`[]`,
+		"{\"messages\":\"\xff\"}",
+	} {
+		if err := validateStrategyStorage([]byte(raw), agentDocument{}); err == nil {
+			t.Fatalf("ambiguous protected workspace accepted: %q", raw)
+		}
+	}
+}
+
+func BenchmarkStrategyLegacyWorkspaceValidation(b *testing.B) {
+	messages := make([]map[string]string, 128)
+	for i := range messages {
+		messages[i] = map[string]string{"text": strings.Repeat("x", 1024)}
+	}
+	raw, err := json.Marshal(map[string]any{"messages": messages, "tasks": []any{}, "runs": []any{}})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if err := validateStrategyStorage(raw, agentDocument{}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

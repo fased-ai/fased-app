@@ -448,7 +448,11 @@ func TestNativeProvidersSchema24ReaderAndMigration(t *testing.T) {
 	s := fixtureStore(t)
 	a := saveTestConnection(t, s)
 	v := prepareConnected(t, s, a.Ref)
-	before, _ := json.Marshal(v)
+	var before string
+	var beforeRevision int64
+	if err := s.db.QueryRow("SELECT document,revision FROM agent_workspace WHERE id=1").Scan(&before, &beforeRevision); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.db.Exec("PRAGMA user_version=24"); err != nil {
 		t.Fatal(err)
 	}
@@ -458,9 +462,15 @@ func TestNativeProvidersSchema24ReaderAndMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, _ := next.Agents(t.Context(), v.ProfileID, "")
-	after, _ := json.Marshal(got)
-	if !bytes.Equal(before, after) {
+	if _, err := next.Agents(t.Context(), v.ProfileID, ""); err != nil {
+		t.Fatal(err)
+	}
+	var after string
+	var afterRevision int64
+	if err := next.db.QueryRow("SELECT document,revision FROM agent_workspace WHERE id=1").Scan(&after, &afterRevision); err != nil {
+		t.Fatal(err)
+	}
+	if before != after || beforeRevision != afterRevision {
 		t.Fatal("migration changed records")
 	}
 	next.Close()

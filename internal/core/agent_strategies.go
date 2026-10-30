@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -9,8 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"github.com/fased-ai/fased-app/internal/update"
+	"io"
 	"math/big"
 	"strings"
+	"unicode/utf8"
 )
 
 // StrategyPlan is a paper-only limit-buy policy. Amounts use SOL atoms (1e9)
@@ -341,10 +344,49 @@ func (s *Store) evaluateStrategyTask(ctx context.Context, tx *sql.Tx, d *agentDo
 	}
 	return runStrategyTask(d, i, now, s.providerFixture, accounts, compiledStrategyQuote(*d.Tasks[i].StrategyPlan, now))
 }
+
+// Inspect root names once, without recursively walking unrelated chat/history.
+// Protected containers below retain bounded strict decoding, including aliases,
+// duplicate fields and typed policies. Other sections keep their own validators.
+func strategyWorkspaceFields(raw []byte) (map[string]json.RawMessage, error) {
+	if len(raw) == 0 || len(raw) > strategyStateLimit || !utf8.Valid(raw) {
+		return nil, errors.New("invalid strategy workspace")
+	}
+	d := json.NewDecoder(bytes.NewReader(raw))
+	first, err := d.Token()
+	if err != nil || first != json.Delim('{') {
+		return nil, errors.New("invalid strategy workspace")
+	}
+	seen := make(map[string]bool)
+	root := make(map[string]json.RawMessage)
+	for d.More() {
+		key, err := d.Token()
+		name, ok := key.(string)
+		if err != nil || !ok || seen[name] {
+			return nil, errors.New("ambiguous strategy workspace")
+		}
+		seen[name] = true
+		var value json.RawMessage
+		if err := d.Decode(&value); err != nil {
+			return nil, errors.New("invalid strategy workspace")
+		}
+		if strings.EqualFold(name, "strategies") || strings.EqualFold(name, "tasks") || strings.EqualFold(name, "runs") {
+			root[name] = value
+		}
+	}
+	if last, err := d.Token(); err != nil || last != json.Delim('}') {
+		return nil, errors.New("invalid strategy workspace")
+	}
+	if _, err := d.Token(); err != io.EOF {
+		return nil, errors.New("trailing strategy workspace")
+	}
+	return root, nil
+}
+
 func strategyFields(raw []byte, unprotected bool) error {
-	var root map[string]json.RawMessage
-	if update.StrictJSONBounded(raw, &root, strategyStateLimit) != nil {
-		return errors.New("invalid strategy workspace")
+	root, err := strategyWorkspaceFields(raw)
+	if err != nil {
+		return err
 	}
 	for key, value := range root {
 		if strings.EqualFold(key, "strategies") {
@@ -361,7 +403,7 @@ func strategyFields(raw []byte, unprotected bool) error {
 				return errors.New("ambiguous strategy container; preserve original state")
 			}
 			var rows []map[string]json.RawMessage
-			if json.Unmarshal(value, &rows) != nil {
+			if update.StrictJSONBounded(value, &rows, strategyStateLimit) != nil {
 				return errors.New("invalid task records")
 			}
 			for _, row := range rows {

@@ -900,17 +900,17 @@ test.describe("calendar reminders", () => {
     await page
       .getByRole("button", { name: "Pause: Calendar journal", exact: true })
       .click();
-    await expect(table).toContainText("paused");
+    await expect(table).toContainText("Paused");
     await stop();
     await start();
     await page.goto(url + "/#agents/tasks");
     await page.getByLabel("Owner password").fill(fixturePassword);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
-    await expect(table).toContainText("paused");
+    await expect(table).toContainText("Paused");
     await page
       .getByRole("button", { name: "Resume: Calendar journal", exact: true })
       .click();
-    await expect(table).toContainText("scheduled");
+    await expect(table).toContainText("Scheduled");
     v = await privateCLI(["agents"]);
     expect(v.tasks[0].nextAt).toBe(at);
     expect(v.tasks[0].calendar.at).toBe(at);
@@ -918,7 +918,7 @@ test.describe("calendar reminders", () => {
     await page
       .getByRole("button", { name: "Run now: Calendar journal", exact: true })
       .click();
-    await expect(table).toContainText("completed");
+    await expect(table).toContainText("Completed");
     await page
       .getByRole("button", { name: "Result: Calendar journal", exact: true })
       .click();
@@ -1079,7 +1079,7 @@ test("compact Tasks reviews without writes and preserves bounded runs across UI 
   await page
     .getByRole("button", { name: "Pause: Journal review", exact: true })
     .click();
-  await expect(table).toContainText("paused");
+  await expect(table).toContainText("Paused");
   await expect(
     page.getByRole("button", { name: "Run now: Journal review", exact: true }),
   ).toBeDisabled();
@@ -1095,12 +1095,12 @@ test("compact Tasks reviews without writes and preserves bounded runs across UI 
   await page.goto(url + "/#agents/tasks");
   await page.getByLabel("Owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(table).toContainText("paused");
+  await expect(table).toContainText("Paused");
   expect((await privateCLI(["agents"])).runs).toEqual(paused.runs);
   await page
     .getByRole("button", { name: "Resume: Journal review", exact: true })
     .click();
-  await expect(table).toContainText("scheduled");
+  await expect(table).toContainText("Scheduled");
   v = await privateCLI(["agents"]);
   expect(v.tasks[0].nextAt).toBeGreaterThan(Date.now() / 1000 + 895);
   await page
@@ -1655,11 +1655,16 @@ test.beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "fcu-"));
   await start();
 });
-test.afterEach(async () => {
+test.afterEach(async ({ page }) => {
   try {
-    await stop();
+    // Drain intercepted reads before stopping the fixture they forward to.
+    await page.unrouteAll({ behavior: "wait" });
   } finally {
-    if (dir) await rm(dir, { recursive: true, force: true });
+    try {
+      await stop();
+    } finally {
+      if (dir) await rm(dir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -10362,7 +10367,7 @@ test("R1 workspace uses a compact branded shell and on-demand chat task memory c
     .getByRole("button", { name: "Run now: R1 fixture reminder", exact: true })
     .click();
   await expect(page.getByRole("table", { name: "Tasks" })).toContainText(
-    "completed",
+    "Completed",
   );
   await expect(page.getByRole("table", { name: "Tasks" })).toContainText(
     "1 / 1",

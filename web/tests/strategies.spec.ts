@@ -20,8 +20,14 @@ test("versioned paper strategies join reviewed Tasks and CLI through pause edit 
   // Disposable, reconstructible and nonauthoritative. Keep core.sock short;
   // public inputs/results and stopped failure state are retained in evidence.
   const dir = await mkdtemp(join(tmpdir(), "fased-b06-"));
-  const binary = join(root, "bin/fased-app");
-  const seed = join(root, "bin/core.test");
+  // Reuse the binaries compiled by the joined CI journey. Ignored local
+  // acceptance artifacts are not available in a clean checkout.
+  const binary = resolve(
+    process.env.FASED_CORE_BINARY ?? ".evidence/bin/fased-app",
+  );
+  const seed = resolve(
+    process.env.FASED_WALLET_BROWSER_BINARY ?? ".evidence/bin/wallet-core.test",
+  );
   const password = "disposable-strategy-browser-owner-password";
   const profileId = "trading-analyst";
   const strategyName = "Paper accumulation";

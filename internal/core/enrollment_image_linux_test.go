@@ -226,7 +226,7 @@ func TestEnrollmentImageRejectsUnsafeSource(t *testing.T) {
 			s := fixtureStore(t)
 			switch mode {
 			case "future":
-				_, _ = s.db.ExecContext(t.Context(), "PRAGMA user_version=30")
+				_, _ = s.db.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version=%d", StateSchema+1))
 			case "older":
 				_, _ = s.db.ExecContext(t.Context(), "PRAGMA user_version=28")
 			case "paused":
