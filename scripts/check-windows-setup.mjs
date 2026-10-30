@@ -35,7 +35,74 @@ async function checkContract() {
   assert.match(source, /CoreInstallAttempted and \(not CoreInstallConfirmed\)/);
   assert.match(source, /CoreInstallConfirmed := Code = 0;/);
   assert.match(source, /CoreInstallAttempted := True;/);
+  assert.match(
+    source,
+    /CoreInstallConfirmed := ExecAndLogOutput\([^\n]+ewWaitUntilTerminated, Code, nil\);/,
+    "core install errors must reach the existing setup log without weakening failure propagation",
+  );
+  assert.match(
+    source,
+    /Result := ExecAndLogOutput\([^\n]+'uninstall'[^\n]+ewWaitUntilTerminated, Code, nil\);/,
+    "core removal errors must reach the existing uninstall log",
+  );
   return { result: "PASS", class: "source contract; Windows runtime unproven" };
+}
+
+async function failureSnapshot(app, data) {
+  const snapshot = {};
+  try {
+    const manifest = JSON.parse(
+      await readFile(join(app, "install.json"), "utf8"),
+    );
+    snapshot.manifest = Object.fromEntries(
+      [
+        "schema",
+        "phase",
+        "version",
+        "root",
+        "data",
+        "listen",
+        "location",
+        "autostart",
+      ]
+        .filter((key) => Object.hasOwn(manifest, key))
+        .map((key) => [key, manifest[key]]),
+    );
+  } catch (error) {
+    snapshot.manifestError = error.code ?? error.name;
+  }
+  try {
+    snapshot.endpointPresent = (
+      await stat(join(data, "endpoint.json"))
+    ).isFile();
+  } catch (error) {
+    snapshot.endpointPresent = false;
+    if (error.code !== "ENOENT") snapshot.endpointError = error.code;
+  }
+  try {
+    snapshot.task = JSON.parse(
+      execFileSync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          `
+$taskIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$taskName = 'FasedApp-' + $taskIdentity
+$ownedTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+if ($null -eq $ownedTask) { @{present=$false;name=$taskName} | ConvertTo-Json -Compress; exit 0 }
+$ownedInfo = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction Stop
+@{present=$true;name=$taskName;state=[string]$ownedTask.State;user=$ownedTask.Principal.UserId;logon=[string]$ownedTask.Principal.LogonType;runLevel=[string]$ownedTask.Principal.RunLevel;lastRun=$ownedInfo.LastRunTime;lastResult=$ownedInfo.LastTaskResult;nextRun=$ownedInfo.NextRunTime;missedRuns=$ownedInfo.NumberOfMissedRuns} | ConvertTo-Json -Compress
+`,
+        ],
+        { encoding: "utf8", timeout: 10000 },
+      ),
+    );
+  } catch (error) {
+    snapshot.taskError = error.code ?? error.status ?? error.name;
+  }
+  return snapshot;
 }
 
 async function checkWindowsSetup() {
@@ -249,6 +316,7 @@ async function checkWindowsSetup() {
     });
   } catch (e) {
     report.error = String(e);
+    report.failure = await failureSnapshot(app, data);
     throw e;
   } finally {
     if (installed) {

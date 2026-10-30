@@ -35,7 +35,7 @@ end;
 function InitializeUninstall(): Boolean;
 var Code: Integer;
 begin
-  Result := Exec(ExpandConstant('{app}\bundle\fased-app.exe'), 'uninstall', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Result := ExecAndLogOutput(ExpandConstant('{app}\bundle\fased-app.exe'), 'uninstall', '', SW_HIDE, ewWaitUntilTerminated, Code, nil);
   if Result then Result := Code = 0;
   if (not Result) and (not UninstallSilent) then
     MsgBox('Fased core removal was refused. Application and instance data are preserved. Inspect the CLI uninstall error before retrying.', mbError, MB_OK);
@@ -48,7 +48,7 @@ begin
   begin
     CoreInstallAttempted := True;
     Code := 0;
-    CoreInstallConfirmed := Exec(ExpandConstant('{app}\bundle\fased-app.exe'), 'install --bundle "' + ExpandConstant('{app}\bundle') + '"', '', SW_HIDE, ewWaitUntilTerminated, Code);
+    CoreInstallConfirmed := ExecAndLogOutput(ExpandConstant('{app}\bundle\fased-app.exe'), 'install --bundle "' + ExpandConstant('{app}\bundle') + '"', '', SW_HIDE, ewWaitUntilTerminated, Code, nil);
     if CoreInstallConfirmed then CoreInstallConfirmed := Code = 0;
     if not CoreInstallConfirmed then
     begin
