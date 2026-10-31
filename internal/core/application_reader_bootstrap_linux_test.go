@@ -69,7 +69,7 @@ func readerSchema(t *testing.T, dir string) int {
 func TestApplicationReaderBootstrapPreservesRawRecordsAndCompletes(t *testing.T) {
 	dir, r, original := applicationReaderFixture(t)
 	got, e := BootstrapApplicationReader(t.Context(), dir, r)
-	if e != nil || got.Phase != "reader-migrated-forward-only" || got.Checkpoint.PreviousEngineSHA256 != r.PreviousEngineSHA256 || got.Checkpoint.Pause.Core.State.Version != 35 || readerSchema(t, dir) != 35 {
+	if e != nil || got.Phase != "reader-migrated-forward-only" || got.Checkpoint.PreviousEngineSHA256 != r.PreviousEngineSHA256 || got.Checkpoint.Pause.Core.State.Version != StateSchema || readerSchema(t, dir) != StateSchema {
 		t.Fatal(got, e)
 	}
 	again, e := ResumeApplicationReaderBootstrap(t.Context(), dir, r.OperationID)
@@ -117,7 +117,7 @@ func TestApplicationReaderBootstrapInterruptionKeepsOriginalAndResumes(t *testin
 			}
 			want := 33
 			if point == "reader:after-commit" {
-				want = 35
+				want = StateSchema
 			}
 			if got := readerSchema(t, dir); got != want {
 				t.Fatal("unexpected cutover", got)
@@ -125,7 +125,7 @@ func TestApplicationReaderBootstrapInterruptionKeepsOriginalAndResumes(t *testin
 			if _, e = ResumeApplicationReaderBootstrap(t.Context(), dir, r.OperationID); e != nil {
 				t.Fatal("exact interrupted transaction cannot resume", e)
 			}
-			if readerSchema(t, dir) != 35 {
+			if readerSchema(t, dir) != StateSchema {
 				t.Fatal("resume did not finish")
 			}
 		})

@@ -129,7 +129,7 @@ func TestApplicationReaderCompiledPredecessorIPC(t *testing.T) {
 	}()
 	ipc := &applicationOwnerIPC{directory: dir, instance: snapshot.InstanceID, id: id, lease: request.OwnerLease}
 	state, e := ipc.call(ctx, "inspect", nil)
-	if e != nil || state.View.Schema != 35 || state.View.InstanceID != snapshot.InstanceID {
+	if e != nil || state.View.Schema != core.StateSchema || state.View.InstanceID != snapshot.InstanceID {
 		t.Fatal(state, e)
 	}
 	proof := core.ApplicationUpdateReceipt{ID: id, Sequence: release.Sequence, ManifestSHA256: release.ManifestSHA256, EngineSHA256: release.EngineSHA256, Phase: "completed"}

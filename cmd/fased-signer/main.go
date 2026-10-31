@@ -34,6 +34,9 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	if len(args) > 0 && (args[0] == "fixture-inspection-compatibility" || args[0] == "fixture-reader-guard" || args[0] == "fixture-inspection-empty" || args[0] == "fixture-inspection-init" || args[0] == "fixture-inspection-cold") {
 		return inspectionFixtureCommand(args, input, out, errOut)
 	}
+	if len(args) == 1 && args[0] == "ordinary-custody-compatibility" {
+		return json.NewEncoder(out).Encode(signer.OrdinaryCustodyReadContract())
+	}
 	if len(args) == 1 && args[0] == "custody-compatibility" {
 		return json.NewEncoder(out).Encode(signer.ManagedUpdateContract())
 	}
@@ -47,11 +50,12 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		return json.NewEncoder(out).Encode(map[string]any{"protocol": 1, "ownerFlow": 1, "mode": signer.FixtureNetwork, "walletSigner": false})
 	}
 	if len(args) == 0 {
-		return errors.New("usage: fased-signer serve|owner|app|approve --config <root-owned-fixture.json> --disposable-fixture [options]")
+		return errors.New("usage: fased-signer serve|owner|app|approve --config <identity.json> (--disposable-fixture|--ordinary-custody) [options]")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(errOut)
-	configPath := flags.String("config", "", "root-owned immutable fixture identity configuration")
+	configPath := flags.String("config", "", "root-owned immutable signer identity configuration")
+	ordinary := flags.Bool("ordinary-custody", false, "owner-authorized custody; normal admission remains held")
 	fixture := flags.Bool("disposable-fixture", false, "confirm these are unfunded disposable test keys")
 	rpcOrigin := flags.String("rpc-origin", "", "canonical read-only receipt RPC origin; key is entered privately")
 	action := flags.String("action", "status", "owner administration or bounded fixture operation; app: status and fixture operations only")
@@ -65,12 +69,18 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
-	if flags.NArg() != 0 || !*fixture || *configPath == "" {
-		return errors.New("explicit disposable fixture confirmation and identity configuration required")
+	if flags.NArg() != 0 || (*fixture == *ordinary) || *configPath == "" {
+		return errors.New("select one custody mode and an identity configuration")
+	}
+	if *ordinary && !signer.OrdinaryOwnerAdmissionEnabled() {
+		return signer.ErrUnavailable
 	}
 	c, err := signer.LoadConfig(*configPath)
 	if err != nil {
 		return err
+	}
+	if *ordinary && (c.Version != 3 || c.Mode != signer.OrdinaryCustodyMode) {
+		return signer.ErrUnavailable
 	}
 	if args[0] == "fixture-install-inspect" || args[0] == "fixture-update-inspect" {
 		if *passwordStdin || *requestStdin || *approvalStdin || *documentPath != "" {
@@ -203,6 +213,8 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		importAction := "import-fixture-seed"
 		if c.Version == 2 {
 			importAction = "import-managed-seed"
+		} else if c.Version == 3 {
+			importAction = "import-ordinary-seed"
 		}
 		return conductImportAction(ctx, *seedPath, *documentPath, password, out, func(ctx context.Context, r signer.Request) (signer.Response, error) {
 			return signer.Call(ctx, c, true, r)

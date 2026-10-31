@@ -291,3 +291,35 @@ it("enrolls the exact installed source and never creates a second blank instance
   expect(walletOwnerCommands(view, "create", "devnet")).toEqual([]);
   expect(walletSetupLabel(view)).toBe("Install app");
 });
+
+it("attaches only held ordinary custody references with authenticated controlled provenance", () => {
+  const v = setupView();
+  const status = v.fixture.status!;
+  status.account!.version = 3;
+  status.publicIdentity!.version = 3;
+  status.custody = {
+    version: 1,
+    class: "ordinary-custody:v1",
+    profile: "controlled-disposable:v1",
+    provenance: "controlled-disposable:v1",
+    origin: "generated",
+  };
+  status.admissionHeld = true;
+  v.setup!.custodyClass = "ordinary-custody:v1";
+  v.setup!.admissionHeld = true;
+  expect(walletSetupReference(v)).toEqual(status.account);
+  expect(walletOwnerCommands(v, "create", "devnet")).toEqual([]);
+  status.custody.profile = "owner-authorized:v1";
+  expect(walletSetupReference(v)).toEqual(status.account);
+  status.custody.profile = "owner:v1";
+  expect(walletSetupReference(v)).toBeUndefined();
+  status.custody.profile = "controlled-disposable:v1";
+  status.admissionHeld = false;
+  expect(walletSetupReference(v)).toBeUndefined();
+  status.admissionHeld = true;
+  status.walletSigner = true;
+  expect(walletSetupReference(v)).toBeUndefined();
+  status.walletSigner = false;
+  status.account!.version = 2;
+  expect(walletSetupReference(v)).toBeUndefined();
+});

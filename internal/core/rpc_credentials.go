@@ -152,7 +152,7 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		return view, fail
 	}
 	version := 1
-	if account.Version == 2 || managedNetworkAccount(*account) {
+	if account.Version == 2 || (managedNetworkAccount(*account) || ordinaryNetworkAccount(*account)) {
 		version = 2
 		view.TestOnly = false
 	}
@@ -162,7 +162,7 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 	if c.Action == "save" && !validRPCSecret(version, c.Key) {
 		return view, fail
 	}
-	if (c.Action == "save" || c.Action == "verify" || c.Action == "check" || c.Action == "restore") && account.Mode == "fixture-managed" {
+	if (c.Action == "save" || c.Action == "verify" || c.Action == "check" || c.Action == "restore") && (account.Mode == "fixture-managed" || ordinaryNetworkAccount(*account)) {
 		live := s.fixtureView(ctx)
 		if account.Signer == nil || live.Status == nil || live.Status.Account == nil || *live.Status.Account != *account.Signer {
 			return view, fail
@@ -178,7 +178,7 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		view.Ref = v.Ref
 		view.Saved = true
 		view.Stale = account.RPC == nil || v.Binding != rpcBinding(*account)
-		if account.Mode == "fixture-managed" {
+		if account.Mode == "fixture-managed" || ordinaryNetworkAccount(*account) {
 			live := s.fixtureView(ctx)
 			// The saved metadata may still name the pre-recovery epoch. Public
 			// status must not present its encrypted credential as current.
@@ -237,7 +237,7 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 				if sha256.Sum256(encoded) != sha256.Sum256(sealed) {
 					return fail
 				}
-				if account.Mode == "fixture-managed" {
+				if account.Mode == "fixture-managed" || ordinaryNetworkAccount(*account) {
 					live := s.fixtureView(ctx)
 					if account.Signer == nil || live.Status == nil || live.Status.Account == nil || *live.Status.Account != *account.Signer {
 						return fail

@@ -212,8 +212,8 @@ func bootstrapApplicationReader(ctx context.Context, directory string, request A
 	if e = c.QueryRowContext(ctx, "PRAGMA user_version").Scan(&schema); e != nil {
 		return out, e
 	}
-	if schema != 33 && schema != StateSchema || StateSchema != 35 {
-		return out, errors.New("only installed schema33 -> schema35 is supported; schema34 and unknown readers remain unchanged")
+	if schema != 33 && schema != StateSchema || StateSchema != 36 {
+		return out, errors.New("unsupported installed reader; preserve original installation")
 	}
 	phase, held, e := readPause(ctx, c)
 	if e != nil || phase != "paused" || held.PauseID != request.Predecessor.PauseID || held.Request.IntentID != request.OperationID || held.Request.Sequence != request.Release.Sequence || held.Request.ManifestSHA256 != request.Release.ManifestSHA256 {
@@ -275,7 +275,7 @@ func bootstrapApplicationReader(ctx context.Context, directory string, request A
 	if schema == 33 {
 		o := ApplicationUpdateOperation{ID: request.OperationID, Phase: "applying", OwnerLease: request.OwnerLease, Release: &request.Release, BootID: request.Predecessor.Core.BootID}
 		raw, _ := json.Marshal(o)
-		if _, e = c.ExecContext(ctx, "CREATE TABLE application_updates(id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, document TEXT NOT NULL); INSERT INTO application_updates(id,revision,document) VALUES(1,0,?); PRAGMA user_version=35;", string(raw)); e != nil {
+		if _, e = c.ExecContext(ctx, "CREATE TABLE application_updates(id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, document TEXT NOT NULL); INSERT INTO application_updates(id,revision,document) VALUES(1,0,?); PRAGMA user_version=36;", string(raw)); e != nil {
 			return out, e
 		}
 		next, err := s.snapshotTx(ctx, c, request.Predecessor.Core.ProbeID)
@@ -400,7 +400,7 @@ func applicationReaderLegacySnapshot(ctx context.Context, tx snapshotReader, pro
 	}
 	features := []string{}
 	for _, f := range UpdateContract().State[0].Features {
-		if f != "application-updates-v1" {
+		if f != "application-updates-v1" && f != "ordinary-custody-admission-v1" {
 			features = append(features, f)
 		}
 	}

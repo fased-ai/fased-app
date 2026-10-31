@@ -17,6 +17,7 @@ type journal struct {
 }
 
 type journalRecord struct {
+	Admission       *CustodyAdmission    `json:"admission,omitempty"`
 	ReceiptRPC      *receiptRPCEnvelope  `json:"receiptRPC,omitempty"`
 	FreshManaged    bool                 `json:"freshManaged,omitempty"`
 	Swap            *SwapProposal        `json:"swap,omitempty"`
@@ -44,6 +45,10 @@ type journalRecord struct {
 func recordHash(r journalRecord) string {
 	r.Hash = ""
 	b, _ := json.Marshal(r)
-	h := sha256.Sum256(append([]byte("fased-fixture-journal:v1\x00"), b...))
+	domain := "fased-fixture-journal:v1\x00"
+	if r.Admission != nil {
+		domain = "fased-ordinary-custody-journal:v1\x00"
+	}
+	h := sha256.Sum256(append([]byte(domain), b...))
 	return hex.EncodeToString(h[:])
 }

@@ -206,6 +206,9 @@ func (l *ledger) authorize(i FixtureIntent, at int64) error {
 // apply validates the transition as well as its recorded time. Replay uses the
 // same checks as live append; no persisted app counter is trusted.
 func (l *ledger) apply(r journalRecord) error {
+	if l.ref.Version == 3 {
+		return ErrUnavailable
+	}
 	if l.ref.Version == 2 {
 		expected := journalRecord{Version: r.Version, Sequence: r.Sequence, Previous: r.Previous, Hash: r.Hash, At: r.At, Kind: r.Kind}
 		switch r.Kind {
@@ -457,6 +460,9 @@ func (l *ledger) append(v *Vault, r journalRecord) error {
 }
 
 func (v *Vault) openLedger() error {
+	if v.ordinary {
+		return v.openOrdinaryHistory()
+	}
 	if v.network != "" {
 		return v.openManagedHistory()
 	}
@@ -509,6 +515,9 @@ func (v *Vault) openLedger() error {
 // Thus a crash during first setup preserves the encrypted original and cannot
 // be mistaken for permission to reset an existing wallet's counters.
 func (s *storage) ensureInitialHistory(e envelope) error {
+	if e.Version == 4 {
+		return s.ensureOrdinaryHistory(e)
+	}
 	if e.Version == 2 || e.Version == 3 {
 		return s.ensureManagedHistory(e)
 	}

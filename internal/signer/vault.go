@@ -44,18 +44,21 @@ type AccountRef struct {
 }
 
 type envelope struct {
-	FreshManaged     bool       `json:"freshManaged,omitempty"`
-	Version          int        `json:"version"`
-	Purpose          string     `json:"purpose"`
-	KDF              string     `json:"kdf"`
-	Ref              AccountRef `json:"account"`
-	RecoveryRequired bool       `json:"recoveryRequired"`
-	Salt             []byte     `json:"salt"`
-	Nonce            []byte     `json:"nonce"`
-	Ciphertext       []byte     `json:"ciphertext"`
+	Admission        *CustodyAdmission `json:"admission,omitempty"`
+	FreshManaged     bool              `json:"freshManaged,omitempty"`
+	Version          int               `json:"version"`
+	Purpose          string            `json:"purpose"`
+	KDF              string            `json:"kdf"`
+	Ref              AccountRef        `json:"account"`
+	RecoveryRequired bool              `json:"recoveryRequired"`
+	Salt             []byte            `json:"salt"`
+	Nonce            []byte            `json:"nonce"`
+	Ciphertext       []byte            `json:"ciphertext"`
 }
 
 type Status struct {
+	Custody            *CustodyAdmission `json:"custody,omitempty"`
+	AdmissionHeld      bool              `json:"admissionHeld,omitempty"`
 	ReceiptRPC         *ReceiptRPCStatus `json:"receiptRPC,omitempty"`
 	SwapReady          bool              `json:"swapReady,omitempty"`
 	UpdateHeld         bool              `json:"updateHeld"`
@@ -70,6 +73,8 @@ type Status struct {
 }
 
 type Vault struct {
+	admissionContext  CustodyAdmission
+	ordinary          bool
 	receiptRPCFactory func(onchain.CredentialAccess) (SwapObserver, error)
 	receiptRPCLease   *receiptRPCLease
 	swapObserver      SwapObserver
@@ -140,6 +145,9 @@ func seal(seed, password []byte, ref AccountRef, purpose string, recovery bool) 
 	return sealOrigin(seed, password, ref, purpose, recovery, false)
 }
 func sealOrigin(seed, password []byte, ref AccountRef, purpose string, recovery, fresh bool) (envelope, error) {
+	return sealAdmission(seed, password, ref, purpose, recovery, fresh, nil)
+}
+func sealAdmission(seed, password []byte, ref AccountRef, purpose string, recovery, fresh bool, admission *CustodyAdmission) (envelope, error) {
 	if !validPassword(password) {
 		return envelope{}, errors.New("use 12 or more characters, at most 1024 bytes")
 	}
@@ -150,6 +158,16 @@ func sealOrigin(seed, password []byte, ref AccountRef, purpose string, recovery,
 			e.Version = 3
 			e.FreshManaged = true
 		}
+	}
+	if ref.Version == 3 {
+		if admission == nil || !admission.Valid() || !ValidOrdinaryAccountRef(ref) || !recovery || fresh {
+			return envelope{}, ErrUnavailable
+		}
+		copy := *admission
+		e.Version = 4
+		e.Admission = &copy
+	} else if admission != nil {
+		return envelope{}, ErrUnavailable
 	}
 	key := argon2.IDKey(password, e.Salt, 3, 64*1024, 2, 32)
 	defer wipe(key)
@@ -202,7 +220,8 @@ func openVault(dir, signerID string, readOnly bool) (*Vault, error) {
 	return openVaultNetwork(dir, signerID, readOnly, "")
 }
 func openVaultNetwork(dir, signerID string, readOnly bool, network string) (*Vault, error) {
-	if network != "" && !managedNetwork(network) {
+	publicNetwork, admissionContext, ordinary := ordinaryContextForNetwork(network)
+	if network != "" && !managedNetwork(publicNetwork) {
 		return nil, ErrUnavailable
 	}
 	if !validID(signerID) {
@@ -220,7 +239,7 @@ func openVaultNetwork(dir, signerID string, readOnly bool, network string) (*Vau
 	if err != nil {
 		return nil, err
 	}
-	v := &Vault{store: s, signerID: signerID, network: network, now: time.Now, bootID: update.NewProbe()}
+	v := &Vault{store: s, signerID: signerID, network: publicNetwork, ordinary: ordinary, admissionContext: admissionContext, now: time.Now, bootID: update.NewProbe()}
 	b, err := s.read()
 	if err == nil {
 		var e envelope
@@ -281,7 +300,18 @@ func (v *Vault) Status() Status {
 	defer v.mu.Unlock()
 	locked := !v.unlocked()
 	s := Status{ReceiptRPC: v.receiptRPCStatus(), SwapReady: v.managedSwapEligible(), FixtureOnly: true, Locked: locked, UnlockUntil: v.until, UpdateHeld: v.store.failedState() || v.ledger != nil && v.ledger.activeUpdate != ""}
+	if v.ordinary {
+		hint := v.admissionContext
+		s.Custody = &hint
+		s.FixtureOnly = hint.Provenance == ControlledCustodyProfile
+		s.AdmissionHeld = true
+	}
 	if v.record != nil {
+		if v.ordinary {
+			copy := *v.record.Admission
+			s.Custody = &copy
+			s.AdmissionHeld = true
+		}
 		ref := v.record.Ref
 		s.Account = &ref
 		s.RecoveryRequired = v.recoveryRequired()
@@ -335,13 +365,27 @@ func (v *Vault) createSeed(seed, password []byte, recovery bool) error {
 	private := ed25519.NewKeyFromSeed(seed)
 	defer wipe(private)
 	ref := AccountRef{Version: 1, SignerID: v.signerID, WalletID: randomID(), Epoch: randomID(), Network: FixtureNetwork, PublicKey: hex.EncodeToString(private[ed25519.SeedSize:])}
+	imported := recovery
 	fresh := v.network != "" && !recovery
 	if v.network != "" {
 		ref.Version = 2
 		ref.Network = v.network
 		recovery = true
 	}
-	e, err := sealOrigin(seed, password, ref, "vault", recovery, fresh)
+	var admission *CustodyAdmission
+	if v.ordinary {
+		origin := "generated"
+		if imported {
+			origin = "imported"
+		}
+		ref.Version = 3
+		fresh = false
+		recovery = true
+		metadata := v.admissionContext
+		metadata.Origin = origin
+		admission = &metadata
+	}
+	e, err := sealAdmission(seed, password, ref, "vault", recovery, fresh, admission)
 	if err != nil {
 		return err
 	}
@@ -395,7 +439,7 @@ func (v *Vault) Backup(password []byte) ([]byte, error) {
 	if !v.unlocked() {
 		return nil, ErrLocked
 	}
-	e, err := seal(v.seed, password, v.record.Ref, "backup", true)
+	e, err := sealAdmission(v.seed, password, v.record.Ref, "backup", true, false, v.record.Admission)
 	if err != nil {
 		return nil, err
 	}
@@ -422,7 +466,7 @@ func (v *Vault) VerifyBackup(document, password []byte) error {
 		return err
 	}
 	defer wipe(seed)
-	if !sameWallet(e.Ref, v.record.Ref) || !bytes.Equal(seed, v.seed) {
+	if !sameWallet(e.Ref, v.record.Ref) || !bytes.Equal(seed, v.seed) || (e.Admission == nil) != (v.record.Admission == nil) || e.Admission != nil && *e.Admission != *v.record.Admission {
 		return errors.New("backup belongs to another fixture wallet")
 	}
 	return nil
@@ -447,7 +491,7 @@ func (v *Vault) Restore(backup, backupPassword, newPassword []byte) error {
 	if err := decode(backup, &e); err != nil {
 		return err
 	}
-	if !envelopeForNetwork(e, v.network) {
+	if !envelopeForNetwork(e, v.vaultNetwork()) {
 		return ErrUnavailable
 	}
 	if v.managedRef != nil && !sameWallet(*v.managedRef, e.Ref) {
@@ -463,7 +507,7 @@ func (v *Vault) Restore(backup, backupPassword, newPassword []byte) error {
 	}
 	e.Ref.SignerID = v.signerID
 	e.Ref.Epoch = randomID()
-	restored, err := seal(seed, newPassword, e.Ref, "vault", true)
+	restored, err := sealAdmission(seed, newPassword, e.Ref, "vault", true, false, e.Admission)
 	if err != nil {
 		return err
 	}

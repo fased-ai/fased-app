@@ -199,12 +199,15 @@ func (s *Store) checkAccountRPC(ctx context.Context, input RPCCheckRequest, chec
 				return Account{}, "", errors.New("wallet network mismatch")
 			}
 			state := "public-record-only"
-			if a.Mode == "fixture-managed" {
+			if a.Mode == "fixture-managed" || ordinaryNetworkAccount(a) {
 				live := s.fixtureView(ctx)
 				if !live.Available || live.Status == nil || live.Status.Account == nil || a.Signer == nil || *live.Status.Account != *a.Signer {
 					return Account{}, "", errors.New("wallet reference is stale or signer unavailable")
 				}
 				state = "current-fixture"
+				if ordinaryNetworkAccount(a) {
+					state = "current-custody-held"
+				}
 			}
 			return a, state, nil
 		}
