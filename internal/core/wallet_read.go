@@ -13,12 +13,13 @@ import (
 )
 
 type WalletReadCommand struct {
-	AccountID  string `json:"accountId"`
-	Revision   int64  `json:"revision"`
-	Ref        string `json:"ref"`
-	Passphrase string `json:"passphrase"`
+	Selection  *WalletSelection `json:"selection,omitempty"`
+	AccountID  string           `json:"accountId"`
+	Revision   int64            `json:"revision"`
+	Ref        string           `json:"ref"`
+	Passphrase string           `json:"passphrase"`
 }
-type walletReader func(context.Context, Account, string, []byte, func() error) (WalletSnapshot, error)
+type walletReader func(context.Context, Account, string, []byte, func() error, *WalletSelection) (WalletSnapshot, error)
 
 func (s *Store) ReadWallet(ctx context.Context, in WalletReadCommand) (WalletSnapshot, error) {
 	return s.readWallet(ctx, in, nil)
@@ -29,7 +30,7 @@ func (s *Store) readWallet(ctx context.Context, in WalletReadCommand, authorized
 		return empty, errors.New("Wallet busy")
 	}
 	defer s.walletReadMu.Unlock()
-	if !hexValue(in.AccountID, 16) || in.Revision < 0 || !validPassword(in.Passphrase) {
+	if !hexValue(in.AccountID, 16) || in.Revision < 0 || !validPassword(in.Passphrase) || (in.Selection != nil && !validWalletSelection(in.Selection)) {
 		return empty, errors.New("Wallet unavailable")
 	}
 	if s.walletReadFixture == nil && !s.rpcAdmission {
@@ -39,7 +40,7 @@ func (s *Store) readWallet(ctx context.Context, in WalletReadCommand, authorized
 	defer cancel()
 	pauseBinding := ""
 	lookup := func() (Account, error) {
-		if ctx.Err() != nil || (authorized != nil && !authorized()) {
+		if ctx.Err() != nil || (authorized != nil && !authorized()) || (in.Selection != nil && time.Now().Unix() >= in.Selection.ExpiresAt) {
 			return Account{}, errors.New("Wallet unavailable")
 		}
 		phase, pause, err := readPause(ctx, s.db)
@@ -92,7 +93,7 @@ func (s *Store) readWallet(ctx context.Context, in WalletReadCommand, authorized
 	}
 	address := onchain.Base58(public)
 	vault, err := s.readRPCVault(in.AccountID)
-	if err != nil || vault.Version != 2 || vault.Ref != in.Ref || vault.Binding != rpcBinding(account) {
+	if err != nil || vault.Version != 2 || vault.Ref != in.Ref || vault.Binding != rpcBinding(account) || (in.Selection != nil && in.Selection.Binding != vault.Binding) {
 		return empty, errors.New("RPC locked or changed")
 	}
 	encoded, _ := json.Marshal(vault)
@@ -122,16 +123,16 @@ func (s *Store) readWallet(ctx context.Context, in WalletReadCommand, authorized
 	defer clear(key)
 	read := s.walletReadFixture
 	if read == nil {
-		read = func(ctx context.Context, a Account, address string, key []byte, valid func() error) (WalletSnapshot, error) {
+		read = func(ctx context.Context, a Account, address string, key []byte, valid func() error, selection *WalletSelection) (WalletSnapshot, error) {
 			next := newPublicRPCTransport()
 			if !next.enabled {
 				return WalletSnapshot{}, errors.New("Wallet reads disabled")
 			}
 			transport := &providerRPCTransport{origin: a.RPC.Endpoint, provider: rpcProvider(a.RPC.Endpoint, a.Network), key: key, valid: valid, next: next}
-			return walletRPC(ctx, a.RPC.Endpoint, transport, valid, false, address, a.Network)
+			return walletRPC(ctx, a.RPC.Endpoint, transport, valid, false, address, a.Network, selection)
 		}
 	}
-	out, err := read(ctx, account, address, key, valid)
+	out, err := read(ctx, account, address, key, valid, in.Selection)
 	if err != nil {
 		return empty, err
 	}

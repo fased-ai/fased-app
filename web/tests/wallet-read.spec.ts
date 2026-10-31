@@ -13,7 +13,10 @@ test("wallet Refresh joins encrypted RPC and CLI without changing saved data", a
 }, info) => {
   test.setTimeout(90000);
   page.setDefaultTimeout(10000);
-  const evidence = resolve(".evidence/b05-wallet-read", info.project.name);
+  const evidence = resolve(
+    ".evidence/b05-transaction-details",
+    info.project.name,
+  );
   await mkdir(evidence, { recursive: true, mode: 0o700 });
   // Reconstructible isolated fixture state; persist results, never a real key.
   const dir = await mkdtemp(join(tmpdir(), "fased-wread-"));
@@ -92,6 +95,7 @@ test("wallet Refresh joins encrypted RPC and CLI without changing saved data", a
       }
       return route.continue();
     });
+    await page.clock.install({ time: new Date() });
     await page.goto(url + "/#wallets/accounts");
     await page
       .getByLabel("Owner password", { exact: true })
@@ -147,6 +151,125 @@ test("wallet Refresh joins encrypted RPC and CLI without changing saved data", a
     expect(result.activity).toHaveLength(1);
     expect((await run(["accounts"])).out).toBe(saved);
     expect(await hash()).toBe(original);
+    const selection = {
+      ...result.activity[0],
+      binding: result.binding,
+      fetchedAt: result.fetchedAt,
+      expiresAt: result.expiresAt,
+    };
+    const inspectInput = { ...ready.input, selection };
+    const detailsCLI = await run(["accounts", "--read-stdin"], inspectInput);
+    expect(detailsCLI.code, detailsCLI.err).toBe(0);
+    const detail = JSON.parse(detailsCLI.out).transaction;
+    expect(detail.feeLamports).toBe("5000");
+    expect(detail.nativeChange).toBe("-100");
+    expect(detail.tokens.map((t: { change: string }) => t.change)).toEqual([
+      "7",
+      "-5",
+    ]);
+    const openTransaction = async () => {
+      const name = `Transaction ${result.activity[0].signature.slice(0, 8)}…${result.activity[0].signature.slice(-6)}`;
+      if (
+        !(await account.getByRole("button", { name, exact: true }).isVisible())
+      )
+        await account
+          .locator("summary")
+          .filter({ hasText: "Activity" })
+          .click();
+      await account.getByRole("button", { name, exact: true }).click();
+      return page.getByRole("dialog", { name: "Transaction", exact: true });
+    };
+    let transaction = await openTransaction();
+    await transaction
+      .getByRole("button", { name: "Cancel", exact: true })
+      .click();
+    await expect(transaction).not.toBeVisible();
+    transaction = await openTransaction();
+    await transaction
+      .getByLabel("Vault password", { exact: true })
+      .fill(ready.input.passphrase);
+    await transaction
+      .getByRole("button", { name: "View", exact: true })
+      .click();
+    await expect(transaction).toContainText("0.000005 SOL");
+    await expect(
+      transaction.getByTitle(detail.payer, { exact: true }),
+    ).toBeVisible();
+    await expect(
+      transaction.getByTitle(result.activity[0].signature, { exact: true }),
+    ).toBeVisible();
+    expect(
+      await transaction
+        .locator(".wallet-transaction")
+        .evaluate((el) => parseFloat(getComputedStyle(el).paddingLeft)),
+    ).toBeGreaterThanOrEqual(16);
+    await expect(transaction).toContainText("-0.0000001");
+    await expect(transaction).toContainText("+0.000007");
+    await expect(transaction).toContainText("-0.000005");
+    expect(
+      await transaction.evaluate((el) => el.scrollWidth <= el.clientWidth + 1),
+    ).toBe(true);
+    await page.screenshot({
+      path: join(evidence, "transaction.png"),
+      fullPage: true,
+    });
+    await page.clock.fastForward(61000);
+    await expect(transaction).not.toBeVisible();
+    await page.clock.setSystemTime(new Date());
+    await refresh();
+    await expect(
+      page.getByRole("dialog", { name: "Unlock RPC", exact: true }),
+    ).not.toBeVisible();
+    await expect(
+      page.getByRole("dialog", { name: "Transaction", exact: true }),
+    ).not.toBeVisible();
+    await writeFile(join(dir, "read-mode"), "tx-unavailable");
+    transaction = await openTransaction();
+    await transaction
+      .getByLabel("Vault password", { exact: true })
+      .fill(ready.input.passphrase);
+    await transaction
+      .getByRole("button", { name: "View", exact: true })
+      .click();
+    await expect(transaction.getByRole("alert")).toHaveText("Unavailable");
+    await expect(transaction).not.toContainText("0.000005 SOL");
+    await transaction
+      .getByRole("button", { name: "Cancel", exact: true })
+      .click();
+    await writeFile(join(dir, "read-mode"), "");
+    let requested = false,
+      release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const hold = async (route: import("@playwright/test").Route) => {
+      if (route.request().postDataJSON()?.selection) {
+        requested = true;
+        await held;
+        await route.abort().catch(() => {});
+      } else await route.continue();
+    };
+    await page.route("**/api/v1/accounts/read", hold);
+    try {
+      transaction = await openTransaction();
+      await transaction
+        .getByLabel("Vault password", { exact: true })
+        .fill(ready.input.passphrase);
+      await transaction
+        .getByRole("button", { name: "View", exact: true })
+        .click();
+      await expect.poll(() => requested).toBe(true);
+      await transaction
+        .getByRole("button", { name: "Cancel", exact: true })
+        .click();
+      await expect(transaction).not.toBeVisible();
+    } finally {
+      release();
+      await page.unroute("**/api/v1/accounts/read", hold);
+    }
+    expect((await run(["accounts"])).out).toBe(saved);
+    expect(await hash()).toBe(original);
+    await writeFile(join(evidence, "transaction.json"), detailsCLI.out);
     await writeFile(join(evidence, "snapshot.json"), cli.out);
     await page.screenshot({
       path: join(evidence, "wallets.png"),
@@ -179,6 +302,27 @@ test("wallet Refresh joins encrypted RPC and CLI without changing saved data", a
     });
     expect(resumed.code, resumed.err).toBe(0);
     expect(JSON.parse(resumed.out).lamports).toBe("0");
+    await writeFile(join(dir, "read-mode"), "");
+    const afterRestart = JSON.parse(
+      (await run(["accounts", "--read-stdin"], restarted.input)).out,
+    );
+    const resumedDetails = await run(["accounts", "--read-stdin"], {
+      ...restarted.input,
+      selection: {
+        ...afterRestart.activity[0],
+        binding: afterRestart.binding,
+        fetchedAt: afterRestart.fetchedAt,
+        expiresAt: afterRestart.expiresAt,
+      },
+    });
+    expect(resumedDetails.code, resumedDetails.err).toBe(0);
+    expect(JSON.parse(resumedDetails.out).transaction).toEqual(detail);
+    const initialAccounts = JSON.parse(saved);
+    expect(JSON.parse((await run(["accounts"])).out)).toEqual({
+      ...initialAccounts,
+      setup: { ...initialAccounts.setup, networkWatchEnabled: false },
+    });
+
     expect(await hash()).toBe(original);
     await writeFile(
       join(evidence, "result.json"),

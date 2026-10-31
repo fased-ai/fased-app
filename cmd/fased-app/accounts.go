@@ -26,7 +26,7 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	rpcSecret := flags.Bool("rpc-credential-stdin", false, "manage disposable RPC credentials from private JSON input")
 	rpcConfig := flags.Bool("rpc-stdin", false, "save/remove disposable wallet RPC settings from JSON")
 	rpcCheck := flags.Bool("check-rpc-stdin", false, "check disposable RPC endpoint/network JSON; no saving or live calls")
-	walletRead := flags.Bool("read-stdin", false, "read wallet balances and recent activity using private credential JSON")
+	walletRead := flags.Bool("read-stdin", false, "read wallet balances/activity or selected transaction using private credential JSON")
 	update := flags.Bool("request-stdin", false, "revision-checked public account record JSON from stdin; no secrets")
 	setup := flags.Bool("setup-stdin", false, "add a network public address or verified signer reference from JSON; no secrets")
 	if e = flags.Parse(args); e != nil {

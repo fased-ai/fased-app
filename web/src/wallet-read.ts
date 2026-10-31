@@ -1,5 +1,6 @@
 import type { Account } from "./accounts";
 export type WalletSnapshot = {
+  transaction?: WalletTransaction;
   version: number;
   accountId: string;
   revision: number;
@@ -30,6 +31,82 @@ export type WalletSnapshot = {
   fixtureOnly: boolean;
   liveRPC: boolean;
 };
+export type WalletActivity = WalletSnapshot["activity"][number];
+export type WalletTransaction = WalletActivity & {
+  feeLamports: string;
+  payer: string;
+  nativeBefore: string;
+  nativeAfter: string;
+  nativeChange: string;
+  tokens: {
+    account: string;
+    program: string;
+    mint: string;
+    decimals: number;
+    before: string;
+    after: string;
+    change: string;
+  }[];
+  tokenChangesComplete: boolean;
+};
+
+const u64 = (v: unknown): v is string =>
+  uint(v) && BigInt(v) <= 18446744073709551615n;
+const delta = (before: unknown, after: unknown, change: unknown) =>
+  u64(before) &&
+  u64(after) &&
+  typeof change === "string" &&
+  (BigInt(after) - BigInt(before)).toString() === change;
+export function currentWalletTransaction(
+  v: WalletTransaction | undefined,
+  snapshot: WalletSnapshot,
+  selected: WalletActivity,
+  now = Date.now() / 1000,
+): v is WalletTransaction {
+  return (
+    !!v &&
+    snapshot.expiresAt > now &&
+    v.signature === selected.signature &&
+    v.slot === selected.slot &&
+    v.failed === selected.failed &&
+    v.blockTime === selected.blockTime &&
+    snapshot.activity.some(
+      (a) =>
+        a.signature === selected.signature &&
+        a.slot === selected.slot &&
+        a.failed === selected.failed &&
+        a.blockTime === selected.blockTime,
+    ) &&
+    u64(v.feeLamports) &&
+    key(v.payer) &&
+    delta(v.nativeBefore, v.nativeAfter, v.nativeChange) &&
+    typeof v.tokenChangesComplete === "boolean" &&
+    Array.isArray(v.tokens) &&
+    v.tokens.length <= 256 &&
+    v.tokens.every(
+      (t) =>
+        !!t &&
+        key(t.account) &&
+        key(t.mint) &&
+        programs.includes(t.program) &&
+        Number.isInteger(t.decimals) &&
+        t.decimals >= 0 &&
+        t.decimals <= 255 &&
+        delta(t.before, t.after, t.change),
+    ) &&
+    new Set(v.tokens.map((t) => t.account)).size === v.tokens.length
+  );
+}
+export function walletSignedAmount(amount: string, decimals: number): string {
+  if (!/^(0|-?[1-9][0-9]*)$/.test(amount)) return "—";
+  const n = walletAmount(
+    amount.startsWith("-") ? amount.slice(1) : amount,
+    decimals,
+  );
+  return n === "—"
+    ? n
+    : (amount.startsWith("-") ? "-" : amount === "0" ? "" : "+") + n;
+}
 const uint = (value: unknown, digits = 20): value is string =>
   typeof value === "string" &&
   value.length <= digits &&
