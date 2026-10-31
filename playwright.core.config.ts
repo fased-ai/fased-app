@@ -11,6 +11,7 @@ export default defineConfig({
     "session-automatic.spec.ts",
     "strategies.spec.ts",
     "onchain.spec.ts",
+    "wallet-read.spec.ts",
   ],
   outputDir: ".evidence/core-browser",
   reporter: [

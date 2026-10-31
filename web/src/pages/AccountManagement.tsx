@@ -1,4 +1,5 @@
 import { RPCCheck } from "./RPCCheck";
+import { WalletRead } from "./WalletSnapshot";
 import { useUI } from "../ui-preferences";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useCore } from "../core";
@@ -407,6 +408,15 @@ export function AccountManagement() {
                 <code className="account-key" title={a.publicKey}>
                   {accountAddress(a, view)}
                 </code>
+                <WalletRead
+                  account={a}
+                  revision={view.record.revision}
+                  address={accountAddress(a, view)}
+                  blocked={["stale", "unverified"].includes(
+                    view.accountStates[a.id],
+                  )}
+                  settingsOpen={rpcID !== ""}
+                />
                 <div className="account-actions">
                   <button
                     className="secondary"
@@ -471,8 +481,7 @@ export function AccountManagement() {
                             "Signer unavailable — reference unverified",
                         } as Record<string, string>
                       )[view.accountStates[a.id]] ?? "Reference unverified",
-                    )}{" "}
-                    {uiText("· Balance unavailable")}
+                    )}
                   </p>
                   {a.signer && (
                     <p className="account-key">

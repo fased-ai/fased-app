@@ -22,6 +22,8 @@ export async function currentStorageFixture(archivedRoot) {
     "rpc_authenticated.go",
     "rpc_public.go",
     "rpc_providers.go",
+    "wallet_read.go",
+    "wallet_rpc.go",
     "agent_provider.go",
     "provider_models.go",
     "provider_native.go",
@@ -390,7 +392,7 @@ func ValidManagedAccountRef(r AccountRef) bool {
       )
       .replace(
         "type Store struct {",
-        "type Store struct {\n\tappUpdates applicationUpdates\n\tvenueCredentials venueCredentials\n\trpcAdmission bool\n\trpcCheckFixture func(context.Context, RPCCheckRequest) (RPCCheckResult, error)\n\tcustodyNetwork string\n\tonchain *onchainRuntime\n\tproviderFixture bool\n\tchatEpoch atomic.Uint64\n\tprogressMu sync.Mutex\n\taiProgress map[string]string\n\tsessionFixture bool\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState\n\tpilot openAIPilotState\n\tresearchRead func(context.Context, researchFactResult) (json.RawMessage, error)",
+        "type Store struct {\n\tappUpdates applicationUpdates\n\tvenueCredentials venueCredentials\n\trpcAdmission bool\n\twalletReadFixture walletReader\n\twalletReadMu sync.Mutex\n\trpcCheckFixture func(context.Context, RPCCheckRequest) (RPCCheckResult, error)\n\tcustodyNetwork string\n\tonchain *onchainRuntime\n\tproviderFixture bool\n\tchatEpoch atomic.Uint64\n\tprogressMu sync.Mutex\n\taiProgress map[string]string\n\tsessionFixture bool\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState\n\tpilot openAIPilotState\n\tresearchRead func(context.Context, researchFactResult) (json.RawMessage, error)",
       )
       .replace(
         marker,

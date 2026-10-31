@@ -1,5 +1,22 @@
 // Product UI vocabulary; records and protocol identifiers remain unchanged.
 export const priorityCopy = {
+  Balance: ["Баланс", "Saldo", "余额", "잔액"],
+  Token: ["Токен", "Token", "代币", "토큰"],
+  "Unlock RPC": [
+    "Разблокировать RPC",
+    "Desbloquear RPC",
+    "解锁 RPC",
+    "RPC 잠금 해제",
+  ],
+  "No recent activity": [
+    "Нет недавних операций",
+    "Sin actividad reciente",
+    "暂无近期活动",
+    "최근 활동 없음",
+  ],
+  Finalized: ["Подтверждено", "Finalizado", "已最终确认", "확정됨"],
+  Slot: ["Слот", "Slot", "插槽", "슬롯"],
+  Updated: ["Обновлено", "Actualizado", "更新时间", "업데이트됨"],
   "Workspace (optional)": [
     "Рабочая область (необязательно)",
     "Espacio de trabajo (opcional)",

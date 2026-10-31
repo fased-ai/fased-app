@@ -26,6 +26,7 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	rpcSecret := flags.Bool("rpc-credential-stdin", false, "manage disposable RPC credentials from private JSON input")
 	rpcConfig := flags.Bool("rpc-stdin", false, "save/remove disposable wallet RPC settings from JSON")
 	rpcCheck := flags.Bool("check-rpc-stdin", false, "check disposable RPC endpoint/network JSON; no saving or live calls")
+	walletRead := flags.Bool("read-stdin", false, "read wallet balances and recent activity using private credential JSON")
 	update := flags.Bool("request-stdin", false, "revision-checked public account record JSON from stdin; no secrets")
 	setup := flags.Bool("setup-stdin", false, "add a network public address or verified signer reference from JSON; no secrets")
 	if e = flags.Parse(args); e != nil {
@@ -33,6 +34,9 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected account arguments")
+	}
+	if *walletRead && (*venueSecret || *rpcSecret || *rpcConfig || *rpcCheck || *update || *setup || *backupOut != "") {
+		return errors.New("choose one account operation")
 	}
 	if *backupOut != "" && !*rpcSecret {
 		return errors.New("backup output requires RPC credential input")
@@ -48,6 +52,24 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	defer c.Close()
 	if e = c.LoadSession(ctx, *dir); e != nil {
 		return e
+	}
+	if *walletRead {
+		var input core.WalletReadCommand
+		b, err := io.ReadAll(io.LimitReader(in, 4097))
+		defer clear(b)
+		if err != nil || len(b) > 4096 {
+			return errors.New("invalid wallet read input")
+		}
+		d := json.NewDecoder(bytes.NewReader(b))
+		d.DisallowUnknownFields()
+		if d.Decode(&input) != nil || d.Decode(new(any)) != io.EOF {
+			return errors.New("invalid wallet read input")
+		}
+		var result core.WalletSnapshot
+		if err = c.Do(ctx, http.MethodPost, "/api/v1/accounts/read", input, &result); err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(result)
 	}
 	if *venueSecret {
 		b, err := io.ReadAll(io.LimitReader(in, 4097))
