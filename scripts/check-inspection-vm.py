@@ -6,12 +6,16 @@ Evidence survives snapshot rollback; large reconstructible VM outputs are remove
 import argparse, base64, selectors, hashlib, json, os, pathlib, shutil, signal, socket, subprocess, tarfile, time, urllib.request
 P=pathlib.Path
 repo=P.cwd(); root=repo/'.evidence/p4-fault-reboot'; root.mkdir(parents=True,exist_ok=True)
-p=argparse.ArgumentParser(); p.add_argument('--full',action='store_true'); p.add_argument('--resume',action='store_true'); p.add_argument('--inspection-only',action='store_true'); p.add_argument('--keep-failed-vm',action='store_true'); p.add_argument('--managed-remote-only',action='store_true'); p.add_argument('--network-only',action='store_true'); p.add_argument('--owner-browser-only',action='store_true'); a=p.parse_args()
+p=argparse.ArgumentParser(); p.add_argument('--full',action='store_true'); p.add_argument('--resume',action='store_true'); p.add_argument('--inspection-only',action='store_true'); p.add_argument('--keep-failed-vm',action='store_true'); p.add_argument('--managed-remote-only',action='store_true'); p.add_argument('--network-only',action='store_true'); p.add_argument('--owner-browser-only',action='store_true'); p.add_argument('--maintenance-only',action='store_true'); a=p.parse_args()
 assert os.geteuid()>0 and os.environ.get('FASED_DISPOSABLE_VM_ACCEPTANCE')=='1'
 assert not a.managed_remote_only or not (a.resume or a.full or a.inspection_only),'managed Remote acceptance requires a fresh single-case VM'
 assert not a.network_only or not (a.resume or a.full or a.inspection_only or a.managed_remote_only),'network acceptance requires a fresh single-case VM'
 assert not a.owner_browser_only or not (a.resume or a.full or a.inspection_only or a.managed_remote_only or a.network_only),'owner browser acceptance requires a fresh single-case VM'
-single_case=a.managed_remote_only or a.network_only or a.owner_browser_only
+assert not a.maintenance_only or not (a.resume or a.full or a.inspection_only or a.managed_remote_only or a.network_only or a.owner_browser_only),'maintenance authority requires one fresh disposable VM'
+single_case=a.managed_remote_only or a.network_only or a.owner_browser_only or a.maintenance_only
+if a.maintenance_only:
+ root=repo/'.evidence/b01-connected-install/vm'; root.mkdir(parents=True,exist_ok=True)
+ assert os.path.exists('/dev/kvm') and os.access('/dev/kvm',os.R_OK|os.W_OK),'KVM authority prerequisite unavailable; do not substitute prolonged TCG acceptance'
 if a.network_only:
  root=repo/'.evidence/b01-network/vm'; root.mkdir(parents=True,exist_ok=True)
 if a.owner_browser_only:
@@ -71,6 +75,12 @@ if not a.resume:
        ubuntu ALL=(root) NOPASSWD: /usr/bin/setpriv ^--reuid [1-9][0-9]* --regid [1-9][0-9]* --clear-groups --no-new-privs --inh-caps=-all --ambient-caps=-all --bounding-set=-all -- .*$
  packages: [sudo, python3, bubblewrap, apparmor, apparmor-utils, nftables]
  ''')
+ if a.maintenance_only:
+  # One fixed root OS switcher for the controlling ubuntu fixture. It drops to
+  # the separate non-sudo maintainer before any project test code executes.
+  data=(work/'user-data').read_text()
+  fixed='       ubuntu ALL=(root) NOPASSWD: /usr/sbin/runuser ^-u fased-probe -- /usr/bin/env --ignore-environment --chdir=/home/fased-probe HOME=/home/fased-probe XDG_CONFIG_HOME=/home/fased-probe/.config PATH=/usr/bin:/bin FASED_DISPOSABLE_VM=1 FASED_MAINTENANCE_OWNER=1 /var/lib/fased-maintenance-probe-input/fased-app-tests -test[.]run=TestRemoteMaintenanceOwnerUbuntuVM -test[.]v$\n'
+  (work/'user-data').write_text(data.replace(' packages:',fixed+' packages:'))
  run(['xorriso','-as','mkisofs','-quiet','-r','-J','-V','cidata','-o',str(work/'seed.iso'),str(work/'user-data'),str(work/'meta-data')])
  run(['qemu-img','create','-q','-f','qcow2','-F','qcow2','-b',str(image),str(work/'disk.qcow2')])
  run(['qemu-img','resize',str(work/'disk.qcow2'),'12G'])
@@ -199,7 +209,14 @@ try:
   report['inputs']['.evidence/bin/fased-app']=sha(core.read_bytes())
   save('vm-inputs.json',report['inputs'])
   with bundle.open('rb') as stream:run(sshbase+['umask 077; mkdir -p fased/.evidence/p4-fault-reboot/guest && cd fased && tar -xf -'],stdin=stream,timeout=120)
-  if a.owner_browser_only:
+  if a.maintenance_only:
+   print('Ubuntu maintenance authority: isolated owner1100, removed setup grant, actual NNP AppUID Polkit start',flush=True)
+   output=ssh('cd /home/ubuntu/fased && FASED_DISPOSABLE_VM=1 .evidence/bin/fased-app -test.run=^TestRemoteMaintenanceAuthorityUbuntuVM$ -test.v',150)
+   (root/'maintenance-authority-test.log').write_text(output)
+   result=receipt('maintenance-authority');assert result['result']=='PASS' and result['fixtureOnly'] and result['temporarySetupGrantRemoved'] and result['appUIDNoNewPrivilegesPolkitStart'] and not result['signedInstalledUpdateAcceptance']
+   report['checks']['maintenance-authority']=result
+   report['scope']='single actual Ubuntu limited-sudo/Polkit/template UID boundary with isolated ordinary maintainer1100 and inert actor; no signed installed update or public activation acceptance'
+  elif a.owner_browser_only:
    print('Ubuntu managed owner browser: install actual isolated service',flush=True)
    output=ssh('cd /home/ubuntu/fased && FASED_DISPOSABLE_VM=1 XDG_CONFIG_HOME=/home/ubuntu/fased/.evidence/p4-fault-reboot/guest/owner-config .evidence/bin/fased-app -test.run=^TestManagedOwnerBrowserUbuntuVM$ -test.v',150)
    (root/'owner-provision-test.log').write_text(output)
@@ -342,11 +359,11 @@ try:
  report['result']='PASS'
 except BaseException as e:
  report['error']=str(e)
- if isinstance(e,subprocess.CalledProcessError):
+ if isinstance(e,(subprocess.CalledProcessError,subprocess.TimeoutExpired)):
   (root/'guest-failure.stdout').write_bytes(e.stdout or b'')
-  (root/'guest-failure.stderr').write_bytes(e.stderr)
+  (root/'guest-failure.stderr').write_bytes(e.stderr or b'')
   report['commandStdout']=(e.stdout or b'').decode(errors='replace')[-8000:]
-  report['commandStderr']=e.stderr.decode(errors='replace')[-8000:]
+  report['commandStderr']=(e.stderr or b'').decode(errors='replace')[-8000:]
  raise
 finally:
  if tunnel is not None and tunnel.poll() is None:tunnel.terminate();tunnel.wait(10)

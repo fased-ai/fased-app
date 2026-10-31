@@ -387,7 +387,7 @@ func TestVenueCredentialSchema32PreservesRecordsAndRefusesUnprotectedPolicy(t *t
 	var schema int
 	next.db.QueryRow("SELECT document,revision FROM agent_workspace WHERE id=1").Scan(&after, &gotRevision)
 	next.db.QueryRow("PRAGMA user_version").Scan(&schema)
-	if before != after || revision != gotRevision || schema != 33 {
+	if before != after || revision != gotRevision || schema != StateSchema {
 		t.Fatal("migration rewrote records or revision")
 	}
 	h, _, _ := setupCredentialSwapHarness(t, fixtureStore(t), true)

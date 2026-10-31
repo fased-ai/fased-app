@@ -1,5 +1,7 @@
-// Package localinstall owns the ordinary-user engineering installation. It does
-// not acquire releases, update binaries in place, run as root, or own app data.
+// Package localinstall owns ordinary-user installation and the authenticated
+// app-only replacement adapter. Install retry never selects another release;
+// replacement requires the separate typed controller/fence transaction. The
+// package never runs as root or restores application/signer data.
 package localinstall
 
 import (
@@ -20,21 +22,25 @@ import (
 
 type Paths struct{ Root, Data string }
 type Options struct {
+	ApplicationSequence                             uint64
+	ApplicationReleaseSHA256                        string
 	Engine, Desktop, Listen, PublicOrigin, Location string
 	EngineSHA256, DesktopSHA256                     string
 	Start, Autostart                                bool
 }
 type Manifest struct {
-	Location     string            `json:"location,omitempty"`
-	Schema       int               `json:"schema"`
-	Phase        string            `json:"phase"`
-	Version      string            `json:"version"`
-	Root         string            `json:"root"`
-	Data         string            `json:"data"`
-	Files        map[string]string `json:"files"`
-	Autostart    bool              `json:"autostart"`
-	Listen       string            `json:"listen,omitempty"`
-	PublicOrigin string            `json:"publicOrigin,omitempty"`
+	ApplicationSequence      uint64            `json:"applicationSequence,omitempty"`
+	ApplicationReleaseSHA256 string            `json:"applicationReleaseSha256,omitempty"`
+	Location                 string            `json:"location,omitempty"`
+	Schema                   int               `json:"schema"`
+	Phase                    string            `json:"phase"`
+	Version                  string            `json:"version"`
+	Root                     string            `json:"root"`
+	Data                     string            `json:"data"`
+	Files                    map[string]string `json:"files"`
+	Autostart                bool              `json:"autostart"`
+	Listen                   string            `json:"listen,omitempty"`
+	PublicOrigin             string            `json:"publicOrigin,omitempty"`
 }
 type State struct {
 	Installed bool   `json:"installed"`
@@ -126,6 +132,9 @@ func Load(paths Paths) (Manifest, error) {
 	if json.Unmarshal(data, &m) != nil || m.Schema != 1 || (m.Location != "" && m.Location != "local" && m.Location != "remote") || m.Root != p.Root || m.Data != p.Data || (m.Phase != "preparing" && m.Phase != "ready" && m.Phase != "removing") {
 		return m, errors.New("unknown installation receipt; refusing mutation")
 	}
+	if (m.ApplicationSequence == 0) != (m.ApplicationReleaseSHA256 == "") || m.ApplicationReleaseSHA256 != "" && !validExpectedDigest(m.ApplicationReleaseSHA256) {
+		return m, errors.New("invalid installed application release identity")
+	}
 	for name := range m.Files {
 		if name != engineName && name != desktopName && name != definitionName && name != shortcutName {
 			return m, errors.New("unknown installation file in receipt")
@@ -146,6 +155,9 @@ func verify(m Manifest) error {
 	return nil
 }
 func Install(ctx context.Context, paths Paths, options Options) (Manifest, error) {
+	if (options.ApplicationSequence == 0) != (options.ApplicationReleaseSHA256 == "") || options.ApplicationReleaseSHA256 != "" && !validExpectedDigest(options.ApplicationReleaseSHA256) {
+		return Manifest{}, errors.New("paired authenticated initial release identity required")
+	}
 	if err := supported(); err != nil {
 		return Manifest{}, err
 	}
@@ -199,6 +211,9 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 	}
 	m, loadErr := Load(p)
 	if loadErr == nil {
+		if options.ApplicationSequence != 0 && (m.ApplicationSequence != options.ApplicationSequence || m.ApplicationReleaseSHA256 != options.ApplicationReleaseSHA256) {
+			return m, errors.New("existing installation release identity differs; use authenticated update, never relabel install retry")
+		}
 		if m.Phase == "removing" {
 			return m, errors.New("unfinished uninstall; resume uninstall before installing")
 		}
@@ -223,7 +238,7 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 				return m, errors.New("installation directory contains unclassified files; refusing adoption")
 			}
 		}
-		m = Manifest{Schema: 1, Phase: "preparing", Version: core.Version, Root: p.Root, Data: p.Data, Files: files, Listen: options.Listen, PublicOrigin: options.PublicOrigin, Location: options.Location}
+		m = Manifest{ApplicationSequence: options.ApplicationSequence, ApplicationReleaseSHA256: options.ApplicationReleaseSHA256, Schema: 1, Phase: "preparing", Version: core.Version, Root: p.Root, Data: p.Data, Files: files, Listen: options.Listen, PublicOrigin: options.PublicOrigin, Location: options.Location}
 		if err = core.WritePrivateJSON(filepath.Join(p.Root, "install.json"), m); err != nil {
 			return m, err
 		}
@@ -396,6 +411,9 @@ func Uninstall(ctx context.Context, paths Paths) error {
 		return err
 	}
 	defer lock.Close()
+	if err = checkMaintenanceRemoval(m); err != nil {
+		return err
+	}
 	if m.Phase != "removing" {
 		if err = verify(m); err != nil {
 			return err

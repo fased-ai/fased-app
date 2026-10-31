@@ -6,6 +6,7 @@ export type MaintenanceWindow = {
   end: string;
 };
 export type UpdatePolicy = {
+  mode?: "manual" | "automatic";
   notify: boolean;
   pin?: UpdatePin;
   window?: MaintenanceWindow;
@@ -67,6 +68,7 @@ export function readUpdatePreferences(value: unknown): UpdatePreferencesView {
     v.financialExecution !== false ||
     !v.policy ||
     typeof v.policy.notify !== "boolean" ||
+    ![undefined, "manual", "automatic"].includes(v.policy.mode) ||
     !["unrestricted", "open", "closed"].includes(v.window) ||
     !Number.isFinite(Date.parse(v.evaluatedAt))
   )

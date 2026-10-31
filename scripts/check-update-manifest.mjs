@@ -66,8 +66,9 @@ try {
   );
   pass(
     "schemaPauseAndApprovalFeatures",
-    contracts[0].state[0].versions.min === 33 &&
-      contracts[0].state[0].versions.max === 33 &&
+    contracts[0].state[0].versions.min === 35 &&
+      contracts[0].state[0].versions.max === 35 &&
+      contracts[0].state[0].features.includes("application-updates-v1") &&
       contracts[0].state[0].features.includes("agents-task-analysis-v1") &&
       contracts[0].state[0].features.includes("agents-onchain-swaps-v1") &&
       contracts[0].state[0].features.includes("agents-venue-credentials-v1") &&
@@ -246,6 +247,15 @@ try {
       "schema32CoreReaderDenied",
       (m) => {
         m.components[0].contract.state[0].versions = { min: 32, max: 32 };
+      },
+    ],
+    [
+      "applicationUpdateFeatureErasureDenied",
+      (m) => {
+        m.components[0].contract.state[0].features =
+          m.components[0].contract.state[0].features.filter(
+            (f) => f !== "application-updates-v1",
+          );
       },
     ],
     [

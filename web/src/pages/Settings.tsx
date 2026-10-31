@@ -5,7 +5,7 @@ import {
 import { AppearanceSettings, useUI } from "../ui-preferences";
 import { ArrowRight } from "../icons";
 import { UpdateStatusPanel } from "../components/UpdateStatusPanel";
-import { UpdatePreferencesPanel } from "../components/UpdatePreferencesPanel";
+import { ApplicationUpdatesPanel } from "../components/ApplicationUpdatesPanel";
 import { Badge, SectionHead } from "../components/shared";
 import { useWorkspace } from "../workspace";
 export function Settings() {
@@ -36,19 +36,6 @@ export function Settings() {
             <div className="settings-body">
               <InstanceSummary />
               <RemoteConnection />
-              {core.mode === "ready" && (
-                <details className="instance-diagnostics">
-                  <summary>{uiText("Diagnostics")}</summary>
-                  <dl>
-                    <dt>{uiText("Saved deployment preference")}</dt>
-                    <dd data-testid="saved-deployment-preference">
-                      {state.setup.host === "vps"
-                        ? uiText("Remote")
-                        : uiText("Local")}
-                    </dd>
-                  </dl>
-                </details>
-              )}
               <button className="secondary" onClick={() => setSetupOpen(true)}>
                 {core.mode === "ready"
                   ? uiText("Setup")
@@ -88,10 +75,20 @@ export function Settings() {
             </section>
           )}
         </div>
+        <ApplicationUpdatesPanel />
         <details className="panel settings-advanced update-settings">
-          <summary>{uiText("Updates and recovery")}</summary>
+          <summary>{uiText("Diagnostics")}</summary>
+          {core.mode === "ready" && (
+            <dl className="settings-body">
+              <dt>{uiText("Saved deployment preference")}</dt>
+              <dd data-testid="saved-deployment-preference">
+                {state.setup.host === "vps"
+                  ? uiText("Remote")
+                  : uiText("Local")}
+              </dd>
+            </dl>
+          )}
           <UpdateStatusPanel />
-          <UpdatePreferencesPanel />
         </details>
       </div>
     </>

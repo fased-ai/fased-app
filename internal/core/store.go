@@ -21,6 +21,7 @@ import (
 )
 
 type Store struct {
+	appUpdates         applicationUpdates
 	venueCredentials   venueCredentials
 	onchain            *onchainRuntime // Explicit controlled constructor only; ordinary/live admission stays closed.
 	installationSource atomic.Uint32   // Verified installer class, never a browser preference.
@@ -290,6 +291,11 @@ PRAGMA user_version=1;`)
 	}
 	if schema <= 32 {
 		if err = migrateVenueCredentials(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if schema <= 34 {
+		if err = migrateApplicationUpdates(ctx, db); err != nil {
 			return nil, err
 		}
 	}

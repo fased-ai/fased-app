@@ -120,9 +120,16 @@ func remotePublicOrigin(plan privateaccess.Plan) string {
 	return ""
 }
 
-func managedRemoteInstall(ctx context.Context, corePath, hash, listen string, plan privateaccess.Plan, prepare, start bool, out, errOut io.Writer) error {
+func managedRemoteInstall(ctx context.Context, corePath, hash, listen string, plan privateaccess.Plan, prepare, start bool, out, errOut io.Writer, admission ...installationAdmission) error {
 	system := remoteSystem(os.Stdin, errOut)
-	m, err := vpsinstall.Install(ctx, vpsinstall.Options{Core: corePath, CoreSHA256: hash, Listen: listen, PublicOrigin: remotePublicOrigin(plan), PrepareHost: prepare, Start: start}, system)
+	var admitted installationAdmission
+	if len(admission) > 1 {
+		return errors.New("one initial release admission required")
+	}
+	if len(admission) == 1 {
+		admitted = admission[0]
+	}
+	m, err := vpsinstall.Install(ctx, vpsinstall.Options{ApplicationSequence: admitted.sequence, ApplicationReleaseSHA256: admitted.release, Core: corePath, CoreSHA256: hash, Listen: listen, PublicOrigin: remotePublicOrigin(plan), PrepareHost: prepare, Start: start}, system)
 	if err != nil {
 		return err
 	}
@@ -130,7 +137,7 @@ func managedRemoteInstall(ctx context.Context, corePath, hash, listen string, pl
 	if start {
 		url, err = enableRemoteAccess(ctx, m, system)
 		if err != nil {
-			return fmt.Errorf("Remote is installed; private access is pending: %w; retry with vps access", err)
+			return remoteAccessPending(m, err)
 		}
 	}
 	remoteHandoff(errOut, m, plan, start)
@@ -192,12 +199,15 @@ func networkHandoff(out io.Writer, m vpsinstall.Manifest, status vpsinstall.Netw
 }
 
 func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
+	if len(args) > 0 && args[0] == "updates" {
+		return vpsUpdatesCommand(args[1:], in, out, errOut)
+	}
 	if len(args) == 0 {
-		return errors.New("usage: fased-app vps status|start|stop|claim-code|recover|access|remove|harden|confirm|rollback|network")
+		return errors.New("usage: fased-app vps status|start|stop|login|claim-code|recover|access|remove|harden|confirm|rollback|network")
 	}
 	action := args[0]
 	switch action {
-	case "status", "start", "stop", "claim-code", "recover", "access", "remove", "harden", "confirm", "rollback", "network":
+	case "status", "start", "stop", "login", "claim-code", "recover", "access", "remove", "harden", "confirm", "rollback", "network":
 	default:
 		return errors.New("unknown vps action")
 	}
@@ -223,6 +233,13 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 		ctx, cancel = context.WithTimeout(ctx, remoteOperationTimeout)
 	}
 	defer cancel()
+	if action == "login" {
+		if e := vpsinstall.ApplicationReaderSignIn(ctx, m, system); e != nil {
+			return e
+		}
+		fmt.Fprintln(out, "Signed in")
+		return nil
+	}
 	target, enrolled, e := vpsEnrollmentTarget(action, m.Data, enrolledTarget)
 	if e != nil {
 		return e
@@ -367,4 +384,8 @@ func vpsEnrollmentTarget(action, data string, lookup func(string) (custodyinstal
 		return custodyinstall.Manifest{}, false, nil
 	}
 	return lookup(data)
+}
+
+func remoteAccessPending(m vpsinstall.Manifest, cause error) error {
+	return fmt.Errorf("Remote is installed; private access is pending: %w; retry with %s", cause, installationCommand(m.Core, "vps", "access"))
 }

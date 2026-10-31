@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -12,14 +13,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/bundle"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/hostprep"
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
+	"github.com/fased-ai/fased-app/internal/vpsinstall"
 	"golang.org/x/term"
 )
 
@@ -53,6 +57,9 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	vps := f.Bool("vps", false, "require always-on Linux VPS readiness")
 	managedRemote := f.Bool("managed-remote", false, "install Ubuntu Remote using a dedicated locked application account")
 	packageDir := f.String("bundle", "", "verify and install this platform package inventory")
+	verificationOutput := f.String("verification-output", "", "restrict installation/state to paths separate from verified acquisition output")
+	bootstrapSequence := f.String("bootstrap-sequence", "", "verified bootstrap release sequence; no version inference")
+	bootstrapRelease := f.String("bootstrap-release-sha256", "", "verified bootstrap descriptor identity")
 	packageSHA256 := f.String("bundle-sha256", "", "independently obtained SHA-256 of exact bundle.json bytes")
 	installRuntime := f.Bool("install-runtime", false, "authorize Ubuntu 24.04's OS package manager to install missing desktop runtime libraries")
 	prepareHost := f.Bool("prepare-host", false, "authorize Ubuntu OS prerequisites and the verified restrictive sandbox policy")
@@ -64,6 +71,12 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	}
 	if *packageSHA256 != "" && (command != "install" || *packageDir == "") {
 		return errors.New("--bundle-sha256 requires install --bundle")
+	}
+	if command != "install" && (*bootstrapSequence != "" || *bootstrapRelease != "") {
+		return errors.New("bootstrap release metadata is an installation option")
+	}
+	if *verificationOutput != "" && command != "install" {
+		return errors.New("verification output guard is an installation option")
 	}
 	paths = localinstall.Paths{Root: *root, Data: *data}
 	if *managedRemote && command != "install" {
@@ -119,17 +132,11 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			}
 			*vps = choice == "remote"
 			if *vps {
-				value, e := installationAnswer(r, errOut, "Private access [tailscale/ssh, default tailscale]: ")
+				value, e := installationPrivateAccessChoice(r, errOut)
 				if e != nil {
 					return e
 				}
 				*access = value
-				if *access == "" {
-					*access = "tailscale"
-				}
-				if *access != "tailscale" && *access != "ssh" {
-					return errors.New("choose tailscale or ssh")
-				}
 			}
 			*managedRemote = false
 			if *vps {
@@ -156,6 +163,14 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 				return err
 			}
 		}
+		selectedPaths := paths
+		if *managedRemote {
+			selectedPaths.Root = vpsinstall.Root(os.Getuid())
+			selectedPaths.Data = selectedPaths.Root + "/app-state"
+		}
+		if err = installationOutputSeparation(*verificationOutput, selectedPaths); err != nil {
+			return err
+		}
 		engine, err := os.Executable()
 		if err != nil {
 			return err
@@ -171,6 +186,10 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			if inventory.Desktop {
 				*desktop = filepath.Join(canonical, localinstall.DesktopName())
 			}
+		}
+		sequence, release, e := installationReleaseAdmission(*bootstrapSequence, *bootstrapRelease, *verificationOutput, *packageSHA256)
+		if e != nil {
+			return e
 		}
 		if *managedRemote && inventory.Desktop {
 			return errors.New("managed Remote requires a verified headless bundle")
@@ -188,10 +207,15 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 				}
 			}
 		}
-		plan, err := privateaccess.System().Plan(ctx, *access, *listen)
+		var accessWizard *bufio.Reader
+		if *vps {
+			accessWizard = wizard
+		}
+		plan, err := installationPrivateAccess(ctx, accessWizard, errOut, *access, *listen, privateaccess.System().Plan, hostprep.PrepareTailscale)
 		if err != nil {
 			return err
 		}
+		*access = plan.Mode
 		if *access == "tailscale" {
 			if *origin != "" && *origin != plan.Origin {
 				return errors.New("configured origin differs from this Tailscale device")
@@ -214,12 +238,12 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			*prepareHost = strings.EqualFold(strings.TrimSpace(choice), "y")
 		}
 		if *managedRemote {
-			return managedRemoteInstall(ctx, engine, inventory.Files[localinstall.EngineName()].SHA256, *listen, plan, *prepareHost, *start, out, errOut)
+			return managedRemoteInstall(ctx, engine, inventory.Files[localinstall.EngineName()].SHA256, *listen, plan, *prepareHost, *start, out, errOut, installationAdmission{sequence, release})
 		}
 		if err = desktopRuntime(ctx, *desktop, *packageDir, *data, *installRuntime, *prepareHost, os.Stdin, errOut); err != nil {
 			return err
 		}
-		m, err := localinstall.Install(ctx, paths, localinstall.Options{Engine: engine, EngineSHA256: inventory.Files[localinstall.EngineName()].SHA256, Desktop: *desktop, DesktopSHA256: inventory.Files[localinstall.DesktopName()].SHA256, Listen: *listen, PublicOrigin: *origin, Start: *start, Autostart: *autostart, Location: installLocation(*vps)})
+		m, err := localinstall.Install(ctx, paths, localinstall.Options{ApplicationSequence: sequence, ApplicationReleaseSHA256: release, Engine: engine, EngineSHA256: inventory.Files[localinstall.EngineName()].SHA256, Desktop: *desktop, DesktopSHA256: inventory.Files[localinstall.DesktopName()].SHA256, Listen: *listen, PublicOrigin: *origin, Start: *start, Autostart: *autostart, Location: installLocation(*vps)})
 		if err != nil {
 			return err
 		}
@@ -237,15 +261,19 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 				id := c.Endpoint.InstanceID
 				c.Close()
 				if e = privateaccess.System().Enable(ctx, m.Root, plan, id); e != nil {
-					return e
+					return installationAccessPending(m, e)
 				}
 				url = plan.Origin
 			}
 		}
+		maintenance := "manual-only"
+		if !*vps {
+			maintenance = localinstall.PrepareInstallationMaintenance(ctx, m, *start, errOut)
+		}
 		if *interactive {
 			installationHandoff(errOut, m, plan, url)
 		}
-		return json.NewEncoder(out).Encode(map[string]any{"location": installLocation(*vps), "installed": true, "application": filepath.Join(m.Root, localinstall.EngineName()), "data": m.Data, "autostart": m.Autostart, "url": url, "access": plan, "walletsConnected": false})
+		return json.NewEncoder(out).Encode(map[string]any{"maintenance": maintenance, "location": installLocation(*vps), "installed": true, "application": filepath.Join(m.Root, localinstall.EngineName()), "data": m.Data, "autostart": m.Autostart, "url": url, "access": plan, "walletsConnected": false})
 	case "uninstall":
 		if err = localinstall.Uninstall(ctx, paths); err != nil {
 			return err
@@ -261,6 +289,9 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			url, err := waitForCore(ctx, *data)
 			if err != nil {
 				return err
+			}
+			if m, e := localinstall.Load(paths); e == nil && m.Location != "remote" {
+				localinstall.PrepareInstallationMaintenance(ctx, m, true, errOut)
 			}
 			fmt.Fprintln(out, url)
 			return nil
@@ -475,4 +506,107 @@ func installationAutostart(r *bufio.Reader, out io.Writer, remote bool) (bool, e
 		}
 		fmt.Fprintln(out, "Choose yes or no.")
 	}
+}
+
+// Private access is planned before host preparation or installation. A changed
+// transport requires another explicit wizard choice, never an automatic fallback.
+func installationPrivateAccess(ctx context.Context, in *bufio.Reader, out io.Writer, mode, listen string, planner func(context.Context, string, string) (privateaccess.Plan, error), preparer ...func(context.Context, *bufio.Reader, io.Writer) error) (privateaccess.Plan, error) {
+	// Changing access cannot repair an invalid listener. Reuse the pure local
+	// planner's target validation before any readiness call or retry prompt.
+	if _, err := (privateaccess.Manager{}).Plan(ctx, "local", listen); err != nil {
+		return privateaccess.Plan{}, err
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return privateaccess.Plan{}, err
+		}
+		var plan privateaccess.Plan
+		var err error
+		if mode == "tailscale" && in != nil && len(preparer) > 0 {
+			err = preparer[0](ctx, in, out)
+		}
+		if err == nil {
+			plan, err = planner(ctx, mode, listen)
+		}
+		if err == nil {
+			return plan, nil
+		}
+		if in == nil {
+			return privateaccess.Plan{}, err
+		}
+		if cancelErr := ctx.Err(); cancelErr != nil {
+			return privateaccess.Plan{}, cancelErr
+		}
+		fmt.Fprintln(out, "Private access is not ready:", err)
+		fmt.Fprintln(out, "Prepare Tailscale and retry, or choose SSH. Installation has not started.")
+		mode, err = installationPrivateAccessChoice(in, out)
+		if err != nil {
+			return privateaccess.Plan{}, err
+		}
+	}
+}
+
+func installationPrivateAccessChoice(in *bufio.Reader, out io.Writer) (string, error) {
+	for {
+		mode, err := installationAnswer(in, out, "Private access [tailscale/ssh, default tailscale]: ")
+		if err != nil {
+			return "", err
+		}
+		switch strings.ToLower(mode) {
+		case "", "tailscale":
+			return "tailscale", nil
+		case "ssh":
+			return "ssh", nil
+		}
+		fmt.Fprintln(out, "Choose tailscale or ssh.")
+	}
+}
+
+func installationAccessPending(m localinstall.Manifest, cause error) error {
+	retry := installationCommand(filepath.Join(m.Root, localinstall.EngineName()), "access", "enable", "--prefix", m.Root, "--data-dir", m.Data)
+	return fmt.Errorf("Fased is installed; private access is pending: %w; retry with %s", cause, retry)
+}
+
+// The verified bootstrap supplies only a restriction, never a target/authority.
+// This runs after profile choice and before package/host/access mutation.
+func installationOutputSeparation(output string, selected localinstall.Paths) error {
+	if output == "" {
+		return nil
+	}
+	if !filepath.IsAbs(output) || filepath.Clean(output) != output || output == string(filepath.Separator) {
+		return errors.New("invalid verified acquisition output guard")
+	}
+	for _, path := range []string{selected.Root, selected.Data} {
+		absolute, e := filepath.Abs(path)
+		if e != nil {
+			return e
+		}
+		for _, pair := range [][2]string{{output, absolute}, {absolute, output}} {
+			rel, e := filepath.Rel(pair[0], pair[1])
+			if e == nil && (rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+				return errors.New("selected installation/state must be separate from the verified acquisition output")
+			}
+		}
+	}
+	return nil
+}
+
+type installationAdmission struct {
+	sequence uint64
+	release  string
+}
+
+// These are restricted verifier handoff data, not proof that an executable
+// downloaded independently is trusted. Full pinned bundle admission precedes
+// this function; initial executable trust still belongs to the verifier.
+func installationReleaseAdmission(sequence, release, output, pinnedBundle string) (uint64, string, error) {
+	if sequence == "" && release == "" {
+		return 0, "", nil
+	}
+	n, e := strconv.ParseUint(sequence, 10, 64)
+	b, he := hex.DecodeString(release)
+	if e != nil || n == 0 || strconv.FormatUint(n, 10) != sequence || he != nil || len(b) != 32 || hex.EncodeToString(b) != release || output == "" || pinnedBundle == "" {
+		return 0, "", errors.New("verified bootstrap release metadata requires the exact pinned bundle and output guard")
+	}
+	return n, release, nil
 }

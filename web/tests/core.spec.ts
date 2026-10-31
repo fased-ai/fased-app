@@ -4188,7 +4188,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   );
 });
 
-test("update preferences and review-only proposals share revisions, survive restart and obey the metadata pause", async ({
+test("Updates keeps manual and automatic preferences without activating releases", async ({
   page,
 }) => {
   await page.goto(url);
@@ -4207,160 +4207,36 @@ test("update preferences and review-only proposals share revisions, survive rest
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
   await page.goto(url + "/#settings");
-  await openUpdateSettings(page);
-  const panel = page.getByRole("region", {
-    name: "Update preferences & proposals",
-  });
+  const panel = page.getByRole("region", { name: "Updates", exact: true });
+  await expect(panel.getByLabel("Update mode")).toHaveValue("manual");
   await expect(
-    panel.getByLabel("Show notices for pending proposals"),
-  ).toBeChecked();
-  await revealControl(
-    page,
-    panel.getByLabel("Pin a release identity for review"),
-    "",
+    panel.getByRole("button", { name: "Check", exact: true }),
+  ).toBeDisabled();
+  await expect(panel).toContainText("Release channel unavailable");
+  await expect(page.getByLabel("Pinned sequence", { exact: true })).toHaveCount(
+    0,
   );
-  await panel.getByLabel("Pin a release identity for review").check();
-  await revealControl(
-    page,
-    panel.getByLabel("Pinned sequence", { exact: true }),
-    "",
-  );
-  await panel.getByLabel("Pinned sequence", { exact: true }).fill("7");
-  await revealControl(
-    page,
-    panel.getByLabel("Pinned manifest SHA-256", { exact: true }),
-    "",
-  );
-  await panel
-    .getByLabel("Pinned manifest SHA-256", { exact: true })
-    .fill("a".repeat(64));
-  await revealControl(
-    page,
-    panel.getByLabel("Set a preferred maintenance window"),
-    "",
-  );
-  await panel.getByLabel("Set a preferred maintenance window").check();
-  await revealControl(page, panel.getByLabel("IANA timezone"), "");
-  await panel.getByLabel("IANA timezone").fill("America/Chicago");
-  await revealControl(page, panel.getByLabel("Window start"), "");
-  await panel.getByLabel("Window start").fill("23:00");
-  await revealControl(page, panel.getByLabel("Window end"), "");
-  await panel.getByLabel("Window end").fill("01:00");
-  await panel
-    .getByRole("button", { name: "Save update preferences", exact: true })
-    .click();
-  await expect(panel.getByRole("status")).toContainText(
-    "Saved app metadata only",
-  );
-  const initial = await privateCLI(["updates", "preferences"]);
-  expect(initial.policy.window.timeZone).toBe("America/Chicago");
-  expect(initial.policy.pin.sequence).toBe("7");
-  await revealControl(
-    page,
-    panel.getByLabel("Release label", { exact: true }),
-    "",
-  );
-  await panel
-    .getByLabel("Release label", { exact: true })
-    .fill("Disposable review");
-  await revealControl(
-    page,
-    panel.getByLabel("Claimed sequence", { exact: true }),
-    "",
-  );
-  await panel.getByLabel("Claimed sequence", { exact: true }).fill("7");
-  await revealControl(
-    page,
-    panel.getByLabel("Claimed manifest SHA-256", { exact: true }),
-    "",
-  );
-  await panel
-    .getByLabel("Claimed manifest SHA-256", { exact: true })
-    .fill("a".repeat(64));
-  await panel
-    .getByRole("button", { name: "Add review-only proposal", exact: true })
-    .click();
-  const card = panel.getByRole("article", {
-    name: "Update proposal Disposable review",
-  });
-  await expect(card.getByText("UNVERIFIED", { exact: true })).toBeVisible();
   await expect(
-    panel.getByRole("heading", { name: "Update notices (1)", exact: true }),
-  ).toBeVisible();
-  const proposed = await privateCLI(["updates", "preferences"]);
-  const duplicate = await privateCLI(
-    ["updates", "preferences", "--request-stdin"],
-    {
-      revision: proposed.revision,
-      action: "propose",
-      candidate: proposed.proposals[0].candidate,
-    },
-  );
-  expect(duplicate.revision).toBe(proposed.revision);
-  expect(duplicate.notifications).toEqual(proposed.notifications);
-  await privateCLI(["updates", "preferences", "--request-stdin"], {
-    revision: proposed.revision,
-    action: "policy",
-    policy: { ...proposed.policy, notify: false },
-  });
-  await card
-    .getByRole("button", { name: "Mark reviewed", exact: true })
-    .click();
-  await expect(panel.getByRole("alert")).toContainText(
-    "settings changed in another client",
-  );
-  await expect(card).toHaveCount(0);
-  await panel
-    .getByRole("button", { name: "Refresh update preferences", exact: true })
-    .click();
-  await expect(
-    panel.getByRole("heading", { name: "Update notices (0)", exact: true }),
-  ).toBeVisible();
-  await card
-    .getByRole("button", { name: "Mark reviewed", exact: true })
-    .click();
-  await expect(card).toContainText("reviewed");
-  const reviewed = await privateCLI(["updates", "preferences"]);
-  expect(reviewed.proposals[0].verified).toBe(false);
-  expect(reviewed.installAllowed).toBe(false);
-  expect(reviewed.resumeAllowed).toBe(false);
-  expect(reviewed.automaticUpdates).toBe(false);
-  expect(reviewed.financialExecution).toBe(false);
-  await page.screenshot({
-    path: `.evidence/p4-policy/preferences-${test.info().project.name}.png`,
-    fullPage: true,
-  });
-  const probe = randomBytes(16).toString("hex"),
-    snapshot = await privateCLI(["update-inventory", "--probe-id", probe]);
-  const pause = {
-    version: 1,
-    intentId: randomBytes(16).toString("hex"),
-    sequence: "1",
-    manifestSha256: createHash("sha256")
-      .update("disposable policy pause")
-      .digest("hex"),
-    expected: snapshot,
-  };
-  await privateCLI(["update-pause", "--request-stdin"], {
-    action: "pause",
-    probeId: probe,
-    request: pause,
-  });
-  await revealControl(
-    page,
-    panel.getByLabel("Show notices for pending proposals"),
-    "",
-  );
-  await panel.getByLabel("Show notices for pending proposals").check();
-  await panel
-    .getByRole("button", { name: "Save update preferences", exact: true })
-    .click();
-  await expect(panel.getByRole("alert")).toContainText(
-    "core metadata paused for update",
-  );
-  expect((await privateCLI(["updates", "preferences"])).revision).toBe(
-    reviewed.revision,
-  );
+    page.getByLabel("Manifest SHA-256", { exact: true }),
+  ).toHaveCount(0);
+  await panel.getByLabel("Update mode").selectOption("automatic");
+  await expect
+    .poll(
+      async () => (await privateCLI(["updates", "preferences"])).policy.mode,
+    )
+    .toBe("automatic");
+  await panel.getByText("Schedule and version", { exact: true }).click();
+  await panel.getByLabel("Maintenance window", { exact: true }).check();
+  await expect
+    .poll(
+      async () =>
+        (await privateCLI(["updates", "preferences"])).policy.window?.start,
+    )
+    .toBe("02:00");
+  const v = await privateCLI(["updates", "status"]);
+  expect(v.controllerAvailable).toBe(false);
+  expect(v.activationEnabled).toBe(false);
+  expect(v.operation.phase).toBe("idle");
   await stop();
   await start();
   await page.goto(url + "/#settings");
@@ -4373,32 +4249,18 @@ test("update preferences and review-only proposals share revisions, survive rest
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await openUpdateSettings(page);
-  await expect(panel.getByLabel("IANA timezone")).toHaveValue(
-    "America/Chicago",
-  );
-  await expect(card).toContainText("reviewed");
-  expect((await privateCLI(["updates", "preferences"])).policy).toEqual(
-    reviewed.policy,
-  );
-  await privateCLI(["update-pause", "--request-stdin"], {
-    action: "release",
-    probeId: probe,
-    aborted: {
-      id: pause.intentId,
-      sequence: "1",
-      manifestSha256: pause.manifestSha256,
-      core: snapshot,
-      state: "aborted",
-    },
-  });
+  await expect(panel.getByLabel("Update mode")).toHaveValue("automatic");
+  await expect(panel).toContainText("Automatic installation is not active.");
+  expect(
+    (await privateCLI(["updates", "preferences"])).policy.window.start,
+  ).toBe("02:00");
 });
 
 test("update status shares UI and private CLI observations across pause, release and restart", async ({
   page,
 }) => {
   await expect(
-    exec(binary, ["updates", "status", "--data-dir", dir]),
+    exec(binary, ["update-status", "--data-dir", dir]),
   ).rejects.toThrow();
   await page.goto(url);
   const claim = JSON.parse(
@@ -4433,7 +4295,7 @@ test("update status shares UI and private CLI observations across pause, release
     expect((await once(child, "exit"))[0], error).toBe(0);
     return JSON.parse(output);
   };
-  const before = await cli(["updates", "status"]);
+  const before = await cli(["update-status"]);
   expect(before.core.phase).toBe("idle");
   expect(before.automaticUpdates).toBe(false);
   const probe = randomBytes(16).toString("hex");
@@ -4459,7 +4321,7 @@ test("update status shares UI and private CLI observations across pause, release
   await expect(
     panel.getByText(request.intentId, { exact: true }),
   ).toBeVisible();
-  const held = await cli(["updates", "status"]);
+  const held = await cli(["update-status"]);
   expect(held.core).toEqual({ phase: "paused", intentId: request.intentId });
   expect(held.signer).toEqual(before.signer);
   expect(held.guidance.some((g: { code: string }) => g.code === "paused")).toBe(
@@ -4520,7 +4382,7 @@ test("update status shares UI and private CLI observations across pause, release
     panel.getByRole("heading", { name: "Signer not configured", exact: true }),
   ).toBeVisible();
   await expect(panel.getByText("released", { exact: true })).toBeVisible();
-  expect((await cli(["updates", "status"])).core.phase).toBe("released");
+  expect((await cli(["update-status"])).core.phase).toBe("released");
 });
 
 test("update recovery view rejects unsupported or lost status without retaining a healthy observation (UI mock only)", async ({
@@ -10606,7 +10468,8 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
   await expect(
     page.getByRole("heading", { name: "Browser demo data", exact: true }),
   ).toHaveCount(0);
-  const notices = page.getByLabel("Show notices for pending proposals");
+  const updates = page.getByRole("region", { name: "Updates", exact: true });
+  const notices = updates.getByLabel("Show in inbox");
   await expect(notices).toBeChecked();
   const checkbox = await notices.evaluate((input) => {
     const box = input.getBoundingClientRect(),
@@ -10616,9 +10479,10 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
   expect(checkbox.left).toBeLessThan(24);
   expect(checkbox.height).toBeGreaterThanOrEqual(isMobile ? 44 : 36);
   await checkLayout("settings", ".settings-workspace");
+  await expect(updates).toBeVisible();
   await expect(
-    page.getByRole("region", { name: "Update preferences & proposals" }),
-  ).toBeVisible();
+    updates.getByRole("button", { name: "Check", exact: true }),
+  ).toBeDisabled();
   if (!isMobile) {
     await page.setViewportSize({ width: 900, height: 1000 });
     expect(

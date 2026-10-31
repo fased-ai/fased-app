@@ -1,10 +1,26 @@
-# Development update verification
+# Updates and recovery
 
-P4 provides a **development verifier and protected disposable installation flow**.
-Real wallets and automatic updates remain disabled. Explicit development-only HTTPS
-acquisition is available; there is no public signing key, public release feed,
-production bootstrap trust, key-rotation mechanism or updater service. Existing installation
-commands still refuse in-place binary replacement. Nothing here enables wallets.
+Use **Settings → Updates** for the installed version, update status and short
+Check → Review → Update flow. Manual is the default. Automatic is an explicit
+preference with an optional maintenance window and version pin. The same records
+are available through `fased-app updates status`, `updates check`, `updates apply`
+and `updates recover`. Advanced recovery observations remain under Diagnostics
+and the `update-status` CLI alias.
+
+This engineering build has no active public release channel. Check and installation
+remain unavailable until trusted release bindings and installed acceptance are
+ready; choosing Automatic does not activate them. Controlled releases exercise
+the update controller without real credentials, wallets or funds.
+
+Ubuntu Local uses an ordinary-owner maintenance process outside the app sandbox.
+It retains one transaction through restart and compatible code rollback. Dedicated
+Remote maintenance uses the ordinary administrator's protected terminal or its
+prepared, narrowly scoped maintenance service. The app account can request only
+that service and receives no sudo grant. A verified installer upgrades the
+supported older reader through a stopped-instance handoff and retained backup;
+reader migration is forward-only. Actual installed acceptance remains open. Signer-enrolled installations use the separate paired custody
+controller. An app-only updater never restores databases, unlocks credentials or
+clears financial holds. See [installation](install.md#recovery-and-removal).
 
 The [production release-trust operations specification](#production-release-trust-operations-specification)
 below is a proposed implementation contract. It does not change those capabilities.
@@ -1310,11 +1326,11 @@ removes its generated keys/downloads in `finally`.
 
 ## Shared read-only status and recovery guidance
 
-Open **Settings → Updates & recovery** in the private UI, or use the same
+Open **Settings → Diagnostics → Updates & recovery** in the private UI, or use the same
 authenticated core contract from the CLI:
 
 ```sh
-fased-app updates status --data-dir /absolute/instance/directory
+fased-app update-status --data-dir /absolute/instance/directory
 ```
 
 Use the existing instance's CLI login first (`fased-app login --data-dir

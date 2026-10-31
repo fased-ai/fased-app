@@ -75,6 +75,14 @@ export async function currentStorageFixture(archivedRoot) {
         name.endsWith(".go") &&
         !name.endsWith("_test.go"),
     ),
+    "update_preferences.go",
+    "backup_linux.go",
+    ...(await readdir("internal/core")).filter(
+      (name) =>
+        name.startsWith("application_") &&
+        name.endsWith(".go") &&
+        !name.endsWith("_test.go"),
+    ),
     "update.go",
     "lifecycle.go",
     ...(await readdir("internal/core")).filter(
@@ -136,6 +144,20 @@ func ValidManagedAccountRef(r AccountRef) bool {
     await readFile(signerPublic),
   );
   storage["accounts.go"] = sha(await readFile(accounts));
+  // Lifecycle3 predates update-preference storage. Add only the optional data
+  // field needed by the composed row readers; keep its constructor, validator,
+  // old UI and HTTP/CLI dispatch unchanged.
+  const modelPath = path.join(archivedRoot, "internal/core/model.go");
+  let model = await readFile(modelPath, "utf8");
+  if (!model.includes("*UpdatePreferences")) {
+    assert.equal(model.split("type Setup struct {").length, 2);
+    model = model.replace(
+      "type Setup struct {",
+      'type Setup struct {\n\tUpdates *UpdatePreferences `json:"updates,omitempty"`',
+    );
+    await writeFile(modelPath, model);
+  }
+  storage["model.go"] = sha(Buffer.from(model));
   // Read-only current swap-history backport. Preserve old protocol, lifecycle
   // and dispatch: the composed helper gains no observer or signing commands.
   const signerRoot = path.join(archivedRoot, "internal/signer");
@@ -248,9 +270,8 @@ func ValidManagedAccountRef(r AccountRef) bool {
     await writeFile(path.join(strategyRoot, file), bytes);
     storage["wenstrategy/" + file] = sha(bytes);
   }
-  // Storage projections compile their private reader helpers, but the archived
-  // router/command dispatch remain unchanged. These zero-value fields do not
-  // expose a research endpoint or enable fixture execution in the predecessor.
+  // Storage projections compile private readers without copying routers or
+  // constructors. Each caller retains its own historical UI/dispatch contract.
   const http = path.join(archivedRoot, "internal/core/http.go");
   const httpBefore = await readFile(http, "utf8");
   assert.ok(!httpBefore.includes("/api/v1/wen/"));
@@ -347,14 +368,28 @@ func ValidManagedAccountRef(r AccountRef) bool {
       )
       .replace(
         "type Store struct {",
-        "type Store struct {\n\tvenueCredentials venueCredentials\n\trpcAdmission bool\n\trpcCheckFixture func(context.Context, RPCCheckRequest) (RPCCheckResult, error)\n\tcustodyNetwork string\n\tonchain *onchainRuntime\n\tproviderFixture bool\n\tchatEpoch atomic.Uint64\n\tprogressMu sync.Mutex\n\taiProgress map[string]string\n\tsessionFixture bool\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState\n\tpilot openAIPilotState\n\tresearchRead func(context.Context, researchFactResult) (json.RawMessage, error)",
+        "type Store struct {\n\tappUpdates applicationUpdates\n\tvenueCredentials venueCredentials\n\trpcAdmission bool\n\trpcCheckFixture func(context.Context, RPCCheckRequest) (RPCCheckResult, error)\n\tcustodyNetwork string\n\tonchain *onchainRuntime\n\tproviderFixture bool\n\tchatEpoch atomic.Uint64\n\tprogressMu sync.Mutex\n\taiProgress map[string]string\n\tsessionFixture bool\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState\n\tpilot openAIPilotState\n\tresearchRead func(context.Context, researchFactResult) (json.RawMessage, error)",
       )
       .replace(
         marker,
-        "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }; if schema <= 6 { if err = migrateAIConnections(ctx, db); err != nil { return nil, err } }; if schema <= 7 { if err = migrateAgentNews(ctx, db); err != nil { return nil, err } }; if schema <= 8 { if err = migrateAIAdmission(ctx, db); err != nil { return nil, err } }; if schema <= 9 { if err = migrateWENPaper(ctx, db); err != nil { return nil, err } }; if schema <= 10 { if err = migrateWENResearch(ctx, db); err != nil { return nil, err } }; if schema <= 11 { if err = migrateWENResearchAI(ctx, db); err != nil { return nil, err } }; if schema <= 12 { if err = migrateWENResearchLoop(ctx, db); err != nil { return nil, err } }; if schema <= 13 { if err = migrateWENSessions(ctx, db); err != nil { return nil, err } }; if schema <= 14 { if err = migrateWENFixtureRuns(ctx, db); err != nil { return nil, err } }; if schema <= 15 { if err = migratePlaybooks(ctx, db); err != nil { return nil, err } }; if schema <= 16 { if err = migrateTaskCalendar(ctx, db); err != nil { return nil, err } }; if schema <= 17 { if err = migrateTaskCron(ctx, db); err != nil { return nil, err } }; if schema <= 18 { if err = migrateAgentChat(ctx, db); err != nil { return nil, err } }; if schema <= 19 { if err = migrateAccountRPC(ctx, db); err != nil { return nil, err } }; if schema <= 20 { if err = migrateProviderRPC(ctx, db); err != nil { return nil, err } }; if schema <= 21 { if err = migrateManagedKeys(ctx, db); err != nil { return nil, err } }; if schema <= 22 { if err = migrateProviderAccounts(ctx, db, dir); err != nil { return nil, err } }; if schema <= 23 { if err = migrateProviderModels(ctx, db); err != nil { return nil, err } }; if schema <= 24 { if err = migrateNativeProviders(ctx, db); err != nil { return nil, err } }; if schema <= 25 { if err = migrateSignInPlan(ctx, db); err != nil { return nil, err } }; if schema <= 26 { if err = migrateLocalProviders(ctx, db); err != nil { return nil, err } }; if schema <= 27 { if err = migrateNewsWatch(ctx, db); err != nil { return nil, err } }; if schema <= 28 { if err = migrateTaskAnalysis(ctx, db); err != nil { return nil, err } }; if schema <= 29 { if err = migrateStrategies(ctx, db); err != nil { return nil, err } }; if schema <= 30 { if err = migrateOnchain(ctx, db); err != nil { return nil, err } }; if schema <= 31 { if err = migrateManagedSwaps(ctx, db); err != nil { return nil, err } }; if schema <= 32 { if err = migrateVenueCredentials(ctx, db); err != nil { return nil, err } }\n" +
+        "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }; if schema <= 6 { if err = migrateAIConnections(ctx, db); err != nil { return nil, err } }; if schema <= 7 { if err = migrateAgentNews(ctx, db); err != nil { return nil, err } }; if schema <= 8 { if err = migrateAIAdmission(ctx, db); err != nil { return nil, err } }; if schema <= 9 { if err = migrateWENPaper(ctx, db); err != nil { return nil, err } }; if schema <= 10 { if err = migrateWENResearch(ctx, db); err != nil { return nil, err } }; if schema <= 11 { if err = migrateWENResearchAI(ctx, db); err != nil { return nil, err } }; if schema <= 12 { if err = migrateWENResearchLoop(ctx, db); err != nil { return nil, err } }; if schema <= 13 { if err = migrateWENSessions(ctx, db); err != nil { return nil, err } }; if schema <= 14 { if err = migrateWENFixtureRuns(ctx, db); err != nil { return nil, err } }; if schema <= 15 { if err = migratePlaybooks(ctx, db); err != nil { return nil, err } }; if schema <= 16 { if err = migrateTaskCalendar(ctx, db); err != nil { return nil, err } }; if schema <= 17 { if err = migrateTaskCron(ctx, db); err != nil { return nil, err } }; if schema <= 18 { if err = migrateAgentChat(ctx, db); err != nil { return nil, err } }; if schema <= 19 { if err = migrateAccountRPC(ctx, db); err != nil { return nil, err } }; if schema <= 20 { if err = migrateProviderRPC(ctx, db); err != nil { return nil, err } }; if schema <= 21 { if err = migrateManagedKeys(ctx, db); err != nil { return nil, err } }; if schema <= 22 { if err = migrateProviderAccounts(ctx, db, dir); err != nil { return nil, err } }; if schema <= 23 { if err = migrateProviderModels(ctx, db); err != nil { return nil, err } }; if schema <= 24 { if err = migrateNativeProviders(ctx, db); err != nil { return nil, err } }; if schema <= 25 { if err = migrateSignInPlan(ctx, db); err != nil { return nil, err } }; if schema <= 26 { if err = migrateLocalProviders(ctx, db); err != nil { return nil, err } }; if schema <= 27 { if err = migrateNewsWatch(ctx, db); err != nil { return nil, err } }; if schema <= 28 { if err = migrateTaskAnalysis(ctx, db); err != nil { return nil, err } }; if schema <= 29 { if err = migrateStrategies(ctx, db); err != nil { return nil, err } }; if schema <= 30 { if err = migrateOnchain(ctx, db); err != nil { return nil, err } }; if schema <= 31 { if err = migrateManagedSwaps(ctx, db); err != nil { return nil, err } }; if schema <= 32 { if err = migrateVenueCredentials(ctx, db); err != nil { return nil, err } }; if schema <= 34 { if err = migrateApplicationUpdates(ctx, db); err != nil { return nil, err } }\n" +
           marker,
       ),
   );
+  const composedStore = await readFile(store, "utf8");
+  if (!composedStore.includes("func readSetupRecord(")) {
+    const currentStore = await readFile("internal/core/store.go", "utf8");
+    const signature = "func readSetupRecord(";
+    assert.equal(currentStore.split(signature).length, 2);
+    const start = currentStore.indexOf(signature);
+    const end = currentStore.indexOf("\nfunc ", start + signature.length);
+    assert.ok(end > start);
+    const reader = currentStore.slice(start, end);
+    assert.ok(
+      reader.includes("SELECT setup,revision FROM instance WHERE id=1"),
+    );
+    await writeFile(store, composedStore + "\n" + reader + "\n");
+  }
   storage["store.go"] = sha(await readFile(store));
   const readerLog = execFileSync(
     "go",

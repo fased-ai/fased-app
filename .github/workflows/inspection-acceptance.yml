@@ -7,6 +7,11 @@ on:
       - "internal/custodyinstall/**"
       - "internal/signer/**"
       - "internal/core/**"
+      - "internal/bootstrap/**"
+      - "internal/localinstall/**"
+      - "internal/vpsinstall/**"
+      - "cmd/fased-app/application_*"
+      - "cmd/fased-app/maintenance_authority_*"
       - "cmd/fased-app/inspection_*"
       - "cmd/fased-app/bootstrap_linux.go"
       - "cmd/fased-signer/inspection_*"
@@ -14,6 +19,7 @@ on:
       - "scripts/fixture-core-storage.mjs"
       - "scripts/fixture-vm-guest.mjs"
       - "scripts/fixture-development-envelope.mjs"
+      - "scripts/fixtures/application-reader-predecessor.go.txt"
       - ".github/workflows/inspection-acceptance.yml"
       - "scripts/ci-routing*"
 permissions:
@@ -83,6 +89,12 @@ jobs:
           go test -c -o .evidence/p4-fault-reboot/update-tests ./internal/update
           go build -o .evidence/bin/fased-signer ./cmd/fased-signer
           node scripts/build-inspection-predecessor.mjs
+      - name: Build the actual schema33 reader fixture
+        run: node scripts/build-inspection-predecessor.mjs --application-reader
+      - name: Verify authenticated older-reader handoff
+        env:
+          FASED_READER_PREDECESSOR: ${{ github.workspace }}/.evidence/b01-connected-install/reader-predecessor-schema33
+        run: go test -race ./cmd/fased-app -run '^TestApplicationReaderCompiledPredecessorIPC$' -count=1
       - name: Disposable VM prerequisites
         run: |
           node --test scripts/ci-ubuntu-mirror.test.mjs
@@ -107,6 +119,10 @@ jobs:
         env:
           FASED_DISPOSABLE_VM_ACCEPTANCE: "1"
         run: python3 scripts/check-inspection-vm.py --full
+      - name: Remote maintenance kernel authority
+        env:
+          FASED_DISPOSABLE_VM_ACCEPTANCE: "1"
+        run: python3 scripts/check-inspection-vm.py --maintenance-only
       - name: Remove only the owned CI KVM rule
         if: always()
         run: |
@@ -124,4 +140,7 @@ jobs:
             .evidence/p4-fault-reboot/*.jsonl
             .evidence/p4-fault-reboot/*.log
             .evidence/p4-fault-reboot/*.stderr
+            .evidence/b01-connected-install/*.json
+            .evidence/b01-connected-install/vm/*.json
+            .evidence/b01-connected-install/vm/*.log
           retention-days: 7

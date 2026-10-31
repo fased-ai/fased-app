@@ -95,6 +95,9 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
+	case "/api/v1/updates/application/owner":
+		h.applicationOwnerAPI(w, r)
+		return
 	case "/api/v1/health":
 		if r.Method != http.MethodGet {
 			writeError(w, 405, "method not allowed")
@@ -235,6 +238,9 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		return
 	case "/api/v1/agents":
 		h.agentsAPI(w, r, token)
+		return
+	case "/api/v1/updates/application":
+		h.applicationUpdatesAPI(w, r, token)
 		return
 	case "/api/v1/updates/preferences":
 		h.updatePreferencesAPI(w, r, token)
@@ -492,6 +498,16 @@ func (h *HTTPHandler) mutation(w http.ResponseWriter, r *http.Request) bool {
 	if err != nil || mediaType != "application/json" {
 		writeError(w, 415, "JSON content type required")
 		return false
+	}
+	// Freeze ordinary writes from durable dispatch through recovery. Sessions and
+	// protected maintenance remain reachable. The existing metadata fence remains
+	// the authority across processes; this closes dispatch-to-fence HTTP races.
+	if !strings.HasPrefix(r.URL.Path, "/api/v1/updates/") && !oneOf(r.URL.Path, "/api/v1/login", "/api/v1/logout", "/api/v1/auth/login", "/api/v1/auth/logout") {
+		o, _, e := readApplicationUpdate(r.Context(), h.store.db)
+		if e != nil || oneOf(o.Phase, "applying", "recovery") {
+			writeError(w, 409, "Update in progress. Inspect recovery before changing this instance.")
+			return false
+		}
 	}
 	return true
 }

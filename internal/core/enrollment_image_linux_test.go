@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -66,6 +67,203 @@ func TestEnrollmentImagePreservesSameInstance(t *testing.T) {
 	var gotRev int64
 	if err = next.db.QueryRowContext(t.Context(), "SELECT document,revision FROM agent_workspace WHERE id=1").Scan(&gotDoc, &gotRev); err != nil || gotDoc != doc || gotRev != rev || next.instanceID != id {
 		t.Fatal("app records changed", err)
+	}
+}
+
+func TestEnrollmentImageApplicationUpdateIdleRowPreserved(t *testing.T) {
+	s := fixtureStore(t)
+	prefs, e := s.UpdatePreferences(t.Context())
+	if e != nil {
+		t.Fatal(e)
+	}
+	policy := prefs.Policy
+	policy.Notify = false
+	policy.Mode = "manual"
+	if _, e = s.ChangeUpdatePreferences(t.Context(), UpdatePreferencesRequest{Action: "policy", Revision: prefs.Revision, Policy: &policy}); e != nil {
+		t.Fatal(e)
+	}
+	raw := `{"phase":"idle", "id":""}`
+	if _, e = s.db.Exec("UPDATE application_updates SET revision=9,document=? WHERE id=1", raw); e != nil {
+		t.Fatal(e)
+	}
+	var setup string
+	if e = s.db.QueryRow("SELECT setup FROM instance WHERE id=1").Scan(&setup); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.Close(); e != nil {
+		t.Fatal(e)
+	}
+	image, lease, e := ExportEnrollmentImage(t.Context(), s.dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer lease.Close()
+	stage := enrollmentStage(t)
+	if e = ImportEnrollmentImage(t.Context(), stage, image); e != nil {
+		t.Fatal(e)
+	}
+	next, e := OpenStore(stage)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer next.Close()
+	var got, gotSetup string
+	var revision int64
+	if e = next.db.QueryRow("SELECT document,revision FROM application_updates WHERE id=1").Scan(&got, &revision); e != nil || got != raw || revision != 9 {
+		t.Fatal("idle row rewritten", got, revision, e)
+	}
+	if e = next.db.QueryRow("SELECT setup FROM instance WHERE id=1").Scan(&gotSetup); e != nil || gotSetup != setup {
+		t.Fatal("update preferences changed", e)
+	}
+}
+
+func TestEnrollmentImageApplicationUpdateSettledHistory(t *testing.T) {
+	for _, phase := range []string{"completed", "rolled-back"} {
+		t.Run(phase, func(t *testing.T) {
+			s := fixtureStore(t)
+			controller := fixtureUpdateController()
+			if e := s.BindApplicationMaintenance(controller.Check, func(context.Context, string) error { return nil }); e != nil {
+				t.Fatal(e)
+			}
+			updateCommandFixture(t, s, "check")
+			updateTickFixture(t, s)
+			updateCommandFixture(t, s, "apply")
+			updateTickFixture(t, s)
+			view, e := s.ApplicationUpdates(t.Context())
+			if e != nil {
+				t.Fatal(e)
+			}
+			op := view.Operation
+			leaseID := update.NewProbe()
+			if _, e = s.ApplicationOwnerCommand(t.Context(), ApplicationOwnerCommand{Action: "claim", ID: op.ID, Lease: leaseID}); e != nil {
+				t.Fatal(e)
+			}
+			prepared, e := s.ApplicationOwnerCommand(t.Context(), ApplicationOwnerCommand{Action: "prepare", ID: op.ID, Lease: leaseID})
+			if e != nil || prepared.Checkpoint == nil {
+				t.Fatal(e)
+			}
+			engine := op.Release.EngineSHA256
+			if phase == "rolled-back" {
+				engine = prepared.Checkpoint.PreviousEngineSHA256
+			}
+			proof := ApplicationUpdateReceipt{ID: op.ID, Sequence: op.Release.Sequence, ManifestSHA256: op.Release.ManifestSHA256, EngineSHA256: engine, Phase: phase}
+			if _, e = s.ApplicationOwnerCommand(t.Context(), ApplicationOwnerCommand{Action: "finish", ID: op.ID, Lease: leaseID, Receipt: &proof}); e != nil {
+				t.Fatal(e)
+			}
+			// Current work may change after a settled update. Its sealed original
+			// backup must be preserved independently, never compared to or restored
+			// over this newer workspace during enrollment.
+			agentApply(t, s, AgentCommand{Action: "session-create", Name: "After settled update"})
+			var raw string
+			var revision int64
+			if e = s.db.QueryRow("SELECT document,revision FROM application_updates WHERE id=1").Scan(&raw, &revision); e != nil {
+				t.Fatal(e)
+			}
+			if e = s.Close(); e != nil {
+				t.Fatal(e)
+			}
+			image, lease, e := ExportEnrollmentImage(t.Context(), s.dir)
+			if e != nil {
+				t.Fatal("settled update prevented enrollment", e)
+			}
+			defer lease.Close()
+			stage := enrollmentStage(t)
+			if e = ImportEnrollmentImage(t.Context(), stage, image); e != nil {
+				t.Fatal(e)
+			}
+			next, e := OpenStore(stage)
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer next.Close()
+			var got string
+			var gotRevision int64
+			if e = next.db.QueryRow("SELECT document,revision FROM application_updates WHERE id=1").Scan(&got, &gotRevision); e != nil || raw != got || revision != gotRevision {
+				t.Fatal("settled receipt/floor rewritten", e)
+			}
+			for _, file := range image.Files {
+				if strings.HasPrefix(file.Path, "lifecycle/") {
+					b, e := os.ReadFile(filepath.Join(stage, file.Path))
+					if e != nil || !bytes.Equal(b, file.Data) {
+						t.Fatal("update originals altered", file.Path, e)
+					}
+				}
+			}
+			for _, tamper := range []string{"checkpoint", "backup", "missing-backup"} {
+				bad := image
+				bad.Files = append([]EnrollmentFile{}, image.Files...)
+				for i, f := range bad.Files {
+					if tamper == "checkpoint" && f.Path == "lifecycle/"+op.ID+"/application.json" {
+						bad.Files[i].Data = []byte(`{"version":1}`)
+						break
+					}
+					if strings.HasSuffix(f.Path, prepared.Checkpoint.Snapshot.File) && tamper != "checkpoint" {
+						if tamper == "missing-backup" {
+							bad.Files = append(bad.Files[:i], bad.Files[i+1:]...)
+						} else {
+							bad.Files[i].Data = []byte("changed original")
+						}
+						break
+					}
+				}
+				if e = ValidateEnrollmentImage(bad); e == nil {
+					t.Fatal("tampered terminal history accepted", tamper)
+				}
+			}
+		})
+	}
+}
+
+func TestEnrollmentImageApplicationUpdateAuthorityRefused(t *testing.T) {
+	for _, mode := range []string{"queued", "applying", "recovery", "checking", "available", "unknown", "idle-lease", "unknown-field", "negative-revision", "extra-row", "schema34"} {
+		t.Run(mode, func(t *testing.T) {
+			s := fixtureStore(t)
+			o := ApplicationUpdateOperation{ID: update.NewProbe(), Phase: mode, Release: &ApplicationRelease{Version: "0.0.0-fixture", Sequence: 7, ManifestSHA256: strings.Repeat("a", 64), EngineSHA256: strings.Repeat("b", 64), Target: update.Target{OS: "linux", Arch: runtime.GOARCH}}}
+			if mode == "idle-lease" {
+				o = ApplicationUpdateOperation{Phase: "idle", OwnerLease: update.NewProbe()}
+			}
+			raw, _ := json.Marshal(o)
+			if mode == "unknown-field" {
+				raw = []byte(`{"phase":"idle","id":"","unclassified":true}`)
+			}
+			if mode == "negative-revision" || mode == "extra-row" || mode == "schema34" {
+				raw = []byte(`{"phase":"idle","id":""}`)
+			}
+			if _, e := s.db.Exec("UPDATE application_updates SET document=? WHERE id=1", string(raw)); e != nil {
+				t.Fatal(e)
+			}
+			switch mode {
+			case "negative-revision":
+				if _, e := s.db.Exec("UPDATE application_updates SET revision=-1"); e != nil {
+					t.Fatal(e)
+				}
+			case "extra-row":
+				if _, e := s.db.Exec(`ALTER TABLE application_updates RENAME TO old_updates; CREATE TABLE application_updates(id INTEGER,revision INTEGER,document TEXT); INSERT INTO application_updates SELECT * FROM old_updates; INSERT INTO application_updates VALUES(2,0,'{"phase":"idle","id":""}'); DROP TABLE old_updates`); e != nil {
+					t.Fatal(e)
+				}
+			case "schema34":
+				if _, e := s.db.Exec("PRAGMA user_version=34"); e != nil {
+					t.Fatal(e)
+				}
+			}
+			if e := s.Close(); e != nil {
+				t.Fatal(e)
+			}
+			before, e := os.ReadFile(filepath.Join(s.dir, "core.sqlite"))
+			if e != nil {
+				t.Fatal(e)
+			}
+			if image, lease, e := ExportEnrollmentImage(t.Context(), s.dir); e == nil || lease != nil || len(image.Files) != 0 {
+				if lease != nil {
+					lease.Close()
+				}
+				t.Fatal("unsettled or unknown update authority enrolled", mode, e)
+			}
+			after, e := os.ReadFile(filepath.Join(s.dir, "core.sqlite"))
+			if e != nil || !bytes.Equal(before, after) {
+				t.Fatal("refusal changed original database", e)
+			}
+		})
 	}
 }
 

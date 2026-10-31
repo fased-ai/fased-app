@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -107,13 +108,14 @@ func ValidateTarget() error {
 // System invokes only fixed, absolute OS tools. sudo obtains its password from
 // the terminal; it never receives -S, a password, or project code to execute.
 type System struct {
-	In         io.Reader
-	Out        io.Writer
-	authorized bool
+	In            io.Reader
+	Out           io.Writer
+	Authorization string
+	authorized    bool
 }
 
 func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte, error) {
-	if os.Geteuid() == 0 {
+	if os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
 		return nil, errors.New("run Fased as an ordinary OS user")
 	}
 	if len(args) == 0 {
@@ -121,11 +123,37 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 	}
 	switch args[0] {
 	case "/usr/bin/apt-get", "/usr/bin/cat", "/usr/bin/install", "/usr/bin/ln", "/usr/bin/rm", "/usr/bin/sync", "/usr/sbin/apparmor_parser":
+	case "/usr/bin/systemctl":
+		if strings.Join(args[1:], " ") != "enable --now tailscaled.service" {
+			return nil, errors.New("only guided Tailscale service preparation is allowed")
+		}
+	case "/usr/bin/tailscale":
+		u, err := user.Current()
+		if err != nil || !AllowedTailscalePreparation(u.Username, args[1:]) {
+			return nil, errors.New("only bounded Tailscale status, owner login and operator preparation are allowed")
+		}
 	default:
 		return nil, errors.New("unknown OS preparation tool")
 	}
 	for _, p := range []string{"/usr/bin/sudo", args[0]} {
-		i, e := os.Stat(p)
+		resolved, e := filepath.EvalSymlinks(p)
+		if e != nil {
+			return nil, e
+		}
+		for parent := filepath.Dir(resolved); ; parent = filepath.Dir(parent) {
+			i, err := os.Lstat(parent)
+			if err != nil {
+				return nil, err
+			}
+			owner, ok := i.Sys().(*syscall.Stat_t)
+			if !ok || owner.Uid != 0 || !i.IsDir() || i.Mode().Perm()&0022 != 0 {
+				return nil, errors.New("OS preparation tool parents must be root-owned and immutable")
+			}
+			if parent == "/" {
+				break
+			}
+		}
+		i, e := os.Stat(resolved)
 		if e != nil {
 			return nil, e
 		}
@@ -135,7 +163,11 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 		}
 	}
 	if !s.authorized {
-		fmt.Fprintln(s.Out, "Authorize Ubuntu prerequisites: OS packages and the reviewed restrictive Bubblewrap profile. Existing policies are preserved; global AppArmor restrictions stay enabled. Fased remains unprivileged.")
+		prompt := s.Authorization
+		if prompt == "" {
+			prompt = "Authorize Ubuntu prerequisites: OS packages and the reviewed restrictive Bubblewrap profile. Existing policies are preserved; global AppArmor restrictions stay enabled. Fased remains unprivileged."
+		}
+		fmt.Fprintln(s.Out, prompt)
 		c := exec.CommandContext(ctx, "/usr/bin/sudo", "-v")
 		c.Stdin = s.In
 		c.Stdout = s.Out
@@ -148,7 +180,7 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 	c := exec.CommandContext(ctx, "/usr/bin/sudo", append([]string{"-n", "--"}, args...)...)
 	c.Stdin = bytes.NewReader(input)
 	c.Stderr = s.Out
-	if args[0] == "/usr/bin/apt-get" {
+	if args[0] == "/usr/bin/apt-get" || args[0] == "/usr/bin/tailscale" && len(args) > 1 && args[1] == "login" {
 		c.Stdout = s.Out
 		return nil, c.Run()
 	}
@@ -326,4 +358,14 @@ func preparePolicy(ctx context.Context, data string, policy []byte, read readHos
 	}
 	r.Phase = "ready"
 	return core.WritePrivateJSON(path, r)
+}
+
+// AllowedTailscalePreparation is deliberately narrower than a generic elevated
+// Tailscale CLI. No logout, switch, reset, routes, Funnel, SSH or auth keys.
+func AllowedTailscalePreparation(username string, args []string) bool {
+	if username == "" || username == "root" || strings.ContainsAny(username, " \t\r\n/=") || strings.HasPrefix(username, "-") {
+		return false
+	}
+	joined := strings.Join(args, " ")
+	return joined == "status --json" || joined == "debug prefs" || joined == "login --timeout=120s" || joined == "set --operator="+username
 }

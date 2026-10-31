@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { createHash } from "node:crypto";
+import { createMacDiskImage } from "./macos-dmg.mjs";
 const output = resolve(".evidence/packages");
 await mkdir(output, { recursive: true });
 const windows = process.platform === "win32";
@@ -74,21 +75,17 @@ if (process.platform === "darwin") {
       ["-lint", join(fixture, "Fased App.app/Contents/Info.plist")],
       { stdio: "inherit" },
     );
-    execFileSync(
-      "hdiutil",
-      [
-        "create",
-        "-volname",
-        "Fased App Engineering",
-        "-srcfolder",
-        fixture,
-        "-ov",
-        "-format",
-        "UDZO",
-        join(output, "fased-app-macos-unsigned.dmg"),
-      ],
-      { stdio: "inherit" },
-    );
+    await createMacDiskImage([
+      "create",
+      "-volname",
+      "Fased App Engineering",
+      "-srcfolder",
+      fixture,
+      "-ov",
+      "-format",
+      "UDZO",
+      join(output, "fased-app-macos-unsigned.dmg"),
+    ]);
   } finally {
     await rm(fixture, { recursive: true, force: true });
   }

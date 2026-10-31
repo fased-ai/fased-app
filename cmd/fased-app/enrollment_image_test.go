@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/update"
@@ -39,7 +40,7 @@ func TestEnrollmentPrivateImageChannelHoldsSourceAndPreservesInstance(t *testing
 	defer output.Close()
 	defer private.Close()
 	go func() {
-		done <- enrollmentImageCommand(t.Context(), []string{"export", "--data-dir", dir, "--expected-instance", snap.InstanceID, "--disposable-fixture"}, input, private, io.Discard)
+		done <- enrollmentExportFixture(t.Context(), []string{"export", "--data-dir", dir, "--expected-instance", snap.InstanceID, "--disposable-fixture"}, input, private)
 	}()
 	var image core.EnrollmentImage
 	if e = json.NewDecoder(output).Decode(&image); e != nil {
@@ -166,7 +167,7 @@ func TestEnrollmentImageParentFailureReleasesSourceWithoutChangingIt(t *testing.
 			defer cancel()
 			done := make(chan error, 1)
 			go func() {
-				done <- enrollmentImageCommand(ctx, []string{"export", "--data-dir", dir, "--expected-instance", snap.InstanceID, "--disposable-fixture"}, input, writer, io.Discard)
+				done <- enrollmentExportFixture(ctx, []string{"export", "--data-dir", dir, "--expected-instance", snap.InstanceID, "--disposable-fixture"}, input, writer)
 			}()
 			var image core.EnrollmentImage
 			if e = json.NewDecoder(output).Decode(&image); e != nil {
@@ -192,5 +193,40 @@ func TestEnrollmentImageParentFailureReleasesSourceWithoutChangingIt(t *testing.
 				t.Fatal("failed parent changed source")
 			}
 		})
+	}
+}
+
+// The in-process fixture owns its pipe, just as a real helper process closes
+// stdout on exit. Propagate early validation failures instead of hanging Decode.
+func enrollmentExportFixture(ctx context.Context, args []string, in io.Reader, out *io.PipeWriter) error {
+	err := enrollmentImageCommand(ctx, args, in, out, io.Discard)
+	_ = out.CloseWithError(err)
+	return err
+}
+
+func TestEnrollmentImageEarlyExportFailureClosesFrame(t *testing.T) {
+	dir := privateEnrollmentDir(t)
+	input, ack := io.Pipe()
+	output, writer := io.Pipe()
+	defer input.Close()
+	defer ack.Close()
+	defer output.Close()
+	defer writer.Close()
+	done := make(chan error, 1)
+	go func() {
+		done <- enrollmentExportFixture(t.Context(), []string{"export", "--data-dir", dir, "--expected-instance", strings.Repeat("a", 43), "--disposable-fixture"}, input, writer)
+	}()
+	decoded := make(chan error, 1)
+	go func() { var image core.EnrollmentImage; decoded <- json.NewDecoder(output).Decode(&image) }()
+	select {
+	case err := <-decoded:
+		if err == nil {
+			t.Fatal("invalid source emitted image")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("early fixture refusal left frame reader blocked")
+	}
+	if err := <-done; err == nil {
+		t.Fatal("invalid source accepted")
 	}
 }

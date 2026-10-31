@@ -16,6 +16,7 @@ import (
 // consumes these records as permission. Existing snapshots hash the entire setup
 // JSON and SQLite pause guards/backups already cover it.
 type UpdatePolicy struct {
+	Mode   string             `json:"mode,omitempty"`
 	Notify bool               `json:"notify"`
 	Pin    *UpdatePin         `json:"pin,omitempty"`
 	Window *MaintenanceWindow `json:"window,omitempty"`
@@ -152,6 +153,9 @@ func hasDay(days []int, day int) bool {
 	return false
 }
 func (p UpdatePolicy) Validate() error {
+	if p.Mode != "" && p.Mode != "manual" && p.Mode != "automatic" {
+		return errors.New("choose Manual or Automatic")
+	}
 	if p.Pin != nil && !validPin(*p.Pin) {
 		return errors.New("pin requires a positive canonical sequence and lowercase SHA-256")
 	}
@@ -217,6 +221,8 @@ func (s *Store) UpdatePreferences(ctx context.Context) (UpdatePreferencesView, e
 	return preferencesView(r, s.now()), nil
 }
 func (s *Store) ChangeUpdatePreferences(ctx context.Context, request UpdatePreferencesRequest) (UpdatePreferencesView, error) {
+	s.appUpdates.mu.Lock()
+	defer s.appUpdates.mu.Unlock()
 	if request.Revision < 0 {
 		return UpdatePreferencesView{}, errors.New("invalid revision")
 	}

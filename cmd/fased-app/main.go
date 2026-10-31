@@ -32,6 +32,12 @@ func main() {
 	}
 }
 func run(args []string, in *os.File, out, errOut io.Writer) error {
+	if len(args) > 0 && args[0] == "application-owner-client" {
+		return applicationOwnerClient(args[1:], in, out, errOut)
+	}
+	if len(args) > 0 && args[0] == "maintain-update" {
+		return maintainUpdateCommand(args[1:], out, errOut)
+	}
 	if len(args) > 0 && args[0] == "enrollment-image" {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
@@ -79,6 +85,9 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	if len(args) > 0 && args[0] == "owner-updates" {
 		return ownerUpdatesCommand(args[1:], in, out, errOut)
 	}
+	if len(args) > 0 && args[0] == "updates" && (len(args) == 1 || args[1] == "status" || args[1] == "check" || args[1] == "apply" || args[1] == "recover") {
+		return applicationUpdatesCommand(args[1:], in, out, errOut)
+	}
 	if len(args) > 0 && args[0] == "updates" {
 		return updatesCommand(args[1:], out, errOut)
 	}
@@ -116,6 +125,12 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 		return recoverCommand(args[1:], in, out, errOut)
 	}
 	if args[0] == "version" {
+		if len(args) == 2 && args[1] == "--json" {
+			return json.NewEncoder(out).Encode(map[string]any{"version": core.Version, "stateSchema": core.StateSchema, "maintenanceProtocol": 1})
+		}
+		if len(args) != 1 {
+			return errors.New("usage: fased-app version [--json]")
+		}
 		fmt.Fprintln(out, core.Version)
 		return nil
 	}
@@ -381,6 +396,9 @@ func serveInstalledRuntime(dir, listen, publicOrigin, researchOrigin, location, 
 	}
 	if err == nil {
 		err = server.ConfigureWENResearch(researchOrigin)
+	}
+	if err == nil && source == "remote" && compiledApplicationUpdateCheck != nil {
+		err = bindCompiledRemoteMaintenance(server.Store, ownerUID, compiledApplicationUpdateCheck)
 	}
 	if err != nil {
 		_ = server.Close(context.Background())

@@ -15,8 +15,14 @@ permission/reconciliation acceptance gates stay open.
 ## Ubuntu prerequisites
 
 Ubuntu 24.04 LTS, x86-64 is the first Linux/VPS engineering target. Run the app
-as an ordinary OS user. A VPS administrator must provide the ordinary administrative account. The
-per-user service path needs working systemd user services and, for execution
+as an ordinary OS user. On a root-only VPS image, use the provider console or its
+OS account guide to create an ordinary administrator with sudo and working SSH
+key access first. For Ubuntu, the trusted OS account tools are `adduser` and
+`usermod -aG sudo`; test the new administrator's SSH and sudo access before
+leaving the provider/root recovery session. Run the Fased verifier and wizard
+from that ordinary account. Fased does not execute itself as root or silently
+change root SSH policy. The per-user service path needs working systemd user
+services and, for execution
 after logout/reboot, user lingering.
 The ordinary per-user Remote path checks this prerequisite. The explicit managed
 Remote path below instead creates a locked application account and system service;
@@ -78,7 +84,7 @@ directory, run:
 ./fased-app install --bundle . --interactive
 ```
 
-The terminal installer offers **Local** (install on this computer), **Remote** (install on this server) and **Connect** (open an existing instance). Connect verifies the selected Fased API/instance and opens its browser UI; it never installs or starts a local engine. Local asks whether to start at login, off by default. Remote offers a dedicated locked app account, then asks whether to keep running after logout/reboot. The dedicated option uses a system service; the older current-user option still requires Linux user-service/linger readiness. Remote retains the `--vps` CLI alias and requires explicit SSH or Tailscale access. Tailscale enrollment, HTTPS and operator permissions remain owner prerequisites; no tailnet, SSH or firewall policy is reset.
+The terminal installer offers **Local** (install on this computer), **Remote** (install on this server) and **Connect** (open an existing instance). Connect verifies the selected Fased API/instance and opens its browser UI; it never installs or starts a local engine. Local asks whether to start at login, off by default. Remote offers a dedicated locked app account, then asks whether to keep running after logout/reboot. The dedicated option uses a system service; the older current-user option still requires Linux user-service/linger readiness. Remote retains the `--vps` CLI alias and requires explicit SSH or Tailscale access. On Ubuntu 24.04, the Tailscale choice guides missing package/service setup, browser sign-in and permission for your ordinary administrator. It uses the official signed package repository with a bundled reviewed signing key; no downloaded setup script runs as root. An already enrolled online device with the same operator needs no setup ceremony. A different existing operator, stopped connection or device-approval requirement is preserved for its owner rather than reset. Enable tailnet HTTPS and authorize the computer you will use; the wizard prints the relevant handoff. If setup is declined or cannot finish, the wizard keeps your installation choices and lets you retry or explicitly choose SSH. It does not silently change access or begin installation before the selected access plan is ready. Invalid access choices are prompted again; cancelling leaves installation untouched.
 
 For Local or Remote installation, the wizard verifies the package's platform,
 version and complete file inventory before host preparation.
@@ -105,6 +111,29 @@ checks them before changing installation or instance directories. Each copied
 file is verified in staging before publication. Changed input is refused without
 publishing a bad target; restoring the same verified bundle permits retry with
 the same installation identity and preserved instance data.
+
+A verified first installation retains its authenticated release sequence and
+identity as the update baseline. Retrying installation cannot relabel that
+release or lower its floor. Direct unsigned engineering bundles retain no public
+release baseline; a version string is not authenticated release identity.
+
+The verified bootstrap leaves default installation paths to the selected profile;
+Local defaults never become explicit custom Remote path flags. Deliberate
+advanced Local path overrides are retained, and installation/state must remain
+separate from the verification output. The wizard chooses one instance; retry
+never moves its state implicitly.
+
+Guided Tailscale setup requires an ordinary Ubuntu administrator's explicit
+consent before fixed OS tools run through sudo. Browser sign-in prints its URL
+only in that owner's terminal and has a finite deadline; Fased never asks for an
+auth key or stores it. Repository publication refuses foreign files and keeps a
+private recovery intent so interrupted preparation can retry. The shared
+Tailscale package/repository/service is deliberately retained on app removal;
+existing device accounts, routes, Serve/Funnel and SSH/firewall policies are not
+reset. The accessing computer must be installed, signed into the same tailnet
+and allowed by its policy. Local and SSH choices do not run this preparation.
+
+If private HTTPS cannot be verified after installation, Fased preserves the installed instance and reports private access as pending. The error prints the exact installed command to retry access, including custom installation/data paths where applicable; it does not require reinstalling or treating an unverified URL as ready.
 
 When installation finishes, the wizard prints the selected connection steps and
 commands using the installed executable and exact state directory; adding Fased
@@ -189,8 +218,10 @@ services and configuration are not adopted or overwritten. The installation and
 state directories are fixed per administrator; custom `--prefix`/`--data-dir` and
 desktop payloads are rejected for this option. The ordinary Local path is unchanged.
 
-Tailscale must already be installed and owner-enrolled. The administrator needs
-Serve permission; the application account does not receive it. Private Serve
+The wizard detects missing Tailscale setup and offers bounded package preparation
+and browser enrollment with the administrator's consent. Existing enrollment is
+retained. The administrator needs Serve permission; the application account does
+not receive it. Private Serve
 configuration/recovery belongs to the administrator's private control directory.
 App data belongs to the application account, and the browser still requires its
 owner claim/password. The wizard prints the installed management command:
@@ -321,9 +352,73 @@ The installed CLI supports `service status`, `service start`, `service stop` and
 `open`. For custom paths, keep the same `--prefix` and `--data-dir` arguments.
 Read-only binaries are separate from private state. Installation refuses unknown
 files, a different application version or a foreign service/shortcut identity.
-The ordinary installer does not replace a different binary in place. The
-separate [controlled update flow](updates.md) applies only to its explicitly
-managed disposable installations; it is not an ordinary/public updater.
+The ordinary installer does not replace a different binary on retry. App-only
+Local and dedicated Remote replacement uses a separate authenticated update
+transaction: retain the exact installation, stop the service, verify fixed
+application artifacts, check health and commit or hold for compatible recovery.
+Its durable release floor survives code rollback. The owner maintenance process
+runs outside the read-only app sandbox; the app does not make itself writable.
+No wallet enrollment is needed for an app-only update. Signer-enrolled instances
+continue to require the separate paired custody controller. Neither path restores
+old databases, keys or uncertain financial state.
+
+Linux Local setup prepares the owner maintenance entry automatically after the
+service starts, without starting an update or enabling automatic mode. If the
+owner's user-service manager is unavailable, setup reports deferred readiness
+and preserves the installed app/data. A later normal service start retries this
+preparation. The verified maintenance entry is kept separately from replaceable
+application code, so it can inspect the original transaction after interruption.
+It runs as the ordinary owner outside the app's read-only service. Its persistent
+operation resumes at the next owner OS session (or existing linger session) after
+reboot. Completed or deferred operations disable only their own launch instance.
+Removal refuses an unfinished actor or replacement transaction; data and recovery
+backups remain preserved.
+
+Dedicated Remote uses a fixed maintenance service running as the ordinary
+administrator. Prepare its bounded OS authority once in that administrator's
+terminal:
+
+```sh
+fased-app vps updates prepare
+```
+
+Preparation may install the missing Ubuntu `polkitd` package. It registers an
+immutable maintenance executable and limits the OS grant to this installation's
+fixed application files, existing service and protected app-account helpers.
+The app account can request only that maintenance service; it gets no sudo or
+wallet authority. Preparation starts no update and does not choose Automatic.
+Unsupported older executables must complete the verified upgrade first. Existing
+foreign policy is preserved and refused. Host acceptance remains separate from
+controlled verification; this engineering build has no active public channel.
+
+Settings provides manual update status/review and an explicit automatic policy;
+installation remains unavailable until its trusted release channel and protected
+controller are configured. Automatic policy does not unlock provider or wallet
+credentials, replay missed work, or authorize live execution. Public/ordinary
+update activation remains disabled for this engineering build. See
+[updates and recovery](updates.md) for the supported boundaries.
+
+### Background behavior
+
+| Event                        | What continues                                                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Close the browser            | The installed engine keeps running. Only already approved tasks can run.                                                                    |
+| Sign out or lock credentials | The service stays running; temporary provider and venue unlocks close. Provider-free tasks need no AI credential.                           |
+| Stop the engine              | No task or update runs. Restart preserves records; it does not authorize unknown work again.                                                |
+| Log out of the OS or reboot  | A Local user service needs its supported autostart/linger session. Dedicated Remote uses its system service. Neither unlocks credentials.   |
+| Apply an update              | New work pauses for the exact transaction. Uncertain outcomes stay held for recovery. Keys, task permissions and credentials are not reset. |
+| Enable Automatic             | The preference is saved. This build has no active public release channel; no installation is activated.                                     |
+
+An app-only update can proceed without a wallet. Signer-enrolled installations
+require the paired custody update path; an application-only update refuses them.
+A verified installer supports `fased-install --upgrade` for an existing Local
+installation and `fased-install --upgrade --remote` for dedicated Remote. It
+preserves the instance and requires the source owner's existing CLI sign-in;
+Remote sign-in uses `fased-app vps login` in the protected terminal. Credentials
+are not copied to the administrator. Reader migration retains the original
+backup and permits forward recovery; it never restores an older database.
+Unsupported source readers remain unchanged. Public release bindings and actual
+installed acceptance remain held.
 
 If the app password is lost, use the existing OS-owner SSH/terminal:
 

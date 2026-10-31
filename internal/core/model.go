@@ -8,7 +8,8 @@ import (
 )
 
 const APIVersion = "1"
-const Version = "0.0.0-core.1"
+
+var Version = "0.0.0-core.1" // Set by the reviewed release build; not a runtime option.
 
 func DefaultDataDir() (string, error) {
 	base, err := os.UserConfigDir()
