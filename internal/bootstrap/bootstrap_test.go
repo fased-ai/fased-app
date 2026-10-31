@@ -247,10 +247,43 @@ func TestFirstInstallVerifiesBeforeExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, wanted := range []string{"install\n", "--interactive\n", "--start=false\n", p.report.BundleSHA256} {
+	for _, wanted := range []string{"install\n", "--interactive\n", "--start=false\n", p.report.BundleSHA256, "--bootstrap-sequence\n7\n", "--bootstrap-release-sha256\n" + p.report.DescriptorSHA256 + "\n"} {
 		if !strings.Contains(string(args), wanted) {
 			t.Fatal("existing installer handoff lost a bound argument")
 		}
+	}
+}
+
+func TestFirstInstallLeavesProfileDefaultsToWizard(t *testing.T) {
+	for _, explicit := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default dedicated Remote", true: "explicit Local override"}[explicit], func(t *testing.T) {
+			f := newFirstFixture(t)
+			p, err := Prepare(t.Context(), f.options())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			opts := InstallOptions{Start: false}
+			if explicit {
+				opts.Prefix = filepath.Join(f.parent, "chosen-app")
+			}
+			if err = p.Run(t.Context(), opts, strings.NewReader("remote\nssh\n\n"), io.Discard, io.Discard); err != nil {
+				t.Fatal(err)
+			}
+			args, err := os.ReadFile(f.arguments)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(args), "--data-dir\n") || strings.Contains(string(args), "--prefix\n") != explicit {
+				t.Fatal("inferred Local defaults became explicit wizard overrides", string(args))
+			}
+			if explicit && !strings.Contains(string(args), opts.Prefix+"\n") {
+				t.Fatal("explicit Local override lost", string(args))
+			}
+			if !strings.Contains(string(args), "--interactive\n") || !strings.Contains(string(args), p.report.BundleSHA256) {
+				t.Fatal("verified wizard binding lost", string(args))
+			}
+		})
 	}
 }
 
@@ -424,7 +457,7 @@ func TestFirstInstallRefusesSamePublicKeyWithAlternateEncoding(t *testing.T) {
 	}
 }
 
-func TestFirstInstallResolvesDefaultDataBeforeExecution(t *testing.T) {
+func TestFirstInstallDefersDefaultPathsUntilProfileChoice(t *testing.T) {
 	f := newFirstFixture(t)
 	t.Setenv("XDG_CONFIG_HOME", f.parent)
 	o := f.options()
@@ -434,11 +467,15 @@ func TestFirstInstallResolvesDefaultDataBeforeExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	if err = p.Run(t.Context(), InstallOptions{Prefix: filepath.Join(f.parent, "app"), Start: false}, nil, io.Discard, io.Discard); err == nil {
-		t.Fatal("default instance data inside verification output was accepted")
+	if err = p.Run(t.Context(), InstallOptions{Start: false}, strings.NewReader("remote\nssh\n\n"), io.Discard, io.Discard); err != nil {
+		t.Fatal("Local defaults blocked another profile before selection", err)
 	}
-	if _, err = os.Stat(f.marker); !os.IsNotExist(err) {
-		t.Fatal("default data collision executed installer")
+	args, err := os.ReadFile(f.arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(args), "--data-dir\n") || !strings.Contains(string(args), "--verification-output\n"+o.Directory+"\n") {
+		t.Fatal("selected-profile output guard lost", string(args))
 	}
 }
 

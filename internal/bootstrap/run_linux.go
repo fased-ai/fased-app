@@ -11,11 +11,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/fased-ai/fased-app/internal/bundle"
-	"github.com/fased-ai/fased-app/internal/localinstall"
 )
 
 func owned(i os.FileInfo) bool {
@@ -26,6 +26,7 @@ func owned(i os.FileInfo) bool {
 type InstallOptions struct {
 	Prefix, DataDirectory string
 	Start                 bool
+	upgrade               *UpgradeOptions
 }
 
 // Run uses the already-reviewed ordinary installer/wizard. No arbitrary command,
@@ -38,16 +39,6 @@ func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader
 	defer p.mu.Unlock()
 	if p.root == nil || p.closed || p.invoked || !p.report.BundleVerified || os.Geteuid() == 0 {
 		return errors.New("fresh verified first-install bootstrap and explicit owner invocation required")
-	}
-	defaults, err := localinstall.DefaultPaths()
-	if err != nil {
-		return err
-	}
-	if options.Prefix == "" {
-		options.Prefix = defaults.Root
-	}
-	if options.DataDirectory == "" {
-		options.DataDirectory = defaults.Data
 	}
 	if err := p.revalidate(); err != nil {
 		return err
@@ -76,23 +67,34 @@ func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader
 	if err = p.revalidate(); err != nil {
 		return err
 	}
-	args := []string{"install", "--bundle", p.report.BundleDirectory, "--bundle-sha256", p.report.BundleSHA256, "--interactive"}
+	args := []string{"install", "--bundle", p.report.BundleDirectory, "--bundle-sha256", p.report.BundleSHA256, "--interactive", "--verification-output", p.options.Directory, "--bootstrap-sequence", strconv.FormatUint(p.report.Sequence, 10), "--bootstrap-release-sha256", p.report.DescriptorSHA256}
+	if options.upgrade != nil {
+		args, err = p.upgradeArguments(*options.upgrade)
+		if err != nil {
+			return err
+		}
+	}
 	if !options.Start {
 		args = append(args, "--start=false")
 	}
+	// Profile-specific defaults belong to the wizard. Validate only explicit
+	// owner overrides here; the restrictive output guard is handed to the same
+	// verified installer, which checks actual selected Local/Remote paths before
+	// any host preparation. Connect performs no installation/path mutation.
 	for _, v := range []struct{ flag, value string }{{"--prefix", options.Prefix}, {"--data-dir", options.DataDirectory}} {
-		if v.value != "" {
-			if !filepath.IsAbs(v.value) || filepath.Clean(v.value) != v.value {
-				return errors.New("explicit installation paths must be absolute and clean")
-			}
-			for _, pair := range [][2]string{{p.options.Directory, v.value}, {v.value, p.options.Directory}} {
-				rel, err := filepath.Rel(pair[0], pair[1])
-				if err == nil && (rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
-					return errors.New("installation/state must be separate from the verified bootstrap output")
-				}
-			}
-			args = append(args, v.flag, v.value)
+		if v.value == "" {
+			continue
 		}
+		if !filepath.IsAbs(v.value) || filepath.Clean(v.value) != v.value {
+			return errors.New("explicit installation paths must be absolute and clean")
+		}
+		for _, pair := range [][2]string{{p.options.Directory, v.value}, {v.value, p.options.Directory}} {
+			rel, e := filepath.Rel(pair[0], pair[1])
+			if e == nil && (rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+				return errors.New("installation/state must be separate from the verified bootstrap output")
+			}
+		}
+		args = append(args, v.flag, v.value)
 	}
 	if err = ctx.Err(); err != nil {
 		return err

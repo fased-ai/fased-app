@@ -31,23 +31,27 @@ type hostFile struct {
 	Link               string
 }
 type hostOps struct {
-	uid, euid, gid    int
-	read              func(string) (hostFile, error)
-	list              func(string) ([]string, error)
-	run               func(context.Context, []byte, ...string) ([]byte, error)
-	command           func(context.Context, ...string) ([]byte, error)
-	helper            func(context.Context, []string, io.Writer) error
-	readJournal       func(string) ([]byte, error)
-	writeJournal      func(string, any) error
-	lock              func() (io.Closer, error)
-	runtime           func() error
-	executable        func() (string, error)
-	groups            func() ([]int, error)
-	enrollmentJournal func() ([]byte, error) // Fixed owner journal; no runtime override.
-	enrolledTarget    func(string, int) (custodyinstall.Manifest, error)
-	custodyTarget     func(int) (custodyinstall.Manifest, error)
+	uid, euid, gid      int
+	read                func(string) (hostFile, error)
+	rootParents         func(string) error // Optional exact policy-file ancestry; default root:root contract stays unchanged.
+	list                func(string) ([]string, error)
+	run                 func(context.Context, []byte, ...string) ([]byte, error)
+	command             func(context.Context, ...string) ([]byte, error)
+	applicationContract func(context.Context, Manifest) ([]byte, error) // Fixed unprivileged version metadata, never arbitrary argv.
+	helper              func(context.Context, []string, io.Writer) error
+	readJournal         func(string) ([]byte, error)
+	writeJournal        func(string, any) error
+	lock                func() (io.Closer, error)
+	runtime             func() error
+	executable          func() (string, error)
+	groups              func() ([]int, error)
+	enrollmentJournal   func() ([]byte, error) // Fixed owner journal; no runtime override.
+	enrolledTarget      func(string, int) (custodyinstall.Manifest, error)
+	custodyTarget       func(int) (custodyinstall.Manifest, error)
 }
 type intent struct {
+	ApplicationSequence              uint64 `json:"applicationSequence,omitempty"`
+	ApplicationReleaseSHA256         string `json:"applicationReleaseSha256,omitempty"`
 	Version                          int    `json:"version"`
 	ID                               string `json:"id"`
 	OwnerUID, OwnerGID               int
@@ -94,6 +98,22 @@ func ownerJournal() (string, error) {
 }
 func liveOps(s *custodyinstall.System) hostOps {
 	o := hostOps{uid: os.Getuid(), euid: os.Geteuid(), gid: os.Getgid(), read: file, executable: os.Executable, groups: os.Getgroups}
+	o.applicationContract = func(ctx context.Context, m Manifest) ([]byte, error) {
+		if os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
+			return nil, errors.New("ordinary maintenance owner required")
+		}
+		c, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		command := exec.CommandContext(c, m.Core, "version", "--json")
+		command.Dir = "/"
+		command.Env = []string{"PATH=/usr/bin:/bin", "HOME=/nonexistent", "LANG=C"}
+		var output applicationOwnerResponse
+		command.Stdout = &output
+		if e := command.Run(); e != nil {
+			return nil, e
+		}
+		return output.Bytes(), nil
+	}
 	bindEnrollmentOps(&o)
 	o.list = func(p string) ([]string, error) {
 		es, e := os.ReadDir(p)
@@ -105,7 +125,7 @@ func liveOps(s *custodyinstall.System) hostOps {
 	}
 	o.runtime = func() error { return trustedTool(o, "/usr/bin/systemctl") }
 	o.command = func(ctx context.Context, args ...string) ([]byte, error) {
-		if len(args) == 0 || (args[0] != "/usr/bin/getent" && args[0] != "/usr/bin/id" && args[0] != "/usr/bin/systemctl") {
+		if len(args) == 0 || (args[0] != "/usr/bin/getent" && args[0] != "/usr/bin/id" && args[0] != "/usr/bin/systemctl" && !(args[0] == "/usr/bin/sudo" && len(args) == 2 && args[1] == "--version")) {
 			return nil, errors.New("unknown Remote read-only OS tool")
 		}
 		if e := trustedTool(o, args[0]); e != nil {
@@ -220,7 +240,13 @@ func trustedTool(o hostOps, p string) error {
 	return nil
 }
 func rootFile(o hostOps, p string) (hostFile, error) {
-	if e := parents(o, filepath.Dir(p)); e != nil {
+	var e error
+	if o.rootParents != nil {
+		e = o.rootParents(p)
+	} else {
+		e = parents(o, filepath.Dir(p))
+	}
+	if e != nil {
 		return hostFile{}, e
 	}
 	f, e := o.read(p)
@@ -405,7 +431,7 @@ func account(ctx context.Context, o hostOps, j intent, create bool) (int, int, e
 	return uid, gid, nil
 }
 func intentFor(m Manifest) intent {
-	return intent{Version: 1, ID: m.ID, OwnerUID: m.OwnerUID, OwnerGID: m.OwnerGID, CoreSHA256: m.CoreSHA256, Listen: m.Listen, PublicOrigin: m.PublicOrigin}
+	return intent{ApplicationSequence: m.ApplicationSequence, ApplicationReleaseSHA256: m.ApplicationReleaseSHA256, Version: 1, ID: m.ID, OwnerUID: m.OwnerUID, OwnerGID: m.OwnerGID, CoreSHA256: m.CoreSHA256, Listen: m.Listen, PublicOrigin: m.PublicOrigin}
 }
 func verifyFiles(o hostOps, m Manifest) error {
 	if e := verifyImmutableFiles(o, m); e != nil {
@@ -551,6 +577,9 @@ func Install(ctx context.Context, options Options, s *custodyinstall.System) (Ma
 }
 func install(ctx context.Context, opt Options, o hostOps) (Manifest, error) {
 	var m Manifest
+	if (opt.ApplicationSequence == 0) != (opt.ApplicationReleaseSHA256 == "") || opt.ApplicationReleaseSHA256 != "" && !canonicalHex(opt.ApplicationReleaseSHA256, 32) {
+		return m, errors.New("paired authenticated initial Remote release identity required")
+	}
 	if !opt.PrepareHost {
 		return m, errors.New("explicit Remote host preparation consent is required")
 	}
@@ -586,17 +615,21 @@ func install(ctx context.Context, opt Options, o hostOps) (Manifest, error) {
 		return m, e
 	}
 	defer lock.Close()
-	j := intent{Version: 1, OwnerUID: o.uid, OwnerGID: o.gid, CoreSHA256: opt.CoreSHA256, Listen: opt.Listen, PublicOrigin: opt.PublicOrigin}
+	j := intent{ApplicationSequence: opt.ApplicationSequence, ApplicationReleaseSHA256: opt.ApplicationReleaseSHA256, Version: 1, OwnerUID: o.uid, OwnerGID: o.gid, CoreSHA256: opt.CoreSHA256, Listen: opt.Listen, PublicOrigin: opt.PublicOrigin}
 	existing, le := manifestAt(o, o.uid)
 	if le != nil && !errors.Is(le, os.ErrNotExist) {
 		return m, le
 	}
 	if b, e := o.readJournal("intent.json"); e == nil {
 		var prior intent
-		if strict(b, &prior) != nil || !canonicalHex(prior.ID, 16) {
+		if strict(b, &prior) != nil || !canonicalHex(prior.ID, 16) || (prior.ApplicationSequence == 0) != (prior.ApplicationReleaseSHA256 == "") || prior.ApplicationReleaseSHA256 != "" && !canonicalHex(prior.ApplicationReleaseSHA256, 32) {
 			return m, errors.New("invalid Remote installer intent")
 		}
 		j.ID = prior.ID
+		if opt.ApplicationSequence == 0 {
+			j.ApplicationSequence = prior.ApplicationSequence
+			j.ApplicationReleaseSHA256 = prior.ApplicationReleaseSHA256
+		}
 		if prior != j {
 			return m, errors.New("Remote installer intent differs; preserving prior work")
 		}
@@ -604,6 +637,10 @@ func install(ctx context.Context, opt Options, o hostOps) (Manifest, error) {
 		return m, e
 	}
 	if le == nil {
+		if opt.ApplicationSequence == 0 {
+			j.ApplicationSequence = existing.ApplicationSequence
+			j.ApplicationReleaseSHA256 = existing.ApplicationReleaseSHA256
+		}
 		j.ID = existing.ID
 		if intentFor(existing) != j {
 			return m, errors.New("existing Remote inputs differ; in-place replacement is unavailable")
@@ -665,7 +702,7 @@ func install(ctx context.Context, opt Options, o hostOps) (Manifest, error) {
 		if e != nil {
 			return m, e
 		}
-		m = Manifest{Version: 1, ID: j.ID, Phase: "installed", OwnerUID: o.uid, OwnerGID: o.gid, AppUID: appUID, AppGID: appGID, AppUser: accountName(o.uid), Root: root, Data: root + "/app-state", Core: root + "/fased-app", Config: ConfigPath(o.uid), Unit: unitName(o.uid), UnitPath: "/etc/systemd/system/" + unitName(o.uid), Listen: opt.Listen, PublicOrigin: opt.PublicOrigin, CoreSHA256: opt.CoreSHA256}
+		m = Manifest{ApplicationSequence: j.ApplicationSequence, ApplicationReleaseSHA256: j.ApplicationReleaseSHA256, Version: 1, ID: j.ID, Phase: "installed", OwnerUID: o.uid, OwnerGID: o.gid, AppUID: appUID, AppGID: appGID, AppUser: accountName(o.uid), Root: root, Data: root + "/app-state", Core: root + "/fased-app", Config: ConfigPath(o.uid), Unit: unitName(o.uid), UnitPath: "/etc/systemd/system/" + unitName(o.uid), Listen: opt.Listen, PublicOrigin: opt.PublicOrigin, CoreSHA256: opt.CoreSHA256}
 		if e = m.validate(); e != nil {
 			return m, e
 		}
@@ -804,6 +841,9 @@ func remove(ctx context.Context, o hostOps, m Manifest) error {
 	if e := enableLink(o, m); e != nil {
 		return e
 	}
+	if e := removeApplicationMaintenance(ctx, o, m); e != nil {
+		return e
+	}
 	_, e := rootFile(o, m.UnitPath)
 	present := e == nil
 	if e != nil && !errors.Is(e, os.ErrNotExist) {
@@ -909,7 +949,7 @@ func status(ctx context.Context, o hostOps, m Manifest) (ServiceStatus, error) {
 	if !bytes.Contains(proc.Data, []byte(want)) || !bytes.Contains(proc.Data, []byte("NoNewPrivs:\t1\n")) {
 		return r, errors.New("Remote runtime UID or NoNewPrivileges not enforced")
 	}
-	b, e := o.run(ctx, nil, helperArgs(m, "status")...)
+	b, e := o.run(ctx, nil, applicationReaderSourceArgs(m, "status", "")...)
 	var h core.Health
 	if e != nil {
 		return r, e

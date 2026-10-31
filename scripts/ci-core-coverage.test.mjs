@@ -3,6 +3,27 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { classify, verifyGate } from "./ci-routing.mjs";
 
+test("Ubuntu acceptance executes Remote maintenance and the actual older reader", async () => {
+  const workflow = await readFile(
+    new URL("../.github/workflows/inspection-acceptance.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    workflow,
+    /python3 scripts\/check-inspection-vm\.py --maintenance-only/,
+  );
+  assert.match(
+    workflow,
+    /node scripts\/build-inspection-predecessor\.mjs --application-reader/,
+  );
+  assert.match(
+    workflow,
+    /FASED_READER_PREDECESSOR:.*reader-predecessor-schema33/,
+  );
+  assert.match(workflow, /TestApplicationReaderCompiledPredecessorIPC/);
+  assert.match(workflow, /\.evidence\/b01-connected-install\/vm\/\*\.json/);
+});
+
 test("full race groups retain every package and require delegated update coverage", async () => {
   const workflow = await readFile(
     new URL("../.github/workflows/checks.yml", import.meta.url),

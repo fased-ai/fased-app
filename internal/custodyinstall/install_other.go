@@ -10,8 +10,9 @@ import (
 )
 
 type System struct {
-	In  io.Reader
-	Out io.Writer
+	In             io.Reader
+	Out            io.Writer
+	NonInteractive bool
 }
 
 var unsupported = errors.New("installer-managed custody identities are supported only by the Ubuntu fixture; wallets remain disabled")

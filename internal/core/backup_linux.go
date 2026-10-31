@@ -88,25 +88,9 @@ func (s *Store) BackupMetadata(ctx context.Context, p update.Preflight) (update.
 	// foreign, conflicting or changed prefix is truncated or replaced.
 	var image []byte
 	serialize := func() error {
-		var pages, size int64
-		if err := c.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pages); err != nil {
-			return err
-		}
-		if err := c.QueryRowContext(ctx, "PRAGMA page_size").Scan(&size); err != nil {
-			return err
-		}
-		if pages <= 0 || size <= 0 || pages > update.MaxMetadataBackup/size {
-			return errors.New("metadata snapshot exceeds bounded backup size")
-		}
-		return c.Raw(func(raw any) error {
-			v, ok := raw.(interface{ Serialize() ([]byte, error) })
-			if !ok {
-				return errors.New("SQLite snapshot support unavailable")
-			}
-			var err error
-			image, err = v.Serialize()
-			return err
-		})
+		var err error
+		image, err = serializeMetadataConnection(ctx, c)
+		return err
 	}
 	index := update.RecoveryIndex{Version: 1, Phase: "metadata-backed-up", Binding: binding, BindingSHA256: update.RecoveryDigest(binding)}
 	if raw, err := recoveryRead(d, "request.json", 16384); err == nil {
@@ -378,4 +362,29 @@ func (s *Store) verifyMetadata(ctx context.Context, d int, snap update.MetadataS
 		return errors.New("snapshot metadata/pause mismatch")
 	}
 	return nil
+}
+
+// Shared bounded WAL-consistent serializer for custody and app-only metadata.
+func serializeMetadataConnection(ctx context.Context, c *sql.Conn) ([]byte, error) {
+	var pages, size int64
+	if e := c.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pages); e != nil {
+		return nil, e
+	}
+	if e := c.QueryRowContext(ctx, "PRAGMA page_size").Scan(&size); e != nil {
+		return nil, e
+	}
+	if pages <= 0 || size <= 0 || pages > update.MaxMetadataBackup/size {
+		return nil, errors.New("metadata snapshot exceeds bounded backup size")
+	}
+	var image []byte
+	e := c.Raw(func(raw any) error {
+		v, ok := raw.(interface{ Serialize() ([]byte, error) })
+		if !ok {
+			return errors.New("SQLite snapshot support unavailable")
+		}
+		var err error
+		image, err = v.Serialize()
+		return err
+	})
+	return image, e
 }

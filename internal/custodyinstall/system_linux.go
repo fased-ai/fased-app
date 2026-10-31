@@ -24,8 +24,11 @@ type System struct {
 	In            io.Reader
 	Out           io.Writer
 	Authorization string // Optional fixed caller-owned ceremony; empty retains custody wording.
-	authorized    bool
-	installFault  func(string) error // Tests only; never configuration/IPC.
+	// Trusted owner-maintenance composition only. This never creates an OS grant:
+	// sudo -n must independently admit the exact command under installed policy.
+	NonInteractive bool
+	authorized     bool
+	installFault   func(string) error // Tests only; never configuration/IPC.
 }
 type hostFile struct {
 	Data    []byte
@@ -89,12 +92,17 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 	switch args[0] {
 	case "/usr/bin/install", "/usr/bin/mkdir", "/usr/bin/ln", "/usr/bin/mv", "/usr/bin/sync", "/usr/bin/rm", "/usr/bin/cat", "/usr/bin/systemctl", "/usr/bin/setpriv", "/usr/sbin/useradd":
 	case "/usr/bin/find":
-		if len(args) != 9 || args[1] != Root(os.Getuid())+"/signer-state" || strings.Join(args[2:], " ") != "-mindepth 1 -maxdepth 1 -printf x -quit" {
+		maintenance := len(args) == 8 && args[2] == "-maxdepth" && args[3] == "1" && args[4] == "-name" && args[6] == "-printf" && args[7] == "%U:%G:%m:%y" && maintenancePolicyInput(args[1]+"/"+args[5])
+		if !maintenance && (len(args) != 9 || args[1] != Root(os.Getuid())+"/signer-state" || strings.Join(args[2:], " ") != "-mindepth 1 -maxdepth 1 -printf x -quit") {
 			return nil, errors.New("only the empty target signer-state enrollment probe is allowed")
 		}
 	case "/usr/bin/stat":
 		if len(args) != 5 || args[1] != "--printf" || args[2] != "%d %i %u %g %f" || args[3] != "--" || filepath.Clean(args[4]) != args[4] || !regexp.MustCompile(`^/proc/[1-9][0-9]*/fd/[0-9]+/[^/]+/\.original/data$`).MatchString(args[4]) {
 			return nil, errors.New("only pinned enrollment archive identity inspection is allowed")
+		}
+	case "/usr/bin/apt-get":
+		if strings.Join(args[1:], " ") != "install --yes --no-install-recommends polkitd" {
+			return nil, errors.New("only the declared maintenance OS prerequisite may be installed")
 		}
 	case "/usr/sbin/nft":
 		allowed := len(args) == 2 && args[1] == "--version" || len(args) == 3 && args[1] == "list" && args[2] == "tables" || len(args) == 6 && (args[1] == "--stateless" || args[1] == "--json") && args[2] == "list" && args[3] == "table" && args[4] == "inet" && networkNftTable.MatchString(args[5]) || len(args) == 3 && args[1] == "--file" && networkNftInput.MatchString(args[2]) || len(args) == 4 && args[1] == "--check" && args[2] == "--file" && networkNftInput.MatchString(args[3])
@@ -137,7 +145,7 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 			return nil, errors.New("OS utilities must be root-owned and immutable")
 		}
 	}
-	if !s.authorized {
+	if !s.authorized && !s.NonInteractive {
 		prompt := s.Authorization
 		if prompt == "" {
 			prompt = "Authorize disposable custody installation: dedicated locked OS accounts, root-owned files and system services. Fased itself remains unprivileged. No real wallets are enabled."
@@ -160,6 +168,11 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 
 // AppHelper elevates the OS credential switcher, which drops UID, groups and
 // capabilities before any Fased code reads interactive owner input.
+func maintenancePolicyInput(path string) bool {
+	uid := strconv.Itoa(os.Getuid())
+	return regexp.MustCompile(`^/etc/(sudoers\.d/(\.)?fased-vps-` + uid + `-updates|polkit-1/rules\.d/(\.)?60-fased-vps-` + uid + `-updates\.rules)(-[a-f0-9]{32}\.pending)?$`).MatchString(path)
+}
+
 func (s *System) AppHelper(ctx context.Context, m Manifest, recoverPassword, passwordStdin bool, out io.Writer) error {
 	if recoverPassword && passwordStdin {
 		return errors.New("app recovery requires an owner terminal")

@@ -84,7 +84,11 @@ func main() {
 			if e == nil {
 				terminal, e = prepareDesktopHost(ctx, firstPackage, paths)
 				if e == nil && !terminal {
-					_, e = localinstall.Install(ctx, paths, localinstall.Options{Engine: filepath.Join(firstPackage, localinstall.EngineName()), Desktop: filepath.Join(firstPackage, localinstall.DesktopName()), Listen: "127.0.0.1:7331", Start: true, Location: "local"})
+					var installed localinstall.Manifest
+					installed, e = localinstall.Install(ctx, paths, localinstall.Options{Engine: filepath.Join(firstPackage, localinstall.EngineName()), Desktop: filepath.Join(firstPackage, localinstall.DesktopName()), Listen: "127.0.0.1:7331", Start: true, Location: "local"})
+					if e == nil {
+						localinstall.PrepareInstallationMaintenance(ctx, installed, true, os.Stderr)
+					}
 				}
 			}
 			if e != nil {

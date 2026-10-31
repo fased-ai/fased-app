@@ -11,6 +11,84 @@ assert.ok(
     process.env.FASED_DISPOSABLE_VM_BUILD === "1",
 );
 assert.ok(process.getuid() > 0);
+const args = process.argv.slice(2);
+assert.ok(
+  args.length === 0 ||
+    (args.length === 1 && args[0] === "--application-reader"),
+  "Unknown predecessor fixture mode",
+);
+if (args[0] === "--application-reader") {
+  // Untouched schema33 core sources plus a minimal, inert fixture entrypoint.
+  // Keep this distinct from the current-storage composed reader below.
+  const source = "ecc832e55afa0d62f42cacfdefa5c9cd5d73c8fb";
+  const output = path.resolve(
+    process.env.FASED_PREDECESSOR_OUTPUT ?? ".evidence/b01-connected-install",
+  );
+  const scratch = path.join(output, "reader-predecessor-source");
+  await mkdir(output, { recursive: true, mode: 0o700 });
+  await mkdir(scratch, { mode: 0o700 });
+  try {
+    try {
+      execFileSync("git", ["cat-file", "-e", source + "^{commit}"]);
+    } catch {
+      execFileSync("git", ["fetch", "--depth=1", "origin", source], {
+        stdio: "inherit",
+      });
+    }
+    const archive = execFileSync("git", ["archive", "--format=tar", source], {
+      maxBuffer: 32 << 20,
+    });
+    execFileSync("tar", ["-xf", "-", "-C", scratch], { input: archive });
+    assert.match(
+      await readFile(path.join(scratch, "internal/core/update.go"), "utf8"),
+      /const StateSchema = 33\b/,
+    );
+    const entry = await readFile(
+      new URL(
+        "./fixtures/application-reader-predecessor.go.txt",
+        import.meta.url,
+      ),
+    );
+    const entryPath = path.join(scratch, "cmd/fased-reader-fixture");
+    await mkdir(entryPath);
+    await writeFile(path.join(entryPath, "main.go"), entry);
+    const binary = path.join(output, "reader-predecessor-schema33");
+    execFileSync(
+      "go",
+      [
+        "build",
+        "-buildvcs=false",
+        "-trimpath",
+        "-o",
+        binary,
+        "./cmd/fased-reader-fixture",
+      ],
+      { cwd: scratch, stdio: "inherit" },
+    );
+    await writeFile(
+      path.join(output, "reader-predecessor-build.json"),
+      JSON.stringify(
+        {
+          result: "PASS",
+          sourceCommit: source,
+          sourceSchema: 33,
+          fixtureOnly: true,
+          exactHistoricalBinary: false,
+          classification:
+            "Actual archived schema33 core; minimal standalone fixture entry; no installed-service or release acceptance",
+          archiveSha256: sha(archive),
+          entrySha256: sha(entry),
+          binarySha256: sha(await readFile(binary)),
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+  process.exit(0);
+}
 const ref = "6c53e34eca22486dcef856cb701f3cd72e30eaa4",
   root = path.resolve(
     process.env.FASED_PREDECESSOR_OUTPUT ?? ".evidence/p4-installed-inspection",

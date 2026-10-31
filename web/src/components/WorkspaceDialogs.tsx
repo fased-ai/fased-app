@@ -1,3 +1,4 @@
+import { ApplicationUpdateNotice } from "./ApplicationUpdateNotice";
 import { NoticeResult } from "./NoticeResult";
 import { AIModelPicker, useAIConnection } from "../pages/AIConnection";
 import { useEffect, useRef, useState } from "react";
@@ -25,6 +26,7 @@ import {
 import { Badge, Dialog } from "../components/shared";
 import { useWorkspace } from "../workspace";
 export function WorkspaceDialogs() {
+  const [updateReadEpoch, setUpdateReadEpoch] = useState(0);
   const { t: uiText } = useUI();
   const {
     state,
@@ -475,13 +477,17 @@ export function WorkspaceDialogs() {
             )}
             <button
               className="text-button"
-              onClick={() => dispatch({ type: "read-notices" })}
+              onClick={() => {
+                dispatch({ type: "read-notices" });
+                setUpdateReadEpoch((n) => n + 1);
+              }}
             >
               {uiText("Mark all read ")}
               <CheckCheck size={14} />
             </button>
           </div>
           <div className="notice-list">
+            <ApplicationUpdateNotice readEpoch={updateReadEpoch} />
             {state.notices.map((n) => (
               <article key={n.id} className={n.read ? "read" : ""}>
                 <span className="dot" />

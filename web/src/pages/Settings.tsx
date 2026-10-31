@@ -5,7 +5,7 @@ import {
 import { AppearanceSettings, useUI } from "../ui-preferences";
 import { ArrowRight } from "../icons";
 import { UpdateStatusPanel } from "../components/UpdateStatusPanel";
-import { UpdatePreferencesPanel } from "../components/UpdatePreferencesPanel";
+import { ApplicationUpdatesPanel } from "../components/ApplicationUpdatesPanel";
 import { Badge, SectionHead } from "../components/shared";
 import { useWorkspace } from "../workspace";
 export function Settings() {
@@ -88,10 +88,10 @@ export function Settings() {
             </section>
           )}
         </div>
+        <ApplicationUpdatesPanel />
         <details className="panel settings-advanced update-settings">
-          <summary>{uiText("Updates and recovery")}</summary>
+          <summary>{uiText("Diagnostics")}</summary>
           <UpdateStatusPanel />
-          <UpdatePreferencesPanel />
         </details>
       </div>
     </>

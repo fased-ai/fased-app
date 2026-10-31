@@ -316,3 +316,93 @@ func TestInstallationPrivateAccessRejectsInvalidListenerBeforePrompt(t *testing.
 		})
 	}
 }
+
+func TestInstallationPrivateAccessGuidesPreparationOnlyForChosenActivity(t *testing.T) {
+	for _, mode := range []string{"local", "ssh", "tailscale"} {
+		t.Run(mode, func(t *testing.T) {
+			prepared := 0
+			planned := 0
+			prepare := func(context.Context, *bufio.Reader, io.Writer) error { prepared++; return nil }
+			plan := func(ctx context.Context, got, listen string) (privateaccess.Plan, error) {
+				planned++
+				return (privateaccess.Manager{}).Plan(ctx, got, listen)
+			}
+			// Tailscale planner is injected: no real CLI/account/network operation.
+			if mode == "tailscale" {
+				plan = func(context.Context, string, string) (privateaccess.Plan, error) {
+					planned++
+					return privateaccess.Plan{Mode: "tailscale"}, nil
+				}
+			}
+			got, e := installationPrivateAccess(t.Context(), bufio.NewReader(strings.NewReader("")), io.Discard, mode, "127.0.0.1:7331", plan, prepare)
+			want := 0
+			if mode == "tailscale" {
+				want = 1
+			}
+			if e != nil || got.Mode != mode || prepared != want || planned != 1 {
+				t.Fatal(got, e, prepared, planned)
+			}
+		})
+	}
+}
+func TestInstallationDeclinedTailscaleSetupRequiresExplicitSSH(t *testing.T) {
+	prepared := 0
+	planned := 0
+	prepare := func(context.Context, *bufio.Reader, io.Writer) error {
+		prepared++
+		return errors.New("owner declined setup")
+	}
+	plan := func(ctx context.Context, mode, listen string) (privateaccess.Plan, error) {
+		planned++
+		if mode != "ssh" {
+			t.Fatal("declined setup reached planner", mode)
+		}
+		return (privateaccess.Manager{}).Plan(ctx, mode, listen)
+	}
+	got, e := installationPrivateAccess(t.Context(), bufio.NewReader(strings.NewReader("ssh\n")), io.Discard, "tailscale", "127.0.0.1:7331", plan, prepare)
+	if e != nil || got.Mode != "ssh" || prepared != 1 || planned != 1 {
+		t.Fatal(got, e, prepared, planned)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, e = installationPrivateAccess(ctx, bufio.NewReader(strings.NewReader("")), io.Discard, "tailscale", "127.0.0.1:7331", plan, prepare); !errors.Is(e, context.Canceled) || prepared != 1 {
+		t.Fatal("cancelled setup elevated", e, prepared)
+	}
+}
+
+func TestInstallationOutputGuardUsesActualSelectedProfile(t *testing.T) {
+	output := "/home/owner/.config/fased-app"
+	// A default Local collision must be refused, but it cannot reject dedicated
+	// Remote before that profile selects its own immutable paths.
+	local := localinstall.Paths{Root: "/home/owner/.local/share/fased-app", Data: output}
+	if e := installationOutputSeparation(output, local); e == nil {
+		t.Fatal("default Local state overlapped verified output")
+	}
+	remote := localinstall.Paths{Root: "/var/lib/fased-app-vps-1000", Data: "/var/lib/fased-app-vps-1000/app-state"}
+	if e := installationOutputSeparation(output, remote); e != nil {
+		t.Fatal("unrelated Local default rejected Remote", e)
+	}
+	for _, p := range []localinstall.Paths{{Root: output + "/app", Data: "/elsewhere"}, {Root: "/elsewhere", Data: "/home/owner/.config"}} {
+		if e := installationOutputSeparation(output, p); e == nil {
+			t.Fatal("output ancestor/descendant collision accepted", p)
+		}
+	}
+	if e := installationOutputSeparation("relative", remote); e == nil {
+		t.Fatal("relative guard accepted")
+	}
+}
+
+func TestInstallationReleaseAdmissionRequiresPinnedBundlePair(t *testing.T) {
+	sha := strings.Repeat("a", 64)
+	if seq, release, e := installationReleaseAdmission("7", sha, "/private/acquisition", sha); e != nil || seq != 7 || release != sha {
+		t.Fatal(seq, release, e)
+	}
+	if seq, release, e := installationReleaseAdmission("", "", "", ""); e != nil || seq != 0 || release != "" {
+		t.Fatal("unsigned engineering became admitted", e)
+	}
+	for _, v := range [][4]string{{"7", "", "/private", sha}, {"0", sha, "/private", sha}, {"07", sha, "/private", sha}, {"7", strings.ToUpper(sha), "/private", sha}, {"7", sha, "", sha}, {"7", sha, "/private", ""}} {
+		if _, _, e := installationReleaseAdmission(v[0], v[1], v[2], v[3]); e == nil {
+			t.Fatal("unbound release metadata accepted", v)
+		}
+	}
+}

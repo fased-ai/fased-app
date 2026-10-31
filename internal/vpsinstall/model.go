@@ -14,30 +14,35 @@ import (
 )
 
 type Options struct {
+	ApplicationSequence                    uint64
+	ApplicationReleaseSHA256               string
 	Core, CoreSHA256, Listen, PublicOrigin string
 	PrepareHost, Start                     bool
 }
 
-// Manifest is published once as root-owned configuration. Lifecycle progress
-// belongs to a separate owner-private journal; application state never owns it.
+// Manifest is root-owned configuration. Only the authenticated app-only
+// replacement transaction may change its binary/release identity. Lifecycle
+// progress belongs to a separate owner-private journal, never application state.
 type Manifest struct {
-	Version      int    `json:"version"`
-	ID           string `json:"id"`
-	Phase        string `json:"phase"`
-	OwnerUID     int    `json:"ownerUid"`
-	OwnerGID     int    `json:"ownerGid"`
-	AppUID       int    `json:"appUid"`
-	AppGID       int    `json:"appGid"`
-	AppUser      string `json:"appUser"`
-	Root         string `json:"root"`
-	Data         string `json:"data"`
-	Core         string `json:"core"`
-	Config       string `json:"config"`
-	Unit         string `json:"unit"`
-	UnitPath     string `json:"unitPath"`
-	Listen       string `json:"listen"`
-	PublicOrigin string `json:"publicOrigin"`
-	CoreSHA256   string `json:"coreSha256"`
+	ApplicationSequence      uint64 `json:"applicationSequence,omitempty"`
+	ApplicationReleaseSHA256 string `json:"applicationReleaseSha256,omitempty"`
+	Version                  int    `json:"version"`
+	ID                       string `json:"id"`
+	Phase                    string `json:"phase"`
+	OwnerUID                 int    `json:"ownerUid"`
+	OwnerGID                 int    `json:"ownerGid"`
+	AppUID                   int    `json:"appUid"`
+	AppGID                   int    `json:"appGid"`
+	AppUser                  string `json:"appUser"`
+	Root                     string `json:"root"`
+	Data                     string `json:"data"`
+	Core                     string `json:"core"`
+	Config                   string `json:"config"`
+	Unit                     string `json:"unit"`
+	UnitPath                 string `json:"unitPath"`
+	Listen                   string `json:"listen"`
+	PublicOrigin             string `json:"publicOrigin"`
+	CoreSHA256               string `json:"coreSha256"`
 }
 
 type ServiceStatus struct {
@@ -74,6 +79,9 @@ func validateEndpoint(listen, origin string) error {
 	return nil
 }
 func (m Manifest) validate() error {
+	if (m.ApplicationSequence == 0) != (m.ApplicationReleaseSHA256 == "") || m.ApplicationReleaseSHA256 != "" && !canonicalHex(m.ApplicationReleaseSHA256, 32) {
+		return errors.New("invalid Remote application release identity")
+	}
 	if m.Version != 1 || m.Phase != "installed" || !canonicalHex(m.ID, 16) || !canonicalHex(m.CoreSHA256, 32) || m.OwnerUID <= 0 || m.OwnerGID <= 0 || m.AppUID <= 0 || m.AppGID <= 0 || m.AppUID == m.OwnerUID || m.AppGID == m.OwnerGID || m.AppUser != accountName(m.OwnerUID) || m.Root != Root(m.OwnerUID) || m.Data != m.Root+"/app-state" || m.Core != m.Root+"/fased-app" || m.Config != ConfigPath(m.OwnerUID) || m.Unit != unitName(m.OwnerUID) || m.UnitPath != "/etc/systemd/system/"+m.Unit {
 		return errors.New("invalid independent Remote installation identity")
 	}
