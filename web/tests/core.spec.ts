@@ -15024,6 +15024,21 @@ test("normal Tasks joins optional News analysis and granted analysis-only result
   await editor
     .getByLabel("Reminder text", { exact: true })
     .fill("Preserve this unfinished reminder");
+  // Leaving Tasks must preserve input without retaining a reviewed action.
+  await page.evaluate(() => {
+    window.location.hash = "agents/chat";
+  });
+  await expect(editor).toHaveCount(0);
+  await page.evaluate(() => {
+    window.location.hash = "agents/tasks";
+  });
+  await expect(editor).toBeVisible();
+  await expect(editor.getByLabel("Task name", { exact: true })).toHaveValue(
+    "Keep reminder draft",
+  );
+  await expect(editor.getByLabel("Reminder text", { exact: true })).toHaveValue(
+    "Preserve this unfinished reminder",
+  );
   await editor.getByLabel("Type", { exact: true }).selectOption("analysis");
   await editor
     .getByLabel("Task name", { exact: true })
@@ -15031,6 +15046,36 @@ test("normal Tasks joins optional News analysis and granted analysis-only result
   await editor
     .getByLabel("Prompt", { exact: true })
     .fill("Summarize synthetic evidence");
+  const agentPicker = page.getByLabel("Agent", { exact: true });
+  await agentPicker.selectOption("news-researcher");
+  await expect(editor).toHaveCount(0);
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  await editor
+    .getByLabel("Task name", { exact: true })
+    .fill("Other agent draft");
+  await editor
+    .getByLabel("Reminder text", { exact: true })
+    .fill("Separate profile input");
+  await agentPicker.selectOption(profileId);
+  await expect(editor.getByLabel("Task name", { exact: true })).toHaveValue(
+    "Keep analysis draft",
+  );
+  await expect(editor.getByLabel("Prompt", { exact: true })).toHaveValue(
+    "Summarize synthetic evidence",
+  );
+  await agentPicker.selectOption("news-researcher");
+  await expect(editor.getByLabel("Task name", { exact: true })).toHaveValue(
+    "Other agent draft",
+  );
+  await editor
+    .getByRole("button", { name: "Cancel task", exact: true })
+    .click();
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  await expect(editor.getByLabel("Task name", { exact: true })).toHaveValue("");
+  await editor
+    .getByRole("button", { name: "Cancel task", exact: true })
+    .click();
+  await agentPicker.selectOption(profileId);
   await editor.getByLabel("Type", { exact: true }).selectOption("reminder");
   await expect(editor.getByLabel("Task name", { exact: true })).toHaveValue(
     "Keep reminder draft",
@@ -15065,6 +15110,47 @@ test("normal Tasks joins optional News analysis and granted analysis-only result
   let v = await read();
   expect(v.tasks).toEqual(before.tasks);
   expect(v.sessions).toEqual(before.sessions);
+  // Completed reviews cannot survive a page or agent round trip.
+  await page.evaluate(() => {
+    window.location.hash = "providers";
+  });
+  await expect(
+    page.getByRole("region", { name: "Providers", exact: true }),
+  ).toBeVisible();
+  await page.evaluate(() => {
+    window.location.hash = "agents/tasks";
+  });
+  await expect(editor).toBeVisible();
+  await expect(editor.getByLabel("Task name", { exact: true })).toHaveValue(
+    "Optional paper analysis",
+  );
+  await expect(editor.getByLabel("Contains", { exact: true })).toHaveValue(
+    "paper",
+  );
+  await expect(review).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Create task", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    editor.getByRole("checkbox", { name: "Analyze", exact: true }),
+  ).toBeChecked();
+  expect((await read()).tasks).toEqual(before.tasks);
+  expect((await read()).aiRequests).toHaveLength(0);
+  await editor
+    .getByRole("button", { name: "Review task", exact: true })
+    .click();
+  await expect(review).toBeVisible();
+  await agentPicker.selectOption("news-researcher");
+  await expect(review).toHaveCount(0);
+  await agentPicker.selectOption(profileId);
+  await expect(editor.getByLabel("Task name", { exact: true })).toHaveValue(
+    "Optional paper analysis",
+  );
+  await expect(review).toHaveCount(0);
+  await editor
+    .getByRole("button", { name: "Review task", exact: true })
+    .click();
+  await expect(review).toBeVisible();
   await review
     .getByRole("button", { name: "Create task", exact: true })
     .click();
@@ -15118,6 +15204,7 @@ test("normal Tasks joins optional News analysis and granted analysis-only result
     name: "Create a task",
     exact: true,
   });
+  await expect(editor.getByLabel("Task name", { exact: true })).toHaveValue("");
   await editor.getByLabel("Type", { exact: true }).selectOption("analysis");
   await editor
     .getByLabel("Task name", { exact: true })

@@ -24,6 +24,42 @@ export type AgentSettingsDraft = {
   revision: number;
   baseline: string;
 };
+export type TaskInputDraft = {
+  name: string;
+  text: string;
+  prompt: string;
+  bot: string;
+  news: string;
+  age: number;
+  contains: string;
+  seconds: number;
+  unit: number;
+  runs: number;
+  calendarMode: boolean;
+  cronMode: boolean;
+  zone: string;
+  cron: import("./pages/TaskCronFields").CronSettings;
+  at: string;
+  analyze: boolean;
+  failure: "required" | "optional";
+  overridden: boolean;
+  connectionRef: string;
+  model: string;
+  session: string;
+  input: number;
+  output: number;
+  deadline?: number;
+  perCall?: number;
+  budget?: number;
+  minutes: number;
+};
+export type TaskComposerDraft = {
+  open: boolean;
+  watchMode: boolean;
+  seedId?: string;
+  kind?: "reminder" | "analysis";
+  inputs?: Record<"reminder" | "analysis" | "watch", TaskInputDraft>;
+};
 function loadInitialState() {
   try {
     return restoreState(localStorage.getItem(STORAGE_KEY));
@@ -130,6 +166,9 @@ function useWorkspaceState() {
   const [chatDrafts, setChatDrafts] = useState(new Map<string, string>());
   const [agentSettingsDrafts, setAgentSettingsDrafts] = useState(
     new Map<string, AgentSettingsDraft>(),
+  );
+  const [taskComposerDrafts, setTaskComposerDrafts] = useState(
+    new Map<string, TaskComposerDraft>(),
   );
   const [setupOpen, setSetupOpen] = useState(false);
   const providersOpen = route === "providers";
@@ -248,6 +287,8 @@ function useWorkspaceState() {
     setChatDrafts,
     agentSettingsDrafts,
     setAgentSettingsDrafts,
+    taskComposerDrafts,
+    setTaskComposerDrafts,
     state,
     dispatch,
     route,
