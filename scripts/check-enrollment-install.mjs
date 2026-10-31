@@ -24,6 +24,10 @@ import {
   readEnrollmentObservation,
   removeEnrollmentUnitLink,
 } from "./fixture-enrollment-observer.mjs";
+import {
+  walletReadJourney,
+  refusedWalletRead,
+} from "./fixture-wallet-read-journey.mjs";
 
 assert.equal(
   process.env.FASED_ENROLLMENT_ACCEPTANCE,
@@ -282,6 +286,37 @@ async function ordinaryWalletJourney(mode, target, url, session) {
   const ownerArgs = ["--disposable-fixture", "--password-stdin"];
   const walletKey = `${key}-${mode}`;
   secrets.add(walletKey);
+  const walletPassword = `Disposable signer owner ${token} ${mode}`;
+  secrets.add(walletPassword);
+  const readCLI = (input) =>
+    JSON.parse(
+      cli(
+        [
+          "custody",
+          "accounts",
+          "--disposable-fixture",
+          "--prepare-host",
+          "--read-stdin",
+        ],
+        JSON.stringify(input),
+      ),
+    );
+  const readAPI = (path, method = "GET", body) =>
+    api(url, session, path, method, body);
+  const read = (view, id, label) =>
+    walletReadJourney({
+      view,
+      accountId: id,
+      password: vaultPassword,
+      ownerPassword: password,
+      url,
+      api: readAPI,
+      cliRead: readCLI,
+      browser,
+      evidence,
+      label,
+      check,
+    });
   const ownerStatus = () =>
     JSON.parse(
       execute(`${target.root}/fased-signer`, [
@@ -357,7 +392,7 @@ async function ordinaryWalletJourney(mode, target, url, session) {
     const result = JSON.parse(
       cli(
         command,
-        `${vaultPassword}\n${vaultPassword}\n${vaultPassword}\n${vaultPassword}\n`,
+        `${walletPassword}\n${walletPassword}\n${walletPassword}\n${walletPassword}\n`,
       ),
     );
     const status = ownerStatus();
@@ -388,6 +423,21 @@ async function ordinaryWalletJourney(mode, target, url, session) {
         `${target.root}/app-state/rpc-credential-${old.id}.json`,
       ]).trim();
     const originalCredential = credentialHash();
+    cli(
+      [
+        "custody",
+        "login",
+        "--disposable-fixture",
+        "--prepare-host",
+        "--password-stdin",
+      ],
+      password + "\n",
+    );
+    const observation = await read(view, old.id, mode + "-initial");
+    check(
+      `${mode}:readPreservesCredential`,
+      credentialHash() === originalCredential,
+    );
     osTool("/usr/bin/systemctl", ["restart", unitNames[1]]);
     await waitSigner();
     const restarted = await api(url, session, "/api/v1/accounts");
@@ -396,6 +446,7 @@ async function ordinaryWalletJourney(mode, target, url, session) {
       restarted.accountStates[old.id] === "current-custody-held" &&
         JSON.stringify(restarted.record) === JSON.stringify(view.record),
     );
+    await read(restarted, old.id, mode + "-restart");
     osTool("/usr/bin/systemctl", ["stop", unitNames[1]]);
     osTool("/usr/bin/mv", [
       "--",
@@ -418,7 +469,7 @@ async function ordinaryWalletJourney(mode, target, url, session) {
     const recovered = JSON.parse(
       cli(
         ["custody", "recover", ...ownerArgs, "--backup-file", backup],
-        `${vaultPassword}\n${vaultPassword}\n${vaultPassword}\n`,
+        `${walletPassword}\n${walletPassword}\n${walletPassword}\n`,
       ),
     );
     const fresh = ownerStatus();
@@ -449,12 +500,58 @@ async function ordinaryWalletJourney(mode, target, url, session) {
       `${mode}:ordinaryRecoveryCannotReuseOldRPC`,
       oldCredential.stale && oldCredential.locked,
     );
+    await refusedWalletRead({
+      input: { ...observation.input, revision: stale.record.revision },
+      api: readAPI,
+      cliRead: readCLI,
+      label: mode + "-recovery",
+      check,
+    });
+    await refusedWalletRead({
+      input: {
+        ...observation.input,
+        revision: stale.record.revision,
+        selection: observation.selection,
+      },
+      api: readAPI,
+      cliRead: readCLI,
+      label: mode + "-old-detail",
+      check,
+    });
     view = await attach(fresh, `Recovered ${mode} wallet`);
     const current = view.record.accounts.find(
       (a) => a.signer?.epoch === fresh.account.epoch,
     );
     assert.ok(current);
-    await saveRPC(view, current.id);
+    view = await saveRPC(view, current.id);
+    await read(view, current.id, mode + "-reconnected");
+    const final = ownerStatus();
+    check(
+      `${mode}:readsKeepRecoveryAndSigningHeld`,
+      final.locked &&
+        final.recoveryRequired &&
+        final.admissionHeld &&
+        !final.walletSigner &&
+        !final.financialExecution &&
+        credentialHash() === originalCredential,
+    );
+    return async () => {
+      await read(
+        await api(url, session, "/api/v1/accounts"),
+        current.id,
+        mode + "-core-restart",
+      );
+      const status = ownerStatus();
+      check(
+        `${mode}:coreRestartReadsRetainCustodyHold`,
+        status.locked &&
+          status.recoveryRequired &&
+          status.admissionHeld &&
+          !status.walletSigner &&
+          !status.financialExecution &&
+          credentialHash() === originalCredential,
+      );
+    };
   } finally {
     await rm(ownerDir, { recursive: true, force: true });
   }
@@ -977,9 +1074,15 @@ try {
         setup.setup.state === "empty" &&
         setup.fixture.available,
     );
-    let restartExpected = expected;
+    let restartExpected = expected,
+      readAfterCoreRestart;
     if (ordinary) {
-      await ordinaryWalletJourney(mode, target, url, session);
+      readAfterCoreRestart = await ordinaryWalletJourney(
+        mode,
+        target,
+        url,
+        session,
+      );
       restartExpected = snapshot(target.app, custodyRoot + "/app-state");
       // Only the explicitly reviewed wallet/RPC records may change. Preserve
       // every original record, credential ciphertext and unresolved hold.
@@ -1022,6 +1125,7 @@ try {
     lifecycle("stop");
     lifecycle("start");
     await health(url, original.instanceId);
+    if (readAfterCoreRestart) await readAfterCoreRestart();
     assert.deepEqual(
       snapshot(target.app, custodyRoot + "/app-state"),
       restartExpected,
