@@ -17,8 +17,9 @@ type Source struct {
 }
 
 type Options struct {
-	Core, Signer, Network   string
-	PrepareHost, Disposable bool
+	Core, Signer, Network     string
+	Mode, Profile, Provenance string
+	PrepareHost, Disposable   bool
 }
 
 type sourceRecord struct {
@@ -46,6 +47,9 @@ type node struct {
 }
 
 type journal struct {
+	Mode       string                  `json:"mode,omitempty"`
+	Profile    string                  `json:"profile,omitempty"`
+	Provenance string                  `json:"provenance,omitempty"`
 	Version    int                     `json:"version"`
 	ID         string                  `json:"id"`
 	Owner      int                     `json:"owner"`
@@ -82,4 +86,8 @@ func rank(p string) int {
 		}
 	}
 	return -1
+}
+
+func custodyContext(mode, profile, provenance string) bool {
+	return mode == "" && profile == "" && provenance == "" || mode == "ordinary-custody:v1" && profile == "owner-authorized:v1" && (provenance == "controlled-disposable:v1" || provenance == "owner-input:v1")
 }

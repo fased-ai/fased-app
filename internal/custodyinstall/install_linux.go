@@ -131,11 +131,29 @@ func account(ctx context.Context, name, id, role string, s *System) (Identity, e
 	return lookup()
 }
 func identityConfig(m Manifest) signer.Config {
-	return signer.Config{Version: m.Version, Mode: m.Mode, Network: m.Network, SignerID: m.ID, OwnerUID: m.Owner, AppUID: m.App.UID, SignerUID: m.Signer.UID, StateDir: m.Root + "/signer-state", SocketDir: m.Root + "/signer-ipc"}
+	return signer.Config{Version: m.Version, Profile: m.Profile, Provenance: m.Provenance, Mode: m.Mode, Network: m.Network, SignerID: m.ID, OwnerUID: m.Owner, AppUID: m.App.UID, SignerUID: m.Signer.UID, StateDir: m.Root + "/signer-state", SocketDir: m.Root + "/signer-ipc"}
 }
 
 func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
+	return install(ctx, o, s, false)
+}
+
+// InstallControlledOwnerCustody binds a compiled disposable owner profile. The
+// ordinary CLI cannot select this constructor or supply a runtime override.
+func InstallControlledOwnerCustody(ctx context.Context, o Options, s *System) (Manifest, error) {
+	if o.Mode != signer.OrdinaryCustodyMode || o.Profile != signer.OwnerCustodyProfile || o.Provenance != signer.ControlledCustodyProfile || !o.StageOnly {
+		return Manifest{}, signer.ErrUnavailable
+	}
+	return install(ctx, o, s, true)
+}
+func install(ctx context.Context, o Options, s *System, controlled bool) (Manifest, error) {
 	var m Manifest
+	if o.Mode == signer.OrdinaryCustodyMode && (!o.StageOnly || !controlled && (!signer.OrdinaryOwnerAdmissionEnabled() || o.Provenance != signer.OwnerKeyProvenance)) {
+		return m, signer.ErrUnavailable
+	}
+	if controlled && (o.Profile != signer.OwnerCustodyProfile || o.Provenance != signer.ControlledCustodyProfile) {
+		return m, signer.ErrUnavailable
+	}
 	if !o.Disposable || !o.PrepareHost {
 		return m, errors.New("explicit --disposable-fixture and --prepare-host consent are required before OS mutation")
 	}
@@ -150,7 +168,14 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 	if o.Network != "" {
 		versionNumber = 2
 	}
-	if !custodyMode(versionNumber, modeFor(o.Network), o.Network) {
+	mode := modeFor(o.Network)
+	if o.Mode != "" {
+		mode = o.Mode
+	}
+	if mode == signer.OrdinaryCustodyMode {
+		versionNumber = 3
+	}
+	if !custodyContext(versionNumber, o.Profile, o.Provenance) || !custodyMode(versionNumber, mode, o.Network) {
 		return m, errors.New("unsupported disposable custody network")
 	}
 	if !validListen(o.Listen) {
@@ -171,17 +196,22 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 	if o.Network != "" {
 		probe = "custody-version"
 	}
+	if versionNumber == 3 {
+		probe = "ordinary-custody-version"
+	}
 	version, e := exec.CommandContext(ctx, o.Signer, probe).Output()
 	if e != nil {
 		return m, errors.New("signer fixture version probe failed")
 	}
 	var protocol struct {
+		Profile      string `json:"profile,omitempty"`
+		Provenance   string `json:"provenance,omitempty"`
 		Protocol     int    `json:"protocol"`
 		OwnerFlow    int    `json:"ownerFlow"`
 		Mode         string `json:"mode"`
 		WalletSigner bool   `json:"walletSigner"`
 	}
-	if strict(version, &protocol) != nil || protocol.Protocol != versionNumber || protocol.OwnerFlow != 1 || protocol.Mode != modeFor(o.Network) || protocol.WalletSigner {
+	if strict(version, &protocol) != nil || protocol.Protocol != versionNumber || protocol.OwnerFlow != 1 || protocol.Mode != mode || protocol.Profile != o.Profile || protocol.Provenance != o.Provenance || protocol.WalletSigner {
 		return m, errors.New("incompatible fixture signer")
 	}
 	jdir, e := ownerJournal()
@@ -195,6 +225,11 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 	defer lock.Close()
 	uid := os.Getuid()
 	j := journal{Version: versionNumber, Network: o.Network, Owner: uid, CoreHash: sum(coreBytes), SignerHash: sum(signerBytes), Listen: o.Listen, Enrollment: o.StageOnly, Location: o.Location, PublicOrigin: o.PublicOrigin}
+	if versionNumber == 3 {
+		j.Mode = mode
+		j.Profile = o.Profile
+		j.Provenance = o.Provenance
+	}
 	haveIntent := false
 	existing, loadErr := Load(uid)
 	if loadErr == nil {
@@ -212,7 +247,7 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 	}
 	if b, re := core.ReadPrivateFile(jdir + "/intent.json"); re == nil {
 		var old journal
-		if strict(b, &old) != nil || old.validate(uid) != nil || old.CoreHash != j.CoreHash || old.SignerHash != j.SignerHash || old.Listen != j.Listen || old.Network != j.Network || old.Version != j.Version || old.Enrollment != j.Enrollment || old.Location != j.Location || old.PublicOrigin != j.PublicOrigin {
+		if strict(b, &old) != nil || old.validate(uid) != nil || old.CoreHash != j.CoreHash || old.SignerHash != j.SignerHash || old.Listen != j.Listen || old.Network != j.Network || old.Version != j.Version || old.Mode != j.Mode || old.Profile != j.Profile || old.Provenance != j.Provenance || old.Enrollment != j.Enrollment || old.Location != j.Location || old.PublicOrigin != j.PublicOrigin {
 			return m, errors.New("installer intent conflicts with requested inputs; preserving it")
 		}
 		j = old
@@ -221,7 +256,7 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 		return m, re
 	}
 	if loadErr == nil {
-		if existing.CoreHash != j.CoreHash || existing.SignerHash != j.SignerHash || existing.Listen != j.Listen || existing.Network != j.Network || existing.Version != j.Version || existing.Enrollment != j.Enrollment || existing.Location != j.Location || existing.PublicOrigin != j.PublicOrigin || (j.ID != "" && existing.ID != j.ID) {
+		if existing.CoreHash != j.CoreHash || existing.SignerHash != j.SignerHash || existing.Listen != j.Listen || existing.Network != j.Network || existing.Version != j.Version || existing.Mode != j.mode() || existing.Profile != j.Profile || existing.Provenance != j.Provenance || existing.Enrollment != j.Enrollment || existing.Location != j.Location || existing.PublicOrigin != j.PublicOrigin || (j.ID != "" && existing.ID != j.ID) {
 			return m, errors.New("existing installation differs; automatic replacement/update is unavailable")
 		}
 		j.ID = existing.ID
@@ -261,7 +296,7 @@ func Install(ctx context.Context, o Options, s *System) (Manifest, error) {
 		if e != nil {
 			return m, e
 		}
-		m = Manifest{Version: versionNumber, Mode: modeFor(o.Network), Network: o.Network, ID: j.ID, Owner: uid, Root: root, Listen: o.Listen, CoreHash: j.CoreHash, SignerHash: j.SignerHash, App: app, Signer: key, Enrollment: j.Enrollment, Location: j.Location, PublicOrigin: j.PublicOrigin}
+		m = Manifest{Version: versionNumber, Mode: mode, Profile: o.Profile, Provenance: o.Provenance, Network: o.Network, ID: j.ID, Owner: uid, Root: root, Listen: o.Listen, CoreHash: j.CoreHash, SignerHash: j.SignerHash, App: app, Signer: key, Enrollment: j.Enrollment, Location: j.Location, PublicOrigin: j.PublicOrigin}
 		if e = m.validate(); e != nil {
 			return m, e
 		}
@@ -459,9 +494,9 @@ func waitReady(ctx context.Context, m Manifest, system *System) error {
 				if de == nil && r.StatusCode == 200 && h.Status == "ok" && h.InstanceID == private.InstanceID && h.APIVersion == core.APIVersion && len(h.Capabilities) > 0 && !h.Capabilities["walletSigner"] && !h.Capabilities["financialExecution"] && !h.Capabilities["updater"] {
 					// Type=simple/active precedes socket readiness. Authenticate the
 					// signer's actual owner RPC before declaring both services ready.
-					b, se := exec.CommandContext(ctx, m.Root+"/fased-signer", "owner", "--config", m.Root+"/identity.json", "--disposable-fixture").Output()
+					b, se := exec.CommandContext(ctx, m.Root+"/fased-signer", "owner", "--config", m.Root+"/identity.json", signerModeFlag(m)).Output()
 					var status signer.Status
-					if se == nil && json.Unmarshal(b, &status) == nil && status.FixtureOnly && !status.WalletSigner && !status.FinancialExecution {
+					if se == nil && json.Unmarshal(b, &status) == nil && signerStatusReady(m, status) {
 						return nil
 					}
 				}

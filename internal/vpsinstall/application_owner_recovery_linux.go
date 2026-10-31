@@ -153,7 +153,7 @@ func ValidateApplicationReaderOwnerRequest(m Manifest, image string, r core.Appl
 }
 
 func validateApplicationReaderOwnerRequest(o hostOps, m Manifest, image string, r core.ApplicationReaderBootstrapRequest) error {
-	if !update.IDOK(r.OperationID) || r.Version != 1 || !update.IDOK(r.OwnerLease) || image != m.Root+"-update-"+r.OperationID+"/next-core" {
+	if !update.IDOK(r.OperationID) || (r.Version != 1 && r.Version != 2) || !update.IDOK(r.OwnerLease) || image != m.Root+"-update-"+r.OperationID+"/next-core" {
 		return errors.New("fixed admitted target reader helper required")
 	}
 	dir := m.Root + "-update-" + r.OperationID

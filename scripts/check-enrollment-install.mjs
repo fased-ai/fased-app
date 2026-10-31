@@ -4,7 +4,14 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { watch } from "node:fs";
-import { mkdir, readFile, writeFile, lstat, rm } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  writeFile,
+  lstat,
+  rm,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve, join } from "node:path";
 import net from "node:net";
@@ -33,11 +40,32 @@ const { chromium } = await import("@playwright/test");
 
 const uid = process.getuid(),
   gid = process.getgid();
-const evidence = resolve(".evidence/b05-enrollment-installed");
+const args = process.argv.slice(2);
+assert.ok(
+  args.length === 0 || (args.length === 1 && args[0] === "--ordinary-custody"),
+);
+const ordinary = args[0] === "--ordinary-custody";
+const evidence = resolve(
+  ordinary
+    ? ".evidence/b05-ordinary-installed"
+    : ".evidence/b05-enrollment-installed",
+);
 await mkdir(evidence, { mode: 0o700 });
-const compiledEngine = resolve(".evidence/bin/fased-app");
+let compiledEngine = resolve(".evidence/bin/fased-app");
+let signer = resolve(".evidence/bin/fased-signer");
+if (ordinary) {
+  compiledEngine = join(evidence, "fased-app-tests");
+  signer = join(evidence, "fased-signer-tests");
+  for (const [output, pkg] of [
+    [compiledEngine, "./cmd/fased-app"],
+    [signer, "./cmd/fased-signer"],
+  ])
+    execFileSync("go", ["test", "-c", "-buildvcs=false", "-o", output, pkg], {
+      stdio: "inherit",
+    });
+}
 let engine = compiledEngine;
-const signer = resolve(".evidence/bin/fased-signer");
+
 const config = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
 const custodyRoot = `/var/lib/fased-app-custody-${uid}`;
 const remoteRoot = `/var/lib/fased-app-vps-${uid}`;
@@ -77,6 +105,7 @@ const report = {
   class:
     "actual disposable Ubuntu Local/Remote same-instance enrollment; not owner/VPS/native/live acceptance",
   fixtureOnly: true,
+  ordinaryCustody: ordinary,
   mining: false,
   liveFeatures: false,
   checks: {},
@@ -246,6 +275,189 @@ print(json.dumps(out,separators=(',',':')))
     detail.journalUnavailable = true;
   }
   return detail;
+}
+
+async function ordinaryWalletJourney(mode, target, url, session) {
+  const ownerDir = await mkdtemp(join(evidence, "owner-"));
+  const ownerArgs = ["--disposable-fixture", "--password-stdin"];
+  const walletKey = `${key}-${mode}`;
+  secrets.add(walletKey);
+  const ownerStatus = () =>
+    JSON.parse(
+      execute(`${target.root}/fased-signer`, [
+        "owner",
+        "--config",
+        `${target.root}/identity.json`,
+        "--disposable-fixture",
+      ]),
+    );
+  const waitSigner = async () => {
+    const until = Date.now() + 10000;
+    while (Date.now() < until) {
+      try {
+        return ownerStatus();
+      } catch {}
+      await wait(50);
+    }
+    throw new Error("controlled signer unavailable after restart");
+  };
+  const attach = async (status, name) => {
+    const view = await api(url, session, "/api/v1/accounts");
+    return api(url, session, "/api/v1/accounts/setup", "PUT", {
+      revision: view.record.revision,
+      action: "attach",
+      name,
+      network: "devnet",
+      reference: status.account,
+    });
+  };
+  const saveRPC = async (view, id) => {
+    const saved = await api(url, session, "/api/v1/accounts/rpc", "PUT", {
+      revision: view.record.revision,
+      accountId: id,
+      network: "devnet",
+      endpoint: "https://devnet.helius-rpc.com",
+    });
+    const credential = await api(
+      url,
+      session,
+      "/api/v1/accounts/rpc-credential",
+      "PUT",
+      {
+        revision: saved.record.revision,
+        accountId: id,
+        action: "save",
+        key: walletKey,
+        passphrase: vaultPassword,
+      },
+    );
+    check(
+      `${mode}:ordinaryRPCEncryptedConfiguration`,
+      credential.saved && credential.locked && !credential.liveRPC,
+    );
+    return saved;
+  };
+  try {
+    assert.equal(target.version, 3);
+    assert.equal(target.mode, "ordinary-custody:v1");
+    assert.equal(target.profile, "owner-authorized:v1");
+    assert.equal(target.provenance, "controlled-disposable:v1");
+    const backup = join(ownerDir, "wallet-backup.json");
+    const action = mode === "local" ? "setup" : "import";
+    const command = ["custody", action, ...ownerArgs, "--backup-file", backup];
+    if (action === "import") {
+      const seed = randomBytes(32);
+      secrets.add(seed.toString("hex"));
+      secrets.add(seed.toString("base64"));
+      const seedPath = join(ownerDir, "wallet-seed.bin");
+      await writeFile(seedPath, seed, { mode: 0o600 });
+      seed.fill(0);
+      command.push("--seed-file", seedPath);
+    }
+    const result = JSON.parse(
+      cli(
+        command,
+        `${vaultPassword}\n${vaultPassword}\n${vaultPassword}\n${vaultPassword}\n`,
+      ),
+    );
+    const status = ownerStatus();
+    check(
+      `${mode}:ordinaryProtectedOwner`,
+      result.backupVerified &&
+        status.locked &&
+        status.recoveryRequired &&
+        status.admissionHeld &&
+        status.account.version === 3 &&
+        status.custody.profile === target.profile &&
+        status.custody.provenance === target.provenance &&
+        status.custody.origin ===
+          (action === "setup" ? "generated" : "imported") &&
+        !status.walletSigner &&
+        !status.financialExecution,
+    );
+    let view = await attach(status, `Installed ${mode} wallet`);
+    const old = view.record.accounts.find(
+      (a) => a.signer?.epoch === status.account.epoch,
+    );
+    assert.ok(old);
+    view = await saveRPC(view, old.id);
+    const credentialHash = () =>
+      as(target.app, "/usr/bin/python3", [
+        "-c",
+        "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())",
+        `${target.root}/app-state/rpc-credential-${old.id}.json`,
+      ]).trim();
+    const originalCredential = credentialHash();
+    osTool("/usr/bin/systemctl", ["restart", unitNames[1]]);
+    await waitSigner();
+    const restarted = await api(url, session, "/api/v1/accounts");
+    check(
+      `${mode}:ordinaryRestartRetainsReference`,
+      restarted.accountStates[old.id] === "current-custody-held" &&
+        JSON.stringify(restarted.record) === JSON.stringify(view.record),
+    );
+    osTool("/usr/bin/systemctl", ["stop", unitNames[1]]);
+    osTool("/usr/bin/mv", [
+      "--",
+      `${target.root}/signer-state`,
+      `${target.root}/signer-state-before-recovery`,
+    ]);
+    osTool("/usr/bin/install", [
+      "-d",
+      "-m",
+      "0700",
+      "-o",
+      String(target.signer.uid),
+      "-g",
+      String(target.signer.gid),
+      "--",
+      `${target.root}/signer-state`,
+    ]);
+    osTool("/usr/bin/systemctl", ["start", unitNames[1]]);
+    await waitSigner();
+    const recovered = JSON.parse(
+      cli(
+        ["custody", "recover", ...ownerArgs, "--backup-file", backup],
+        `${vaultPassword}\n${vaultPassword}\n${vaultPassword}\n`,
+      ),
+    );
+    const fresh = ownerStatus();
+    check(
+      `${mode}:ordinaryProtectedRecovery`,
+      recovered.backupVerified &&
+        fresh.locked &&
+        fresh.recoveryRequired &&
+        fresh.admissionHeld &&
+        fresh.account.publicKey === status.account.publicKey &&
+        fresh.account.epoch !== status.account.epoch &&
+        fresh.custody.provenance === target.provenance,
+    );
+    const stale = await api(url, session, "/api/v1/accounts");
+    check(
+      `${mode}:ordinaryRecoveryPreservesOldCiphertext`,
+      stale.accountStates[old.id] === "stale" &&
+        credentialHash() === originalCredential,
+    );
+    const oldCredential = await api(
+      url,
+      session,
+      "/api/v1/accounts/rpc-credential",
+      "PUT",
+      { revision: stale.record.revision, accountId: old.id, action: "status" },
+    );
+    check(
+      `${mode}:ordinaryRecoveryCannotReuseOldRPC`,
+      oldCredential.stale && oldCredential.locked,
+    );
+    view = await attach(fresh, `Recovered ${mode} wallet`);
+    const current = view.record.accounts.find(
+      (a) => a.signer?.epoch === fresh.account.epoch,
+    );
+    assert.ok(current);
+    await saveRPC(view, current.id);
+  } finally {
+    await rm(ownerDir, { recursive: true, force: true });
+  }
 }
 
 async function browserProof(url, profile, instance) {
@@ -719,6 +931,7 @@ try {
       "--prepare-host",
       "--disposable-fixture",
       ...(mode === "local" ? paths : []),
+      ...(ordinary ? ["--ordinary-custody"] : []),
     ];
     if (mode === "local")
       await controlledInterruption(enroll, original.instanceId);
@@ -764,6 +977,20 @@ try {
         setup.setup.state === "empty" &&
         setup.fixture.available,
     );
+    let restartExpected = expected;
+    if (ordinary) {
+      await ordinaryWalletJourney(mode, target, url, session);
+      restartExpected = snapshot(target.app, custodyRoot + "/app-state");
+      // Only the explicitly reviewed wallet/RPC records may change. Preserve
+      // every original record, credential ciphertext and unresolved hold.
+      const preserved = structuredClone(restartExpected);
+      preserved.rows.accounts = expected.rows.accounts;
+      for (const [name, hash] of Object.entries(expected.vaults))
+        assert.equal(preserved.vaults[name], hash);
+      preserved.vaults = expected.vaults;
+      assert.deepEqual(preserved, expected);
+      check(`${mode}:ordinaryWalletPreservesUnrelatedRecords`, true);
+    }
     const pids = unitNames.map((n) =>
       Number(
         execute("/usr/bin/systemctl", [
@@ -797,7 +1024,7 @@ try {
     await health(url, original.instanceId);
     assert.deepEqual(
       snapshot(target.app, custodyRoot + "/app-state"),
-      expected,
+      restartExpected,
     );
     check(`${mode}:restartPreservesRecordsCiphertextHolds`, true);
     let enabled;

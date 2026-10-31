@@ -16,12 +16,16 @@ import (
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/enrollment"
 	"github.com/fased-ai/fased-app/internal/localinstall"
+	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/vpsinstall"
 )
+
+var compiledOrdinaryEnrollment func(context.Context, enrollment.Source, enrollment.Options, *custodyinstall.System) (custodyinstall.Manifest, error)
 
 func enrollmentCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 	f := flag.NewFlagSet("custody enroll", flag.ContinueOnError)
 	f.SetOutput(errOut)
+	ordinary := f.Bool("ordinary-custody", false, "ordinary signer custody")
 	mode := f.String("source", "", "owned installation: local or remote")
 	expected := f.String("expected-instance", "", "exact current instance identity")
 	network := f.String("network", "", "disposable key network: devnet or mainnet-beta")
@@ -36,6 +40,9 @@ func enrollmentCommand(args []string, in io.Reader, out, errOut io.Writer) error
 	data := f.String("data-dir", defaults.Data, "existing Local instance directory")
 	if e = f.Parse(args); e != nil {
 		return e
+	}
+	if *ordinary && compiledOrdinaryEnrollment == nil && !signer.OrdinaryOwnerAdmissionEnabled() {
+		return signer.ErrUnavailable
 	}
 	if f.NArg() != 0 || !*prepare || !*disposable || os.Getuid() <= 0 || os.Getuid() != os.Geteuid() || (*mode != "local" && *mode != "remote") || *expected == "" || (*network != "devnet" && *network != "mainnet-beta") || *signerBinary == "" {
 		return errors.New("choose an installed source, exact instance, network and signer; explicit disposable/host consent required")
@@ -59,7 +66,18 @@ func enrollmentCommand(args []string, in io.Reader, out, errOut io.Writer) error
 	if e != nil {
 		return e
 	}
-	result, e := enrollment.Run(ctx, source, enrollment.Options{Core: binary, Signer: key, Network: *network, PrepareHost: *prepare, Disposable: *disposable}, system)
+	options := enrollment.Options{Core: binary, Signer: key, Network: *network, PrepareHost: *prepare, Disposable: *disposable}
+	runEnrollment := enrollment.Run
+	if *ordinary {
+		options.Mode = signer.OrdinaryCustodyMode
+		options.Profile = signer.OwnerCustodyProfile
+		options.Provenance = signer.OwnerKeyProvenance
+		if compiledOrdinaryEnrollment != nil {
+			options.Provenance = signer.ControlledCustodyProfile
+			runEnrollment = compiledOrdinaryEnrollment
+		}
+	}
+	result, e := runEnrollment(ctx, source, options, system)
 	if e != nil {
 		return e
 	}

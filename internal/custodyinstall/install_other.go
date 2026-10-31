@@ -52,3 +52,7 @@ func (*System) UpdateRecovery(context.Context, Manifest, update.RecoveryCheck, i
 }
 
 func fixtureUnits(Manifest, bool) map[string][]byte { return nil }
+
+func InstallControlledOwnerCustody(context.Context, Options, *System) (Manifest, error) {
+	return Manifest{}, unsupported
+}

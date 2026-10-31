@@ -36,6 +36,8 @@ func flowCall(v *signer.Vault) ownerCall {
 		case "status":
 		case "lock":
 			v.Lock()
+		case "import-ordinary-seed":
+			e = v.ImportControlledOrdinarySeed(r.Document, r.Password)
 		case "import-fixture-seed":
 			e = v.ImportFixtureSeed(r.Document, r.Password)
 		case "create":
@@ -251,5 +253,36 @@ func TestProtectedImportFailureLocksAndPreserves(t *testing.T) {
 				t.Fatal("refused input created wallet")
 			}
 		})
+	}
+}
+
+func TestOrdinaryProtectedImportFlow(t *testing.T) {
+	dir := ownerFixture(t)
+	v, err := signer.OpenControlledOwnerCustody(dir, "11111111111111111111111111111111", "devnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close()
+	seedFile := filepath.Join(ownerFixture(t), "disposable-seed.bin")
+	if err = os.WriteFile(seedFile, bytes.Repeat([]byte{43}, 32), 0600); err != nil {
+		t.Fatal(err)
+	}
+	backupFile := filepath.Join(ownerFixture(t), "backup.json")
+	ask := func(label string, confirm bool) ([]byte, error) {
+		if label == "Encrypted backup password" {
+			return bytes.Clone(flowBackup), nil
+		}
+		return bytes.Clone(flowUnlock), nil
+	}
+	var out bytes.Buffer
+	if err = conductImportAction(t.Context(), seedFile, backupFile, ask, &out, flowCall(v), "import-ordinary-seed"); err != nil {
+		t.Fatal(err)
+	}
+	status := v.Status()
+	if status.Account == nil || status.Account.Version != 3 || status.Custody == nil || status.Custody.Origin != "imported" || !status.Locked || !status.RecoveryRequired || status.WalletSigner {
+		t.Fatal("unsafe protected import completion")
+	}
+	if bytes.Contains(out.Bytes(), bytes.Repeat([]byte{43}, 32)) || bytes.Contains(out.Bytes(), flowUnlock) {
+		t.Fatal("owner secret leaked into public receipt")
 	}
 }

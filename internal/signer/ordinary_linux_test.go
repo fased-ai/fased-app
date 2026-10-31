@@ -175,7 +175,7 @@ func TestOrdinaryCustodyPublicationAndNoPromotion(t *testing.T) {
 	if !bytes.Equal(old, current) {
 		t.Fatal("promotion refusal changed key")
 	}
-	c := Config{Version: 3, Mode: OrdinaryCustodyMode, Network: "devnet", SignerID: "00112233445566778899aabbccddeeff", OwnerUID: 1101, AppUID: 1102, SignerUID: 1103, StateDir: dir, SocketDir: dir + "-ipc"}
+	c := Config{Version: 3, Profile: OwnerCustodyProfile, Provenance: OwnerKeyProvenance, Mode: OrdinaryCustodyMode, Network: "devnet", SignerID: "00112233445566778899aabbccddeeff", OwnerUID: 1101, AppUID: 1102, SignerUID: 1103, StateDir: dir, SocketDir: dir + "-ipc"}
 	if server, err := Serve(context.Background(), c); err == nil {
 		server.Close()
 		t.Fatal("ordinary startup activated")

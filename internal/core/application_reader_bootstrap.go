@@ -24,5 +24,15 @@ type ApplicationReaderBootstrapReceipt struct {
 
 func (r ApplicationReaderBootstrapRequest) valid() bool {
 	p := r.Predecessor
-	return r.Version == 1 && update.IDOK(r.OperationID) && update.IDOK(r.OwnerLease) && hexValue(r.PreviousEngineSHA256, 32) && r.Release.valid() && p.Version == 1 && p.State == "paused" && update.IDOK(p.PauseID) && p.Request != nil && update.ValidPauseRequest(*p.Request) && p.Request.IntentID == r.OperationID && p.Request.Sequence == r.Release.Sequence && p.Request.ManifestSHA256 == r.Release.ManifestSHA256 && p.Core.State.Version == 33 && p.Request.Expected.State.Version == 33 && update.SameCoreMetadata(p.Core, p.Request.Expected)
+	return r.validIntent() && p.State == "paused" && update.IDOK(p.PauseID)
+}
+
+func (r ApplicationReaderBootstrapRequest) validIntent() bool {
+	p := r.Predecessor
+	source := p.Core.State.Version
+	return (r.Version == 1 && source == 33 || r.Version == 2 && source == 35) && update.IDOK(r.OperationID) && update.IDOK(r.OwnerLease) && hexValue(r.PreviousEngineSHA256, 32) && r.Release.valid() && p.Version == 1 && p.Request != nil && update.ValidPauseRequest(*p.Request) && p.Request.IntentID == r.OperationID && p.Request.Sequence == r.Release.Sequence && p.Request.ManifestSHA256 == r.Release.ManifestSHA256 && p.Request.Expected.State.Version == source && update.SameCoreMetadata(p.Core, p.Request.Expected)
+}
+
+func (r ApplicationReaderBootstrapRequest) prepared() bool {
+	return r.Version == 2 && r.validIntent() && r.Predecessor.State == "prepared" && r.Predecessor.PauseID == ""
 }

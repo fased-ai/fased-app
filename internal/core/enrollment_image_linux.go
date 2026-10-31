@@ -141,7 +141,7 @@ func enrollmentPath(name string) (included bool, max int64, ok bool) {
 		switch leaf {
 		case "metadata.sqlite":
 			return true, MaxEnrollmentFileBytes, true
-		case "request.json", "recovery.json", "application.json", "reader-request.json", "reader-bootstrap.json":
+		case "request.json", "recovery.json", "application.json", "reader-request.json", "reader-bootstrap.json", "reader-preparation.json":
 			return true, 16384, true
 		case "backup.lock":
 			if parts[2] == "backup.lock" {
@@ -154,8 +154,10 @@ func enrollmentPath(name string) (included bool, max int64, ok bool) {
 		}{
 			{"application-", ".sqlite", MaxEnrollmentFileBytes},
 			{"reader-33-", ".sqlite", MaxEnrollmentFileBytes},
+			{"reader-35-", ".sqlite", MaxEnrollmentFileBytes},
 			{"application-index-", ".json", 16384},
 			{"reader-request-", ".json", 16384},
+			{"reader-preparation-", ".json", 16384},
 			{"reader-bootstrap-index-", ".json", 16384},
 		} {
 			if strings.HasPrefix(leaf, file.prefix) && strings.HasSuffix(leaf, file.suffix) && hexValue(strings.TrimSuffix(strings.TrimPrefix(leaf, file.prefix), file.suffix), 32) {

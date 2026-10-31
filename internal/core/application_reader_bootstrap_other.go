@@ -25,3 +25,7 @@ func ReadApplicationReaderBootstrapRequest(string, string) (ApplicationReaderBoo
 func CheckApplicationReaderPredecessor(context.Context, string, update.CoreSnapshot) error {
 	return errors.New("installed reader-bootstrap supports Linux only")
 }
+
+func PrepareApplicationReaderBootstrap(context.Context, string, ApplicationReaderBootstrapRequest) error {
+	return errors.New("installed reader-bootstrap supports Linux only")
+}

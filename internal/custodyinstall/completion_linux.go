@@ -13,7 +13,13 @@ import (
 )
 
 func installerIntent(m Manifest) journal {
-	return journal{Version: m.Version, Network: m.Network, ID: m.ID, Owner: m.Owner, CoreHash: m.CoreHash, SignerHash: m.SignerHash, Listen: m.Listen, Enrollment: m.Enrollment, Location: m.Location, PublicOrigin: m.PublicOrigin}
+	j := journal{Version: m.Version, Network: m.Network, ID: m.ID, Owner: m.Owner, CoreHash: m.CoreHash, SignerHash: m.SignerHash, Listen: m.Listen, Enrollment: m.Enrollment, Location: m.Location, PublicOrigin: m.PublicOrigin}
+	if m.Version == 3 {
+		j.Mode = m.Mode
+		j.Profile = m.Profile
+		j.Provenance = m.Provenance
+	}
+	return j
 }
 func readyRecord(m Manifest) []byte {
 	return mustJSON(map[string]any{"schema": 1, "manifest": sum(mustJSON(m)), "fixtureOnly": true})

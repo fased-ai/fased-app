@@ -107,6 +107,7 @@ func (s *Store) configureSigner(path string) error {
 	}
 	if c.Version == 2 || c.Version == 3 {
 		s.custodyNetwork = c.Network
+		s.custodyOwnerSupported = c.Version == 3 && c.Profile == signer.OwnerCustodyProfile && c.Provenance == signer.ControlledCustodyProfile
 	}
 	return nil
 }
@@ -336,4 +337,12 @@ func (s *Store) updateAccounts(ctx context.Context, r AccountsRecord, rpcChange 
 		return AccountsView{}, ErrConflict
 	}
 	return s.Accounts(ctx)
+}
+
+func (s *Store) controlledOrdinaryAccount(ctx context.Context, a Account) bool {
+	if !s.custodyOwnerSupported || !ordinaryNetworkAccount(a) {
+		return false
+	}
+	status := s.fixtureView(ctx).Status
+	return ordinaryStatus(status) && status.Custody.Profile == signer.OwnerCustodyProfile && status.Custody.Provenance == signer.ControlledCustodyProfile && *status.Account == *a.Signer
 }

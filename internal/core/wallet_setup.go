@@ -61,7 +61,7 @@ func (s *Store) walletSetup(live FixtureView) WalletSetup {
 		v.FixtureOnly = status.FixtureOnly
 		v.CustodyClass = status.Custody.Class
 		v.AdmissionHeld = true
-		v.OwnerSupported = false
+		v.OwnerSupported = v.OwnerSupported && s.custodyOwnerSupported && status.Custody.Profile == signer.OwnerCustodyProfile && status.Custody.Provenance == signer.ControlledCustodyProfile
 		if status.Account != nil && !ordinaryStatus(status) {
 			return v
 		}
@@ -90,7 +90,7 @@ func (s *Store) walletSetup(live FixtureView) WalletSetup {
 		v.State = "update-held"
 	case status.Account == nil:
 		v.State = "empty"
-	case status.RecoveryRequired:
+	case status.RecoveryRequired && status.Custody == nil:
 		v.State = "recovery"
 	case status.Locked:
 		v.State = "locked"

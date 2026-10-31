@@ -16,6 +16,7 @@ import (
 type Options struct {
 	Core, Signer, Listen, Network string
 	PrepareHost, Disposable       bool
+	Mode, Profile, Provenance     string
 	StageOnly                     bool // Enrollment only; never an ordinary CLI option.
 	Location, PublicOrigin        string
 }
@@ -25,6 +26,8 @@ type Identity struct {
 	GID  int    `json:"gid"`
 }
 type Manifest struct {
+	Profile          string   `json:"profile,omitempty"`
+	Provenance       string   `json:"provenance,omitempty"`
 	Enrollment       bool     `json:"enrollment,omitempty"`
 	Location         string   `json:"location,omitempty"`
 	PublicOrigin     string   `json:"publicOrigin,omitempty"`
@@ -42,6 +45,9 @@ type Manifest struct {
 	Signer           Identity `json:"signer"`
 }
 type journal struct {
+	Mode         string `json:"mode,omitempty"`
+	Profile      string `json:"profile,omitempty"`
+	Provenance   string `json:"provenance,omitempty"`
 	Enrollment   bool   `json:"enrollment,omitempty"`
 	Location     string `json:"location,omitempty"`
 	PublicOrigin string `json:"publicOrigin,omitempty"`
@@ -77,7 +83,7 @@ func (m Manifest) validate() error {
 	if m.InspectionBridge != "" && (m.Version != 1 || !validHex(m.InspectionBridge, 16)) {
 		return errors.New("invalid fixture reader bridge")
 	}
-	if !custodyMode(m.Version, m.Mode, m.Network) || m.Owner <= 0 || m.Root != Root(m.Owner) || !validHex(m.ID, 16) || !validHex(m.CoreHash, 32) || !validHex(m.SignerHash, 32) || !validListen(m.Listen) {
+	if !custodyContext(m.Version, m.Profile, m.Provenance) || m.Version == 3 && !m.Enrollment || !custodyMode(m.Version, m.Mode, m.Network) || m.Owner <= 0 || m.Root != Root(m.Owner) || !validHex(m.ID, 16) || !validHex(m.CoreHash, 32) || !validHex(m.SignerHash, 32) || !validListen(m.Listen) {
 		return errors.New("invalid managed fixture manifest")
 	}
 	for _, pair := range []struct {
@@ -94,7 +100,7 @@ func (m Manifest) validate() error {
 	return nil
 }
 func (j journal) validate(uid int) error {
-	if !custodyMode(j.Version, modeFor(j.Network), j.Network) || j.Owner != uid || !validHex(j.ID, 16) || !validHex(j.CoreHash, 32) || !validHex(j.SignerHash, 32) || !validListen(j.Listen) || !validLocation(j.Location, j.PublicOrigin) || j.Enrollment && j.Location == "" {
+	if !custodyContext(j.Version, j.Profile, j.Provenance) || j.Version == 3 && !j.Enrollment || !custodyMode(j.Version, j.mode(), j.Network) || j.Owner != uid || !validHex(j.ID, 16) || !validHex(j.CoreHash, 32) || !validHex(j.SignerHash, 32) || !validListen(j.Listen) || !validLocation(j.Location, j.PublicOrigin) || j.Enrollment && j.Location == "" {
 		return errors.New("invalid installer intent; preserve and investigate it")
 	}
 	return nil
@@ -134,7 +140,7 @@ func definitions(m Manifest) map[string][]byte {
 	}
 	return map[string][]byte{
 		"fased-app.service":    unit(m.App, m.Root+"/fased-app serve --data-dir "+m.Root+"/app-state --listen "+m.Listen+" --require-sandbox --installation-root "+m.Root+" --custody-config "+m.Root+"/identity.json"+profile, m.Root+"/app-state", "AF_UNIX AF_INET AF_INET6"),
-		"fased-signer.service": unit(m.Signer, m.Root+"/fased-signer serve --config "+m.Root+"/identity.json --disposable-fixture", m.Root+"/signer-state "+m.Root+"/signer-ipc", "AF_UNIX"),
+		"fased-signer.service": unit(m.Signer, m.Root+"/fased-signer serve --config "+m.Root+"/identity.json "+signerModeFlag(m), m.Root+"/signer-state "+m.Root+"/signer-ipc", "AF_UNIX"),
 	}
 }
 
@@ -159,5 +165,21 @@ func modeFor(network string) string {
 	return "disposable-custody:v2"
 }
 func custodyMode(version int, mode, network string) bool {
-	return version == 1 && mode == "disposable-fixture:v1" && network == "" || version == 2 && mode == "disposable-custody:v2" && (network == "devnet" || network == "mainnet-beta")
+	return version == 1 && mode == "disposable-fixture:v1" && network == "" || (version == 2 && mode == "disposable-custody:v2" || version == 3 && mode == "ordinary-custody:v1") && (network == "devnet" || network == "mainnet-beta")
+}
+
+func custodyContext(version int, profile, provenance string) bool {
+	return version != 3 && profile == "" && provenance == "" || version == 3 && profile == "owner-authorized:v1" && (provenance == "controlled-disposable:v1" || provenance == "owner-input:v1")
+}
+func (j journal) mode() string {
+	if j.Mode != "" {
+		return j.Mode
+	}
+	return modeFor(j.Network)
+}
+func signerModeFlag(m Manifest) string {
+	if m.Version == 3 && m.Provenance == "owner-input:v1" {
+		return "--ordinary-custody"
+	}
+	return "--disposable-fixture"
 }

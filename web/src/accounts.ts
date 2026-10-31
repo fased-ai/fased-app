@@ -62,11 +62,12 @@ export type AccountsView = {
   fixture: {
     available: boolean;
     status?: {
+      fixtureOnly?: boolean;
       custody?: {
         version: number;
         class: string;
         profile: string;
-        origin: "generated" | "imported";
+        origin: "" | "generated" | "imported";
         provenance: string;
       };
       admissionHeld?: boolean;
@@ -207,8 +208,32 @@ export function walletOwnerCommands(
   selectedNetwork: string,
 ): string[] {
   const setup = view.setup;
-  if (!setup?.ownerSupported || !setup.fixtureOnly || setup.custodyClass)
+  if (
+    !setup?.ownerSupported ||
+    !setup.fixtureOnly ||
+    (setup.custodyClass && setup.custodyClass !== "ordinary-custody:v1")
+  )
     return [];
+  if (setup.custodyClass) {
+    const status = view.fixture.status;
+    const custody = status?.custody;
+    if (
+      setup.state !== "empty" ||
+      !view.fixture.available ||
+      !status?.fixtureOnly ||
+      status.account ||
+      status.walletSigner ||
+      status.financialExecution ||
+      !status.admissionHeld ||
+      !setup.admissionHeld ||
+      custody?.version !== 1 ||
+      custody.class !== setup.custodyClass ||
+      custody.profile !== "owner-authorized:v1" ||
+      custody.provenance !== "controlled-disposable:v1" ||
+      custody.origin !== ""
+    )
+      return [];
+  }
   const network =
     setup.state === "not-installed" ? selectedNetwork : setup.network;
   if (

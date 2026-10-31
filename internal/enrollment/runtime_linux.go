@@ -19,6 +19,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 	"golang.org/x/sys/unix"
 )
@@ -423,7 +424,21 @@ func (h *runtimeHost) finish(ctx context.Context, j journal) error {
 }
 
 func Run(ctx context.Context, s Source, o Options, system *custodyinstall.System) (custodyinstall.Manifest, error) {
+	return runInstalled(ctx, s, o, system, false)
+}
+
+// RunControlledOwnerCustody is selected by compiled disposable acceptance only.
+func RunControlledOwnerCustody(ctx context.Context, s Source, o Options, system *custodyinstall.System) (custodyinstall.Manifest, error) {
+	if o.Mode != signer.OrdinaryCustodyMode || o.Profile != signer.OwnerCustodyProfile || o.Provenance != signer.ControlledCustodyProfile {
+		return custodyinstall.Manifest{}, signer.ErrUnavailable
+	}
+	return runInstalled(ctx, s, o, system, true)
+}
+func runInstalled(ctx context.Context, s Source, o Options, system *custodyinstall.System, controlled bool) (custodyinstall.Manifest, error) {
 	var out custodyinstall.Manifest
+	if o.Mode == signer.OrdinaryCustodyMode && !controlled && (!signer.OrdinaryOwnerAdmissionEnabled() || o.Provenance != signer.OwnerKeyProvenance) {
+		return out, signer.ErrUnavailable
+	}
 	if !o.Disposable || !o.PrepareHost {
 		return out, errors.New("explicit disposable host consent required")
 	}
@@ -446,7 +461,11 @@ func Run(ctx context.Context, s Source, o Options, system *custodyinstall.System
 		save: func(j journal) error { return core.WritePrivateJSON(h.state, j) }, node: realNode,
 		targetExists: func() bool { _, e := os.Lstat(custodyinstall.Root(os.Getuid())); return !errors.Is(e, os.ErrNotExist) },
 		prepare: func(ctx context.Context, j journal, o Options) (custodyinstall.Manifest, error) {
-			return custodyinstall.Install(ctx, custodyinstall.Options{Core: o.Core, Signer: o.Signer, Network: o.Network, Listen: j.Source.Listen, Location: j.Source.Profile, PublicOrigin: j.Source.PublicOrigin, PrepareHost: true, Disposable: true, StageOnly: true}, system)
+			options := custodyinstall.Options{Mode: o.Mode, Profile: o.Profile, Provenance: o.Provenance, Core: o.Core, Signer: o.Signer, Network: o.Network, Listen: j.Source.Listen, Location: j.Source.Profile, PublicOrigin: j.Source.PublicOrigin, PrepareHost: true, Disposable: true, StageOnly: true}
+			if controlled {
+				return custodyinstall.InstallControlledOwnerCustody(ctx, options, system)
+			}
+			return custodyinstall.Install(ctx, options, system)
 		},
 		target: func(m custodyinstall.Manifest) error {
 			current, err := custodyinstall.Load(os.Getuid())
