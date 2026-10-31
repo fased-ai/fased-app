@@ -211,13 +211,9 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		}
 	}
 	if exists {
-		key := passwordHash(c.Passphrase, v.Salt)
-		block, _ := aes.NewCipher(key)
-		clear(key)
-		gcm, _ := cipher.NewGCM(block)
-		plain, err := gcm.Open(nil, v.Nonce, v.Ciphertext, s.rpcAAD(c.AccountID, v))
+		plain, err := s.openRPCVaultKey(c.AccountID, c.Passphrase, v)
 		defer clear(plain)
-		if err != nil || !validRPCSecret(v.Version, string(plain)) {
+		if err != nil {
 			return view, fail
 		}
 
@@ -302,4 +298,22 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		return view, fail
 	}
 	return RPCCredentialView{Ref: v.Ref, Saved: true, Locked: true, TestOnly: version == 1}, nil
+}
+
+// Every caller owns only one operation's plaintext and must clear it. This
+// creates no unlocked session, background lease or new credential format.
+func (s *Store) openRPCVaultKey(id, passphrase string, v rpcVault) ([]byte, error) {
+	if !validPassword(passphrase) || !validRPCVault(v) {
+		return nil, errors.New("RPC locked")
+	}
+	key := passwordHash(passphrase, v.Salt)
+	block, _ := aes.NewCipher(key)
+	clear(key)
+	gcm, _ := cipher.NewGCM(block)
+	plain, err := gcm.Open(nil, v.Nonce, v.Ciphertext, s.rpcAAD(id, v))
+	if err != nil || !validRPCSecret(v.Version, string(plain)) {
+		clear(plain)
+		return nil, errors.New("RPC locked")
+	}
+	return plain, nil
 }
