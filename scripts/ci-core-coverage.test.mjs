@@ -18,7 +18,7 @@ test("Ubuntu acceptance executes Remote maintenance and the actual older reader"
   );
   assert.match(
     workflow,
-    /FASED_READER_PREDECESSOR:.*reader-predecessor-schema33/,
+    /FASED_READER_PREDECESSOR:\s+\$\{\{ github\.workspace \}\}\/\.evidence\/b01-connected-install\/reader-predecessor-schema33/,
   );
   assert.match(workflow, /TestApplicationReaderCompiledPredecessorIPC/);
   assert.match(workflow, /\.evidence\/b01-connected-install\/vm\/\*\.json/);

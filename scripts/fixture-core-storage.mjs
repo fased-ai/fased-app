@@ -256,19 +256,40 @@ func ValidManagedAccountRef(r AccountRef) bool {
     await writeFile(path.join(strategyRoot, file), bytes);
     storage["wenstrategy/" + file] = sha(bytes);
   }
-  // Storage projections compile their private reader helpers, but the archived
-  // router/command dispatch remain unchanged. These zero-value fields do not
-  // expose a research endpoint or enable fixture execution in the predecessor.
+  // Storage projections compile private readers without enabling their worker,
+  // owner or mutation routes. The current compact Updates UI needs only an
+  // authenticated read-only projection; the controller remains its nil value.
   const http = path.join(archivedRoot, "internal/core/http.go");
   const httpBefore = await readFile(http, "utf8");
   assert.ok(!httpBefore.includes("/api/v1/wen/"));
   assert.equal(httpBefore.split("type HTTPHandler struct {").length, 2);
+  const projectionMarker =
+    '\tswitch r.URL.Path {\n\tcase "/api/v1/updates/preferences":';
+  assert.equal(httpBefore.split(projectionMarker).length, 2);
+  const authentication = httpBefore.indexOf('"owner authentication required"');
+  assert.ok(
+    authentication >= 0 &&
+      authentication < httpBefore.indexOf(projectionMarker),
+  );
+  assert.ok(!httpBefore.includes('case "/api/v1/updates/application":'));
   await writeFile(
     http,
-    httpBefore.replace(
-      "type HTTPHandler struct {",
-      "type HTTPHandler struct {\n\twenResearchKey []byte\n\twenResearchOrigin string\n\tagentFixture bool",
-    ),
+    httpBefore
+      .replace(
+        "type HTTPHandler struct {",
+        "type HTTPHandler struct {\n\twenResearchKey []byte\n\twenResearchOrigin string\n\tagentFixture bool",
+      )
+      .replace(
+        projectionMarker,
+        `\tswitch r.URL.Path {
+\tcase "/api/v1/updates/application":
+\t\tif r.Method != http.MethodGet { writeError(w,405,"method not allowed");return }
+\t\tv,e:=h.store.ApplicationUpdates(r.Context())
+\t\tif e!=nil { writeError(w,500,"update status unavailable");return }
+\t\twriteJSON(w,200,v)
+\t\treturn
+\tcase "/api/v1/updates/preferences":`,
+      ),
   );
   storage["http.go"] = sha(await readFile(http));
   const pm1Root = path.join(archivedRoot, "internal/wenpm1");

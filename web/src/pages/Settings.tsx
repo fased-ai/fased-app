@@ -36,19 +36,6 @@ export function Settings() {
             <div className="settings-body">
               <InstanceSummary />
               <RemoteConnection />
-              {core.mode === "ready" && (
-                <details className="instance-diagnostics">
-                  <summary>{uiText("Diagnostics")}</summary>
-                  <dl>
-                    <dt>{uiText("Saved deployment preference")}</dt>
-                    <dd data-testid="saved-deployment-preference">
-                      {state.setup.host === "vps"
-                        ? uiText("Remote")
-                        : uiText("Local")}
-                    </dd>
-                  </dl>
-                </details>
-              )}
               <button className="secondary" onClick={() => setSetupOpen(true)}>
                 {core.mode === "ready"
                   ? uiText("Setup")
@@ -91,6 +78,16 @@ export function Settings() {
         <ApplicationUpdatesPanel />
         <details className="panel settings-advanced update-settings">
           <summary>{uiText("Diagnostics")}</summary>
+          {core.mode === "ready" && (
+            <dl className="settings-body">
+              <dt>{uiText("Saved deployment preference")}</dt>
+              <dd data-testid="saved-deployment-preference">
+                {state.setup.host === "vps"
+                  ? uiText("Remote")
+                  : uiText("Local")}
+              </dd>
+            </dl>
+          )}
           <UpdateStatusPanel />
         </details>
       </div>

@@ -137,14 +137,29 @@ func enrollmentPath(name string) (included bool, max int64, ok bool) {
 	}
 	parts := strings.Split(name, "/")
 	if len(parts) == 3 && parts[0] == "lifecycle" && update.IDOK(parts[1]) {
-		switch strings.TrimSuffix(parts[2], ".pending") {
+		leaf := strings.TrimSuffix(parts[2], ".pending")
+		switch leaf {
 		case "metadata.sqlite":
 			return true, MaxEnrollmentFileBytes, true
-		case "request.json", "recovery.json":
+		case "request.json", "recovery.json", "application.json", "reader-request.json", "reader-bootstrap.json":
 			return true, 16384, true
 		case "backup.lock":
 			if parts[2] == "backup.lock" {
 				return true, 0, true
+			}
+		}
+		for _, file := range []struct {
+			prefix, suffix string
+			max            int64
+		}{
+			{"application-", ".sqlite", MaxEnrollmentFileBytes},
+			{"reader-33-", ".sqlite", MaxEnrollmentFileBytes},
+			{"application-index-", ".json", 16384},
+			{"reader-request-", ".json", 16384},
+			{"reader-bootstrap-index-", ".json", 16384},
+		} {
+			if strings.HasPrefix(leaf, file.prefix) && strings.HasSuffix(leaf, file.suffix) && hexValue(strings.TrimSuffix(strings.TrimPrefix(leaf, file.prefix), file.suffix), 32) {
+				return true, file.max, true
 			}
 		}
 	}
@@ -308,7 +323,11 @@ func exportEnrollmentImage(ctx context.Context, dir string) (_ EnrollmentImage, 
 	if !ok || len(db.data) == 0 {
 		return out, nil, errEnrollmentImage
 	}
-	serialized, id, err := enrollmentSQLite(ctx, db.data, before["core.sqlite-wal"].data, true)
+	contents := map[string][]byte{}
+	for name, entry := range before {
+		contents[name] = entry.data
+	}
+	serialized, id, err := enrollmentSQLite(ctx, db.data, before["core.sqlite-wal"].data, true, contents)
 	if err != nil {
 		return out, nil, fmt.Errorf("enrollment source snapshot: %w", err)
 	}
@@ -342,7 +361,7 @@ func exportEnrollmentImage(ctx context.Context, dir string) (_ EnrollmentImage, 
 
 // SQLite reads and WAL reconstruction operate only on a disposable private copy.
 // Even a read-only WAL connection may create SHM; never let it touch the source.
-func enrollmentSQLite(ctx context.Context, data, wal []byte, serialize bool) ([]byte, string, error) {
+func enrollmentSQLite(ctx context.Context, data, wal []byte, serialize bool, files map[string][]byte) ([]byte, string, error) {
 	if len(data) == 0 || len(data) > MaxEnrollmentFileBytes || len(wal) > MaxEnrollmentFileBytes {
 		return nil, "", errEnrollmentImage
 	}
@@ -383,7 +402,7 @@ func enrollmentSQLite(ctx context.Context, data, wal []byte, serialize bool) ([]
 	if err != nil {
 		return nil, "", errEnrollmentImage
 	}
-	classified := map[string]bool{"instance": true, "sessions": true, "accounts": true, "update_pause": true, "agent_workspace": true, "wen_research": true, "agent_history": true, "sqlite_sequence": true}
+	classified := map[string]bool{"instance": true, "sessions": true, "accounts": true, "update_pause": true, "application_updates": true, "agent_workspace": true, "wen_research": true, "agent_history": true, "sqlite_sequence": true}
 	for tables.Next() {
 		var name string
 		if tables.Scan(&name) != nil || !classified[name] {
@@ -396,9 +415,12 @@ func enrollmentSQLite(ctx context.Context, data, wal []byte, serialize bool) ([]
 	if err != nil || len(classified) != 0 {
 		return nil, "", errEnrollmentImage
 	}
-	phase, _, err := readPause(ctx, c)
+	phase, pause, err := readPause(ctx, c)
 	if err != nil || phase == "paused" {
 		return nil, "", errors.New("finish existing update recovery before enrollment")
+	}
+	if err = enrollmentApplicationUpdates(ctx, c, id, phase, pause, files); err != nil {
+		return nil, "", err
 	}
 	// Parse existing current-schema records without migration, execution, recovery
 	// mutation or credential decryption; snapshot validates the archive contract.
@@ -435,12 +457,50 @@ func enrollmentSQLite(ctx context.Context, data, wal []byte, serialize bool) ([]
 	return image, id, nil
 }
 
+// Preserve the exact row/revision through SQLite serialization. Only idle or
+// independently bound settled history may move; enrollment never clears update
+// authority, releases its pause, repairs receipts or restores a database.
+func enrollmentApplicationUpdates(ctx context.Context, c snapshotReader, instance, phase string, pause pauseRecord, files map[string][]byte) error {
+	var count int
+	if c.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_schema WHERE name='application_updates' AND type='table'").Scan(&count) != nil || count != 1 || c.QueryRowContext(ctx, "SELECT count(*) FROM application_updates").Scan(&count) != nil || count != 1 {
+		return errEnrollmentImage
+	}
+	o, revision, err := readApplicationUpdate(ctx, c)
+	if err != nil || revision < 0 {
+		return errEnrollmentImage
+	}
+	if o == (ApplicationUpdateOperation{Phase: "idle"}) {
+		return nil
+	}
+	if !oneOf(o.Phase, "completed", "rolled-back") || o.Release == nil || o.Receipt == nil || o.Receipt.Phase != o.Phase || !update.IDOK(o.OwnerLease) || phase != "released" || pause.Request.IntentID != o.ID || pause.Request.Sequence != o.Release.Sequence || pause.Request.ManifestSHA256 != o.Release.ManifestSHA256 || pause.Request.Expected.InstanceID != instance {
+		return errors.New("finish application update work before enrollment")
+	}
+	var checkpoint ApplicationCheckpoint
+	dir := "lifecycle/" + o.ID + "/"
+	if update.StrictJSON(files[dir+"application.json"], &checkpoint) != nil || checkpoint.Version != 1 || checkpoint.OperationID != o.ID || checkpoint.ManifestSHA256 != o.Release.ManifestSHA256 || !hexValue(checkpoint.PreviousEngineSHA256, 32) || checkpoint.Pause.Version != 1 || checkpoint.Pause.State != "paused" || checkpoint.Pause.Request == nil || checkpoint.Pause.PauseID != pause.PauseID || update.SnapshotDigest("enrollment-update-pause", *checkpoint.Pause.Request) != update.SnapshotDigest("enrollment-update-pause", pause.Request) || !update.SameCoreMetadata(checkpoint.Pause.Core, pause.Request.Expected) || !hexValue(checkpoint.Snapshot.SHA256, 32) || checkpoint.Snapshot.File != "application-"+checkpoint.Snapshot.SHA256+".sqlite" || checkpoint.Snapshot.Size <= 0 || checkpoint.Snapshot.Size > MaxEnrollmentFileBytes {
+		return errEnrollmentImage
+	}
+	backup := files[dir+checkpoint.Snapshot.File]
+	if int64(len(backup)) != checkpoint.Snapshot.Size || metadataHash(backup) != checkpoint.Snapshot.SHA256 {
+		return errEnrollmentImage
+	}
+	expected := o.Release.EngineSHA256
+	if o.Phase == "rolled-back" {
+		expected = checkpoint.PreviousEngineSHA256
+	}
+	if o.Receipt.EngineSHA256 != expected {
+		return errEnrollmentImage
+	}
+	return nil
+}
+
 func validateEnrollmentImage(image EnrollmentImage) error {
 	if os.Geteuid() == 0 || image.Version != 1 || image.Schema != StateSchema || !validConnectionRef(image.InstanceID) || len(image.Files) == 0 || len(image.Files) > MaxEnrollmentFiles {
 		return errEnrollmentImage
 	}
 	var total int64
 	var database []byte
+	contents := map[string][]byte{}
 	prior := ""
 	for _, f := range image.Files {
 		include, max, ok := enrollmentPath(f.Path)
@@ -448,6 +508,7 @@ func validateEnrollmentImage(image EnrollmentImage) error {
 			return errEnrollmentImage
 		}
 		prior = f.Path
+		contents[f.Path] = f.Data
 		total += int64(len(f.Data))
 		if total > MaxEnrollmentImageBytes {
 			return errEnrollmentImage
@@ -461,7 +522,7 @@ func validateEnrollmentImage(image EnrollmentImage) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, id, err := enrollmentSQLite(ctx, database, nil, false)
+	_, id, err := enrollmentSQLite(ctx, database, nil, false, contents)
 	if err != nil || id != image.InstanceID {
 		return errEnrollmentImage
 	}

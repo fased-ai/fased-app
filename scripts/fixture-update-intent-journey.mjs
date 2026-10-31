@@ -161,25 +161,42 @@ export async function fixtureUpdateIntentJourney({
         .getByLabel("Owner password", { exact: true })
         .fill(appPassword);
       await page.getByRole("button", { name: "Sign in", exact: true }).click();
-      await page.locator("details.update-settings > summary").click();
       const panel = page.getByRole("region", {
-        name: "Update preferences & proposals",
+        name: "Updates",
+        exact: true,
       });
-      const card = panel.getByRole("article", {
-        name: "Update proposal Disposable Ubuntu review",
-      });
-      await expect(card.getByText("UNVERIFIED", { exact: true })).toBeVisible();
-      await expect(panel.getByLabel("IANA timezone")).toHaveValue(
+      await expect(
+        panel.getByLabel("Update mode", { exact: true }),
+      ).toHaveValue("manual");
+      await expect(
+        panel.getByRole("button", { name: "Check", exact: true }),
+      ).toBeDisabled();
+      await expect(
+        panel.getByText("Release channel unavailable", { exact: true }),
+      ).toBeVisible();
+      await panel.getByText("Schedule and version", { exact: true }).click();
+      await expect(panel.getByLabel("Timezone", { exact: true })).toHaveValue(
         policy.window.timeZone,
       );
+      await expect(panel.getByLabel("From", { exact: true })).toHaveValue(
+        policy.window.start,
+      );
+      await expect(panel.getByLabel("To", { exact: true })).toHaveValue(
+        policy.window.end,
+      );
+      await expect(
+        panel.getByText("Version pinned", { exact: true }),
+      ).toBeVisible();
       pass("policyCLIWriteActualUIRead", true);
-      await card
-        .getByRole("button", { name: "Mark reviewed", exact: true })
-        .click();
-      await expect(card).toContainText("reviewed");
-      let current = preferences();
+      // Unverified proposal metadata is an advanced CLI review, not an
+      // install card in the ordinary Updates panel. Reviewing grants no authority.
+      let current = preferences({
+        revision: v.revision,
+        action: "review",
+        digest: v.proposals[0].digest,
+      });
       pass(
-        "policyUIReviewCannotGrantAuthority",
+        "policyCLIReviewCannotGrantAuthority",
         current.proposals[0].state === "reviewed" &&
           !current.proposals[0].verified &&
           current.notifications.length === 0 &&
@@ -193,13 +210,18 @@ export async function fixtureUpdateIntentJourney({
           preferences({ revision: v.revision, action: "policy", policy }),
         ),
       );
-      await panel.getByLabel("Show notices for pending proposals").uncheck();
-      await panel
-        .getByRole("button", { name: "Save update preferences", exact: true })
-        .click();
-      await expect(panel.getByRole("status")).toContainText(
-        "Saved app metadata only",
+      // Fetch the revision changed by CLI review before the next UI mutation.
+      await page.reload();
+      const notices = panel.getByLabel("Show in inbox", { exact: true });
+      await expect(notices).toBeChecked();
+      const saved = page.waitForResponse(
+        (response) =>
+          response.url().endsWith("/api/v1/updates/preferences") &&
+          response.request().method() === "PUT",
       );
+      await notices.uncheck();
+      assert((await saved).ok(), "compact policy auto-save must succeed");
+      await expect(notices).not.toBeChecked();
       current = preferences();
       pass(
         "policyUIWriteCLIRead",

@@ -93,7 +93,7 @@ jobs:
         run: node scripts/build-inspection-predecessor.mjs --application-reader
       - name: Verify authenticated older-reader handoff
         env:
-          FASED_READER_PREDECESSOR: .evidence/b01-connected-install/reader-predecessor-schema33
+          FASED_READER_PREDECESSOR: ${{ github.workspace }}/.evidence/b01-connected-install/reader-predecessor-schema33
         run: go test -race ./cmd/fased-app -run '^TestApplicationReaderCompiledPredecessorIPC$' -count=1
       - name: Disposable VM prerequisites
         run: |

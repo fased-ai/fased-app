@@ -10468,7 +10468,8 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
   await expect(
     page.getByRole("heading", { name: "Browser demo data", exact: true }),
   ).toHaveCount(0);
-  const notices = page.getByLabel("Show notices for pending proposals");
+  const updates = page.getByRole("region", { name: "Updates", exact: true });
+  const notices = updates.getByLabel("Show in inbox");
   await expect(notices).toBeChecked();
   const checkbox = await notices.evaluate((input) => {
     const box = input.getBoundingClientRect(),
@@ -10478,9 +10479,10 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
   expect(checkbox.left).toBeLessThan(24);
   expect(checkbox.height).toBeGreaterThanOrEqual(isMobile ? 44 : 36);
   await checkLayout("settings", ".settings-workspace");
+  await expect(updates).toBeVisible();
   await expect(
-    page.getByRole("region", { name: "Update preferences & proposals" }),
-  ).toBeVisible();
+    updates.getByRole("button", { name: "Check", exact: true }),
+  ).toBeDisabled();
   if (!isMobile) {
     await page.setViewportSize({ width: 900, height: 1000 });
     expect(
