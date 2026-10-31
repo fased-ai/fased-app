@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/fased-ai/fased-app/internal/core"
 )
 
 type maintenanceHost struct {
@@ -34,7 +36,7 @@ func maintenanceHostFor(t *testing.T) *maintenanceHost {
 	}
 	f := &maintenanceHost{host: h, ops: o, manifest: m, enabled: map[string]bool{}, running: map[string]bool{}}
 	f.ops.applicationContract = func(context.Context, Manifest) ([]byte, error) {
-		return []byte(`{"version":"test","stateSchema":35,"maintenanceProtocol":1}`), nil
+		return []byte(fmt.Sprintf(`{"version":"test","stateSchema":%d,"maintenanceProtocol":1}`, core.StateSchema)), nil
 	}
 	command := o.command
 	f.ops.command = func(ctx context.Context, a ...string) ([]byte, error) {

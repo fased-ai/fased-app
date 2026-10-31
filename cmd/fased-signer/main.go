@@ -107,7 +107,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 			return err
 		}
 		defer server.Close()
-		fmt.Fprintf(out, "Signer ready; pid=%d uid=%d; financial signing unavailable.\n", os.Getpid(), os.Geteuid())
+		fmt.Fprintf(out, "Disposable signer ready; pid=%d uid=%d; real wallets and signing unavailable.\n", os.Getpid(), os.Geteuid())
 		<-ctx.Done()
 		return nil
 	}
