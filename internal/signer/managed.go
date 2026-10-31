@@ -20,9 +20,12 @@ func managedRefValid(r AccountRef) bool {
 	return r.Version == 2 && managedNetwork(r.Network) && validID(r.SignerID) && validID(r.WalletID) && validID(r.Epoch) && err == nil && len(b) == 32 && hex.EncodeToString(b) == r.PublicKey
 }
 func validEnvelopeIdentity(e envelope) bool {
-	return e.Version == 1 && !e.FreshManaged && validRef(e.Ref) || e.Version == 2 && !e.FreshManaged && e.RecoveryRequired && managedRefValid(e.Ref) || e.Version == 3 && e.FreshManaged && e.Purpose == "vault" && e.RecoveryRequired && managedRefValid(e.Ref)
+	return e.Admission == nil && (e.Version == 1 && !e.FreshManaged && validRef(e.Ref) || e.Version == 2 && !e.FreshManaged && e.RecoveryRequired && managedRefValid(e.Ref) || e.Version == 3 && e.FreshManaged && e.Purpose == "vault" && e.RecoveryRequired && managedRefValid(e.Ref)) || ordinaryEnvelope(e)
 }
 func envelopeForNetwork(e envelope, network string) bool {
+	if public, context, ordinary := ordinaryContextForNetwork(network); ordinary {
+		return ordinaryEnvelope(e) && e.Ref.Network == public && e.Admission.Profile == context.Profile && e.Admission.Provenance == context.Provenance
+	}
 	if network == "" {
 		return e.Version == 1 && validRef(e.Ref)
 	}

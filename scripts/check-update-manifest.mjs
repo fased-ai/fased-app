@@ -66,8 +66,8 @@ try {
   );
   pass(
     "schemaPauseAndApprovalFeatures",
-    contracts[0].state[0].versions.min === 35 &&
-      contracts[0].state[0].versions.max === 35 &&
+    contracts[0].state[0].versions.min === 36 &&
+      contracts[0].state[0].versions.max === 36 &&
       contracts[0].state[0].features.includes("application-updates-v1") &&
       contracts[0].state[0].features.includes("agents-task-analysis-v1") &&
       contracts[0].state[0].features.includes("agents-onchain-swaps-v1") &&

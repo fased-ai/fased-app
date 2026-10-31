@@ -24,3 +24,11 @@ func ManagedUpdateContract() update.Contract {
 		{Name: "operations", Versions: update.Range{Min: 1, Max: 1}, Features: []string{"managed-key-history-v1", "managed-maintenance-v2", "install-completion-v1", "managed-swap-fixture-v1", receiptRPCCredentialFeature}},
 	}}
 }
+
+// OrdinaryCustodyReadContract declares decoding only, not installed update authority.
+func OrdinaryCustodyReadContract() update.Contract {
+	return update.Contract{Version: 1, Component: "signer", Protocol: 3, PeerProtocol: update.Range{Min: 1, Max: 1}, Features: []string{"ordinary-custody-read-v1"}, State: []update.StateSupport{
+		{Name: "vault", Versions: update.Range{Min: 4, Max: 4}, Features: []string{"ordinary-custody-admission-v1", "controlled-provenance-v1", "owner-profile-v1", "owner-input-provenance-v1", "key-only-recovery-hold-v1"}},
+		{Name: "operations", Versions: update.Range{Min: 1, Max: 1}, Features: []string{"ordinary-key-genesis-v1"}},
+	}}
+}

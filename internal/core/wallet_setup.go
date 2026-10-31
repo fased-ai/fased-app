@@ -13,6 +13,8 @@ import (
 // WalletSetup is public, non-persistent onboarding state. Owner key operations
 // stay exclusively in the existing immutable owner helper, not this API.
 type WalletSetup struct {
+	CustodyClass        string `json:"custodyClass,omitempty"`
+	AdmissionHeld       bool   `json:"admissionHeld,omitempty"`
 	InstanceID          string `json:"instanceId"`
 	Source              string `json:"source,omitempty"`
 	Version             int    `json:"version"`
@@ -49,11 +51,23 @@ func (s *Store) walletSetup(live FixtureView) WalletSetup {
 		return v
 	}
 	status := live.Status
-	if !status.FixtureOnly || status.WalletSigner || status.FinancialExecution {
+	if (!status.FixtureOnly && !ordinaryContext(status)) || status.WalletSigner || status.FinancialExecution {
 		return v
 	}
+	if status.Custody != nil {
+		if !ordinaryContext(status) {
+			return v
+		}
+		v.FixtureOnly = status.FixtureOnly
+		v.CustodyClass = status.Custody.Class
+		v.AdmissionHeld = true
+		v.OwnerSupported = false
+		if status.Account != nil && !ordinaryStatus(status) {
+			return v
+		}
+	}
 	if status.Account != nil {
-		if !signer.ValidManagedAccountRef(*status.Account) {
+		if !signer.ValidManagedAccountRef(*status.Account) && !ordinaryStatus(status) {
 			v.State = "legacy"
 			return v
 		}
@@ -62,6 +76,10 @@ func (s *Store) walletSetup(live FixtureView) WalletSetup {
 		} else if v.Network != status.Account.Network {
 			return v
 		}
+	}
+	if ordinaryStatus(status) {
+		v.CustodyClass = status.Custody.Class
+		v.AdmissionHeld = true
 	}
 	if solanaGenesis(v.Network) == "" {
 		v.State = "legacy"
@@ -109,7 +127,7 @@ func (s *Store) SetupAccount(ctx context.Context, c AccountSetupCommand) (Accoun
 		}
 		a.Version, a.Mode = 2, "watch"
 	case "attach":
-		if c.Address != "" || c.Reference == nil || !signer.ValidManagedAccountRef(*c.Reference) || c.Reference.Network != c.Network {
+		if c.Address != "" || c.Reference == nil || (!signer.ValidManagedAccountRef(*c.Reference) && !signer.ValidOrdinaryAccountRef(*c.Reference)) || c.Reference.Network != c.Network {
 			return AccountsView{}, fail
 		}
 		live := s.fixtureView(ctx)
@@ -121,12 +139,18 @@ func (s *Store) SetupAccount(ctx context.Context, c AccountSetupCommand) (Accoun
 			return AccountsView{}, errors.New("refresh the current signer identity before adding this wallet")
 		}
 		a.Version, a.Mode, a.PublicKey = 3, "fixture-managed", c.Reference.PublicKey
+		if signer.ValidOrdinaryAccountRef(*c.Reference) {
+			if !ordinaryStatus(live.Status) {
+				return AccountsView{}, errors.New("ordinary custody admission unavailable")
+			}
+			a.Version, a.Mode = 4, "managed"
+		}
 		ref := *c.Reference
 		a.Signer = &ref
 	}
 	for _, old := range r.Accounts {
 		if old.Mode == a.Mode && old.Network == a.Network && old.PublicKey == a.PublicKey {
-			if a.Mode == "fixture-managed" && old.Signer != nil && a.Signer != nil && *old.Signer != *a.Signer {
+			if (a.Mode == "fixture-managed" || a.Mode == "managed") && old.Signer != nil && a.Signer != nil && *old.Signer != *a.Signer {
 				// Recovery creates a distinct authority epoch. Keep the old public
 				// record/credential binding intact; explicitly attach the new one.
 				continue

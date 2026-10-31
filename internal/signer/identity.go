@@ -16,7 +16,7 @@ type PublicIdentity struct {
 }
 
 func (r AccountRef) PublicIdentity() *PublicIdentity {
-	if !validRef(r) && !managedRefValid(r) {
+	if !validRef(r) && !managedRefValid(r) && !ValidOrdinaryAccountRef(r) {
 		return nil
 	}
 	key, _ := hex.DecodeString(r.PublicKey)
@@ -56,6 +56,9 @@ func (s Status) PublicView() PublicStatus {
 	p := PublicStatus{Status: s}
 	if s.Account != nil {
 		p.PublicIdentity = s.Account.PublicIdentity()
+		if p.PublicIdentity != nil {
+			p.PublicIdentity.FixtureOnly = s.FixtureOnly
+		}
 	}
 	return p
 }

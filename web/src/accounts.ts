@@ -11,7 +11,7 @@ export type Account = {
   version: number;
   id: string;
   name: string;
-  mode: "watch" | "external" | "fixture-managed";
+  mode: "watch" | "external" | "fixture-managed" | "managed";
   network: string;
   publicKey: string;
   signer?: AccountRef;
@@ -39,6 +39,8 @@ export type AccountsRecord = {
 export type AccountsView = {
   setup?: {
     version: 1;
+    custodyClass?: "ordinary-custody:v1";
+    admissionHeld?: boolean;
     instanceId?: string;
     source?: "local" | "remote";
     network: string;
@@ -51,7 +53,7 @@ export type AccountsView = {
       | "recovery"
       | "update-held"
       | "legacy";
-    fixtureOnly: true;
+    fixtureOnly: boolean;
     networkWatchEnabled: boolean;
     ownerSupported: boolean;
   };
@@ -60,6 +62,14 @@ export type AccountsView = {
   fixture: {
     available: boolean;
     status?: {
+      custody?: {
+        version: number;
+        class: string;
+        profile: string;
+        origin: "generated" | "imported";
+        provenance: string;
+      };
+      admissionHeld?: boolean;
       account?: AccountRef;
       publicIdentity?: {
         version: number;
@@ -145,19 +155,50 @@ export function walletSetupReference(
   const identity = status?.publicIdentity;
   if (
     !setup ||
+    !status ||
+    !ref ||
+    !identity ||
     !["locked", "unlocked", "recovery"].includes(setup.state) ||
-    !setup.fixtureOnly ||
     !view.fixture.available ||
     !walletNetwork(setup.network) ||
-    ref?.version !== 2 ||
     ref.network !== setup.network ||
-    identity?.version !== 2 ||
+    identity.version !== ref.version ||
     identity.network !== ref.network ||
     identity.chain !== "solana" ||
-    !identity.fixtureOnly ||
-    !identity.address
+    !identity.address ||
+    status.walletSigner ||
+    status.financialExecution
   )
     return;
+  if (ref.version === 2) {
+    if (!setup.fixtureOnly || !identity.fixtureOnly || setup.custodyClass)
+      return;
+  } else if (ref.version === 3) {
+    const admission = status.custody;
+    if (
+      setup.custodyClass !== "ordinary-custody:v1" ||
+      !setup.admissionHeld ||
+      !status.admissionHeld ||
+      admission?.version !== 1 ||
+      admission.class !== setup.custodyClass ||
+      !["generated", "imported"].includes(admission.origin)
+    )
+      return;
+    const controlled =
+      setup.fixtureOnly &&
+      identity.fixtureOnly &&
+      admission.provenance === "controlled-disposable:v1" &&
+      ["controlled-disposable:v1", "owner-authorized:v1"].includes(
+        admission.profile,
+      );
+    const owner =
+      !setup.fixtureOnly &&
+      !identity.fixtureOnly &&
+      admission.profile === "owner-authorized:v1" &&
+      admission.provenance === "owner-input:v1";
+    if (!controlled && !owner) return;
+  } else return;
+
   return ref;
 }
 export function walletOwnerCommands(
@@ -166,7 +207,8 @@ export function walletOwnerCommands(
   selectedNetwork: string,
 ): string[] {
   const setup = view.setup;
-  if (!setup?.ownerSupported || !setup.fixtureOnly) return [];
+  if (!setup?.ownerSupported || !setup.fixtureOnly || setup.custodyClass)
+    return [];
   const network =
     setup.state === "not-installed" ? selectedNetwork : setup.network;
   if (

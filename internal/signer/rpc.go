@@ -24,7 +24,7 @@ type Config struct {
 }
 
 func (c Config) Validate() error {
-	modeOK := c.Version == 1 && c.Mode == FixtureNetwork && c.Network == "" || c.Version == 2 && c.Mode == ManagedFixtureMode && managedNetwork(c.Network)
+	modeOK := c.Version == 1 && c.Mode == FixtureNetwork && c.Network == "" || c.Version == 2 && c.Mode == ManagedFixtureMode && managedNetwork(c.Network) || c.Version == 3 && c.Mode == OrdinaryCustodyMode && managedNetwork(c.Network)
 	if !modeOK || !validID(c.SignerID) || c.OwnerUID <= 0 || c.AppUID <= 0 || c.SignerUID <= 0 ||
 		c.OwnerUID == c.AppUID || c.OwnerUID == c.SignerUID || c.AppUID == c.SignerUID || c.StateDir == c.SocketDir {
 		return errors.New("fixture requires a versioned identity and three distinct non-root UIDs")
@@ -69,8 +69,15 @@ func execute(v *Vault, r Request, owner bool) Response {
 	defer wipe(r.RPCKey)
 	defer wipe(r.Password)
 	defer wipe(r.NewPassword)
-	if r.Action == "import-fixture-seed" || r.Action == "import-managed-seed" {
+	if r.Action == "import-fixture-seed" || r.Action == "import-managed-seed" || r.Action == "import-ordinary-seed" {
 		defer wipe(r.Document)
+	}
+	if v.ordinary {
+		switch r.Action {
+		case "status", "create", "import-ordinary-seed", "unlock", "lock", "backup", "verify-backup", "restore":
+		default:
+			return Response{Error: ErrUnavailable.Error()}
+		}
 	}
 	var document []byte
 	var err error
@@ -107,7 +114,7 @@ func execute(v *Vault, r Request, owner bool) Response {
 	}
 	if v.network != "" {
 		switch r.Action {
-		case "receipt-rpc-save", "receipt-rpc-unlock", "swap-approve", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel", "status", "create", "import-managed-seed", "unlock", "lock", "backup", "verify-backup", "restore", "fixture-update-inventory", "fixture-update-status", "fixture-update-prepare", "fixture-update-abort", "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish", "fixture-update-preflight", "fixture-install-controller":
+		case "receipt-rpc-save", "receipt-rpc-unlock", "swap-approve", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel", "status", "create", "import-managed-seed", "import-ordinary-seed", "unlock", "lock", "backup", "verify-backup", "restore", "fixture-update-inventory", "fixture-update-status", "fixture-update-prepare", "fixture-update-abort", "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish", "fixture-update-preflight", "fixture-install-controller":
 		default:
 			return Response{Error: ErrUnavailable.Error()}
 		}
@@ -215,6 +222,8 @@ func execute(v *Vault, r Request, owner bool) Response {
 	case "status":
 	case "import-fixture-seed":
 		err = v.ImportFixtureSeed(r.Document, r.Password)
+	case "import-ordinary-seed":
+		err = v.ImportControlledOrdinarySeed(r.Document, r.Password)
 	case "create":
 		err = v.Create(r.Password)
 	case "unlock":

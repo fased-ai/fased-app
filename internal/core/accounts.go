@@ -57,6 +57,16 @@ func managedNetworkAccount(a Account) bool {
 	return a.Version == 3 && a.Mode == "fixture-managed" && a.Signer != nil && signer.ValidManagedAccountRef(*a.Signer) && a.Signer.Network == a.Network && a.Signer.PublicKey == a.PublicKey
 }
 
+func ordinaryContext(s *signer.PublicStatus) bool {
+	if s == nil || s.Custody == nil || !s.Custody.ValidContext() || !s.AdmissionHeld || s.WalletSigner || s.FinancialExecution {
+		return false
+	}
+	return s.Custody.Provenance == signer.ControlledCustodyProfile && s.FixtureOnly || s.Custody.Provenance == signer.OwnerKeyProvenance && !s.FixtureOnly && signer.OrdinaryOwnerAdmissionEnabled()
+}
+func ordinaryStatus(s *signer.PublicStatus) bool {
+	return ordinaryContext(s) && s.Custody.Valid() && s.Account != nil && signer.ValidOrdinaryAccountRef(*s.Account)
+}
+
 func defaultAccounts() AccountsRecord {
 	return AccountsRecord{Version: 1, Accounts: []Account{}, Proposals: []ProposalDraft{}}
 }
@@ -95,7 +105,7 @@ func (s *Store) configureSigner(path string) error {
 		defer cancel()
 		return signer.Call(ctx, c, false, r)
 	}
-	if c.Version == 2 {
+	if c.Version == 2 || c.Version == 3 {
 		s.custodyNetwork = c.Network
 	}
 	return nil
@@ -132,18 +142,21 @@ func (s *Store) Accounts(ctx context.Context) (AccountsView, error) {
 	v.Setup = s.walletSetup(v.Fixture)
 	v.Addresses = map[string]string{}
 	for _, a := range r.Accounts {
-		if (a.Version == 2 || a.Version == 3) && solanaGenesis(a.Network) != "" {
+		if (a.Version == 2 || a.Version == 3 || a.Version == 4) && solanaGenesis(a.Network) != "" {
 			if address, err := signer.FormatPublicKey(a.PublicKey); err == nil {
 				v.Addresses[a.ID] = address
 			}
 		}
 		state := "public-record-only"
-		if a.Mode == "fixture-managed" {
+		if a.Mode == "fixture-managed" || a.Mode == "managed" {
 			state = "unverified"
 			if v.Fixture.Status != nil && v.Fixture.Status.Account != nil {
 				state = "stale"
 				if a.Signer != nil && *a.Signer == *v.Fixture.Status.Account {
 					state = "current-fixture"
+					if ordinaryNetworkAccount(a) && ordinaryStatus(v.Fixture.Status) {
+						state = "current-custody-held"
+					}
 				}
 			}
 		}
@@ -188,7 +201,7 @@ func validateAccounts(r AccountsRecord, old AccountsRecord, live FixtureView, no
 		oldProposals[p.Proposal.ID] = p
 	}
 	for _, a := range r.Accounts {
-		if !((a.Version == 1 && a.Network == signer.FixtureNetwork) || (a.Version == 2 && a.Mode == "watch" && a.Signer == nil && solanaGenesis(a.Network) != "") || managedNetworkAccount(a)) || !hexValue(a.ID, 16) || !validName(a.Name) || !hexValue(a.PublicKey, 32) {
+		if !((a.Version == 1 && a.Network == signer.FixtureNetwork) || (a.Version == 2 && a.Mode == "watch" && a.Signer == nil && solanaGenesis(a.Network) != "") || managedNetworkAccount(a) || ordinaryNetworkAccount(a)) || !hexValue(a.ID, 16) || !validName(a.Name) || !hexValue(a.PublicKey, 32) {
 			return errors.New("use a versioned disposable public account; real wallets are disabled")
 		}
 		if _, ok := accounts[a.ID]; ok {
@@ -198,6 +211,16 @@ func validateAccounts(r AccountsRecord, old AccountsRecord, live FixtureView, no
 		case "watch", "external":
 			if a.Signer != nil {
 				return errors.New("public/manual records have no signer authority")
+			}
+		case "managed":
+			if !ordinaryNetworkAccount(a) {
+				return errors.New("invalid ordinary custody reference")
+			}
+			prior, ok := oldAccounts[a.ID]
+			if !ok || prior.Signer == nil || *prior.Signer != *a.Signer {
+				if !ordinaryStatus(live.Status) || *live.Status.Account != *a.Signer || live.Status.UpdateHeld {
+					return errors.New("stale or unavailable ordinary custody reference")
+				}
 			}
 		case "fixture-managed":
 			if a.Signer == nil || !(a.Version == 1 && signer.ValidAccountRef(*a.Signer) || managedNetworkAccount(a)) || a.Signer.PublicKey != a.PublicKey || a.Signer.Network != a.Network {

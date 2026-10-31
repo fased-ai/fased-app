@@ -394,7 +394,10 @@ export function AccountManagement() {
                             ? "Manual"
                             : view.accountStates[a.id] === "stale"
                               ? "Reconnect"
-                              : view.accountStates[a.id] === "current-fixture"
+                              : [
+                                    "current-fixture",
+                                    "current-custody-held",
+                                  ].includes(view.accountStates[a.id])
                                 ? walletSetupLabel(view)
                                 : "Unverified",
                       )}
@@ -459,6 +462,7 @@ export function AccountManagement() {
                         {
                           "public-record-only": "Public reference only",
                           "current-fixture": "Current disposable reference",
+                          "current-custody-held": "Recovery required",
                           stale:
                             "Stale reference — refresh before proposing permissions",
                           unverified:

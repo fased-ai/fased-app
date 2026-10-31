@@ -215,6 +215,12 @@ func ServeControlledSwapCredentialsFixture(ctx context.Context, c Config, factor
 	return serveCredentialConfigured(ctx, c, false, nil, factory)
 }
 func serveCredentialConfigured(ctx context.Context, c Config, guarded bool, observer SwapObserver, factory func(onchain.CredentialAccess) (SwapObserver, error)) (*Server, error) {
+	return serveCustodyConfigured(ctx, c, guarded, observer, factory, false)
+}
+func serveCustodyConfigured(ctx context.Context, c Config, guarded bool, observer SwapObserver, factory func(onchain.CredentialAccess) (SwapObserver, error), controlledOrdinary bool) (*Server, error) {
+	if c.Version == 3 && !controlledOrdinary && !OrdinaryOwnerAdmissionEnabled() || controlledOrdinary && (c.Version != 3 || c.Mode != OrdinaryCustodyMode || observer != nil || factory != nil) {
+		return nil, ErrUnavailable
+	}
 	if _, e := os.Lstat(filepath.Dir(c.StateDir) + "/fixture-inspection-v1/forward.json"); !os.IsNotExist(e) && !guarded {
 		return nil, errors.New("guarded fixture startup required before state access")
 	}
@@ -239,7 +245,15 @@ func serveCredentialConfigured(ctx context.Context, c Config, guarded bool, obse
 	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
 		return nil, err
 	}
-	v, err := openVaultNetwork(c.StateDir, c.SignerID, false, c.Network)
+	network := c.Network
+	if c.Version == 3 {
+		namespace := ordinaryOwnerNamespace
+		if controlledOrdinary {
+			namespace = ordinaryNamespace
+		}
+		network = namespace + network
+	}
+	v, err := openVaultNetwork(c.StateDir, c.SignerID, false, network)
 	if err != nil {
 		return nil, err
 	}

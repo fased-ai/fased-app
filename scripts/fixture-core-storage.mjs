@@ -11,6 +11,7 @@ export async function currentStorageFixture(archivedRoot) {
   const sha = (b) => createHash("sha256").update(b).digest("hex");
   for (const file of [
     "agents.go",
+    "ordinary_custody.go",
     "agent_strategies.go",
     "onchain.go",
     "onchain_storage.go",
@@ -99,6 +100,24 @@ export async function currentStorageFixture(archivedRoot) {
     await writeFile(path.join(archivedRoot, "internal/core", file), bytes);
     storage[file] = sha(bytes);
   }
+  // Public-reader-only dependency: never activate owner/vault/terminal migration.
+  await writeFile(
+    path.join(archivedRoot, "internal/core/ordinary_custody_projection.go"),
+    `package core
+import "context"
+func ordinaryCustodySettled(context.Context,snapshotReader,string,ApplicationUpdateOperation)error{return ErrCorePaused}
+`,
+  );
+  const vaultPublicPath = path.join(archivedRoot, "internal/signer/vault.go");
+  const vaultPublic = await readFile(vaultPublicPath, "utf8");
+  assert.equal(vaultPublic.split("type Status struct {").length, 2);
+  await writeFile(
+    vaultPublicPath,
+    vaultPublic.replace(
+      "type Status struct {",
+      'type Status struct {\n Custody *CustodyAdmission `json:"custody,omitempty"`\n AdmissionHeld bool `json:"admissionHeld,omitempty"`',
+    ),
+  );
   // Preserve the new storage field without adding any configuration routes.
   const accounts = path.join(archivedRoot, "internal/core/accounts.go");
   const accountBefore = await readFile(accounts, "utf8");
@@ -168,6 +187,7 @@ func ValidManagedAccountRef(r AccountRef) bool {
     "onchain_state_test.go",
     "testdata/onchain-reader.json",
     "journal.go",
+    "ordinary_public.go",
   ]) {
     const b = await readFile("internal/signer/" + name);
     await writeFile(path.join(signerRoot, name), b);
@@ -372,7 +392,7 @@ func ValidManagedAccountRef(r AccountRef) bool {
       )
       .replace(
         marker,
-        "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }; if schema <= 6 { if err = migrateAIConnections(ctx, db); err != nil { return nil, err } }; if schema <= 7 { if err = migrateAgentNews(ctx, db); err != nil { return nil, err } }; if schema <= 8 { if err = migrateAIAdmission(ctx, db); err != nil { return nil, err } }; if schema <= 9 { if err = migrateWENPaper(ctx, db); err != nil { return nil, err } }; if schema <= 10 { if err = migrateWENResearch(ctx, db); err != nil { return nil, err } }; if schema <= 11 { if err = migrateWENResearchAI(ctx, db); err != nil { return nil, err } }; if schema <= 12 { if err = migrateWENResearchLoop(ctx, db); err != nil { return nil, err } }; if schema <= 13 { if err = migrateWENSessions(ctx, db); err != nil { return nil, err } }; if schema <= 14 { if err = migrateWENFixtureRuns(ctx, db); err != nil { return nil, err } }; if schema <= 15 { if err = migratePlaybooks(ctx, db); err != nil { return nil, err } }; if schema <= 16 { if err = migrateTaskCalendar(ctx, db); err != nil { return nil, err } }; if schema <= 17 { if err = migrateTaskCron(ctx, db); err != nil { return nil, err } }; if schema <= 18 { if err = migrateAgentChat(ctx, db); err != nil { return nil, err } }; if schema <= 19 { if err = migrateAccountRPC(ctx, db); err != nil { return nil, err } }; if schema <= 20 { if err = migrateProviderRPC(ctx, db); err != nil { return nil, err } }; if schema <= 21 { if err = migrateManagedKeys(ctx, db); err != nil { return nil, err } }; if schema <= 22 { if err = migrateProviderAccounts(ctx, db, dir); err != nil { return nil, err } }; if schema <= 23 { if err = migrateProviderModels(ctx, db); err != nil { return nil, err } }; if schema <= 24 { if err = migrateNativeProviders(ctx, db); err != nil { return nil, err } }; if schema <= 25 { if err = migrateSignInPlan(ctx, db); err != nil { return nil, err } }; if schema <= 26 { if err = migrateLocalProviders(ctx, db); err != nil { return nil, err } }; if schema <= 27 { if err = migrateNewsWatch(ctx, db); err != nil { return nil, err } }; if schema <= 28 { if err = migrateTaskAnalysis(ctx, db); err != nil { return nil, err } }; if schema <= 29 { if err = migrateStrategies(ctx, db); err != nil { return nil, err } }; if schema <= 30 { if err = migrateOnchain(ctx, db); err != nil { return nil, err } }; if schema <= 31 { if err = migrateManagedSwaps(ctx, db); err != nil { return nil, err } }; if schema <= 32 { if err = migrateVenueCredentials(ctx, db); err != nil { return nil, err } }; if schema <= 34 { if err = migrateApplicationUpdates(ctx, db); err != nil { return nil, err } }\n" +
+        "\tif schema <= 3 { if err = migrateAgents(ctx, db); err != nil { return nil, err } }; if schema <= 4 { if err = migrateAgentAI(ctx, db); err != nil { return nil, err } }; if schema <= 5 { if err = migrateTaskAI(ctx, db); err != nil { return nil, err } }; if schema <= 6 { if err = migrateAIConnections(ctx, db); err != nil { return nil, err } }; if schema <= 7 { if err = migrateAgentNews(ctx, db); err != nil { return nil, err } }; if schema <= 8 { if err = migrateAIAdmission(ctx, db); err != nil { return nil, err } }; if schema <= 9 { if err = migrateWENPaper(ctx, db); err != nil { return nil, err } }; if schema <= 10 { if err = migrateWENResearch(ctx, db); err != nil { return nil, err } }; if schema <= 11 { if err = migrateWENResearchAI(ctx, db); err != nil { return nil, err } }; if schema <= 12 { if err = migrateWENResearchLoop(ctx, db); err != nil { return nil, err } }; if schema <= 13 { if err = migrateWENSessions(ctx, db); err != nil { return nil, err } }; if schema <= 14 { if err = migrateWENFixtureRuns(ctx, db); err != nil { return nil, err } }; if schema <= 15 { if err = migratePlaybooks(ctx, db); err != nil { return nil, err } }; if schema <= 16 { if err = migrateTaskCalendar(ctx, db); err != nil { return nil, err } }; if schema <= 17 { if err = migrateTaskCron(ctx, db); err != nil { return nil, err } }; if schema <= 18 { if err = migrateAgentChat(ctx, db); err != nil { return nil, err } }; if schema <= 19 { if err = migrateAccountRPC(ctx, db); err != nil { return nil, err } }; if schema <= 20 { if err = migrateProviderRPC(ctx, db); err != nil { return nil, err } }; if schema <= 21 { if err = migrateManagedKeys(ctx, db); err != nil { return nil, err } }; if schema <= 22 { if err = migrateProviderAccounts(ctx, db, dir); err != nil { return nil, err } }; if schema <= 23 { if err = migrateProviderModels(ctx, db); err != nil { return nil, err } }; if schema <= 24 { if err = migrateNativeProviders(ctx, db); err != nil { return nil, err } }; if schema <= 25 { if err = migrateSignInPlan(ctx, db); err != nil { return nil, err } }; if schema <= 26 { if err = migrateLocalProviders(ctx, db); err != nil { return nil, err } }; if schema <= 27 { if err = migrateNewsWatch(ctx, db); err != nil { return nil, err } }; if schema <= 28 { if err = migrateTaskAnalysis(ctx, db); err != nil { return nil, err } }; if schema <= 29 { if err = migrateStrategies(ctx, db); err != nil { return nil, err } }; if schema <= 30 { if err = migrateOnchain(ctx, db); err != nil { return nil, err } }; if schema <= 31 { if err = migrateManagedSwaps(ctx, db); err != nil { return nil, err } }; if schema <= 32 { if err = migrateVenueCredentials(ctx, db); err != nil { return nil, err } }; if schema <= 34 { if err = migrateApplicationUpdates(ctx, db); err != nil { return nil, err } }; if schema <= 35 { if err = migrateOrdinaryCustody(ctx, db, dir); err != nil { return nil, err } }\n" +
           marker,
       ),
   );
@@ -402,5 +422,11 @@ func ValidManagedAccountRef(r AccountRef) bool {
   );
   storage["signer/reader-test-output"] = sha(Buffer.from(readerLog));
 
+  storage["ordinary_custody_projection.go"] = sha(
+    await readFile(
+      path.join(archivedRoot, "internal/core/ordinary_custody_projection.go"),
+    ),
+  );
+  storage["signer/vault.go"] = sha(await readFile(vaultPublicPath));
   return { fixtureOnly: true, exactHistoricalBinary: false, storage };
 }
