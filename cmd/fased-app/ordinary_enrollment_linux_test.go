@@ -41,3 +41,24 @@ func TestOrdinaryEnrollmentOwnerBoundary(t *testing.T) {
 		t.Fatal("real key admission enabled")
 	}
 }
+
+func TestCustodyRuntimeOwnerIdentity(t *testing.T) {
+	for _, row := range []struct {
+		name, location    string
+		version, expected int
+	}{
+		{"legacy-local", "local", 1, 0},
+		{"legacy-remote", "remote", 1, 1001},
+		{"managed-local", "local", 2, 1001},
+		{"managed-remote", "remote", 2, 1001},
+		{"ordinary-local", "local", 3, 1001},
+		{"ordinary-remote", "remote", 3, 1001},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			config := signer.Config{Version: row.version, OwnerUID: 1001, AppUID: 999}
+			if got := custodyRuntimeOwnerUID(config, row.location); got != row.expected {
+				t.Fatalf("connection owner %d, want protected owner %d", got, row.expected)
+			}
+		})
+	}
+}
