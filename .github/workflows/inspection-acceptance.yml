@@ -97,7 +97,9 @@ jobs:
         env:
           FASED_READER_PREDECESSOR: ${{ github.workspace }}/.evidence/b01-connected-install/reader-predecessor-schema33
           FASED_READER_PREDECESSOR35: ${{ github.workspace }}/.evidence/b01-connected-install/reader-predecessor-schema35
-        run: go test -race ./cmd/fased-app -run '^TestApplicationReader(CompiledPredecessorIPC|35IPC)$' -count=1
+        run: |
+          go test -race ./cmd/fased-app -run '^TestApplicationReaderCompiledPredecessorIPC$' -count=1
+          go test -race ./cmd/fased-app -run '^TestApplicationReader35IPC$' -count=1
       - name: Disposable VM prerequisites
         run: |
           node --test scripts/ci-ubuntu-mirror.test.mjs
