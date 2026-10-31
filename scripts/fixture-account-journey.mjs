@@ -15,7 +15,11 @@ export async function revealFixtureAccountEntry(page) {
 }
 
 export async function refreshFixtureAccounts(page) {
-  await page
+  // The page refresh and a wallet's balance refresh have distinct scopes.
+  // Retain the historical label for older UI fixtures without this header.
+  const header = page.locator(".wallet-workspace > .section-head");
+  const scope = (await header.count()) ? header : page;
+  await scope
     .getByRole("button", { name: /^(Refresh|Refresh accounts and approvals)$/ })
     .click();
 }

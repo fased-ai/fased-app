@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
+import { refreshFixtureAccounts } from "../../scripts/fixture-account-journey.mjs";
 
 test.use({ colorScheme: "dark" });
 test("wallet Refresh joins encrypted RPC and CLI without changing saved data", async ({
@@ -151,6 +152,10 @@ test("wallet Refresh joins encrypted RPC and CLI without changing saved data", a
       path: join(evidence, "wallets.png"),
       fullPage: true,
     });
+    await refreshFixtureAccounts(page);
+    await expect(
+      account.getByRole("region", { name: "Balance", exact: true }),
+    ).toContainText("Unavailable");
     await writeFile(join(dir, "read-mode"), "failure");
     const failed = await refresh();
     await expect(failed.getByRole("alert")).toHaveText("Unavailable");

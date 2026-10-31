@@ -15626,7 +15626,7 @@ for (const method of ["create", "import"] as const) {
       });
       expect(stale.stale).toBe(true);
       expect(stale.locked).toBe(true);
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await refreshFixtureAccounts(page);
       await expect(
         page
           .getByRole("article", {
