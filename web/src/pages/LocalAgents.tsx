@@ -5,10 +5,10 @@ import { useCore } from "../core";
 import { NewsInputs } from "./NewsInputs";
 import { modelForProviderChange } from "../agent-defaults";
 import { AIModelPicker, useAIConnection } from "./AIConnection";
-import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { BookOpen, Bot, Plus, Settings2, History } from "../icons";
 import { Badge, SectionHead, Dialog } from "../components/shared";
-import { useWorkspace } from "../workspace";
+import { useWorkspace, type AgentSettingsDraft } from "../workspace";
 import { providerNames, type Provider } from "../state";
 import type {
   AgentMemory,
@@ -137,9 +137,15 @@ function LocalAgentEditor({
   taskPanel: string;
   setTaskPanel: (value: string) => void;
 }) {
-  const { setProvidersOpen } = useWorkspace();
   const { t: uiText } = useUI();
-  const { agents, tab, navigate } = useWorkspace();
+  const {
+    agents,
+    tab,
+    navigate,
+    setProvidersOpen,
+    agentSettingsDrafts,
+    setAgentSettingsDrafts,
+  } = useWorkspace();
   const t = uiText;
   const core = useCore();
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -169,62 +175,53 @@ function LocalAgentEditor({
     useState<AgentMemoryRestoreDraft | null>(null);
   const [memoryExpiryEdited, setMemoryExpiryEdited] = useState(false);
   const memoryExpiryOriginal = useRef(0);
-  const [name, setName] = useState(profile.name);
-  const [persona, setPersona] = useState(profile.persona);
-  const [provider, setProvider] = useState(profile.provider);
-  const [model, setModel] = useState(profile.model);
-  const [accountRef, setAccountRef] = useState(profile.connectionRef || "");
+  const profileDraftKey = `${core.instanceId}:${v.profileId}`;
+  const initialValues = {
+    name: profile.name,
+    persona: profile.persona,
+    provider: profile.provider,
+    model: profile.model,
+    accountRef: profile.connectionRef || "",
+  };
+  const profileDraft = agentSettingsDrafts.get(profileDraftKey) ?? {
+    values: initialValues,
+    revision: v.revision,
+    baseline: JSON.stringify(initialValues),
+  };
+  const { name, persona, provider, model, accountRef } = profileDraft.values;
+  function updateProfileDraft(patch: Partial<AgentSettingsDraft["values"]>) {
+    setAgentSettingsDrafts((drafts) => {
+      const draft = drafts.get(profileDraftKey) ?? profileDraft;
+      const values = { ...draft.values, ...patch };
+      const next = new Map(drafts);
+      if (JSON.stringify(values) === draft.baseline)
+        next.delete(profileDraftKey);
+      else next.set(profileDraftKey, { ...draft, values });
+      return next;
+    });
+  }
+  const setName = (name: string) => updateProfileDraft({ name });
+  const setPersona = (persona: string) => updateProfileDraft({ persona });
+  const setModel = (model: string) => updateProfileDraft({ model });
+  const setAccountRef = (accountRef: string) =>
+    updateProfileDraft({ accountRef });
+  function reloadProfile(expected?: AgentSettingsDraft) {
+    setAgentSettingsDrafts((drafts) => {
+      if (
+        !drafts.has(profileDraftKey) ||
+        (expected && drafts.get(profileDraftKey) !== expected)
+      )
+        return drafts;
+      const next = new Map(drafts);
+      next.delete(profileDraftKey);
+      return next;
+    });
+  }
   const [botName, setBotName] = useState("");
   const [quantity, setQuantity] = useState(1);
   const [price, setPrice] = useState(100);
   const [budget, setBudget] = useState(500);
-  const profileRevision = useRef(v.revision);
-  const profileInitialized = useRef(false);
-  const profileBaseline = useRef(
-    JSON.stringify([
-      profile.name,
-      profile.persona,
-      profile.provider,
-      profile.model,
-      profile.connectionRef || "",
-    ]),
-  );
   const memoryRevision = useRef(v.revision);
-  function reloadProfile() {
-    setName(profile.name);
-    setPersona(profile.persona);
-    setProvider(profile.provider);
-    setModel(profile.model);
-    setAccountRef(profile.connectionRef || "");
-    profileRevision.current = v.revision;
-    profileBaseline.current = JSON.stringify([
-      profile.name,
-      profile.persona,
-      profile.provider,
-      profile.model,
-      profile.connectionRef || "",
-    ]);
-  }
-  useLayoutEffect(() => {
-    if (tab !== "settings") {
-      // Leaving for Providers must not discard edits or adopt a newer revision.
-      // Clean forms may load fresh records next time; dirty forms require Save
-      // against their original revision or explicit Reload.
-      if (
-        profileBaseline.current ===
-        JSON.stringify([name, persona, provider, model, accountRef])
-      )
-        profileInitialized.current = false;
-      return;
-    }
-    // A preceding save may still be awaiting its response as this tab opens.
-    // Capture its resulting revision before fields become interactive, once per
-    // entry. Later external changes still require explicit reload/review.
-    if (!agents.busy && !profileInitialized.current) {
-      reloadProfile();
-      profileInitialized.current = true;
-    }
-  }, [tab, agents.busy]);
   const query = search.toLowerCase();
   const matching = v.sessions.filter(
     (s) =>
@@ -593,7 +590,7 @@ function LocalAgentEditor({
                 if (
                   await agents.change({
                     action: "profile-update",
-                    revision: profileRevision.current,
+                    revision: profileDraft.revision,
                     name,
                     text: persona,
                     provider,
@@ -601,14 +598,7 @@ function LocalAgentEditor({
                     model,
                   })
                 ) {
-                  profileRevision.current++;
-                  profileBaseline.current = JSON.stringify([
-                    name,
-                    persona,
-                    provider,
-                    model,
-                    accountRef,
-                  ]);
+                  reloadProfile(profileDraft);
                 }
               })}
             >
@@ -640,7 +630,7 @@ function LocalAgentEditor({
                     value={provider}
                     aria-label={uiText("Provider")}
                     onChange={(e) => {
-                      setProvider(e.target.value as Provider);
+                      const provider = e.target.value as Provider;
                       const a =
                         connection?.connections?.find(
                           (a) => a.provider === e.target.value,
@@ -648,17 +638,17 @@ function LocalAgentEditor({
                         (connection?.provider === e.target.value
                           ? connection
                           : null);
-                      setAccountRef(a?.ref || "");
-                      setModel(
-                        modelForProviderChange(
-                          e.target.value,
+                      updateProfileDraft({
+                        provider,
+                        accountRef: a?.ref || "",
+                        model: modelForProviderChange(
+                          provider,
                           a?.catalog?.models.find((m) => m.recommended)?.id ||
                             connection?.catalog?.models.find(
-                              (m) =>
-                                m.provider === e.target.value && m.recommended,
+                              (m) => m.provider === provider && m.recommended,
                             )?.id,
                         ),
-                      );
+                      });
                     }}
                   >
                     <option value="none">{uiText("No AI")}</option>
@@ -733,7 +723,7 @@ function LocalAgentEditor({
               <button
                 type="button"
                 className="text-button"
-                onClick={reloadProfile}
+                onClick={() => reloadProfile()}
               >
                 {uiText("Reload")}
               </button>
