@@ -12995,6 +12995,16 @@ test("Providers page preserves agent drafts and shares account models without ge
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
+  // An empty provider draft may return to No AI without resurrecting the
+  // previous selection while account/model fields reset in the same event.
+  await page.locator("details.profile-defaults > summary").click();
+  await page.getByLabel("Provider", { exact: true }).selectOption("xai");
+  await expect(page.getByLabel("Provider", { exact: true })).toHaveValue("xai");
+  await page.getByLabel("Provider", { exact: true }).selectOption("none");
+  await expect(page.getByLabel("Provider", { exact: true })).toHaveValue(
+    "none",
+  );
+  await page.locator("details.profile-defaults > summary").click();
   await page
     .getByRole("textbox", { name: "Instructions", exact: true })
     .fill("Preserve this unsaved agent draft");
@@ -13059,7 +13069,7 @@ test("Providers page preserves agent drafts and shares account models without ge
     ).toBeGreaterThanOrEqual(44);
   await page.evaluate(() => scrollTo(0, 0));
   await page.screenshot({
-    path: `.evidence/b03-providers/page-${isMobile ? "mobile" : "desktop"}.png`,
+    path: `.evidence/b02-agent-use/providers-${isMobile ? "mobile" : "desktop"}.png`,
     fullPage: true,
   });
   await providers.getByRole("button", { name: "Back", exact: true }).click();
@@ -13079,6 +13089,158 @@ test("Providers page preserves agent drafts and shares account models without ge
   await expect(
     page.getByRole("textbox", { name: "Instructions", exact: true }),
   ).toHaveValue("Preserve this unsaved agent draft");
+  const selectedAgent = page.getByLabel("Agent", { exact: true });
+  const originalAgent = await selectedAgent.inputValue();
+  const otherAgent =
+    originalAgent === "news-researcher" ? "trading-analyst" : "news-researcher";
+  const draftName = "Unsaved account research agent";
+  await page
+    .getByRole("textbox", { name: "Name", exact: true })
+    .fill(draftName);
+  await page.locator("details.profile-defaults > summary").click();
+  await page.getByLabel("Provider", { exact: true }).selectOption("anthropic");
+  await page
+    .getByLabel("Model", { exact: true })
+    .selectOption(
+      account.catalog.models.find((m: any) => m.recommended && m.selectable).id,
+    );
+  const draftModel = await page
+    .getByLabel("Model", { exact: true })
+    .inputValue();
+  await selectedAgent.selectOption(otherAgent);
+  await expect(
+    page.getByRole("textbox", { name: "Name", exact: true }),
+  ).not.toHaveValue(draftName);
+  await page
+    .getByRole("textbox", { name: "Instructions", exact: true })
+    .fill("Separate unsaved news instructions");
+  await selectedAgent.selectOption(originalAgent);
+  await expect(
+    page.getByRole("textbox", { name: "Name", exact: true }),
+  ).toHaveValue(draftName);
+  await expect(
+    page.getByRole("textbox", { name: "Instructions", exact: true }),
+  ).toHaveValue("Preserve this unsaved agent draft");
+  await page.locator("details.profile-defaults > summary").click();
+  await expect(page.getByLabel("Provider", { exact: true })).toHaveValue(
+    "anthropic",
+  );
+  await expect(page.getByLabel("Account", { exact: true })).toHaveValue(
+    account.ref,
+  );
+  await expect(page.getByLabel("Model", { exact: true })).toHaveValue(
+    draftModel,
+  );
+  await selectedAgent.selectOption(otherAgent);
+  await expect(
+    page.getByRole("textbox", { name: "Instructions", exact: true }),
+  ).toHaveValue("Separate unsaved news instructions");
+  await selectedAgent.selectOption(originalAgent);
+
+  const readOriginal = () => privateCLI(["agents", "--profile", originalAgent]);
+  const beforeConcurrentEdit = await readOriginal();
+  const savedOriginal = beforeConcurrentEdit.profiles.find(
+    (p: any) => p.id === originalAgent,
+  );
+  expect(savedOriginal.name).not.toBe(draftName);
+  await privateCLI(["agents", "--request-stdin"], {
+    action: "profile-update",
+    profileId: originalAgent,
+    revision: beforeConcurrentEdit.revision,
+    name: "Saved in another window",
+    text: savedOriginal.persona,
+    provider: savedOriginal.provider,
+    model: savedOriginal.model,
+    accountRef: savedOriginal.connectionRef || "",
+  });
+  await page.getByRole("button", { name: "Save agent", exact: true }).click();
+  await expect(page.locator(".storage-warning[role=alert]")).toContainText(
+    /changed|reload|review/i,
+  );
+  await expect(
+    page.getByRole("textbox", { name: "Name", exact: true }),
+  ).toHaveValue(draftName);
+  expect(
+    (await readOriginal()).profiles.find((p: any) => p.id === originalAgent)
+      .name,
+  ).toBe("Saved in another window");
+  await page.getByRole("button", { name: "Reload", exact: true }).click();
+  await expect(
+    page.getByRole("textbox", { name: "Name", exact: true }),
+  ).toHaveValue("Saved in another window");
+  await page
+    .getByRole("textbox", { name: "Name", exact: true })
+    .fill("Saved research agent");
+  await page.locator("details.profile-defaults > summary").click();
+  await page.getByLabel("Provider", { exact: true }).selectOption("anthropic");
+  await page
+    .getByLabel("Model", { exact: true })
+    .selectOption(
+      account.catalog.models.find((m: any) => m.recommended && m.selectable).id,
+    );
+  await page.getByRole("button", { name: "Save agent", exact: true }).click();
+  await expect
+    .poll(
+      async () =>
+        (await readOriginal()).profiles.find((p: any) => p.id === originalAgent)
+          .connectionRef,
+    )
+    .toBe(account.ref);
+  expect(
+    (await readOriginal()).profiles.find((p: any) => p.id === originalAgent)
+      .model,
+  ).toBe(
+    account.catalog.models.find((m: any) => m.recommended && m.selectable).id,
+  );
+  await selectedAgent.selectOption(otherAgent);
+  await expect(
+    page.getByRole("textbox", { name: "Instructions", exact: true }),
+  ).toHaveValue("Separate unsaved news instructions");
+  await selectedAgent.selectOption(originalAgent);
+  await expect(
+    page.getByRole("textbox", { name: "Name", exact: true }),
+  ).toHaveValue("Saved research agent");
+  await page.screenshot({
+    path: `.evidence/b02-agent-use/agent-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+  await page.evaluate(() => {
+    window.location.hash = "agents/chat";
+  });
+  await openConversationList(page);
+  await page
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Saved research conversation");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await expect(
+    page.getByRole("textbox", { name: "Message", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("textbox", { name: "Message", exact: true })
+    .fill("Keep this unsent research question with its agent.");
+  await page.evaluate(() => {
+    window.location.hash = "providers";
+  });
+  await expect(
+    page.getByRole("region", { name: "Providers", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("region", { name: "Providers", exact: true })
+    .getByRole("button", { name: "Back", exact: true })
+    .click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/chat";
+  });
+  await expect(
+    page.getByRole("textbox", { name: "Message", exact: true }),
+  ).toHaveValue("Keep this unsent research question with its agent.");
+  expect((await readOriginal()).aiRequests).toHaveLength(0);
+
   const health = await (await page.request.get(url + "/api/v1/health")).json();
   for (const key of [
     "aiConnections",

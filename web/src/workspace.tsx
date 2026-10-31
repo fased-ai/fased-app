@@ -12,7 +12,18 @@ import { terminalData } from "./fixtures";
 import { useUI } from "./ui-preferences";
 import { useCore } from "./core";
 import { useAgents } from "./agents";
-import type { Action } from "./state";
+import type { Action, Provider } from "./state";
+export type AgentSettingsDraft = {
+  values: {
+    name: string;
+    persona: string;
+    provider: Provider;
+    model: string;
+    accountRef: string;
+  };
+  revision: number;
+  baseline: string;
+};
 function loadInitialState() {
   try {
     return restoreState(localStorage.getItem(STORAGE_KEY));
@@ -117,6 +128,9 @@ function useWorkspaceState() {
   const [route, setRoute] = useState(getRoute);
   const [focusedTask, setFocusedTask] = useState("");
   const [chatDrafts, setChatDrafts] = useState(new Map<string, string>());
+  const [agentSettingsDrafts, setAgentSettingsDrafts] = useState(
+    new Map<string, AgentSettingsDraft>(),
+  );
   const [setupOpen, setSetupOpen] = useState(false);
   const providersOpen = route === "providers";
   const [providerReturn, setProviderReturn] = useState("agents/settings");
@@ -232,6 +246,8 @@ function useWorkspaceState() {
     setFocusedTask,
     chatDrafts,
     setChatDrafts,
+    agentSettingsDrafts,
+    setAgentSettingsDrafts,
     state,
     dispatch,
     route,
