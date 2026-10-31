@@ -24,10 +24,11 @@ import (
 )
 
 type walletReadTestState struct {
-	mu     sync.Mutex
-	mode   string
-	calls  int
-	change func()
+	mu          sync.Mutex
+	mode        string
+	calls       int
+	change      func()
+	transaction any
 }
 
 func (f *walletReadTestState) set(mode string) { f.mu.Lock(); defer f.mu.Unlock(); f.mode = mode }
@@ -53,8 +54,9 @@ func walletReadTLS(t *testing.T) (*walletReadTestState, walletReader) {
 		mode := f.mode
 		f.calls++
 		change := f.change
+		tx := f.transaction
 		f.mu.Unlock()
-		if request.Method != "getGenesisHash" {
+		if request.Method != "getGenesisHash" && request.Method != "getTransaction" {
 			var owner string
 			_ = json.Unmarshal(request.Params[0], &owner)
 			if owner != address {
@@ -121,6 +123,27 @@ func walletReadTLS(t *testing.T) (*walletReadTestState, walletReader) {
 			if mode != "zero" {
 				result = []any{map[string]any{"signature": onchain.Base58(bytes.Repeat([]byte{6}, 64)), "slot": 99, "err": nil, "blockTime": nil, "confirmationStatus": "finalized"}}
 			}
+		case "getTransaction":
+			var config struct {
+				Commitment, Encoding           string
+				MaxSupportedTransactionVersion int
+			}
+			_ = json.Unmarshal(request.Params[1], &config)
+			var sig string
+			_ = json.Unmarshal(request.Params[0], &sig)
+			if config.Commitment != "finalized" || config.Encoding != "json" || config.MaxSupportedTransactionVersion != 0 || sig != onchain.Base58(bytes.Repeat([]byte{6}, 64)) {
+				t.Error("transaction request binding")
+			}
+			result = tx
+			if result == nil {
+				result = walletTransactionFixture()
+			}
+			if mode == "tx-unavailable" {
+				result = nil
+			}
+			if mode == "tx-change" && change != nil {
+				change()
+			}
 		default:
 			t.Error("unrequested method", request.Method)
 		}
@@ -148,9 +171,9 @@ func walletReadTLS(t *testing.T) (*walletReadTestState, walletReader) {
 		return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
 	}
 	t.Cleanup(next.transport.CloseIdleConnections)
-	read := func(ctx context.Context, a Account, address string, key []byte, valid func() error) (WalletSnapshot, error) {
+	read := func(ctx context.Context, a Account, address string, key []byte, valid func() error, selection *WalletSelection) (WalletSnapshot, error) {
 		transport := &providerRPCTransport{origin: a.RPC.Endpoint, provider: "helius", key: key, valid: valid, next: next}
-		return walletRPC(ctx, a.RPC.Endpoint, transport, valid, true, address, a.Network)
+		return walletRPC(ctx, a.RPC.Endpoint, transport, valid, true, address, a.Network, selection)
 	}
 	return f, read
 }
@@ -351,7 +374,7 @@ func TestWalletReadRejectsRecoveredSignerEpoch(t *testing.T) {
 		t.Fatal(err)
 	}
 	before, _ := os.ReadFile(s.rpcVaultPath(id))
-	s.walletReadFixture = func(ctx context.Context, a Account, address string, key []byte, valid func() error) (WalletSnapshot, error) {
+	s.walletReadFixture = func(ctx context.Context, a Account, address string, key []byte, valid func() error, selection *WalletSelection) (WalletSnapshot, error) {
 		ref := *status.Account
 		ref.Epoch = strings.Repeat("d", 32)
 		status.Account = &ref
@@ -421,13 +444,13 @@ func TestWalletReadUIFixture(t *testing.T) {
 		in = WalletReadCommand{AccountID: account.ID, Revision: record.Revision, Ref: vault.Ref, Passphrase: "Disposable provider vault password 123"}
 	}
 	state, read := walletReadTLS(t)
-	server.Store.walletReadFixture = func(ctx context.Context, a Account, address string, key []byte, valid func() error) (WalletSnapshot, error) {
+	server.Store.walletReadFixture = func(ctx context.Context, a Account, address string, key []byte, valid func() error, selection *WalletSelection) (WalletSnapshot, error) {
 		if b, e := os.ReadFile(filepath.Join(dir, "read-mode")); e == nil {
 			state.set(strings.TrimSpace(string(b)))
 		} else {
 			state.set("")
 		}
-		return read(ctx, a, address, key, valid)
+		return read(ctx, a, address, key, valid, selection)
 	}
 	if err = server.ConfigureConnection("local"); err != nil {
 		t.Fatal(err)

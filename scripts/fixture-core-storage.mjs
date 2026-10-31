@@ -24,6 +24,7 @@ export async function currentStorageFixture(archivedRoot) {
     "rpc_providers.go",
     "wallet_read.go",
     "wallet_rpc.go",
+    "wallet_transaction.go",
     "agent_provider.go",
     "provider_models.go",
     "provider_native.go",

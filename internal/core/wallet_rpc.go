@@ -34,6 +34,7 @@ type WalletActivity struct {
 	Failed    bool   `json:"failed"`
 }
 type WalletSnapshot struct {
+	Transaction   *WalletTransaction   `json:"transaction,omitempty"`
 	Version       int                  `json:"version"`
 	AccountID     string               `json:"accountId"`
 	Revision      int64                `json:"revision"`
@@ -54,14 +55,10 @@ type WalletSnapshot struct {
 	LiveRPC       bool                 `json:"liveRPC"`
 }
 
-func walletRPC(ctx context.Context, endpoint string, rt http.RoundTripper, valid func() error, fixture bool, address, network string) (WalletSnapshot, error) {
-	var out WalletSnapshot
-	if _, err := onchain.Key(address); err != nil || solanaGenesis(network) == "" || rt == nil || valid == nil {
-		return out, errors.New("Wallet unavailable")
-	}
+func walletRPCCaller(ctx context.Context, endpoint string, rt http.RoundTripper, valid func() error) func(string, any, any) error {
 	client := &http.Client{Transport: rt, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("RPC redirects refused") }}
 	id := 0
-	call := func(method string, params any, dest any) error {
+	return func(method string, params any, dest any) error {
 		if err := valid(); err != nil {
 			return err
 		}
@@ -95,6 +92,14 @@ func walletRPC(ctx context.Context, endpoint string, rt http.RoundTripper, valid
 		}
 		return valid()
 	}
+}
+
+func walletRPC(ctx context.Context, endpoint string, rt http.RoundTripper, valid func() error, fixture bool, address, network string, selection *WalletSelection) (WalletSnapshot, error) {
+	var out WalletSnapshot
+	if _, err := onchain.Key(address); err != nil || solanaGenesis(network) == "" || rt == nil || valid == nil {
+		return out, errors.New("Wallet unavailable")
+	}
+	call := walletRPCCaller(ctx, endpoint, rt, valid)
 	var genesis string
 	if err := call("getGenesisHash", []any{}, &genesis); err != nil {
 		return out, err
@@ -204,6 +209,27 @@ func walletRPC(ctx context.Context, endpoint string, rt http.RoundTripper, valid
 		last = *signature.Slot
 		seenSignatures[signature.Signature] = true
 		out.Activity = append(out.Activity, WalletActivity{Signature: signature.Signature, Slot: strconv.FormatUint(*signature.Slot, 10), BlockTime: signature.BlockTime, Failed: string(signature.Err) != "null"})
+	}
+	if selection != nil {
+		found := false
+		for _, entry := range out.Activity {
+			if sameWalletActivity(entry, selection.WalletActivity) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return WalletSnapshot{}, errors.New("Transaction unavailable")
+		}
+		var raw json.RawMessage
+		if err := call("getTransaction", []any{selection.Signature, map[string]any{"commitment": "finalized", "encoding": "json", "maxSupportedTransactionVersion": 0}}, &raw); err != nil {
+			return WalletSnapshot{}, err
+		}
+		detail, err := parseWalletTransaction(raw, address, selection)
+		if err != nil {
+			return WalletSnapshot{}, err
+		}
+		out.Transaction = &detail
 	}
 	if err := valid(); err != nil {
 		return WalletSnapshot{}, err

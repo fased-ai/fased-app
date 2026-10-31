@@ -1,5 +1,12 @@
 // Product UI vocabulary; records and protocol identifiers remain unchanged.
 export const priorityCopy = {
+  Transaction: ["Транзакция", "Transacción", "交易", "트랜잭션"],
+  Fee: ["Комиссия", "Comisión", "手续费", "수수료"],
+  Payer: ["Плательщик", "Pagador", "付款方", "수수료 납부자"],
+  Changes: ["Изменения", "Cambios", "变动", "변동"],
+  Change: ["Изменение", "Cambio", "变动", "변동"],
+  Partial: ["Частично", "Parcial", "部分", "일부"],
+  View: ["Открыть", "Ver", "查看", "보기"],
   Balance: ["Баланс", "Saldo", "余额", "잔액"],
   Token: ["Токен", "Token", "代币", "토큰"],
   "Unlock RPC": [

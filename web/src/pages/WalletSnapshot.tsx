@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
 import { Dialog } from "../components/shared";
+import { WalletTransactionDetails } from "./WalletTransactionDetails";
 import type { Account } from "../accounts";
 import {
   currentWalletSnapshot,
   walletAmount,
   type WalletSnapshot,
+  type WalletActivity,
 } from "../wallet-read";
 
 export function WalletRead({
@@ -25,6 +27,7 @@ export function WalletRead({
   const core = useCore(),
     { t } = useUI();
   const [snapshot, setSnapshot] = useState<WalletSnapshot>();
+  const [selected, setSelected] = useState<WalletActivity>();
   const [ref, setRef] = useState(""),
     [password, setPassword] = useState("");
   const [open, setOpen] = useState(false),
@@ -36,6 +39,7 @@ export function WalletRead({
     generation.current++;
     active.current?.abort();
     setSnapshot(undefined);
+    setSelected(undefined);
     setPassword("");
     setRef("");
     setOpen(false);
@@ -52,7 +56,10 @@ export function WalletRead({
   useEffect(() => {
     if (!snapshot) return;
     const timer = window.setTimeout(
-      () => setState("Stale"),
+      () => {
+        setSelected(undefined);
+        setState("Stale");
+      },
       Math.max(0, snapshot.expiresAt * 1000 - Date.now()),
     );
     return () => clearTimeout(timer);
@@ -64,6 +71,7 @@ export function WalletRead({
     const abort = new AbortController();
     active.current = abort;
     setSnapshot(undefined);
+    setSelected(undefined);
     setBusy(true);
     setState("Loading");
     try {
@@ -100,6 +108,7 @@ export function WalletRead({
     active.current = abort;
     setPassword("");
     setSnapshot(undefined);
+    setSelected(undefined);
     setBusy(true);
     setState("Loading");
     try {
@@ -180,9 +189,16 @@ export function WalletRead({
               <ul className="wallet-activity">
                 {current.activity.map((v) => (
                   <li key={v.signature}>
-                    <code title={v.signature}>
-                      {v.signature.slice(0, 8)}…{v.signature.slice(-6)}
-                    </code>
+                    <button
+                      className="text-button"
+                      title={t("Transaction")}
+                      aria-label={`${t("Transaction")} ${v.signature.slice(0, 8)}…${v.signature.slice(-6)}`}
+                      onClick={() => setSelected(v)}
+                    >
+                      <code title={v.signature}>
+                        {v.signature.slice(0, 8)}…{v.signature.slice(-6)}
+                      </code>
+                    </button>
                     <span>{t(v.failed ? "Failed" : "Finalized")}</span>
                     <time>
                       {v.blockTime === null
@@ -206,6 +222,15 @@ export function WalletRead({
             </dl>
           </details>
         </>
+      )}
+      {current && selected && (
+        <WalletTransactionDetails
+          key={selected.signature}
+          account={account}
+          snapshot={current}
+          activity={selected}
+          onClose={() => setSelected(undefined)}
+        />
       )}
       {open && (
         <Dialog title={t("Unlock RPC")} onClose={reset}>
