@@ -144,6 +144,20 @@ func ValidManagedAccountRef(r AccountRef) bool {
     await readFile(signerPublic),
   );
   storage["accounts.go"] = sha(await readFile(accounts));
+  // Lifecycle3 predates update-preference storage. Add only the optional data
+  // field needed by the composed row readers; keep its constructor, validator,
+  // old UI and HTTP/CLI dispatch unchanged.
+  const modelPath = path.join(archivedRoot, "internal/core/model.go");
+  let model = await readFile(modelPath, "utf8");
+  if (!model.includes("*UpdatePreferences")) {
+    assert.equal(model.split("type Setup struct {").length, 2);
+    model = model.replace(
+      "type Setup struct {",
+      'type Setup struct {\n\tUpdates *UpdatePreferences `json:"updates,omitempty"`',
+    );
+    await writeFile(modelPath, model);
+  }
+  storage["model.go"] = sha(Buffer.from(model));
   // Read-only current swap-history backport. Preserve old protocol, lifecycle
   // and dispatch: the composed helper gains no observer or signing commands.
   const signerRoot = path.join(archivedRoot, "internal/signer");
@@ -256,40 +270,18 @@ func ValidManagedAccountRef(r AccountRef) bool {
     await writeFile(path.join(strategyRoot, file), bytes);
     storage["wenstrategy/" + file] = sha(bytes);
   }
-  // Storage projections compile private readers without enabling their worker,
-  // owner or mutation routes. The current compact Updates UI needs only an
-  // authenticated read-only projection; the controller remains its nil value.
+  // Storage projections compile private readers without copying routers or
+  // constructors. Each caller retains its own historical UI/dispatch contract.
   const http = path.join(archivedRoot, "internal/core/http.go");
   const httpBefore = await readFile(http, "utf8");
   assert.ok(!httpBefore.includes("/api/v1/wen/"));
   assert.equal(httpBefore.split("type HTTPHandler struct {").length, 2);
-  const projectionMarker =
-    '\tswitch r.URL.Path {\n\tcase "/api/v1/updates/preferences":';
-  assert.equal(httpBefore.split(projectionMarker).length, 2);
-  const authentication = httpBefore.indexOf('"owner authentication required"');
-  assert.ok(
-    authentication >= 0 &&
-      authentication < httpBefore.indexOf(projectionMarker),
-  );
-  assert.ok(!httpBefore.includes('case "/api/v1/updates/application":'));
   await writeFile(
     http,
-    httpBefore
-      .replace(
-        "type HTTPHandler struct {",
-        "type HTTPHandler struct {\n\twenResearchKey []byte\n\twenResearchOrigin string\n\tagentFixture bool",
-      )
-      .replace(
-        projectionMarker,
-        `\tswitch r.URL.Path {
-\tcase "/api/v1/updates/application":
-\t\tif r.Method != http.MethodGet { writeError(w,405,"method not allowed");return }
-\t\tv,e:=h.store.ApplicationUpdates(r.Context())
-\t\tif e!=nil { writeError(w,500,"update status unavailable");return }
-\t\twriteJSON(w,200,v)
-\t\treturn
-\tcase "/api/v1/updates/preferences":`,
-      ),
+    httpBefore.replace(
+      "type HTTPHandler struct {",
+      "type HTTPHandler struct {\n\twenResearchKey []byte\n\twenResearchOrigin string\n\tagentFixture bool",
+    ),
   );
   storage["http.go"] = sha(await readFile(http));
   const pm1Root = path.join(archivedRoot, "internal/wenpm1");
@@ -384,6 +376,20 @@ func ValidManagedAccountRef(r AccountRef) bool {
           marker,
       ),
   );
+  const composedStore = await readFile(store, "utf8");
+  if (!composedStore.includes("func readSetupRecord(")) {
+    const currentStore = await readFile("internal/core/store.go", "utf8");
+    const signature = "func readSetupRecord(";
+    assert.equal(currentStore.split(signature).length, 2);
+    const start = currentStore.indexOf(signature);
+    const end = currentStore.indexOf("\nfunc ", start + signature.length);
+    assert.ok(end > start);
+    const reader = currentStore.slice(start, end);
+    assert.ok(
+      reader.includes("SELECT setup,revision FROM instance WHERE id=1"),
+    );
+    await writeFile(store, composedStore + "\n" + reader + "\n");
+  }
   storage["store.go"] = sha(await readFile(store));
   const readerLog = execFileSync(
     "go",
