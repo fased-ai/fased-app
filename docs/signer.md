@@ -393,11 +393,20 @@ For a managed Ubuntu instance, the owner can use the fixed CLI identity bridge:
 ./fased-app custody login --disposable-fixture --prepare-host
 ./fased-app custody accounts --disposable-fixture --prepare-host
 ./fased-app custody accounts --disposable-fixture --prepare-host --request-stdin < public-record.json
+./fased-app custody accounts --disposable-fixture --prepare-host --read-stdin
 ```
 
 The OS credential switch happens before the immutable core runs as the app UID.
 This needs ordinary OS authorization, and does not let the owner read app/signer
 state directly. App login protects app access; wallet secrets are separate.
+
+The read command takes the existing account ID, revision, RPC credential reference
+and RPC vault password through private stdin. It uses the same per-operation
+Wallets reader for balances, recent activity and a selected transaction. It does
+not unlock the signer. After wallet recovery, the previous reference and saved
+RPC binding remain stale; explicitly reconnect the recovered reference and RPC.
+Controlled installed acceptance uses disposable keys and synthetic HTTPS data;
+ordinary live reads remain disabled.
 
 In Wallets, record the disposable signer, draft explicit wallet/bot/per-operation
 caps and expiry, then download the public proposal. These proposals allow only

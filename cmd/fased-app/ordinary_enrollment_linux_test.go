@@ -8,13 +8,35 @@ import (
 	"io"
 	"testing"
 
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/enrollment"
 	"github.com/fased-ai/fased-app/internal/signer"
+	"github.com/fased-ai/fased-app/internal/walletfixture"
 )
 
 func configureOrdinaryEnrollmentFixture() {
 	compiledOrdinaryEnrollment = enrollment.RunControlledOwnerCustody
+	compiledInstalledWalletRead = func(server *core.Server, path string) (func(), error) {
+		// Ordinary Local/Remote startup passes an empty optional identity.
+		// Match core.Start: no signer configuration means no fixture transport.
+		if path == "" {
+			return nil, nil
+		}
+		cfg, err := signer.LoadConfig(path)
+		if err != nil {
+			return nil, err
+		}
+		if cfg.Version != 3 || cfg.Profile != signer.OwnerCustodyProfile || cfg.Provenance != signer.ControlledCustodyProfile {
+			return nil, nil
+		}
+		transport, closeFixture := walletfixture.New()
+		if err := server.ConfigureControlledWalletReads(transport); err != nil {
+			closeFixture()
+			return nil, err
+		}
+		return closeFixture, nil
+	}
 }
 
 func TestOrdinaryEnrollmentOwnerBoundary(t *testing.T) {
@@ -39,6 +61,30 @@ func TestOrdinaryEnrollmentOwnerBoundary(t *testing.T) {
 	m.Provenance = signer.OwnerKeyProvenance
 	if _, err := custodyOwnerFlag(m, "import"); !errors.Is(err, signer.ErrUnavailable) {
 		t.Fatal("real key admission enabled")
+	}
+}
+
+func TestCustodyReadInputCannotBecomeOwnerOrMutation(t *testing.T) {
+	for _, args := range [][]string{
+		{"accounts", "--disposable-fixture", "--read-stdin", "--request-stdin"},
+		{"accounts", "--disposable-fixture", "--read-stdin", "--password-stdin"},
+		{"login", "--disposable-fixture", "--read-stdin"},
+		{"recover", "--disposable-fixture", "--read-stdin"},
+	} {
+		var out bytes.Buffer
+		if err := custodyCommand(args, nil, &out, io.Discard); err == nil || err.Error() != "wallet read input requires accounts only; no update or login input" || out.Len() != 0 {
+			t.Fatal(args, err)
+		}
+	}
+}
+
+func TestOrdinaryReadFixtureSkipsAbsentIdentity(t *testing.T) {
+	if compiledInstalledWalletRead == nil {
+		t.Fatal("compiled acceptance hook missing")
+	}
+	closeFixture, err := compiledInstalledWalletRead(nil, "")
+	if err != nil || closeFixture != nil {
+		t.Fatal("unconfigured startup must not load a signer or install a transport", err)
 	}
 }
 

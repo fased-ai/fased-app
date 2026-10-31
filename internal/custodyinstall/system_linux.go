@@ -196,6 +196,12 @@ func (s *System) AccountsHelper(ctx context.Context, m Manifest, login, request,
 	}
 	return s.appClient(ctx, m, action, flags, out)
 }
+
+// Read input reaches only the installed app UID/client. It is parsed by the
+// existing bounded accounts reader; no signing-key/owner operation is exposed.
+func (s *System) AccountsReadHelper(ctx context.Context, m Manifest, out io.Writer) error {
+	return s.appClient(ctx, m, "accounts", []string{"--read-stdin"}, out)
+}
 func (s *System) appClient(ctx context.Context, m Manifest, action string, flags []string, out io.Writer) error {
 	return s.appClientInput(ctx, m, action, flags, s.In, out)
 }

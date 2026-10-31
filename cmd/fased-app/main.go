@@ -384,6 +384,11 @@ func serveWithResearch(dir, listen, publicOrigin, researchOrigin string, out io.
 func serveRuntime(dir, listen, publicOrigin, researchOrigin, location string, ownerUID int, out io.Writer, custodyConfig ...string) error {
 	return serveInstalledRuntime(dir, listen, publicOrigin, researchOrigin, location, "", ownerUID, out, custodyConfig...)
 }
+
+// Set only by the explicitly compiled disposable acceptance executable.
+// Ordinary builds have no selector, flag or endpoint/CA override for this hook.
+var compiledInstalledWalletRead func(*core.Server, string) (func(), error)
+
 func serveInstalledRuntime(dir, listen, publicOrigin, researchOrigin, location, source string, ownerUID int, out io.Writer, custodyConfig ...string) error {
 	server, err := core.Start(context.Background(), dir, listen, publicOrigin, fasedapp.UI(), custodyConfig...)
 	if err != nil {
@@ -397,6 +402,13 @@ func serveInstalledRuntime(dir, listen, publicOrigin, researchOrigin, location, 
 	}
 	if err == nil && source == "remote" && compiledApplicationUpdateCheck != nil {
 		err = bindCompiledRemoteMaintenance(server.Store, ownerUID, compiledApplicationUpdateCheck)
+	}
+	if err == nil && len(custodyConfig) == 1 && compiledInstalledWalletRead != nil {
+		var closeFixture func()
+		closeFixture, err = compiledInstalledWalletRead(server, custodyConfig[0])
+		if closeFixture != nil {
+			defer closeFixture()
+		}
 	}
 	if err != nil {
 		_ = server.Close(context.Background())

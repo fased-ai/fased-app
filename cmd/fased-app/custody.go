@@ -48,12 +48,16 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 	proposalFile := f.String("proposal-file", "", "owner-selected public proposal JSON")
 	approvalStdin := f.Bool("approval-stdin", false, "fixture CI only: approval challenge through stdin")
 	requestStdin := f.Bool("request-stdin", false, "public account record JSON from stdin")
+	readStdin := f.Bool("read-stdin", false, "read-only wallet observation JSON through the installed app identity")
 	passwordStdin := f.Bool("password-stdin", false, "scripted fixture passwords through private stdin only")
 	if e := f.Parse(args[1:]); e != nil {
 		return e
 	}
 	if f.NArg() != 0 || !*disposable {
 		return errors.New("explicit --disposable-fixture confirmation is required; real wallets unavailable")
+	}
+	if *readStdin && (args[0] != "accounts" || *requestStdin || *passwordStdin) {
+		return errors.New("wallet read input requires accounts only; no update or login input")
 	}
 	if *network != "" && args[0] != "install" {
 		return errors.New("network is selected only during installation")
@@ -118,6 +122,9 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 	case "accounts", "login":
 		if !*prepare {
 			return errors.New("managed CLI access requires explicit --prepare-host authorization for the OS identity switch")
+		}
+		if *readStdin {
+			return system.AccountsReadHelper(ctx, m, out)
 		}
 		return system.AccountsHelper(ctx, m, args[0] == "login", *requestStdin, *passwordStdin, out)
 	case "update-status":
