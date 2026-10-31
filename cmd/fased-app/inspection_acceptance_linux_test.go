@@ -34,6 +34,7 @@ func (acceptanceBoundaryWriter) Write(b []byte) (int, error) {
 	return n, e
 }
 func TestMain(m *testing.M) {
+	configureOrdinaryEnrollmentFixture()
 	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-test.") {
 		if os.Getuid() == 0 || os.Geteuid() == 0 {
 			fmt.Fprintln(os.Stderr, "test fixture refuses root")

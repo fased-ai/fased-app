@@ -217,8 +217,17 @@ func ServeControlledSwapCredentialsFixture(ctx context.Context, c Config, factor
 func serveCredentialConfigured(ctx context.Context, c Config, guarded bool, observer SwapObserver, factory func(onchain.CredentialAccess) (SwapObserver, error)) (*Server, error) {
 	return serveCustodyConfigured(ctx, c, guarded, observer, factory, false)
 }
+
+// ServeControlledOwnerCustody is compiled disposable composition only. Its
+// immutable config and encrypted key namespace can never become owner-input.
+func ServeControlledOwnerCustody(ctx context.Context, c Config) (*Server, error) {
+	if c.Version != 3 || c.Profile != OwnerCustodyProfile || c.Provenance != ControlledCustodyProfile {
+		return nil, ErrUnavailable
+	}
+	return serveCustodyConfigured(ctx, c, false, nil, nil, true)
+}
 func serveCustodyConfigured(ctx context.Context, c Config, guarded bool, observer SwapObserver, factory func(onchain.CredentialAccess) (SwapObserver, error), controlledOrdinary bool) (*Server, error) {
-	if c.Version == 3 && !controlledOrdinary && !OrdinaryOwnerAdmissionEnabled() || controlledOrdinary && (c.Version != 3 || c.Mode != OrdinaryCustodyMode || observer != nil || factory != nil) {
+	if c.Version == 3 && !controlledOrdinary && (!OrdinaryOwnerAdmissionEnabled() || c.Profile != OwnerCustodyProfile || c.Provenance != OwnerKeyProvenance) || controlledOrdinary && (c.Version != 3 || c.Mode != OrdinaryCustodyMode || observer != nil || factory != nil) {
 		return nil, ErrUnavailable
 	}
 	if _, e := os.Lstat(filepath.Dir(c.StateDir) + "/fixture-inspection-v1/forward.json"); !os.IsNotExist(e) && !guarded {
@@ -249,7 +258,7 @@ func serveCustodyConfigured(ctx context.Context, c Config, guarded bool, observe
 	if c.Version == 3 {
 		namespace := ordinaryOwnerNamespace
 		if controlledOrdinary {
-			namespace = ordinaryNamespace
+			namespace = ordinaryOwnerTestNamespace
 		}
 		network = namespace + network
 	}

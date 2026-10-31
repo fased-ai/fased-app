@@ -133,7 +133,7 @@ func conductImport(ctx context.Context, seedPath, backupPath string, ask askPass
 	return conductImportAction(ctx, seedPath, backupPath, ask, out, call, "import-fixture-seed")
 }
 func conductImportAction(ctx context.Context, seedPath, backupPath string, ask askPassword, out io.Writer, call ownerCall, action string) error {
-	if action != "import-fixture-seed" && action != "import-managed-seed" {
+	if action != "import-fixture-seed" && action != "import-managed-seed" && action != "import-ordinary-seed" {
 		return signer.ErrUnavailable
 	}
 	seed, err := readOwnerFile(seedPath)

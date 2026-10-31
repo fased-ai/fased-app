@@ -26,28 +26,29 @@ type Store struct {
 	onchain            *onchainRuntime // Explicit controlled constructor only; ordinary/live admission stays closed.
 	installationSource atomic.Uint32   // Verified installer class, never a browser preference.
 
-	rpcCheckFixture func(context.Context, RPCCheckRequest) (RPCCheckResult, error) // Tests only; never configuration or IPC.
-	providerFixture bool
-	rpcAdmission    bool // Disabled in ordinary constructors; tests only.
-	sessionFixture  bool
-	aiMu            sync.Mutex
-	chatEpoch       atomic.Uint64
-	progressMu      sync.Mutex
-	aiProgress      map[string]string
-	newsMu          sync.Mutex
-	provider        providerState
-	pilot           openAIPilotState // No ordinary constructor configures a target.
-	db              *sql.DB
-	dir             string
-	instanceID      string
-	pauseFault      func(string) error // Test-only interruption injection, never configuration or IPC.
-	backupFault     func(string) error // Test-only partial write/crash injection.
-	bootID          string
-	now             func() time.Time
-	authMu          sync.Mutex
-	fixture         func(context.Context, signer.Request) (signer.Response, error)
-	custodyNetwork  string                                                             // Public immutable v2 configuration; no key material.
-	researchRead    func(context.Context, researchFactResult) (json.RawMessage, error) // Test-only local projection fault; never configuration/IPC.
+	rpcCheckFixture       func(context.Context, RPCCheckRequest) (RPCCheckResult, error) // Tests only; never configuration or IPC.
+	providerFixture       bool
+	rpcAdmission          bool // Disabled in ordinary constructors; tests only.
+	sessionFixture        bool
+	aiMu                  sync.Mutex
+	chatEpoch             atomic.Uint64
+	progressMu            sync.Mutex
+	aiProgress            map[string]string
+	newsMu                sync.Mutex
+	provider              providerState
+	pilot                 openAIPilotState // No ordinary constructor configures a target.
+	db                    *sql.DB
+	dir                   string
+	instanceID            string
+	pauseFault            func(string) error // Test-only interruption injection, never configuration or IPC.
+	backupFault           func(string) error // Test-only partial write/crash injection.
+	bootID                string
+	now                   func() time.Time
+	authMu                sync.Mutex
+	fixture               func(context.Context, signer.Request) (signer.Response, error)
+	custodyOwnerSupported bool
+	custodyNetwork        string                                                             // Public immutable v2 configuration; no key material.
+	researchRead          func(context.Context, researchFactResult) (json.RawMessage, error) // Test-only local projection fault; never configuration/IPC.
 }
 
 func OpenStore(dir string) (_ *Store, resultErr error) {

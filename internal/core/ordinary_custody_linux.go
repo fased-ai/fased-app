@@ -11,6 +11,14 @@ import (
 )
 
 func ordinaryCustodySettled(ctx context.Context, c snapshotReader, directory string, o ApplicationUpdateOperation) error {
+	phase, pause, err := readPause(ctx, c)
+	if err != nil {
+		return err
+	}
+	return ordinaryCustodySettledWithPause(ctx, c, directory, o, phase, pause)
+}
+
+func ordinaryCustodySettledWithPause(ctx context.Context, c snapshotReader, directory string, o ApplicationUpdateOperation, phase string, pause pauseRecord) error {
 	if !update.IDOK(o.ID) {
 		return ErrCorePaused
 	}
@@ -18,8 +26,7 @@ func ordinaryCustodySettled(ctx context.Context, c snapshotReader, directory str
 		if !update.IDOK(o.OwnerLease) || o.Release == nil || o.Receipt != nil || o.Failure != "Release is no longer eligible. Check for updates again." {
 			return ErrCorePaused
 		}
-		phase, _, err := readPause(ctx, c)
-		if err != nil || phase == "paused" {
+		if phase == "paused" {
 			return ErrCorePaused
 		}
 		fd, err := recoveryDirectoryMode(directory, o.ID, false)
@@ -36,12 +43,8 @@ func ordinaryCustodySettled(ctx context.Context, c snapshotReader, directory str
 		}
 		return ErrCorePaused
 	}
-	phase, pause, err := readPause(ctx, c)
-	if err != nil {
-		return err
-	}
 	var instance string
-	if err = c.QueryRowContext(ctx, "SELECT instance_id FROM instance WHERE id=1").Scan(&instance); err != nil {
+	if err := c.QueryRowContext(ctx, "SELECT instance_id FROM instance WHERE id=1").Scan(&instance); err != nil {
 		return err
 	}
 	fd, err := recoveryDirectoryMode(directory, o.ID, false)

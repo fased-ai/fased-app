@@ -156,7 +156,8 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		version = 2
 		view.TestOnly = false
 	}
-	if version == 2 && !s.rpcAdmission && (c.Action == "save" || c.Action == "verify" || c.Action == "check" || c.Action == "restore") {
+	configurationOnly := (c.Action == "save" || c.Action == "restore") && s.controlledOrdinaryAccount(ctx, *account)
+	if version == 2 && !s.rpcAdmission && !configurationOnly && (c.Action == "save" || c.Action == "verify" || c.Action == "check" || c.Action == "restore") {
 		return view, errors.New("live RPC credentials disabled")
 	}
 	if c.Action == "save" && !validRPCSecret(version, c.Key) {

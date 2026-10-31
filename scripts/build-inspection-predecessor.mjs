@@ -14,17 +14,25 @@ assert.ok(process.getuid() > 0);
 const args = process.argv.slice(2);
 assert.ok(
   args.length === 0 ||
-    (args.length === 1 && args[0] === "--application-reader"),
+    (args.length === 1 &&
+      ["--application-reader", "--application-reader35"].includes(args[0])),
   "Unknown predecessor fixture mode",
 );
-if (args[0] === "--application-reader") {
+if (["--application-reader", "--application-reader35"].includes(args[0])) {
+  const sourceSchema = args[0] === "--application-reader35" ? 35 : 33;
   // Untouched schema33 core sources plus a minimal, inert fixture entrypoint.
   // Keep this distinct from the current-storage composed reader below.
-  const source = "ecc832e55afa0d62f42cacfdefa5c9cd5d73c8fb";
+  const source =
+    sourceSchema === 35
+      ? "90bdf4a31bb658f4358d5e71a8c9f50dc3ebbf3a"
+      : "ecc832e55afa0d62f42cacfdefa5c9cd5d73c8fb";
   const output = path.resolve(
     process.env.FASED_PREDECESSOR_OUTPUT ?? ".evidence/b01-connected-install",
   );
-  const scratch = path.join(output, "reader-predecessor-source");
+  const scratch = path.join(
+    output,
+    "reader-predecessor-source" + (sourceSchema === 35 ? "35" : ""),
+  );
   await mkdir(output, { recursive: true, mode: 0o700 });
   await mkdir(scratch, { mode: 0o700 });
   try {
@@ -41,7 +49,7 @@ if (args[0] === "--application-reader") {
     execFileSync("tar", ["-xf", "-", "-C", scratch], { input: archive });
     assert.match(
       await readFile(path.join(scratch, "internal/core/update.go"), "utf8"),
-      /const StateSchema = 33\b/,
+      new RegExp(`const StateSchema = ${sourceSchema}\\b`),
     );
     const entry = await readFile(
       new URL(
@@ -52,7 +60,10 @@ if (args[0] === "--application-reader") {
     const entryPath = path.join(scratch, "cmd/fased-reader-fixture");
     await mkdir(entryPath);
     await writeFile(path.join(entryPath, "main.go"), entry);
-    const binary = path.join(output, "reader-predecessor-schema33");
+    const binary = path.join(
+      output,
+      `reader-predecessor-schema${sourceSchema}`,
+    );
     execFileSync(
       "go",
       [
@@ -66,16 +77,20 @@ if (args[0] === "--application-reader") {
       { cwd: scratch, stdio: "inherit" },
     );
     await writeFile(
-      path.join(output, "reader-predecessor-build.json"),
+      path.join(
+        output,
+        sourceSchema === 35
+          ? "reader-predecessor35-build.json"
+          : "reader-predecessor-build.json",
+      ),
       JSON.stringify(
         {
           result: "PASS",
           sourceCommit: source,
-          sourceSchema: 33,
+          sourceSchema,
           fixtureOnly: true,
           exactHistoricalBinary: false,
-          classification:
-            "Actual archived schema33 core; minimal standalone fixture entry; no installed-service or release acceptance",
+          classification: `Actual archived schema${sourceSchema} core; minimal standalone fixture entry; no installed-service or release acceptance`,
           archiveSha256: sha(archive),
           entrySha256: sha(entry),
           binarySha256: sha(await readFile(binary)),

@@ -66,6 +66,121 @@ func readerSchema(t *testing.T, dir string) int {
 	return schema
 }
 
+func TestApplicationReader35RequestHasDistinctVersion(t *testing.T) {
+	_, r, _ := applicationReaderFixture(t)
+	r.Version = 2
+	r.Predecessor.Core.State.Version = 35
+	r.Predecessor.Request.Expected.State.Version = 35
+	if !r.valid() {
+		t.Fatal("fresh schema35 handoff requires its separately versioned request")
+	}
+	r.Version = 1
+	if r.valid() {
+		t.Fatal("legacy request adopted a schema35 source")
+	}
+}
+
+func reader35Fixture(t *testing.T, prepare bool) (string, ApplicationReaderBootstrapRequest, string) {
+	t.Helper()
+	s := fixtureStore(t)
+	var original string
+	if err := s.db.QueryRow("SELECT document FROM agent_workspace WHERE id=1").Scan(&original); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec("PRAGMA user_version=35"); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := applicationReaderSourceSnapshot(t.Context(), s.db, update.NewProbe(), s.bootID, 35)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := fixtureUpdateController().release
+	pause := update.CorePauseRequest{Version: 1, IntentID: update.NewProbe(), Sequence: release.Sequence, ManifestSHA256: release.ManifestSHA256, Expected: snapshot}
+	r := ApplicationReaderBootstrapRequest{Version: 2, OperationID: pause.IntentID, OwnerLease: update.NewProbe(), PreviousEngineSHA256: strings.Repeat("b", 64), Release: release, Predecessor: update.CorePauseReceipt{Version: 1, State: "prepared", Core: snapshot, Request: &pause}}
+	if prepare {
+		if err = PrepareApplicationReaderBootstrap(t.Context(), s.dir, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	held := pauseRecord{PauseID: update.NewProbe(), Request: pause}
+	raw, _ := json.Marshal(held)
+	if _, err = s.db.Exec("UPDATE update_pause SET phase='paused',document=? WHERE id=1", string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	r.Predecessor.State = "paused"
+	r.Predecessor.PauseID = held.PauseID
+	dir := s.dir
+	s.Close()
+	lock, err := LockInstance(filepath.Join(dir, "instance.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.Close()
+	return dir, r, original
+}
+
+func TestApplicationReader35PreparedHandoffRecovery(t *testing.T) {
+	for _, point := range []string{"", "reader:before-commit", "reader:after-commit"} {
+		t.Run(point, func(t *testing.T) {
+			dir, r, original := reader35Fixture(t, true)
+			if err := StageApplicationReaderBootstrap(t.Context(), dir, r); err != nil {
+				t.Fatal(err)
+			}
+			fault := func(p string) error {
+				if point != "" && p == point {
+					return errors.New("disposable interruption")
+				}
+				return nil
+			}
+			_, err := bootstrapApplicationReader(t.Context(), dir, r, fault)
+			if (point != "") != (err != nil) {
+				t.Fatalf("fault not reached: %v", err)
+			}
+			receipt, err := ResumeApplicationReaderBootstrap(t.Context(), dir, r.OperationID)
+			if err != nil || readerSchema(t, dir) != StateSchema || !strings.HasPrefix(receipt.Original.File, "reader-35-") {
+				t.Fatal(receipt, err)
+			}
+			s, err := OpenStore(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			var got string
+			if err = s.db.QueryRow("SELECT document FROM agent_workspace WHERE id=1").Scan(&got); err != nil || got != original {
+				t.Fatal("records/drafts changed", err)
+			}
+			proof := ApplicationUpdateReceipt{ID: r.OperationID, Sequence: r.Release.Sequence, ManifestSHA256: r.Release.ManifestSHA256, EngineSHA256: r.Release.EngineSHA256, Phase: "completed"}
+			if _, err = s.ApplicationOwnerCommand(t.Context(), ApplicationOwnerCommand{Action: "finish", ID: r.OperationID, Lease: r.OwnerLease, Receipt: &proof}); err != nil {
+				t.Fatal(err)
+			}
+			if err = CheckApplicationRollbackMetadata(t.Context(), dir, r.OperationID, 35); err == nil {
+				t.Fatal("old reader could reopen migrated metadata")
+			}
+		})
+	}
+}
+
+func TestApplicationReader35DoesNotAdoptOldPauseOrLease(t *testing.T) {
+	dir, r, _ := reader35Fixture(t, false)
+	if err := PrepareApplicationReaderBootstrap(t.Context(), dir, readerIntent(r)); err == nil {
+		t.Fatal("prepared an already paused source")
+	}
+	if err := StageApplicationReaderBootstrap(t.Context(), dir, r); err == nil {
+		t.Fatal("adopted an old pause")
+	}
+	if _, err := BootstrapApplicationReader(t.Context(), dir, r); err == nil || readerSchema(t, dir) != 35 {
+		t.Fatal("unprepared source changed", err)
+	}
+	dir, r, _ = reader35Fixture(t, true)
+	r.OwnerLease = update.NewProbe()
+	if err := StageApplicationReaderBootstrap(t.Context(), dir, r); err == nil {
+		t.Fatal("replaced the prepared owner lease")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "lifecycle", r.OperationID, "reader-request.json")); err == nil {
+		t.Fatal("staged changed authority")
+	}
+}
+
 func TestApplicationReaderBootstrapPreservesRawRecordsAndCompletes(t *testing.T) {
 	dir, r, original := applicationReaderFixture(t)
 	got, e := BootstrapApplicationReader(t.Context(), dir, r)
@@ -261,4 +376,27 @@ func TestApplicationReaderBootstrapStagesLeaseBeforeStopping(t *testing.T) {
 
 func fmtReaderRecoveryPath(d int, name string) string {
 	return fmt.Sprintf("/proc/self/fd/%d/%s", d, name)
+}
+
+func TestApplicationReader35LeaseFreeFailedCheck(t *testing.T) {
+	s := fixtureStore(t)
+	defer s.Close()
+	if _, err := s.db.Exec("PRAGMA user_version=35"); err != nil {
+		t.Fatal(err)
+	}
+	o := ApplicationUpdateOperation{ID: update.NewProbe(), Phase: "check-failed", Failure: "Release check unavailable."}
+	raw, _ := json.Marshal(o)
+	if _, err := s.db.Exec("UPDATE application_updates SET document=? WHERE id=1", string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := applicationReaderSourceSnapshot(t.Context(), s.db, update.NewProbe(), s.bootID, 35)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := fixtureUpdateController().release
+	want := update.CorePauseRequest{Version: 1, IntentID: update.NewProbe(), Sequence: release.Sequence, ManifestSHA256: release.ManifestSHA256, Expected: snapshot}
+	r := ApplicationReaderBootstrapRequest{Version: 2, OperationID: want.IntentID, OwnerLease: update.NewProbe(), PreviousEngineSHA256: strings.Repeat("b", 64), Release: release, Predecessor: update.CorePauseReceipt{Version: 1, State: "prepared", Core: snapshot, Request: &want}}
+	if err = PrepareApplicationReaderBootstrap(t.Context(), s.dir, r); err != nil {
+		t.Fatal("ordinary failed check incorrectly requires a claimed lease", err)
+	}
 }

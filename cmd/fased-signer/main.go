@@ -43,6 +43,9 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	if len(args) == 1 && args[0] == "fixture-compatibility" {
 		return json.NewEncoder(out).Encode(signer.UpdateContract())
 	}
+	if len(args) == 1 && args[0] == "ordinary-custody-version" {
+		return json.NewEncoder(out).Encode(map[string]any{"protocol": 3, "ownerFlow": 1, "mode": signer.OrdinaryCustodyMode, "profile": signer.OwnerCustodyProfile, "provenance": signer.OwnerKeyProvenance, "walletSigner": false})
+	}
 	if len(args) == 1 && args[0] == "custody-version" {
 		return json.NewEncoder(out).Encode(map[string]any{"protocol": 2, "ownerFlow": 1, "mode": signer.ManagedFixtureMode, "walletSigner": false})
 	}
@@ -78,6 +81,9 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	c, err := signer.LoadConfig(*configPath)
 	if err != nil {
 		return err
+	}
+	if c.Version == 3 && *fixture && (c.Profile != signer.OwnerCustodyProfile || c.Provenance != signer.ControlledCustodyProfile) {
+		return signer.ErrUnavailable
 	}
 	if *ordinary && (c.Version != 3 || c.Mode != signer.OrdinaryCustodyMode) {
 		return signer.ErrUnavailable

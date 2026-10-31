@@ -323,3 +323,36 @@ it("attaches only held ordinary custody references with authenticated controlled
   status.account!.version = 2;
   expect(walletSetupReference(v)).toBeUndefined();
 });
+
+it("offers ordinary owner setup only for an empty bound controlled owner profile", () => {
+  const view = setupView();
+  view.setup!.state = "empty";
+  view.setup!.custodyClass = "ordinary-custody:v1";
+  view.setup!.admissionHeld = true;
+  const status = view.fixture.status!;
+  delete status.account;
+  delete status.publicIdentity;
+  status.fixtureOnly = true;
+  status.admissionHeld = true;
+  const custody = (status.custody = {
+    version: 1,
+    class: "ordinary-custody:v1",
+    profile: "owner-authorized:v1",
+    provenance: "controlled-disposable:v1",
+    origin: "",
+  });
+  expect(walletOwnerCommands(view, "create", "devnet")).toEqual([
+    "fased-app custody setup --disposable-fixture --backup-file /absolute/private/wallet-backup.json",
+  ]);
+  expect(walletOwnerCommands(view, "import", "devnet")[0]).toContain(
+    "custody import --disposable-fixture",
+  );
+  custody.provenance = "owner-input:v1";
+  expect(walletOwnerCommands(view, "import", "devnet")).toEqual([]);
+  custody.provenance = "controlled-disposable:v1";
+  custody.profile = "controlled-disposable:v1";
+  expect(walletOwnerCommands(view, "create", "devnet")).toEqual([]);
+  custody.profile = "owner-authorized:v1";
+  view.setup!.ownerSupported = false;
+  expect(walletOwnerCommands(view, "create", "devnet")).toEqual([]);
+});

@@ -24,6 +24,11 @@ func readerLocalCallbacks(m localinstall.Manifest, request *core.ApplicationRead
 	}
 	return localinstall.ApplicationUpdateCallbacks{
 		BeforeStop: func(ctx context.Context, previous, target localinstall.Manifest) error {
+			if request.Version == 2 && request.Predecessor.State == "prepared" {
+				if e := stageLocalReader35(ctx, m.Data, request); e != nil {
+					return e
+				}
+			}
 			if previous.Files["fased-app"] != request.PreviousEngineSHA256 || target.Files["fased-app"] != request.Release.EngineSHA256 {
 				return errors.New("reader-bootstrap installed code identity changed")
 			}
@@ -47,7 +52,7 @@ func readerLocalCallbacks(m localinstall.Manifest, request *core.ApplicationRead
 			return nil
 		},
 		RollbackAllowed: func(ctx context.Context, _, _ localinstall.Manifest) error {
-			return core.CheckApplicationRollbackMetadata(ctx, m.Data, request.OperationID, 33)
+			return core.CheckApplicationRollbackMetadata(ctx, m.Data, request.OperationID, request.Predecessor.Core.State.Version)
 		},
 		Complete: func(ctx context.Context, target localinstall.Manifest, s localinstall.ApplicationUpdateStatus) error {
 			proof := core.ApplicationUpdateReceipt{ID: s.ID, Sequence: s.Sequence, ManifestSHA256: s.ReleaseSHA256, EngineSHA256: target.Files["fased-app"], Phase: s.Phase}
@@ -119,8 +124,8 @@ func maintainLocalReaderUpdate(ctx context.Context, m localinstall.Manifest, id 
 	if e = client.Do(ctx, http.MethodGet, "/api/v1/updates/inventory?probe="+update.NewProbe(), nil, &snapshot); e != nil {
 		return e
 	}
-	if snapshot.State.Version != 33 {
-		return errors.New("only the installed schema33 predecessor is supported; schema34 remains preserved")
+	if snapshot.State.Version != 33 && snapshot.State.Version != 35 {
+		return errors.New("unsupported installed predecessor; preserve state")
 	}
 	if e = core.CheckApplicationReaderPredecessor(ctx, m.Data, snapshot); e != nil {
 		return e
@@ -147,16 +152,30 @@ func maintainLocalReaderUpdate(ctx context.Context, m localinstall.Manifest, id 
 		return errors.New("independently authenticated newer reader release required")
 	}
 	pauseRequest := update.CorePauseRequest{Version: 1, IntentID: id, Sequence: release.Sequence, ManifestSHA256: release.ManifestSHA256, Expected: snapshot}
-	var paused update.CorePauseReceipt
-	if e = client.Do(ctx, http.MethodPost, "/api/v1/updates/pause", update.CorePauseCommand{Action: "pause", ProbeID: update.NewProbe(), Request: &pauseRequest}, &paused); e != nil {
-		return e
-	}
-	request, e = p.ApplicationReaderBootstrapRequest(id, update.NewProbe(), m.Files["fased-app"], paused)
-	if e != nil {
-		return e
-	}
-	if e = core.StageApplicationReaderBootstrap(ctx, m.Data, request); e != nil {
-		return e
+	if snapshot.State.Version == 35 {
+		prepared := update.CorePauseReceipt{Version: 1, State: "prepared", Core: snapshot, Request: &pauseRequest}
+		request, e = p.ApplicationReaderBootstrapRequest(id, update.NewProbe(), m.Files["fased-app"], prepared)
+		if e != nil {
+			return e
+		}
+		if e = core.PrepareApplicationReaderBootstrap(ctx, m.Data, request); e != nil {
+			return e
+		}
+		if e = stageLocalReader35(ctx, m.Data, &request); e != nil {
+			return e
+		}
+	} else {
+		var paused update.CorePauseReceipt
+		if e = client.Do(ctx, http.MethodPost, "/api/v1/updates/pause", update.CorePauseCommand{Action: "pause", ProbeID: update.NewProbe(), Request: &pauseRequest}, &paused); e != nil {
+			return e
+		}
+		request, e = p.ApplicationReaderBootstrapRequest(id, update.NewProbe(), m.Files["fased-app"], paused)
+		if e != nil {
+			return e
+		}
+		if e = core.StageApplicationReaderBootstrap(ctx, m.Data, request); e != nil {
+			return e
+		}
 	}
 	_, e = driver.Apply(ctx, core.ApplicationUpdateOperation{ID: id, Phase: "applying", OwnerLease: request.OwnerLease, Release: &request.Release, BootID: snapshot.BootID})
 	if e != nil {
@@ -180,5 +199,42 @@ func finishLocalReaderUpdateWith(ctx context.Context, paths localinstall.Paths, 
 	}
 	prepare(ctx, current, true, out)
 	fmt.Fprintln(out, "completed")
+	return nil
+}
+
+// Finalize only the durable35 intent recorded before the old source paused.
+func stageLocalReader35(ctx context.Context, directory string, r *core.ApplicationReaderBootstrapRequest) error {
+	client, e := core.NewClient(ctx, directory)
+	if e != nil {
+		return e
+	}
+	defer client.Close()
+	if e = client.LoadSession(ctx, directory); e != nil {
+		return errors.New("sign in to the original instance before reader handoff")
+	}
+	var current update.CoreSnapshot
+	if e = client.Do(ctx, http.MethodGet, "/api/v1/updates/inventory?probe="+update.NewProbe(), nil, &current); e != nil {
+		return e
+	}
+	if !update.SameCoreMetadata(current, r.Predecessor.Core) {
+		return errors.New("original prepared reader state changed")
+	}
+	var paused update.CorePauseReceipt
+	if e = client.Do(ctx, http.MethodPost, "/api/v1/updates/pause", update.CorePauseCommand{Action: "status", ProbeID: update.NewProbe()}, &paused); e != nil {
+		return e
+	}
+	if paused.State != "paused" {
+		fresh := *r.Predecessor.Request
+		fresh.Expected = current
+		if e = client.Do(ctx, http.MethodPost, "/api/v1/updates/pause", update.CorePauseCommand{Action: "pause", ProbeID: update.NewProbe(), Request: &fresh}, &paused); e != nil {
+			return e
+		}
+	}
+	final := *r
+	final.Predecessor = paused
+	if e = core.StageApplicationReaderBootstrap(ctx, directory, final); e != nil {
+		return e
+	}
+	*r = final
 	return nil
 }

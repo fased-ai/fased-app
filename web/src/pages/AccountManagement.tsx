@@ -462,7 +462,9 @@ export function AccountManagement() {
                         {
                           "public-record-only": "Public reference only",
                           "current-fixture": "Current disposable reference",
-                          "current-custody-held": "Recovery required",
+                          "current-custody-held": view.fixture.status?.locked
+                            ? "Locked"
+                            : "Unavailable",
                           stale:
                             "Stale reference — refresh before proposing permissions",
                           unverified:

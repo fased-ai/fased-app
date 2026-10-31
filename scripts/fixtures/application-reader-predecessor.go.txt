@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+    "errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -12,7 +13,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/core"
 )
 
-// Disposable schema33 core/IPC fixture, never an installer or live connector.
+// Disposable predecessor core/IPC fixture, never an installer or live connector.
 func main() {
 	if os.Getuid() == 0 || len(os.Args) != 2 {
 		panic("ordinary fixture owner and data directory required")
@@ -24,7 +25,7 @@ func main() {
 		panic(err)
 	}
 	code, err := server.Store.IssueClaimCode(ctx)
-	if err != nil {
+	if err != nil && !errors.Is(err,core.ErrClaimed) {
 		panic(err)
 	}
 	if err = json.NewEncoder(os.Stdout).Encode(map[string]string{"code": code.Code}); err != nil {

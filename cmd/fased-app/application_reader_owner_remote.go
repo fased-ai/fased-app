@@ -49,7 +49,7 @@ func readerApplicationOwnerHelper(ctx context.Context, m vpsinstall.Manifest, im
 	}
 	switch c.Action {
 	case "reader-prepare":
-		if c.ReaderBootstrap != nil {
+		if c.ReaderBootstrap != nil || r.Predecessor.State == "prepared" {
 			client, e := core.NewClient(ctx, m.Data)
 			if e != nil {
 				return out, true, e
@@ -62,10 +62,30 @@ func readerApplicationOwnerHelper(ctx context.Context, m vpsinstall.Manifest, im
 			if e = client.Do(ctx, http.MethodGet, "/api/v1/updates/inventory?probe="+update.NewProbe(), nil, &snapshot); e != nil {
 				return out, true, e
 			}
-			if e = core.CheckApplicationReaderPredecessor(ctx, m.Data, snapshot); e != nil {
+			pause := update.CorePauseRequest{Version: 1, IntentID: c.ID, Sequence: r.Release.Sequence, ManifestSHA256: r.Release.ManifestSHA256, Expected: snapshot}
+			if snapshot.State.Version == 35 {
+				retained, re := core.ReadApplicationReaderBootstrapRequest(m.Data, c.ID)
+				if re == nil {
+					if retained.PreviousEngineSHA256 != r.PreviousEngineSHA256 || update.SnapshotDigest("reader-release", retained.Release) != update.SnapshotDigest("reader-release", r.Release) || !update.SameCoreMetadata(retained.Predecessor.Core, snapshot) {
+						return out, true, errors.New("retained reader intent differs from source or admitted release")
+					}
+					r = retained
+					pause = *r.Predecessor.Request
+				} else if errors.Is(re, os.ErrNotExist) {
+					if e = core.CheckApplicationReaderPredecessor(ctx, m.Data, snapshot); e != nil {
+						return out, true, e
+					}
+					r.Version = 2
+					r.Predecessor = update.CorePauseReceipt{Version: 1, State: "prepared", Core: snapshot, Request: &pause}
+					if e = core.PrepareApplicationReaderBootstrap(ctx, m.Data, r); e != nil {
+						return out, true, e
+					}
+				} else {
+					return out, true, re
+				}
+			} else if e = core.CheckApplicationReaderPredecessor(ctx, m.Data, snapshot); e != nil {
 				return out, true, e
 			}
-			pause := update.CorePauseRequest{Version: 1, IntentID: c.ID, Sequence: r.Release.Sequence, ManifestSHA256: r.Release.ManifestSHA256, Expected: snapshot}
 			if e = client.Do(ctx, http.MethodPost, "/api/v1/updates/pause", update.CorePauseCommand{Action: "status", ProbeID: update.NewProbe()}, &r.Predecessor); e != nil {
 				return out, true, e
 			}
@@ -74,8 +94,11 @@ func readerApplicationOwnerHelper(ctx context.Context, m vpsinstall.Manifest, im
 				if p == nil || p.IntentID != c.ID || p.Sequence != r.Release.Sequence || p.ManifestSHA256 != r.Release.ManifestSHA256 || !update.SameCoreMetadata(r.Predecessor.Core, snapshot) {
 					return out, true, errors.New("another source metadata fence remains active")
 				}
-			} else if e = client.Do(ctx, http.MethodPost, "/api/v1/updates/pause", update.CorePauseCommand{Action: "pause", ProbeID: update.NewProbe(), Request: &pause}, &r.Predecessor); e != nil {
-				return out, true, e
+			} else {
+				pause.Expected = snapshot
+				if e = client.Do(ctx, http.MethodPost, "/api/v1/updates/pause", update.CorePauseCommand{Action: "pause", ProbeID: update.NewProbe(), Request: &pause}, &r.Predecessor); e != nil {
+					return out, true, e
+				}
 			}
 			if e = core.StageApplicationReaderBootstrap(ctx, m.Data, r); e != nil {
 				return out, true, e
@@ -97,7 +120,7 @@ func readerApplicationOwnerHelper(ctx context.Context, m vpsinstall.Manifest, im
 		}
 	}
 	if c.Action == "reader-prepare" {
-		out = core.ApplicationOwnerView{ReaderBootstrap: &r, BootID: r.Predecessor.Core.BootID, View: core.ApplicationUpdateView{Version: 1, InstanceID: r.Predecessor.Core.InstanceID, Schema: 33, Operation: core.ApplicationUpdateOperation{ID: r.OperationID, Phase: "applying", OwnerLease: r.OwnerLease, Release: &r.Release, BootID: r.Predecessor.Core.BootID}}}
+		out = core.ApplicationOwnerView{ReaderBootstrap: &r, BootID: r.Predecessor.Core.BootID, View: core.ApplicationUpdateView{Version: 1, InstanceID: r.Predecessor.Core.InstanceID, Schema: r.Predecessor.Core.State.Version, Operation: core.ApplicationUpdateOperation{ID: r.OperationID, Phase: "applying", OwnerLease: r.OwnerLease, Release: &r.Release, BootID: r.Predecessor.Core.BootID}}}
 		return out, true, nil
 	}
 	v, e := core.ReadApplicationOwnerOffline(ctx, m.Data, c.ID)
@@ -114,7 +137,7 @@ func remoteReaderUpdateApplicable(ctx context.Context, m vpsinstall.Manifest, id
 		return true, errors.New("cannot verify the installed source reader; sign in with fased-app vps login or inspect the preserved transaction")
 	}
 	switch snapshot.State.Version {
-	case 33:
+	case 33, 35:
 		return true, nil
 	case core.StateSchema:
 		return false, nil
@@ -146,7 +169,7 @@ func routeRemoteApplicationMaintenance(status vpsinstall.ApplicationUpdateStatus
 
 func maintainRemoteReaderUpdate(ctx context.Context, m vpsinstall.Manifest, id string, rollback bool, source func(context.Context, string) (*bootstrap.Prepared, error), out io.Writer, system *custodyinstall.System) error {
 	if rollback {
-		return errors.New("reader-bootstrap preserves forward recovery; it never downgrades schema35")
+		return errors.New("reader-bootstrap preserves forward recovery; it never downgrades migrated metadata")
 	}
 	actor := &remoteApplicationOwner{m: m, id: id, system: system}
 	var request core.ApplicationReaderBootstrapRequest
@@ -187,7 +210,7 @@ func maintainRemoteReaderUpdate(ctx context.Context, m vpsinstall.Manifest, id s
 			return nil
 		},
 		RollbackAllowed: func(context.Context, vpsinstall.Manifest, vpsinstall.Manifest) error {
-			return errors.New("schema33 reader bootstrap requires forward recovery")
+			return errors.New("reader bootstrap requires forward recovery")
 		},
 		Complete: func(ctx context.Context, target vpsinstall.Manifest, s vpsinstall.ApplicationUpdateStatus) error {
 			actor.m = target
@@ -232,8 +255,8 @@ func maintainRemoteReaderUpdate(ctx context.Context, m vpsinstall.Manifest, id s
 	if e != nil {
 		return e
 	}
-	if snapshot.State.Version != 33 {
-		return errors.New("only installed schema33 may enter reader-bootstrap; schema34 stays unchanged")
+	if snapshot.State.Version != 33 && snapshot.State.Version != 35 {
+		return errors.New("unsupported installed reader; preserve original state")
 	}
 	if source == nil {
 		return errors.New("trusted reader-bootstrap release binding is not configured; activation remains disabled")
@@ -254,7 +277,11 @@ func maintainRemoteReaderUpdate(ctx context.Context, m vpsinstall.Manifest, id s
 	if release == nil {
 		return errors.New("new independently verified reader release required")
 	}
-	request = core.ApplicationReaderBootstrapRequest{Version: 1, OperationID: id, OwnerLease: update.NewProbe(), PreviousEngineSHA256: m.CoreSHA256, Release: *release}
+	version := 1
+	if snapshot.State.Version == 35 {
+		version = 2
+	}
+	request = core.ApplicationReaderBootstrapRequest{Version: version, OperationID: id, OwnerLease: update.NewProbe(), PreviousEngineSHA256: m.CoreSHA256, Release: *release}
 	_, e = driver.Apply(ctx, core.ApplicationUpdateOperation{ID: id, Phase: "applying", OwnerLease: request.OwnerLease, Release: release, BootID: snapshot.BootID})
 	if e == nil {
 		fmt.Fprintln(out, "completed")

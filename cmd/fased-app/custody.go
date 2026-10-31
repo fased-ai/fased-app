@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/signer"
 )
 
 func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result error) {
@@ -97,6 +98,10 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 		}
 		defer lock.Close()
 	}
+	signerFlag, e := custodyOwnerFlag(m, args[0])
+	if e != nil {
+		return e
+	}
 	switch args[0] {
 	case "status":
 		active := custodyinstall.Runtime(m) == nil
@@ -126,7 +131,7 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 		}
 		return system.UpdatePreferences(ctx, m, *requestStdin, out)
 	case "receipt-rpc-save", "receipt-rpc-unlock":
-		command := []string{"owner", "--config", m.Root + "/identity.json", "--disposable-fixture", "--action", args[0]}
+		command := []string{"owner", "--config", m.Root + "/identity.json", signerFlag, "--action", args[0]}
 		if args[0] == "receipt-rpc-save" {
 			if *rpcOrigin == "" {
 				return errors.New("choose a canonical --rpc-origin")
@@ -145,7 +150,7 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 		if *proposalFile == "" {
 			return errors.New("choose --proposal-file containing a public proposal")
 		}
-		command := []string{args[0], "--config", m.Root + "/identity.json", "--disposable-fixture", "--file", *proposalFile}
+		command := []string{args[0], "--config", m.Root + "/identity.json", signerFlag, "--file", *proposalFile}
 		if *approvalStdin {
 			command = append(command, "--approval-stdin")
 		}
@@ -161,7 +166,7 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 		if *file == "" {
 			return errors.New("choose --backup-file in a private owner directory")
 		}
-		command := []string{args[0], "--config", m.Root + "/identity.json", "--disposable-fixture", "--file", *file}
+		command := []string{args[0], "--config", m.Root + "/identity.json", signerFlag, "--file", *file}
 		if args[0] == "import" {
 			if *seedFile == "" {
 				return errors.New("choose --seed-file in a private owner directory")
@@ -199,4 +204,25 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 	default:
 		return errors.New("unknown custody command")
 	}
+}
+
+func custodyOwnerFlag(m custodyinstall.Manifest, action string) (string, error) {
+	if m.Version != 3 {
+		return "--disposable-fixture", nil
+	}
+	if m.Mode != signer.OrdinaryCustodyMode || m.Profile != signer.OwnerCustodyProfile {
+		return "", signer.ErrUnavailable
+	}
+	switch action {
+	case "status", "remove", "accounts", "login", "claim-code", "reset-app-password", "setup", "import", "recover", "update-status":
+	default:
+		return "", signer.ErrUnavailable
+	}
+	if m.Provenance == signer.ControlledCustodyProfile {
+		return "--disposable-fixture", nil
+	}
+	if m.Provenance == signer.OwnerKeyProvenance && signer.OrdinaryOwnerAdmissionEnabled() {
+		return "--ordinary-custody", nil
+	}
+	return "", signer.ErrUnavailable
 }

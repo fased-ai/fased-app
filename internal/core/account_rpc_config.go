@@ -51,7 +51,7 @@ func (s *Store) ConfigureAccountRPC(ctx context.Context, in RPCConfigInput) (Acc
 				}
 			}
 			if a.Version == 2 || (managedNetworkAccount(a) || ordinaryNetworkAccount(a)) {
-				if !s.rpcAdmission || in.Network != a.Network || rpcProvider(in.Endpoint, in.Network) == "" {
+				if (!s.rpcAdmission && !s.controlledOrdinaryAccount(ctx, a)) || in.Network != a.Network || rpcProvider(in.Endpoint, in.Network) == "" {
 					return AccountsView{}, errors.New("live RPC configuration disabled")
 				}
 				record.Accounts[i].RPC = &AccountRPC{Version: 2, Endpoint: in.Endpoint, Network: in.Network}

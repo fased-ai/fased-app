@@ -1,0 +1,64 @@
+//go:build linux
+
+package main
+
+import (
+	"bytes"
+	"errors"
+	"io"
+	"testing"
+
+	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/enrollment"
+	"github.com/fased-ai/fased-app/internal/signer"
+)
+
+func configureOrdinaryEnrollmentFixture() {
+	compiledOrdinaryEnrollment = enrollment.RunControlledOwnerCustody
+}
+
+func TestOrdinaryEnrollmentOwnerBoundary(t *testing.T) {
+	held := compiledOrdinaryEnrollment
+	compiledOrdinaryEnrollment = nil
+	defer func() { compiledOrdinaryEnrollment = held }()
+	var out bytes.Buffer
+	if err := enrollmentCommand([]string{"--ordinary-custody"}, nil, &out, io.Discard); !errors.Is(err, signer.ErrUnavailable) || out.Len() != 0 {
+		t.Fatal("ordinary admission crossed source/credential boundary", err)
+	}
+	m := custodyinstall.Manifest{Version: 3, Mode: signer.OrdinaryCustodyMode, Profile: signer.OwnerCustodyProfile, Provenance: signer.ControlledCustodyProfile}
+	for _, action := range []string{"setup", "import", "recover"} {
+		if flag, err := custodyOwnerFlag(m, action); err != nil || flag != "--disposable-fixture" {
+			t.Fatal(action, flag, err)
+		}
+	}
+	for _, action := range []string{"approve", "approve-swap", "receipt-rpc-save", "update-preferences"} {
+		if _, err := custodyOwnerFlag(m, action); err == nil {
+			t.Fatal("unsupported authority exposed", action)
+		}
+	}
+	m.Provenance = signer.OwnerKeyProvenance
+	if _, err := custodyOwnerFlag(m, "import"); !errors.Is(err, signer.ErrUnavailable) {
+		t.Fatal("real key admission enabled")
+	}
+}
+
+func TestCustodyRuntimeOwnerIdentity(t *testing.T) {
+	for _, row := range []struct {
+		name, location    string
+		version, expected int
+	}{
+		{"legacy-local", "local", 1, 0},
+		{"legacy-remote", "remote", 1, 1001},
+		{"managed-local", "local", 2, 1001},
+		{"managed-remote", "remote", 2, 1001},
+		{"ordinary-local", "local", 3, 1001},
+		{"ordinary-remote", "remote", 3, 1001},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			config := signer.Config{Version: row.version, OwnerUID: 1001, AppUID: 999}
+			if got := custodyRuntimeOwnerUID(config, row.location); got != row.expected {
+				t.Fatalf("connection owner %d, want protected owner %d", got, row.expected)
+			}
+		})
+	}
+}

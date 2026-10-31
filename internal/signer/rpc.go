@@ -12,20 +12,23 @@ import (
 const ManagedFixtureMode = "disposable-custody:v2"
 
 type Config struct {
-	Network   string `json:"network,omitempty"`
-	Version   int    `json:"version"`
-	Mode      string `json:"mode"`
-	SignerID  string `json:"signerId"`
-	OwnerUID  int    `json:"ownerUid"`
-	AppUID    int    `json:"appUid"`
-	SignerUID int    `json:"signerUid"`
-	StateDir  string `json:"stateDir"`
-	SocketDir string `json:"socketDir"`
+	Profile    string `json:"profile,omitempty"`
+	Provenance string `json:"provenance,omitempty"`
+	Network    string `json:"network,omitempty"`
+	Version    int    `json:"version"`
+	Mode       string `json:"mode"`
+	SignerID   string `json:"signerId"`
+	OwnerUID   int    `json:"ownerUid"`
+	AppUID     int    `json:"appUid"`
+	SignerUID  int    `json:"signerUid"`
+	StateDir   string `json:"stateDir"`
+	SocketDir  string `json:"socketDir"`
 }
 
 func (c Config) Validate() error {
 	modeOK := c.Version == 1 && c.Mode == FixtureNetwork && c.Network == "" || c.Version == 2 && c.Mode == ManagedFixtureMode && managedNetwork(c.Network) || c.Version == 3 && c.Mode == OrdinaryCustodyMode && managedNetwork(c.Network)
-	if !modeOK || !validID(c.SignerID) || c.OwnerUID <= 0 || c.AppUID <= 0 || c.SignerUID <= 0 ||
+	contextOK := c.Version != 3 && c.Profile == "" && c.Provenance == "" || c.Version == 3 && c.Profile == OwnerCustodyProfile && (c.Provenance == ControlledCustodyProfile || c.Provenance == OwnerKeyProvenance)
+	if !modeOK || !contextOK || !validID(c.SignerID) || c.OwnerUID <= 0 || c.AppUID <= 0 || c.SignerUID <= 0 ||
 		c.OwnerUID == c.AppUID || c.OwnerUID == c.SignerUID || c.AppUID == c.SignerUID || c.StateDir == c.SocketDir {
 		return errors.New("fixture requires a versioned identity and three distinct non-root UIDs")
 	}

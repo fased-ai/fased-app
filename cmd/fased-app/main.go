@@ -213,9 +213,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 			if e != nil {
 				return e
 			}
-			if config.Version == 2 || *instanceLocation == "remote" {
-				ownerUID = config.OwnerUID
-			}
+			ownerUID = custodyRuntimeOwnerUID(config, *instanceLocation)
 		}
 		if *requireSandbox {
 			if *custodyConfig != "" || *remoteConfig != "" {
@@ -428,4 +426,13 @@ func serveStarted(server *core.Server, out io.Writer) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return errors.Join(result, server.Close(ctx))
+}
+
+// The installed service authenticates config before deriving its connection
+// owner. The app service UID is separate from that owner for enrolled custody.
+func custodyRuntimeOwnerUID(config signer.Config, location string) int {
+	if config.Version == 2 || config.Version == 3 || location == "remote" {
+		return config.OwnerUID
+	}
+	return 0
 }

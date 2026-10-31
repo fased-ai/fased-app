@@ -71,7 +71,7 @@ func TestOrdinaryCustodyAccountRPCRestartAndRecovery(t *testing.T) {
 	if _, err = s.ConfigureAccountRPC(ctx, rpc); err == nil {
 		t.Fatal("ordinary RPC dispatch enabled")
 	}
-	s.rpcAdmission = true // Existing controlled setting gate; no network request.
+	s.custodyOwnerSupported = true // Authenticated controlled installed binding; no live RPC.
 	current, err = s.ConfigureAccountRPC(ctx, rpc)
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +82,12 @@ func TestOrdinaryCustodyAccountRPCRestartAndRecovery(t *testing.T) {
 	credential, err := s.RPCCredential(ctx, RPCCredentialCommand{AccountID: account.ID, Revision: current.Record.Revision, Action: "save", Key: "ordinary-controlled-rpc-key-12345678", Passphrase: "disposable RPC password"})
 	if err != nil || !credential.Saved || !credential.Locked || credential.LiveRPC {
 		t.Fatal("ordinary RPC credential not safely saved", err)
+	}
+	if s.rpcAdmission {
+		t.Fatal("configuration enabled a live transport")
+	}
+	if _, err = s.RPCCredential(ctx, RPCCredentialCommand{AccountID: account.ID, Revision: current.Record.Revision, Action: "check", Passphrase: "disposable RPC password"}); err == nil {
+		t.Fatal("saving configuration enabled a real RPC check")
 	}
 	vault, err := s.readRPCVault(account.ID)
 	if err != nil {
@@ -142,7 +148,7 @@ func TestOrdinaryCustodyAccountRPCRestartAndRecovery(t *testing.T) {
 	if current.AccountStates[old.ID] != "stale" {
 		t.Fatal("restored epoch reused old reference")
 	}
-	s.rpcAdmission = true
+	s.custodyOwnerSupported = true
 	rpc.Revision = current.Record.Revision
 	if _, err = s.ConfigureAccountRPC(ctx, rpc); err == nil {
 		t.Fatal("stale wallet changed RPC")

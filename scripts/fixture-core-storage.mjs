@@ -106,6 +106,8 @@ export async function currentStorageFixture(archivedRoot) {
     `package core
 import "context"
 func ordinaryCustodySettled(context.Context,snapshotReader,string,ApplicationUpdateOperation)error{return ErrCorePaused}
+func ordinaryCustodySettledWithPause(context.Context,snapshotReader,string,ApplicationUpdateOperation,string,pauseRecord)error{return ErrCorePaused}
+func(s *Store)controlledOrdinaryAccount(context.Context,Account)bool{return false}
 `,
   );
   const vaultPublicPath = path.join(archivedRoot, "internal/signer/vault.go");
