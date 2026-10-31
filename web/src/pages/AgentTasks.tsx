@@ -11,7 +11,7 @@ import type {
   TaskCalendar,
 } from "../agents";
 import { useCore } from "../core";
-import { useWorkspace } from "../workspace";
+import { useWorkspace, type TaskComposerDraft } from "../workspace";
 import { RefreshCw } from "../icons";
 import { Badge } from "../components/shared";
 import { TaskHistory } from "./TaskHistory";
@@ -110,14 +110,56 @@ export function AgentTasks({
   const { t: uiText } = useUI();
   const { instanceId } = useCore();
   const tr = uiText;
-  const { agents, focusedTask, setFocusedTask } = useWorkspace();
+  const {
+    agents,
+    focusedTask,
+    setFocusedTask,
+    taskComposerDrafts,
+    setTaskComposerDrafts,
+  } = useWorkspace();
+  const composerKey = `${instanceId}:${v.profileId}`;
+  const composer = taskComposerDrafts.get(composerKey);
+  function updateComposer(
+    update: (draft: TaskComposerDraft) => TaskComposerDraft,
+  ) {
+    setTaskComposerDrafts((drafts) => {
+      const next = new Map(drafts);
+      next.set(
+        composerKey,
+        update(drafts.get(composerKey) ?? { open: false, watchMode: false }),
+      );
+      return next;
+    });
+  }
+  function discardComposer(expected?: TaskComposerDraft) {
+    setTaskComposerDrafts((drafts) => {
+      if (
+        !drafts.has(composerKey) ||
+        (expected && drafts.get(composerKey) !== expected)
+      )
+        return drafts;
+      const next = new Map(drafts);
+      next.delete(composerKey);
+      return next;
+    });
+  }
+  const editing = composer?.open ?? false;
+  const watchMode = composer?.watchMode ?? false;
+  const reviewTask = v.tasks.find((task) => task.id === composer?.seedId);
+  const setEditing = (open: boolean) =>
+    updateComposer((draft) => ({ ...draft, open }));
+  const setWatchMode = (watchMode: boolean) =>
+    updateComposer((draft) => ({ ...draft, watchMode }));
+  const setReviewTask = (task?: AgentTask) =>
+    updateComposer((draft) =>
+      draft.seedId === task?.id
+        ? draft
+        : { ...draft, seedId: task?.id, kind: undefined, inputs: undefined },
+    );
   const { view: connections } = useAIConnection();
-  const [editing, setEditing] = useState(false);
-  const [watchMode, setWatchMode] = useState(false);
   const [selected, setSelected] = useState("");
   const [resultId, setResultId] = useState("");
   const [reuse, setReuse] = useState("");
-  const [reviewTask, setReviewTask] = useState<AgentTask>();
   const [createdFrom, setCreatedFrom] = useState<string[]>();
   const [strategyRequest, setStrategyRequest] = useState<string>();
   const advanced = useRef<HTMLDetailsElement>(null);
@@ -612,14 +654,16 @@ export function AgentTasks({
           </div>
           {editing ? (
             <TaskComposer
-              key={`${v.profileId}:${reviewTask?.id || "new"}`}
+              key={`${instanceId}:${v.profileId}:${composer?.seedId || "new"}`}
+              draftState={composer!}
+              updateDraft={updateComposer}
               view={v}
               seed={reviewTask}
               watchMode={watchMode}
-              close={() => setEditing(false)}
+              close={() => discardComposer()}
               created={() => {
                 setCreatedFrom(tasks.map((task) => task.id));
-                setEditing(false);
+                discardComposer(composer);
               }}
             />
           ) : reuse ? (
@@ -896,6 +940,8 @@ function AnalysisTaskAccess({
 }
 
 function TaskComposer({
+  draftState,
+  updateDraft,
   view: v,
   watchMode,
   close,
@@ -903,6 +949,10 @@ function TaskComposer({
   seed,
 }: {
   view: AgentView;
+  draftState: TaskComposerDraft;
+  updateDraft: (
+    update: (draft: TaskComposerDraft) => TaskComposerDraft,
+  ) => void;
   watchMode: boolean;
   close: () => void;
   created: () => void;
@@ -950,11 +1000,11 @@ function TaskComposer({
     minutes: 60,
   });
   type Draft = ReturnType<typeof freshDraft>;
-  const [kind, setKind] = useState<"reminder" | "analysis">(
-    seed?.ai?.analysis && !seed.watch ? "analysis" : "reminder",
-  );
+  const kind =
+    draftState.kind ??
+    (seed?.ai?.analysis && !seed.watch ? "analysis" : "reminder");
   const mode = watchMode ? "watch" : kind;
-  const [drafts, setDrafts] = useState(() => {
+  const [initialDrafts] = useState(() => {
     const initial = {
       reminder: freshDraft(),
       analysis: freshDraft(),
@@ -1001,12 +1051,22 @@ function TaskComposer({
     }
     return initial;
   });
+  const drafts = draftState.inputs ?? initialDrafts;
   const draft = drafts[mode];
-  const patch = (change: Partial<Draft>) =>
-    setDrafts((saved) => ({
+  const setKind = (kind: "reminder" | "analysis") =>
+    updateDraft((saved) => ({
       ...saved,
-      [mode]: { ...saved[mode], ...change },
+      kind,
+      inputs: saved.inputs ?? initialDrafts,
     }));
+  const patch = (change: Partial<Draft>) =>
+    updateDraft((saved) => {
+      const inputs = saved.inputs ?? initialDrafts;
+      return {
+        ...saved,
+        inputs: { ...inputs, [mode]: { ...inputs[mode], ...change } },
+      };
+    });
   const {
     name,
     text,
