@@ -123,6 +123,17 @@ jobs:
         env:
           FASED_DISPOSABLE_VM_ACCEPTANCE: "1"
         run: python3 scripts/check-inspection-vm.py --maintenance-only
+      - name: Compose disposable signed Remote update
+        run: |
+          mkdir -p .evidence/b01-connected-install/installed-remote/inputs
+          cp .evidence/p4-fault-reboot/fased-app .evidence/b01-connected-install/installed-remote/inputs/fased-app-tests
+          CGO_ENABLED=0 go test -c -ldflags '-s -w -X github.com/fased-ai/fased-app/internal/core.Version=0.0.0-b01-vm.2' -o .evidence/b01-connected-install/installed-remote/target ./cmd/fased-app
+          FASED_UPDATE_FIXTURE_INPUTS="$GITHUB_WORKSPACE/.evidence/b01-connected-install/installed-remote/inputs" FASED_UPDATE_FIXTURE_TARGET="$GITHUB_WORKSPACE/.evidence/b01-connected-install/installed-remote/target" .evidence/b01-connected-install/installed-remote/inputs/fased-app-tests -test.run='^TestApplicationUpdateVMInputs$' -test.v
+          cat .evidence/b01-connected-install/installed-remote/input-receipt.json
+      - name: Installed Remote signed update and exact reboot recovery
+        env:
+          FASED_DISPOSABLE_VM_ACCEPTANCE: "1"
+        run: python3 scripts/check-inspection-vm.py --installed-remote-update-only
       - name: Remove only the owned CI KVM rule
         if: always()
         run: |
@@ -143,4 +154,7 @@ jobs:
             .evidence/b01-connected-install/*.json
             .evidence/b01-connected-install/vm/*.json
             .evidence/b01-connected-install/vm/*.log
+            .evidence/b01-connected-install/installed-remote/*.json
+            .evidence/b01-connected-install/installed-remote/*.log
+            .evidence/b01-connected-install/installed-remote/*.stderr
           retention-days: 7
