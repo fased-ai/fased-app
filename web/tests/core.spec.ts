@@ -5040,7 +5040,7 @@ test("public account records share UI/CLI state without wallet authority", async
   change.stdin.end(JSON.stringify(state.record));
   await once(change, "exit");
   expect(change.exitCode).toBe(0);
-  await page.getByRole("button", { name: "Refresh" }).click();
+  await refreshFixtureAccounts(page);
   await expect(
     page.getByRole("heading", { name: "External manual fixture", exact: true }),
   ).toBeVisible();
