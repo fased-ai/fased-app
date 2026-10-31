@@ -18,6 +18,11 @@ import (
 func configureOrdinaryEnrollmentFixture() {
 	compiledOrdinaryEnrollment = enrollment.RunControlledOwnerCustody
 	compiledInstalledWalletRead = func(server *core.Server, path string) (func(), error) {
+		// Ordinary Local/Remote startup passes an empty optional identity.
+		// Match core.Start: no signer configuration means no fixture transport.
+		if path == "" {
+			return nil, nil
+		}
 		cfg, err := signer.LoadConfig(path)
 		if err != nil {
 			return nil, err
@@ -70,6 +75,16 @@ func TestCustodyReadInputCannotBecomeOwnerOrMutation(t *testing.T) {
 		if err := custodyCommand(args, nil, &out, io.Discard); err == nil || err.Error() != "wallet read input requires accounts only; no update or login input" || out.Len() != 0 {
 			t.Fatal(args, err)
 		}
+	}
+}
+
+func TestOrdinaryReadFixtureSkipsAbsentIdentity(t *testing.T) {
+	if compiledInstalledWalletRead == nil {
+		t.Fatal("compiled acceptance hook missing")
+	}
+	closeFixture, err := compiledInstalledWalletRead(nil, "")
+	if err != nil || closeFixture != nil {
+		t.Fatal("unconfigured startup must not load a signer or install a transport", err)
 	}
 }
 
