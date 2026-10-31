@@ -41,6 +41,13 @@ func TestMain(m *testing.M) {
 		}
 		var diagnostic io.Writer = os.Stderr
 		self, _ := os.Executable()
+		if handled, e := applicationUpdateVMRuntime(self, os.Args[1:]); handled || e != nil {
+			if e != nil {
+				fmt.Fprintln(os.Stderr, e)
+				os.Exit(1)
+			}
+			return
+		}
 		if handled, e := maintenanceAuthorityActorFixture(self, os.Args[1:]); handled {
 			if e != nil {
 				fmt.Fprintln(os.Stderr, e)

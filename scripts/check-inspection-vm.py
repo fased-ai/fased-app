@@ -6,16 +6,20 @@ Evidence survives snapshot rollback; large reconstructible VM outputs are remove
 import argparse, base64, selectors, hashlib, json, os, pathlib, shutil, signal, socket, subprocess, tarfile, time, urllib.request
 P=pathlib.Path
 repo=P.cwd(); root=repo/'.evidence/p4-fault-reboot'; root.mkdir(parents=True,exist_ok=True)
-p=argparse.ArgumentParser(); p.add_argument('--full',action='store_true'); p.add_argument('--resume',action='store_true'); p.add_argument('--inspection-only',action='store_true'); p.add_argument('--keep-failed-vm',action='store_true'); p.add_argument('--managed-remote-only',action='store_true'); p.add_argument('--network-only',action='store_true'); p.add_argument('--owner-browser-only',action='store_true'); p.add_argument('--maintenance-only',action='store_true'); a=p.parse_args()
+p=argparse.ArgumentParser(); p.add_argument('--full',action='store_true'); p.add_argument('--resume',action='store_true'); p.add_argument('--inspection-only',action='store_true'); p.add_argument('--keep-failed-vm',action='store_true'); p.add_argument('--managed-remote-only',action='store_true'); p.add_argument('--network-only',action='store_true'); p.add_argument('--owner-browser-only',action='store_true'); p.add_argument('--maintenance-only',action='store_true'); p.add_argument('--installed-remote-update-only',action='store_true'); a=p.parse_args()
 assert os.geteuid()>0 and os.environ.get('FASED_DISPOSABLE_VM_ACCEPTANCE')=='1'
 assert not a.managed_remote_only or not (a.resume or a.full or a.inspection_only),'managed Remote acceptance requires a fresh single-case VM'
 assert not a.network_only or not (a.resume or a.full or a.inspection_only or a.managed_remote_only),'network acceptance requires a fresh single-case VM'
 assert not a.owner_browser_only or not (a.resume or a.full or a.inspection_only or a.managed_remote_only or a.network_only),'owner browser acceptance requires a fresh single-case VM'
 assert not a.maintenance_only or not (a.resume or a.full or a.inspection_only or a.managed_remote_only or a.network_only or a.owner_browser_only),'maintenance authority requires one fresh disposable VM'
-single_case=a.managed_remote_only or a.network_only or a.owner_browser_only or a.maintenance_only
+assert not a.installed_remote_update_only or not (a.resume or a.full or a.inspection_only or a.managed_remote_only or a.network_only or a.owner_browser_only or a.maintenance_only),'installed Remote update requires one fresh disposable VM'
+single_case=a.managed_remote_only or a.network_only or a.owner_browser_only or a.maintenance_only or a.installed_remote_update_only
 if a.maintenance_only:
  root=repo/'.evidence/b01-connected-install/vm'; root.mkdir(parents=True,exist_ok=True)
  assert os.path.exists('/dev/kvm') and os.access('/dev/kvm',os.R_OK|os.W_OK),'KVM authority prerequisite unavailable; do not substitute prolonged TCG acceptance'
+if a.installed_remote_update_only:
+ root=repo/'.evidence/b01-connected-install/installed-remote'; root.mkdir(parents=True,exist_ok=True)
+ assert os.path.exists('/dev/kvm') and os.access('/dev/kvm',os.R_OK|os.W_OK),'KVM installed-update prerequisite unavailable; do not substitute prolonged TCG acceptance'
 if a.network_only:
  root=repo/'.evidence/b01-network/vm'; root.mkdir(parents=True,exist_ok=True)
 if a.owner_browser_only:
@@ -81,6 +85,14 @@ if not a.resume:
   data=(work/'user-data').read_text()
   fixed='       ubuntu ALL=(root) NOPASSWD: /usr/sbin/runuser ^-u fased-probe -- /usr/bin/env --ignore-environment --chdir=/home/fased-probe HOME=/home/fased-probe XDG_CONFIG_HOME=/home/fased-probe/.config PATH=/usr/bin:/bin FASED_DISPOSABLE_VM=1 FASED_MAINTENANCE_OWNER=1 /var/lib/fased-maintenance-probe-input/fased-app-tests -test[.]run=TestRemoteMaintenanceOwnerUbuntuVM -test[.]v$\n'
   (work/'user-data').write_text(data.replace(' packages:',fixed+' packages:'))
+ if a.installed_remote_update_only:
+  # Both controller actions drop to the one isolated owner before test code.
+  # The controller removes that owner's temporary setup grant before launch.
+  data=(work/'user-data').read_text()
+  fixed=''
+  for action in ['TestApplicationUpdateInstalledRemoteOwnerUbuntuVM','TestApplicationUpdateInstalledRemoteOwnerVerifyUbuntuVM']:
+   fixed+='       ubuntu ALL=(root) NOPASSWD: /usr/sbin/runuser ^-u fased-probe -- /usr/bin/env --ignore-environment --chdir=/home/fased-probe HOME=/home/fased-probe XDG_CONFIG_HOME=/home/fased-probe/.config PATH=/usr/bin:/bin FASED_DISPOSABLE_VM=1 FASED_UPDATE_OWNER=1 /var/lib/fased-update-fixture/fased-app-tests -test[.]run='+action+' -test[.]v$\n'
+  (work/'user-data').write_text(data.replace(' packages:',fixed+' packages:').replace('nftables]', 'nftables, polkitd]'))
  run(['xorriso','-as','mkisofs','-quiet','-r','-J','-V','cidata','-o',str(work/'seed.iso'),str(work/'user-data'),str(work/'meta-data')])
  run(['qemu-img','create','-q','-f','qcow2','-F','qcow2','-b',str(image),str(work/'disk.qcow2')])
  run(['qemu-img','resize',str(work/'disk.qcow2'),'12G'])
@@ -88,6 +100,10 @@ with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
 kvm=os.path.exists('/dev/kvm') and os.access('/dev/kvm',os.R_OK|os.W_OK)
 serial=(root/'vm-serial.log').open('wb');stderr=(root/'qemu.stderr').open('wb')
 cmd=['qemu-system-x86_64','-machine','q35,accel='+('kvm' if kvm else 'tcg'),'-cpu','host' if kvm else 'max','-smp','2','-m','2048','-nographic','-monitor','none','-qmp',f'unix:{work}/qmp.sock,server=on,wait=off','-drive',f'file={work}/disk.qcow2,if=virtio,format=qcow2','-drive',f'file={work}/seed.iso,if=virtio,format=raw,readonly=on','-netdev',f'user,id=n,hostfwd=tcp:127.0.0.1:{port}-:22','-device','virtio-net-pci,netdev=n','-device','virtio-rng-pci','-smbios','type=1,serial=ds=nocloud']
+if a.installed_remote_update_only:
+ # This one abrupt reboot uses no QMP. Its evidence path exceeds the UNIX
+ # socket path limit, so do not create an unused monitor socket there.
+ i=cmd.index('-qmp'); del cmd[i:i+2]
 vm=None;tunnel=None
 def start_vm():
  global vm
@@ -124,6 +140,28 @@ def guest(mode,arg=''):
  return ssh('cd /home/ubuntu/fased && FASED_DISPOSABLE_VM=1 .evidence/bin/node scripts/fixture-vm-guest.mjs '+mode+' '+arg,240)
 def receipt(name):
  data=ssh('cat /home/ubuntu/fased/.evidence/p4-fault-reboot/guest/'+name+'.json',30);return json.loads(data)
+def capture_installed_update_failure():
+ # Public transaction/OS diagnostics only. Never copy DB, provider ciphertext,
+ # CLI sessions or owner leases into host logs. Keep the failed disk for those.
+ paths={
+  'controller':'/home/fased-probe/.config/fased-app-vps-installer/application-update.json',
+  'maintenance':'/home/fased-probe/.config/fased-app-vps-installer/application-maintenance.json',
+  'cut':'/var/lib/fased-app-vps-1100/app-state/update-fixture-cut.json',
+  'resumed':'/var/lib/fased-app-vps-1100/app-state/update-fixture-resumed.json'}
+ diagnostics={}
+ for name,path in paths.items():
+  try:
+   r=subprocess.run(sshbase+['sudo -n -- /usr/bin/cat -- '+path],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=8)
+   (root/('failure-'+name+'.json')).write_bytes(r.stdout)
+   (root/('failure-'+name+'.stderr')).write_bytes(r.stderr)
+   diagnostics[name]={'exitCode':r.returncode}
+  except subprocess.SubprocessError as e:diagnostics[name]={'error':str(e)}
+ try:
+  r=subprocess.run(sshbase+['sudo -n -- /usr/bin/systemctl status --no-pager --full fased-vps-1100.service fased-vps-maintenance-1100@*.service'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=8)
+  (root/'failure-services.log').write_bytes(r.stdout+r.stderr)
+  diagnostics['services']={'exitCode':r.returncode}
+ except subprocess.SubprocessError as e:diagnostics['services']={'error':str(e)}
+ save('failure-diagnostics.json',diagnostics)
 def check_inspection_faults():
   for role in ['owner','signer']:
    for case in ['regression','epoch','uncertain','equal-expiry','skew']:
@@ -197,10 +235,20 @@ try:
  if single_case:
   report['inputs']={}
   bundle=work/'inputs.tar'
-  core=repo/'.evidence/p4-fault-reboot/fased-app'
+  core=root/'inputs/fased-app-tests' if a.installed_remote_update_only else repo/'.evidence/p4-fault-reboot/fased-app'
   assert core.is_file() and not core.is_symlink() and core.stat().st_uid==os.getuid(),'owned current test executable required'
   with tarfile.open(bundle,'w') as arc:
    arc.add(core,'.evidence/bin/fased-app')
+   if a.installed_remote_update_only:
+    fixture_inputs=root/'inputs'
+    assert {entry.name for entry in fixture_inputs.iterdir()}=={'fased-app-tests','repo','seed.json','fixture.json','ca.pem','cert.pem','key.pem'},'finite signed input set required'
+    entries=sorted(fixture_inputs.rglob('*'))
+    assert len(entries)<=64 and all(not entry.is_symlink() for entry in entries),'finite regular fixture inputs required'
+    for entry in entries:
+     rel=entry.relative_to(repo)
+     assert entry.is_file() or entry.is_dir(),'regular fixture entry required'
+     if entry.is_file():report['inputs'][str(rel)]=sha(entry.read_bytes())
+     arc.add(entry,str(rel),recursive=False)
    if a.network_only:
     network=repo/'.evidence/b01-network/network-tests'
     assert network.is_file() and not network.is_symlink() and network.stat().st_uid==os.getuid(),'owned current network test executable required'
@@ -209,7 +257,35 @@ try:
   report['inputs']['.evidence/bin/fased-app']=sha(core.read_bytes())
   save('vm-inputs.json',report['inputs'])
   with bundle.open('rb') as stream:run(sshbase+['umask 077; mkdir -p fased/.evidence/p4-fault-reboot/guest && cd fased && tar -xf -'],stdin=stream,timeout=120)
-  if a.maintenance_only:
+  if a.installed_remote_update_only:
+   print('Ubuntu installed Remote update: verified signed fixture, separate owner1100 and AppUID; remove setup grant before dispatch',flush=True)
+   guest_root='/home/ubuntu/fased/.evidence/b01-connected-install/installed-remote'
+   output=ssh('cd /home/ubuntu/fased && FASED_DISPOSABLE_VM=1 .evidence/bin/fased-app -test.run=^TestApplicationUpdateInstalledRemotePrepareUbuntuVM$ -test.v',150)
+   (root/'installed-prepare-test.log').write_text(output)
+   prepared=json.loads(ssh('cat '+guest_root+'/prepared.json',30))
+   assert prepared['result']=='PASS' and prepared['fixtureOnly'] and prepared['temporarySetupGrantRemoved']
+   manifest=prepared['manifest'];assert manifest['ownerUid']==1100 and manifest['appUid'] not in [0,1000,1100] and manifest['data']=='/var/lib/fased-app-vps-1100/app-state'
+   before=ssh('cat /proc/sys/kernel/random/boot_id').strip()
+   deadline=time.monotonic()+60;cut=None
+   while time.monotonic()<deadline:
+    try:
+     cut=json.loads(ssh('sudo -n -- /usr/bin/cat -- '+manifest['data']+'/update-fixture-cut.json',10));break
+    except (subprocess.SubprocessError,ValueError):time.sleep(.2)
+   assert cut and cut['result']=='CUT' and cut['fixtureOnly'] and cut['phase']=='healthy-held' and cut['bootId']==before,'no durable protected completion cut'
+   assert len(cut['id'])==32 and all(c in '0123456789abcdef' for c in cut['id'])
+   report['checks']['before-reboot']={'prepared':prepared,'cut':cut};save('vm-progress.json',report)
+   print('Ubuntu installed Remote update: abrupt power cut at healthy-held, resume original operation on same disk/new kernel',flush=True)
+   ssh('sync');stop_vm();start_vm();ready(180)
+   after=ssh('cat /proc/sys/kernel/random/boot_id').strip();assert before!=after,'not an actual new kernel boot'
+   output=ssh('cd /home/ubuntu/fased && FASED_DISPOSABLE_VM=1 .evidence/bin/fased-app -test.run=^TestApplicationUpdateInstalledRemoteVerifyUbuntuVM$ -test.v',100)
+   (root/'installed-verify-test.log').write_text(output)
+   verified=json.loads(ssh('cat '+guest_root+'/verified.json',30))
+   assert verified['result']=='PASS' and verified['fixtureOnly'] and verified['ciphertextPreserved'] and verified['originalCheckpointPreserved']
+   assert verified['cutBootId']==before and verified['resumedBootId']==after
+   for field in ['id','sequence','manifestSha256','engineSha256']:assert verified[field]==cut[field],'recovery changed original '+field
+   report['checks']['installed-remote-update']={'result':'PASS','beforeBoot':before,'afterBoot':after,'cut':cut,'verified':verified}
+   report['scope']='one signed test app-only installed Remote transaction through protected ordinary owner process, interrupted healthy-held completion and same-ID offline new-kernel resume; no production source, owner-host, real provider/wallet/RPC/mining or public activation'
+  elif a.maintenance_only:
    print('Ubuntu maintenance authority: isolated owner1100, removed setup grant, actual NNP AppUID Polkit start',flush=True)
    output=ssh('cd /home/ubuntu/fased && FASED_DISPOSABLE_VM=1 .evidence/bin/fased-app -test.run=^TestRemoteMaintenanceAuthorityUbuntuVM$ -test.v',150)
    (root/'maintenance-authority-test.log').write_text(output)
@@ -364,6 +440,8 @@ except BaseException as e:
   (root/'guest-failure.stderr').write_bytes(e.stderr or b'')
   report['commandStdout']=(e.stdout or b'').decode(errors='replace')[-8000:]
   report['commandStderr']=(e.stderr or b'').decode(errors='replace')[-8000:]
+ if a.installed_remote_update_only and vm is not None and vm.poll() is None:
+  capture_installed_update_failure()
  raise
 finally:
  if tunnel is not None and tunnel.poll() is None:tunnel.terminate();tunnel.wait(10)
