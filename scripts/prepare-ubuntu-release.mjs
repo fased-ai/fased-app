@@ -386,8 +386,16 @@ function finish(c) {
     entry: file("install.sh", 2 * 1024 * 1024).identity,
     productionSignaturesCreated: false,
     signingRequestReady: false,
+    finalizer: {
+      inputVersion: 1,
+      command: "fased-release-candidate",
+      request: "release-request",
+      complete: "release-finalize",
+      privateKeysAccepted: false,
+      metadataOnly: true,
+    },
     missing: [
-      "owner-authorized immutable GitHub release/asset locators",
+      "owner-authorized immutable GitHub release/asset locators and reviewed sequence/version/expiry plan",
       "exact descriptor/targets/snapshot/timestamp signing payloads and independent quorum signatures",
       "final production bootstrap verification before publication",
     ],
