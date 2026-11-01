@@ -22,6 +22,23 @@ test("Ubuntu acceptance executes Remote maintenance and the actual older reader"
   );
   assert.match(workflow, /TestApplicationReaderCompiledPredecessorIPC/);
   assert.match(workflow, /\.evidence\/b01-connected-install\/vm\/\*\.json/);
+
+  const compose = workflow.indexOf(
+    "      - name: Compose finalizer-produced disposable Remote update",
+  );
+  const boot = workflow.indexOf(
+    "      - name: Actual interruption, kernel reboot and protected recovery",
+  );
+  assert.ok(compose >= 0 && compose < boot, "compose before long VM acceptance");
+  const composition = workflow.slice(
+    compose,
+    workflow.indexOf("      - ", compose + 10),
+  );
+  assert.match(
+    composition,
+    /run: \|\n\s+umask 077\n\s+mkdir -p \.evidence\/b01-finalized-update\/vm\/inputs/,
+    "finalizer inputs must start in an owner-private directory",
+  );
 });
 
 test("full race groups retain every package and require delegated update coverage", async () => {

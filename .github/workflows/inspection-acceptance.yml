@@ -120,6 +120,14 @@ jobs:
             .evidence/p4-fault-reboot/ubuntu.img
             .evidence/p4-fault-reboot/node-v24.10.0-linux-x64.tar.xz
           key: ubuntu-noble-b3296484e362ba2e-node24.10.0
+      - name: Compose finalizer-produced disposable Remote update
+        run: |
+          umask 077
+          mkdir -p .evidence/b01-finalized-update/vm/inputs
+          CGO_ENABLED=0 go test -c -tags=fased_finalizer_vm -ldflags '-s -w' -o .evidence/b01-finalized-update/vm/inputs/fased-app-tests ./cmd/fased-app
+          CGO_ENABLED=0 go test -c -tags=fased_finalizer_vm -ldflags '-s -w -X github.com/fased-ai/fased-app/internal/core.Version=0.1.0' -o .evidence/b01-finalized-update/vm/target ./cmd/fased-app
+          FASED_UPDATE_FIXTURE_INPUTS="$GITHUB_WORKSPACE/.evidence/b01-finalized-update/vm/inputs" FASED_UPDATE_FIXTURE_TARGET="$GITHUB_WORKSPACE/.evidence/b01-finalized-update/vm/target" FASED_UPDATE_FIXTURE_FINALIZER=1 .evidence/b01-finalized-update/vm/inputs/fased-app-tests -test.run='^TestApplicationUpdateVMInputs$' -test.v
+          cat .evidence/b01-finalized-update/vm/input-receipt.json
       - name: Actual interruption, kernel reboot and protected recovery
         env:
           FASED_DISPOSABLE_VM_ACCEPTANCE: "1"
@@ -128,13 +136,6 @@ jobs:
         env:
           FASED_DISPOSABLE_VM_ACCEPTANCE: "1"
         run: python3 scripts/check-inspection-vm.py --maintenance-only
-      - name: Compose finalizer-produced disposable Remote update
-        run: |
-          mkdir -p .evidence/b01-finalized-update/vm/inputs
-          CGO_ENABLED=0 go test -c -tags=fased_finalizer_vm -ldflags '-s -w' -o .evidence/b01-finalized-update/vm/inputs/fased-app-tests ./cmd/fased-app
-          CGO_ENABLED=0 go test -c -tags=fased_finalizer_vm -ldflags '-s -w -X github.com/fased-ai/fased-app/internal/core.Version=0.1.0' -o .evidence/b01-finalized-update/vm/target ./cmd/fased-app
-          FASED_UPDATE_FIXTURE_INPUTS="$GITHUB_WORKSPACE/.evidence/b01-finalized-update/vm/inputs" FASED_UPDATE_FIXTURE_TARGET="$GITHUB_WORKSPACE/.evidence/b01-finalized-update/vm/target" FASED_UPDATE_FIXTURE_FINALIZER=1 .evidence/b01-finalized-update/vm/inputs/fased-app-tests -test.run='^TestApplicationUpdateVMInputs$' -test.v
-          cat .evidence/b01-finalized-update/vm/input-receipt.json
       - name: Finalized metadata installed update, reboot recovery and authenticated no-op
         env:
           FASED_DISPOSABLE_VM_ACCEPTANCE: "1"
