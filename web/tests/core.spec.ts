@@ -4356,6 +4356,9 @@ test("update status shares UI and private CLI observations across pause, release
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
   await page.goto(url + "/#settings");
   await openUpdateSettings(page);
   const panel = page.getByRole("region", { name: "Updates & recovery" });
@@ -4481,6 +4484,9 @@ test("update recovery view rejects unsupported or lost status without retaining 
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
   let fail = false,
     unsupported = false;
   const observation = {
@@ -4853,6 +4859,9 @@ test("public account records share UI/CLI state without wallet authority", async
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
   await page.goto(url + "/#wallets/accounts");
   await expect(page.getByRole("heading", { name: "Wallets" })).toBeVisible();
   await revealFixtureAccountEntry(page);
