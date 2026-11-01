@@ -70,7 +70,7 @@ func metaFile(v int64, b []byte) *metadata.MetaFiles {
 	return &metadata.MetaFiles{Version: v, Length: int64(len(b)), Hashes: metadata.Hashes{"sha256": h}}
 }
 
-func newFirstFixture(t *testing.T) *firstFixture {
+func newFirstFixture(t *testing.T, profile ...string) *firstFixture {
 	t.Helper()
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("Ubuntu bootstrap targets Linux amd64")
@@ -84,7 +84,12 @@ func newFirstFixture(t *testing.T) *firstFixture {
 	t.Setenv("FASED_BOOTSTRAP_ARGS", f.arguments)
 	f.root = metadata.Root(f.now.Add(7 * 24 * time.Hour))
 	f.root.Signed.ConsistentSnapshot = true
-	for role, count := range map[string]int{"root": 3, "targets": 3, "snapshot": 1, "timestamp": 1} {
+	counts := map[string]int{"root": 3, "targets": 3, "snapshot": 1, "timestamp": 1}
+	if len(profile) == 1 && profile[0] == SingleOwnerSigningProfile {
+		counts["root"], counts["targets"] = 1, 1
+		f.rootSignatures, f.targetSignatures = 1, 1
+	}
+	for role, count := range counts {
 		for i := 0; i < count; i++ {
 			pub, priv, err := ed25519.GenerateKey(rand.Reader)
 			if err != nil {

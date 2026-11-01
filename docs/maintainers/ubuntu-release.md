@@ -8,23 +8,76 @@ GitHub Release, signed update metadata, deployment or update activation. Its
 current configuration intentionally lacks production trust. Do not create a tag
 or run a release build until the owner authorizes it.
 
+## Ubuntu 0.1.0 approval worksheet
+
+**Draft single-owner recommendation; no keys, trust binding or activation.**
+Version0.1.0 / Ubuntu24.04 amd64 is selected. Reference main `f78236f` is a
+baseline, not the selected release source. Repository `fased-ai/fased-app`
+(ID `1426211857`, owner `279582504`), workflow `.github/workflows/release.yml`
+and proposed protected metadata branch `release-metadata` retain their identity.
+
+### Single-owner signing recommendation
+
+Use the [single-owner policy](../updates.md#single-owner-signing-policy--proposed-not-activated)
+as the sole proposed production policy: one owner, four distinct role keys,
+one required signature per role. Root/recovery stays offline; Targets/release
+is unlocked for approval; restricted Snapshot/Timestamp automation maintains
+freshness. No external custodians, customer key forms or signing vendor.
+
+Customers install from the official link and click Update. The public key is
+bundled for automatic verification; private software-signing keys remain with
+the publisher, separate from wallets. A release push alone cannot provide that
+approval to an installed verifier.
+
+The proposed first installer uses conventional official-website HTTPS trust,
+with explicit acceptance of website/TLS compromise risk. Installed updates retain
+pinned signatures, provenance, expiry, rollback and preserving recovery checks.
+The verifier accepts explicit `single-owner-v1` in the pinned public seed; empty
+profile retains original eight-key/2-of-3 behavior. Controlled new-policy checks
+pass; no production seed is bound and historical fixtures keep their old scope.
+
 ## Inputs required before building
 
-- An approved public version-3 bootstrap seed: production TUF root, metadata
-  branch/transport identity, minimum sequence and offline Sigstore trust roots.
-- Independent signing custodians and recovery arrangements: Root and Targets
-  each require two of three distinct keys; Snapshot and Timestamp each use a
-  separate key. Private keys stay outside source, CI and chat.
-- An approved independent way to authenticate the first installer and its trust
-  material. A binary and checksum from the same download location do not supply
-  independent authentication.
-- Recorded custody and initial-trust approvals, then separate owner authorization
-  for the canonical annotated tag and its build. Configuration digests record
-  those reviews; they are not signatures or substitutes for them.
+- Owner confirmation of the single-owner profile and conventional HTTPS initial
+  trust assumption; actual release-owner/account and official hostname.
+- Separately authorized key setup, protected offline recovery/release storage,
+  encrypted backup and restore evidence; public keys/fingerprints only for review.
+- Actual approved `single-owner-v1` public seed and official HTTPS installer
+  endpoint. Explicit-profile verification, finalization and publisher functions
+  are implemented/controlled-verified; public acquisition is not accepted.
+- Exact public v3 seed and recorded owner signing/initial-trust approvals, then
+  separately authorized tag/build. Pre-build approval binds method/identity and
+  seed; post-build receipt binds actual installer/source/run/seed. Never rewrite
+  a pre-build approval digest to pretend it approved unbuilt bytes.
 
-Record only the reviewed public seed path, digest and approval-record digests in
-`release/ubuntu.json`. Public repository and owner IDs are pinned there. Missing
-values stay `null`; development keys must never fill them.
+`release/ubuntu.json` retains null `seedFile`, `seedSha256`,
+`custodyApprovalSha256` and `initialTrustApprovalSha256`. The existing field name
+`custodyApprovalSha256` records publisher signing ownership/backup approval; it
+does not require a third party. No config/schema change is made by this document.
+
+## Existing publisher integration
+
+The offline `release-finalize` output now includes `publication.json`, containing
+only verified public metadata and pinned release identity. The dormant
+`scripts/publish-ubuntu-release.mjs` library has no command-line entry, token
+lookup or import-time network activity. Its explicit operations are:
+
+1. `stageCandidate`: reviewed exact candidate inventory → verify existing annotated
+   tag/source → draft release/assets with checked digests and recorded attempt IDs.
+2. Existing offline finalizer: bind real asset IDs and signatures to the exact
+   descriptor and metadata; retain the reviewed `publication.json` digest.
+3. `releaseCandidate`: recheck reviewed draft inventory/tag/source → publish only
+   the finalized candidate; require GitHub immutable-release confirmation.
+4. `publishFinalized`: confirm immutable release/asset identity and metadata head;
+   verify exact Git blobs/tree/commit; preserve versioned history; advance without
+   force and read back the result. Concurrent/uncertain outcomes stop without retry.
+
+Callers provide explicit credentials and an awaited durable operation recorder.
+Only injected fixture transports/recorders have run here. Protected initial
+metadata branch, immutable-release configuration, real durable record storage,
+restricted refresh operation and public acquisition/readback still need authorized
+production setup/acceptance. No new service is required. Automatic metadata
+refresh and client automatic installation remain unactivated.
 
 ## Staging flow
 
@@ -134,11 +187,16 @@ missing, partial or invalid finalization record does not authorize publishing.
 
 Finalization creates no GitHub asset, release, metadata branch or update activation.
 Actual tag builds and immutable asset staging need separate owner authorization.
-Production trust/custodians, independent first-installer authentication, signed
+Production single-owner signing inputs, accepted first-installer bootstrap, signed
 metadata readback and the installed manual-update journey remain release gates.
-Controlled finalizer tests prove first acquisition and update admission with the
-same verifiers. Unchanged controller commit, no-op and interrupted-completion
-proof is reused; those tests do not claim a fresh installed-service acceptance.
+Controlled finalizer tests prove acquisition and update admission with the same
+verifiers. PR #68 also verifies the installed disposable Ubuntu Remote path:
+manual Apply, offline same-ID recovery after an actual new-kernel boot and an
+authenticated no-op without another replacement. Checkpoint, ciphertext and
+workspace preservation passed. Its source/CI evidence is retained in the internal
+execution record and reused while compatible. This accepts the controlled
+installed path; independent production first-installer authentication, real
+publisher inputs, public readback and other platform rows remain open.
 
 Public/automatic updates, mining and live features remain disabled. The
 [release-trust contract](../updates.md#production-release-trust-operations-specification)

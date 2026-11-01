@@ -396,7 +396,7 @@ function finish(c) {
     },
     missing: [
       "owner-authorized immutable GitHub release/asset locators and reviewed sequence/version/expiry plan",
-      "exact descriptor/targets/snapshot/timestamp signing payloads and independent quorum signatures",
+      "exact descriptor/targets/snapshot/timestamp signing payloads and approved profile signatures",
       "final production bootstrap verification before publication",
     ],
     publicRelease: false,

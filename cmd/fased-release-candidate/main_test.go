@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/fased-ai/fased-app/internal/bootstrap"
 	"github.com/fased-ai/fased-app/internal/releaseprovenance"
 	"github.com/fased-ai/fased-app/internal/releaseprovenance/fixture"
 	"os"
@@ -70,5 +71,40 @@ func TestCandidateOfflineProvenanceBoundary(t *testing.T) {
 		if err = run(args, &out); err == nil || out.Len() != 0 {
 			t.Fatal("unexpected authority", args, err)
 		}
+	}
+}
+
+func TestFinalizedPublicationOutputIsExclusive(t *testing.T) {
+	root, err := filepath.Abs("../../.evidence/single-owner-release/test-state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", root)
+	dir := t.TempDir()
+	if err = os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "metadata")
+	release := bootstrap.FinalizedRelease{Files: map[string][]byte{"timestamp.json": []byte("public fixture")}, Publication: bootstrap.ReleasePublication{Version: 1, SigningProfile: bootstrap.SingleOwnerSigningProfile}}
+	if err := writeFinalized(out, release); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(out, "publication.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var publication bootstrap.ReleasePublication
+	if json.Unmarshal(raw, &publication) != nil || publication.SigningProfile != bootstrap.SingleOwnerSigningProfile {
+		t.Fatal("publication handoff missing")
+	}
+	if err = writeFinalized(out, release); err == nil {
+		t.Fatal("existing publication overwritten")
+	}
+	after, err := os.ReadFile(filepath.Join(out, "publication.json"))
+	if err != nil || !bytes.Equal(raw, after) {
+		t.Fatal("preserved publication changed")
 	}
 }

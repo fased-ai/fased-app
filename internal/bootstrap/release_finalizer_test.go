@@ -18,7 +18,7 @@ import (
 	"github.com/theupdateframework/go-tuf/v2/metadata"
 )
 
-func finalizerFixture(t *testing.T) (*firstFixture, Options, ReleaseFinalizerInput) {
+func finalizerFixture(t *testing.T, profiles ...string) (*firstFixture, Options, ReleaseFinalizerInput) {
 	t.Helper()
 	root, err := filepath.Abs("../../.evidence/ubuntu-release-finalizer/test-state")
 	if err != nil {
@@ -28,7 +28,11 @@ func finalizerFixture(t *testing.T) (*firstFixture, Options, ReleaseFinalizerInp
 		t.Fatal(err)
 	}
 	t.Setenv("TMPDIR", root)
-	f, o, _ := productionFixture(t, "")
+	variant := ""
+	if len(profiles) == 1 {
+		variant = profiles[0]
+	}
+	f, o, _ := productionFixture(t, variant)
 	if !strings.HasPrefix(f.parent, root+string(os.PathSeparator)) {
 		t.Fatal("fixture escaped declared scratch root")
 	}
@@ -53,7 +57,7 @@ func approveRelease(t *testing.T, f *firstFixture, finalizer *ReleaseFinalizer) 
 		}
 		count := 1
 		if role == "targets" {
-			count = 2
+			count = f.targetSignatures
 		}
 		var signatures []metadata.Signature
 		for _, signer := range f.keys[role][:count] {
@@ -254,7 +258,11 @@ func TestReleaseFinalizerApprovalBoundaries(t *testing.T) {
 }
 
 func TestReleaseFinalizerManualUpdateAdmission(t *testing.T) {
-	f, o, input := finalizerFixture(t)
+	t.Run("original", func(t *testing.T) { releaseFinalizerManualAdmission(t, "") })
+	t.Run("single-owner", func(t *testing.T) { releaseFinalizerManualAdmission(t, SingleOwnerSigningProfile) })
+}
+func releaseFinalizerManualAdmission(t *testing.T, profile string) {
+	f, o, input := finalizerFixture(t, profile)
 	finalizer, err := NewReleaseFinalizer(input)
 	if err != nil {
 		t.Fatal(err)
