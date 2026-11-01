@@ -55,10 +55,56 @@ type Result struct {
 }
 
 func Probe(ctx context.Context, value, expected string) (Result, error) {
-	transport := &http.Transport{Proxy: nil, TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 3 * time.Second, DisableCompression: true}
-	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("instance redirects are refused") }}
+	client, close := instanceClient()
+	defer close()
 	return probe(ctx, value, expected, client)
+}
+func instanceClient() (*http.Client, func()) {
+	transport := &http.Transport{Proxy: nil, TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 3 * time.Second, DisableCompression: true}
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("instance redirects are refused") }}
+	return client, transport.CloseIdleConnections
+}
+
+// A claimed instance needs only its normal sign-in URL. Do not execute an
+// installed setup-proof helper merely to reopen it; older releases lack it.
+func ClaimedOwnerURL(ctx context.Context, value, expected string) (string, bool, error) {
+	client, close := instanceClient()
+	defer close()
+	return claimedOwnerURL(ctx, value, expected, client)
+}
+func claimedOwnerURL(ctx context.Context, value, expected string, client *http.Client) (string, bool, error) {
+	if expected == "" {
+		return "", false, errors.New("expected owner instance required")
+	}
+	instance, err := probe(ctx, value, expected, client)
+	if err != nil {
+		return "", false, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, instance.URL+"/api/v1/auth/state", nil)
+	if err != nil {
+		return "", false, err
+	}
+	response, err := client.Do(req)
+	if err != nil {
+		return "", false, errors.New("cannot verify owner sign-in state")
+	}
+	defer response.Body.Close()
+	kind, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if response.StatusCode != 200 || err != nil || kind != "application/json" || response.Header.Get("Content-Encoding") != "" {
+		return "", false, errors.New("invalid owner sign-in state")
+	}
+	b, err := io.ReadAll(io.LimitReader(response.Body, 4097))
+	var state struct {
+		Claimed *bool `json:"claimed"`
+	}
+	if err != nil || len(b) > 4096 || json.Unmarshal(b, &state) != nil || state.Claimed == nil {
+		return "", false, errors.New("invalid owner sign-in state")
+	}
+	if !*state.Claimed {
+		return "", false, nil
+	}
+	address, err := OwnerSetupURL(instance.URL, instance.InstanceID, "")
+	return address, true, err
 }
 func probe(ctx context.Context, value, expected string, client *http.Client) (Result, error) {
 	origin, e := Origin(value)

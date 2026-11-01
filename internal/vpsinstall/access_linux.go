@@ -64,6 +64,42 @@ func accessFiles(m Manifest) map[string][]byte {
 	return map[string][]byte{m.Config: encoded(m), filepath.Join(m.Root, "intent.json"): encoded(intentFor(m)), filepath.Join(m.Root, m.Unit): unit(m), m.UnitPath: unit(m)}
 }
 func accessStage(j accessJournal) string { return j.Previous.Root + "-access-" + j.ID }
+
+// Staging contains only the root-owned manifest, intent and unit bytes already
+// published 0644. The ordinary administrator must be able to verify them, while
+// no unprivileged user may write the directory. Keys and data are never staged.
+const accessStageMode os.FileMode = 0755
+
+func prepareAccessStage(ctx context.Context, o hostOps, j accessJournal) error {
+	if !accessJournalValid(j) {
+		return errors.New("invalid private access transaction; preserving staging")
+	}
+	stage := accessStage(j)
+	if e := parents(o, filepath.Dir(stage)); e != nil {
+		return e
+	}
+	f, e := o.read(stage)
+	if e == nil {
+		if !f.Directory || f.Mode&os.ModeType != os.ModeDir || f.UID != 0 || f.GID != 0 || f.Mode&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+			return errors.New("foreign access staging directory; preserving it")
+		}
+		switch f.Mode.Perm() {
+		case accessStageMode:
+		case 0700:
+			// The old mode prevented even the first publication. Remove only an
+			// empty exact journal-derived directory; never chmod unread contents.
+			if _, e = o.run(ctx, nil, "/usr/bin/rm", "--dir", "--", stage); e != nil {
+				return fmt.Errorf("preserve nonempty or unavailable root-only access staging: %w", e)
+			}
+		default:
+			return errors.New("foreign access staging permissions; preserving it")
+		}
+	} else if !errors.Is(e, os.ErrNotExist) {
+		return e
+	}
+	return directory(ctx, o, stage, 0, 0, accessStageMode)
+}
+
 func accessGenerationKnown(o hostOps, j accessJournal) error {
 	previous, next := accessFiles(j.Previous), accessFiles(j.Next)
 	for path, b := range previous {
@@ -87,7 +123,7 @@ func switchAccess(ctx context.Context, o hostOps, j accessJournal, target Manife
 		}
 	}
 	stage := accessStage(j)
-	if e := directory(ctx, o, stage, 0, 0, 0700); e != nil {
+	if e := prepareAccessStage(ctx, o, j); e != nil {
 		return e
 	}
 	if _, e := o.run(ctx, nil, "/usr/bin/systemctl", "stop", "--", target.Unit); e != nil {
@@ -126,7 +162,7 @@ func cleanupAccessStage(ctx context.Context, o hostOps, j accessJournal) error {
 	if _, e := o.read(stage); errors.Is(e, os.ErrNotExist) {
 		return nil
 	}
-	if e := checkDirectory(o, stage, 0, 0, 0700); e != nil {
+	if e := checkDirectory(o, stage, 0, 0, accessStageMode); e != nil {
 		return e
 	}
 	for prefix, m := range map[string]Manifest{"next": j.Next, "previous": j.Previous} {

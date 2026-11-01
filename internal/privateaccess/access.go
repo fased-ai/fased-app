@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/connection"
@@ -205,11 +207,49 @@ func (m Manager) Enable(ctx context.Context, root string, p Plan, instanceID str
 	if !reflect.DeepEqual(cfg, expected(p)) {
 		return errors.New("Serve/Funnel configuration differs; no reset or overwrite was attempted")
 	}
-	if err = m.verifyEndpoint(ctx, p, instanceID); err != nil {
+	if r.Phase == "preparing" {
+		err = m.waitForPreparingEndpoint(ctx, p, instanceID)
+	} else {
+		err = m.verifyEndpoint(ctx, p, instanceID)
+	}
+	if err != nil {
 		return err
+	}
+	// The owner may have changed Serve while the first certificate was issued.
+	cfg, _, err = m.config(ctx)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(cfg, expected(p)) {
+		return errors.New("Serve/Funnel configuration changed; private readiness was not recorded")
 	}
 	r.Phase = "ready"
 	return core.WritePrivateJSON(filepath.Join(root, "private-access.json"), r)
+}
+
+var errEndpointStarting = errors.New("private HTTPS is starting; retain SSH/console access")
+
+// A new Serve endpoint can take time to obtain its first certificate. Keep each
+// probe bounded, retry only transport startup, and never rewrite the route.
+func (m Manager) waitForPreparingEndpoint(ctx context.Context, p Plan, instanceID string) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := m.Verify(ctx, p, instanceID)
+		if !errors.Is(err, errEndpointStarting) {
+			return err
+		}
+		timer := time.NewTimer(500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 // Verify checks the existing private route without changing Serve or owner state.
@@ -239,6 +279,13 @@ func (m Manager) verifyEndpoint(ctx context.Context, p Plan, instanceID string) 
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		var networkError net.Error
+		if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || (errors.As(err, &networkError) && networkError.Timeout()) {
+			return errEndpointStarting
+		}
 		return errors.New("private HTTPS could not be verified; retain SSH/console access and retry this command")
 	}
 	defer resp.Body.Close()
