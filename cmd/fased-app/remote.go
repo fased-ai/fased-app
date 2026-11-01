@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
@@ -166,7 +167,21 @@ func managedRemoteInstall(ctx context.Context, corePath, hash, listen string, pl
 
 func remoteOwnerLink(ctx context.Context, m vpsinstall.Manifest, system *custodyinstall.System, out io.Writer) error {
 	var link bytes.Buffer
-	if e := vpsinstall.SetupLink(ctx, m, system, &link); e != nil {
+	status, e := vpsinstall.Status(ctx, m, system)
+	if e != nil {
+		return e
+	}
+	origin := m.PublicOrigin
+	if origin == "" {
+		origin = "http://" + m.Listen
+	}
+	address, claimed, e := connection.ClaimedOwnerURL(ctx, origin, status.InstanceID)
+	if e != nil {
+		return e
+	}
+	if claimed {
+		fmt.Fprintln(&link, address)
+	} else if e = vpsinstall.SetupLink(ctx, m, system, &link); e != nil {
 		return e
 	}
 	if os.Getenv("FASED_INSTALL_ROOT_ENTRY") != "1" {

@@ -7,9 +7,134 @@ import (
 	"context"
 	"errors"
 	"github.com/fased-ai/fased-app/internal/update"
+	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+// Model kernel pathname search checks, which the generic in-memory host omits.
+// A missing child of a root-only directory is EACCES, not ENOENT.
+func searchableAccessFixture(t *testing.T) (*memoryHost, hostOps, Manifest) {
+	h, o, m := activeAccessFixture(t)
+	read, run := o.read, o.run
+	o.read = func(path string) (hostFile, error) {
+		for parent := filepath.Dir(path); parent != "/"; parent = filepath.Dir(parent) {
+			if f, ok := h.files[parent]; ok && strings.HasPrefix(parent, m.Root+"-access-") && f.Directory && f.UID == 0 && f.Mode.Perm()&0001 == 0 {
+				return hostFile{}, os.ErrPermission
+			}
+		}
+		return read(path)
+	}
+	o.run = func(ctx context.Context, b []byte, args ...string) ([]byte, error) {
+		if args[0] == "/usr/bin/rm" && contains(args, "--dir") {
+			dir := args[len(args)-1]
+			for path := range h.files {
+				if strings.HasPrefix(path, dir+"/") {
+					return nil, syscall.ENOTEMPTY
+				}
+			}
+		}
+		return run(ctx, b, args...)
+	}
+	return h, o, m
+}
+
+func TestRemoteAccessStageSupportsOrdinaryOwnerReadback(t *testing.T) {
+	h, o, m := searchableAccessFixture(t)
+	core := bytes.Clone(h.files[m.Core].Data)
+	next, err := changeAccess(t.Context(), o, m, "https://node.owner.ts.net", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.PublicOrigin == "" || !bytes.Equal(core, h.files[m.Core].Data) {
+		t.Fatal("access change altered the core or lost its origin")
+	}
+	if err := verify(t.Context(), o, next); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRemoteAccessEmptyPrivateStageRecoversOriginalOperation(t *testing.T) {
+	h, o, m := searchableAccessFixture(t)
+	state, err := status(t.Context(), o, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := m
+	next.PublicOrigin = "https://node.owner.ts.net"
+	j := accessJournal{Version: 1, ID: update.NewProbe(), Phase: "rollback", InstanceID: state.InstanceID, Previous: m, Next: next}
+	h.files[accessStage(j)] = hostFile{UID: 0, GID: 0, Directory: true, Mode: os.ModeDir | 0700}
+	if err := o.writeJournal(accessJournalName, j); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := changeAccess(t.Context(), o, m, next.PublicOrigin, nil)
+	if err == nil || !strings.Contains(err.Error(), "previous access restored") || restored != m {
+		t.Fatal(restored, err)
+	}
+	var recovered accessJournal
+	if strict(h.journals[accessJournalName], &recovered) != nil || recovered.ID != j.ID || recovered.Phase != "rolled-back" {
+		t.Fatal("lost the original recovery operation")
+	}
+	if _, ok := h.files[accessStage(j)]; ok {
+		t.Fatal("completed recovery retained staging")
+	}
+	if err := verify(t.Context(), o, m); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRemoteAccessPreservesNonemptyOrForeignPrivateStage(t *testing.T) {
+	for _, kind := range []string{"nonempty", "owner", "group", "symlink", "mode"} {
+		t.Run(kind, func(t *testing.T) {
+			h, o, m := searchableAccessFixture(t)
+			state, err := status(t.Context(), o, m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			next := m
+			next.PublicOrigin = "https://node.owner.ts.net"
+			j := accessJournal{Version: 1, ID: update.NewProbe(), Phase: "rollback", InstanceID: state.InstanceID, Previous: m, Next: next}
+			stage := accessStage(j)
+			f := hostFile{UID: 0, GID: 0, Directory: true, Mode: os.ModeDir | 0700}
+			switch kind {
+			case "nonempty":
+				h.files[stage+"/unknown"] = hostFile{Regular: true, Mode: 0600, Data: []byte("preserved private fixture")}
+			case "owner":
+				f.UID = 2000
+			case "group":
+				f.GID = 2000
+			case "symlink":
+				f.Directory = false
+				f.Mode = os.ModeSymlink | 0777
+				f.Link = "/foreign"
+			case "mode":
+				f.Mode = os.ModeDir | 0775
+			}
+			h.files[stage] = f
+			if err := o.writeJournal(accessJournalName, j); err != nil {
+				t.Fatal(err)
+			}
+			calls := len(h.calls)
+			if _, err := changeAccess(t.Context(), o, m, next.PublicOrigin, nil); err == nil {
+				t.Fatal("accepted foreign or nonempty staging")
+			}
+			got, ok := h.files[stage]
+			if !ok || got.UID != f.UID || got.GID != f.GID || got.Mode != f.Mode || got.Link != f.Link || !h.active {
+				t.Fatal("changed foreign staging or stopped the original service")
+			}
+			if kind == "nonempty" && string(h.files[stage+"/unknown"].Data) != "preserved private fixture" {
+				t.Fatal("changed unknown staging contents")
+			}
+			for _, args := range h.calls[calls:] {
+				if args[0] == "/usr/bin/systemctl" && args[1] == "stop" {
+					t.Fatal("stopped the service before staging validation")
+				}
+			}
+		})
+	}
+}
 
 func activeAccessFixture(t *testing.T) (*memoryHost, hostOps, Manifest) {
 	fixture := remoteApplicationFixture(t)
