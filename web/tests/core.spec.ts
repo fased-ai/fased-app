@@ -7038,8 +7038,12 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
   expect(first.ai).toBeUndefined();
   expect(first.news).toBeUndefined();
   expect(first.wen).toBeUndefined();
-  await command({ action: "task-pause", id: first.id });
+  v = await command({ action: "task-pause", id: first.id });
+  expect(
+    v.tasks.find((task: { id: string }) => task.id === first.id).state,
+  ).toBe("paused");
   await page.goto(url + "/#agents/tasks");
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(
     page.getByRole("button", {
       name: "Resume: Review my research",
