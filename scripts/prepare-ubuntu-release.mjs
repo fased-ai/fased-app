@@ -1,4 +1,4 @@
-// Maintainer-only candidate staging. No key generation, tag, publish or activation.
+// Explicit maintainer tooling. No key generation, implicit publish or activation.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -6,10 +6,20 @@ import {
   readFileSync,
   writeFileSync,
   lstatSync,
+  readdirSync,
   existsSync,
 } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  runRecordedPublisher,
+  publicationInput,
+  githubPublisher,
+} from "./publish-ubuntu-release.mjs";
+import {
+  inspectPublisherJournal,
+  readPublisherFile,
+} from "./publisher-journal.mjs";
 
 export const evidence = ".evidence/ubuntu-release";
 const sha = (b) => createHash("sha256").update(b).digest("hex");
@@ -403,6 +413,129 @@ function finish(c) {
     activation: false,
   });
 }
+// Renewed metadata gets a new retained operation automatically. Identical
+// approved bytes always reopen the same journal; no journal is reset/deleted.
+export function publisherOperationDirectory(c, request) {
+  validateConfig(c);
+  if (!["stage", "release", "metadata"].includes(request.action))
+    throw Error("Publisher action required");
+  const suffix =
+    request.action === "metadata" ? request.approval?.sha256 : null;
+  if (request.action === "metadata" && !hash.test(suffix))
+    throw Error("Approved metadata digest required");
+  return path.resolve(
+    evidence,
+    `publisher-${c.version}-${request.action}${suffix ? "-" + suffix : ""}`,
+  );
+}
+export function inspectMaintainerPublisher(c) {
+  validateConfig(c);
+  const rows = ["stage", "release"].map((action) => {
+    const dir = publisherOperationDirectory(c, { action });
+    return {
+      action,
+      ...(existsSync(dir) ? inspectPublisherJournal(dir) : { exists: false }),
+    };
+  });
+  const prefix = `publisher-${c.version}-metadata-`;
+  const dirs = existsSync(evidence)
+    ? readdirSync(evidence)
+        .filter(
+          (name) =>
+            name.startsWith(prefix) && hash.test(name.slice(prefix.length)),
+        )
+        .sort()
+    : [];
+  if (!dirs.length) rows.push({ action: "metadata", exists: false });
+  for (const name of dirs)
+    rows.push({
+      action: "metadata",
+      publicationSha256: name.slice(prefix.length),
+      ...inspectPublisherJournal(path.resolve(evidence, name)),
+    });
+  return rows;
+}
+
+// Explicit maintainer entry only; missing production bindings refuse before
+// credentials or transport are opened. Inspection is local and never dispatches.
+export async function runMaintainerPublisher(c, request) {
+  const missing = validateConfig(c);
+  if (missing.length)
+    throw Error("Production trust missing; publisher dispatch disabled");
+  const keys = [
+    "version",
+    "action",
+    "mode",
+    "candidateFile",
+    "candidateSHA256",
+    "publicationFile",
+    "approval",
+    "tokenFile",
+    "resolutions",
+  ];
+  if (
+    !request ||
+    request.version !== 1 ||
+    Object.keys(request).some((k) => !keys.includes(k)) ||
+    !["stage", "release", "metadata"].includes(request.action) ||
+    !["start", "resume"].includes(request.mode) ||
+    typeof request.tokenFile !== "string" ||
+    !path.isAbsolute(request.tokenFile)
+  )
+    throw Error("Explicit reviewed publisher request required");
+  const candidate =
+    request.action !== "metadata"
+      ? readPublisherFile(request.candidateFile)
+      : undefined;
+  const publication =
+    request.action !== "stage"
+      ? readPublisherFile(request.publicationFile)
+      : undefined;
+  if (candidate) {
+    const v = JSON.parse(candidate);
+    if (
+      v.version !== c.version ||
+      v.repository !== c.repository ||
+      v.repositoryId !== c.repositoryId ||
+      v.ownerId !== c.ownerId
+    )
+      throw Error("Candidate/config identity differs");
+  }
+  const seedStat = lstatSync(c.seedFile);
+  if (!seedStat.isFile() || seedStat.isSymbolicLink() || seedStat.size > 65536)
+    throw Error("Bounded reviewed public seed file required");
+  const publicSeed = readFileSync(c.seedFile);
+  if (
+    sha(publicSeed) !== c.seedSha256 ||
+    JSON.parse(publicSeed).signingProfile !== "single-owner-v1"
+  )
+    throw Error("Reviewed single-owner public seed required");
+  if (publication) {
+    const { p } = publicationInput(publication, request.approval);
+    if (
+      p.seedSha256 !== c.seedSha256 ||
+      p.descriptor.productVersion !== c.version
+    )
+      throw Error("Publication/config identity differs");
+  }
+  const api = githubPublisher(
+    readPublisherFile(request.tokenFile, 4096).toString().trim(),
+  );
+  return runRecordedPublisher(
+    {
+      action: request.action,
+      mode: request.mode,
+      directory: publisherOperationDirectory(c, request),
+      candidate,
+      candidateSHA256: request.candidateSHA256,
+      publication,
+      approval: request.approval,
+      resolutions: request.resolutions,
+    },
+    { api, readArtifact: async (name) => file(name, 128 * 1024 * 1024).bytes },
+  );
+}
+
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
@@ -434,6 +567,27 @@ if (
           ),
         );
         break;
+      case "publisher-inspect":
+        console.log(JSON.stringify(inspectMaintainerPublisher(c), null, 2));
+        break;
+      case "publisher":
+        if (missing.length)
+          throw Error("Production trust missing; publisher dispatch disabled");
+        console.log(
+          JSON.stringify(
+            await runMaintainerPublisher(
+              c,
+              JSON.parse(
+                readPublisherFile(
+                  path.resolve(evidence, "publisher-request.json"),
+                ),
+              ),
+            ),
+            null,
+            2,
+          ),
+        );
+        break;
       case "prepare":
         prepare(c);
         break;
@@ -445,7 +599,7 @@ if (
         break;
       default:
         throw Error(
-          "plan, prepare, inventory or finish required; no publishing command",
+          "plan, prepare, inventory, finish, publisher-inspect or explicit publisher request required",
         );
     }
   } catch (e) {

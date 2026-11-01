@@ -2,6 +2,7 @@
 // Input is publication.json from the existing offline release finalizer, bound
 // by an independently reviewed SHA256. No keys or signing are accepted here.
 import { createHash } from "node:crypto";
+import { openPublisherJournal } from "./publisher-journal.mjs";
 const sha = (b) => createHash("sha256").update(b).digest("hex");
 const hash = /^[a-f0-9]{64}$/;
 const oid = /^[a-f0-9]{40}$/;
@@ -556,6 +557,7 @@ export async function releaseCandidate(
     if (
       expected.length !== 1 ||
       found.length !== 1 ||
+      !number.test(String(found[0].id)) ||
       !hash.test(expected[0].sha256) ||
       found[0].digest !== `sha256:${expected[0].sha256}` ||
       found[0].size !== expected[0].size ||
@@ -583,6 +585,7 @@ export async function releaseCandidate(
     phase: "release-publish-attempted",
     releaseId: d.github.releaseId,
     publicationSha256: approval.sha256,
+    assetIds: release.assets.map((a) => ({ name: a.name, id: String(a.id) })),
   });
   const published = await api(
     "PATCH",
@@ -599,4 +602,445 @@ export async function releaseCandidate(
     );
   await record({ phase: "release-published", releaseId: d.github.releaseId });
   return { releaseId: d.github.releaseId, activation: false };
+}
+
+// Reuse the same verified publisher functions through private, fsynced state.
+// Production callers still supply transport/credentials explicitly.
+export async function runRecordedPublisher(input, { api, readArtifact } = {}) {
+  const action = input.action,
+    mode = input.mode ?? "start";
+  if (
+    !["stage", "release", "metadata"].includes(action) ||
+    !["start", "resume"].includes(mode) ||
+    typeof api !== "function"
+  )
+    throw Error("Explicit publisher action/mode/transport required");
+  const candidate = Buffer.isBuffer(input.candidate)
+    ? Buffer.from(input.candidate)
+    : undefined;
+  const publication = Buffer.isBuffer(input.publication)
+    ? Buffer.from(input.publication)
+    : undefined;
+  const approval = Object.freeze({ ...input.approval });
+  const candidateSHA256 = input.candidateSHA256;
+  if (
+    action !== "metadata" &&
+    (!candidate || sha(candidate) !== candidateSHA256)
+  )
+    throw Error("Exact candidate approval required");
+  if (action !== "stage") publicationInput(publication, approval);
+  const binding = sha(
+    JSON.stringify({
+      action,
+      candidate: candidate ? sha(candidate) : null,
+      publication: publication ? sha(publication) : null,
+      approval: action === "stage" ? null : approval,
+    }),
+  );
+  const resolutions = JSON.parse(JSON.stringify(input.resolutions ?? {}));
+  const journal = openPublisherJournal(input.directory, binding, {
+    resume: mode === "resume",
+  });
+  let cursor = 0;
+  const state = journal.state;
+  const c = candidate ? JSON.parse(candidate) : null;
+  const p = publication ? publicationInput(publication, approval).p : null;
+  const finish = (result) => {
+    const publicResult =
+      action === "stage"
+        ? {
+            releaseId: result.releaseId,
+            assets: result.assets.map((a) => ({
+              name: a.name,
+              id: a.id,
+              size: a.size,
+              sha256: a.sha256,
+            })),
+            published: false,
+            activation: false,
+          }
+        : action === "release"
+          ? { releaseId: result.releaseId, activation: false }
+          : {
+              metadataCommit: result.metadataCommit,
+              sequence: result.sequence,
+              activation: false,
+            };
+    state.result = JSON.parse(JSON.stringify(publicResult));
+    state.complete = true;
+    journal.save();
+    return { ...state.result, noOp: false };
+  };
+  const request = (method, path, body) => ({
+    method,
+    path,
+    requestSha256: sha(
+      Buffer.isBuffer(body) ? body : JSON.stringify(body ?? null),
+    ),
+    body: Buffer.isBuffer(body)
+      ? { size: body.length, sha256: sha(body) }
+      : JSON.parse(JSON.stringify(body ?? null)),
+  });
+  const safeResult = (method, path, r) => {
+    if (method === "UPLOAD")
+      return {
+        id: r.id,
+        name: r.name,
+        size: r.size,
+        state: r.state,
+        digest: r.digest,
+      };
+    if (path.endsWith("/releases"))
+      return { id: r.id, draft: r.draft, tag_name: r.tag_name };
+    if (path.includes("/git/refs/")) return { object: { sha: r.object?.sha } };
+    if (method === "PATCH")
+      return { id: r.id, draft: r.draft, immutable: r.immutable };
+    return { sha: r.sha };
+  };
+  const identity = async () => {
+    const v = await api("GET", repo);
+    if (
+      String(v.id) !== "1426211857" ||
+      String(v.owner?.id) !== "279582504" ||
+      v.full_name !== "fased-ai/fased-app"
+    )
+      throw Error("Publisher repository changed");
+  };
+  const compareAssets = (release, expected, ids) => {
+    if (
+      !Array.isArray(release.assets) ||
+      release.assets.length !== expected.length
+    )
+      throw Error("Publisher asset inventory changed");
+    for (const a of expected) {
+      const found = release.assets.filter((v) => v.name === a.name);
+      const id = ids?.find((v) => v.name === a.name)?.id;
+      if (
+        found.length !== 1 ||
+        !number.test(String(found[0].id)) ||
+        found[0].state !== "uploaded" ||
+        found[0].size !== a.size ||
+        found[0].digest !== `sha256:${a.sha256}` ||
+        (id !== undefined && String(found[0].id) !== String(id))
+      )
+        throw Error("Publisher asset bytes/ID changed");
+    }
+  };
+  const inspectCompleted = async (result) => {
+    await identity();
+    const d = p?.descriptor;
+    await verifyAnnotatedTag(
+      api,
+      c?.version ?? d.productVersion,
+      c?.tagObject ?? d.release.tagObject,
+      c?.source ?? d.source,
+    );
+    const id = action === "stage" ? result.releaseId : d.github.releaseId;
+    const release = await api("GET", repo + `/releases/${id}`);
+    if (
+      String(release.id) !== id ||
+      release.tag_name !== `v${c?.version ?? d.productVersion}` ||
+      release.prerelease !== false
+    )
+      throw Error("Publisher release identity changed");
+    if (action === "stage") {
+      if (
+        release.draft !== true &&
+        !(release.draft === false && release.immutable === true)
+      )
+        throw Error("Publisher release state changed");
+      compareAssets(release, c.assets, result.assets);
+    } else {
+      if (release.draft !== false || release.immutable !== true)
+        throw Error("Publication not confirmed; no replay");
+      if (action === "release") {
+        const event = state.events.findLast(
+          (e) => e.phase === "release-publish-attempted",
+        );
+        if (!event?.assetIds)
+          throw Error("Missing recorded release asset identities");
+        compareAssets(release, c.assets, event.assetIds);
+      }
+      const asset = release.assets?.filter(
+        (v) => String(v.id) === d.github.assetId,
+      );
+      if (
+        asset?.length !== 1 ||
+        asset[0].name !== d.github.name ||
+        asset[0].size !== d.github.size ||
+        asset[0].digest !== `sha256:${d.github.sha256}` ||
+        asset[0].state !== "uploaded"
+      )
+        throw Error("Finalized archive identity changed");
+    }
+    if (action !== "metadata") return;
+    const commitStep = state.effects.findLast(
+      (e) =>
+        e.path === repo + "/git/commits" &&
+        e.result?.sha === result.metadataCommit,
+    );
+    if (!commitStep) throw Error("Missing original metadata commit identity");
+    const committed = await api(
+      "GET",
+      repo + `/git/commits/${result.metadataCommit}`,
+    );
+    if (
+      committed.sha !== result.metadataCommit ||
+      committed.tree?.sha !== commitStep.body.tree ||
+      committed.parents?.length !== 1 ||
+      committed.parents[0].sha !== approval.previousCommit
+    )
+      throw Error("Recorded metadata commit changed");
+    const prior = await api(
+      "GET",
+      repo + `/git/commits/${approval.previousCommit}`,
+    );
+    if (prior.sha !== approval.previousCommit || !oid.test(prior.tree?.sha))
+      throw Error("Prior metadata identity changed");
+    const old = await api(
+      "GET",
+      repo + `/git/trees/${prior.tree.sha}?recursive=1`,
+    );
+    const tree = await api(
+      "GET",
+      repo + `/git/trees/${committed.tree.sha}?recursive=1`,
+    );
+    if (
+      old.truncated !== false ||
+      tree.truncated !== false ||
+      !Array.isArray(old.tree) ||
+      !Array.isArray(tree.tree)
+    )
+      throw Error("Complete recovery trees required");
+    const expected = new Map(
+      old.tree.filter((v) => v.type !== "tree").map((v) => [v.path, v]),
+    );
+    for (const [path, content] of Object.entries(p.files))
+      expected.set(path, {
+        path,
+        type: "blob",
+        mode: "100644",
+        sha: gitBlobSHA(Buffer.from(content, "base64")),
+      });
+    const leaves = tree.tree.filter((v) => v.type !== "tree");
+    if (
+      leaves.length !== expected.size ||
+      new Set(leaves.map((v) => v.path)).size !== leaves.length ||
+      [...expected.values()].some(
+        (v) =>
+          !leaves.some(
+            (e) =>
+              e.path === v.path &&
+              e.sha === v.sha &&
+              e.type === v.type &&
+              e.mode === v.mode,
+          ),
+      )
+    )
+      throw Error("Recovered metadata bytes/history changed");
+    const ref = await api("GET", repo + "/git/ref/heads/release-metadata");
+    if (
+      ref.ref !== "refs/heads/release-metadata" ||
+      ref.object?.type !== "commit" ||
+      ref.object.sha !== result.metadataCommit
+    )
+      throw Error("Metadata outcome pending/changed; no replay");
+  };
+  const observed = async (step, body, index) => {
+    let id = step.result?.id ?? step.result?.sha;
+    const resolution = resolutions[index];
+    if (!step.result && resolution) {
+      if (resolution.requestSha256 !== step.requestSha256)
+        throw Error("Recovery observation does not match original request");
+      id = resolution.id;
+    }
+    let result;
+    if (step.path === repo + "/releases") {
+      if (!number.test(String(id)))
+        throw Error(
+          "Uncertain draft creation: explicitly inspect/bind its release ID; never recreate",
+        );
+      result = await api("GET", repo + `/releases/${id}`);
+      if (
+        String(result.id) !== String(id) ||
+        result.draft !== true ||
+        result.prerelease !== false ||
+        result.tag_name !== body.tag_name
+      )
+        throw Error("Original draft identity/state changed");
+    } else if (step.method === "UPLOAD") {
+      const match = step.path.match(
+        /\/releases\/([1-9][0-9]*)\/assets\?name=(.+)$/,
+      );
+      if (!match) throw Error("Unsupported recovery upload");
+      const release = await api("GET", repo + `/releases/${match[1]}`);
+      if (String(release.id) !== match[1] || release.draft !== true)
+        throw Error("Original upload draft changed");
+      const assets = release.assets?.filter((v) => v.name === match[2]);
+      if (
+        assets?.length !== 1 ||
+        assets[0].digest !== `sha256:${step.body.sha256}` ||
+        assets[0].size !== step.body.size ||
+        assets[0].state !== "uploaded" ||
+        (id !== undefined && String(assets[0].id) !== String(id))
+      )
+        throw Error("Upload outcome unresolved/changed; no replay");
+      result = assets[0];
+    } else if (step.path === repo + "/git/blobs") {
+      const bytes = Buffer.from(body.content, "base64"),
+        expected = gitBlobSHA(bytes);
+      if (id !== undefined && id !== expected)
+        throw Error("Recorded metadata blob identity changed");
+      result = await api("GET", repo + `/git/blobs/${expected}`);
+      if (
+        result.sha !== expected ||
+        result.encoding !== "base64" ||
+        typeof result.content !== "string" ||
+        result.content.length > 90000 ||
+        gitBlobSHA(Buffer.from(result.content, "base64")) !== expected
+      )
+        throw Error("Metadata blob outcome unresolved/changed");
+    } else if (step.path === repo + "/git/trees") {
+      if (!oid.test(id))
+        throw Error(
+          "Uncertain tree: explicitly inspect/bind its original SHA; never recreate",
+        );
+      result = await api("GET", repo + `/git/trees/${id}?recursive=1`);
+      if (
+        result.sha !== id ||
+        result.truncated !== false ||
+        !Array.isArray(result.tree)
+      )
+        throw Error("Original metadata tree changed");
+      const prior = await api(
+        "GET",
+        repo + `/git/trees/${body.base_tree}?recursive=1`,
+      );
+      if (prior.truncated !== false || !Array.isArray(prior.tree))
+        throw Error("Original base tree unavailable");
+      const expected = new Map(
+        prior.tree.filter((e) => e.type !== "tree").map((e) => [e.path, e]),
+      );
+      for (const e of body.tree) expected.set(e.path, e);
+      const leaves = result.tree.filter((e) => e.type !== "tree");
+      if (
+        leaves.length !== expected.size ||
+        new Set(leaves.map((e) => e.path)).size !== leaves.length ||
+        [...expected.values()].some(
+          (e) =>
+            !leaves.some(
+              (v) =>
+                v.path === e.path &&
+                v.sha === e.sha &&
+                v.mode === e.mode &&
+                v.type === e.type,
+            ),
+        )
+      )
+        throw Error("Recovered tree bytes changed");
+    } else if (step.path === repo + "/git/commits") {
+      if (!oid.test(id))
+        throw Error(
+          "Uncertain commit: explicitly inspect/bind its original SHA; never recreate",
+        );
+      result = await api("GET", repo + `/git/commits/${id}`);
+      if (
+        result.sha !== id ||
+        result.tree?.sha !== body.tree ||
+        result.parents?.length !== 1 ||
+        result.parents[0].sha !== body.parents[0] ||
+        result.message !== body.message
+      )
+        throw Error("Original metadata commit changed");
+    } else
+      throw Error(
+        "Unresolved mutation; inspect original operation without replay",
+      );
+    const safe = safeResult(step.method, step.path, result);
+    if (step.result && JSON.stringify(safe) !== JSON.stringify(step.result))
+      throw Error("Recorded API result changed");
+    if (!step.result) {
+      step.result = safe;
+      step.recovered = true;
+      journal.save();
+    }
+    return safe;
+  };
+  const wire = async (method, path, body) => {
+    if (method === "GET") return api(method, path, body);
+    const next = request(method, path, body),
+      index = cursor++;
+    let step = state.effects[index];
+    if (step) {
+      if (
+        step.method !== next.method ||
+        step.path !== next.path ||
+        step.requestSha256 !== next.requestSha256
+      )
+        throw Error("Publisher request order/bytes changed");
+      return observed(step, body, index);
+    }
+    if (index !== state.effects.length)
+      throw Error("Publisher request index changed");
+    step = { ...next };
+    state.effects.push(step);
+    journal.save();
+    const result = await api(method, path, body);
+    step.result = safeResult(method, path, result);
+    journal.save();
+    return result;
+  };
+  try {
+    if (state.complete) {
+      await inspectCompleted(state.result);
+      return { ...state.result, noOp: true };
+    }
+    const final = state.effects.findLast((e) => e.method === "PATCH");
+    if (final) {
+      const result =
+        action === "release"
+          ? { releaseId: p.descriptor.github.releaseId, activation: false }
+          : action === "metadata"
+            ? {
+                metadataCommit: final.body.sha,
+                sequence: p.descriptor.sequence,
+                activation: false,
+              }
+            : null;
+      if (!result) throw Error("Unexpected final publisher mutation");
+      await inspectCompleted(result);
+      final.result ??=
+        action === "release"
+          ? { id: result.releaseId, draft: false, immutable: true }
+          : { object: { sha: result.metadataCommit } };
+      final.recovered = true;
+      return finish(result);
+    }
+    const result =
+      action === "stage"
+        ? await stageCandidate(
+            candidate,
+            candidateSHA256,
+            readArtifact,
+            wire,
+            journal.record,
+          )
+        : action === "release"
+          ? await releaseCandidate(
+              candidate,
+              candidateSHA256,
+              publication,
+              approval,
+              wire,
+              journal.record,
+            )
+          : await publishFinalized(publication, approval, wire, journal.record);
+    if (cursor !== state.effects.length)
+      throw Error("Recorded operation has unconsumed requests");
+    // Verify actual terminal objects before persisting completed/no-op authority.
+    await inspectCompleted(result);
+    return finish(result);
+  } finally {
+    journal.close();
+  }
 }

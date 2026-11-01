@@ -680,3 +680,576 @@ test("publisher rejects prior timestamp bytes that do not match tree blob identi
     false,
   );
 });
+
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { resolve, join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { runRecordedPublisher } from "./publish-ubuntu-release.mjs";
+import {
+  inspectPublisherJournal,
+  openPublisherJournal,
+} from "./publisher-journal.mjs";
+import { runMaintainerPublisher } from "./prepare-ubuntu-release.mjs";
+
+// Deterministic remote model: every mutation has a unique observable effect.
+// A repeated create/upload/ref mutation fails; recovery must use reads instead.
+function recoveryRemote(f, existing) {
+  const state = existing ?? {
+    release: null,
+    mutations: [],
+    head: "1".repeat(40),
+    blobs: {},
+    trees: { ["2".repeat(40)]: [] },
+    commits: {
+      ["1".repeat(40)]: { sha: "1".repeat(40), tree: { sha: "2".repeat(40) } },
+    },
+  };
+  const api = async (m, p, b) => {
+    const prefix = "/repos/fased-ai/fased-app";
+    if (m !== "GET") state.mutations.push({ method: m, path: p });
+    if (p === prefix)
+      return {
+        id: 1426211857,
+        owner: { id: 279582504 },
+        full_name: "fased-ai/fased-app",
+      };
+    if (p.includes("/git/ref/tags/"))
+      return {
+        ref: "refs/tags/v0.1.0",
+        object: { type: "tag", sha: f.candidate.tagObject },
+      };
+    if (p.includes("/git/tags/"))
+      return {
+        sha: f.candidate.tagObject,
+        tag: "v0.1.0",
+        object: { type: "commit", sha: f.candidate.source },
+      };
+    if (m === "POST" && p === prefix + "/releases") {
+      if (state.release) throw Error("DUPLICATE release creation");
+      state.release = {
+        id: 11,
+        draft: true,
+        prerelease: false,
+        immutable: false,
+        tag_name: "v0.1.0",
+        assets: [],
+      };
+      return structuredClone(state.release);
+    }
+    if (m === "UPLOAD") {
+      const name = p.split("?name=")[1];
+      if (state.release.assets.some((a) => a.name === name))
+        throw Error("DUPLICATE asset upload");
+      const a = {
+        id: 17 + state.release.assets.length,
+        name,
+        size: b.length,
+        state: "uploaded",
+        digest: `sha256:${psha(b)}`,
+      };
+      state.release.assets.push(a);
+      return structuredClone(a);
+    }
+    if (p === prefix + "/releases/11") {
+      if (!state.release)
+        throw Object.assign(Error("not found"), { status: 404 });
+      if (m === "PATCH") {
+        if (!state.release.draft) throw Error("DUPLICATE release publication");
+        state.release.draft = false;
+        state.release.immutable = true;
+      }
+      return structuredClone(state.release);
+    }
+    if (m === "POST" && p.endsWith("/git/blobs")) {
+      const bytes = Buffer.from(b.content, "base64"),
+        id = createHash("sha1")
+          .update(`blob ${bytes.length}\0`)
+          .update(bytes)
+          .digest("hex");
+      state.blobs[id] = { sha: id, encoding: "base64", content: b.content };
+      return { sha: id };
+    }
+    if (m === "POST" && p.endsWith("/git/trees")) {
+      if (state.trees["3".repeat(40)]) throw Error("DUPLICATE tree creation");
+      state.trees["3".repeat(40)] = b.tree;
+      return { sha: "3".repeat(40) };
+    }
+    if (m === "POST" && p.endsWith("/git/commits")) {
+      if (state.commits["4".repeat(40)])
+        throw Error("DUPLICATE commit creation");
+      state.commits["4".repeat(40)] = {
+        sha: "4".repeat(40),
+        tree: { sha: b.tree },
+        parents: b.parents.map((sha) => ({ sha })),
+        message: b.message,
+      };
+      return { sha: "4".repeat(40) };
+    }
+    if (p.includes("/git/refs/heads/")) {
+      if (state.head !== "1".repeat(40)) throw Error("DUPLICATE ref update");
+      state.head = b.sha;
+      return { object: { type: "commit", sha: state.head } };
+    }
+    if (p.includes("/git/ref/heads/"))
+      return {
+        ref: "refs/heads/release-metadata",
+        object: { type: "commit", sha: state.head },
+      };
+    for (const [kind, table] of [
+      ["blobs", state.blobs],
+      ["trees", state.trees],
+      ["commits", state.commits],
+    ]) {
+      const marker = `/git/${kind}/`;
+      if (m === "GET" && p.includes(marker)) {
+        const id = p.split(marker)[1].split("?")[0],
+          v = table[id];
+        if (!v)
+          throw Object.assign(Error("unknown original object"), {
+            status: 404,
+          });
+        return structuredClone(
+          kind === "trees" ? { sha: id, truncated: false, tree: v } : v,
+        );
+      }
+    }
+    throw Error("Unexpected fixture API route " + m + " " + p);
+  };
+  return { state, api };
+}
+function durableFixture(t, action) {
+  const f = publisherFixture();
+  const root = resolve(".evidence/publisher-recovery/test-state");
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  const parent = mkdtempSync(join(root, "case-"));
+  chmodSync(parent, 0o700);
+  t.after(() => rmSync(parent, { recursive: true, force: true }));
+  const input = {
+    action,
+    mode: "start",
+    directory: join(parent, "operation"),
+    ...(action !== "metadata"
+      ? {
+          candidate: Buffer.from(JSON.stringify(f.candidate)),
+          candidateSHA256: psha(Buffer.from(JSON.stringify(f.candidate))),
+        }
+      : {}),
+    ...(action !== "stage" ? { publication: f.raw, approval: f.approval } : {}),
+  };
+  const remote = recoveryRemote(f);
+  if (action !== "stage")
+    remote.state.release = {
+      id: 11,
+      tag_name: "v0.1.0",
+      draft: action === "release",
+      prerelease: false,
+      immutable: action === "metadata",
+      assets: structuredClone(f.assets),
+    };
+  return {
+    ...f,
+    parent,
+    input,
+    remote,
+    readArtifact: async (name) =>
+      Buffer.from(name.endsWith(".tar.gz") ? "archive" : "x"),
+  };
+}
+test("durable publisher completes and reopens each action as a verified no-op", async (t) => {
+  for (const action of ["stage", "release", "metadata"]) {
+    const f = durableFixture(t, action),
+      deps = { api: f.remote.api, readArtifact: f.readArtifact };
+    const first = await runRecordedPublisher(f.input, deps);
+    assert.equal(first.noOp, false);
+    const mutations = f.remote.state.mutations.length;
+    const before = readFileSync(join(f.input.directory, "operation.json"));
+    const again = await runRecordedPublisher(
+      { ...f.input, mode: "resume" },
+      deps,
+    );
+    assert.equal(again.noOp, true);
+    assert.equal(f.remote.state.mutations.length, mutations);
+    assert.deepEqual(
+      readFileSync(join(f.input.directory, "operation.json")),
+      before,
+    );
+    assert.equal(inspectPublisherJournal(f.input.directory).complete, true);
+  }
+});
+test("durable upload loss is inspected and resumes with original release/asset IDs", async (t) => {
+  const f = durableFixture(t, "stage");
+  let dropped = false;
+  const api = async (m, p, b) => {
+    const r = await f.remote.api(m, p, b);
+    if (m === "UPLOAD" && !dropped) {
+      dropped = true;
+      throw Error("response lost after upload");
+    }
+    return r;
+  };
+  await assert.rejects(
+    runRecordedPublisher(f.input, { api, readArtifact: f.readArtifact }),
+  );
+  const original = inspectPublisherJournal(f.input.directory);
+  assert.equal(original.pending.at(-1).pending, true);
+  const result = await runRecordedPublisher(
+    { ...f.input, mode: "resume" },
+    { api: f.remote.api, readArtifact: f.readArtifact },
+  );
+  assert.equal(result.releaseId, "11");
+  assert.equal(result.assets[0].id, "17");
+  assert.equal(
+    f.remote.state.mutations.filter((v) => v.method === "UPLOAD").length,
+    4,
+  );
+  assert.equal(inspectPublisherJournal(f.input.directory).id, original.id);
+});
+test("uncertain draft holds until exact observed ID is explicitly bound; never creates twice", async (t) => {
+  const f = durableFixture(t, "stage");
+  let dropped = false;
+  const api = async (m, p, b) => {
+    const r = await f.remote.api(m, p, b);
+    if (m === "POST" && p.endsWith("/releases") && !dropped) {
+      dropped = true;
+      throw Error("draft response lost");
+    }
+    return r;
+  };
+  await assert.rejects(
+    runRecordedPublisher(f.input, { api, readArtifact: f.readArtifact }),
+  );
+  const observed = inspectPublisherJournal(f.input.directory).pending[0];
+  await assert.rejects(
+    runRecordedPublisher(
+      { ...f.input, mode: "resume" },
+      { api: f.remote.api, readArtifact: f.readArtifact },
+    ),
+    /Uncertain draft/,
+  );
+  const result = await runRecordedPublisher(
+    {
+      ...f.input,
+      mode: "resume",
+      resolutions: { 0: { requestSha256: observed.requestSha256, id: "11" } },
+    },
+    { api: f.remote.api, readArtifact: f.readArtifact },
+  );
+  assert.equal(result.releaseId, "11");
+  assert.equal(
+    f.remote.state.mutations.filter((v) => v.path.endsWith("/releases")).length,
+    1,
+  );
+});
+test("uncertain public transitions recover by readback with no second PATCH", async (t) => {
+  for (const action of ["release", "metadata"]) {
+    const f = durableFixture(t, action);
+    let dropped = false;
+    const api = async (m, p, b) => {
+      const r = await f.remote.api(m, p, b);
+      if (m === "PATCH" && !dropped) {
+        dropped = true;
+        throw Error("PATCH response lost");
+      }
+      return r;
+    };
+    await assert.rejects(runRecordedPublisher(f.input, { api }));
+    const result = await runRecordedPublisher(
+      { ...f.input, mode: "resume" },
+      { api: f.remote.api },
+    );
+    assert.equal(result.activation, false);
+    assert.equal(
+      f.remote.state.mutations.filter((v) => v.method === "PATCH").length,
+      1,
+    );
+    assert.equal(inspectPublisherJournal(f.input.directory).complete, true);
+  }
+});
+test("uncertain absent effects and changed inputs/IDs refuse without mutations", async (t) => {
+  const f = durableFixture(t, "stage");
+  const api = async (m, p, b) => {
+    if (m === "UPLOAD") throw Error("delivery unknown");
+    return f.remote.api(m, p, b);
+  };
+  await assert.rejects(
+    runRecordedPublisher(f.input, { api, readArtifact: f.readArtifact }),
+  );
+  const writes = f.remote.state.mutations.length;
+  await assert.rejects(
+    runRecordedPublisher(
+      { ...f.input, mode: "resume" },
+      { api: f.remote.api, readArtifact: f.readArtifact },
+    ),
+    /unresolved\/changed/,
+  );
+  assert.equal(f.remote.state.mutations.length, writes);
+  const changed = { ...f.candidate, source: "8".repeat(40) },
+    raw = Buffer.from(JSON.stringify(changed));
+  await assert.rejects(
+    runRecordedPublisher(
+      {
+        ...f.input,
+        mode: "resume",
+        candidate: raw,
+        candidateSHA256: psha(raw),
+      },
+      { api: f.remote.api, readArtifact: f.readArtifact },
+    ),
+    /authority changed/,
+  );
+  assert.equal(f.remote.state.mutations.length, writes);
+});
+test("publisher state is private, exclusive, and corruption-preserving", async (t) => {
+  const f = durableFixture(t, "stage"),
+    dir = join(f.parent, "locked");
+  const j = openPublisherJournal(dir, "a".repeat(64));
+  assert.throws(
+    () => openPublisherJournal(dir, "a".repeat(64), { resume: true }),
+    /already running/,
+  );
+  j.close();
+  const bytes = readFileSync(join(dir, "operation.json"));
+  writeFileSync(
+    join(dir, "operation.json"),
+    Buffer.concat([bytes, Buffer.from("corrupt")]),
+  );
+  const bad = readFileSync(join(dir, "operation.json"));
+  assert.throws(() =>
+    openPublisherJournal(dir, "a".repeat(64), { resume: true }),
+  );
+  assert.deepEqual(readFileSync(join(dir, "operation.json")), bad);
+  const publicDir = join(f.parent, "public");
+  mkdirSync(publicDir, { mode: 0o755 });
+  assert.throws(
+    () => openPublisherJournal(publicDir, "a".repeat(64)),
+    /Private owned/,
+  );
+});
+test("production maintainer dispatch refuses missing trust before credential access", async () => {
+  await assert.rejects(
+    runMaintainerPublisher(rawConfig, { tokenFile: "/does-not-exist" }),
+    /dispatch disabled/,
+  );
+});
+test("actual SIGKILL restart recovers durable upload and released OS lock with original IDs", async (t) => {
+  const f = durableFixture(t, "stage");
+  const descriptor = join(f.parent, "child-input.json"),
+    remoteFile = join(f.parent, "remote.json");
+  writeFileSync(
+    descriptor,
+    JSON.stringify({
+      candidate: f.candidate,
+      assets: f.assets,
+      options: { ...f.input, candidate: undefined },
+      candidateBase64: f.input.candidate.toString("base64"),
+      remoteFile,
+    }),
+    { mode: 0o600 },
+  );
+  const script = `import {readFileSync,writeFileSync,openSync,fsyncSync,closeSync} from 'node:fs';import {createHash} from 'node:crypto';import {runRecordedPublisher} from ${JSON.stringify(new URL("./publish-ubuntu-release.mjs", import.meta.url).href)};
+ const psha=b=>createHash('sha256').update(b).digest('hex');const f=JSON.parse(readFileSync(process.argv[1]));const model=(${recoveryRemote.toString()})(f);const api=async(m,p,b)=>{const r=await model.api(m,p,b);writeFileSync(f.remoteFile,JSON.stringify(model.state),{mode:0o600});const fd=openSync(f.remoteFile,'r');fsyncSync(fd);closeSync(fd);if(m==='UPLOAD')process.kill(process.pid,'SIGKILL');return r;};await runRecordedPublisher({...f.options,candidate:Buffer.from(f.candidateBase64,'base64')},{api,readArtifact:async(n)=>Buffer.from(n.endsWith('.tar.gz')?'archive':'x')});`;
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", script, descriptor],
+    { timeout: 30000, maxBuffer: 65536 },
+  );
+  assert.equal(result.signal, "SIGKILL", result.stderr.toString());
+  assert.equal(existsSync(join(f.input.directory, "writer.lock")), true);
+  const remote = recoveryRemote(f, JSON.parse(readFileSync(remoteFile)));
+  const recovered = await runRecordedPublisher(
+    { ...f.input, mode: "resume" },
+    { api: remote.api, readArtifact: f.readArtifact },
+  );
+  assert.equal(recovered.releaseId, "11");
+  assert.equal(recovered.assets[0].id, "17");
+  assert.equal(
+    remote.state.mutations.filter((v) => v.method === "UPLOAD").length,
+    4,
+  );
+  assert.equal(inspectPublisherJournal(f.input.directory).complete, true);
+});
+test("uncertain metadata object responses resume by exact identity without recreating objects", async (t) => {
+  for (const kind of ["blobs", "trees", "commits"]) {
+    const f = durableFixture(t, "metadata");
+    let dropped = false;
+    const api = async (m, p, b) => {
+      const r = await f.remote.api(m, p, b);
+      if (m === "POST" && p.endsWith(`/git/${kind}`) && !dropped) {
+        dropped = true;
+        throw Error("object response lost");
+      }
+      return r;
+    };
+    await assert.rejects(runRecordedPublisher(f.input, { api }));
+    const last = inspectPublisherJournal(f.input.directory).pending.at(-1),
+      count = f.remote.state.mutations.length;
+    const resume = { ...f.input, mode: "resume" };
+    if (kind !== "blobs") {
+      await assert.rejects(
+        runRecordedPublisher(resume, { api: f.remote.api }),
+        /explicitly inspect/,
+      );
+      assert.equal(f.remote.state.mutations.length, count);
+      resume.resolutions = {
+        [last.index]: {
+          requestSha256: last.requestSha256,
+          id: (kind === "trees" ? "3" : "4").repeat(40),
+        },
+      };
+    }
+    const result = await runRecordedPublisher(resume, { api: f.remote.api });
+    assert.equal(result.metadataCommit, "4".repeat(40));
+    assert.equal(
+      f.remote.state.mutations.filter((v) => v.path.endsWith(`/git/${kind}`))
+        .length,
+      kind === "blobs" ? 6 : 1,
+    );
+  }
+});
+test("completed recovery refuses changed remote asset IDs and metadata head", async (t) => {
+  for (const action of ["stage", "metadata"]) {
+    const f = durableFixture(t, action),
+      deps = { api: f.remote.api, readArtifact: f.readArtifact };
+    await runRecordedPublisher(f.input, deps);
+    const count = f.remote.state.mutations.length;
+    if (action === "stage") f.remote.state.release.assets[0].id = 99;
+    else f.remote.state.head = "8".repeat(40);
+    await assert.rejects(
+      runRecordedPublisher({ ...f.input, mode: "resume" }, deps),
+    );
+    assert.equal(f.remote.state.mutations.length, count);
+  }
+});
+test("journal write failure stops before any remote mutation", async (t) => {
+  const f = durableFixture(t, "stage");
+  const binding = psha(
+    JSON.stringify({
+      action: "stage",
+      candidate: psha(f.input.candidate),
+      publication: null,
+      approval: null,
+    }),
+  );
+  const j = openPublisherJournal(f.input.directory, binding);
+  j.close();
+  chmodSync(f.input.directory, 0o500);
+  try {
+    await assert.rejects(
+      runRecordedPublisher(
+        { ...f.input, mode: "resume" },
+        { api: f.remote.api, readArtifact: f.readArtifact },
+      ),
+    );
+    assert.equal(f.remote.state.mutations.length, 0);
+  } finally {
+    chmodSync(f.input.directory, 0o700);
+  }
+});
+test("maintainer CLI inspects locally and blocks publishing before request/credential reads", () => {
+  const inspect = spawnSync(
+    process.execPath,
+    ["scripts/prepare-ubuntu-release.mjs", "publisher-inspect"],
+    { timeout: 10000 },
+  );
+  assert.equal(inspect.status, 0, inspect.stderr.toString());
+  assert.deepEqual(
+    JSON.parse(inspect.stdout).map((v) => v.action),
+    ["stage", "release", "metadata"],
+  );
+  const run = spawnSync(
+    process.execPath,
+    ["scripts/prepare-ubuntu-release.mjs", "publisher"],
+    { timeout: 10000 },
+  );
+  assert.equal(run.status, 1);
+  assert.match(
+    run.stderr.toString(),
+    /Production trust missing; publisher dispatch disabled/,
+  );
+});
+import fsBuiltin from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+test("publisher persists operation-directory parent before dispatch and sync failure holds", async (t) => {
+  const original = fsBuiltin.fsyncSync;
+  let target = null,
+    saw = false,
+    fail = false;
+  fsBuiltin.fsyncSync = (fd) => {
+    if (target && fsBuiltin.realpathSync(`/proc/self/fd/${fd}`) === target) {
+      saw = true;
+      if (fail) throw Error("fixture parent sync failed");
+    }
+    return original(fd);
+  };
+  syncBuiltinESMExports();
+  try {
+    const f = durableFixture(t, "stage");
+    target = f.parent;
+    await runRecordedPublisher(f.input, {
+      api: async (m, p, b) => {
+        if (m !== "GET") assert.equal(saw, true);
+        return f.remote.api(m, p, b);
+      },
+      readArtifact: f.readArtifact,
+    });
+    assert.equal(saw, true);
+    const held = durableFixture(t, "stage");
+    target = held.parent;
+    saw = false;
+    fail = true;
+    await assert.rejects(
+      runRecordedPublisher(held.input, {
+        api: held.remote.api,
+        readArtifact: held.readArtifact,
+      }),
+      /parent sync failed/,
+    );
+    assert.equal(held.remote.state.mutations.length, 0);
+    // Even the interrupted, now-existing directory must sync its parent again.
+    fail = false;
+    saw = false;
+    await runRecordedPublisher(held.input, {
+      api: async (m, p, b) => {
+        if (m !== "GET") assert.equal(saw, true);
+        return held.remote.api(m, p, b);
+      },
+      readArtifact: held.readArtifact,
+    });
+    assert.equal(saw, true);
+  } finally {
+    fsBuiltin.fsyncSync = original;
+    syncBuiltinESMExports();
+  }
+});
+import { publisherOperationDirectory } from "./prepare-ubuntu-release.mjs";
+test("same-version metadata renewals retain distinct journals and identical input reuses its journal", () => {
+  const first = publisherOperationDirectory(rawConfig, {
+    action: "metadata",
+    approval: { sha256: "a".repeat(64) },
+  });
+  const repeat = publisherOperationDirectory(rawConfig, {
+    action: "metadata",
+    approval: { sha256: "a".repeat(64) },
+  });
+  const renewed = publisherOperationDirectory(rawConfig, {
+    action: "metadata",
+    approval: { sha256: "b".repeat(64) },
+  });
+  assert.equal(first, repeat);
+  assert.notEqual(first, renewed);
+  assert.ok(first.endsWith("-" + "a".repeat(64)));
+  assert.ok(renewed.endsWith("-" + "b".repeat(64)));
+  assert.throws(() =>
+    publisherOperationDirectory(rawConfig, {
+      action: "metadata",
+      approval: { sha256: "../reset" },
+    }),
+  );
+});
