@@ -1,0 +1,87 @@
+name: Ubuntu release candidate
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+concurrency:
+  group: ubuntu-release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  ubuntu-amd64:
+    if: github.repository == 'fased-ai/fased-app' && github.repository_id == '1426211857' && github.repository_owner_id == '279582504'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      GOTOOLCHAIN: local
+      GOFLAGS: -mod=readonly
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Require approved production inputs before building
+        id: prepare
+        run: node scripts/prepare-ubuntu-release.mjs prepare
+      - name: Build the locked UI once
+        run: |
+          npm ci
+          npm run build
+      - name: Build and package the tag-bound core and verifier once
+        env:
+          FASED_RELEASE_VERSION: ${{ steps.prepare.outputs.version }}
+          GOFLAGS: -mod=readonly -overlay=${{ steps.prepare.outputs.overlay }}
+        run: |
+          go mod verify
+          node scripts/build-core.mjs --version="$FASED_RELEASE_VERSION"
+          node scripts/build-core.mjs --installer --version="$FASED_RELEASE_VERSION"
+          go run -ldflags "-X github.com/fased-ai/fased-app/internal/core.Version=$FASED_RELEASE_VERSION" ./cmd/fased-package --engine .evidence/bin/fased-app --source "$GITHUB_SHA" --out .evidence/ubuntu-release --ubuntu-release-format
+          cp .evidence/bin/fased-install .evidence/ubuntu-release/fased-install-linux-amd64
+          node scripts/prepare-ubuntu-release.mjs inventory
+      - name: Attest the actual archive from this tag-push run
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: .evidence/ubuntu-release/fased-app-linux-amd64.tar.gz
+          push-to-registry: false
+          create-storage-record: false
+      - name: Verify original provenance offline and stage public signing inputs
+        env:
+          FASED_PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          cp "$FASED_PROVENANCE_BUNDLE" .evidence/ubuntu-release/fased-app-linux-amd64.provenance.sigstore.json
+          go run ./cmd/fased-release-candidate verify-provenance --policy-file .evidence/ubuntu-release/provenance-policy.json --expected-file .evidence/ubuntu-release/expected-provenance.json --bundle-file .evidence/ubuntu-release/fased-app-linux-amd64.provenance.sigstore.json > .evidence/ubuntu-release/verified-provenance.json
+          node scripts/prepare-ubuntu-release.mjs finish
+      - name: Retain candidate for independent review; do not publish a release
+        if: ${{ always() && steps.prepare.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ubuntu-amd64-release-candidate
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            .evidence/ubuntu-release/fased-app-linux-amd64.tar.gz
+            .evidence/ubuntu-release/fased-app-linux-amd64.json
+            .evidence/ubuntu-release/fased-install-linux-amd64
+            .evidence/ubuntu-release/fased-app-linux-amd64.provenance.sigstore.json
+            .evidence/ubuntu-release/verified-provenance.json
+            .evidence/ubuntu-release/expected-provenance.json
+            .evidence/ubuntu-release/provenance-policy.json
+            .evidence/ubuntu-release/first-install-seed.json
+            .evidence/ubuntu-release/install.sh
+            .evidence/ubuntu-release/build-inputs.json
+            .evidence/ubuntu-release/artifact-inventory.json
+            .evidence/ubuntu-release/signing-inputs.json

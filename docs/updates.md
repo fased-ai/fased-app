@@ -27,11 +27,14 @@ below is a proposed implementation contract. It does not change those capabiliti
 
 ## Production release-trust operations specification
 
-**P4-10/11 design proposal, revision 1, 2026-10-20.** This section specifies future
-production controls; none is activated by this document. Current commands accept
-development trust only. Real wallets, financial execution and automatic updates
+**P4-10/11 production contract.** Offline production verification is implemented;
+ordinary public acquisition and update dispatch remain inactive. This section
+specifies publisher controls; none is activated by this document. Real wallets,
+financial execution and automatic updates
 stay disabled. No production key, credential, repository, branch protection,
-publisher workflow, trust configuration or public release is created here.
+trust configuration or public release is created here. A dormant Ubuntu candidate
+workflow stages an authorized tag build and verifies actual provenance; it does
+not publish releases or sign metadata. See the [publisher preparation procedure](maintainers/ubuntu-release.md).
 
 ### Trust architecture and scope
 

@@ -42,6 +42,8 @@ jobs:
         with:
           node-version: "24"
       - run: node --test scripts/ci-routing.test.mjs scripts/ci-core-coverage.test.mjs
+      - name: Verify dormant release staging boundaries
+        run: node --test --test-isolation=none scripts/prepare-ubuntu-release.test.mjs
       - id: route
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -82,7 +84,7 @@ jobs:
         if: needs.classify.outputs.scope == 'full'
         run: |
           # Update unit coverage runs in the required handoff job on the same head.
-          go list ./internal/... ./cmd/fased-app ./cmd/fased-signer ./cmd/fased-install ./cmd/fased-package > .evidence/core-test-packages.txt
+          go list ./internal/... ./cmd/fased-app ./cmd/fased-signer ./cmd/fased-install ./cmd/fased-package ./cmd/fased-release-candidate > .evidence/core-test-packages.txt
           mapfile -t fased_other_packages < <(grep -vE '/internal/(core|update)$' .evidence/core-test-packages.txt)
           test "${#fased_other_packages[@]}" -gt 0
           go test -race -p 1 "${fased_other_packages[@]}"

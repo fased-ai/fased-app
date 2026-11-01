@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "version": "0.1.0",
+  "repository": "fased-ai/fased-app",
+  "repositoryId": "1426211857",
+  "ownerId": "279582504",
+  "workflow": ".github/workflows/release.yml",
+  "target": { "os": "linux", "arch": "amd64", "ubuntu": "24.04" },
+  "seedFile": null,
+  "seedSha256": null,
+  "custodyApprovalSha256": null,
+  "initialTrustApprovalSha256": null
+}

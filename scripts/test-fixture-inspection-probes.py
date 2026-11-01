@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test the status reconnect helper without installing or contacting a signer."""
+"""Test socket denial/reconnect without installing or contacting a signer."""
 import ast
 import contextlib
 import pathlib
@@ -64,6 +64,75 @@ class HistoricalStatusTest(unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.invoke([reply, self.status()])
         self.assertEqual(self.connections, 1)
+
+
+class ChannelDenialTest(unittest.TestCase):
+    def probe(self, send_error=None, read_error=None, reply=None, attempt=True):
+        source = pathlib.Path(__file__).with_name("fixture-inspection-probes.py")
+        tree = ast.parse(source.read_text())
+        helper = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                      and n.name == "denied")
+        self.calls = []
+        connection = object()
+        request = {"kind": "status"}
+
+        def send(actual, frame):
+            self.assertIs(actual, connection)
+            self.assertIs(frame, request)
+            self.calls.append("send")
+            if send_error is not None:
+                raise send_error
+
+        def read(actual):
+            self.assertIs(actual, connection)
+            self.calls.append("read")
+            if read_error is not None:
+                raise read_error
+            return reply
+
+        scope = dict(send=send, read=read)
+        exec(compile(ast.Module(body=[helper], type_ignores=[]), str(source), "exec"), scope)
+        return scope["denied"](connection, request) if attempt else scope["denied"](connection)
+
+    def test_closed_before_send_is_denied_without_retry(self):
+        for error in (BrokenPipeError("closed"), ConnectionResetError("closed")):
+            with self.subTest(error=type(error).__name__):
+                self.assertTrue(self.probe(send_error=error))
+                self.assertEqual(self.calls, ["send"])
+
+    def test_closed_during_read_is_denied_without_retry(self):
+        for error in (EOFError("closed"), ConnectionResetError("closed"), BrokenPipeError("closed")):
+            with self.subTest(error=type(error).__name__):
+                self.assertTrue(self.probe(read_error=error))
+                self.assertEqual(self.calls, ["send", "read"])
+
+    def test_any_response_fails_the_denial_probe(self):
+        for reply in (None, {}, {"kind": "status-result"}, {"kind": "challenge"}):
+            with self.subTest(reply=reply):
+                self.assertFalse(self.probe(reply=reply))
+                self.assertEqual(self.calls, ["send", "read"])
+
+    def test_timeout_and_other_errors_are_not_denial(self):
+        for error in (TimeoutError("deadline"), PermissionError("permission"),
+                      ConnectionRefusedError("refused"), OSError("unexpected"), ValueError("invalid")):
+            for phase in ("send_error", "read_error"):
+                with self.subTest(error=type(error).__name__, phase=phase):
+                    with self.assertRaises(type(error)):
+                        self.probe(**{phase: error})
+
+    def test_existing_receive_only_check_is_preserved(self):
+        self.assertTrue(self.probe(read_error=EOFError("closed"), attempt=False))
+        self.assertEqual(self.calls, ["read"])
+        self.assertFalse(self.probe(reply={"kind": "confirmed"}, attempt=False))
+
+    def test_concurrent_probe_sends_inside_denial_check(self):
+        source = pathlib.Path(__file__).with_name("fixture-inspection-probes.py")
+        tree = ast.parse(source.read_text())
+        checks = [n.test for n in ast.walk(tree) if isinstance(n, ast.Assert)
+                  and isinstance(n.test, ast.Call) and isinstance(n.test.func, ast.Name)
+                  and n.test.func.id == "denied" and len(n.test.args) == 2
+                  and isinstance(n.test.args[0], ast.Name) and n.test.args[0].id == "other"]
+        self.assertEqual(len(checks), 1)
 
 
 if __name__ == "__main__":
