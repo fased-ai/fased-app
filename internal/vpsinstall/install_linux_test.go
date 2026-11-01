@@ -55,7 +55,7 @@ func fixtureHost() (*memoryHost, hostOps, Options) {
 			return errors.New("project code was not privilege-dropped")
 		}
 		action := args[len(args)-3]
-		if action != "claim-code" && action != "recover" {
+		if action != "claim-code" && action != "recover" && action != "remote-setup-link" {
 			return errors.New("unknown owner helper action")
 		}
 		h.helperActions = append(h.helperActions, action)
@@ -573,5 +573,42 @@ func TestSharedPasswordToolRejectsEveryMutationForm(t *testing.T) {
 		if _, e := (&custodyinstall.System{Out: io.Discard}).Run(context.Background(), nil, args...); e == nil || !strings.Contains(e.Error(), "status") {
 			t.Fatal("password mutation form admitted", args, e)
 		}
+	}
+}
+
+func TestOwnerSetupLinkUsesVerifiedUIDHelper(t *testing.T) {
+	h, o, m := installFixture(t)
+	if err := start(t.Context(), o, m); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := setupLink(t.Context(), o, m, &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.helperActions) != 1 || h.helperActions[0] != "remote-setup-link" {
+		t.Fatal(h.helperActions)
+	}
+	h.active = false
+	if err := setupLink(t.Context(), o, m, &out); err == nil {
+		t.Fatal("inactive service issued a handoff")
+	}
+	if len(h.helperActions) != 1 {
+		t.Fatal("helper ran without a verified active unit")
+	}
+}
+
+func TestReadinessUsesQuietProbeWithoutHidingLifecycleCommands(t *testing.T) {
+	_, o, m := installFixture(t)
+	probes := 0
+	original := o.run
+	o.readinessRun = func(ctx context.Context, input []byte, args ...string) ([]byte, error) {
+		probes++
+		return original(ctx, input, args...)
+	}
+	if e := start(t.Context(), o, m); e != nil {
+		t.Fatal(e)
+	}
+	if probes == 0 {
+		t.Fatal("readiness bypassed quiet diagnostics")
 	}
 }

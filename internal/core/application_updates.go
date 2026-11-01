@@ -79,9 +79,12 @@ type ApplicationUpdateCommand struct {
 	ManifestSHA256 string `json:"manifestSha256,omitempty"`
 }
 type applicationUpdates struct {
-	mu         sync.Mutex
-	controller ApplicationUpdateController
-	configured atomic.Bool
+	mu          sync.Mutex
+	controller  ApplicationUpdateController
+	configured  atomic.Bool
+	checkAsync  bool
+	checkCancel context.CancelFunc
+	checkWG     sync.WaitGroup
 }
 
 func (r ApplicationRelease) valid() bool {
@@ -279,6 +282,9 @@ func (s *Store) runApplicationUpdates(ctx context.Context) error {
 		return nil
 	}
 	defer s.appUpdates.mu.Unlock()
+	if !s.appUpdates.configured.Load() {
+		return nil
+	}
 	v, e := s.ApplicationUpdates(ctx)
 	if e != nil {
 		return e
@@ -303,25 +309,33 @@ func (s *Store) runApplicationUpdates(ctx context.Context) error {
 			return e
 		}
 		v.Revision++
-		release, err := s.appUpdates.controller.Check(ctx)
-		o.CheckedAt = now
-		o.FinishedAt = now
-		o.BootID = ""
-		if err != nil {
-			o.Phase = "check-failed"
-			o.Failure = "Release check failed. Check access and try again."
-		} else if release == nil {
-			o.Phase = "current"
-			o.Failure = ""
-		} else if !release.valid() {
-			o.Phase = "check-failed"
-			o.Failure = "Release identity is invalid. Preserve the current installation."
-		} else {
-			o.Phase = "available"
-			o.Release = release
-			o.Failure = ""
+		if s.appUpdates.checkAsync {
+			checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+			s.appUpdates.checkCancel = cancel
+			s.appUpdates.checkWG.Add(1)
+			controller := s.appUpdates.controller
+			go func() {
+				defer s.appUpdates.checkWG.Done()
+				defer cancel()
+				release, checkErr := controller.Check(checkCtx)
+				s.appUpdates.mu.Lock()
+				defer s.appUpdates.mu.Unlock()
+				s.appUpdates.checkCancel = nil
+				if !s.appUpdates.configured.Load() {
+					return
+				}
+				publishCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
+				defer done()
+				fresh, e := s.ApplicationUpdates(publishCtx)
+				if e != nil || fresh.Operation.ID != o.ID || fresh.Operation.Phase != "checking" || fresh.Operation.BootID != s.bootID {
+					return
+				}
+				_ = s.finishApplicationCheck(publishCtx, fresh.Operation, fresh.Revision, release, checkErr)
+			}()
+			return nil
 		}
-		return s.publishApplicationUpdate(ctx, o, v.Revision)
+		release, checkErr := s.appUpdates.controller.Check(ctx)
+		return s.finishApplicationCheck(ctx, o, v.Revision, release, checkErr)
 	case "available":
 		if p.Mode != "automatic" || !updatePinMatches(p, *o.Release) || (p.Window != nil && !p.Window.Contains(time.Unix(now, 0))) {
 			return nil
@@ -360,6 +374,37 @@ func (s *Store) runApplicationUpdates(ctx context.Context) error {
 	}
 	return nil
 }
+func (s *Store) finishApplicationCheck(ctx context.Context, o ApplicationUpdateOperation, revision int64, release *ApplicationRelease, err error) error {
+	o.CheckedAt = s.now().Unix()
+	o.FinishedAt = o.CheckedAt
+	o.BootID = ""
+	switch {
+	case err != nil:
+		o.Phase = "check-failed"
+		o.Failure = "Release check failed. Check access and try again."
+	case release == nil:
+		o.Phase = "current"
+		o.Failure = ""
+	case !release.valid():
+		o.Phase = "check-failed"
+		o.Failure = "Release identity is invalid. Preserve the current installation."
+	default:
+		o.Phase = "available"
+		o.Release = release
+		o.Failure = ""
+	}
+	return s.publishApplicationUpdate(ctx, o, revision)
+}
+func (s *Store) closeApplicationChecks() {
+	s.appUpdates.configured.Store(false)
+	s.appUpdates.mu.Lock()
+	if s.appUpdates.checkCancel != nil {
+		s.appUpdates.checkCancel()
+	}
+	s.appUpdates.mu.Unlock()
+	s.appUpdates.checkWG.Wait()
+}
+
 func (s *Store) finishApplicationUpdate(ctx context.Context, o ApplicationUpdateOperation, revision int64, r ApplicationUpdateReceipt, err error) error {
 	if errors.Is(err, ErrApplicationUpdateNotStarted) {
 		o.Phase = "check-failed"
@@ -405,7 +450,7 @@ func (s *Store) publishApplicationUpdate(ctx context.Context, o ApplicationUpdat
 // BindApplicationUpdateController is a Go-only composition boundary for an
 // authenticated owner controller, not a public activation/configuration API.
 // Ordinary constructors never call it. Binding cannot replace a running driver.
-func (s *Store) BindApplicationUpdateController(c ApplicationUpdateController) error {
+func (s *Store) BindApplicationUpdateController(c ApplicationUpdateController, asynchronous ...bool) error {
 	if c == nil {
 		return errors.New("authenticated controller required")
 	}
@@ -414,6 +459,10 @@ func (s *Store) BindApplicationUpdateController(c ApplicationUpdateController) e
 	if s.appUpdates.configured.Load() {
 		return errors.New("update controller already bound")
 	}
+	if len(asynchronous) > 1 {
+		return errors.New("one update execution mode required")
+	}
+	s.appUpdates.checkAsync = len(asynchronous) == 1 && asynchronous[0]
 	s.appUpdates.controller = c
 	s.appUpdates.configured.Store(true)
 	return nil

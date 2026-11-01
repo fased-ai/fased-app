@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 
@@ -22,7 +23,9 @@ const Purpose = "fased-app-first-install-development:v1"
 const GitHubPurpose = "fased-app-first-install-github-controlled:v1"
 const ProductionPurpose = "fased-app-first-install-production:v1"
 const descriptorTarget = "bootstrap/descriptor.json"
-const archiveTarget = "fased-app-linux-amd64.tar.gz"
+
+var archiveTarget = "fased-app-linux-" + runtime.GOARCH + ".tar.gz"
+
 const maxArchiveBytes = 128 << 20
 
 type Binding struct {
@@ -38,7 +41,7 @@ func (b Binding) valid() bool {
 	profile := b.Version == 1 && b.Purpose == Purpose || b.Version == 2 && b.Purpose == GitHubPurpose
 	development := profile && b.DevelopmentOnly && b.Channel == "development"
 	production := b.Version == 3 && b.Purpose == ProductionPurpose && !b.DevelopmentOnly && b.Channel == "stable"
-	return (development || production) && b.Repository == "fased-ai/fased-app" && b.Target == (update.Target{OS: "linux", Arch: "amd64"})
+	return (development || production) && b.Repository == "fased-ai/fased-app" && b.Target.OS == "linux" && (b.Target.Arch == "amd64" || b.Target.Arch == "arm64") && b.Target.Arch == runtime.GOARCH
 }
 
 type Seed struct {

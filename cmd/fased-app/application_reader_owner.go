@@ -42,7 +42,7 @@ func readerLocalCallbacks(m localinstall.Manifest, request *core.ApplicationRead
 			return e
 		},
 		Health: func(ctx context.Context, target localinstall.Manifest) error {
-			v, e := ipc().call(ctx, "inspect", nil)
+			v, e := waitApplicationOwnerHealth(ctx, func(ctx context.Context) (core.ApplicationOwnerView, error) { return ipc().call(ctx, "inspect", nil) })
 			if e != nil {
 				return e
 			}

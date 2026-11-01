@@ -74,6 +74,16 @@ func TestNativeTransportDoesNotSupplyAuthority(t *testing.T) {
 			t.Fatalf("%s: got %d", tc.path, got.Code)
 		}
 	}
+	// The native OS-owner bridge renews expired setup proof internally. Network
+	// clients have no equivalent endpoint and never receive this proof.
+	if err = core.WritePrivateJSON(filepath.Join(dir, "claim-code.json"), core.ClaimCode{Code: "expired", ExpiresAt: time.Now().Add(-time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	renewed := request("GET", "/api/v1/installation/claim-code", "", "", "", "")
+	var setup core.ClaimCode
+	if renewed.Code != 200 || json.Unmarshal(renewed.Body.Bytes(), &setup) != nil || len(setup.Code) != 43 || !setup.ExpiresAt.After(time.Now()) {
+		t.Fatal("native setup did not renew")
+	}
 	claim, err := server.Store.IssueClaimCode(t.Context())
 	if err != nil {
 		t.Fatal(err)

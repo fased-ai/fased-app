@@ -202,7 +202,7 @@ func readPublicLinks(path string, maxLinks uint64) ([]byte, error) {
 	f := os.NewFile(uintptr(fd), path)
 	defer f.Close()
 	var st unix.Stat_t
-	if unix.Fstat(fd, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Uid != 0 || st.Mode&07777 != 0644 || st.Nlink < 1 || st.Nlink > maxLinks || st.Size < 0 || st.Size > 16384 {
+	if unix.Fstat(fd, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Uid != 0 || st.Mode&07777 != 0644 || st.Nlink < 1 || uint64(st.Nlink) > maxLinks || st.Size < 0 || st.Size > 16384 {
 		return nil, errState
 	}
 	b, err := io.ReadAll(io.LimitReader(f, 16385))

@@ -1,3 +1,4 @@
+import { openOwnerSetup } from "../../scripts/fixture-owner-setup.mjs";
 import { test, expect } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
@@ -136,7 +137,7 @@ test("reviewed v2 continuations share UI/CLI consent, transcript and restart", a
     const claim = JSON.parse(
       await readFile(join(dir, "claim-code.json"), "utf8"),
     );
-    await page.getByLabel("One-use claim code").fill(claim.code);
+    await openOwnerSetup(page, claim.code);
     await page.getByLabel("Create owner password").fill(password);
     await page
       .getByRole("button", { name: "Claim workspace", exact: true })

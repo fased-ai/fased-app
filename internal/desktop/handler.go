@@ -129,8 +129,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		data, e := core.ReadPrivateFile(filepath.Join(h.dir, "claim-code.json"))
 		var code core.ClaimCode
 		if e != nil || len(data) > 4096 || json.Unmarshal(data, &code) != nil || time.Now().After(code.ExpiresAt) {
-			fail(w, 409, "claim code expired; renew it from the OS owner's terminal")
-			return
+			store, openErr := core.OpenStore(h.dir)
+			if openErr != nil {
+				fail(w, 409, "Reopen Fased to finish setup.")
+				return
+			}
+			code, e = store.IssueClaimCode(r.Context())
+			store.Close()
+			if e != nil {
+				fail(w, 409, "Reopen Fased to finish setup.")
+				return
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(code)

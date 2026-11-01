@@ -1,3 +1,4 @@
+import { openOwnerSetup } from "./fixture-owner-setup.mjs";
 // Disposable Ubuntu installation + real SSH forwarding only. No owner browser,
 // user credentials, API provider or external endpoint is used by this check.
 import assert from "node:assert/strict";
@@ -219,13 +220,10 @@ try {
   await expect(
     page.getByRole("heading", { name: "Claim this workspace", exact: true }),
   ).toBeVisible();
-  await page.getByText("Get setup code", { exact: true }).click();
+  await expect(page.getByLabel("One-use claim code")).toHaveCount(0);
   await expect(
-    page
-      .locator("details")
-      .filter({ has: page.getByText("Get setup code", { exact: true }) })
-      .locator("code"),
-  ).toContainText(`${config.core} vps claim-code`);
+    page.getByRole("button", { name: "Claim workspace", exact: true }),
+  ).toBeDisabled();
   await page.setViewportSize({ width: 390, height: 844 });
   assert.ok(
     await page.evaluate(
@@ -237,7 +235,7 @@ try {
   await page.setViewportSize({ width: 1280, height: 850 });
   claimCode = await cli("claim-code");
   assert.match(claimCode, /^[A-Za-z0-9_-]+$/);
-  await page.getByLabel("One-use claim code").fill(claimCode);
+  await openOwnerSetup(page, claimCode);
   await page.getByLabel("Create owner password").fill(password);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })

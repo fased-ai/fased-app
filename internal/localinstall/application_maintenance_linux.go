@@ -17,7 +17,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/core"
 )
 
-const maintenanceTemplateName = "fased-app-maintenance@.service"
+const maintenanceTemplateName = "fased-app-maintenance-system@.service"
 const maintenanceProperties = "--property=LoadState,FragmentPath,DropInPaths,ExecStart,ActiveState,SubState,UnitFileState,Result"
 
 type maintenanceImage struct {
@@ -28,7 +28,7 @@ type maintenanceImage struct {
 }
 
 func maintenanceExecutable(m Manifest) string {
-	return filepath.Join(applicationUpdateDirectory(Paths{Root: m.Root, Data: m.Data}), "fased-app-maintenance")
+	return filepath.Join(applicationUpdateDirectory(Paths{Root: m.Root, Data: m.Data}), "fased-app-maintenance-system")
 }
 func checkMaintenanceImage(m Manifest) error {
 	b, e := core.ReadPrivateFile(maintenanceExecutable(m) + ".json")
@@ -70,12 +70,12 @@ type maintenanceRequest struct {
 func maintenanceTemplatePath(m Manifest) string {
 	return filepath.Join(applicationUpdateDirectory(Paths{Root: m.Root, Data: m.Data}), maintenanceTemplateName)
 }
-func maintenanceUnit(id string) string { return "fased-app-maintenance@" + id + ".service" }
+func maintenanceUnit(id string) string { return "fased-app-maintenance-system@" + id + ".service" }
 func maintenanceTemplate(m Manifest) []byte {
 	control := applicationUpdateDirectory(Paths{Root: m.Root, Data: m.Data})
 	// This is a deliberate owner-maintenance role outside the read-only app
 	// service. No sudo, shell, environment command, user tool or arbitrary argv.
-	return []byte("[Unit]\nDescription=Fased update maintenance\nAfter=network.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=" + quote(maintenanceExecutable(m)) + " maintain-update --operation %i --prefix " + quote(m.Root) + " --data-dir " + quote(m.Data) + "\nTimeoutStartSec=15min\nRestart=no\nUMask=0077\nNoNewPrivileges=yes\nCapabilityBoundingSet=\nAmbientCapabilities=\nRestrictSUIDSGID=yes\nLockPersonality=yes\nPrivateTmp=yes\nProtectSystem=strict\nProtectHome=read-only\nReadWritePaths=" + quote(m.Root) + " " + quote(m.Data) + " " + quote(control) + "\nWorkingDirectory=/\n\n[Install]\nWantedBy=default.target\n")
+	return []byte("[Unit]\nDescription=Fased update maintenance\nAfter=network.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=" + quote(maintenanceExecutable(m)) + " maintenance-delegate --operation %i --prefix " + quote(m.Root) + " --data-dir " + quote(m.Data) + "\nTimeoutStartSec=16min\nRestart=no\nUMask=0077\nNoNewPrivileges=yes\nAmbientCapabilities=\nRestrictSUIDSGID=yes\nLockPersonality=yes\nPrivateTmp=yes\nProtectSystem=strict\nProtectHome=read-only\nReadWritePaths=" + quote(m.Root) + " " + quote(m.Data) + " " + quote(control) + "\nWorkingDirectory=/\n\n[Install]\nWantedBy=default.target\n")
 }
 func maintenanceIdentity(m Manifest) error {
 	control := applicationUpdateDirectory(Paths{Root: m.Root, Data: m.Data})
@@ -129,7 +129,8 @@ func maintenanceManager(ctx context.Context, run MaintenanceRunner, unit string)
 	return result, nil
 }
 func checkMaintenanceTemplate(m Manifest, p map[string]string) error {
-	if p["LoadState"] != "loaded" || p["FragmentPath"] != maintenanceTemplatePath(m) || p["DropInPaths"] != "" {
+	fragment, fragmentErr := filepath.EvalSymlinks(p["FragmentPath"])
+	if p["LoadState"] != "loaded" || fragmentErr != nil || fragment != maintenanceTemplatePath(m) || p["DropInPaths"] != "" {
 		return errors.New("owner maintenance template is missing or foreign; preserve it and use the installer owner's setup")
 	}
 	b, e := core.ReadPrivateFile(maintenanceTemplatePath(m))
@@ -153,7 +154,7 @@ func checkMaintenanceTemplate(m Manifest, p map[string]string) error {
 	if !ok {
 		return errors.New("owner maintenance argv unavailable")
 	}
-	prefix := maintenanceExecutable(m) + " maintain-update --operation "
+	prefix := maintenanceExecutable(m) + " maintenance-delegate --operation "
 	if !strings.HasPrefix(argv, prefix) {
 		return errors.New("owner maintenance entry changed")
 	}
@@ -172,11 +173,14 @@ func ApplicationMaintenanceRunner(m Manifest) MaintenanceRunner {
 			return nil, e
 		}
 		validUnit := func(s string) bool {
-			return s == maintenanceTemplateName || strings.HasPrefix(s, "fased-app-maintenance@") && strings.HasSuffix(s, ".service") && applicationUpdateID(strings.TrimSuffix(strings.TrimPrefix(s, "fased-app-maintenance@"), ".service"))
+			return s == maintenanceTemplateName || strings.HasPrefix(s, "fased-app-maintenance-system@") && strings.HasSuffix(s, ".service") && applicationUpdateID(strings.TrimSuffix(strings.TrimPrefix(s, "fased-app-maintenance-system@"), ".service"))
 		}
 		admitted := len(args) == 1 && args[0] == "daemon-reload" || len(args) == 3 && args[0] == "show" && validUnit(args[1]) && args[2] == maintenanceProperties || len(args) == 3 && args[0] == "link" && args[1] == "--" && args[2] == maintenanceTemplatePath(m) || len(args) == 3 && (args[0] == "enable" || args[0] == "disable" || args[0] == "reset-failed") && args[1] == "--" && validUnit(args[2]) && args[2] != maintenanceTemplateName || len(args) == 4 && args[0] == "start" && args[1] == "--no-block" && args[2] == "--" && validUnit(args[3])
 		if !admitted {
 			return nil, errors.New("unsupported owner maintenance OS operation")
+		}
+		if maintenanceSandbox(m) {
+			return maintenanceBus(ctx, m, args...)
 		}
 		tool := "/usr/bin/systemctl"
 		resolved, e := filepath.EvalSymlinks(tool)
@@ -213,6 +217,9 @@ func InstallApplicationMaintenance(ctx context.Context, m Manifest, run Maintena
 	}
 	p, e := maintenanceManager(ctx, run, maintenanceUnit(strings.Repeat("0", 32)))
 	if e != nil {
+		return e
+	}
+	if e := legacyMaintenanceIdle(m); e != nil {
 		return e
 	}
 	if p["LoadState"] != "not-found" {
@@ -264,7 +271,7 @@ func InstallApplicationMaintenance(ctx context.Context, m Manifest, run Maintena
 	return checkMaintenanceTemplate(m, p)
 }
 func readMaintenanceRequest(m Manifest) (maintenanceRequest, error) {
-	b, e := core.ReadPrivateFile(filepath.Join(applicationUpdateDirectory(Paths{Root: m.Root, Data: m.Data}), "maintenance.json"))
+	b, e := core.ReadPrivateFile(filepath.Join(applicationUpdateDirectory(Paths{Root: m.Root, Data: m.Data}), "system-maintenance.json"))
 	if e != nil {
 		return maintenanceRequest{}, e
 	}
@@ -324,7 +331,7 @@ func LaunchApplicationMaintenance(ctx context.Context, m Manifest, id string, ru
 		return ApplicationMaintenanceStatus(ctx, m, id, run)
 	}
 	request := maintenanceRequest{Version: 1, ID: id, Root: m.Root, Data: m.Data, TemplateSHA256: bytesDigest(maintenanceTemplate(m)), PreviousManifestSHA256: ManifestSHA256(m)}
-	if e = core.WritePrivateJSON(filepath.Join(dir, "maintenance.json"), request); e != nil {
+	if e = core.WritePrivateJSON(filepath.Join(dir, "system-maintenance.json"), request); e != nil {
 		return MaintenanceStatus{}, e
 	}
 	if _, e = run(ctx, "enable", "--", maintenanceUnit(id)); e != nil {
@@ -450,7 +457,7 @@ func CompleteApplicationMaintenance(ctx context.Context, m Manifest, id, phase s
 		return errors.New("could not disable the owned maintenance instance; preserve its identity and retry cleanup")
 	}
 	request.Finished = phase
-	return core.WritePrivateJSON(filepath.Join(dir, "maintenance.json"), request)
+	return core.WritePrivateJSON(filepath.Join(dir, "system-maintenance.json"), request)
 }
 
 // ApplicationMaintenanceEntry is the fixed, verified maintenance image; callers
@@ -467,4 +474,122 @@ func ApplicationMaintenanceEntry(m Manifest) (string, error) {
 func readMaintenanceRequestForRemoval(m Manifest) (string, error) {
 	r, e := readMaintenanceRequest(m)
 	return r.Finished, e
+}
+
+// ApplicationMaintenanceReady reads immutable installation/actor identity only.
+// The sandboxed core may inspect it but cannot write the owner control directory.
+func ApplicationMaintenanceReady(ctx context.Context, m Manifest, id string, run MaintenanceRunner) error {
+	if !applicationUpdateID(id) {
+		return errors.New("one opaque maintenance operation required")
+	}
+	if e := ctx.Err(); e != nil {
+		return e
+	}
+	if e := maintenanceIdentity(m); e != nil {
+		return e
+	}
+	if e := verify(m); e != nil {
+		return e
+	}
+	p, e := maintenanceManager(ctx, run, maintenanceUnit(id))
+	if e != nil {
+		return e
+	}
+	return checkMaintenanceTemplate(m, p)
+}
+
+// StartApplicationMaintenance is the only Local launch path exposed to the core:
+// start one validated existing user unit, without writing or enabling anything.
+func StartApplicationMaintenance(ctx context.Context, m Manifest, id string, run MaintenanceRunner) error {
+	if e := ApplicationMaintenanceReady(ctx, m, id, run); e != nil {
+		return e
+	}
+	p, e := maintenanceManager(ctx, run, maintenanceUnit(id))
+	if e != nil {
+		return e
+	}
+	if p["Result"] != "success" {
+		return errors.New("maintenance failed; use explicit owner recovery")
+	}
+	switch p["ActiveState"] {
+	case "activating", "deactivating":
+		return nil
+	case "active":
+		if p["SubState"] == "running" {
+			return nil
+		}
+		return errors.New("maintenance exited without a receipt; use explicit owner recovery")
+	case "inactive":
+		if p["SubState"] != "dead" {
+			return errors.New("unknown maintenance state; preserve recovery")
+		}
+	default:
+		return errors.New("maintenance is failed or unknown; use explicit owner recovery")
+	}
+	_, e = run(ctx, "start", "--no-block", "--", maintenanceUnit(id))
+	return e
+}
+
+// PrepareApplicationMaintenanceOperation runs in the ordinary owner actor after
+// admitted-operation IPC inspection. Reuse durable prior-ID/replay/enable checks;
+// the actor is already running, so never recursively start or wait on itself.
+func PrepareApplicationMaintenanceOperation(ctx context.Context, m Manifest, id string, run MaintenanceRunner) error {
+	_, e := LaunchApplicationMaintenance(ctx, m, id, func(ctx context.Context, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "start" {
+			return nil, nil
+		}
+		return run(ctx, args...)
+	})
+	if e != nil {
+		return e
+	}
+	request, e := readMaintenanceRequest(m)
+	if e != nil {
+		return e
+	}
+	if request.ID != id {
+		return errors.New("owner operation changed")
+	}
+	if request.Finished != "" {
+		return nil
+	}
+	// Retry after request publication must still establish reboot persistence.
+	status, e := ApplicationMaintenanceStatus(ctx, m, id, run)
+	if e != nil {
+		return e
+	}
+	if status.Persistent {
+		return nil
+	}
+	_, e = run(ctx, "enable", "--", maintenanceUnit(id))
+	return e
+}
+func ApplicationAcquisitionParent(m Manifest) (string, error) {
+	if e := maintenanceIdentity(m); e != nil {
+		return "", e
+	}
+	parent := applicationUpdateDirectory(Paths{Root: m.Root, Data: m.Data})
+	return parent, nil
+}
+
+func IsApplicationMaintenanceImage(m Manifest, image string) bool {
+	return filepath.Clean(strings.TrimSuffix(image, " (deleted)")) == maintenanceExecutable(m)
+}
+func ValidateApplicationMaintenanceProcess() error {
+	b, e := os.ReadFile("/proc/self/status")
+	if e != nil {
+		return e
+	}
+	return validateMaintenanceProcess(os.Getuid(), os.Geteuid(), string(b))
+}
+func validateMaintenanceProcess(uid, euid int, status string) error {
+	if uid <= 0 || uid != euid {
+		return errors.New("ordinary maintenance identity required")
+	}
+	for _, line := range []string{"NoNewPrivs:\t1\n", "CapEff:\t0000000000000000\n", "CapPrm:\t0000000000000000\n", "CapInh:\t0000000000000000\n", "CapAmb:\t0000000000000000\n"} {
+		if !strings.Contains(status, line) {
+			return errors.New("maintenance requires NoNewPrivileges and zero effective/permitted/inheritable/ambient capabilities")
+		}
+	}
+	return nil
 }

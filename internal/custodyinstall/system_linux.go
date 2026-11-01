@@ -121,6 +121,11 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 		if len(args) != 5 || args[1] != "--silent" || args[2] != "--" || !networkOutcomeInput.MatchString(args[3]) || !networkOutcomeInput.MatchString(args[4]) {
 			return nil, errors.New("only owned Remote outcome comparison is allowed")
 		}
+	case "/usr/bin/pkcheck":
+		expected := []string{"--action-id", "org.freedesktop.systemd1.manage-units", "--process", strconv.Itoa(os.Getpid()), "--detail", "unit", "fased-local-maintenance-" + strconv.Itoa(os.Getuid()) + "@" + strings.Repeat("0", 32) + ".service", "--detail", "verb", "start"}
+		if strings.Join(args[1:], "\x00") != strings.Join(expected, "\x00") {
+			return nil, errors.New("only Local maintenance self-authorization inspection is allowed")
+		}
 	case "/usr/bin/passwd":
 		if len(args) != 3 || args[1] != "-S" || args[2] == "" || args[2][0] == '-' {
 			return nil, errors.New("only fixed-account password lock status is allowed")
@@ -170,6 +175,9 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 // capabilities before any Fased code reads interactive owner input.
 func maintenancePolicyInput(path string) bool {
 	uid := strconv.Itoa(os.Getuid())
+	if regexp.MustCompile(`^/etc/(systemd/system/(\.)?fased-local-(maintenance|recovery)-` + uid + `@\.service|polkit-1/rules\.d/(\.)?60-fased-local-` + uid + `-updates\.rules)(-[a-f0-9]{32}\.pending)?$`).MatchString(path) {
+		return true
+	}
 	return regexp.MustCompile(`^/etc/(sudoers\.d/(\.)?fased-vps-` + uid + `-updates|polkit-1/rules\.d/(\.)?60-fased-vps-` + uid + `-updates\.rules)(-[a-f0-9]{32}\.pending)?$`).MatchString(path)
 }
 

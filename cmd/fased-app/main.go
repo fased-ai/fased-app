@@ -28,15 +28,33 @@ import (
 func main() {
 	if err := run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "fased-app:", err)
+		if errors.Is(err, core.ErrCoreUnavailable) {
+			os.Exit(75)
+		}
 		os.Exit(1)
 	}
 }
 func run(args []string, in *os.File, out, errOut io.Writer) error {
+	if len(args) > 0 && args[0] == "remote-setup-link" {
+		return remoteOwnerSetupLink(args[1:], out)
+	}
+	if len(args) > 0 && args[0] == "install-command" {
+		return installedCommandCommand(args[1:], out, errOut)
+	}
+	if len(args) > 0 && args[0] == "update" {
+		return ordinaryUpdateCommand(args[1:], in, out, errOut)
+	}
 	if len(args) > 0 && args[0] == "application-owner-client" {
 		return applicationOwnerClient(args[1:], in, out, errOut)
 	}
 	if len(args) > 0 && args[0] == "maintain-update" {
 		return maintainUpdateCommand(args[1:], out, errOut)
+	}
+	if len(args) > 0 && args[0] == "maintenance-delegate" {
+		return maintenanceDelegateCommand(args[1:], errOut)
+	}
+	if len(args) > 0 && args[0] == "maintenance-recover" {
+		return maintenanceRecoveryCommand(args[1:], errOut)
 	}
 	if len(args) > 0 && args[0] == "enrollment-image" {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -113,7 +131,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 		return custodyCommand(args[1:], in, out, errOut)
 	}
 	if len(args) == 0 {
-		return errors.New("usage: fased-app wen-session|wen-research|wen-market-data|agents|updates|accounts|install|connect|custody|service|open|access|recover|uninstall|serve|status|claim-code|claim|login|logout|setup|version [options]")
+		return errors.New("usage: fased-app wen-session|wen-research|wen-market-data|agents|update|updates|accounts|install|connect|custody|service|open|access|recover|uninstall|serve|status|claim-code|claim|login|logout|setup|version [options]")
 	}
 	if args[0] == "install" || args[0] == "uninstall" || args[0] == "service" || args[0] == "open" {
 		return hostCommand(args, out, errOut)
@@ -125,6 +143,9 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 		return recoverCommand(args[1:], in, out, errOut)
 	}
 	if args[0] == "version" {
+		if len(args) == 2 && args[1] == "--entry-json" {
+			return json.NewEncoder(out).Encode(map[string]any{"version": 1, "update": true})
+		}
 		if len(args) == 2 && args[1] == "--json" {
 			return json.NewEncoder(out).Encode(map[string]any{"version": core.Version, "stateSchema": core.StateSchema, "maintenanceProtocol": 1})
 		}
@@ -245,7 +266,9 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 				source = "remote"
 			}
 		}
-		return serveInstalledRuntime(*dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, source, ownerUID, out, *custodyConfig)
+		return serveInstalledRuntimeAt(*installationRoot, *dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, source, ownerUID, out, *custodyConfig)
+	case "setup-link":
+		return ownerSetupLink(ctx, *dir, *publicOrigin, out)
 	case "claim-code":
 		store, err := core.OpenStore(*dir)
 		if err != nil {
@@ -390,6 +413,9 @@ func serveRuntime(dir, listen, publicOrigin, researchOrigin, location string, ow
 var compiledInstalledWalletRead func(*core.Server, string) (func(), error)
 
 func serveInstalledRuntime(dir, listen, publicOrigin, researchOrigin, location, source string, ownerUID int, out io.Writer, custodyConfig ...string) error {
+	return serveInstalledRuntimeAt("", dir, listen, publicOrigin, researchOrigin, location, source, ownerUID, out, custodyConfig...)
+}
+func serveInstalledRuntimeAt(installationRoot, dir, listen, publicOrigin, researchOrigin, location, source string, ownerUID int, out io.Writer, custodyConfig ...string) error {
 	server, err := core.Start(context.Background(), dir, listen, publicOrigin, fasedapp.UI(), custodyConfig...)
 	if err != nil {
 		return err
@@ -400,9 +426,18 @@ func serveInstalledRuntime(dir, listen, publicOrigin, researchOrigin, location, 
 	if err == nil {
 		err = server.ConfigureWENResearch(researchOrigin)
 	}
-	if err == nil && source == "remote" && compiledApplicationUpdateCheck != nil {
-		err = bindCompiledRemoteMaintenance(server.Store, ownerUID, compiledApplicationUpdateCheck)
+	if err == nil {
+		var check func(context.Context) (*core.ApplicationRelease, error)
+		check, err = installedChannelCheck(source, installationRoot, dir, ownerUID)
+		if err == nil && check != nil {
+			if source == "remote" {
+				err = bindCompiledRemoteMaintenance(server.Store, ownerUID, check)
+			} else if source == "local" && installationRoot != "" {
+				err = bindCompiledLocalMaintenance(server.Store, installationRoot, dir, check)
+			}
+		}
 	}
+
 	if err == nil && len(custodyConfig) == 1 && compiledInstalledWalletRead != nil {
 		var closeFixture func()
 		closeFixture, err = compiledInstalledWalletRead(server, custodyConfig[0])

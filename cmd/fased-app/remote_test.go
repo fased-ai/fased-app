@@ -102,12 +102,12 @@ func TestManagedRemoteWizardAndHandoff(t *testing.T) {
 	m := vpsinstall.Manifest{Core: "/managed/Fased app/fased-app", Data: "/managed/private data"}
 	for _, started := range []bool{false, true} {
 		var out bytes.Buffer
-		remoteHandoff(&out, m, privateaccess.Plan{Mode: "ssh", Instructions: []string{"PRIVATE-GUIDE"}}, started)
+		remoteHandoff(&out, m, privateaccess.Plan{Mode: "ssh", Instructions: []string{"PRIVATE-GUIDE"}}, started, "PRIVATE-SETUP-LINK")
 		text := out.String()
 		if !strings.Contains(text, "vps") || !strings.Contains(text, "status") || strings.Contains(text, "custody") || strings.Contains(text, "wallet") {
 			t.Fatal(text)
 		}
-		if started != strings.Contains(text, "claim-code") || started != strings.Contains(text, "PRIVATE-GUIDE") {
+		if strings.Contains(text, "claim-code") || started != strings.Contains(text, "PRIVATE-SETUP-LINK") || started != strings.Contains(text, "PRIVATE-GUIDE") {
 			t.Fatal("unready UI was offered or ready handoff absent", text)
 		}
 	}
@@ -125,5 +125,18 @@ func TestManagedRemotePendingAccessUsesInstalledCommand(t *testing.T) {
 	err := remoteAccessPending(m, cause)
 	if !errors.Is(err, cause) || !strings.Contains(err.Error(), installationCommand(m.Core, "vps", "access")) {
 		t.Fatal(err)
+	}
+}
+
+func TestRootEntryHandoffNeverSuggestsRunningGoAsRoot(t *testing.T) {
+	t.Setenv("FASED_INSTALL_ROOT_ENTRY", "1")
+	m := vpsinstall.Manifest{Core: "/fixture/installed/fased-app"}
+	var out bytes.Buffer
+	remoteHandoff(&out, m, privateaccess.Plan{Mode: "tailscale", Instructions: []string{"open https://fixture.ts.net"}}, true, "https://fixture.ts.net/?instance=fixture")
+	if strings.Contains(out.String(), m.Core) || !strings.Contains(out.String(), "--status") || !strings.Contains(out.String(), "--recover") {
+		t.Fatal(out.String())
+	}
+	if e := remoteAccessPending(m, errors.New("fixture pending")); !strings.Contains(e.Error(), "same installer") || strings.Contains(e.Error(), m.Core) {
+		t.Fatal(e)
 	}
 }

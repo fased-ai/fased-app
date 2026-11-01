@@ -57,6 +57,10 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	prefix := f.String("prefix", "", "optional explicit installation directory")
 	data := f.String("data-dir", "", "optional explicit instance data directory")
 	start := f.Bool("start", true, "start the user service after owner-reviewed installation")
+	profile := f.String("profile", "", "preselected Local/Remote/Connect terminal setup")
+	listen := f.String("listen", "", "optional fixed loopback listener for installation")
+	receipt := f.String("receipt-file", "", "private bootstrap acquisition receipt")
+	entryAction := f.String("entry-action", "", "fixed installed-instance action for the entry launcher")
 	if err := f.Parse(args); err != nil {
 		return err
 	}
@@ -65,6 +69,35 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	}
 	if *install && *upgrade || *remote && !*upgrade || *upgrade && !*start {
 		return errors.New("choose installation or an existing Local/Remote upgrade")
+	}
+	if *profile != "" && *profile != "remote" && *profile != "local" && *profile != "connect" || (*profile != "" || *listen != "") && *upgrade {
+		return errors.New("profile/listen require a fresh Remote installation")
+	}
+	if *receipt != "" && (!*install || *profile == "" || *upgrade) {
+		return errors.New("private entry receipt requires an installation profile")
+	}
+	entryProfile := *profile
+	retailEntry := *entryAction != "" || *profile != ""
+	if *entryAction != "" {
+		if *profile == "" || !*install || *upgrade {
+			return errors.New("entry actions require an installation profile")
+		}
+		handled, e := installedEntry(context.Background(), *profile, *entryAction, in, out, errOut)
+		if errors.Is(e, errEntryUpgradeRequired) {
+			if e = signInForEntryUpgrade(context.Background(), entryProfile, in, out, errOut); e != nil {
+				return e
+			}
+			*install = false
+			*upgrade = true
+			*remote = entryProfile == "remote"
+			*profile = ""
+			*listen = ""
+		} else if e != nil {
+			return e
+		}
+		if handled {
+			return nil
+		}
 	}
 	var options bootstrap.Options
 	if *seed == "" && *pin == "" && *directory == "" && !*development && *ca == "" {
@@ -99,7 +132,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		}
 		options = bootstrap.Options{Development: *development, Seed: b, SeedSHA256: *pin, Directory: *directory, TLSCA: cert}
 	}
-	if !*install && !*upgrade && (*prefix != "" || *data != "" || !*start) {
+	if !*install && !*upgrade && (*prefix != "" || *data != "" || !*start || *profile != "" || *listen != "") {
 		return errors.New("installation options require explicit --install")
 	}
 	p, err := bootstrap.Prepare(context.Background(), options)
@@ -107,15 +140,34 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		return err
 	}
 	defer p.Close()
+	if *receipt != "" {
+		if err = core.WritePrivateJSON(*receipt, p.Report()); err != nil {
+			return err
+		}
+	}
 	if *upgrade {
 		if err = p.RunUpgrade(context.Background(), bootstrap.UpgradeOptions{Prefix: *prefix, DataDirectory: *data, Remote: *remote}, in, out, errOut); err != nil {
 			return err
 		}
+		if retailEntry {
+			if err = completeInstalledEntry(entryProfile, in, out, errOut); err != nil {
+				return err
+			}
+		}
 	}
+
 	if *install {
-		if err = p.Run(context.Background(), bootstrap.InstallOptions{Prefix: *prefix, DataDirectory: *data, Start: *start}, in, out, errOut); err != nil {
+		if err = p.Run(context.Background(), bootstrap.InstallOptions{Prefix: *prefix, DataDirectory: *data, Start: *start, Profile: *profile, Listen: *listen}, in, out, errOut); err != nil {
 			return err
 		}
+	}
+	if *receipt != "" {
+		if err = core.WritePrivateJSON(*receipt, p.Report()); err != nil {
+			return err
+		}
+	}
+	if retailEntry {
+		return nil
 	}
 	return json.NewEncoder(out).Encode(p.Report())
 }

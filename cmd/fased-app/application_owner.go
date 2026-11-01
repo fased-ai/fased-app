@@ -75,6 +75,15 @@ func maintainUpdateCommand(args []string, out, errOut io.Writer) error {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 14*time.Minute)
 		defer cancel()
+		source := compiledApplicationUpdateSource
+		if compiledApplicationChannel != nil {
+			parent, e := vpsinstall.ApplicationAcquisitionParent(m)
+			if e != nil {
+				return e
+			}
+			source = installedChannelSource(parent)
+			compiledApplicationReaderSource = installedReaderChannelSource(parent)
+		}
 		if *unattended {
 			image, err := os.Executable()
 			if err != nil {
@@ -83,9 +92,9 @@ func maintainUpdateCommand(args []string, out, errOut io.Writer) error {
 			if err = vpsinstall.ValidateApplicationMaintenanceEntry(m, image); err != nil {
 				return err
 			}
-			return maintainRemoteUpdateWithSystem(ctx, m, *id, *rollback, compiledApplicationUpdateSource, out, &custodyinstall.System{NonInteractive: true, Out: errOut})
+			return maintainRemoteUpdateWithSystem(ctx, m, *id, *rollback, source, out, &custodyinstall.System{NonInteractive: true, Out: errOut})
 		}
-		return maintainRemoteUpdate(ctx, m, *id, *rollback, compiledApplicationUpdateSource, out)
+		return maintainRemoteUpdate(ctx, m, *id, *rollback, source, out)
 	}
 	if *unattended {
 		return errors.New("unattended entry requires the fixed installed Remote actor")
@@ -95,11 +104,37 @@ func maintainUpdateCommand(args []string, out, errOut io.Writer) error {
 	if e != nil {
 		return e
 	}
+	image, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	actor := localinstall.IsApplicationMaintenanceImage(m, image)
+	if actor {
+		entry, err := localinstall.ApplicationMaintenanceEntry(m)
+		if err != nil {
+			return err
+		}
+		if entry != image {
+			return errors.New("maintenance process image changed")
+		}
+		if err = localinstall.ValidateApplicationMaintenanceProcess(); err != nil {
+			return err
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 14*time.Minute)
 	defer cancel()
-	return maintainLocalUpdate(ctx, m, *id, *rollback, compiledApplicationUpdateSource, out)
+	source := compiledApplicationUpdateSource
+	if compiledApplicationChannel != nil {
+		parent, e := localinstall.ApplicationAcquisitionParent(m)
+		if e != nil {
+			return e
+		}
+		source = installedChannelSource(parent)
+		compiledApplicationReaderSource = installedReaderChannelSource(parent)
+	}
+	return maintainLocalUpdate(ctx, m, *id, *rollback, source, out, actor)
 }
-func maintainLocalUpdate(ctx context.Context, m localinstall.Manifest, id string, rollback bool, source func(context.Context, core.ApplicationRelease, string) (*bootstrap.Prepared, error), out io.Writer) error {
+func maintainLocalUpdate(ctx context.Context, m localinstall.Manifest, id string, rollback bool, source func(context.Context, core.ApplicationRelease, string) (*bootstrap.Prepared, error), out io.Writer, actor ...bool) error {
 	if _, e := core.ReadApplicationReaderBootstrapRequest(m.Data, id); e == nil {
 		return maintainLocalReaderUpdate(ctx, m, id, rollback, compiledApplicationReaderSource, out)
 	} else if !errors.Is(e, os.ErrNotExist) {
@@ -164,6 +199,17 @@ func maintainLocalUpdate(ctx context.Context, m localinstall.Manifest, id string
 		}
 	}
 	o := state.View.Operation
+	if o.ID != id || o.Release == nil || (o.Phase != "applying" && o.Phase != "recovery" && o.Phase != "completed" && o.Phase != "rolled-back") {
+		return errors.New("admitted owner update required before maintenance preparation")
+	}
+	if len(actor) > 1 {
+		return errors.New("one installed actor identity required")
+	}
+	if len(actor) == 1 && actor[0] {
+		if e := localinstall.PrepareApplicationMaintenanceOperation(ctx, m, id, localinstall.ApplicationMaintenanceRunner(m)); e != nil {
+			return e
+		}
+	}
 	if o.Release == nil {
 		return errors.New("admitted release missing")
 	}
@@ -184,7 +230,7 @@ func maintainLocalUpdate(ctx context.Context, m localinstall.Manifest, id string
 			return e
 		},
 		Health: func(ctx context.Context, target localinstall.Manifest) error {
-			fresh, e := ipc.call(ctx, "inspect", nil)
+			fresh, e := waitApplicationOwnerHealth(ctx, func(ctx context.Context) (core.ApplicationOwnerView, error) { return ipc.call(ctx, "inspect", nil) })
 			if e != nil {
 				return e
 			}

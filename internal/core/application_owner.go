@@ -158,11 +158,11 @@ func (s *Store) ApplicationOwnerCommand(ctx context.Context, c ApplicationOwnerC
 // BindApplicationMaintenance connects the existing core worker to an OS owner
 // actor. Apply only launches the fixed installed entry, never swaps its own
 // running/sandboxed executable. The owner publishes its durable receipt via IPC.
-func (s *Store) BindApplicationMaintenance(check func(context.Context) (*ApplicationRelease, error), launch func(context.Context, string) error) error {
+func (s *Store) BindApplicationMaintenance(check func(context.Context) (*ApplicationRelease, error), launch func(context.Context, string) error, asynchronous ...bool) error {
 	if check == nil || launch == nil {
 		return errors.New("authenticated source and fixed owner actor required")
 	}
-	return s.BindApplicationUpdateController(&applicationMaintenanceProxy{store: s, check: check, launch: launch})
+	return s.BindApplicationUpdateController(&applicationMaintenanceProxy{store: s, check: check, launch: launch}, asynchronous...)
 }
 
 type applicationMaintenanceProxy struct {

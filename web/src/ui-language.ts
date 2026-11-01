@@ -397,6 +397,18 @@ const rows = {
   ],
   Notifications: ["Уведомления", "Notificaciones", "通知", "알림"],
   unread: ["непрочитанных", "sin leer", "未读", "읽지 않음"],
+  "Open the setup link from your installation.": [
+    "Откройте ссылку настройки из установки.",
+    "Abre el enlace de configuración de la instalación.",
+    "打开安装程序提供的设置链接。",
+    "설치 프로그램의 설정 링크를 여세요.",
+  ],
+  "Reopen Fased to finish setup.": [
+    "Откройте Fased снова для завершения настройки.",
+    "Vuelve a abrir Fased para completar la configuración.",
+    "重新打开 Fased 以完成设置。",
+    "설정을 마치려면 Fased를 다시 여세요.",
+  ],
   Local: ["Локально", "Local", "本地", "로컬"],
   Remote: ["Удалённо", "Remoto", "远程", "원격"],
   Preview: ["Предпросмотр", "Vista previa", "预览", "미리보기"],

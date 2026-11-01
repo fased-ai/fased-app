@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -55,18 +56,28 @@ type Report struct {
 // Prepared is deliberately not a JSON-install permit. Run revalidates its
 // original in-memory inputs, final expiry and every disk identity before exec.
 type Prepared struct {
-	mu            sync.Mutex
-	options       Options
-	report        Report
-	seed          Seed
-	descriptor    Descriptor
-	engine        bundle.File
-	directoryInfo os.FileInfo
-	root          *os.Root
-	metadata      map[string][]byte
-	invoked       bool
-	closed        bool
-	startedAt     time.Time
+	pruneAcquisition bool
+	mu               sync.Mutex
+	options          Options
+	report           Report
+	seed             Seed
+	descriptor       Descriptor
+	engine           bundle.File
+	directoryInfo    os.FileInfo
+	root             *os.Root
+	metadata         map[string][]byte
+	invoked          bool
+	closed           bool
+	startedAt        time.Time
+}
+
+// RetainAcquisitionEvidence opts an owned update acquisition into bounded cleanup
+// at Close. The held Root removes only its download payloads, retaining original
+// signed public metadata; this grants no execution or installation authority.
+func (p *Prepared) RetainAcquisitionEvidence() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.pruneAcquisition = true
 }
 
 func (p *Prepared) Report() Report { p.mu.Lock(); defer p.mu.Unlock(); return p.report }
@@ -77,7 +88,33 @@ func (p *Prepared) Close() error {
 		return nil
 	}
 	p.closed = true
-	return p.root.Close()
+	if p.root == nil {
+		return nil
+	}
+	var cleanupErr error
+	if p.pruneAcquisition {
+		// Retain the exact signed public inputs/receipt, not duplicate executables.
+		for name, data := range p.metadata {
+			if strings.ContainsAny(name, "/\\") {
+				cleanupErr = errors.New("invalid acquisition evidence name")
+				break
+			}
+			if e := writeNew(p.root, "evidence-"+name, data); e != nil {
+				cleanupErr = e
+				break
+			}
+		}
+		if cleanupErr == nil {
+			cleanupErr = writeNew(p.root, "evidence-seed.json", p.options.Seed)
+		}
+		if cleanupErr == nil {
+			cleanupErr = p.root.RemoveAll("bundle")
+		}
+		if cleanupErr == nil {
+			cleanupErr = p.root.Remove("download.tar.gz")
+		}
+	}
+	return errors.Join(cleanupErr, p.root.Close())
 }
 func (o Options) clock() time.Time {
 	if o.now != nil {
@@ -118,9 +155,20 @@ func privateDirectory(path string) (os.FileInfo, error) {
 
 // Prepare has no defaults for trust, endpoint or output. It neither reads app
 // state nor installs/executes anything. Old update/rehearsal seeds are refused.
-func Prepare(ctx context.Context, o Options) (prepared *Prepared, err error) {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || os.Geteuid() == 0 {
-		return nil, errors.New("ordinary-user Linux amd64 first-install bootstrap required")
+func Prepare(ctx context.Context, o Options) (*Prepared, error) { return prepare(ctx, o, false) }
+
+// Inspect authenticates only metadata/provenance. It creates no output, downloads
+// no archive and supplies no executable/installation authority.
+func Inspect(ctx context.Context, o Options) (Descriptor, string, error) {
+	p, e := prepare(ctx, o, true)
+	if e != nil {
+		return Descriptor{}, "", e
+	}
+	return p.descriptor, p.report.DescriptorSHA256, nil
+}
+func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepared, err error) {
+	if runtime.GOOS != "linux" || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") || os.Geteuid() == 0 {
+		return nil, errors.New("ordinary-user supported Linux first-install bootstrap required")
 	}
 	o.Seed, o.TLSCA = append([]byte(nil), o.Seed...), append([]byte(nil), o.TLSCA...)
 	seed, err := parseSeed(o.Seed, o.SeedSHA256, o.clock())
@@ -214,6 +262,12 @@ func Prepare(ctx context.Context, o Options) (prepared *Prepared, err error) {
 	decision, err := productionProof(seed, descriptor, docs["provenance.sigstore.json"], o.clock())
 	if err != nil {
 		return nil, err
+	}
+	if metadataOnly {
+		if _, e := initialChain(seed, docs["timestamp.json"], docs["snapshot.json"], docs["targets.json"], o.clock()); e != nil {
+			return nil, e
+		}
+		return &Prepared{descriptor: descriptor, report: Report{MetadataVerified: true, DescriptorSHA256: digest(docs["descriptor.json"])}}, nil
 	}
 	if err = parentRoot.Mkdir(base, 0700); err != nil {
 		return nil, err

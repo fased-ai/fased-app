@@ -1,3 +1,4 @@
+import { openOwnerSetup } from "./fixture-owner-setup.mjs";
 // Explicit owner-authorized, ordinary-user service acceptance on this host.
 // Never points at an existing owner installation or financial data.
 import assert from "node:assert/strict";
@@ -119,7 +120,7 @@ try {
     viewport: { width: 1440, height: 940 },
   });
   await page.goto(current.url);
-  await page.getByLabel("One-use claim code").fill(code);
+  await openOwnerSetup(page, code);
   await page.getByLabel("Create owner password").fill(password);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })

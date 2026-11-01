@@ -233,6 +233,7 @@ func TestRemoteMaintenanceOSRuleBoundariesAndSudoSyntax(t *testing.T) {
 		{"/usr/bin/install", "-m", "755", "-o", "root", "-g", "root", "--", "/dev/stdin", dir + "/.next-core-" + id + ".pending"},
 		{"/usr/bin/mv", "--force", "--no-target-directory", "--", dir + "/replacement-fased-app", m.Core},
 		applicationOwnerHelperArgs(m, m.Core), applicationOwnerHelperArgs(m, dir+"/next-core"),
+		append(applicationReaderSourceArgs(m, "remote-setup-link", "")[:len(applicationReaderSourceArgs(m, "remote-setup-link", ""))-2], "--config", m.Config),
 	}
 	for _, args := range good {
 		if !allowed(args) {

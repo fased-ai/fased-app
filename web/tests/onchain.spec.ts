@@ -1,3 +1,4 @@
+import { openOwnerSetup } from "../../scripts/fixture-owner-setup.mjs";
 import { test, expect } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
@@ -97,9 +98,7 @@ test("Onchain quote review protected approval submit and original result share U
       return route.abort();
     });
     await page.goto(url + "/#terminals/jupiter");
-    await page
-      .getByLabel("One-use claim code", { exact: true })
-      .fill(started.claim);
+    await openOwnerSetup(page, started.claim);
     await page
       .getByLabel("Create owner password", { exact: true })
       .fill(password);

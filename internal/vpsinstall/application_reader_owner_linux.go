@@ -5,6 +5,7 @@ package vpsinstall
 import (
 	"context"
 	"errors"
+	"github.com/fased-ai/fased-app/internal/core"
 	"io"
 	"os/exec"
 
@@ -99,4 +100,41 @@ func runApplicationReaderSource(ctx context.Context, s *custodyinstall.System, a
 		return nil, e
 	}
 	return output.Bytes(), nil
+}
+
+// ApplicationUpdateClient forwards only ordinary authenticated update actions.
+// Passwords/sessions remain in the app identity; the OS owner receives public JSON.
+func ApplicationUpdateClient(ctx context.Context, m Manifest, action string, s *custodyinstall.System, out io.Writer) error {
+	switch action {
+	case "status", "check", "apply", "recover":
+	default:
+		return errors.New("unsupported installed update action")
+	}
+	if s == nil || (action == "apply" && s.NonInteractive) {
+		return errors.New("owner terminal required")
+	}
+	o := liveOps(s)
+	if e := verify(ctx, o, m); e != nil {
+		return e
+	}
+	if e := loaded(ctx, o, m); e != nil {
+		return e
+	}
+	for _, tool := range []string{"/usr/bin/sudo", "/usr/bin/setpriv", "/usr/bin/env"} {
+		if e := trustedTool(o, tool); e != nil {
+			return e
+		}
+	}
+	args := applicationReaderSourceArgs(m, "updates", "")
+	args = append(args[:len(args)-2], append([]string{action}, args[len(args)-2:]...)...)
+	b, e := runApplicationReaderSource(ctx, s, args, s.In)
+	if e != nil {
+		var status *exec.ExitError
+		if errors.As(e, &status) && status.ExitCode() == 75 {
+			return core.ErrCoreUnavailable
+		}
+		return e
+	}
+	_, e = out.Write(b)
+	return e
 }

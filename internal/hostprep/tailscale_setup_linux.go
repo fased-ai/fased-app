@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/fased-ai/fased-app/internal/hostplatform"
 	"io"
 	"os"
 	"os/exec"
@@ -79,19 +80,9 @@ func PrepareTailscale(ctx context.Context, in *bufio.Reader, out io.Writer) erro
 	if in == nil || os.Getuid() <= 0 || os.Getuid() != os.Geteuid() {
 		return errors.New("Tailscale preparation needs an ordinary administrator terminal")
 	}
-	release, e := os.ReadFile("/etc/os-release")
+	platform, e := hostplatform.Current()
 	if e != nil {
 		return e
-	}
-	values := map[string]string{}
-	for _, line := range strings.Split(string(release), "\n") {
-		k, v, ok := strings.Cut(line, "=")
-		if ok {
-			values[k] = strings.Trim(v, "\"'")
-		}
-	}
-	if values["ID"] != "ubuntu" || values["VERSION_ID"] != "24.04" {
-		return errors.New("guided Tailscale preparation supports Ubuntu 24.04; install/enroll Tailscale for this OS, or choose SSH")
 	}
 	u, e := user.Current()
 	if e != nil {
@@ -147,10 +138,10 @@ func PrepareTailscale(ctx context.Context, in *bufio.Reader, out io.Writer) erro
 	}
 	dir := filepath.Join(base, "host-preparation", "tailscale")
 	system := &System{In: os.Stdin, Out: out, Authorization: "Authorize Tailscale's official signed Ubuntu package, service and this user's private access. Existing accounts/routes and SSH/firewall policy are preserved. Fased stays unprivileged."}
-	return prepareTailscale(ctx, dir, os.Getuid(), u.Username, out, readPreparationFile, system.Run)
+	return prepareTailscale(ctx, dir, os.Getuid(), u.Username, out, readPreparationFile, system.Run, platform)
 }
 
-func prepareTailscale(ctx context.Context, dir string, uid int, username string, out io.Writer, read preparationRead, run preparationRun) error {
+func prepareTailscale(ctx context.Context, dir string, uid int, username string, out io.Writer, read preparationRead, run preparationRun, platforms ...hostplatform.Platform) error {
 	if uid <= 0 || !AllowedTailscalePreparation(username, []string{"status", "--json"}) {
 		return errors.New("ordinary administrator required")
 	}
@@ -162,7 +153,7 @@ func prepareTailscale(ctx context.Context, dir string, uid int, username string,
 		return errors.New("bundled Tailscale signing key differs from the reviewed digest")
 	}
 	if _, e := read("/usr/bin/tailscale"); errors.Is(e, os.ErrNotExist) {
-		if e = prepareTailscalePackage(ctx, dir, uid, read, run); e != nil {
+		if e = prepareTailscalePackage(ctx, dir, uid, read, run, platforms...); e != nil {
 			return e
 		}
 	} else if e != nil {
@@ -209,7 +200,14 @@ func prepareTailscale(ctx context.Context, dir string, uid int, username string,
 	return nil
 }
 
-func prepareTailscalePackage(ctx context.Context, dir string, uid int, read preparationRead, run preparationRun) error {
+func prepareTailscalePackage(ctx context.Context, dir string, uid int, read preparationRead, run preparationRun, platforms ...hostplatform.Platform) error {
+	source := tailscaleSource
+	if len(platforms) == 1 {
+		source = platforms[0].TailscaleSource(tailscaleKeyPath)
+	}
+	if len(platforms) > 1 {
+		return errors.New("one exact OS package profile required")
+	}
 	if e := core.EnsurePrivateDirectory(dir); e != nil {
 		return e
 	}
@@ -234,12 +232,12 @@ func prepareTailscalePackage(ctx context.Context, dir string, uid int, read prep
 	files := []struct {
 		path string
 		data []byte
-	}{{tailscaleKeyPath, tailscaleAPTKey}, {tailscaleSourcePath, []byte(tailscaleSource)}}
+	}{{tailscaleKeyPath, tailscaleAPTKey}, {tailscaleSourcePath, []byte(source)}}
 	sourcePath := tailscaleSourcePath
 	// Reuse an exact already-configured official repository instead of adding a
 	// conflicting Signed-By definition. Never rewrite an administrator's files.
 	if existing, err := read(standardTailscaleSourcePath); err == nil {
-		want := strings.ReplaceAll(tailscaleSource, tailscaleKeyPath, standardTailscaleKeyPath)
+		want := strings.ReplaceAll(source, tailscaleKeyPath, standardTailscaleKeyPath)
 		var lines []string
 		for _, line := range strings.Split(string(existing.data), "\n") {
 			line = strings.TrimSpace(line)

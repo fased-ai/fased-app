@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/fased-ai/fased-app/internal/hostplatform"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,16 +41,7 @@ func RequiresBubblewrap() bool {
 	b, err := os.ReadFile("/etc/os-release")
 	return err == nil && ubuntu2404(string(b))
 }
-func ubuntu2404(release string) bool {
-	values := map[string]string{}
-	for _, line := range strings.Split(release, "\n") {
-		k, v, ok := strings.Cut(line, "=")
-		if ok {
-			values[k] = strings.Trim(v, "\"'")
-		}
-	}
-	return values["ID"] == "ubuntu" && values["VERSION_ID"] == "24.04"
-}
+func ubuntu2404(release string) bool { return hostplatform.RestrictedUbuntu(release) }
 func CheckHostRuntime() error {
 	if err := CheckHostTools(); err != nil {
 		return err
@@ -70,7 +62,7 @@ func CheckHostTools() error {
 	}
 	info, err := os.Stat("/usr/bin/bwrap")
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 {
-		return errors.New("Ubuntu 24.04 requires the OS bubblewrap package; rerun install --install-runtime or ask the administrator to install it")
+		return errors.New("This Ubuntu release requires the OS bubblewrap package; rerun install --install-runtime or ask the administrator to install it")
 	}
 	if owner, ok := info.Sys().(*syscall.Stat_t); !ok || owner.Uid != 0 || info.Mode().Perm()&0111 == 0 || info.Mode()&os.ModeSetuid != 0 {
 		return errors.New("/usr/bin/bwrap must be the ordinary, root-owned non-setuid OS executable")
@@ -103,7 +95,7 @@ func linuxDefinition(p Paths, o Options, bubblewrap bool) ([]byte, error) {
 func systemctl(ctx context.Context, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, "systemctl", append([]string{"--user"}, args...)...).CombinedOutput()
+	output, err := exec.CommandContext(ctx, "/usr/bin/systemctl", append([]string{"--user"}, args...)...).CombinedOutput()
 	if err != nil {
 		return string(output), fmt.Errorf("user service manager refused %s: %s", args[0], strings.TrimSpace(string(output)))
 	}

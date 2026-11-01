@@ -2,36 +2,79 @@ import { ownerHandoff } from "../owner-handoff";
 import { useUI } from "../ui-preferences";
 import { InstanceSummary, RemoteConnection } from "./InstanceConnection";
 import logo from "../assets/fased-logo.svg";
-import { useState, type FormEvent, type ReactNode } from "react";
+import { captureOwnerSetup } from "../owner-setup";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { ArrowRight, ShieldCheck } from "../icons";
 import { useCore } from "../core";
+// Module capture survives React StrictMode's repeated render/effect setup.
+let ownerSetup = captureOwnerSetup(window.location.href, (url) =>
+  history.replaceState(history.state, "", url),
+);
+let nativeProof: { instanceId: string; result: Promise<string> } | undefined;
 export function CoreGate({ children }: { children: ReactNode }) {
   const { t: uiText } = useUI();
   const core = useCore();
   const [password, setPassword] = useState("");
-  const [code, setCode] = useState("");
+  const [code, setCode] = useState(ownerSetup?.code ?? "");
   const [claimError, setClaimError] = useState("");
   const handoff = ownerHandoff(core.connection);
   const recoveryCommands = handoff?.recovery ?? [];
   const native = ["wails", "wails.localhost"].includes(
     window.location.hostname,
   );
-  async function useLocalCode() {
-    setClaimError("");
-    try {
-      const response = await fetch("/api/v1/installation/claim-code", {
-        cache: "no-store",
-      });
-      const result = await response.json();
-      if (!response.ok || typeof result.code !== "string")
-        throw new Error(result.error || "Local claim code unavailable");
-      setCode(result.code);
-    } catch (error) {
-      setClaimError(
-        error instanceof Error ? error.message : "Local claim code unavailable",
+  useEffect(() => {
+    const receive = () => {
+      const next = captureOwnerSetup(window.location.href, (url) =>
+        history.replaceState(history.state, "", url),
       );
+      if (!next) return;
+      if (core.connection && next.instanceId !== core.connection.instanceId) {
+        setClaimError("Reopen Fased to finish setup.");
+        setCode("");
+        return;
+      }
+      ownerSetup = next;
+      setCode(next.code);
+      setClaimError("");
+    };
+    window.addEventListener("hashchange", receive);
+    return () => window.removeEventListener("hashchange", receive);
+  }, [core.connection]);
+  useEffect(() => {
+    if (core.mode !== "unclaimed" || !core.connection) return;
+    const id = core.connection.instanceId;
+    if (ownerSetup && ownerSetup.instanceId !== id) {
+      ownerSetup = null;
+      setCode("");
+      return;
     }
-  }
+    if (code || !native) return;
+    if (!nativeProof || nativeProof.instanceId !== id) {
+      nativeProof = {
+        instanceId: id,
+        result: (async () => {
+          const response = await fetch("/api/v1/installation/claim-code", {
+            cache: "no-store",
+          });
+          const result = await response.json();
+          if (!response.ok || !/^[A-Za-z0-9_-]{43}$/.test(result.code ?? ""))
+            throw Error("Reopen Fased to finish setup.");
+          return result.code as string;
+        })(),
+      };
+    }
+    let active = true;
+    nativeProof.result
+      .then((value) => {
+        if (active) setCode(value);
+      })
+      .catch(() => {
+        if (active) setClaimError("Reopen Fased to finish setup.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [core.mode, core.connection, native, code]);
   async function submit(event: FormEvent) {
     event.preventDefault();
     try {
@@ -41,6 +84,8 @@ export function CoreGate({ children }: { children: ReactNode }) {
       );
       setPassword("");
       setCode("");
+      ownerSetup = null;
+      nativeProof = undefined;
     } catch {
       /* error is rendered by the core controller */
     }
@@ -80,50 +125,12 @@ export function CoreGate({ children }: { children: ReactNode }) {
                   ? uiText("Claim this workspace")
                   : uiText("Sign in")}
               </h1>
-              {core.mode === "unclaimed" && (
-                <>
-                  <label htmlFor="owner-code">
-                    {uiText("One-use claim code")}
-                  </label>
-                  <input
-                    id="owner-code"
-                    type="password"
-                    autoComplete="off"
-                    required
-                    value={code}
-                    onChange={(e) => setCode(e.target.value)}
-                  />
-                  <details>
-                    <summary>{uiText("Get setup code")}</summary>
-                    {handoff ? (
-                      <p>
-                        {uiText("Run ")}
-                        <code style={{ overflowWrap: "anywhere" }}>
-                          {handoff.claim}
-                        </code>
-                        {uiText(
-                          " on this instance. Codes expire after 15 minutes.",
-                        )}
-                      </p>
-                    ) : (
-                      <p>
-                        {uiText(
-                          "Use the setup command printed by the installer.",
-                        )}
-                      </p>
-                    )}
-                  </details>
-                  {native && (
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => void useLocalCode()}
-                    >
-                      {uiText("Use this computer’s setup code")}
-                    </button>
+              {core.mode === "unclaimed" && !code && (
+                <p role="status">
+                  {uiText(
+                    claimError || "Open the setup link from your installation.",
                   )}
-                  {claimError && <p role="alert">{claimError}</p>}
-                </>
+                </p>
               )}
               <label htmlFor="owner-password">
                 {core.mode === "unclaimed"
@@ -147,10 +154,15 @@ export function CoreGate({ children }: { children: ReactNode }) {
               />
               {core.error && (
                 <p className="core-error" role="alert">
-                  {core.error}
+                  {core.mode === "unclaimed"
+                    ? uiText("Reopen Fased to finish setup.")
+                    : core.error}
                 </p>
               )}
-              <button className="primary" disabled={core.saving}>
+              <button
+                className="primary"
+                disabled={core.saving || (core.mode === "unclaimed" && !code)}
+              >
                 {core.saving
                   ? uiText("Checking…")
                   : core.mode === "unclaimed"

@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/hostplatform"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -245,9 +247,13 @@ func installApplicationMaintenance(ctx context.Context, m Manifest, o hostOps, c
 	}
 	defer lock.Close()
 	osInfo, e := osRelease(o)
-	if e != nil || !strings.Contains(string(osInfo.Data), "ID=ubuntu\n") || (!strings.Contains(string(osInfo.Data), "VERSION_ID=\"24.04\"") && !strings.Contains(string(osInfo.Data), "VERSION_ID=24.04")) {
-		return errors.New("Remote maintenance preparation requires Ubuntu24.04")
+	if e != nil {
+		return e
 	}
+	if _, e = hostplatform.LookupRemote(string(osInfo.Data), runtime.GOARCH); e != nil {
+		return e
+	}
+
 	if e := verifyFiles(o, m); e != nil {
 		return e
 	}
@@ -451,10 +457,10 @@ func launchApplicationMaintenance(ctx context.Context, o hostOps, m Manifest, id
 	if e != nil {
 		return result, e
 	}
-	if result.Phase == "running" || result.Phase == "finished" {
+	if result.Phase == "running" {
 		return result, nil
 	}
-	if result.Phase == "failed" {
+	if result.Phase == "failed" || result.Phase == "finished" {
 		return result, errors.New("Remote maintenance needs explicit recovery; automatic retry refused")
 	}
 	// Polkit grants AppUID only this fixed start operation; no sudo in the agent.
@@ -491,6 +497,9 @@ func beginApplicationMaintenance(ctx context.Context, o hostOps, m Manifest, id 
 		return e
 	}
 	defer lock.Close()
+	if e := accessIdle(o, m); e != nil {
+		return e
+	}
 	if !canonicalHex(id, 16) {
 		return errors.New("exact operation required")
 	}
@@ -547,6 +556,9 @@ func completeApplicationMaintenance(ctx context.Context, o hostOps, m Manifest, 
 		return e
 	}
 	defer lock.Close()
+	if e := accessIdle(o, m); e != nil {
+		return e
+	}
 	if !canonicalHex(id, 16) || (phase != "completed" && phase != "rolled-back" && phase != "deferred") {
 		return errors.New("exact terminal outcome required")
 	}
@@ -632,4 +644,11 @@ func removeApplicationMaintenance(ctx context.Context, o hostOps, m Manifest) er
 		}
 	}
 	return nil
+}
+
+func ApplicationAcquisitionParent(m Manifest) (string, error) {
+	if e := ownedBy(liveOps(nil), m); e != nil {
+		return "", e
+	}
+	return ownerJournal()
 }
