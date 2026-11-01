@@ -57,6 +57,31 @@ test("full race groups retain every package and require delegated update coverag
     workflow.indexOf("  handoff:\n"),
     workflow.indexOf("  handoff-uid:\n"),
   );
+  const desktop = workflow.slice(
+    workflow.indexOf("  desktop:\n"),
+    workflow.indexOf("  signer:\n"),
+  );
+  for (const [name, goos, arch, runner] of [
+    ["Headless Windows compilation", "windows", "amd64", "Windows"],
+    ["Headless macOS compilation", "darwin", "arm64", "macOS"],
+  ]) {
+    const output = goos === "windows" ? "windows.exe" : "macos";
+    const command = `run: GOOS=${goos} GOARCH=${arch} CGO_ENABLED=0 go build -o .evidence/bin/${output} ./cmd/fased-app`;
+    assert.ok(
+      core.includes(
+        `- name: ${name}\n        if: needs.classify.outputs.desktop != 'true'\n        ${command}`,
+      ),
+      "leaf routes retain both headless compilation targets",
+    );
+    assert.ok(
+      desktop.includes(
+        `- name: ${name}\n        if: runner.os == '${runner}'\n        shell: bash\n        ${command}`,
+      ),
+      "selected platform jobs own the same headless compilation targets",
+    );
+  }
+  assert.equal(classify(["web/src/core.tsx"]).desktop, false);
+  assert.equal(classify(["internal/core/rpc_check.go"]).desktop, false);
   assert.match(
     core,
     /go list \.\/internal\/\.\.\. \.\/cmd\/fased-app \.\/cmd\/fased-signer \.\/cmd\/fased-install \.\/cmd\/fased-package/,

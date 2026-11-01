@@ -120,8 +120,10 @@ jobs:
             .evidence/p4-trust-rehearsal/trust-cli.log
           retention-days: 7
       - name: Headless Windows compilation
+        if: needs.classify.outputs.desktop != 'true'
         run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o .evidence/bin/windows.exe ./cmd/fased-app
       - name: Headless macOS compilation
+        if: needs.classify.outputs.desktop != 'true'
         run: GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o .evidence/bin/macos ./cmd/fased-app
       # Same runner libraries and headless browser as the managed signer UI proof.
       - run: npx playwright install --only-shell chromium
@@ -184,6 +186,14 @@ jobs:
       - run: go -C desktop mod verify
       - run: npm run build:desktop
       - run: npm run build:core
+      - name: Headless Windows compilation
+        if: runner.os == 'Windows'
+        shell: bash
+        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o .evidence/bin/windows.exe ./cmd/fased-app
+      - name: Headless macOS compilation
+        if: runner.os == 'macOS'
+        shell: bash
+        run: GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o .evidence/bin/macos ./cmd/fased-app
       - name: Verify bounded disk-image resource handling
         run: node --test --test-isolation=none scripts/macos-dmg.test.mjs
       - run: npm run package:native
