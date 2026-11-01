@@ -72,12 +72,59 @@ lookup or import-time network activity. Its explicit operations are:
    verify exact Git blobs/tree/commit; preserve versioned history; advance without
    force and read back the result. Concurrent/uncertain outcomes stop without retry.
 
-Callers provide explicit credentials and an awaited durable operation recorder.
-Only injected fixture transports/recorders have run here. Protected initial
-metadata branch, immutable-release configuration, real durable record storage,
-restricted refresh operation and public acquisition/readback still need authorized
-production setup/acceptance. No new service is required. Automatic metadata
-refresh and client automatic installation remain unactivated.
+### Durable operation and recovery
+
+Use `runRecordedPublisher` for execution; it connects the existing operations to
+private on-disk recording. Each mutation is flushed before dispatch and its
+result is flushed afterward. Ubuntu's existing `flock` serializes writers and
+releases automatically if the process dies. No service or database is added.
+
+The existing maintainer entry uses two commands:
+
+- `node scripts/prepare-ubuntu-release.mjs publisher-inspect` reads local progress
+  without credentials or network access.
+- `node scripts/prepare-ubuntu-release.mjs publisher` reads a private
+  `.evidence/ubuntu-release/publisher-request.json`. Production trust must be
+  configured first; missing bindings stop before request/credential access.
+
+The request names version1, `action` (`stage`, `release` or `metadata`), `mode`
+(`start` or `resume`), exact candidate/publication file paths and approval hashes,
+and an explicit `tokenFile`. Artifact files use the existing staging directory.
+Inputs and the token file must be owned private regular files; no credential is
+read from the environment or saved in operation state. Public signing keys and
+approval records remain separate from the API publishing credential. No real
+request, credential or production trust is supplied by this implementation.
+
+State for staging/release lives in
+`.evidence/ubuntu-release/publisher-<version>-<action>/`; metadata adds
+`-<approved-publication-SHA256>` to that directory name. Renewed metadata retains
+a separate operation; identical approved bytes reopen the same journal. Local
+inspection lists retained metadata journals. Each contains private `operation.json`
+and an OS lock file. Preserve it with the corresponding build,
+finalizer inputs and approval hashes. Do not delete/reset it to retry. Atomic
+replacement, file, operation-directory and parent-directory synchronization preserve a complete old or new
+snapshot; damaged state refuses unchanged. This is process/crash recovery, not
+a promise against disk loss or a compromised maintainer host.
+
+On `resume`, known objects are inspected and retain their IDs. An uploaded asset
+whose response was lost can be recovered by its exact release/name/digest/size;
+public-release and metadata-ref outcomes are verified read-only. A completed
+operation reopens as a verified no-op. Changed inputs, assets, source tag or
+metadata head refuse. No uncertain mutation is automatically resent.
+
+If a draft/tree/commit was created but its ID was never received, retain the hold.
+An explicitly reviewed `resolutions` entry can bind the observed original ID to
+that pending request index and `requestSha256`; inspection verifies the object
+before recording it. For example, the record shape is
+`{"0":{"requestSha256":"<exact pending request digest>","id":"<observed original ID>"}}`.
+A missing or unverifiable object remains held; this does not authorize creating a
+replacement or choosing a different ID. No force/reset command is provided.
+
+Controlled fixtures cover these paths, including actual child-process SIGKILL.
+Real protected branch/immutable-release configuration, scoped credentials,
+backups, restricted freshness operation and public acquisition/readback still
+require authorized production setup/acceptance. Automatic refresh and client
+automatic installation remain unactivated. Customer Install/Update is unchanged.
 
 ## Staging flow
 
