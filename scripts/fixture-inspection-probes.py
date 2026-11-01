@@ -24,8 +24,10 @@ def read(s):
    b+=part
   return b
  n=struct.unpack('!I',exact(4))[0];assert 0<n<=65536;return json.loads(exact(n))
-def denied(s):
- try:read(s)
+def denied(s,attempted=None):
+ try:
+  if attempted is not None:send(s,attempted)
+  read(s)
  except (EOFError,ConnectionResetError,BrokenPipeError):return True
  return False
 for name,change in [('profile',{'profile':'production'}),('capability',{'capability':'production'}),('version',{'version':2}),('kind',{'kind':'execute'}),('provision',{'provision':'a'*32}),('channel',{'channel':'a'*32})]:
@@ -102,7 +104,7 @@ with connect() as s:
 with connect() as held:
  time.sleep(.05)
  with connect() as other:
-  send(other,frame('status',{'nonce':os.urandom(16).hex()}));assert denied(other)
+  assert denied(other,frame('status',{'nonce':os.urandom(16).hex()}))
 checks['concurrent-channel-bounded']='PASS'
 historical_status()
 # The original review/header ceiling uses elapsed monotonic time, not a mutable
