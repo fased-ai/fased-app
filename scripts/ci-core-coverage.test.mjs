@@ -29,7 +29,10 @@ test("Ubuntu acceptance executes Remote maintenance and the actual older reader"
   const boot = workflow.indexOf(
     "      - name: Actual interruption, kernel reboot and protected recovery",
   );
-  assert.ok(compose >= 0 && compose < boot, "compose before long VM acceptance");
+  assert.ok(
+    compose >= 0 && compose < boot,
+    "compose before long VM acceptance",
+  );
   const composition = workflow.slice(
     compose,
     workflow.indexOf("      - ", compose + 10),
