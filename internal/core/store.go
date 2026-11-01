@@ -331,7 +331,12 @@ PRAGMA user_version=1;`)
 	}
 	return store, nil
 }
-func (s *Store) Close() error { s.closeVenueCredentials(); s.lockAIConnection(); return s.db.Close() }
+func (s *Store) Close() error {
+	s.closeApplicationChecks()
+	s.closeVenueCredentials()
+	s.lockAIConnection()
+	return s.db.Close()
+}
 func randomToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -446,7 +451,17 @@ func WritePrivateJSON(path string, value any) error {
 	if err := privateDir(filepath.Dir(path)); err != nil {
 		return err
 	}
-	if err := privateFile(path); err != nil {
+	// Validate an existing destination without creating an empty placeholder.
+	// Readers must see either absence or one complete published document.
+	info, err := os.Lstat(path)
+	if err == nil {
+		if !info.Mode().IsRegular() {
+			return errors.New("private JSON destination must be a regular file")
+		}
+		if err = protectPath(path, info); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	data, err := json.Marshal(value)
@@ -459,7 +474,7 @@ func WritePrivateJSON(path string, value any) error {
 		return err
 	}
 	defer os.Remove(f.Name())
-	info, err := f.Stat()
+	info, err = f.Stat()
 	if err == nil {
 		err = protectPath(f.Name(), info)
 	}

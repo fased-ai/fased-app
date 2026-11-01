@@ -12,12 +12,26 @@ account records and encrypted RPC settings; real credentials/dispatch stay disab
 Privileged same-instance, physical-host/native custody and later
 permission/reconciliation acceptance gates stay open.
 
+## One-command Local/Remote and Update entry (unpublished)
+
+`install.sh` is a release-stamped entry template, not an active public download. The raw repository template refuses before system mutation. Offline release tooling pins the verifier checksum, canonical GitHub release URL and public bootstrap trust. Controlled tests use a separately rendered, disposable-trust loopback HTTPS fixture; ordinary installation has no URL, CA or verification-bypass switch.
+
+On a mapped Ubuntu release/architecture, a root SSH invocation installs the small OS bootstrap prerequisites, records an ordinary operator and drops privileges before verifier or application execution. Temporary OS-administration authorization expires and is removed when setup exits; the locked application identity receives none. This is administration by the existing server administrator, not a sandbox for an untrusted installer. No SSH keys are copied or root login policy changed.
+
+The authenticated verifier opens the terminal wizard automatically: **Local / Remote / Connect / Update**. SSH/Tailscale selection, host preparation, isolated service/autostart and password-only private browser setup use the existing core. Root-entry SSH guidance keeps the existing administrator route. Repeating the same entry reopens the installed workspace without replacing its binary, updating it or resetting data. Fixed `--open`, `--start`, `--stop`, `--status`, `--update`, `--setup` and `--recover` actions reuse installed identity checks; recovery retains the stopped-service requirement. The installed command includes `open`, `status`, `login` and `update`; a root SSH invocation drops to its recorded ordinary owner before running it. Unknown or foreign command files are preserved. Older entries use authenticated reader-compatible upgrading, not fresh installation over existing data. Public activation and production trust remain separate gates.
+
+`internal/hostplatform/platforms.json` is shared with entry rendering, OS prerequisites and Tailscale repository selection. It maps Ubuntu22.04 Local and Ubuntu24.04/26.04/26.10 Local+Remote, with amd64/arm64 package selection. Only Ubuntu24.04/amd64 has real-host controlled installed evidence; other host rows remain unaccepted. Ubuntu22.04 Remote is refused because the bounded maintenance authority requires sudo>=1.9.10. Unknown releases cannot inherit a supposedly universal dependency recipe.
+
+**Manual AND automatic updates:** the installed/menu Update path checks the trusted channel, waits for asynchronous verification, applies once and follows durable completion/recovery through restart. Automatic is explicit opt-in under Settings→Updates and uses the same controller plus installed ordinary-owner maintenance actor. Nil compiled release bindings keep ordinary/public updates inactive. Signed fixtures exercise this composition without exposing a runtime endpoint, trust-key or CA override. Same-instance SSH/Tailscale access changes are administrator-controlled transactions; unfinished access/update work fences the other operation. Signer-enrolled access migration remains refused.
+
+**Installed acceptance boundary:** Ubuntu24.04/amd64 Remote installation, signed automatic fixture update, restored Manual policy, stopped-core original-operation recovery, restart and Already current passed together. Controlled Local manual and automatic updating also passed. Local uses a fixed user-service delegate and a root-managed actor that drops to the ordinary UID/GID before Go execution, with NoNewPrivileges, zero capabilities and writes limited to installation/data/owner control. The core sandbox remains unchanged. Explicit update recovery requires OS-admin authorization; it has no unconditional polkit grant. A real prepared-stage process kill and isolated recovery preserved the same operation, lease and workspace. Other mapped releases/architectures, native/physical installs and public acquisition still require their own acceptance. Never fabricate an outcome or relaunch failed actors indefinitely.
+
 ## Ubuntu prerequisites
 
 Ubuntu 24.04 LTS, x86-64 is the first Linux/VPS engineering target. Run the app
-as an ordinary OS user. On a root-only VPS image, use the provider console or its
+as an ordinary OS user. For a manually supplied engineering bundle on a root-only VPS image, use the provider console or its
 OS account guide to create an ordinary administrator with sudo and working SSH
-key access first. For Ubuntu, the trusted OS account tools are `adduser` and
+key access first. The unpublished one-command entry prepares its operator automatically. For Ubuntu, the trusted OS account tools are `adduser` and
 `usermod -aG sudo`; test the new administrator's SSH and sudo access before
 leaving the provider/root recovery session. Run the Fased verifier and wizard
 from that ordinary account. Fased does not execute itself as root or silently
@@ -49,8 +63,7 @@ terminal wizard offers automatic preparation. For an explicit terminal command:
 
 Fased verifies the package and checks the separate policy against a compiled
 reviewed digest before requesting sudo. One terminal authorization permits the
-fixed OS package operations and restrictive policy setup. No Fased executable or
-shell script runs as root; sudo handles its own password prompt. Desktop first
+fixed OS package operations and restrictive policy setup. No Fased Go executable runs as root; sudo handles its own password prompt. Desktop first
 launch opens the system terminal for this preparation when needed, then attaches
 to the installed core. A Linux desktop missing GTK/WebKit must start with the
 terminal installer so those libraries can be installed before opening a window.
@@ -139,16 +152,16 @@ When installation finishes, the wizard prints the selected connection steps and
 commands using the installed executable and exact state directory; adding Fased
 to PATH is not required. SSH mode prints the forwarding command for your chosen
 port before directing you to the browser on your computer. Tailscale mode prints
-the private tailnet URL. Get the first owner setup code on the installed host;
-existing owners sign in with their existing password. Installation, browser and
+the private setup link. Open that link and choose your owner password; there is
+no code to copy. Existing owners sign in with their existing password. Installation, browser and
 CLI all use this same engine and state. With `--start=false`, the wizard instead
 prints the start command and, for Tailscale, the subsequent access-enable command.
 Run those commands first. For SSH, obtain the forwarding steps with
 `fased-app access plan --mode ssh`, repeating the installation's `--listen` value
-if customized, and keep the tunnel open. Then run
-`fased-app claim-code` on the installed host with the exact `--data-dir`, open
-the selected local/tailnet URL on your computer and claim the instance or sign
-in. A deferred installation has no ready private UI until these steps succeed.
+if customized, and keep the tunnel open. Open the private setup link printed by
+the start/access command. For Local browser setup, the installed `open` command
+opens this link automatically; `open --print` prints it instead. A deferred
+installation has no ready private UI until these steps succeed.
 
 Later examples use `fased-app` as shorthand for that installed executable. Use
 the full path printed by the wizard unless you have added its directory to PATH;
@@ -189,9 +202,12 @@ need Developer ID signing and notarization before retail distribution. Unsigned
 Windows/macOS packaging tests are engineering evidence only.
 
 Desktop first launch and terminal installation use the same installer/state.
-The native claim screen can retrieve this OS user's one-use setup code. Browser
-setup requires `fased-app claim-code` in the host owner's terminal; enter it in
-the private UI and choose an owner password. Claim codes expire in 15 minutes.
+Native setup supplies this OS user's ownership proof automatically. Browser
+setup opens the private link supplied by installation or the installed `open`
+command. Only password creation appears in the setup form. Setup links expire
+after 15 minutes; reopen Fased or use the installation's access command to obtain
+a fresh link. Keep the link private. Opening an existing workspace does not reset
+its password.
 App ownership does not grant wallet authority. Reopening the client reuses the
 same background engine. Preferences resume from the instance's SQLite state.
 
@@ -228,7 +244,6 @@ owner claim/password. The wizard prints the installed management command:
 
 ```sh
 fased-app vps status
-fased-app vps claim-code
 fased-app vps stop
 fased-app vps start
 fased-app vps recover

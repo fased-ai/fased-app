@@ -38,6 +38,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/bundle"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/update"
 	"github.com/fased-ai/fased-app/internal/vpsinstall"
 	"github.com/sigstore/sigstore/pkg/signature"
@@ -49,6 +50,7 @@ const applicationVMVersion = "0.0.0-b01-vm.2"
 const applicationVMPassword = "disposable-b01-owner-password"
 
 type applicationVMTrust struct {
+	Connected    bool   `json:"connected,omitempty"`
 	SeedSHA256   string `json:"seedSha256"`
 	CASHA256     string `json:"caSha256"`
 	SourceSHA256 string `json:"sourceSha256"`
@@ -228,10 +230,30 @@ func TestApplicationUpdateVMInputs(t *testing.T) {
 	}
 	sb := applicationVMJSON(seed)
 	put("seed.json", sb, 0600)
-	put("fixture.json", applicationVMJSON(applicationVMTrust{applicationVMDigest(sb), applicationVMDigest(ca), applicationVMDigest(source), applicationVMDigest(target)}), 0600)
+	put("fixture.json", applicationVMJSON(applicationVMTrust{Connected: os.Getenv("FASED_UPDATE_FIXTURE_CONNECTED") == "1", SeedSHA256: applicationVMDigest(sb), CASHA256: applicationVMDigest(ca), SourceSHA256: applicationVMDigest(source), TargetSHA256: applicationVMDigest(target)}), 0600)
 	put("../input-receipt.json", applicationVMJSON(map[string]any{"fixtureOnly": true, "sequence": 7, "descriptorSha256": applicationVMDigest(db), "engineSha256": applicationVMDigest(target), "sourceSha256": applicationVMDigest(source), "targetSha256": applicationVMDigest(target), "privateSigningKeysRetained": false}), 0600)
 }
 
+// Root has the overflow UID inside the one-UID Local Bubblewrap namespace.
+// Accept that view only after proving that exact map and the unchanged product
+// sandbox (the proc mount expresses the parent UID as zero). No writable/owner-created trust file or ordinary runtime is admitted.
+func applicationVMRootOwner(uid uint32) bool {
+	if uid == 0 {
+		return true
+	}
+	if uid != 65534 || os.Getuid() != 1100 {
+		return false
+	}
+	b, e := os.ReadFile("/proc/self/uid_map")
+	if e != nil || strings.Join(strings.Fields(string(b)), " ") != "1100 0 1" {
+		return false
+	}
+	paths, e := localinstall.DefaultPaths()
+	if e != nil {
+		return false
+	}
+	return localinstall.CheckSandbox(paths.Root, paths.Data) == nil
+}
 func applicationVMTrustRead() (applicationVMTrust, error) {
 	var c applicationVMTrust
 	for _, p := range []string{applicationVMInputs, applicationVMInputs + "/fixture.json", applicationVMInputs + "/seed.json", applicationVMInputs + "/ca.pem"} {
@@ -240,7 +262,7 @@ func applicationVMTrustRead() (applicationVMTrust, error) {
 			return c, e
 		}
 		s, ok := i.Sys().(*syscall.Stat_t)
-		if !ok || s.Uid != 0 || i.Mode()&os.ModeSymlink != 0 || i.Mode().Perm()&0022 != 0 {
+		if !ok || !applicationVMRootOwner(s.Uid) || i.Mode()&os.ModeSymlink != 0 || i.Mode().Perm()&0022 != 0 {
 			return c, errors.New("root-published disposable fixture required")
 		}
 	}
@@ -274,9 +296,87 @@ func applicationVMPrepare(ctx context.Context, parent string) (*bootstrap.Prepar
 	return bootstrap.Prepare(ctx, bootstrap.Options{Development: true, Seed: seed, SeedSHA256: trust.SeedSHA256, TLSCA: ca, Directory: filepath.Join(dir, "verified")})
 }
 
+func applicationVMOptions(directory string) (bootstrap.Options, error) {
+	trust, e := applicationVMTrustRead()
+	if e != nil {
+		return bootstrap.Options{}, e
+	}
+	seed, e := os.ReadFile(applicationVMInputs + "/seed.json")
+	if e != nil {
+		return bootstrap.Options{}, e
+	}
+	ca, e := os.ReadFile(applicationVMInputs + "/ca.pem")
+	if e != nil || applicationVMDigest(ca) != trust.CASHA256 {
+		return bootstrap.Options{}, errors.New("fixture CA changed")
+	}
+	return bootstrap.Options{Development: true, Seed: seed, SeedSHA256: trust.SeedSHA256, TLSCA: ca, Directory: directory}, nil
+}
+
+// This mode exercises the product channel factories without the separate older
+// reboot barrier. The owner, image and root-published inputs remain fixed.
+func applicationConnectedRuntime(args []string) (bool, error) {
+	if len(args) == 0 || args[0] != "serve" && args[0] != "maintain-update" && args[0] != "maintenance-recover" {
+		return false, nil
+	}
+	remote := false
+	for _, a := range args {
+		if a == "--remote" || a == "--remote-config" {
+			remote = true
+		}
+	}
+	var data, parent string
+	var sequence uint64
+	var release string
+	if remote {
+		var m vpsinstall.Manifest
+		raw, e := os.ReadFile(vpsinstall.ConfigPath(1100))
+		if e != nil {
+			return false, e
+		}
+		if json.Unmarshal(raw, &m) != nil || m.OwnerUID != 1100 || (os.Getuid() != 1100 && os.Getuid() != m.AppUID) {
+			return false, errors.New("fixed fixture Remote identity required")
+		}
+		data, sequence, release = m.Data, m.ApplicationSequence, m.ApplicationReleaseSHA256
+		if args[0] != "serve" {
+			parent, e = vpsinstall.ApplicationAcquisitionParent(m)
+			if e != nil {
+				return false, e
+			}
+		}
+	} else {
+		if os.Getuid() != 1100 {
+			return false, errors.New("fixed fixture Local owner required")
+		}
+		paths, e := localinstall.DefaultPaths()
+		if e != nil {
+			return false, e
+		}
+		m, e := localinstall.Load(paths)
+		if e != nil {
+			return false, e
+		}
+		data, sequence, release = m.Data, m.ApplicationSequence, m.ApplicationReleaseSHA256
+		if args[0] != "serve" {
+			parent, e = localinstall.ApplicationAcquisitionParent(m)
+			if e != nil {
+				return false, e
+			}
+		}
+	}
+	compiledApplicationUpdateCheck = channelCheck(applicationVMOptions, filepath.Join(data, "update-channel"), sequence, release)
+	if parent != "" {
+		compiledApplicationUpdateSource = channelSource(applicationVMOptions, parent)
+	}
+	return false, nil
+}
+
 // Called only by the pre-existing compiled-test dispatcher. Validate installed
 // immutable bytes and real guest identity before binding any fixture source.
 func applicationUpdateVMRuntime(image string, args []string) (bool, error) {
+	// The delegate only requests a fixed OS unit; it binds no fixture channel.
+	if len(args) > 0 && args[0] == "maintenance-delegate" {
+		return false, nil
+	}
 	if _, e := os.Lstat(applicationVMInputs + "/fixture.json"); errors.Is(e, os.ErrNotExist) {
 		return false, nil
 	}
@@ -295,6 +395,9 @@ func applicationUpdateVMRuntime(image string, args []string) (bool, error) {
 	h := applicationVMDigest(b)
 	if h != trust.SourceSHA256 && h != trust.TargetSHA256 {
 		return false, errors.New("unrecognized compiled fixture image")
+	}
+	if trust.Connected {
+		return applicationConnectedRuntime(args)
 	}
 	m, e := vpsinstall.Load(1100)
 	if e != nil { // AppUID cannot use owner Load; public fixed config is sufficient only for checker binding.

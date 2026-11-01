@@ -10,10 +10,25 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
+
+var ErrCoreUnavailable = errors.New("core temporarily unavailable")
+
+func clientTransportError(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
+	var network net.Error
+	if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) || errors.Is(err, io.EOF) || (errors.As(err, &network) && network.Timeout()) {
+		return fmt.Errorf("cannot reach local core: %w", errors.Join(ErrCoreUnavailable, err))
+	}
+	return fmt.Errorf("core connection refused: %w", err)
+}
 
 type Client struct {
 	Endpoint Endpoint
@@ -30,7 +45,10 @@ func NewClient(ctx context.Context, dir string) (*Client, error) {
 	endpointPath := filepath.Join(dir, "endpoint.json")
 	data, err := readPrivateFile(endpointPath)
 	if err != nil {
-		return nil, errors.New("core is not running; start the engine first")
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("core is not running; start the engine first: %w", ErrCoreUnavailable)
+		}
+		return nil, fmt.Errorf("cannot read core endpoint: %w", err)
 	}
 	var endpoint Endpoint
 	if json.Unmarshal(data, &endpoint) != nil {
@@ -84,7 +102,7 @@ func (c *Client) Do(ctx context.Context, method, route string, input, output any
 	}
 	response, err := c.HTTP.Do(req)
 	if err != nil {
-		return errors.New("cannot reach local core")
+		return clientTransportError(err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -130,7 +148,7 @@ func (c *Client) authenticate(ctx context.Context, route string, credentials map
 	req.Header.Set("Content-Type", "application/json")
 	response, err := c.HTTP.Do(req)
 	if err != nil {
-		return errors.New("cannot reach local core")
+		return clientTransportError(err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != 200 {

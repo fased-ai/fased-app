@@ -3,6 +3,7 @@ package connection
 import (
 	"errors"
 	"os/exec"
+	"regexp"
 	"runtime"
 )
 
@@ -27,4 +28,21 @@ func OpenBrowser(value string, expected ...string) error {
 		command = exec.Command("xdg-open", origin)
 	}
 	return command.Run()
+}
+
+// OwnerSetupURL is used only by the OS-owner launcher, never by Connect or an
+// unauthenticated HTTP handler. The fragment is not sent to the HTTP server.
+func OwnerSetupURL(value, instanceID, proof string) (string, error) {
+	origin, err := Origin(value)
+	if err != nil {
+		return "", err
+	}
+	if !identity.MatchString(instanceID) || proof != "" && !regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`).MatchString(proof) {
+		return "", errors.New("invalid owner setup handoff")
+	}
+	address := origin + "/?instance=" + instanceID
+	if proof != "" {
+		address += "#setup=" + proof
+	}
+	return address, nil
 }

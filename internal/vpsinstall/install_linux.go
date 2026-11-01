@@ -10,10 +10,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/fased-ai/fased-app/internal/hostplatform"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -36,6 +38,7 @@ type hostOps struct {
 	rootParents         func(string) error // Optional exact policy-file ancestry; default root:root contract stays unchanged.
 	list                func(string) ([]string, error)
 	run                 func(context.Context, []byte, ...string) ([]byte, error)
+	readinessRun        func(context.Context, []byte, ...string) ([]byte, error)
 	command             func(context.Context, ...string) ([]byte, error)
 	applicationContract func(context.Context, Manifest) ([]byte, error) // Fixed unprivileged version metadata, never arbitrary argv.
 	helper              func(context.Context, []string, io.Writer) error
@@ -165,6 +168,18 @@ func liveOps(s *custodyinstall.System) hostOps {
 			s.Authorization = "Authorize Remote installation: one dedicated locked OS account, immutable application files and an app-only system service. Fased runs without root or sudo access. Instance data and identities are preserved on removal."
 		}
 		o.run = s.Run
+		o.readinessRun = func(ctx context.Context, input []byte, args ...string) ([]byte, error) {
+			// Authorization has already happened. Buffer expected cold-start
+			// diagnostics, retaining the final error if readiness never succeeds.
+			quiet := *s
+			var diagnostics bytes.Buffer
+			quiet.Out = &diagnostics
+			result, e := quiet.Run(ctx, input, args...)
+			if e != nil && diagnostics.Len() > 0 {
+				e = fmt.Errorf("%w: %s", e, strings.TrimSpace(diagnostics.String()))
+			}
+			return result, e
+		}
 		o.helper = func(ctx context.Context, args []string, out io.Writer) error {
 			if _, e := s.Run(ctx, nil, "/usr/bin/setpriv", "--version"); e != nil {
 				return e
@@ -596,10 +611,10 @@ func install(ctx context.Context, opt Options, o hostOps) (Manifest, error) {
 	if e != nil {
 		return m, e
 	}
-	values := fields(release.Data)
-	if strings.Trim(values["ID"], "\"'") != "ubuntu" || strings.Trim(values["VERSION_ID"], "\"'") != "24.04" {
-		return m, errors.New("app-only Remote installation requires Ubuntu 24.04")
+	if _, e := hostplatform.LookupRemote(string(release.Data), runtime.GOARCH); e != nil {
+		return m, e
 	}
+
 	binary, e := o.read(opt.Core)
 	if e != nil {
 		return m, e
@@ -797,8 +812,14 @@ func start(ctx context.Context, o hostOps, m Manifest) error {
 	defer deadline.Stop()
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
+	probe := o
+	if o.readinessRun != nil {
+		probe.run = o.readinessRun
+	}
+	var lastError error
 	for {
-		r, e := status(ctx, o, m)
+		r, e := status(ctx, probe, m)
+		lastError = e
 		if e == nil && r.Active && r.InstanceID != "" {
 			return record(o, m, "ready")
 		}
@@ -806,6 +827,9 @@ func start(ctx context.Context, o hostOps, m Manifest) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
+			if lastError != nil {
+				return fmt.Errorf("Remote core did not become ready; preserve state and retry the same command: %w", lastError)
+			}
 			return errors.New("Remote core did not become ready; preserve state and retry the same command")
 		case <-tick.C:
 		}
@@ -877,6 +901,33 @@ func remove(ctx context.Context, o hostOps, m Manifest) error {
 		return e
 	}
 	return record(o, m, "removed")
+}
+
+// SetupLink retains the same verified owner/unit/UID boundary as Claim. Only
+// the trusted terminal receives the transient proof; status stays public-only.
+func SetupLink(ctx context.Context, m Manifest, s *custodyinstall.System, out io.Writer) error {
+	if s == nil || out == nil {
+		return errors.New("owner terminal and output required")
+	}
+	return locked(ctx, liveOps(s), m, func(o hostOps) error { return setupLink(ctx, o, m, out) })
+}
+func setupLink(ctx context.Context, o hostOps, m Manifest, out io.Writer) error {
+	if e := verify(ctx, o, m); e != nil {
+		return e
+	}
+	if e := loaded(ctx, o, m); e != nil {
+		return e
+	}
+	p, e := unitFields(ctx, o, m)
+	if e != nil {
+		return e
+	}
+	if p["ActiveState"] != "active" {
+		return errors.New("start the Remote instance before setup")
+	}
+	args := applicationOwnerHelperArgs(m, m.Core)
+	args[len(args)-3] = "remote-setup-link"
+	return o.helper(ctx, args, out)
 }
 func Claim(ctx context.Context, m Manifest, s *custodyinstall.System, recover bool, out io.Writer) error {
 	if s == nil || out == nil {

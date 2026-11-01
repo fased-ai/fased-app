@@ -1,3 +1,4 @@
+import { openOwnerSetup } from "../../scripts/fixture-owner-setup.mjs";
 import { expect, test, type Request, type Route } from "@playwright/test";
 import {
   refreshFixtureAccounts,
@@ -13,6 +14,102 @@ import { basename, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { once } from "node:events";
 import { createHash, randomBytes } from "node:crypto";
+
+test("owner setup is password-only, bound, scrubbed and single-use", async ({
+  page,
+}) => {
+  await page.goto(url);
+  await expect(page.getByLabel("One-use claim code")).toHaveCount(0);
+  await expect(page.getByText("Get setup code", { exact: true })).toHaveCount(
+    0,
+  );
+  await expect(
+    page.getByRole("button", { name: "Claim workspace", exact: true }),
+  ).toBeDisabled();
+  const response = await page.request.get(
+    url + "/api/v1/installation/claim-code",
+  );
+  expect(response.status()).toBe(401);
+  expect(await response.json()).not.toHaveProperty("code");
+  const { stdout: setupLink } = await exec(binary, [
+    "setup-link",
+    "--data-dir",
+    dir,
+  ]);
+  const link = setupLink.trim();
+  expect(new URL(link).hash).toMatch(/^#setup=[A-Za-z0-9_-]{43}$/);
+  const wrong = new URL(link);
+  wrong.searchParams.set("instance", "wrong-instance-identity");
+  await page.goto(wrong.href);
+  await expect(
+    page.getByRole("heading", { name: "Connection unavailable", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Claim workspace", exact: true }),
+  ).toHaveCount(0);
+  const requests: string[] = [];
+  page.on("request", (request) => requests.push(request.url()));
+  await page.goto(link);
+  await expect(
+    page.getByRole("button", { name: "Claim workspace", exact: true }),
+  ).toBeEnabled();
+  const proof = new URL(link).hash.slice("#setup=".length);
+  expect(page.url()).not.toContain("setup=");
+  await expect(
+    page
+      .locator("form")
+      .filter({
+        has: page.getByLabel("Create owner password", { exact: true }),
+      })
+      .locator("input"),
+  ).toHaveCount(1);
+  expect(
+    await page.evaluate(
+      (proof) =>
+        [...Object.keys(localStorage), ...Object.keys(sessionStorage)].some(
+          (key) =>
+            (
+              localStorage.getItem(key) ??
+              sessionStorage.getItem(key) ??
+              ""
+            ).includes(proof),
+        ),
+      proof,
+    ),
+  ).toBe(false);
+  expect(requests.some((address) => address.includes(proof))).toBe(false);
+  await page.screenshot({
+    path: resolve(".evidence/b01-owner-setup/password-only.png"),
+  });
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const replay = await page.request.post(url + "/api/v1/auth/claim", {
+    headers: { Origin: url },
+    data: { code: proof, password: "another-disposable-password" },
+  });
+  expect(replay.status()).toBe(401);
+  const reopened = (
+    await exec(binary, ["setup-link", "--data-dir", dir])
+  ).stdout.trim();
+  expect(new URL(reopened).hash).toBe("");
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await page.goto(reopened);
+  await expect(
+    page.getByRole("heading", { name: "Sign in", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+});
 
 test("agent memory and archives keep recall sources journals and results through UI CLI restart", async ({
   page,
@@ -31,7 +128,7 @@ test("agent memory and archives keep recall sources journals and results through
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -281,7 +378,7 @@ test("reviewed recurring tasks preserve named zones bounds CLI results pause and
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -418,7 +515,7 @@ test("existing pages localize controls and keep owner drafts records and Meteora
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -573,7 +670,7 @@ test("Meteora shell preserves drafts and records through navigation theme langua
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -765,7 +862,7 @@ test.describe("calendar reminders", () => {
     const claim = JSON.parse(
       await readFile(join(dir, "claim-code.json"), "utf8"),
     );
-    await page.getByLabel("One-use claim code").fill(claim.code);
+    await openOwnerSetup(page, claim.code);
     await page.getByLabel("Create owner password").fill(fixturePassword);
     await page
       .getByRole("button", { name: "Claim workspace", exact: true })
@@ -988,7 +1085,7 @@ test("compact Tasks reviews without writes and preserves bounded runs across UI 
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -1151,7 +1248,7 @@ test("normal Chat grants bounded replies, streams Send and retains scoped histor
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -1331,7 +1428,7 @@ test("normal Chat keeps a draft when its selected connection locks and stops a p
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -1686,8 +1783,7 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
@@ -2017,8 +2113,7 @@ test("reviewed memory restoration shares inert UI CLI drafts, expiry, current-on
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
@@ -2332,8 +2427,7 @@ test("expired owner access returns to sign-in without replay or stale-session re
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
@@ -2562,8 +2656,7 @@ test("periodic refresh follows the requested profile while a selection is pendin
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
@@ -2675,8 +2768,7 @@ test("chat drafts stay with their conversation through search switching and a pe
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
@@ -2892,8 +2984,7 @@ test("agent selection survives reload and core restart with scoped preference fa
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
@@ -3030,8 +3121,7 @@ test("task inbox opens the exact named run without writes across profiles and re
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
@@ -3210,8 +3300,7 @@ test("reminder task draft shares inert inspection edited review and bounded crea
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
@@ -3495,8 +3584,7 @@ test("conversation search follows matching records and closes hidden conversatio
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
@@ -3657,8 +3745,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
@@ -4195,8 +4282,7 @@ test("Updates keeps manual and automatic preferences without activating releases
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
@@ -4266,8 +4352,7 @@ test("update status shares UI and private CLI observations across pause, release
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
@@ -4392,8 +4477,7 @@ test("update recovery view rejects unsupported or lost status without retaining 
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
@@ -4483,8 +4567,7 @@ test("claim, UI/CLI setup, restart and logout preserve one Local instance", asyn
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
@@ -4642,8 +4725,7 @@ test("Satcoin prototype preserves legacy links and disabled authority across cor
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
@@ -4767,8 +4849,7 @@ test("public account records share UI/CLI state without wallet authority", async
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
@@ -5136,8 +5217,7 @@ test("proposal form uses explicit fixture labels (UI mock only)", async ({
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
@@ -5177,8 +5257,7 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
@@ -5419,8 +5498,7 @@ test("bounded news inputs retain provenance across UI CLI and restart, hold depe
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
@@ -5628,8 +5706,7 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
@@ -5796,8 +5873,7 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
@@ -6017,8 +6093,7 @@ test("bounded AI schedules share consent and execution with CLI, survive restart
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
@@ -6180,8 +6255,7 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
@@ -6452,8 +6526,7 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
@@ -6613,8 +6686,7 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
@@ -6807,8 +6879,7 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
@@ -7107,8 +7178,7 @@ test("chat memory requires explicit source-backed UI and CLI save and survives r
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
@@ -7367,8 +7437,7 @@ test("task run chat shares historical UI and CLI capture, explicit fixture expla
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
@@ -7595,8 +7664,7 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
@@ -7911,8 +7979,7 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Claim workspace" }).click();
@@ -8262,8 +8329,7 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
@@ -8685,8 +8751,7 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
@@ -9164,8 +9229,7 @@ test("local agent evidence inspection shares UI/CLI sources, inert reads and res
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
@@ -9578,8 +9642,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
@@ -10127,8 +10190,7 @@ test("R1 workspace uses a compact branded shell and on-demand chat task memory c
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
@@ -10334,8 +10396,7 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
@@ -10530,8 +10591,7 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await revealControl(page, page.getByLabel("One-use claim code"), "");
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await revealControl(page, page.getByLabel("Create owner password"), "");
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
@@ -10824,7 +10884,7 @@ test("installation connection uses runtime identity and opens Remote without cha
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -11005,7 +11065,7 @@ test("installation connection refuses changed identity before sending an owner p
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -11042,7 +11102,7 @@ test("reviewed task credential allowance is scoped, finite and revocable in Prov
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -11183,7 +11243,7 @@ test("Dashboard drag and resize autosave without a duplicate home rail shortcut"
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -11297,7 +11357,7 @@ test("compact agent pages share one provider editor and keep feed settings off t
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -11407,7 +11467,7 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -11763,7 +11823,7 @@ test("provider editor follows core credential admission without enabling live ca
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -11848,7 +11908,7 @@ test("multiple accounts keep scheduled agent selection and refuse a stale provid
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -12000,7 +12060,7 @@ for (const location of ["local", "remote"]) {
     const claim = JSON.parse(
       await readFile(join(dir, "claim-code.json"), "utf8"),
     );
-    await page.getByLabel("One-use claim code").fill(claim.code);
+    await openOwnerSetup(page, claim.code);
     await page.getByLabel("Create owner password").fill(fixturePassword);
     await page
       .getByRole("button", { name: "Claim workspace", exact: true })
@@ -12297,7 +12357,7 @@ test("configured agent joins account Chat task result and memory without partial
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -12468,7 +12528,7 @@ test("shared Add Provider binds native accounts and latest models across Chat an
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -12683,7 +12743,7 @@ test("scoped pilot controls keep review allow and revoke exact while ordinary co
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -12839,7 +12899,7 @@ test("local provider connects in UI and shares configured agent Chat without API
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -12984,7 +13044,7 @@ test("Providers page preserves agent drafts and shares account models without ge
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -13273,7 +13333,7 @@ test("New cloud accounts use the Providers page and shared agent Chat without ge
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -13429,7 +13489,7 @@ test("OpenRouter Remote sign-in accepts a code and returns an ordinary encrypted
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -13491,7 +13551,7 @@ test("Named local servers share setup models and agent Chat without retargeting 
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -13647,7 +13707,7 @@ test("Qwen API keeps its region and model through Providers, agent and Chat", as
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -13808,7 +13868,7 @@ test("Kimi regional USD account shares agent Chat and preserves mainland records
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -13987,7 +14047,7 @@ test("Google API sign-in uses project models in agent Chat and preserves its API
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -14169,7 +14229,7 @@ test("Kimi Code membership connects models agent and normal Chat without task au
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -14354,7 +14414,7 @@ test("Anthropic workspace account joins models agent Chat and preserves existing
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -14528,7 +14588,7 @@ test("Ollama Cloud key joins models agent Chat and task access without an invent
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -14793,7 +14853,7 @@ test("provider-free News watch reviews rules deduplicates across restart and joi
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -14978,7 +15038,7 @@ test("normal Tasks joins optional News analysis and granted analysis-only result
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
-  await page.getByLabel("One-use claim code").fill(claim.code);
+  await openOwnerSetup(page, claim.code);
   await page.getByLabel("Create owner password").fill(fixturePassword);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })
@@ -15445,7 +15505,7 @@ for (const method of ["create", "import"] as const) {
       const claim = JSON.parse(
         await readFile(join(dataDir, "claim-code.json"), "utf8"),
       );
-      await page.getByLabel("One-use claim code").fill(claim.code);
+      await openOwnerSetup(page, claim.code);
       await page.getByLabel("Create owner password").fill(fixturePassword);
       await page
         .getByRole("button", { name: "Claim workspace", exact: true })

@@ -1,3 +1,4 @@
+import { openOwnerSetup } from "./fixture-owner-setup.mjs";
 // Real local OpenSSH and TLS fixtures. This does not enroll/change Tailscale,
 // create a VPS, change owner SSH/firewall settings or use wallet keys.
 import assert from "node:assert/strict";
@@ -144,7 +145,7 @@ try {
   const code = JSON.parse(
     await readFile(join(state, "claim-code.json"), "utf8"),
   ).code;
-  await page.getByLabel("One-use claim code").fill(code);
+  await openOwnerSetup(page, code);
   await page.getByLabel("Create owner password").fill(password);
   await page
     .getByRole("button", { name: "Claim workspace", exact: true })

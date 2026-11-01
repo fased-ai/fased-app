@@ -5,7 +5,9 @@ package main
 // This dispatcher exists ONLY in an explicitly compiled Go test executable.
 // Ordinary product builds have no environment-driven interruption or consent.
 import (
+	"errors"
 	"fmt"
+	"github.com/fased-ai/fased-app/internal/core"
 	"io"
 	"os"
 	"path/filepath"
@@ -45,6 +47,9 @@ func TestMain(m *testing.M) {
 		if handled, e := applicationUpdateVMRuntime(self, os.Args[1:]); handled || e != nil {
 			if e != nil {
 				fmt.Fprintln(os.Stderr, e)
+				if errors.Is(e, core.ErrCoreUnavailable) {
+					os.Exit(75)
+				}
 				os.Exit(1)
 			}
 			return
@@ -52,6 +57,9 @@ func TestMain(m *testing.M) {
 		if handled, e := maintenanceAuthorityActorFixture(self, os.Args[1:]); handled {
 			if e != nil {
 				fmt.Fprintln(os.Stderr, e)
+				if errors.Is(e, core.ErrCoreUnavailable) {
+					os.Exit(75)
+				}
 				os.Exit(1)
 			}
 			return
@@ -64,6 +72,9 @@ func TestMain(m *testing.M) {
 		}
 		if e := run(os.Args[1:], os.Stdin, os.Stdout, diagnostic); e != nil {
 			fmt.Fprintln(os.Stderr, "fased-app:", e)
+			if errors.Is(e, core.ErrCoreUnavailable) {
+				os.Exit(75)
+			}
 			os.Exit(1)
 		}
 		return

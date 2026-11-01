@@ -53,6 +53,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	autostart := f.Bool("autostart", false, "explicitly enable the user service at login")
 	printOnly := f.Bool("print", false, "print the verified local UI URL without opening a window")
 	interactive := f.Bool("interactive", false, "guide installation in this terminal")
+	profile := f.String("profile", "", "preselected Local/Remote/Connect installation profile")
 	access := f.String("access", "local", "local, ssh or tailscale private access")
 	vps := f.Bool("vps", false, "require always-on Linux VPS readiness")
 	managedRemote := f.Bool("managed-remote", false, "install Ubuntu Remote using a dedicated locked application account")
@@ -77,6 +78,9 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	}
 	if *verificationOutput != "" && command != "install" {
 		return errors.New("verification output guard is an installation option")
+	}
+	if *profile != "" && (*profile != "remote" && *profile != "local" && *profile != "connect" || command != "install" || !*interactive) {
+		return errors.New("profile requires interactive Remote installation")
 	}
 	paths = localinstall.Paths{Root: *root, Data: *data}
 	if *managedRemote && command != "install" {
@@ -119,9 +123,18 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			}
 			r := bufio.NewReader(os.Stdin)
 			wizard = r
-			choice, e := installationChoice(r, errOut)
-			if e != nil {
-				return e
+			choice := *profile
+			if choice == "" {
+				var e error
+				choice, e = installationChoice(r, errOut)
+				if e != nil {
+					return e
+				}
+			} else {
+				fmt.Fprintln(errOut, "Fased", strings.Title(choice), "setup")
+			}
+			if choice == "update" {
+				return ordinaryUpdateCommand(nil, os.Stdin, out, errOut)
 			}
 			if choice == "connect" {
 				address, e := installationAnswer(r, errOut, "Existing instance URL: ")
@@ -215,6 +228,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		if err != nil {
 			return err
 		}
+		plan = installationSSHPlan(plan, os.Getenv("SSH_CONNECTION"))
 		*access = plan.Mode
 		if *access == "tailscale" {
 			if *origin != "" && *origin != plan.Origin {
@@ -231,14 +245,14 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		if *interactive && !*prepareHost && (needsHostPreparation(*desktop) || *managedRemote) {
 			prompt := "Authorize required Ubuntu preparation with sudo? [y/N]: "
 			if *managedRemote {
-				prompt = "Authorize Ubuntu preparation, a locked app account and a system service with sudo? [y/N]: "
+				prompt = "Authorize Ubuntu preparation, isolated service and bounded update maintenance with sudo? [y/N]: "
 			}
 			fmt.Fprint(errOut, prompt)
 			choice, _ := wizard.ReadString('\n')
 			*prepareHost = strings.EqualFold(strings.TrimSpace(choice), "y")
 		}
 		if *managedRemote {
-			return managedRemoteInstall(ctx, engine, inventory.Files[localinstall.EngineName()].SHA256, *listen, plan, *prepareHost, *start, out, errOut, installationAdmission{sequence, release})
+			return managedRemoteInstall(ctx, engine, inventory.Files[localinstall.EngineName()].SHA256, *listen, plan, *prepareHost, *start, out, errOut, installationAdmission{sequence: sequence, release: release, prepareUpdates: *interactive && *prepareHost})
 		}
 		if err = desktopRuntime(ctx, *desktop, *packageDir, *data, *installRuntime, *prepareHost, os.Stdin, errOut); err != nil {
 			return err
@@ -246,6 +260,15 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		m, err := localinstall.Install(ctx, paths, localinstall.Options{ApplicationSequence: sequence, ApplicationReleaseSHA256: release, Engine: engine, EngineSHA256: inventory.Files[localinstall.EngineName()].SHA256, Desktop: *desktop, DesktopSHA256: inventory.Files[localinstall.DesktopName()].SHA256, Listen: *listen, PublicOrigin: *origin, Start: *start, Autostart: *autostart, Location: installLocation(*vps)})
 		if err != nil {
 			return err
+		}
+		defaultPaths, e := localinstall.DefaultPaths()
+		if e != nil {
+			return e
+		}
+		if m.Root == defaultPaths.Root && m.Data == defaultPaths.Data {
+			if e := installCommand(filepath.Join(m.Root, localinstall.EngineName()), m.Root, m.Data, false, errOut); e != nil {
+				return e
+			}
 		}
 		url := ""
 		if *start {
@@ -271,12 +294,28 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			maintenance = localinstall.PrepareInstallationMaintenance(ctx, m, *start, errOut)
 		}
 		if *interactive {
-			installationHandoff(errOut, m, plan, url)
+			setupURL := ""
+			if url != "" {
+				setupURL, err = localOwnerSetupLink(ctx, m.Data, url)
+				if err != nil {
+					return err
+				}
+			}
+			installationHandoff(errOut, m, plan, setupURL)
+			if !*vps && *start && setupURL != "" {
+				openSetupBrowser(setupURL, errOut)
+			}
 		}
 		return json.NewEncoder(out).Encode(map[string]any{"maintenance": maintenance, "location": installLocation(*vps), "installed": true, "application": filepath.Join(m.Root, localinstall.EngineName()), "data": m.Data, "autostart": m.Autostart, "url": url, "access": plan, "walletsConnected": false})
 	case "uninstall":
+		manifest, manifestErr := localinstall.Load(paths)
 		if err = localinstall.Uninstall(ctx, paths); err != nil {
 			return err
+		}
+		if manifestErr == nil {
+			if e := removeCommand(filepath.Join(manifest.Root, localinstall.EngineName()), manifest.Root, manifest.Data, false); e != nil {
+				return e
+			}
 		}
 		fmt.Fprintln(out, "Application removed. Instance data was preserved:", *data)
 		return nil
@@ -293,6 +332,11 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			if m, e := localinstall.Load(paths); e == nil && m.Location != "remote" {
 				localinstall.PrepareInstallationMaintenance(ctx, m, true, errOut)
 			}
+			setupURL, e := localOwnerSetupLink(ctx, *data, url)
+			if e != nil {
+				return e
+			}
+			fmt.Fprintln(errOut, setupURL)
 			fmt.Fprintln(out, url)
 			return nil
 		case "stop":
@@ -314,6 +358,10 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			return err
 		}
 		url, err := waitForCore(ctx, *data)
+		if err != nil {
+			return err
+		}
+		url, err = localOwnerSetupLink(ctx, *data, url)
 		if err != nil {
 			return err
 		}
@@ -408,8 +456,8 @@ func installationHandoff(out io.Writer, m localinstall.Manifest, plan privateacc
 		for _, instruction := range plan.Instructions {
 			fmt.Fprintln(out, instruction)
 		}
-		fmt.Fprintln(out, "First visit: run this on the installed host for an owner setup code, then choose your password in the private UI:")
-		fmt.Fprintln(out, installationCommand(engine, "claim-code", "--data-dir", m.Data))
+		fmt.Fprintln(out, "Open Fased and choose your password:")
+		fmt.Fprintln(out, readyURL)
 		fmt.Fprintln(out, "Already set up? Sign in with your existing owner password.")
 	}
 	fmt.Fprintln(out, "Check this instance:")
@@ -468,9 +516,9 @@ func installationAnswer(r *bufio.Reader, out io.Writer, prompt string) (string, 
 	return strings.TrimSpace(s), nil
 }
 func installationChoice(r *bufio.Reader, out io.Writer) (string, error) {
-	fmt.Fprintln(out, "Fased\n  Local   — install on this computer\n  Remote  — install on this server\n  Connect — use an existing Remote instance")
+	fmt.Fprintln(out, "Fased\n  Local   — install on this computer\n  Remote  — install on this server\n  Connect — use an existing Remote instance\n  Update  — update this installation")
 	for {
-		s, e := installationAnswer(r, out, "Choose [local/remote/connect, default local]: ")
+		s, e := installationAnswer(r, out, "Choose [local/remote/connect/update, default local]: ")
 		if e != nil {
 			return "", e
 		}
@@ -481,8 +529,10 @@ func installationChoice(r *bufio.Reader, out io.Writer) (string, error) {
 			return "remote", nil
 		case "connect":
 			return "connect", nil
+		case "update":
+			return "update", nil
 		}
-		fmt.Fprintln(out, "Choose local, remote or connect.")
+		fmt.Fprintln(out, "Choose Local, Remote, Connect or Update.")
 	}
 }
 
@@ -592,8 +642,9 @@ func installationOutputSeparation(output string, selected localinstall.Paths) er
 }
 
 type installationAdmission struct {
-	sequence uint64
-	release  string
+	sequence       uint64
+	release        string
+	prepareUpdates bool
 }
 
 // These are restricted verifier handoff data, not proof that an executable

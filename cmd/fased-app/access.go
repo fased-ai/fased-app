@@ -77,6 +77,11 @@ func accessCommand(args []string, out, errOut io.Writer) error {
 		if e = manager.Enable(ctx, m.Root, plan, id); e != nil {
 			return e
 		}
+		setupURL, e := localOwnerSetupLink(ctx, *data, plan.Origin)
+		if e != nil {
+			return e
+		}
+		fmt.Fprintln(errOut, setupURL)
 		fmt.Fprintln(out, plan.Origin)
 		return nil
 	}

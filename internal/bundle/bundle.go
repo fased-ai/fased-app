@@ -117,7 +117,7 @@ func VerifyPinned(dir, manifestSHA256 string) (Manifest, error) {
 		return m, e
 	}
 	engineering := m.Schema == 1 && m.UnsignedEngineering
-	release := m.Schema == 2 && !m.UnsignedEngineering && !m.Desktop && m.Platform == "linux" && m.Arch == "amd64"
+	release := m.Schema == 2 && !m.UnsignedEngineering && !m.Desktop && m.Platform == "linux" && (m.Arch == "amd64" || m.Arch == "arm64")
 	if (!engineering && !release) || m.Platform != runtime.GOOS || m.Arch != runtime.GOARCH || m.Version == "" {
 		return m, errors.New("unsupported bundle identity or release mode")
 	}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -39,7 +40,7 @@ func (f *maintenanceManagerFixture) run(_ context.Context, args ...string) ([]by
 			return []byte("LoadState=not-found\nFragmentPath=\nDropInPaths=\nExecStart=\nActiveState=inactive\nSubState=dead\nUnitFileState=not-found\nResult=success\n"), nil
 		}
 		unit := args[1]
-		id := strings.TrimSuffix(strings.TrimPrefix(unit, "fased-app-maintenance@"), ".service")
+		id := strings.TrimSuffix(strings.TrimPrefix(unit, "fased-app-maintenance-system@"), ".service")
 		if id == "" {
 			id = "%i"
 		}
@@ -54,7 +55,7 @@ func (f *maintenanceManagerFixture) run(_ context.Context, args ...string) ([]by
 		if f.enabled[unit] {
 			enabled = "enabled"
 		}
-		command := maintenanceExecutable(f.m) + " maintain-update --operation " + id + " --prefix " + f.m.Root + " --data-dir " + f.m.Data
+		command := maintenanceExecutable(f.m) + " maintenance-delegate --operation " + id + " --prefix " + f.m.Root + " --data-dir " + f.m.Data
 		if f.command != "" {
 			command = f.command
 		}
@@ -95,7 +96,7 @@ func TestApplicationMaintenancePersistentFixedOwnerEntry(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	for _, want := range []string{"maintain-update --operation %i", "RemainAfterExit=yes", "WantedBy=default.target", "NoNewPrivileges=yes", "Restart=no"} {
+	for _, want := range []string{"maintenance-delegate --operation %i", "RemainAfterExit=yes", "WantedBy=default.target", "NoNewPrivileges=yes", "Restart=no"} {
 		if !strings.Contains(string(body), want) {
 			t.Fatal(want, string(body))
 		}
@@ -167,7 +168,7 @@ func TestApplicationMaintenanceRefusesForeignTemplateImageAndCache(t *testing.T)
 			case "dropin":
 				f.drop = "/home/owner/override.conf"
 			case "cached command":
-				f.command = maintenanceExecutable(a.old) + " maintain-update --operation " + a.candidate.ID + " --prefix " + a.old.Root + " --data-dir " + a.old.Data + " --unsafe"
+				f.command = maintenanceExecutable(a.old) + " maintenance-delegate --operation " + a.candidate.ID + " --prefix " + a.old.Root + " --data-dir " + a.old.Data + " --unsafe"
 			}
 			if _, e := LaunchApplicationMaintenance(t.Context(), a.old, a.candidate.ID, f.run); e == nil {
 				t.Fatal("foreign actor configuration accepted", kind)
@@ -273,7 +274,7 @@ func TestInstallationPreparesMaintenanceWithoutActivatingOrUndoingApp(t *testing
 		name          string
 		ready, denied bool
 		want          string
-	}{{"ready", true, false, "ready"}, {"manager unavailable", true, true, "manual-only"}, {"service deferred", false, false, "deferred"}} {
+	}{{"ready", true, false, "ready"}, {"manager unavailable", true, true, "needs-setup"}, {"service deferred", false, false, "deferred"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, f := maintenanceFixture(t)
 			f.denied = tc.denied
@@ -333,5 +334,182 @@ func TestApplicationRemovalRefusesStandalonePendingUpdate(t *testing.T) {
 	}
 	if e := verify(a.old); e != nil {
 		t.Fatal("pending removal changed app", e)
+	}
+}
+
+func TestApplicationMaintenanceCoreStartCannotWriteOwnerControl(t *testing.T) {
+	a, f := maintenanceFixture(t)
+	if e := InstallApplicationMaintenance(t.Context(), a.old, f.run); e != nil {
+		t.Fatal(e)
+	}
+	dir := applicationUpdateDirectory(Paths{Root: a.old.Root, Data: a.old.Data})
+	if e := os.Chmod(dir, 0500); e != nil {
+		t.Fatal(e)
+	}
+	defer os.Chmod(dir, 0700)
+	lockPath := filepath.Join(dir, "maintenance.lock")
+	if e := os.Chmod(lockPath, 0400); e != nil {
+		t.Fatal(e)
+	}
+	defer os.Chmod(lockPath, 0600)
+	before, e := os.Stat(lockPath)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e := StartApplicationMaintenance(t.Context(), a.old, a.candidate.ID, f.run); e != nil {
+		t.Fatal(e)
+	}
+	if f.count("start") != 1 || f.count("enable") != 0 {
+		t.Fatal(f.calls)
+	}
+	if _, e := os.Stat(filepath.Join(dir, "system-maintenance.json")); !errors.Is(e, os.ErrNotExist) {
+		t.Fatal("core wrote request", e)
+	}
+	after, e := os.Stat(lockPath)
+	if e != nil || !os.SameFile(before, after) || !before.ModTime().Equal(after.ModTime()) {
+		t.Fatal("core changed owner lock", e)
+	}
+	if e := os.Chmod(lockPath, 0600); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.Chmod(dir, 0700); e != nil {
+		t.Fatal(e)
+	}
+	if e := PrepareApplicationMaintenanceOperation(t.Context(), a.old, a.candidate.ID, f.run); e != nil {
+		t.Fatal(e)
+	}
+	if f.count("start") != 1 || f.count("enable") != 1 {
+		t.Fatal("actor recursed or did not persist", f.calls)
+	}
+	if r, e := readMaintenanceRequest(a.old); e != nil || r.ID != a.candidate.ID {
+		t.Fatal(r, e)
+	}
+}
+func TestApplicationMaintenanceCoreRefusesForeignActor(t *testing.T) {
+	a, f := maintenanceFixture(t)
+	if e := InstallApplicationMaintenance(t.Context(), a.old, f.run); e != nil {
+		t.Fatal(e)
+	}
+	f.drop = "/foreign.conf"
+	if e := StartApplicationMaintenance(t.Context(), a.old, a.candidate.ID, f.run); e == nil || f.count("start") != 0 {
+		t.Fatal(e, f.calls)
+	}
+}
+
+func TestApplicationMaintenanceActorRetryEnsuresPersistence(t *testing.T) {
+	a, f := maintenanceFixture(t)
+	if e := InstallApplicationMaintenance(t.Context(), a.old, f.run); e != nil {
+		t.Fatal(e)
+	}
+	if e := PrepareApplicationMaintenanceOperation(t.Context(), a.old, a.candidate.ID, f.run); e != nil {
+		t.Fatal(e)
+	}
+	unit := maintenanceUnit(a.candidate.ID)
+	// Model interruption after durable request but before enable; actual actor starts
+	// again without a new operation. It must restore exactly its own persistence.
+	f.active[unit] = true
+	f.enabled[unit] = false
+	before := f.count("enable")
+	if e := PrepareApplicationMaintenanceOperation(t.Context(), a.old, a.candidate.ID, f.run); e != nil {
+		t.Fatal(e)
+	}
+	if !f.enabled[unit] || f.count("enable") != before+1 {
+		t.Fatal("retry did not persist", f.calls)
+	}
+}
+
+func TestMaintenanceOwnerMapRefusesAmbiguousRootViews(t *testing.T) {
+	for _, tc := range []struct {
+		uid  int
+		text string
+		ok   bool
+	}{{1100, "1100 0 1\n", true}, {1100, "1100 1100 1", false}, {1100, "1100 0 2", false}, {1100, "0 0 1\n1100 0 1", false}, {0, "0 0 1", false}, {1100, "1101 0 1", false}} {
+		if got := maintenanceOwnerMap(tc.uid, tc.text); got != tc.ok {
+			t.Fatal(tc, got)
+		}
+	}
+}
+
+func TestApplicationMaintenanceAcceptsOnlyExactLinkedTemplate(t *testing.T) {
+	a, f := maintenanceFixture(t)
+	if e := InstallApplicationMaintenance(t.Context(), a.old, f.run); e != nil {
+		t.Fatal(e)
+	}
+	p, e := maintenanceManager(t.Context(), f.run, maintenanceUnit(strings.Repeat("0", 32)))
+	if e != nil {
+		t.Fatal(e)
+	}
+	link := filepath.Join(t.TempDir(), "fased-app-maintenance-system@.service")
+	if e = os.Symlink(maintenanceTemplatePath(a.old), link); e != nil {
+		t.Fatal(e)
+	}
+	p["FragmentPath"] = link
+	if e = checkMaintenanceTemplate(a.old, p); e != nil {
+		t.Fatal("valid linked template refused", e)
+	}
+	if e = os.Remove(link); e != nil {
+		t.Fatal(e)
+	}
+	foreign := filepath.Join(t.TempDir(), "foreign.service")
+	if e = os.WriteFile(foreign, maintenanceTemplate(a.old), 0600); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.Symlink(foreign, link); e != nil {
+		t.Fatal(e)
+	}
+	if e = checkMaintenanceTemplate(a.old, p); e == nil {
+		t.Fatal("foreign template alias accepted")
+	}
+}
+
+func TestCoreMaintenanceDoesNotRestartFailedOrFinishedActor(t *testing.T) {
+	for _, tc := range []struct {
+		active, sub, result string
+		ok                  bool
+	}{{"inactive", "dead", "success", true}, {"active", "running", "success", true}, {"activating", "start", "success", true}, {"active", "exited", "success", false}, {"failed", "failed", "exit-code", false}, {"unknown", "dead", "success", false}, {"inactive", "dead", "resources", false}} {
+		a, f := maintenanceFixture(t)
+		if e := InstallApplicationMaintenance(t.Context(), a.old, f.run); e != nil {
+			t.Fatal(e)
+		}
+		runner := func(ctx context.Context, args ...string) ([]byte, error) {
+			b, e := f.run(ctx, args...)
+			if args[0] == "show" {
+				text := string(b)
+				text = strings.ReplaceAll(text, "ActiveState=inactive", "ActiveState="+tc.active)
+				text = strings.ReplaceAll(text, "SubState=dead", "SubState="+tc.sub)
+				text = strings.ReplaceAll(text, "Result=success", "Result="+tc.result)
+				b = []byte(text)
+			}
+			return b, e
+		}
+		e := StartApplicationMaintenance(t.Context(), a.old, a.candidate.ID, runner)
+		if (e == nil) != tc.ok {
+			t.Fatal(tc, e)
+		}
+		want := 0
+		if tc.active == "inactive" && tc.ok {
+			want = 1
+		}
+		if f.count("start") != want {
+			t.Fatal("actor restarted", tc, f.calls)
+		}
+	}
+}
+func TestLocalMaintenancePrivilegeAssertionAndActorPath(t *testing.T) {
+	good := "NoNewPrivs:\t1\nCapEff:\t0000000000000000\nCapPrm:\t0000000000000000\nCapInh:\t0000000000000000\nCapAmb:\t0000000000000000\nCapBnd:\t00000000a80425fb\n"
+	if e := validateMaintenanceProcess(1000, 1000, good); e != nil {
+		t.Fatal(e)
+	}
+	for _, bad := range []string{strings.Replace(good, "NoNewPrivs:\t1", "NoNewPrivs:\t0", 1), strings.Replace(good, "CapPrm:\t0000000000000000", "CapPrm:\t0000000000000001", 1), strings.Replace(good, "CapAmb:\t0000000000000000", "CapAmb:\t0000000000000001", 1)} {
+		if e := validateMaintenanceProcess(1000, 1000, bad); e == nil {
+			t.Fatal("privileged actor accepted")
+		}
+	}
+	if e := validateMaintenanceProcess(0, 0, good); e == nil {
+		t.Fatal("root accepted")
+	}
+	m := Manifest{Root: "/fixed/app"}
+	if !IsApplicationMaintenanceImage(m, maintenanceExecutable(m)) || !IsApplicationMaintenanceImage(m, maintenanceExecutable(m)+" (deleted)") {
+		t.Fatal("invalid receipt could downgrade actor")
 	}
 }

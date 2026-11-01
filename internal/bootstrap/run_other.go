@@ -14,6 +14,7 @@ func owned(os.FileInfo) bool { return false }
 type InstallOptions struct {
 	Prefix, DataDirectory string
 	Start                 bool
+	Profile, Listen       string
 	upgrade               *UpgradeOptions
 }
 

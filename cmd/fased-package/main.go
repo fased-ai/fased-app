@@ -43,8 +43,8 @@ func runArgs(args []string) error {
 	}
 	if *releaseFormat {
 		commit, err := hex.DecodeString(*source)
-		if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || *desktop != "" || err != nil || len(commit) != 20 || hex.EncodeToString(commit) != *source {
-			return fmt.Errorf("release format requires headless Linux amd64 and an explicit canonical source commit")
+		if runtime.GOOS != "linux" || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") || *desktop != "" || err != nil || len(commit) != 20 || hex.EncodeToString(commit) != *source {
+			return fmt.Errorf("release format requires headless supported Linux architecture and an explicit canonical source commit")
 		}
 	}
 	if e := os.MkdirAll(*out, 0700); e != nil {

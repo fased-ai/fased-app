@@ -25,23 +25,24 @@ Onchain, Hyperliquid, Mining and the trading-focused Fased Network have separate
 
 ## Install
 
-Ubuntu 24.04 x86-64 is the first supported engineering target. Public downloads and signed native installers are still pending; start only with a verified bundle supplied through the project's reviewed distribution process. See the [installation guide](docs/guide/install.md).
+Ubuntu 24.04 x86-64 is the first target. **Public downloads are not released yet.** The one-command installer is being verified on a private VPS; no public install command is available today. See the [installation guide](docs/guide/install.md).
 
-From the extracted bundle, as an ordinary user:
+The release installer downloads and verifies Fased, prepares the required OS components and opens the terminal wizard automatically. Choose Local, Remote, Connect or Update. A root SSH session is supported: setup prepares an ordinary owner before running Fased. You will choose **SSH** or **Tailscale**, then open the private browser link and create your password. No Go, Node, npm, Git, provider or wallet is required.
 
-```sh
-./fased-app install --bundle . --interactive
-```
+| Choose      | Where Fased runs           | How you connect                           |
+| ----------- | -------------------------- | ----------------------------------------- |
+| **Local**   | Your computer              | Local browser or available desktop client |
+| **Remote**  | Your Ubuntu server         | Private SSH or Tailscale access           |
+| **Connect** | An existing instance       | Verify the instance and open its UI       |
+| **Update**  | Your existing installation | Check, update or inspect recovery         |
 
-The wizard guides setup, private access and opening Fased. It can request administrator approval for required system preparation; Fased itself does not run as root.
+Keep SSH and provider-console recovery access. Tailscale is separate software on the server and your computer; the wizard guides server preparation and enrollment. Fased needs no public management port. macOS and Windows distribution remain under acceptance; see [platform status](docs/reference/status.md).
 
-| Choose      | Where Fased runs     | How you connect                           |
-| ----------- | -------------------- | ----------------------------------------- |
-| **Local**   | Your computer        | Local browser or available desktop client |
-| **Remote**  | Your Ubuntu server   | Private SSH or Tailscale access           |
-| **Connect** | An existing instance | Verify the instance and open its UI       |
+## Updates
 
-For Remote, keep server recovery access and enroll Tailscale before choosing that route. A public management port is not required. macOS and Windows distribution remain under acceptance; see [platform status](docs/reference/status.md).
+`fased update` uses the existing installation and preserves its data. Manual is the default; opt-in Automatic and its maintenance window live in **Settings → Updates**. An existing `fased` command is preserved; use the command name printed by setup. Public update activation remains disabled.
+
+Local and Remote updates have controlled installed verification on Ubuntu24.04 x86-64. Other platform rows and public distribution remain under acceptance; see the [installation guide](docs/guide/install.md#platform-availability).
 
 ## Get started
 

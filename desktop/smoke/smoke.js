@@ -29,14 +29,14 @@
     field.blur();
   };
   try {
-    await wait(() => document.getElementById("owner-code"));
+    await wait(() => document.getElementById("owner-password"));
     phase = "owner claim";
-    const localCode = [...document.querySelectorAll("button")].find((button) =>
-      button.textContent.includes("Use this computer"),
-    );
-    if (!localCode) throw new Error("Native setup-code control missing");
-    localCode.click();
-    await wait(() => document.getElementById("owner-code").value.length === 43);
+    if (document.getElementById("owner-code"))
+      throw new Error("Manual setup code field remains");
+    await wait(() => {
+      const submit = document.querySelector(".core-auth form .primary");
+      return submit && !submit.disabled;
+    });
     input("owner-password", fixture.password);
     await pause(100);
     document.querySelector(".core-auth form .primary").click();

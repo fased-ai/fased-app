@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"encoding/hex"
 	"errors"
+	"runtime"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/bundle"
@@ -12,9 +13,12 @@ import (
 )
 
 const productionDescriptorTarget = "ubuntu-first-install/descriptor.json"
-const productionArchiveTarget = "ubuntu-first-install/" + archiveTarget
+
+var productionArchiveTarget = "ubuntu-first-install/" + archiveTarget
+
 const productionProvenanceTarget = "ubuntu-first-install/provenance.sigstore.json"
-const provenanceFile = "fased-app-linux-amd64.provenance.sigstore.json"
+
+var provenanceFile = "fased-app-linux-" + runtime.GOARCH + ".provenance.sigstore.json"
 
 // ProductionRelease is comparable so final descriptor revalidation cannot drop
 // any approved identity. These fields grant no signer/update/privileged helper

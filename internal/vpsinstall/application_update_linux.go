@@ -226,6 +226,9 @@ func replaceApplication(ctx context.Context, o hostOps, m Manifest, c Applicatio
 		return Manifest{}, e
 	}
 	defer l.Close()
+	if e := accessIdle(o, m); e != nil {
+		return Manifest{}, e
+	}
 	j, e := readApplicationJournal(o)
 	if e == nil && j.Status.ID != c.ID {
 		if c.Sequence <= j.Status.Sequence {

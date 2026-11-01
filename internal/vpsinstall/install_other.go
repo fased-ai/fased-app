@@ -25,3 +25,13 @@ func Status(context.Context, Manifest, *custodyinstall.System) (ServiceStatus, e
 	return ServiceStatus{}, unsupported
 }
 func CheckApplication(string, string, string, string, string) error { return unsupported }
+
+func SetupLink(context.Context, Manifest, *custodyinstall.System, io.Writer) error {
+	return unsupported
+}
+
+func ApplicationAcquisitionParent(Manifest) (string, error) { return "", unsupported }
+
+func ChangeAccess(context.Context, Manifest, string, *custodyinstall.System, func(context.Context, Manifest) error) (Manifest, error) {
+	return Manifest{}, unsupported
+}

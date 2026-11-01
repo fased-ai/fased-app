@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/fased-ai/fased-app/internal/hostplatform"
 	"os"
 	"path/filepath"
 	"strings"
@@ -214,5 +215,22 @@ func TestGuidedTailscaleReusesExactOfficialRepository(t *testing.T) {
 				t.Fatal("foreign repo reached privileged tools", f.calls)
 			}
 		})
+	}
+}
+
+func TestGuidedTailscaleReleaseMapping(t *testing.T) {
+	for _, version := range []string{"22.04", "24.04", "26.04", "26.10"} {
+		p, e := hostplatform.Lookup("ID=ubuntu\nVERSION_ID="+version+"\n", "amd64")
+		if e != nil {
+			t.Fatal(e)
+		}
+		f := setupFixture()
+		if e = prepareTailscale(t.Context(), preparationDirectory(t), 1000, "owner", &bytes.Buffer{}, f.read, f.run, p); e != nil {
+			t.Fatal(version, e)
+		}
+		got, _ := f.read(tailscaleSourcePath)
+		if string(got.data) != p.TailscaleSource(tailscaleKeyPath) {
+			t.Fatal(version, string(got.data))
+		}
 	}
 }

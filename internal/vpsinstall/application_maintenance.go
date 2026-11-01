@@ -66,9 +66,11 @@ func maintenanceRules(m Manifest) []maintenanceRule {
 		{"/usr/bin/passwd", `-S ` + q(m.AppUser)},
 		{"/usr/bin/setpriv", `--version`},
 		{"/usr/bin/setpriv", helper + helperImage + ` application-owner-client --config ` + q(m.Config)},
+		{"/usr/bin/setpriv", helper + q(m.Core) + ` remote-setup-link --config ` + q(m.Config)},
 		{"/usr/bin/setpriv", helper + q(m.Core) + ` update-inventory --data-dir ` + q(m.Data) + ` --probe-id ` + id},
 		{"/usr/bin/setpriv", helper + q(m.Core) + ` login --data-dir ` + q(m.Data)},
 		{"/usr/bin/setpriv", helper + q(m.Core) + ` status --data-dir ` + q(m.Data)},
+		{"/usr/bin/setpriv", helper + q(m.Core) + ` updates (status|check|apply|recover) --data-dir ` + q(m.Data)},
 		// The existing managed Remote Start preserves its autostart contract by
 		// enabling this already installed immutable unit before starting it.
 		{"/usr/bin/systemctl", `(start|stop|enable) -- ` + q(m.Unit)},

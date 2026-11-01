@@ -146,7 +146,7 @@ func TestInstallationHandoffUsesInstalledPathsAndPrivateAccess(t *testing.T) {
 		var out bytes.Buffer
 		installationHandoff(&out, m, plan, "http://127.0.0.1:7441")
 		text := out.String()
-		for _, want := range []string{m.Root, m.Data, "claim-code", "service", "status", "AUTHORIZED-DEVICE-GUIDE", "Sign in"} {
+		for _, want := range []string{m.Root, m.Data, "choose your password", "service", "status", "AUTHORIZED-DEVICE-GUIDE", "Sign in"} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s missing %q: %s", mode, want, text)
 			}
@@ -164,7 +164,7 @@ func TestInstallationHandoffSSHUsesConfiguredPort(t *testing.T) {
 	}
 	var out bytes.Buffer
 	installationHandoff(&out, localinstall.Manifest{Root: "/fixture/app", Data: "/fixture/state"}, plan, plan.Target)
-	for _, want := range []string{"ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:7441:127.0.0.1:7441 USER@VPS", "on your computer", "host key", "claim-code"} {
+	for _, want := range []string{"ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:7441:127.0.0.1:7441 USER@VPS", "on your computer", "host key", "choose your password"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("missing %q: %s", want, out.String())
 		}

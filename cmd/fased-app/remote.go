@@ -2,11 +2,13 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/fased-ai/fased-app/internal/hostprep"
 	"io"
 	"os"
 	"path/filepath"
@@ -133,6 +135,16 @@ func managedRemoteInstall(ctx context.Context, corePath, hash, listen string, pl
 	if err != nil {
 		return err
 	}
+	if e := installCommand(m.Core, m.Root, m.Data, true, errOut); e != nil {
+		return e
+	}
+	if admitted.prepareUpdates {
+		// This durable, bounded grant is distinct from changing automatic policy.
+		updateSystem := remoteSystem(os.Stdin, errOut)
+		if e := prepareRemoteUpdateAuthority(ctx, m, updateSystem, io.Discard); e != nil {
+			return e
+		}
+	}
 	url := ""
 	if start {
 		url, err = enableRemoteAccess(ctx, m, system)
@@ -140,28 +152,65 @@ func managedRemoteInstall(ctx context.Context, corePath, hash, listen string, pl
 			return remoteAccessPending(m, err)
 		}
 	}
-	remoteHandoff(errOut, m, plan, start)
+	setupURL := ""
+	if start {
+		var link bytes.Buffer
+		if err = vpsinstall.SetupLink(ctx, m, system, &link); err != nil {
+			return err
+		}
+		setupURL = strings.TrimSpace(link.String())
+	}
+	remoteHandoff(errOut, m, installationSSHPlan(plan, os.Getenv("SSH_CONNECTION")), start, setupURL)
 	return json.NewEncoder(out).Encode(map[string]any{"installed": true, "location": "remote", "managed": true, "application": m.Core, "data": m.Data, "url": url, "autostart": start, "walletsConnected": false})
 }
 
-func remoteHandoff(out io.Writer, m vpsinstall.Manifest, plan privateaccess.Plan, started bool) {
+func remoteOwnerLink(ctx context.Context, m vpsinstall.Manifest, system *custodyinstall.System, out io.Writer) error {
+	var link bytes.Buffer
+	if e := vpsinstall.SetupLink(ctx, m, system, &link); e != nil {
+		return e
+	}
+	if os.Getenv("FASED_INSTALL_ROOT_ENTRY") != "1" {
+		_, e := out.Write(link.Bytes())
+		return e
+	}
+	mode := "ssh"
+	if m.PublicOrigin != "" {
+		mode = "tailscale"
+	}
+	plan, e := privateaccess.System().Plan(ctx, mode, m.Listen)
+	if e != nil {
+		return e
+	}
+	remoteHandoff(out, m, installationSSHPlan(plan, os.Getenv("SSH_CONNECTION")), true, strings.TrimSpace(link.String()))
+	return nil
+}
+
+func remoteHandoff(out io.Writer, m vpsinstall.Manifest, plan privateaccess.Plan, started bool, setupURL string) {
 	command := func(action string) string { return installationCommand(m.Core, "vps", action) }
 	fmt.Fprintln(out, "Fased Remote is installed with a separate application account.")
 	if !started {
 		fmt.Fprintln(out, "Start the instance and prepare private access:")
 		fmt.Fprintln(out, command("start"))
 	} else {
+		origin := strings.SplitN(setupURL, "/?instance=", 2)[0]
 		for _, line := range plan.Instructions {
+			if origin != "" {
+				line = strings.ReplaceAll(line, origin, "the setup link below")
+			}
 			fmt.Fprintln(out, line)
 		}
-		fmt.Fprintln(out, "First visit: get the owner setup code here, then set your password in Fased:")
-		fmt.Fprintln(out, command("claim-code"))
+		fmt.Fprintln(out, "Open Fased and choose your password:")
+		fmt.Fprintln(out, setupURL)
 		fmt.Fprintln(out, "Already set up? Sign in with your owner password.")
 	}
-	fmt.Fprintln(out, "Check the instance:")
-	fmt.Fprintln(out, command("status"))
+	if os.Getenv("FASED_INSTALL_ROOT_ENTRY") == "1" {
+		fmt.Fprintln(out, "From your administrator SSH shell, rerun the installer with --status, --stop, --start, --update or --recover. Fased itself runs as the ordinary installation owner.")
+	} else {
+		fmt.Fprintln(out, "Check the instance:")
+		fmt.Fprintln(out, command("status"))
+	}
 	fmt.Fprintln(out, "Keep administrative SSH or provider-console access. SSH and firewall policy have not been changed.")
-	if plan.Mode == "tailscale" {
+	if plan.Mode == "tailscale" && os.Getenv("FASED_INSTALL_ROOT_ENTRY") != "1" {
 		fmt.Fprintln(out, "After private sign-in and console recovery work, open SSH through Tailscale to review network lockdown:")
 		fmt.Fprintln(out, command("harden"))
 	}
@@ -212,9 +261,13 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 		return errors.New("unknown vps action")
 	}
 	f := flag.NewFlagSet("vps "+action, flag.ContinueOnError)
+	configure := f.Bool("configure", false, "guide private access change for the same workspace")
 	f.SetOutput(errOut)
 	if err := f.Parse(args[1:]); err != nil {
 		return err
+	}
+	if *configure && action != "access" {
+		return errors.New("configure is an access option")
 	}
 	if (action == "confirm" && f.NArg() != 1) || (action != "confirm" && f.NArg() != 0) {
 		return errors.New("unexpected vps arguments")
@@ -230,7 +283,11 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 	ctx := context.Background()
 	cancel := func() {}
 	if action != "recover" {
-		ctx, cancel = context.WithTimeout(ctx, remoteOperationTimeout)
+		budget := remoteOperationTimeout
+		if *configure {
+			budget = 15 * time.Minute
+		}
+		ctx, cancel = context.WithTimeout(ctx, budget)
 	}
 	defer cancel()
 	if action == "login" {
@@ -245,6 +302,9 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 		return e
 	}
 	if enrolled {
+		if *configure {
+			return errors.New("custody is enrolled; preserve current access and keys until its dedicated access migration is supported")
+		}
 		switch action {
 		case "status", "start", "stop", "claim-code", "recover", "access", "remove":
 			if action == "remove" {
@@ -271,6 +331,9 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 			}
 			return enrolledLifecycle(ctx, target, action, true, true, out, enrolledSystem(system))
 		}
+	}
+	if *configure {
+		return configureRemoteAccess(ctx, m, system, in, out, errOut)
 	}
 	switch action {
 	case "harden", "confirm", "rollback", "network":
@@ -308,6 +371,9 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 		if err != nil {
 			return err
 		}
+		if err = remoteOwnerLink(ctx, m, system, errOut); err != nil {
+			return err
+		}
 		fmt.Fprintln(out, url)
 		return nil
 	case "stop":
@@ -321,8 +387,12 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 		if err != nil {
 			return err
 		}
+		if err = remoteOwnerLink(ctx, m, system, errOut); err != nil {
+			return err
+		}
 		fmt.Fprintln(out, url)
 		return nil
+
 	case "remove":
 		dir, err := remoteAccessDirectory()
 		if err != nil {
@@ -387,5 +457,55 @@ func vpsEnrollmentTarget(action, data string, lookup func(string) (custodyinstal
 }
 
 func remoteAccessPending(m vpsinstall.Manifest, cause error) error {
+	if os.Getenv("FASED_INSTALL_ROOT_ENTRY") == "1" {
+		return fmt.Errorf("private access is pending; complete its setup and rerun the same installer. Installed data is preserved: %w", cause)
+	}
 	return fmt.Errorf("Remote is installed; private access is pending: %w; retry with %s", cause, installationCommand(m.Core, "vps", "access"))
+}
+
+func configureRemoteAccess(ctx context.Context, m vpsinstall.Manifest, system *custodyinstall.System, in io.Reader, out, errOut io.Writer) error {
+	reader := bufio.NewReader(in)
+	choice, e := installationPrivateAccessChoice(reader, errOut)
+	if e != nil {
+		return e
+	}
+	plan, e := installationPrivateAccess(ctx, reader, errOut, choice, m.Listen, privateaccess.System().Plan, hostprep.PrepareTailscale)
+	if e != nil {
+		return e
+	}
+	dir, e := remoteAccessDirectory()
+	if e != nil {
+		return e
+	}
+	original, e := vpsinstall.Status(ctx, m, system)
+	if e != nil {
+		return e
+	}
+	confirm := func(ctx context.Context, target vpsinstall.Manifest) error {
+		manager := privateaccess.System()
+		if target.PublicOrigin == "" {
+			return manager.Remove(ctx, dir)
+		}
+		chosen, e := manager.Plan(ctx, "tailscale", target.Listen)
+		if e != nil {
+			return e
+		}
+		if chosen.Origin != target.PublicOrigin {
+			return errors.New("private origin differs from this Tailscale device")
+		}
+		return manager.Enable(ctx, dir, chosen, original.InstanceID)
+	}
+	target, e := vpsinstall.ChangeAccess(ctx, m, remotePublicOrigin(plan), system, confirm)
+	if e != nil {
+		return e
+	}
+	if e = remoteOwnerLink(ctx, target, system, errOut); e != nil {
+		return e
+	}
+	url := "http://" + target.Listen
+	if target.PublicOrigin != "" {
+		url = target.PublicOrigin
+	}
+	fmt.Fprintln(out, url)
+	return nil
 }

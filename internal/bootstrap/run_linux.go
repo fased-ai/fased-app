@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,12 +27,23 @@ func owned(i os.FileInfo) bool {
 type InstallOptions struct {
 	Prefix, DataDirectory string
 	Start                 bool
+	Profile, Listen       string
 	upgrade               *UpgradeOptions
 }
 
 // Run uses the already-reviewed ordinary installer/wizard. No arbitrary command,
 // update receipt, owner session or financial permission can select the program.
 func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader, out, errOut io.Writer) error {
+	if options.Profile != "" && options.Profile != "remote" && options.Profile != "local" && options.Profile != "connect" {
+		return errors.New("invalid installation profile")
+	}
+	if options.Listen != "" {
+		host, port, e := net.SplitHostPort(options.Listen)
+		n, ne := strconv.Atoi(port)
+		if e != nil || ne != nil || host != "127.0.0.1" || n < 1024 || n > 65535 || strconv.Itoa(n) != port {
+			return errors.New("installation requires a fixed loopback listener")
+		}
+	}
 	if p == nil {
 		return errors.New("verified bootstrap required")
 	}
@@ -68,6 +80,12 @@ func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader
 		return err
 	}
 	args := []string{"install", "--bundle", p.report.BundleDirectory, "--bundle-sha256", p.report.BundleSHA256, "--interactive", "--verification-output", p.options.Directory, "--bootstrap-sequence", strconv.FormatUint(p.report.Sequence, 10), "--bootstrap-release-sha256", p.report.DescriptorSHA256}
+	if options.Profile != "" {
+		args = append(args, "--profile", options.Profile)
+	}
+	if options.Listen != "" {
+		args = append(args, "--listen", options.Listen)
+	}
 	if options.upgrade != nil {
 		args, err = p.upgradeArguments(*options.upgrade)
 		if err != nil {
@@ -107,6 +125,9 @@ func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader
 	command.Args[0] = filepath.Join(p.report.BundleDirectory, engine)
 	command.ExtraFiles = []*os.File{f}
 	command.Stdin, command.Stdout, command.Stderr = in, out, errOut
+	if options.Profile != "" {
+		command.Stdout = io.Discard
+	}
 	p.invoked, p.report.InstallerInvoked = true, true
 	return command.Run()
 }
