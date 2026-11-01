@@ -76,9 +76,26 @@ type ReleaseFinalizationReport struct {
 	Published        bool   `json:"published"`
 	Activation       bool   `json:"activation"`
 }
+
+// ReleasePublication contains only already verified public metadata and the
+// immutable release identity. A separate approved digest binds publisher input.
+type ReleasePublication struct {
+	Version        int               `json:"version"`
+	SigningProfile string            `json:"signingProfile"`
+	Repository     string            `json:"repository"`
+	RepositoryID   string            `json:"repositoryId"`
+	OwnerID        string            `json:"ownerId"`
+	MetadataBranch string            `json:"metadataBranch"`
+	SeedSHA256     string            `json:"seedSha256"`
+	PlanSHA256     string            `json:"planSha256"`
+	Descriptor     Descriptor        `json:"descriptor"`
+	Files          map[string][]byte `json:"files"`
+}
+
 type FinalizedRelease struct {
-	Files  map[string][]byte
-	Report ReleaseFinalizationReport
+	Files       map[string][]byte
+	Publication ReleasePublication
+	Report      ReleaseFinalizationReport
 }
 type ReleaseFinalizer struct {
 	seed                         Seed
@@ -370,6 +387,7 @@ func (f *ReleaseFinalizer) Finalize(a ReleaseApprovals) (FinalizedRelease, error
 		return empty, err
 	}
 	files := map[string][]byte{fmt.Sprintf("%d.root.json", f.root.Signed.Version): append([]byte(nil), f.seed.Root...), "timestamp.json": timestamp, fmt.Sprintf("%d.snapshot.json", f.plan.Versions.Snapshot): snapshot, fmt.Sprintf("%d.targets.json", f.plan.Versions.Targets): targets, descriptorPath(f.seed, mustReleaseHash(f.descriptor)): append([]byte(nil), f.descriptor...), "targets/provenance/" + digest(f.proof) + ".sigstore.json": append([]byte(nil), f.proof...)}
-	return FinalizedRelease{Files: files, Report: ReleaseFinalizationReport{Version: 1, SeedSHA256: f.pin, PlanSHA256: f.planHash, DescriptorSHA256: digest(f.descriptor), ArchiveSHA256: d.Archive.SHA256, MetadataVerified: true}}, nil
+	publication := ReleasePublication{Version: 1, SigningProfile: f.seed.SigningProfile, Repository: f.seed.Repository, RepositoryID: f.seed.GitHub.RepositoryID, OwnerID: f.seed.Provenance.OwnerID, MetadataBranch: f.seed.GitHub.MetadataBranch, SeedSHA256: f.pin, PlanSHA256: f.planHash, Descriptor: d, Files: files}
+	return FinalizedRelease{Files: files, Publication: publication, Report: ReleaseFinalizationReport{Version: 1, SeedSHA256: f.pin, PlanSHA256: f.planHash, DescriptorSHA256: digest(f.descriptor), ArchiveSHA256: d.Archive.SHA256, MetadataVerified: true}}, nil
 }
 func mustReleaseHash(b []byte) []byte { sum, _ := hex.DecodeString(digest(b)); return sum }

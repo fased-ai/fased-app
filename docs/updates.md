@@ -39,6 +39,13 @@ role requests, verifies imported signatures and emits metadata through the same
 production bootstrap verifier. It accepts no private key and activates nothing.
 See the [publisher preparation procedure](maintainers/ubuntu-release.md).
 
+**Policy precedence:** the single-owner section below is the revised production
+recommendation. Earlier multi-person thresholds and independent-bootstrap
+requirements retained in historical/fixture contracts describe the old enforced
+profile. They are not active staffing requirements. The explicit new
+profile and dormant publisher are implemented; production bindings, operational
+acceptance and public activation remain open.
+
 ### Trust architecture and scope
 
 Use The Update Framework (TUF) for production metadata verification. Its roles
@@ -55,8 +62,8 @@ Keep four separate authorities:
 
 | Authority                               | Permitted decision                                              | Boundary                                                                                  |
 | --------------------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Offline root quorum                     | Appoint/remove metadata keys and thresholds                     | Cannot substitute a wallet grant or reset financial history                               |
-| Offline targets quorum                  | Authorize one exact release descriptor and artifact set         | Cannot authorize arbitrary installer commands, paths or wallet use                        |
+| Offline root authority                  | Appoint/remove metadata keys and thresholds                     | Cannot substitute a wallet grant or reset financial history                               |
+| Offline release authority               | Authorize one exact release descriptor and artifact set         | Cannot authorize arbitrary installer commands, paths or wallet use                        |
 | Build/publisher identities              | Build, attest, transport and serve authorized bytes             | Cannot manufacture root/targets approval                                                  |
 | Installed OS owner/lifecycle controller | Review and apply a verified compatible release to this instance | Must obtain actual signer inventory/floors, pause and recover; no automatic unlock/resume |
 
@@ -64,8 +71,9 @@ Release signing keys are **publisher software keys**, separate from every user
 wallet key, Hyperliquid API wallet and fixture signer identity. An authorized bad
 signer binary could compromise future wallet use; signatures prove publisher
 authorization, not code safety. Code review, isolated builds, provenance and
-owner review remain necessary. Network/repository compromise, one sub-quorum
-offline key, stolen online metadata keys and interrupted persistence are in scope.
+owner review remain necessary. Network/repository compromise, stolen online metadata keys and interrupted
+persistence are in scope. The proposed single-owner profile does not tolerate
+compromise of its sole Root or Targets key.
 A compromised root quorum or host administrator requires independent recovery;
 this design cannot protect an already compromised running host.
 
@@ -73,43 +81,38 @@ The first proposed public custody/update target is Ubuntu 24.04 Linux amd64.
 Native macOS/Windows custody, signed installers, actual private VPS and retail
 acceptance remain their own gates. Portable source/cross-builds do not close them.
 
-### Key custody, roles and operating windows
+### Single-owner signing policy — proposed, not activated
 
-| Role      | Proposed threshold            | Custody and permitted operation                                                                                              | Maximum metadata validity |
-| --------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| Root      | 2 of 3 distinct Ed25519 keys  | Offline; three independent custodians/locations, any quorum needs two accountable people; approve role/key/threshold changes | 365 days                  |
-| Targets   | 2 of 3 different Ed25519 keys | Offline/manual signing; approve exact candidate digests and provenance; no reuse of root keys                                | 30 days                   |
-| Snapshot  | 1 dedicated key               | Restricted metadata service/job; bind approved target-metadata versions                                                      | 7 days                    |
-| Timestamp | 1 different dedicated key     | Restricted metadata service/job; advertise fresh approved snapshot                                                           | 48 hours                  |
+The customer flow is **install from the official link → click Update**, or opt in to automatic updates later. The publisher flow is **review → build → approve/sign → publish on GitHub**. Verification runs automatically. No customer keys, fingerprint copying, extra setup codes, signing account or paid signing service are required for this Ubuntu proposal.
 
-Assign named primary/backup custodians and incident contacts before production.
-Keeping three keys on one laptop does not meet independent custody. Backup
-arrangements must not let one custodian recover a second key in the same role.
-The same three people may hold separate root and targets keys; no person controls
-a quorum in either role. Root/targets private keys must not enter source, CI
-artifacts, app/signer services, ordinary developer environment files or publisher
-secrets. Choose reviewed offline signing
-devices/software with encrypted backups, separately stored recovery material and
-an observed restore exercise. A hardware device is an option, not a claim that
-existing infrastructure provides an enclave. No purchases or enrollment are
-authorized here. Insufficient personnel/custody keeps release activation blocked;
-do not silently lower the threshold.
+A private signing key approves a release. The matching public key lets Fased verify that approval without possessing the private key. These are software-release keys, unrelated to wallets, RPC, provider login or encryption of user data. A Git push or HTTPS download alone does not establish release approval for an already installed verifier.
 
-Use separate least-privilege snapshot/timestamp/publish identities. They may
-refresh already authorized metadata, never add targets or lengthen offline
-authorization. Refresh timestamp at least every 12 hours, snapshot before its
-remaining validity falls below 48 hours, targets before 7 days remain and root
-before 30 days remain. Shorter parent-role validity limits effective freshness.
-Repository refresh operations are distinct from client automatic installation;
-neither job nor client timer is installed now. Staffing, monitoring and recovery
-for these windows must pass a disposable rehearsal before public activation.
+**Recommendation:** replace the three-person/eight-key production proposal with one accountable release owner and four distinct metadata-role keys, each requiring one signature. Retain the existing TUF verifier/controller/finalizer architecture. The owner uses one release-signing action; tooling handles metadata roles. No new signing service/vendor, committee or personnel requirement.
 
-Every signing ceremony records the role, distinct public key IDs, metadata version,
-exact signed-byte digest, validity, approvals, operator identities and backup test
-reference. Retain public records and every intermediate root; never retain private
-keys/unlock material in evidence. Pin reviewed library versions and retain their
-licenses. Use TUF's own canonical signing representation, not the development
-envelope's raw-byte signature convention.
+| Role              | Proposed handling                                                                                                                      | Purpose                                                             |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Root / recovery   | One offline, encrypted key; separate device/storage from routine signing; encrypted backup in a different location                     | Authorize replacement/rotation of trusted release keys; used rarely |
+| Targets / release | One different encrypted, owner-controlled signing key, unlocked only for release approval/renewal; absent from source, app, VPS and CI | Approve exact reviewed artifact digests and provenance              |
+| Snapshot          | One restricted automation key                                                                                                          | Bind consistent versions of already approved metadata               |
+| Timestamp         | One different restricted automation key                                                                                                | Keep approved metadata fresh                                        |
+
+One person can own all four roles; there are no external custodians. Snapshot/Timestamp automation cannot introduce an unapproved release or extend the offline release authorization. Publishing credentials are separately scoped. Keep private keys out of chat, repositories, logs and artifacts. Two encrypted backups of a key are backups, not extra signing identities. No hardware purchase is required; a supported hardware signer is optional later.
+
+Retain existing validity ceilings (Root365d, Targets30d, Snapshot7d, Timestamp48h) and refresh windows. Routine refresh is publisher automation, independent of whether users enable automatic installation. The release owner renews Targets before seven days remain and Root before thirty days remain. Monitoring alerts on failed refresh; expiry blocks new update admission, not permission to erase/reinitialize data or unlock wallets. Do not ask the owner to refresh metadata manually every twelve hours or invent another daemon; implement the smallest restricted scheduled publisher operation during the release package.
+
+**Tradeoff:** no second person can stop an owner-authorized mistake or theft of a sufficient signing credential. A compromised release key can authorize malicious updates while it remains trusted; an offline Root can revoke it for clients that receive valid recovery metadata, but cannot undo malware already installed. Root compromise requires an independently authenticated recovery/reinstall path. Losing the only usable Root key and all backups can strand the trusted update chain. Keep Root and routine release material separated in practice, not just in filenames. Separate online keys reduce authority exposure but do not compensate for an already compromised signing machine. GitHub protections and build provenance remain necessary; signatures do not prove code safety.
+
+**First installation recommendation:** use an official HTTPS installer endpoint under a Fased-controlled domain, with DNS/hosting administration protected separately from release-upload credentials. It bootstraps the bundled public trust and downloads/verifies the exact GitHub package before running Fased. This deliberately trusts the initial website/TLS delivery; it is not independent cryptographic proof if that endpoint is compromised. Accept that conventional bootstrap tradeoff explicitly, record the actual hostname/operator, and never claim same-origin checksums solve it. Customers follow one official link; no manual public-key ceremony. Installed updates then use pinned signature/provenance/version/expiry checks. Existing stronger initial-acquisition requirements remain enforced until an authorized implementation explicitly supports this policy.
+
+**Implementation / controlled verification:** the pinned v3 seed now accepts the explicit `single-owner-v1` signing profile with four distinct 1-of-1 role keys. Empty profile retains the original eight-key/2-of-3 policy; unknown profiles, development promotion, mixed role keys and wrong thresholds refuse. The existing finalizer verifies approvals and writes `publication.json` alongside its original output. `scripts/publish-ubuntu-release.mjs` provides explicit-credential publisher functions: stage exact assets as draft against an existing annotated tag/source; release only the reviewed complete finalized candidate; verify immutable release/assets; publish exact metadata with checked Git object identities, preserved history, a non-force ref change and readback. Inputs are snapshotted; uncertain mutations are not retried. There is no CLI, automatic credential lookup, import-time fetch or enabled workflow. Production key generation, schedule and public activation remain absent.
+
+Publisher callers must supply and await a durable operation recorder before each irreversible attempt; a test callback is not evidence of operational crash recovery. Existing finalizer/Update recovery evidence retains its original scope. An actual protected metadata branch, release immutability settings, narrowly scoped publisher credential and durable recorder/operator procedure must be configured and accepted at authorized production setup. No settings are changed here. Do not infer public acquisition/installation or live publisher acceptance from controlled unit tests. Reuse old fixture evidence only for its unchanged profile.
+
+**Before production:** confirm this single-owner recommendation and HTTPS-bootstrap risk; designate the release owner, backup location/responsibility, official hostname and publishing account. Then separately authorize key setup and reviewed delivery/build/publication steps. Existing public seed and approval fields remain null; no production keys, account permissions, metadata job, publication or activation is authorized here.
+
+This proposal supersedes the multi-person requirement in the active planning queue; historical/fixture sections remain records of the earlier profile. It does not weaken the running verifier by documentation.
+
+Sources: [TUF roles and thresholds](https://theupdateframework.github.io/specification/v1.0.36/), [separate/offline keys and compromise recovery](https://theupdateframework.io/docs/faq/).
 
 ### First installation and initial trust
 
@@ -448,16 +451,16 @@ may need owner-authorized containment beyond a metadata update.
 All entries below are **UNASSIGNED/BLOCKED**, not credentials to fill automatically.
 Named owner approval and recorded evidence are required before activating them.
 
-| Decision              | Required concrete record                                                                                                                         |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Initial bootstrap     | Supported distribution/OS signing chain or independent verification channel; exact verifier/root/checkpoint digests                              |
-| Roles/custodians      | Named 2-of-3 root and targets custodians, distinct online-role owners, backup locations/restore evidence and monitoring rota                     |
-| Origins/transport     | Repository ID; protected metadata branch/path; exact metadata/API/CDN hosts and redirect/DNS policy; outage behavior                             |
-| Release authorization | Approvers, sequence ledger owner, supported target/channel, retention policy, publisher identity/least privilege and protected workflow revision |
-| Provenance            | Attestation verification mechanism, expected builder/source/workflow identities, retained verification roots/material                            |
-| Trusted state/time    | Library/version/license review, durable store/clock policy, production signer/owner handoff contract and lifecycle-reader compatibility          |
-| Incident/recovery     | Named contacts, compromise/expiry/lost-quorum drill, independently authenticated rescue path and supported old-client horizon                    |
-| Platform/retail       | Native signing credentials/acceptance, real private VPS, authoritative recovery and representative first-install/update trial                    |
+| Decision              | Required concrete record                                                                                                                                                         |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Initial bootstrap     | Supported distribution/OS signing chain or independent verification channel; exact verifier/root/checkpoint digests                                                              |
+| Signing ownership     | One release owner; separate Root/Targets/Snapshot/Timestamp keys, encrypted backups/restore evidence, restricted refresh/publish permissions; new profile implementation pending |
+| Origins/transport     | Repository ID; protected metadata branch/path; exact metadata/API/CDN hosts and redirect/DNS policy; outage behavior                                                             |
+| Release authorization | Approvers, sequence ledger owner, supported target/channel, retention policy, publisher identity/least privilege and protected workflow revision                                 |
+| Provenance            | Attestation verification mechanism, expected builder/source/workflow identities, retained verification roots/material                                                            |
+| Trusted state/time    | Library/version/license review, durable store/clock policy, production signer/owner handoff contract and lifecycle-reader compatibility                                          |
+| Incident/recovery     | Named contacts, compromise/expiry/lost-quorum drill, independently authenticated rescue path and supported old-client horizon                                                    |
+| Platform/retail       | Native signing credentials/acceptance, real private VPS, authoritative recovery and representative first-install/update trial                                                    |
 
 Required future acceptance uses disposable keys, controlled clocks/HTTPS, isolated
 identities and no live wallets. Each case must retain exact inputs/results and
@@ -465,20 +468,20 @@ demonstrate zero financial/install authority until its explicit owner stage:
 
 Inject fixture clocks; do not change the owner's system clock or trust settings.
 
-| ID    | Predicate that must fail safely or pass with exact bindings                                                                                                     |
-| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| RT-01 | Independently authenticated seed succeeds; substituted installer/root, same-origin checksum-only proof and development-to-production promotion refuse           |
-| RT-02 | Genuine distinct-key thresholds succeed; duplicate signatures, one-key root/targets approval, wrong role/channel/repository and unknown keys refuse             |
-| RT-03 | Valid root succession and expired-intermediate catch-up succeed; skipped versions, missing old/new quorum and expired final root refuse                         |
-| RT-04 | Expired/frozen/mixed/rolled-back metadata, invalid clock and unauthorized target/provenance changes refuse before candidate admission                           |
-| RT-05 | Controlled exact asset/redirect succeeds; cross-origin/wildcard/downgrade/private-DNS/rebinding/token leakage, extra redirect and unbounded/partial data refuse |
-| RT-06 | Complete pair/provenance/helper bindings pass; mixed platform, changed source/workflow/digest, omitted helper or arbitrary archive/hook/path refuses            |
-| RT-07 | Interrupted/concurrent trust writes recover monotonically; corrupted/missing/restored-old trust state cannot reset release or financial floors                  |
-| RT-08 | Current/offline client rotation and online-cache reset preserve financial state; revoked-key/target admission fails after verified fresh revocation             |
-| RT-09 | Immutable owner and signer independently verify production authorization; app-forged receipts/inventory/approval, unsupported readers and expired intent refuse |
-| RT-10 | Mid-lifecycle expiry/revocation keeps holds; protected pre-commit rollback/abort preserves state; committed rollback and stale financial restore refuse         |
-| RT-11 | Public readback matches approved immutable source/artifacts/metadata/provenance; failed promotion retains evidence and never reuses a sequence for other bytes  |
-| RT-12 | Lost quorum/store and publisher outage produce actionable independent recovery without an unsigned/force path, automatic unlock or bot resume                   |
+| ID    | Predicate that must fail safely or pass with exact bindings                                                                                                                                               |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| RT-01 | Independently authenticated seed succeeds; substituted installer/root, same-origin checksum-only proof and development-to-production promotion refuse                                                     |
+| RT-02 | Explicit approved profile thresholds succeed; the new production profile requires its own tests; old 2-of-3 fixtures still reject one-key approval; wrong role/channel/repository and unknown keys refuse |
+| RT-03 | Valid root succession and expired-intermediate catch-up succeed; skipped versions, missing old/new quorum and expired final root refuse                                                                   |
+| RT-04 | Expired/frozen/mixed/rolled-back metadata, invalid clock and unauthorized target/provenance changes refuse before candidate admission                                                                     |
+| RT-05 | Controlled exact asset/redirect succeeds; cross-origin/wildcard/downgrade/private-DNS/rebinding/token leakage, extra redirect and unbounded/partial data refuse                                           |
+| RT-06 | Complete pair/provenance/helper bindings pass; mixed platform, changed source/workflow/digest, omitted helper or arbitrary archive/hook/path refuses                                                      |
+| RT-07 | Interrupted/concurrent trust writes recover monotonically; corrupted/missing/restored-old trust state cannot reset release or financial floors                                                            |
+| RT-08 | Current/offline client rotation and online-cache reset preserve financial state; revoked-key/target admission fails after verified fresh revocation                                                       |
+| RT-09 | Immutable owner and signer independently verify production authorization; app-forged receipts/inventory/approval, unsupported readers and expired intent refuse                                           |
+| RT-10 | Mid-lifecycle expiry/revocation keeps holds; protected pre-commit rollback/abort preserves state; committed rollback and stale financial restore refuse                                                   |
+| RT-11 | Public readback matches approved immutable source/artifacts/metadata/provenance; failed promotion retains evidence and never reuses a sequence for other bytes                                            |
+| RT-12 | Lost quorum/store and publisher outage produce actionable independent recovery without an unsigned/force path, automatic unlock or bot resume                                                             |
 
 These remain production acceptance obligations. Fixture engineering tests below
 do not authenticate production bindings or close public acceptance.

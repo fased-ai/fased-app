@@ -182,3 +182,29 @@ test("one release selects authenticated amd64 and arm64 tuples with update/local
     }),
   );
 });
+
+test("single-owner entry preserves Local/Remote/Update and rejects profile invention", () => {
+  const configured = {
+    ...config,
+    seed: Buffer.from(
+      JSON.stringify({
+        ...JSON.parse(seed),
+        signingProfile: "single-owner-v1",
+      }),
+    ),
+  };
+  const script = renderEntry(template, configured);
+  assert.match(script, /--local/);
+  assert.match(script, /--remote/);
+  assert.match(script, /--update/);
+  assert.match(script, /--install --profile/);
+  assert.doesNotMatch(script, /skip-verify/);
+  assert.throws(() =>
+    renderEntry(template, {
+      ...configured,
+      seed: Buffer.from(
+        JSON.stringify({ ...JSON.parse(seed), signingProfile: "arbitrary" }),
+      ),
+    }),
+  );
+});

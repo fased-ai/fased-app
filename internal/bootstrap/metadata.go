@@ -22,6 +22,11 @@ import (
 const Purpose = "fased-app-first-install-development:v1"
 const GitHubPurpose = "fased-app-first-install-github-controlled:v1"
 const ProductionPurpose = "fased-app-first-install-production:v1"
+
+// SingleOwnerSigningProfile is explicit in the pinned production seed. Empty
+// retains the original threshold policy; development seeds cannot opt into it.
+const SingleOwnerSigningProfile = "single-owner-v1"
+
 const descriptorTarget = "bootstrap/descriptor.json"
 
 var archiveTarget = "fased-app-linux-" + runtime.GOARCH + ".tar.gz"
@@ -46,6 +51,7 @@ func (b Binding) valid() bool {
 
 type Seed struct {
 	Binding
+	SigningProfile  string                    `json:"signingProfile,omitempty"`
 	Origin          string                    `json:"origin"`
 	Root            []byte                    `json:"root"`
 	CreatedAt       int64                     `json:"createdAt"`
@@ -141,19 +147,31 @@ func parseSeed(b []byte, pin string, now time.Time) (Seed, error) {
 	if err := metadataShape(seed.Root, "root"); err != nil {
 		return seed, err
 	}
+	counts := map[string]int{"root": 3, "targets": 3, "snapshot": 1, "timestamp": 1}
+	keyCount := 8
+	switch seed.SigningProfile {
+	case "": // Original roots/fixtures keep their exact quorum, never inferred.
+	case SingleOwnerSigningProfile:
+		if seed.Version != 3 || seed.DevelopmentOnly {
+			return seed, errors.New("single-owner signing requires a pinned production seed")
+		}
+		counts["root"], counts["targets"], keyCount = 1, 1, 4
+	default:
+		return seed, errors.New("unsupported signing profile")
+	}
 	root, err := metadata.Root().FromBytes(seed.Root)
-	if err != nil || !root.Signed.ConsistentSnapshot || len(root.Signed.Roles) != 4 || len(root.Signed.Keys) != 8 || !root.Signed.Expires.After(now) || root.Signed.Expires.After(time.Unix(seed.CreatedAt, 0).Add(365*24*time.Hour)) || seed.ExpiresAt > root.Signed.Expires.Unix() {
+	if err != nil || !root.Signed.ConsistentSnapshot || len(root.Signed.Roles) != 4 || len(root.Signed.Keys) != keyCount || !root.Signed.Expires.After(now) || root.Signed.Expires.After(time.Unix(seed.CreatedAt, 0).Add(365*24*time.Hour)) || seed.ExpiresAt > root.Signed.Expires.Unix() {
 		return seed, errors.New("invalid current first-install TUF root")
 	}
 	ids, pubs := map[string]bool{}, map[string]bool{}
-	for role, count := range map[string]int{"root": 3, "targets": 3, "snapshot": 1, "timestamp": 1} {
+	for role, count := range counts {
 		r := root.Signed.Roles[role]
 		threshold := 1
 		if count == 3 {
 			threshold = 2
 		}
 		if r == nil || r.Threshold != threshold || len(r.KeyIDs) != count {
-			return seed, errors.New("root/targets require two of three separate keys; online roles require their own key")
+			return seed, errors.New("role threshold/key count differs from pinned signing profile")
 		}
 		for _, id := range r.KeyIDs {
 			key := root.Signed.Keys[id]

@@ -23,6 +23,10 @@ function targetValues(config) {
   if (
     trust.repository !== "fased-ai/fased-app" ||
     trust.target?.os !== "linux" ||
+    (trust.signingProfile !== undefined &&
+      (trust.signingProfile !== "single-owner-v1" ||
+        trust.version !== 3 ||
+        trust.developmentOnly !== false)) ||
     !["amd64", "arm64"].includes(trust.target?.arch)
   )
     throw Error("Wrong installer trust identity");

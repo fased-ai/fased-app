@@ -98,7 +98,7 @@ func publishProduction(f *firstFixture, proof []byte, omit bool) {
 		}
 		f.targets.Signed.Targets[name] = v
 	}
-	for _, signer := range f.keys["targets"][:2] {
+	for _, signer := range f.keys["targets"][:f.targetSignatures] {
 		if _, e := f.targets.Sign(signer); e != nil {
 			f.t.Fatal(e)
 		}
@@ -122,19 +122,26 @@ func publishProduction(f *firstFixture, proof []byte, omit bool) {
 
 func productionFixture(t *testing.T, variant string) (*firstFixture, Options, *atomic.Int64) {
 	t.Helper()
-	f := newFirstFixture(t)
+	f := newFirstFixture(t, variant)
 	version := "1.2.3"
 	if variant == "prerelease" {
 		version = "1.2.3-rc.1"
 	}
 	f.archive, f.descriptor.BundleSHA256 = releaseArchive(t, f.archive, variant == "engineering-bundle", version)
 	f.seed.Binding = Binding{Version: 3, Purpose: ProductionPurpose, Repository: "fased-ai/fased-app", Channel: "stable", Target: update.Target{OS: "linux", Arch: "amd64"}}
+	if variant == SingleOwnerSigningProfile {
+		f.seed.SigningProfile = SingleOwnerSigningProfile
+	}
 	f.seed.Origin = ""
 	policy := releaseops.GitHubPolicy{Version: 1, Repository: f.seed.Repository, RepositoryID: "7", MetadataBranch: "release-metadata", MetadataHost: "raw.githubusercontent.com", APIHost: "api.github.com", CDNHost: "release-assets.githubusercontent.com", CDNPathPrefix: "/github-production-release-asset/7/", APIVersion: releaseops.GitHubAPIVersion}
+	if variant == SingleOwnerSigningProfile {
+		policy.RepositoryID = "1426211857"
+		policy.CDNPathPrefix = "/github-production-release-asset/1426211857/"
+	}
 	f.seed.GitHub = policy
 	f.descriptor.Binding, f.descriptor.ProductVersion, f.descriptor.Source = f.seed.Binding, version, strings.Repeat("a", 40)
 	f.descriptor.Archive = update.Artifact{File: archiveTarget, Size: int64(len(f.archive)), SHA256: digest(f.archive)}
-	asset := releaseops.GitHubAsset{RepositoryID: "7", ReleaseID: "11", AssetID: "17", Name: archiveTarget, SHA256: f.descriptor.Archive.SHA256, Size: f.descriptor.Archive.Size, CDNPath: policy.CDNPathPrefix + "fixture-release"}
+	asset := releaseops.GitHubAsset{RepositoryID: policy.RepositoryID, ReleaseID: "11", AssetID: "17", Name: archiveTarget, SHA256: f.descriptor.Archive.SHA256, Size: f.descriptor.Archive.Size, CDNPath: policy.CDNPathPrefix + "fixture-release"}
 	f.descriptor.GitHub = asset
 	f.descriptor.Release = ProductionRelease{SourceTree: strings.Repeat("b", 40), TagObject: strings.Repeat("c", 40), PackageLockSHA256: strings.Repeat("d", 64), GoSumSHA256: strings.Repeat("e", 64), WorkflowCommit: f.descriptor.Source, RunID: "23", RunAttempt: "1"}
 	expected := f.descriptor.provenanceExpected()
@@ -145,7 +152,11 @@ func productionFixture(t *testing.T, variant string) (*firstFixture, Options, *a
 	if variant == "complete-v2" {
 		fixtureOptions.RekorV2, fixtureOptions.Timestamp = true, true
 	}
-	p, proof, err := fixture.NewWithOptions(releaseprovenance.Policy{Version: releaseprovenance.PolicyVersion, Repository: f.seed.Repository, RepositoryID: "7", OwnerID: "8", Workflow: releaseprovenance.WorkflowPath}, expected, f.now, fixtureOptions)
+	ownerID := "8"
+	if variant == SingleOwnerSigningProfile {
+		ownerID = "279582504"
+	}
+	p, proof, err := fixture.NewWithOptions(releaseprovenance.Policy{Version: releaseprovenance.PolicyVersion, Repository: f.seed.Repository, RepositoryID: policy.RepositoryID, OwnerID: ownerID, Workflow: releaseprovenance.WorkflowPath}, expected, f.now, fixtureOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +200,7 @@ func productionFixture(t *testing.T, variant string) (*firstFixture, Options, *a
 			w.Header().Set("Content-Type", "application/json")
 			switch r.URL.Path {
 			case "/repos/fased-ai/fased-app":
-				json.NewEncoder(w).Encode(map[string]any{"id": 7, "full_name": policy.Repository})
+				json.NewEncoder(w).Encode(map[string]any{"id": json.Number(policy.RepositoryID), "full_name": policy.Repository})
 			case "/repos/fased-ai/fased-app/releases/11":
 				json.NewEncoder(w).Encode(map[string]any{"id": 11, "assets": []any{map[string]any{"id": 17, "name": asset.Name, "size": asset.Size, "state": "uploaded"}}})
 			case "/repos/fased-ai/fased-app/releases/assets/17":

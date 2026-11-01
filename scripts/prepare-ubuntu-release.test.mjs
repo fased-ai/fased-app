@@ -301,3 +301,382 @@ test("dormant staging has one pinned Ubuntu build and no release or activation a
     /go list [^\n]+\.\/cmd\/fased-release-candidate > \.evidence\/core-test-packages.txt/,
   );
 });
+
+// Single-owner publisher uses explicit injected fixture transport; no live API.
+import {
+  publicationInput,
+  publishFinalized,
+  stageCandidate,
+  releaseCandidate,
+  githubPublisher,
+} from "./publish-ubuntu-release.mjs";
+const psha = (b) => createHash("sha256").update(b).digest("hex");
+function publisherFixture() {
+  const descriptor = {
+    version: 3,
+    purpose: "fased-app-first-install-production:v1",
+    developmentOnly: false,
+    repository: "fased-ai/fased-app",
+    channel: "stable",
+    target: { os: "linux", arch: "amd64" },
+    sequence: "7",
+    productVersion: "0.1.0",
+    source: "a".repeat(40),
+    release: { tagObject: "9".repeat(40) },
+    github: {
+      repositoryId: "1426211857",
+      releaseId: "11",
+      assetId: "17",
+      name: "fased-app-linux-amd64.tar.gz",
+      size: 7,
+      sha256: psha(Buffer.from("archive")),
+    },
+  };
+  const encoded = (v) => Buffer.from(JSON.stringify(v)).toString("base64");
+  const meta = (version = 1) => ({
+    signed: { version, expires: new Date(Date.now() + 86400000).toISOString() },
+  });
+  const db = Buffer.from(JSON.stringify(descriptor));
+  const publication = {
+    version: 1,
+    signingProfile: "single-owner-v1",
+    repository: descriptor.repository,
+    repositoryId: "1426211857",
+    ownerId: "279582504",
+    metadataBranch: "release-metadata",
+    seedSha256: "b".repeat(64),
+    planSha256: "c".repeat(64),
+    descriptor,
+    files: {
+      "1.root.json": encoded(meta()),
+      "1.targets.json": encoded(meta()),
+      "1.snapshot.json": encoded(meta()),
+      "timestamp.json": encoded(meta()),
+      [`targets/production-bootstrap/${psha(db)}.descriptor.json`]:
+        db.toString("base64"),
+      [`targets/provenance/${"d".repeat(64)}.sigstore.json`]: encoded({
+        fixture: true,
+      }),
+    },
+  };
+  const raw = Buffer.from(JSON.stringify(publication));
+  const approval = { sha256: psha(raw), previousCommit: "1".repeat(40) };
+  const calls = [],
+    records = [];
+  let head = approval.previousCommit;
+  const candidate = {
+    repository: publication.repository,
+    repositoryId: publication.repositoryId,
+    ownerId: publication.ownerId,
+    version: "0.1.0",
+    source: descriptor.source,
+    tagObject: descriptor.release.tagObject,
+    assets: [
+      "fased-app-linux-amd64.tar.gz",
+      "fased-install-linux-amd64",
+      "fased-app-linux-amd64.provenance.sigstore.json",
+      "install.sh",
+    ].map((name, i) => ({
+      name,
+      size: i === 0 ? 7 : 1,
+      sha256: i === 0 ? descriptor.github.sha256 : psha(Buffer.from("x")),
+    })),
+  };
+  const assets = candidate.assets.map((a, i) => ({
+    ...a,
+    id: 17 + i,
+    state: "uploaded",
+    digest: `sha256:${a.sha256}`,
+  }));
+  let createdTree = [];
+  const api = async (method, path, body) => {
+    calls.push({ method, path, body });
+    if (path.endsWith("/fased-app"))
+      return {
+        id: 1426211857,
+        full_name: publication.repository,
+        owner: { id: 279582504 },
+      };
+    if (path.endsWith("/releases/11"))
+      return {
+        id: 11,
+        draft: false,
+        prerelease: false,
+        immutable: true,
+        tag_name: "v0.1.0",
+        assets,
+      };
+    if (path.includes("/git/ref/tags/"))
+      return {
+        ref: "refs/tags/v0.1.0",
+        object: { type: "tag", sha: candidate.tagObject },
+      };
+    if (path.includes("/git/tags/"))
+      return {
+        sha: candidate.tagObject,
+        tag: "v0.1.0",
+        object: { type: "commit", sha: candidate.source },
+      };
+    if (path.includes("/git/ref/"))
+      return {
+        ref: "refs/heads/release-metadata",
+        object: { type: "commit", sha: head },
+      };
+    if (method === "GET" && path.includes("/git/commits/")) {
+      if (path.endsWith(approval.previousCommit))
+        return { sha: approval.previousCommit, tree: { sha: "2".repeat(40) } };
+      return {
+        sha: "4".repeat(40),
+        tree: { sha: "3".repeat(40) },
+        parents: [{ sha: approval.previousCommit }],
+      };
+    }
+    if (method === "GET" && path.includes("/git/trees/"))
+      return {
+        truncated: false,
+        tree: path.includes("2".repeat(40)) ? [] : createdTree,
+      };
+    if (method === "POST" && path.endsWith("/git/blobs")) {
+      const bytes = Buffer.from(body.content, "base64");
+      return {
+        sha: createHash("sha1")
+          .update(`blob ${bytes.length}\0`)
+          .update(bytes)
+          .digest("hex"),
+      };
+    }
+    if (method === "POST" && path.endsWith("/git/trees")) {
+      createdTree = body.tree;
+      return { sha: "3".repeat(40) };
+    }
+    if (method === "POST" && path.endsWith("/git/commits"))
+      return { sha: "4".repeat(40) };
+    if (method === "PATCH") {
+      assert.equal(body.force, false);
+      head = body.sha;
+      return { object: { sha: head } };
+    }
+    throw Error("unexpected fixture request");
+  };
+  return {
+    publication,
+    raw,
+    approval,
+    calls,
+    records,
+    api,
+    candidate,
+    assets,
+    record: async (x) => records.push(x),
+  };
+}
+test("single owner publishes finalized metadata with non-force ref and readback", async () => {
+  const f = publisherFixture();
+  const r = await publishFinalized(f.raw, f.approval, f.api, f.record);
+  assert.equal(r.activation, false);
+  assert.equal(f.calls.filter((x) => x.method === "PATCH").length, 1);
+  assert.equal(f.records.at(-1).phase, "metadata-published");
+});
+test("publisher refuses changed input, identity, expiry, draft, history and concurrent head", async () => {
+  for (const variant of [
+    "pin",
+    "identity",
+    "expired",
+    "draft",
+    "history",
+    "race",
+    "record",
+  ]) {
+    const f = publisherFixture();
+    let raw = f.raw;
+    let approval = f.approval;
+    if (variant === "pin") raw = Buffer.concat([raw, Buffer.from(" ")]);
+    if (variant === "expired") {
+      f.publication.files["timestamp.json"] = Buffer.from(
+        JSON.stringify({ signed: { expires: "2000-01-01T00:00:00Z" } }),
+      ).toString("base64");
+      raw = Buffer.from(JSON.stringify(f.publication));
+      approval = { ...approval, sha256: psha(raw) };
+    }
+    let refs = 0;
+    const api = async (m, p, b) => {
+      const r = await f.api(m, p, b);
+      if (variant === "identity" && p.endsWith("/fased-app")) r.id = 9;
+      if (variant === "draft" && p.includes("/releases/")) r.draft = true;
+      if (variant === "history" && p.includes("/git/trees/"))
+        r.tree = [
+          {
+            path: "1.root.json",
+            sha: "9".repeat(40),
+            type: "blob",
+            mode: "100644",
+          },
+        ];
+      if (variant === "race" && p.includes("/git/ref/heads/") && ++refs === 2)
+        r.object.sha = "9".repeat(40);
+      return r;
+    };
+    await assert.rejects(
+      publishFinalized(
+        raw,
+        approval,
+        api,
+        variant === "record"
+          ? async () => {
+              throw Error("disk full");
+            }
+          : f.record,
+      ),
+      variant,
+    );
+    assert.equal(
+      f.calls.filter((x) => x.method === "PATCH").length,
+      0,
+      variant,
+    );
+  }
+  assert.throws(() => githubPublisher(""));
+});
+test("candidate stages exact bytes as draft only; failed upload is not replayed", async () => {
+  for (const failure of [false, true]) {
+    const f = publisherFixture(),
+      c = Buffer.from(JSON.stringify(f.candidate));
+    let uploads = 0;
+    const api = async (m, p, b) => {
+      if (m === "GET") return f.api(m, p, b);
+      if (m === "POST") return { id: 11, draft: true, tag_name: "v0.1.0" };
+      if (m === "UPLOAD") {
+        uploads++;
+        if (failure) throw Error("connection lost");
+        return f.assets.find((x) => p.endsWith(`name=${x.name}`));
+      }
+      throw Error("unexpected mutation");
+    };
+    const op = stageCandidate(
+      c,
+      psha(c),
+      async (name) => Buffer.from(name.endsWith(".tar.gz") ? "archive" : "x"),
+      api,
+      f.record,
+    );
+    if (failure) {
+      await assert.rejects(op);
+      assert.equal(uploads, 1);
+      assert.equal(f.records.at(-1).phase, "asset-upload-attempted");
+    } else {
+      const staged = await op;
+      assert.equal(staged.published, false);
+      assert.equal(staged.assets.length, 4);
+    }
+  }
+});
+test("only exact finalized complete draft may become immutable release", async () => {
+  const f = publisherFixture(),
+    raw = Buffer.from(JSON.stringify(f.candidate));
+  let patches = 0;
+  const api = async (m, p, b) => {
+    if (m === "PATCH") {
+      patches++;
+      return { id: 11, draft: false, immutable: true };
+    }
+    if (p.endsWith("/releases/11"))
+      return {
+        id: 11,
+        draft: true,
+        prerelease: false,
+        tag_name: "v0.1.0",
+        assets: f.assets,
+      };
+    return f.api(m, p, b);
+  };
+  await releaseCandidate(raw, psha(raw), f.raw, f.approval, api, f.record);
+  assert.equal(patches, 1);
+  f.assets[1].digest = "sha256:" + "0".repeat(64);
+  await assert.rejects(
+    releaseCandidate(raw, psha(raw), f.raw, f.approval, api, f.record),
+  );
+  assert.equal(patches, 1);
+});
+test("publisher snapshots approvals and refuses wrong blobs/commits/tag before authority", async () => {
+  for (const variant of ["approval-mutation", "blob", "commit", "tag"]) {
+    const f = publisherFixture();
+    const api = async (m, p, b) => {
+      if (variant === "approval-mutation" && p.endsWith("/fased-app"))
+        f.approval.previousCommit = "8".repeat(40);
+      const r = await f.api(m, p, b);
+      if (variant === "approval-mutation" && p.includes("/git/ref/heads/"))
+        r.object.sha = "8".repeat(40);
+      if (variant === "blob" && m === "POST" && p.endsWith("/git/blobs"))
+        r.sha = "0".repeat(40);
+      if (
+        variant === "commit" &&
+        m === "GET" &&
+        p.endsWith("/git/commits/" + "4".repeat(40))
+      )
+        r.tree.sha = "0".repeat(40);
+      if (variant === "tag" && p.includes("/git/ref/tags/"))
+        r.object.sha = "0".repeat(40);
+      return r;
+    };
+    await assert.rejects(publishFinalized(f.raw, f.approval, api, f.record));
+    assert.equal(
+      f.calls.filter((c) => c.method === "PATCH").length,
+      0,
+      variant,
+    );
+  }
+});
+test("stage refuses missing or moved canonical tag before creating a draft", async () => {
+  const f = publisherFixture(),
+    raw = Buffer.from(JSON.stringify(f.candidate));
+  const api = async (m, p, b) => {
+    const r = await f.api(m, p, b);
+    if (p.includes("/git/tags/")) r.object.sha = "8".repeat(40);
+    return r;
+  };
+  await assert.rejects(
+    stageCandidate(
+      raw,
+      psha(raw),
+      async (n) => Buffer.from(n.endsWith(".tar.gz") ? "archive" : "x"),
+      api,
+      f.record,
+    ),
+  );
+  assert.equal(
+    f.calls.some((c) => c.method !== "GET"),
+    false,
+  );
+});
+test("publisher rejects prior timestamp bytes that do not match tree blob identity", async () => {
+  const f = publisherFixture();
+  const truth = Buffer.from(JSON.stringify({ signed: { version: 99 } }));
+  const id = createHash("sha1")
+    .update(`blob ${truth.length}\0`)
+    .update(truth)
+    .digest("hex");
+  const api = async (m, p, b) => {
+    if (m === "GET" && p.endsWith(`/git/blobs/${id}`))
+      return {
+        sha: id,
+        encoding: "base64",
+        content: Buffer.from(
+          JSON.stringify({ signed: { version: 0 } }),
+        ).toString("base64"),
+      };
+    const r = await f.api(m, p, b);
+    if (m === "GET" && p.includes("/git/trees/"))
+      r.tree = [
+        { path: "timestamp.json", type: "blob", mode: "100644", sha: id },
+      ];
+    return r;
+  };
+  await assert.rejects(
+    publishFinalized(f.raw, f.approval, api, f.record),
+    /Prior timestamp blob identity changed/,
+  );
+  assert.equal(
+    f.calls.some((c) => c.method === "PATCH"),
+    false,
+  );
+});

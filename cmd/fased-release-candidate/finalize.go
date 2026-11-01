@@ -137,6 +137,13 @@ func writeFinalized(output string, release bootstrap.FinalizedRelease) error {
 	if err = write("finalization.json", append(receipt, '\n')); err != nil {
 		return err
 	}
+	publication, err := json.Marshal(release.Publication)
+	if err != nil {
+		return err
+	}
+	if err = write("publication.json", append(publication, '\n')); err != nil {
+		return err
+	}
 	directory, err := root.Open(".")
 	if err != nil {
 		return err
