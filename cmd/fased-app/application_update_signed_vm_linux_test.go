@@ -26,10 +26,12 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -49,7 +51,30 @@ const applicationVMInputs = "/var/lib/fased-update-fixture"
 const applicationVMVersion = "0.0.0-b01-vm.2"
 const applicationVMPassword = "disposable-b01-owner-password"
 
+type applicationVMFinalizerComposition struct {
+	Dir                         string
+	Now                         time.Time
+	Seed                        bootstrap.Seed
+	Manifest                    bundle.Manifest
+	Keys                        map[string][]signature.Signer
+	Archive, Source, Target, CA []byte
+	Put                         func(string, []byte, os.FileMode)
+}
+type applicationVMFinalizerHooks struct {
+	Finish  func(*testing.T, applicationVMFinalizerComposition)
+	Options func(string, []byte, []byte, applicationVMTrust) (bootstrap.Options, error)
+	Handler func(applicationVMTrust) (http.Handler, error)
+}
+
+var applicationVMFinalizer *applicationVMFinalizerHooks
+var applicationVMRequests atomic.Uint64
+
 type applicationVMTrust struct {
+	Finalized        bool   `json:"finalized,omitempty"`
+	DescriptorSHA256 string `json:"descriptorSha256,omitempty"`
+	ProvenanceSHA256 string `json:"provenanceSha256,omitempty"`
+	PlanSHA256       string `json:"planSha256,omitempty"`
+
 	Connected    bool   `json:"connected,omitempty"`
 	SeedSHA256   string `json:"seedSha256"`
 	CASHA256     string `json:"caSha256"`
@@ -87,6 +112,11 @@ func TestApplicationUpdateVMInputs(t *testing.T) {
 	if os.Getuid() == 0 || !filepath.IsAbs(dir) {
 		t.Fatal("ordinary owner and absolute fixture root required")
 	}
+	finalized := os.Getenv("FASED_UPDATE_FIXTURE_FINALIZER") == "1"
+	if finalized && (applicationVMFinalizer == nil || os.Getenv("FASED_UPDATE_FIXTURE_CONNECTED") == "1") {
+		t.Fatal("explicit finalizer fixture build and interrupted-owner path required")
+	}
+
 	put := func(name string, b []byte, mode os.FileMode) {
 		t.Helper()
 		p := filepath.Join(dir, name)
@@ -114,6 +144,9 @@ func TestApplicationUpdateVMInputs(t *testing.T) {
 		t.Fatal(e)
 	}
 	cert := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "B01 disposable TLS"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(48 * time.Hour), KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, IsCA: true, BasicConstraintsValid: true, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}}
+	if finalized {
+		cert.DNSNames = []string{"raw.githubusercontent.com", "api.github.com", "release-assets.githubusercontent.com"}
+	}
 	der, e := x509.CreateCertificate(rand.Reader, cert, cert, pub, priv)
 	if e != nil {
 		t.Fatal(e)
@@ -168,6 +201,12 @@ func TestApplicationUpdateVMInputs(t *testing.T) {
 	}
 	seed := bootstrap.Seed{Binding: bootstrap.Binding{Version: 1, Purpose: bootstrap.Purpose, DevelopmentOnly: true, Repository: "fased-ai/fased-app", Channel: "development", Target: update.Target{OS: "linux", Arch: "amd64"}}, Origin: "https://127.0.0.1:17449", Root: raw(root), CreatedAt: now.Add(-time.Minute).Unix(), ExpiresAt: now.Add(24 * time.Hour).Unix(), MinimumSequence: 7}
 	manifest := bundle.Manifest{Schema: 1, Platform: "linux", Arch: "amd64", Version: applicationVMVersion, Source: "B01-disposable-VM", UnsignedEngineering: true, Files: map[string]bundle.File{}}
+	if finalized {
+		manifest.Schema = 2
+		manifest.UnsignedEngineering = false
+		manifest.Version = "0.1.0"
+		manifest.Source = strings.Repeat("a", 40)
+	}
 	payload := map[string][]byte{"fased-app": target, "LICENSE": []byte("disposable fixture"), "NOTICE": []byte("disposable fixture"), "INSTALL.txt": []byte("disposable fixture only")}
 	for name := range bundle.PlatformFiles() {
 		payload[name] = []byte("disposable fixture " + name)
@@ -194,6 +233,10 @@ func TestApplicationUpdateVMInputs(t *testing.T) {
 		t.Fatal(e)
 	}
 	archive := packed.Bytes()
+	if finalized {
+		applicationVMFinalizer.Finish(t, applicationVMFinalizerComposition{Dir: dir, Now: now, Seed: seed, Manifest: manifest, Keys: keys, Archive: archive, Source: source, Target: target, CA: ca, Put: put})
+		return
+	}
 	descriptor := bootstrap.Descriptor{Binding: seed.Binding, Sequence: 7, ProductVersion: manifest.Version, Source: manifest.Source, BundleSHA256: applicationVMDigest(payload["bundle.json"]), Archive: update.Artifact{File: "fased-app-linux-amd64.tar.gz", Size: int64(len(archive)), SHA256: applicationVMDigest(archive)}}
 	db := applicationVMJSON(descriptor)
 	targets := metadata.Targets(now.Add(24 * time.Hour))
@@ -293,6 +336,16 @@ func applicationVMPrepare(ctx context.Context, parent string) (*bootstrap.Prepar
 	if e = os.Chmod(dir, 0700); e != nil {
 		return nil, e
 	}
+	if trust.Finalized {
+		if applicationVMFinalizer == nil {
+			return nil, errors.New("finalizer fixture build required")
+		}
+		options, e := applicationVMFinalizer.Options(filepath.Join(dir, "verified"), seed, ca, trust)
+		if e != nil {
+			return nil, e
+		}
+		return bootstrap.Prepare(ctx, options)
+	}
 	return bootstrap.Prepare(ctx, bootstrap.Options{Development: true, Seed: seed, SeedSHA256: trust.SeedSHA256, TLSCA: ca, Directory: filepath.Join(dir, "verified")})
 }
 
@@ -308,6 +361,12 @@ func applicationVMOptions(directory string) (bootstrap.Options, error) {
 	ca, e := os.ReadFile(applicationVMInputs + "/ca.pem")
 	if e != nil || applicationVMDigest(ca) != trust.CASHA256 {
 		return bootstrap.Options{}, errors.New("fixture CA changed")
+	}
+	if trust.Finalized {
+		if applicationVMFinalizer == nil {
+			return bootstrap.Options{}, errors.New("finalizer fixture build required")
+		}
+		return applicationVMFinalizer.Options(directory, seed, ca, trust)
 	}
 	return bootstrap.Options{Development: true, Seed: seed, SeedSHA256: trust.SeedSHA256, TLSCA: ca, Directory: directory}, nil
 }
@@ -414,6 +473,9 @@ func applicationUpdateVMRuntime(image string, args []string) (bool, error) {
 		var current vpsinstall.Manifest
 		if json.Unmarshal(raw, &current) != nil {
 			return nil, errors.New("invalid fixture identity")
+		}
+		if trust.Finalized {
+			return channelCheck(applicationVMOptions, filepath.Join(m.Data, "update-channel"), current.ApplicationSequence, current.ApplicationReleaseSHA256)(ctx)
 		}
 		if current.ApplicationSequence >= 7 {
 			return nil, nil
@@ -561,7 +623,21 @@ func applicationVMServer(t *testing.T) error {
 	if e != nil {
 		return e
 	}
-	s := &http.Server{Handler: http.FileServer(http.Dir(applicationVMInputs + "/repo")), TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, ReadHeaderTimeout: 5 * time.Second}
+	handler := http.Handler(http.FileServer(http.Dir(applicationVMInputs + "/repo")))
+	trust, e := applicationVMTrustRead()
+	if e != nil {
+		return e
+	}
+	if trust.Finalized {
+		if applicationVMFinalizer == nil {
+			return errors.New("finalizer fixture server required")
+		}
+		handler, e = applicationVMFinalizer.Handler(trust)
+		if e != nil {
+			return e
+		}
+	}
+	s := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { applicationVMRequests.Add(1); handler.ServeHTTP(w, r) }), TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = s.Serve(tls.NewListener(l, s.TLSConfig)) }()
 	t.Cleanup(func() { _ = s.Close() })
 	return nil
@@ -814,7 +890,83 @@ func applicationUpdateVMOwnerVerify(t *testing.T, m vpsinstall.Manifest) (map[st
 		return nil, errors.New("original owner actor has not settled and disabled")
 	}
 
-	return map[string]any{"result": "PASS", "fixtureOnly": true, "id": o.ID, "sequence": r.Sequence, "manifestSha256": r.ManifestSHA256, "engineSha256": r.EngineSHA256, "instanceId": v.InstanceID, "signedInstalledUpdateAcceptance": true, "manualReview": true, "offlineOriginalRecovery": true, "workspaceScheduleHoldPreserved": true, "credentialLocked": true, "fenceReleased": true, "consumedReleaseFloor": current.ApplicationSequence, "ownerActorRetired": true, "ordinaryActorStarts": len(rows), "distinctActorBoots": len(boots), "realAI": false, "realWallets": false, "publicActivation": false}, nil
+	trust, e := applicationVMTrustRead()
+	if e != nil {
+		return nil, e
+	}
+	noop := false
+	if trust.Finalized {
+		if r.ManifestSHA256 != trust.DescriptorSHA256 {
+			return nil, errors.New("installed receipt differs from finalizer output")
+		}
+		beforeActors := applicationVMDigest(actors)
+		if e = applicationVMServer(t); e != nil {
+			return nil, e
+		}
+		if v, e = applicationVMUpdateView(t.Context(), c, "GET", nil); e != nil {
+			return nil, e
+		}
+		command := core.ApplicationUpdateCommand{Action: "check", Revision: v.Revision, PolicyRevision: v.PolicyRevision}
+		if v, e = applicationVMUpdateView(t.Context(), c, "POST", command); e != nil {
+			return nil, e
+		}
+		for end := time.Now().Add(15 * time.Second); v.Operation.Phase == "check-queued" || v.Operation.Phase == "checking"; {
+			if time.Now().After(end) {
+				return nil, errors.New("authenticated no-op did not complete")
+			}
+			time.Sleep(100 * time.Millisecond)
+			if v, e = applicationVMUpdateView(t.Context(), c, "GET", nil); e != nil {
+				return nil, e
+			}
+		}
+		afterActors, ae := os.ReadFile(filepath.Join(maintenanceProbeHome, ".config/fased-app-vps-installer/update-fixture-actors.jsonl"))
+		unchanged, ue := vpsinstall.ApplicationUpdateState(1100)
+		if v.Operation.Phase != "current" || v.Operation.Release != nil || applicationVMRequests.Load() == 0 || ae != nil || ue != nil || unchanged.ID != j.ID || unchanged.Phase != "completed" || applicationVMDigest(afterActors) != beforeActors {
+			return nil, errors.New("authenticated current check changed installed operation or actor")
+		}
+		noop = true
+	}
+	return map[string]any{"finalizerProduced": trust.Finalized, "finalizedDescriptorSha256": trust.DescriptorSHA256, "provenanceSha256": trust.ProvenanceSHA256, "finalizerPlanSha256": trust.PlanSHA256, "authenticatedNoop": noop, "metadataRequests": applicationVMRequests.Load(), "result": "PASS", "fixtureOnly": true, "id": o.ID, "sequence": r.Sequence, "manifestSha256": r.ManifestSHA256, "engineSha256": r.EngineSHA256, "instanceId": v.InstanceID, "signedInstalledUpdateAcceptance": true, "manualReview": true, "offlineOriginalRecovery": true, "workspaceScheduleHoldPreserved": true, "credentialLocked": true, "fenceReleased": true, "consumedReleaseFloor": current.ApplicationSequence, "ownerActorRetired": true, "ordinaryActorStarts": len(rows), "distinctActorBoots": len(boots), "realAI": false, "realWallets": false, "publicActivation": false}, nil
+}
+
+func applicationVMUpdateView(ctx context.Context, c *core.Client, method string, input any) (core.ApplicationUpdateView, error) {
+	var view core.ApplicationUpdateView
+	err := c.Do(ctx, method, "/api/v1/updates/application", input, &view)
+	return view, err
+}
+
+func TestApplicationUpdateVMNoopFreshResponses(t *testing.T) {
+	phases := []string{"completed", "check-queued", "checking", "current"}
+	n := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if n >= len(phases) || r.URL.Path != "/api/v1/updates/application" {
+			t.Error("unexpected no-op request", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		release := ""
+		if n == 0 {
+			release = `,"release":{"manifestSha256":"previous"}`
+		}
+		fmt.Fprintf(w, `{"revision":3,"policyRevision":2,"operation":{"phase":%q%s}}`, phases[n], release)
+		n++
+	}))
+	defer server.Close()
+	c := &core.Client{Endpoint: core.Endpoint{URL: server.URL}, HTTP: server.Client()}
+	var view core.ApplicationUpdateView
+	for i, phase := range phases {
+		method := "GET"
+		var input any
+		if i == 1 {
+			method = "POST"
+			input = core.ApplicationUpdateCommand{Action: "check", Revision: view.Revision, PolicyRevision: view.PolicyRevision}
+		}
+		var err error
+		view, err = applicationVMUpdateView(t.Context(), c, method, input)
+		if err != nil || view.Operation.Phase != phase || (view.Operation.Release != nil) != (i == 0) {
+			t.Fatal("stale or invalid no-op response", phase, view.Operation, err)
+		}
+	}
 }
 
 func TestApplicationUpdateVMDefaultsRemainClosed(t *testing.T) {
