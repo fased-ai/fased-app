@@ -54,17 +54,92 @@ as an accepted candidate.
 Do not rebuild approved bytes under a different run and reuse their provenance.
 The proposed version is not a published version or an existing tag.
 
-## Signing and publication remain separate
+## Offline signing and finalization
 
-The staging packet is **not yet a signing request**. Exact GitHub release/asset
-locators are available only after separately authorized asset staging. A subsequent
-publisher step must construct the real descriptor and Targets/Snapshot/Timestamp
-payloads from those locators and the actual verified bytes, obtain independent
-quorum signatures, and exercise final production bootstrap/manual-update
-verification before publication. That finalizer is not implemented by this
-staging package; do not fabricate locators, provenance or metadata to bypass it.
+The staged packet is not a signing request until actual immutable asset identities
+and a reviewed metadata plan are supplied. The maintainer-only
+`fased-release-candidate` tool now prepares requests and verifies imported public
+signatures. It accepts no private key, generates no key and makes no network call.
+It is not included in customer packages.
 
-Initial installer authentication and production signing remain open acceptance
-gates. Public/automatic updates, mining and live features remain disabled.
-The [release-trust contract](../updates.md#production-release-trust-operations-specification)
+Provide one version-1 candidate JSON document with these fields:
+
+| Field                                    | Content                                                                                                                                            |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`                                | `1`                                                                                                                                                |
+| `seedFile`, `seedSha256`                 | Exact independently approved public seed and its digest                                                                                            |
+| `archiveFile`, `provenanceFile`          | Original staged archive and attestation bundle                                                                                                     |
+| `plan.version`                           | `1`                                                                                                                                                |
+| `plan.descriptor`                        | Existing production descriptor, binding actual archive/manifest, source/tree/tag/locks/run/provenance and approved immutable GitHub asset identity |
+| `plan.previousSequence`                  | Reviewed prior sequence, encoded as a decimal string                                                                                               |
+| `plan.versions`, `plan.previousVersions` | Current/prior `targets`, `snapshot`, `timestamp` integer versions                                                                                  |
+| `plan.expires`                           | Explicit whole-second RFC3339 expiries for those three roles                                                                                       |
+
+File paths resolve relative to the candidate document. Work and output directories
+are explicit absolute private paths. No production values are supplied by default.
+Descriptor identities come from the verified staging packet and approved asset
+record; do not substitute example locators. Each role version advances its reviewed
+floor exactly once. Sequence must advance and meet the seed minimum. Prior floors
+are reviewed publisher inputs, not an independent ledger or replacements for the
+installed client's persisted rollback protections.
+
+Request signatures in dependency order:
+
+```sh
+go run ./cmd/fased-release-candidate release-request \
+  --candidate-file "$candidate" --work-dir "$work" --role targets
+
+go run ./cmd/fased-release-candidate release-request \
+  --candidate-file "$candidate" --work-dir "$work" \
+  --approvals-file "$approvals" --role snapshot
+
+go run ./cmd/fased-release-candidate release-request \
+  --candidate-file "$candidate" --work-dir "$work" \
+  --approvals-file "$approvals" --role timestamp
+```
+
+The request contains the exact canonical TUF payload as base64, its SHA256, role,
+authorized key IDs and threshold, plus public seed/plan digests for review. Only
+the payload is the TUF signing preimage; context digests are supporting review
+records. Custodians independently inspect the actual candidate and plan before
+signing through their own offline custody process.
+
+The versionless approvals document has `targets`, `snapshot` and `timestamp`
+arrays of standard TUF `{keyid, sig}` public signatures. Import the Targets quorum
+before requesting Snapshot, then Snapshot before Timestamp. Key identities must
+match that role, every signature must verify and duplicate or insufficient
+signatures fail. A changed upstream signature set or body requires new dependent
+requests. Root rotation is not offered by this tool.
+
+Finalize the complete approvals into a new directory:
+
+```sh
+go run ./cmd/fased-release-candidate release-finalize \
+  --candidate-file "$candidate" --work-dir "$work" \
+  --approvals-file "$approvals" --output "$output"
+```
+
+The tool revalidates the original archive, release profile, manifest, provenance,
+expiry and role chain through the existing production bootstrap verifier. Output
+contains the original root, versioned Targets/Snapshot, Timestamp, content-addressed
+descriptor/provenance and `finalization.json`. It neither copies nor executes the
+application. The finalization record is verification evidence, not publication,
+installer authenticity or an owner execution grant.
+
+Existing output is refused. If a filesystem write is interrupted, preserve and
+inspect the partial directory; it is never adopted or overwritten on retry. A
+missing, partial or invalid finalization record does not authorize publishing.
+
+## Publication and installed acceptance
+
+Finalization creates no GitHub asset, release, metadata branch or update activation.
+Actual tag builds and immutable asset staging need separate owner authorization.
+Production trust/custodians, independent first-installer authentication, signed
+metadata readback and the installed manual-update journey remain release gates.
+Controlled finalizer tests prove first acquisition and update admission with the
+same verifiers. Unchanged controller commit, no-op and interrupted-completion
+proof is reused; those tests do not claim a fresh installed-service acceptance.
+
+Public/automatic updates, mining and live features remain disabled. The
+[release-trust contract](../updates.md#production-release-trust-operations-specification)
 defines the retained role and recovery boundaries.

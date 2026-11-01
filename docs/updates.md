@@ -34,7 +34,10 @@ financial execution and automatic updates
 stay disabled. No production key, credential, repository, branch protection,
 trust configuration or public release is created here. A dormant Ubuntu candidate
 workflow stages an authorized tag build and verifies actual provenance; it does
-not publish releases or sign metadata. See the [publisher preparation procedure](maintainers/ubuntu-release.md).
+not publish releases or sign metadata. The offline finalizer prepares canonical
+role requests, verifies imported signatures and emits metadata through the same
+production bootstrap verifier. It accepts no private key and activates nothing.
+See the [publisher preparation procedure](maintainers/ubuntu-release.md).
 
 ### Trust architecture and scope
 

@@ -30,11 +30,13 @@ func run(args []string, out io.Writer) error {
 		return errors.New("ordinary maintainer identity required")
 	}
 	if len(args) == 0 {
-		return errors.New("verify-seed or verify-provenance required")
+		return errors.New("verify-seed, verify-provenance, release-request or release-finalize required")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	switch args[0] {
+	case "release-request", "release-finalize":
+		return runFinalizer(args, flags, out)
 	case "verify-seed":
 		path := flags.String("seed-file", "", "approved public production seed")
 		pin := flags.String("seed-sha256", "", "independently approved seed digest")
