@@ -25,6 +25,17 @@ func TestApplicationReaderBootstrapRequestUsesAuthenticatedRelease(t *testing.T)
 	if e != nil || got.Release.EngineSHA256 != p.engine.SHA256 || got.Release.ManifestSHA256 != p.report.DescriptorSHA256 || got.OwnerLease != lease {
 		t.Fatal(got, e)
 	}
+	for _, schema := range []int{35, 36} {
+		snapshot.State.Version = schema
+		r.Expected = snapshot
+		prepared := update.CorePauseReceipt{Version: 1, State: "prepared", Request: &r, Core: snapshot}
+		got, err := p.ApplicationReaderBootstrapRequest(id, lease, strings.Repeat("b", 64), prepared)
+		expected, _ := core.ApplicationReaderRequestVersion(schema)
+		if err != nil || got.Version != expected {
+			t.Fatal("prepared authenticated handoff", schema, got, err)
+		}
+	}
+	r.Expected = paused.Core
 	r.Sequence++
 	if _, e = p.ApplicationReaderBootstrapRequest(id, lease, strings.Repeat("b", 64), paused); e == nil {
 		t.Fatal("altered predecessor release admitted")

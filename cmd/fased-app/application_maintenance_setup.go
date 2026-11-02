@@ -75,7 +75,7 @@ func vpsUpdatesCommand(args []string, in io.Reader, out, errOut io.Writer) error
 	if args[0] != "prepare" {
 		if args[0] == "wizard" {
 			admitted := ""
-			return updateWizard(func(action string, dest io.Writer) error {
+			return authenticatedUpdateWizard(func(action string, dest io.Writer) error {
 				if action == "status" && admitted != "" {
 					actor, e := vpsinstall.ApplicationMaintenanceStatus(ctx, m, admitted)
 					if e != nil {
@@ -105,7 +105,7 @@ func vpsUpdatesCommand(args []string, in io.Reader, out, errOut io.Writer) error
 				}
 				_, e = dest.Write(result.Bytes())
 				return e
-			}, out, errOut)
+			}, func() error { return vpsinstall.ApplicationReaderSignIn(ctx, m, system) }, out, errOut)
 		}
 
 		return vpsinstall.ApplicationUpdateClient(ctx, m, args[0], system, out)

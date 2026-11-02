@@ -130,8 +130,13 @@ func ApplicationUpdateClient(ctx context.Context, m Manifest, action string, s *
 	b, e := runApplicationReaderSource(ctx, s, args, s.In)
 	if e != nil {
 		var status *exec.ExitError
-		if errors.As(e, &status) && status.ExitCode() == 75 {
-			return core.ErrCoreUnavailable
+		if errors.As(e, &status) {
+			switch status.ExitCode() {
+			case 75:
+				return core.ErrCoreUnavailable
+			case 77:
+				return core.ErrUnauthorized
+			}
 		}
 		return e
 	}

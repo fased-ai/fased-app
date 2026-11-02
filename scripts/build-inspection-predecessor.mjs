@@ -15,24 +15,32 @@ const args = process.argv.slice(2);
 assert.ok(
   args.length === 0 ||
     (args.length === 1 &&
-      ["--application-reader", "--application-reader35"].includes(args[0])),
+      [
+        "--application-reader",
+        "--application-reader35",
+        "--application-reader36",
+      ].includes(args[0])),
   "Unknown predecessor fixture mode",
 );
-if (["--application-reader", "--application-reader35"].includes(args[0])) {
-  const sourceSchema = args[0] === "--application-reader35" ? 35 : 33;
-  // Untouched schema33 core sources plus a minimal, inert fixture entrypoint.
-  // Keep this distinct from the current-storage composed reader below.
-  const source =
-    sourceSchema === 35
-      ? "90bdf4a31bb658f4358d5e71a8c9f50dc3ebbf3a"
-      : "ecc832e55afa0d62f42cacfdefa5c9cd5d73c8fb";
+if (
+  [
+    "--application-reader",
+    "--application-reader35",
+    "--application-reader36",
+  ].includes(args[0])
+) {
+  const readers = {
+    "--application-reader": [33, "ecc832e55afa0d62f42cacfdefa5c9cd5d73c8fb"],
+    "--application-reader35": [35, "90bdf4a31bb658f4358d5e71a8c9f50dc3ebbf3a"],
+    "--application-reader36": [36, "ad910705246844c333eae8b41b742cb818a58069"],
+  };
+  // Archived core sources with an inert entrypoint and no public updater.
+  const [sourceSchema, source] = readers[args[0]];
+  const suffix = sourceSchema === 33 ? "" : String(sourceSchema);
   const output = path.resolve(
     process.env.FASED_PREDECESSOR_OUTPUT ?? ".evidence/b01-connected-install",
   );
-  const scratch = path.join(
-    output,
-    "reader-predecessor-source" + (sourceSchema === 35 ? "35" : ""),
-  );
+  const scratch = path.join(output, "reader-predecessor-source" + suffix);
   await mkdir(output, { recursive: true, mode: 0o700 });
   await mkdir(scratch, { mode: 0o700 });
   try {
@@ -77,12 +85,7 @@ if (["--application-reader", "--application-reader35"].includes(args[0])) {
       { cwd: scratch, stdio: "inherit" },
     );
     await writeFile(
-      path.join(
-        output,
-        sourceSchema === 35
-          ? "reader-predecessor35-build.json"
-          : "reader-predecessor-build.json",
-      ),
+      path.join(output, `reader-predecessor${suffix}-build.json`),
       JSON.stringify(
         {
           result: "PASS",

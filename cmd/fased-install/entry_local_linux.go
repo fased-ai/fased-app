@@ -24,6 +24,11 @@ func installedLocalEntry(ctx context.Context, action string, in io.Reader, out, 
 	if e != nil {
 		return true, e
 	}
+	if action == "install" || action == "update" {
+		if err := entryUpgradeDecision(action, installedUpdateEntrySupported(ctx, filepath.Join(m.Root, localinstall.EngineName())), in, errOut); err != nil {
+			return false, err
+		}
+	}
 	var args []string
 	switch action {
 	case "install", "open", "start", "setup":
@@ -33,9 +38,6 @@ func installedLocalEntry(ctx context.Context, action string, in io.Reader, out, 
 	case "status":
 		args = []string{"status", "--data-dir", m.Data}
 	case "update":
-		if !installedUpdateEntrySupported(ctx, filepath.Join(m.Root, localinstall.EngineName())) {
-			return false, errEntryUpgradeRequired
-		}
 		args = []string{"update", "--data-dir", m.Data}
 	case "recover":
 		return true, errors.New("use the existing stopped-instance recovery flow; no implicit password reset")

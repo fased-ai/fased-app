@@ -66,7 +66,7 @@ func readReaderPreparation(directory, id string) (applicationReaderPreparation, 
 // supplies an independently verified release and then uses the old pause API.
 func PrepareApplicationReaderBootstrap(ctx context.Context, directory string, request ApplicationReaderBootstrapRequest) error {
 	if !request.prepared() {
-		return errors.New("new schema35 owner intent required")
+		return errors.New("new prepared owner intent required")
 	}
 	if p, err := readReaderPreparation(directory, request.OperationID); err == nil {
 		if readerIntentDigest(p.Request) != readerIntentDigest(request) {
@@ -106,7 +106,7 @@ func PrepareApplicationReaderBootstrap(ctx context.Context, directory string, re
 	if phase == "paused" {
 		return ErrCorePaused
 	}
-	got, err := applicationReaderSourceSnapshot(ctx, tx, request.Predecessor.Core.ProbeID, request.Predecessor.Core.BootID, 35)
+	got, err := applicationReaderSourceSnapshot(ctx, tx, request.Predecessor.Core.ProbeID, request.Predecessor.Core.BootID, request.Predecessor.Core.State.Version)
 	if err != nil || !update.SameCoreMetadata(got, request.Predecessor.Core) {
 		return errors.New("source changed before reader preparation")
 	}

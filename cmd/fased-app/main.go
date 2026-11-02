@@ -31,6 +31,9 @@ func main() {
 		if errors.Is(err, core.ErrCoreUnavailable) {
 			os.Exit(75)
 		}
+		if errors.Is(err, core.ErrUnauthorized) {
+			os.Exit(77)
+		}
 		os.Exit(1)
 	}
 }

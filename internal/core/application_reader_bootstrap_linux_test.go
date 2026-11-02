@@ -81,22 +81,33 @@ func TestApplicationReader35RequestHasDistinctVersion(t *testing.T) {
 }
 
 func reader35Fixture(t *testing.T, prepare bool) (string, ApplicationReaderBootstrapRequest, string) {
+	return preparedReaderFixture(t, 35, prepare)
+}
+
+func preparedReaderFixture(t *testing.T, schema int, prepare bool) (string, ApplicationReaderBootstrapRequest, string) {
 	t.Helper()
 	s := fixtureStore(t)
 	var original string
 	if err := s.db.QueryRow("SELECT document FROM agent_workspace WHERE id=1").Scan(&original); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec("PRAGMA user_version=35"); err != nil {
+	if _, err := s.db.Exec(fmt.Sprintf("PRAGMA user_version=%d", schema)); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := applicationReaderSourceSnapshot(t.Context(), s.db, update.NewProbe(), s.bootID, 35)
+	snapshot, err := applicationReaderSourceSnapshot(t.Context(), s.db, update.NewProbe(), s.bootID, schema)
+	if schema == StateSchema {
+		snapshot, err = s.snapshotTx(t.Context(), s.db, snapshot.ProbeID)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	release := fixtureUpdateController().release
 	pause := update.CorePauseRequest{Version: 1, IntentID: update.NewProbe(), Sequence: release.Sequence, ManifestSHA256: release.ManifestSHA256, Expected: snapshot}
-	r := ApplicationReaderBootstrapRequest{Version: 2, OperationID: pause.IntentID, OwnerLease: update.NewProbe(), PreviousEngineSHA256: strings.Repeat("b", 64), Release: release, Predecessor: update.CorePauseReceipt{Version: 1, State: "prepared", Core: snapshot, Request: &pause}}
+	version := 2
+	if schema == 36 {
+		version = 3
+	}
+	r := ApplicationReaderBootstrapRequest{Version: version, OperationID: pause.IntentID, OwnerLease: update.NewProbe(), PreviousEngineSHA256: strings.Repeat("b", 64), Release: release, Predecessor: update.CorePauseReceipt{Version: 1, State: "prepared", Core: snapshot, Request: &pause}}
 	if prepare {
 		if err = PrepareApplicationReaderBootstrap(t.Context(), s.dir, r); err != nil {
 			t.Fatal(err)
@@ -398,5 +409,76 @@ func TestApplicationReader35LeaseFreeFailedCheck(t *testing.T) {
 	r := ApplicationReaderBootstrapRequest{Version: 2, OperationID: want.IntentID, OwnerLease: update.NewProbe(), PreviousEngineSHA256: strings.Repeat("b", 64), Release: release, Predecessor: update.CorePauseReceipt{Version: 1, State: "prepared", Core: snapshot, Request: &want}}
 	if err = PrepareApplicationReaderBootstrap(t.Context(), s.dir, r); err != nil {
 		t.Fatal("ordinary failed check incorrectly requires a claimed lease", err)
+	}
+}
+
+func TestApplicationReader36PreparedHandoffRecovery(t *testing.T) {
+	for _, point := range []string{"", "reader:before-commit", "reader:after-commit"} {
+		t.Run(point, func(t *testing.T) {
+			dir, request, original := preparedReaderFixture(t, 36, true)
+			if err := StageApplicationReaderBootstrap(t.Context(), dir, request); err != nil {
+				t.Fatal(err)
+			}
+			_, err := bootstrapApplicationReader(t.Context(), dir, request, func(at string) error {
+				if point != "" && point == at {
+					return errors.New("disposable interruption")
+				}
+				return nil
+			})
+			if (point != "") != (err != nil) {
+				t.Fatalf("fault not reached: %v", err)
+			}
+			receipt, err := ResumeApplicationReaderBootstrap(t.Context(), dir, request.OperationID)
+			if err != nil || readerSchema(t, dir) != 36 || !strings.HasPrefix(receipt.Original.File, "reader-36-") {
+				t.Fatal(receipt, err)
+			}
+			again, err := ResumeApplicationReaderBootstrap(t.Context(), dir, request.OperationID)
+			if err != nil || again.Original != receipt.Original {
+				t.Fatal("recovery replaced original", err)
+			}
+			store, err := OpenStore(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			var got string
+			if err = store.db.QueryRow("SELECT document FROM agent_workspace WHERE id=1").Scan(&got); err != nil || got != original {
+				t.Fatal("records/drafts changed", err)
+			}
+			snapshot, err := store.snapshotTx(t.Context(), store.db, request.Predecessor.Core.ProbeID)
+			if err != nil || !update.SameCoreMetadata(snapshot, request.Predecessor.Core) {
+				t.Fatal("owner authentication or records changed", err)
+			}
+			proof := ApplicationUpdateReceipt{ID: request.OperationID, Sequence: request.Release.Sequence, ManifestSHA256: request.Release.ManifestSHA256, EngineSHA256: request.Release.EngineSHA256, Phase: "completed"}
+			if _, err = store.ApplicationOwnerCommand(t.Context(), ApplicationOwnerCommand{Action: "finish", ID: request.OperationID, Lease: request.OwnerLease, Receipt: &proof}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestApplicationReader36RefusesBorrowedAuthority(t *testing.T) {
+	dir, request, _ := preparedReaderFixture(t, 36, false)
+	for _, version := range []int{1, 2, 4} {
+		changed := request
+		changed.Version = version
+		if changed.valid() {
+			t.Fatalf("wrong request version %d", version)
+		}
+	}
+	if err := StageApplicationReaderBootstrap(t.Context(), dir, request); err == nil {
+		t.Fatal("unprepared pause adopted")
+	}
+	if _, err := BootstrapApplicationReader(t.Context(), dir, request); err == nil {
+		t.Fatal("unprepared source mutated")
+	}
+	if readerSchema(t, dir) != 36 {
+		t.Fatal("source schema changed")
+	}
+	dir, request, _ = preparedReaderFixture(t, 36, true)
+	changed := request
+	changed.OwnerLease = update.NewProbe()
+	if err := StageApplicationReaderBootstrap(t.Context(), dir, changed); err == nil {
+		t.Fatal("foreign lease adopted")
 	}
 }

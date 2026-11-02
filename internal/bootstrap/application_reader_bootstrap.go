@@ -28,12 +28,12 @@ func (p *Prepared) ApplicationReaderBootstrapRequest(id, lease, previousEngine s
 	if e := p.revalidate(); e != nil {
 		return out, e
 	}
-	if predecessor.Version != 1 || !(predecessor.State == "paused" && update.IDOK(predecessor.PauseID) || predecessor.State == "prepared" && predecessor.PauseID == "" && predecessor.Core.State.Version == 35) || predecessor.Request == nil || !update.ValidPauseRequest(*predecessor.Request) || predecessor.Request.IntentID != id || predecessor.Request.Sequence != p.report.Sequence || predecessor.Request.ManifestSHA256 != p.report.DescriptorSHA256 || (predecessor.Core.State.Version != 33 && predecessor.Core.State.Version != 35) || predecessor.Request.Expected.State.Version != predecessor.Core.State.Version || !update.SameCoreMetadata(predecessor.Core, predecessor.Request.Expected) {
+	if predecessor.Version != 1 || !(predecessor.State == "paused" && update.IDOK(predecessor.PauseID) || predecessor.State == "prepared" && predecessor.PauseID == "" && (predecessor.Core.State.Version == 35 || predecessor.Core.State.Version == 36)) || predecessor.Request == nil || !update.ValidPauseRequest(*predecessor.Request) || predecessor.Request.IntentID != id || predecessor.Request.Sequence != p.report.Sequence || predecessor.Request.ManifestSHA256 != p.report.DescriptorSHA256 || (predecessor.Core.State.Version != 33 && predecessor.Core.State.Version != 35 && predecessor.Core.State.Version != 36) || predecessor.Request.Expected.State.Version != predecessor.Core.State.Version || !update.SameCoreMetadata(predecessor.Core, predecessor.Request.Expected) {
 		return out, errors.New("predecessor fence differs from authenticated release")
 	}
-	version := 1
-	if predecessor.Core.State.Version == 35 {
-		version = 2
+	version, e := core.ApplicationReaderRequestVersion(predecessor.Core.State.Version)
+	if e != nil {
+		return out, e
 	}
 	return core.ApplicationReaderBootstrapRequest{Version: version, OperationID: id, OwnerLease: lease, PreviousEngineSHA256: previousEngine, Release: core.ApplicationRelease{Version: p.descriptor.ProductVersion, EngineSHA256: p.engine.SHA256, Sequence: p.report.Sequence, ManifestSHA256: p.report.DescriptorSHA256, Target: p.report.Target}, Predecessor: predecessor}, nil
 }

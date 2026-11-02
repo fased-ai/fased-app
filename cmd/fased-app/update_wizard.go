@@ -15,6 +15,32 @@ import (
 
 // updateWizard composes ordinary authenticated endpoints, including asynchronous
 // check/restart completion. It never retries apply or enables automatic policy.
+// Authenticate once at entry. A later authentication failure holds the original
+// operation instead of reauthorizing it or repeating Apply.
+func authenticatedUpdateWizard(call func(string, io.Writer) error, signIn func() error, out, errOut io.Writer) error {
+	first := true
+	return updateWizard(func(action string, dest io.Writer) error {
+		if !first {
+			return call(action, dest)
+		}
+		first = false
+		var response bytes.Buffer
+		err := call(action, &response)
+		if errors.Is(err, core.ErrUnauthorized) {
+			if err = signIn(); err != nil {
+				return err
+			}
+			response.Reset()
+			err = call(action, &response)
+		}
+		if err != nil {
+			return err
+		}
+		_, err = dest.Write(response.Bytes())
+		return err
+	}, out, errOut)
+}
+
 func updateWizard(call func(string, io.Writer) error, out, errOut io.Writer) error {
 	return runUpdateWizard(call, out, errOut, func() { time.Sleep(time.Second) }, 900)
 }
@@ -135,7 +161,7 @@ func ordinaryUpdateCommand(args []string, in *os.File, out, errOut io.Writer) er
 		return recoverInstalledLocalUpdate(*prefix, *dir, in, out, errOut)
 	}
 	if action == "wizard" {
-		return updateWizard(call, out, errOut)
+		return authenticatedUpdateWizard(call, func() error { return run([]string{"login", "--data-dir", *dir}, in, out, errOut) }, out, errOut)
 	}
 	return call(action, out)
 }

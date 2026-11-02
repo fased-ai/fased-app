@@ -12,6 +12,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/localinstall"
+	"github.com/fased-ai/fased-app/internal/update"
 	"github.com/fased-ai/fased-app/internal/vpsinstall"
 )
 
@@ -87,5 +88,33 @@ func TestRemoteApplicationOrdinaryRollbackDoesNotProbeReaderHelper(t *testing.T)
 	}
 	if e = routeRemoteApplicationMaintenance(status, os.ErrNotExist, status.ID, func() error { return nil }, func() error { t.Fatal("missing journal became migration authority"); return nil }); e != nil {
 		t.Fatal(e)
+	}
+}
+
+func TestCurrentRemoteReaderRequiresPublicUpdaterHandoff(t *testing.T) {
+	id := update.NewProbe()
+	snapshot := update.CoreSnapshot{InstanceID: "existing", State: update.State{Version: core.StateSchema}}
+	view := core.ApplicationUpdateView{Version: 1, Schema: core.StateSchema, InstanceID: "existing", Operation: core.ApplicationUpdateOperation{Phase: "idle"}}
+	required, err := currentReaderNeedsBootstrap(snapshot, view, id)
+	if err != nil || !required {
+		t.Fatal("same schema without public updater skipped handoff", required, err)
+	}
+	view.ControllerAvailable = true
+	if required, err = currentReaderNeedsBootstrap(snapshot, view, id); err != nil || required {
+		t.Fatal("configured controller bypassed", err)
+	}
+	view.ControllerAvailable = false
+	view.Operation.ID = id
+	if required, err = currentReaderNeedsBootstrap(snapshot, view, id); err != nil || required {
+		t.Fatal("existing owner operation bypassed", err)
+	}
+	view.Operation.ID = ""
+	view.Operation.Phase = "recovery"
+	if _, err = currentReaderNeedsBootstrap(snapshot, view, id); err == nil {
+		t.Fatal("unresolved update replaced")
+	}
+	view.InstanceID = "foreign"
+	if _, err = currentReaderNeedsBootstrap(snapshot, view, id); err == nil {
+		t.Fatal("foreign workspace adopted")
 	}
 }

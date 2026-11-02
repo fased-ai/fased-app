@@ -89,17 +89,19 @@ jobs:
           go test -c -o .evidence/p4-fault-reboot/update-tests ./internal/update
           go build -o .evidence/bin/fased-signer ./cmd/fased-signer
           node scripts/build-inspection-predecessor.mjs
-      - name: Build the actual schema33 reader fixture
+      - name: Build archived application reader fixtures
         run: |
           node scripts/build-inspection-predecessor.mjs --application-reader
           node scripts/build-inspection-predecessor.mjs --application-reader35
+          node scripts/build-inspection-predecessor.mjs --application-reader36
       - name: Verify authenticated older-reader handoff
         env:
           FASED_READER_PREDECESSOR: ${{ github.workspace }}/.evidence/b01-connected-install/reader-predecessor-schema33
           FASED_READER_PREDECESSOR35: ${{ github.workspace }}/.evidence/b01-connected-install/reader-predecessor-schema35
+          FASED_READER_PREDECESSOR36: ${{ github.workspace }}/.evidence/b01-connected-install/reader-predecessor-schema36
         run: |
           go test -race ./cmd/fased-app -run '^TestApplicationReaderCompiledPredecessorIPC$' -count=1
-          go test -race ./cmd/fased-app -run '^TestApplicationReader35IPC$' -count=1
+          go test -race ./cmd/fased-app -run '^TestApplicationReader(35|36)IPC$' -count=1
       - name: Disposable VM prerequisites
         run: |
           node --test scripts/ci-ubuntu-mirror.test.mjs
