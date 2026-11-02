@@ -1,6 +1,6 @@
 # Ubuntu release preparation
 
-The proposed first version is **0.1.0**, targeting Ubuntu 24.04 amd64. This is a
+The proposed first version is **0.1.1**, targeting Ubuntu 24.04 amd64. This is a
 publisher procedure; customers do not manage release-signing keys.
 
 The staging workflow in `.github/workflows/release.yml` is dormant. It creates no
@@ -8,7 +8,9 @@ GitHub Release, signed update metadata, deployment or update activation. Its
 public verification inputs are bound locally for review. Do not create a tag
 or run a release build until the owner authorizes it.
 
-## Ubuntu0.1.0 local signing and recovery
+<a id="ubuntu010-local-signing-and-recovery"></a>
+
+## Local signing and recovery
 
 The owner approved the GitHub installer URL and single-owner local signing plan.
 The signing tooling is delivered on main `4eb9e0f`. Production encrypted local
@@ -21,7 +23,7 @@ The first public row remains Ubuntu24.04/amd64.
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Owner               | The owner operating `fcode-ai`; one owner/workflow, four distinct internal role keys under `single-owner-v1`.                                                          |
 | Official installer  | `https://github.com/fased-ai/fased-app/releases/latest/download/install.sh` after publication.                                                                         |
-| Exact first version | `https://github.com/fased-ai/fased-app/releases/download/v0.1.0/install.sh` after publication.                                                                         |
+| Exact first version | `https://github.com/fased-ai/fased-app/releases/download/v0.1.1/install.sh` after publication.                                                                         |
 | Trust               | GitHub HTTPS for the first script; the rendered script pins verifier bytes/public seed. Installed Update verifies signed metadata, provenance, expiry and floors.      |
 | Key storage         | One encrypted local keystore and a versioned encrypted local recovery archive, outside Git and customer/application data. No cloud integration or additional hardware. |
 
