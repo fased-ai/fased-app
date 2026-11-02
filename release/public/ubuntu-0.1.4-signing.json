@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "repository": "fased-ai/fased-app",
+  "releaseVersion": "0.1.4",
+  "profile": "single-owner-v1",
+  "owner": "fcode-ai",
+  "identitySHA256": "7a3df5ec0d14a0328fc139f4327299803469b4ad6ef482912347be097c695396",
+  "roles": {
+    "root": "6c793fb8f2456449ac2c40af79ce8a4713097f77b72367229271b6afc81de811",
+    "snapshot": "e3dddfec90f0a9a31ba674c3dcad6ef5f39498c1f91a3708234407e1a66d4804",
+    "targets": "f29696b54cea66abbc22dd970ecf4e520ac32d8fa678867c0eee355f9d2b1a4f",
+    "timestamp": "b6a6d6dd62c40b3310168522020d0cf7cb165e72db2f114ea181c244bbc0030b"
+  },
+  "ownerApprovalSha256": "9b47c090045e930d264314f5f376355db0e90a9bdcb2c545ec0a83685b667a3b",
+  "storage": "owner-unlocked encrypted local keystore and encrypted local recovery archive",
+  "recoveryVerified": true,
+  "recoveryLimit": "same-computer copies do not cover total device or passphrase loss",
+  "scope": "local signing and recovery; no release publication or automatic access"
+}
