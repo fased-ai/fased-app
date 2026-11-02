@@ -72,6 +72,54 @@ lookup or import-time network activity. Its explicit operations are:
    verify exact Git blobs/tree/commit; preserve versioned history; advance without
    force and read back the result. Concurrent/uncertain outcomes stop without retry.
 
+### Bounded metadata refresh
+
+`node scripts/prepare-ubuntu-release.mjs publisher-refresh` is an explicit,
+one-shot maintainer operation. It automatically checks whether renewal is due,
+requests only the required online signatures, verifies the result and uses the
+existing recorded metadata publisher. No timer, workflow schedule or service is
+installed. Production trust is still unconfigured; the command stops before
+reading keys or publishing credentials until those bindings are approved.
+
+The private `.evidence/ubuntu-release/refresh-request.json` names version 1,
+`mode` (`start` or `resume`), `publicationFile`, `publicationSHA256`,
+`previousCommit`, `verifierFile`, `verifierSHA256`, `onlineKeyFiles`
+(`snapshot` and `timestamp` PEM paths), and `tokenFile`. File paths are explicit
+and absolute. The verifier is the reviewed compiled `fased-release-candidate`
+executable. Optional `resolutions` use the existing publisher's recovery contract.
+No Root or Targets private key is accepted. Keep these files owned and private;
+no credential comes from an environment default or enters the journal.
+
+The Go verifier authenticates the pinned prior publication, Root, role signatures,
+metadata links, descriptor and provenance. Before any new signature, the runner
+checks that those exact public bytes exist at the reviewed current metadata
+commit. It refuses a changed head or different release/asset/sequence. Expired
+Snapshot/Timestamp can serve as historical input to this operation only; Root,
+seed and Targets must still authorize the release. Consumer expiry checks stay
+unchanged.
+
+Snapshot renews when at most 48 hours remain and its bounded expiry can extend.
+Timestamp renews when at most 36 hours remain, or Snapshot renews. Validity stays
+within Snapshot 7 days, Timestamp 48 hours and all offline authorization expiries.
+Targets and every immutable release file remain byte-for-byte unchanged. If a
+parent expiry prevents useful extension, the result is a no-op with an offline
+renewal warning rather than repeated signatures. Root/Targets renewal remains a
+separate owner signing action.
+
+The private `refresh-<version>-<baseline-publication-SHA256>/` journal freezes the
+due plan before signing and retains public approvals/output. Resume uses those
+exact payloads, not a newly computed clock. Its `metadata/` child uses the existing
+publisher recorder, original IDs, uncertain-write inspection and head checks.
+Completed work is verified read-only; no duplicate ref update or re-signing.
+Not-due checks read no private signing key or API token and can be invoked again
+when due. `publisher-inspect` includes retained refresh operations.
+
+A successful result includes the renewed public `publication` object, its digest
+and the confirmed metadata commit. Retain them together as the next baseline;
+keep previous operation records. Missing/corrupt/expired state stops rather than
+resetting an operation. Controlled disposable-key/time/transport checks are
+engineering evidence, not public-release or scheduled-service acceptance.
+
 ### Durable operation and recovery
 
 Use `runRecordedPublisher` for execution; it connects the existing operations to
@@ -87,7 +135,7 @@ The existing maintainer entry uses two commands:
   `.evidence/ubuntu-release/publisher-request.json`. Production trust must be
   configured first; missing bindings stop before request/credential access.
 
-The request names version1, `action` (`stage`, `release` or `metadata`), `mode`
+The request names version 1, `action` (`stage`, `release` or `metadata`), `mode`
 (`start` or `resume`), exact candidate/publication file paths and approval hashes,
 and an explicit `tokenFile`. Artifact files use the existing staging directory.
 Inputs and the token file must be owned private regular files; no credential is

@@ -690,7 +690,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { resolve, join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync, execFileSync } from "node:child_process";
 import { runRecordedPublisher } from "./publish-ubuntu-release.mjs";
 import {
   inspectPublisherJournal,
@@ -778,7 +778,14 @@ function recoveryRemote(f, existing) {
     }
     if (m === "POST" && p.endsWith("/git/trees")) {
       if (state.trees["3".repeat(40)]) throw Error("DUPLICATE tree creation");
-      state.trees["3".repeat(40)] = b.tree;
+      state.trees["3".repeat(40)] = [
+        ...new Map(
+          [...(state.trees[b.base_tree] ?? []), ...b.tree].map((e) => [
+            e.path,
+            e,
+          ]),
+        ).values(),
+      ];
       return { sha: "3".repeat(40) };
     }
     if (m === "POST" && p.endsWith("/git/commits")) {
@@ -1252,4 +1259,416 @@ test("same-version metadata renewals retain distinct journals and identical inpu
       approval: { sha256: "../reset" },
     }),
   );
+});
+
+// Refresh uses the same durable publisher fixture, with the current publication
+// already present at the reviewed metadata head. No public network is involved.
+import {
+  runMetadataRefresh,
+  onlineMetadataSigner,
+} from "./refresh-ubuntu-metadata.mjs";
+import { runMaintainerRefresh } from "./prepare-ubuntu-release.mjs";
+import {
+  generateKeyPairSync,
+  createPublicKey,
+  verify as verifySignature,
+} from "node:crypto";
+function refreshFixture(t) {
+  const f = durableFixture(t, "metadata");
+  const old = JSON.parse(f.raw),
+    next = structuredClone(old);
+  const meta = (v) =>
+    Buffer.from(
+      JSON.stringify({
+        signed: {
+          version: v,
+          expires: new Date(Date.now() + 86400000).toISOString(),
+        },
+      }),
+    ).toString("base64");
+  delete next.files["1.snapshot.json"];
+  next.files["2.snapshot.json"] = meta(2);
+  next.files["timestamp.json"] = meta(2);
+  next.planSha256 = "e".repeat(64);
+  const tree = [];
+  for (const [name, content] of Object.entries(old.files)) {
+    const bytes = Buffer.from(content, "base64"),
+      id = createHash("sha1")
+        .update(`blob ${bytes.length}\0`)
+        .update(bytes)
+        .digest("hex");
+    tree.push({ path: name, mode: "100644", type: "blob", sha: id });
+    f.remote.state.blobs[id] = { sha: id, encoding: "base64", content };
+  }
+  f.remote.state.trees["2".repeat(40)] = tree;
+  const seed = Buffer.from("disposable fixture public seed"),
+    plan = {
+      version: 1,
+      due: true,
+      renewSnapshot: true,
+      offlineRenewalNeeded: false,
+      createdAt: new Date().toISOString(),
+    },
+    signed = [];
+  const input = {
+    directory: join(f.parent, "refresh"),
+    mode: "start",
+    seed,
+    seedSHA256: sha(seed),
+    publication: f.raw,
+    publicationSHA256: sha(f.raw),
+    previousCommit: f.approval.previousCommit,
+    verifierSHA256: "a".repeat(64),
+  };
+  const verify = async (op, i) => {
+    if (op === "plan") return i.plan ?? plan;
+    if (op === "finalize")
+      return {
+        plan: i.plan,
+        publication: i.plan.due ? next : old,
+        previousPublicationSha256: input.publicationSHA256,
+        targetsUnchanged: true,
+        noOp: !i.plan.due,
+        published: false,
+        activation: false,
+      };
+    return {
+      role: op,
+      seedSha256: input.seedSHA256,
+      payload: "frozen-" + op,
+      planSha256: "e".repeat(64),
+    };
+  };
+  return {
+    ...f,
+    input,
+    old,
+    next,
+    plan,
+    signed,
+    deps: {
+      verify,
+      signOnline: async (r) => {
+        signed.push(r.payload);
+        return [{ keyid: r.role, sig: "disposable-public-signature" }];
+      },
+      api: f.remote.api,
+    },
+  };
+}
+test("refresh freezes one plan, publishes only renewed metadata and resumes as no-op", async (t) => {
+  const f = refreshFixture(t),
+    out = await runMetadataRefresh(f.input, f.deps);
+  assert.equal(out.metadataCommit, "4".repeat(40));
+  assert.equal(out.noOp, false);
+  assert.equal(out.activation, false);
+  assert.deepEqual(out.publication.descriptor, f.old.descriptor);
+  assert.equal(
+    out.publication.files["1.targets.json"],
+    f.old.files["1.targets.json"],
+  );
+  assert.deepEqual(f.signed, ["frozen-snapshot", "frozen-timestamp"]);
+  assert.ok(f.remote.state.mutations.every((m) => m.path.includes("/git/")));
+  const count = f.remote.state.mutations.length;
+  const resumed = await runMetadataRefresh(
+    { ...f.input, mode: "resume" },
+    f.deps,
+  );
+  assert.equal(resumed.noOp, true);
+  assert.equal(f.remote.state.mutations.length, count);
+  assert.equal(f.signed.length, 2);
+  const journal = readFileSync(
+    join(f.input.directory, "operation.json"),
+    "utf8",
+  );
+  assert.ok(!journal.includes("PRIVATE KEY"));
+});
+test("refresh interruption retains approvals and exact payloads; changed authority refuses", async (t) => {
+  const f = refreshFixture(t);
+  let failed = false;
+  const deps = {
+    ...f.deps,
+    signOnline: async (r) => {
+      if (r.role === "timestamp" && !failed) {
+        failed = true;
+        throw Error("fixture interruption");
+      }
+      return f.deps.signOnline(r);
+    },
+  };
+  await assert.rejects(
+    runMetadataRefresh(f.input, deps),
+    /fixture interruption/,
+  );
+  assert.deepEqual(f.signed, ["frozen-snapshot"]);
+  assert.equal(f.remote.state.mutations.length, 0);
+  await assert.rejects(runMetadataRefresh(f.input, deps), /explicit resume/);
+  await assert.rejects(
+    runMetadataRefresh(
+      { ...f.input, mode: "resume", previousCommit: "9".repeat(40) },
+      deps,
+    ),
+    /changed/,
+  );
+  f.plan.createdAt = "2099-01-01"; // Restart must use the saved plan, not this clock.
+  const result = await runMetadataRefresh({ ...f.input, mode: "resume" }, deps);
+  assert.equal(result.noOp, false);
+  assert.deepEqual(f.signed, ["frozen-snapshot", "frozen-timestamp"]);
+});
+test("uncertain refresh metadata head is read back without replay or re-signing", async (t) => {
+  const f = refreshFixture(t);
+  let interrupted = false;
+  const deps = {
+    ...f.deps,
+    api: async (m, p, b) => {
+      const r = await f.remote.api(m, p, b);
+      if (m === "PATCH" && !interrupted) {
+        interrupted = true;
+        throw Error("lost ref response");
+      }
+      return r;
+    },
+  };
+  await assert.rejects(runMetadataRefresh(f.input, deps), /lost ref response/);
+  const count = f.remote.state.mutations.length;
+  const out = await runMetadataRefresh({ ...f.input, mode: "resume" }, deps);
+  assert.equal(out.metadataCommit, "4".repeat(40));
+  assert.equal(f.remote.state.mutations.length, count);
+  assert.equal(f.signed.length, 2);
+});
+test("not-due refresh signs/publishes nothing and later due work remains possible", async (t) => {
+  const f = refreshFixture(t);
+  f.plan.due = false;
+  const deps = {
+    ...f.deps,
+    verify: async (op, i) => {
+      const r = await f.deps.verify(op, i);
+      if (op === "finalize")
+        r.publication = Object.fromEntries(
+          Object.entries(r.publication).reverse(),
+        );
+      return r;
+    },
+    api: () => {
+      throw Error("unexpected transport");
+    },
+    signOnline: () => {
+      throw Error("unexpected key access");
+    },
+  };
+  assert.equal((await runMetadataRefresh(f.input, deps)).noOp, true);
+  f.plan.due = true;
+  assert.equal((await runMetadataRefresh(f.input, f.deps)).noOp, false);
+});
+test("wrong head, baseline bytes, offline expiry and lock contention stop refresh", async (t) => {
+  for (const kind of ["head", "bytes", "expiry", "lock"]) {
+    const f = refreshFixture(t);
+    const deps = { ...f.deps };
+    if (kind === "head") f.remote.state.head = "8".repeat(40);
+    if (kind === "bytes")
+      f.remote.state.trees["2".repeat(40)][0].sha = "8".repeat(40);
+    if (kind === "expiry")
+      deps.verify = async () => {
+        throw Error("offline authorization expired");
+      };
+    let lock;
+    if (kind === "lock") {
+      const binding = sha(
+        JSON.stringify({
+          version: 1,
+          seed: f.input.seedSHA256,
+          publication: f.input.publicationSHA256,
+          previousCommit: f.input.previousCommit,
+          verifier: f.input.verifierSHA256,
+        }),
+      );
+      lock = openPublisherJournal(f.input.directory, binding);
+    }
+    try {
+      await assert.rejects(
+        runMetadataRefresh(f.input, deps),
+        /changed|expired|already running/,
+      );
+      assert.equal(f.signed.length, 0);
+      assert.equal(f.remote.state.mutations.length, 0);
+    } finally {
+      lock?.close();
+    }
+  }
+});
+test("online signer opens only matching private online role and verifies exact payload", async (t) => {
+  const f = refreshFixture(t),
+    roles = {},
+    keys = {},
+    paths = {};
+  for (const role of ["snapshot", "timestamp"]) {
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519"),
+      id = sha(Buffer.from(role));
+    roles[role] = { threshold: 1, keyids: [id] };
+    keys[id] = {
+      keyval: {
+        public: Buffer.from(
+          publicKey.export({ format: "jwk" }).x,
+          "base64url",
+        ).toString("hex"),
+      },
+    };
+    paths[role] = join(f.parent, role + ".pem");
+    writeFileSync(
+      paths[role],
+      privateKey.export({ type: "pkcs8", format: "pem" }),
+      { mode: 0o600 },
+    );
+  }
+  const seed = Buffer.from(
+      JSON.stringify({
+        signingProfile: "single-owner-v1",
+        root: Buffer.from(JSON.stringify({ signed: { roles, keys } })).toString(
+          "base64",
+        ),
+      }),
+    ),
+    pin = sha(seed),
+    payload = Buffer.from(JSON.stringify({ _type: "timestamp" }));
+  const request = {
+    version: 1,
+    role: "timestamp",
+    seedSha256: pin,
+    planSha256: "e".repeat(64),
+    threshold: 1,
+    keyIds: roles.timestamp.keyids,
+    payload: payload.toString("base64"),
+    payloadSha256: sha(payload),
+  };
+  const signer = onlineMetadataSigner(seed, pin, paths),
+    a = await signer(request);
+  assert.ok(
+    verifySignature(
+      null,
+      payload,
+      createPublicKey(readFileSync(paths.timestamp)),
+      Buffer.from(a[0].sig, "hex"),
+    ),
+  );
+  for (const patch of [
+    { role: "targets" },
+    { payloadSha256: "f".repeat(64) },
+    { keyIds: roles.snapshot.keyids },
+    { seedSha256: "f".repeat(64) },
+  ])
+    await assert.rejects(signer({ ...request, ...patch }), /required/);
+  const wrong = onlineMetadataSigner(seed, pin, {
+    ...paths,
+    timestamp: paths.snapshot,
+  });
+  await assert.rejects(wrong(request), /differs/);
+  chmodSync(paths.timestamp, 0o644);
+  await assert.rejects(signer(request), /Private regular/);
+});
+test("refresh maintainer entry refuses unconfigured production trust before credentials", async () => {
+  await assert.rejects(
+    runMaintainerRefresh(rawConfig, {
+      tokenFile: "/must-not-read",
+      onlineKeyFiles: {},
+    }),
+    /Production trust missing/,
+  );
+  assert.throws(
+    () =>
+      execFileSync(
+        process.execPath,
+        ["scripts/prepare-ubuntu-release.mjs", "publisher-refresh"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    /refresh dispatch disabled/,
+  );
+});
+
+test("configured refresh reads the repository seed directly and never touches credentials before verifier admission", async (t) => {
+  const f = refreshFixture(t),
+    c = complete();
+  const folder = join(f.parent, "release/public");
+  mkdirSync(folder, { recursive: true, mode: 0o700 });
+  const seed = Buffer.from(
+    JSON.stringify({
+      signingProfile: "single-owner-v1",
+      root: Buffer.from(
+        JSON.stringify({ signed: { roles: {}, keys: {} } }),
+      ).toString("base64"),
+    }),
+  );
+  c.seedSha256 = sha(seed);
+  writeFileSync(join(f.parent, c.seedFile), seed, { mode: 0o600 });
+  const publicationFile = join(f.parent, "publication.json");
+  writeFileSync(publicationFile, f.raw, { mode: 0o600 });
+  const verifierFile = join(f.parent, "absent-reviewed-verifier");
+  const request = {
+    version: 1,
+    mode: "start",
+    publicationFile,
+    publicationSHA256: sha(f.raw),
+    previousCommit: f.approval.previousCommit,
+    verifierFile,
+    verifierSHA256: "a".repeat(64),
+    tokenFile: join(f.parent, "must-not-read-token"),
+    onlineKeyFiles: {
+      snapshot: join(f.parent, "must-not-read-snapshot"),
+      timestamp: join(f.parent, "must-not-read-timestamp"),
+    },
+  };
+  const script = `import {runMaintainerRefresh} from ${JSON.stringify(new URL("./prepare-ubuntu-release.mjs", import.meta.url).href)};try{await runMaintainerRefresh(${JSON.stringify(c)},${JSON.stringify(request)});throw Error("accepted missing verifier");}catch(e){if(e.code!=="ENOENT" || e.path!==${JSON.stringify(verifierFile)})throw e;}`;
+  const child = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", script],
+    { cwd: f.parent, encoding: "utf8" },
+  );
+  assert.equal(child.status, 0, child.stderr);
+});
+
+test("refresh snapshots caller authority and resolutions before any verifier await", async (t) => {
+  const f = refreshFixture(t),
+    old = { ...f.input };
+  f.input.resolutions = {};
+  const deps = {
+    ...f.deps,
+    verify: async (op, i) => {
+      const result = await f.deps.verify(op, i);
+      f.input.previousCommit = "9".repeat(40);
+      f.input.directory = join(f.parent, "wrong-operation");
+      f.input.resolutions["0"] = { id: "wrong" };
+      return result;
+    },
+  };
+  const out = await runMetadataRefresh(f.input, deps);
+  assert.equal(out.metadataCommit, "4".repeat(40));
+  assert.deepEqual(f.remote.state.commits[out.metadataCommit].parents, [
+    { sha: old.previousCommit },
+  ]);
+  assert.ok(existsSync(join(old.directory, "operation.json")));
+  assert.equal(existsSync(f.input.directory), false);
+});
+
+test("refresh never recreates a missing child publication journal on resume", async (t) => {
+  const f = refreshFixture(t);
+  let failed = false;
+  const deps = {
+    ...f.deps,
+    api: async (m, p, b) => {
+      const r = await f.remote.api(m, p, b);
+      if (m === "PATCH" && !failed) {
+        failed = true;
+        throw Error("lost response");
+      }
+      return r;
+    },
+  };
+  await assert.rejects(runMetadataRefresh(f.input, deps), /lost response/);
+  const count = f.remote.state.mutations.length;
+  fsBuiltin.unlinkSync(join(f.input.directory, "metadata/operation.json"));
+  await assert.rejects(
+    runMetadataRefresh({ ...f.input, mode: "resume" }, deps),
+    /Missing publisher state/,
+  );
+  assert.equal(f.remote.state.mutations.length, count);
+  assert.equal(f.signed.length, 2);
 });

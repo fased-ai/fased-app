@@ -35,6 +35,8 @@ func run(args []string, out io.Writer) error {
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	switch args[0] {
+	case "refresh-plan", "refresh-request", "refresh-finalize":
+		return runRefresh(args, flags, out)
 	case "release-request", "release-finalize":
 		return runFinalizer(args, flags, out)
 	case "verify-seed":
