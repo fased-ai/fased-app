@@ -1,3 +1,8 @@
+> Current release authority: `github-attestation-v1`; see
+> [Ubuntu releases](maintainers/ubuntu-release.md) and the password-free command
+> below. Earlier signed-profile contracts in this engineering reference describe
+> compatibility behavior, not prerequisites for publishing a new release.
+
 # Updates and recovery
 
 Use **Settings → Updates** for the installed version, update status and short
@@ -96,9 +101,9 @@ A private signing key approves a release. The matching public key lets Fased ver
 | Snapshot          | Separate local metadata role; the current one-shot operation needs private owner unlock                                             | Bind consistent versions of already approved metadata               |
 | Timestamp         | Another distinct local metadata role; the current one-shot operation needs private owner unlock                                     | Keep approved metadata fresh                                        |
 
-One person can own all four roles; there are no external custodians. The active owner amendment uses an encrypted local keystore and local recovery archive; no cloud service, removable device or hardware signer is required. This is local encryption, not physically offline storage, and cannot recover total computer/disk/passphrase loss. See the [local signing procedure](maintainers/ubuntu-release.md#local-signing-and-recovery). Snapshot/Timestamp automation cannot introduce an unapproved release or extend the offline release authorization. Publishing credentials are separately scoped. Keep private keys out of chat, repositories, logs and artifacts. Two encrypted backups of a key are backups, not extra signing identities. No hardware purchase is required; a supported hardware signer is optional later.
+One person can own all four roles; there are no external custodians. The retained signed-profile tooling supports an encrypted local keystore and local recovery archive; no cloud service, removable device or hardware signer is required. This is local encryption, not physically offline storage, and cannot recover total computer/disk/passphrase loss. See the [current release and recovery procedure](maintainers/ubuntu-release.md#recovery). Snapshot/Timestamp automation cannot introduce an unapproved release or extend the offline release authorization. Publishing credentials are separately scoped. Keep private keys out of chat, repositories, logs and artifacts. Two encrypted backups of a key are backups, not extra signing identities. No hardware purchase is required; a supported hardware signer is optional later.
 
-Retain existing validity ceilings (Root365d, Targets30d, Snapshot7d, Timestamp48h) and refresh windows. Routine refresh is publisher automation, independent of whether users enable automatic installation. The release owner renews Targets before seven days remain and Root before thirty days remain. Monitoring alerts on failed refresh; expiry blocks new update admission, not permission to erase/reinitialize data or unlock wallets. The bounded one-shot publisher refresh derives renewal, signs only the online roles and uses durable recovery automatically when invoked; see the [maintainer procedure](maintainers/ubuntu-release.md#bounded-metadata-refresh). Scheduling, monitoring and production operation remain separate, unconfigured release gates. No timer or daemon is added by this implementation.
+Retain existing validity ceilings (Root365d, Targets30d, Snapshot7d, Timestamp48h) and refresh windows. Routine refresh is publisher automation, independent of whether users enable automatic installation. The release owner renews Targets before seven days remain and Root before thirty days remain. Monitoring alerts on failed refresh; expiry blocks new update admission, not permission to erase/reinitialize data or unlock wallets. The bounded one-shot publisher refresh derives renewal, signs only the online roles and uses durable recovery automatically when invoked; see the [current release procedure](maintainers/ubuntu-release.md#release). Scheduling, monitoring and production operation remain separate, unconfigured release gates. No timer or daemon is added by this implementation.
 
 **Tradeoff:** no second person can stop an owner-authorized mistake or theft of a sufficient signing credential. A compromised release key can authorize malicious updates while it remains trusted; an offline Root can revoke it for clients that receive valid recovery metadata, but cannot undo malware already installed. Root compromise requires an independently authenticated recovery/reinstall path. Losing the only usable Root key and all backups can strand the trusted update chain. Keep Root and routine release material separated in practice, not just in filenames. Separate online keys reduce authority exposure but do not compensate for an already compromised signing machine. GitHub protections and build provenance remain necessary; signatures do not prove code safety.
 
@@ -2771,3 +2776,27 @@ On a failed local run, `--keep-failed-vm` may retain the exact owned baseline fo
 VM disk, seed, ephemeral SSH key and process. CI always uploads only small
 receipts/logs, never VM disks or keys. Production trust, real wallets, financial
 execution, automatic updates and public releases remain disabled.
+
+## Password-free release command
+
+The current publisher authority is `github-attestation-v1`. A protected,
+main-derived tag runs one Ubuntu build. GitHub/Sigstore authenticates both the
+archive and installer; immutable release metadata binds the public inventory.
+No local release key, password, keyring setup or online-role metadata refresh is
+used by this default. Existing signing archives remain untouched.
+
+```sh
+npm run release
+```
+
+This joins required checks, exact-head merge, tag/build, independent provenance
+verification, actual executable preflight, publication and anonymous readback.
+Verifier processes do not receive publishing credentials. `npm run release --
+publish PATH` resumes a retained exact candidate. Preserve operation records and
+original bytes on failure; never rerun or replace a used tag to diagnose it.
+
+Installed manual Update keeps the existing Local/Remote controller, monotonic
+release identity, pause, data/signer preservation and recovery. Existing trusted
+profiles are not reinterpreted; the official bootstrap Update handoff installs
+the new verifier explicitly. Customer automatic installation and live product
+features remain separately disabled.

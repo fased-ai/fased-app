@@ -304,7 +304,7 @@ export function githubPublisher(token) {
   return async (method, path, body) => {
     const upload =
       method === "UPLOAD" &&
-      /^\/repos\/fased-ai\/fased-app\/releases\/[1-9][0-9]*\/assets\?name=(fased-app-linux-amd64\.tar\.gz|fased-install-linux-amd64|fased-app-linux-amd64\.provenance\.sigstore\.json|install\.sh)$/.test(
+      /^\/repos\/fased-ai\/fased-app\/releases\/[1-9][0-9]*\/assets\?name=(fased-app-linux-amd64\.tar\.gz|fased-install-linux-amd64|fased-app-linux-amd64\.provenance\.sigstore\.json|install\.sh|fased-release\.json)$/.test(
         path,
       ) &&
       Buffer.isBuffer(body);
@@ -340,7 +340,10 @@ export function githubPublisher(token) {
     );
     if (!response.ok) {
       await response.body?.cancel();
-      throw Error(`Publisher refused (${response.status}); no automatic retry`);
+      throw Object.assign(
+        Error(`Publisher refused (${response.status}); no automatic retry`),
+        { status: response.status },
+      );
     }
     const reader = response.body.getReader();
     let size = 0;
@@ -361,7 +364,7 @@ export function githubPublisher(token) {
   };
 }
 
-async function verifyAnnotatedTag(api, version, tagObject, source) {
+export async function verifyAnnotatedTag(api, version, tagObject, source) {
   if (!oid.test(tagObject) || !oid.test(source))
     throw Error("Reviewed annotated tag/source required");
   const ref = await api("GET", repo + `/git/ref/tags/v${version}`);
@@ -406,6 +409,8 @@ export async function stageCandidate(
     "fased-app-linux-amd64.provenance.sigstore.json",
     "install.sh",
   ];
+  if (c.releaseAuthority === "github-attestation-v1")
+    names.push("fased-release.json");
   if (
     c.repository !== "fased-ai/fased-app" ||
     c.repositoryId !== "1426211857" ||
@@ -446,6 +451,11 @@ export async function stageCandidate(
     identity.full_name !== c.repository
   )
     throw Error("Candidate repository changed");
+  if (
+    c.releaseAuthority !== "github-attestation-v1" &&
+    (await api("GET", repo + "/immutable-releases")).enabled !== true
+  )
+    throw Error("Repository immutable releases must be enabled before staging");
   await verifyAnnotatedTag(api, c.version, c.tagObject, c.source);
   await record({
     phase: "create-draft-attempted",
@@ -581,6 +591,10 @@ export async function releaseCandidate(
     throw Error("Release repository changed");
   await verifyAnnotatedTag(api, c.version, c.tagObject, c.source);
   publicationInput(publication, approval);
+  if ((await api("GET", repo + "/immutable-releases")).enabled !== true)
+    throw Error(
+      "Repository immutable releases must be enabled before publication",
+    );
   await record({
     phase: "release-publish-attempted",
     releaseId: d.github.releaseId,
@@ -590,7 +604,7 @@ export async function releaseCandidate(
   const published = await api(
     "PATCH",
     repo + `/releases/${d.github.releaseId}`,
-    { draft: false },
+    { draft: false, tag_name: `v${c.version}`, target_commitish: c.source },
   );
   if (
     published.draft !== false ||

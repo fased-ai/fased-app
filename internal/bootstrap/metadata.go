@@ -27,6 +27,9 @@ const ProductionPurpose = "fased-app-first-install-production:v1"
 // retains the original threshold policy; development seeds cannot opt into it.
 const SingleOwnerSigningProfile = "single-owner-v1"
 
+const GitHubAttestationProfile = "github-attestation-v1"
+const AttestedPurpose = "fased-app-github-release:v1"
+
 const descriptorTarget = "bootstrap/descriptor.json"
 
 var archiveTarget = "fased-app-linux-" + runtime.GOARCH + ".tar.gz"
@@ -46,6 +49,7 @@ func (b Binding) valid() bool {
 	profile := b.Version == 1 && b.Purpose == Purpose || b.Version == 2 && b.Purpose == GitHubPurpose
 	development := profile && b.DevelopmentOnly && b.Channel == "development"
 	production := b.Version == 3 && b.Purpose == ProductionPurpose && !b.DevelopmentOnly && b.Channel == "stable"
+	production = production || b.Version == 4 && b.Purpose == AttestedPurpose && !b.DevelopmentOnly && b.Channel == "stable"
 	return (development || production) && b.Repository == "fased-ai/fased-app" && b.Target.OS == "linux" && (b.Target.Arch == "amd64" || b.Target.Arch == "arm64") && b.Target.Arch == runtime.GOARCH
 }
 
@@ -129,7 +133,7 @@ func parseSeed(b []byte, pin string, now time.Time) (Seed, error) {
 	if !hashOK(pin) || digest(b) != pin || update.StrictJSON(b, &seed) != nil || !seed.Binding.valid() || seed.CreatedAt <= 0 || seed.CreatedAt > now.Unix() || seed.ExpiresAt <= now.Unix() || seed.ExpiresAt-seed.CreatedAt > 365*86400 || seed.MinimumSequence == 0 || len(seed.Root) > update.MaxDocument {
 		return seed, errors.New("current independently pinned first-install seed required")
 	}
-	if seed.Version == 3 {
+	if seed.Version >= 3 {
 		if seed.Provenance == nil || seed.Provenance.Validate() != nil || seed.Provenance.Repository != seed.Repository || seed.Provenance.RepositoryID != seed.GitHub.RepositoryID {
 			return seed, errors.New("production seed requires pinned matching provenance trust and repository identity")
 		}
@@ -143,6 +147,12 @@ func parseSeed(b []byte, pin string, now time.Time) (Seed, error) {
 		}
 	} else if seed.Origin != "" || seed.GitHub.Validate() != nil {
 		return seed, errors.New("GitHub seed requires one explicit pinned policy and no legacy origin")
+	}
+	if seed.Version == 4 {
+		if seed.SigningProfile != GitHubAttestationProfile || len(seed.Root) != 0 {
+			return seed, errors.New("GitHub attestation profile requires no publisher signing root")
+		}
+		return seed, nil
 	}
 	if err := metadataShape(seed.Root, "root"); err != nil {
 		return seed, err

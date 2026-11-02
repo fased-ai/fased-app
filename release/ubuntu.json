@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "0.1.3",
+  "version": "0.1.4",
   "repository": "fased-ai/fased-app",
   "repositoryId": "1426211857",
   "ownerId": "279582504",
@@ -10,8 +10,9 @@
     "arch": "amd64",
     "ubuntu": "24.04"
   },
-  "seedFile": "release/public/ubuntu-0-1-0-seed.json",
-  "seedSha256": "f86dedbc5c6652f61157ff08cd6b989f6841c99eb1299d73d641afd3579d6336",
-  "custodyApprovalSha256": "9b47c090045e930d264314f5f376355db0e90a9bdcb2c545ec0a83685b667a3b",
-  "initialTrustApprovalSha256": "d62fb7ef01356bc7b2a8b3d10daaebfd1aa39abb6b2b18a0a755c59ad29f1996"
+  "seedFile": "release/public/ubuntu-attested-seed.json",
+  "seedSha256": "92a01bf0328df43819c7bbfa01b127d1227e7a1f9f9fccdf545edef97dd25643",
+  "custodyApprovalSha256": null,
+  "initialTrustApprovalSha256": null,
+  "releaseAuthority": "github-attestation-v1"
 }

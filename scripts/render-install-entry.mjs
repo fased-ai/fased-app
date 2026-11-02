@@ -24,9 +24,17 @@ function targetValues(config) {
     trust.repository !== "fased-ai/fased-app" ||
     trust.target?.os !== "linux" ||
     (trust.signingProfile !== undefined &&
-      (trust.signingProfile !== "single-owner-v1" ||
-        trust.version !== 3 ||
-        trust.developmentOnly !== false)) ||
+      !(
+        trust.signingProfile === "single-owner-v1" &&
+        trust.version === 3 &&
+        trust.developmentOnly === false
+      ) &&
+      !(
+        trust.signingProfile === "github-attestation-v1" &&
+        trust.version === 4 &&
+        trust.developmentOnly === false &&
+        trust.root === ""
+      )) ||
     !["amd64", "arm64"].includes(trust.target?.arch)
   )
     throw Error("Wrong installer trust identity");
@@ -41,7 +49,7 @@ function targetValues(config) {
         !trust.developmentOnly
       : config.url !== undefined ||
         ca !== undefined ||
-        trust.version !== 3 ||
+        (trust.version !== 3 && trust.version !== 4) ||
         trust.developmentOnly !== false ||
         trust.channel !== "stable" ||
         !trust.provenance

@@ -164,7 +164,10 @@ function rootFor(keys, identity, now) {
     _type: "root",
     spec_version: "1.0.31",
     version: 1,
-    expires: new Date(now + 364 * 86400000).toISOString(),
+    // Go's TUF reader canonicalizes time values; sign one shared seconds form.
+    expires: new Date(Math.floor(now / 1000) * 1000 + 364 * 86400000)
+      .toISOString()
+      .replace(/\.000Z$/, "Z"),
     consistent_snapshot: true,
     keys: {},
     roles: {},
@@ -322,7 +325,14 @@ function unseal(raw, pass, expectedIdentitySHA256, expectedClass) {
 
 // Every filesystem write is registered before dispatch. Temporary ciphertext is
 // classified by that journal, so interrupted partial writes can be safely replaced.
-function persist(journal, target, data) {
+function persist(journal, target, data, limit = max) {
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > 128 * 1024 * 1024 ||
+    data.length > limit
+  )
+    throw Error("Release file exceeds bound");
   privateDir(path.dirname(target));
   journal.state.files ??= {};
   const records = journal.state.files;
@@ -363,12 +373,12 @@ function persist(journal, target, data) {
       unlinkSync(temp);
       syncDir(path.dirname(target));
     }
-    if (sha(readPublisherFile(target, max)) !== wanted)
+    if (sha(readPublisherFile(target, limit)) !== wanted)
       throw Error("Existing signing file differs; never overwrite");
     return;
   }
   if (existsSync(temp)) {
-    const b = readPublisherFile(temp, max);
+    const b = readPublisherFile(temp, limit);
     if (sha(b) !== wanted) {
       unlinkSync(temp);
       syncDir(path.dirname(target));
@@ -745,3 +755,6 @@ export function localSigningSession(
     },
   };
 }
+
+// Reuse the established durable, no-replace recovery writer for release inputs.
+export { persist as persistLocalReleaseFile };

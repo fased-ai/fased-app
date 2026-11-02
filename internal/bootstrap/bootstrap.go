@@ -207,65 +207,76 @@ func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepa
 	defer cancel()
 	start := o.clock()
 	docs := map[string][]byte{}
-	docs["timestamp.json"], err = source.metadata(ctx, "timestamp.json", update.MaxDocument)
-	if err != nil {
-		return nil, err
-	}
-	chain, err := initialChain(seed, docs["timestamp.json"], nil, nil, start)
-	if err != nil {
-		return nil, err
-	}
-	name, err := versioned(chain.Timestamp.Signed.Meta["snapshot.json"].Version, "snapshot")
-	if err != nil {
-		return nil, err
-	}
-	docs["snapshot.json"], err = source.metadata(ctx, name, update.MaxDocument)
-	if err != nil {
-		return nil, err
-	}
-	chain, err = initialChain(seed, docs["timestamp.json"], docs["snapshot.json"], nil, start)
-	if err != nil {
-		return nil, err
-	}
-	name, err = versioned(chain.Snapshot.Signed.Meta["targets.json"].Version, "targets")
-	if err != nil {
-		return nil, err
-	}
-	docs["targets.json"], err = source.metadata(ctx, name, update.MaxDocument)
-	if err != nil {
-		return nil, err
-	}
-	chain, err = initialChain(seed, docs["timestamp.json"], docs["snapshot.json"], docs["targets.json"], start)
-	if err != nil {
-		return nil, err
-	}
-	targets := chain.Targets["targets"].Signed.Targets
-	descriptorName := descriptorTarget
-	if seed.Version == 3 {
-		descriptorName = productionDescriptorTarget
-	}
-	docs["descriptor.json"], err = source.metadata(ctx, descriptorPath(seed, targets[descriptorName].Hashes["sha256"]), targets[descriptorName].Length)
-	if err != nil {
-		return nil, err
-	}
-	descriptor, err := verifyDescriptor(docs["descriptor.json"], seed, chain)
-	if err != nil {
-		return nil, err
-	}
-	if seed.Version == 3 {
-		proof := descriptor.Release.Provenance
-		docs["provenance.sigstore.json"], err = source.metadata(ctx, "targets/provenance/"+proof.SHA256+".sigstore.json", proof.Size)
+	var descriptor Descriptor
+	if seed.Version == 4 {
+		descriptor, docs, err = source.attested(ctx)
 		if err != nil {
 			return nil, err
 		}
+	} else {
+		docs["timestamp.json"], err = source.metadata(ctx, "timestamp.json", update.MaxDocument)
+		if err != nil {
+			return nil, err
+		}
+		chain, err := initialChain(seed, docs["timestamp.json"], nil, nil, start)
+		if err != nil {
+			return nil, err
+		}
+		name, err := versioned(chain.Timestamp.Signed.Meta["snapshot.json"].Version, "snapshot")
+		if err != nil {
+			return nil, err
+		}
+		docs["snapshot.json"], err = source.metadata(ctx, name, update.MaxDocument)
+		if err != nil {
+			return nil, err
+		}
+		chain, err = initialChain(seed, docs["timestamp.json"], docs["snapshot.json"], nil, start)
+		if err != nil {
+			return nil, err
+		}
+		name, err = versioned(chain.Snapshot.Signed.Meta["targets.json"].Version, "targets")
+		if err != nil {
+			return nil, err
+		}
+		docs["targets.json"], err = source.metadata(ctx, name, update.MaxDocument)
+		if err != nil {
+			return nil, err
+		}
+		chain, err = initialChain(seed, docs["timestamp.json"], docs["snapshot.json"], docs["targets.json"], start)
+		if err != nil {
+			return nil, err
+		}
+		targets := chain.Targets["targets"].Signed.Targets
+		descriptorName := descriptorTarget
+		if seed.Version == 3 {
+			descriptorName = productionDescriptorTarget
+		}
+		docs["descriptor.json"], err = source.metadata(ctx, descriptorPath(seed, targets[descriptorName].Hashes["sha256"]), targets[descriptorName].Length)
+		if err != nil {
+			return nil, err
+		}
+		descriptor, err = verifyDescriptor(docs["descriptor.json"], seed, chain)
+		if err != nil {
+			return nil, err
+		}
+		if seed.Version == 3 {
+			proof := descriptor.Release.Provenance
+			docs["provenance.sigstore.json"], err = source.metadata(ctx, "targets/provenance/"+proof.SHA256+".sigstore.json", proof.Size)
+			if err != nil {
+				return nil, err
+			}
+		}
+
 	}
 	decision, err := productionProof(seed, descriptor, docs["provenance.sigstore.json"], o.clock())
 	if err != nil {
 		return nil, err
 	}
 	if metadataOnly {
-		if _, e := initialChain(seed, docs["timestamp.json"], docs["snapshot.json"], docs["targets.json"], o.clock()); e != nil {
-			return nil, e
+		if seed.Version != 4 {
+			if _, e := initialChain(seed, docs["timestamp.json"], docs["snapshot.json"], docs["targets.json"], o.clock()); e != nil {
+				return nil, e
+			}
 		}
 		return &Prepared{descriptor: descriptor, report: Report{MetadataVerified: true, DescriptorSHA256: digest(docs["descriptor.json"])}}, nil
 	}
@@ -337,7 +348,7 @@ func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepa
 	if err = writeNew(root, "seed.json", o.Seed); err != nil {
 		return prepared, err
 	}
-	prepared.report = Report{Version: seed.Version, DevelopmentOnly: seed.DevelopmentOnly, Purpose: seed.Purpose, MetadataVerified: true, ArchiveVerified: true, BundleVerified: true, Sequence: descriptor.Sequence, Target: descriptor.Target, SeedSHA256: o.SeedSHA256, DescriptorSHA256: digest(docs["descriptor.json"]), ArchiveSHA256: descriptor.Archive.SHA256, BundleSHA256: descriptor.BundleSHA256, BundleDirectory: filepath.Join(o.Directory, "bundle"), GitHubTransport: seed.Version >= 2, ProvenanceVerified: seed.Version == 3, ProvenanceSHA256: decision.BundleSHA256, TrustPolicySHA256: decision.PolicySHA256}
+	prepared.report = Report{Version: seed.Version, DevelopmentOnly: seed.DevelopmentOnly, Purpose: seed.Purpose, MetadataVerified: true, ArchiveVerified: true, BundleVerified: true, Sequence: descriptor.Sequence, Target: descriptor.Target, SeedSHA256: o.SeedSHA256, DescriptorSHA256: digest(docs["descriptor.json"]), ArchiveSHA256: descriptor.Archive.SHA256, BundleSHA256: descriptor.BundleSHA256, BundleDirectory: filepath.Join(o.Directory, "bundle"), GitHubTransport: seed.Version >= 2, ProvenanceVerified: seed.Version >= 3, ProvenanceSHA256: decision.BundleSHA256, TrustPolicySHA256: decision.PolicySHA256}
 	b, err := json.Marshal(prepared.report)
 	if err != nil {
 		return prepared, err
@@ -361,16 +372,24 @@ func (p *Prepared) revalidate() error {
 	if err != nil {
 		return err
 	}
-	chain, err := initialChain(seed, p.metadata["timestamp.json"], p.metadata["snapshot.json"], p.metadata["targets.json"], now)
-	if err != nil {
-		return err
-	}
-	d, err := verifyDescriptor(p.metadata["descriptor.json"], seed, chain)
-	if err != nil || d != p.descriptor {
-		return errors.New("bootstrap descriptor identity changed")
-	}
-	if _, err = productionProof(seed, d, p.metadata["provenance.sigstore.json"], now); err != nil {
-		return err
+	d := p.descriptor
+	if seed.Version == 4 {
+		if err = revalidateAttested(seed, p.metadata, d, now); err != nil {
+			return err
+		}
+	} else {
+		chain, err := initialChain(seed, p.metadata["timestamp.json"], p.metadata["snapshot.json"], p.metadata["targets.json"], now)
+		if err != nil {
+			return err
+		}
+		d, err := verifyDescriptor(p.metadata["descriptor.json"], seed, chain)
+		if err != nil || d != p.descriptor {
+			return errors.New("bootstrap descriptor identity changed")
+		}
+		if _, err = productionProof(seed, d, p.metadata["provenance.sigstore.json"], now); err != nil {
+			return err
+		}
+
 	}
 	archive, err := bundle.Inspect(filepath.Join(p.options.Directory, "download.tar.gz"))
 	if err != nil || archive.SHA256 != d.Archive.SHA256 || archive.Bytes != d.Archive.Size {

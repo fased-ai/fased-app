@@ -25,6 +25,7 @@ var provenanceFile = "fased-app-linux-" + runtime.GOARCH + ".provenance.sigstore
 // authority. Tree/tag-object/lock hashes are TUF-approved assertions, not claims
 // invented by the standard GitHub Actions provenance format.
 type ProductionRelease struct {
+	InstallerSHA256   string          `json:"installerSha256,omitempty"`
 	SourceTree        string          `json:"sourceTree"`
 	TagObject         string          `json:"tagObject"`
 	PackageLockSHA256 string          `json:"packageLockSha256"`
@@ -56,7 +57,7 @@ func sourceHash(s string) bool {
 }
 
 func (d Descriptor) provenanceExpected() releaseprovenance.Expected {
-	return releaseprovenance.Expected{ArchiveName: d.Archive.File, ArchiveSHA256: d.Archive.SHA256, SourceCommit: d.Source, WorkflowCommit: d.Release.WorkflowCommit, Tag: "v" + d.ProductVersion, RunID: d.Release.RunID, RunAttempt: d.Release.RunAttempt}
+	return releaseprovenance.Expected{InstallerSHA256: d.Release.InstallerSHA256, ArchiveName: d.Archive.File, ArchiveSHA256: d.Archive.SHA256, SourceCommit: d.Source, WorkflowCommit: d.Release.WorkflowCommit, Tag: "v" + d.ProductVersion, RunID: d.Release.RunID, RunAttempt: d.Release.RunAttempt}
 }
 
 func validateProductionDescriptor(d Descriptor, target *metadata.TargetFiles) error {
@@ -68,7 +69,7 @@ func validateProductionDescriptor(d Descriptor, target *metadata.TargetFiles) er
 }
 
 func productionProof(seed Seed, d Descriptor, proof []byte, now time.Time) (releaseprovenance.Decision, error) {
-	if seed.Version != 3 {
+	if seed.Version < 3 {
 		return releaseprovenance.Decision{}, nil
 	}
 	if seed.Provenance == nil || int64(len(proof)) != d.Release.Provenance.Size || digest(proof) != d.Release.Provenance.SHA256 {
@@ -78,7 +79,7 @@ func productionProof(seed Seed, d Descriptor, proof []byte, now time.Time) (rele
 }
 
 func verifyBundleProfile(seed Seed, m bundle.Manifest) error {
-	if seed.Version == 3 {
+	if seed.Version >= 3 {
 		if m.Schema != 2 || m.UnsignedEngineering || m.Desktop {
 			return errors.New("production first install requires the distinct headless Ubuntu release-bundle format")
 		}

@@ -18,6 +18,7 @@ const sha = (v) => createHash("sha256").update(v).digest("hex");
 const copy = (v) => structuredClone(v);
 const unconfigured = () => ({
   ...rawConfig,
+
   seedFile: null,
   seedSha256: null,
   custodyApprovalSha256: null,
@@ -54,12 +55,7 @@ const env = {
 };
 
 test("production trust inputs are explicit; configuration cannot redirect authority", () => {
-  assert.deepEqual(validateConfig(unconfigured()), [
-    "seedFile",
-    "seedSha256",
-    "custodyApprovalSha256",
-    "initialTrustApprovalSha256",
-  ]);
+  assert.deepEqual(validateConfig(unconfigured()), ["seedFile", "seedSha256"]);
   assert.deepEqual(validateConfig(complete()), []);
   assert.deepEqual(validateConfig(rawConfig), []);
   for (const patch of [
@@ -85,6 +81,17 @@ test("production public inputs bind the signing identity, seed and pre-build app
     new URL(`../${rawConfig.seedFile}`, import.meta.url),
   );
   const seed = JSON.parse(seedBytes);
+  if (rawConfig.releaseAuthority === "github-attestation-v1") {
+    assert.equal(sha(seedBytes), rawConfig.seedSha256);
+    assert.equal(seed.version, 4);
+    assert.equal(seed.signingProfile, "github-attestation-v1");
+    assert.equal(seed.root, "");
+    assert.equal(seed.provenance.repository, rawConfig.repository);
+    assert.equal(seed.provenance.ownerId, rawConfig.ownerId);
+    assert.equal(rawConfig.custodyApprovalSha256, null);
+    assert.equal(rawConfig.initialTrustApprovalSha256, null);
+    return;
+  }
   const approvalBytes = publicFile(
     `ubuntu-${rawConfig.version}-initial-trust.json`,
   );
@@ -274,7 +281,7 @@ return options.encoding?value.toString():Buffer.from(value);
         seed.provenance,
       );
       const overlay = JSON.parse(readFileSync(join(output, "overlay.json")));
-      assert.equal(Object.keys(overlay.Replace).length, 2);
+      assert.equal(Object.keys(overlay.Replace).length, 3);
       for (const file of Object.values(overlay.Replace))
         assert.ok(readFileSync(file, "utf8").includes(rawConfig.seedSha256));
       assert.equal(
@@ -329,14 +336,19 @@ test("build overlay embeds only the exact approved public seed in both binaries"
     [
       "/fixture/cmd/fased-app/publisher_seed_generated.go",
       "/fixture/cmd/fased-install/publisher_seed_generated.go",
+      "/fixture/internal/bootstrap/publisher_seed_generated.go",
     ],
   );
-  for (const b of bindings) {
+  for (const b of bindings.slice(0, 2)) {
     assert.ok(b.source.includes(seed.toString("base64")));
     assert.ok(b.source.includes(sha(seed)));
     assert.match(b.source, /func init\(\)/);
     assert.doesNotMatch(b.source, /os\.Getenv|https:|privateKey/);
   }
+  assert.equal(bindings[2].output, "bootstrap.go");
+  assert.match(bindings[2].source, /^package bootstrap\n/);
+  assert.match(bindings[2].source, /productionGitHubActivationEnabled = true/);
+  assert.doesNotMatch(bindings[2].source, /os\.Getenv|https:|privateKey/);
   assert.throws(() => bindingOverlay(seed, "a".repeat(64), "/fixture"));
 });
 
@@ -489,7 +501,7 @@ test("staging requires actual verifier timestamp enums, exact policy and tag ide
   );
 });
 
-test("dormant staging has one pinned Ubuntu build and no release or activation authority", () => {
+test("tagged release has one pinned Ubuntu build and scoped password-free publication", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/release.yml", import.meta.url),
     "utf8",
@@ -497,7 +509,13 @@ test("dormant staging has one pinned Ubuntu build and no release or activation a
   assert.match(workflow, /push:\n\s+tags: \["v\*"\]/);
   assert.doesNotMatch(
     workflow,
-    /workflow_dispatch|pull_request|contents: write|secrets\.|gh release|git push|sudo|activate/,
+    /workflow_dispatch|pull_request|secrets\.|gh release|git push|sudo|activate/,
+  );
+  assert.match(workflow, /contents: write/);
+  assert.match(workflow, /node scripts\/release-ubuntu\.mjs publish/);
+  assert.doesNotMatch(
+    workflow,
+    /signer-sign|npm run release -- credentials|passphrase|keys\.enc/,
   );
   assert.equal((workflow.match(/runs-on:/g) ?? []).length, 1);
   assert.match(workflow, /runs-on: ubuntu-24\.04/);
@@ -508,7 +526,7 @@ test("dormant staging has one pinned Ubuntu build and no release or activation a
   assert.equal((workflow.match(/npm run build/g) ?? []).length, 1);
   assert.match(
     workflow,
-    /subject-path: \.evidence\/ubuntu-release\/fased-app-linux-amd64.tar.gz/,
+    /subject-path: \|\n\s+\.evidence\/ubuntu-release\/fased-app-linux-amd64.tar.gz\n\s+\.evidence\/ubuntu-release\/fased-install-linux-amd64/,
   );
   assert.match(workflow, /verify-provenance --policy-file/);
   assert.match(workflow, /create-storage-record: false/);
@@ -623,6 +641,8 @@ function publisherFixture() {
   let createdTree = [];
   const api = async (method, path, body) => {
     calls.push({ method, path, body });
+    if (method === "GET" && path.endsWith("/immutable-releases"))
+      return { enabled: true };
     if (path.endsWith("/fased-app"))
       return {
         id: 1426211857,
@@ -809,6 +829,8 @@ test("only exact finalized complete draft may become immutable release", async (
   const api = async (m, p, b) => {
     if (m === "PATCH") {
       patches++;
+      assert.equal(b.tag_name, "v0.1.0");
+      assert.equal(b.target_commitish, f.candidate.source);
       return { id: 11, draft: false, immutable: true };
     }
     if (p.endsWith("/releases/11"))
@@ -945,6 +967,8 @@ function recoveryRemote(f, existing) {
   };
   const api = async (m, p, b) => {
     const prefix = "/repos/fased-ai/fased-app";
+    if (m === "GET" && p === prefix + "/immutable-releases")
+      return { enabled: true };
     if (m !== "GET") state.mutations.push({ method: m, path: p });
     if (p === prefix)
       return {
@@ -2634,3 +2658,365 @@ test("local signing syncs existing recovery directory parent after interrupted m
     syncBuiltinESMExports();
   }
 });
+
+test("publisher checks immutable boolean before publication instead of trusting HTTP success", async () => {
+  const f = publisherFixture(),
+    raw = Buffer.from(JSON.stringify(f.candidate));
+  let mutations = 0;
+  const api = async (method, route, body) => {
+    if (method !== "GET") mutations++;
+    if (route.endsWith("/immutable-releases")) return { enabled: false };
+    if (route.endsWith("/releases/11"))
+      return {
+        id: 11,
+        draft: true,
+        prerelease: false,
+        tag_name: "v0.1.0",
+        assets: f.assets,
+      };
+    return f.api(method, route, body);
+  };
+  await assert.rejects(
+    releaseCandidate(raw, sha(raw), f.raw, f.approval, api, f.record),
+    /immutable releases/,
+  );
+  assert.equal(mutations, 0);
+});
+
+import { publicAsset } from "./release-ubuntu.mjs";
+test("release readback uses anonymous pinned public bytes and refuses unsafe redirects", async () => {
+  const raw = Buffer.from("disposable published executable fixture"),
+    identity = { size: raw.length, sha256: sha(raw) };
+  const urls = [];
+  const fetchFixture = async (url, options) => {
+    urls.push(url);
+    assert.equal(options.headers, undefined);
+    assert.equal(options.redirect, "manual");
+    return urls.length === 1
+      ? new Response(null, {
+          status: 302,
+          headers: {
+            location:
+              "https://release-assets.githubusercontent.com/github-production-release-asset/fixture?temporary=not-retained",
+          },
+        })
+      : new Response(raw, { status: 200 });
+  };
+  assert.deepEqual(
+    await publicAsset(
+      "0.1.4",
+      "fased-install-linux-amd64",
+      identity,
+      fetchFixture,
+    ),
+    raw,
+  );
+  assert.equal(urls.length, 2);
+  await assert.rejects(
+    publicAsset(
+      "0.1.4",
+      "fased-install-linux-amd64",
+      identity,
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://evil.invalid/?credential=secret" },
+        }),
+    ),
+    /redirect refused/,
+  );
+  await assert.rejects(
+    publicAsset(
+      "0.1.4",
+      "fased-install-linux-amd64",
+      identity,
+      async () => new Response(Buffer.from("wrong"), { status: 200 }),
+    ),
+    /differs/,
+  );
+});
+
+import { persistLocalReleaseFile } from "./local-release-signing.mjs";
+test("release resumes frozen finalization input after lost link acknowledgement without replacing bytes", (t) => {
+  const f = localSigningFixture(t),
+    file = join(f.parent, "finalization.json"),
+    raw = Buffer.from('{"fixture":"frozen expiry and source"}\n');
+  const journal = { state: {}, save() {} };
+  assert.throws(() => {
+    persistLocalReleaseFile(journal, file, raw);
+    throw Error("lost acknowledgement");
+  }, /lost acknowledgement/);
+  assert.deepEqual(readFileSync(file), raw);
+  persistLocalReleaseFile(journal, file, raw);
+  assert.throws(
+    () => persistLocalReleaseFile(journal, file, Buffer.from("changed")),
+    /changed|differs/,
+  );
+  assert.deepEqual(readFileSync(file), raw);
+});
+
+import {
+  acceptedReleasePR,
+  prepareReleaseCandidate,
+} from "./release-source.mjs";
+test("release source requires exact reviewed main PR and refuses failed CI before mutation", async () => {
+  const head = "a".repeat(40),
+    pr = { number: 77, baseRefName: "main", headRefOid: head, state: "OPEN" };
+  assert.throws(() => acceptedReleasePR({ ...pr, baseRefName: "other" }, head));
+  assert.throws(() => acceptedReleasePR(pr, "b".repeat(40)));
+  const calls = [];
+  const run = (program, args) => {
+    calls.push([program, ...args]);
+    if (
+      program === "gh" &&
+      args[0] === "api" &&
+      args[1] === "/repos/fased-ai/fased-app/immutable-releases"
+    )
+      return JSON.stringify({ enabled: true });
+    if (program === "git" && args[0] === "remote")
+      return "git@github-fased:fased-ai/fased-app.git";
+    if (
+      program === "gh" &&
+      args[0] === "api" &&
+      args[1] === "/repos/fased-ai/fased-app"
+    )
+      return JSON.stringify({
+        id: 1426211857,
+        owner: { id: 279582504 },
+        full_name: "fased-ai/fased-app",
+      });
+    if (program === "git" && args[0] === "status") return "";
+    if (program === "git" && args[0] === "rev-parse") return head;
+    if (args[0] === "pr" && args[1] === "view") return JSON.stringify(pr);
+    if (args[0] === "pr" && args[1] === "checks")
+      throw Error("controlled CI failure");
+    return "";
+  };
+  await assert.rejects(
+    prepareReleaseCandidate("0.1.4", "77", { run, progress() {} }),
+    /CI failure/,
+  );
+  assert.ok(
+    !calls.some(
+      (c) =>
+        (c[0] === "gh" && c[1] === "pr" && c[2] === "merge") ||
+        (c[0] === "git" && c[1] === "push") ||
+        c.includes("tag"),
+    ),
+  );
+});
+
+test("release source resumes merged/tagged build and verifies its original ZIP before extraction", async (t) => {
+  const f = localSigningFixture(t),
+    source = "a".repeat(40),
+    tree = "b".repeat(40),
+    id = "123";
+  const version = "0.0.777",
+    zip = join(f.parent, "fixture.zip");
+  execFileSync("python3", [
+    "-c",
+    `import zipfile,json,sys
+names='fased-app-linux-amd64.tar.gz fased-app-linux-amd64.json fased-install-linux-amd64 fased-app-linux-amd64.provenance.sigstore.json verified-provenance.json expected-provenance.json provenance-policy.json first-install-seed.json install.sh build-inputs.json artifact-inventory.json signing-inputs.json fased-release.json'.split()
+with zipfile.ZipFile(sys.argv[1],'w') as z:
+ for name in names:
+  raw=json.dumps(dict(version='0.0.777',sourceCommit='a'*40,runId='123',runAttempt='1')) if name=='signing-inputs.json' else 'disposable fixture'
+  z.writestr(name,raw)
+`,
+    zip,
+  ]);
+  const archive = readFileSync(zip),
+    calls = [];
+  const run = (program, args, options) => {
+    calls.push([program, ...args]);
+    if (
+      program === "gh" &&
+      args[0] === "api" &&
+      args[1] === "/repos/fased-ai/fased-app/immutable-releases"
+    )
+      return JSON.stringify({ enabled: true });
+    if (program === "git" && args[0] === "remote")
+      return "git@github-fased:fased-ai/fased-app.git";
+    if (
+      program === "gh" &&
+      args[0] === "api" &&
+      args[1] === "/repos/fased-ai/fased-app"
+    )
+      return JSON.stringify({
+        id: 1426211857,
+        owner: { id: 279582504 },
+        full_name: "fased-ai/fased-app",
+      });
+    if (program === "python3") return execFileSync(program, args, options);
+    if (program === "git") {
+      if (args[0] === "status") return "";
+      if (args[0] === "rev-parse") return args[1] === "HEAD" ? source : tree;
+      if (args[0] === "ls-remote")
+        return `${source}\trefs/tags/v${version}^{}\n`;
+      if (args[0] === "fetch") return "";
+      throw Error("unexpected Git mutation");
+    }
+    if (args[0] === "auth") return "";
+    if (args[0] === "pr")
+      return JSON.stringify({
+        number: 77,
+        state: "MERGED",
+        baseRefName: "main",
+        headRefOid: source,
+        mergeCommit: { oid: source },
+      });
+    if (args[0] === "run" && args[1] === "list")
+      return JSON.stringify([
+        { databaseId: 123, headSha: source, status: "completed" },
+      ]);
+    if (args[0] === "run" && args[1] === "view")
+      return JSON.stringify({
+        conclusion: "failure",
+        attempt: 1,
+        jobs: [
+          {
+            name: "ubuntu-amd64",
+            steps: [
+              {
+                name: "Verify original provenance offline and stage public signing inputs",
+                conclusion: "success",
+              },
+            ],
+          },
+        ],
+      });
+    if (args[0] === "api" && args[1].endsWith("/zip")) return archive;
+    if (
+      args[0] === "api" &&
+      args[1] === "/repos/fased-ai/fased-app/immutable-releases"
+    )
+      return JSON.stringify({ enabled: true });
+    if (args[0] === "api")
+      return JSON.stringify({
+        artifacts: [
+          {
+            id: 456,
+            name: "ubuntu-amd64-release-candidate",
+            digest: `sha256:${sha(archive)}`,
+            expired: false,
+          },
+        ],
+      });
+    throw Error("unexpected release command");
+  };
+  const directory = await prepareReleaseCandidate(version, "77", {
+    run,
+    workspace: f.parent,
+    progress() {},
+  });
+  assert.equal(
+    JSON.parse(readFileSync(join(directory, "signing-inputs.json"))).runId,
+    id,
+  );
+  assert.ok(
+    !calls.some(
+      (c) =>
+        (c[0] === "gh" && c[1] === "pr" && c[2] === "merge") ||
+        (c[0] === "git" && c[1] === "push"),
+    ),
+  );
+});
+
+test("release source refuses a different origin before GitHub or Git mutation", async () => {
+  const calls = [];
+  await assert.rejects(
+    prepareReleaseCandidate("0.1.4", "77", {
+      run(program, args) {
+        calls.push([program, ...args]);
+        if (
+          program === "gh" &&
+          args[0] === "api" &&
+          args[1] === "/repos/fased-ai/fased-app/immutable-releases"
+        )
+          return JSON.stringify({ enabled: true });
+        if (program === "git" && args[0] === "remote")
+          return "git@github.com:someone/another-project.git";
+        return "";
+      },
+      progress() {},
+    }),
+    /Fixed Fased origin/,
+  );
+  assert.deepEqual(
+    calls.map((c) => c.slice(0, 2)),
+    [
+      ["gh", "auth"],
+      ["git", "remote"],
+    ],
+  );
+});
+
+test("durable release inputs support larger artifacts and recover a journaled partial temporary", (t) => {
+  const f = localSigningFixture(t),
+    target = join(f.parent, "artifact.zip"),
+    raw = Buffer.alloc(96 * 1024, 7);
+  const temp = join(f.parent, ".local-signing-" + "a".repeat(32));
+  writeFileSync(temp, raw.subarray(0, 128), { mode: 0o600, flag: "wx" });
+  const journal = {
+    state: { files: { [target]: { sha256: sha(raw), temp } } },
+    save() {},
+  };
+  persistLocalReleaseFile(journal, target, raw, 128 * 1024 * 1024);
+  assert.deepEqual(readFileSync(target), raw);
+  assert.equal(existsSync(temp), false);
+});
+
+test("release waits for dependency checks before the late registered required aggregate", async () => {
+  const head = "a".repeat(40),
+    checks = [];
+  let merged = false;
+  const run = (program, args) => {
+    if (program === "git") {
+      if (args[0] === "remote")
+        return "git@github-fased:fased-ai/fased-app.git";
+      if (args[0] === "status") return "";
+      if (args[0] === "rev-parse") return head;
+      if (args[0] === "fetch")
+        throw Error("controlled stop after verified checks");
+    }
+    if (args[0] === "auth") return "";
+    if (
+      args[0] === "api" &&
+      args[1] === "/repos/fased-ai/fased-app/immutable-releases"
+    )
+      return JSON.stringify({ enabled: true });
+    if (args[0] === "api")
+      return JSON.stringify({
+        id: 1426211857,
+        owner: { id: 279582504 },
+        full_name: "fased-ai/fased-app",
+      });
+    if (args[0] === "pr" && args[1] === "view")
+      return JSON.stringify({
+        number: 77,
+        state: merged ? "MERGED" : "OPEN",
+        baseRefName: "main",
+        headRefOid: head,
+        mergeCommit: merged ? { oid: head } : null,
+      });
+    if (args[0] === "pr" && args[1] === "checks") {
+      checks.push(args);
+      return "";
+    }
+    if (args[0] === "pr" && args[1] === "merge") {
+      assert.equal(checks.length, 2);
+      merged = true;
+      return "";
+    }
+    throw Error("unexpected command");
+  };
+  await assert.rejects(
+    prepareReleaseCandidate("0.1.4", "77", { run, progress() {} }),
+    /controlled stop/,
+  );
+  assert.equal(checks.length, 2);
+  assert.equal(checks[0].includes("--required"), false);
+  assert.equal(checks[1].includes("--required"), true);
+});
+
+// The active no-password authority is tested separately from retained profiles.
+import "./attested-release.test.mjs";

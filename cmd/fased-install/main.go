@@ -61,11 +61,28 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	listen := f.String("listen", "", "optional fixed loopback listener for installation")
 	receipt := f.String("receipt-file", "", "private bootstrap acquisition receipt")
 	entryAction := f.String("entry-action", "", "fixed installed-instance action for the entry launcher")
+	verifyCandidate := f.String("verify-candidate", "", "verify a retained release candidate without installation")
 	if err := f.Parse(args); err != nil {
 		return err
 	}
 	if f.NArg() != 0 {
 		return errors.New("unexpected installer arguments")
+	}
+	if *verifyCandidate != "" {
+		mixed := false
+		f.Visit(func(flag *flag.Flag) {
+			if flag.Name != "verify-candidate" {
+				mixed = true
+			}
+		})
+		if mixed || compiledFirstInstallBinding == nil {
+			return errors.New("candidate preflight requires only compiled installer trust")
+		}
+		report, err := bootstrap.VerifyAttestedCandidate(bootstrap.Options{Seed: compiledFirstInstallBinding.Seed, SeedSHA256: compiledFirstInstallBinding.SHA256}, *verifyCandidate)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(report)
 	}
 	if *install && *upgrade || *remote && !*upgrade || *upgrade && !*start {
 		return errors.New("choose installation or an existing Local/Remote upgrade")

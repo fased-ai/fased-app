@@ -43,12 +43,13 @@ try {
     execFileSync("tar", ["-xf", "-", "-C", dir], { input: bytes });
     return dir;
   };
-  // These two commands do not build the predecessor UI or change its runtime
+  // These maintenance commands do not build the predecessor UI or change its runtime
   // dependencies. Every other package field and the lockfile must still match.
   const packageInputs = (value) => {
     const inputs = structuredClone(value);
     delete inputs.scripts["build:installer"];
     delete inputs.scripts["test:core"];
+    delete inputs.scripts.release;
     return inputs;
   };
   assert.deepEqual(
@@ -60,7 +61,7 @@ try {
         }),
       ),
     ),
-    "predecessor package inputs changed outside installer-build/core-test commands",
+    "predecessor package inputs changed outside installer-build/core-test/owner-release commands",
   );
   assert.equal(
     execFileSync("git", ["diff", prior, "--", "package-lock.json"], {

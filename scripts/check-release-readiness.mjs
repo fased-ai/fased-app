@@ -82,6 +82,7 @@ try {
     "TestReleaseTransportRefusals",
     "TestReleaseTransportDNSAndRebinding",
     "TestReleaseTransportBindingLimits",
+    "TestReleaseTransportPinnedAddressFallback",
     "TestReleaseLedgerReservationAndRetry",
     "TestReleaseLedgerFaults",
     "TestReleaseLedgerConcurrencyAndBounds",
