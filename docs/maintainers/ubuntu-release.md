@@ -5,14 +5,16 @@ publisher procedure; customers do not manage release-signing keys.
 
 The staging workflow in `.github/workflows/release.yml` is dormant. It creates no
 GitHub Release, signed update metadata, deployment or update activation. Its
-current configuration intentionally lacks production trust. Do not create a tag
+public verification inputs are bound locally for review. Do not create a tag
 or run a release build until the owner authorizes it.
 
 ## Ubuntu0.1.0 local signing and recovery
 
 The owner approved the GitHub installer URL and single-owner local signing plan.
-The engineering baseline is main `7a2ee5112aa7241e80df82e2e6c70577c605c632`;
-no release source/tag is selected and no production key or public trust is bound.
+The signing tooling is delivered on main `4eb9e0f`. Production encrypted local
+setup and recovery were separately authorized and verified. Public verification
+inputs in `release/public/` are bound locally for review; no release source/tag
+is selected and no public release is activated.
 The first public row remains Ubuntu24.04/amd64.
 
 | Input               | Recorded direction                                                                                                                                                     |
@@ -67,9 +69,9 @@ short-lived trusted maintainer process, not an agent session/service.
 
 The existing production ownership gate remains closed: `production` operations
 need a private `ownerApprovalFile` matching configured
-`custodyApprovalSha256` before private input/key admission. Current configuration
-has null approval/trust fields; only disposable fixture setup was exercised.
-Nothing here authorizes real key creation or populates those fields.
+`custodyApprovalSha256` before private input/key admission. The actual ownership digest now matches the privately retained approval record.
+Public seed and initial-download approval hashes are configured for review.
+These inputs authorize no publication, schedule or installed update activation.
 
 ### Recovery and interrupted operations
 
@@ -121,8 +123,10 @@ No cloud/removable-storage decision is outstanding for the active local plan.
   seed; post-build receipt binds actual installer/source/run/seed. Never rewrite
   a pre-build approval digest to pretend it approved unbuilt bytes.
 
-`release/ubuntu.json` retains null `seedFile`, `seedSha256`,
-`custodyApprovalSha256` and `initialTrustApprovalSha256`. The existing field name
+`release/ubuntu.json` binds `release/public/ubuntu-0-1-0-seed.json`, its SHA256,
+the actual ownership-approval digest and the pre-build initial-trust approval
+digest. The public signing summary and initial-trust record contain no private
+keys or local filesystem paths. The existing field name
 `custodyApprovalSha256` records publisher signing ownership/backup approval; it
 does not require a third party. No config/schema change is made by this document.
 
@@ -149,8 +153,9 @@ lookup or import-time network activity. Its explicit operations are:
 one-shot maintainer operation. It automatically checks whether renewal is due,
 requests only the required online signatures, verifies the result and uses the
 existing recorded metadata publisher. No timer, workflow schedule or service is
-installed. Production trust is still unconfigured; the command stops before
-reading keys or publishing credentials until those bindings are approved.
+installed. Production public inputs are under local review. No production
+refresh request or publishing credential is configured; dispatch and scheduling
+remain separately authorized operations.
 
 The private `.evidence/ubuntu-release/refresh-request.json` names version 1,
 `mode` (`start` or `resume`), `publicationFile`, `publicationSHA256`,
