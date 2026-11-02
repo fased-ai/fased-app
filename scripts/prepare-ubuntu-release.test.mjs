@@ -3075,3 +3075,51 @@ test("durable release inputs support larger artifacts and recover a journaled pa
   assert.deepEqual(readFileSync(target), raw);
   assert.equal(existsSync(temp), false);
 });
+
+test("release waits for dependency checks before the late registered required aggregate", async () => {
+  const head = "a".repeat(40),
+    checks = [];
+  let merged = false;
+  const run = (program, args) => {
+    if (program === "git") {
+      if (args[0] === "remote")
+        return "git@github-fased:fased-ai/fased-app.git";
+      if (args[0] === "status") return "";
+      if (args[0] === "rev-parse") return head;
+      if (args[0] === "fetch")
+        throw Error("controlled stop after verified checks");
+    }
+    if (args[0] === "auth") return "";
+    if (args[0] === "api")
+      return JSON.stringify({
+        id: 1426211857,
+        owner: { id: 279582504 },
+        full_name: "fased-ai/fased-app",
+      });
+    if (args[0] === "pr" && args[1] === "view")
+      return JSON.stringify({
+        number: 77,
+        state: merged ? "MERGED" : "OPEN",
+        baseRefName: "main",
+        headRefOid: head,
+        mergeCommit: merged ? { oid: head } : null,
+      });
+    if (args[0] === "pr" && args[1] === "checks") {
+      checks.push(args);
+      return "";
+    }
+    if (args[0] === "pr" && args[1] === "merge") {
+      assert.equal(checks.length, 2);
+      merged = true;
+      return "";
+    }
+    throw Error("unexpected command");
+  };
+  await assert.rejects(
+    prepareReleaseCandidate("0.1.4", "77", { run, progress() {} }),
+    /controlled stop/,
+  );
+  assert.equal(checks.length, 2);
+  assert.equal(checks[0].includes("--required"), false);
+  assert.equal(checks[1].includes("--required"), true);
+});

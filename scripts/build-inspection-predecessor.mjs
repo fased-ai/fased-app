@@ -176,12 +176,13 @@ try {
       "historical health plus current connection descriptor and authenticated read-only Updates projection; nil controller",
     httpSHA256: sha(await readFile(httpPath)),
   };
-  // Installer-build and core-test commands do not produce this inert UI.
+  // Installer-build, core-test and owner release commands do not produce this inert UI.
   // Keep every other package field, UI input and lockfile bound to the baseline.
   const packageInputs = (value) => {
     const inputs = structuredClone(value);
     delete inputs.scripts["build:installer"];
     delete inputs.scripts["test:core"];
+    delete inputs.scripts.release;
     return inputs;
   };
   assert.deepEqual(

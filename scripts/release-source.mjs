@@ -89,22 +89,21 @@ export async function prepareReleaseCandidate(
   let pr = acceptedReleasePR(view(), head);
   if (pr.state === "OPEN") {
     progress("required CI");
-    call(
-      "gh",
-      [
-        "pr",
-        "checks",
-        "--repo",
-        "fased-ai/fased-app",
-        String(pr.number),
-        "--required",
-        "--watch",
-        "--fail-fast",
-        "--interval",
-        "15",
-      ],
-      { stdio: "inherit" },
-    );
+    // GitHub registers the required aggregate only after its dependency jobs.
+    // Watch current checks first, then require the protected aggregate itself.
+    const checkArgs = [
+      "pr",
+      "checks",
+      "--repo",
+      "fased-ai/fased-app",
+      String(pr.number),
+      "--watch",
+      "--fail-fast",
+      "--interval",
+      "15",
+    ];
+    call("gh", checkArgs, { stdio: "inherit" });
+    call("gh", [...checkArgs, "--required"], { stdio: "inherit" });
     progress("merge passing package");
     call("gh", [
       "pr",
