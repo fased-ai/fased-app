@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "repository": "fased-ai/fased-app",
+  "repositoryId": "1426211857",
+  "ownerId": "279582504",
+  "releaseVersion": "0.1.0",
+  "scope": "pre-build-public-verification-inputs",
+  "seedFile": "release/public/ubuntu-0-1-0-seed.json",
+  "seedSha256": "f86dedbc5c6652f61157ff08cd6b989f6841c99eb1299d73d641afd3579d6336",
+  "signingIdentitySHA256": "7a3df5ec0d14a0328fc139f4327299803469b4ad6ef482912347be097c695396",
+  "ownerApprovalSha256": "9b47c090045e930d264314f5f376355db0e90a9bdcb2c545ec0a83685b667a3b",
+  "officialInstallerUrl": "https://github.com/fased-ai/fased-app/releases/latest/download/install.sh",
+  "versionedInstallerUrl": "https://github.com/fased-ai/fased-app/releases/download/v0.1.0/install.sh",
+  "firstDownloadTrust": "GitHub HTTPS delivers the initial script and its verifier/seed pins; compromise of that initial delivery can replace those pins. This is not independent authentication of the first script.",
+  "installedUpdateTrust": "verify the pinned release signatures, repository/tag-bound build provenance, expiry and persisted sequence/version floors",
+  "provenanceRootSource": "GitHub CLI gh attestation trusted-root, authenticated using its built-in TUF trust; Sigstore Public Good Instance",
+  "provenanceRootSha256": "844a1c6de3986c9f02070266b25e0d1a2fa99ceccc89f6b9ad90aae47b62a16e",
+  "artifactAcceptance": "not granted; actual installer/artifact/run identities require separate post-build review",
+  "publishingAuthorized": false,
+  "schedulingAuthorized": false,
+  "activationAuthorized": false
+}

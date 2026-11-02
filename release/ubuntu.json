@@ -5,9 +5,13 @@
   "repositoryId": "1426211857",
   "ownerId": "279582504",
   "workflow": ".github/workflows/release.yml",
-  "target": { "os": "linux", "arch": "amd64", "ubuntu": "24.04" },
-  "seedFile": null,
-  "seedSha256": null,
-  "custodyApprovalSha256": null,
-  "initialTrustApprovalSha256": null
+  "target": {
+    "os": "linux",
+    "arch": "amd64",
+    "ubuntu": "24.04"
+  },
+  "seedFile": "release/public/ubuntu-0-1-0-seed.json",
+  "seedSha256": "f86dedbc5c6652f61157ff08cd6b989f6841c99eb1299d73d641afd3579d6336",
+  "custodyApprovalSha256": "9b47c090045e930d264314f5f376355db0e90a9bdcb2c545ec0a83685b667a3b",
+  "initialTrustApprovalSha256": "aba05cafd5bb49b03096c63a9a9b38b3a2b90e8da0c165a59e1c97e602e84d4b"
 }

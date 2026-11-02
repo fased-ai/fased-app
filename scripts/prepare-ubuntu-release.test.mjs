@@ -45,14 +45,24 @@ const env = {
   RUNNER_ARCH: "X64",
 };
 
-test("unapproved production trust stays absent; configuration cannot redirect authority", () => {
-  assert.deepEqual(validateConfig(rawConfig), [
-    "seedFile",
-    "seedSha256",
-    "custodyApprovalSha256",
-    "initialTrustApprovalSha256",
-  ]);
+test("production trust inputs are explicit; configuration cannot redirect authority", () => {
+  assert.deepEqual(
+    validateConfig({
+      ...rawConfig,
+      seedFile: null,
+      seedSha256: null,
+      custodyApprovalSha256: null,
+      initialTrustApprovalSha256: null,
+    }),
+    [
+      "seedFile",
+      "seedSha256",
+      "custodyApprovalSha256",
+      "initialTrustApprovalSha256",
+    ],
+  );
   assert.deepEqual(validateConfig(complete()), []);
+  assert.deepEqual(validateConfig(rawConfig), []);
   for (const patch of [
     { version: "0.1.0-rc.1" },
     { version: "00.1.0" },
@@ -67,6 +77,77 @@ test("unapproved production trust stays absent; configuration cannot redirect au
     { target: { ...rawConfig.target, extra: true } },
   ])
     assert.throws(() => validateConfig({ ...complete(), ...patch }));
+});
+
+test("production public inputs bind the signing identity, seed and pre-build approval", () => {
+  const publicFile = (name) =>
+    readFileSync(new URL(`../release/public/${name}`, import.meta.url));
+  const seedBytes = readFileSync(
+    new URL(`../${rawConfig.seedFile}`, import.meta.url),
+  );
+  const seed = JSON.parse(seedBytes);
+  const approvalBytes = publicFile("ubuntu-0.1.0-initial-trust.json");
+  const approval = JSON.parse(approvalBytes);
+  const signing = JSON.parse(publicFile("ubuntu-0.1.0-signing.json"));
+  assert.equal(sha(seedBytes), rawConfig.seedSha256);
+  assert.equal(sha(approvalBytes), rawConfig.initialTrustApprovalSha256);
+  assert.equal(approval.seedSha256, rawConfig.seedSha256);
+  assert.equal(approval.seedFile, rawConfig.seedFile);
+  assert.equal(approval.ownerApprovalSha256, rawConfig.custodyApprovalSha256);
+  assert.equal(signing.ownerApprovalSha256, rawConfig.custodyApprovalSha256);
+  assert.equal(approval.signingIdentitySHA256, signing.identitySHA256);
+  assert.equal(signing.recoveryVerified, true);
+  assert.equal(seed.version, 3);
+  assert.equal(seed.signingProfile, "single-owner-v1");
+  assert.equal(seed.developmentOnly, false);
+  assert.equal(seed.minimumSequence, "1");
+  assert.equal(seed.github.metadataBranch, "release-metadata");
+  for (const identity of [
+    seed,
+    seed.github,
+    seed.provenance,
+    signing,
+    approval,
+  ]) {
+    assert.equal(identity.repository, rawConfig.repository);
+  }
+  for (const identity of [seed.github, seed.provenance, approval]) {
+    assert.equal(identity.repositoryId, rawConfig.repositoryId);
+  }
+  assert.equal(seed.provenance.ownerId, rawConfig.ownerId);
+  assert.equal(seed.provenance.workflow, rawConfig.workflow);
+  assert.equal(
+    sha(Buffer.from(seed.provenance.trustedRoot, "base64")),
+    approval.provenanceRootSha256,
+  );
+  const root = JSON.parse(Buffer.from(seed.root, "base64"));
+  assert.equal(Object.keys(root.signed.keys).length, 4);
+  assert.equal(new Set(Object.values(signing.roles)).size, 4);
+  for (const [role, keyid] of Object.entries(signing.roles)) {
+    assert.deepEqual(root.signed.roles[role], {
+      keyids: [keyid],
+      threshold: 1,
+    });
+    assert.equal(root.signed.keys[keyid].keytype, "ed25519");
+  }
+  assert.equal(approval.scope, "pre-build-public-verification-inputs");
+  for (const key of [
+    "publishingAuthorized",
+    "schedulingAuthorized",
+    "activationAuthorized",
+  ]) {
+    assert.equal(approval[key], false);
+  }
+  for (const raw of [
+    seedBytes,
+    approvalBytes,
+    publicFile("ubuntu-0.1.0-signing.json"),
+  ]) {
+    assert.doesNotMatch(
+      raw.toString(),
+      /BEGIN (?:ENCRYPTED )?PRIVATE KEY|\/home\/|keys\.enc/,
+    );
+  }
 });
 
 test("only the exact clean annotated main-merged tag-push can build", () => {
