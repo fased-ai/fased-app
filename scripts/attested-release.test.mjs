@@ -8,6 +8,7 @@ import {
   writeFileSync,
   readFileSync,
   rmSync,
+  chmodSync,
 } from "node:fs";
 import path from "node:path";
 import { publishAttested, verifierEnvironment } from "./release-ubuntu.mjs";
@@ -226,6 +227,32 @@ test("attested publisher refuses an independently failed installer proof before 
   );
   assert.equal(f.candidateRuns, 0);
   assert.equal(f.mutations, 0);
+});
+test("workflow build permissions are normalized before private publisher admission", async (t) => {
+  const f = fixture(t);
+  const options = {
+    api: f.api,
+    execute: f.execute,
+    fetchResponse: f.fetchResponse,
+    stateRoot: path.join(f.parent, "publisher"),
+  };
+  for (const name of Object.keys(f.files))
+    chmodSync(
+      path.join(f.directory, name),
+      name === "fased-install-linux-amd64" || name === "install.sh"
+        ? 0o755
+        : 0o644,
+    );
+  await assert.rejects(
+    publishAttested(f.c, f.directory, options),
+    /Private regular publisher file required/,
+  );
+  assert.equal(f.candidateRuns, 0);
+  assert.equal(f.mutations, 0);
+  for (const name of [...Object.keys(f.files), "first-install-seed.json"])
+    chmodSync(path.join(f.directory, name), 0o600);
+  const result = await publishAttested(f.c, f.directory, options);
+  assert.equal(result.verified, true);
 });
 test("verifier environment excludes publishing and unrelated secrets", () => {
   const env = verifierEnvironment({

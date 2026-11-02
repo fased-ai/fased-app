@@ -513,6 +513,10 @@ test("tagged release has one pinned Ubuntu build and scoped password-free public
   );
   assert.match(workflow, /contents: write/);
   assert.match(workflow, /node scripts\/release-ubuntu\.mjs publish/);
+  assert.match(
+    workflow,
+    /chmod 600 .*fased-app-linux-amd64\.tar\.gz.*fased-install-linux-amd64.*provenance\.sigstore\.json.*install\.sh.*fased-release\.json.*first-install-seed\.json/,
+  );
   assert.doesNotMatch(
     workflow,
     /signer-sign|npm run release -- credentials|passphrase|keys\.enc/,
