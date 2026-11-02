@@ -203,7 +203,6 @@ function prepare(c) {
     !/^VERSION_ID="24\.04"$/m.test(osRelease)
   )
     throw Error("Ubuntu24.04 build host required");
-  request = JSON.parse(JSON.stringify(request));
   const seedStat = lstatSync(c.seedFile);
   if (!seedStat.isFile() || seedStat.isSymbolicLink())
     throw Error("Public seed must be a regular tracked file");

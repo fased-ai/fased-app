@@ -25,6 +25,7 @@ const unconfigured = () => ({
 });
 const complete = () => ({
   ...rawConfig,
+  version: "0.1.0", // Deliberate immutable fixture, independent of the current release.
   seedFile: "release/public/ubuntu-amd64.json",
   seedSha256: "a".repeat(64),
   custodyApprovalSha256: "b".repeat(64),
@@ -84,13 +85,23 @@ test("production public inputs bind the signing identity, seed and pre-build app
     new URL(`../${rawConfig.seedFile}`, import.meta.url),
   );
   const seed = JSON.parse(seedBytes);
-  const approvalBytes = publicFile("ubuntu-0.1.0-initial-trust.json");
+  const approvalBytes = publicFile(
+    `ubuntu-${rawConfig.version}-initial-trust.json`,
+  );
   const approval = JSON.parse(approvalBytes);
-  const signing = JSON.parse(publicFile("ubuntu-0.1.0-signing.json"));
+  const signing = JSON.parse(
+    publicFile(`ubuntu-${rawConfig.version}-signing.json`),
+  );
   assert.equal(sha(seedBytes), rawConfig.seedSha256);
   assert.equal(sha(approvalBytes), rawConfig.initialTrustApprovalSha256);
   assert.equal(approval.seedSha256, rawConfig.seedSha256);
   assert.equal(approval.seedFile, rawConfig.seedFile);
+  assert.equal(approval.releaseVersion, rawConfig.version);
+  assert.equal(signing.releaseVersion, rawConfig.version);
+  assert.equal(
+    approval.versionedInstallerUrl,
+    `https://github.com/${rawConfig.repository}/releases/download/v${rawConfig.version}/install.sh`,
+  );
   assert.equal(approval.ownerApprovalSha256, rawConfig.custodyApprovalSha256);
   assert.equal(signing.ownerApprovalSha256, rawConfig.custodyApprovalSha256);
   assert.equal(approval.signingIdentitySHA256, signing.identitySHA256);
@@ -139,12 +150,144 @@ test("production public inputs bind the signing identity, seed and pre-build app
   for (const raw of [
     seedBytes,
     approvalBytes,
-    publicFile("ubuntu-0.1.0-signing.json"),
+    publicFile(`ubuntu-${rawConfig.version}-signing.json`),
   ]) {
     assert.doesNotMatch(
       raw.toString(),
       /BEGIN (?:ENCRYPTED )?PRIVATE KEY|\/home\/|keys\.enc/,
     );
+  }
+});
+
+test("candidate preparation CLI reaches verified metadata output without a publisher request", async (t) => {
+  for (const variant of [
+    "complete",
+    "changed-tracked-seed",
+    "wrong-provenance-owner",
+  ]) {
+    await t.test(variant, (t) => {
+      const f = durableFixture(t, "stage");
+      const moduleFile = resolve("scripts/prepare-ubuntu-release.mjs");
+      const seedBytes = readFileSync(rawConfig.seedFile);
+      const seed = JSON.parse(seedBytes);
+      mkdirSync(join(f.parent, "release/public"), {
+        recursive: true,
+        mode: 0o700,
+      });
+      writeFileSync(
+        join(f.parent, "release/ubuntu.json"),
+        JSON.stringify(rawConfig),
+        { mode: 0o600 },
+      );
+      writeFileSync(join(f.parent, rawConfig.seedFile), seedBytes, {
+        mode: 0o600,
+      });
+      writeFileSync(
+        join(f.parent, "package-lock.json"),
+        "fixture-package-lock",
+        { mode: 0o600 },
+      );
+      writeFileSync(join(f.parent, "go.sum"), "fixture-go-sum", {
+        mode: 0o600,
+      });
+      const descriptor = join(f.parent, "prepare-input.json");
+      const callsFile = join(f.parent, "calls.json");
+      const workflowOutput = join(f.parent, "workflow-output");
+      writeFileSync(
+        descriptor,
+        JSON.stringify({
+          moduleFile,
+          source,
+          config: rawConfig,
+          policy: seed.provenance,
+          variant,
+          callsFile,
+        }),
+        { mode: 0o600 },
+      );
+      // Execute the real CLI in a disposable directory; only host/Git/Go inputs are controlled.
+      const code = String.raw`
+import fs from "node:fs";import cp from "node:child_process";import{syncBuiltinESMExports}from"node:module";import{pathToFileURL}from"node:url";
+const input=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const originalRead=fs.readFileSync;const calls=[];
+fs.readFileSync=(file,...args)=>file==="/etc/os-release"?["ID=ubuntu",'VERSION_ID="24.04"',""].join(String.fromCharCode(10)):originalRead(file,...args);
+cp.execFileSync=(file,args,options={})=>{calls.push([file,args]);let value;
+if(file==="git"){
+ const key=args.join(" ");
+ if(key==="rev-parse HEAD")value=input.source.commit;
+ else if(key==="rev-parse HEAD^{tree}")value=input.source.tree;
+ else if(key==="rev-parse refs/tags/v"+input.config.version+"^{tag}")value=input.source.tagObject;
+ else if(key==="status --porcelain")value="";
+ else if(key==="merge-base --is-ancestor "+input.source.commit+" refs/remotes/origin/main")value="";
+ else if(key==="show "+input.source.commit+":"+input.config.seedFile)value=input.variant==="changed-tracked-seed"?Buffer.from("changed"):originalRead(input.config.seedFile);
+ else throw Error("Unexpected Git call: "+key);
+}else if(file==="go"&&JSON.stringify(args)===JSON.stringify(["run","./cmd/fased-release-candidate","verify-seed","--seed-file",input.config.seedFile,"--seed-sha256",input.config.seedSha256])){value=JSON.stringify({...input.policy,...(input.variant==="wrong-provenance-owner"?{ownerId:"1"}:{})});}
+else throw Error("Unexpected execution: "+file);
+return options.encoding?value.toString():Buffer.from(value);
+};syncBuiltinESMExports();process.argv=[process.execPath,input.moduleFile,"prepare"];await import(pathToFileURL(input.moduleFile).href);fs.writeFileSync(input.callsFile,JSON.stringify(calls));
+`;
+      const child = spawnSync(
+        process.execPath,
+        ["--input-type=module", "-e", code, descriptor],
+        {
+          cwd: f.parent,
+          env: {
+            ...process.env,
+            ...env,
+            GITHUB_REF: `refs/tags/v${rawConfig.version}`,
+            GITHUB_WORKFLOW_REF: `${rawConfig.repository}/.github/workflows/release.yml@refs/tags/v${rawConfig.version}`,
+            GITHUB_OUTPUT: workflowOutput,
+          },
+          encoding: "utf8",
+          timeout: 10000,
+        },
+      );
+      const output = join(f.parent, ".evidence/ubuntu-release");
+      if (variant !== "complete") {
+        assert.equal(child.status, 1);
+        assert.match(
+          child.stderr,
+          variant === "changed-tracked-seed"
+            ? /Approved tracked public seed changed/
+            : /Production public trust repository changed/,
+        );
+        assert.equal(existsSync(output), false);
+        assert.equal(existsSync(workflowOutput), false);
+        return;
+      }
+      assert.equal(child.status, 0, child.stderr);
+      const inputs = JSON.parse(
+        readFileSync(join(output, "build-inputs.json")),
+      );
+      assert.equal(inputs.sourceCommit, source.commit);
+      assert.equal(inputs.tagObject, source.tagObject);
+      assert.equal(inputs.seedSha256, rawConfig.seedSha256);
+      assert.equal(inputs.packageLockSha256, sha("fixture-package-lock"));
+      assert.equal(inputs.goSumSha256, sha("fixture-go-sum"));
+      assert.equal(inputs.publicRelease, false);
+      assert.equal(inputs.activation, false);
+      assert.deepEqual(
+        readFileSync(join(output, "first-install-seed.json")),
+        seedBytes,
+      );
+      assert.deepEqual(
+        JSON.parse(readFileSync(join(output, "provenance-policy.json"))),
+        seed.provenance,
+      );
+      const overlay = JSON.parse(readFileSync(join(output, "overlay.json")));
+      assert.equal(Object.keys(overlay.Replace).length, 2);
+      for (const file of Object.values(overlay.Replace))
+        assert.ok(readFileSync(file, "utf8").includes(rawConfig.seedSha256));
+      assert.equal(
+        readFileSync(workflowOutput, "utf8").match(/^version=(.*)$/m)?.[1],
+        rawConfig.version,
+      );
+      assert.match(readFileSync(workflowOutput, "utf8"), /^overlay=/m);
+      assert.equal(
+        JSON.parse(readFileSync(callsFile)).filter(([name]) => name === "go")
+          .length,
+        1,
+      );
+    });
   }
 });
 
