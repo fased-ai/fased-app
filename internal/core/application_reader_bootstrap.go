@@ -1,6 +1,9 @@
 package core
 
-import "github.com/fased-ai/fased-app/internal/update"
+import (
+	"errors"
+	"github.com/fased-ai/fased-app/internal/update"
+)
 
 // ApplicationReaderBootstrapRequest is constructed by the independently
 // authenticated owner release driver, never a browser or source/path override.
@@ -27,12 +30,27 @@ func (r ApplicationReaderBootstrapRequest) valid() bool {
 	return r.validIntent() && p.State == "paused" && update.IDOK(p.PauseID)
 }
 
+// A distinct request version prevents older readers from adopting new handoffs.
+func ApplicationReaderRequestVersion(schema int) (int, error) {
+	switch schema {
+	case 33:
+		return 1, nil
+	case 35:
+		return 2, nil
+	case 36:
+		return 3, nil
+	default:
+		return 0, errors.New("unsupported installed reader schema")
+	}
+}
+
 func (r ApplicationReaderBootstrapRequest) validIntent() bool {
 	p := r.Predecessor
 	source := p.Core.State.Version
-	return (r.Version == 1 && source == 33 || r.Version == 2 && source == 35) && update.IDOK(r.OperationID) && update.IDOK(r.OwnerLease) && hexValue(r.PreviousEngineSHA256, 32) && r.Release.valid() && p.Version == 1 && p.Request != nil && update.ValidPauseRequest(*p.Request) && p.Request.IntentID == r.OperationID && p.Request.Sequence == r.Release.Sequence && p.Request.ManifestSHA256 == r.Release.ManifestSHA256 && p.Request.Expected.State.Version == source && update.SameCoreMetadata(p.Core, p.Request.Expected)
+	version, err := ApplicationReaderRequestVersion(source)
+	return err == nil && r.Version == version && update.IDOK(r.OperationID) && update.IDOK(r.OwnerLease) && hexValue(r.PreviousEngineSHA256, 32) && r.Release.valid() && p.Version == 1 && p.Request != nil && update.ValidPauseRequest(*p.Request) && p.Request.IntentID == r.OperationID && p.Request.Sequence == r.Release.Sequence && p.Request.ManifestSHA256 == r.Release.ManifestSHA256 && p.Request.Expected.State.Version == source && update.SameCoreMetadata(p.Core, p.Request.Expected)
 }
 
 func (r ApplicationReaderBootstrapRequest) prepared() bool {
-	return r.Version == 2 && r.validIntent() && r.Predecessor.State == "prepared" && r.Predecessor.PauseID == ""
+	return r.Version >= 2 && r.validIntent() && r.Predecessor.State == "prepared" && r.Predecessor.PauseID == ""
 }

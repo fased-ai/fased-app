@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -63,7 +64,7 @@ func readerApplicationOwnerHelper(ctx context.Context, m vpsinstall.Manifest, im
 				return out, true, e
 			}
 			pause := update.CorePauseRequest{Version: 1, IntentID: c.ID, Sequence: r.Release.Sequence, ManifestSHA256: r.Release.ManifestSHA256, Expected: snapshot}
-			if snapshot.State.Version == 35 {
+			if snapshot.State.Version == 35 || snapshot.State.Version == 36 {
 				retained, re := core.ReadApplicationReaderBootstrapRequest(m.Data, c.ID)
 				if re == nil {
 					if retained.PreviousEngineSHA256 != r.PreviousEngineSHA256 || update.SnapshotDigest("reader-release", retained.Release) != update.SnapshotDigest("reader-release", r.Release) || !update.SameCoreMetadata(retained.Predecessor.Core, snapshot) {
@@ -75,7 +76,10 @@ func readerApplicationOwnerHelper(ctx context.Context, m vpsinstall.Manifest, im
 					if e = core.CheckApplicationReaderPredecessor(ctx, m.Data, snapshot); e != nil {
 						return out, true, e
 					}
-					r.Version = 2
+					r.Version, e = core.ApplicationReaderRequestVersion(snapshot.State.Version)
+					if e != nil {
+						return out, true, e
+					}
 					r.Predecessor = update.CorePauseReceipt{Version: 1, State: "prepared", Core: snapshot, Request: &pause}
 					if e = core.PrepareApplicationReaderBootstrap(ctx, m.Data, r); e != nil {
 						return out, true, e
@@ -140,7 +144,15 @@ func remoteReaderUpdateApplicable(ctx context.Context, m vpsinstall.Manifest, id
 	case 33, 35:
 		return true, nil
 	case core.StateSchema:
-		return false, nil
+		var raw bytes.Buffer
+		if err := vpsinstall.ApplicationUpdateClient(ctx, m, "status", system, &raw); err != nil {
+			return true, err
+		}
+		var view core.ApplicationUpdateView
+		if update.StrictJSON(raw.Bytes(), &view) != nil {
+			return true, errors.New("invalid installed update status")
+		}
+		return currentReaderNeedsBootstrap(snapshot, view, id)
 	case 34:
 		return true, errors.New("schema34 belongs to the separately preserved recovery branch; installed data is unchanged")
 	default:
@@ -255,7 +267,7 @@ func maintainRemoteReaderUpdate(ctx context.Context, m vpsinstall.Manifest, id s
 	if e != nil {
 		return e
 	}
-	if snapshot.State.Version != 33 && snapshot.State.Version != 35 {
+	if snapshot.State.Version != 33 && snapshot.State.Version != 35 && snapshot.State.Version != 36 {
 		return errors.New("unsupported installed reader; preserve original state")
 	}
 	if source == nil {
@@ -277,9 +289,9 @@ func maintainRemoteReaderUpdate(ctx context.Context, m vpsinstall.Manifest, id s
 	if release == nil {
 		return errors.New("new independently verified reader release required")
 	}
-	version := 1
-	if snapshot.State.Version == 35 {
-		version = 2
+	version, e := core.ApplicationReaderRequestVersion(snapshot.State.Version)
+	if e != nil {
+		return e
 	}
 	request = core.ApplicationReaderBootstrapRequest{Version: version, OperationID: id, OwnerLease: update.NewProbe(), PreviousEngineSHA256: m.CoreSHA256, Release: *release}
 	_, e = driver.Apply(ctx, core.ApplicationUpdateOperation{ID: id, Phase: "applying", OwnerLease: request.OwnerLease, Release: release, BootID: snapshot.BootID})
@@ -287,4 +299,20 @@ func maintainRemoteReaderUpdate(ctx context.Context, m vpsinstall.Manifest, id s
 		fmt.Fprintln(out, "completed")
 	}
 	return e
+}
+
+// A current data schema does not imply that the installed public updater exists.
+func currentReaderNeedsBootstrap(snapshot update.CoreSnapshot, view core.ApplicationUpdateView, id string) (bool, error) {
+	if view.Version != 1 || view.Schema != core.StateSchema || view.InstanceID != snapshot.InstanceID {
+		return true, errors.New("installed update status differs from source inventory")
+	}
+	if view.ControllerAvailable || view.Operation.ID == id {
+		return false, nil
+	}
+	switch view.Operation.Phase {
+	case "idle", "current", "available", "check-failed", "completed", "rolled-back":
+		return true, nil
+	default:
+		return true, errors.New("existing update must recover before reader handoff")
+	}
 }

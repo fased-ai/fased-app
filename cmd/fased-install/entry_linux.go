@@ -54,14 +54,16 @@ func installedEntry(ctx context.Context, profile, action string, in io.Reader, o
 	if e != nil {
 		return false, e
 	}
+	if action == "install" || action == "update" {
+		if err := entryUpgradeDecision(action, installedUpdateEntrySupported(ctx, m.Core), in, errOut); err != nil {
+			return false, err
+		}
+	}
 	system := &custodyinstall.System{In: in, Out: errOut}
 	// Stop/recover must work even when a running core cannot answer health.
 	// Their existing implementations enforce immutable owner/unit/UID checks.
 	switch action {
 	case "update":
-		if !installedUpdateEntrySupported(ctx, m.Core) {
-			return false, errEntryUpgradeRequired
-		}
 		command := exec.CommandContext(ctx, m.Core, "vps", "updates", "wizard")
 		command.Stdin, command.Stdout, command.Stderr = in, out, errOut
 		return true, command.Run()

@@ -24,7 +24,7 @@ func readerLocalCallbacks(m localinstall.Manifest, request *core.ApplicationRead
 	}
 	return localinstall.ApplicationUpdateCallbacks{
 		BeforeStop: func(ctx context.Context, previous, target localinstall.Manifest) error {
-			if request.Version == 2 && request.Predecessor.State == "prepared" {
+			if request.Version >= 2 && request.Predecessor.State == "prepared" {
 				if e := stageLocalReader35(ctx, m.Data, request); e != nil {
 					return e
 				}
@@ -124,7 +124,7 @@ func maintainLocalReaderUpdate(ctx context.Context, m localinstall.Manifest, id 
 	if e = client.Do(ctx, http.MethodGet, "/api/v1/updates/inventory?probe="+update.NewProbe(), nil, &snapshot); e != nil {
 		return e
 	}
-	if snapshot.State.Version != 33 && snapshot.State.Version != 35 {
+	if snapshot.State.Version != 33 && snapshot.State.Version != 35 && snapshot.State.Version != 36 {
 		return errors.New("unsupported installed predecessor; preserve state")
 	}
 	if e = core.CheckApplicationReaderPredecessor(ctx, m.Data, snapshot); e != nil {
@@ -152,7 +152,7 @@ func maintainLocalReaderUpdate(ctx context.Context, m localinstall.Manifest, id 
 		return errors.New("independently authenticated newer reader release required")
 	}
 	pauseRequest := update.CorePauseRequest{Version: 1, IntentID: id, Sequence: release.Sequence, ManifestSHA256: release.ManifestSHA256, Expected: snapshot}
-	if snapshot.State.Version == 35 {
+	if snapshot.State.Version == 35 || snapshot.State.Version == 36 {
 		prepared := update.CorePauseReceipt{Version: 1, State: "prepared", Core: snapshot, Request: &pauseRequest}
 		request, e = p.ApplicationReaderBootstrapRequest(id, update.NewProbe(), m.Files["fased-app"], prepared)
 		if e != nil {

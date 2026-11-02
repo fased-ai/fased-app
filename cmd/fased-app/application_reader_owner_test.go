@@ -33,6 +33,11 @@ func TestApplicationReader35IPC(t *testing.T) {
 		t.Run(reboot, func(t *testing.T) { applicationReaderIPC(t, os.Getenv("FASED_READER_PREDECESSOR35"), 35, reboot) })
 	}
 }
+func TestApplicationReader36IPC(t *testing.T) {
+	for _, reboot := range []string{"", "before-pause", "after-pause"} {
+		t.Run(reboot, func(t *testing.T) { applicationReaderIPC(t, os.Getenv("FASED_READER_PREDECESSOR36"), 36, reboot) })
+	}
+}
 func applicationReaderIPC(t *testing.T, binary string, schema int, reboot string) {
 	t.Helper()
 	if binary == "" {
@@ -121,8 +126,11 @@ func applicationReaderIPC(t *testing.T, binary string, schema int, reboot string
 	want := update.CorePauseRequest{Version: 1, IntentID: id, Sequence: release.Sequence, ManifestSHA256: release.ManifestSHA256, Expected: snapshot}
 	var pause update.CorePauseReceipt
 	request := core.ApplicationReaderBootstrapRequest{Version: 1, OperationID: id, OwnerLease: update.NewProbe(), PreviousEngineSHA256: hex.EncodeToString(oldHash[:]), Release: release}
-	if schema == 35 {
-		request.Version = 2
+	if schema == 35 || schema == 36 {
+		request.Version, e = core.ApplicationReaderRequestVersion(schema)
+		if e != nil {
+			t.Fatal(e)
+		}
 		request.Predecessor = update.CorePauseReceipt{Version: 1, State: "prepared", Core: snapshot, Request: &want}
 		if e = core.PrepareApplicationReaderBootstrap(ctx, dir, request); e != nil {
 			t.Fatal(e)

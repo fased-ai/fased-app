@@ -51,7 +51,7 @@ func StageApplicationReaderBootstrap(ctx context.Context, directory string, requ
 	if e := checkApplicationReaderPredecessor(ctx, directory, request.Predecessor.Core, &request.Predecessor); e != nil {
 		return e
 	}
-	if request.Version == 2 {
+	if request.Version >= 2 {
 		prepared, err := readReaderPreparation(directory, request.OperationID)
 		if err != nil {
 			return err
@@ -121,7 +121,7 @@ func CheckApplicationReaderPredecessor(ctx context.Context, directory string, ex
 }
 
 func checkApplicationReaderPredecessor(ctx context.Context, directory string, expected update.CoreSnapshot, pause *update.CorePauseReceipt) error {
-	if (expected.State.Version != 33 && expected.State.Version != 35) || !update.IDOK(expected.ProbeID) || !update.IDOK(expected.BootID) {
+	if (expected.State.Version != 33 && expected.State.Version != 35 && expected.State.Version != 36) || !update.IDOK(expected.ProbeID) || !update.IDOK(expected.BootID) {
 		return errors.New("admitted predecessor snapshot required")
 	}
 	d, e := openApplicationMetadataDirectory(directory)
@@ -156,7 +156,7 @@ func checkApplicationReaderPredecessor(ctx context.Context, directory string, ex
 			return errors.New("exact original source pause required before staging")
 		}
 	}
-	if schema == 35 {
+	if schema == 35 || schema == 36 {
 		if pause == nil {
 			phase, p, err := readPause(ctx, tx)
 			if err != nil {
@@ -268,10 +268,18 @@ func bootstrapApplicationReader(ctx context.Context, directory string, request A
 	if e != nil || !update.SameCoreMetadata(legacy, request.Predecessor.Core) {
 		return out, errors.New("predecessor records changed before reader handoff")
 	}
-	if schema == source && update.SnapshotDigest("pause-request", held.Request) != update.SnapshotDigest("pause-request", *request.Predecessor.Request) {
+	alreadyAdmitted := false
+	if source == 36 {
+		operation, _, err := readApplicationUpdate(ctx, c)
+		if err != nil {
+			return out, err
+		}
+		alreadyAdmitted = operation.ID == request.OperationID
+	}
+	if schema == source && !alreadyAdmitted && update.SnapshotDigest("pause-request", held.Request) != update.SnapshotDigest("pause-request", *request.Predecessor.Request) {
 		return out, errors.New("predecessor pause receipt changed")
 	}
-	if schema == 35 {
+	if schema == source && source >= 35 && !alreadyAdmitted {
 		if e = verifyReader35Preparation(ctx, c, directory, request); e != nil {
 			return out, e
 		}
@@ -298,7 +306,7 @@ func bootstrapApplicationReader(ctx context.Context, directory string, request A
 	defer unix.Flock(int(backupLock.Fd()), unix.LOCK_UN)
 	s := &Store{db: db, dir: directory, bootID: request.Predecessor.Core.BootID, now: time.Now}
 	index, e := readApplicationReaderBootstrapIndex(d, request.OperationID)
-	if errors.Is(e, os.ErrNotExist) && schema == source {
+	if errors.Is(e, os.ErrNotExist) && schema == source && !alreadyAdmitted {
 		image, err := serializeMetadataConnection(ctx, c)
 		if err != nil {
 			return out, err
@@ -319,7 +327,7 @@ func bootstrapApplicationReader(ctx context.Context, directory string, request A
 	if e = verifyApplicationReaderOriginal(ctx, d, index, directory); e != nil {
 		return out, e
 	}
-	if schema == source {
+	if schema == source && !alreadyAdmitted {
 		o := ApplicationUpdateOperation{ID: request.OperationID, Phase: "applying", OwnerLease: request.OwnerLease, Release: &request.Release, BootID: request.Predecessor.Core.BootID}
 		raw, _ := json.Marshal(o)
 		if source == 33 {
@@ -422,6 +430,9 @@ func applicationReaderLegacySnapshot(ctx context.Context, tx snapshotReader, pro
 	return applicationReaderSourceSnapshot(ctx, tx, probe, boot, 33)
 }
 func applicationReaderSourceSnapshot(ctx context.Context, tx snapshotReader, probe, boot string, source int) (update.CoreSnapshot, error) {
+	if source == StateSchema {
+		return (&Store{bootID: boot}).snapshotTx(ctx, tx, probe)
+	}
 	// Exact schema33 snapshot shape. Only the schema number and declared new
 	// application-updates feature differ in35; underlying raw records stay exact.
 	var v struct {
@@ -485,7 +496,7 @@ func verifyApplicationReaderOriginal(ctx context.Context, d int, index applicati
 	if e != nil || !update.SameCoreMetadata(got, p) {
 		return errors.New("original reader snapshot differs from predecessor")
 	}
-	if p.State.Version == 35 {
+	if p.State.Version == 35 || p.State.Version == 36 {
 		return verifyReader35Preparation(ctx, db, directory, index.Request)
 	}
 	return nil

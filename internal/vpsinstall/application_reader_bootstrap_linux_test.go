@@ -75,13 +75,13 @@ func TestRemoteApplicationReaderAdmitsOnlyExactStagedTarget(t *testing.T) {
 		t.Fatal("admitted staged target identity refused", e)
 	}
 	r := core.ApplicationReaderBootstrapRequest{Version: 1, OperationID: j.Status.ID, OwnerLease: update.NewProbe(), PreviousEngineSHA256: j.Previous.CoreSHA256, Release: core.ApplicationRelease{Version: j.ProductVersion, Sequence: j.Status.Sequence, ManifestSHA256: j.Status.ReleaseSHA256, EngineSHA256: j.Target.CoreSHA256, Target: update.Target{OS: "linux", Arch: runtime.GOARCH}}}
-	for _, version := range []int{1, 2} {
+	for _, version := range []int{1, 2, 3} {
 		r.Version = version
 		if e := validateApplicationReaderOwnerRequest(o, f.old, image, r); e != nil {
 			t.Fatal("admitted reader version refused", version, e)
 		}
 	}
-	r.Version = 3
+	r.Version = 4
 	if e := validateApplicationReaderOwnerRequest(o, f.old, image, r); e == nil {
 		t.Fatal("unknown reader version admitted")
 	}

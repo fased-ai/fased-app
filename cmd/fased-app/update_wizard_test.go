@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"github.com/fased-ai/fased-app/internal/core"
 	"io"
 	"strings"
@@ -113,5 +114,46 @@ func TestOfflineRecoveryRequiresExactPreviouslyAdmittedMetadata(t *testing.T) {
 	v.View.Operation.Phase = "available"
 	if recoveryMetadataMatches(v, v.View.Operation.ID, 7, strings.Repeat("b", 64)) {
 		t.Fatal("new apply authorized offline")
+	}
+}
+
+func TestUpdateWizardSignsInOnlyAtEntry(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		t.Run(map[bool]string{false: "valid-session", true: "expired-session"}[expired], func(t *testing.T) {
+			calls, logins := 0, 0
+			var out bytes.Buffer
+			err := authenticatedUpdateWizard(func(action string, w io.Writer) error {
+				calls++
+				if expired && calls == 1 {
+					return core.ErrUnauthorized
+				}
+				return json.NewEncoder(w).Encode(core.ApplicationUpdateView{Operation: core.ApplicationUpdateOperation{Phase: "current"}})
+			}, func() error { logins++; return nil }, &out, io.Discard)
+			expected := 0
+			if expired {
+				expected = 1
+			}
+			if err != nil || logins != expected || !strings.Contains(out.String(), "Already current") {
+				t.Fatal(logins, out.String(), err)
+			}
+		})
+	}
+}
+func TestUpdateWizardDoesNotReauthorizeAfterStart(t *testing.T) {
+	calls, logins := 0, 0
+	err := authenticatedUpdateWizard(func(action string, w io.Writer) error {
+		calls++
+		if calls == 1 {
+			return json.NewEncoder(w).Encode(core.ApplicationUpdateView{Operation: core.ApplicationUpdateOperation{Phase: "available"}})
+		}
+		return core.ErrUnauthorized
+	}, func() error { logins++; return nil }, io.Discard, io.Discard)
+	if !errors.Is(err, core.ErrUnauthorized) || logins != 0 {
+		t.Fatal(logins, err)
+	}
+	cancelled := errors.New("owner cancelled sign-in")
+	err = authenticatedUpdateWizard(func(string, io.Writer) error { return core.ErrUnauthorized }, func() error { return cancelled }, io.Discard, io.Discard)
+	if !errors.Is(err, cancelled) {
+		t.Fatal(err)
 	}
 }

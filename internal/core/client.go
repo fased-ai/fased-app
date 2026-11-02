@@ -172,11 +172,11 @@ func (c *Client) LoadSession(ctx context.Context, dir string) error {
 	file := filepath.Join(dir, "cli-session.json")
 	data, err := readPrivateFile(file)
 	if err != nil {
-		return errors.New("CLI login required")
+		return fmt.Errorf("CLI login required: %w", ErrUnauthorized)
 	}
 	var saved SavedSession
 	if json.Unmarshal(data, &saved) != nil || saved.InstanceID != c.Endpoint.InstanceID {
-		return errors.New("CLI login required")
+		return fmt.Errorf("CLI login required: %w", ErrUnauthorized)
 	}
 	c.Token = saved.Token
 	var result struct {
@@ -187,7 +187,7 @@ func (c *Client) LoadSession(ctx context.Context, dir string) error {
 		return err
 	}
 	if !result.Authenticated {
-		return errors.New("CLI session expired; log in again")
+		return fmt.Errorf("CLI session expired: %w", ErrUnauthorized)
 	}
 	c.CSRF = result.CSRFToken
 	return nil
