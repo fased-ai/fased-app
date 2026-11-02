@@ -16,6 +16,13 @@ const rawConfig = JSON.parse(
 );
 const sha = (v) => createHash("sha256").update(v).digest("hex");
 const copy = (v) => structuredClone(v);
+const unconfigured = () => ({
+  ...rawConfig,
+  seedFile: null,
+  seedSha256: null,
+  custodyApprovalSha256: null,
+  initialTrustApprovalSha256: null,
+});
 const complete = () => ({
   ...rawConfig,
   seedFile: "release/public/ubuntu-amd64.json",
@@ -46,21 +53,12 @@ const env = {
 };
 
 test("production trust inputs are explicit; configuration cannot redirect authority", () => {
-  assert.deepEqual(
-    validateConfig({
-      ...rawConfig,
-      seedFile: null,
-      seedSha256: null,
-      custodyApprovalSha256: null,
-      initialTrustApprovalSha256: null,
-    }),
-    [
-      "seedFile",
-      "seedSha256",
-      "custodyApprovalSha256",
-      "initialTrustApprovalSha256",
-    ],
-  );
+  assert.deepEqual(validateConfig(unconfigured()), [
+    "seedFile",
+    "seedSha256",
+    "custodyApprovalSha256",
+    "initialTrustApprovalSha256",
+  ]);
   assert.deepEqual(validateConfig(complete()), []);
   assert.deepEqual(validateConfig(rawConfig), []);
   for (const patch of [
@@ -1122,8 +1120,12 @@ test("publisher state is private, exclusive, and corruption-preserving", async (
 });
 test("production maintainer dispatch refuses missing trust before credential access", async () => {
   await assert.rejects(
-    runMaintainerPublisher(rawConfig, { tokenFile: "/does-not-exist" }),
+    runMaintainerPublisher(unconfigured(), { tokenFile: "/does-not-exist" }),
     /dispatch disabled/,
+  );
+  await assert.rejects(
+    runMaintainerPublisher(rawConfig, { tokenFile: "/must-not-read" }),
+    /Explicit reviewed publisher request required/,
   );
 });
 test("actual SIGKILL restart recovers durable upload and released OS lock with original IDs", async (t) => {
@@ -1240,28 +1242,56 @@ test("journal write failure stops before any remote mutation", async (t) => {
     chmodSync(f.input.directory, 0o700);
   }
 });
-test("maintainer CLI inspects locally and blocks publishing before request/credential reads", () => {
-  const inspect = spawnSync(
+// Keep CLI rejection fixtures independent of the operator's real release inputs.
+function maintainerCLI(t, config, operation, request) {
+  const f = durableFixture(t, "stage");
+  mkdirSync(join(f.parent, "release"), { mode: 0o700 });
+  writeFileSync(join(f.parent, "release/ubuntu.json"), JSON.stringify(config), {
+    mode: 0o600,
+  });
+  if (request) {
+    const folder = join(f.parent, ".evidence/ubuntu-release");
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(
+        folder,
+        operation === "publisher"
+          ? "publisher-request.json"
+          : "refresh-request.json",
+      ),
+      JSON.stringify(request),
+      { mode: 0o600 },
+    );
+  }
+  return spawnSync(
     process.execPath,
-    ["scripts/prepare-ubuntu-release.mjs", "publisher-inspect"],
-    { timeout: 10000 },
+    [resolve("scripts/prepare-ubuntu-release.mjs"), operation],
+    { cwd: f.parent, timeout: 10000 },
   );
+}
+test("maintainer CLI inspects locally and blocks publishing before request/credential reads", (t) => {
+  const inspect = maintainerCLI(t, unconfigured(), "publisher-inspect");
   assert.equal(inspect.status, 0, inspect.stderr.toString());
   assert.deepEqual(
     JSON.parse(inspect.stdout).map((v) => v.action),
     ["stage", "release", "metadata"],
   );
-  const run = spawnSync(
-    process.execPath,
-    ["scripts/prepare-ubuntu-release.mjs", "publisher"],
-    { timeout: 10000 },
-  );
-  assert.equal(run.status, 1);
+  const missing = maintainerCLI(t, unconfigured(), "publisher");
+  assert.equal(missing.status, 1);
   assert.match(
-    run.stderr.toString(),
+    missing.stderr.toString(),
     /Production trust missing; publisher dispatch disabled/,
   );
+  const configured = maintainerCLI(t, rawConfig, "publisher", {
+    tokenFile: "/must-not-read",
+  });
+  assert.equal(configured.status, 1);
+  assert.match(
+    configured.stderr.toString(),
+    /Explicit reviewed publisher request required/,
+  );
 });
+
 import fsBuiltin from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 test("publisher persists operation-directory parent before dispatch and sync failure holds", async (t) => {
@@ -1646,22 +1676,24 @@ test("online signer opens only matching private online role and verifies exact p
   chmodSync(paths.timestamp, 0o644);
   await assert.rejects(signer(request), /Private regular/);
 });
-test("refresh maintainer entry refuses unconfigured production trust before credentials", async () => {
+test("refresh maintainer entry refuses unconfigured production trust before credentials", async (t) => {
+  const request = { tokenFile: "/must-not-read", onlineKeyFiles: {} };
   await assert.rejects(
-    runMaintainerRefresh(rawConfig, {
-      tokenFile: "/must-not-read",
-      onlineKeyFiles: {},
-    }),
+    runMaintainerRefresh(unconfigured(), request),
     /Production trust missing/,
   );
-  assert.throws(
-    () =>
-      execFileSync(
-        process.execPath,
-        ["scripts/prepare-ubuntu-release.mjs", "publisher-refresh"],
-        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-      ),
-    /refresh dispatch disabled/,
+  await assert.rejects(
+    runMaintainerRefresh(rawConfig, request),
+    /Explicit pinned refresh request required/,
+  );
+  const missing = maintainerCLI(t, unconfigured(), "publisher-refresh");
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr.toString(), /refresh dispatch disabled/);
+  const configured = maintainerCLI(t, rawConfig, "publisher-refresh", request);
+  assert.equal(configured.status, 1);
+  assert.match(
+    configured.stderr.toString(),
+    /Explicit pinned refresh request required/,
   );
 });
 
