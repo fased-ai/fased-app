@@ -274,7 +274,7 @@ return options.encoding?value.toString():Buffer.from(value);
         seed.provenance,
       );
       const overlay = JSON.parse(readFileSync(join(output, "overlay.json")));
-      assert.equal(Object.keys(overlay.Replace).length, 2);
+      assert.equal(Object.keys(overlay.Replace).length, 3);
       for (const file of Object.values(overlay.Replace))
         assert.ok(readFileSync(file, "utf8").includes(rawConfig.seedSha256));
       assert.equal(
@@ -329,14 +329,19 @@ test("build overlay embeds only the exact approved public seed in both binaries"
     [
       "/fixture/cmd/fased-app/publisher_seed_generated.go",
       "/fixture/cmd/fased-install/publisher_seed_generated.go",
+      "/fixture/internal/bootstrap/publisher_seed_generated.go",
     ],
   );
-  for (const b of bindings) {
+  for (const b of bindings.slice(0, 2)) {
     assert.ok(b.source.includes(seed.toString("base64")));
     assert.ok(b.source.includes(sha(seed)));
     assert.match(b.source, /func init\(\)/);
     assert.doesNotMatch(b.source, /os\.Getenv|https:|privateKey/);
   }
+  assert.equal(bindings[2].output, "bootstrap.go");
+  assert.match(bindings[2].source, /^package bootstrap\n/);
+  assert.match(bindings[2].source, /productionGitHubActivationEnabled = true/);
+  assert.doesNotMatch(bindings[2].source, /os\.Getenv|https:|privateKey/);
   assert.throws(() => bindingOverlay(seed, "a".repeat(64), "/fixture"));
 });
 
@@ -623,6 +628,8 @@ function publisherFixture() {
   let createdTree = [];
   const api = async (method, path, body) => {
     calls.push({ method, path, body });
+    if (method === "GET" && path.endsWith("/immutable-releases"))
+      return { enabled: true };
     if (path.endsWith("/fased-app"))
       return {
         id: 1426211857,
@@ -809,6 +816,8 @@ test("only exact finalized complete draft may become immutable release", async (
   const api = async (m, p, b) => {
     if (m === "PATCH") {
       patches++;
+      assert.equal(b.tag_name, "v0.1.0");
+      assert.equal(b.target_commitish, f.candidate.source);
       return { id: 11, draft: false, immutable: true };
     }
     if (p.endsWith("/releases/11"))
@@ -945,6 +954,8 @@ function recoveryRemote(f, existing) {
   };
   const api = async (m, p, b) => {
     const prefix = "/repos/fased-ai/fased-app";
+    if (m === "GET" && p === prefix + "/immutable-releases")
+      return { enabled: true };
     if (m !== "GET") state.mutations.push({ method: m, path: p });
     if (p === prefix)
       return {
@@ -2633,4 +2644,434 @@ test("local signing syncs existing recovery directory parent after interrupted m
     fsBuiltin.fsyncSync = original;
     syncBuiltinESMExports();
   }
+});
+
+// Desktop credentials and the joined release reuse the same disposable signing
+// fixtures and required CI entry, without a separate runner or real key access.
+import { desktopCredentials } from "./release-credentials.mjs";
+import { finalizationPlan, releaseSequence } from "./release-ubuntu.mjs";
+
+test("desktop signing validates existing encryption before remembering and never puts secrets in argv", async (t) => {
+  const f = localSigningFixture(t);
+  const out = setupLocalSigning({ ...f.input, passphrase: f.passphrase });
+  const seed = localSeed(out);
+  const config = {
+    storeFile: out.storeFile,
+    identitySHA256: out.identitySHA256,
+    keyClass: "disposable",
+    seed,
+    seedSHA256: sha(seed),
+    allowedRoles: ["targets"],
+  };
+  let stored, response;
+  const run = (exe, args, options) => {
+    assert.equal(exe, "secret-tool");
+    assert.ok(!JSON.stringify(args).includes(f.passphrase.toString()));
+    assert.equal(options.env, undefined);
+    if (args[0] === "store") stored = Buffer.from(options.input);
+    if (args[0] === "clear") {
+      stored.fill(0);
+      stored = undefined;
+    }
+    response =
+      args[0] === "lookup"
+        ? Buffer.concat([stored, Buffer.from("\n")])
+        : Buffer.alloc(0);
+    return { status: 0, stdout: response, stderr: Buffer.alloc(0) };
+  };
+  const credentials = desktopCredentials(config, { run });
+  const entered = Buffer.from(f.passphrase);
+  await credentials.remember(async () => entered);
+  assert.ok(entered.every((b) => b === 0));
+  const pass = credentials.getPassphrase();
+  assert.ok(pass.equals(f.passphrase));
+  assert.ok(response.every((b) => b === 0));
+  pass.fill(0);
+  credentials.forget();
+  assert.equal(stored, undefined);
+  let writes = 0;
+  const rejected = desktopCredentials(config, {
+    run: () => {
+      writes++;
+      return { status: 0 };
+    },
+  });
+  await assert.rejects(
+    rejected.remember(async () =>
+      Buffer.from("wrong disposable fixture password"),
+    ),
+  );
+  assert.equal(writes, 0);
+});
+
+test("desktop signing refuses locked keyring without terminal fallback or leaking output", () => {
+  const raw = Buffer.from("sensitive fixture output");
+  const keyring = desktopCredentials(
+    { identitySHA256: "a".repeat(64), keyClass: "production" },
+    {
+      run: () => ({
+        status: 1,
+        stdout: raw,
+        stderr: Buffer.from("sensitive error"),
+      }),
+    },
+  );
+  assert.throws(() => keyring.getPassphrase(), /locked or not set up/);
+  assert.ok(raw.every((b) => b === 0));
+});
+
+test("one release command stops at failure and reuses durable stages on resume", async () => {
+  const names = [
+    "preflight",
+    "stage",
+    "finalize",
+    "publish",
+    "metadata",
+    "readback",
+  ];
+  const journal = { state: {}, save() {} },
+    calls = [];
+  let fail = true;
+  const operations = Object.fromEntries(
+    names.map((name) => [
+      name,
+      async () => {
+        calls.push(name);
+        if (name === "finalize" && fail)
+          throw Error("fixture signing unavailable");
+        return { phase: name, verified: true };
+      },
+    ]),
+  );
+  await assert.rejects(releaseSequence(journal, operations));
+  assert.deepEqual(calls, names.slice(0, 3));
+  assert.equal(journal.state.complete, undefined);
+  fail = false;
+  calls.length = 0;
+  const result = await releaseSequence(journal, operations);
+  assert.deepEqual(calls, names);
+  assert.equal(journal.state.complete, true);
+  assert.equal(result.liveActivation, false);
+  assert.equal(result.automaticUpdates, false);
+});
+
+test("joined release derives monotonic floors and locators without temporary CDN tokens", () => {
+  const previous = { descriptor: { sequence: "7" }, files: {} };
+  for (const role of ["targets", "snapshot", "timestamp"])
+    previous.files[role === "timestamp" ? "timestamp.json" : `2.${role}.json`] =
+      Buffer.from(JSON.stringify({ signed: { version: 2 } })).toString(
+        "base64",
+      );
+  const packet = {
+    version: "0.1.4",
+    sourceCommit: "a".repeat(40),
+    objects: {
+      archive: {
+        file: "fased-app-linux-amd64.tar.gz",
+        size: 7,
+        sha256: "b".repeat(64),
+      },
+      manifestSha256: "c".repeat(64),
+    },
+  };
+  const stage = {
+    releaseId: "11",
+    assets: [
+      {
+        id: "17",
+        name: packet.objects.archive.file,
+        size: 7,
+        sha256: "b".repeat(64),
+      },
+    ],
+  };
+  const now = new Date("2026-11-02T12:00:00Z");
+  const plan = finalizationPlan(
+    packet,
+    stage,
+    previous,
+    "/github-production-release-asset/1426211857/fixture",
+    now,
+  );
+  assert.equal(plan.descriptor.sequence, "8");
+  assert.deepEqual(plan.versions, { targets: 3, snapshot: 3, timestamp: 3 });
+  assert.equal(plan.expires.timestamp, "2026-11-04T11:00:00.000Z");
+  assert.throws(() =>
+    finalizationPlan(
+      packet,
+      stage,
+      previous,
+      "https://evil.invalid/?token=secret",
+      now,
+    ),
+  );
+});
+
+test("publisher checks immutable boolean before publication instead of trusting HTTP success", async () => {
+  const f = publisherFixture(),
+    raw = Buffer.from(JSON.stringify(f.candidate));
+  let mutations = 0;
+  const api = async (method, route, body) => {
+    if (method !== "GET") mutations++;
+    if (route.endsWith("/immutable-releases")) return { enabled: false };
+    if (route.endsWith("/releases/11"))
+      return {
+        id: 11,
+        draft: true,
+        prerelease: false,
+        tag_name: "v0.1.0",
+        assets: f.assets,
+      };
+    return f.api(method, route, body);
+  };
+  await assert.rejects(
+    releaseCandidate(raw, sha(raw), f.raw, f.approval, api, f.record),
+    /immutable releases/,
+  );
+  assert.equal(mutations, 0);
+});
+
+import { publicAsset } from "./release-ubuntu.mjs";
+test("release readback uses anonymous pinned public bytes and refuses unsafe redirects", async () => {
+  const raw = Buffer.from("disposable published executable fixture"),
+    identity = { size: raw.length, sha256: sha(raw) };
+  const urls = [];
+  const fetchFixture = async (url, options) => {
+    urls.push(url);
+    assert.equal(options.headers, undefined);
+    assert.equal(options.redirect, "manual");
+    return urls.length === 1
+      ? new Response(null, {
+          status: 302,
+          headers: {
+            location:
+              "https://release-assets.githubusercontent.com/github-production-release-asset/fixture?temporary=not-retained",
+          },
+        })
+      : new Response(raw, { status: 200 });
+  };
+  assert.deepEqual(
+    await publicAsset(
+      "0.1.4",
+      "fased-install-linux-amd64",
+      identity,
+      fetchFixture,
+    ),
+    raw,
+  );
+  assert.equal(urls.length, 2);
+  await assert.rejects(
+    publicAsset(
+      "0.1.4",
+      "fased-install-linux-amd64",
+      identity,
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://evil.invalid/?credential=secret" },
+        }),
+    ),
+    /redirect refused/,
+  );
+  await assert.rejects(
+    publicAsset(
+      "0.1.4",
+      "fased-install-linux-amd64",
+      identity,
+      async () => new Response(Buffer.from("wrong"), { status: 200 }),
+    ),
+    /differs/,
+  );
+});
+
+import { persistLocalReleaseFile } from "./local-release-signing.mjs";
+test("release resumes frozen finalization input after lost link acknowledgement without replacing bytes", (t) => {
+  const f = localSigningFixture(t),
+    file = join(f.parent, "finalization.json"),
+    raw = Buffer.from('{"fixture":"frozen expiry and source"}\n');
+  const journal = { state: {}, save() {} };
+  assert.throws(() => {
+    persistLocalReleaseFile(journal, file, raw);
+    throw Error("lost acknowledgement");
+  }, /lost acknowledgement/);
+  assert.deepEqual(readFileSync(file), raw);
+  persistLocalReleaseFile(journal, file, raw);
+  assert.throws(
+    () => persistLocalReleaseFile(journal, file, Buffer.from("changed")),
+    /changed|differs/,
+  );
+  assert.deepEqual(readFileSync(file), raw);
+});
+
+import {
+  acceptedReleasePR,
+  prepareReleaseCandidate,
+} from "./release-source.mjs";
+test("release source requires exact reviewed main PR and refuses failed CI before mutation", async () => {
+  const head = "a".repeat(40),
+    pr = { number: 77, baseRefName: "main", headRefOid: head, state: "OPEN" };
+  assert.throws(() => acceptedReleasePR({ ...pr, baseRefName: "other" }, head));
+  assert.throws(() => acceptedReleasePR(pr, "b".repeat(40)));
+  const calls = [];
+  const run = (program, args) => {
+    calls.push([program, ...args]);
+    if (program === "git" && args[0] === "remote")
+      return "git@github-fased:fased-ai/fased-app.git";
+    if (
+      program === "gh" &&
+      args[0] === "api" &&
+      args[1] === "/repos/fased-ai/fased-app"
+    )
+      return JSON.stringify({
+        id: 1426211857,
+        owner: { id: 279582504 },
+        full_name: "fased-ai/fased-app",
+      });
+    if (program === "git" && args[0] === "status") return "";
+    if (program === "git" && args[0] === "rev-parse") return head;
+    if (args[0] === "pr" && args[1] === "view") return JSON.stringify(pr);
+    if (args[0] === "pr" && args[1] === "checks")
+      throw Error("controlled CI failure");
+    return "";
+  };
+  await assert.rejects(
+    prepareReleaseCandidate("0.1.4", "77", { run, progress() {} }),
+    /CI failure/,
+  );
+  assert.ok(
+    !calls.some(
+      (c) =>
+        (c[0] === "gh" && c[1] === "pr" && c[2] === "merge") ||
+        (c[0] === "git" && c[1] === "push") ||
+        c.includes("tag"),
+    ),
+  );
+});
+
+test("release source resumes merged/tagged build and verifies its original ZIP before extraction", async (t) => {
+  const f = localSigningFixture(t),
+    source = "a".repeat(40),
+    tree = "b".repeat(40),
+    id = "123";
+  const version = "0.0.777",
+    zip = join(f.parent, "fixture.zip");
+  execFileSync("python3", [
+    "-c",
+    `import zipfile,json,sys
+names='fased-app-linux-amd64.tar.gz fased-app-linux-amd64.json fased-install-linux-amd64 fased-app-linux-amd64.provenance.sigstore.json verified-provenance.json expected-provenance.json provenance-policy.json first-install-seed.json install.sh build-inputs.json artifact-inventory.json signing-inputs.json'.split()
+with zipfile.ZipFile(sys.argv[1],'w') as z:
+ for name in names:
+  raw=json.dumps(dict(version='0.0.777',sourceCommit='a'*40,runId='123',runAttempt='1')) if name=='signing-inputs.json' else 'disposable fixture'
+  z.writestr(name,raw)
+`,
+    zip,
+  ]);
+  const archive = readFileSync(zip),
+    calls = [];
+  const run = (program, args, options) => {
+    calls.push([program, ...args]);
+    if (program === "git" && args[0] === "remote")
+      return "git@github-fased:fased-ai/fased-app.git";
+    if (
+      program === "gh" &&
+      args[0] === "api" &&
+      args[1] === "/repos/fased-ai/fased-app"
+    )
+      return JSON.stringify({
+        id: 1426211857,
+        owner: { id: 279582504 },
+        full_name: "fased-ai/fased-app",
+      });
+    if (program === "python3") return execFileSync(program, args, options);
+    if (program === "git") {
+      if (args[0] === "status") return "";
+      if (args[0] === "rev-parse") return args[1] === "HEAD" ? source : tree;
+      if (args[0] === "ls-remote")
+        return `${source}\trefs/tags/v${version}^{}\n`;
+      if (args[0] === "fetch") return "";
+      throw Error("unexpected Git mutation");
+    }
+    if (args[0] === "auth") return "";
+    if (args[0] === "pr")
+      return JSON.stringify({
+        number: 77,
+        state: "MERGED",
+        baseRefName: "main",
+        headRefOid: source,
+        mergeCommit: { oid: source },
+      });
+    if (args[0] === "run" && args[1] === "list")
+      return JSON.stringify([
+        { databaseId: 123, headSha: source, status: "completed" },
+      ]);
+    if (args[0] === "run" && args[1] === "view")
+      return JSON.stringify({ conclusion: "success", attempt: 1 });
+    if (args[0] === "api" && args[1].endsWith("/zip")) return archive;
+    if (args[0] === "api")
+      return JSON.stringify({
+        artifacts: [
+          {
+            id: 456,
+            name: "ubuntu-amd64-release-candidate",
+            digest: `sha256:${sha(archive)}`,
+            expired: false,
+          },
+        ],
+      });
+    throw Error("unexpected release command");
+  };
+  const directory = await prepareReleaseCandidate(version, "77", {
+    run,
+    workspace: f.parent,
+    progress() {},
+  });
+  assert.equal(
+    JSON.parse(readFileSync(join(directory, "signing-inputs.json"))).runId,
+    id,
+  );
+  assert.ok(
+    !calls.some(
+      (c) =>
+        (c[0] === "gh" && c[1] === "pr" && c[2] === "merge") ||
+        (c[0] === "git" && c[1] === "push"),
+    ),
+  );
+});
+
+test("release source refuses a different origin before GitHub or Git mutation", async () => {
+  const calls = [];
+  await assert.rejects(
+    prepareReleaseCandidate("0.1.4", "77", {
+      run(program, args) {
+        calls.push([program, ...args]);
+        if (program === "git" && args[0] === "remote")
+          return "git@github.com:someone/another-project.git";
+        return "";
+      },
+      progress() {},
+    }),
+    /Fixed Fased origin/,
+  );
+  assert.deepEqual(
+    calls.map((c) => c.slice(0, 2)),
+    [
+      ["gh", "auth"],
+      ["git", "remote"],
+    ],
+  );
+});
+
+test("durable release inputs support larger artifacts and recover a journaled partial temporary", (t) => {
+  const f = localSigningFixture(t),
+    target = join(f.parent, "artifact.zip"),
+    raw = Buffer.alloc(96 * 1024, 7);
+  const temp = join(f.parent, ".local-signing-" + "a".repeat(32));
+  writeFileSync(temp, raw.subarray(0, 128), { mode: 0o600, flag: "wx" });
+  const journal = {
+    state: { files: { [target]: { sha256: sha(raw), temp } } },
+    save() {},
+  };
+  persistLocalReleaseFile(journal, target, raw, 128 * 1024 * 1024);
+  assert.deepEqual(readFileSync(target), raw);
+  assert.equal(existsSync(temp), false);
 });

@@ -2771,3 +2771,43 @@ On a failed local run, `--keep-failed-vm` may retain the exact owned baseline fo
 VM disk, seed, ephemeral SSH key and process. CI always uploads only small
 receipts/logs, never VM disks or keys. Production trust, real wallets, financial
 execution, automatic updates and public releases remain disabled.
+
+## Owner desktop release command
+
+Use one connected source package and its PR. An owner instruction to release
+covers required checks, the exact passing merge, one annotated tag/build,
+verification, signing, publication and public readback. Development alone does
+not publish, and a release does not enable customer automatic installation.
+
+Once on the release owner's Linux desktop:
+
+```sh
+npm run release -- credentials
+```
+
+Enter the existing signing password privately once. The tool verifies the
+existing encrypted keystore before storing its unlock credential in the desktop
+keyring. Keep the encrypted recovery archive. No new keys, cloud service or
+hardware are needed. An unlocked desktop account/keyring is part of this trust
+boundary; a locked or missing keyring stops the operation before merge or tag.
+
+From the committed source branch with its reviewed PR:
+
+```sh
+npm run release
+```
+
+The command reuses saved GitHub authentication and the fixed Fased repository,
+waits for required CI, merges only the unchanged passing head, verifies the merge
+tree, creates or verifies the immutable tag, and consumes one successful original
+build. It checks the Actions ZIP digest and actual installer executable before
+publication. Existing signer and publisher journals retain approvals, release and
+asset IDs, version floors and uncertain outcomes. Rerun the same command to resume;
+do not delete its state, rerun a failed build or replace an existing release.
+
+After a candidate has already been retained, `npm run release -- publish` resumes
+its signing/publication path. `npm run release -- forget` removes this identity's
+desktop credential without deleting release keys or recovery. Local owner
+references and operation records stay under `.evidence/ubuntu-release/`, outside Git.
+Automatic-update activation, metadata-refresh scheduling and live product features
+remain separate owner decisions.

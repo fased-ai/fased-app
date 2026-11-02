@@ -169,11 +169,22 @@ export function bindingOverlay(seed, pin, root) {
       "installer.go",
     ],
   ];
-  return declarations.map(([target, type, name, output]) => ({
+  const bindings = declarations.map(([target, type, name, output]) => ({
     target: path.resolve(root, target),
     output,
     source: `package main\nimport "encoding/base64"\nfunc init() {\n b, e := base64.StdEncoding.DecodeString(${JSON.stringify(seed.toString("base64"))})\n if e != nil { panic("invalid compiled public release seed") }\n ${name} = &${type}{Seed:b, SHA256:${JSON.stringify(pin)}}\n}\n`,
   }));
+  return [
+    ...bindings,
+    {
+      target: path.resolve(
+        root,
+        "internal/bootstrap/publisher_seed_generated.go",
+      ),
+      output: "bootstrap.go",
+      source: `package bootstrap\n// Publisher-approved seed SHA256: ${pin}\nfunc init() { productionGitHubActivationEnabled = true }\n`,
+    },
+  ];
 }
 function prepare(c) {
   const missing = validateConfig(c);

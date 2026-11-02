@@ -446,6 +446,8 @@ export async function stageCandidate(
     identity.full_name !== c.repository
   )
     throw Error("Candidate repository changed");
+  if ((await api("GET", repo + "/immutable-releases")).enabled !== true)
+    throw Error("Repository immutable releases must be enabled before staging");
   await verifyAnnotatedTag(api, c.version, c.tagObject, c.source);
   await record({
     phase: "create-draft-attempted",
@@ -581,6 +583,10 @@ export async function releaseCandidate(
     throw Error("Release repository changed");
   await verifyAnnotatedTag(api, c.version, c.tagObject, c.source);
   publicationInput(publication, approval);
+  if ((await api("GET", repo + "/immutable-releases")).enabled !== true)
+    throw Error(
+      "Repository immutable releases must be enabled before publication",
+    );
   await record({
     phase: "release-publish-attempted",
     releaseId: d.github.releaseId,
@@ -590,7 +596,7 @@ export async function releaseCandidate(
   const published = await api(
     "PATCH",
     repo + `/releases/${d.github.releaseId}`,
-    { draft: false },
+    { draft: false, tag_name: `v${c.version}`, target_commitish: c.source },
   );
   if (
     published.draft !== false ||

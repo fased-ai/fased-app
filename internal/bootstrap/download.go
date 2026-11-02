@@ -11,8 +11,9 @@ import (
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
-// No CLI, seed field or environment variable can enable ordinary dispatch.
-const productionGitHubActivationEnabled = false
+// Only the reviewed publisher build overlay enables GitHub acquisition. No CLI,
+// seed field or environment variable can enable dispatch in an ordinary build.
+var productionGitHubActivationEnabled = false
 
 type downloadSource struct {
 	metadata func(context.Context, string, int64) ([]byte, error)

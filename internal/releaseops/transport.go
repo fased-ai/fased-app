@@ -100,7 +100,28 @@ func newHostTransport(ca []byte, hosts []string, lookup resolver, dial dialer) (
 				return nil, errors.New("fixture special-address DNS refused")
 			}
 		}
-		return dial(c, network, net.JoinHostPort(ips[0].Unmap().String(), "443"))
+		// Try only this validated answer set. Share the existing request budget so
+		// an unreachable address/family cannot consume every fallback's time.
+		deadline := time.Now().Add(20 * time.Second)
+		if parent, ok := c.Deadline(); ok && parent.Before(deadline) {
+			deadline = parent
+		}
+		for i, ip := range ips {
+			if err := c.Err(); err != nil {
+				return nil, err
+			}
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				return nil, context.DeadlineExceeded
+			}
+			attempt, cancel := context.WithTimeout(c, remaining/time.Duration(len(ips)-i))
+			connection, err := dial(attempt, network, net.JoinHostPort(ip.Unmap().String(), "443"))
+			cancel()
+			if err == nil {
+				return connection, nil
+			}
+		}
+		return nil, errors.New("verified public addresses unavailable")
 	}
 	return &transport{wire: w, client: &http.Client{Transport: w, Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
