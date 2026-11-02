@@ -54,12 +54,14 @@ const fields = [
   "seedSha256",
   "custodyApprovalSha256",
   "initialTrustApprovalSha256",
+  "releaseAuthority",
 ];
 export function validateConfig(c) {
   if (
     !c ||
     Object.keys(c).some((k) => !fields.includes(k)) ||
-    Object.keys(c).length !== fields.length ||
+    Object.keys(c).length !==
+      fields.length - (c.releaseAuthority === undefined ? 1 : 0) ||
     c.schemaVersion !== 1 ||
     !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(c.version) ||
     c.repository !== "fased-ai/fased-app" ||
@@ -73,6 +75,11 @@ export function validateConfig(c) {
     c.target.ubuntu !== "24.04"
   )
     throw Error("Reviewed Ubuntu release identity required");
+  if (
+    c.releaseAuthority !== undefined &&
+    c.releaseAuthority !== "github-attestation-v1"
+  )
+    throw Error("Unsupported release authority");
   for (const key of [
     "seedSha256",
     "custodyApprovalSha256",
@@ -85,12 +92,16 @@ export function validateConfig(c) {
     !/^release\/public\/[A-Za-z0-9_-]+\.json$/.test(c.seedFile)
   )
     throw Error("Approved repository public seed path required");
-  return [
-    "seedFile",
-    "seedSha256",
-    "custodyApprovalSha256",
-    "initialTrustApprovalSha256",
-  ].filter((k) => c[k] === null);
+  return (
+    c.releaseAuthority === "github-attestation-v1"
+      ? ["seedFile", "seedSha256"]
+      : [
+          "seedFile",
+          "seedSha256",
+          "custodyApprovalSha256",
+          "initialTrustApprovalSha256",
+        ]
+  ).filter((k) => c[k] === null);
 }
 export function releaseContext(c, env, source) {
   validateConfig(c);
@@ -266,6 +277,7 @@ function prepare(c) {
   });
   write("build-inputs.json", {
     ...context,
+    releaseAuthority: c.releaseAuthority,
     configSha256: sha(readFileSync("release/ubuntu.json")),
     seedSha256: c.seedSha256,
     custodyApprovalSha256: c.custodyApprovalSha256,
@@ -281,8 +293,11 @@ function prepare(c) {
     { flag: "a" },
   );
 }
-export function expectedProvenance(input, archive) {
+export function expectedProvenance(input, archive, installer) {
   return {
+    ...(input.releaseAuthority === "github-attestation-v1"
+      ? { installerSha256: installer.sha256 }
+      : {}),
     archiveName: archive.file,
     archiveSha256: archive.sha256,
     sourceCommit: input.sourceCommit,
@@ -336,7 +351,10 @@ function inventory() {
     "artifact-inventory.json",
     candidateInventory(input, archive, installer, report),
   );
-  write("expected-provenance.json", expectedProvenance(input, archive));
+  write(
+    "expected-provenance.json",
+    expectedProvenance(input, archive, installer),
+  );
 }
 export function verifiedCandidate(c, input, objects, decision, proof, policy) {
   if (
@@ -378,7 +396,9 @@ function finish(c) {
     decision = read("verified-provenance.json");
   if (
     JSON.stringify(read("expected-provenance.json")) !==
-    JSON.stringify(expectedProvenance(input, objects.archive))
+    JSON.stringify(
+      expectedProvenance(input, objects.archive, objects.installer),
+    )
   )
     throw Error("Verified artifact/source expectations changed");
   for (const identity of [objects.archive, objects.installer])
@@ -423,22 +443,54 @@ function finish(c) {
     entry: file("install.sh", 2 * 1024 * 1024).identity,
     productionSignaturesCreated: false,
     signingRequestReady: false,
-    finalizer: {
-      inputVersion: 1,
-      command: "fased-release-candidate",
-      request: "release-request",
-      complete: "release-finalize",
-      privateKeysAccepted: false,
-      metadataOnly: true,
-    },
-    missing: [
-      "owner-authorized immutable GitHub release/asset locators and reviewed sequence/version/expiry plan",
-      "exact descriptor/targets/snapshot/timestamp signing payloads and approved profile signatures",
-      "final production bootstrap verification before publication",
-    ],
+    finalizer:
+      c.releaseAuthority === "github-attestation-v1"
+        ? {
+            inputVersion: 1,
+            command: "fased-install",
+            verify: "--verify-candidate",
+            privateKeysAccepted: false,
+          }
+        : {
+            inputVersion: 1,
+            command: "fased-release-candidate",
+            request: "release-request",
+            complete: "release-finalize",
+            privateKeysAccepted: false,
+            metadataOnly: true,
+          },
+    missing:
+      c.releaseAuthority === "github-attestation-v1"
+        ? ["final production bootstrap verification before publication"]
+        : [
+            "owner-authorized immutable GitHub release/asset locators and reviewed sequence/version/expiry plan",
+            "exact descriptor/targets/snapshot/timestamp signing payloads and approved profile signatures",
+            "final production bootstrap verification before publication",
+          ],
     publicRelease: false,
     activation: false,
   });
+  if (c.releaseAuthority === "github-attestation-v1")
+    write("fased-release.json", {
+      version: 1,
+      productVersion: input.version,
+      source: input.sourceCommit,
+      bundleSha256: objects.manifestSha256,
+      archive: objects.archive,
+      installer: objects.installer,
+      entry: file("install.sh", 2 * 1024 * 1024).identity,
+      release: {
+        installerSha256: objects.installer.sha256,
+        sourceTree: input.sourceTree,
+        tagObject: input.tagObject,
+        packageLockSha256: input.packageLockSha256,
+        goSumSha256: input.goSumSha256,
+        workflowCommit: input.workflowCommit,
+        runId: input.runId,
+        runAttempt: input.runAttempt,
+        provenance: proof,
+      },
+    });
 }
 // Renewed metadata gets a new retained operation automatically. Identical
 // approved bytes always reopen the same journal; no journal is reset/deleted.

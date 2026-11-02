@@ -10,8 +10,9 @@
     "arch": "amd64",
     "ubuntu": "24.04"
   },
-  "seedFile": "release/public/ubuntu-0-1-0-seed.json",
-  "seedSha256": "f86dedbc5c6652f61157ff08cd6b989f6841c99eb1299d73d641afd3579d6336",
-  "custodyApprovalSha256": "9b47c090045e930d264314f5f376355db0e90a9bdcb2c545ec0a83685b667a3b",
-  "initialTrustApprovalSha256": "a19caf67317a85144bf662948c366a750ec417ae75dfc82674e164ec4a3ca983"
+  "seedFile": "release/public/ubuntu-attested-seed.json",
+  "seedSha256": "92a01bf0328df43819c7bbfa01b127d1227e7a1f9f9fccdf545edef97dd25643",
+  "custodyApprovalSha256": null,
+  "initialTrustApprovalSha256": null,
+  "releaseAuthority": "github-attestation-v1"
 }

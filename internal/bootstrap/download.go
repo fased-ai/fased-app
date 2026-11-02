@@ -19,6 +19,7 @@ type downloadSource struct {
 	metadata func(context.Context, string, int64) ([]byte, error)
 	archive  func(context.Context, Descriptor) (io.ReadCloser, error)
 	close    func()
+	attested func(context.Context) (Descriptor, map[string][]byte, error)
 	window   time.Duration
 }
 
@@ -54,7 +55,7 @@ func initialDownloads(o Options, seed Seed) (downloadSource, error) {
 	if err != nil {
 		return downloadSource{}, err
 	}
-	return downloadSource{metadata: func(ctx context.Context, name string, limit int64) ([]byte, error) {
+	return downloadSource{attested: func(ctx context.Context) (Descriptor, map[string][]byte, error) { return attestedInputs(ctx, g, seed) }, metadata: func(ctx context.Context, name string, limit int64) ([]byte, error) {
 		b, err := g.Metadata(ctx, name)
 		if err != nil {
 			return nil, err
@@ -64,7 +65,13 @@ func initialDownloads(o Options, seed Seed) (downloadSource, error) {
 		}
 		return b, nil
 	}, archive: func(ctx context.Context, d Descriptor) (io.ReadCloser, error) {
-		b, err := g.Asset(ctx, d.GitHub)
+		var b []byte
+		var err error
+		if seed.Version == 4 {
+			b, err = g.PublishedAsset(ctx, d.GitHub)
+		} else {
+			b, err = g.Asset(ctx, d.GitHub)
+		}
 		if err != nil {
 			return nil, err
 		}

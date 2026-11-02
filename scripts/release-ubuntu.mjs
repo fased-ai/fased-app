@@ -1,4 +1,5 @@
-// One owner command joins the existing verifier, signer and durable publisher.
+// Password-free release authority: protected GitHub workflow + immutable assets
+// + offline-verified GitHub/Sigstore build provenance. No local signing secrets.
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
@@ -6,38 +7,68 @@ import {
   writeFileSync,
   existsSync,
   chmodSync,
-  rmSync,
   mkdtempSync,
+  rmSync,
 } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { prepareReleaseCandidate } from "./release-source.mjs";
-import { desktopCredentials } from "./release-credentials.mjs";
-import {
-  unlockLocalSigning,
-  persistLocalReleaseFile,
-} from "./local-release-signing.mjs";
-import {
-  runMaintainerLocalSigning,
-  verifiedCandidate,
-  expectedProvenance,
-  validateConfig,
-} from "./prepare-ubuntu-release.mjs";
+import { validateConfig } from "./prepare-ubuntu-release.mjs";
 import {
   githubPublisher,
   runRecordedPublisher,
+  verifyAnnotatedTag,
 } from "./publish-ubuntu-release.mjs";
 import {
   openPublisherJournal,
   readPublisherFile,
   ensurePublisherDirectory,
 } from "./publisher-journal.mjs";
-
 const sha = (b) => createHash("sha256").update(b).digest("hex");
 const repo = "/repos/fased-ai/fased-app";
-const roles = ["targets", "snapshot", "timestamp"];
-const json = (p) => JSON.parse(readPublisherFile(p));
-const bytes = (v) => Buffer.from(JSON.stringify(v) + "\n");
+const names = [
+  "fased-app-linux-amd64.tar.gz",
+  "fased-install-linux-amd64",
+  "fased-app-linux-amd64.provenance.sigstore.json",
+  "install.sh",
+  "fased-release.json",
+];
+
+export function releaseSequence(version) {
+  if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(version))
+    throw Error("Canonical stable version required");
+  let sequence = 0n;
+  for (const part of version.split(".")) {
+    const value = BigInt(part);
+    if (value >= 1000000n) throw Error("Bounded release version required");
+    sequence = sequence * 1000000n + value;
+  }
+  return String(sequence + 1n);
+}
+
+export function verifierEnvironment(source = process.env) {
+  const env = {
+    GOTOOLCHAIN: "local",
+    GOFLAGS: "-mod=readonly",
+    GOPROXY: "off",
+    GOSUMDB: "off",
+  };
+  for (const key of [
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "LANG",
+    "LC_ALL",
+    "TZ",
+    "TMPDIR",
+    "GOCACHE",
+    "GOMODCACHE",
+    "GOROOT",
+  ])
+    if (typeof source[key] === "string") env[key] = source[key];
+  return env;
+}
 
 export async function publicAsset(
   version,
@@ -45,19 +76,19 @@ export async function publicAsset(
   identity,
   fetchResponse = fetch,
 ) {
-  let address = `https://github.com/fased-ai/fased-app/releases/download/v${version}/${name}`;
-  if (!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version) || path.basename(name) !== name)
+  if (!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version) || !names.includes(name))
     throw Error("Exact public release asset required");
-  let response;
+  let address = `https://github.com/fased-ai/fased-app/releases/download/v${version}/${name}`,
+    response;
   for (let hop = 0; hop < 2; hop++) {
     response = await fetchResponse(address, {
       redirect: "manual",
       signal: AbortSignal.timeout(60000),
     });
     if (response.status === 200) break;
-    const location = response.headers.get("location");
+    const next = response.headers.get("location");
     await response.body?.cancel();
-    const u = location ? new URL(location) : null;
+    const u = next ? new URL(next) : null;
     if (
       hop !== 0 ||
       response.status !== 302 ||
@@ -73,552 +104,430 @@ export async function publicAsset(
   if (response.status !== 200 || response.headers.get("content-encoding"))
     throw Error("Complete public asset required");
   const chunks = [];
-  let length = 0;
+  let size = 0;
   for await (const chunk of response.body) {
-    length += chunk.length;
-    if (length > identity.size)
-      throw Error("Public asset exceeds approved size");
+    size += chunk.length;
+    if (size > identity.size) throw Error("Public asset exceeds approved size");
     chunks.push(Buffer.from(chunk));
   }
-  const raw = Buffer.concat(chunks);
-  if (raw.length !== identity.size || sha(raw) !== identity.sha256)
+  const bytes = Buffer.concat(chunks);
+  if (bytes.length !== identity.size || sha(bytes) !== identity.sha256)
     throw Error("Public asset differs from approved bytes");
-  return raw;
+  return bytes;
 }
-
-// Completed suboperations always reconcile their remote identities on resume.
-// Only the existing publisher can recover an uncertain HTTP mutation.
-export async function releaseSequence(
-  journal,
-  operations,
-  progress = () => {},
-) {
-  for (const name of [
-    "preflight",
-    "stage",
-    "finalize",
-    "publish",
-    "metadata",
-    "readback",
-  ]) {
-    progress(name);
-    const result = await operations[name](journal.state);
-    journal.state[name] = result;
-    journal.save();
-  }
-  journal.state.complete = true;
-  journal.save();
-  return {
-    ...journal.state.readback,
-    automaticUpdates: false,
-    liveActivation: false,
-  };
-}
-
-export function finalizationPlan(packet, stage, previous, cdnPath, now) {
-  const old = previous.descriptor;
-  const previousVersions = Object.fromEntries(
-    roles.map((role) => {
-      const values = Object.entries(previous.files).filter(([name]) =>
-        role === "timestamp"
-          ? name === "timestamp.json"
-          : new RegExp(`^[0-9]+\\.${role}\\.json$`).test(name),
-      );
-      if (values.length !== 1)
-        throw Error("Previous signed metadata roles required");
-      return [
-        role,
-        JSON.parse(Buffer.from(values[0][1], "base64")).signed.version,
-      ];
-    }),
-  );
+export function attestedInventory(c, packet, raw) {
   if (
-    !/^[0-9]+$/.test(old.sequence) ||
-    BigInt(old.sequence) < 1n ||
-    Object.values(previousVersions).some(
-      (v) => !Number.isSafeInteger(v) || v < 1,
-    )
+    c.releaseAuthority !== "github-attestation-v1" ||
+    packet.version !== 1 ||
+    packet.productVersion !== c.version ||
+    !/^[a-f0-9]{40}$/.test(packet.source)
   )
-    throw Error("Previous release floors invalid");
-  const asset = stage.assets.find(
-    (a) => a.name === packet.objects.archive.file,
-  );
-  if (
-    !asset ||
-    !/^\/github-production-release-asset\/1426211857\/[A-Za-z0-9-]+$/.test(
-      cdnPath,
-    )
-  )
-    throw Error("Pinned GitHub archive locator required");
-  const expires = (hours) =>
-    new Date(now.getTime() + hours * 3600000).toISOString();
-  return {
-    version: 1,
-    descriptor: {
-      version: 3,
-      purpose: "fased-app-first-install-production:v1",
-      developmentOnly: false,
-      repository: "fased-ai/fased-app",
-      channel: "stable",
-      target: { os: "linux", arch: "amd64" },
-      sequence: String(BigInt(old.sequence) + 1n),
-      productVersion: packet.version,
-      source: packet.sourceCommit,
-      bundleSha256: packet.objects.manifestSha256,
-      archive: packet.objects.archive,
-      github: {
-        repositoryId: "1426211857",
-        releaseId: stage.releaseId,
-        assetId: asset.id,
-        name: asset.name,
-        size: asset.size,
-        sha256: asset.sha256,
-        cdnPath,
-      },
-      release: {
-        sourceTree: packet.sourceTree,
-        tagObject: packet.tagObject,
-        packageLockSha256: packet.packageLockSha256,
-        goSumSha256: packet.goSumSha256,
-        workflowCommit: packet.workflowCommit,
-        runId: packet.runId,
-        runAttempt: packet.runAttempt,
-        provenance: packet.provenance,
-      },
-    },
-    previousSequence: old.sequence,
-    previousVersions,
-    versions: Object.fromEntries(
-      roles.map((r) => [r, previousVersions[r] + 1]),
-    ),
-    expires: {
-      targets: expires(29 * 24),
-      snapshot: expires(6 * 24),
-      timestamp: expires(47),
-    },
-  };
-}
-
-export async function releaseUbuntu(
-  c,
-  owner,
-  packetDirectory,
-  {
-    api,
-    token,
-    execute = execFileSync,
-    progress = (stage) => process.stdout.write(`Release: ${stage}\n`),
-    credentials,
-    now = () => new Date(),
-    fetchResponse = fetch,
-  } = {},
-) {
-  c = JSON.parse(JSON.stringify(c));
-  owner = JSON.parse(JSON.stringify(owner));
-  if (process.getuid?.() === 0 || validateConfig(c).length)
-    throw Error("Configured ordinary release owner required");
-  const directory = path.resolve(packetDirectory);
-  const packet = json(path.join(directory, "signing-inputs.json"));
-  const readArtifact = (name, max = 128 * 1024 * 1024) => {
-    if (path.basename(name) !== name)
-      throw Error("Candidate file name invalid");
-    return readPublisherFile(path.join(directory, name), max);
-  };
-  const seed = readArtifact("first-install-seed.json", 65536);
-  if (
-    sha(seed) !== c.seedSha256 ||
-    packet.version !== c.version ||
-    sha(readPublisherFile(owner.ownerApprovalFile, 65536)) !==
-      c.custodyApprovalSha256 ||
-    sha(readPublisherFile(owner.verifierFile, 128 * 1024 * 1024)) !==
-      owner.verifierSHA256
-  )
-    throw Error("Owner, verifier or public trust differs from approved inputs");
-  const signingConfig = {
-    storeFile: owner.storeFile,
-    identitySHA256: owner.identitySHA256,
-    keyClass: "production",
-    seed,
-    seedSHA256: c.seedSha256,
-    allowedRoles: roles,
-  };
-  credentials ??= desktopCredentials(signingConfig);
-  api ??= githubPublisher(token);
+    throw Error("Attested release authority/version required");
   const identities = [
-    packet.objects.archive,
-    packet.objects.installer,
-    packet.provenance,
+    packet.archive,
+    packet.installer,
+    packet.release.provenance,
     packet.entry,
+    { file: "fased-release.json", size: raw.length, sha256: sha(raw) },
   ];
-  for (const a of identities) {
-    const b = readArtifact(a.file);
-    if (b.length !== a.size || sha(b) !== a.sha256)
-      throw Error("Candidate artifact changed");
-  }
-  verifiedCandidate(
-    c,
-    packet,
-    packet.objects,
-    packet.provenanceDecision,
-    packet.provenance,
-    json(path.join(directory, "provenance-policy.json")),
-  );
   if (
-    JSON.stringify(expectedProvenance(packet, packet.objects.archive)) !==
-    JSON.stringify(json(path.join(directory, "expected-provenance.json")))
+    identities.some(
+      (a, i) =>
+        a.file !== names[i] ||
+        !Number.isSafeInteger(a.size) ||
+        a.size <= 0 ||
+        a.size > 128 * 1024 * 1024 ||
+        !/^[a-f0-9]{64}$/.test(a.sha256),
+    )
   )
-    throw Error("Candidate provenance expectations changed");
-  const inventory = {
+    throw Error("Complete exact attested asset inventory required");
+  return {
+    releaseAuthority: c.releaseAuthority,
     repository: c.repository,
     repositoryId: c.repositoryId,
     ownerId: c.ownerId,
     version: c.version,
-    source: packet.sourceCommit,
-    tagObject: packet.tagObject,
+    source: packet.source,
+    tagObject: packet.release.tagObject,
     assets: identities.map((a) => ({
       name: a.file,
       size: a.size,
       sha256: a.sha256,
     })),
   };
-  const candidate = bytes(inventory),
-    candidateSHA256 = sha(candidate);
-  const root = path.resolve(".evidence/ubuntu-release");
-  ensurePublisherDirectory(root, true);
-  const work = path.join(root, `release-${c.version}`);
-  ensurePublisherDirectory(work, true);
-  const historyDir = path.join(root, "owner-release");
-  const history = openPublisherJournal(
-    historyDir,
-    sha(bytes({ identity: owner.identitySHA256, seed: c.seedSha256 })),
-    { resume: existsSync(path.join(historyDir, "operation.json")) },
-  );
-  history.state.packages ??= {};
-  if (!history.state.packages[c.version]) {
-    history.state.packages[c.version] = history.state.last
-      ? {
-          ...owner,
-          previousPublicationFile: history.state.last.publicationFile,
-          previousMetadataCommit: history.state.last.metadataCommit,
-        }
-      : owner;
-    history.save();
+}
+function checkRelease(release, c, inventory, partial = false) {
+  if (
+    String(release.id).match(/^[1-9][0-9]*$/) === null ||
+    release.tag_name !== `v${c.version}` ||
+    release.prerelease !== false ||
+    !Array.isArray(release.assets) ||
+    (partial ? release.assets.length > 5 : release.assets.length !== 5) ||
+    new Set(release.assets.map((a) => String(a.id))).size !==
+      release.assets.length ||
+    release.assets.some(
+      (a) =>
+        !/^[1-9][0-9]*$/.test(String(a.id)) ||
+        !inventory.assets.some((expected) => expected.name === a.name),
+    )
+  )
+    throw Error("Exact immutable release inventory required");
+  for (const expected of inventory.assets) {
+    const found = release.assets.filter((a) => a.name === expected.name);
+    if (partial && found.length === 0) continue;
+    if (
+      found.length !== 1 ||
+      found[0].state !== "uploaded" ||
+      found[0].size !== expected.size ||
+      found[0].digest !== `sha256:${expected.sha256}`
+    )
+      throw Error("Release asset identity changed");
   }
-  owner = history.state.packages[c.version];
-  const binding = sha(bytes({ candidateSHA256, owner, config: c }));
-  let outer;
+  return String(release.id);
+}
+export async function publishAttested(
+  c,
+  directory,
+  {
+    api,
+    stateRoot = path.resolve(".evidence/ubuntu-release"),
+    execute = execFileSync,
+    fetchResponse = fetch,
+    progress = () => {},
+  } = {},
+) {
+  if (
+    process.getuid?.() === 0 ||
+    validateConfig(c).length ||
+    c.releaseAuthority !== "github-attestation-v1"
+  )
+    throw Error("Configured ordinary release owner required");
+  directory = path.resolve(directory);
+  const read = (name) =>
+    readPublisherFile(path.join(directory, name), 128 * 1024 * 1024);
+  const raw = read("fased-release.json"),
+    packet = JSON.parse(raw),
+    inventory = attestedInventory(c, packet, raw);
+  for (const asset of inventory.assets) {
+    const b = read(asset.name);
+    if (b.length !== asset.size || sha(b) !== asset.sha256)
+      throw Error("Candidate artifact changed");
+  }
+  if (sha(read("first-install-seed.json")) !== c.seedSha256)
+    throw Error("Candidate trust changed");
+  const installer = path.join(directory, "fased-install-linux-amd64");
+  chmodSync(installer, 0o500);
+  progress("verify actual candidate executable");
+  const trustedSeedBytes = readFileSync(path.resolve(c.seedFile));
+  if (sha(trustedSeedBytes) !== c.seedSha256)
+    throw Error("Trusted public seed differs from config");
+  const trustedSeed = JSON.parse(trustedSeedBytes);
+  if (
+    trustedSeed.version !== 4 ||
+    trustedSeed.signingProfile !== "github-attestation-v1" ||
+    packet.release.installerSha256 !== packet.installer.sha256
+  )
+    throw Error("Attested installer trust required");
+  const scratch = mkdtempSync(path.join(directory, ".trusted-preflight-"));
   try {
-    outer = openPublisherJournal(path.join(work, "sequence"), binding, {
-      resume: existsSync(path.join(work, "sequence/operation.json")),
+    const policy = path.join(scratch, "policy.json"),
+      expected = path.join(scratch, "expected.json");
+    writeFileSync(policy, JSON.stringify(trustedSeed.provenance), {
+      mode: 0o600,
+      flag: "wx",
     });
-  } catch (err) {
-    history.close();
-    throw err;
-  }
-  const mode = (dir) =>
-    existsSync(path.join(dir, "operation.json")) ? "resume" : "start";
-  const publish = (action, publication, approval) => {
-    const dir = path.join(work, action);
-    return runRecordedPublisher(
-      {
-        action,
-        mode: mode(dir),
-        directory: dir,
-        candidate,
-        candidateSHA256,
-        publication,
-        approval,
-      },
-      { api, readArtifact },
+    writeFileSync(
+      expected,
+      JSON.stringify({
+        installerSha256: packet.installer.sha256,
+        archiveName: packet.archive.file,
+        archiveSha256: packet.archive.sha256,
+        sourceCommit: packet.source,
+        workflowCommit: packet.release.workflowCommit,
+        tag: `v${packet.productVersion}`,
+        runId: packet.release.runId,
+        runAttempt: packet.release.runAttempt,
+      }),
+      { mode: 0o600, flag: "wx" },
     );
-  };
-  const invoke = (exe, args) => {
-    try {
-      return JSON.parse(
-        execute(exe, args, {
+    const decision = JSON.parse(
+      execute(
+        "go",
+        [
+          "run",
+          "-buildvcs=false",
+          "./cmd/fased-release-candidate",
+          "verify-provenance",
+          "--policy-file",
+          policy,
+          "--expected-file",
+          expected,
+          "--bundle-file",
+          path.join(directory, packet.release.provenance.file),
+        ],
+        {
           encoding: "utf8",
+          env: verifierEnvironment(),
           timeout: 180000,
           maxBuffer: 2 * 1024 * 1024,
           stdio: ["ignore", "pipe", "pipe"],
-        }),
-      );
-    } catch {
-      throw Error(
-        "Release executable verification failed; no publication permitted",
-      );
-    }
-  };
-  const inspect = async (name, published = false) => {
-    const scratch = mkdtempSync(path.join(work, `${name}-`));
-    const output = path.join(scratch, "acquired");
+        },
+      ),
+    );
+    if (decision.BundleSHA256 !== packet.release.provenance.sha256)
+      throw Error("Independent installer/archive provenance failed");
+  } finally {
+    rmSync(scratch, { recursive: true });
+  }
+  const preflight = JSON.parse(
+    execute(installer, ["--verify-candidate", directory], {
+      encoding: "utf8",
+      env: verifierEnvironment(),
+      timeout: 180000,
+      maxBuffer: 2 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  );
+  if (
+    preflight.version !== 4 ||
+    !preflight.archiveVerified ||
+    !preflight.bundleVerified ||
+    !preflight.provenanceVerified ||
+    preflight.installerInvoked ||
+    preflight.publicActivation ||
+    preflight.seedSha256 !== c.seedSha256 ||
+    preflight.archiveSha256 !== packet.archive.sha256
+  )
+    throw Error("Actual candidate preflight failed");
+  const identity = await api("GET", repo);
+  if (
+    String(identity.id) !== c.repositoryId ||
+    String(identity.owner?.id) !== c.ownerId ||
+    identity.full_name !== c.repository
+  )
+    throw Error("Fixed release repository required");
+  // Owner settings are checked before tagging; GITHUB_TOKEN has no admin-read.
+  // Canonical publication below and all consumers still require immutable:true.
+  await verifyAnnotatedTag(
+    api,
+    c.version,
+    inventory.tagObject,
+    inventory.source,
+  );
+  const root = stateRoot;
+  ensurePublisherDirectory(root, true);
+  const work = path.join(root, `attested-${c.version}`);
+  ensurePublisherDirectory(work, true);
+  const journalDir = path.join(work, "publication");
+  const binding = sha(JSON.stringify({ inventory, seed: c.seedSha256 }));
+  const journal = openPublisherJournal(journalDir, binding, {
+    resume: existsSync(path.join(journalDir, "operation.json")),
+  });
+  const candidate = Buffer.from(JSON.stringify(inventory) + "\n");
+  try {
+    let existing;
     try {
-      let installer = path.join(directory, packet.objects.installer.file);
-      if (published) {
+      existing = await api("GET", repo + `/releases/tags/v${c.version}`);
+    } catch (e) {
+      if (e.status !== 404) throw e;
+    }
+    let id;
+    if (existing?.draft === false) {
+      id = checkRelease(existing, c, inventory);
+      if (existing.immutable !== true)
+        throw Error("Public release not immutable");
+    } else {
+      const stageDir = path.join(work, "stage");
+      if (existing && !existsSync(path.join(stageDir, "operation.json"))) {
+        id = checkRelease(existing, c, inventory, true);
+        if (journal.state.adopted && journal.state.adopted.releaseId !== id)
+          throw Error("Recorded draft identity changed");
+        for (const recorded of journal.state.adopted?.assets ?? [])
+          if (
+            !existing.assets.some(
+              (a) => a.name === recorded.name && String(a.id) === recorded.id,
+            )
+          )
+            throw Error("Recorded draft asset identity changed");
+        journal.state.adopted = {
+          releaseId: id,
+          assets: existing.assets.map((a) => ({
+            id: String(a.id),
+            name: a.name,
+          })),
+        };
+        journal.save();
+        for (const expected of inventory.assets) {
+          if (existing.assets.some((a) => a.name === expected.name)) continue;
+          if (journal.state.adoptedUploadAttempt?.name === expected.name)
+            throw Error(
+              "Draft upload outcome unresolved; preserve its original request",
+            );
+          const bytes = read(expected.name);
+          if (bytes.length !== expected.size || sha(bytes) !== expected.sha256)
+            throw Error("Candidate changed during draft recovery");
+          journal.state.adoptedUploadAttempt = {
+            releaseId: id,
+            name: expected.name,
+            sha256: expected.sha256,
+          };
+          journal.save();
+          const uploaded = await api(
+            "UPLOAD",
+            repo + `/releases/${id}/assets?name=${expected.name}`,
+            bytes,
+          );
+          if (
+            !/^[1-9][0-9]*$/.test(String(uploaded.id)) ||
+            uploaded.name !== expected.name ||
+            uploaded.size !== expected.size ||
+            uploaded.state !== "uploaded" ||
+            uploaded.digest !== `sha256:${expected.sha256}`
+          )
+            throw Error("Recovered draft upload outcome unresolved");
+          journal.state.adopted.assets.push({
+            id: String(uploaded.id),
+            name: uploaded.name,
+          });
+          delete journal.state.adoptedUploadAttempt;
+          journal.save();
+        }
+      } else {
+        const stage = await runRecordedPublisher(
+          {
+            action: "stage",
+            mode: existsSync(path.join(stageDir, "operation.json"))
+              ? "resume"
+              : "start",
+            directory: stageDir,
+            candidate,
+            candidateSHA256: sha(candidate),
+          },
+          { api, readArtifact: async (name) => read(name) },
+        );
+        id = stage.releaseId;
+      }
+      const current = await api("GET", repo + `/releases/${id}`);
+      checkRelease(current, c, inventory);
+      if (current.draft === true) {
+        if (journal.state.publishAttempted)
+          throw Error(
+            "Publication outcome unresolved; preserve the original release ID and inspect",
+          );
+        journal.state.publishAttempted = {
+          releaseId: id,
+          tag: `v${c.version}`,
+          source: packet.source,
+        };
+        journal.save();
+        progress("publish verified immutable release");
+        await api("PATCH", repo + `/releases/${id}`, {
+          draft: false,
+          tag_name: `v${c.version}`,
+          target_commitish: packet.source,
+        });
+      }
+      const published = await api("GET", repo + `/releases/${id}`);
+      checkRelease(published, c, inventory);
+      if (published.draft !== false || published.immutable !== true)
+        throw Error("Publication not confirmed immutable");
+    }
+    progress("verify anonymous public installer and update authority");
+    const scratch = mkdtempSync(path.join(work, "readback-"));
+    let report;
+    try {
+      for (const name of ["install.sh", "fased-release.json"])
         await publicAsset(
           c.version,
-          packet.entry.file,
-          packet.entry,
+          name,
+          inventory.assets.find((a) => a.name === name),
           fetchResponse,
         );
-        installer = path.join(scratch, packet.objects.installer.file);
-        writeFileSync(
-          installer,
-          await publicAsset(
-            c.version,
-            packet.objects.installer.file,
-            packet.objects.installer,
-            fetchResponse,
-          ),
-          { flag: "wx", mode: 0o500 },
-        );
-      }
-      chmodSync(installer, 0o500);
-      const result = invoke(installer, [
-        "--seed-file",
-        path.join(directory, "first-install-seed.json"),
-        "--seed-sha256",
-        c.seedSha256,
-        "--output",
-        output,
-        "--install=false",
-        "--upgrade=false",
-      ]);
+      const binary = await publicAsset(
+        c.version,
+        "fased-install-linux-amd64",
+        inventory.assets.find((a) => a.name === "fased-install-linux-amd64"),
+        fetchResponse,
+      );
+      const exe = path.join(scratch, "fased-install");
+      writeFileSync(exe, binary, { mode: 0o500, flag: "wx" });
+      report = JSON.parse(
+        execute(
+          exe,
+          [
+            "--seed-file",
+            path.join(directory, "first-install-seed.json"),
+            "--seed-sha256",
+            c.seedSha256,
+            "--output",
+            path.join(scratch, "acquired"),
+            "--install=false",
+            "--upgrade=false",
+          ],
+          {
+            encoding: "utf8",
+            env: verifierEnvironment(),
+            timeout: 180000,
+            maxBuffer: 2 * 1024 * 1024,
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        ),
+      );
       if (
-        !result.metadataVerified ||
-        !result.provenanceVerified ||
-        !result.archiveVerified ||
-        !result.bundleVerified ||
-        result.installerInvoked ||
-        result.publicActivation
+        report.version !== 4 ||
+        !report.metadataVerified ||
+        !report.provenanceVerified ||
+        !report.bundleVerified ||
+        report.installerInvoked ||
+        report.publicActivation ||
+        report.archiveSha256 !== packet.archive.sha256 ||
+        report.sequence !== releaseSequence(c.version)
       )
-        throw Error("Actual installer acquisition proof required");
-      return result;
+        throw Error("Public installer/readback differs from release");
     } finally {
       rmSync(scratch, { recursive: true });
     }
-  };
-  try {
-    const result = await releaseSequence(
-      outer,
-      {
-        preflight: async () => {
-          if (!outer.state.finalize) {
-            const pass = await credentials.getPassphrase();
-            try {
-              unlockLocalSigning({
-                ...signingConfig,
-                passphrase: pass,
-              }).close();
-            } finally {
-              pass.fill(0);
-            }
-          }
-          if ((await api("GET", repo + "/immutable-releases")).enabled !== true)
-            throw Error("Enable immutable GitHub releases before release");
-          const proof = invoke(owner.verifierFile, [
-            "verify-provenance",
-            "--policy-file",
-            path.join(directory, "provenance-policy.json"),
-            "--expected-file",
-            path.join(directory, "expected-provenance.json"),
-            "--bundle-file",
-            path.join(directory, packet.provenance.file),
-          ]);
-          if (proof.BundleSHA256 !== packet.provenance.sha256)
-            throw Error("Original provenance differs");
-          return inspect("preflight-acquisition");
-        },
-        stage: () => publish("stage"),
-        finalize: async (state) => {
-          if (!state.finalizationRequest) {
-            const previous = json(owner.previousPublicationFile);
-            if (
-              previous.seedSha256 !== c.seedSha256 ||
-              previous.descriptor.sequence !== state.preflight.sequence
-            )
-              throw Error(
-                "Previous publication differs from actual verified public channel",
-              );
-            const asset = state.stage.assets.find(
-              (a) => a.name === packet.objects.archive.file,
-            );
-            const response = await fetchResponse(
-              `https://api.github.com${repo}/releases/assets/${asset.id}`,
-              {
-                headers: {
-                  Accept: "application/octet-stream",
-                  Authorization: `Bearer ${token}`,
-                  "X-GitHub-Api-Version": "2022-11-28",
-                },
-                redirect: "manual",
-                signal: AbortSignal.timeout(30000),
-              },
-            );
-            const location = response.headers.get("location");
-            await response.body?.cancel();
-            const u = location ? new URL(location) : null;
-            if (
-              response.status !== 302 ||
-              !u ||
-              u.protocol !== "https:" ||
-              u.host !== "release-assets.githubusercontent.com" ||
-              u.username ||
-              u.password
-            )
-              throw Error("GitHub archive CDN identity unavailable");
-            // Never persist the temporary query/token.
-            const plan = finalizationPlan(
-              packet,
-              state.stage,
-              previous,
-              u.pathname,
-              now(),
-            );
-            const input = {
-              version: 1,
-              seedFile: path.join(directory, "first-install-seed.json"),
-              seedSha256: c.seedSha256,
-              archiveFile: path.join(directory, packet.objects.archive.file),
-              provenanceFile: path.join(directory, packet.provenance.file),
-              plan,
-            };
-            const inputFile = path.join(work, "finalization-candidate.json");
-            const raw = bytes(input);
-            state.finalizationInput = input;
-            state.finalizationRequest = {
-              version: 1,
-              keyClass: "production",
-              ownerApprovalFile: owner.ownerApprovalFile,
-              directory: path.join(work, "signing"),
-              storeFile: owner.storeFile,
-              identitySHA256: owner.identitySHA256,
-              candidateFile: inputFile,
-              candidateSHA256: sha(raw),
-              seedFile: input.seedFile,
-              seedSHA256: c.seedSha256,
-              verifierFile: owner.verifierFile,
-              verifierSHA256: owner.verifierSHA256,
-              workDirectory: path.join(work, "finalizer-work"),
-              outputDirectory: path.join(work, "finalized"),
-            };
-            outer.save();
-          }
-          persistLocalReleaseFile(
-            outer,
-            state.finalizationRequest.candidateFile,
-            bytes(state.finalizationInput),
-          );
-          return runMaintainerLocalSigning(
-            c,
-            "signer-sign",
-            {
-              ...state.finalizationRequest,
-              mode: mode(state.finalizationRequest.directory),
-            },
-            { getPassphrase: () => credentials.getPassphrase() },
-          );
-        },
-        publish: (state) => {
-          const publication = readPublisherFile(
-            path.join(work, "finalized/publication.json"),
-          );
-          return publish("release", publication, {
-            sha256: sha(publication),
-            previousCommit: owner.previousMetadataCommit,
-          });
-        },
-        metadata: () => {
-          const publication = readPublisherFile(
-            path.join(work, "finalized/publication.json"),
-          );
-          return publish("metadata", publication, {
-            sha256: sha(publication),
-            previousCommit: owner.previousMetadataCommit,
-          });
-        },
-        readback: async (state) => {
-          const result = await inspect("public-acquisition", true);
-          const p = json(path.join(work, "finalized/publication.json"));
-          if (
-            result.sequence !== p.descriptor.sequence ||
-            result.archiveSha256 !== packet.objects.archive.sha256
-          )
-            throw Error("Public release readback differs from signed release");
-          return {
-            version: c.version,
-            releaseId: state.stage.releaseId,
-            metadataCommit: state.metadata.metadataCommit,
-            publicationFile: path.join(work, "finalized/publication.json"),
-            verified: true,
-          };
-        },
-      },
-      progress,
-    );
-    history.state.last = result;
-    history.save();
-    return result;
+    journal.state.result = {
+      version: c.version,
+      releaseId: id,
+      sequence: releaseSequence(c.version),
+      verified: true,
+      automaticUpdates: false,
+      liveActivation: false,
+    };
+    journal.state.complete = true;
+    journal.save();
+    return journal.state.result;
   } finally {
-    outer.close();
-    history.close();
+    journal.close();
   }
 }
-
 export async function main(args = process.argv.slice(2)) {
   const operation = args[0] ?? "ship";
-  if (
-    !["ship", "publish", "credentials", "forget"].includes(operation) ||
-    args.length > 2
-  )
+  if (!["ship", "publish"].includes(operation) || args.length > 2)
     throw Error(
-      "Use: npm run release -- [ship [PR] | publish [candidate-directory] | credentials | forget]",
+      "Use npm run release -- [ship [PR] | publish [candidate-directory]]",
     );
   const c = JSON.parse(readFileSync("release/ubuntu.json", "utf8"));
-  const owner = json(path.resolve(".evidence/ubuntu-release/owner.json"));
-  const directory = path.resolve(
-    args[1] ?? `.evidence/ubuntu-${c.version}-candidate/artifacts`,
-  );
-  if (
-    validateConfig(c).length ||
-    sha(readPublisherFile(owner.ownerApprovalFile, 65536)) !==
-      c.custodyApprovalSha256 ||
-    sha(readPublisherFile(owner.verifierFile, 128 * 1024 * 1024)) !==
-      owner.verifierSHA256
-  )
-    throw Error("Approved signing owner and verifier required");
-  const seed = readPublisherFile(path.resolve(c.seedFile), 65536);
-  const signingConfig = {
-    storeFile: owner.storeFile,
-    identitySHA256: owner.identitySHA256,
-    keyClass: "production",
-    seed,
-    seedSHA256: c.seedSha256,
-    allowedRoles: roles,
-  };
-  const credentials = desktopCredentials(signingConfig);
-  if (["credentials", "forget"].includes(operation))
-    return operation === "credentials"
-      ? credentials.remember()
-      : credentials.forget();
-  // Refuse before merge/tag/build when the one-time desktop setup is missing.
-  if (operation === "ship") {
-    const pass = credentials.getPassphrase();
-    try {
-      unlockLocalSigning({ ...signingConfig, passphrase: pass }).close();
-    } finally {
-      pass.fill(0);
-    }
+  let token = process.env.GH_TOKEN;
+  if (!token) {
+    execFileSync("gh", ["auth", "status"], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    token = execFileSync("gh", ["auth", "token"], {
+      encoding: "utf8",
+      env: verifierEnvironment(),
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
   }
-  execFileSync("gh", ["auth", "status"], { stdio: ["ignore", "pipe", "pipe"] });
-  const token = execFileSync("gh", ["auth", "token"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
-  const packetDirectory =
+  const directory =
     operation === "ship"
       ? await prepareReleaseCandidate(c.version, args[1])
-      : directory;
-  return releaseUbuntu(c, owner, packetDirectory, { token });
+      : path.resolve(args[1] ?? ".evidence/ubuntu-release");
+  return publishAttested(c, directory, {
+    api: githubPublisher(token),
+    progress: (s) => process.stdout.write(`Release: ${s}\n`),
+  });
 }
 if (
   process.argv[1] &&
@@ -628,7 +537,7 @@ if (
     .then((r) => console.log(JSON.stringify(r)))
     .catch(() => {
       console.error(
-        "Release held. Preserve .evidence/ubuntu-release; resolve the recorded phase and rerun the same command.",
+        "Release held. Preserve the original artifacts and operation records; no password is needed.",
       );
       process.exitCode = 1;
     });

@@ -11,7 +11,11 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { persistLocalReleaseFile } from "./local-release-signing.mjs";
-import { openPublisherJournal } from "./publisher-journal.mjs";
+import {
+  openPublisherJournal,
+  readPublisherFile,
+  ensurePublisherDirectory,
+} from "./publisher-journal.mjs";
 export function acceptedReleasePR(pr, head) {
   if (
     pr.baseRefName !== "main" ||
@@ -70,6 +74,15 @@ export async function prepareReleaseCandidate(
     repository.full_name !== "fased-ai/fased-app"
   )
     throw Error("Fased repository identity changed");
+  // This settings endpoint needs admin-read, unavailable to GITHUB_TOKEN.
+  // The owner checks it here before creating a tag; the workflow and clients
+  // independently require immutable:true on the final published object.
+  if (
+    JSON.parse(
+      call("gh", ["api", "/repos/fased-ai/fased-app/immutable-releases"]),
+    ).enabled !== true
+  )
+    throw Error("Enable immutable releases before tagging");
   if (call("git", ["status", "--porcelain"]).trim())
     throw Error("Commit the reviewed package before release");
   const head = call("git", ["rev-parse", "HEAD"]).trim(),
@@ -87,23 +100,24 @@ export async function prepareReleaseCandidate(
       ]),
     );
   let pr = acceptedReleasePR(view(), head);
+  progress("required CI");
+  // GitHub registers the required aggregate only after its dependency jobs.
+  // Watch current checks first, then require the protected aggregate itself.
+  const checkArgs = [
+    "pr",
+    "checks",
+    "--repo",
+    "fased-ai/fased-app",
+    String(pr.number),
+    "--watch",
+    "--fail-fast",
+    "--interval",
+    "15",
+  ];
+  call("gh", checkArgs, { stdio: "inherit" });
+  call("gh", [...checkArgs, "--required"], { stdio: "inherit" });
+
   if (pr.state === "OPEN") {
-    progress("required CI");
-    // GitHub registers the required aggregate only after its dependency jobs.
-    // Watch current checks first, then require the protected aggregate itself.
-    const checkArgs = [
-      "pr",
-      "checks",
-      "--repo",
-      "fased-ai/fased-app",
-      String(pr.number),
-      "--watch",
-      "--fail-fast",
-      "--interval",
-      "15",
-    ];
-    call("gh", checkArgs, { stdio: "inherit" });
-    call("gh", [...checkArgs, "--required"], { stdio: "inherit" });
     progress("merge passing package");
     call("gh", [
       "pr",
@@ -171,23 +185,26 @@ export async function prepareReleaseCandidate(
   if (runs?.length !== 1 || runs[0].headSha !== source)
     throw Error("One exact tag-bound build required; do not rerun");
   const id = String(runs[0].databaseId);
-  if (runs[0].status !== "completed")
-    call(
-      "gh",
-      [
-        "run",
-        "watch",
-        id,
-        "--repo",
-        "fased-ai/fased-app",
-        "--exit-status",
-        "--interval",
-        "10",
-      ],
-      {
-        stdio: "inherit",
-      },
-    );
+  if (runs[0].status !== "completed") {
+    try {
+      call(
+        "gh",
+        [
+          "run",
+          "watch",
+          id,
+          "--repo",
+          "fased-ai/fased-app",
+          "--exit-status",
+          "--interval",
+          "10",
+        ],
+        {
+          stdio: "inherit",
+        },
+      );
+    } catch {}
+  } // Read canonical outcome; failed publication must remain recoverable.
   const outcome = JSON.parse(
     call("gh", [
       "run",
@@ -196,11 +213,31 @@ export async function prepareReleaseCandidate(
       "--repo",
       "fased-ai/fased-app",
       "--json",
-      "conclusion,attempt",
+      "conclusion,attempt,jobs",
     ]),
   );
-  if (outcome.conclusion !== "success" || outcome.attempt !== 1)
+  if (
+    !["success", "failure", "cancelled", "timed_out"].includes(
+      outcome.conclusion,
+    ) ||
+    outcome.attempt !== 1
+  )
     throw Error("Original candidate build did not pass");
+  if (outcome.conclusion !== "success") {
+    const producer = outcome.jobs?.find((j) => j.name === "ubuntu-amd64");
+    if (
+      !producer ||
+      !producer.steps?.some(
+        (s) =>
+          s.name ===
+            "Verify original provenance offline and stage public signing inputs" &&
+          s.conclusion === "success",
+      )
+    )
+      throw Error(
+        "Original build did not complete verification; never rerun it",
+      );
+  }
   const entries = JSON.parse(
     call("gh", [
       "api",
@@ -209,21 +246,37 @@ export async function prepareReleaseCandidate(
   ).artifacts.filter(
     (a) => a.name === "ubuntu-amd64-release-candidate" && !a.expired,
   );
-  if (entries.length !== 1 || !/^sha256:[a-f0-9]{64}$/.test(entries[0].digest))
-    throw Error("Authenticated candidate digest unavailable");
   const root = path.resolve(workspace, `.evidence/ubuntu-${version}-candidate`);
   mkdirSync(root, { recursive: true, mode: 0o700 });
+  ensurePublisherDirectory(root);
+  if (entries.length === 0)
+    return recoverPublicCandidate({
+      version,
+      source,
+      runId: id,
+      root,
+      workspace,
+      call,
+    });
+  if (
+    entries.length !== 1 ||
+    !/^sha256:[a-f0-9]{64}$/.test(entries[0].digest) ||
+    !/^[1-9][0-9]*$/.test(String(entries[0].id))
+  )
+    throw Error("Authenticated candidate digest unavailable");
   const zip = path.join(root, "original-artifact.zip");
-  const raw = existsSync(zip)
-    ? readFileSync(zip)
-    : call(
-        "gh",
-        [
-          "api",
-          `/repos/fased-ai/fased-app/actions/artifacts/${entries[0].id}/zip`,
-        ],
-        { encoding: "buffer", maxBuffer: 128 * 1024 * 1024 },
-      );
+  let raw;
+  if (existsSync(zip)) {
+    try {
+      raw = readPublisherFile(zip, 128 * 1024 * 1024);
+    } catch {}
+  }
+  raw ??= call(
+    "gh",
+    ["api", `/repos/fased-ai/fased-app/actions/artifacts/${entries[0].id}/zip`],
+    { encoding: "buffer", maxBuffer: 128 * 1024 * 1024 },
+  );
+
   if (
     `sha256:${createHash("sha256").update(raw).digest("hex")}` !==
     entries[0].digest
@@ -243,7 +296,7 @@ export async function prepareReleaseCandidate(
       "-c",
       `
 import zipfile,pathlib,sys,stat
-names=set('fased-app-linux-amd64.tar.gz fased-app-linux-amd64.json fased-install-linux-amd64 fased-app-linux-amd64.provenance.sigstore.json verified-provenance.json expected-provenance.json provenance-policy.json first-install-seed.json install.sh build-inputs.json artifact-inventory.json signing-inputs.json'.split())
+names=set('fased-app-linux-amd64.tar.gz fased-app-linux-amd64.json fased-install-linux-amd64 fased-app-linux-amd64.provenance.sigstore.json verified-provenance.json expected-provenance.json provenance-policy.json first-install-seed.json install.sh build-inputs.json artifact-inventory.json signing-inputs.json fased-release.json'.split())
 out=pathlib.Path(sys.argv[2]);seen=set();total=0
 with zipfile.ZipFile(sys.argv[1]) as z:
  for f in z.infolist():
@@ -283,6 +336,114 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     return directory;
   } finally {
     if (scratch) rmSync(scratch, { recursive: true });
+    journal.close();
+  }
+}
+
+// Recover a completed immutable publication if Actions retention itself failed.
+// All bytes still undergo the trusted Go proof and installer preflight in the
+// caller; this is recovery of one original build, never a rebuild or new tag.
+export function recoverPublicCandidate({
+  version,
+  source,
+  runId,
+  root,
+  workspace,
+  call,
+}) {
+  const release = JSON.parse(
+    call("gh", ["api", `/repos/fased-ai/fased-app/releases/tags/v${version}`]),
+  );
+  const names = [
+    "fased-app-linux-amd64.tar.gz",
+    "fased-install-linux-amd64",
+    "fased-app-linux-amd64.provenance.sigstore.json",
+    "install.sh",
+    "fased-release.json",
+  ];
+  if (
+    release.tag_name !== `v${version}` ||
+    release.draft !== false ||
+    release.prerelease !== false ||
+    release.immutable !== true ||
+    release.assets?.length !== names.length
+  )
+    throw Error("Original complete immutable release required for recovery");
+  const directory = path.join(root, "artifacts");
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  ensurePublisherDirectory(directory);
+  const journalDir = path.join(root, "public-recovery");
+  const binding = createHash("sha256")
+    .update(
+      JSON.stringify({ source, runId, version, releaseId: String(release.id) }),
+    )
+    .digest("hex");
+  const journal = openPublisherJournal(journalDir, binding, {
+    resume: existsSync(path.join(journalDir, "operation.json")),
+  });
+  try {
+    for (const name of names) {
+      const assets = release.assets.filter((a) => a.name === name);
+      if (assets.length !== 1)
+        throw Error("Original release inventory changed");
+      const asset = assets[0];
+      if (
+        !/^[1-9][0-9]*$/.test(String(asset.id)) ||
+        asset.state !== "uploaded" ||
+        !Number.isSafeInteger(asset.size) ||
+        asset.size <= 0 ||
+        asset.size > 128 * 1024 * 1024 ||
+        !/^sha256:[a-f0-9]{64}$/.test(asset.digest)
+      )
+        throw Error("Original asset identity invalid");
+      const raw = call(
+        "gh",
+        [
+          "api",
+          "-H",
+          "Accept: application/octet-stream",
+          `/repos/fased-ai/fased-app/releases/assets/${asset.id}`,
+        ],
+        { encoding: "buffer", maxBuffer: 128 * 1024 * 1024 },
+      );
+      if (
+        raw.length !== asset.size ||
+        `sha256:${createHash("sha256").update(raw).digest("hex")}` !==
+          asset.digest
+      )
+        throw Error("Original asset bytes differ");
+      persistLocalReleaseFile(
+        journal,
+        path.join(directory, name),
+        raw,
+        128 * 1024 * 1024,
+      );
+    }
+    const packet = JSON.parse(
+      readPublisherFile(path.join(directory, "fased-release.json")),
+    );
+    if (
+      packet.productVersion !== version ||
+      packet.source !== source ||
+      String(packet.release?.runId) !== runId ||
+      packet.release.runAttempt !== "1"
+    )
+      throw Error("Original published source/run differs");
+    const c = JSON.parse(
+      readFileSync(path.join(workspace, "release/ubuntu.json"), "utf8"),
+    );
+    const seed = readFileSync(path.join(workspace, c.seedFile));
+    if (createHash("sha256").update(seed).digest("hex") !== c.seedSha256)
+      throw Error("Source public trust changed");
+    persistLocalReleaseFile(
+      journal,
+      path.join(directory, "first-install-seed.json"),
+      seed,
+    );
+    journal.state.complete = true;
+    journal.save();
+    return directory;
+  } finally {
     journal.close();
   }
 }

@@ -333,9 +333,23 @@ func (g *GitHubTransport) bindAsset(ctx context.Context, a GitHubAsset) error {
 }
 
 func (g *GitHubTransport) Asset(ctx context.Context, a GitHubAsset) ([]byte, error) {
+	return g.asset(ctx, a, false)
+}
+
+// PublishedAsset learns the CDN path only from GitHub HTTPS after immutable
+// release discovery. It still pins host/prefix, membership, length and digest.
+func (g *GitHubTransport) PublishedAsset(ctx context.Context, a GitHubAsset) ([]byte, error) {
+	return g.asset(ctx, a, true)
+}
+
+func (g *GitHubTransport) asset(ctx context.Context, a GitHubAsset, discovered bool) ([]byte, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if err := a.Validate(g.policy); err != nil {
+	check := a
+	if discovered && check.CDNPath == "" {
+		check.CDNPath = g.policy.CDNPathPrefix + "discovery"
+	}
+	if err := check.Validate(g.policy); err != nil {
 		return nil, err
 	}
 	g.assets++
@@ -361,6 +375,13 @@ func (g *GitHubTransport) Asset(ctx context.Context, a GitHubAsset) ([]byte, err
 			r.Body.Close()
 			if hop != 0 || strings.Contains(location, "#") {
 				return nil, errors.New("GitHub redirect refused")
+			}
+			if discovered && a.CDNPath == "" {
+				u, e := url.Parse(location)
+				if e != nil || !canonicalPath(u.Path) || !strings.HasPrefix(u.Path, g.policy.CDNPathPrefix) {
+					return nil, errors.New("GitHub discovered CDN path refused")
+				}
+				a.CDNPath = u.Path
 			}
 			next, e := parsed(location, g.policy.CDNHost, a.CDNPath, true)
 			if e != nil {

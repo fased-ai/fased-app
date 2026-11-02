@@ -26,13 +26,14 @@ type Policy struct {
 // It includes only identities actually proved by the standard GitHub statement
 // and verified certificate. Tree/tag-object/lock assertions belong to TUF.
 type Expected struct {
-	ArchiveName    string `json:"archiveName"`
-	ArchiveSHA256  string `json:"archiveSha256"`
-	SourceCommit   string `json:"sourceCommit"`
-	WorkflowCommit string `json:"workflowCommit"`
-	Tag            string `json:"tag"`
-	RunID          string `json:"runId"`
-	RunAttempt     string `json:"runAttempt"`
+	InstallerSHA256 string `json:"installerSha256,omitempty"`
+	ArchiveName     string `json:"archiveName"`
+	ArchiveSHA256   string `json:"archiveSha256"`
+	SourceCommit    string `json:"sourceCommit"`
+	WorkflowCommit  string `json:"workflowCommit"`
+	Tag             string `json:"tag"`
+	RunID           string `json:"runId"`
+	RunAttempt      string `json:"runAttempt"`
 }
 
 // Decision contains public verified identities only; it is not a replayable

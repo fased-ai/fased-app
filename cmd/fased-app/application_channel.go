@@ -25,7 +25,7 @@ func channelOptions(binding *applicationChannelBinding, directory string) (boots
 	}
 	// Production-only binding: fixture transports exist solely in test Go callers.
 	var seed bootstrap.Seed
-	if update.StrictJSON(binding.Seed, &seed) != nil || seed.Version != 3 || seed.DevelopmentOnly || seed.Channel != "stable" {
+	if update.StrictJSON(binding.Seed, &seed) != nil || (seed.Version != 3 && seed.Version != 4) || seed.DevelopmentOnly || seed.Channel != "stable" {
 		return bootstrap.Options{}, errors.New("production update channel required")
 	}
 	return bootstrap.Options{Seed: append([]byte(nil), binding.Seed...), SeedSHA256: binding.SHA256, Directory: directory}, nil

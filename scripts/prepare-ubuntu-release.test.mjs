@@ -18,6 +18,7 @@ const sha = (v) => createHash("sha256").update(v).digest("hex");
 const copy = (v) => structuredClone(v);
 const unconfigured = () => ({
   ...rawConfig,
+
   seedFile: null,
   seedSha256: null,
   custodyApprovalSha256: null,
@@ -54,12 +55,7 @@ const env = {
 };
 
 test("production trust inputs are explicit; configuration cannot redirect authority", () => {
-  assert.deepEqual(validateConfig(unconfigured()), [
-    "seedFile",
-    "seedSha256",
-    "custodyApprovalSha256",
-    "initialTrustApprovalSha256",
-  ]);
+  assert.deepEqual(validateConfig(unconfigured()), ["seedFile", "seedSha256"]);
   assert.deepEqual(validateConfig(complete()), []);
   assert.deepEqual(validateConfig(rawConfig), []);
   for (const patch of [
@@ -85,6 +81,17 @@ test("production public inputs bind the signing identity, seed and pre-build app
     new URL(`../${rawConfig.seedFile}`, import.meta.url),
   );
   const seed = JSON.parse(seedBytes);
+  if (rawConfig.releaseAuthority === "github-attestation-v1") {
+    assert.equal(sha(seedBytes), rawConfig.seedSha256);
+    assert.equal(seed.version, 4);
+    assert.equal(seed.signingProfile, "github-attestation-v1");
+    assert.equal(seed.root, "");
+    assert.equal(seed.provenance.repository, rawConfig.repository);
+    assert.equal(seed.provenance.ownerId, rawConfig.ownerId);
+    assert.equal(rawConfig.custodyApprovalSha256, null);
+    assert.equal(rawConfig.initialTrustApprovalSha256, null);
+    return;
+  }
   const approvalBytes = publicFile(
     `ubuntu-${rawConfig.version}-initial-trust.json`,
   );
@@ -494,7 +501,7 @@ test("staging requires actual verifier timestamp enums, exact policy and tag ide
   );
 });
 
-test("dormant staging has one pinned Ubuntu build and no release or activation authority", () => {
+test("tagged release has one pinned Ubuntu build and scoped password-free publication", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/release.yml", import.meta.url),
     "utf8",
@@ -502,7 +509,13 @@ test("dormant staging has one pinned Ubuntu build and no release or activation a
   assert.match(workflow, /push:\n\s+tags: \["v\*"\]/);
   assert.doesNotMatch(
     workflow,
-    /workflow_dispatch|pull_request|contents: write|secrets\.|gh release|git push|sudo|activate/,
+    /workflow_dispatch|pull_request|secrets\.|gh release|git push|sudo|activate/,
+  );
+  assert.match(workflow, /contents: write/);
+  assert.match(workflow, /node scripts\/release-ubuntu\.mjs publish/);
+  assert.doesNotMatch(
+    workflow,
+    /signer-sign|npm run release -- credentials|passphrase|keys\.enc/,
   );
   assert.equal((workflow.match(/runs-on:/g) ?? []).length, 1);
   assert.match(workflow, /runs-on: ubuntu-24\.04/);
@@ -513,7 +526,7 @@ test("dormant staging has one pinned Ubuntu build and no release or activation a
   assert.equal((workflow.match(/npm run build/g) ?? []).length, 1);
   assert.match(
     workflow,
-    /subject-path: \.evidence\/ubuntu-release\/fased-app-linux-amd64.tar.gz/,
+    /subject-path: \|\n\s+\.evidence\/ubuntu-release\/fased-app-linux-amd64.tar.gz\n\s+\.evidence\/ubuntu-release\/fased-install-linux-amd64/,
   );
   assert.match(workflow, /verify-provenance --policy-file/);
   assert.match(workflow, /create-storage-record: false/);
@@ -2646,167 +2659,6 @@ test("local signing syncs existing recovery directory parent after interrupted m
   }
 });
 
-// Desktop credentials and the joined release reuse the same disposable signing
-// fixtures and required CI entry, without a separate runner or real key access.
-import { desktopCredentials } from "./release-credentials.mjs";
-import { finalizationPlan, releaseSequence } from "./release-ubuntu.mjs";
-
-test("desktop signing validates existing encryption before remembering and never puts secrets in argv", async (t) => {
-  const f = localSigningFixture(t);
-  const out = setupLocalSigning({ ...f.input, passphrase: f.passphrase });
-  const seed = localSeed(out);
-  const config = {
-    storeFile: out.storeFile,
-    identitySHA256: out.identitySHA256,
-    keyClass: "disposable",
-    seed,
-    seedSHA256: sha(seed),
-    allowedRoles: ["targets"],
-  };
-  let stored, response;
-  const run = (exe, args, options) => {
-    assert.equal(exe, "secret-tool");
-    assert.ok(!JSON.stringify(args).includes(f.passphrase.toString()));
-    assert.equal(options.env, undefined);
-    if (args[0] === "store") stored = Buffer.from(options.input);
-    if (args[0] === "clear") {
-      stored.fill(0);
-      stored = undefined;
-    }
-    response =
-      args[0] === "lookup"
-        ? Buffer.concat([stored, Buffer.from("\n")])
-        : Buffer.alloc(0);
-    return { status: 0, stdout: response, stderr: Buffer.alloc(0) };
-  };
-  const credentials = desktopCredentials(config, { run });
-  const entered = Buffer.from(f.passphrase);
-  await credentials.remember(async () => entered);
-  assert.ok(entered.every((b) => b === 0));
-  const pass = credentials.getPassphrase();
-  assert.ok(pass.equals(f.passphrase));
-  assert.ok(response.every((b) => b === 0));
-  pass.fill(0);
-  credentials.forget();
-  assert.equal(stored, undefined);
-  let writes = 0;
-  const rejected = desktopCredentials(config, {
-    run: () => {
-      writes++;
-      return { status: 0 };
-    },
-  });
-  await assert.rejects(
-    rejected.remember(async () =>
-      Buffer.from("wrong disposable fixture password"),
-    ),
-  );
-  assert.equal(writes, 0);
-});
-
-test("desktop signing refuses locked keyring without terminal fallback or leaking output", () => {
-  const raw = Buffer.from("sensitive fixture output");
-  const keyring = desktopCredentials(
-    { identitySHA256: "a".repeat(64), keyClass: "production" },
-    {
-      run: () => ({
-        status: 1,
-        stdout: raw,
-        stderr: Buffer.from("sensitive error"),
-      }),
-    },
-  );
-  assert.throws(() => keyring.getPassphrase(), /locked or not set up/);
-  assert.ok(raw.every((b) => b === 0));
-});
-
-test("one release command stops at failure and reuses durable stages on resume", async () => {
-  const names = [
-    "preflight",
-    "stage",
-    "finalize",
-    "publish",
-    "metadata",
-    "readback",
-  ];
-  const journal = { state: {}, save() {} },
-    calls = [];
-  let fail = true;
-  const operations = Object.fromEntries(
-    names.map((name) => [
-      name,
-      async () => {
-        calls.push(name);
-        if (name === "finalize" && fail)
-          throw Error("fixture signing unavailable");
-        return { phase: name, verified: true };
-      },
-    ]),
-  );
-  await assert.rejects(releaseSequence(journal, operations));
-  assert.deepEqual(calls, names.slice(0, 3));
-  assert.equal(journal.state.complete, undefined);
-  fail = false;
-  calls.length = 0;
-  const result = await releaseSequence(journal, operations);
-  assert.deepEqual(calls, names);
-  assert.equal(journal.state.complete, true);
-  assert.equal(result.liveActivation, false);
-  assert.equal(result.automaticUpdates, false);
-});
-
-test("joined release derives monotonic floors and locators without temporary CDN tokens", () => {
-  const previous = { descriptor: { sequence: "7" }, files: {} };
-  for (const role of ["targets", "snapshot", "timestamp"])
-    previous.files[role === "timestamp" ? "timestamp.json" : `2.${role}.json`] =
-      Buffer.from(JSON.stringify({ signed: { version: 2 } })).toString(
-        "base64",
-      );
-  const packet = {
-    version: "0.1.4",
-    sourceCommit: "a".repeat(40),
-    objects: {
-      archive: {
-        file: "fased-app-linux-amd64.tar.gz",
-        size: 7,
-        sha256: "b".repeat(64),
-      },
-      manifestSha256: "c".repeat(64),
-    },
-  };
-  const stage = {
-    releaseId: "11",
-    assets: [
-      {
-        id: "17",
-        name: packet.objects.archive.file,
-        size: 7,
-        sha256: "b".repeat(64),
-      },
-    ],
-  };
-  const now = new Date("2026-11-02T12:00:00Z");
-  const plan = finalizationPlan(
-    packet,
-    stage,
-    previous,
-    "/github-production-release-asset/1426211857/fixture",
-    now,
-  );
-  assert.equal(plan.descriptor.sequence, "8");
-  assert.deepEqual(plan.versions, { targets: 3, snapshot: 3, timestamp: 3 });
-  assert.equal(plan.expires.timestamp, "2026-11-04T11:00:00.000Z");
-  assert.throws(() =>
-    finalizationPlan(
-      packet,
-      stage,
-      previous,
-      "https://evil.invalid/?token=secret",
-      now,
-    ),
-  );
-});
-
 test("publisher checks immutable boolean before publication instead of trusting HTTP success", async () => {
   const f = publisherFixture(),
     raw = Buffer.from(JSON.stringify(f.candidate));
@@ -2915,6 +2767,12 @@ test("release source requires exact reviewed main PR and refuses failed CI befor
   const calls = [];
   const run = (program, args) => {
     calls.push([program, ...args]);
+    if (
+      program === "gh" &&
+      args[0] === "api" &&
+      args[1] === "/repos/fased-ai/fased-app/immutable-releases"
+    )
+      return JSON.stringify({ enabled: true });
     if (program === "git" && args[0] === "remote")
       return "git@github-fased:fased-ai/fased-app.git";
     if (
@@ -2958,7 +2816,7 @@ test("release source resumes merged/tagged build and verifies its original ZIP b
   execFileSync("python3", [
     "-c",
     `import zipfile,json,sys
-names='fased-app-linux-amd64.tar.gz fased-app-linux-amd64.json fased-install-linux-amd64 fased-app-linux-amd64.provenance.sigstore.json verified-provenance.json expected-provenance.json provenance-policy.json first-install-seed.json install.sh build-inputs.json artifact-inventory.json signing-inputs.json'.split()
+names='fased-app-linux-amd64.tar.gz fased-app-linux-amd64.json fased-install-linux-amd64 fased-app-linux-amd64.provenance.sigstore.json verified-provenance.json expected-provenance.json provenance-policy.json first-install-seed.json install.sh build-inputs.json artifact-inventory.json signing-inputs.json fased-release.json'.split()
 with zipfile.ZipFile(sys.argv[1],'w') as z:
  for name in names:
   raw=json.dumps(dict(version='0.0.777',sourceCommit='a'*40,runId='123',runAttempt='1')) if name=='signing-inputs.json' else 'disposable fixture'
@@ -2970,6 +2828,12 @@ with zipfile.ZipFile(sys.argv[1],'w') as z:
     calls = [];
   const run = (program, args, options) => {
     calls.push([program, ...args]);
+    if (
+      program === "gh" &&
+      args[0] === "api" &&
+      args[1] === "/repos/fased-ai/fased-app/immutable-releases"
+    )
+      return JSON.stringify({ enabled: true });
     if (program === "git" && args[0] === "remote")
       return "git@github-fased:fased-ai/fased-app.git";
     if (
@@ -3005,8 +2869,27 @@ with zipfile.ZipFile(sys.argv[1],'w') as z:
         { databaseId: 123, headSha: source, status: "completed" },
       ]);
     if (args[0] === "run" && args[1] === "view")
-      return JSON.stringify({ conclusion: "success", attempt: 1 });
+      return JSON.stringify({
+        conclusion: "failure",
+        attempt: 1,
+        jobs: [
+          {
+            name: "ubuntu-amd64",
+            steps: [
+              {
+                name: "Verify original provenance offline and stage public signing inputs",
+                conclusion: "success",
+              },
+            ],
+          },
+        ],
+      });
     if (args[0] === "api" && args[1].endsWith("/zip")) return archive;
+    if (
+      args[0] === "api" &&
+      args[1] === "/repos/fased-ai/fased-app/immutable-releases"
+    )
+      return JSON.stringify({ enabled: true });
     if (args[0] === "api")
       return JSON.stringify({
         artifacts: [
@@ -3044,6 +2927,12 @@ test("release source refuses a different origin before GitHub or Git mutation", 
     prepareReleaseCandidate("0.1.4", "77", {
       run(program, args) {
         calls.push([program, ...args]);
+        if (
+          program === "gh" &&
+          args[0] === "api" &&
+          args[1] === "/repos/fased-ai/fased-app/immutable-releases"
+        )
+          return JSON.stringify({ enabled: true });
         if (program === "git" && args[0] === "remote")
           return "git@github.com:someone/another-project.git";
         return "";
@@ -3090,6 +2979,11 @@ test("release waits for dependency checks before the late registered required ag
         throw Error("controlled stop after verified checks");
     }
     if (args[0] === "auth") return "";
+    if (
+      args[0] === "api" &&
+      args[1] === "/repos/fased-ai/fased-app/immutable-releases"
+    )
+      return JSON.stringify({ enabled: true });
     if (args[0] === "api")
       return JSON.stringify({
         id: 1426211857,
@@ -3123,3 +3017,6 @@ test("release waits for dependency checks before the late registered required ag
   assert.equal(checks[0].includes("--required"), false);
   assert.equal(checks[1].includes("--required"), true);
 });
+
+// The active no-password authority is tested separately from retained profiles.
+import "./attested-release.test.mjs";

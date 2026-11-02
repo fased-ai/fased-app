@@ -12,7 +12,7 @@ func ValidateProductionSeed(raw []byte, pin string) (Seed, error) {
 	if err != nil {
 		return Seed{}, err
 	}
-	if seed.Version != 3 || seed.DevelopmentOnly {
+	if (seed.Version != 3 && seed.Version != 4) || seed.DevelopmentOnly {
 		return Seed{}, errors.New("production first-install seed required")
 	}
 	return seed, nil

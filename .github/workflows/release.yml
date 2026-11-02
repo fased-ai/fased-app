@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
-      contents: read
+      contents: write
       id-token: write
       attestations: write
     env:
@@ -54,7 +54,9 @@ jobs:
         id: provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: .evidence/ubuntu-release/fased-app-linux-amd64.tar.gz
+          subject-path: |
+            .evidence/ubuntu-release/fased-app-linux-amd64.tar.gz
+            .evidence/ubuntu-release/fased-install-linux-amd64
           push-to-registry: false
           create-storage-record: false
       - name: Verify original provenance offline and stage public signing inputs
@@ -64,7 +66,11 @@ jobs:
           cp "$FASED_PROVENANCE_BUNDLE" .evidence/ubuntu-release/fased-app-linux-amd64.provenance.sigstore.json
           go run ./cmd/fased-release-candidate verify-provenance --policy-file .evidence/ubuntu-release/provenance-policy.json --expected-file .evidence/ubuntu-release/expected-provenance.json --bundle-file .evidence/ubuntu-release/fased-app-linux-amd64.provenance.sigstore.json > .evidence/ubuntu-release/verified-provenance.json
           node scripts/prepare-ubuntu-release.mjs finish
-      - name: Retain candidate for independent review; do not publish a release
+      - name: Verify and publish the immutable release without local signing keys
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release-ubuntu.mjs publish .evidence/ubuntu-release
+      - name: Retain original verified release artifacts
         if: ${{ always() && steps.prepare.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -85,3 +91,4 @@ jobs:
             .evidence/ubuntu-release/build-inputs.json
             .evidence/ubuntu-release/artifact-inventory.json
             .evidence/ubuntu-release/signing-inputs.json
+            .evidence/ubuntu-release/fased-release.json

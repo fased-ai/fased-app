@@ -72,6 +72,9 @@ func (p Policy) Validate() error {
 	return nil
 }
 func (e Expected) Validate() error {
+	if e.InstallerSHA256 != "" && !canonicalHash(e.InstallerSHA256, 32) {
+		return errors.New("exact installer digest required")
+	}
 	if e.ArchiveName != "fased-app-linux-amd64.tar.gz" || !canonicalHash(e.ArchiveSHA256, 32) || !canonicalHash(e.SourceCommit, 20) || e.WorkflowCommit != e.SourceCommit || len(e.Tag) > 80 || !versionTag.MatchString(e.Tag) || !canonicalNumber(e.RunID) || !canonicalNumber(e.RunAttempt) {
 		return errors.New("exact Ubuntu artifact, local workflow and immutable release identities required")
 	}
@@ -130,9 +133,21 @@ type statement struct {
 
 func validateStatement(raw []byte, p Policy, e Expected) error {
 	var s statement
-	if update.StrictJSON(raw, &s) != nil || s.Type != "https://in-toto.io/Statement/v1" || s.PredicateType != "https://slsa.dev/provenance/v1" || len(s.Subject) != 1 || s.Subject[0].Name != e.ArchiveName || len(s.Subject[0].Digest) != 1 || s.Subject[0].Digest["sha256"] != e.ArchiveSHA256 {
-		return errors.New("exact in-toto artifact subject required")
+	expectedSubjects := map[string]string{e.ArchiveName: e.ArchiveSHA256}
+	if e.InstallerSHA256 != "" {
+		expectedSubjects["fased-install-linux-amd64"] = e.InstallerSHA256
 	}
+	if update.StrictJSON(raw, &s) != nil || s.Type != "https://in-toto.io/Statement/v1" || s.PredicateType != "https://slsa.dev/provenance/v1" || len(s.Subject) != len(expectedSubjects) {
+		return errors.New("exact release statement subjects required")
+	}
+	for _, subject := range s.Subject {
+		wanted, ok := expectedSubjects[subject.Name]
+		if !ok || len(subject.Digest) != 1 || subject.Digest["sha256"] != wanted {
+			return errors.New("release subject digest mismatch")
+		}
+		delete(expectedSubjects, subject.Name)
+	}
+
 	b := s.Predicate.BuildDefinition
 	w := b.ExternalParameters.Workflow
 	g := b.InternalParameters.GitHub
