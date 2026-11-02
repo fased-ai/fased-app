@@ -69,7 +69,9 @@ jobs:
       - name: Verify and publish the immutable release without local signing keys
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/release-ubuntu.mjs publish .evidence/ubuntu-release
+        run: |
+          chmod 600 .evidence/ubuntu-release/fased-app-linux-amd64.tar.gz .evidence/ubuntu-release/fased-install-linux-amd64 .evidence/ubuntu-release/fased-app-linux-amd64.provenance.sigstore.json .evidence/ubuntu-release/install.sh .evidence/ubuntu-release/fased-release.json .evidence/ubuntu-release/first-install-seed.json
+          node scripts/release-ubuntu.mjs publish .evidence/ubuntu-release
       - name: Retain original verified release artifacts
         if: ${{ always() && steps.prepare.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
