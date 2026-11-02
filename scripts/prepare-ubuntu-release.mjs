@@ -1,4 +1,4 @@
-// Explicit maintainer tooling. No key generation, implicit publish or activation.
+// Explicit maintainer tooling. Key setup is owner-gated; no implicit publish or activation.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -8,6 +8,8 @@ import {
   lstatSync,
   readdirSync,
   existsSync,
+  mkdtempSync,
+  rmSync,
 } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -26,6 +28,14 @@ import {
   refreshVerifier,
   onlineMetadataSigner,
 } from "./refresh-ubuntu-metadata.mjs";
+
+import {
+  setupLocalSigning,
+  recoverLocalSigning,
+  localSigningSession,
+  privateSigningPassphrase,
+} from "./local-release-signing.mjs";
+import { openPublisherJournal } from "./publisher-journal.mjs";
 
 export const evidence = ".evidence/ubuntu-release";
 const sha = (b) => createHash("sha256").update(b).digest("hex");
@@ -488,6 +498,7 @@ export async function runMaintainerRefresh(c, request) {
     "verifierFile",
     "verifierSHA256",
     "onlineKeyFiles",
+    "localSigner",
     "tokenFile",
     "resolutions",
   ];
@@ -499,14 +510,21 @@ export async function runMaintainerRefresh(c, request) {
     !hash.test(request.publicationSHA256) ||
     !commit.test(request.previousCommit) ||
     !hash.test(request.verifierSHA256) ||
-    !request.onlineKeyFiles ||
-    Object.keys(request.onlineKeyFiles).sort().join(",") !==
-      "snapshot,timestamp" ||
+    !!request.onlineKeyFiles === !!request.localSigner ||
+    (request.onlineKeyFiles &&
+      Object.keys(request.onlineKeyFiles).sort().join(",") !==
+        "snapshot,timestamp") ||
+    (request.localSigner &&
+      (Object.keys(request.localSigner).sort().join(",") !==
+        "identitySHA256,storeFile" ||
+        !hash.test(request.localSigner.identitySHA256))) ||
     [
       request.publicationFile,
       request.verifierFile,
       request.tokenFile,
-      ...Object.values(request.onlineKeyFiles),
+      ...(request.onlineKeyFiles
+        ? Object.values(request.onlineKeyFiles)
+        : [request.localSigner.storeFile]),
     ].some((v) => typeof v !== "string" || !path.isAbsolute(v))
   )
     throw Error("Explicit pinned refresh request required");
@@ -530,27 +548,38 @@ export async function runMaintainerRefresh(c, request) {
     `refresh-${c.version}-${request.publicationSHA256}`,
   );
   let api;
-  return runMetadataRefresh(
-    { ...request, directory, seed, seedSHA256: c.seedSha256, publication },
-    {
-      verify: refreshVerifier(
-        request.verifierFile,
-        request.verifierSHA256,
-        path.resolve(evidence),
-      ),
-      signOnline: onlineMetadataSigner(
+  const local = request.localSigner
+    ? localSigningSession({
+        ...request.localSigner,
+        keyClass: "production",
         seed,
-        c.seedSha256,
-        request.onlineKeyFiles,
-      ),
-      api: async (...args) => {
-        api ??= githubPublisher(
-          readPublisherFile(request.tokenFile, 4096).toString().trim(),
-        );
-        return api(...args);
+        seedSHA256: c.seedSha256,
+        allowedRoles: ["snapshot", "timestamp"],
+      })
+    : null;
+  try {
+    return await runMetadataRefresh(
+      { ...request, directory, seed, seedSHA256: c.seedSha256, publication },
+      {
+        verify: refreshVerifier(
+          request.verifierFile,
+          request.verifierSHA256,
+          path.resolve(evidence),
+        ),
+        signOnline: local
+          ? local.sign
+          : onlineMetadataSigner(seed, c.seedSha256, request.onlineKeyFiles),
+        api: async (...args) => {
+          api ??= githubPublisher(
+            readPublisherFile(request.tokenFile, 4096).toString().trim(),
+          );
+          return api(...args);
+        },
       },
-    },
-  );
+    );
+  } finally {
+    local?.close();
+  }
 }
 
 // Explicit maintainer entry only; missing production bindings refuse before
@@ -633,6 +662,237 @@ export async function runMaintainerPublisher(c, request) {
   );
 }
 
+// One owner entry for local setup/sign/recovery. Production is refused before
+// credential entry until the existing ownership approval is actually configured.
+export async function runMaintainerLocalSigning(
+  c,
+  operation,
+  request,
+  {
+    getPassphrase = privateSigningPassphrase,
+    generate,
+    afterFinalize = () => {},
+  } = {},
+) {
+  validateConfig(c);
+  if (
+    !["signer-setup", "signer-sign", "signer-recover"].includes(operation) ||
+    !request ||
+    request.version !== 1 ||
+    !["disposable", "production"].includes(request.keyClass) ||
+    !["start", "resume"].includes(request.mode)
+  )
+    throw Error("Explicit local signing operation required");
+  request = JSON.parse(JSON.stringify(request));
+  if (request.keyClass === "production") {
+    if (
+      !c.custodyApprovalSha256 ||
+      !request.ownerApprovalFile ||
+      sha(readPublisherFile(request.ownerApprovalFile, 65536)) !==
+        c.custodyApprovalSha256
+    )
+      throw Error(
+        "Production signing ownership approval missing; no keys admitted",
+      );
+  }
+  const common = ["version", "keyClass", "mode", "ownerApprovalFile"];
+  const specific =
+    operation === "signer-setup"
+      ? ["directory", "archiveDirectory"]
+      : operation === "signer-recover"
+        ? ["directory", "archiveFile", "archiveSHA256", "identitySHA256"]
+        : [
+            "directory",
+            "storeFile",
+            "identitySHA256",
+            "candidateFile",
+            "candidateSHA256",
+            "seedFile",
+            "seedSHA256",
+            "verifierFile",
+            "verifierSHA256",
+            "workDirectory",
+            "outputDirectory",
+          ];
+  if (
+    Object.keys(request).some((k) => ![...common, ...specific].includes(k)) ||
+    specific
+      .filter((k) => !k.endsWith("SHA256"))
+      .some(
+        (k) => typeof request[k] !== "string" || !path.isAbsolute(request[k]),
+      ) ||
+    specific
+      .filter((k) => k.endsWith("SHA256"))
+      .some((k) => !hash.test(request[k]))
+  )
+    throw Error("Pinned private local signing request required");
+  if (operation !== "signer-sign") {
+    const pass = await getPassphrase(
+      operation === "signer-setup"
+        ? "New release passphrase: "
+        : "Recovery passphrase: ",
+    );
+    try {
+      if (operation === "signer-setup") {
+        const again = await getPassphrase("Confirm release passphrase: ");
+        try {
+          if (!pass.equals(again)) throw Error("Release passphrases differ");
+        } finally {
+          again.fill(0);
+        }
+        return setupLocalSigning(
+          { ...request, passphrase: pass },
+          generate ? { generate } : {},
+        );
+      }
+      return recoverLocalSigning({ ...request, passphrase: pass });
+    } finally {
+      pass.fill(0);
+    }
+  }
+  const candidate = readPublisherFile(request.candidateFile, 65536),
+    seed = readPublisherFile(request.seedFile, 65536);
+  if (
+    sha(candidate) !== request.candidateSHA256 ||
+    sha(seed) !== request.seedSHA256 ||
+    sha(readPublisherFile(request.verifierFile, 128 * 1024 * 1024)) !==
+      request.verifierSHA256
+  )
+    throw Error("Local signing input changed");
+  const document = JSON.parse(candidate),
+    resolveCandidate = (p) =>
+      path.resolve(path.dirname(request.candidateFile), p);
+  if (
+    resolveCandidate(document.seedFile) !== request.seedFile ||
+    document.seedSha256 !== request.seedSHA256
+  )
+    throw Error("Candidate and signing seed differ");
+  const binding = sha(
+    JSON.stringify({
+      operation,
+      keyClass: request.keyClass,
+      candidate: request.candidateSHA256,
+      seed: request.seedSHA256,
+      identity: request.identitySHA256,
+      verifier: request.verifierSHA256,
+      work: request.workDirectory,
+      output: request.outputDirectory,
+    }),
+  );
+  const journal = openPublisherJournal(request.directory, binding, {
+    resume: request.mode === "resume",
+  });
+  const signer = localSigningSession(
+    {
+      storeFile: request.storeFile,
+      identitySHA256: request.identitySHA256,
+      keyClass: request.keyClass,
+      seed,
+      seedSHA256: request.seedSHA256,
+      allowedRoles: ["targets", "snapshot", "timestamp"],
+    },
+    { getPassphrase },
+  );
+  try {
+    const call = (command, role) => {
+      if (
+        sha(readPublisherFile(request.candidateFile, 65536)) !==
+          request.candidateSHA256 ||
+        sha(readPublisherFile(request.seedFile, 65536)) !==
+          request.seedSHA256 ||
+        sha(readPublisherFile(request.verifierFile, 128 * 1024 * 1024)) !==
+          request.verifierSHA256
+      )
+        throw Error("Signing input changed while unlocked");
+      const scratch = mkdtempSync(path.join(request.directory, ".sign-input-"));
+      try {
+        const approvalsFile = path.join(scratch, "approvals.json");
+        writeFileSync(
+          approvalsFile,
+          JSON.stringify(journal.state.approvals ?? {}) + "\n",
+          { mode: 0o600, flag: "wx" },
+        );
+        const args = [
+          command,
+          "--candidate-file",
+          request.candidateFile,
+          "--approvals-file",
+          approvalsFile,
+          "--work-dir",
+          request.workDirectory,
+        ];
+        if (role) args.push("--role", role);
+        else args.push("--output", request.outputDirectory);
+        return JSON.parse(
+          execFileSync(request.verifierFile, args, {
+            encoding: "utf8",
+            timeout: 30000,
+            maxBuffer: 2 * 1024 * 1024,
+            stdio: ["ignore", "pipe", "pipe"],
+          }),
+        );
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    };
+    if (journal.state.complete) {
+      const report = call("release-inspect");
+      const publication = readPublisherFile(
+        path.join(request.outputDirectory, "publication.json"),
+        1024 * 1024,
+      );
+      if (
+        sha(publication) !== journal.state.result.publicationSHA256 ||
+        JSON.stringify(report) !== JSON.stringify(journal.state.result.report)
+      )
+        throw Error("Completed local signing output changed");
+      return { ...journal.state.result, noOp: true };
+    }
+    journal.state.approvals ??= {};
+    for (const role of ["targets", "snapshot", "timestamp"]) {
+      const r = call("release-request", role);
+      if (
+        r.role !== role ||
+        r.seedSha256 !== request.seedSHA256 ||
+        (journal.state.planSHA256 && journal.state.planSHA256 !== r.planSha256)
+      )
+        throw Error("Release signing authority changed");
+      journal.state.planSHA256 = r.planSha256;
+      journal.save();
+      if (!journal.state.approvals[role]) {
+        journal.state.approvals[role] = await signer.sign(r);
+        journal.save();
+      }
+    }
+    const recovering = journal.state.finalizerStarted === true;
+    if (!recovering) {
+      journal.state.finalizerStarted = true;
+      journal.save();
+    }
+    const report = call(recovering ? "release-inspect" : "release-finalize");
+    afterFinalize();
+    const publication = readPublisherFile(
+      path.join(request.outputDirectory, "publication.json"),
+      1024 * 1024,
+    );
+    const result = {
+      version: 1,
+      report,
+      publicationSHA256: sha(publication),
+      identitySHA256: request.identitySHA256,
+      published: false,
+      activation: false,
+    };
+    journal.state.result = result;
+    journal.state.complete = true;
+    journal.save();
+    return { ...result, noOp: false };
+  } finally {
+    signer.close();
+    journal.close();
+  }
+}
+
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
@@ -659,6 +919,25 @@ if (
               published: false,
               activation: false,
             },
+            null,
+            2,
+          ),
+        );
+        break;
+      case "signer-setup":
+      case "signer-sign":
+      case "signer-recover":
+        console.log(
+          JSON.stringify(
+            await runMaintainerLocalSigning(
+              c,
+              process.argv[2],
+              JSON.parse(
+                readPublisherFile(
+                  path.resolve(evidence, "local-signing-request.json"),
+                ),
+              ),
+            ),
             null,
             2,
           ),
@@ -714,7 +993,7 @@ if (
         break;
       default:
         throw Error(
-          "plan, prepare, inventory, finish, publisher-inspect, publisher-refresh or explicit publisher request required",
+          "plan, prepare, inventory, finish, publisher-inspect, publisher-refresh, signer-setup, signer-sign, signer-recover or explicit publisher request required",
         );
     }
   } catch (e) {

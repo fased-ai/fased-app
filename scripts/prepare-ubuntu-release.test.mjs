@@ -1672,3 +1672,699 @@ test("refresh never recreates a missing child publication journal on resume", as
   assert.equal(f.remote.state.mutations.length, count);
   assert.equal(f.signed.length, 2);
 });
+
+import {
+  setupLocalSigning,
+  recoverLocalSigning,
+  unlockLocalSigning,
+} from "./local-release-signing.mjs";
+function localSigningFixture(t) {
+  const root = resolve(".evidence/local-release-signing/test-state");
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  const parent = mkdtempSync(join(root, "case-"));
+  chmodSync(parent, 0o700);
+  t.after(() => rmSync(parent, { recursive: true, force: true }));
+  return {
+    parent,
+    passphrase: Buffer.from("Disposable signing fixture phrase only"),
+    input: {
+      directory: join(parent, "working"),
+      archiveDirectory: join(parent, "recovery"),
+      mode: "start",
+      keyClass: "disposable",
+    },
+  };
+}
+function localSeed(setup) {
+  return Buffer.from(
+    JSON.stringify({
+      signingProfile: "single-owner-v1",
+      root: Buffer.from(JSON.stringify(setup.initialRoot)).toString("base64"),
+    }),
+  );
+}
+function localRequest(out, seed, role = "targets", plan = "a".repeat(64)) {
+  const payload = Buffer.from(
+    JSON.stringify({
+      _type: role,
+      version: 1,
+      expires: new Date(Date.now() + 86400000).toISOString(),
+    }),
+  );
+  return {
+    version: 1,
+    role,
+    seedSha256: sha(seed),
+    planSha256: plan,
+    keyIds: [out.identity.roles[role].keyid],
+    threshold: 1,
+    payload: payload.toString("base64"),
+    payloadSha256: sha(payload),
+  };
+}
+test("local signing encrypts four distinct keys, signs exact scopes and closes", (t) => {
+  const f = localSigningFixture(t),
+    out = setupLocalSigning({ ...f.input, passphrase: f.passphrase });
+  assert.equal(
+    new Set(Object.values(out.identity.roles).map((r) => r.keyid)).size,
+    4,
+  );
+  assert.equal(out.published, false);
+  assert.equal(out.activation, false);
+  const encrypted = readFileSync(out.storeFile, "utf8");
+  assert.ok(!encrypted.includes("PRIVATE KEY"));
+  assert.deepEqual(readFileSync(out.storeFile), readFileSync(out.archiveFile));
+  const seed = localSeed(out),
+    session = unlockLocalSigning({
+      storeFile: out.storeFile,
+      identitySHA256: out.identitySHA256,
+      keyClass: "disposable",
+      passphrase: f.passphrase,
+      seed,
+      seedSHA256: sha(seed),
+      allowedRoles: ["targets", "snapshot", "timestamp"],
+    });
+  for (const role of ["targets", "snapshot", "timestamp"]) {
+    const req = localRequest(out, seed, role),
+      a = session.sign(req);
+    const pub = out.identity.roles[role].key.keyval.public;
+    const key = createPublicKey({
+      key: {
+        kty: "OKP",
+        crv: "Ed25519",
+        x: Buffer.from(pub, "hex").toString("base64url"),
+      },
+      format: "jwk",
+    });
+    assert.ok(
+      verifySignature(
+        null,
+        Buffer.from(req.payload, "base64"),
+        key,
+        Buffer.from(a[0].sig, "hex"),
+      ),
+    );
+  }
+  assert.throws(() => session.sign(localRequest(out, seed, "root")), /scoped/);
+  assert.throws(
+    () => session.sign(localRequest(out, seed, "targets", "b".repeat(64))),
+    /plan changed/,
+  );
+  session.close();
+  assert.throws(() => session.sign(localRequest(out, seed)), /closed/);
+  assert.ok(
+    !readFileSync(join(f.input.directory, "operation.json"), "utf8").includes(
+      f.passphrase.toString(),
+    ),
+  );
+});
+test("local signing restores encrypted archives with pinned identity and harmless proof", (t) => {
+  const f = localSigningFixture(t),
+    out = setupLocalSigning({ ...f.input, passphrase: f.passphrase }),
+    restored = join(f.parent, "restored");
+  const r = recoverLocalSigning({
+    archiveFile: out.archiveFile,
+    archiveSHA256: out.archiveSHA256,
+    identitySHA256: out.identitySHA256,
+    directory: restored,
+    passphrase: f.passphrase,
+    keyClass: "disposable",
+    mode: "start",
+  });
+  assert.equal(r.keysVerified, true);
+  assert.deepEqual(readFileSync(r.storeFile), readFileSync(out.storeFile));
+  const seed = localSeed(out),
+    s = unlockLocalSigning({
+      ...r,
+      passphrase: f.passphrase,
+      seed,
+      seedSHA256: sha(seed),
+      allowedRoles: ["targets"],
+    });
+  assert.equal(
+    s.sign(localRequest(out, seed))[0].keyid,
+    out.identity.roles.targets.keyid,
+  );
+  s.close();
+});
+test("local signing rejects wrong password, pins, key class and root substitution", (t) => {
+  const f = localSigningFixture(t),
+    out = setupLocalSigning({ ...f.input, passphrase: f.passphrase }),
+    seed = localSeed(out);
+  const base = {
+    storeFile: out.storeFile,
+    identitySHA256: out.identitySHA256,
+    keyClass: "disposable",
+    passphrase: f.passphrase,
+    seed,
+    seedSHA256: sha(seed),
+    allowedRoles: ["targets"],
+  };
+  for (const patch of [
+    { passphrase: Buffer.from("Definitely the wrong fixture passphrase") },
+    { identitySHA256: "0".repeat(64) },
+    { keyClass: "production" },
+    { seedSHA256: "0".repeat(64) },
+    { allowedRoles: ["root"] },
+  ])
+    assert.throws(() => unlockLocalSigning({ ...base, ...patch }));
+  const wrong = JSON.parse(seed);
+  wrong.root = Buffer.from(
+    JSON.stringify({
+      ...out.initialRoot,
+      signed: {
+        ...out.initialRoot.signed,
+        roles: {
+          ...out.initialRoot.signed.roles,
+          targets: out.initialRoot.signed.roles.snapshot,
+        },
+      },
+    }),
+  ).toString("base64");
+  const b = Buffer.from(JSON.stringify(wrong));
+  assert.throws(
+    () => unlockLocalSigning({ ...base, seed: b, seedSHA256: sha(b) }),
+    /pinned root/,
+  );
+  const before = readFileSync(out.storeFile);
+  const e = JSON.parse(before);
+  e.tag = Buffer.alloc(16).toString("base64");
+  writeFileSync(out.storeFile, Buffer.from(JSON.stringify(e) + "\n"), {
+    mode: 0o600,
+  });
+  assert.throws(() => unlockLocalSigning(base));
+  writeFileSync(out.storeFile, before);
+});
+test("local signing interruption resumes original keys and completed setup is no-op", (t) => {
+  const f = localSigningFixture(t);
+  let once = true;
+  assert.throws(
+    () =>
+      setupLocalSigning(
+        { ...f.input, passphrase: f.passphrase },
+        {
+          afterArchive() {
+            if (once) {
+              once = false;
+              throw Error("fixture stop after archive");
+            }
+          },
+        },
+      ),
+    /fixture stop/,
+  );
+  assert.throws(
+    () => setupLocalSigning({ ...f.input, passphrase: f.passphrase }),
+    /explicit resume/,
+  );
+  const out = setupLocalSigning(
+    { ...f.input, mode: "resume", passphrase: f.passphrase },
+    {
+      generate() {
+        throw Error("must retain original keys");
+      },
+    },
+  );
+  const again = setupLocalSigning(
+    { ...f.input, mode: "resume", passphrase: f.passphrase },
+    {
+      generate() {
+        throw Error("must not generate again");
+      },
+    },
+  );
+  assert.equal(again.noOp, true);
+  assert.equal(out.identitySHA256, again.identitySHA256);
+  assert.equal(out.archiveSHA256, again.archiveSHA256);
+});
+test("local signing refuses overwrite, bad permissions and archive/path substitution", (t) => {
+  const f = localSigningFixture(t),
+    out = setupLocalSigning({ ...f.input, passphrase: f.passphrase });
+  const req = {
+    archiveFile: out.archiveFile,
+    archiveSHA256: out.archiveSHA256,
+    identitySHA256: out.identitySHA256,
+    directory: join(f.parent, "restored"),
+    passphrase: f.passphrase,
+    keyClass: "disposable",
+    mode: "start",
+  };
+  for (const patch of [
+    { archiveSHA256: "0".repeat(64) },
+    { identitySHA256: "0".repeat(64) },
+  ])
+    assert.throws(() => recoverLocalSigning({ ...req, ...patch }));
+  mkdirSync(req.directory, { mode: 0o700 });
+  writeFileSync(join(req.directory, "keys.enc"), "existing unique work", {
+    mode: 0o600,
+  });
+  assert.throws(() => recoverLocalSigning(req), /Existing signing file/);
+  assert.equal(
+    readFileSync(join(req.directory, "keys.enc"), "utf8"),
+    "existing unique work",
+  );
+  chmodSync(out.archiveFile, 0o644);
+  assert.throws(
+    () => recoverLocalSigning({ ...req, directory: join(f.parent, "another") }),
+    /Private regular/,
+  );
+  assert.throws(
+    () =>
+      setupLocalSigning({
+        ...f.input,
+        archiveDirectory: f.input.directory,
+        passphrase: f.passphrase,
+      }),
+    /Separate local/,
+  );
+});
+
+import { localSigningSession } from "./local-release-signing.mjs";
+import { runMaintainerLocalSigning } from "./prepare-ubuntu-release.mjs";
+test("local signing owner entry joins setup and recovery with private prompts only", async (t) => {
+  const f = localSigningFixture(t);
+  let prompts = 0;
+  const getPassphrase = async () => {
+    prompts++;
+    return Buffer.from(f.passphrase);
+  };
+  const out = await runMaintainerLocalSigning(
+    rawConfig,
+    "signer-setup",
+    { version: 1, ...f.input },
+    { getPassphrase },
+  );
+  assert.equal(prompts, 2);
+  const restored = await runMaintainerLocalSigning(
+    rawConfig,
+    "signer-recover",
+    {
+      version: 1,
+      keyClass: "disposable",
+      mode: "start",
+      directory: join(f.parent, "restored"),
+      archiveFile: out.archiveFile,
+      archiveSHA256: out.archiveSHA256,
+      identitySHA256: out.identitySHA256,
+    },
+    { getPassphrase },
+  );
+  assert.equal(restored.keysVerified, true);
+  assert.equal(prompts, 3);
+  const again = await runMaintainerLocalSigning(
+    rawConfig,
+    "signer-recover",
+    {
+      version: 1,
+      keyClass: "disposable",
+      mode: "resume",
+      directory: join(f.parent, "restored"),
+      archiveFile: out.archiveFile,
+      archiveSHA256: out.archiveSHA256,
+      identitySHA256: out.identitySHA256,
+    },
+    { getPassphrase },
+  );
+  assert.equal(again.noOp, true);
+});
+test("local signing production admission and plaintext password fields refuse before prompt", async () => {
+  const getPassphrase = () => {
+    throw Error("must not ask for private input");
+  };
+  await assert.rejects(
+    runMaintainerLocalSigning(
+      rawConfig,
+      "signer-setup",
+      { version: 1, keyClass: "production", mode: "start" },
+      { getPassphrase },
+    ),
+    /Production signing ownership approval missing/,
+  );
+  await assert.rejects(
+    runMaintainerLocalSigning(
+      rawConfig,
+      "signer-setup",
+      {
+        version: 1,
+        keyClass: "disposable",
+        mode: "start",
+        directory: "/not-read",
+        archiveDirectory: "/not-read-2",
+        passphrase: "forbidden-in-request",
+      },
+      { getPassphrase },
+    ),
+    /Pinned private/,
+  );
+});
+test("local signing lazy unlock prompts once, revokes on close and skips not-due refresh", async (t) => {
+  const f = localSigningFixture(t),
+    out = setupLocalSigning({ ...f.input, passphrase: f.passphrase }),
+    seed = localSeed(out);
+  let count = 0;
+  const signer = localSigningSession(
+    {
+      storeFile: out.storeFile,
+      identitySHA256: out.identitySHA256,
+      keyClass: "disposable",
+      seed,
+      seedSHA256: sha(seed),
+      allowedRoles: ["snapshot", "timestamp"],
+    },
+    {
+      getPassphrase: async () => {
+        count++;
+        return Buffer.from(f.passphrase);
+      },
+    },
+  );
+  assert.equal(count, 0);
+  await signer.sign(localRequest(out, seed, "snapshot"));
+  await signer.sign(localRequest(out, seed, "timestamp"));
+  assert.equal(count, 1);
+  signer.close();
+  await assert.rejects(
+    signer.sign(localRequest(out, seed, "timestamp")),
+    /closed/,
+  );
+  const inert = refreshFixture(t);
+  inert.plan.due = false;
+  const noUnlock = localSigningSession(
+    {
+      storeFile: join(f.parent, "does-not-exist"),
+      identitySHA256: out.identitySHA256,
+      keyClass: "disposable",
+      seed,
+      seedSHA256: sha(seed),
+      allowedRoles: ["snapshot", "timestamp"],
+    },
+    {
+      getPassphrase: () => {
+        throw Error("not-due must not unlock");
+      },
+    },
+  );
+  try {
+    assert.equal(
+      (
+        await runMetadataRefresh(inert.input, {
+          ...inert.deps,
+          signOnline: noUnlock.sign,
+          api: () => {
+            throw Error("not-due transport");
+          },
+        })
+      ).noOp,
+      true,
+    );
+  } finally {
+    noUnlock.close();
+  }
+});
+
+test("local signing freezes requests, serializes unlock and honors cancellation", async (t) => {
+  const f = localSigningFixture(t),
+    out = setupLocalSigning({ ...f.input, passphrase: f.passphrase }),
+    seed = localSeed(out);
+  let release,
+    count = 0;
+  const scope = {
+    storeFile: out.storeFile,
+    identitySHA256: out.identitySHA256,
+    keyClass: "disposable",
+    seed,
+    seedSHA256: sha(seed),
+    allowedRoles: ["snapshot", "timestamp"],
+  };
+  const signer = localSigningSession(scope, {
+    getPassphrase: () => {
+      count++;
+      return new Promise((resolve) => {
+        release = resolve;
+      });
+    },
+  });
+  const req = localRequest(out, seed, "snapshot"),
+    pending = signer.sign(req),
+    other = signer.sign(localRequest(out, seed, "timestamp"));
+  req.payload = "changed-after-await";
+  req.planSha256 = "b".repeat(64);
+  release(Buffer.from(f.passphrase));
+  await Promise.all([pending, other]);
+  assert.equal(count, 1);
+  signer.close();
+  const cancelled = localSigningSession(scope, {
+    getPassphrase: () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  });
+  const attempt = cancelled.sign(localRequest(out, seed, "timestamp"));
+  cancelled.close();
+  release(Buffer.from(f.passphrase));
+  await assert.rejects(attempt, /closed/);
+});
+
+test("local signing private terminal hides passphrases and restores modes on cancel", () => {
+  const module = new URL("./local-release-signing.mjs", import.meta.url).href;
+  const python = String.raw`import os,pty,select,signal,subprocess,sys,termios,time,json
+module=sys.argv[1]
+secret=b'Disposable terminal phrase only'
+results=[]
+for action in ['enter','ctrl-c','sigterm']:
+ pid,fd=pty.fork()
+ if pid==0:
+  code='import {privateSigningPassphrase} from '+json.dumps(module)+';try{const p=await privateSigningPassphrase();p.fill(0);console.log("fixture done");}catch{console.log("fixture cancelled");process.exitCode=1;}'
+  os.execvp('node',['node','--input-type=module','-e',code])
+ data=b'';end=time.monotonic()+10;sent=False;status=None
+ try:
+  while time.monotonic()<end:
+   ready,_,_=select.select([fd],[],[],0.1)
+   if ready:
+    try:
+     part=os.read(fd,8192)
+    except OSError:part=b''
+    data+=part
+    if not part:break
+   if not sent and b'Release passphrase:' in data:
+    sent=True
+    if action=='enter':os.write(fd,secret+b'\r')
+    elif action=='ctrl-c':os.write(fd,b'\x03')
+    else:os.kill(pid,signal.SIGTERM)
+   done,code=os.waitpid(pid,os.WNOHANG)
+   if done:status=code;break
+  if status is None:
+   done,code=os.waitpid(pid,os.WNOHANG)
+   if done:status=code
+  if status is None:raise AssertionError('private terminal child did not exit')
+  if not sent or secret in data:raise AssertionError('private terminal input was exposed')
+  if not termios.tcgetattr(fd)[3]&termios.ECHO:raise AssertionError('private terminal echo was not restored')
+  exitcode=os.waitstatus_to_exitcode(status)
+  if exitcode!=(0 if action=='enter' else 1):raise AssertionError('private terminal wrong outcome')
+  results.append(action)
+ finally:
+  if status is None:
+   try:os.kill(pid,signal.SIGKILL)
+   except ProcessLookupError:pass
+   try:os.waitpid(pid,0)
+   except ChildProcessError:pass
+  os.close(fd)
+print(json.dumps({'privateTerminal':results}))`;
+  const child = spawnSync("python3", ["-c", python, module], {
+    encoding: "utf8",
+    timeout: 40000,
+  });
+  assert.equal(child.status, 0, child.stderr);
+  assert.ok(child.stdout.includes("sigterm"));
+});
+
+test("local signing recovers interrupted ciphertext link without replacing identities", (t) => {
+  const f = localSigningFixture(t),
+    original = fsBuiltin.linkSync;
+  let fired = false;
+  fsBuiltin.linkSync = (...args) => {
+    const r = original(...args);
+    if (!fired && args[1].endsWith(".enc")) {
+      fired = true;
+      throw Error("lost ciphertext link acknowledgement");
+    }
+    return r;
+  };
+  syncBuiltinESMExports();
+  try {
+    assert.throws(
+      () => setupLocalSigning({ ...f.input, passphrase: f.passphrase }),
+      /lost ciphertext link/,
+    );
+  } finally {
+    fsBuiltin.linkSync = original;
+    syncBuiltinESMExports();
+  }
+  const out = setupLocalSigning(
+    { ...f.input, mode: "resume", passphrase: f.passphrase },
+    {
+      generate() {
+        throw Error("must not regenerate");
+      },
+    },
+  );
+  assert.equal(fired, true);
+  assert.deepEqual(readFileSync(out.storeFile), readFileSync(out.archiveFile));
+  assert.equal(
+    fsBuiltin
+      .readdirSync(f.input.archiveDirectory)
+      .some((n) => n.startsWith(".local-signing-")),
+    false,
+  );
+});
+test("local signing recovers a classified partial ciphertext temp file", (t) => {
+  const f = localSigningFixture(t),
+    original = fsBuiltin.writeFileSync;
+  let fired = false;
+  fsBuiltin.writeFileSync = (file, data, ...rest) => {
+    if (
+      !fired &&
+      typeof file === "number" &&
+      fsBuiltin
+        .readlinkSync("/proc/self/fd/" + file)
+        .includes("/.local-signing-")
+    ) {
+      fired = true;
+      original(file, Buffer.from(data).subarray(0, 10), ...rest);
+      throw Error("partial ciphertext write");
+    }
+    return original(file, data, ...rest);
+  };
+  syncBuiltinESMExports();
+  try {
+    assert.throws(
+      () => setupLocalSigning({ ...f.input, passphrase: f.passphrase }),
+      /partial ciphertext/,
+    );
+  } finally {
+    fsBuiltin.writeFileSync = original;
+    syncBuiltinESMExports();
+  }
+  const out = setupLocalSigning(
+    { ...f.input, mode: "resume", passphrase: f.passphrase },
+    {
+      generate() {
+        throw Error("must retain encrypted original");
+      },
+    },
+  );
+  assert.equal(fired, true);
+  assert.deepEqual(readFileSync(out.storeFile), readFileSync(out.archiveFile));
+});
+
+test("local signing re-syncs complete interrupted ciphertext before linking", (t) => {
+  const f = localSigningFixture(t),
+    original = fsBuiltin.fsyncSync;
+  let fired = false;
+  fsBuiltin.fsyncSync = (fd) => {
+    if (
+      !fired &&
+      fsBuiltin.readlinkSync("/proc/self/fd/" + fd).includes("/.local-signing-")
+    ) {
+      fired = true;
+      throw Error("complete ciphertext before fsync");
+    }
+    return original(fd);
+  };
+  syncBuiltinESMExports();
+  try {
+    assert.throws(
+      () => setupLocalSigning({ ...f.input, passphrase: f.passphrase }),
+      /before fsync/,
+    );
+  } finally {
+    fsBuiltin.fsyncSync = original;
+    syncBuiltinESMExports();
+  }
+  let fileSynced = false;
+  const link = fsBuiltin.linkSync;
+  fsBuiltin.fsyncSync = (fd) => {
+    if (
+      fsBuiltin.readlinkSync("/proc/self/fd/" + fd).includes("/.local-signing-")
+    )
+      fileSynced = true;
+    return original(fd);
+  };
+  fsBuiltin.linkSync = (...args) => {
+    assert.equal(
+      fileSynced,
+      true,
+      "ciphertext inode was not synced before publication",
+    );
+    return link(...args);
+  };
+  syncBuiltinESMExports();
+  try {
+    const out = setupLocalSigning(
+      { ...f.input, mode: "resume", passphrase: f.passphrase },
+      {
+        generate() {
+          throw Error("must retain keys");
+        },
+      },
+    );
+    assert.deepEqual(
+      readFileSync(out.storeFile),
+      readFileSync(out.archiveFile),
+    );
+  } finally {
+    fsBuiltin.fsyncSync = original;
+    fsBuiltin.linkSync = link;
+    syncBuiltinESMExports();
+  }
+});
+test("local signing syncs existing recovery directory parent after interrupted mkdir", (t) => {
+  const f = localSigningFixture(t),
+    original = fsBuiltin.fsyncSync;
+  let fired = false;
+  fsBuiltin.fsyncSync = (fd) => {
+    if (
+      !fired &&
+      fsBuiltin.readlinkSync("/proc/self/fd/" + fd) === f.parent &&
+      existsSync(f.input.archiveDirectory)
+    ) {
+      fired = true;
+      throw Error("recovery mkdir before parent sync");
+    }
+    return original(fd);
+  };
+  syncBuiltinESMExports();
+  try {
+    assert.throws(
+      () => setupLocalSigning({ ...f.input, passphrase: f.passphrase }),
+      /before parent sync/,
+    );
+  } finally {
+    fsBuiltin.fsyncSync = original;
+    syncBuiltinESMExports();
+  }
+  assert.ok(existsSync(f.input.archiveDirectory));
+  let parents = 0;
+  fsBuiltin.fsyncSync = (fd) => {
+    if (fsBuiltin.readlinkSync("/proc/self/fd/" + fd) === f.parent) parents++;
+    return original(fd);
+  };
+  syncBuiltinESMExports();
+  try {
+    setupLocalSigning(
+      { ...f.input, mode: "resume", passphrase: f.passphrase },
+      {
+        generate() {
+          throw Error("must retain keys");
+        },
+      },
+    );
+    assert.ok(
+      parents >= 2,
+      "both existing working and recovery directory names need parent sync",
+    );
+  } finally {
+    fsBuiltin.fsyncSync = original;
+    syncBuiltinESMExports();
+  }
+});

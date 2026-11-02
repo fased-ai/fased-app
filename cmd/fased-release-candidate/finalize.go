@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -88,7 +90,12 @@ func runFinalizer(args []string, flags *flag.FlagSet, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err = writeFinalized(*output, finalized); err != nil {
+	if args[0] == "release-inspect" {
+		err = inspectFinalized(*output, finalized)
+	} else {
+		err = writeFinalized(*output, finalized)
+	}
+	if err != nil {
 		return err
 	}
 	return json.NewEncoder(out).Encode(finalized.Report)
@@ -151,6 +158,85 @@ func writeFinalized(output string, release bootstrap.FinalizedRelease) error {
 	defer directory.Close()
 	if err = directory.Sync(); err != nil {
 		return fmt.Errorf("metadata output sync failed: %w", err)
+	}
+	return nil
+}
+
+// Read-only adoption/no-op of a complete output after lost acknowledgement.
+// The caller has already recomputed/verified it from the current pinned inputs.
+func inspectFinalized(output string, release bootstrap.FinalizedRelease) error {
+	info, err := os.Lstat(output)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0077 != 0 {
+		return errors.New("private existing output required")
+	}
+	root, err := os.OpenRoot(output)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	expected := map[string][]byte{}
+	for name, b := range release.Files {
+		expected[name] = b
+	}
+	b, err := json.Marshal(release.Report)
+	if err != nil {
+		return err
+	}
+	expected["finalization.json"] = append(b, '\n')
+	b, err = json.Marshal(release.Publication)
+	if err != nil {
+		return err
+	}
+	expected["publication.json"] = append(b, '\n')
+	seen := 0
+	err = fs.WalkDir(root.FS(), ".", func(name string, e fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if e.IsDir() {
+			return nil
+		}
+		want, ok := expected[name]
+		if !ok || e.Type()&os.ModeSymlink != 0 {
+			return errors.New("unexpected finalizer output; preserve and inspect")
+		}
+		before, err := root.Lstat(name)
+		if err != nil {
+			return err
+		}
+		if !before.Mode().IsRegular() || before.Mode().Perm()&0077 != 0 {
+			return errors.New("private regular finalizer file required")
+		}
+		f, err := root.Open(name)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		after, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		if !os.SameFile(before, after) {
+			return errors.New("finalizer file changed")
+		}
+		got, err := io.ReadAll(io.LimitReader(f, int64(len(want)+1)))
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(got, want) {
+			return errors.New("finalizer output differs from verified metadata")
+		}
+		seen++
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if seen != len(expected) {
+		return errors.New("incomplete finalizer output; preserve and inspect")
 	}
 	return nil
 }
