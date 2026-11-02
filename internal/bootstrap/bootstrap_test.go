@@ -39,6 +39,7 @@ type firstFixture struct {
 	snapshot                         *metadata.Metadata[metadata.SnapshotType]
 	timestamp                        *metadata.Metadata[metadata.TimestampType]
 	keys                             map[string][]signature.Signer
+	onlineFixtureKeys                map[string]ed25519.PrivateKey
 	files                            map[string][]byte
 	server                           *httptest.Server
 	archive                          []byte
@@ -75,7 +76,7 @@ func newFirstFixture(t *testing.T, profile ...string) *firstFixture {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("Ubuntu bootstrap targets Linux amd64")
 	}
-	f := &firstFixture{t: t, now: time.Now().UTC().Truncate(time.Second), keys: map[string][]signature.Signer{}, files: map[string][]byte{}, parent: t.TempDir(), rootSignatures: 2, targetSignatures: 2}
+	f := &firstFixture{t: t, now: time.Now().UTC().Truncate(time.Second), keys: map[string][]signature.Signer{}, onlineFixtureKeys: map[string]ed25519.PrivateKey{}, files: map[string][]byte{}, parent: t.TempDir(), rootSignatures: 2, targetSignatures: 2}
 	if err := os.Chmod(f.parent, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -107,6 +108,9 @@ func newFirstFixture(t *testing.T, profile ...string) *firstFixture {
 				t.Fatal(err)
 			}
 			f.keys[role] = append(f.keys[role], signer)
+			if role == "snapshot" || role == "timestamp" {
+				f.onlineFixtureKeys[role] = priv
+			}
 		}
 		if count == 3 {
 			f.root.Signed.Roles[role].Threshold = 2

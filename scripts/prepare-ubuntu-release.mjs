@@ -21,6 +21,12 @@ import {
   readPublisherFile,
 } from "./publisher-journal.mjs";
 
+import {
+  runMetadataRefresh,
+  refreshVerifier,
+  onlineMetadataSigner,
+} from "./refresh-ubuntu-metadata.mjs";
+
 export const evidence = ".evidence/ubuntu-release";
 const sha = (b) => createHash("sha256").update(b).digest("hex");
 const hash = /^[a-f0-9]{64}$/;
@@ -187,6 +193,7 @@ function prepare(c) {
     !/^VERSION_ID="24\.04"$/m.test(osRelease)
   )
     throw Error("Ubuntu24.04 build host required");
+  request = JSON.parse(JSON.stringify(request));
   const seedStat = lstatSync(c.seedFile);
   if (!seedStat.isFile() || seedStat.isSymbolicLink())
     throw Error("Public seed must be a regular tracked file");
@@ -453,7 +460,97 @@ export function inspectMaintainerPublisher(c) {
       publicationSha256: name.slice(prefix.length),
       ...inspectPublisherJournal(path.resolve(evidence, name)),
     });
+  const refreshPrefix = `refresh-${c.version}-`;
+  for (const name of (existsSync(evidence) ? readdirSync(evidence) : [])
+    .filter(
+      (n) =>
+        n.startsWith(refreshPrefix) && hash.test(n.slice(refreshPrefix.length)),
+    )
+    .sort())
+    rows.push({
+      action: "refresh",
+      baselineSha256: name.slice(refreshPrefix.length),
+      ...inspectPublisherJournal(path.resolve(evidence, name)),
+    });
   return rows;
+}
+
+// One explicit invocation only. No schedule, production default or activation.
+export async function runMaintainerRefresh(c, request) {
+  if (validateConfig(c).length)
+    throw Error("Production trust missing; refresh dispatch disabled");
+  const fields = [
+    "version",
+    "mode",
+    "publicationFile",
+    "publicationSHA256",
+    "previousCommit",
+    "verifierFile",
+    "verifierSHA256",
+    "onlineKeyFiles",
+    "tokenFile",
+    "resolutions",
+  ];
+  if (
+    !request ||
+    request.version !== 1 ||
+    Object.keys(request).some((k) => !fields.includes(k)) ||
+    !["start", "resume"].includes(request.mode) ||
+    !hash.test(request.publicationSHA256) ||
+    !commit.test(request.previousCommit) ||
+    !hash.test(request.verifierSHA256) ||
+    !request.onlineKeyFiles ||
+    Object.keys(request.onlineKeyFiles).sort().join(",") !==
+      "snapshot,timestamp" ||
+    [
+      request.publicationFile,
+      request.verifierFile,
+      request.tokenFile,
+      ...Object.values(request.onlineKeyFiles),
+    ].some((v) => typeof v !== "string" || !path.isAbsolute(v))
+  )
+    throw Error("Explicit pinned refresh request required");
+  const seedStat = lstatSync(c.seedFile);
+  if (!seedStat.isFile() || seedStat.isSymbolicLink() || seedStat.size > 65536)
+    throw Error("Bounded reviewed public seed file required");
+  const seed = readFileSync(c.seedFile);
+  if (
+    sha(seed) !== c.seedSha256 ||
+    JSON.parse(seed).signingProfile !== "single-owner-v1"
+  )
+    throw Error("Reviewed single-owner public seed required");
+  const publication = readPublisherFile(request.publicationFile, 1024 * 1024);
+  if (
+    sha(publication) !== request.publicationSHA256 ||
+    JSON.parse(publication).descriptor?.productVersion !== c.version
+  )
+    throw Error("Refresh/config identity differs");
+  const directory = path.resolve(
+    evidence,
+    `refresh-${c.version}-${request.publicationSHA256}`,
+  );
+  let api;
+  return runMetadataRefresh(
+    { ...request, directory, seed, seedSHA256: c.seedSha256, publication },
+    {
+      verify: refreshVerifier(
+        request.verifierFile,
+        request.verifierSHA256,
+        path.resolve(evidence),
+      ),
+      signOnline: onlineMetadataSigner(
+        seed,
+        c.seedSha256,
+        request.onlineKeyFiles,
+      ),
+      api: async (...args) => {
+        api ??= githubPublisher(
+          readPublisherFile(request.tokenFile, 4096).toString().trim(),
+        );
+        return api(...args);
+      },
+    },
+  );
 }
 
 // Explicit maintainer entry only; missing production bindings refuse before
@@ -570,6 +667,24 @@ if (
       case "publisher-inspect":
         console.log(JSON.stringify(inspectMaintainerPublisher(c), null, 2));
         break;
+      case "publisher-refresh":
+        if (missing.length)
+          throw Error("Production trust missing; refresh dispatch disabled");
+        console.log(
+          JSON.stringify(
+            await runMaintainerRefresh(
+              c,
+              JSON.parse(
+                readPublisherFile(
+                  path.resolve(evidence, "refresh-request.json"),
+                ),
+              ),
+            ),
+            null,
+            2,
+          ),
+        );
+        break;
       case "publisher":
         if (missing.length)
           throw Error("Production trust missing; publisher dispatch disabled");
@@ -599,7 +714,7 @@ if (
         break;
       default:
         throw Error(
-          "plan, prepare, inventory, finish, publisher-inspect or explicit publisher request required",
+          "plan, prepare, inventory, finish, publisher-inspect, publisher-refresh or explicit publisher request required",
         );
     }
   } catch (e) {
