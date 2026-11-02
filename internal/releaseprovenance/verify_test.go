@@ -166,7 +166,7 @@ func TestProductionProvenanceStatementBindings(t *testing.T) {
 	if err = protojson.Unmarshal(raw, &signed); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"subject", "digest", "extra-subject", "extra-digest", "predicate", "build-type", "repository", "ref", "workflow", "event", "repository-id", "owner-id", "runner", "builder", "invocation", "dependency", "commit", "extra-dependency", "duplicate", "alias", "unknown"} {
+	for _, name := range []string{"subject", "digest", "extra-subject", "extra-digest", "predicate", "build-type", "previous-build-type", "repository", "ref", "workflow", "event", "repository-id", "owner-id", "runner", "builder", "generic-builder", "other-workflow-builder", "invocation", "dependency", "commit", "extra-dependency", "duplicate", "alias", "unknown"} {
 		t.Run(name, func(t *testing.T) {
 			var s map[string]any
 			if err := json.Unmarshal(signed.GetDsseEnvelope().Payload, &s); err != nil {
@@ -191,6 +191,8 @@ func TestProductionProvenanceStatementBindings(t *testing.T) {
 				s["predicateType"] = "https://slsa.dev/provenance/v0.2"
 			case "build-type":
 				build["buildType"] = "https://attacker.invalid/DO-NOT-LEAK"
+			case "previous-build-type":
+				build["buildType"] = "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1"
 			case "repository":
 				workflow["repository"] = "https://github.com/attacker/repo"
 			case "ref":
@@ -207,6 +209,10 @@ func TestProductionProvenanceStatementBindings(t *testing.T) {
 				github["runner_environment"] = "self-hosted"
 			case "builder":
 				run["builder"].(map[string]any)["id"] = "https://github.com/actions/runner/self-hosted"
+			case "generic-builder":
+				run["builder"].(map[string]any)["id"] = "https://github.com/actions/runner/github-hosted"
+			case "other-workflow-builder":
+				run["builder"].(map[string]any)["id"] = "https://github.com/fased-ai/fased-app/.github/workflows/other.yml@refs/tags/" + e.Tag
 			case "invocation":
 				run["metadata"].(map[string]any)["invocationId"] = "https://github.com/fased-ai/fased-app/actions/runs/12/attempts/2"
 			case "dependency":
