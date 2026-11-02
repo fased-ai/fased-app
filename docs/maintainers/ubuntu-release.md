@@ -1,6 +1,6 @@
 # Ubuntu release preparation
 
-The proposed first version is **0.1.2**, targeting Ubuntu 24.04 amd64. This is a
+The proposed first version is **0.1.3**, targeting Ubuntu 24.04 amd64. This is a
 publisher procedure; customers do not manage release-signing keys.
 
 The staging workflow in `.github/workflows/release.yml` is dormant. It creates no
@@ -23,7 +23,7 @@ The first public row remains Ubuntu24.04/amd64.
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Owner               | The owner operating `fcode-ai`; one owner/workflow, four distinct internal role keys under `single-owner-v1`.                                                          |
 | Official installer  | `https://github.com/fased-ai/fased-app/releases/latest/download/install.sh` after publication.                                                                         |
-| Exact first version | `https://github.com/fased-ai/fased-app/releases/download/v0.1.2/install.sh` after publication.                                                                         |
+| Exact first version | `https://github.com/fased-ai/fased-app/releases/download/v0.1.3/install.sh` after publication.                                                                         |
 | Trust               | GitHub HTTPS for the first script; the rendered script pins verifier bytes/public seed. Installed Update verifies signed metadata, provenance, expiry and floors.      |
 | Key storage         | One encrypted local keystore and a versioned encrypted local recovery archive, outside Git and customer/application data. No cloud integration or additional hardware. |
 
@@ -278,6 +278,12 @@ Available public inputs are retained after preparation even if building or
 verification fails. Partial files or a missing verification decision never count
 as an accepted candidate.
 Do not rebuild approved bytes under a different run and reuse their provenance.
+Before authorizing a new candidate tag after a producer-contract failure, verify
+the correction and final preparation against the retained original public
+attestation and package. Keep the real-producer regression in the repository;
+synthetic fixtures alone must not establish the emitter contract. Reuse passing
+checks and cached tools. Create the new immutable tag only after the correction
+and version are delivered together.
 The proposed version is not a published version or an existing tag.
 
 ## Offline signing and finalization

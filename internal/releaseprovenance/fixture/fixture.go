@@ -150,9 +150,10 @@ func NewWithOptions(p releaseprovenance.Policy, e releaseprovenance.Expected, no
 	if err != nil {
 		return p, nil, err
 	}
+	// Match the pinned GitHub emitter independently of verifier constants.
 	statement := options.Statement
 	if len(statement) == 0 {
-		statement, err = json.Marshal(map[string]any{"_type": "https://in-toto.io/Statement/v1", "subject": []any{map[string]any{"name": e.ArchiveName, "digest": map[string]string{"sha256": e.ArchiveSHA256}}}, "predicateType": "https://slsa.dev/provenance/v1", "predicate": map[string]any{"buildDefinition": map[string]any{"buildType": releaseprovenance.BuildType, "externalParameters": map[string]any{"workflow": map[string]string{"ref": "refs/tags/" + e.Tag, "repository": repository, "path": p.Workflow}}, "internalParameters": map[string]any{"github": map[string]string{"event_name": "push", "repository_id": p.RepositoryID, "repository_owner_id": p.OwnerID}}, "resolvedDependencies": []any{map[string]any{"uri": "git+" + repository + "@refs/tags/" + e.Tag, "digest": map[string]string{"gitCommit": e.SourceCommit}}}}, "runDetails": map[string]any{"builder": map[string]string{"id": releaseprovenance.BuilderID}, "metadata": map[string]string{"invocationId": ext.RunInvocationURI}}}})
+		statement, err = json.Marshal(map[string]any{"_type": "https://in-toto.io/Statement/v1", "subject": []any{map[string]any{"name": e.ArchiveName, "digest": map[string]string{"sha256": e.ArchiveSHA256}}}, "predicateType": "https://slsa.dev/provenance/v1", "predicate": map[string]any{"buildDefinition": map[string]any{"buildType": "https://actions.github.io/buildtypes/workflow/v1", "externalParameters": map[string]any{"workflow": map[string]string{"ref": "refs/tags/" + e.Tag, "repository": repository, "path": p.Workflow}}, "internalParameters": map[string]any{"github": map[string]string{"event_name": "push", "repository_id": p.RepositoryID, "repository_owner_id": p.OwnerID}}, "resolvedDependencies": []any{map[string]any{"uri": "git+" + repository + "@refs/tags/" + e.Tag, "digest": map[string]string{"gitCommit": e.SourceCommit}}}}, "runDetails": map[string]any{"builder": map[string]string{"id": repository + "/" + p.Workflow + "@refs/tags/" + e.Tag}, "metadata": map[string]string{"invocationId": ext.RunInvocationURI}}}})
 		if err != nil {
 			return p, nil, err
 		}

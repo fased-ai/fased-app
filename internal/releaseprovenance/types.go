@@ -6,8 +6,7 @@ import "time"
 
 const PolicyVersion = 1
 const Issuer = "https://token.actions.githubusercontent.com"
-const BuildType = "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1"
-const BuilderID = "https://github.com/actions/runner/github-hosted"
+const BuildType = "https://actions.github.io/buildtypes/workflow/v1"
 const WorkflowPath = ".github/workflows/release.yml"
 const MaxBundleBytes = 64 << 10
 const MaxTrustedRootBytes = 32 << 10

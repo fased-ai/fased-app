@@ -1,0 +1,9 @@
+{
+  "archiveName": "fased-app-linux-amd64.tar.gz",
+  "archiveSha256": "174930dca8002ecfe0d49fca6d24389ba1652613e1ac2ab5839d103b0dc68d24",
+  "sourceCommit": "e96910fa492bf146fb6d8f58d2c17ce22e2fe149",
+  "workflowCommit": "e96910fa492bf146fb6d8f58d2c17ce22e2fe149",
+  "tag": "v0.1.2",
+  "runId": "41426694034",
+  "runAttempt": "1"
+}

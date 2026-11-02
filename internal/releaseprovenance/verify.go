@@ -137,7 +137,7 @@ func validateStatement(raw []byte, p Policy, e Expected) error {
 	w := b.ExternalParameters.Workflow
 	g := b.InternalParameters.GitHub
 	r := s.Predicate.RunDetails
-	if b.BuildType != BuildType || w.Ref != "refs/tags/"+e.Tag || w.Repository != "https://github.com/"+p.Repository || w.Path != p.Workflow || g.Event != "push" || g.Repository != p.RepositoryID || g.Owner != p.OwnerID || g.Runner != "" && g.Runner != "github-hosted" || r.Builder.ID != BuilderID || len(r.Builder.Version) != 0 || r.Metadata.InvocationID != expectedExtensions(p, e).RunInvocationURI || len(b.ResolvedDependencies) != 1 {
+	if b.BuildType != BuildType || w.Ref != "refs/tags/"+e.Tag || w.Repository != "https://github.com/"+p.Repository || w.Path != p.Workflow || g.Event != "push" || g.Repository != p.RepositoryID || g.Owner != p.OwnerID || g.Runner != "" && g.Runner != "github-hosted" || r.Builder.ID != expectedExtensions(p, e).BuildSignerURI || len(r.Builder.Version) != 0 || r.Metadata.InvocationID != expectedExtensions(p, e).RunInvocationURI || len(b.ResolvedDependencies) != 1 {
 		return errors.New("exact local GitHub release workflow provenance required")
 	}
 	dependency := b.ResolvedDependencies[0]
