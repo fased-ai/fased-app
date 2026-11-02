@@ -356,3 +356,119 @@ func TestReleaseRefreshLargePublication(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestLocalReleaseSigningCompiledJourney(t *testing.T) {
+	f, o, input := finalizerFixture(t, SingleOwnerSigningProfile)
+	input.Plan.Expires.Targets = f.now.Add(5 * 24 * time.Hour)
+	write := func(name string, b []byte) string {
+		t.Helper()
+		p := filepath.Join(f.parent, name)
+		if err := os.WriteFile(p, b, 0600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	privateFiles := map[string]string{}
+	for role, key := range f.allFixtureKeys {
+		der, err := x509.MarshalPKCS8PrivateKey(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		privateFiles[role] = write(role+"-disposable.pem", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+	}
+	seed := write("seed.json", input.Seed)
+	write("proof.json", input.Provenance)
+	candidate := write("candidate.json", jsonBytes(t, map[string]any{"version": 1, "seedFile": "seed.json", "seedSha256": input.SeedSHA256, "archiveFile": "candidate.tar.gz", "provenanceFile": "proof.json", "plan": input.Plan}))
+	binary := filepath.Join(f.parent, "verifier")
+	cmd := exec.CommandContext(t.Context(), "go", "build", "-buildvcs=false", "-o", binary, "./cmd/fased-release-candidate")
+	cmd.Dir = "../.."
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatal(string(b), err)
+	}
+	if err := os.Chmod(binary, 0700); err != nil {
+		t.Fatal(err)
+	}
+	bin, err := os.ReadFile(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := filepath.Abs("../../scripts/prepare-ubuntu-release.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := write("local-journey.json", jsonBytes(t, map[string]any{"parent": f.parent, "seedFile": seed, "seedSHA256": input.SeedSHA256, "candidateFile": candidate, "candidateSHA256": digest(jsonBytes(t, map[string]any{"version": 1, "seedFile": "seed.json", "seedSha256": input.SeedSHA256, "archiveFile": "candidate.tar.gz", "provenanceFile": "proof.json", "plan": input.Plan})), "verifierFile": binary, "verifierSHA256": digest(bin), "keys": privateFiles}))
+	output := filepath.Join(f.parent, "journey-result.json")
+	js := `import {readFileSync,writeFileSync,unlinkSync,readdirSync} from "node:fs";
+import {pathToFileURL} from "node:url";import path from "node:path";import {createPrivateKey,createHash} from "node:crypto";
+const entry=pathToFileURL(process.argv[1]),{runMaintainerLocalSigning}=await import(entry);
+const {localSigningSession}=await import(new URL("local-release-signing.mjs",entry));
+const {refreshVerifier}=await import(new URL("refresh-ubuntu-metadata.mjs",entry));
+const {publicationInput}=await import(new URL("publish-ubuntu-release.mjs",entry));
+const cfg=JSON.parse(readFileSync(new URL("../release/ubuntu.json",entry))),s=JSON.parse(readFileSync(process.argv[2]));
+const sha=b=>createHash("sha256").update(b).digest("hex");let prompts=0;
+const getPassphrase=async()=>{prompts++;return Buffer.from("Disposable joined local signing phrase");};
+const setup=await runMaintainerLocalSigning(cfg,"signer-setup",{version:1,keyClass:"disposable",mode:"start",directory:path.join(s.parent,"working"),archiveDirectory:path.join(s.parent,"backup")},{getPassphrase,generate:role=>createPrivateKey(readFileSync(s.keys[role]))});
+for(const f of Object.values(s.keys))unlinkSync(f);
+const req={version:1,keyClass:"disposable",mode:"start",directory:path.join(s.parent,"signing"),storeFile:setup.storeFile,identitySHA256:setup.identitySHA256,candidateFile:s.candidateFile,candidateSHA256:s.candidateSHA256,seedFile:s.seedFile,seedSHA256:s.seedSHA256,verifierFile:s.verifierFile,verifierSHA256:s.verifierSHA256,workDirectory:s.parent,outputDirectory:path.join(s.parent,"metadata")};
+let stopped=false;try{await runMaintainerLocalSigning(cfg,"signer-sign",req,{getPassphrase,afterFinalize(){stopped=true;throw Error("fixture lost finalizer acknowledgement");}});}catch(e){if(!e.message.includes("fixture lost finalizer"))throw e;}
+if(!stopped || prompts!==3)throw Error("signing did not unlock once");
+const result=await runMaintainerLocalSigning(cfg,"signer-sign",{...req,mode:"resume"},{getPassphrase:()=>{throw Error("must not re-sign on recovery");}});
+if(!result.report.metadataVerified || result.published || result.activation)throw Error("unverified signed output");
+const restored=await runMaintainerLocalSigning(cfg,"signer-recover",{version:1,keyClass:"disposable",mode:"start",directory:path.join(s.parent,"restored"),archiveFile:setup.archiveFile,archiveSHA256:setup.archiveSHA256,identitySHA256:setup.identitySHA256},{getPassphrase});
+if(!restored.keysVerified)throw Error("restore did not verify keys");
+unlinkSync(setup.storeFile);
+const noop=await runMaintainerLocalSigning(cfg,"signer-sign",{...req,mode:"resume",storeFile:restored.storeFile},{getPassphrase:()=>{throw Error("no-op must not unlock");}});if(!noop.noOp)throw Error("completed signing repeated");
+const seed=readFileSync(s.seedFile),publication=readFileSync(path.join(req.outputDirectory,"publication.json"));
+const verify=refreshVerifier(s.verifierFile,s.verifierSHA256,s.parent),input={seed,seedSHA256:s.seedSHA256,publication,publicationSHA256:sha(publication)},plan=await verify("plan",input);
+const signer=localSigningSession({storeFile:restored.storeFile,identitySHA256:setup.identitySHA256,keyClass:"disposable",seed,seedSHA256:s.seedSHA256,allowedRoles:["snapshot","timestamp"]},{getPassphrase});
+const approvals={};let final;try{for(const role of [...(plan.renewSnapshot?["snapshot"]:[]),"timestamp"]){approvals[role]=await signer.sign(await verify(role,{...input,plan,approvals}));}final=await verify("finalize",{...input,plan,approvals});}finally{signer.close();}
+if(prompts!==5)throw Error("unexpected repeated unlock");const raw=Buffer.from(JSON.stringify(final.publication));publicationInput(raw,{sha256:sha(raw),previousCommit:"1".repeat(40)});
+if(readdirSync(req.directory).some(n=>n.startsWith(".sign-input-")))throw Error("signing scratch leaked");
+writeFileSync(process.argv[3],JSON.stringify({initialRoot:setup.initialRoot,publication:final.publication,keysVerified:restored.keysVerified,prompts}),{mode:0o600,flag:"wx"});`
+	bridge := write("local-signing-bridge.mjs", []byte(strings.NewReplacer("process.argv[3]", "process.argv[4]", "process.argv[2]", "process.argv[3]", "process.argv[1]", "process.argv[2]").Replace(js)))
+	cmd = exec.CommandContext(t.Context(), "node", bridge, entry, spec, output)
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatal(string(b), err)
+	}
+	raw, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		InitialRoot  json.RawMessage    `json:"initialRoot"`
+		Publication  ReleasePublication `json:"publication"`
+		KeysVerified bool               `json:"keysVerified"`
+		Prompts      int                `json:"prompts"`
+	}
+	if err = json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	root, err := metadata.Root().FromBytes(out.InitialRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = root.VerifyDelegate("root", root); err != nil {
+		t.Fatal("Node initial Root/key IDs", err)
+	}
+	if !out.KeysVerified || out.Prompts != 5 {
+		t.Fatal("bad local journey result")
+	}
+	f.files = map[string][]byte{}
+	for n, b := range out.Publication.Files {
+		f.files["/"+n] = b
+	}
+	f.now = time.Now().UTC().Truncate(time.Second)
+	o.Directory = filepath.Join(f.parent, "after-local-recovery")
+	p, err := Prepare(t.Context(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	release, err := p.ApplicationRelease()
+	if err != nil || release.Sequence != f.descriptor.Sequence {
+		t.Fatal("recovered signer update admission", err)
+	}
+	if _, err = os.Stat(f.marker); !os.IsNotExist(err) {
+		t.Fatal("application fixture ran")
+	}
+}

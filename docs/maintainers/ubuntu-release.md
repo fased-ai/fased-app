@@ -8,40 +8,111 @@ GitHub Release, signed update metadata, deployment or update activation. Its
 current configuration intentionally lacks production trust. Do not create a tag
 or run a release build until the owner authorizes it.
 
-## Ubuntu 0.1.0 approval worksheet
+## Ubuntu0.1.0 local signing and recovery
 
-**Draft single-owner recommendation; no keys, trust binding or activation.**
-Version0.1.0 / Ubuntu24.04 amd64 is selected. Reference main `f78236f` is a
-baseline, not the selected release source. Repository `fased-ai/fased-app`
-(ID `1426211857`, owner `279582504`), workflow `.github/workflows/release.yml`
-and proposed protected metadata branch `release-metadata` retain their identity.
+The owner approved the GitHub installer URL and single-owner local signing plan.
+The engineering baseline is main `7a2ee5112aa7241e80df82e2e6c70577c605c632`;
+no release source/tag is selected and no production key or public trust is bound.
+The first public row remains Ubuntu24.04/amd64.
 
-### Single-owner signing recommendation
+| Input               | Recorded direction                                                                                                                                                     |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Owner               | The owner operating `fcode-ai`; one owner/workflow, four distinct internal role keys under `single-owner-v1`.                                                          |
+| Official installer  | `https://github.com/fased-ai/fased-app/releases/latest/download/install.sh` after publication.                                                                         |
+| Exact first version | `https://github.com/fased-ai/fased-app/releases/download/v0.1.0/install.sh` after publication.                                                                         |
+| Trust               | GitHub HTTPS for the first script; the rendered script pins verifier bytes/public seed. Installed Update verifies signed metadata, provenance, expiry and floors.      |
+| Key storage         | One encrypted local keystore and a versioned encrypted local recovery archive, outside Git and customer/application data. No cloud integration or additional hardware. |
 
-Use the [single-owner policy](../updates.md#single-owner-signing-policy--proposed-not-activated)
-as the sole proposed production policy: one owner, four distinct role keys,
-one required signature per role. Root/recovery stays offline; Targets/release
-is unlocked for approval; restricted Snapshot/Timestamp automation maintains
-freshness. No external custodians, customer key forms or signing vendor.
+These URLs are not live release downloads. Do not distribute the raw repository
+`install.sh` template. The delivered first script uses a fixed versioned verifier
+URL/hash; `latest` locates the initial script, not installed update authority.
+Customers keep the same one-command Local/Remote wizard and Install → Update;
+release keys and recovery files belong only to the publisher.
 
-Customers install from the official link and click Update. The public key is
-bundled for automatic verification; private software-signing keys remain with
-the publisher, separate from wallets. A release push alone cannot provide that
-approval to an installed verifier.
+### One owner workflow
 
-The proposed first installer uses conventional official-website HTTPS trust,
-with explicit acceptance of website/TLS compromise risk. Installed updates retain
-pinned signatures, provenance, expiry, rollback and preserving recovery checks.
-The verifier accepts explicit `single-owner-v1` in the pinned public seed; empty
-profile retains original eight-key/2-of-3 behavior. Controlled new-policy checks
-pass; no production seed is bound and historical fixtures keep their old scope.
+The existing maintainer entry provides:
+
+- `node scripts/prepare-ubuntu-release.mjs signer-setup`: confirm a privately
+  entered terminal passphrase, generate four separate Ed25519 roles, encrypt the
+  local store and retain an encrypted recovery archive plus public identity.
+- `node scripts/prepare-ubuntu-release.mjs signer-sign`: unlock once, request exact
+  role payloads from the pinned Go finalizer, sign only Targets/Snapshot/Timestamp
+  in that plan, and produce verified metadata. No publisher/network dispatch.
+- `node scripts/prepare-ubuntu-release.mjs signer-recover`: verify the encrypted
+  archive and independently retained public-identity digest, restore into a
+  separate private directory without overwriting existing files, and verify a
+  harmless signature from every restored role.
+
+The commands read the private reviewed
+`.evidence/ubuntu-release/local-signing-request.json`; the tooling/caller prepares
+operation paths/pins, not four manual key ceremonies. `version:1`, explicit
+`keyClass` (`disposable` or `production`) and `mode` (`start` or `resume`) are
+required. Setup adds `directory`/`archiveDirectory`; recover adds `directory`,
+`archiveFile`, `archiveSHA256` and `identitySHA256`. Signing adds `directory`,
+`storeFile`, `identitySHA256`, `candidateFile`/`candidateSHA256`,
+`seedFile`/`seedSHA256`, `verifierFile`/`verifierSHA256`, `workDirectory` and
+`outputDirectory`. Paths are explicit absolute locations with owned, stable
+parents. The tool creates private working/archive leaf directories; it never
+changes existing permissions to make unsafe locations pass.
+
+Passphrases are accepted only through the hidden terminal prompt, not request
+fields, environment variables, arguments, logs or operation state. They must be
+16–1024 UTF8 bytes. The encrypted format fixes scrypt N131072/r8/p1 and
+AES256-GCM, binding repository/profile/key class and public identity. Private
+PKCS8 keys exist only in the owner process during the operation; no plaintext PEM
+file is required by the new workflow. Buffer cleanup is best effort; Node/V8
+strings/KeyObjects do not provide a guaranteed memory-erasure contract. Use a
+short-lived trusted maintainer process, not an agent session/service.
+
+The existing production ownership gate remains closed: `production` operations
+need a private `ownerApprovalFile` matching configured
+`custodyApprovalSha256` before private input/key admission. Current configuration
+has null approval/trust fields; only disposable fixture setup was exercised.
+Nothing here authorizes real key creation or populates those fields.
+
+### Recovery and interrupted operations
+
+The existing private journal freezes the encrypted setup artifact before file
+publication. Registered temporary ciphertext, no-replace file linking, file and
+parent-directory synchronization preserve the same identities through resume.
+Changed bytes, permissions, identity, paths or an unknown operation refuse rather
+than overwrite work. Journal state contains encrypted key material, never a
+passphrase/plaintext key. Treat it as private and preserve it with the local
+keystore and recovery receipt.
+
+Signing journals retain public approvals and exact plan identity. A lost finalizer
+acknowledgement or completed no-op uses Go `release-inspect` to revalidate the
+full existing output against the current candidate/seed/approvals, without new
+signatures or replacement. Partial, tampered or unexpected output remains held.
+Neither key restoration nor inspection resets metadata floors, release/asset IDs,
+publisher journals, unknown outcomes or application state.
+
+Metadata refresh can use `localSigner: {storeFile, identitySHA256}` in its existing
+reviewed request instead of `onlineKeyFiles` (never both). It lazily unlocks once
+only if signing is due, accepts Snapshot/Timestamp requests only, and closes after
+the operation. Not-due checks do not read/unlock keys. This creates no scheduler,
+unattended unlock or automatic-install permission. Production refresh still needs
+all existing trust bindings and production-class identities.
+
+Two local directories can recover an accidentally deleted/corrupt working store;
+they cannot recover loss of this computer/disk or all copies/passphrases. GitHub
+administration/public keys cannot recreate lost private keys. Total loss needs a
+separately authorized trusted rebootstrap path; no transparent replacement or
+customer-data reset is provided. Signed key rotation and actual production
+backup/operator acceptance are separate from this local restore proof.
+
+Controlled evidence covers setup/sign/lost-ack/restore/refresh, hidden prompt and
+cancellation, identity/pin/permission refusal, and interrupted ciphertext/directory
+sync. It is not production-key, public-download or whole-product acceptance.
+No cloud/removable-storage decision is outstanding for the active local plan.
 
 ## Inputs required before building
 
-- Owner confirmation of the single-owner profile and conventional HTTPS initial
-  trust assumption; actual release-owner/account and official hostname.
-- Separately authorized key setup, protected offline recovery/release storage,
-  encrypted backup and restore evidence; public keys/fingerprints only for review.
+- Record the already approved single-owner local method, GitHub publishing
+  account/URLs and first-download trust assumption in the actual public approval inputs.
+- Separately authorized local key setup, encrypted working/recovery storage and
+  restore evidence; public keys/fingerprints only for review.
 - Actual approved `single-owner-v1` public seed and official HTTPS installer
   endpoint. Explicit-profile verification, finalization and publisher functions
   are implemented/controlled-verified; public acquisition is not accepted.

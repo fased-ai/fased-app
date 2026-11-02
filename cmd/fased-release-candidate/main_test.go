@@ -108,3 +108,61 @@ func TestFinalizedPublicationOutputIsExclusive(t *testing.T) {
 		t.Fatal("preserved publication changed")
 	}
 }
+
+func TestFinalizedOutputReadOnlyInspection(t *testing.T) {
+	root, err := filepath.Abs("../../.evidence/local-release-signing/test-state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", root)
+	dir := t.TempDir()
+	if err = os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(dir, "output")
+	release := bootstrap.FinalizedRelease{Files: map[string][]byte{"timestamp.json": []byte("public fixture")}, Publication: bootstrap.ReleasePublication{Version: 1, SigningProfile: bootstrap.SingleOwnerSigningProfile}}
+	if err = writeFinalized(output, release); err != nil {
+		t.Fatal(err)
+	}
+	if err = inspectFinalized(output, release); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(output, "timestamp.json")
+	if err = os.WriteFile(file, []byte("tampered unique output"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = inspectFinalized(output, release); err == nil {
+		t.Fatal("changed output accepted")
+	}
+	if b, _ := os.ReadFile(file); string(b) != "tampered unique output" {
+		t.Fatal("inspection mutated output")
+	}
+	if err = os.WriteFile(file, release.Files["timestamp.json"], 0600); err != nil {
+		t.Fatal(err)
+	}
+	extra := filepath.Join(output, "extra")
+	if err = os.WriteFile(extra, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = inspectFinalized(output, release); err == nil {
+		t.Fatal("unreviewed output accepted")
+	}
+	if err = os.Remove(extra); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	if err = inspectFinalized(output, release); err == nil {
+		t.Fatal("partial output accepted")
+	}
+	if err = os.WriteFile(file, release.Files["timestamp.json"], 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err = inspectFinalized(output, release); err == nil {
+		t.Fatal("public output permissions accepted")
+	}
+}

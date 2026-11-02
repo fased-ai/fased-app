@@ -37,7 +37,7 @@ func run(args []string, out io.Writer) error {
 	switch args[0] {
 	case "refresh-plan", "refresh-request", "refresh-finalize":
 		return runRefresh(args, flags, out)
-	case "release-request", "release-finalize":
+	case "release-request", "release-finalize", "release-inspect":
 		return runFinalizer(args, flags, out)
 	case "verify-seed":
 		path := flags.String("seed-file", "", "approved public production seed")

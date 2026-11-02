@@ -237,3 +237,6 @@ export function openPublisherJournal(dir, binding, { resume = false } = {}) {
     throw e;
   }
 }
+
+// Shared private-directory admission includes parent fsync on resumed creation.
+export { privateDirectory as ensurePublisherDirectory };
