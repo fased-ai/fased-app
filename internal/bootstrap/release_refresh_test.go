@@ -406,6 +406,8 @@ const {refreshVerifier}=await import(new URL("refresh-ubuntu-metadata.mjs",entry
 const {publicationInput}=await import(new URL("publish-ubuntu-release.mjs",entry));
 const cfg=JSON.parse(readFileSync(new URL("../release/ubuntu.json",entry))),s=JSON.parse(readFileSync(process.argv[2]));
 const sha=b=>createHash("sha256").update(b).digest("hex");let prompts=0;
+// Exercise timestamp canonicalization instead of depending on random milliseconds.
+const setupNow=Date.now();Date.now=()=>Math.floor(setupNow/1000)*1000+100;
 const getPassphrase=async()=>{prompts++;return Buffer.from("Disposable joined local signing phrase");};
 const setup=await runMaintainerLocalSigning(cfg,"signer-setup",{version:1,keyClass:"disposable",mode:"start",directory:path.join(s.parent,"working"),archiveDirectory:path.join(s.parent,"backup")},{getPassphrase,generate:role=>createPrivateKey(readFileSync(s.keys[role]))});
 for(const f of Object.values(s.keys))unlinkSync(f);

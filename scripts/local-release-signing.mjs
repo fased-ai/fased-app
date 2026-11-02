@@ -164,7 +164,10 @@ function rootFor(keys, identity, now) {
     _type: "root",
     spec_version: "1.0.31",
     version: 1,
-    expires: new Date(now + 364 * 86400000).toISOString(),
+    // Go's TUF reader canonicalizes time values; sign one shared seconds form.
+    expires: new Date(Math.floor(now / 1000) * 1000 + 364 * 86400000)
+      .toISOString()
+      .replace(/\.000Z$/, "Z"),
     consistent_snapshot: true,
     keys: {},
     roles: {},
