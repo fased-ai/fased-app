@@ -367,7 +367,7 @@ const report = {
     version: input.version,
     source: input.sourceCommit,
   },
-  identity: { size: archive.size, sha256: archive.sha256 },
+  identity: { bytes: archive.size, sha256: archive.sha256 },
   manifestIdentity: { sha256: "c".repeat(64) },
 };
 
@@ -376,6 +376,16 @@ test("actual package identities and provenance expectations cannot drift apart",
     candidateInventory(input, archive, installer, report).archive.sha256,
     archive.sha256,
   );
+  for (const identity of [
+    { bytes: archive.size + 1, sha256: archive.sha256 },
+    { size: archive.size, sha256: archive.sha256 },
+  ]) {
+    assert.throws(
+      () =>
+        candidateInventory(input, archive, installer, { ...report, identity }),
+      /Producer\/archive version or identity changed/,
+    );
+  }
   const expected = expectedProvenance(input, archive);
   assert.equal(expected.archiveSha256, archive.sha256);
   assert.equal(expected.sourceCommit, input.sourceCommit);

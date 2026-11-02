@@ -304,7 +304,7 @@ export function candidateInventory(input, archive, installer, report) {
     report.manifest.platform !== "linux" ||
     report.manifest.arch !== "amd64" ||
     report.identity?.sha256 !== archive.sha256 ||
-    report.identity?.size !== archive.size ||
+    report.identity?.bytes !== archive.size ||
     !hash.test(report.manifestIdentity?.sha256 ?? "")
   )
     throw Error("Producer/archive version or identity changed");
