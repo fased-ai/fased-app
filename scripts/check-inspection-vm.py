@@ -157,7 +157,10 @@ def check_vm_running():
  with (root/'qemu.stderr').open('rb') as stream:
   stream.seek(0,2);stream.seek(max(vm_stderr_start,stream.tell()-8192));detail=stream.read().decode(errors='replace')
  if a.staged_package_only:
-  save('staged-vm-failure.json',{'returncode':code,'stderr':detail})
+  try:
+   device=os.stat('/dev/kvm');device={'uid':device.st_uid,'gid':device.st_gid,'mode':oct(device.st_mode & 0o777),'inode':device.st_ino}
+  except OSError as error:device={'unavailable':True,'errno':error.errno}
+  save('staged-vm-failure.json',{'returncode':code,'stderr':detail,'kvmDevice':device,'process':{'uid':os.geteuid(),'gid':os.getegid(),'groups':os.getgroups()}})
  raise RuntimeError('QEMU exited ('+str(code)+'): '+detail)
 def ready(timeout=300):
  end=time.monotonic()+timeout
