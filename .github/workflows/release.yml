@@ -1,7 +1,11 @@
 name: Ubuntu release candidate
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      source:
+        description: Reviewed main commit to stage
+        required: true
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -9,16 +13,17 @@ concurrency:
   cancel-in-progress: false
 jobs:
   ubuntu-amd64:
-    if: github.repository == 'fased-ai/fased-app' && github.repository_id == '1426211857' && github.repository_owner_id == '279582504'
+    if: github.ref == 'refs/heads/main' && github.sha == inputs.source && github.repository == 'fased-ai/fased-app' && github.repository_id == '1426211857' && github.repository_owner_id == '279582504'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
-      contents: write
+      contents: read
       id-token: write
       attestations: write
     env:
       GOTOOLCHAIN: local
       GOFLAGS: -mod=readonly
+      FASED_RELEASE_SOURCE: ${{ inputs.source }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -39,7 +44,7 @@ jobs:
         run: |
           npm ci
           npm run build
-      - name: Build and package the tag-bound core and verifier once
+      - name: Build and package the reviewed core and verifier once
         env:
           FASED_RELEASE_VERSION: ${{ steps.prepare.outputs.version }}
           GOFLAGS: -mod=readonly -overlay=${{ steps.prepare.outputs.overlay }}
@@ -50,7 +55,7 @@ jobs:
           go run -ldflags "-X github.com/fased-ai/fased-app/internal/core.Version=$FASED_RELEASE_VERSION" ./cmd/fased-package --engine .evidence/bin/fased-app --source "$GITHUB_SHA" --out .evidence/ubuntu-release --ubuntu-release-format
           cp .evidence/bin/fased-install .evidence/ubuntu-release/fased-install-linux-amd64
           node scripts/prepare-ubuntu-release.mjs inventory
-      - name: Attest the actual archive from this tag-push run
+      - name: Attest the actual archive from this main-dispatch run
         id: provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -66,17 +71,13 @@ jobs:
           cp "$FASED_PROVENANCE_BUNDLE" .evidence/ubuntu-release/fased-app-linux-amd64.provenance.sigstore.json
           go run ./cmd/fased-release-candidate verify-provenance --policy-file .evidence/ubuntu-release/provenance-policy.json --expected-file .evidence/ubuntu-release/expected-provenance.json --bundle-file .evidence/ubuntu-release/fased-app-linux-amd64.provenance.sigstore.json > .evidence/ubuntu-release/verified-provenance.json
           node scripts/prepare-ubuntu-release.mjs finish
-      - name: Verify and publish the immutable release without local signing keys
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          chmod 600 .evidence/ubuntu-release/fased-app-linux-amd64.tar.gz .evidence/ubuntu-release/fased-install-linux-amd64 .evidence/ubuntu-release/fased-app-linux-amd64.provenance.sigstore.json .evidence/ubuntu-release/install.sh .evidence/ubuntu-release/fased-release.json .evidence/ubuntu-release/first-install-seed.json
-          node scripts/release-ubuntu.mjs publish .evidence/ubuntu-release
+      - name: Preserve verified staged artifact modes
+        run: chmod 600 .evidence/ubuntu-release/fased-app-linux-amd64.tar.gz .evidence/ubuntu-release/fased-install-linux-amd64 .evidence/ubuntu-release/fased-app-linux-amd64.provenance.sigstore.json .evidence/ubuntu-release/install.sh .evidence/ubuntu-release/fased-release.json .evidence/ubuntu-release/first-install-seed.json
       - name: Retain original verified release artifacts
         if: ${{ always() && steps.prepare.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ubuntu-amd64-release-candidate
+          name: ubuntu-amd64-release-candidate-${{ github.run_attempt }}
           include-hidden-files: true
           retention-days: 7
           if-no-files-found: error
@@ -94,3 +95,83 @@ jobs:
             .evidence/ubuntu-release/artifact-inventory.json
             .evidence/ubuntu-release/signing-inputs.json
             .evidence/ubuntu-release/fased-release.json
+      - name: Prepare the private current-reader compatibility fixture
+        id: compatibility
+        run: node scripts/prepare-ubuntu-release.mjs compatibility-prepare
+      - name: Package the private predecessor with the same reviewed source and UI
+        env:
+          FASED_RELEASE_VERSION: ${{ steps.compatibility.outputs.version }}
+          GOFLAGS: -mod=readonly -overlay=${{ steps.compatibility.outputs.overlay }}
+        run: |
+          node scripts/build-core.mjs --version="$FASED_RELEASE_VERSION"
+          node scripts/build-core.mjs --installer --version="$FASED_RELEASE_VERSION"
+          go run -ldflags "-X github.com/fased-ai/fased-app/internal/core.Version=$FASED_RELEASE_VERSION" ./cmd/fased-package --engine .evidence/bin/fased-app --source "$GITHUB_SHA" --out .evidence/ubuntu-release-compatibility --ubuntu-release-format
+          cp .evidence/bin/fased-install .evidence/ubuntu-release-compatibility/fased-install-linux-amd64
+          node scripts/prepare-ubuntu-release.mjs compatibility-inventory
+      - name: Attest compatibility bytes separately; never publish them
+        id: compatibility_provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            .evidence/ubuntu-release-compatibility/fased-app-linux-amd64.tar.gz
+            .evidence/ubuntu-release-compatibility/fased-install-linux-amd64
+          push-to-registry: false
+          create-storage-record: false
+      - name: Verify the compatibility fixture with its original attestation
+        env:
+          FASED_PROVENANCE_BUNDLE: ${{ steps.compatibility_provenance.outputs.bundle-path }}
+        run: |
+          cp "$FASED_PROVENANCE_BUNDLE" .evidence/ubuntu-release-compatibility/fased-app-linux-amd64.provenance.sigstore.json
+          go run ./cmd/fased-release-candidate verify-provenance --policy-file .evidence/ubuntu-release-compatibility/provenance-policy.json --expected-file .evidence/ubuntu-release-compatibility/expected-provenance.json --bundle-file .evidence/ubuntu-release-compatibility/fased-app-linux-amd64.provenance.sigstore.json > .evidence/ubuntu-release-compatibility/verified-provenance.json
+          node scripts/prepare-ubuntu-release.mjs compatibility-finish
+      - name: Retain the private compatibility fixture
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ubuntu-amd64-compatibility-predecessor-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: .evidence/ubuntu-release-compatibility/
+  installed-acceptance:
+    needs: ubuntu-amd64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ubuntu-amd64-release-candidate-${{ github.run_attempt }}
+          path: .evidence/ubuntu-release
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ubuntu-amd64-compatibility-predecessor-${{ github.run_attempt }}
+          path: .evidence/ubuntu-release-compatibility
+      - name: Prepare the existing disposable Ubuntu acceptance runner
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends qemu-system-x86 qemu-utils xorriso
+          sudo setfacl -m "u:$USER:rw" /dev/kvm
+          npm ci
+          npx playwright install --with-deps chromium
+          mkdir -p .evidence/ubuntu-release-legacy
+      - name: Acquire the immutable public predecessor for its separate bridge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v0.1.5 --repo fased-ai/fased-app --dir .evidence/ubuntu-release-legacy --pattern install.sh --pattern fased-release.json --pattern fased-app-linux-amd64.tar.gz --pattern fased-install-linux-amd64 --pattern fased-app-linux-amd64.provenance.sigstore.json
+      - name: Run the complete packaged Local and Remote journey
+        env:
+          FASED_DISPOSABLE_VM_ACCEPTANCE: "1"
+        run: python3 scripts/check-inspection-vm.py --staged-package-only --candidate .evidence/ubuntu-release --predecessor .evidence/ubuntu-release-compatibility --legacy-predecessor .evidence/ubuntu-release-legacy
+      - name: Retain only the installed acceptance result
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ubuntu-amd64-installed-acceptance-${{ github.run_attempt }}
+          if-no-files-found: error
+          path: .evidence/b01-staged-installed/vm/installed-acceptance.json

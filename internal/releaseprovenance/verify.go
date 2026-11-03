@@ -72,6 +72,9 @@ func (p Policy) Validate() error {
 	return nil
 }
 func (e Expected) Validate() error {
+	if e.BuildRef != "" && e.BuildRef != "refs/heads/main" {
+		return errors.New("protected main staging ref required")
+	}
 	if e.InstallerSHA256 != "" && !canonicalHash(e.InstallerSHA256, 32) {
 		return errors.New("exact installer digest required")
 	}
@@ -81,10 +84,18 @@ func (e Expected) Validate() error {
 	return nil
 }
 
+func buildIdentity(e Expected) (string, string) {
+	if e.BuildRef == "refs/heads/main" {
+		return e.BuildRef, "workflow_dispatch"
+	}
+	return "refs/tags/" + e.Tag, "push"
+}
+
 func expectedExtensions(p Policy, e Expected) certificate.Extensions {
+	ref, event := buildIdentity(e)
 	repository := "https://github.com/" + p.Repository
-	workflow := repository + "/" + p.Workflow + "@refs/tags/" + e.Tag
-	return certificate.Extensions{Issuer: Issuer, BuildSignerURI: workflow, BuildSignerDigest: e.WorkflowCommit, RunnerEnvironment: "github-hosted", SourceRepositoryURI: repository, SourceRepositoryDigest: e.SourceCommit, SourceRepositoryRef: "refs/tags/" + e.Tag, SourceRepositoryIdentifier: p.RepositoryID, SourceRepositoryOwnerURI: "https://github.com/fased-ai", SourceRepositoryOwnerIdentifier: p.OwnerID, BuildConfigURI: workflow, BuildConfigDigest: e.WorkflowCommit, BuildTrigger: "push", RunInvocationURI: repository + "/actions/runs/" + e.RunID + "/attempts/" + e.RunAttempt, SourceRepositoryVisibilityAtSigning: "public"}
+	workflow := repository + "/" + p.Workflow + "@" + ref
+	return certificate.Extensions{Issuer: Issuer, BuildSignerURI: workflow, BuildSignerDigest: e.WorkflowCommit, RunnerEnvironment: "github-hosted", SourceRepositoryURI: repository, SourceRepositoryDigest: e.SourceCommit, SourceRepositoryRef: ref, SourceRepositoryIdentifier: p.RepositoryID, SourceRepositoryOwnerURI: "https://github.com/fased-ai", SourceRepositoryOwnerIdentifier: p.OwnerID, BuildConfigURI: workflow, BuildConfigDigest: e.WorkflowCommit, BuildTrigger: event, RunInvocationURI: repository + "/actions/runs/" + e.RunID + "/attempts/" + e.RunAttempt, SourceRepositoryVisibilityAtSigning: "public"}
 }
 
 type statement struct {
@@ -148,15 +159,16 @@ func validateStatement(raw []byte, p Policy, e Expected) error {
 		delete(expectedSubjects, subject.Name)
 	}
 
+	ref, event := buildIdentity(e)
 	b := s.Predicate.BuildDefinition
 	w := b.ExternalParameters.Workflow
 	g := b.InternalParameters.GitHub
 	r := s.Predicate.RunDetails
-	if b.BuildType != BuildType || w.Ref != "refs/tags/"+e.Tag || w.Repository != "https://github.com/"+p.Repository || w.Path != p.Workflow || g.Event != "push" || g.Repository != p.RepositoryID || g.Owner != p.OwnerID || g.Runner != "" && g.Runner != "github-hosted" || r.Builder.ID != expectedExtensions(p, e).BuildSignerURI || len(r.Builder.Version) != 0 || r.Metadata.InvocationID != expectedExtensions(p, e).RunInvocationURI || len(b.ResolvedDependencies) != 1 {
+	if b.BuildType != BuildType || w.Ref != ref || w.Repository != "https://github.com/"+p.Repository || w.Path != p.Workflow || g.Event != event || g.Repository != p.RepositoryID || g.Owner != p.OwnerID || g.Runner != "" && g.Runner != "github-hosted" || r.Builder.ID != expectedExtensions(p, e).BuildSignerURI || len(r.Builder.Version) != 0 || r.Metadata.InvocationID != expectedExtensions(p, e).RunInvocationURI || len(b.ResolvedDependencies) != 1 {
 		return errors.New("exact local GitHub release workflow provenance required")
 	}
 	dependency := b.ResolvedDependencies[0]
-	if dependency.URI != "git+https://github.com/"+p.Repository+"@refs/tags/"+e.Tag || len(dependency.Digest) != 1 || dependency.Digest["gitCommit"] != e.SourceCommit {
+	if dependency.URI != "git+https://github.com/"+p.Repository+"@"+ref || len(dependency.Digest) != 1 || dependency.Digest["gitCommit"] != e.SourceCommit {
 		return errors.New("exact release source dependency required")
 	}
 	return nil

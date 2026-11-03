@@ -13,7 +13,7 @@ export type ApplicationUpdateView = {
   policyRevision: number;
   installedVersion: string;
   controllerAvailable: boolean;
-  activationEnabled: false;
+  activationEnabled: boolean;
   policy: UpdatePolicy;
   operation: {
     id: string;
@@ -49,13 +49,18 @@ export function readApplicationUpdates(value: unknown): ApplicationUpdateView {
     v.policyRevision < 0 ||
     typeof v.installedVersion !== "string" ||
     typeof v.controllerAvailable !== "boolean" ||
-    v.activationEnabled !== false ||
+    typeof v.activationEnabled !== "boolean" ||
     !v.operation ||
     !phases.includes(v.operation.phase) ||
     typeof v.operation.id !== "string" ||
     !v.policy ||
     typeof v.policy.notify !== "boolean" ||
     !["manual", "automatic", undefined].includes(v.policy.mode)
+  )
+    throw new Error("Update status unavailable. Refresh and try again.");
+  if (
+    v.activationEnabled &&
+    (!v.controllerAvailable || v.policy.mode !== "automatic")
   )
     throw new Error("Update status unavailable. Refresh and try again.");
   const r = v.operation.release;

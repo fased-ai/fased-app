@@ -26,6 +26,7 @@ type Policy struct {
 // It includes only identities actually proved by the standard GitHub statement
 // and verified certificate. Tree/tag-object/lock assertions belong to TUF.
 type Expected struct {
+	BuildRef        string `json:"buildRef,omitempty"`
 	InstallerSHA256 string `json:"installerSha256,omitempty"`
 	ArchiveName     string `json:"archiveName"`
 	ArchiveSHA256   string `json:"archiveSha256"`

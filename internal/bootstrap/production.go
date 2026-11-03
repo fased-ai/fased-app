@@ -25,6 +25,7 @@ var provenanceFile = "fased-app-linux-" + runtime.GOARCH + ".provenance.sigstore
 // authority. Tree/tag-object/lock hashes are TUF-approved assertions, not claims
 // invented by the standard GitHub Actions provenance format.
 type ProductionRelease struct {
+	BuildRef          string          `json:"buildRef,omitempty"`
 	InstallerSHA256   string          `json:"installerSha256,omitempty"`
 	SourceTree        string          `json:"sourceTree"`
 	TagObject         string          `json:"tagObject"`
@@ -57,12 +58,12 @@ func sourceHash(s string) bool {
 }
 
 func (d Descriptor) provenanceExpected() releaseprovenance.Expected {
-	return releaseprovenance.Expected{InstallerSHA256: d.Release.InstallerSHA256, ArchiveName: d.Archive.File, ArchiveSHA256: d.Archive.SHA256, SourceCommit: d.Source, WorkflowCommit: d.Release.WorkflowCommit, Tag: "v" + d.ProductVersion, RunID: d.Release.RunID, RunAttempt: d.Release.RunAttempt}
+	return releaseprovenance.Expected{BuildRef: d.Release.BuildRef, InstallerSHA256: d.Release.InstallerSHA256, ArchiveName: d.Archive.File, ArchiveSHA256: d.Archive.SHA256, SourceCommit: d.Source, WorkflowCommit: d.Release.WorkflowCommit, Tag: "v" + d.ProductVersion, RunID: d.Release.RunID, RunAttempt: d.Release.RunAttempt}
 }
 
 func validateProductionDescriptor(d Descriptor, target *metadata.TargetFiles) error {
 	p := d.Release.Provenance
-	if d.provenanceExpected().Validate() != nil || !sourceHash(d.Release.SourceTree) || !sourceHash(d.Release.TagObject) || !hashOK(d.Release.PackageLockSHA256) || !hashOK(d.Release.GoSumSHA256) || p.File != provenanceFile || target == nil || p.Size != target.Length || p.Size <= 0 || p.Size > releaseprovenance.MaxBundleBytes || p.SHA256 != hex.EncodeToString(target.Hashes["sha256"]) {
+	if d.Release.BuildRef != "" || d.provenanceExpected().Validate() != nil || !sourceHash(d.Release.SourceTree) || !sourceHash(d.Release.TagObject) || !hashOK(d.Release.PackageLockSHA256) || !hashOK(d.Release.GoSumSHA256) || p.File != provenanceFile || target == nil || p.Size != target.Length || p.Size <= 0 || p.Size > releaseprovenance.MaxBundleBytes || p.SHA256 != hex.EncodeToString(target.Hashes["sha256"]) {
 		return errors.New("production release/provenance identity differs from authenticated targets")
 	}
 	return nil

@@ -1,4 +1,4 @@
-// One protected source package -> one immutable tag -> one original CI artifact.
+// One protected source -> unpublished build/installed acceptance -> tag/promotion.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -10,6 +10,10 @@ import {
   readdirSync,
 } from "node:fs";
 import path from "node:path";
+import {
+  attestedInventory,
+  verifyInstalledAcceptance,
+} from "./release-acceptance.mjs";
 import { persistLocalReleaseFile } from "./local-release-signing.mjs";
 import {
   openPublisherJournal,
@@ -25,6 +29,85 @@ export function acceptedReleasePR(pr, head) {
     throw Error("Exact current-source PR to main required");
   return pr;
 }
+export async function stagedWorkflowRun({
+  source,
+  version,
+  workspace,
+  call,
+  progress,
+  delay,
+}) {
+  const directory = path.resolve(
+    workspace,
+    `.evidence/ubuntu-${version}-candidate/dispatch-${source}`,
+  );
+  const binding = createHash("sha256")
+    .update(JSON.stringify({ source, version }))
+    .digest("hex");
+  mkdirSync(path.dirname(directory), { recursive: true, mode: 0o700 });
+  ensurePublisherDirectory(path.dirname(directory));
+  const journal = openPublisherJournal(directory, binding, {
+    resume: existsSync(path.join(directory, "operation.json")),
+  });
+  try {
+    for (let poll = 0; poll < 12; poll++) {
+      const runs = JSON.parse(
+        call("gh", [
+          "run",
+          "list",
+          "--repo",
+          "fased-ai/fased-app",
+          "--workflow",
+          "release.yml",
+          "--branch",
+          "main",
+          "--event",
+          "workflow_dispatch",
+          "--json",
+          "databaseId,headSha,status,conclusion",
+        ]),
+      ).filter((run) => run.headSha === source);
+      if (runs.length > 1)
+        throw Error("Multiple staged runs require original-run inspection");
+      if (runs.length === 1) {
+        const id = String(runs[0].databaseId);
+        if (
+          !/^[1-9][0-9]*$/.test(id) ||
+          (journal.state.runId && journal.state.runId !== id)
+        )
+          throw Error("Recorded staged run changed");
+        journal.state.runId = id;
+        journal.save();
+        return runs[0];
+      }
+      if (journal.state.runId)
+        throw Error("Recorded staged run is no longer visible");
+      if (!journal.state.dispatchAttempted) {
+        journal.state.dispatchAttempted = { source, version };
+        journal.save();
+        progress("unpublished commit-bound candidate build");
+        call("gh", [
+          "workflow",
+          "run",
+          "release.yml",
+          "--repo",
+          "fased-ai/fased-app",
+          "--ref",
+          "main",
+          "-f",
+          `source=${source}`,
+        ]);
+      }
+      await delay(5000);
+    }
+    throw Error(
+      "Staged dispatch unresolved; reconcile the recorded attempt before another build",
+    );
+  } finally {
+    journal.close();
+  }
+}
+
 export async function prepareReleaseCandidate(
   version,
   number,
@@ -32,6 +115,8 @@ export async function prepareReleaseCandidate(
     run = execFileSync,
     progress = (s) => process.stdout.write(`Release: ${s}\n`),
     workspace = process.cwd(),
+    verifyAcceptance = verifyInstalledAcceptance,
+    config = JSON.parse(readFileSync("release/ubuntu.json", "utf8")),
     delay = (ms) => new Promise((r) => setTimeout(r, ms)),
   } = {},
 ) {
@@ -145,45 +230,81 @@ export async function prepareReleaseCandidate(
       `refs/tags/${tag}`,
       `refs/tags/${tag}^{}`,
     ]);
-  if (!remote.trim()) {
-    if (!call("git", ["tag", "--list", tag]).trim())
-      call("git", ["tag", "-a", tag, source, "-m", `Fased ${version}`]);
-    if (
-      call("git", ["cat-file", "-t", `refs/tags/${tag}`]).trim() !== "tag" ||
-      call("git", ["rev-parse", `${tag}^{commit}`]).trim() !== source
-    )
-      throw Error("Local tag identity differs");
-    progress("tag-bound candidate build");
-    call("git", ["push", "origin", `refs/tags/${tag}`]);
-  } else if (
+  if (
+    remote.trim() &&
     !remote
       .split("\n")
       .some((line) => line === `${source}\trefs/tags/${tag}^{}`)
   )
     throw Error("Existing tag differs; never move it");
-  let runs;
-  for (let attempt = 0; attempt < 12; attempt++) {
-    runs = JSON.parse(
-      call("gh", [
-        "run",
-        "list",
-        "--repo",
-        "fased-ai/fased-app",
-        "--workflow",
-        "release.yml",
-        "--branch",
-        tag,
-        "--event",
-        "push",
-        "--json",
-        "databaseId,headSha,status,conclusion",
-      ]),
-    );
-    if (runs.length) break;
-    await delay(5000);
+  // A completed immutable publication is recovered without dispatching a build.
+  if (remote.trim()) {
+    let published;
+    try {
+      published = JSON.parse(
+        call("gh", ["api", `/repos/fased-ai/fased-app/releases/tags/${tag}`]),
+      );
+    } catch (error) {
+      if (!String(error.stderr ?? error.message).includes("404")) throw error;
+    }
+    if (published?.draft === false && published?.immutable === true) {
+      const assets = published.assets?.filter(
+        (asset) => asset.name === "fased-release.json",
+      );
+      if (assets?.length !== 1 || !/^[1-9][0-9]*$/.test(String(assets[0].id)))
+        throw Error("Published release packet identity missing");
+      const raw = call(
+        "gh",
+        [
+          "api",
+          "-H",
+          "Accept: application/octet-stream",
+          `/repos/fased-ai/fased-app/releases/assets/${assets[0].id}`,
+        ],
+        { encoding: "buffer", maxBuffer: 128 * 1024 * 1024 },
+      );
+      if (
+        raw.length !== assets[0].size ||
+        `sha256:${createHash("sha256").update(raw).digest("hex")}` !==
+          assets[0].digest
+      )
+        throw Error("Published release packet changed");
+      const packet = JSON.parse(raw);
+      const runId = packet.release?.runId,
+        runAttempt = packet.release?.runAttempt;
+      if (
+        packet.source !== source ||
+        packet.productVersion !== version ||
+        !/^[1-9][0-9]*$/.test(runId) ||
+        !/^[1-9][0-9]*$/.test(runAttempt)
+      )
+        throw Error("Published source/run identity differs");
+      const root = path.resolve(
+        workspace,
+        `.evidence/ubuntu-${version}-candidate/run-${runId}-attempt-${runAttempt}`,
+      );
+      mkdirSync(root, { recursive: true, mode: 0o700 });
+      ensurePublisherDirectory(root);
+      return recoverPublicCandidate({
+        version,
+        source,
+        runId,
+        runAttempt,
+        root,
+        workspace,
+        call,
+      });
+    }
   }
-  if (runs?.length !== 1 || runs[0].headSha !== source)
-    throw Error("One exact tag-bound build required; do not rerun");
+  const stagedRun = await stagedWorkflowRun({
+    source,
+    version,
+    workspace,
+    call,
+    progress,
+    delay,
+  });
+  const runs = [stagedRun];
   const id = String(runs[0].databaseId);
   if (runs[0].status !== "completed") {
     try {
@@ -220,7 +341,8 @@ export async function prepareReleaseCandidate(
     !["success", "failure", "cancelled", "timed_out"].includes(
       outcome.conclusion,
     ) ||
-    outcome.attempt !== 1
+    !Number.isSafeInteger(outcome.attempt) ||
+    outcome.attempt < 1
   )
     throw Error("Original candidate build did not pass");
   if (outcome.conclusion !== "success") {
@@ -244,9 +366,14 @@ export async function prepareReleaseCandidate(
       `/repos/fased-ai/fased-app/actions/runs/${id}/artifacts`,
     ]),
   ).artifacts.filter(
-    (a) => a.name === "ubuntu-amd64-release-candidate" && !a.expired,
+    (a) =>
+      a.name === `ubuntu-amd64-release-candidate-${outcome.attempt}` &&
+      !a.expired,
   );
-  const root = path.resolve(workspace, `.evidence/ubuntu-${version}-candidate`);
+  const root = path.resolve(
+    workspace,
+    `.evidence/ubuntu-${version}-candidate/run-${id}-attempt-${outcome.attempt}`,
+  );
   mkdirSync(root, { recursive: true, mode: 0o700 });
   ensurePublisherDirectory(root);
   if (entries.length === 0)
@@ -254,6 +381,7 @@ export async function prepareReleaseCandidate(
       version,
       source,
       runId: id,
+      runAttempt: String(outcome.attempt),
       root,
       workspace,
       call,
@@ -330,9 +458,33 @@ with zipfile.ZipFile(sys.argv[1]) as z:
       packet.version !== version ||
       packet.sourceCommit !== source ||
       String(packet.runId) !== id ||
-      packet.runAttempt !== "1"
+      packet.runAttempt !== String(outcome.attempt)
     )
       throw Error("Candidate differs from actual original build");
+    const releasePacket = JSON.parse(
+      readFileSync(path.join(directory, "fased-release.json"), "utf8"),
+    );
+    const inventory = attestedInventory(
+      config,
+      releasePacket,
+      readFileSync(path.join(directory, "fased-release.json")),
+    );
+    const api = async (method, url) => {
+      if (method !== "GET") throw Error("Acceptance verification is read-only");
+      return JSON.parse(call("gh", ["api", url]));
+    };
+    await verifyAcceptance(releasePacket, inventory, api);
+    if (!remote.trim()) {
+      if (!call("git", ["tag", "--list", tag]).trim())
+        call("git", ["tag", "-a", tag, source, "-m", `Fased ${version}`]);
+      if (
+        call("git", ["cat-file", "-t", `refs/tags/${tag}`]).trim() !== "tag" ||
+        call("git", ["rev-parse", `${tag}^{commit}`]).trim() !== source
+      )
+        throw Error("Local tag identity differs");
+      progress("tag accepted source without rebuilding");
+      call("git", ["push", "origin", `refs/tags/${tag}`]);
+    }
     return directory;
   } finally {
     if (scratch) rmSync(scratch, { recursive: true });
@@ -347,6 +499,7 @@ export function recoverPublicCandidate({
   version,
   source,
   runId,
+  runAttempt = "1",
   root,
   workspace,
   call,
@@ -426,7 +579,7 @@ export function recoverPublicCandidate({
       packet.productVersion !== version ||
       packet.source !== source ||
       String(packet.release?.runId) !== runId ||
-      packet.release.runAttempt !== "1"
+      packet.release.runAttempt !== runAttempt
     )
       throw Error("Original published source/run differs");
     const c = JSON.parse(

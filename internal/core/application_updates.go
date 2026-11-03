@@ -198,7 +198,8 @@ func (s *Store) ApplicationUpdates(ctx context.Context) (ApplicationUpdateView, 
 	if setup.Settings.Updates != nil {
 		p = setup.Settings.Updates.Policy
 	}
-	return ApplicationUpdateView{InstanceID: s.instanceID, Schema: StateSchema, Version: 1, Revision: r, InstalledVersion: Version, ControllerAvailable: s.appUpdates.configured.Load(), Operation: o, Policy: p, PolicyRevision: setup.Revision, Notice: applicationUpdateNotice(o, p)}, nil
+	configured := s.appUpdates.configured.Load()
+	return ApplicationUpdateView{InstanceID: s.instanceID, Schema: StateSchema, Version: 1, Revision: r, InstalledVersion: Version, ControllerAvailable: configured, ActivationEnabled: configured && p.Mode == "automatic", Operation: o, Policy: p, PolicyRevision: setup.Revision, Notice: applicationUpdateNotice(o, p)}, nil
 }
 func (s *Store) CommandApplicationUpdate(ctx context.Context, c ApplicationUpdateCommand) (ApplicationUpdateView, error) {
 	s.appUpdates.mu.Lock()

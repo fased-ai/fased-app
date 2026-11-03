@@ -4,12 +4,21 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   bindingOverlay,
+  compatibilityConfig,
   candidateInventory,
   expectedProvenance,
   releaseContext,
   validateConfig,
   verifiedCandidate,
 } from "./prepare-ubuntu-release.mjs";
+
+test("compatibility reader is explicitly private and cannot replace the target config", () => {
+  const original = { ...complete(), version: "0.1.6" };
+  const snapshot = JSON.stringify(original);
+  assert.equal(compatibilityConfig(original).version, "0.1.4");
+  assert.equal(JSON.stringify(original), snapshot);
+  assert.throws(() => compatibilityConfig({ ...original, version: "0.1.4" }));
+});
 
 const rawConfig = JSON.parse(
   readFileSync(new URL("../release/ubuntu.json", import.meta.url)),
@@ -501,18 +510,25 @@ test("staging requires actual verifier timestamp enums, exact policy and tag ide
   );
 });
 
-test("tagged release has one pinned Ubuntu build and scoped password-free publication", () => {
+test("staged release has one pinned unpublished Ubuntu build", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/release.yml", import.meta.url),
     "utf8",
   );
-  assert.match(workflow, /push:\n\s+tags: \["v\*"\]/);
+  assert.match(workflow, /workflow_dispatch:/);
   assert.doesNotMatch(
     workflow,
-    /workflow_dispatch|pull_request|secrets\.|gh release|git push|sudo|activate/,
+    /push:\n|pull_request|secrets\.|gh release (create|upload|edit|delete)|git push|activate/,
   );
-  assert.match(workflow, /contents: write/);
-  assert.match(workflow, /node scripts\/release-ubuntu\.mjs publish/);
+  assert.match(workflow, /installed-acceptance:\n/);
+  assert.match(workflow, /--staged-package-only/);
+  assert.match(workflow, /compatibility-prepare/);
+  assert.doesNotMatch(
+    workflow,
+    /sudo .*?(node|python3|fased-install|fased-app)/,
+  );
+  assert.doesNotMatch(workflow, /contents: write/);
+  assert.doesNotMatch(workflow, /node scripts\/release-ubuntu\.mjs publish/);
   assert.match(
     workflow,
     /chmod 600 .*fased-app-linux-amd64\.tar\.gz.*fased-install-linux-amd64.*provenance\.sigstore\.json.*install\.sh.*fased-release\.json.*first-install-seed\.json/,
@@ -521,7 +537,7 @@ test("tagged release has one pinned Ubuntu build and scoped password-free public
     workflow,
     /signer-sign|npm run release -- credentials|passphrase|keys\.enc/,
   );
-  assert.equal((workflow.match(/runs-on:/g) ?? []).length, 1);
+  assert.equal((workflow.match(/runs-on:/g) ?? []).length, 2);
   assert.match(workflow, /runs-on: ubuntu-24\.04/);
   for (const line of workflow.split("\n").filter((s) => s.includes("uses:")))
     assert.match(line, /uses: actions\/[a-z-]+@[a-f0-9]{40}(?: |$)/);
@@ -2810,7 +2826,7 @@ test("release source requires exact reviewed main PR and refuses failed CI befor
   );
 });
 
-test("release source resumes merged/tagged build and verifies its original ZIP before extraction", async (t) => {
+test("release source resumes staged attempt2 and verifies its original ZIP before promotion", async (t) => {
   const f = localSigningFixture(t),
     source = "a".repeat(40),
     tree = "b".repeat(40),
@@ -2823,7 +2839,7 @@ test("release source resumes merged/tagged build and verifies its original ZIP b
 names='fased-app-linux-amd64.tar.gz fased-app-linux-amd64.json fased-install-linux-amd64 fased-app-linux-amd64.provenance.sigstore.json verified-provenance.json expected-provenance.json provenance-policy.json first-install-seed.json install.sh build-inputs.json artifact-inventory.json signing-inputs.json fased-release.json'.split()
 with zipfile.ZipFile(sys.argv[1],'w') as z:
  for name in names:
-  raw=json.dumps(dict(version='0.0.777',sourceCommit='a'*40,runId='123',runAttempt='1')) if name=='signing-inputs.json' else 'disposable fixture'
+  raw=json.dumps(dict(version='0.0.777',sourceCommit='a'*40,runId='123',runAttempt='2')) if name=='signing-inputs.json' else json.dumps(dict(version=2,productVersion='0.0.777',source='a'*40,bundleSha256='b'*64,archive=dict(file='fased-app-linux-amd64.tar.gz',size=1,sha256='c'*64),installer=dict(file='fased-install-linux-amd64',size=1,sha256='d'*64),entry=dict(file='install.sh',size=1,sha256='e'*64),release=dict(buildRef='refs/heads/main',tagObject='',sourceTree='b'*40,runId='123',runAttempt='2',provenance=dict(file='fased-app-linux-amd64.provenance.sigstore.json',size=1,sha256='f'*64)))) if name=='fased-release.json' else 'disposable fixture'
   z.writestr(name,raw)
 `,
     zip,
@@ -2874,8 +2890,8 @@ with zipfile.ZipFile(sys.argv[1],'w') as z:
       ]);
     if (args[0] === "run" && args[1] === "view")
       return JSON.stringify({
-        conclusion: "failure",
-        attempt: 1,
+        conclusion: "success",
+        attempt: 2,
         jobs: [
           {
             name: "ubuntu-amd64",
@@ -2899,7 +2915,7 @@ with zipfile.ZipFile(sys.argv[1],'w') as z:
         artifacts: [
           {
             id: 456,
-            name: "ubuntu-amd64-release-candidate",
+            name: "ubuntu-amd64-release-candidate-2",
             digest: `sha256:${sha(archive)}`,
             expired: false,
           },
@@ -2910,6 +2926,10 @@ with zipfile.ZipFile(sys.argv[1],'w') as z:
   const directory = await prepareReleaseCandidate(version, "77", {
     run,
     workspace: f.parent,
+    config: { ...rawConfig, version },
+    verifyAcceptance: async (packet) => {
+      assert.equal(packet.release.runAttempt, "2");
+    },
     progress() {},
   });
   assert.equal(
@@ -3024,3 +3044,29 @@ test("release waits for dependency checks before the late registered required ag
 
 // The active no-password authority is tested separately from retained profiles.
 import "./attested-release.test.mjs";
+
+test("staged context binds protected main, exact source and actual attempt without a tag", () => {
+  const stagedEnv = {
+    ...env,
+    GITHUB_EVENT_NAME: "workflow_dispatch",
+    GITHUB_REF: "refs/heads/main",
+    GITHUB_WORKFLOW_REF: `${rawConfig.repository}/.github/workflows/release.yml@refs/heads/main`,
+    FASED_RELEASE_SOURCE: source.commit,
+    GITHUB_RUN_ATTEMPT: "2",
+  };
+  const stagedSource = { ...source, tagObject: "" };
+  assert.equal(
+    releaseContext(complete(), stagedEnv, stagedSource).buildRef,
+    "refs/heads/main",
+  );
+  for (const change of [
+    { GITHUB_REF: "refs/heads/topic" },
+    { FASED_RELEASE_SOURCE: "a".repeat(40) },
+    {
+      GITHUB_WORKFLOW_REF: `${rawConfig.repository}/.github/workflows/release.yml@refs/tags/v0.1.0`,
+    },
+  ])
+    assert.throws(() =>
+      releaseContext(complete(), { ...stagedEnv, ...change }, stagedSource),
+    );
+});

@@ -13,6 +13,10 @@ import {
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { prepareReleaseCandidate } from "./release-source.mjs";
+import {
+  attestedInventory,
+  verifyInstalledAcceptance,
+} from "./release-acceptance.mjs";
 import { validateConfig } from "./prepare-ubuntu-release.mjs";
 import {
   githubPublisher,
@@ -115,47 +119,8 @@ export async function publicAsset(
     throw Error("Public asset differs from approved bytes");
   return bytes;
 }
-export function attestedInventory(c, packet, raw) {
-  if (
-    c.releaseAuthority !== "github-attestation-v1" ||
-    packet.version !== 1 ||
-    packet.productVersion !== c.version ||
-    !/^[a-f0-9]{40}$/.test(packet.source)
-  )
-    throw Error("Attested release authority/version required");
-  const identities = [
-    packet.archive,
-    packet.installer,
-    packet.release.provenance,
-    packet.entry,
-    { file: "fased-release.json", size: raw.length, sha256: sha(raw) },
-  ];
-  if (
-    identities.some(
-      (a, i) =>
-        a.file !== names[i] ||
-        !Number.isSafeInteger(a.size) ||
-        a.size <= 0 ||
-        a.size > 128 * 1024 * 1024 ||
-        !/^[a-f0-9]{64}$/.test(a.sha256),
-    )
-  )
-    throw Error("Complete exact attested asset inventory required");
-  return {
-    releaseAuthority: c.releaseAuthority,
-    repository: c.repository,
-    repositoryId: c.repositoryId,
-    ownerId: c.ownerId,
-    version: c.version,
-    source: packet.source,
-    tagObject: packet.release.tagObject,
-    assets: identities.map((a) => ({
-      name: a.file,
-      size: a.size,
-      sha256: a.sha256,
-    })),
-  };
-}
+export { attestedInventory } from "./release-acceptance.mjs";
+
 function checkRelease(release, c, inventory, partial = false) {
   if (
     String(release.id).match(/^[1-9][0-9]*$/) === null ||
@@ -193,6 +158,7 @@ export async function publishAttested(
     stateRoot = path.resolve(".evidence/ubuntu-release"),
     execute = execFileSync,
     fetchResponse = fetch,
+    verifyAcceptance = verifyInstalledAcceptance,
     progress = () => {},
   } = {},
 ) {
@@ -239,6 +205,9 @@ export async function publishAttested(
     writeFileSync(
       expected,
       JSON.stringify({
+        ...(packet.release.buildRef
+          ? { buildRef: packet.release.buildRef }
+          : {}),
         installerSha256: packet.installer.sha256,
         archiveName: packet.archive.file,
         archiveSha256: packet.archive.sha256,
@@ -306,6 +275,26 @@ export async function publishAttested(
     identity.full_name !== c.repository
   )
     throw Error("Fixed release repository required");
+  let prior;
+  try {
+    prior = await api("GET", repo + `/releases/tags/v${c.version}`);
+  } catch (error) {
+    if (error.status !== 404) throw error;
+  }
+  const publicReadback = prior?.draft === false && prior?.immutable === true;
+  const acceptance = publicReadback
+    ? null
+    : await verifyAcceptance(packet, inventory, api);
+  if (packet.version === 2) {
+    const ref = await api("GET", repo + `/git/ref/tags/v${c.version}`);
+    if (
+      ref.ref !== `refs/tags/v${c.version}` ||
+      ref.object?.type !== "tag" ||
+      !/^[a-f0-9]{40}$/.test(ref.object.sha)
+    )
+      throw Error("Accepted source requires an existing annotated release tag");
+    inventory.tagObject = ref.object.sha;
+  }
   // Owner settings are checked before tagging; GITHUB_TOKEN has no admin-read.
   // Canonical publication below and all consumers still require immutable:true.
   await verifyAnnotatedTag(
@@ -325,12 +314,11 @@ export async function publishAttested(
   });
   const candidate = Buffer.from(JSON.stringify(inventory) + "\n");
   try {
-    let existing;
-    try {
-      existing = await api("GET", repo + `/releases/tags/v${c.version}`);
-    } catch (e) {
-      if (e.status !== 404) throw e;
+    if (acceptance) {
+      journal.state.installedAcceptance = acceptance;
+      journal.save();
     }
+    let existing = prior;
     let id;
     if (existing?.draft === false) {
       id = checkRelease(existing, c, inventory);
