@@ -535,7 +535,7 @@ installer checks apply. Ordinary GitHub activation stays disabled; CLI/JSON cann
 select a fixture resolver, dialer or test CA for that profile. Version 1 above
 retains its no-redirect transport. No production seed/endpoint/binding is created.
 
-Retained profiles 1–3 keep their original threshold, transport and activation restrictions. Their fixtures provide evidence for those profiles. Public profile 4 uses its GitHub-attested release binding. Current installed acceptance and promotion requirements are in the [release guide](maintainers/ubuntu-release.md). [Threshold operations](updates.md#production-release-trust-operations-specification) remain a compatibility reference.
+Retained profiles 1–3 keep their original threshold, transport and activation restrictions. Their fixtures provide evidence for those profiles. Public profile 4 uses its GitHub-attested release binding. Current installed acceptance and promotion requirements are in the [release guide](maintainers/ubuntu-release.md). [Threshold operations](maintainers/ubuntu-release.md#status-and-authority) remain a compatibility reference.
 
 <a id="production-first-install-admission-not-activated"></a>
 
@@ -552,7 +552,7 @@ Version-1/2 development profiles retain their restrictions and cannot consume th
 new release-bundle format. The ordinary CLI exposes no test transport or verifier
 factory; public GitHub activation remains compiled off. No production seed, trust
 root or endpoint is supplied automatically, and native signing/real VPS acceptance
-is not implied. See [the frozen policy](updates.md#production-ubuntu-first-install-policy-v1).
+is not implied. See [the frozen policy](maintainers/ubuntu-release.md#staged-acquisition-and-trust-boundary).
 
 The package producer supports explicit `--ubuntu-release-format` for this schema.
 It requires Linux amd64, a canonical source commit and no desktop payload before
