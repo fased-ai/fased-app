@@ -152,7 +152,7 @@ func remoteReaderUpdateApplicable(ctx context.Context, m vpsinstall.Manifest, id
 		if update.StrictJSON(raw.Bytes(), &view) != nil {
 			return true, errors.New("invalid installed update status")
 		}
-		return currentReaderNeedsBootstrap(snapshot, view, id)
+		return currentReaderNeedsBootstrap(snapshot, view, id, bootstrap.InstalledUpdateEntrySupported(ctx, m.Core))
 	case 34:
 		return true, errors.New("schema34 belongs to the separately preserved recovery branch; installed data is unchanged")
 	default:
@@ -301,12 +301,12 @@ func maintainRemoteReaderUpdate(ctx context.Context, m vpsinstall.Manifest, id s
 	return e
 }
 
-// A current data schema does not imply that the installed public updater exists.
-func currentReaderNeedsBootstrap(snapshot update.CoreSnapshot, view core.ApplicationUpdateView, id string) (bool, error) {
+// Neither a current schema nor a configured controller proves packet support.
+func currentReaderNeedsBootstrap(snapshot update.CoreSnapshot, view core.ApplicationUpdateView, id string, packetSupported bool) (bool, error) {
 	if view.Version != 1 || view.Schema != core.StateSchema || view.InstanceID != snapshot.InstanceID {
 		return true, errors.New("installed update status differs from source inventory")
 	}
-	if view.ControllerAvailable || view.Operation.ID == id {
+	if view.Operation.ID == id || view.ControllerAvailable && packetSupported {
 		return false, nil
 	}
 	switch view.Operation.Phase {

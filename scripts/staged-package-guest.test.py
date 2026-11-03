@@ -2,6 +2,8 @@ import importlib.util
 import hashlib
 import json
 import pathlib
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -10,6 +12,40 @@ guest = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guest)
 
 class DeliveryFixtureTest(unittest.TestCase):
+    def test_handoff_preserves_old_setup_proof_and_rejects_ambiguous_owners(self):
+        setup = 'http://127.0.0.1:17482/?instance=owner#setup=proof'
+        plain = 'http://127.0.0.1:17482'
+        self.assertEqual(guest.browser_link(setup + '\n' + plain), (setup, 2))
+        claimed = 'http://127.0.0.1:17482/?instance=owner'
+        self.assertEqual(guest.browser_link(claimed + '\n' + plain), (claimed, 2))
+        self.assertEqual(guest.browser_link(claimed), (claimed, 1))
+        with self.assertRaisesRegex(RuntimeError, 'ambiguous'):
+            guest.browser_link(setup + '\n' + setup.replace('owner', 'other'))
+
+    def test_terminal_deadline_retains_the_unanswered_prompt_without_secrets(self):
+        command = [sys.executable, '-c', 'print("disposable-staged-owner-password #setup=private-token\\nUnanswered consent? [y/N]: ", flush=True); input()']
+        with self.assertRaisesRegex(TimeoutError, r'Unanswered consent\?') as caught:
+            guest.terminal(command, {}, timeout=1)
+        self.assertNotIn(guest.PASSWORD, str(caught.exception))
+        self.assertNotIn('private-token', str(caught.exception))
+
+    def test_failed_owner_reply_is_bounded_private_and_redacted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = pathlib.Path(temporary) / 'failure.json'
+            error = ('x' * 10000 + guest.PASSWORD + ' #setup=private-setup-token\nPermission denied').encode()
+            result = subprocess.CompletedProcess(['ssh'], 2, b'private stdout', error)
+            with self.assertRaisesRegex(RuntimeError, '(?s)fased-local/install.*Permission denied'):
+                guest.checked_reply(result, 'fased-local', 'install', receipt)
+            saved = guest.document(receipt)
+            self.assertEqual(saved['returncode'], 2)
+            self.assertLessEqual(len(saved['stderr']), 8192)
+            self.assertNotIn(guest.PASSWORD, saved['stderr'])
+            self.assertNotIn('private-setup-token', saved['stderr'])
+            self.assertNotIn('private stdout', receipt.read_text())
+            self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
+            success = subprocess.CompletedProcess(['ssh'], 0, b'{"result":"PASS"}', b'')
+            self.assertEqual(guest.checked_reply(success, 'fased-local', 'install', receipt), {'result': 'PASS'})
+
     def package(self, root, key, version, packet_version):
         path = root / key
         path.mkdir()

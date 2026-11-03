@@ -96,7 +96,7 @@ if not a.resume:
   users+='   - name: root\n     lock_passwd: true\n     ssh_authorized_keys:\n       - '+public+'\n'
   data=data.replace(' disable_root: true',' disable_root: false').replace(' write_files:',users+' write_files:')
   extra=''
-  utilities='/usr/bin/install, /usr/bin/mkdir, /usr/bin/ln, /usr/bin/mv, /usr/bin/sync, /usr/bin/rm, /usr/bin/cat, /usr/bin/cmp, /usr/bin/cp, /usr/bin/chmod, /usr/bin/chown, /usr/bin/find, /usr/bin/flock, /usr/bin/getent, /usr/bin/id, /usr/bin/passwd, /usr/bin/pkcheck, /usr/bin/setpriv, /usr/bin/stat, /usr/bin/systemctl, /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/apparmor_parser, /usr/sbin/nft, /usr/sbin/ip, /usr/sbin/update-ca-certificates'
+  utilities='/usr/bin/apt-get, /usr/bin/install, /usr/bin/mkdir, /usr/bin/ln, /usr/bin/mv, /usr/bin/sync, /usr/bin/rm, /usr/bin/cat, /usr/bin/cmp, /usr/bin/cp, /usr/bin/chmod, /usr/bin/chown, /usr/bin/find, /usr/bin/flock, /usr/bin/getent, /usr/bin/id, /usr/bin/passwd, /usr/bin/pkcheck, /usr/bin/setpriv, /usr/bin/stat, /usr/bin/systemctl, /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/apparmor_parser, /usr/sbin/nft, /usr/sbin/ip, /usr/sbin/update-ca-certificates'
   for name in ['ubuntu','fased-local','fased-remote','fased-legacy']:
    extra+='       Defaults:'+name+' verifypw=any\n       '+name+' ALL=(root) NOPASSWD: '+utilities+'\n'
   data=data.replace(' packages:',extra+' packages:').replace('nftables]', 'nftables, polkitd, curl, ca-certificates, openssl, iproute2]')
@@ -261,13 +261,15 @@ def staged_package_acceptance():
   left=target if field=='source' else target['release'];right=packages['predecessor']['packet'] if field=='source' else packages['predecessor']['packet']['release']
   assert left[field]==right[field],'compatibility fixture must have the exact target source/run identity'
  result={**fixture.binding(packages['candidate']),'result':'FAIL','fixtureOnly':True,'mining':False,'liveFeatures':False,'automaticUpdates':False,'checks':{},'profiles':{}}
- checks=result['checks']; guest='/home/ubuntu/fased-staged'; remote_work=guest+'/delivery'
+ # Shared public inputs must not sit below ubuntu's private (0750) home.
+ # The neutral directory is ubuntu-owned; delivery state remains mode0700.
+ checks=result['checks']; guest='/var/tmp/fased-staged'; remote_work=guest+'/delivery'
  host_browser=work/'browser';host_browser.mkdir(mode=0o700)
  def guest_call(args,owner='ubuntu',timeout=360):
   command='FASED_DISPOSABLE_VM=1 python3 '+shlex.quote(guest+'/scripts/staged-package-guest.py')+' '+shlex.join(args)
   connection=sshbase[:-1]+[owner+'@127.0.0.1',command]
-  data=run(connection,timeout=timeout).stdout.decode()
-  return json.loads(data) if data.strip().startswith('{') else data
+  reply=subprocess.run(connection,timeout=timeout,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+  return fixture.checked_reply(reply,owner,args[0],root/'staged-owner-failure.json')
  def owner_call(profile,action,expected=None):
   return guest_call(['owner','--profile',profile,'--owner-action',action,*(['--version',expected] if expected else [])],fixture.PROFILES[profile][0])
  def select_package(name,fail=False):
@@ -277,14 +279,16 @@ def staged_package_acceptance():
   if tunnel is not None and tunnel.poll() is None:tunnel.terminate();tunnel.wait(10)
   forwards=[]
   for _,_,listen in fixture.PROFILES.values():forwards+=['-L',f'127.0.0.1:{listen}:127.0.0.1:{listen}']
-  tunnel=subprocess.Popen(sshbase[:-1]+['-N','-o','ExitOnForwardFailure=yes',*forwards,sshbase[-1]],stdout=subprocess.DEVNULL,stderr=(root/'staged-tunnel.stderr').open('ab'))
+  # Model a logged-in Local desktop while retaining the same private forwards.
+  # Remote's system service must still boot without its operator logging in.
+  tunnel=subprocess.Popen(sshbase[:-1]+['-o','ExitOnForwardFailure=yes',*forwards,'fased-local@127.0.0.1','sleep 3600'],stdout=subprocess.DEVNULL,stderr=(root/'staged-tunnel.stderr').open('ab'))
  def browser(profile,action,expected,link=None):
   listen=fixture.PROFILES[profile][2]
   cfg={'fixtureOnly':True,'action':action,'url':link or 'http://127.0.0.1:'+str(listen),'version':expected,'storageFile':str(host_browser/(profile+'-storage.json')),'baselineFile':str(host_browser/(profile+'-baseline.json'))}
   if action in ['ui-update','automatic-update']:cfg['fromVersion']='0.1.4'
   path=host_browser/(profile+'-request.json');fixture.write_private(path,cfg)
-  output=run(['node','scripts/staged-package-browser.mjs',str(path)],timeout=360).stdout.decode()
-  value=json.loads(output);assert value['result']=='PASS';return value
+  reply=subprocess.run(['node','scripts/staged-package-browser.mjs',str(path)],timeout=360,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+  value=fixture.checked_reply(reply,profile,'browser-'+action,root/'staged-browser-failure.json');assert value['result']=='PASS';return value
  def reboot():
   previous=ssh('cat /proc/sys/kernel/random/boot_id',15).strip()
   subprocess.run(sshbase+['sudo -n -- /usr/bin/systemctl reboot'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=15)
@@ -308,7 +312,7 @@ def staged_package_acceptance():
    seed=directory/'first-install-seed.json'
    if seed.exists():arc.add(seed,'packages/'+label+'/first-install-seed.json')
  result['inputs']={name:{'source':v['packet']['source'],'version':v['packet']['productVersion'],'artifactSetSha256':fixture.binding(v)['artifactSetSha256']} for name,v in packages.items()}
- with payload.open('rb') as stream:run(sshbase+['umask 077; mkdir -p '+guest+'; tar -xf - -C '+guest],stdin=stream,timeout=120)
+ with payload.open('rb') as stream:run(sshbase+['umask 077; mkdir -- '+guest+'; tar -xf - -C '+guest],stdin=stream,timeout=120)
  # Private disposable source is readable by the three fixture owners. They
  # execute as themselves; only the verified shell entry's OS bootstrap is root.
  ssh('chmod 755 '+guest+' '+guest+'/scripts '+guest+'/packages; chmod -R a+rX '+guest+'/packages '+guest+'/scripts',30)
@@ -318,19 +322,22 @@ def staged_package_acceptance():
  start_tunnel();select_package('predecessor')
  installed={}
  installed['local']=owner_call('local','install','0.1.4')
+ print('Staged package: Local URL wizard installed',flush=True)
  # Exact URL entry in a real root SSH terminal. The reviewed shell performs
  # fixed OS preparation and drops to the selected ordinary operator before Go.
  entry='bash <(curl -fsSL https://github.com/fased-ai/fased-app/releases/download/v0.1.4/install.sh) --operator fased-remote --listen 127.0.0.1:17482'
- answers={'Choose [local/remote':'','Private access [':'ssh','Use a dedicated app account':'y','Keep Fased running':'y','Prepare Ubuntu':'y','Start Fased at login?':'y'}
+ answers={'Choose [local/remote':'','Private access [':'ssh','Use a dedicated app account':'y','Keep Fased running':'y','Start Fased at login?':'y',**fixture.PREPARATION_ANSWERS}
  code,output=fixture.terminal(sshbase[:-1]+['-tt','root@127.0.0.1',entry],answers,timeout=300)
- (root/'root-entry.log').write_text(output.replace(fixture.PASSWORD,'[redacted]'))
+ (root/'root-entry.log').write_text(fixture.redacted(output))
  assert code==0,'root-safe URL entry failed; preserve terminal output'
  installed['remote']=owner_call('remote','open')
+ print('Staged package: root Remote URL wizard and private handoff installed',flush=True)
  for profile in ['local','remote']:
   browser(profile,'claim','0.1.4',installed[profile]['url']);owner_call(profile,'login')
   shutil.copyfile(host_browser/(profile+'-storage.json'),host_browser/(profile+'-initial-storage.json'))
   shutil.copyfile(host_browser/(profile+'-storage.json.session.json'),host_browser/(profile+'-initial-session.json'))
   result['profiles'][profile]={'installed':'PASS','ordinaryOwnerUID':fixture.PROFILES[profile][1]}
+  print('Staged package: '+profile+' owner claim and CLI sign-in passed',flush=True)
  select_package('legacy');legacy_install=owner_call('legacy','install','0.1.5')
  browser('legacy','claim','0.1.5',legacy_install['url']);owner_call('legacy','login')
  app_user=ssh('systemctl show --property User --value fased-vps-1200.service',15).strip()
@@ -341,25 +348,31 @@ def staged_package_acceptance():
  assert all('127.0.0.1:'+str(v[2]) in listeners for v in fixture.PROFILES.values())
  assert all(('0.0.0.0:'+str(v[2])) not in listeners and ('[::]:'+str(v[2])) not in listeners for v in fixture.PROFILES.values())
  checks['privateAccess']='PASS'
+ print('Staged package: three installed profiles and private listeners passed',flush=True)
  ssh('sync',15);disk_snapshot('baseline');start_vm();ready(90);guest_call(['network','--work',remote_work]);start_tunnel()
  select_package('candidate',True)
  failed=owner_call('legacy','failed-bootstrap',version)
  observed=json.loads(ssh('cat '+remote_work+'/selection.json',15))
- assert failed['result']=='PASS' and observed.get('archiveFailureObserved') is True,'failure proof must observe the injected archive request'
+ if failed['result']!='PASS' or observed.get('archiveFailureObserved') is not True:
+  detail=fixture.redacted(failed.get('failure','missing original failure'))[-8192:]
+  fixture.write_private(root/'staged-owner-failure.json',{'owner':'legacy','action':'archive-recovery','returncode':failed.get('returncode'),'stderr':detail})
+  raise RuntimeError('failure proof did not reach its injected archive request: '+detail[-4096:])
  result['recovery']={'kind':'failed-verified-acquisition','archiveFailureObserved':True,'instancePreserved':True}
  checks['recovery']='PASS'
  select_package('candidate');owner_call('legacy','bootstrap',version)
  browser('legacy','preserve',version);checks['legacyBootstrap']='PASS'
+ print('Staged package: public0.1.5 failure recovery and reader bridge passed',flush=True)
  result['legacyBootstrap']={'result':'PASS','productVersion':'0.1.5','predecessorPacketVersion':1,'candidatePacketVersion':2,'upgradeApplied':True,'predecessorArtifactSetSha256':result['inputs']['legacy']['artifactSetSha256']}
  local_apply=browser('local','ui-update',version);assert local_apply['uiOutcome']=='applied'
  root_status=json.loads(run(sshbase[:-1]+['root@127.0.0.1','fased update status'],timeout=30).stdout.decode())
  assert root_status['controllerAvailable'] is True and root_status['installedVersion']=='0.1.4'
- code,output=fixture.terminal(sshbase[:-1]+['-tt','root@127.0.0.1','fased update'],{'Owner password: ':fixture.PASSWORD},timeout=360)
- (root/'root-cli-update.log').write_text(output.replace(fixture.PASSWORD,'[redacted]'))
+ code,output=fixture.terminal(sshbase[:-1]+['-tt','root@127.0.0.1','fased update'],{'Owner password: ':fixture.PASSWORD,'Update to '+version+'? [y/N]: ':'y'},timeout=360)
+ (root/'root-cli-update.log').write_text(fixture.redacted(output))
  assert code==0 and 'Updated' in output,'standard root-safe installed CLI did not apply'
  remote_after=owner_call('remote','check');assert remote_after['health']['version']==version
  browser('remote','preserve',version)
  checks.update(uiUpdate='PASS',cliUpdate='PASS',preservation='PASS')
+ print('Staged package: actual UI and root-safe installed CLI apply passed',flush=True)
  for profile in ['local','remote']:
   owner_call(profile,'restart');assert owner_call(profile,'check')['cliOutcome']=='alreadyCurrent';assert browser(profile,'check',version)['uiOutcome']=='alreadyCurrent'
   assert browser(profile,'auth-cycle',version)['logoutSignIn'] is True
@@ -367,6 +380,7 @@ def staged_package_acceptance():
  result['reboot']=reboot()
  for profile in ['local','remote']:assert browser(profile,'reconnect',version)['reconnected'] is True
  checks['rebootReconnect']='PASS'
+ print('Staged package: restart, no-op, sign-out/in and reboot reconnect passed',flush=True)
  # Reuse the exact pre-update disk/data/auth baseline for opt-in automatic
  # operation; do not create another product version or public release.
  disk_snapshot('baseline',True);start_vm();ready(90);guest_call(['network','--work',remote_work]);start_tunnel();select_package('candidate')
@@ -377,6 +391,9 @@ def staged_package_acceptance():
   outcome=browser(profile,'automatic-update',version)
   assert outcome['automaticOutcome']=='applied' and outcome['policyRestored']=='manual' and outcome['customerActivation'] is False
   auto.append({'profile':profile,**outcome})
+  print('Staged package: '+profile+' automatic apply and Manual restoration passed',flush=True)
+ for profile in ['local','remote']:
+  assert owner_call(profile,'open')['urlCount']==1,'updated installation must present one usable owner link'
  checks['controlledAutomatic']='PASS'
  result.update(result='PASS',upgradeRoute='installed',predecessorPacketVersion=2,candidatePacketVersion=2,upgradeApplied=True,uiOutcome='applied',cliOutcome='applied',ordinaryUpdateApply='PASS',automaticOutcome='applied',automaticPolicyRestored='manual',customerActivation=False,controlledAutomatic=auto)
  pred=packages['predecessor']['packet'];result['compatibilityPredecessor']={'fixtureOnly':True,'published':False,'packetVersion':2,'productVersion':'0.1.4','source':pred['source'],'sourceTree':pred['release']['sourceTree'],'runId':pred['release']['runId'],'runAttempt':pred['release']['runAttempt'],'artifactSetSha256':result['inputs']['predecessor']['artifactSetSha256']}
@@ -395,6 +412,10 @@ if a.staged_package_only:
    (root/'staged-failure.stderr').write_bytes(error.stderr or b'')
   raise
  finally:
+  # Flush private guest diagnostics before terminating this disposable VM.
+  # Deliberate crash/reboot probes inside the journey keep their own semantics.
+  try:ssh('sync',10)
+  except (subprocess.SubprocessError,OSError):pass
   if tunnel is not None and tunnel.poll() is None:tunnel.terminate();tunnel.wait(10)
   stop_vm();serial.close();stderr.close()
   staged_result['durationSeconds']=round(time.time()-started,3)

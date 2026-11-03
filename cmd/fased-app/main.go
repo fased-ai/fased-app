@@ -18,6 +18,7 @@ import (
 	"time"
 
 	fasedapp "github.com/fased-ai/fased-app"
+	"github.com/fased-ai/fased-app/internal/bootstrap"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/signer"
@@ -147,7 +148,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	}
 	if args[0] == "version" {
 		if len(args) == 2 && args[1] == "--entry-json" {
-			return json.NewEncoder(out).Encode(map[string]any{"version": 1, "update": true})
+			return json.NewEncoder(out).Encode(bootstrap.CurrentEntryCapabilities())
 		}
 		if len(args) == 2 && args[1] == "--json" {
 			return json.NewEncoder(out).Encode(map[string]any{"version": core.Version, "stateSchema": core.StateSchema, "maintenanceProtocol": 1})

@@ -382,15 +382,11 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 		if err = vpsinstall.Start(ctx, m, system); err != nil {
 			return err
 		}
-		url, err := enableRemoteAccess(ctx, m, system)
+		_, err := enableRemoteAccess(ctx, m, system)
 		if err != nil {
 			return err
 		}
-		if err = remoteOwnerLink(ctx, m, system, errOut); err != nil {
-			return err
-		}
-		fmt.Fprintln(out, url)
-		return nil
+		return remoteOwnerLink(ctx, m, system, out)
 	case "stop":
 		return vpsinstall.Stop(ctx, m, system)
 	case "claim-code":
@@ -398,15 +394,11 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 	case "recover":
 		return vpsinstall.Claim(ctx, m, system, true, out)
 	case "access":
-		url, err := enableRemoteAccess(ctx, m, system)
+		_, err := enableRemoteAccess(ctx, m, system)
 		if err != nil {
 			return err
 		}
-		if err = remoteOwnerLink(ctx, m, system, errOut); err != nil {
-			return err
-		}
-		fmt.Fprintln(out, url)
-		return nil
+		return remoteOwnerLink(ctx, m, system, out)
 
 	case "remove":
 		dir, err := remoteAccessDirectory()
@@ -514,13 +506,5 @@ func configureRemoteAccess(ctx context.Context, m vpsinstall.Manifest, system *c
 	if e != nil {
 		return e
 	}
-	if e = remoteOwnerLink(ctx, target, system, errOut); e != nil {
-		return e
-	}
-	url := "http://" + target.Listen
-	if target.PublicOrigin != "" {
-		url = target.PublicOrigin
-	}
-	fmt.Fprintln(out, url)
-	return nil
+	return remoteOwnerLink(ctx, target, system, out)
 }
