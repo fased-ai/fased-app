@@ -350,13 +350,14 @@ export async function fixtureInspectionJourney({
       pass(
         "actualControllerStoppedAtExactCut",
         result.interrupted && result.exitCode !== 0,
+        result,
       );
       report.cut = stopAt;
       report.bridgeId = id;
       report.result = "CUT";
       return report;
     }
-    pass("guardedBridgeCompletes", result.exitCode === 0);
+    pass("guardedBridgeCompletes", result.exitCode === 0, result);
     const after = snapshot();
     report.after = after;
     pass(

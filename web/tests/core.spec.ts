@@ -4343,9 +4343,7 @@ test("Updates keeps manual and automatic preferences without activating releases
 test("update status shares UI and private CLI observations across pause, release and restart", async ({
   page,
 }) => {
-  await expect(
-    exec(binary, ["update-status", "--data-dir", dir]),
-  ).rejects.toThrow();
+  expect((await fetch(url + "/api/v1/updates/status")).status).toBe(401);
   await page.goto(url);
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
@@ -4364,9 +4362,6 @@ test("update status shares UI and private CLI observations across pause, release
     panel.getByRole("heading", { name: "Signer not configured" }),
   ).toBeVisible();
   await expect(panel.getByText("Unknown", { exact: true })).toHaveCount(3);
-  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
-  login.stdin!.end(fixturePassword + "\n");
-  expect((await once(login, "exit"))[0]).toBe(0);
   const cli = async (args: string[], input?: unknown) => {
     if (input === undefined)
       return JSON.parse(

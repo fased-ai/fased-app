@@ -1,6 +1,9 @@
 // Ordinary-user compiler for reconstructible predecessor and bad-health fixtures.
 import assert from "node:assert/strict";
-import { currentStorageFixture } from "./fixture-core-storage.mjs";
+import {
+  currentStorageFixture,
+  projectPasswordOnlyContract,
+} from "./fixture-core-storage.mjs";
 import { execFileSync } from "node:child_process";
 import {
   mkdir,
@@ -146,6 +149,26 @@ try {
       .digest("hex");
   }
   await cp("dist", path.join(bad, "dist"), { recursive: true });
+  // This bootstrap verifies lifecycle replacement with unchanged financial
+  // state. Use an explicit schema36-only current helper, not a37 migration.
+  report.targetContractSource = await projectPasswordOnlyContract(bad);
+  const compatible = path.join(root, "fased-app-same-format");
+  execFileSync(
+    "go",
+    [
+      "build",
+      "-mod=readonly",
+      "-buildvcs=false",
+      "-trimpath",
+      "-o",
+      compatible,
+      "./cmd/fased-app",
+    ],
+    { cwd: bad, stdio: "pipe" },
+  );
+  report.outputs[compatible] = createHash("sha256")
+    .update(await readFile(compatible))
+    .digest("hex");
   await writeFile(
     path.join(bad, "cmd/fased-app/zz_disposable_bad_health.go"),
     'package main\nimport "os"\nfunc init(){if len(os.Args)>1 && os.Args[1]=="serve" {os.Exit(42)}}\n',
@@ -195,25 +218,6 @@ try {
     const normalized = structuredClone(after);
     if (component === "core") {
       normalized.lifecycle = before.lifecycle;
-      const oldState = before.state.find((state) => state.name === "core-db");
-      const newState = normalized.state.find(
-        (state) => state.name === "core-db",
-      );
-      // The source reader intentionally stays password-only36. The current
-      // reader additionally supports first-claim Local format37; compare their
-      // shared36 format exactly, without erasing other capability differences.
-      assert.deepEqual(oldState.versions, { min: 36, max: 36 });
-      assert.deepEqual(newState.versions, { min: 36, max: 37 });
-      assert.equal(oldState.features.includes("local-os-owner-v1"), false);
-      assert.equal(
-        newState.features.filter((feature) => feature === "local-os-owner-v1")
-          .length,
-        1,
-      );
-      newState.versions = structuredClone(oldState.versions);
-      newState.features = newState.features.filter(
-        (feature) => feature !== "local-os-owner-v1",
-      );
     }
     for (const state of normalized.state) {
       if (state.name === "operations")

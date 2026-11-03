@@ -23,7 +23,7 @@ export async function fixtureBootstrapJourney({
 }) {
   const evidence = path.resolve(".evidence/p4-bootstrap");
   await mkdir(evidence, { recursive: true });
-  const core = path.resolve(".evidence/bin/fased-app"),
+  const core = path.join(evidence, "fased-app-same-format"),
     signer = path.resolve(".evidence/bin/fased-signer"),
     bad = path.join(evidence, "fased-app-bad-health");
   const bp = path.join(backups, "bootstrap.json"),

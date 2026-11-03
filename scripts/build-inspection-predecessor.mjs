@@ -236,14 +236,7 @@ try {
     path.join(guardedSource, "cmd/fased-app/zz_disposable_guarded_reader.go"),
     `package main
 import "os"
-func init() {
- if len(os.Args)>1 { switch os.Args[1] {
- case "fixture-reader-guard", "fixture-inspection-compatibility", "owner-fixture-inspection", "fixture-inspection-cold", "fixture-inspection-init", "fixture-inspection-empty": return
- } }
- if len(os.Args)==3 && os.Args[1]=="updates" && os.Args[2]=="compatibility" { return }
- if len(os.Args)>3 && os.Args[1]=="custody" && os.Args[2]=="fixture-inspection" && (os.Args[3]=="provision" || os.Args[3]=="inspect" || os.Args[3]=="bridge" || os.Args[3]=="rollback") { return }
- os.Exit(92)
-}
+func init() { if len(os.Args)>1 && os.Args[1]=="serve" { os.Exit(92) } }
 `,
   );
   const guarded = path.join(root, "guarded-app");
@@ -296,6 +289,20 @@ func init() {
     "failed-health trial must preserve the exact source state contract",
   );
   outputs.unhealthyApp = sha(await readFile(unhealthy));
+  assert.throws(
+    () =>
+      execFileSync(
+        guarded,
+        [
+          "status",
+          "--data-dir",
+          path.join(guardedSource, "absent-owner-state"),
+        ],
+        { stdio: "pipe" },
+      ),
+    (error) => error.status !== 92,
+    "readiness status must reach the production IPC verifier",
+  );
   outputs.guardedApp = sha(await readFile(guarded));
   outputs.guardedContractSource = guardedContractSHA;
   await writeFile(
