@@ -56,13 +56,20 @@ type Result struct {
 }
 
 func Probe(ctx context.Context, value, expected string) (Result, error) {
-	client, close := instanceClient()
-	defer close()
-	result, err := probe(ctx, value, expected, client)
+	result, err := Inspect(ctx, value, expected)
 	if err == nil && result.Location == "remote" && (!strings.HasPrefix(result.URL, "https://") || !strings.HasSuffix(result.URL, ".ts.net")) {
 		return Result{}, errors.New("Remote requires its Tailscale HTTPS address")
 	}
 	return result, err
+}
+
+// Inspect reads public health only. Existing-instance maintenance/enrollment may
+// inspect a legacy loopback backend; this grants no connection/session authority.
+// Browser/native/CLI Connect must use Probe's mandatory Tailscale admission.
+func Inspect(ctx context.Context, value, expected string) (Result, error) {
+	client, close := instanceClient()
+	defer close()
+	return probe(ctx, value, expected, client)
 }
 func instanceClient() (*http.Client, func()) {
 	transport := &http.Transport{Proxy: nil, TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 3 * time.Second, DisableCompression: true}

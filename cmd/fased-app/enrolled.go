@@ -50,7 +50,7 @@ func enrolledSystem(s *custodyinstall.System) enrolledOps {
 		control: func(ctx context.Context, m custodyinstall.Manifest, role, action string) error {
 			return custodyinstall.Control(ctx, m, role, action, s)
 		},
-		probe: connection.Probe,
+		probe: connection.Inspect,
 		helper: func(ctx context.Context, m custodyinstall.Manifest, recover bool, out io.Writer) error {
 			return s.AppHelper(ctx, m, recover, false, out)
 		},

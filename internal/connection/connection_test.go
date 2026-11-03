@@ -58,6 +58,27 @@ func TestProbeIdentityTLSAndNoCredentialForwarding(t *testing.T) {
 		t.Fatal("unexpected operations/retries", requests)
 	}
 }
+
+func TestLegacyHealthInspectionGrantsNoRemoteConnection(t *testing.T) {
+	id := strings.Repeat("h", 43)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" || r.URL.Path != "/api/v1/health" || r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" {
+			t.Error("inspection forwarded authority")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(core.Health{Status: "ok", APIVersion: core.APIVersion, InstanceID: id, Connection: &core.ConnectionInfo{Location: "remote", Transport: "loopback"}})
+	}))
+	defer server.Close()
+	if result, err := Inspect(t.Context(), server.URL, id); err != nil || result.InstanceID != id || result.Location != "remote" {
+		t.Fatal(result, err)
+	}
+	if _, err := Inspect(t.Context(), server.URL, strings.Repeat("b", 43)); err == nil {
+		t.Fatal("inspection lost instance pin")
+	}
+	if _, err := Probe(t.Context(), server.URL, id); err == nil || !strings.Contains(err.Error(), "Tailscale HTTPS") {
+		t.Fatal("inspection became Remote connection", err)
+	}
+}
 func TestProbeRefusesRedirectAndOversize(t *testing.T) {
 	var followed int
 	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { followed++ }))
