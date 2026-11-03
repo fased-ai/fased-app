@@ -111,26 +111,38 @@ func TestCurrentRemoteReaderRequiresPublicUpdaterHandoff(t *testing.T) {
 	id := update.NewProbe()
 	snapshot := update.CoreSnapshot{InstanceID: "existing", State: update.State{Version: core.StateSchema}}
 	view := core.ApplicationUpdateView{Version: 1, Schema: core.StateSchema, InstanceID: "existing", Operation: core.ApplicationUpdateOperation{Phase: "idle"}}
-	required, err := currentReaderNeedsBootstrap(snapshot, view, id)
+	required, err := currentReaderNeedsBootstrap(snapshot, view, id, true)
 	if err != nil || !required {
 		t.Fatal("same schema without public updater skipped handoff", required, err)
 	}
 	view.ControllerAvailable = true
-	if required, err = currentReaderNeedsBootstrap(snapshot, view, id); err != nil || required {
+	if required, err = currentReaderNeedsBootstrap(snapshot, view, id, true); err != nil || required {
 		t.Fatal("configured controller bypassed", err)
 	}
+	if required, err = currentReaderNeedsBootstrap(snapshot, view, id, false); err != nil || !required {
+		t.Fatal("configured older packet reader skipped verified bootstrap", required, err)
+	}
+	view.Operation.Phase = "check-failed"
+	if required, err = currentReaderNeedsBootstrap(snapshot, view, id, false); err != nil || !required {
+		t.Fatal("failed older format check skipped bootstrap", required, err)
+	}
+	view.Operation.Phase = "recovery"
+	if _, err = currentReaderNeedsBootstrap(snapshot, view, id, false); err == nil {
+		t.Fatal("older packet capability bypassed unresolved recovery")
+	}
+	view.Operation.Phase = "idle"
 	view.ControllerAvailable = false
 	view.Operation.ID = id
-	if required, err = currentReaderNeedsBootstrap(snapshot, view, id); err != nil || required {
+	if required, err = currentReaderNeedsBootstrap(snapshot, view, id, true); err != nil || required {
 		t.Fatal("existing owner operation bypassed", err)
 	}
 	view.Operation.ID = ""
 	view.Operation.Phase = "recovery"
-	if _, err = currentReaderNeedsBootstrap(snapshot, view, id); err == nil {
+	if _, err = currentReaderNeedsBootstrap(snapshot, view, id, true); err == nil {
 		t.Fatal("unresolved update replaced")
 	}
 	view.InstanceID = "foreign"
-	if _, err = currentReaderNeedsBootstrap(snapshot, view, id); err == nil {
+	if _, err = currentReaderNeedsBootstrap(snapshot, view, id, true); err == nil {
 		t.Fatal("foreign workspace adopted")
 	}
 }

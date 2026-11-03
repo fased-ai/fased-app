@@ -28,6 +28,10 @@ PROFILES = {"local": ("fased-local", 1100, 17481), "remote": ("fased-remote", 12
 HOSTS = ["github.com", "api.github.com", "release-assets.githubusercontent.com"]
 ADDRESS = "140.82.112.3"
 PASSWORD = "disposable-staged-owner-password"
+PREPARATION_ANSWERS = {
+    "Authorize required Ubuntu preparation with sudo? [y/N]: ": "y",
+    "Authorize Ubuntu preparation, isolated service and bounded update maintenance with sudo? [y/N]: ": "y",
+}
 
 
 def digest(raw):
@@ -56,6 +60,19 @@ def write_private(path, value):
         json.dump(value, stream, separators=(",", ":"))
         stream.write("\n")
     os.replace(temporary, target)
+
+
+def redacted(text):
+    return re.sub(r"#setup=[^\s]+", "#setup=[redacted]", text.replace(PASSWORD, "[redacted]"))
+
+
+def checked_reply(result, owner, action, failure_file):
+    if result.returncode:
+        error = redacted((result.stderr or b"").decode(errors="replace"))[-8192:]
+        write_private(failure_file, {"owner": owner, "action": action, "returncode": result.returncode, "stderr": error})
+        raise RuntimeError("staged " + owner + "/" + action + " failed (" + str(result.returncode) + "): " + error[-1024:])
+    text = result.stdout.decode()
+    return json.loads(text) if text.strip().startswith("{") else text
 
 
 def package(directory):
@@ -237,7 +254,7 @@ def terminal(args, answers, timeout=180):
                 status = child_status
                 break
         else:
-            raise TimeoutError("packaged terminal journey deadline")
+            raise TimeoutError("packaged terminal journey deadline: " + redacted(output.decode(errors="replace"))[-8192:])
     finally:
         os.close(fd)
         if status is None:
@@ -257,6 +274,16 @@ def command_path():
     raise RuntimeError("installed ordinary command missing")
 
 
+def browser_link(output):
+    links = list(dict.fromkeys(re.findall(r"https?://[^\s]+", output)))
+    setup = [link for link in links if urllib.parse.urlsplit(link).fragment.startswith("setup=")]
+    identified = [link for link in links if "instance" in urllib.parse.parse_qs(urllib.parse.urlsplit(link).query)]
+    preferred = setup or identified or links
+    if len(preferred) != 1:
+        raise RuntimeError("ambiguous or missing private browser handoff")
+    return preferred[0], len(links)
+
+
 def health(port):
     with urllib.request.urlopen("http://127.0.0.1:" + str(port) + "/api/v1/health", timeout=5) as response:
         result = json.load(response)
@@ -273,13 +300,15 @@ def owner(args):
     state_dir = P.home() / ".cache/fased-staged"
     state_dir.mkdir(mode=0o700, exist_ok=True)
     state = document(state_dir / "state.json") if (state_dir / "state.json").exists() else {}
-    prompts = {"Private access [": "ssh", "Use a dedicated app account": "y", "Keep Fased running": "y", "Start Fased at login?": "y", "Prepare Ubuntu": "y", "Owner password: ": PASSWORD}
+    prompts = {"Private access [": "ssh", "Use a dedicated app account": "y", "Keep Fased running": "y", "Start Fased at login?": "y", "Owner password: ": PASSWORD, **PREPARATION_ANSWERS}
+    if args.version and args.owner_action in ("apply", "bootstrap", "failed-bootstrap"):
+        prompts["Update to " + args.version + "? [y/N]: "] = "y"
     if args.owner_action == "open":
-        code, output = terminal([command_path(), "open", "--print"], {})
-        links = re.findall(r"https?://[^\s]+", output)
-        if code or not links:
-            raise RuntimeError("ordinary private browser handoff missing")
-        return {"result": "PASS", "url": links[-1]}
+        code, output = terminal([command_path(), "open", *(["--print"] if args.profile == "local" else [])], {})
+        if code:
+            raise RuntimeError("ordinary private browser handoff missing: " + redacted(output)[-8192:])
+        url, count = browser_link(output)
+        return {"result": "PASS", "url": url, "urlCount": count}
     if args.owner_action in ("install", "bootstrap", "failed-bootstrap"):
         version = args.version
         install_profile = "remote" if args.profile == "legacy" else args.profile
@@ -290,7 +319,7 @@ def owner(args):
         if args.owner_action != "install":
             shell += " --update"
         result, output = terminal(["bash", "-c", shell, "staged-entry", url], prompts)
-        scrubbed = re.sub(r"#setup=[^\s]+", "#setup=[redacted]", output).replace(PASSWORD, "[redacted]")
+        scrubbed = redacted(output)
         (state_dir / (args.owner_action + ".log")).write_text(scrubbed)
         if args.owner_action == "failed-bootstrap":
             if result == 0:
@@ -298,9 +327,9 @@ def owner(args):
             current = health(port)
             if current["instanceId"] != state["instanceId"] or current["version"] != state["version"]:
                 raise RuntimeError("failed acquisition changed the running instance")
-            return {"result": "PASS", "recovery": "failed acquisition preserved the original running version"}
+            return {"result": "PASS", "recovery": "failed acquisition preserved the original running version", "returncode": result, "failure": scrubbed[-8192:]}
         if result != 0:
-            raise RuntimeError("packaged " + args.owner_action + " failed; private terminal log retained")
+            raise RuntimeError("packaged " + args.owner_action + " failed: " + redacted(output)[-8192:])
         current = health(port)
         if args.owner_action == "install":
             state = {"instanceId": current["instanceId"], "version": current["version"]}
@@ -308,25 +337,26 @@ def owner(args):
             raise RuntimeError("bootstrap did not preserve the instance and install candidate")
         state["version"] = current["version"]
         write_private(state_dir / "state.json", state)
-        code, opened = terminal([command_path(), "open", "--print"], {})
-        links = re.findall(r"https?://[^\s]+", opened)
-        if code or not links:
-            raise RuntimeError("normal private browser handoff missing")
-        return {"result": "PASS", "url": links[-1], "health": current}
+        code, opened = terminal([command_path(), "open", *(["--print"] if args.profile == "local" else [])], {})
+        if code:
+            raise RuntimeError("normal private browser handoff missing: " + redacted(opened)[-8192:])
+        url, count = browser_link(opened)
+        return {"result": "PASS", "url": url, "urlCount": count, "health": current}
     if args.owner_action == "login":
         code, output = terminal([command_path(), "login"], {"Owner password: ": PASSWORD})
-        if code or "CLI authenticated" not in output:
-            raise RuntimeError("ordinary CLI owner sign-in failed")
+        confirmation = "CLI authenticated" if args.profile == "local" else "Signed in"
+        if code or confirmation not in output:
+            raise RuntimeError("ordinary CLI owner sign-in failed: " + redacted(output)[-8192:])
         return {"result": "PASS"}
     if args.owner_action == "apply":
         before = health(port)
         if before["version"] == args.version:
             raise RuntimeError("apply requires an older running reader")
         code, output = terminal([command_path(), "update"], prompts, timeout=300)
-        (state_dir / "apply.log").write_text(output.replace(PASSWORD, "[redacted]"))
+        (state_dir / "apply.log").write_text(redacted(output))
         current = health(port)
         if code or "Updated" not in output or current["version"] != args.version or current["instanceId"] != before["instanceId"]:
-            raise RuntimeError("ordinary installed CLI did not apply the candidate")
+            raise RuntimeError("ordinary installed CLI did not apply the candidate: " + redacted(output)[-8192:])
         state["version"] = current["version"]
         write_private(state_dir / "state.json", state)
         return {"result": "PASS", "cliOutcome": "applied", "health": current}

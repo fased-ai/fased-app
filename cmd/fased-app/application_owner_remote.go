@@ -111,6 +111,17 @@ func maintainRemoteUpdateWithSystem(ctx context.Context, m vpsinstall.Manifest, 
 }
 
 func maintainSameReaderRemoteUpdate(ctx context.Context, m vpsinstall.Manifest, id string, rollback bool, source func(context.Context, core.ApplicationRelease, string) (*bootstrap.Prepared, error), out io.Writer, system *custodyinstall.System) error {
+	// A configured older updater may not understand this release format. Route
+	// its verified upgrade before asking it to admit a format it cannot read.
+	// Existing journals and recovery holds remain authoritative in this check.
+	if !rollback && !bootstrap.InstalledUpdateEntrySupported(ctx, m.Core) {
+		if handled, err := remoteReaderUpdateApplicable(ctx, m, id, system); handled {
+			if err != nil {
+				return err
+			}
+			return maintainRemoteReaderUpdate(ctx, m, id, rollback, compiledApplicationReaderSource, out, system)
+		}
+	}
 	actor := &remoteApplicationOwner{m: m, id: id, system: system}
 	state, e := actor.call(ctx, "inspect", nil)
 	if e != nil {
