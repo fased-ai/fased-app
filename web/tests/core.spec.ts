@@ -15734,3 +15734,90 @@ for (const method of ["create", "import"] as const) {
     }
   });
 }
+
+for (const restored of [false, true]) {
+  test(
+    restored
+      ? "Remote restored session stays signed out"
+      : "Remote approved device connects without a password and logout stays final",
+    async ({ page }) => {
+      await exec(binary, ["setup", "--data-dir", dir]);
+      const saved = JSON.parse(
+        await readFile(join(dir, "cli-session.json"), "utf8"),
+      ) as { token: string };
+      const auth = await page.request.get(url + "/api/v1/auth/state", {
+        headers: { Authorization: `Bearer ${saved.token}` },
+      });
+      const state = (await auth.json()) as { csrfToken: string };
+      let signedIn = restored,
+        connections = 0;
+      await page.route("**/api/v1/health", async (route) => {
+        const response = await route.fetch();
+        const health = await response.json();
+        await route.fulfill({
+          json: {
+            ...health,
+            connection: { location: "remote", transport: "private-https" },
+          },
+        });
+      });
+      await page.route("**/api/v1/auth/state", async (route) => {
+        await route.fulfill({
+          json: {
+            claimed: true,
+            authenticated:
+              signedIn &&
+              route.request().headers().authorization ===
+                `Bearer ${saved.token}`,
+            csrfToken: state.csrfToken,
+            remoteAccess: true,
+            remoteEnrolled: true,
+          },
+        });
+      });
+      await page.route("**/api/v1/auth/remote", async (route) => {
+        expect(route.request().method()).toBe("POST");
+        expect(route.request().postDataJSON()).not.toHaveProperty("password");
+        connections++;
+        signedIn = true;
+        await route.fulfill({
+          json: {
+            authenticated: true,
+            csrfToken: state.csrfToken,
+            sessionToken: saved.token,
+            sessionMode: "bearer",
+          },
+        });
+      });
+      await page.route("**/api/v1/auth/logout", async (route) => {
+        signedIn = false;
+        await route.fulfill({ json: { authenticated: false } });
+      });
+      if (restored)
+        await page.addInitScript(
+          (token) => sessionStorage.setItem("fased.core.session.v1", token),
+          saved.token,
+        );
+      await page.goto(url);
+      await expect(
+        page.getByRole("button", { name: "Sign out", exact: true }),
+      ).toBeVisible();
+      await expect(page.locator('input[type="password"]')).toHaveCount(0);
+      expect(connections).toBe(restored ? 0 : 1);
+      await page.getByRole("button", { name: "Sign out", exact: true }).click();
+      await expect(
+        page.getByRole("heading", { name: "Open Fased", exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Connect", exact: true }),
+      ).toBeVisible();
+      expect(connections).toBe(restored ? 0 : 1);
+      await page.getByRole("button", { name: "Connect", exact: true }).click();
+      await expect(
+        page.getByRole("button", { name: "Sign out", exact: true }),
+      ).toBeVisible();
+      expect(connections).toBe(restored ? 1 : 2);
+      await expect(page.locator('input[type="password"]')).toHaveCount(0);
+    },
+  );
+}

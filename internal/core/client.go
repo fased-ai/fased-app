@@ -37,6 +37,7 @@ type Client struct {
 	Token      string
 	CSRF       string
 	localOwner bool
+	remote     bool
 }
 type SavedSession struct {
 	InstanceID string `json:"instanceId"`
@@ -100,6 +101,9 @@ func (c *Client) Do(ctx context.Context, method, route string, input, output any
 			req.Header.Set("X-CSRF-Token", c.CSRF)
 		}
 	}
+	if c.remote {
+		req.Header.Set("X-Fased-Instance", c.Endpoint.InstanceID)
+	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
@@ -146,6 +150,9 @@ func (c *Client) authenticate(ctx context.Context, route string, credentials map
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint.URL+route, bytes.NewReader(request))
 	if err != nil {
 		return err
+	}
+	if c.remote {
+		req.Header.Set("X-Fased-Instance", c.Endpoint.InstanceID)
 	}
 	req.Header.Set("Origin", c.Endpoint.URL)
 	req.Header.Set("Content-Type", "application/json")

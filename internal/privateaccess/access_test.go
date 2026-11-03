@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"github.com/fased-ai/fased-app/internal/core"
 	"io"
 	"net/http"
 	"os"
@@ -219,6 +221,53 @@ func TestPrivateAccessReadinessRequiresHealthyCompatibleInstance(t *testing.T) {
 			}
 			if receipt, err := load(root); err != nil || receipt.Phase != "ready" || writes != 1 {
 				t.Fatal("retry changed the route or failed readiness", receipt, writes, err)
+			}
+		})
+	}
+}
+
+func TestPrivateIngressTransitionRecoversLostWriteWithoutReplacingForeignPolicy(t *testing.T) {
+	for _, foreign := range []bool{false, true} {
+		t.Run(fmt.Sprint(foreign), func(t *testing.T) {
+			root := fixture(t)
+			old := Plan{Mode: "tailscale", Origin: "https://node.owner.ts.net", Target: "http://127.0.0.1:7331"}
+			next := old
+			next.Target = "unix:/var/lib/fased/app-state/tailscale.sock"
+			if err := core.WritePrivateJSON(filepath.Join(root, "private-access.json"), receipt{Schema: 1, Phase: "ready", Plan: old}); err != nil {
+				t.Fatal(err)
+			}
+			cfg, _ := json.Marshal(expected(old))
+			writes := 0
+			m := Manager{GetConfig: func(context.Context) ([]byte, string, error) { return cfg, "etag", nil }, SetConfig: func(_ context.Context, data []byte, _ string) error {
+				writes++
+				cfg = append([]byte(nil), data...)
+				if writes == 1 {
+					return errors.New("lost committed response")
+				}
+				return nil
+			}, Client: &http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"status":"ok","apiVersion":"1","instanceId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","connection":{"location":"remote","transport":"private-https"}}`)), Header: http.Header{"Content-Type": []string{"application/json"}}}, nil
+			})}}
+			id := strings.Repeat("a", 43)
+			if err := m.Enable(t.Context(), root, next, id); err == nil {
+				t.Fatal("lost write treated as ready")
+			}
+			if writes != 1 {
+				t.Fatal("unexpected retry", writes)
+			}
+			if foreign {
+				cfg = []byte(`{"AllowFunnel":{"node.owner.ts.net:443":true}}`)
+				if err := m.Enable(t.Context(), root, next, id); err == nil || writes != 1 {
+					t.Fatal("foreign route overwritten", err, writes)
+				}
+				return
+			}
+			if err := m.Enable(t.Context(), root, next, id); err != nil {
+				t.Fatal(err)
+			}
+			r, err := load(root)
+			if err != nil || r.Phase != "ready" || r.Plan.Target != next.Target || r.Next != nil || writes != 1 {
+				t.Fatal("transition did not recover exact target", r, err, writes)
 			}
 		})
 	}

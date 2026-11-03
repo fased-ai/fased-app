@@ -553,7 +553,7 @@ func TestWENResearchLoopCompatibility(t *testing.T) {
 			}
 			r := loopPrepared(t, s, c, 2, 2)
 			if mode == "unsupported" {
-				if _, e := s.db.Exec(fmt.Sprintf("PRAGMA user_version=%d", LocalOwnerStateSchema+1)); e != nil {
+				if _, e := s.db.Exec(fmt.Sprintf("PRAGMA user_version=%d", RemoteOwnerStateSchema+1)); e != nil {
 					t.Fatal(e)
 				}
 			} else if mode == "v2-record-discriminator" {

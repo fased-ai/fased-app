@@ -104,7 +104,7 @@ func TestWENResearchSchema10MigrationAndNewerRefusal(t *testing.T) {
 	if schema != StateSchema {
 		t.Fatal(schema)
 	}
-	n.db.Exec(fmt.Sprintf("PRAGMA user_version=%d", LocalOwnerStateSchema+1))
+	n.db.Exec(fmt.Sprintf("PRAGMA user_version=%d", RemoteOwnerStateSchema+1))
 	n.Close()
 	if old, e := OpenStore(dir); e == nil {
 		old.Close()

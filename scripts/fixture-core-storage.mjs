@@ -114,6 +114,9 @@ import "context"
 func ordinaryCustodySettled(context.Context,snapshotReader,string,ApplicationUpdateOperation)error{return ErrCorePaused}
 func ordinaryCustodySettledWithPause(context.Context,snapshotReader,string,ApplicationUpdateOperation,string,pauseRecord)error{return ErrCorePaused}
 func(s *Store)controlledOrdinaryAccount(context.Context,Account)bool{return false}
+const RemoteOwnerStateSchema = 38
+const remoteOwnerFeature = "remote-device-owner-v1"
+func remoteOwnerSnapshot(context.Context,snapshotReader,int)(string,error){return "",nil}
 `,
   );
   const vaultPublicPath = path.join(archivedRoot, "internal/signer/vault.go");
@@ -445,12 +448,15 @@ export async function projectPasswordOnlyContract(root) {
   const file = path.join(root, "internal/core/update.go");
   const source = await readFile(file, "utf8");
   const replacements = [
-    ["Max: LocalOwnerStateSchema", "Max: StateSchema"],
+    ["Max: RemoteOwnerStateSchema", "Max: StateSchema"],
     [
-      "return schema == StateSchema || schema == LocalOwnerStateSchema",
+      "return schema == StateSchema || schema == LocalOwnerStateSchema || schema == RemoteOwnerStateSchema",
       "return schema == StateSchema",
     ],
-    ['Features: []string{"local-os-owner-v1", ', "Features: []string{"],
+    [
+      'Features: []string{remoteOwnerFeature, "local-os-owner-v1", ',
+      "Features: []string{",
+    ],
   ];
   let projected = source;
   for (const [before, after] of replacements) {

@@ -56,8 +56,8 @@ func readerApplicationOwnerHelper(ctx context.Context, m vpsinstall.Manifest, im
 				return out, true, e
 			}
 			defer client.Close()
-			if e = client.LoadSession(ctx, m.Data); e != nil {
-				return out, true, errors.New("sign in to the existing Remote CLI before reader upgrade")
+			if e = loadRemoteHelperSession(ctx, client, m); e != nil {
+				return out, true, e
 			}
 			var snapshot update.CoreSnapshot
 			if e = client.Do(ctx, http.MethodGet, "/api/v1/updates/inventory?probe="+update.NewProbe(), nil, &snapshot); e != nil {
@@ -138,7 +138,7 @@ func remoteReaderUpdateApplicable(ctx context.Context, m vpsinstall.Manifest, id
 	}
 	snapshot, e := vpsinstall.ApplicationReaderInventory(ctx, m, id, system)
 	if e != nil {
-		return true, errors.New("cannot verify the installed source reader; sign in with fased-app vps login or inspect the preserved transaction")
+		return true, errors.New("cannot verify the installed source reader; preserve the transaction and repair Remote setup")
 	}
 	switch snapshot.State.Version {
 	case 33, 35:

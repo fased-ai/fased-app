@@ -42,9 +42,14 @@ func applicationUpdatesCommand(args []string, in *os.File, out, errOut io.Writer
 		return e
 	}
 	defer c.Close()
-	if e = c.LoadSession(ctx, *dir); e != nil {
+	if e = loadUpdateSession(ctx, c, *dir); e != nil {
 		return e
 	}
+	return applicationUpdatesWithClient(ctx, c, action, in, out, errOut)
+}
+
+func applicationUpdatesWithClient(ctx context.Context, c *core.Client, action string, in *os.File, out, errOut io.Writer) error {
+	var e error
 	var v core.ApplicationUpdateView
 	if e = c.Do(ctx, http.MethodGet, "/api/v1/updates/application", nil, &v); e != nil {
 		return e

@@ -11,6 +11,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/hostprep"
 	"io"
 	"os"
+	osuser "os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -21,6 +22,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 	"github.com/fased-ai/fased-app/internal/vpsinstall"
 )
 
@@ -46,7 +48,7 @@ func installationManagedRemote(in *bufio.Reader, out io.Writer) (bool, error) {
 		case "", "y", "yes":
 			return true, nil
 		case "n", "no":
-			return false, nil
+			return false, errors.New("Remote setup requires an isolated app account")
 		}
 		fmt.Fprintln(out, "Choose yes or no.")
 	}
@@ -106,6 +108,7 @@ func enableRemoteAccess(ctx context.Context, m vpsinstall.Manifest, system *cust
 	if plan.Origin != m.PublicOrigin {
 		return "", errors.New("Tailscale identity changed; installed Remote origin was preserved")
 	}
+	plan.Target = tailnet.Target(m.Data)
 	dir, err := remoteAccessDirectory()
 	if err != nil {
 		return "", err
@@ -123,7 +126,7 @@ func remotePublicOrigin(plan privateaccess.Plan) string {
 	return ""
 }
 
-func managedRemoteInstall(ctx context.Context, corePath, hash, listen string, plan privateaccess.Plan, prepare, start bool, out, errOut io.Writer, admission ...installationAdmission) error {
+func managedRemoteInstall(ctx context.Context, corePath, hash, listen string, plan privateaccess.Plan, prepare, start bool, out, errOut io.Writer, wizard *bufio.Reader, admission ...installationAdmission) error {
 	system := remoteSystem(os.Stdin, errOut)
 	var admitted installationAdmission
 	if len(admission) > 1 {
@@ -131,6 +134,25 @@ func managedRemoteInstall(ctx context.Context, corePath, hash, listen string, pl
 	}
 	if len(admission) == 1 {
 		admitted = admission[0]
+	}
+	if plan.Mode != "tailscale" || plan.Origin == "" {
+		return errors.New("Remote requires verified Tailscale before deployment")
+	}
+	if err := hostprep.PrepareRecoveryKey(wizard, errOut); err != nil {
+		return err
+	}
+	accessDir, err := remoteAccessDirectory()
+	if err != nil {
+		return err
+	}
+	gateCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	owner, err := privateaccess.System().BeforeInstall(gateCtx, accessDir, plan, errOut)
+	if err != nil {
+		return err
+	}
+	if err = core.WritePrivateJSON(filepath.Join(accessDir, "owner-handoff.json"), remoteSetupOwner{Version: 1, Origin: plan.Origin, Listen: listen, EngineSHA256: hash, Owner: owner}); err != nil {
+		return err
 	}
 	m, err := vpsinstall.Install(ctx, vpsinstall.Options{ApplicationSequence: admitted.sequence, ApplicationReleaseSHA256: admitted.release, Core: corePath, CoreSHA256: hash, Listen: listen, PublicOrigin: remotePublicOrigin(plan), PrepareHost: prepare, Start: start}, system)
 	if err != nil {
@@ -156,13 +178,38 @@ func managedRemoteInstall(ctx context.Context, corePath, hash, listen string, pl
 	setupURL := ""
 	if start {
 		var link bytes.Buffer
-		if err = vpsinstall.SetupLink(ctx, m, system, &link); err != nil {
+		status, e := vpsinstall.Status(ctx, m, system)
+		if e != nil {
+			return e
+		}
+		bound, found, e := loadRemoteSetupOwner(accessDir, m, status.InstanceID)
+		if e != nil {
+			return e
+		}
+		if !found {
+			return errors.New("initial Remote owner handoff is missing")
+		}
+		owner = bound
+		if err = vpsinstall.SetupLink(ctx, m, system, &link, owner); err != nil {
 			return err
 		}
 		setupURL = strings.TrimSpace(link.String())
 	}
 	remoteHandoff(errOut, m, installationSSHPlan(plan, os.Getenv("SSH_CONNECTION")), start, setupURL)
-	return json.NewEncoder(out).Encode(map[string]any{"installed": true, "location": "remote", "managed": true, "application": m.Core, "data": m.Data, "url": url, "autostart": start, "walletsConnected": false})
+	if start {
+		user, err := osuser.Current()
+		if err != nil {
+			return err
+		}
+		host := strings.TrimPrefix(plan.Origin, "https://")
+		first := installationCommand("ssh", "-t", "-o", "ControlMaster=no", "-o", "ControlPath=none", user.Username+"@"+host, installationCommand(m.Core, "vps", "harden"))
+		second := installationCommand("ssh", "-t", "-o", "ControlMaster=no", "-o", "ControlPath=none", user.Username+"@"+host, installationCommand(m.Core, "vps", "finish"))
+		fmt.Fprintln(errOut, "After opening Fased, finish private recovery from your computer:")
+		fmt.Fprintln(errOut, first+" && "+second)
+		fmt.Fprintln(errOut, "Public access closes only after private recovery and console checks. Then close this bootstrap SSH session.")
+	}
+
+	return json.NewEncoder(out).Encode(map[string]any{"installed": true, "location": "remote", "managed": true, "application": m.Core, "data": m.Data, "url": url, "autostart": start, "walletsConnected": false, "setupComplete": false, "next": "private-recovery-and-lockdown"})
 }
 
 func remoteOwnerLink(ctx context.Context, m vpsinstall.Manifest, system *custodyinstall.System, out io.Writer) error {
@@ -181,8 +228,23 @@ func remoteOwnerLink(ctx context.Context, m vpsinstall.Manifest, system *custody
 	}
 	if claimed {
 		fmt.Fprintln(&link, address)
-	} else if e = vpsinstall.SetupLink(ctx, m, system, &link); e != nil {
-		return e
+	} else {
+		dir, e := remoteAccessDirectory()
+		if e != nil {
+			return e
+		}
+		owner, found, e := loadRemoteSetupOwner(dir, m, status.InstanceID)
+		if e != nil {
+			return e
+		}
+		if found {
+			e = vpsinstall.SetupLink(ctx, m, system, &link, owner)
+		} else {
+			e = vpsinstall.SetupLink(ctx, m, system, &link)
+		}
+		if e != nil {
+			return e
+		}
 	}
 	if os.Getenv("FASED_INSTALL_ROOT_ENTRY") != "1" {
 		_, e := out.Write(link.Bytes())
@@ -271,7 +333,7 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 	}
 	action := args[0]
 	switch action {
-	case "status", "start", "stop", "login", "claim-code", "recover", "access", "remove", "harden", "confirm", "rollback", "network":
+	case "status", "start", "stop", "login", "claim-code", "recover", "access", "remove", "harden", "confirm", "finish", "rollback", "network":
 	default:
 		return errors.New("unknown vps action")
 	}
@@ -351,7 +413,7 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 		return configureRemoteAccess(ctx, m, system, in, out, errOut)
 	}
 	switch action {
-	case "harden", "confirm", "rollback", "network":
+	case "harden", "confirm", "finish", "rollback", "network":
 		var status vpsinstall.NetworkStatus
 		switch action {
 		case "harden":
@@ -362,6 +424,13 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 			status, err = vpsinstall.BeginNetwork(ctx, m, system, approval)
 		case "confirm":
 			status, err = vpsinstall.ConfirmNetwork(ctx, m, system, f.Arg(0))
+		case "finish":
+			status, err = vpsinstall.InspectNetwork(ctx, m, system)
+			if err == nil && status.Phase == "pending" {
+				status, err = vpsinstall.ConfirmNetwork(ctx, m, system, status.AttemptID)
+			} else if err == nil && status.Phase != "committed" {
+				err = errors.New("no pending private setup; existing access is preserved")
+			}
 		case "rollback":
 			status, err = vpsinstall.RollbackNetwork(ctx, m, system)
 		case "network":
@@ -457,7 +526,7 @@ func enableEnrolledRemoteAccess(ctx context.Context, source vpsinstall.Manifest,
 // prevent that recovery path from reaching its original policy controller.
 func vpsEnrollmentTarget(action, data string, lookup func(string) (custodyinstall.Manifest, bool, error)) (custodyinstall.Manifest, bool, error) {
 	switch action {
-	case "harden", "confirm", "rollback", "network":
+	case "harden", "confirm", "finish", "rollback", "network":
 		return custodyinstall.Manifest{}, false, nil
 	}
 	return lookup(data)

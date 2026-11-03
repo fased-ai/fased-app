@@ -12,6 +12,33 @@ export const languages = {
 export type Language = keyof typeof languages;
 // Interface copy only. Never translate user records, model output or server receipts.
 const rows = {
+  Devices: ["Устройства", "Dispositivos", "设备", "기기"],
+  "Add device": [
+    "Добавить устройство",
+    "Añadir dispositivo",
+    "添加设备",
+    "기기 추가",
+  ],
+  "This device": ["Это устройство", "Este dispositivo", "此设备", "현재 기기"],
+  "Open on your other device": [
+    "Откройте на другом устройстве",
+    "Abre en tu otro dispositivo",
+    "在另一台设备上打开",
+    "다른 기기에서 열기",
+  ],
+  "Device list unavailable": [
+    "Список устройств недоступен",
+    "Lista de dispositivos no disponible",
+    "无法获取设备列表",
+    "기기 목록을 불러올 수 없습니다",
+  ],
+  "Use an approved device or a setup link.": [
+    "Используйте разрешённое устройство или ссылку настройки.",
+    "Usa un dispositivo autorizado o un enlace de configuración.",
+    "请使用已授权设备或设置链接。",
+    "승인된 기기 또는 설정 링크를 사용하세요.",
+  ],
+
   "Open Fased": ["Открыть Fased", "Abrir Fased", "打开 Fased", "Fased 열기"],
   "Open Fased on this computer.": [
     "Откройте Fased на этом компьютере.",

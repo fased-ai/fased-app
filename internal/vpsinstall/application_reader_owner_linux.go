@@ -110,10 +110,16 @@ func ApplicationUpdateClient(ctx context.Context, m Manifest, action string, s *
 	default:
 		return errors.New("unsupported installed update action")
 	}
-	if s == nil || (action == "apply" && s.NonInteractive) {
-		return errors.New("owner terminal required")
+	if s == nil {
+		return errors.New("installed owner update context required")
 	}
-	o := liveOps(s)
+	// NonInteractive disables OS-password fallback; it does not cancel an
+	// explicit Apply. The caller and fixed helper are still checked below.
+	return applicationUpdateClient(ctx, m, action, liveOps(s), out, func(ctx context.Context, args []string) ([]byte, error) {
+		return runApplicationReaderSource(ctx, s, args, s.In)
+	})
+}
+func applicationUpdateClient(ctx context.Context, m Manifest, action string, o hostOps, out io.Writer, helper func(context.Context, []string) ([]byte, error)) error {
 	if e := verify(ctx, o, m); e != nil {
 		return e
 	}
@@ -127,7 +133,7 @@ func ApplicationUpdateClient(ctx context.Context, m Manifest, action string, s *
 	}
 	args := applicationReaderSourceArgs(m, "updates", "")
 	args = append(args[:len(args)-2], append([]string{action}, args[len(args)-2:]...)...)
-	b, e := runApplicationReaderSource(ctx, s, args, s.In)
+	b, e := helper(ctx, args)
 	if e != nil {
 		var status *exec.ExitError
 		if errors.As(e, &status) {

@@ -48,6 +48,8 @@ function useCoreState() {
   const [instanceId, setInstanceId] = useState("");
   const [version, setVersion] = useState("");
   const [connection, setConnection] = useState<InstanceConnection | null>(null);
+  const [remoteAccess, setRemoteAccess] = useState(false);
+  const [remoteEnrolled, setRemoteEnrolled] = useState(false);
   const [localAccess, setLocalAccess] = useState(false);
   const [passwordAvailable, setPasswordAvailable] = useState(false);
   const connectedID = useRef(
@@ -116,6 +118,7 @@ function useCoreState() {
         route !== "auth/login" &&
         route !== "auth/claim" &&
         route !== "auth/local" &&
+        route !== "auth/remote" &&
         route !== "installation/local-owner"
       ) {
         const message = "Your session ended. Sign in again.";
@@ -175,11 +178,33 @@ function useCoreState() {
         authenticated: boolean;
         csrfToken?: string;
         localAccess?: boolean;
+        remoteAccess?: boolean;
+        remoteEnrolled?: boolean;
+        legacyAuthenticated?: boolean;
         passwordAvailable?: boolean;
       }>("auth/state");
       if (epoch !== authGeneration.current) return;
       setLocalAccess(auth.localAccess === true);
+      setRemoteAccess(auth.remoteAccess === true);
+      setRemoteEnrolled(auth.remoteEnrolled === true);
+      if (auth.legacyAuthenticated) csrf.current = auth.csrfToken ?? "";
       setPasswordAvailable(auth.passwordAvailable === true);
+      if (
+        auth.remoteAccess &&
+        !auth.remoteEnrolled &&
+        auth.legacyAuthenticated
+      ) {
+        const session = await request<{ csrfToken: string }>(
+          "auth/remote",
+          "POST",
+          {},
+        );
+        if (epoch !== authGeneration.current) return;
+        csrf.current = session.csrfToken;
+        auth.authenticated = true;
+        auth.claimed = true;
+        setRemoteEnrolled(true);
+      }
       if (!auth.claimed) {
         setConnection(verifiedConnection);
         setMode("unclaimed");
@@ -190,7 +215,8 @@ function useCoreState() {
         setConnection(verifiedConnection);
         return;
       }
-      csrf.current = auth.csrfToken ?? "";
+      if (!auth.legacyAuthenticated || auth.remoteEnrolled)
+        csrf.current = auth.csrfToken ?? "";
       const current = await request<CoreSetup>("setup");
       if (epoch !== authGeneration.current) return;
       record.current = current;
@@ -225,7 +251,12 @@ function useCoreState() {
       active = false;
     };
   }, [refresh]);
-  async function authenticate(password: string, code?: string, local = false) {
+  async function authenticate(
+    password: string,
+    code?: string,
+    local = false,
+    remote = false,
+  ) {
     const epoch = ++authGeneration.current;
     setError("");
     changePending(epoch, 1);
@@ -240,23 +271,32 @@ function useCoreState() {
         sessionToken: string;
         sessionMode?: "bearer" | "cookie";
       }>(
-        nativeLocal
-          ? "installation/local-owner"
-          : local
-            ? "auth/local"
-            : code === undefined
-              ? "auth/login"
-              : "auth/claim",
+        remote
+          ? "auth/remote"
+          : nativeLocal
+            ? "installation/local-owner"
+            : local
+              ? "auth/local"
+              : code === undefined
+                ? "auth/login"
+                : "auth/claim",
         "POST",
-        nativeLocal
-          ? {}
-          : local
-            ? { action: "exchange", code }
-            : code === undefined
-              ? { password }
-              : { password, code },
+        remote
+          ? { code }
+          : nativeLocal
+            ? {}
+            : local
+              ? { action: "exchange", code }
+              : code === undefined
+                ? { password }
+                : { password, code },
       );
       if (epoch !== authGeneration.current) return;
+      if (remote) {
+        try {
+          sessionStorage.removeItem("fased.remote.signed-out");
+        } catch {}
+      }
       csrf.current = session.csrfToken;
       // HTTP loopback cookies would be shared across ports. Use origin-scoped session
       // storage for loopback/native bearer sessions; private HTTPS uses its cookie.
@@ -323,7 +363,14 @@ function useCoreState() {
     changePending(epoch, 1);
     try {
       await request("auth/logout", "POST", {});
-      if (epoch === authGeneration.current) lock();
+      if (epoch === authGeneration.current) {
+        if (remoteAccess) {
+          try {
+            sessionStorage.setItem("fased.remote.signed-out", "1");
+          } catch {}
+        }
+        lock();
+      }
     } catch (e) {
       if (epoch === authGeneration.current)
         setError(e instanceof Error ? e.message : "Logout failed");
@@ -332,6 +379,8 @@ function useCoreState() {
     }
   }
   return {
+    remoteAccess,
+    remoteEnrolled,
     localAccess,
     passwordAvailable,
     mode,

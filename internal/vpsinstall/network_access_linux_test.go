@@ -106,7 +106,7 @@ func TestNetworkPrivateApplicationIdentityAndOwner(t *testing.T) {
 				}
 				code, body := 200, `{"claimed":true}`
 				if req.URL.Path == "/api/v1/health" {
-					h := core.Health{Status: "ok", APIVersion: core.APIVersion, InstanceID: strings.Repeat("a", 43), Connection: &core.ConnectionInfo{Location: "remote", Transport: "private-https"}}
+					h := core.Health{Status: "ok", APIVersion: core.APIVersion, InstanceID: strings.Repeat("a", 43), Connection: &core.ConnectionInfo{RemoteReady: true, Location: "remote", Transport: "private-https"}}
 					if scenario == "different instance" && req.URL.Scheme == "https" {
 						h.InstanceID = strings.Repeat("b", 43)
 					}
@@ -115,6 +115,17 @@ func TestNetworkPrivateApplicationIdentityAndOwner(t *testing.T) {
 					}
 					if scenario == "bad health" {
 						h.Status = "failed"
+					}
+					if req.URL.Scheme == "https" {
+						switch scenario {
+						case "unclaimed":
+							h.Connection.RemoteReady = false
+						case "owner failure":
+							code = 503
+						case "huge owner":
+							body = strings.Repeat("x", 16385)
+							return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+						}
 					}
 					data, _ := json.Marshal(h)
 					body = string(data)

@@ -4,6 +4,12 @@ Fased uses saved GitHub authentication and automated build attestations. Custome
 
 The current candidate job is Local-only: it uses the immutable public0.1.6 predecessor, tests UI/CLI apply and Automatic with no open tab, and checks fresh password-free Local setup. This receipt cannot authorize publication: the existing publisher still requires its complete Remote/private-access acceptance. No tag or public release is part of this Local package.
 
+The Remote source package adds mandatory predeployment private-owner proof, a dedicated root-peer ingress, device-bound sessions and direct private HTTPS CLI updates. Fresh Remote ownership uses protected format38. Existing password identity bytes are preserved; enrollment requires the existing authenticated owner through trusted ingress. Initial owner/device changes are refused during an update hold. These source and controlled checks do not establish installed Remote acceptance.
+
+The existing real VPS still runs0.1.5, format36. Its exact retained executable passed a local disposable-state missing-session regression without migration or password handoff. Before old-reader inventory, only the verified current bootstrap may stage its immutable content-bound helper; trusted OS tools drop to the fixed app UID before executing it. Routine maintenance uses noninteractive fixed OS grants. A missing grant fails setup rather than prompting for an application or sudo password.
+
+**Unresolved staging gate:** `VerifyAttestedCandidate` remains read-only. Normal acquisition requires an immutable public release. Do not install an unreviewed binary or repoint the existing VPS at fixture metadata, a test CA or a fake GitHub endpoint. Source review and the previous Local candidate cannot close the same-candidate installed Remote gate. Record this missing execution admission separately from publication authorization.
+
 Existing password accounts retain format36 through this UI upgrade; only new password-free Local claims use protected format37. Do not convert old accounts during the predecessor's frozen update or claim that its initial password setup has disappeared from immutable binaries.
 
 ## Status and authority

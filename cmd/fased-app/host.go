@@ -54,7 +54,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	printOnly := f.Bool("print", false, "print the verified local UI URL without opening a window")
 	interactive := f.Bool("interactive", false, "guide installation in this terminal")
 	profile := f.String("profile", "", "preselected Local/Remote/Connect installation profile")
-	access := f.String("access", "local", "local, ssh or tailscale private access")
+	access := f.String("access", "local", "local or mandatory tailscale private access")
 	vps := f.Bool("vps", false, "require always-on Linux VPS readiness")
 	managedRemote := f.Bool("managed-remote", false, "install Ubuntu Remote using a dedicated locked application account")
 	packageDir := f.String("bundle", "", "verify and install this platform package inventory")
@@ -208,16 +208,14 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			return errors.New("managed Remote requires a verified headless bundle")
 		}
 		if *vps {
-			if *access != "ssh" && *access != "tailscale" {
-				return errors.New("Remote installation requires --access ssh or tailscale")
+			if *access != "tailscale" {
+				return errors.New("Remote requires Tailscale before installation")
 			}
 			if runtime.GOOS != "linux" || !*autostart {
 				return errors.New("VPS installation requires Linux and explicit --autostart")
 			}
 			if !*managedRemote {
-				if err = checkLinger(ctx); err != nil {
-					return err
-				}
+				return errors.New("Remote requires the isolated application service; use --managed-remote")
 			}
 		}
 		var accessWizard *bufio.Reader
@@ -252,7 +250,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			*prepareHost = strings.EqualFold(strings.TrimSpace(choice), "y")
 		}
 		if *managedRemote {
-			return managedRemoteInstall(ctx, engine, inventory.Files[localinstall.EngineName()].SHA256, *listen, plan, *prepareHost, *start, out, errOut, installationAdmission{sequence: sequence, release: release, prepareUpdates: *interactive && *prepareHost})
+			return managedRemoteInstall(ctx, engine, inventory.Files[localinstall.EngineName()].SHA256, *listen, plan, *prepareHost, *start, out, errOut, wizard, installationAdmission{sequence: sequence, release: release, prepareUpdates: *interactive && *prepareHost})
 		}
 		if err = desktopRuntime(ctx, *desktop, *packageDir, *data, *installRuntime, *prepareHost, os.Stdin, errOut); err != nil {
 			return err
@@ -561,6 +559,9 @@ func installationAutostart(r *bufio.Reader, out io.Writer, remote bool) (bool, e
 // Private access is planned before host preparation or installation. A changed
 // transport requires another explicit wizard choice, never an automatic fallback.
 func installationPrivateAccess(ctx context.Context, in *bufio.Reader, out io.Writer, mode, listen string, planner func(context.Context, string, string) (privateaccess.Plan, error), preparer ...func(context.Context, *bufio.Reader, io.Writer) error) (privateaccess.Plan, error) {
+	if mode == "ssh" {
+		return privateaccess.Plan{}, errors.New("Remote requires Tailscale; SSH is only for initial setup and recovery")
+	}
 	// Changing access cannot repair an invalid listener. Reuse the pure local
 	// planner's target validation before any readiness call or retry prompt.
 	if _, err := (privateaccess.Manager{}).Plan(ctx, "local", listen); err != nil {
@@ -588,7 +589,7 @@ func installationPrivateAccess(ctx context.Context, in *bufio.Reader, out io.Wri
 			return privateaccess.Plan{}, cancelErr
 		}
 		fmt.Fprintln(out, "Private access is not ready:", err)
-		fmt.Fprintln(out, "Prepare Tailscale and retry, or choose SSH. Installation has not started.")
+		fmt.Fprintln(out, "Connect Tailscale and retry. Fased has not been installed.")
 		mode, err = installationPrivateAccessChoice(in, out)
 		if err != nil {
 			return privateaccess.Plan{}, err
@@ -597,18 +598,15 @@ func installationPrivateAccess(ctx context.Context, in *bufio.Reader, out io.Wri
 }
 
 func installationPrivateAccessChoice(in *bufio.Reader, out io.Writer) (string, error) {
-	for {
-		mode, err := installationAnswer(in, out, "Private access [tailscale/ssh, default tailscale]: ")
-		if err != nil {
-			return "", err
-		}
-		switch strings.ToLower(mode) {
-		case "", "tailscale":
-			return "tailscale", nil
-		case "ssh":
-			return "ssh", nil
-		}
-		fmt.Fprintln(out, "Choose tailscale or ssh.")
+	answer, err := installationAnswer(in, out, "Connect Tailscale for private Remote access? [Y/n]: ")
+	if err != nil {
+		return "", err
+	}
+	switch strings.ToLower(answer) {
+	case "", "y", "yes", "tailscale":
+		return "tailscale", nil
+	default:
+		return "", errors.New("Remote setup cancelled; Tailscale is required")
 	}
 }
 

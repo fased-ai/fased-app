@@ -241,7 +241,7 @@ func TestRemoteEnrolledNetworkProofBindsInstanceAndOwner(t *testing.T) {
 			client := &http.Client{Transport: networkRoundTrip(func(r *http.Request) (*http.Response, error) {
 				body := []byte(`{"claimed":true}`)
 				if r.URL.Path == "/api/v1/health" {
-					h := core.Health{Status: "ok", APIVersion: core.APIVersion, InstanceID: identity, Connection: &core.ConnectionInfo{Location: "remote", Transport: "private-https", OwnerUID: m.OwnerUID}}
+					h := core.Health{Status: "ok", APIVersion: core.APIVersion, InstanceID: identity, Connection: &core.ConnectionInfo{RemoteReady: true, Location: "remote", Transport: "private-https", OwnerUID: m.OwnerUID}}
 					if mode == "wrong-loopback" && r.URL.Scheme == "http" || mode == "wrong-private" && r.URL.Scheme == "https" {
 						h.InstanceID = strings.Repeat("a", 43)
 					}

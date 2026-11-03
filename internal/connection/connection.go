@@ -51,6 +51,7 @@ type Result struct {
 	InstanceID          string `json:"instanceId"`
 	Location            string `json:"location"`
 	Transport           string `json:"transport"`
+	RemoteReady         bool   `json:"remoteReady,omitempty"`
 	InstallationCreated bool   `json:"installationCreated"`
 }
 
@@ -79,6 +80,10 @@ func claimedOwnerURL(ctx context.Context, value, expected string, client *http.C
 	instance, err := probe(ctx, value, expected, client)
 	if err != nil {
 		return "", false, err
+	}
+	if instance.RemoteReady {
+		address, e := OwnerSetupURL(instance.URL, instance.InstanceID, "")
+		return address, true, e
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, instance.URL+"/api/v1/auth/state", nil)
 	if err != nil {
@@ -128,7 +133,7 @@ func probe(ctx context.Context, value, expected string, client *http.Client) (Re
 	if e != nil {
 		return Result{}, e
 	}
-	return Result{URL: origin, InstanceID: h.InstanceID, Location: h.Connection.Location, Transport: h.Connection.Transport}, nil
+	return Result{URL: origin, InstanceID: h.InstanceID, Location: h.Connection.Location, Transport: h.Connection.Transport, RemoteReady: h.Connection.RemoteReady}, nil
 }
 
 // ReadHealth applies the same instance readiness contract to ordinary Connect

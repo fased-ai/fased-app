@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/fased-ai/fased-app/internal/hostplatform"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 	"io"
 	"os"
 	"os/exec"
@@ -983,9 +984,21 @@ func remove(ctx context.Context, o hostOps, m Manifest) error {
 
 // SetupLink retains the same verified owner/unit/UID boundary as Claim. Only
 // the trusted terminal receives the transient proof; status stays public-only.
-func SetupLink(ctx context.Context, m Manifest, s *custodyinstall.System, out io.Writer) error {
+func SetupLink(ctx context.Context, m Manifest, s *custodyinstall.System, out io.Writer, owner ...tailnet.Identity) error {
 	if s == nil || out == nil {
 		return errors.New("owner terminal and output required")
+	}
+	if len(owner) > 1 {
+		return errors.New("one verified Remote owner required")
+	}
+	if len(owner) == 1 {
+		copy := *s
+		data, e := json.Marshal(owner[0])
+		if e != nil {
+			return e
+		}
+		copy.In = bytes.NewReader(data)
+		s = &copy
 	}
 	return locked(ctx, liveOps(s), m, func(o hostOps) error { return setupLink(ctx, o, m, out) })
 }

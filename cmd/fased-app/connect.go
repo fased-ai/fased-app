@@ -7,13 +7,21 @@ import (
 	"flag"
 	"fmt"
 	"github.com/fased-ai/fased-app/internal/connection"
+	"github.com/fased-ai/fased-app/internal/core"
 	"io"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
 func connectCommand(args []string, out, errOut io.Writer) error {
 	f := flag.NewFlagSet("connect", flag.ContinueOnError)
 	f.SetOutput(errOut)
+	base, e := core.DefaultDataDir()
+	if e != nil {
+		return e
+	}
+	dataDir := f.String("data-dir", base, "private client preferences")
 	address := f.String("url", "", "existing Fased HTTPS origin or loopback SSH tunnel")
 	expected := f.String("instance-id", "", "optional expected instance identity")
 	printOnly := f.Bool("print", false, "verify and print without opening a browser")
@@ -28,6 +36,18 @@ func connectCommand(args []string, out, errOut io.Writer) error {
 	result, e := connection.Probe(ctx, *address, *expected)
 	if e != nil {
 		return e
+	}
+	if result.Location == "remote" {
+		if !strings.HasPrefix(result.URL, "https://") || !strings.HasSuffix(result.URL, ".ts.net") {
+			return errors.New("Remote requires its Tailscale HTTPS address")
+		}
+		dir := *dataDir
+		if e = core.EnsurePrivateDirectory(dir); e != nil {
+			return e
+		}
+		if e = core.WritePrivateJSON(filepath.Join(dir, "remote-connection.json"), result); e != nil {
+			return e
+		}
 	}
 	if err := json.NewEncoder(out).Encode(result); err != nil {
 		return err

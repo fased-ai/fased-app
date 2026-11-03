@@ -101,10 +101,15 @@ func (c *remoteApplicationOwner) call(ctx context.Context, action string, p *cor
 	return v, e
 }
 func maintainRemoteUpdate(ctx context.Context, m vpsinstall.Manifest, id string, rollback bool, source func(context.Context, core.ApplicationRelease, string) (*bootstrap.Prepared, error), out io.Writer) error {
-	return maintainRemoteUpdateWithSystem(ctx, m, id, rollback, source, out, &custodyinstall.System{In: os.Stdin, Out: os.Stderr})
+	return maintainRemoteUpdateWithSystem(ctx, m, id, rollback, source, out, &custodyinstall.System{In: os.Stdin, Out: os.Stderr, NonInteractive: true})
 }
 func maintainRemoteUpdateWithSystem(ctx context.Context, m vpsinstall.Manifest, id string, rollback bool, source func(context.Context, core.ApplicationRelease, string) (*bootstrap.Prepared, error), out io.Writer, system *custodyinstall.System) error {
 	status, statusErr := vpsinstall.ApplicationUpdateState(m.OwnerUID)
+	if statusErr != nil || status.ID != id {
+		if err := prepareRemoteSourceSession(ctx, m, system); err != nil {
+			return err
+		}
+	}
 	return routeRemoteApplicationMaintenance(status, statusErr, id, func() error { return maintainSameReaderRemoteUpdate(ctx, m, id, rollback, source, out, system) }, func() error {
 		return maintainRemoteReaderUpdate(ctx, m, id, rollback, compiledApplicationReaderSource, out, system)
 	})

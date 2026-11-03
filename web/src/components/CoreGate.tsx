@@ -13,6 +13,7 @@ let ownerSetup = captureOwnerSetup(window.location.href, (url) =>
 let nativeProof: { instanceId: string; result: Promise<string> } | undefined;
 let localProof: { code: string; result: Promise<void> } | undefined;
 let nativeLocalAttempted = false;
+let remoteAttempt: { instance: string; result: Promise<void> } | undefined;
 export function CoreGate({ children }: { children: ReactNode }) {
   const { t: uiText } = useUI();
   const core = useCore();
@@ -25,6 +26,56 @@ export function CoreGate({ children }: { children: ReactNode }) {
   const native = ["wails", "wails.localhost"].includes(
     window.location.hostname,
   );
+  useEffect(() => {
+    if (!core.remoteAccess || !core.connection) return;
+    if (core.mode === "ready") {
+      remoteAttempt = {
+        instance: core.connection.instanceId,
+        result: Promise.resolve(),
+      };
+      ownerSetup = null;
+      setCode("");
+      return;
+    }
+    if (!["locked", "unclaimed"].includes(core.mode)) return;
+    try {
+      if (!code && sessionStorage.getItem("fased.remote.signed-out") === "1")
+        return;
+    } catch {
+      /* OS-device authority still requires explicit Connect after this window's logout. */
+    }
+    if (!core.remoteEnrolled && !code) return;
+    const instance = core.connection.instanceId;
+    if (ownerSetup && ownerSetup.instanceId !== instance) {
+      setCode("");
+      setClaimError("Reopen Fased to connect.");
+      return;
+    }
+    if (!remoteAttempt || remoteAttempt.instance !== instance) {
+      remoteAttempt = {
+        instance,
+        result: core.authenticate("", code || undefined, false, true),
+      };
+    }
+    let active = true;
+    remoteAttempt.result
+      .then(() => {
+        ownerSetup = null;
+        if (active) setCode("");
+      })
+      .catch(() => {
+        if (active) setClaimError("Use an approved device or a setup link.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [
+    core.remoteAccess,
+    core.remoteEnrolled,
+    core.connection,
+    core.mode,
+    code,
+  ]);
   useEffect(() => {
     if (!native || !core.localAccess) return;
     if (core.mode === "ready") {
@@ -138,6 +189,8 @@ export function CoreGate({ children }: { children: ReactNode }) {
         password,
         core.mode === "unclaimed" ? code.trim() : undefined,
       );
+      if (core.remoteAccess)
+        await core.authenticate("", undefined, false, true);
       setPassword("");
       setCode("");
       ownerSetup = null;
@@ -201,6 +254,26 @@ export function CoreGate({ children }: { children: ReactNode }) {
                 {uiText("Use password")}
               </button>
             )}
+          </div>
+        ) : core.remoteAccess &&
+          (core.mode === "unclaimed" || core.remoteEnrolled) ? (
+          <div className="settings-body">
+            <h1>{uiText("Open Fased")}</h1>
+            <button
+              className="button primary"
+              disabled={core.saving}
+              onClick={() => {
+                remoteAttempt = undefined;
+                void core
+                  .authenticate("", code || undefined, false, true)
+                  .catch(() =>
+                    setClaimError("Use an approved device or a setup link."),
+                  );
+              }}
+            >
+              {uiText("Connect")}
+            </button>
+            {claimError && <p role="alert">{uiText(claimError)}</p>}
           </div>
         ) : (
           <form onSubmit={submit}>
