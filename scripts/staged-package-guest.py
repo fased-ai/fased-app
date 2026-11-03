@@ -24,7 +24,7 @@ import urllib.request
 
 P = pathlib.Path
 ASSETS = ["fased-app-linux-amd64.tar.gz", "fased-install-linux-amd64", "fased-app-linux-amd64.provenance.sigstore.json", "install.sh", "fased-release.json"]
-PROFILES = {"local": ("fased-local", 1100, 17481), "remote": ("fased-remote", 1200, 17482), "legacy": ("fased-legacy", 1300, 17483)}
+PROFILES = {"local": ("fased-local", 1100, 17481), "remote": ("fased-remote", 1200, 17482), "legacy": ("fased-legacy", 1300, 17483), "fresh": ("fased-fresh", 1400, 17484)}
 HOSTS = ["github.com", "api.github.com", "release-assets.githubusercontent.com"]
 ADDRESS = "140.82.112.3"
 PASSWORD = "disposable-staged-owner-password"
@@ -63,7 +63,7 @@ def write_private(path, value):
 
 
 def redacted(text):
-    return re.sub(r"#setup=[^\s]+", "#setup=[redacted]", text.replace(PASSWORD, "[redacted]"))
+    return re.sub(r"(#(?:setup|local)=)[^\s]+", r"\1[redacted]", text.replace(PASSWORD, "[redacted]"))
 
 
 def checked_reply(result, owner, action, failure_file):
@@ -324,14 +324,14 @@ def owner(args):
     if args.version and args.owner_action in ("apply", "bootstrap", "failed-bootstrap"):
         prompts["Update to " + args.version + "? [y/N]: "] = "y"
     if args.owner_action == "open":
-        code, output = terminal([command_path(), "open", *(["--print"] if args.profile == "local" else [])], {})
+        code, output = terminal([command_path(), "open", *(["--print"] if args.profile in ("local", "fresh") else [])], {})
         if code:
             raise RuntimeError("ordinary private browser handoff missing: " + redacted(output)[-8192:])
         url, count = browser_link(output)
         return {"result": "PASS", "url": url, "urlCount": count}
     if args.owner_action in ("install", "bootstrap", "failed-bootstrap"):
         version = args.version
-        install_profile = "remote" if args.profile == "legacy" else args.profile
+        install_profile = "local" if args.profile in ("local", "fresh") else "remote"
         if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version or ""):
             raise RuntimeError("fixed verified release version required")
         url = "https://github.com/fased-ai/fased-app/releases/download/v" + version + "/install.sh"
@@ -357,14 +357,14 @@ def owner(args):
             raise RuntimeError("bootstrap did not preserve the instance and install candidate")
         state["version"] = current["version"]
         write_private(state_dir / "state.json", state)
-        code, opened = terminal([command_path(), "open", *(["--print"] if args.profile == "local" else [])], {})
+        code, opened = terminal([command_path(), "open", *(["--print"] if args.profile in ("local", "fresh") else [])], {})
         if code:
             raise RuntimeError("normal private browser handoff missing: " + redacted(opened)[-8192:])
         url, count = browser_link(opened)
         return {"result": "PASS", "url": url, "urlCount": count, "health": current}
     if args.owner_action == "login":
         code, output = terminal([command_path(), "login"], {"Owner password: ": PASSWORD})
-        confirmation = "CLI authenticated" if args.profile == "local" else "Signed in"
+        confirmation = "CLI authenticated" if args.profile in ("local", "fresh") else "Signed in"
         if code or confirmation not in output:
             raise RuntimeError("ordinary CLI owner sign-in failed: " + redacted(output)[-8192:])
         return {"result": "PASS"}
@@ -379,12 +379,12 @@ def owner(args):
             raise RuntimeError("ordinary installed CLI did not apply the candidate: " + redacted(output)[-8192:])
         state["version"] = current["version"]
         write_private(state_dir / "state.json", state)
-        return {"result": "PASS", "cliOutcome": "applied", "health": current}
+        return {"result": "PASS", "cliOutcome": "applied", "health": current, "passwordPrompt": "Owner password:" in output}
     if args.owner_action == "check":
         code, output = terminal([command_path(), "update"], prompts)
         if code or "Already current" not in output:
             raise RuntimeError("ordinary installed CLI Update/no-op failed")
-        return {"result": "PASS", "cliOutcome": "alreadyCurrent", "health": health(port)}
+        return {"result": "PASS", "cliOutcome": "alreadyCurrent", "health": health(port), "passwordPrompt": "Owner password:" in output}
     if args.owner_action == "restart":
         previous = health(port)
         for action in ("stop", "start"):
@@ -410,6 +410,7 @@ def main():
     parser.add_argument("--profile", choices=PROFILES)
     parser.add_argument("--owner-action", choices=["install", "failed-bootstrap", "bootstrap", "open", "login", "apply", "check", "restart"])
     parser.add_argument("--version")
+    parser.add_argument("--released-local-only", action="store_true")
     args = parser.parse_args()
     vm_guard()
     if args.action == "owner":
@@ -419,7 +420,7 @@ def main():
         raise RuntimeError("fixed VM fixture administrator required")
     if args.action == "setup":
         candidate, predecessor, legacy = package(args.candidate), package(args.predecessor), package(args.legacy)
-        if candidate["packet"]["version"] != 2 or predecessor["packet"]["version"] != 2 or predecessor["packet"]["productVersion"] != "0.1.4" or legacy["packet"]["version"] != 1:
+        if candidate["packet"]["version"] != 2 or predecessor["packet"]["version"] != 2 or (not args.released_local_only and predecessor["packet"]["productVersion"] != "0.1.4") or (not args.released_local_only and legacy["packet"]["version"] != 1):
             raise RuntimeError("target, attested compatibility reader and original legacy bridge inputs required")
         args.work.mkdir(mode=0o700, parents=True)
         write_private(args.work / "fixture.json", {"candidate": str(args.candidate), "predecessor": str(args.predecessor), "legacy": str(args.legacy)})

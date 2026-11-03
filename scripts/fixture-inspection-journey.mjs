@@ -16,7 +16,7 @@ else:args=[binary,'custody','fixture-inspection',op,'--bridge-id',ident]
 args+=['--disposable-fixture','--prepare-host']
 pid,fd=pty.fork()
 if pid==0:os.execv(binary,args)
-seen=b'';sent=False;interrupted=False;deadline=time.time()+85;done=None
+seen=b'';sent=False;interrupted=False;deadline=time.time()+85;done=None;failed=False
 try:
  while time.time()<deadline:
   ready,_,_=select.select([fd],[],[],.05)
@@ -56,9 +56,12 @@ try:
     if not last:break
     seen+=last
    break
+except BaseException:
+ failed=True
+ raise
 finally:
  if done is None:
-  if time.time()>=deadline:
+  if failed or time.time()>=deadline:
    try:os.killpg(pid,signal.SIGKILL)
    except ProcessLookupError:pass
   try:_,status=os.waitpid(pid,0);done=os.waitstatus_to_exitcode(status)
@@ -84,6 +87,7 @@ export async function fixtureInspectionJourney({
     ),
     work = path.join(evidence, "public-fixture"),
     core = path.resolve(".evidence/bin/fased-app"),
+    guardedCore = path.resolve(".evidence/p4-installed-inspection/guarded-app"),
     signer = path.resolve(".evidence/bin/fased-signer");
   await mkdir(work, { recursive: true, mode: 0o700 });
   const run = (bin, args, input) =>
@@ -128,7 +132,7 @@ export async function fixtureInspectionJourney({
   const target = {
     ...base,
     inspectionBridge: id,
-    coreHash: sha(await readFile(core)),
+    coreHash: sha(await readFile(guardedCore)),
     signerHash: sha(await readFile(signer)),
   };
   const units = {};
@@ -225,7 +229,7 @@ export async function fixtureInspectionJourney({
       run("python3", [
         "-c",
         tty,
-        core,
+        guardedCore,
         op,
         id,
         txpath,
@@ -326,7 +330,7 @@ export async function fixtureInspectionJourney({
     for (const role of ["app", "signer"])
       await writeFile(
         path.join(candidate, "fased-" + role),
-        await readFile(role === "app" ? core : signer),
+        await readFile(role === "app" ? guardedCore : signer),
         { mode: 0o700 },
       );
     const cancelled = terminal("provision", "cancel");
@@ -349,13 +353,14 @@ export async function fixtureInspectionJourney({
       pass(
         "actualControllerStoppedAtExactCut",
         result.interrupted && result.exitCode !== 0,
+        result,
       );
       report.cut = stopAt;
       report.bridgeId = id;
       report.result = "CUT";
       return report;
     }
-    pass("guardedBridgeCompletes", result.exitCode === 0);
+    pass("guardedBridgeCompletes", result.exitCode === 0, result);
     const after = snapshot();
     report.after = after;
     pass(

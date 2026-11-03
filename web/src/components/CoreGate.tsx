@@ -11,17 +11,72 @@ let ownerSetup = captureOwnerSetup(window.location.href, (url) =>
   history.replaceState(history.state, "", url),
 );
 let nativeProof: { instanceId: string; result: Promise<string> } | undefined;
+let localProof: { code: string; result: Promise<void> } | undefined;
+let nativeLocalAttempted = false;
 export function CoreGate({ children }: { children: ReactNode }) {
   const { t: uiText } = useUI();
   const core = useCore();
   const [password, setPassword] = useState("");
   const [code, setCode] = useState(ownerSetup?.code ?? "");
   const [claimError, setClaimError] = useState("");
+  const [passwordSignIn, setPasswordSignIn] = useState(false);
   const handoff = ownerHandoff(core.connection);
   const recoveryCommands = handoff?.recovery ?? [];
   const native = ["wails", "wails.localhost"].includes(
     window.location.hostname,
   );
+  useEffect(() => {
+    if (!native || !core.localAccess) return;
+    if (core.mode === "ready") {
+      nativeLocalAttempted = true;
+      return;
+    }
+    if (!nativeLocalAttempted && ["locked", "unclaimed"].includes(core.mode)) {
+      nativeLocalAttempted = true;
+      void core
+        .authenticate("", undefined, true)
+        .catch(() => setClaimError("Reopen Fased to connect."));
+    }
+  }, [native, core.localAccess, core.mode]);
+  useEffect(() => {
+    if (ownerSetup?.mode === "local" && core.mode === "ready") {
+      ownerSetup = null;
+      setCode("");
+      return;
+    }
+    if (
+      ownerSetup?.mode !== "local" ||
+      !core.connection ||
+      !["locked", "unclaimed"].includes(core.mode)
+    )
+      return;
+    if (ownerSetup.instanceId !== core.connection.instanceId) {
+      ownerSetup = null;
+      setCode("");
+      setClaimError("Reopen Fased to connect.");
+      return;
+    }
+    const proof = ownerSetup.code;
+    if (!localProof || localProof.code !== proof) {
+      localProof = { code: proof, result: core.authenticate("", proof, true) };
+    }
+    let active = true;
+    localProof.result
+      .then(() => {
+        if (ownerSetup?.code === proof) ownerSetup = null;
+        if (active) setCode("");
+      })
+      .catch(() => {
+        if (ownerSetup?.code === proof) ownerSetup = null;
+        if (active) {
+          setCode("");
+          setClaimError("Reopen Fased to connect.");
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [core.mode, core.connection, code]);
   useEffect(() => {
     const receive = () => {
       const next = captureOwnerSetup(window.location.href, (url) =>
@@ -41,7 +96,8 @@ export function CoreGate({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("hashchange", receive);
   }, [core.connection]);
   useEffect(() => {
-    if (core.mode !== "unclaimed" || !core.connection) return;
+    if (core.localAccess || core.mode !== "unclaimed" || !core.connection)
+      return;
     const id = core.connection.instanceId;
     if (ownerSetup && ownerSetup.instanceId !== id) {
       ownerSetup = null;
@@ -74,7 +130,7 @@ export function CoreGate({ children }: { children: ReactNode }) {
     return () => {
       active = false;
     };
-  }, [core.mode, core.connection, native, code]);
+  }, [core.mode, core.connection, native, code, core.localAccess]);
   async function submit(event: FormEvent) {
     event.preventDefault();
     try {
@@ -116,6 +172,35 @@ export function CoreGate({ children }: { children: ReactNode }) {
             <button className="primary" onClick={() => void core.retry()}>
               {uiText("Retry connection")}
             </button>
+          </div>
+        ) : ownerSetup?.mode === "local" ? (
+          <div className="empty-state" role="status">
+            {uiText("Opening your workspace")}
+          </div>
+        ) : core.localAccess && !passwordSignIn && !code ? (
+          <div className="settings-body">
+            <h1>{uiText("Open Fased")}</h1>
+            {native && (
+              <button
+                className="primary"
+                disabled={core.saving}
+                onClick={() =>
+                  void core
+                    .authenticate("", undefined, true)
+                    .catch(() => setClaimError("Reopen Fased to connect."))
+                }
+              >
+                {uiText("Open Fased")}
+              </button>
+            )}
+            <p role={claimError ? "alert" : "status"}>
+              {uiText(claimError || "Open Fased on this computer.")}
+            </p>
+            {core.passwordAvailable && (
+              <button onClick={() => setPasswordSignIn(true)}>
+                {uiText("Use password")}
+              </button>
+            )}
           </div>
         ) : (
           <form onSubmit={submit}>

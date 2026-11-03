@@ -1,4 +1,7 @@
-import { openOwnerSetup } from "../../scripts/fixture-owner-setup.mjs";
+import {
+  openOwnerSetup,
+  openPasswordSignIn,
+} from "../../scripts/fixture-owner-setup.mjs";
 import { expect, test } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
@@ -514,10 +517,15 @@ test("versioned paper strategies join reviewed Tasks and CLI through pause edit 
     await expect
       .poll(
         async () =>
-          (await signOut.isVisible()) || (await ownerPassword.isVisible()),
+          (await signOut.isVisible()) ||
+          (await ownerPassword.isVisible()) ||
+          (await page
+            .getByRole("button", { name: "Use password", exact: true })
+            .isVisible()),
       )
       .toBe(true);
     if (!(await signOut.isVisible())) {
+      await openPasswordSignIn(page);
       await ownerPassword.fill(password);
       await page.getByRole("button", { name: "Sign in", exact: true }).click();
     }

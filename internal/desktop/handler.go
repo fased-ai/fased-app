@@ -118,6 +118,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, 409, "instance identity changed; close the window and select the instance again")
 		return
 	}
+	if r.URL.Path == "/api/v1/installation/local-owner" {
+		if len(bytes.TrimSpace(body)) != 2 || string(bytes.TrimSpace(body)) != "{}" {
+			fail(w, 400, "invalid Local access request")
+			return
+		}
+		if err = client.LocalOwner(r.Context()); err != nil {
+			fail(w, 403, "Local OS owner access required")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"authenticated": true, "sessionToken": client.Token, "csrfToken": client.CSRF, "sessionMode": "bearer"})
+		return
+	}
 	if r.URL.Path == "/api/v1/installation/claim-code" {
 		var auth struct {
 			Claimed bool `json:"claimed"`
@@ -165,7 +178,7 @@ func allowed(method, route string) bool {
 	switch route {
 	case "/api/v1/health", "/api/v1/auth/state", "/api/v1/signer/status", "/api/v1/installation/claim-code":
 		return method == "GET"
-	case "/api/v1/installation/connect":
+	case "/api/v1/installation/connect", "/api/v1/installation/local-owner":
 		return method == "POST"
 	case "/api/v1/agents":
 		return method == "GET" || method == "POST"

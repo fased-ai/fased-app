@@ -95,42 +95,6 @@ jobs:
             .evidence/ubuntu-release/artifact-inventory.json
             .evidence/ubuntu-release/signing-inputs.json
             .evidence/ubuntu-release/fased-release.json
-      - name: Prepare the private current-reader compatibility fixture
-        id: compatibility
-        run: node scripts/prepare-ubuntu-release.mjs compatibility-prepare
-      - name: Package the private predecessor with the same reviewed source and UI
-        env:
-          FASED_RELEASE_VERSION: ${{ steps.compatibility.outputs.version }}
-          GOFLAGS: -mod=readonly -overlay=${{ steps.compatibility.outputs.overlay }}
-        run: |
-          node scripts/build-core.mjs --version="$FASED_RELEASE_VERSION"
-          node scripts/build-core.mjs --installer --version="$FASED_RELEASE_VERSION"
-          go run -ldflags "-X github.com/fased-ai/fased-app/internal/core.Version=$FASED_RELEASE_VERSION" ./cmd/fased-package --engine .evidence/bin/fased-app --source "$GITHUB_SHA" --out .evidence/ubuntu-release-compatibility --ubuntu-release-format
-          cp .evidence/bin/fased-install .evidence/ubuntu-release-compatibility/fased-install-linux-amd64
-          node scripts/prepare-ubuntu-release.mjs compatibility-inventory
-      - name: Attest compatibility bytes separately; never publish them
-        id: compatibility_provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-path: |
-            .evidence/ubuntu-release-compatibility/fased-app-linux-amd64.tar.gz
-            .evidence/ubuntu-release-compatibility/fased-install-linux-amd64
-          push-to-registry: false
-          create-storage-record: false
-      - name: Verify the compatibility fixture with its original attestation
-        env:
-          FASED_PROVENANCE_BUNDLE: ${{ steps.compatibility_provenance.outputs.bundle-path }}
-        run: |
-          cp "$FASED_PROVENANCE_BUNDLE" .evidence/ubuntu-release-compatibility/fased-app-linux-amd64.provenance.sigstore.json
-          go run ./cmd/fased-release-candidate verify-provenance --policy-file .evidence/ubuntu-release-compatibility/provenance-policy.json --expected-file .evidence/ubuntu-release-compatibility/expected-provenance.json --bundle-file .evidence/ubuntu-release-compatibility/fased-app-linux-amd64.provenance.sigstore.json > .evidence/ubuntu-release-compatibility/verified-provenance.json
-          node scripts/prepare-ubuntu-release.mjs compatibility-finish
-      - name: Retain the private compatibility fixture
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ubuntu-amd64-compatibility-predecessor-${{ github.run_attempt }}
-          retention-days: 7
-          if-no-files-found: error
-          path: .evidence/ubuntu-release-compatibility/
   installed-acceptance:
     needs: ubuntu-amd64
     runs-on: ubuntu-24.04
@@ -148,10 +112,6 @@ jobs:
         with:
           name: ubuntu-amd64-release-candidate-${{ github.run_attempt }}
           path: .evidence/ubuntu-release
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: ubuntu-amd64-compatibility-predecessor-${{ github.run_attempt }}
-          path: .evidence/ubuntu-release-compatibility
       - name: Prepare the existing disposable Ubuntu acceptance runner
         run: |
           sudo apt-get update
@@ -165,16 +125,16 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           npm ci
           npx playwright install --with-deps chromium
-          mkdir -p .evidence/ubuntu-release-legacy
-      - name: Acquire the immutable public predecessor for its separate bridge
+          mkdir -p .evidence/ubuntu-release-predecessor
+      - name: Acquire the actual immutable public Local predecessor
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download v0.1.5 --repo fased-ai/fased-app --dir .evidence/ubuntu-release-legacy --pattern install.sh --pattern fased-release.json --pattern fased-app-linux-amd64.tar.gz --pattern fased-install-linux-amd64 --pattern fased-app-linux-amd64.provenance.sigstore.json
-      - name: Run the complete packaged Local and Remote journey
+          gh release download v0.1.6 --repo fased-ai/fased-app --dir .evidence/ubuntu-release-predecessor --pattern install.sh --pattern fased-release.json --pattern fased-app-linux-amd64.tar.gz --pattern fased-install-linux-amd64 --pattern fased-app-linux-amd64.provenance.sigstore.json
+      - name: Run the actual released-predecessor Local journey only
         env:
           FASED_DISPOSABLE_VM_ACCEPTANCE: "1"
-        run: python3 scripts/check-inspection-vm.py --staged-package-only --candidate .evidence/ubuntu-release --predecessor .evidence/ubuntu-release-compatibility --legacy-predecessor .evidence/ubuntu-release-legacy
+        run: python3 scripts/check-inspection-vm.py --staged-package-only --released-local-only --candidate .evidence/ubuntu-release --predecessor .evidence/ubuntu-release-predecessor --legacy-predecessor .evidence/ubuntu-release-predecessor
       - name: Remove only the owned CI KVM rule
         if: always()
         run: |
@@ -187,7 +147,7 @@ jobs:
         with:
           name: ubuntu-amd64-installed-acceptance-${{ github.run_attempt }}
           if-no-files-found: error
-          path: .evidence/b01-staged-installed/vm/installed-acceptance.json
+          path: .evidence/b01-staged-installed/local/installed-acceptance.json
       - name: Retain a bounded sanitized owner failure
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -195,6 +155,6 @@ jobs:
           name: ubuntu-amd64-installed-failure-${{ github.run_attempt }}
           if-no-files-found: ignore
           path: |
-            .evidence/b01-staged-installed/vm/staged-owner-failure.json
-            .evidence/b01-staged-installed/vm/staged-browser-failure.json
-            .evidence/b01-staged-installed/vm/staged-vm-failure.json
+            .evidence/b01-staged-installed/local/staged-owner-failure.json
+            .evidence/b01-staged-installed/local/staged-browser-failure.json
+            .evidence/b01-staged-installed/local/staged-vm-failure.json

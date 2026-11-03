@@ -12,3 +12,20 @@ export async function openOwnerSetup(page, proof) {
   }).toString();
   await page.goto(current.href);
 }
+
+// Legacy password identities remain optional alongside Local OS-owner entry.
+export async function openPasswordSignIn(page, timeout) {
+  const option = page.getByRole("button", {
+    name: "Use password",
+    exact: true,
+  });
+  const password = page.getByLabel("Owner password", { exact: true });
+  await option
+    .or(password)
+    .first()
+    .waitFor({
+      state: "visible",
+      ...(timeout === undefined ? {} : { timeout }),
+    });
+  if (await option.isVisible()) await option.click();
+}

@@ -50,7 +50,7 @@ func (s *Store) snapshotTx(ctx context.Context, tx snapshotReader, probe string)
 	if e = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v.Schema); e != nil {
 		return update.CoreSnapshot{}, e
 	}
-	if v.Schema != StateSchema {
+	if !supportedCoreStateSchema(v.Schema) {
 		return update.CoreSnapshot{}, errors.New("unsupported core snapshot schema")
 	}
 	if e = tx.QueryRowContext(ctx, "SELECT instance_id,setup,revision,password_salt,password_hash FROM instance WHERE id=1").Scan(&v.Instance, &v.Setup, &v.SetupRevision, &v.PasswordSalt, &v.PasswordHash); e != nil {
@@ -70,6 +70,13 @@ func (s *Store) snapshotTx(ctx context.Context, tx snapshotReader, probe string)
 		return update.CoreSnapshot{}, e
 	}
 	contract := UpdateContract()
-	state := update.State{Name: "core-db", Version: v.Schema, Features: contract.State[0].Features, Anchor: update.SnapshotDigest("core-db", v)}
+	features := make([]string, 0, len(contract.State[0].Features))
+	for _, feature := range contract.State[0].Features {
+		if v.Schema == StateSchema && feature == localOwnerFeature {
+			continue
+		}
+		features = append(features, feature)
+	}
+	state := update.State{Name: "core-db", Version: v.Schema, Features: features, Anchor: update.SnapshotDigest("core-db", v)}
 	return update.CoreSnapshot{Version: 1, ProbeID: probe, BootID: s.bootID, InstanceID: v.Instance, State: state}, nil
 }

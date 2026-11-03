@@ -23,6 +23,9 @@ func TestOwnerSetupLinkPreservesClaimedWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err = server.ConfigureConnection("remote"); err != nil {
+		t.Fatal(err)
+	}
 	go func() { _ = server.Serve() }()
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)

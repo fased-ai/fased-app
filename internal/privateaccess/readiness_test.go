@@ -76,7 +76,9 @@ func TestPreparingHTTPSReadiness(t *testing.T) {
 			if scenario == "startup" {
 				wantRequests = 2
 			}
-			if requests != wantRequests {
+			// A caller deadline can expire while the preparing receipt is synced,
+			// before the first probe. Refusing that probe is correct; a retry is not.
+			if requests != wantRequests && !(scenario == "deadline" && requests == 0) {
 				t.Fatal("unexpected probe/retry", requests)
 			}
 			wantWrites := 1

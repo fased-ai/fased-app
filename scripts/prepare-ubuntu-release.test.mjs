@@ -522,7 +522,12 @@ test("staged release has one pinned unpublished Ubuntu build", () => {
   );
   assert.match(workflow, /installed-acceptance:\n/);
   assert.match(workflow, /--staged-package-only/);
-  assert.match(workflow, /compatibility-prepare/);
+  assert.match(workflow, /--released-local-only/);
+  assert.match(workflow, /gh release download v0\.1\.6/);
+  assert.doesNotMatch(
+    workflow,
+    /compatibility-prepare|ubuntu-release-compatibility/,
+  );
   assert.doesNotMatch(
     workflow,
     /sudo .*?(node|python3|fased-install|fased-app)/,

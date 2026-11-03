@@ -47,6 +47,8 @@ type Store struct {
 	bootID                string
 	now                   func() time.Time
 	authMu                sync.Mutex
+	localLaunchHash       string
+	localLaunchExpires    time.Time
 	fixture               func(context.Context, signer.Request) (signer.Response, error)
 	custodyOwnerSupported bool
 	custodyNetwork        string                                                             // Public immutable v2 configuration; no key material.
@@ -87,7 +89,7 @@ func OpenStore(dir string) (_ *Store, resultErr error) {
 	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&schema); err != nil {
 		return nil, err
 	}
-	if schema > StateSchema {
+	if schema > LocalOwnerStateSchema {
 		return nil, errors.New("core state schema is newer than this binary; refusing downgrade")
 	}
 	if schema == 0 {

@@ -170,13 +170,18 @@ export function browserAddress(config) {
       "automatic-update",
       "reconnect",
       "auth-cycle",
+      "failed-check",
     ].includes(config.action),
   );
   const address = new URL(config.url);
   assert.equal(address.protocol, "http:");
   assert.equal(address.hostname, "127.0.0.1");
   assert.equal(address.username + address.password, "");
-  assert.ok(["17481", "17482", "17483"].includes(address.port));
+  assert.ok(["17481", "17482", "17483", "17484"].includes(address.port));
+  if (address.port === "17484")
+    assert.ok(
+      ["claim", "check", "preserve", "reconnect"].includes(config.action),
+    );
   if (address.port === "17483")
     assert.ok(
       ["claim", "preserve"].includes(config.action),
@@ -232,9 +237,12 @@ export async function runStagedBrowser(config, { chromium, expect }) {
       await route.abort();
     } else await route.continue();
   });
-  const page = await context.newPage();
+  let page = await context.newPage();
+  let detachedRequest;
   const request = (route, method, body) =>
-    browserRequest(page, route, method, body);
+    detachedRequest
+      ? detachedRequest(route, method, body)
+      : browserRequest(page, route, method, body);
   const waitAuthenticated = async () =>
     expect
       .poll(
@@ -266,12 +274,17 @@ export async function runStagedBrowser(config, { chromium, expect }) {
   try {
     await page.goto(config.url);
     if (config.action === "claim") {
-      await page
-        .getByLabel("Create owner password", { exact: true })
-        .fill(password);
-      await page
-        .getByRole("button", { name: "Claim workspace", exact: true })
-        .click();
+      if (new URL(config.url).hash.startsWith("#local=")) {
+        await waitAuthenticated();
+        await expect(page.locator('input[type="password"]')).toHaveCount(0);
+      } else {
+        await page
+          .getByLabel("Create owner password", { exact: true })
+          .fill(password);
+        await page
+          .getByRole("button", { name: "Claim workspace", exact: true })
+          .click();
+      }
     }
     await waitAuthenticated();
     const before = await checkHealth(
@@ -299,17 +312,43 @@ export async function runStagedBrowser(config, { chromium, expect }) {
     }
     if (config.action === "auth-cycle") {
       await page.getByRole("button", { name: "Sign out", exact: true }).click();
-      await expect(
-        page.getByRole("heading", { name: "Sign in", exact: true }),
-      ).toBeVisible();
-      assert.equal((await request("auth/state")).authenticated, false);
-      await page.getByLabel("Owner password", { exact: true }).fill(password);
-      await page.getByRole("button", { name: "Sign in", exact: true }).click();
-      await waitAuthenticated();
+      if (config.reopenUrl) {
+        const reopened = new URL(config.reopenUrl);
+        assert.equal(reopened.origin, address.origin);
+        assert.ok(reopened.hash.startsWith("#local="));
+        await expect
+          .poll(async () => (await request("auth/state")).authenticated)
+          .toBe(false);
+        await page.goto(reopened.href);
+        await waitAuthenticated();
+        await expect(page.locator('input[type="password"]')).toHaveCount(0);
+      } else {
+        if (
+          await page
+            .getByRole("button", { name: "Use password", exact: true })
+            .count()
+        )
+          await page
+            .getByRole("button", { name: "Use password", exact: true })
+            .click();
+        await expect(
+          page.getByRole("heading", { name: "Sign in", exact: true }),
+        ).toBeVisible();
+        assert.equal((await request("auth/state")).authenticated, false);
+        await page.getByLabel("Owner password", { exact: true }).fill(password);
+        await page
+          .getByRole("button", { name: "Sign in", exact: true })
+          .click();
+        await waitAuthenticated();
+      }
     }
-    if (applying || config.action === "check") {
+    if (
+      applying ||
+      config.action === "check" ||
+      config.action === "failed-check"
+    ) {
       await page.goto(address.origin + "/#settings");
-      const updates = page.getByRole("region", {
+      let updates = page.getByRole("region", {
         name: "Updates",
         exact: true,
       });
@@ -320,6 +359,54 @@ export async function runStagedBrowser(config, { chromium, expect }) {
         await updates
           .getByLabel("Update mode", { exact: true })
           .selectOption("automatic");
+        if (config.closeForAutomatic) {
+          await expect
+            .poll(async () => {
+              const state = await request("updates/application");
+              return (
+                updateMode(state) === "automatic" &&
+                state.activationEnabled === true
+              );
+            })
+            .toBe(true);
+          assert.equal(
+            completedApplication(
+              await request("updates/application"),
+              config.version,
+              true,
+            ),
+            false,
+            "detached completion must start before the target is complete",
+          );
+          const token = await page.evaluate(
+            (key) => sessionStorage.getItem(key),
+            sessionKey,
+          );
+          assert.match(token, /^[A-Za-z0-9_-]{43}$/);
+          await page.close();
+          // No tab/JavaScript client remains during completion. The observer
+          // performs authenticated read-only checks; it cannot start an update.
+          detachedRequest = async (route, method = "GET", body) => {
+            assert.equal(method, "GET");
+            assert.equal(body, undefined);
+            assert.ok(
+              [
+                "updates/application",
+                "health",
+                "auth/state",
+                "agents",
+              ].includes(route),
+            );
+            const response = await fetch(address.origin + "/api/v1/" + route, {
+              headers: { Authorization: "Bearer " + token },
+              redirect: "error",
+              signal: AbortSignal.timeout(10000),
+            });
+            if (!response.ok)
+              throw Error("Local update observer HTTP " + response.status);
+            return response.json();
+          };
+        }
         await expect
           .poll(
             async () => {
@@ -345,7 +432,12 @@ export async function runStagedBrowser(config, { chromium, expect }) {
           receipt: state.operation.receipt,
         };
         appliedManifestSha256 = state.operation.receipt.manifestSha256;
-        await page.reload();
+        if (config.closeForAutomatic) {
+          page = await context.newPage();
+          detachedRequest = undefined;
+          await page.goto(address.origin + "/#settings");
+          updates = page.getByRole("region", { name: "Updates", exact: true });
+        } else await page.reload();
         await waitAuthenticated();
         await updates
           .getByLabel("Update mode", { exact: true })
@@ -360,6 +452,18 @@ export async function runStagedBrowser(config, { chromium, expect }) {
           })
           .toBe(true);
         automaticOutcome = "applied";
+      } else if (config.action === "failed-check") {
+        await updates
+          .getByRole("button", { name: "Check", exact: true })
+          .click();
+        await expect
+          .poll(
+            async () => (await request("updates/application")).operation.phase,
+            { timeout: 120000 },
+          )
+          .toBe("check-failed");
+        assert.equal((await request("health")).version, config.version);
+        uiOutcome = "acquisition-failed-preserved";
       } else if (config.action === "ui-update") {
         await updates
           .getByRole("button", { name: "Check", exact: true })
@@ -456,6 +560,12 @@ export async function runStagedBrowser(config, { chromium, expect }) {
       version: health.version,
       workspaceSha256,
       ownerAuth: true,
+      ...(config.action === "claim"
+        ? { passwordFreeSetup: new URL(config.url).hash.startsWith("#local=") }
+        : {}),
+      ...(config.action === "failed-check"
+        ? { acquisitionFailurePreserved: true }
+        : {}),
       preservation: config.action !== "claim",
       ...(seed ? { seeded: seed } : {}),
       ...(uiOutcome ? { uiOutcome } : {}),
@@ -469,6 +579,7 @@ export async function runStagedBrowser(config, { chromium, expect }) {
             automaticOperation,
             policyRestored: "manual",
             customerActivation: false,
+            browserClosedDuringApply: config.closeForAutomatic === true,
           }
         : {}),
       ...(config.action === "auth-cycle" ? { logoutSignIn: true } : {}),

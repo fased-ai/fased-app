@@ -5,9 +5,7 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	_ "embed"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -37,21 +35,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "missing fixture marker")
 		os.Exit(1)
 	}
-	code, err := core.ReadPrivateFile(filepath.Join(data, "claim-code.json"))
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "missing fresh claim fixture")
-		os.Exit(1)
-	}
-	var claim core.ClaimCode
-	if json.Unmarshal(code, &claim) != nil {
-		os.Exit(1)
-	}
-	password := make([]byte, 24)
-	if _, err = rand.Read(password); err != nil {
-		os.Exit(1)
-	}
-	fixture, _ := json.Marshal(map[string]string{"code": claim.Code, "password": "FixtureOnly-" + hex.EncodeToString(password)})
-	js := strings.Replace(script, `"__FASED_FIXTURE__"`, string(fixture), 1)
+	js := script
 	options := window.Options(data)
 	delegate := options.AssetServer.Handler
 	options.AssetServer.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

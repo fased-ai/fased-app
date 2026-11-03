@@ -199,7 +199,11 @@ func (s *Store) ApplicationUpdates(ctx context.Context) (ApplicationUpdateView, 
 		p = setup.Settings.Updates.Policy
 	}
 	configured := s.appUpdates.configured.Load()
-	return ApplicationUpdateView{InstanceID: s.instanceID, Schema: StateSchema, Version: 1, Revision: r, InstalledVersion: Version, ControllerAvailable: configured, ActivationEnabled: configured && p.Mode == "automatic", Operation: o, Policy: p, PolicyRevision: setup.Revision, Notice: applicationUpdateNotice(o, p)}, nil
+	var schema int
+	if e = s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&schema); e != nil || !supportedCoreStateSchema(schema) {
+		return ApplicationUpdateView{}, errors.New("unsupported update reader format")
+	}
+	return ApplicationUpdateView{InstanceID: s.instanceID, Schema: schema, Version: 1, Revision: r, InstalledVersion: Version, ControllerAvailable: configured, ActivationEnabled: configured && p.Mode == "automatic", Operation: o, Policy: p, PolicyRevision: setup.Revision, Notice: applicationUpdateNotice(o, p)}, nil
 }
 func (s *Store) CommandApplicationUpdate(ctx context.Context, c ApplicationUpdateCommand) (ApplicationUpdateView, error) {
 	s.appUpdates.mu.Lock()

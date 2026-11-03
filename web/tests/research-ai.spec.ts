@@ -1,4 +1,7 @@
-import { openOwnerSetup } from "../../scripts/fixture-owner-setup.mjs";
+import {
+  openOwnerSetup,
+  openPasswordSignIn,
+} from "../../scripts/fixture-owner-setup.mjs";
 import { test, expect } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
@@ -249,6 +252,7 @@ test("inert research preparation shares UI/CLI facts, cancellation and restart w
     await stop();
     await start();
     await page.goto(url + "/#agents/chat");
+    await openPasswordSignIn(page);
     await page.getByLabel("Owner password", { exact: true }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await command("login", ["--password-stdin"], password + "\n");

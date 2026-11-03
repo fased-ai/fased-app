@@ -29,7 +29,7 @@ func applicationUpdatesCommand(args []string, in *os.File, out, errOut io.Writer
 	}
 	f := flag.NewFlagSet("updates", flag.ContinueOnError)
 	f.SetOutput(errOut)
-	dir := f.String("data-dir", base, "existing instance; owner sign-in required")
+	dir := f.String("data-dir", base, "existing instance")
 	if e = f.Parse(args); e != nil {
 		return e
 	}

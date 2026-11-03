@@ -1,6 +1,5 @@
 (async () => {
-  const fixture = "__FASED_FIXTURE__";
-  let phase = "claim screen";
+  let phase = "Local owner entry";
   const pause = (ms) => new Promise((done) => setTimeout(done, ms));
   const wait = async (check) => {
     for (let i = 0; i < 100; i++) {
@@ -10,41 +9,19 @@
     }
     throw new Error("Native UI did not reach the expected state");
   };
-  const input = (id, value) => {
-    const field = document.getElementById(id);
-    field.focus();
-    Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      "value",
-    ).set.call(field, value);
-    field.dispatchEvent(
-      new InputEvent("input", {
-        bubbles: true,
-        composed: true,
-        inputType: "insertText",
-        data: value,
-      }),
-    );
-    field.dispatchEvent(new Event("change", { bubbles: true }));
-    field.blur();
-  };
   try {
-    await wait(() => document.getElementById("owner-password"));
-    phase = "owner claim";
-    if (document.getElementById("owner-code"))
-      throw new Error("Manual setup code field remains");
-    await wait(() => {
-      const submit = document.querySelector(".core-auth form .primary");
-      return submit && !submit.disabled;
-    });
-    input("owner-password", fixture.password);
-    await pause(100);
-    document.querySelector(".core-auth form .primary").click();
     await wait(
       () =>
         document.querySelector("main#main-content") &&
         document.querySelector('button[aria-label="Sign out"]'),
     );
+    if (
+      document.getElementById("owner-code") ||
+      document.getElementById("owner-password")
+    )
+      throw new Error(
+        "Local native entry must not require a code or app password",
+      );
     phase = "authenticated setup";
     const token = sessionStorage.getItem("fased.core.session.v1");
     if (!token) throw new Error("Native bearer session missing");
@@ -98,7 +75,7 @@
         checks: [
           "real WebKit window",
           "shared production UI",
-          "owner claim",
+          "Local OS owner entry without app password",
           "bearer and CSRF",
           "private IPC setup",
           "provider read",

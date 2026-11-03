@@ -1,5 +1,25 @@
 import { expect, it } from "vitest";
 import { captureOwnerSetup } from "./owner-setup";
+it("captures Local OS launch proof without persisting it or accepting mixed grants", () => {
+  const id = "i".repeat(43),
+    proof = "x".repeat(43);
+  let cleaned = "";
+  expect(
+    captureOwnerSetup(
+      `http://127.0.0.1:7331/?instance=${id}#local=${proof}`,
+      (value) => {
+        cleaned = value;
+      },
+    ),
+  ).toEqual({ instanceId: id, code: proof, mode: "local" });
+  expect(cleaned).not.toContain(proof);
+  expect(
+    captureOwnerSetup(
+      `http://127.0.0.1:7331/?instance=${id}#local=${proof}&setup=${proof}`,
+      () => {},
+    ),
+  ).toBeNull();
+});
 it("captures a bound setup proof once and scrubs it from browser history", () => {
   const proof = "x".repeat(43),
     id = "i".repeat(43);

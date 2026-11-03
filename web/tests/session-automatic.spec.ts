@@ -1,4 +1,7 @@
-import { openOwnerSetup } from "../../scripts/fixture-owner-setup.mjs";
+import {
+  openOwnerSetup,
+  openPasswordSignIn,
+} from "../../scripts/fixture-owner-setup.mjs";
 import { test, expect, type Page } from "@playwright/test";
 import { spawn, execFile, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
@@ -121,6 +124,7 @@ for (const variant of ["consent", "unknown"] as const) {
     };
     const loginUI = async () => {
       await page.goto(url);
+      await openPasswordSignIn(page);
       await page.getByLabel("Owner password", { exact: true }).fill(password);
       await page.getByRole("button", { name: "Sign in", exact: true }).click();
       await expect(

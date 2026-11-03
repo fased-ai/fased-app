@@ -4,12 +4,15 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/update"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -62,7 +65,8 @@ func TestInspectionUnchangedFinancialHistory(t *testing.T) {
 	}
 }
 
-func TestInspectionPTYDrainsFastCancellation(t *testing.T) {
+func inspectionPTYSource(t *testing.T) string {
+	t.Helper()
 	raw, err := os.ReadFile("../../scripts/fixture-inspection-journey.mjs")
 	if err != nil {
 		t.Fatal(err)
@@ -75,6 +79,11 @@ func TestInspectionPTYDrainsFastCancellation(t *testing.T) {
 	if !ok {
 		t.Fatal("PTY fixture end absent")
 	}
+	return code
+}
+
+func TestInspectionPTYDrainsFastCancellation(t *testing.T) {
+	code := inspectionPTYSource(t)
 	// Force child exit after consent, while its final message is still unread.
 	marker := "  p,status=os.waitpid(pid,os.WNOHANG)"
 	if !strings.Contains(code, marker) {
@@ -83,7 +92,7 @@ func TestInspectionPTYDrainsFastCancellation(t *testing.T) {
 	code = strings.Replace(code, marker, "  time.sleep(.05)\n"+marker, 1)
 	binary := filepath.Join(t.TempDir(), "fast-cancel")
 	script := "#!/usr/bin/python3\nimport sys\nprint('Type BRIDGE FIXTURE '+('a'*64)+':',flush=True)\ninput()\nprint('bridge review cancelled',file=sys.stderr,flush=True)\nsys.exit(1)\n"
-	if err = os.WriteFile(binary, []byte(script), 0700); err != nil {
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -94,5 +103,34 @@ func TestInspectionPTYDrainsFastCancellation(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "bridge review cancelled") || !strings.Contains(string(out), `"exitCode": 1`) {
 		t.Fatalf("final cancellation output lost: %s", out)
+	}
+}
+
+func TestInspectionPTYCleansFailedBoundary(t *testing.T) {
+	code := inspectionPTYSource(t)
+	dir := t.TempDir()
+	binary, pidFile := filepath.Join(dir, "wrong-image"), filepath.Join(dir, "pid")
+	script := fmt.Sprintf("#!/usr/bin/python3\nimport os,signal\nopen(%q,'w').write(str(os.getpid()))\nprint('Fixture acceptance stopped: '+str(os.getpid())+' failed',flush=True)\nos.kill(os.getpid(),signal.SIGSTOP)\n", pidFile)
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		b, _ := os.ReadFile(pidFile)
+		pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+		cmd, _ := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+		if pid > 0 && strings.Contains(string(cmd), binary) {
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+		}
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "python3", "-c", code, binary, "provision", "fixture-id", "fixture-tx", "fixture-inputs", "fixture-artifacts", "approve", "failed").CombinedOutput()
+	if ctx.Err() != nil || err == nil || !strings.Contains(string(out), "AssertionError") {
+		t.Fatalf("failed boundary did not cleanly exit: %v %s", err, out)
+	}
+	b, _ := os.ReadFile(pidFile)
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	if _, err = os.Stat(fmt.Sprintf("/proc/%d", pid)); pid <= 0 || !os.IsNotExist(err) {
+		t.Fatal("stopped child was not reaped", pid, err)
 	}
 }

@@ -103,6 +103,9 @@ export async function currentStorageFixture(archivedRoot) {
     await writeFile(path.join(archivedRoot, "internal/core", file), bytes);
     storage[file] = sha(bytes);
   }
+  // The composed predecessor remains a password-only schema36 reader. It
+  // must not advertise or accept the new Local owner format.
+  storage["update.go"] = await projectPasswordOnlyContract(archivedRoot);
   // Public-reader-only dependency: never activate owner/vault/terminal migration.
   await writeFile(
     path.join(archivedRoot, "internal/core/ordinary_custody_projection.go"),
@@ -434,4 +437,30 @@ func ValidManagedAccountRef(r AccountRef) bool {
   );
   storage["signer/vault.go"] = sha(await readFile(vaultPublicPath));
   return { fixtureOnly: true, exactHistoricalBinary: false, storage };
+}
+
+// Same finite schema36 projection for historical storage and guarded inspection.
+// It must never be used to build a customer release.
+export async function projectPasswordOnlyContract(root) {
+  const file = path.join(root, "internal/core/update.go");
+  const source = await readFile(file, "utf8");
+  const replacements = [
+    ["Max: LocalOwnerStateSchema", "Max: StateSchema"],
+    [
+      "return schema == StateSchema || schema == LocalOwnerStateSchema",
+      "return schema == StateSchema",
+    ],
+    ['Features: []string{"local-os-owner-v1", ', "Features: []string{"],
+  ];
+  let projected = source;
+  for (const [before, after] of replacements) {
+    assert.equal(
+      projected.split(before).length,
+      2,
+      "exact Local contract projection required",
+    );
+    projected = projected.replace(before, after);
+  }
+  await writeFile(file, projected);
+  return createHash("sha256").update(projected).digest("hex");
 }

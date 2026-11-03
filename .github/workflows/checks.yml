@@ -487,6 +487,7 @@ jobs:
           FASED_INSTALLED_INSPECTION_FIXTURE: "1"
           FASED_INSPECTION_ACCEPTANCE: "1"
           FASED_MANAGED_CORE: .evidence/p4-installed-inspection/predecessor-app
+          FASED_UNHEALTHY_CORE: .evidence/p4-installed-inspection/unhealthy-app
           FASED_MANAGED_SIGNER: .evidence/p4-installed-inspection/predecessor-signer
           FASED_MANAGED_EVIDENCE: .evidence/p4-installed-inspection/managed
         run: node scripts/check-installed-inspection-fixture.mjs

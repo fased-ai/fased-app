@@ -87,7 +87,7 @@ func ReadApplicationOwnerOffline(ctx context.Context, directory, id string) (App
 	}
 	defer tx.Rollback()
 	var schema int
-	if e = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&schema); e != nil || schema != StateSchema {
+	if e = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&schema); e != nil || !supportedCoreStateSchema(schema) {
 		return out, errors.New("offline reader does not support this metadata schema")
 	}
 	o, revision, e := readApplicationUpdate(ctx, tx)

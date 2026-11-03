@@ -12,6 +12,25 @@ export const languages = {
 export type Language = keyof typeof languages;
 // Interface copy only. Never translate user records, model output or server receipts.
 const rows = {
+  "Open Fased": ["Открыть Fased", "Abrir Fased", "打开 Fased", "Fased 열기"],
+  "Open Fased on this computer.": [
+    "Откройте Fased на этом компьютере.",
+    "Abre Fased en este equipo.",
+    "在这台计算机上打开 Fased。",
+    "이 컴퓨터에서 Fased를 여세요.",
+  ],
+  "Reopen Fased to connect.": [
+    "Откройте Fased снова для подключения.",
+    "Vuelve a abrir Fased para conectar.",
+    "重新打开 Fased 以连接。",
+    "연결하려면 Fased를 다시 여세요.",
+  ],
+  "Use password": [
+    "Войти с паролем",
+    "Usar contraseña",
+    "使用密码",
+    "비밀번호 사용",
+  ],
   Recovery: ["Восстановление", "Recuperación", "恢复", "복구"],
   "Run on this instance": [
     "Выполните на этом экземпляре",

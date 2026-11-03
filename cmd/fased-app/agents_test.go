@@ -78,14 +78,18 @@ func TestReminderTaskDraftCLIPrivateRoundTrip(t *testing.T) {
 	}
 	args := []string{"--data-dir", dir, "--profile", profile, "--reminder-draft", v.Tasks[0].ID}
 	var out bytes.Buffer
-	if err = agentsCommand(args, nil, &out, io.Discard); err == nil || out.Len() != 0 {
-		t.Fatal("unauthenticated draft read")
+	if err = agentsCommand(args, nil, &out, io.Discard); err != nil || out.Len() == 0 {
+		t.Fatal("OS-owner CLI read failed", err)
 	}
+	out.Reset()
 	client, err := core.NewClient(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer client.Close()
+	if err = client.Do(t.Context(), "GET", "/api/v1/agents?profile=trading-analyst", nil, nil); err == nil || !strings.Contains(err.Error(), "(401)") {
+		t.Fatal("anonymous transport read must remain unauthorized", err)
+	}
 	client.Token = token
 	if err = client.SaveSession(dir); err != nil {
 		t.Fatal(err)
@@ -215,14 +219,18 @@ func TestAgentAIRequestDraftCLIPrivateRoundTrip(t *testing.T) {
 	}
 	args := []string{"--data-dir", dir, "--profile", v.ProfileID, "--ai-draft", v.AIRequests[0].ID}
 	var out bytes.Buffer
-	if err := agentsCommand(args, nil, &out, io.Discard); err == nil || out.Len() != 0 {
-		t.Fatal("unauthenticated draft read")
+	if err = agentsCommand(args, nil, &out, io.Discard); err != nil || out.Len() == 0 {
+		t.Fatal("OS-owner CLI read failed", err)
 	}
+	out.Reset()
 	client, err := core.NewClient(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer client.Close()
+	if err = client.Do(t.Context(), "GET", "/api/v1/agents?profile=trading-analyst", nil, nil); err == nil || !strings.Contains(err.Error(), "(401)") {
+		t.Fatal("anonymous transport read must remain unauthorized", err)
+	}
 	client.Token = token
 	if err = client.SaveSession(dir); err != nil {
 		t.Fatal(err)
@@ -301,14 +309,18 @@ func TestAgentEvidenceCLIPrivateRoundTrip(t *testing.T) {
 	}
 	var out bytes.Buffer
 	args := []string{"--data-dir", dir, "--profile", v.ProfileID, "--evidence", "memory", "--evidence-id", v.Memories[0].ID}
-	if err = agentsCommand(args, nil, &out, io.Discard); err == nil || out.Len() != 0 {
-		t.Fatal("unauthenticated inspection")
+	if err = agentsCommand(args, nil, &out, io.Discard); err != nil || out.Len() == 0 {
+		t.Fatal("OS-owner CLI read failed", err)
 	}
+	out.Reset()
 	client, err := core.NewClient(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer client.Close()
+	if err = client.Do(t.Context(), "GET", "/api/v1/agents?profile=trading-analyst", nil, nil); err == nil || !strings.Contains(err.Error(), "(401)") {
+		t.Fatal("anonymous transport read must remain unauthorized", err)
+	}
 	client.Token = token
 	if err = client.SaveSession(dir); err != nil {
 		t.Fatal(err)
