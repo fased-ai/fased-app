@@ -184,3 +184,4 @@ jobs:
           path: |
             .evidence/b01-staged-installed/vm/staged-owner-failure.json
             .evidence/b01-staged-installed/vm/staged-browser-failure.json
+            .evidence/b01-staged-installed/vm/staged-vm-failure.json

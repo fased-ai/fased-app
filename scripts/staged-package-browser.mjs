@@ -16,6 +16,17 @@ const retainedKeys = [
   "tasks",
   "runs",
 ];
+export function updateMode(state) {
+  assert.ok(
+    state?.policy &&
+      typeof state.policy === "object" &&
+      !Array.isArray(state.policy),
+  );
+  const mode = state.policy.mode;
+  assert.ok([undefined, "manual", "automatic"].includes(mode));
+  // The installed API omits the default Manual mode, as does its UI parser.
+  return mode ?? "manual";
+}
 export function retainedWorkspace(workspace) {
   const retained = {};
   for (const key of retainedKeys) {
@@ -304,7 +315,7 @@ export async function runStagedBrowser(config, { chromium, expect }) {
       });
       if (config.action === "automatic-update") {
         const original = await request("updates/application");
-        assert.equal(original.policy.mode, "manual");
+        assert.equal(updateMode(original), "manual");
         assert.equal(original.activationEnabled, false);
         await updates
           .getByLabel("Update mode", { exact: true })
@@ -316,7 +327,7 @@ export async function runStagedBrowser(config, { chromium, expect }) {
                 const state = await request("updates/application");
                 return (
                   completedApplication(state, config.version, true) &&
-                  state.policy.mode === "automatic" &&
+                  updateMode(state) === "automatic" &&
                   state.activationEnabled === true
                 );
               } catch {
@@ -343,7 +354,7 @@ export async function runStagedBrowser(config, { chromium, expect }) {
           .poll(async () => {
             const restored = await request("updates/application");
             return (
-              restored.policy.mode === "manual" &&
+              updateMode(restored) === "manual" &&
               restored.activationEnabled === false
             );
           })
@@ -362,7 +373,7 @@ export async function runStagedBrowser(config, { chromium, expect }) {
         const available = await request("updates/application");
         assert.equal(available.installedVersion, config.fromVersion);
         assert.equal(available.operation.release.version, config.version);
-        assert.equal(available.policy.mode, "manual");
+        assert.equal(updateMode(available), "manual");
         appliedManifestSha256 = available.operation.release.manifestSha256;
         assert.match(appliedManifestSha256, /^[a-f0-9]{64}$/);
         await updates
@@ -419,7 +430,7 @@ export async function runStagedBrowser(config, { chromium, expect }) {
         uiOutcome = "alreadyCurrent";
       }
       const state = await request("updates/application");
-      assert.equal(state.policy.mode, "manual");
+      assert.equal(updateMode(state), "manual");
       assert.equal(state.activationEnabled, false);
       assert.equal(state.installedVersion, config.version);
     }

@@ -5,7 +5,18 @@ import {
   completedApplication,
   retainedWorkspace,
   seedWorkspace,
+  updateMode,
 } from "./staged-package-browser.mjs";
+
+test("the installed policy's omitted default is Manual, never Automatic", () => {
+  for (const mode of [undefined, "manual", "automatic"])
+    assert.equal(updateMode({ policy: { mode } }), mode ?? "manual");
+  for (const mode of [null, "", "scheduled", false])
+    assert.throws(() => updateMode({ policy: { mode } }));
+  for (const policy of [undefined, null, [], "bad", 0, false])
+    assert.throws(() => updateMode({ policy }));
+  assert.throws(() => updateMode({}));
+});
 
 test("legacy public bridge permits only its exact claim and preservation port", () => {
   const config = {

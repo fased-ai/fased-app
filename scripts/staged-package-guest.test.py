@@ -1,4 +1,6 @@
 import importlib.util
+import ast
+import io
 import hashlib
 import json
 import pathlib
@@ -6,12 +8,80 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch, Mock
 
 spec = importlib.util.spec_from_file_location('staged_guest', pathlib.Path(__file__).with_name('staged-package-guest.py'))
 guest = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guest)
 
+class VMLifecycleTest(unittest.TestCase):
+    def functions(self, names, values):
+        source = pathlib.Path(__file__).with_name('check-inspection-vm.py').read_text()
+        tree = ast.parse(source)
+        nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
+        self.assertEqual(len(nodes), len(names))
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), '<vm-lifecycle>', 'exec'), values)
+        return values
+
+    def test_snapshot_stops_owned_transport_before_vm_without_changing_other_modes(self):
+        for staged, expected in [(True, ['tunnel terminate', 'tunnel wait', 'vm kill', 'vm wait']),
+                                 (False, ['vm kill', 'vm wait'])]:
+            with self.subTest(staged=staged):
+                events = []
+                def process(name):
+                    return SimpleNamespace(poll=lambda: None,
+                        terminate=lambda: events.append(name+' terminate'),
+                        kill=lambda: events.append(name+' kill'),
+                        wait=lambda timeout: events.append(name+' wait'))
+                scope = self.functions(['stop_vm'], {'a': SimpleNamespace(staged_package_only=staged),
+                    'tunnel': process('tunnel'), 'vm': process('vm')})
+                scope['stop_vm']()
+                self.assertEqual(events, expected)
+                # Already-exited children must not be killed or waited again.
+                scope['tunnel'].poll = lambda: 0
+                scope['vm'].poll = lambda: 0
+                scope['stop_vm']()
+                self.assertEqual(events, expected)
+
+    def test_vm_exit_retains_bounded_actual_stderr(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            prior = b'previous intentionally killed VM\n'
+            detail = b'x'*10000 + b'Failed to bind socket: Address already in use'
+            (root/'qemu.stderr').write_bytes(prior+detail)
+            saved = {}
+            scope = self.functions(['check_vm_running'], {'root': root,
+                'a': SimpleNamespace(staged_package_only=True),
+                'vm': SimpleNamespace(poll=lambda: 1), 'vm_stderr_start': len(prior),
+                'save': lambda name, value: saved.update({name: value})})
+            with self.assertRaisesRegex(RuntimeError, 'Address already in use'):
+                scope['check_vm_running']()
+            self.assertEqual(saved['staged-vm-failure.json'], {'returncode': 1, 'stderr': detail[-8192:].decode()})
+            # A later short/empty exit cannot report the prior process's text.
+            for detail in [b'current exit', b'']:
+                (root/'qemu.stderr').write_bytes(prior+detail)
+                with self.assertRaises(RuntimeError):
+                    scope['check_vm_running']()
+                self.assertEqual(saved['staged-vm-failure.json']['stderr'], detail.decode())
+            scope['vm'].poll = lambda: None
+            scope['check_vm_running']()
+
 class DeliveryFixtureTest(unittest.TestCase):
+    def test_restarted_delivery_waits_for_actual_https_readiness(self):
+        process = SimpleNamespace(poll=lambda: None)
+        opener = Mock()
+        good = json.dumps({'id': 1426211857, 'full_name': 'fased-ai/fased-app'}).encode()
+        opener.open.side_effect = [ConnectionRefusedError(), io.BytesIO(good)]
+        with patch.object(guest.urllib.request, 'build_opener', return_value=opener), patch.object(guest.time, 'sleep'):
+            guest.wait_delivery(process)
+        self.assertEqual(opener.open.call_count, 2)
+        opener.open.assert_called_with('https://api.github.com/repos/fased-ai/fased-app', timeout=1)
+        with self.assertRaisesRegex(RuntimeError, 'server exited'):
+            guest.wait_delivery(SimpleNamespace(poll=lambda: 1))
+        with self.assertRaisesRegex(RuntimeError, 'did not become ready'):
+            guest.wait_delivery(process, timeout=0)
+
     def test_handoff_preserves_old_setup_proof_and_rejects_ambiguous_owners(self):
         setup = 'http://127.0.0.1:17482/?instance=owner#setup=proof'
         plain = 'http://127.0.0.1:17482'

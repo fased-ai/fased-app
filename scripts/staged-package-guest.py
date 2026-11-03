@@ -198,6 +198,25 @@ class Fixture:
         server.serve_forever()
 
 
+def wait_delivery(process, timeout=15):
+    # Starting the child does not mean its TLS listener is ready. Reboot and
+    # snapshot restore must prove the actual acquisition route before Update.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError("disposable delivery server exited; inspect server.log")
+        try:
+            with opener.open("https://api.github.com/repos/fased-ai/fased-app", timeout=1) as response:
+                value = json.load(response)
+            if value.get("id") == 1426211857 and value.get("full_name") == "fased-ai/fased-app":
+                return
+        except (OSError, ValueError):
+            pass
+        time.sleep(0.1)
+    raise RuntimeError("disposable HTTPS acquisition route did not become ready")
+
+
 def network(work):
     work = P(work)
     cert = work / "tls.crt"
@@ -221,6 +240,7 @@ def network(work):
     rules.write_text("table ip fased_staged_delivery {\n chain output { type nat hook output priority -100; policy accept; ip daddr " + ADDRESS + " tcp dport 443 redirect to :8443; }\n}\n")
     os_tool("/usr/sbin/nft", "-f", str(rules))
     process = subprocess.Popen([sys.executable, __file__, "serve", "--work", str(work)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=(work / "server.log").open("ab"), start_new_session=True, env={"PATH": "/usr/bin:/bin", "HOME": str(P.home()), "FASED_DISPOSABLE_VM": "1"})
+    wait_delivery(process)
     write_private(work / "server.json", {"pid": process.pid})
 
 
@@ -323,7 +343,7 @@ def owner(args):
         (state_dir / (args.owner_action + ".log")).write_text(scrubbed)
         if args.owner_action == "failed-bootstrap":
             if result == 0:
-                raise RuntimeError("injected acquisition failure did not fail")
+                raise RuntimeError("injected acquisition failure did not fail: " + scrubbed[-8192:])
             current = health(port)
             if current["instanceId"] != state["instanceId"] or current["version"] != state["version"]:
                 raise RuntimeError("failed acquisition changed the running instance")

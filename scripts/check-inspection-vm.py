@@ -122,15 +122,18 @@ with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
 kvm=os.path.exists('/dev/kvm') and os.access('/dev/kvm',os.R_OK|os.W_OK)
 serial=(root/'vm-serial.log').open('wb');stderr=(root/'qemu.stderr').open('wb')
 cmd=['qemu-system-x86_64','-machine','q35,accel='+('kvm' if kvm else 'tcg'),'-cpu','host' if kvm else 'max','-smp','2','-m','2048','-nographic','-monitor','none','-qmp',f'unix:{work}/qmp.sock,server=on,wait=off','-drive',f'file={work}/disk.qcow2,if=virtio,format=qcow2','-drive',f'file={work}/seed.iso,if=virtio,format=raw,readonly=on','-netdev',f'user,id=n,hostfwd=tcp:127.0.0.1:{port}-:22','-device','virtio-net-pci,netdev=n','-device','virtio-rng-pci','-smbios','type=1,serial=ds=nocloud']
-if a.installed_remote_update_only:
- # This one abrupt reboot uses no QMP. Its evidence path exceeds the UNIX
- # socket path limit, so do not create an unused monitor socket there.
+if a.installed_remote_update_only or a.staged_package_only:
+ # These modes reboot through the guest, never QMP. Do not leave an unused
+ # monitor socket behind when the snapshot lifecycle terminates QEMU.
  i=cmd.index('-qmp'); del cmd[i:i+2]
-vm=None;tunnel=None
+vm=None;tunnel=None;vm_stderr_start=0
 def start_vm():
- global vm
+ global vm,vm_stderr_start
+ vm_stderr_start=stderr.tell()
  vm=subprocess.Popen(cmd,stdout=serial,stderr=stderr)
 def stop_vm():
+ if a.staged_package_only and tunnel is not None and tunnel.poll() is None:
+  tunnel.terminate();tunnel.wait(10)
  if vm is not None and vm.poll() is None:
   vm.kill();vm.wait(10)
 def disk_snapshot(name,restore=False):
@@ -148,10 +151,18 @@ def interrupted(signum, frame): raise KeyboardInterrupt("fixture runner interrup
 signal.signal(signal.SIGTERM, interrupted)
 sshbase=['ssh','-F','/dev/null','-o','BatchMode=yes','-o','ControlMaster=no','-o','ControlPath=none','-i',str(key),'-p',str(port),'-o','IdentitiesOnly=yes','-o','StrictHostKeyChecking=accept-new','-o',f'UserKnownHostsFile={work}/known_hosts','-o','ConnectTimeout=4','ubuntu@127.0.0.1']
 def ssh(command,timeout=150): return run(sshbase+[command],timeout=timeout).stdout.decode()
+def check_vm_running():
+ code=vm.poll()
+ if code is None:return
+ with (root/'qemu.stderr').open('rb') as stream:
+  stream.seek(0,2);stream.seek(max(vm_stderr_start,stream.tell()-8192));detail=stream.read().decode(errors='replace')
+ if a.staged_package_only:
+  save('staged-vm-failure.json',{'returncode':code,'stderr':detail})
+ raise RuntimeError('QEMU exited ('+str(code)+'): '+detail)
 def ready(timeout=300):
  end=time.monotonic()+timeout
  while time.monotonic()<end:
-  assert vm.poll() is None,'QEMU exited; inspect serial/stderr'
+  check_vm_running()
   try:
    if ssh('test -f /var/lib/cloud/instance/boot-finished && sudo -n -v && id -u',15).strip()=='1000': return
   except (subprocess.SubprocessError,OSError): pass
