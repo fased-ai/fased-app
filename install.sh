@@ -54,8 +54,9 @@ elif [[ $development_only == 1 ]]; then
   [[ $installer_url =~ ^https://127\.0\.0\.1:[0-9]+/fased-install$ && -n $fixture_ca_base64 ]] || die 'Invalid controlled fixture.'
   printf 'Fased: unpublished disposable-trust test installer.\n' >&2
 else die 'Invalid installer binding.'; fi
-[[ -r /dev/tty && -w /dev/tty ]] || die 'Run this command in an interactive terminal.'
-exec 3<>/dev/tty
+if ! { exec 3<>/dev/tty; } 2>/dev/null; then
+  die 'Run this command in an interactive terminal.'
+fi
 if [[ -z $profile && $action == install ]]; then
   printf 'Fased\n  Local\n  Remote\n  Connect\n  Update\nChoose [local/remote/connect/update, default local]: ' >&3
   IFS= read -r choice <&3
@@ -241,7 +242,7 @@ body="$(declare -f die owner_install); owner_install"
 # The root-owned command contains only fixed OS identity/drop operations. All
 # Fased/user-owned code starts AFTER runuser; updates still use the installed
 # unprivileged controller and do not redownload this entry.
-if [[ $profile == remote ]]; then
+if [[ $profile == remote && ( $action == install || $action == update ) ]]; then
   launcher=$(/usr/sbin/runuser -u "$operator" -- /usr/bin/env --ignore-environment --chdir="$owner_home" HOME="$owner_home" USER="$operator" LOGNAME="$operator" PATH=/usr/sbin:/usr/bin:/sbin:/bin "/var/lib/fased-app-vps-$owner_uid/fased-app" install-command --remote --path)
   [[ $launcher == "$owner_home/.local/bin/fased" || $launcher == "$owner_home/.local/bin/fased-app" ]] || die 'The installed command identity is missing; preserve state and repair.'
   [[ -f $launcher && ! -L $launcher && $(/usr/bin/stat -c '%u:%a' "$launcher") == "$owner_uid:700" ]] || die 'The installed command changed; preserve state and repair.'

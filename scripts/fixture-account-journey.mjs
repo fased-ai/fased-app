@@ -129,7 +129,7 @@ export async function fixtureAccountJourney({
         managed.publicKey === account.publicKey,
     );
     await page
-      .getByLabel("Fixture account", { exact: true })
+      .getByLabel("Test account", { exact: true })
       .selectOption(managed.id);
     await page.getByLabel("Wallet lifetime cap", { exact: true }).fill("150");
     await page.getByLabel("Bot grant cap", { exact: true }).fill("20");

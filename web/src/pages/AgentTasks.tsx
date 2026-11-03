@@ -1,3 +1,4 @@
+import { previewModel } from "../ui-language-preview";
 import { SwapResultFacts } from "./OnchainSwap";
 import { resolveLanguage, translate } from "../ui-language";
 import { useUI } from "../ui-preferences";
@@ -1345,7 +1346,9 @@ function TaskComposer({
                     </>
                   )}
                   <dt>{uiText("Model")}</dt>
-                  <dd>{review.ai.model}</dd>
+                  <dd>
+                    {review.ai.model && previewModel(review.ai.model, uiText)}
+                  </dd>
                   <dt>{uiText("Account")}</dt>
                   <dd>{account?.name || account?.provider}</dd>
                   {!isUnmeteredPolicy(review.ai.policy) && (

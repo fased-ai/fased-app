@@ -41,35 +41,43 @@ func vpsUpdatesCommand(args []string, in io.Reader, out, errOut io.Writer) error
 	defer cancel()
 	system := &custodyinstall.System{In: in, Out: errOut}
 	if args[0] == "recover" {
-		var view core.ApplicationUpdateView
-		if !offline {
-			var b bytes.Buffer
-			e = vpsinstall.ApplicationUpdateClient(ctx, m, "status", system, &b)
-			if e == nil {
-				if json.Unmarshal(b.Bytes(), &view) != nil || view.Operation.Phase != "recovery" || view.Operation.Release == nil || !view.ControllerAvailable {
-					return errors.New("inspect the original update; no owner recovery is admitted")
+		// A reader upgrade can stop before the original core has an application
+		// update row. Its durable installer journal, not idle source IPC, owns
+		// recovery. Resume only that admitted transaction and retained release.
+		status, statusErr := vpsinstall.ApplicationUpdateState(m.OwnerUID)
+		return routeRemoteApplicationMaintenance(status, statusErr, status.ID, func() error {
+			var view core.ApplicationUpdateView
+			if !offline {
+				var b bytes.Buffer
+				e = vpsinstall.ApplicationUpdateClient(ctx, m, "status", system, &b)
+				if e == nil {
+					if json.Unmarshal(b.Bytes(), &view) != nil || view.Operation.Phase != "recovery" || view.Operation.Release == nil || !view.ControllerAvailable {
+						return errors.New("inspect the original update; no owner recovery is admitted")
+					}
+				} else if errors.Is(e, core.ErrCoreUnavailable) {
+					offline = true
+				} else {
+					return e
 				}
-			} else if errors.Is(e, core.ErrCoreUnavailable) {
-				offline = true
-			} else {
-				return e
 			}
-		}
-		if offline {
-			journal, e := vpsinstall.ApplicationUpdateState(m.OwnerUID)
-			if e != nil {
-				return e
+			if offline {
+				journal, e := vpsinstall.ApplicationUpdateState(m.OwnerUID)
+				if e != nil {
+					return e
+				}
+				held, e := vpsinstall.ApplicationOwnerCall(ctx, m, core.ApplicationOwnerCommand{Action: "offline", ID: journal.ID}, system)
+				if e != nil {
+					return e
+				}
+				if !recoveryMetadataMatches(held, journal.ID, journal.Sequence, journal.ReleaseSHA256) {
+					return errors.New("offline recovery differs from its original owner journal")
+				}
+				view = held.View
 			}
-			held, e := vpsinstall.ApplicationOwnerCall(ctx, m, core.ApplicationOwnerCommand{Action: "offline", ID: journal.ID}, system)
-			if e != nil {
-				return e
-			}
-			if !recoveryMetadataMatches(held, journal.ID, journal.Sequence, journal.ReleaseSHA256) {
-				return errors.New("offline recovery differs from its original owner journal")
-			}
-			view = held.View
-		}
-		return vpsinstall.RecoverApplicationMaintenance(ctx, m, view.Operation.ID, system, out)
+			return vpsinstall.RecoverApplicationMaintenance(ctx, m, view.Operation.ID, system, out)
+		}, func() error {
+			return maintainRemoteReaderUpdate(ctx, m, status.ID, false, nil, out, system)
+		})
 	}
 
 	if args[0] != "prepare" {

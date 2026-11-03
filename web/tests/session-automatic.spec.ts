@@ -129,7 +129,7 @@ for (const variant of ["consent", "unknown"] as const) {
       await page.goto(url + "/#terminals/satcoin");
     };
     const panel = () =>
-      page.getByRole("region", { name: "Automatic fixture runs", exact: true });
+      page.getByRole("region", { name: "Automatic test runs", exact: true });
     let priorReader = "N/A: optional actual schema14 reader was not supplied";
     try {
       await start();
@@ -200,11 +200,11 @@ for (const variant of ["consent", "unknown"] as const) {
         mandateId: null,
       });
       await panel()
-        .getByRole("button", { name: "Review fixture run", exact: true })
+        .getByRole("button", { name: "Review test run", exact: true })
         .click();
       await expect(
         panel().getByRole("region", {
-          name: "Fixture run review",
+          name: "Test run review",
           exact: true,
         }),
       ).toBeVisible();
@@ -218,7 +218,7 @@ for (const variant of ["consent", "unknown"] as const) {
           r.request().method() === "POST",
       );
       await panel()
-        .getByRole("button", { name: "Review fixture run", exact: true })
+        .getByRole("button", { name: "Review test run", exact: true })
         .click();
       const reviewed = await (await response).json();
       expect(reviewed.executable).toBe(false);
@@ -226,7 +226,7 @@ for (const variant of ["consent", "unknown"] as const) {
       expect(reviewed.maxWallSeconds).toBe(300);
       expect(reviewed.source.digest).toBe(versions.versions[1].digest);
       await panel()
-        .getByRole("button", { name: "Start fixture run", exact: true })
+        .getByRole("button", { name: "Start test run", exact: true })
         .click();
       const card = () =>
         panel().getByRole("article", {
@@ -305,7 +305,7 @@ for (const variant of ["consent", "unknown"] as const) {
         ) {
           await card()
             .getByRole("button", {
-              name: "Reconcile fixture operation",
+              name: "Reconcile test operation",
               exact: true,
             })
             .click();
@@ -347,7 +347,7 @@ for (const variant of ["consent", "unknown"] as const) {
         ).toBeVisible();
         await context.setOffline(false);
         await panel()
-          .getByRole("button", { name: "Reload fixture runs", exact: true })
+          .getByRole("button", { name: "Reload test runs", exact: true })
           .click();
         await expect(
           panel().getByText("Disconnected · last-known records", {
@@ -358,7 +358,7 @@ for (const variant of ["consent", "unknown"] as const) {
           .getByRole("button", { name: "Review resume", exact: true })
           .click();
         await panel()
-          .getByRole("button", { name: "Start fixture run", exact: true })
+          .getByRole("button", { name: "Start test run", exact: true })
           .click();
         await expect
           .poll(async () => (await read()).runs[0].consentHistory.length)
@@ -378,13 +378,13 @@ for (const variant of ["consent", "unknown"] as const) {
         v = await read();
         expect(v.runs[0].operations[0].status).toBe("reserved");
         await panel()
-          .getByRole("button", { name: "Reload fixture runs", exact: true })
+          .getByRole("button", { name: "Reload test runs", exact: true })
           .click();
         await expect(card().getByTestId(`run-status-${id}`)).toContainText(
           "paused",
         );
         await card()
-          .getByRole("button", { name: "Stop fixture run", exact: true })
+          .getByRole("button", { name: "Stop test run", exact: true })
           .click();
         await expect(card().getByTestId(`run-status-${id}`)).toContainText(
           "held",
@@ -392,7 +392,7 @@ for (const variant of ["consent", "unknown"] as const) {
         const heldBefore = await read();
         await card()
           .getByRole("button", {
-            name: "Inspect fixture operation",
+            name: "Inspect test operation",
             exact: true,
           })
           .click();
@@ -461,7 +461,7 @@ for (const variant of ["consent", "unknown"] as const) {
           // Each click follows a visible reload and inspection. A conflicting
           // stop is refused, never silently replayed with its old revisions.
           await panel()
-            .getByRole("button", { name: "Reload fixture runs", exact: true })
+            .getByRole("button", { name: "Reload test runs", exact: true })
             .click();
           const observed = await read();
           expect(observed.runs[0].record.sessionId).toBe(id);
@@ -474,7 +474,7 @@ for (const variant of ["consent", "unknown"] as const) {
               r.request().postDataJSON()?.action === "stop",
           );
           await card()
-            .getByRole("button", { name: "Stop fixture run", exact: true })
+            .getByRole("button", { name: "Stop test run", exact: true })
             .click();
           const response = await reply;
           if (response.ok()) {
@@ -509,7 +509,7 @@ for (const variant of ["consent", "unknown"] as const) {
         };
         await card()
           .getByRole("button", {
-            name: "Reconcile fixture operation",
+            name: "Reconcile test operation",
             exact: true,
           })
           .click();
@@ -539,7 +539,7 @@ for (const variant of ["consent", "unknown"] as const) {
         (await command("wen-session", "--auto-start-stdin", reviewed)).runs,
       ).toEqual(v.runs);
       await panel()
-        .getByRole("button", { name: "Reload fixture runs", exact: true })
+        .getByRole("button", { name: "Reload test runs", exact: true })
         .click();
       await expect
         .poll(async () =>

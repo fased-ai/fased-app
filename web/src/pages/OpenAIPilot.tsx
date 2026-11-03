@@ -1,3 +1,4 @@
+import { previewModel } from "../ui-language-preview";
 import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "../workspace";
 import { useUI } from "../ui-preferences";
@@ -108,7 +109,7 @@ export function OpenAIPilotSettings({
       {allowance && (
         <dl className="pilot-facts">
           <dt>{t("Model")}</dt>
-          <dd>{allowance.model}</dd>
+          <dd>{previewModel(allowance.model, t)}</dd>
           <dt>{t("Limits")}</dt>
           <dd>
             {t("{count} attempts · {minutes} minutes", {

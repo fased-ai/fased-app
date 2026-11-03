@@ -1,3 +1,4 @@
+import { previewModel } from "../ui-language-preview";
 import { Dialog } from "../components/shared";
 import type { ChatPermission, OpenAIModelPolicy } from "../agents";
 import { isUnmeteredPolicy } from "../agents";
@@ -36,7 +37,7 @@ export function ChatPermissionReview({
         <dl className="review-list">
           <div>
             <dt>{t("Model")}</dt>
-            <dd>{p.model}</dd>
+            <dd>{previewModel(p.model, t)}</dd>
           </div>
           <div>
             <dt>{t("Provider")}</dt>
