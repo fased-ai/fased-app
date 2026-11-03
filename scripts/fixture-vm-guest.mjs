@@ -269,7 +269,7 @@ if (mode === "setup") {
     run("/usr/bin/python3", [
       "-c",
       fixtureInspectionPTY,
-      core,
+      process.cwd() + "/.evidence/p4-installed-inspection/guarded-app",
       "bridge",
       bridgeId,
       "",

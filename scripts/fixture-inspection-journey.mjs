@@ -16,7 +16,7 @@ else:args=[binary,'custody','fixture-inspection',op,'--bridge-id',ident]
 args+=['--disposable-fixture','--prepare-host']
 pid,fd=pty.fork()
 if pid==0:os.execv(binary,args)
-seen=b'';sent=False;interrupted=False;deadline=time.time()+85;done=None
+seen=b'';sent=False;interrupted=False;deadline=time.time()+85;done=None;failed=False
 try:
  while time.time()<deadline:
   ready,_,_=select.select([fd],[],[],.05)
@@ -56,9 +56,12 @@ try:
     if not last:break
     seen+=last
    break
+except BaseException:
+ failed=True
+ raise
 finally:
  if done is None:
-  if time.time()>=deadline:
+  if failed or time.time()>=deadline:
    try:os.killpg(pid,signal.SIGKILL)
    except ProcessLookupError:pass
   try:_,status=os.waitpid(pid,0);done=os.waitstatus_to_exitcode(status)
