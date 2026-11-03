@@ -918,7 +918,11 @@ finally:
     id = randomBytes(16).toString("hex");
     await writeFile(
       path.join(candidates, "fased-app"),
-      await readFile(path.resolve(".evidence/bin/fased-unhealthy-core")),
+      await readFile(
+        path.resolve(
+          env.FASED_UNHEALTHY_CORE ?? ".evidence/bin/fased-unhealthy-core",
+        ),
+      ),
       { mode: 0o700 },
     );
     for (const c of manifest.components) {

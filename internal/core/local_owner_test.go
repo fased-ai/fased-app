@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/signer"
 )
 
 func TestLocalOwnerLaunchIsPrivateSingleUseAndPreservesPassword(t *testing.T) {
@@ -85,6 +87,21 @@ func TestLocalOwnerLaunchIsPrivateSingleUseAndPreservesPassword(t *testing.T) {
 			h.instanceLocation = "remote"
 			if w = call(true, "session", ""); w.Code != 403 {
 				t.Fatal("Remote acquired Local identity")
+			}
+			h.instanceLocation = "local"
+			s.fixture = func(context.Context, signer.Request) (signer.Response, error) {
+				return signer.Response{}, errors.New("not called")
+			}
+			if w = call(true, "session", ""); w.Code != 403 {
+				t.Fatal("separately owned custody acquired Local identity", w.Code)
+			}
+			state := httptest.NewRecorder()
+			h.ServeHTTP(state, httptest.NewRequest("GET", "http://127.0.0.1:7331/api/v1/auth/state", nil))
+			var auth struct {
+				LocalAccess bool `json:"localAccess"`
+			}
+			if state.Code != 200 || json.Unmarshal(state.Body.Bytes(), &auth) != nil || auth.LocalAccess {
+				t.Fatal("custody must retain protected sign-in", state.Code, state.Body)
 			}
 		})
 	}

@@ -226,7 +226,7 @@ export async function fixtureInspectionJourney({
       run("python3", [
         "-c",
         tty,
-        core,
+        guardedCore,
         op,
         id,
         txpath,

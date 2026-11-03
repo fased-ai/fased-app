@@ -241,7 +241,7 @@ func init() {
  case "fixture-reader-guard", "fixture-inspection-compatibility", "owner-fixture-inspection", "fixture-inspection-cold", "fixture-inspection-init", "fixture-inspection-empty": return
  } }
  if len(os.Args)==3 && os.Args[1]=="updates" && os.Args[2]=="compatibility" { return }
- if len(os.Args)>3 && os.Args[1]=="custody" && os.Args[2]=="fixture-inspection" && (os.Args[3]=="bridge" || os.Args[3]=="rollback") { return }
+ if len(os.Args)>3 && os.Args[1]=="custody" && os.Args[2]=="fixture-inspection" && (os.Args[3]=="provision" || os.Args[3]=="inspect" || os.Args[3]=="bridge" || os.Args[3]=="rollback") { return }
  os.Exit(92)
 }
 `,
@@ -275,6 +275,27 @@ func init() {
     (error) => error.status === 92,
     "guarded fixture must refuse ordinary serve",
   );
+  const unhealthy = path.join(root, "unhealthy-app");
+  execFileSync(
+    "go",
+    [
+      "build",
+      "-buildvcs=false",
+      "-o",
+      unhealthy,
+      "./internal/custodyinstall/testdata/unhealthy-core",
+    ],
+    {
+      cwd: guardedSource,
+      stdio: "inherit",
+    },
+  );
+  assert.deepEqual(
+    contract(unhealthy).state,
+    contract(path.join(root, "predecessor-app")).state,
+    "failed-health trial must preserve the exact source state contract",
+  );
+  outputs.unhealthyApp = sha(await readFile(unhealthy));
   outputs.guardedApp = sha(await readFile(guarded));
   outputs.guardedContractSource = guardedContractSHA;
   await writeFile(

@@ -87,11 +87,15 @@ func (s *Store) localOwnerSessionLocked(ctx context.Context) (string, error) {
 	return token, nil
 }
 
+func (h *HTTPHandler) localOwnerAllowed() bool {
+	return h.instanceLocation == "local" && h.instanceOwnerUID == 0 && h.publicHost == "" && h.store.fixture == nil
+}
+
 func (h *HTTPHandler) localOwnerAPI(w http.ResponseWriter, r *http.Request) {
 	if !h.mutation(w, r) {
 		return
 	}
-	if h.instanceLocation != "local" || h.instanceOwnerUID != 0 || h.publicHost != "" {
+	if !h.localOwnerAllowed() {
 		writeError(w, 403, "Local OS owner access required")
 		return
 	}

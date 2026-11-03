@@ -14947,6 +14947,7 @@ test("provider-free News watch reviews rules deduplicates across restart and joi
   await stop();
   await start(true);
   await page.goto(url + "/#agents/tasks");
+  await choosePasswordSignIn(page);
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
@@ -15360,6 +15361,7 @@ test("normal Tasks joins optional News analysis and granted analysis-only result
   await stop();
   await start(true);
   await page.goto(url + "/#agents/tasks");
+  await choosePasswordSignIn(page);
   await page
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
@@ -15647,6 +15649,7 @@ for (const method of ["create", "import"] as const) {
       await stopFixture();
       await startFixture();
       await page.goto(endpoint + "/#wallets/accounts");
+      await choosePasswordSignIn(page);
       await page
         .getByLabel("Owner password", { exact: true })
         .fill(fixturePassword);

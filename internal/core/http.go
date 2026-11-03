@@ -127,7 +127,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		token := h.session(r)
 		valid := h.store.Session(r.Context(), token)
 		result := map[string]any{"claimed": claimed, "authenticated": valid}
-		if h.instanceLocation == "local" && h.instanceOwnerUID == 0 && h.publicHost == "" {
+		if h.localOwnerAllowed() {
 			result["localAccess"] = true
 			var salt []byte
 			if err := h.store.db.QueryRowContext(r.Context(), "SELECT password_salt FROM instance WHERE id=1").Scan(&salt); err != nil {

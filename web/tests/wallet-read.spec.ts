@@ -1,3 +1,4 @@
+import { openPasswordSignIn } from "../../scripts/fixture-owner-setup.mjs";
 import { expect, test } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
@@ -97,6 +98,7 @@ test("wallet Refresh joins encrypted RPC and CLI without changing saved data", a
     });
     await page.clock.install({ time: new Date() });
     await page.goto(url + "/#wallets/accounts");
+    await openPasswordSignIn(page);
     await page
       .getByLabel("Owner password", { exact: true })
       .fill(ready.ownerPassword);
@@ -105,8 +107,11 @@ test("wallet Refresh joins encrypted RPC and CLI without changing saved data", a
       name: "Account Disposable watch",
     });
     await expect(account).toBeVisible();
-    const before = await run(["accounts"]); // Session is CLI-owned, sign in separately.
-    expect(before.code).not.toBe(0);
+    const before = await run(["accounts"]); // The verified OS owner needs no extra app login.
+    expect(before.code).toBe(0);
+    expect(
+      (await fetch(url + "/api/v1/agents?profile=trading-analyst")).status,
+    ).toBe(401);
     expect(
       (await run(["login", "--password-stdin"], ready.ownerPassword + "\n"))
         .code,

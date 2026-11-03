@@ -1,4 +1,7 @@
-import { openOwnerSetup } from "../../scripts/fixture-owner-setup.mjs";
+import {
+  openOwnerSetup,
+  openPasswordSignIn,
+} from "../../scripts/fixture-owner-setup.mjs";
 import { test, expect } from "@playwright/test";
 import { spawn, execFile, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
@@ -281,6 +284,7 @@ for (const variant of ["review", "notify", "unknown"] as const) {
           );
           await page.goto(url + "/#terminals/satcoin");
           // Restart preserves shadow obligations, not the old browser session.
+          await openPasswordSignIn(page);
           await page
             .getByLabel("Owner password", { exact: true })
             .fill(password);
