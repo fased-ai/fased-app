@@ -180,6 +180,27 @@ func TestApplicationUpdateAutomaticWindowPinPolicyAndNoReplay(t *testing.T) {
 		t.Fatal(v, d)
 	}
 }
+
+func TestApplicationUpdateAutomaticActivationReflectsInstalledAuthority(t *testing.T) {
+	s := fixtureStore(t)
+	updateModeFixture(t, s, UpdatePolicy{Mode: "automatic", Notify: true})
+	v, err := s.ApplicationUpdates(t.Context())
+	if err != nil || v.ActivationEnabled {
+		t.Fatal("preference alone activated updates", v, err)
+	}
+	if err = s.BindApplicationUpdateController(fixtureUpdateController()); err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.ApplicationUpdates(t.Context())
+	if err != nil || !v.ActivationEnabled {
+		t.Fatal("installed automatic authority is hidden", v, err)
+	}
+	updateModeFixture(t, s, UpdatePolicy{Mode: "manual", Notify: true})
+	v, err = s.ApplicationUpdates(t.Context())
+	if err != nil || v.ActivationEnabled {
+		t.Fatal("Manual must disable automatic updates", v, err)
+	}
+}
 func TestApplicationUpdateClosedOrdinaryModeAndPreservedState(t *testing.T) {
 	s := fixtureStore(t)
 	before, e := os.ReadFile(filepath.Join(s.dir, "core.sqlite"))

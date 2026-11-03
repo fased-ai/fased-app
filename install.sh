@@ -57,15 +57,19 @@ else die 'Invalid installer binding.'; fi
 if ! { exec 3<>/dev/tty; } 2>/dev/null; then
   die 'Run this command in an interactive terminal.'
 fi
-if [[ -z $profile && $action == install ]]; then
-  printf 'Fased\n  Local\n  Remote\n  Connect\n  Update\nChoose [local/remote/connect/update, default local]: ' >&3
-  IFS= read -r choice <&3
-  case "${choice,,}" in "") profile=local ;; local|remote|connect) profile=${choice,,} ;; update) action=update ;; *) die 'Choose Local, Remote, Connect or Update.' ;; esac
-fi
 if [[ -z $profile ]]; then
-  printf 'Installation [local/remote]: ' >&3
-  IFS= read -r profile <&3; profile=${profile,,}
-  [[ $profile == local || $profile == remote ]] || die 'Choose Local or Remote.'
+  suggested=local
+  if [[ -n ${SSH_CONNECTION:-} || $(/usr/bin/id -u) == 0 && -z ${SUDO_USER:-} ]]; then suggested=remote; fi
+  if [[ $action == install ]]; then
+    printf 'Fased\n  Local\n  Remote\n  Connect\n  Update\nChoose [local/remote/connect/update, default %s]: ' "$suggested" >&3
+    IFS= read -r choice <&3
+    case "${choice,,}" in "") profile=$suggested ;; local|remote|connect) profile=${choice,,} ;; update) action=update ;; *) die 'Choose Local, Remote, Connect or Update.' ;; esac
+  fi
+  if [[ -z $profile ]]; then
+    printf 'Installation [local/remote, default %s]: ' "$suggested" >&3
+    IFS= read -r choice <&3; profile=${choice:-$suggested}; profile=${profile,,}
+    [[ $profile == local || $profile == remote ]] || die 'Choose Local or Remote.'
+  fi
 fi
 if [[ $profile == remote ]]; then
 @REMOTE_PLATFORMS@

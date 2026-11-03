@@ -11,6 +11,24 @@ const idle = () => ({
   operation: { id: "", phase: "idle" },
 });
 describe("application update admission", () => {
+  it("accepts explicit Automatic mode backed by the installed controller", () => {
+    const value = {
+      ...idle(),
+      controllerAvailable: true,
+      activationEnabled: true,
+      policy: { notify: true, mode: "automatic" },
+    };
+    expect(readApplicationUpdates(value).activationEnabled).toBe(true);
+    expect(() =>
+      readApplicationUpdates({ ...value, controllerAvailable: false }),
+    ).toThrow();
+    expect(() =>
+      readApplicationUpdates({
+        ...value,
+        policy: { notify: true, mode: "manual" },
+      }),
+    ).toThrow();
+  });
   it("distinguishes saved automatic preference from activation", () => {
     const v = idle();
     Object.assign(v.policy, { mode: "automatic" });

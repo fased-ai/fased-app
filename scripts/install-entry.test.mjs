@@ -330,3 +330,41 @@ test("single-owner entry preserves Local/Remote/Update and rejects profile inven
     }),
   );
 });
+
+test("the one-command SSH wizard defaults to Remote without a second install command", () => {
+  const decision = template.slice(
+    template.indexOf("if [[ -z $profile"),
+    template.indexOf("if [[ $profile == remote ]]; then"),
+  );
+  const body =
+    "set -eu\nprofile=''\naction=install\nexec 3<>/dev/tty\ndie(){ printf '%s\\n' \\\"$*\\\"; exit 1; }\n" +
+    decision +
+    '\nprintf "SELECTED:%s\\n" "$profile"\n';
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      `
+import os,pty,select,signal,sys,time
+pid,fd=pty.fork()
+if pid==0:
+ os.execvpe('bash',['bash','-c',sys.argv[1]],dict(os.environ,SSH_CONNECTION='192.0.2.1 20000 192.0.2.2 22'))
+os.write(fd,b'\\n');out=b'';deadline=time.monotonic()+5;status=None
+while time.monotonic()<deadline:
+ if select.select([fd],[],[],.1)[0]:
+  try:out+=os.read(fd,65536)
+  except OSError:break
+ done,value=os.waitpid(pid,os.WNOHANG)
+ if done:status=value;break
+if status is None:
+ done,status=os.waitpid(pid,os.WNOHANG)
+ if not done:os.kill(pid,signal.SIGKILL);_,status=os.waitpid(pid,0)
+os.close(fd);sys.stdout.buffer.write(out);sys.exit(os.waitstatus_to_exitcode(status))
+`,
+      body,
+    ],
+    { timeout: 10000 },
+  );
+  assert.equal(result.status, 0, result.stderr?.toString());
+  assert.match(result.stdout.toString(), /SELECTED:remote/);
+});

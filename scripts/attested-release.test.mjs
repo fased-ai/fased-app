@@ -39,7 +39,7 @@ function fixture(t) {
     sha256: sha(files[name]),
   });
   const packet = {
-    version: 1,
+    version: 2,
     productVersion: c.version,
     source: "a".repeat(40),
     bundleSha256: "b".repeat(64),
@@ -47,9 +47,10 @@ function fixture(t) {
     installer: identity("fased-install-linux-amd64"),
     entry: identity("install.sh"),
     release: {
+      buildRef: "refs/heads/main",
       installerSha256: sha(files["fased-install-linux-amd64"]),
       sourceTree: "c".repeat(40),
-      tagObject: "d".repeat(40),
+      tagObject: "",
       packageLockSha256: "e".repeat(64),
       goSumSha256: "f".repeat(64),
       workflowCommit: "a".repeat(40),
@@ -83,11 +84,11 @@ function fixture(t) {
     if (url.includes("/git/ref/tags/"))
       return {
         ref: `refs/tags/v${c.version}`,
-        object: { type: "tag", sha: packet.release.tagObject },
+        object: { type: "tag", sha: "d".repeat(40) },
       };
     if (url.includes("/git/tags/"))
       return {
-        sha: packet.release.tagObject,
+        sha: "d".repeat(40),
         tag: `v${c.version}`,
         object: { type: "commit", sha: packet.source },
       };
@@ -129,6 +130,7 @@ function fixture(t) {
       }
       return structuredClone(release);
     }
+    if (url.includes("/actions/runs/")) return {};
     throw Error("unexpected controlled API request");
   };
   const execute = (program, args, options) => {
@@ -181,6 +183,10 @@ function fixture(t) {
     api,
     execute,
     fetchResponse,
+    verifyAcceptance: async () => ({
+      fixtureOnly: true,
+      runAttempt: packet.release.runAttempt,
+    }),
     get release() {
       return release;
     },
@@ -201,6 +207,7 @@ test("attested publication runs proof before executable, publishes once and resu
     options = {
       api: f.api,
       execute: f.execute,
+      verifyAcceptance: f.verifyAcceptance,
       fetchResponse: f.fetchResponse,
       stateRoot: path.join(f.parent, "publisher"),
     };
@@ -220,6 +227,7 @@ test("attested publisher refuses an independently failed installer proof before 
     publishAttested(f.c, f.directory, {
       api: f.api,
       execute: f.execute,
+      verifyAcceptance: f.verifyAcceptance,
       fetchResponse: f.fetchResponse,
       stateRoot: path.join(f.parent, "publisher"),
     }),
@@ -233,6 +241,7 @@ test("workflow build permissions are normalized before private publisher admissi
   const options = {
     api: f.api,
     execute: f.execute,
+    verifyAcceptance: f.verifyAcceptance,
     fetchResponse: f.fetchResponse,
     stateRoot: path.join(f.parent, "publisher"),
   };
@@ -429,6 +438,7 @@ test("same command recovers a published release after original run retention/rea
   const result = await publishAttested(f.c, directory, {
     api,
     execute: f.execute,
+    verifyAcceptance: f.verifyAcceptance,
     fetchResponse: f.fetchResponse,
     stateRoot: path.join(f.parent, "publisher"),
   });
@@ -462,6 +472,7 @@ test("same publication command recovers an exact partial workflow draft without 
       return f.api(...args);
     },
     execute: f.execute,
+    verifyAcceptance: f.verifyAcceptance,
     fetchResponse: f.fetchResponse,
     stateRoot: path.join(f.parent, "workflow"),
   };
@@ -499,6 +510,7 @@ test("partial draft recovery refuses altered or unexpected uploaded assets befor
           return f.api(...args);
         },
         execute: f.execute,
+        verifyAcceptance: f.verifyAcceptance,
         fetchResponse: f.fetchResponse,
         stateRoot: path.join(f.parent, "workflow"),
       };
@@ -522,4 +534,18 @@ test("partial draft recovery refuses altered or unexpected uploaded assets befor
       );
       assert.equal(f.mutations, mutations);
     });
+});
+
+test("new publication refuses absent trusted installed acceptance before writes", async (t) => {
+  const f = fixture(t);
+  await assert.rejects(
+    publishAttested(f.c, f.directory, {
+      api: f.api,
+      execute: f.execute,
+      fetchResponse: f.fetchResponse,
+      stateRoot: path.join(f.parent, "publisher"),
+    }),
+    /protected candidate workflow/,
+  );
+  assert.equal(f.mutations, 0);
 });

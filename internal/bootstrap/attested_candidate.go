@@ -25,8 +25,12 @@ func VerifyAttestedCandidate(o Options, directory string) (Report, error) {
 		return report, err
 	}
 	var packet AttestedPacket
-	if update.StrictJSON(raw, &packet) != nil || packet.Version != 1 || !hashOK(packet.BundleSHA256) || !sourceHash(packet.Release.SourceTree) || !hashOK(packet.Release.PackageLockSHA256) || !hashOK(packet.Release.GoSumSHA256) {
+	if update.StrictJSON(raw, &packet) != nil || !attestedBuildIdentity(packet, packet.Release.TagObject) || !hashOK(packet.BundleSHA256) || !sourceHash(packet.Release.SourceTree) || !hashOK(packet.Release.PackageLockSHA256) || !hashOK(packet.Release.GoSumSHA256) {
 		return report, errors.New("candidate inventory invalid")
+	}
+	sequence, sequenceErr := releaseSequence(packet.ProductVersion)
+	if sequenceErr != nil || sequence < seed.MinimumSequence {
+		return report, errors.New("candidate version is below the trusted minimum")
 	}
 	if packet.Release.InstallerSHA256 != packet.Installer.SHA256 || !hashOK(packet.Release.InstallerSHA256) {
 		return report, errors.New("attested candidate installer digest required")
