@@ -188,7 +188,7 @@ test("one consented research fixture shares UI/CLI accounting and survives resta
     expect(inspect.turn.models[0].attempted).toBe(false);
     expect(inspect.request.context).toBe(q.context);
     await expect(
-      ai.getByRole("button", { name: "Run development fixture", exact: true }),
+      ai.getByRole("button", { name: "Run test", exact: true }),
     ).toHaveCount(0);
     await expect(
       ai.getByRole("button", { name: "Use as draft", exact: true }),
@@ -206,11 +206,11 @@ test("one consented research fixture shares UI/CLI accounting and survives resta
     );
     expect((await read()).revision).toBe(v.revision);
     const consent = record.getByRole("checkbox", {
-      name: "I reviewed this research wire and consent to one fixture request",
+      name: "I reviewed this research wire and consent to one test request",
       exact: true,
     });
     const run = record.getByRole("button", {
-      name: "Run research fixture",
+      name: "Run research test",
       exact: true,
     });
     await expect(run).toBeDisabled();

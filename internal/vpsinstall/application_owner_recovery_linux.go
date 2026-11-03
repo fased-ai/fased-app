@@ -3,11 +3,13 @@
 package vpsinstall
 
 import (
-	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/update"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -256,8 +258,8 @@ func verifyApplicationOwnerGeneration(o hostOps, j applicationJournal) error {
 			return errors.New("Remote helper generation metadata changed")
 		}
 	}
-	f, e := rootFile(o, m.Core)
-	if e != nil || f.Mode.Perm() != 0755 || hash(f.Data) != j.Previous.CoreSHA256 && hash(f.Data) != j.Target.CoreSHA256 {
+	f, _, sum, e := rootFileDigest(o, m.Core)
+	if e != nil || f.Mode.Perm() != 0755 || sum != j.Previous.CoreSHA256 && sum != j.Target.CoreSHA256 {
 		return errors.New("Remote helper current generation is not admitted")
 	}
 	marker, e := o.read(m.Root + "/app-readonly-probe")
@@ -267,6 +269,39 @@ func verifyApplicationOwnerGeneration(o hostOps, j applicationJournal) error {
 	return nil
 }
 
+type retainedContent struct {
+	path, sha256 string
+	size         int64
+	data         []byte // Small canonical JSON only; executable payloads stay on disk.
+}
+
+func retainedPrefixHash(o hostOps, value retainedContent, length int64) (string, error) {
+	if length < 0 || length > value.size {
+		return "", errors.New("retained prefix exceeds original content")
+	}
+	if value.data != nil {
+		return hash(value.data[:length]), nil
+	}
+	var result string
+	err := rootFileContent(o, value.path, func(f hostFile, size int64, reader io.Reader) error {
+		if f.Mode.Perm() != 0755 || size != value.size {
+			return errors.New("retained prefix reference changed")
+		}
+		full, prefix := sha256.New(), sha256.New()
+		n, err := io.CopyN(io.MultiWriter(full, prefix), reader, length)
+		if err != nil {
+			return err
+		}
+		rest, err := io.Copy(full, reader)
+		if err != nil || n+rest != size || hex.EncodeToString(full.Sum(nil)) != value.sha256 {
+			return errors.New("retained prefix reference differs from admitted digest")
+		}
+		result = hex.EncodeToString(prefix.Sum(nil))
+		return nil
+	})
+	return result, err
+}
+
 func verifyApplicationOwnerRetained(o hostOps, j applicationJournal, dir string) error {
 	if dir != j.Previous.Root+"-update-"+j.Status.ID {
 		return errors.New("Remote retained helper directory changed")
@@ -274,28 +309,41 @@ func verifyApplicationOwnerRetained(o hostOps, j applicationJournal, dir string)
 	if e := checkDirectory(o, dir, 0, 0, 0755); e != nil {
 		return e
 	}
-	old, oe := rootFile(o, dir+"/previous-core")
-	next, ne := rootFile(o, dir+"/next-core")
-	if oe != nil || ne != nil || old.Mode.Perm() != 0755 || next.Mode.Perm() != 0755 || hash(old.Data) != j.Previous.CoreSHA256 || hash(next.Data) != j.Target.CoreSHA256 {
+	old, oldSize, oldHash, oe := rootFileDigest(o, dir+"/previous-core")
+	next, nextSize, nextHash, ne := rootFileDigest(o, dir+"/next-core")
+	if oe != nil || ne != nil || old.Mode.Perm() != 0755 || next.Mode.Perm() != 0755 || oldHash != j.Previous.CoreSHA256 || nextHash != j.Target.CoreSHA256 {
 		return errors.New("Remote retained helper code changed")
 	}
+	previous := retainedContent{path: dir + "/previous-core", size: oldSize, sha256: oldHash}
+	target := retainedContent{path: dir + "/next-core", size: nextSize, sha256: nextHash}
+	metadata := func(values ...[]byte) []retainedContent {
+		result := make([]retainedContent, 0, len(values))
+		for _, value := range values {
+			result = append(result, retainedContent{size: int64(len(value)), sha256: hash(value), data: value})
+		}
+		return result
+	}
 	type publicFile struct {
-		bytes [][]byte
-		mode  os.FileMode
+		content []retainedContent
+		mode    os.FileMode
 	}
 	allowed := map[string]publicFile{
-		"previous-core": {[][]byte{old.Data}, 0755}, "next-core": {[][]byte{next.Data}, 0755},
-		"previous-install.json": {[][]byte{encoded(j.Previous)}, 0644}, "next-install.json": {[][]byte{encoded(j.Target)}, 0644},
-		"previous-intent.json": {[][]byte{encoded(intentFor(j.Previous))}, 0644}, "next-intent.json": {[][]byte{encoded(intentFor(j.Target))}, 0644},
-		"owner-helper.json":        {[][]byte{encoded(applicationOwnerAdmission(j))}, 0644},
-		"replacement-fased-app":    {[][]byte{old.Data, next.Data}, 0755},
-		"replacement-install.json": {[][]byte{encoded(j.Previous), encoded(j.Target)}, 0644},
-		"replacement-intent.json":  {[][]byte{encoded(intentFor(j.Previous)), encoded(intentFor(j.Target))}, 0644},
+		"previous-core":            {[]retainedContent{previous}, 0755},
+		"next-core":                {[]retainedContent{target}, 0755},
+		"previous-install.json":    {metadata(encoded(j.Previous)), 0644},
+		"next-install.json":        {metadata(encoded(j.Target)), 0644},
+		"previous-intent.json":     {metadata(encoded(intentFor(j.Previous))), 0644},
+		"next-intent.json":         {metadata(encoded(intentFor(j.Target))), 0644},
+		"owner-helper.json":        {metadata(encoded(applicationOwnerAdmission(j))), 0644},
+		"replacement-fased-app":    {[]retainedContent{previous, target}, 0755},
+		"replacement-install.json": {metadata(encoded(j.Previous), encoded(j.Target)), 0644},
+		"replacement-intent.json":  {metadata(encoded(intentFor(j.Previous)), encoded(intentFor(j.Target))), 0644},
 	}
 	names, e := o.list(dir)
 	if e != nil {
 		return e
 	}
+	seen := make(map[string]bool, len(names))
 	for _, name := range names {
 		base, partial := name, false
 		if strings.HasPrefix(name, ".") && strings.HasSuffix(name, ".pending") {
@@ -305,23 +353,38 @@ func verifyApplicationOwnerRetained(o hostOps, j applicationJournal, dir string)
 			}
 		}
 		p, ok := allowed[base]
-		f, err := rootFile(o, dir+"/"+name)
-		if !ok || err != nil || f.Mode.Perm() != p.mode {
+		if !ok {
+			return errors.New("unclassified retained Remote helper file")
+		}
+		f, size, sum, err := rootFileDigest(o, dir+"/"+name)
+		if err != nil || f.Mode.Perm() != p.mode {
 			return errors.New("unclassified or unsafe retained Remote helper file")
 		}
 		match := false
-		for _, value := range p.bytes {
-			if bytes.Equal(f.Data, value) || partial && bytes.HasPrefix(value, f.Data) {
+		for _, value := range p.content {
+			if size == value.size && sum == value.sha256 {
 				match = true
+				break
+			}
+			if partial && size < value.size {
+				prefix, err := retainedPrefixHash(o, value, size)
+				if err != nil {
+					return err
+				}
+				if prefix == sum {
+					match = true
+					break
+				}
 			}
 		}
 		if !match {
 			return errors.New("retained Remote helper public inventory changed")
 		}
+		seen[name] = true
 	}
 	for _, required := range []string{"previous-core", "next-core", "previous-install.json", "next-install.json", "previous-intent.json", "next-intent.json", "owner-helper.json"} {
-		if _, e := rootFile(o, dir+"/"+required); e != nil {
-			return e
+		if !seen[required] {
+			return errors.New("required retained Remote helper file is missing")
 		}
 	}
 	return nil

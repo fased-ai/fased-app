@@ -185,7 +185,7 @@ test("inert research preparation shares UI/CLI facts, cancellation and restart w
     expect(inspect.turn.models[0].attempted).toBe(false);
     expect(inspect.request.context).toBe(q.context);
     await expect(
-      ai.getByRole("button", { name: "Run development fixture", exact: true }),
+      ai.getByRole("button", { name: "Run test", exact: true }),
     ).toHaveCount(0);
     await expect(
       ai.getByRole("button", { name: "Use as draft", exact: true }),

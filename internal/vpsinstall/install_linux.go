@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -35,6 +36,7 @@ type hostFile struct {
 type hostOps struct {
 	uid, euid, gid      int
 	read                func(string) (hostFile, error)
+	content             func(string, func(hostFile, int64, io.Reader) error) error
 	rootParents         func(string) error // Optional exact policy-file ancestry; default root:root contract stays unchanged.
 	list                func(string) ([]string, error)
 	run                 func(context.Context, []byte, ...string) ([]byte, error)
@@ -91,6 +93,82 @@ func file(path string) (hostFile, error) {
 	}
 	return f, e
 }
+
+// Executable verification must not retain a complete image while a dropped
+// helper verifies the same transaction. Metadata and content share one held FD.
+func fileContent(path string, consume func(hostFile, int64, io.Reader) error) error {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return err
+	}
+	f := os.NewFile(uintptr(fd), path)
+	defer f.Close()
+	before, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	st, ok := before.Sys().(*syscall.Stat_t)
+	if !ok || !before.Mode().IsRegular() || before.Size() < 0 || before.Size() > 64<<20 {
+		return errors.New("bounded regular host input required")
+	}
+	metadata := hostFile{UID: int(st.Uid), GID: int(st.Gid), Mode: before.Mode(), Regular: true}
+	if err = consume(metadata, before.Size(), io.LimitReader(f, (64<<20)+1)); err != nil {
+		return err
+	}
+	after, err := f.Stat()
+	current, pathErr := os.Lstat(path)
+	if err != nil || pathErr != nil || !os.SameFile(before, after) || !os.SameFile(before, current) || before.Size() != after.Size() || before.Mode() != after.Mode() {
+		return errors.New("host content identity changed during verification")
+	}
+	last, ok := after.Sys().(*syscall.Stat_t)
+	if !ok || st.Uid != last.Uid || st.Gid != last.Gid || st.Mtim != last.Mtim || st.Ctim != last.Ctim {
+		return errors.New("host content changed during verification")
+	}
+	return nil
+}
+
+func rootFileContent(o hostOps, path string, consume func(hostFile, int64, io.Reader) error) error {
+	var err error
+	if o.rootParents != nil {
+		err = o.rootParents(path)
+	} else {
+		err = parents(o, filepath.Dir(path))
+	}
+	if err != nil {
+		return err
+	}
+	check := func(f hostFile, size int64, reader io.Reader) error {
+		if !f.Regular || f.UID != 0 || f.GID != 0 || f.Mode.Perm()&0022 != 0 || f.Mode&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 || size < 0 || size > 64<<20 {
+			return errors.New("foreign root file; preserve it")
+		}
+		return consume(f, size, reader)
+	}
+	if o.content != nil {
+		return o.content(path, check)
+	}
+	f, err := o.read(path)
+	if err != nil {
+		return err
+	}
+	return check(f, int64(len(f.Data)), bytes.NewReader(f.Data))
+}
+
+func rootFileDigest(o hostOps, path string) (hostFile, int64, string, error) {
+	var metadata hostFile
+	var size int64
+	var sum string
+	err := rootFileContent(o, path, func(f hostFile, length int64, reader io.Reader) error {
+		h := sha256.New()
+		n, err := io.Copy(h, reader)
+		if err != nil || n != length {
+			return errors.New("root file length changed")
+		}
+		f.Data = nil
+		metadata, size, sum = f, length, hex.EncodeToString(h.Sum(nil))
+		return nil
+	})
+	return metadata, size, sum, err
+}
 func ownerJournal() (string, error) {
 	d, e := os.UserConfigDir()
 	if e != nil {
@@ -100,7 +178,7 @@ func ownerJournal() (string, error) {
 	return d, core.EnsurePrivateDirectory(d)
 }
 func liveOps(s *custodyinstall.System) hostOps {
-	o := hostOps{uid: os.Getuid(), euid: os.Geteuid(), gid: os.Getgid(), read: file, executable: os.Executable, groups: os.Getgroups}
+	o := hostOps{uid: os.Getuid(), euid: os.Geteuid(), gid: os.Getgid(), read: file, content: fileContent, executable: os.Executable, groups: os.Getgroups}
 	o.applicationContract = func(ctx context.Context, m Manifest) ([]byte, error) {
 		if os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
 			return nil, errors.New("ordinary maintenance owner required")
@@ -482,8 +560,8 @@ func verifyImmutableFiles(o hostOps, m Manifest) error {
 			return errors.New("Remote immutable inventory changed")
 		}
 	}
-	binary, e := rootFile(o, m.Core)
-	if e != nil || binary.Mode.Perm() != 0755 || hash(binary.Data) != m.CoreSHA256 {
+	binary, _, sum, e := rootFileDigest(o, m.Core)
+	if e != nil || binary.Mode.Perm() != 0755 || sum != m.CoreSHA256 {
 		return errors.New("Remote installed executable changed")
 	}
 	return nil

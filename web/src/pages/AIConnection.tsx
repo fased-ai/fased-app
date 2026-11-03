@@ -1,3 +1,4 @@
+import { previewModel } from "../ui-language-preview";
 import "./Providers.css";
 import type { Provider } from "../state";
 type CredentialMode =
@@ -1035,9 +1036,13 @@ export function AIModelPicker({
                     !model.selectable ||
                     model.connectionRef !== connectionRef
                   }
-                  title={model.selectable ? model.id : uiText("Unavailable")}
+                  title={
+                    model.selectable
+                      ? previewModel(model.id, uiText)
+                      : uiText("Unavailable")
+                  }
                 >
-                  {model.name}
+                  {previewModel(model.name, uiText)}
                 </option>
               ))}
             </optgroup>
@@ -1073,7 +1078,7 @@ export function AIAdmissionReview({
                     ? "Kimi Code"
                     : "ChatGPT",
           )}{" "}
-          · {policy.model}
+          · {previewModel(policy.model, uiText)}
         </p>
         {admission && (
           <dl>
@@ -1089,7 +1094,7 @@ export function AIAdmissionReview({
     return (
       <details className="ai-admission">
         <summary>{uiText("Model")}</summary>
-        <p>{policy.model}</p>
+        <p>{previewModel(policy.model, uiText)}</p>
         <p>{uiText("Fixture allowance")}</p>
         {admission && (
           <dl>
@@ -1107,7 +1112,7 @@ export function AIAdmissionReview({
       <summary>{uiText("Model and tariff admission")}</summary>
       <p>
         {uiText("Pinned snapshot: ")}
-        {policy.model}
+        {previewModel(policy.model, uiText)}
         {uiText(" · Standard tier · Text only · No tools.")}
       </p>
       <p>

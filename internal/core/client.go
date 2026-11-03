@@ -152,7 +152,10 @@ func (c *Client) authenticate(ctx context.Context, route string, credentials map
 	}
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
-		return ErrUnauthorized
+		if response.StatusCode == http.StatusUnauthorized {
+			return ErrUnauthorized
+		}
+		return fmt.Errorf("owner authentication failed (HTTP %d %s)", response.StatusCode, http.StatusText(response.StatusCode))
 	}
 	var result struct {
 		CSRFToken    string `json:"csrfToken"`

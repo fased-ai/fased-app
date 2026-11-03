@@ -95,7 +95,7 @@ test("reviewed v2 continuations share UI/CLI consent, transcript and restart", a
     exact: true,
   });
   const consentName =
-    "I reviewed this wire and its allowed local reads and consent to one fixture request";
+    "I reviewed this wire and its allowed local reads and consent to one test request";
   const show = async (id: string) => {
     await page.reload();
     const q = (await inspect(id)).request;
@@ -199,7 +199,7 @@ test("reviewed v2 continuations share UI/CLI consent, transcript and restart", a
     expect(record.turn.state).toBe("prepared");
     expect(record.request.heldMicrousd).toBe(0);
     const run = region.getByRole("button", {
-      name: "Run research fixture",
+      name: "Run research test",
       exact: true,
     });
     await expect(run).toBeDisabled();
@@ -239,7 +239,7 @@ test("reviewed v2 continuations share UI/CLI consent, transcript and restart", a
       region.getByRole("checkbox", { name: consentName, exact: true }),
     ).not.toBeChecked();
     await expect(
-      region.getByRole("button", { name: "Run research fixture", exact: true }),
+      region.getByRole("button", { name: "Run research test", exact: true }),
     ).toBeDisabled();
     await command(
       "wen-research",
@@ -252,7 +252,7 @@ test("reviewed v2 continuations share UI/CLI consent, transcript and restart", a
       .getByRole("checkbox", { name: consentName, exact: true })
       .check();
     await region
-      .getByRole("button", { name: "Run research fixture", exact: true })
+      .getByRole("button", { name: "Run research test", exact: true })
       .click();
     await expect
       .poll(async () => (await inspect(id)).turn.state)

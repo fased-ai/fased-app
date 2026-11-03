@@ -1,3 +1,5 @@
+import { useUI } from "../ui-preferences";
+import { previewIdentity } from "../ui-language-preview";
 import { useEffect, useRef, useState } from "react";
 import { useCore } from "../core";
 import { useWorkspace } from "../workspace";
@@ -64,6 +66,7 @@ type Review = {
 const iso = (at: number) => new Date(at * 1000).toISOString();
 
 export function WENSessionAutomatic() {
+  const { t: uiText } = useUI();
   const core = useCore();
   const { state, agents } = useWorkspace();
   const profile = state.selectedProfile;
@@ -236,11 +239,11 @@ export function WENSessionAutomatic() {
   return (
     <section
       className="panel f4-rehearsal f4-automatic"
-      aria-label="Automatic fixture runs"
+      aria-label={uiText("Automatic test runs")}
     >
       <div className="panel-heading">
-        <h2>Automatic fixture runs</h2>
-        <Badge>FIXTURE</Badge>
+        <h2>{uiText("Automatic test runs")}</h2>
+        <Badge>{uiText("FIXTURE")}</Badge>
       </div>
       {core.mode !== "ready" ? (
         <p>Private core required</p>
@@ -256,14 +259,14 @@ export function WENSessionAutomatic() {
               void perform((ticket) => load(ticket));
             }}
           >
-            Reload fixture runs
+            {uiText("Reload test runs")}
           </button>
           {view && library && catalog && (
             <>
               <p role="status">
                 {view.capability.enabled
-                  ? "Fixture capability enabled"
-                  : "Fixture capability disabled"}
+                  ? uiText("Test mode enabled")
+                  : uiText("Test mode disabled")}
               </p>
               <div className="f4-composer">
                 <label>
@@ -310,7 +313,9 @@ export function WENSessionAutomatic() {
                     }}
                   >
                     {catalog.scenarios.map((s) => (
-                      <option key={s.id}>{s.id}</option>
+                      <option key={s.id} value={s.id}>
+                        {uiText(previewIdentity(s.id))}
+                      </option>
                     ))}
                   </select>
                 </label>
@@ -326,7 +331,9 @@ export function WENSessionAutomatic() {
                     }}
                   >
                     {catalog.poolOptions.map((p) => (
-                      <option key={p}>{p}</option>
+                      <option key={p} value={p}>
+                        {uiText(previewIdentity(p))}
+                      </option>
                     ))}
                   </select>
                 </label>
@@ -368,7 +375,7 @@ export function WENSessionAutomatic() {
                         void perform((ticket) => prepare(null, ticket))
                       }
                     >
-                      Review fixture run
+                      {uiText("Review test run")}
                     </button>
                   </div>
                 </>
@@ -418,8 +425,8 @@ export function WENSessionAutomatic() {
                 </section>
               )}
               {review && (
-                <section aria-label="Fixture run review">
-                  <h3>Fixture run review</h3>
+                <section aria-label={uiText("Test run review")}>
+                  <h3>{uiText("Test run review")}</h3>
                   <dl>
                     <dt>Scenario playback</dt>
                     <dd>
@@ -437,12 +444,12 @@ export function WENSessionAutomatic() {
                     <dt>Review expires</dt>
                     <dd>{iso(review.expiresAt)}</dd>
                     <dt>Shadow pool</dt>
-                    <dd>{review.pool.id}</dd>
+                    <dd>{uiText(previewIdentity(review.pool.id))}</dd>
                     <dt>Available lamports</dt>
                     <dd>{review.pool.budget.availableLamports}</dd>
                   </dl>
                   <details>
-                    <summary>Complete fixture run review</summary>
+                    <summary>{uiText("Complete test run review")}</summary>
                     <pre>{JSON.stringify(review, null, 2)}</pre>
                   </details>
                   <div className="agent-inline">
@@ -453,7 +460,7 @@ export function WENSessionAutomatic() {
                         void perform((ticket) => post("start", review, ticket))
                       }
                     >
-                      Start fixture run
+                      {uiText("Start test run")}
                     </button>
                     <button
                       className="secondary"
@@ -488,7 +495,7 @@ export function WENSessionAutomatic() {
                       <dl>
                         <dt>Original wall deadline</dt>
                         <dd>{iso(r.deadline)}</dd>
-                        <dt>Fixture clock</dt>
+                        <dt>{uiText("Test clock")}</dt>
                         <dd>{r.clockAt}</dd>
                         <dt>Cursor</dt>
                         <dd data-testid={`run-cursor-${id}`}>{r.cursor}</dd>
@@ -497,7 +504,7 @@ export function WENSessionAutomatic() {
                           {r.operations.length}
                         </dd>
                         <dt>Shadow pool</dt>
-                        <dd>{r.record.walletId}</dd>
+                        <dd>{uiText(previewIdentity(r.record.walletId))}</dd>
                         <dt>Available lamports</dt>
                         <dd data-testid={`run-available-${id}`}>
                           {r.record.budget.availableLamports}
@@ -517,7 +524,7 @@ export function WENSessionAutomatic() {
                                 )
                               }
                             >
-                              Pause fixture run
+                              {uiText("Pause test run")}
                             </button>
                             <button
                               className="secondary"
@@ -528,7 +535,7 @@ export function WENSessionAutomatic() {
                                 )
                               }
                             >
-                              Stop fixture run
+                              {uiText("Stop test run")}
                             </button>
                             <button
                               className="secondary"
@@ -572,8 +579,8 @@ export function WENSessionAutomatic() {
                             }
                           >
                             {recoveryEvent.startsWith("uncertain:")
-                              ? "Inspect fixture operation"
-                              : "Reconcile fixture operation"}
+                              ? uiText("Inspect test operation")
+                              : uiText("Reconcile test operation")}
                           </button>
                         )}
                         {r.decisions.length > 0 && (
@@ -630,7 +637,7 @@ export function WENSessionAutomatic() {
                 })}
               </div>
               <details>
-                <summary>Complete fixture run view</summary>
+                <summary>{uiText("Complete test run view")}</summary>
                 <pre data-testid="fixture-run-view">
                   {JSON.stringify(view, null, 2)}
                 </pre>

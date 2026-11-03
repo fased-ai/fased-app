@@ -189,7 +189,7 @@ for (const variant of ["review", "notify", "unknown"] as const) {
       await page.waitForTimeout(300);
       expect(JSON.stringify(await read())).toBe(stateNoTimer);
       await card
-        .getByRole("button", { name: "Step fixture", exact: true })
+        .getByRole("button", { name: "Step test", exact: true })
         .click();
       await expect(card.getByTestId(`accepted-${id}`)).toHaveText("0");
       v = await read();
@@ -265,7 +265,7 @@ for (const variant of ["review", "notify", "unknown"] as const) {
         const receipts = v.sessions[0].receipts;
         if (variant === "unknown") {
           await card
-            .getByRole("button", { name: "Step fixture", exact: true })
+            .getByRole("button", { name: "Step test", exact: true })
             .click();
           await expect(
             card.getByText("fixture-operation-uncertain", { exact: true }),
@@ -295,7 +295,7 @@ for (const variant of ["review", "notify", "unknown"] as const) {
             card.getByText("stop-awaiting-reconciliation", { exact: true }),
           ).toBeVisible();
           await card
-            .getByRole("button", { name: "Step fixture", exact: true })
+            .getByRole("button", { name: "Step test", exact: true })
             .click();
           await expect(
             card.getByText("COMPLETE", { exact: true }),
@@ -305,7 +305,7 @@ for (const variant of ["review", "notify", "unknown"] as const) {
           expect(v.sessions[0].completionReason).toBe("stopped");
         } else {
           await card
-            .getByRole("button", { name: "Step fixture", exact: true })
+            .getByRole("button", { name: "Step test", exact: true })
             .click();
           await expect(
             card.getByText("shadow-reconciled; BTC/SAT unavailable", {

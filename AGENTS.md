@@ -41,6 +41,8 @@
 
 ## Design decisions
 
+- Customer-facing names use **Fased**. Describe simulated behavior as Preview, Test or Paper; keep engineering fixture names out of labels and installer links. Do not rename protocol identifiers, CLI flags or existing manifest/data paths to change display copy. Never use test-scenario directory names as product installation defaults.
+
 Cut taglines, helper text and secondary labels. If a screen needs them to make sense, fix the layout.
 
 Make the best decision that will elevate all three: the user experience (UX), developer experience (DX), and agent experience (AX) always, without breaking anything.

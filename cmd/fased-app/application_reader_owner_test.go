@@ -38,7 +38,13 @@ func TestApplicationReader36IPC(t *testing.T) {
 		t.Run(reboot, func(t *testing.T) { applicationReaderIPC(t, os.Getenv("FASED_READER_PREDECESSOR36"), 36, reboot) })
 	}
 }
-func applicationReaderIPC(t *testing.T, binary string, schema int, reboot string) {
+
+// This optional source is the exact already-installed executable, exercised only
+// against a fresh disposable directory. It never opens the owner VPS database.
+func TestApplicationReaderInstalledSourceIPC(t *testing.T) {
+	applicationReaderIPC(t, os.Getenv("FASED_READER_INSTALLED_SOURCE"), 36, "", true)
+}
+func applicationReaderIPC(t *testing.T, binary string, schema int, reboot string, installed ...bool) {
 	t.Helper()
 	if binary == "" {
 		t.Skip("compiled predecessor fixture is supplied by the focused reader handoff check")
@@ -54,7 +60,11 @@ func applicationReaderIPC(t *testing.T, binary string, schema int, reboot string
 	var pipe io.ReadCloser
 	waited := true
 	start := func() string {
-		child = exec.CommandContext(ctx, binary, dir)
+		if len(installed) != 0 && installed[0] {
+			child = exec.CommandContext(ctx, binary, "serve", "--data-dir", dir, "--listen", "127.0.0.1:0")
+		} else {
+			child = exec.CommandContext(ctx, binary, dir)
+		}
 		child.Stderr = &stderr
 		var err error
 		pipe, err = child.StdoutPipe()
@@ -67,6 +77,25 @@ func applicationReaderIPC(t *testing.T, binary string, schema int, reboot string
 		waited = false
 		var initial struct {
 			Code string `json:"code"`
+		}
+		if len(installed) != 0 && installed[0] {
+			for {
+				raw, readErr := os.ReadFile(filepath.Join(dir, "claim-code.json"))
+				if readErr == nil {
+					if err = json.Unmarshal(raw, &initial); err != nil || initial.Code == "" {
+						t.Fatal("invalid disposable claim", err)
+					}
+					return initial.Code
+				}
+				if !os.IsNotExist(readErr) {
+					t.Fatal(readErr)
+				}
+				select {
+				case <-ctx.Done():
+					t.Fatal("installed source did not start", stderr.String())
+				case <-time.After(20 * time.Millisecond):
+				}
+			}
 		}
 		if err = json.NewDecoder(pipe).Decode(&initial); err != nil {
 			t.Fatal("predecessor did not start", err, stderr.String())
