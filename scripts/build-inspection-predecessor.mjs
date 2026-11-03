@@ -239,10 +239,12 @@ import "os"
 func init() { if len(os.Args)>1 && os.Args[1]=="serve" { os.Exit(92) } }
 `,
   );
+  // The existing VM fault/replay harness is test-only; keep its TestMain
+  // boundary hook in this immutable candidate so cuts exercise the real child.
   const guarded = path.join(root, "guarded-app");
   execFileSync(
     "go",
-    ["build", "-buildvcs=false", "-o", guarded, "./cmd/fased-app"],
+    ["test", "-c", "-buildvcs=false", "-o", guarded, "./cmd/fased-app"],
     {
       cwd: guardedSource,
       stdio: "inherit",
