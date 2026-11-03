@@ -6976,11 +6976,26 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
     .getByRole("button", { name: "Review schedule", exact: true })
     .click();
   await expect(review).toContainText("No task has been created");
+  const beforeNote = (await read()).revision;
+  // Idle refresh runs every five seconds, equal to the assertion budget.
+  // Observe the real updated workspace response before checking its render;
+  // do not race an arbitrary phase of the timer or lengthen the assertion.
+  const workspaceRefreshed = page.waitForResponse(async (response) => {
+    if (
+      response.request().method() !== "GET" ||
+      new URL(response.url()).pathname !== "/api/v1/agents" ||
+      response.status() !== 200
+    )
+      return false;
+    const value = await response.json();
+    return value.profileId === profileId && value.revision > beforeNote;
+  });
   await command({
     action: "memory-put",
     text: "An unrelated owner note",
     source: "owner",
   });
+  await workspaceRefreshed;
   await expect(review).toContainText("Workspace changed or review expired");
   await expect(create).toBeDisabled();
   await review
