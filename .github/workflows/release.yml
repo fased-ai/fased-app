@@ -156,7 +156,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends qemu-system-x86 qemu-utils xorriso
-          sudo setfacl -m "u:$USER:rw" /dev/kvm
+          # Keep access when the device's ordinary kvm ownership/mode is
+          # restored between QEMU processes. A one-off user ACL is transient.
+          sudo usermod --append --groups kvm "$USER"
+          sudo chgrp kvm /dev/kvm
+          sudo chmod g+rw /dev/kvm
           npm ci
           npx playwright install --with-deps chromium
           mkdir -p .evidence/ubuntu-release-legacy
@@ -168,7 +172,9 @@ jobs:
       - name: Run the complete packaged Local and Remote journey
         env:
           FASED_DISPOSABLE_VM_ACCEPTANCE: "1"
-        run: python3 scripts/check-inspection-vm.py --staged-package-only --candidate .evidence/ubuntu-release --predecessor .evidence/ubuntu-release-compatibility --legacy-predecessor .evidence/ubuntu-release-legacy
+        run: |
+          # Refresh group membership without running project code as root.
+          sudo --user="$USER" --group=kvm -- /usr/bin/env "PATH=$PATH" FASED_DISPOSABLE_VM_ACCEPTANCE=1 /usr/bin/python3 scripts/check-inspection-vm.py --staged-package-only --candidate .evidence/ubuntu-release --predecessor .evidence/ubuntu-release-compatibility --legacy-predecessor .evidence/ubuntu-release-legacy
       - name: Retain only the installed acceptance result
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

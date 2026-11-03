@@ -53,17 +53,31 @@ class VMLifecycleTest(unittest.TestCase):
             saved = {}
             scope = self.functions(['check_vm_running'], {'root': root,
                 'a': SimpleNamespace(staged_package_only=True),
+                'os': SimpleNamespace(stat=lambda path: SimpleNamespace(st_uid=0, st_gid=108, st_mode=0o660, st_ino=7),
+                    geteuid=lambda: 1001, getegid=lambda: 108, getgroups=lambda: [108, 1001]),
                 'vm': SimpleNamespace(poll=lambda: 1), 'vm_stderr_start': len(prior),
                 'save': lambda name, value: saved.update({name: value})})
             with self.assertRaisesRegex(RuntimeError, 'Address already in use'):
                 scope['check_vm_running']()
-            self.assertEqual(saved['staged-vm-failure.json'], {'returncode': 1, 'stderr': detail[-8192:].decode()})
+            failure = saved['staged-vm-failure.json']
+            self.assertEqual(failure['returncode'], 1)
+            self.assertEqual(failure['stderr'], detail[-8192:].decode())
+            self.assertEqual(failure['kvmDevice'], {'uid': 0, 'gid': 108, 'mode': '0o660', 'inode': 7})
+            self.assertEqual(failure['process'], {'uid': 1001, 'gid': 108, 'groups': [108, 1001]})
             # A later short/empty exit cannot report the prior process's text.
             for detail in [b'current exit', b'']:
                 (root/'qemu.stderr').write_bytes(prior+detail)
                 with self.assertRaises(RuntimeError):
                     scope['check_vm_running']()
                 self.assertEqual(saved['staged-vm-failure.json']['stderr'], detail.decode())
+            def missing_device(path):
+                raise FileNotFoundError(2, 'missing device', path)
+            scope['os'].stat = missing_device
+            with self.assertRaisesRegex(RuntimeError, 'QEMU exited'):
+                scope['check_vm_running']()
+            self.assertEqual(saved['staged-vm-failure.json']['kvmDevice'], {'unavailable': True, 'errno': 2})
+            self.assertEqual(saved['staged-vm-failure.json']['returncode'], 1)
+            self.assertEqual(saved['staged-vm-failure.json']['stderr'], '')
             scope['vm'].poll = lambda: None
             scope['check_vm_running']()
 
