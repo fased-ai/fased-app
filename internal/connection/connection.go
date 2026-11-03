@@ -23,7 +23,7 @@ var identity = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
 func Origin(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if len(value) > 2048 || strings.ContainsAny(value, "\\\r\n\t\x00") {
-		return "", errors.New("enter an HTTPS instance address, or HTTP loopback for an SSH tunnel")
+		return "", errors.New("enter an HTTPS instance address, or HTTP loopback for Local")
 	}
 	u, e := url.Parse(value)
 	if e != nil || u.Host == "" || u.User != nil || u.Opaque != "" || (u.Path != "" && u.Path != "/") || u.RawPath != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
@@ -32,7 +32,7 @@ func Origin(value string) (string, error) {
 	host := strings.ToLower(u.Hostname())
 	ip := net.ParseIP(host)
 	if u.Scheme != "https" && !(u.Scheme == "http" && (host == "localhost" || ip != nil && ip.IsLoopback())) {
-		return "", errors.New("Remote requires HTTPS; HTTP is allowed only for a loopback SSH tunnel")
+		return "", errors.New("Remote requires HTTPS; HTTP is allowed only for Local loopback")
 	}
 	if strings.HasSuffix(u.Host, ":") {
 		return "", errors.New("invalid instance port")
@@ -58,7 +58,11 @@ type Result struct {
 func Probe(ctx context.Context, value, expected string) (Result, error) {
 	client, close := instanceClient()
 	defer close()
-	return probe(ctx, value, expected, client)
+	result, err := probe(ctx, value, expected, client)
+	if err == nil && result.Location == "remote" && (!strings.HasPrefix(result.URL, "https://") || !strings.HasSuffix(result.URL, ".ts.net")) {
+		return Result{}, errors.New("Remote requires its Tailscale HTTPS address")
+	}
+	return result, err
 }
 func instanceClient() (*http.Client, func()) {
 	transport := &http.Transport{Proxy: nil, TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 3 * time.Second, DisableCompression: true}

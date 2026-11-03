@@ -14,14 +14,13 @@ export function instanceOrigin(value: string): string {
     throw new Error("Enter an HTTPS instance address.");
   }
   const host = url.hostname.toLowerCase();
-  const loopback =
-    host === "localhost" ||
-    host === "[::1]" ||
-    /^127(?:\.\d{1,3}){3}$/.test(host);
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
-    throw new Error(
-      "Remote requires HTTPS. Use HTTP only for a loopback SSH tunnel.",
-    );
+  if (
+    url.protocol !== "https:" ||
+    !host.endsWith(".ts.net") ||
+    url.port ||
+    /:\d+\/?$/.test(input)
+  )
+    throw new Error("Remote requires its Tailscale HTTPS address.");
   if (
     url.username ||
     url.password ||

@@ -944,18 +944,40 @@ try {
         ...bundleArgs,
       ]);
     else {
-      cli([
-        "install",
-        "--vps",
-        "--managed-remote",
-        "--access",
-        "ssh",
-        "--listen",
-        listen,
-        "--prepare-host",
-        "--autostart",
-        ...bundleArgs,
-      ]);
+      // This case consumes an existing legacy Remote source for custody
+      // enrollment. It does not claim retail/Tailscale installation acceptance.
+      // Keep its setup in a test executable, never a product skip flag.
+      const sourceFixture = ordinary
+        ? compiledEngine
+        : join(evidence, "remote-source.test");
+      if (!ordinary)
+        execute("go", [
+          "test",
+          "-c",
+          "-buildvcs=false",
+          "-o",
+          sourceFixture,
+          "./cmd/fased-app",
+        ]);
+      execute(
+        sourceFixture,
+        [
+          "-test.run=^TestPrepareLegacyRemoteEnrollmentSource$",
+          "-test.count=1",
+        ],
+        undefined,
+        {
+          env: {
+            ...env,
+            FASED_ENROLLMENT_SOURCE_FIXTURE: "1",
+            FASED_ENROLLMENT_SOURCE_BUNDLE: bundle,
+            FASED_ENROLLMENT_SOURCE_BUNDLE_SHA: receipt.manifestIdentity.sha256,
+            FASED_ENROLLMENT_SOURCE_LISTEN: listen,
+          },
+        },
+      );
+      report.remoteSourcePreparation =
+        "explicit test-only legacy service; not retail/private-access acceptance";
       source.data = remoteRoot + "/app-state";
     }
     const original = await health(url);

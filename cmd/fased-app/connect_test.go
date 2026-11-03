@@ -51,12 +51,11 @@ func TestConnectDoesNotCreateLocalState(t *testing.T) {
 		json.NewEncoder(w).Encode(core.Health{Status: "ok", APIVersion: "1", InstanceID: id, Connection: &core.ConnectionInfo{Location: "remote", Transport: "loopback"}})
 	}))
 	defer server.Close()
+	// A loopback HTTP address describing a Remote instance is an old SSH
+	// tunnel, not the required private HTTPS connection. Refuse before saving.
 	var out bytes.Buffer
-	if e = run([]string{"connect", "--url", server.URL, "--instance-id", id, "--print"}, nil, &out, io.Discard); e != nil {
-		t.Fatal(e)
-	}
-	if !strings.Contains(out.String(), `"installationCreated":false`) || !strings.Contains(out.String(), id) {
-		t.Fatal(out.String())
+	if e = run([]string{"connect", "--url", server.URL, "--instance-id", id, "--print"}, nil, &out, io.Discard); e == nil || !strings.Contains(e.Error(), "Tailscale HTTPS") {
+		t.Fatal("Remote SSH fallback accepted", e, out.String())
 	}
 	if _, e = os.Stat(filepath.Join(dir, "absent")); !os.IsNotExist(e) {
 		t.Fatal("Remote connection created local state", e)
@@ -107,7 +106,9 @@ func TestInteractiveConnectUsesTTYWithoutInstallation(t *testing.T) {
 			t.Error("unexpected terminal probe")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(core.Health{Status: "ok", APIVersion: "1", InstanceID: id, Connection: &core.ConnectionInfo{Location: "remote", Transport: "loopback"}})
+		// Real loopback transport is a Local connection. Remote positive
+		// transport/identity is covered by the controlled HTTPS client tests.
+		json.NewEncoder(w).Encode(core.Health{Status: "ok", APIVersion: "1", InstanceID: id, Connection: &core.ConnectionInfo{Location: "local", Transport: "loopback"}})
 	}))
 	defer target.Close()
 	bin := filepath.Join(dir, "bin")

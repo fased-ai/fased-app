@@ -10871,7 +10871,7 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
   await expect(activity).not.toContainText("V3 activity reminder");
 });
 
-test("installation connection uses runtime identity and opens Remote without changing Local data", async ({
+test("installation connection rejects Remote tunnels without changing Local data", async ({
   page,
   isMobile,
 }) => {
@@ -10966,7 +10966,6 @@ test("installation connection uses runtime identity and opens Remote without cha
   ]);
   remote.stdout!.on("data", (data) => (remoteOutput += String(data)));
   remote.stderr!.on("data", (data) => (remoteOutput += String(data)));
-  let popup: import("@playwright/test").Page | undefined;
   try {
     await expect
       .poll(() => remoteOutput.includes('"event":"listening"'))
@@ -10980,42 +10979,21 @@ test("installation connection uses runtime identity and opens Remote without cha
     const health = await (
       await page.request.get(remoteURL + "/api/v1/health")
     ).json();
-    const inspected = JSON.parse(
-      (
-        await exec(binary, [
-          "connect",
-          "--url",
-          remoteURL,
-          "--instance-id",
-          health.instanceId,
-          "--print",
-        ])
-      ).stdout,
-    );
-    expect(inspected.installationCreated).toBe(false);
-    expect(inspected.instanceId).toBe(health.instanceId);
-    expect(inspected.location).toBe("remote");
+    await expect(
+      exec(binary, [
+        "connect",
+        "--url",
+        remoteURL,
+        "--instance-id",
+        health.instanceId,
+        "--print",
+      ]),
+    ).rejects.toThrow(/Tailscale HTTPS/);
     await page.getByLabel("Instance URL").fill(remoteURL);
-    const opened = page.context().waitForEvent("page");
+    const pageCount = page.context().pages().length;
     await page.getByRole("button", { name: "Connect", exact: true }).click();
-    popup = await opened;
-    await expect(popup.getByText("Remote", { exact: true })).toBeVisible();
-    await popup.getByText("Instance details", { exact: true }).click();
-    await expect(
-      popup.getByText(health.instanceId, { exact: true }),
-    ).toBeVisible();
-    expect(
-      await popup.evaluate(() =>
-        sessionStorage.getItem("fased.core.session.v1"),
-      ),
-    ).toBeNull();
-    await expect(
-      popup.getByRole("heading", { name: "Claim this workspace", exact: true }),
-    ).toBeVisible();
-    await popup.screenshot({
-      path: `.evidence/installation-remote-${isMobile ? "mobile" : "desktop"}.png`,
-      fullPage: true,
-    });
+    await expect(page.getByRole("alert")).toContainText("Tailscale HTTPS");
+    expect(page.context().pages()).toHaveLength(pageCount);
     const after = await page.evaluate(async () => {
       const headers = {
         Authorization:
@@ -11039,7 +11017,6 @@ test("installation connection uses runtime identity and opens Remote without cha
     ])
       expect(health.capabilities[name]).toBe(false);
   } finally {
-    await popup?.close();
     if (remote.exitCode === null) {
       const done = once(remote, "exit");
       remote.kill("SIGTERM");

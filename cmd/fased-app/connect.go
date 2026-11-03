@@ -22,7 +22,7 @@ func connectCommand(args []string, out, errOut io.Writer) error {
 		return e
 	}
 	dataDir := f.String("data-dir", base, "private client preferences")
-	address := f.String("url", "", "existing Fased HTTPS origin or loopback SSH tunnel")
+	address := f.String("url", "", "existing Local or Tailscale HTTPS instance")
 	expected := f.String("instance-id", "", "optional expected instance identity")
 	printOnly := f.Bool("print", false, "verify and print without opening a browser")
 	if e := f.Parse(args); e != nil {
