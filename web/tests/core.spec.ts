@@ -15,100 +15,76 @@ import { tmpdir } from "node:os";
 import { once } from "node:events";
 import { createHash, randomBytes } from "node:crypto";
 
-test("owner setup is password-only, bound, scrubbed and single-use", async ({
+test("Local owner setup opens without a password and keeps logout final", async ({
   page,
 }) => {
   await page.goto(url);
-  await expect(page.getByLabel("One-use claim code")).toHaveCount(0);
-  await expect(page.getByText("Get setup code", { exact: true })).toHaveCount(
-    0,
-  );
   await expect(
-    page.getByRole("button", { name: "Claim workspace", exact: true }),
-  ).toBeDisabled();
-  const response = await page.request.get(
-    url + "/api/v1/installation/claim-code",
-  );
-  expect(response.status()).toBe(401);
-  expect(await response.json()).not.toHaveProperty("code");
-  const { stdout: setupLink } = await exec(binary, [
-    "setup-link",
-    "--data-dir",
-    dir,
-  ]);
-  const link = setupLink.trim();
-  expect(new URL(link).hash).toMatch(/^#setup=[A-Za-z0-9_-]{43}$/);
-  const wrong = new URL(link);
-  wrong.searchParams.set("instance", "wrong-instance-identity");
-  await page.goto(wrong.href);
-  await expect(
-    page.getByRole("heading", { name: "Connection unavailable", exact: true }),
+    page.getByRole("heading", { name: "Open Fased", exact: true }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Claim workspace", exact: true }),
-  ).toHaveCount(0);
+  await expect(page.locator('input[type="password"]')).toHaveCount(0);
+  const { stdout } = await exec(binary, ["setup-link", "--data-dir", dir]);
+  const link = stdout.trim(),
+    proof = new URL(link).hash.slice("#local=".length);
+  expect(new URL(link).hash).toMatch(/^#local=[A-Za-z0-9_-]{43}$/);
   const requests: string[] = [];
   page.on("request", (request) => requests.push(request.url()));
   await page.goto(link);
   await expect(
-    page.getByRole("button", { name: "Claim workspace", exact: true }),
-  ).toBeEnabled();
-  const proof = new URL(link).hash.slice("#setup=".length);
-  expect(page.url()).not.toContain("setup=");
-  await expect(
-    page
-      .locator("form")
-      .filter({
-        has: page.getByLabel("Create owner password", { exact: true }),
-      })
-      .locator("input"),
-  ).toHaveCount(1);
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator('input[type="password"]')).toHaveCount(0);
+  expect(page.url()).not.toContain(proof);
+  expect(requests.some((address) => address.includes(proof))).toBe(false);
   expect(
     await page.evaluate(
       (proof) =>
-        [...Object.keys(localStorage), ...Object.keys(sessionStorage)].some(
+        [...Object.keys(sessionStorage), ...Object.keys(localStorage)].some(
           (key) =>
             (
-              localStorage.getItem(key) ??
               sessionStorage.getItem(key) ??
+              localStorage.getItem(key) ??
               ""
             ).includes(proof),
         ),
       proof,
     ),
   ).toBe(false);
-  expect(requests.some((address) => address.includes(proof))).toBe(false);
-  await page.screenshot({
-    path: resolve(".evidence/b01-owner-setup/password-only.png"),
-  });
-  await page.getByLabel("Create owner password").fill(fixturePassword);
-  await page
-    .getByRole("button", { name: "Claim workspace", exact: true })
-    .click();
-  await expect(
-    page.getByRole("button", { name: "Sign out", exact: true }),
-  ).toBeVisible();
-  const replay = await page.request.post(url + "/api/v1/auth/claim", {
+  const replay = await page.request.post(url + "/api/v1/auth/local", {
     headers: { Origin: url },
-    data: { code: proof, password: "another-disposable-password" },
+    data: { action: "exchange", code: proof },
   });
   expect(replay.status()).toBe(401);
+  // Opening an already-authenticated tab must not retain a latent sign-in.
   const reopened = (
     await exec(binary, ["setup-link", "--data-dir", dir])
   ).stdout.trim();
-  expect(new URL(reopened).hash).toBe("");
-  await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await page.goto(reopened);
-  await expect(
-    page.getByRole("heading", { name: "Sign in", exact: true }),
-  ).toBeVisible();
-  await page
-    .getByLabel("Owner password", { exact: true })
-    .fill(fixturePassword);
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Sign out", exact: true }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Open Fased", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator('input[type="password"]')).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toHaveCount(0);
+  const next = (
+    await exec(binary, ["setup-link", "--data-dir", dir])
+  ).stdout.trim();
+  await page.goto(next);
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  // The CLI uses the same protected OS owner and Update API, without login.
+  await expect(readFile(join(dir, "cli-session.json"))).rejects.toThrow();
+  const view = await privateCLI(["updates", "status"]);
+  expect(view.instanceId).toBeTruthy();
+  const saved = await readFile(join(dir, "cli-session.json"), "utf8");
+  await privateCLI(["updates", "status"]);
+  expect(await readFile(join(dir, "cli-session.json"), "utf8")).toBe(saved);
 });
 
 test("agent memory and archives keep recall sources journals and results through UI CLI restart", async ({
@@ -999,6 +975,7 @@ test.describe("calendar reminders", () => {
     await stop();
     await start();
     await page.goto(url + "/#agents/tasks");
+    await choosePasswordSignIn(page);
     await page.getByLabel("Owner password").fill(fixturePassword);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await expect(table).toContainText("Paused");
@@ -1188,6 +1165,7 @@ test("compact Tasks reviews without writes and preserves bounded runs across UI 
   await stop();
   await start();
   await page.goto(url + "/#agents/tasks");
+  await choosePasswordSignIn(page);
   await page.getByLabel("Owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(table).toContainText("Paused");
@@ -1585,11 +1563,31 @@ async function openConversationList(page: import("@playwright/test").Page) {
     await toggle.click();
 }
 
+async function choosePasswordSignIn(
+  page: import("@playwright/test").Page,
+  timeout = 5000,
+) {
+  const option = page.getByRole("button", {
+    name: "Use password",
+    exact: true,
+  });
+  const password = page.getByLabel("Owner password", { exact: true });
+  await expect
+    .poll(
+      async () => (await option.isVisible()) || (await password.isVisible()),
+      { timeout },
+    )
+    .toBe(true);
+  if (await option.isVisible()) await option.click();
+}
+
 async function revealControl(
   page: import("@playwright/test").Page,
   control: import("@playwright/test").Locator,
   hint = "",
 ) {
+  if (control.toString().includes("Owner password"))
+    await choosePasswordSignIn(page);
   if (await control.isVisible()) return;
   if ((await control.count()) === 0) {
     if (hint.includes("Conversation name")) {
@@ -2490,6 +2488,7 @@ test("expired owner access returns to sign-in without replay or stale-session re
   };
   await revoke();
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await choosePasswordSignIn(page);
   await expect(
     page.getByRole("heading", { name: "Sign in", exact: true }),
   ).toBeVisible();
@@ -2576,7 +2575,8 @@ test("expired owner access returns to sign-in without replay or stale-session re
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
     await expect.poll(() => oldReadHeld).toBe(true);
     await revoke();
-    // A subsequent protected poll ends the session; do not click the old UI.
+    // A subsequent protected poll ends the session; retain its original 12s poll allowance.
+    await choosePasswordSignIn(page, 12000);
     await expect(
       page.getByRole("heading", { name: "Sign in", exact: true }),
     ).toBeVisible({ timeout: 12000 });
@@ -4561,9 +4561,7 @@ test("claim, UI/CLI setup, restart and logout preserve one Local instance", asyn
   page,
 }) => {
   await page.goto(url);
-  await expect(
-    page.getByRole("heading", { name: "Claim this workspace" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Open Fased" })).toBeVisible();
   await page.screenshot({
     path: `.evidence/claim-${test.info().project.name}.png`,
     fullPage: true,
@@ -4703,6 +4701,7 @@ test("claim, UI/CLI setup, restart and logout preserve one Local instance", asyn
       .settings.walletMode,
   ).toBe("watch");
   await page.goto(url);
+  await choosePasswordSignIn(page);
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   await revealControl(
     page,
@@ -4717,6 +4716,7 @@ test("claim, UI/CLI setup, restart and logout preserve one Local instance", asyn
     page.getByRole("button", { name: "Sign out", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await choosePasswordSignIn(page);
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   expect((await page.request.get(`${url}/api/v1/setup`)).status()).toBe(401);
 });
@@ -11072,6 +11072,7 @@ test("installation connection refuses changed identity before sending an owner p
     .getByRole("button", { name: "Claim workspace", exact: true })
     .click();
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await choosePasswordSignIn(page);
   await expect(
     page.getByRole("heading", { name: "Sign in", exact: true }),
   ).toBeVisible();
@@ -11087,6 +11088,7 @@ test("installation connection refuses changed identity before sending an owner p
     h.instanceId = "x".repeat(43);
     await route.fulfill({ response, json: h });
   });
+  await choosePasswordSignIn(page);
   await page.getByLabel("Owner password").fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("identity changed");

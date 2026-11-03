@@ -95,6 +95,9 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
+	case "/api/v1/auth/local":
+		h.localOwnerAPI(w, r)
+		return
 	case "/api/v1/updates/application/owner":
 		h.applicationOwnerAPI(w, r)
 		return
@@ -124,6 +127,15 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		token := h.session(r)
 		valid := h.store.Session(r.Context(), token)
 		result := map[string]any{"claimed": claimed, "authenticated": valid}
+		if h.instanceLocation == "local" && h.instanceOwnerUID == 0 && h.publicHost == "" {
+			result["localAccess"] = true
+			var salt []byte
+			if err := h.store.db.QueryRowContext(r.Context(), "SELECT password_salt FROM instance WHERE id=1").Scan(&salt); err != nil {
+				writeError(w, 500, "state unavailable")
+				return
+			}
+			result["passwordAvailable"] = claimed && !localPasswordDisabled(salt)
+		}
 		if valid {
 			result["csrfToken"] = csrfToken(token)
 		}
@@ -521,7 +533,7 @@ func (h *HTTPHandler) mutation(w http.ResponseWriter, r *http.Request) bool {
 	// Freeze ordinary writes from durable dispatch through recovery. Sessions and
 	// protected maintenance remain reachable. The existing metadata fence remains
 	// the authority across processes; this closes dispatch-to-fence HTTP races.
-	if !strings.HasPrefix(r.URL.Path, "/api/v1/updates/") && !oneOf(r.URL.Path, "/api/v1/login", "/api/v1/logout", "/api/v1/auth/login", "/api/v1/auth/logout") {
+	if !strings.HasPrefix(r.URL.Path, "/api/v1/updates/") && !oneOf(r.URL.Path, "/api/v1/login", "/api/v1/logout", "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/local") {
 		o, _, e := readApplicationUpdate(r.Context(), h.store.db)
 		if e != nil || oneOf(o.Phase, "applying", "recovery") {
 			writeError(w, 409, "Update in progress. Inspect recovery before changing this instance.")

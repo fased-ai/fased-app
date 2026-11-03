@@ -48,6 +48,8 @@ function useCoreState() {
   const [instanceId, setInstanceId] = useState("");
   const [version, setVersion] = useState("");
   const [connection, setConnection] = useState<InstanceConnection | null>(null);
+  const [localAccess, setLocalAccess] = useState(false);
+  const [passwordAvailable, setPasswordAvailable] = useState(false);
   const connectedID = useRef(
     new URL(location.href).searchParams.get("instance") ?? "",
   );
@@ -112,7 +114,9 @@ function useCoreState() {
       if (
         response.status === 401 &&
         route !== "auth/login" &&
-        route !== "auth/claim"
+        route !== "auth/claim" &&
+        route !== "auth/local" &&
+        route !== "installation/local-owner"
       ) {
         const message = "Your session ended. Sign in again.";
         if (epoch === authGeneration.current) lock(message);
@@ -170,8 +174,12 @@ function useCoreState() {
         claimed: boolean;
         authenticated: boolean;
         csrfToken?: string;
+        localAccess?: boolean;
+        passwordAvailable?: boolean;
       }>("auth/state");
       if (epoch !== authGeneration.current) return;
+      setLocalAccess(auth.localAccess === true);
+      setPasswordAvailable(auth.passwordAvailable === true);
       if (!auth.claimed) {
         setConnection(verifiedConnection);
         setMode("unclaimed");
@@ -217,20 +225,36 @@ function useCoreState() {
       active = false;
     };
   }, [refresh]);
-  async function authenticate(password: string, code?: string) {
+  async function authenticate(password: string, code?: string, local = false) {
     const epoch = ++authGeneration.current;
     setError("");
     changePending(epoch, 1);
     try {
       await inspect();
+      const nativeLocal =
+        local &&
+        code === undefined &&
+        ["wails", "wails.localhost"].includes(location.hostname);
       const session = await request<{
         csrfToken: string;
         sessionToken: string;
         sessionMode?: "bearer" | "cookie";
       }>(
-        code === undefined ? "auth/login" : "auth/claim",
+        nativeLocal
+          ? "installation/local-owner"
+          : local
+            ? "auth/local"
+            : code === undefined
+              ? "auth/login"
+              : "auth/claim",
         "POST",
-        code === undefined ? { password } : { password, code },
+        nativeLocal
+          ? {}
+          : local
+            ? { action: "exchange", code }
+            : code === undefined
+              ? { password }
+              : { password, code },
       );
       if (epoch !== authGeneration.current) return;
       csrf.current = session.csrfToken;
@@ -308,6 +332,8 @@ function useCoreState() {
     }
   }
   return {
+    localAccess,
+    passwordAvailable,
     mode,
     request,
     setup,

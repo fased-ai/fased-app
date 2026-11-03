@@ -193,7 +193,28 @@ try {
     const before = commandContract(predecessor, component);
     const after = commandContract(current, component);
     const normalized = structuredClone(after);
-    if (component === "core") normalized.lifecycle = before.lifecycle;
+    if (component === "core") {
+      normalized.lifecycle = before.lifecycle;
+      const oldState = before.state.find((state) => state.name === "core-db");
+      const newState = normalized.state.find(
+        (state) => state.name === "core-db",
+      );
+      // The source reader intentionally stays password-only36. The current
+      // reader additionally supports first-claim Local format37; compare their
+      // shared36 format exactly, without erasing other capability differences.
+      assert.deepEqual(oldState.versions, { min: 36, max: 36 });
+      assert.deepEqual(newState.versions, { min: 36, max: 37 });
+      assert.equal(oldState.features.includes("local-os-owner-v1"), false);
+      assert.equal(
+        newState.features.filter((feature) => feature === "local-os-owner-v1")
+          .length,
+        1,
+      );
+      newState.versions = structuredClone(oldState.versions);
+      newState.features = newState.features.filter(
+        (feature) => feature !== "local-os-owner-v1",
+      );
+    }
     for (const state of normalized.state) {
       if (state.name === "operations")
         state.features = state.features.filter(

@@ -89,6 +89,9 @@ func (s *Store) Login(ctx context.Context, password string) (string, error) {
 	if err := s.db.QueryRowContext(ctx, "SELECT password_salt,password_hash FROM instance WHERE id=1 AND password_hash IS NOT NULL").Scan(&salt, &expected); err != nil {
 		return "", ErrUnauthorized
 	}
+	if localPasswordDisabled(salt) {
+		return "", ErrUnauthorized
+	}
 	derived := passwordHash(password, salt)
 	if subtle.ConstantTimeCompare(derived, expected) != 1 {
 		return "", ErrUnauthorized

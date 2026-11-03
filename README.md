@@ -8,7 +8,7 @@ Self-hosted agents for trading research and automation. Run Fased on your comput
 
 **[Install](#install) · [User guide](docs/index.md) · [Providers](docs/guide/providers.md) · [Network](docs/guide/network.md) · [Status](docs/reference/status.md)**
 
-> **In development.** Public installation is not released yet. Live AI, wallets, trading and automatic updates remain disabled; mining is deferred. Use development installations with test data only.
+> **In development.** Evaluation downloads exist, but the revised secure installation and update flow is not ready for general use. Live AI, wallets and trading remain disabled; mining is deferred.
 
 ## What’s inside
 
@@ -25,24 +25,21 @@ Onchain, Hyperliquid, Mining and the trading-focused Fased Network have separate
 
 ## Install
 
-Ubuntu 24.04 x86-64 is the first target. **Public downloads are not released yet.** The one-command installer is being verified on a private VPS; no public install command is available today. See the [installation guide](docs/guide/install.md).
+Ubuntu 24.04 x86-64 is the first evaluation target. See the [installation guide](docs/guide/install.md) and [availability](docs/reference/status.md) before using a download. The required flow below is still being completed.
 
-The release installer downloads and verifies Fased, prepares the required OS components and opens the terminal wizard automatically. Choose Local, Remote, Connect or Update. A root SSH session is supported: setup prepares an ordinary owner before running Fased. You will choose **SSH** or **Tailscale**, then open the private browser link and create your password. No Go, Node, npm, Git, provider or wallet is required.
+| Choose      | Setup and access                                                                                                                                                              |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Local**   | Automatic setup for your existing OS user; protected local app/browser session. No Tailscale or separate Fased password by default.                                           |
+| **Remote**  | Initial SSH/provider-console setup; mandatory verified Tailscale before Fased deployment; private HTTPS and safe public-access lockdown. No continuing SSH session or tunnel. |
+| **Connect** | Open the same existing instance and records through its verified owner access.                                                                                                |
 
-| Choose      | Where Fased runs           | How you connect                           |
-| ----------- | -------------------------- | ----------------------------------------- |
-| **Local**   | Your computer              | Local browser or available desktop client |
-| **Remote**  | Your Ubuntu server         | Private SSH or Tailscale access           |
-| **Connect** | An existing instance       | Verify the instance and open its UI       |
-| **Update**  | Your existing installation | Check, update or inspect recovery         |
-
-Keep SSH and provider-console recovery access. Tailscale is separate software on the server and your computer; the wizard guides server preparation and enrollment. Fased needs no public management port. macOS and Windows distribution remain under acceptance; see [platform status](docs/reference/status.md).
+The installer supplies compiled Fased and required OS components; no Go, Node, npm, Git, provider or wallet is needed. Root prepares the OS. The app and signer stay unprivileged; service accounts are not customer logins. A new recovery administrator uses an approved SSH public key, never a blank password. Public access closes only after private access and independent recovery work.
 
 ## Updates
 
-`fased update` uses the existing installation and preserves its data. Manual is the default; opt-in Automatic and its maintenance window live in **Settings → Updates**. An existing `fased` command is preserved; use the command name printed by setup. Public update activation remains disabled.
+**Settings → Updates** and optional `fased update` use the same updater, authorization rules, progress, result and recovery. Routine updates reuse existing owner/device/OS authority without another password or account switch. A CLI client reaches Remote over Tailscale directly, without SSH. Manual is the default; Automatic is explicit opt-in and runs without an open browser or SSH session.
 
-Local and Remote updates have controlled installed verification on Ubuntu24.04 x86-64. Other platform rows and public distribution remain under acceptance; see the [installation guide](docs/guide/install.md#platform-availability).
+This complete installation/update contract remains under development. Updates preserve data and wallet permissions; they never unlock signing or grant spending authority. [Details](docs/guide/install.md).
 
 ## Get started
 

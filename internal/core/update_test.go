@@ -13,7 +13,7 @@ func TestUpdateContractMatchesDurableCore(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := UpdateContract()
-	if schema != StateSchema || c.State[0].Versions.Min != schema || c.State[0].Versions.Max != schema || strconv.Itoa(c.Protocol) != APIVersion {
+	if schema != StateSchema || c.State[0].Versions.Min != schema || c.State[0].Versions.Max != LocalOwnerStateSchema || strconv.Itoa(c.Protocol) != APIVersion {
 		t.Fatal("stale core update contract")
 	}
 }

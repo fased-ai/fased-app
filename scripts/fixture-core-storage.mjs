@@ -103,6 +103,18 @@ export async function currentStorageFixture(archivedRoot) {
     await writeFile(path.join(archivedRoot, "internal/core", file), bytes);
     storage[file] = sha(bytes);
   }
+  // The composed predecessor remains a password-only schema36 reader. It
+  // must not advertise or accept the new Local owner format.
+  const legacyContractPath = path.join(archivedRoot, "internal/core/update.go");
+  const legacyContract = (await readFile(legacyContractPath, "utf8"))
+    .replace("Max: LocalOwnerStateSchema", "Max: StateSchema")
+    .replace(
+      "return schema == StateSchema || schema == LocalOwnerStateSchema",
+      "return schema == StateSchema",
+    )
+    .replace('Features: []string{"local-os-owner-v1", ', "Features: []string{");
+  await writeFile(legacyContractPath, legacyContract);
+  storage["update.go"] = sha(Buffer.from(legacyContract));
   // Public-reader-only dependency: never activate owner/vault/terminal migration.
   await writeFile(
     path.join(archivedRoot, "internal/core/ordinary_custody_projection.go"),

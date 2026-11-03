@@ -59,7 +59,7 @@ test("legacy public bridge permits only its exact claim and preservation port", 
       port,
     );
   assert.throws(() =>
-    browserAddress({ ...config, url: "http://127.0.0.1:17484" }),
+    browserAddress({ ...config, url: "http://127.0.0.1:17485" }),
   );
   assert.throws(() =>
     browserAddress({ ...config, url: "http://127.0.1.4:17483" }),

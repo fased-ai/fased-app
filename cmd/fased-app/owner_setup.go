@@ -10,6 +10,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/vpsinstall"
 	"io"
 	"os"
+	"strings"
 )
 
 // Runs only as the data-owning OS user (or the verified Remote UID helper).
@@ -25,6 +26,22 @@ func ownerSetupLink(ctx context.Context, dir, origin string, out io.Writer) erro
 	}
 	if _, err = connection.OwnerSetupURL(origin, client.Endpoint.InstanceID, ""); err != nil {
 		return err
+	}
+	var health core.Health
+	if err = client.Do(ctx, "GET", "/api/v1/health", nil, &health); err != nil {
+		return err
+	}
+	if origin == client.Endpoint.URL && health.Connection != nil && health.Connection.Location == "local" && health.Connection.OwnerUID == 0 {
+		proof, e := client.LocalLaunch(ctx)
+		if e != nil {
+			return e
+		}
+		address, e := connection.OwnerSetupURL(origin, client.Endpoint.InstanceID, proof)
+		if e != nil {
+			return e
+		}
+		_, e = fmt.Fprintln(out, strings.Replace(address, "#setup=", "#local=", 1))
+		return e
 	}
 	store, err := core.OpenStore(dir)
 	if err != nil {

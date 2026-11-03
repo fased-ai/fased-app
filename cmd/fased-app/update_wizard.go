@@ -161,7 +161,7 @@ func ordinaryUpdateCommand(args []string, in *os.File, out, errOut io.Writer) er
 		return recoverInstalledLocalUpdate(*prefix, *dir, in, out, errOut)
 	}
 	if action == "wizard" {
-		return authenticatedUpdateWizard(call, func() error { return run([]string{"login", "--data-dir", *dir}, in, out, errOut) }, out, errOut)
+		return updateWizard(call, out, errOut)
 	}
 	return call(action, out)
 }

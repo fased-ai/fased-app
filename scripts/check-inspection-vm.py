@@ -6,7 +6,9 @@ Evidence survives snapshot rollback; large reconstructible VM outputs are remove
 import argparse, base64, selectors, hashlib, json, os, pathlib, shutil, signal, socket, subprocess, tarfile, time, urllib.request
 P=pathlib.Path
 repo=P.cwd(); root=repo/'.evidence/p4-fault-reboot'; root.mkdir(parents=True,exist_ok=True)
-p=argparse.ArgumentParser(); p.add_argument('--full',action='store_true'); p.add_argument('--resume',action='store_true'); p.add_argument('--inspection-only',action='store_true'); p.add_argument('--keep-failed-vm',action='store_true'); p.add_argument('--managed-remote-only',action='store_true'); p.add_argument('--network-only',action='store_true'); p.add_argument('--owner-browser-only',action='store_true'); p.add_argument('--maintenance-only',action='store_true'); p.add_argument('--installed-remote-update-only',action='store_true'); p.add_argument('--installed-finalizer-update-only',action='store_true'); p.add_argument('--staged-package-only',action='store_true'); p.add_argument('--candidate',type=P); p.add_argument('--predecessor',type=P); p.add_argument('--legacy-predecessor',type=P); a=p.parse_args()
+p=argparse.ArgumentParser(); p.add_argument('--released-local-only',action='store_true'); p.add_argument('--full',action='store_true'); p.add_argument('--resume',action='store_true'); p.add_argument('--inspection-only',action='store_true'); p.add_argument('--keep-failed-vm',action='store_true'); p.add_argument('--managed-remote-only',action='store_true'); p.add_argument('--network-only',action='store_true'); p.add_argument('--owner-browser-only',action='store_true'); p.add_argument('--maintenance-only',action='store_true'); p.add_argument('--installed-remote-update-only',action='store_true'); p.add_argument('--installed-finalizer-update-only',action='store_true'); p.add_argument('--staged-package-only',action='store_true'); p.add_argument('--candidate',type=P); p.add_argument('--predecessor',type=P); p.add_argument('--legacy-predecessor',type=P); a=p.parse_args()
+if a.released_local_only:
+ assert a.staged_package_only, 'released Local proof uses the existing staged package runner'
 if a.installed_finalizer_update_only:
  assert not a.installed_remote_update_only,'choose one installed update fixture profile'
  a.installed_remote_update_only=True
@@ -20,7 +22,7 @@ single_case=a.staged_package_only or a.managed_remote_only or a.network_only or 
 if a.staged_package_only:
  assert not any([a.full,a.resume,a.inspection_only,a.managed_remote_only,a.network_only,a.owner_browser_only,a.maintenance_only,a.installed_remote_update_only]),'one staged package acceptance mode required'
  assert a.candidate and a.predecessor and a.legacy_predecessor,'exact retained package directories required'
- root=repo/'.evidence/b01-staged-installed/vm'; root.mkdir(parents=True,exist_ok=True)
+ root=repo/('.evidence/b01-staged-installed/local' if a.released_local_only else '.evidence/b01-staged-installed/vm'); root.mkdir(parents=True,exist_ok=True)
  assert os.path.exists('/dev/kvm') and os.access('/dev/kvm',os.R_OK|os.W_OK),'KVM staged acceptance prerequisite unavailable'
 if a.maintenance_only:
  root=repo/'.evidence/b01-connected-install/vm'; root.mkdir(parents=True,exist_ok=True)
@@ -91,13 +93,13 @@ if not a.resume:
   data=(work/'user-data').read_text()
   users=''
   public=(work/'ssh-key.pub').read_text().strip()
-  for name,uid in [('fased-local',1100),('fased-remote',1200),('fased-legacy',1300)]:
+  for name,uid in ([('fased-local',1100),('fased-fresh',1400)] if a.released_local_only else [('fased-local',1100),('fased-remote',1200),('fased-legacy',1300)]):
    users+='   - name: '+name+'\n     uid: '+str(uid)+'\n     groups: [sudo]\n     shell: /bin/bash\n     lock_passwd: true\n     ssh_authorized_keys:\n       - '+public+'\n'
-  users+='   - name: root\n     lock_passwd: true\n     ssh_authorized_keys:\n       - '+public+'\n'
-  data=data.replace(' disable_root: true',' disable_root: false').replace(' write_files:',users+' write_files:')
+  if not a.released_local_only:users+='   - name: root\n     lock_passwd: true\n     ssh_authorized_keys:\n       - '+public+'\n'
+  data=data.replace(' disable_root: true',' disable_root: true' if a.released_local_only else ' disable_root: false').replace(' write_files:',users+' write_files:')
   extra=''
   utilities='/usr/bin/apt-get, /usr/bin/install, /usr/bin/mkdir, /usr/bin/ln, /usr/bin/mv, /usr/bin/sync, /usr/bin/rm, /usr/bin/cat, /usr/bin/cmp, /usr/bin/cp, /usr/bin/chmod, /usr/bin/chown, /usr/bin/find, /usr/bin/flock, /usr/bin/getent, /usr/bin/id, /usr/bin/passwd, /usr/bin/pkcheck, /usr/bin/setpriv, /usr/bin/stat, /usr/bin/systemctl, /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/apparmor_parser, /usr/sbin/nft, /usr/sbin/ip, /usr/sbin/update-ca-certificates'
-  for name in ['ubuntu','fased-local','fased-remote','fased-legacy']:
+  for name in (['ubuntu','fased-local','fased-fresh'] if a.released_local_only else ['ubuntu','fased-local','fased-remote','fased-legacy']):
    extra+='       Defaults:'+name+' verifypw=any\n       '+name+' ALL=(root) NOPASSWD: '+utilities+'\n'
   data=data.replace(' packages:',extra+' packages:').replace('nftables]', 'nftables, polkitd, curl, ca-certificates, openssl, iproute2]')
   (work/'user-data').write_text(data)
@@ -267,11 +269,12 @@ def staged_package_acceptance():
  fixture=importlib.util.module_from_spec(spec);spec.loader.exec_module(fixture)
  packages={k:fixture.package(v) for k,v in [('candidate',a.candidate),('predecessor',a.predecessor),('legacy',a.legacy_predecessor)]}
  target=packages['candidate']['packet'];version=target['productVersion']
- assert target['version']==2 and packages['predecessor']['packet']['version']==2 and packages['predecessor']['packet']['productVersion']=='0.1.4'
- assert packages['legacy']['packet']['version']==1 and packages['legacy']['packet']['productVersion']=='0.1.5'
+ assert target['version']==2 and packages['predecessor']['packet']['version']==2
+ if not a.released_local_only:assert packages['predecessor']['packet']['productVersion']=='0.1.4'
+ if not a.released_local_only:assert packages['legacy']['packet']['version']==1 and packages['legacy']['packet']['productVersion']=='0.1.5'
  for field in ['source','productVersion']:
   assert isinstance(target[field],str)
- for field in ['source','sourceTree','runId','runAttempt']:
+ for field in ([] if a.released_local_only else ['source','sourceTree','runId','runAttempt']):
   left=target if field=='source' else target['release'];right=packages['predecessor']['packet'] if field=='source' else packages['predecessor']['packet']['release']
   assert left[field]==right[field],'compatibility fixture must have the exact target source/run identity'
  result={**fixture.binding(packages['candidate']),'result':'FAIL','fixtureOnly':True,'mining':False,'liveFeatures':False,'automaticUpdates':False,'checks':{},'profiles':{}}
@@ -292,14 +295,16 @@ def staged_package_acceptance():
   global tunnel
   if tunnel is not None and tunnel.poll() is None:tunnel.terminate();tunnel.wait(10)
   forwards=[]
-  for _,_,listen in fixture.PROFILES.values():forwards+=['-L',f'127.0.0.1:{listen}:127.0.0.1:{listen}']
+  for _,_,listen in ([fixture.PROFILES['local'],fixture.PROFILES['fresh']] if a.released_local_only else [fixture.PROFILES[name] for name in ['local','remote','legacy']]):forwards+=['-L',f'127.0.0.1:{listen}:127.0.0.1:{listen}']
   # Model a logged-in Local desktop while retaining the same private forwards.
   # Remote's system service must still boot without its operator logging in.
   tunnel=subprocess.Popen(sshbase[:-1]+['-o','ExitOnForwardFailure=yes',*forwards,'fased-local@127.0.0.1','sleep 3600'],stdout=subprocess.DEVNULL,stderr=(root/'staged-tunnel.stderr').open('ab'))
  def browser(profile,action,expected,link=None):
   listen=fixture.PROFILES[profile][2]
   cfg={'fixtureOnly':True,'action':action,'url':link or 'http://127.0.0.1:'+str(listen),'version':expected,'storageFile':str(host_browser/(profile+'-storage.json')),'baselineFile':str(host_browser/(profile+'-baseline.json'))}
-  if action in ['ui-update','automatic-update']:cfg['fromVersion']='0.1.4'
+  if action in ['ui-update','automatic-update']:cfg['fromVersion']=packages['predecessor']['packet']['productVersion']
+  if a.released_local_only and action=='auth-cycle':cfg['reopenUrl']=owner_call(profile,'open')['url']
+  if a.released_local_only and action=='automatic-update':cfg['closeForAutomatic']=True
   path=host_browser/(profile+'-request.json');fixture.write_private(path,cfg)
   reply=subprocess.run(['node','scripts/staged-package-browser.mjs',str(path)],timeout=360,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
   value=fixture.checked_reply(reply,profile,'browser-'+action,root/'staged-browser-failure.json');assert value['result']=='PASS';return value
@@ -330,13 +335,57 @@ def staged_package_acceptance():
  # Private disposable source is readable by the three fixture owners. They
  # execute as themselves; only the verified shell entry's OS bootstrap is root.
  ssh('chmod 755 '+guest+' '+guest+'/scripts '+guest+'/packages; chmod -R a+rX '+guest+'/packages '+guest+'/scripts',30)
- guest_call(['setup','--work',remote_work,'--candidate',guest+'/packages/candidate','--predecessor',guest+'/packages/predecessor','--legacy',guest+'/packages/legacy'])
+ guest_call(['setup','--work',remote_work,'--candidate',guest+'/packages/candidate','--predecessor',guest+'/packages/predecessor','--legacy',guest+'/packages/legacy',*(['--released-local-only'] if a.released_local_only else [])])
  for label in ['candidate','predecessor']:
   ssh('chmod 700 '+guest+'/packages/'+label+'/fased-install-linux-amd64; '+guest+'/packages/'+label+'/fased-install-linux-amd64 --verify-candidate '+guest+'/packages/'+label,90)
  start_tunnel();select_package('predecessor')
  installed={}
- installed['local']=owner_call('local','install','0.1.4')
+ installed['local']=owner_call('local','install',packages['predecessor']['packet']['productVersion'])
  print('Staged package: Local URL wizard installed',flush=True)
+ if a.released_local_only:
+  pred=packages['predecessor']['packet'];assert pred['productVersion']=='0.1.6' and pred['source']=='738bd835b8c86c7cf7b3abfb2945240635f51fe7'
+  browser('local','claim',pred['productVersion'],installed['local']['url']);owner_call('local','login')
+  result['releasedPredecessor']={'version':pred['productVersion'],'source':pred['source'],'artifactSetSha256':result['inputs']['predecessor']['artifactSetSha256']}
+  result.update(localOnly=True,remoteTested=False,publicAcceptance=False,legacyInitialCLIAuthentication=True)
+  if version==pred['productVersion']:
+   assert owner_call('local','check')['cliOutcome']=='alreadyCurrent';assert browser('local','check',version)['uiOutcome']=='alreadyCurrent'
+   owner_call('local','restart');browser('local','preserve',version)
+   result['reboot']=reboot();assert browser('local','reconnect',version)['reconnected'] is True
+   result.update(result='SUPPORTING',checks={'releasedLocalInstall':'PASS','uiCliAlreadyCurrent':'PASS','restartRebootPreservation':'PASS','noExtraPassword':'FAIL'},targetUpgrade='NOT_RUN')
+   save('released-local-acceptance.json',result);return result
+  def passwordless_current(profile):
+   state=owner_call(profile,'check');assert state['cliOutcome']=='alreadyCurrent' and state['passwordPrompt'] is False;return state
+  for suffix in ['storage.json','storage.json.session.json']:
+   shutil.copyfile(host_browser/('local-'+suffix),host_browser/('initial-'+suffix))
+  ssh('sync');disk_snapshot('baseline');start_vm();ready(90);guest_call(['network','--work',remote_work]);start_tunnel();select_package('candidate')
+  # Recover a refused acquisition through the ordinary UI, without bootstrap.
+  select_package('candidate',True);failure=browser('local','failed-check',pred['productVersion'])
+  assert failure['acquisitionFailurePreserved'] is True
+  assert json.loads(ssh('cat '+remote_work+'/selection.json',15)).get('archiveFailureObserved') is True,'check failed before the injected archive acquisition'
+  select_package('candidate');manual=browser('local','ui-update',version);assert manual['uiOutcome']=='applied'
+  owner_call('local','restart');passwordless_current('local');assert browser('local','check',version)['uiOutcome']=='alreadyCurrent'
+  assert browser('local','auth-cycle',version)['logoutSignIn'] is True
+  result['reboot']=reboot();assert browser('local','reconnect',version)['reconnected'] is True
+  checks.update(entry='PASS',local='PASS',ownerAuth='PASS',uiUpdate='PASS',restart='PASS',alreadyCurrent='PASS',preservation='PASS',recovery='PASS',logoutSignIn='PASS',rebootReconnect='PASS')
+  # Reuse that same actual public-reader baseline for independent CLI and Auto.
+  def restore_local():
+   disk_snapshot('baseline',True);start_vm();ready(90);guest_call(['network','--work',remote_work]);start_tunnel();select_package('candidate')
+   for suffix in ['storage.json','storage.json.session.json']:shutil.copyfile(host_browser/('initial-'+suffix),host_browser/('local-'+suffix))
+  restore_local();cli=owner_call('local','apply',version);assert cli['cliOutcome']=='applied' and cli['passwordPrompt'] is False
+  browser('local','preserve',version);checks['cliUpdate']='PASS'
+  restore_local();automatic=browser('local','automatic-update',version)
+  assert automatic['automaticOutcome']=='applied' and automatic['browserClosedDuringApply'] is True and automatic['policyRestored']=='manual'
+  checks['controlledAutomatic']='PASS'
+  # New Local setup must not inherit the predecessor's password requirement.
+  fresh_session=subprocess.Popen(sshbase[:-1]+['fased-fresh@127.0.0.1','sleep 3600'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+  try:
+   fresh=owner_call('fresh','install',version);opened=browser('fresh','claim',version,fresh['url']);assert opened['passwordFreeSetup'] is True
+   passwordless_current('fresh');browser('fresh','check',version)
+  finally:
+   if fresh_session.poll() is None:fresh_session.terminate();fresh_session.wait(10)
+  checks['passwordFreeLocalSetup']='PASS'
+  result.update(result='PASS',uiOutcome='applied',cliOutcome='applied',automaticOutcome='applied',automaticPolicyRestored='manual',upgradeApplied=True,customerActivation=False,controlledAutomatic=[{'profile':'local',**automatic}],predecessorPacketVersion=2,candidatePacketVersion=2)
+  save('installed-acceptance.json',result);return result
  # Exact URL entry in a real root SSH terminal. The reviewed shell performs
  # fixed OS preparation and drops to the selected ordinary operator before Go.
  entry='bash <(curl -fsSL https://github.com/fased-ai/fased-app/releases/download/v0.1.4/install.sh) --operator fased-remote --listen 127.0.0.1:17482'
@@ -359,8 +408,8 @@ def staged_package_acceptance():
  checks.update(entry='PASS',local='PASS',remote='PASS',ownerAuth='PASS',rootEntry='PASS')
  # The only browser endpoints are SSH-forwarded loopback listeners.
  listeners=ssh('ss -ltn',15)
- assert all('127.0.0.1:'+str(v[2]) in listeners for v in fixture.PROFILES.values())
- assert all(('0.0.0.0:'+str(v[2])) not in listeners and ('[::]:'+str(v[2])) not in listeners for v in fixture.PROFILES.values())
+ assert all('127.0.0.1:'+str(v[2]) in listeners for v in [fixture.PROFILES[name] for name in ['local','remote','legacy']])
+ assert all(('0.0.0.0:'+str(v[2])) not in listeners and ('[::]:'+str(v[2])) not in listeners for v in [fixture.PROFILES[name] for name in ['local','remote','legacy']])
  checks['privateAccess']='PASS'
  print('Staged package: three installed profiles and private listeners passed',flush=True)
  ssh('sync',15);disk_snapshot('baseline');start_vm();ready(90);guest_call(['network','--work',remote_work]);start_tunnel()
@@ -417,7 +466,7 @@ def staged_package_acceptance():
 if a.staged_package_only:
  started=time.time();staged_result={'result':'FAIL','fixtureOnly':True}
  try:
-  print('Ubuntu staged package: literal Local/Remote URL wizard and installed UI/CLI Update',flush=True)
+  print('Ubuntu staged package: actual released Local setup and no-op' if a.released_local_only else 'Ubuntu staged package: literal Local/Remote URL wizard and installed UI/CLI Update',flush=True)
   ready();staged_result=staged_package_acceptance()
  except BaseException as error:
   staged_result['error']=str(error)

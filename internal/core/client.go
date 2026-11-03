@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,10 +32,11 @@ func clientTransportError(err error) error {
 }
 
 type Client struct {
-	Endpoint Endpoint
-	HTTP     *http.Client
-	Token    string
-	CSRF     string
+	Endpoint   Endpoint
+	HTTP       *http.Client
+	Token      string
+	CSRF       string
+	localOwner bool
 }
 type SavedSession struct {
 	InstanceID string `json:"instanceId"`
@@ -74,6 +76,7 @@ func NewClient(ctx context.Context, dir string) (*Client, error) {
 		c.Close()
 		return nil, errors.New("core instance or API version mismatch")
 	}
+	c.localOwner = health.Connection != nil && health.Connection.Location == "local" && health.Connection.OwnerUID == 0 && health.Connection.Transport == "loopback"
 	return c, nil
 }
 func (c *Client) Close() { c.HTTP.CloseIdleConnections() }
@@ -172,14 +175,34 @@ func (c *Client) authenticate(ctx context.Context, route string, credentials map
 	return nil
 }
 func (c *Client) LoadSession(ctx context.Context, dir string) error {
+	// Only the private OS transport can grant Local owner access. Remote and
+	// separately owned managed installs refuse this route and retain their
+	// existing authentication. Never infer ownership from loopback HTTP.
+	err := c.loadSavedSession(ctx, dir)
+	if errors.Is(err, ErrUnauthorized) && c.localOwner {
+		if err = c.LocalOwner(ctx); err != nil {
+			return err
+		}
+		return c.SaveSession(dir)
+	}
+	return err
+}
+func (c *Client) loadSavedSession(ctx context.Context, dir string) error {
 	file := filepath.Join(dir, "cli-session.json")
 	data, err := readPrivateFile(file)
 	if err != nil {
-		return fmt.Errorf("CLI login required: %w", ErrUnauthorized)
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("CLI login required: %w", ErrUnauthorized)
+		}
+		return fmt.Errorf("cannot read protected CLI session; preserve it: %w", err)
 	}
 	var saved SavedSession
 	if json.Unmarshal(data, &saved) != nil || saved.InstanceID != c.Endpoint.InstanceID {
-		return fmt.Errorf("CLI login required: %w", ErrUnauthorized)
+		return errors.New("CLI session does not match this workspace; preserve it")
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(saved.Token)
+	if err != nil || len(saved.Token) != 43 || len(decoded) != 32 {
+		return errors.New("CLI session is malformed; preserve it")
 	}
 	c.Token = saved.Token
 	var result struct {

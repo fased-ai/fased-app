@@ -1,79 +1,13 @@
-# Install Fased
+# Installation and update contract
 
-Fased runs on your computer or Ubuntu VPS. The installer downloads and verifies a compiled package, installs the required system packages and starts the setup wizard. You do not need Go, Node or a source checkout.
+The [user installation guide](guide/install.md) describes the required Local/Remote experience. The [release acceptance guide](maintainers/ubuntu-release.md#complete-packaged-journey) defines its engineering gates. Current authority/status is `/home/fc/fasedbot/docs/fased/execution.md`.
 
-## Ubuntu
+The revised contract is not fully implemented by published0.1.6. Do not advertise its optional SSH/password/terminal-bridge behavior as the required target, or replace the user's UI-update acceptance with a command they must run.
 
-Run this command in an interactive terminal:
+- **Local first:** actual installed supported public predecessor → protected owner session → UI and CLI through the same updater → preservation/restart/recovery/Already current → bounded Automatic operation. No new human OS account or default Fased password.
+- **Remote prerequisite:** OS/Tailscale preparation is allowed first. Verified enrollment and private reachability are mandatory before Fased deployment, database initialization, services or wallet setup. Refusal/failure stops there; no SSH-only fallback or skip flag.
+- **Remote completion:** verified owner/private HTTPS plus private administrator and independent console/rescue access → existing timed hardening transaction → public denial/private continuity → persist → close bootstrap SSH. Core and signer are unprivileged; no ongoing tunnel is needed.
+- **Accounts:** reuse the Local OS user; Remote reuses or provisions a key-authenticated recovery administrator without an empty password. App/signer accounts are locked, non-login identities. Their users/passwords never become customer forms. Do not disable root SSH until a replacement administrator and recovery route work.
+- **Updates:** Settings and installed `fased update` use one controller, release policy, journal, progress/result and recovery. UI uses the existing owner session; Local/host CLI uses authorized OS-owner/admin proof through protected IPC, while a Remote client CLI uses its approved owner/device connection over Tailscale HTTPS; Automatic uses saved scoped software-update authority. No session/cookie copying or generic password/sudo handoff. Initial OS approval or exceptional new privileges are separate setup actions.
 
-```sh
-bash <(curl -fsSL https://github.com/fased-ai/fased-app/releases/latest/download/install.sh)
-```
-
-Choose **Local** for your computer or **Remote** for a VPS. An SSH terminal suggests Remote. The currently verified Ubuntu package targets **24.04 LTS, amd64**; the installer checks platform compatibility before installation.
-
-## Local
-
-The wizard installs Fased for your ordinary account, prepares its isolated service and opens the browser. Create your Fased password to claim the workspace. Reopening an existing workspace uses its existing account and data.
-
-Installation needs no AI provider, wallet or RPC. Connect those later for the activity you choose.
-
-## Remote
-
-1. SSH to your VPS and run the installer above.
-2. Choose Remote, then **Tailscale** or **SSH** for private access.
-3. Complete the selected access setup and open the printed private browser link.
-4. Create your Fased password in the browser.
-
-A root SSH session prepares an ordinary operator and a separate locked application account. Fased runs without root or sudo access. The installed root-safe `fased` command delegates to the recorded operator.
-
-### Tailscale
-
-The wizard guides installation and enrollment on the VPS and configures private HTTPS access. Enroll the computer or phone you will use in the same tailnet, then open the private address. Tailscale is a separate OS application. Fased still requires its owner password.
-
-A conflicting VPN can prevent access. Pause it or configure compatible routing; the SSH access option remains available.
-
-### SSH
-
-The wizard prints the port-forward command for your accessing computer and the browser link to open afterward. Fased listens on loopback; you do not need to expose its application port publicly. Keep your normal SSH access for recovery.
-
-## Open and manage
-
-The installed service can start after reboot. Closing the browser leaves that service running; provider access still follows its credential and task permissions.
-
-```sh
-fased open
-fased status
-fased stop
-fased start
-```
-
-The browser UI and CLI use the same instance and stored records.
-
-## Update
-
-Open **Settings → Updates**, or run:
-
-```sh
-fased update
-```
-
-The updater verifies the release, preserves your data and authentication, restarts Fased and reports the result. A repeat reports **Already current**.
-
-Choose **Automatic** in Settings → Updates to opt in. It requires the installed update controller and follows your maintenance window and version preferences. Manual remains the default. Unresolved recovery or incompatible state stops an update for inspection.
-
-For an earlier installation that needs a compatibility upgrade, run the official installer with `--update` as the same installation user. The wizard upgrades that instance. Ordinary updates then continue through the UI or installed command. See [Updates](updates.md) for the full user flow.
-
-## Remove
-
-```sh
-fased uninstall
-```
-
-Removal preserves instance data and recovery records. Reinstall as the same installation user to reconnect to them.
-
-## Distribution
-
-Native installers and additional platform acceptance are tracked separately. Use the package supported for your platform; a portable Go executable alone does not establish OS dependency compatibility.
-
-The [release contract](maintainers/ubuntu-release.md#one-candidate-one-acceptance-flow) describes package verification and acceptance. [Recovery](maintainers/ubuntu-release.md#recovery-and-tag-discipline) describes retained release transactions.
+Keep published assets immutable and existing data/credentials/recovery holds intact. A terminal repair is not a successful UI upgrade. The old0.1.5 UI compatibility path remains an explicit unresolved implementation predicate. No new release is ready until the corrected Local-first and Tailscale-only journeys pass.
