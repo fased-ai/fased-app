@@ -8,6 +8,8 @@ This is the controlling staged-package acceptance contract for Fased App. The ac
 
 The release command must require the trusted workflow’s matching installed-acceptance artifact before creating a tag or publishing. If any required leg is absent or failed, promotion stops. Current records the actual verification status; no release is ready merely because this contract is documented. Existing published releases and trust profiles remain immutable.
 
+<a id="release"></a>
+
 ## One candidate, one acceptance flow
 
 | Stage                | Required result                                                                                                                                                                                                                                                               |
@@ -41,6 +43,8 @@ Use existing authorized Ubuntu environments. Fresh disposable installs need thei
 5. Keep automatic-update implementation evidence separate from activation. Reuse controlled automatic-mode proof where unchanged, and exercise changed shared-controller behavior with fixtures. Customer scheduling/activation, live AI, wallets/trading and mining remain disabled.
 
 Keep one acceptance record in the existing candidate/evidence area and summarize it in Current. It records exact input identities, environment/profile, literal entry, predecessor, preservation baseline/result, each required leg and reused evidence with its validity basis. Required legs must be PASS or carry a reviewed supported-scope exclusion; unresolved FAIL/BLOCKED cannot be hidden as N/A. The publisher must independently verify the matching trusted CI acceptance result, not trust a user-editable local `PASS` field. Owner credentials and sessions never enter artifacts or logs.
+
+<a id="recovery"></a>
 
 ## Recovery and tag discipline
 
