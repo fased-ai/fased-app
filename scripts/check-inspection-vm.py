@@ -633,7 +633,7 @@ try:
   with tarfile.open(bundle,'w') as arc:
    for name in ['fixture-vm-guest.mjs','fixture-development-envelope.mjs','fixture-inspection-journey.mjs','handoff-transport-evidence.mjs','fixture-inspection-probes.py','fixture-inspection-clock-probe.py']:arc.add(repo/'scripts'/name,'scripts/'+name)
    for name in ['fased-app','fased-signer','update-tests']:arc.add((repo/'.evidence/p4-fault-reboot'/name if name in ['fased-app','update-tests'] else repo/'.evidence/bin'/name),'.evidence/bin/'+name)
-   for name in ['predecessor-app','predecessor-signer']:arc.add(repo/'.evidence/p4-installed-inspection'/name,'.evidence/p4-installed-inspection/'+name)
+   for name in ['predecessor-app','predecessor-signer','guarded-app']:arc.add(repo/'.evidence/p4-installed-inspection'/name,'.evidence/p4-installed-inspection/'+name)
    arc.add(node,'.evidence/bin/node')
   with tarfile.open(bundle) as arc:
    for entry in arc.getmembers():

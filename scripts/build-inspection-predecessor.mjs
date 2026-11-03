@@ -5,7 +5,10 @@ import { execFileSync } from "node:child_process";
 import { mkdir, cp, readFile, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { sha } from "./handoff-transport-evidence.mjs";
-import { currentStorageFixture } from "./fixture-core-storage.mjs";
+import {
+  currentStorageFixture,
+  projectPasswordOnlyContract,
+} from "./fixture-core-storage.mjs";
 assert.ok(
   process.env.GITHUB_ACTIONS === "true" ||
     process.env.FASED_DISPOSABLE_VM_BUILD === "1",
@@ -211,12 +214,69 @@ try {
   const outputs = {};
   for (const role of ["app", "signer"]) {
     const dest = path.join(root, "predecessor-" + role);
-    execFileSync("go", ["build", "-o", dest, "./cmd/fased-" + role], {
-      cwd: scratch,
-      stdio: "inherit",
-    });
+    execFileSync(
+      "go",
+      ["build", "-buildvcs=false", "-o", dest, "./cmd/fased-" + role],
+      {
+        cwd: scratch,
+        stdio: "inherit",
+      },
+    );
     outputs[role] = sha(await readFile(dest));
   }
+  // The inspection bridge changes its guarded reader, never the financial
+  // contract. Build a current guard with the exact source36 contract, isolated
+  // from ordinary serve/setup commands and excluded from every release package.
+  const guardedSource = path.join(scratch, "guarded-source");
+  await mkdir(guardedSource);
+  for (const file of ["cmd", "internal", "dist", "go.mod", "go.sum", "ui.go"])
+    await cp(file, path.join(guardedSource, file), { recursive: true });
+  const guardedContractSHA = await projectPasswordOnlyContract(guardedSource);
+  await writeFile(
+    path.join(guardedSource, "cmd/fased-app/zz_disposable_guarded_reader.go"),
+    `package main
+import "os"
+func init() {
+ if len(os.Args)>1 { switch os.Args[1] {
+ case "fixture-reader-guard", "fixture-inspection-compatibility", "owner-fixture-inspection", "fixture-inspection-cold", "fixture-inspection-init", "fixture-inspection-empty": return
+ } }
+ if len(os.Args)==3 && os.Args[1]=="updates" && os.Args[2]=="compatibility" { return }
+ if len(os.Args)>3 && os.Args[1]=="custody" && os.Args[2]=="fixture-inspection" && (os.Args[3]=="bridge" || os.Args[3]=="rollback") { return }
+ os.Exit(92)
+}
+`,
+  );
+  const guarded = path.join(root, "guarded-app");
+  execFileSync(
+    "go",
+    ["build", "-buildvcs=false", "-o", guarded, "./cmd/fased-app"],
+    {
+      cwd: guardedSource,
+      stdio: "inherit",
+    },
+  );
+  const contract = (binary) =>
+    JSON.parse(
+      execFileSync(binary, ["updates", "compatibility"], { encoding: "utf8" }),
+    ).contract;
+  assert.deepEqual(
+    contract(guarded),
+    contract(path.join(root, "predecessor-app")),
+    "guarded candidate must keep the exact financial reader contract",
+  );
+  const inspection = JSON.parse(
+    execFileSync(guarded, ["fixture-inspection-compatibility"], {
+      encoding: "utf8",
+    }),
+  );
+  assert.equal(inspection.capability, "fixture-installed-inspection-v1");
+  assert.throws(
+    () => execFileSync(guarded, ["serve"], { stdio: "pipe" }),
+    (error) => error.status === 92,
+    "guarded fixture must refuse ordinary serve",
+  );
+  outputs.guardedApp = sha(await readFile(guarded));
+  outputs.guardedContractSource = guardedContractSHA;
   await writeFile(
     path.join(root, "predecessor-build.json"),
     JSON.stringify(

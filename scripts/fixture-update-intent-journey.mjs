@@ -925,6 +925,19 @@ finally:
       const bytes = await readFile(path.join(candidates, c.artifact.file));
       c.artifact.size = bytes.length;
       c.artifact.sha256 = sha(bytes);
+      const actual = JSON.parse(
+        execFileSync(
+          path.join(candidates, c.artifact.file),
+          c.contract.component === "core"
+            ? [
+                "updates",
+                networkMode ? "custody-compatibility" : "compatibility",
+              ]
+            : [networkMode ? "custody-compatibility" : "fixture-compatibility"],
+          { encoding: "utf8", env },
+        ),
+      );
+      c.contract = c.contract.component === "core" ? actual.contract : actual;
     }
     await saveManifest(2);
     pass(
@@ -986,6 +999,19 @@ finally:
       const bytes = await readFile(path.join(candidates, c.artifact.file));
       c.artifact.size = bytes.length;
       c.artifact.sha256 = sha(bytes);
+      const actual = JSON.parse(
+        execFileSync(
+          path.join(candidates, c.artifact.file),
+          c.contract.component === "core"
+            ? [
+                "updates",
+                networkMode ? "custody-compatibility" : "compatibility",
+              ]
+            : [networkMode ? "custody-compatibility" : "fixture-compatibility"],
+          { encoding: "utf8", env },
+        ),
+      );
+      c.contract = c.contract.component === "core" ? actual.contract : actual;
     }
     await saveManifest(3);
     pass(

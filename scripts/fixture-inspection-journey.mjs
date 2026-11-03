@@ -84,6 +84,7 @@ export async function fixtureInspectionJourney({
     ),
     work = path.join(evidence, "public-fixture"),
     core = path.resolve(".evidence/bin/fased-app"),
+    guardedCore = path.resolve(".evidence/p4-installed-inspection/guarded-app"),
     signer = path.resolve(".evidence/bin/fased-signer");
   await mkdir(work, { recursive: true, mode: 0o700 });
   const run = (bin, args, input) =>
@@ -128,7 +129,7 @@ export async function fixtureInspectionJourney({
   const target = {
     ...base,
     inspectionBridge: id,
-    coreHash: sha(await readFile(core)),
+    coreHash: sha(await readFile(guardedCore)),
     signerHash: sha(await readFile(signer)),
   };
   const units = {};
@@ -326,7 +327,7 @@ export async function fixtureInspectionJourney({
     for (const role of ["app", "signer"])
       await writeFile(
         path.join(candidate, "fased-" + role),
-        await readFile(role === "app" ? core : signer),
+        await readFile(role === "app" ? guardedCore : signer),
         { mode: 0o700 },
       );
     const cancelled = terminal("provision", "cancel");
