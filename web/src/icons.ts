@@ -9,6 +9,8 @@ export {
   Plug,
   ArrowDownLeft,
   ArrowRight,
+  ArrowUp,
+  Square,
   ArrowUpRight,
   Bell,
   BookOpen,

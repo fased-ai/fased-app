@@ -16,6 +16,10 @@ import { useWorkspace, type TaskComposerDraft } from "../workspace";
 import { RefreshCw } from "../icons";
 import { Badge } from "../components/shared";
 import { TaskHistory } from "./TaskHistory";
+import {
+  intervalWithUnit,
+  taskInterval as formatInterval,
+} from "../task-timing";
 import { AgentPlaybooks } from "./AgentPlaybooks";
 import { ScheduledAITasks } from "./ScheduledAITasks";
 import { SavedReminderDraft } from "./SavedReminderDraft";
@@ -48,19 +52,7 @@ const taskCopy = (key: string, values?: Record<string, string | number>) =>
 const date = (at: number) =>
   at ? new Date(at * 1000).toLocaleString(displayLocale()) : "—";
 export function taskInterval(seconds: number) {
-  const [value, unit] =
-    seconds % 86400 === 0
-      ? ([seconds / 86400, "day"] as const)
-      : seconds % 3600 === 0
-        ? ([seconds / 3600, "hour"] as const)
-        : seconds % 60 === 0
-          ? ([seconds / 60, "minute"] as const)
-          : ([seconds, "second"] as const);
-  return new Intl.NumberFormat(displayLocale(), {
-    style: "unit",
-    unit,
-    unitDisplay: "long",
-  }).format(value);
+  return formatInterval(seconds, displayLocale());
 }
 const schedule = (t: {
   calendar?: TaskCalendar;
@@ -1737,198 +1729,202 @@ function TaskComposer({
                   />
                 </label>
               )}
-              <label>
-                {tr("Schedule")}
-                <select
-                  aria-label={tr("Schedule")}
-                  value={
-                    cronMode
-                      ? "cron"
-                      : calendarMode
-                        ? "calendar"
-                        : runs === 1
-                          ? "once"
-                          : "repeat"
-                  }
-                  onChange={(e) =>
-                    edit(() => {
-                      const next = e.target.value;
-                      setCalendarMode(next === "calendar");
-                      setCronMode(next === "cron");
-                      setRuns(next === "cron" ? 10 : next === "repeat" ? 3 : 1);
-                      if (next === "calendar" || next === "cron") {
-                        setBot("");
-                        setNews("");
-                      }
-                    })
-                  }
-                >
-                  <option value="once">{uiText("Run once")}</option>
-                  <option value="repeat">{uiText("Repeat")}</option>
-                  <option value="calendar">{uiText("At a date & time")}</option>
-                  <option value="cron">{tr("Recurring calendar")}</option>
-                </select>
-              </label>
-              {cronMode ? (
-                <TaskCronFields
-                  value={cron}
-                  onChange={(value) => edit(() => setCron(value))}
-                />
-              ) : calendarMode ? (
-                <div className="task-calendar-fields">
-                  <label>
-                    {uiText("Date & time")}
-                    <input
-                      type="datetime-local"
-                      required
-                      aria-label={uiText("Date & time")}
-                      value={at}
-                      onChange={(e) => edit(() => setAt(e.target.value))}
-                    />
-                  </label>
-                  <label>
-                    {uiText("Time zone")}
-                    <select
-                      value={zone}
-                      aria-label={uiText("Time zone")}
-                      onChange={(e) =>
-                        edit(() => {
-                          const next = e.target.value;
-                          try {
-                            setAt(
-                              calendarInput(
-                                calendarFromInput(at, zone).at,
-                                next,
-                              ),
-                            );
-                          } catch {
-                            // A rejected wall time stays visible for correction.
-                          }
-                          setZone(next);
-                        })
-                      }
-                    >
-                      {timeZones(localZone).map((z) => (
-                        <option key={z} value={z}>
-                          {z}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-              ) : (
-                <div className="task-timing">
-                  <label>
-                    {runs === 1 ? uiText("First run in") : uiText("Every")}
-                    <input
-                      type="number"
-                      min={60 / unit}
-                      max={604800 / unit}
-                      step="any"
-                      required
-                      value={seconds / unit}
-                      onChange={(e) =>
-                        edit(() =>
-                          setSeconds(Math.round(Number(e.target.value) * unit)),
-                        )
-                      }
-                    />
-                  </label>
-                  <label>
-                    {uiText("Unit")}
-                    <select
-                      value={unit}
-                      onChange={(e) => {
-                        const next = Number(e.target.value);
-                        edit(() => {
-                          setSeconds(
-                            Math.min(
-                              604800,
-                              Math.max(60, (seconds / unit) * next),
-                            ),
-                          );
-                          setUnit(next);
-                        });
-                      }}
-                    >
-                      <option value={60}>{uiText("Minutes")}</option>
-                      <option value={3600}>{uiText("Hours")}</option>
-                      <option value={86400}>{uiText("Days")}</option>
-                    </select>
-                  </label>
-                </div>
-              )}
-              {!calendarMode && (runs > 1 || cronMode) && (
+              <details className="task-inspection">
+                <summary>{tr("Schedule")}</summary>
                 <label>
-                  {uiText("Maximum runs")}
-                  <input
-                    aria-label={uiText("Maximum evaluations")}
-                    type="number"
-                    required
-                    min={cronMode ? 1 : 2}
-                    max={aiEnabled ? 10 : 20}
-                    value={runs}
-                    onChange={(e) =>
-                      edit(() => setRuns(Number(e.target.value)))
+                  {tr("Schedule")}
+                  <select
+                    aria-label={tr("Schedule")}
+                    value={
+                      cronMode
+                        ? "cron"
+                        : calendarMode
+                          ? "calendar"
+                          : runs === 1
+                            ? "once"
+                            : "repeat"
                     }
-                  />
+                    onChange={(e) =>
+                      edit(() => {
+                        const next = e.target.value;
+                        setCalendarMode(next === "calendar");
+                        setCronMode(next === "cron");
+                        setRuns(
+                          next === "cron" ? 10 : next === "repeat" ? 3 : 1,
+                        );
+                        if (next === "calendar" || next === "cron") {
+                          setBot("");
+                          setNews("");
+                        }
+                      })
+                    }
+                  >
+                    <option value="once">{uiText("Run once")}</option>
+                    <option value="repeat">{uiText("Repeat")}</option>
+                    <option value="calendar">
+                      {uiText("At a date & time")}
+                    </option>
+                    <option value="cron">{tr("Recurring calendar")}</option>
+                  </select>
                 </label>
-              )}
-              {!watchMode && !aiEnabled && !calendarMode && !cronMode && (
-                <details className="task-inspection">
-                  <summary>{uiText("Options")}</summary>
-                  <label>
-                    {uiText("Task kind")}
-                    <select
-                      value={bot}
-                      onChange={(e) => edit(() => setBot(e.target.value))}
-                    >
-                      <option value="">{uiText("Local reminder")}</option>
-                      {v.bots.map((b) => (
-                        <option key={b.id} value={b.id}>
-                          {uiText("Paper evaluation · ")}
-                          {b.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <NewsSourcePicker
-                    view={v}
-                    value={news}
-                    onChange={(value) => edit(() => setNews(value))}
-                    age={age}
-                    onAge={(value) => edit(() => setAge(value))}
+                {cronMode ? (
+                  <TaskCronFields
+                    value={cron}
+                    onChange={(value) => edit(() => setCron(value))}
                   />
-                  <label>
-                    {uiText("Interval in seconds")}
-                    <input
-                      required
-                      type="number"
-                      min={60}
-                      max={604800}
-                      value={seconds}
-                      onChange={(e) =>
-                        edit(() => setSeconds(Number(e.target.value)))
-                      }
-                    />
-                  </label>
-                  {runs === 1 && (
+                ) : calendarMode ? (
+                  <div className="task-calendar-fields">
                     <label>
-                      {uiText("Maximum evaluations")}
+                      {uiText("Date & time")}
+                      <input
+                        type="datetime-local"
+                        required
+                        aria-label={uiText("Date & time")}
+                        value={at}
+                        onChange={(e) => edit(() => setAt(e.target.value))}
+                      />
+                    </label>
+                    <label>
+                      {uiText("Time zone")}
+                      <select
+                        value={zone}
+                        aria-label={uiText("Time zone")}
+                        onChange={(e) =>
+                          edit(() => {
+                            const next = e.target.value;
+                            try {
+                              setAt(
+                                calendarInput(
+                                  calendarFromInput(at, zone).at,
+                                  next,
+                                ),
+                              );
+                            } catch {
+                              // A rejected wall time stays visible for correction.
+                            }
+                            setZone(next);
+                          })
+                        }
+                      >
+                        {timeZones(localZone).map((z) => (
+                          <option key={z} value={z}>
+                            {z}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                ) : (
+                  <div className="task-timing">
+                    <label>
+                      {runs === 1 ? uiText("First run in") : uiText("Every")}
                       <input
                         type="number"
+                        min={60 / unit}
+                        max={604800 / unit}
+                        step="any"
                         required
-                        min={1}
-                        max={aiEnabled ? 10 : 20}
-                        value={runs}
+                        value={seconds / unit}
                         onChange={(e) =>
-                          edit(() => setRuns(Number(e.target.value)))
+                          edit(() =>
+                            setSeconds(
+                              Math.round(Number(e.target.value) * unit),
+                            ),
+                          )
                         }
                       />
                     </label>
-                  )}
-                </details>
-              )}
+                    <label>
+                      {uiText("Unit")}
+                      <select
+                        value={unit}
+                        onChange={(e) => {
+                          const next = Number(e.target.value);
+                          edit(() => {
+                            setSeconds(intervalWithUnit(seconds, unit, next));
+                            setUnit(next);
+                          });
+                        }}
+                      >
+                        <option value={60}>{uiText("Minutes")}</option>
+                        <option value={3600}>{uiText("Hours")}</option>
+                        <option value={86400}>{uiText("Days")}</option>
+                      </select>
+                    </label>
+                  </div>
+                )}
+                {!calendarMode && (runs > 1 || cronMode) && (
+                  <label>
+                    {uiText("Maximum runs")}
+                    <input
+                      aria-label={uiText("Maximum evaluations")}
+                      type="number"
+                      required
+                      min={cronMode ? 1 : 2}
+                      max={aiEnabled ? 10 : 20}
+                      value={runs}
+                      onChange={(e) =>
+                        edit(() => setRuns(Number(e.target.value)))
+                      }
+                    />
+                  </label>
+                )}
+                {!watchMode && !aiEnabled && !calendarMode && !cronMode && (
+                  <details className="task-inspection">
+                    <summary>{uiText("Options")}</summary>
+                    <label>
+                      {uiText("Task kind")}
+                      <select
+                        value={bot}
+                        onChange={(e) => edit(() => setBot(e.target.value))}
+                      >
+                        <option value="">{uiText("Local reminder")}</option>
+                        {v.bots.map((b) => (
+                          <option key={b.id} value={b.id}>
+                            {uiText("Paper evaluation · ")}
+                            {b.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <NewsSourcePicker
+                      view={v}
+                      value={news}
+                      onChange={(value) => edit(() => setNews(value))}
+                      age={age}
+                      onAge={(value) => edit(() => setAge(value))}
+                    />
+                    <label>
+                      {uiText("Interval in seconds")}
+                      <input
+                        required
+                        type="number"
+                        min={60}
+                        max={604800}
+                        value={seconds}
+                        onChange={(e) =>
+                          edit(() => setSeconds(Number(e.target.value)))
+                        }
+                      />
+                    </label>
+                    {runs === 1 && (
+                      <label>
+                        {uiText("Maximum evaluations")}
+                        <input
+                          type="number"
+                          required
+                          min={1}
+                          max={aiEnabled ? 10 : 20}
+                          value={runs}
+                          onChange={(e) =>
+                            edit(() => setRuns(Number(e.target.value)))
+                          }
+                        />
+                      </label>
+                    )}
+                  </details>
+                )}
+              </details>
               <button
                 className="primary"
                 disabled={busy || (aiEnabled && !aiReady)}

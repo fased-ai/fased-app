@@ -152,13 +152,11 @@ export function ConnectionPicker({
               uiText("Unavailable")}{" "}
             ·{" "}
             {uiText(
-              account.authMethod === "oauth"
-                ? "Google"
-                : account.authMethod === "sign-in"
-                  ? "ChatGPT"
-                  : account.authMethod === "local"
-                    ? "Server"
-                    : "API key",
+              account.authMethod === "oauth" || account.authMethod === "sign-in"
+                ? "Sign in"
+                : account.authMethod === "local"
+                  ? "Server"
+                  : "API key",
             )}
             {(account.planPaused || account.locked) &&
               ` · ${uiText(account.planPaused ? "Paused" : "Locked")}`}
@@ -457,7 +455,9 @@ export function AIConnectionSettings({
               <button
                 type="button"
                 className="provider-brand-button"
-                aria-pressed={providerFamily === p.id && !view?.ref}
+                aria-pressed={
+                  !!selected && providerFamily === p.id && !view?.ref
+                }
                 disabled={busy || !!signIn}
                 onClick={() => chooseProvider(p.id)}
               >
@@ -493,13 +493,11 @@ export function AIConnectionSettings({
                         {p.family &&
                           `${uiText(root?.catalog?.providers.find((x) => x.id === a.provider)?.route || "")} · `}
                         {uiText(
-                          a.authMethod === "oauth"
-                            ? "Google"
-                            : a.authMethod === "sign-in"
-                              ? "ChatGPT"
-                              : a.authMethod === "local"
-                                ? "Server"
-                                : "API key",
+                          a.authMethod === "oauth" || a.authMethod === "sign-in"
+                            ? "Sign in"
+                            : a.authMethod === "local"
+                              ? "Server"
+                              : "API key",
                         )}
                       </small>
                     </span>
@@ -514,7 +512,9 @@ export function AIConnectionSettings({
           aria-label={uiText("Connection")}
         >
           <div className="panel-heading">
-            <h3>{uiText(providerName)}</h3>
+            <h3>
+              {uiText(!selected && !view?.ref ? "Providers" : providerName)}
+            </h3>
             {view?.authMethod === "oauth" && view.googleProject && (
               <span className="provider-route">{view.googleProject}</span>
             )}
@@ -636,12 +636,7 @@ export function AIConnectionSettings({
             </p>
             {view?.planPaused && (
               <p role="status">
-                {uiText(
-                  pausedFailure?.summary ||
-                    (view.provider === "local"
-                      ? "Local model request failed"
-                      : "ChatGPT request failed"),
-                )}
+                {uiText(pausedFailure?.summary || "Provider unavailable")}
               </p>
             )}
             {error && <p role="alert">{error}</p>}
@@ -665,9 +660,9 @@ export function AIConnectionSettings({
             <details
               className="connection-options"
               key={selected || view?.ref || "new"}
-              open={!view?.ref}
+              open={startNew || selected === "new"}
             >
-              <summary>{uiText("Credentials")}</summary>
+              <summary>{uiText(view?.ref ? "Edit" : "Connect")}</summary>
               <form
                 onSubmit={(e) => {
                   e.preventDefault();

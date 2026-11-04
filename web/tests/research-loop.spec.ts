@@ -171,6 +171,10 @@ test("reviewed v2 continuations share UI/CLI consent, transcript and restart", a
     await panel
       .getByRole("button", { name: "Review research with AI", exact: true })
       .click();
+    await ai
+      .locator(".composer-context > summary")
+      .filter({ hasText: /^Selected research$/ })
+      .click();
     const group = ai.getByRole("group", {
       name: "Selected research for AI",
       exact: true,
@@ -183,9 +187,14 @@ test("reviewed v2 continuations share UI/CLI consent, transcript and restart", a
     await ai
       .getByRole("combobox", { name: "Memory", exact: true })
       .selectOption("none");
+    await ai.locator(".message-options > summary").click();
     await ai
       .getByRole("textbox", { name: "Message", exact: true })
       .fill("Two-step review.");
+    await ai
+      .locator(".composer-context > summary")
+      .filter({ hasText: /^Limits$/ })
+      .click();
     await ai
       .getByRole("spinbutton", { name: "Model attempts", exact: true })
       .fill("2");

@@ -1,11 +1,14 @@
+import { previewModel } from "../ui-language-preview";
 import { agentReplyDefaults } from "../agent-defaults";
-import { Plug } from "../icons";
+import { Plug, ArrowUp, Square } from "../icons";
 import { useUI } from "../ui-preferences";
 type ChatComposer = {
   value: string;
   onChange: (value: string) => void;
   onSave: () => Promise<void>;
   onInteract?: () => void;
+  submitOnMount?: boolean;
+  onSubmittedMount?: () => void;
 };
 import { AgentEvidenceInspector } from "./AgentEvidence";
 import { ChatPermissionReview } from "./ChatPermission";
@@ -14,6 +17,7 @@ import { NewsWatchMessage } from "./NewsWatchMessage";
 import { SlidersHorizontal, BookOpen } from "../icons";
 import type { ResearchSelection } from "./ResearchReadPanel";
 import { ChatMemoryReview } from "./ChatMemoryReview";
+import { reminderRun, ReminderRunMessage } from "./ReminderRunMessage";
 import { NewsSourcePicker } from "./NewsInputs";
 import {
   AIModelPicker,
@@ -92,7 +96,11 @@ function AgentAIForm({
   }
   const [newsSourceId, setNewsSourceId] = useState("");
   const [newsAge, setNewsAge] = useState(3600);
-  const { view: accounts, refresh: refreshAccess } = useAIConnection();
+  const {
+    view: accounts,
+    refresh: refreshAccess,
+    error: accountError,
+  } = useAIConnection();
   const agent = view.profiles.find((p) => p.id === view.profileId)!;
   const access = agent.connectionRef
     ? (accounts?.connections?.find((a) => a.ref === agent.connectionRef) ??
@@ -163,6 +171,7 @@ function AgentAIForm({
       : inherited.ready;
 
   const budgetModel = useRef("");
+  const [limitsIdentity, setLimitsIdentity] = useState("");
   useEffect(() => {
     if (draftSource) return;
     const identity = connectionRef + ":" + model + ":" + selectedPolicy?.id;
@@ -170,6 +179,7 @@ function AgentAIForm({
     const p = selectedPolicy;
     if (!p) return;
     budgetModel.current = identity;
+    setLimitsIdentity(identity);
     if (isUnmeteredPolicy(p)) {
       if (p.provider === "local") setDeadline(60);
       return;
@@ -287,6 +297,47 @@ function AgentAIForm({
       if (epoch === generation.current) setDraftBusy(false);
     }
   }
+  const submittedMount = useRef(false);
+  useEffect(() => {
+    if (!composer?.submitOnMount || submittedMount.current || agents.busy)
+      return;
+    if (agent.provider !== "none" && !accounts && !accountError) return;
+    if (connectionRef !== inherited.connectionRef || model !== inherited.model)
+      return;
+    if (
+      selectedPolicy &&
+      limitsIdentity !== `${connectionRef}:${model}:${selectedPolicy.id}`
+    )
+      return;
+    // Let provider-derived limits settle before the existing form handles Send.
+    const timer = window.setTimeout(() => {
+      submittedMount.current = true;
+      composer.onSubmittedMount?.();
+      if (!remembering && !replyReady) {
+        setDraftError(tr("Provider unavailable"));
+        return;
+      }
+      questionRef.current?.form?.requestSubmit();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [
+    composer,
+    agents.busy,
+    accounts,
+    accountError,
+    budget,
+    deadline,
+    selectedPolicy,
+    limitsIdentity,
+    agent.provider,
+    connectionRef,
+    model,
+    inherited.connectionRef,
+    inherited.model,
+    remembering,
+    replyReady,
+    tr,
+  ]);
   const toggleMemory = (id: string, checked: boolean) =>
     setMemoryIds((ids) =>
       checked ? [...ids, id] : ids.filter((n) => n !== id),
@@ -404,20 +455,19 @@ function AgentAIForm({
     (m) => m.id === permissionReview?.model,
   )?.policy;
   const permissionProvider =
-    accounts?.catalog?.providers.find(
-      (p) => p.id === permissionAccount?.provider,
-    )?.name || tr("Unavailable");
+    permissionPolicy?.provider === "ollama-cloud" ||
+    permissionPolicy?.model === "gemma4:cloud"
+      ? "Ollama Cloud"
+      : accounts?.catalog?.providers.find(
+          (p) => p.id === permissionAccount?.provider,
+        )?.name || tr("Unavailable");
   return (
     <>
       {permissionReview && (
         <ChatPermissionReview
           permission={permissionReview}
           providerName={
-            isUnmeteredPolicy(permissionPolicy)
-              ? tr("Usage")
-              : permissionReview.connectionRef
-                ? permissionProvider
-                : tr("Demo")
+            permissionReview.connectionRef ? permissionProvider : tr("Demo")
           }
           policy={permissionPolicy}
           busy={agents.busy || draftBusy}
@@ -493,7 +543,14 @@ function AgentAIForm({
                           : uiText("Record")}{" "}
                         · {new Date(entry.at * 1000).toLocaleString()}
                       </small>
-                      <NewsWatchMessage text={entry.message.text} />
+                      {reminderRun(entry.message, view.profileId) ? (
+                        <ReminderRunMessage
+                          result={reminderRun(entry.message, view.profileId)!}
+                          source={entry.message.text}
+                        />
+                      ) : (
+                        <NewsWatchMessage text={entry.message.text} />
+                      )}
                     </>
                   )}
                   {entry.message.role === "user" && (
@@ -525,9 +582,30 @@ function AgentAIForm({
           className="chat-message-form"
           onClickCapture={() => composer?.onInteract?.()}
           onKeyDownCapture={() => composer?.onInteract?.()}
+          onKeyDown={(e) => {
+            if (e.key !== "Escape") return;
+            const modelMenu = e.currentTarget.querySelector<HTMLDetailsElement>(
+              ".reply-model-menu[open]",
+            );
+            if (optionsOpen) {
+              e.preventDefault();
+              setOptionsOpen(false);
+              e.currentTarget
+                .querySelector<HTMLElement>(".message-options > summary")
+                ?.focus();
+            } else if (modelMenu) {
+              e.preventDefault();
+              modelMenu.open = false;
+              modelMenu.querySelector<HTMLElement>("summary")?.focus();
+            }
+          }}
           onSubmit={async (e) => {
             e.preventDefault();
             setOptionsOpen(false);
+            const modelMenu = e.currentTarget.querySelector<HTMLDetailsElement>(
+              ".reply-model-menu[open]",
+            );
+            if (modelMenu) modelMenu.open = false;
             if (agents.busy || draftBusy || preparing.current) return;
             preparing.current = true;
             setDraftError("");
@@ -729,55 +807,118 @@ function AgentAIForm({
           }}
         >
           {researchSelection && (
-            <fieldset aria-label={uiText("Selected research for AI")}>
-              <legend>{uiText("Selected research")}</legend>
-              <label>
-                {uiText("Research mode")}
-                <select
-                  value={researchMode}
+            <details className="composer-context">
+              <summary>{uiText("Selected research")}</summary>
+              <fieldset aria-label={uiText("Selected research for AI")}>
+                <legend>{uiText("Selected research")}</legend>
+                <label>
+                  {uiText("Research mode")}
+                  <select
+                    value={researchMode}
+                    disabled={researchPreparing}
+                    onChange={(e) => setResearchMode(e.target.value)}
+                  >
+                    <option value="single">{uiText("Single request")}</option>
+                    <option value="loop">
+                      {uiText("Reviewed continuations")}
+                    </option>
+                  </select>
+                </label>
+                <pre>{JSON.stringify(researchSelection, null, 2)}</pre>
+                <button
+                  type="button"
+                  className="secondary"
                   disabled={researchPreparing}
-                  onChange={(e) => setResearchMode(e.target.value)}
+                  onClick={onClearResearch}
                 >
-                  <option value="single">{uiText("Single request")}</option>
-                  <option value="loop">
-                    {uiText("Reviewed continuations")}
-                  </option>
-                </select>
-              </label>
-              <pre>{JSON.stringify(researchSelection, null, 2)}</pre>
-              <button
-                type="button"
-                className="secondary"
-                disabled={researchPreparing}
-                onClick={onClearResearch}
-              >
-                {uiText("Remove research")}
-              </button>
-            </fieldset>
+                  {uiText("Remove research")}
+                </button>
+              </fieldset>
+            </details>
           )}
           {evidenceSelection && (
-            <fieldset aria-label={uiText("AI evidence selection")}>
-              <legend>{uiText("Selected evidence")}</legend>
-              <pre>{JSON.stringify(evidenceSelection, null, 2)}</pre>
-              {!evidenceAvailable && (
-                <p role="status">
-                  {uiText("Selected evidence unavailable. Inspect again.")}
-                </p>
-              )}
-              {evidencePreview && (
-                <details>
-                  <summary>{uiText("Inspected record")}</summary>
-                  <pre>{JSON.stringify(evidencePreview, null, 2)}</pre>
-                </details>
-              )}
-              <button
-                type="button"
-                className="secondary"
-                onClick={removeEvidence}
+            <details className="composer-context">
+              <summary>{uiText("Selected evidence")}</summary>
+              <fieldset aria-label={uiText("AI evidence selection")}>
+                <legend>{uiText("Selected evidence")}</legend>
+                <pre>{JSON.stringify(evidenceSelection, null, 2)}</pre>
+                {!evidenceAvailable && (
+                  <p role="status">
+                    {uiText("Selected evidence unavailable. Inspect again.")}
+                  </p>
+                )}
+                {evidencePreview && (
+                  <details>
+                    <summary>{uiText("Inspected record")}</summary>
+                    <pre>{JSON.stringify(evidencePreview, null, 2)}</pre>
+                  </details>
+                )}
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={removeEvidence}
+                >
+                  {uiText("Remove evidence")}
+                </button>
+              </fieldset>
+            </details>
+          )}
+          {researchSelection && (
+            <details className="composer-context">
+              <summary>{uiText("Limits")}</summary>
+              <fieldset
+                className="agent-form-grid"
+                aria-label={uiText("Research turn limits")}
               >
-                {uiText("Remove evidence")}
-              </button>
-            </fieldset>
+                <legend>{uiText("Research turn limits")}</legend>
+                <label>
+                  {uiText("Model attempts")}
+                  <input
+                    type="number"
+                    min={1}
+                    max={3}
+                    required
+                    value={modelAttempts}
+                    onChange={(e) => setModelAttempts(e.target.valueAsNumber)}
+                  />
+                </label>
+                <label>
+                  {uiText("Read attempts")}
+                  <input
+                    type="number"
+                    min={1}
+                    max={8}
+                    required
+                    value={toolAttempts}
+                    onChange={(e) => setToolAttempts(e.target.valueAsNumber)}
+                  />
+                </label>
+                <label>
+                  {uiText("Research deadline (seconds)")}
+                  <input
+                    type="number"
+                    min={1}
+                    max={90}
+                    required
+                    value={turnSeconds}
+                    onChange={(e) => setTurnSeconds(e.target.valueAsNumber)}
+                  />
+                </label>
+                {!planUsage && (
+                  <label>
+                    {uiText("Turn budget (micro USD)")}
+                    <input
+                      type="number"
+                      min={1}
+                      max={3000000}
+                      required
+                      value={turnBudget}
+                      onChange={(e) => setTurnBudget(e.target.valueAsNumber)}
+                    />
+                  </label>
+                )}
+              </fieldset>
+            </details>
           )}
           <label className="chat-input">
             <span>{composer ? tr("Message") : uiText("AI request")}</span>
@@ -810,9 +951,9 @@ function AgentAIForm({
             <details className="reply-model-menu">
               <summary
                 aria-label={tr("Reply model")}
-                title={model || tr("No AI")}
+                title={previewModel(model, tr) || tr("No AI")}
               >
-                {model.replace(/-\d{4}-\d{2}-\d{2}$/, "") ||
+                {previewModel(model, tr).replace(/-\d{4}-\d{2}-\d{2}$/, "") ||
                   tr(replyReady ? "No AI" : "Provider")}
               </summary>
               <div className="reply-model-panel">
@@ -851,6 +992,19 @@ function AgentAIForm({
             </details>
             <button
               type="button"
+              className="icon-button"
+              aria-label={tr("Remember a fact")}
+              title={tr("Remember a fact")}
+              disabled={agents.busy || draftBusy}
+              onClick={() => {
+                if (!remembering) setPrompt("/remember " + prompt.trim());
+                questionRef.current?.focus();
+              }}
+            >
+              <BookOpen size={16} />
+            </button>
+            <button
+              type="button"
               className="text-button"
               aria-label={uiText("Providers")}
               title={uiText("Providers")}
@@ -869,199 +1023,253 @@ function AgentAIForm({
               <summary aria-label={tr("Options")} title={tr("Options")}>
                 <SlidersHorizontal size={16} />
               </summary>
-              <details className="chat-evidence">
-                <summary>{uiText("Sources")}</summary>
-                {!researchSelection && (
-                  <AgentEvidenceInspector
-                    view={view}
-                    sessionId={sessionId}
-                    onUse={(e) => {
-                      generation.current++;
-                      setDraftBusy(false);
-                      setDraftError("");
-                      setDraftSource("");
-                      setEvidenceSelection({
-                        kind: e.kind,
-                        id: e.id,
-                        ...(e.itemId ? { itemId: e.itemId } : {}),
-                        sha256: e.sha256,
-                      });
-                      setEvidencePreview(e);
-                      setConsent("");
+              <div className="message-options-panel">
+                <details className="chat-evidence">
+                  <summary>{uiText("Sources")}</summary>
+                  {!researchSelection && (
+                    <AgentEvidenceInspector
+                      view={view}
+                      sessionId={sessionId}
+                      onUse={(e) => {
+                        generation.current++;
+                        setDraftBusy(false);
+                        setDraftError("");
+                        setDraftSource("");
+                        setEvidenceSelection({
+                          kind: e.kind,
+                          id: e.id,
+                          ...(e.itemId ? { itemId: e.itemId } : {}),
+                          sha256: e.sha256,
+                        });
+                        setEvidencePreview(e);
+                        setConsent("");
+                        setOptionsOpen(false);
+                        questionRef.current?.focus();
+                      }}
+                    />
+                  )}
+                </details>
+                <label className="ai-consent">
+                  <input
+                    type="checkbox"
+                    checked={reviewEach}
+                    onChange={(e) => setReviewEach(e.target.checked)}
+                  />
+                  {tr("Review each reply")}
+                </label>
+                {currentPermission &&
+                  view.chatReadiness?.[sessionId] === "ready" && (
+                    <div className="agent-inline">
+                      <span>
+                        {tr("{count} replies left", {
+                          count:
+                            currentPermission.maxRequests -
+                            currentPermission.usedRequests,
+                        })}
+                      </span>
+                      <button
+                        type="button"
+                        className="text-button"
+                        disabled={agents.busy}
+                        onClick={() =>
+                          void agents.change({
+                            action: "chat-revoke",
+                            id: sessionId,
+                            consentDigest: currentPermission.id,
+                          })
+                        }
+                      >
+                        {tr("Revoke")}
+                      </button>
+                    </div>
+                  )}
+                {composer && (
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={agents.busy || !prompt.trim()}
+                    onClick={async () => {
                       setOptionsOpen(false);
-                      questionRef.current?.focus();
+                      await composer.onSave();
                     }}
+                  >
+                    {uiText("Save message")}
+                  </button>
+                )}
+                {!researchSelection && (
+                  <NewsSourcePicker
+                    view={view}
+                    value={newsSourceId}
+                    onChange={setNewsSourceId}
+                    age={newsAge}
+                    onAge={setNewsAge}
                   />
                 )}
-              </details>
-              <label className="ai-consent">
-                <input
-                  type="checkbox"
-                  checked={reviewEach}
-                  onChange={(e) => setReviewEach(e.target.checked)}
-                />
-                {tr("Review each reply")}
-              </label>
-              {currentPermission &&
-                view.chatReadiness?.[sessionId] === "ready" && (
-                  <div className="agent-inline">
-                    <span>
-                      {tr("{count} replies left", {
-                        count:
-                          currentPermission.maxRequests -
-                          currentPermission.usedRequests,
-                      })}
-                    </span>
-                    <button
-                      type="button"
-                      className="text-button"
-                      disabled={agents.busy}
-                      onClick={() =>
-                        void agents.change({
-                          action: "chat-revoke",
-                          id: sessionId,
-                          consentDigest: currentPermission.id,
-                        })
-                      }
-                    >
-                      {tr("Revoke")}
-                    </button>
-                  </div>
-                )}
-              {composer && (
-                <button
-                  type="button"
-                  className="text-button"
-                  disabled={agents.busy || !prompt.trim()}
-                  onClick={async () => {
-                    setOptionsOpen(false);
-                    await composer.onSave();
-                  }}
-                >
-                  {uiText("Save message")}
-                </button>
-              )}
-              {!researchSelection && (
-                <NewsSourcePicker
-                  view={view}
-                  value={newsSourceId}
-                  onChange={setNewsSourceId}
-                  age={newsAge}
-                  onAge={setNewsAge}
-                />
-              )}
-              <label>
-                {uiText("Memory")}
-                <select
-                  value={memoryMode}
-                  onChange={(e) =>
-                    setMemoryMode(
-                      e.target.value as AIMemorySelection["mode"] | "legacy",
-                    )
-                  }
-                >
-                  {legacyDraft && (
-                    <option value="legacy">
-                      {uiText("Legacy active notes")}
+                <label>
+                  {uiText("Memory")}
+                  <select
+                    value={memoryMode}
+                    onChange={(e) =>
+                      setMemoryMode(
+                        e.target.value as AIMemorySelection["mode"] | "legacy",
+                      )
+                    }
+                  >
+                    {legacyDraft && (
+                      <option value="legacy">
+                        {uiText("Legacy active notes")}
+                      </option>
+                    )}
+                    <option value="relevant">
+                      {tr("Relevant notes and recent chat")}
                     </option>
-                  )}
-                  <option value="relevant">
-                    {tr("Relevant notes and recent chat")}
-                  </option>
-                  <option value="all">{uiText("All active notes")}</option>
-                  <option value="none">{uiText("None")}</option>
-                  <option value="selected">{uiText("Selected notes")}</option>
-                </select>
-              </label>
-              {memoryMode === "selected" && (
-                <fieldset aria-label={uiText("AI memory selection")}>
-                  <legend>{uiText("Selected notes")}</legend>
-                  {view.memories.map((m) => (
-                    <label key={m.id}>
-                      <input
-                        type="checkbox"
-                        checked={memoryIds.includes(m.id)}
-                        disabled={m.expired && !memoryIds.includes(m.id)}
-                        onChange={(e) => toggleMemory(m.id, e.target.checked)}
-                      />
-                      {m.text}
-                      {m.expired ? uiText(" (expired)") : ""}
-                    </label>
-                  ))}
-                  {memoryIds
-                    .filter((id) => !view.memories.some((m) => m.id === id))
-                    .map((id) => (
-                      <label key={id}>
+                    <option value="all">{uiText("All active notes")}</option>
+                    <option value="none">{uiText("None")}</option>
+                    <option value="selected">{uiText("Selected notes")}</option>
+                  </select>
+                </label>
+                {memoryMode === "selected" && (
+                  <fieldset aria-label={uiText("AI memory selection")}>
+                    <legend>{uiText("Selected notes")}</legend>
+                    {view.memories.map((m) => (
+                      <label key={m.id}>
                         <input
                           type="checkbox"
-                          checked
-                          onChange={() => toggleMemory(id, false)}
+                          checked={memoryIds.includes(m.id)}
+                          disabled={m.expired && !memoryIds.includes(m.id)}
+                          onChange={(e) => toggleMemory(m.id, e.target.checked)}
                         />
-                        {uiText("Unavailable note: ")}
-                        {id}
+                        {m.text}
+                        {m.expired ? uiText(" (expired)") : ""}
                       </label>
                     ))}
-                </fieldset>
-              )}
-              <div className="agent-form-grid">
-                <label>
-                  {uiText("Maximum input tokens")}
-                  <input
-                    type="number"
-                    min={1000}
-                    max={32000}
-                    required
-                    value={input}
-                    onChange={(e) => setInput(e.target.valueAsNumber)}
-                  />
-                </label>
-                <label>
-                  {uiText("Maximum output tokens")}
-                  <input
-                    type="number"
-                    min={128}
-                    max={1024}
-                    required
-                    value={output}
-                    onChange={(e) => setOutput(e.target.valueAsNumber)}
-                  />
-                </label>
-                <label>
-                  {uiText("Request deadline (seconds)")}
-                  <input
-                    type="number"
-                    min={1}
-                    max={selectedPolicy?.provider === "local" ? 120 : 5}
-                    required
-                    value={deadline}
-                    onChange={(e) => setDeadline(e.target.valueAsNumber)}
-                  />
-                </label>
-                {!planUsage && (
+                    {memoryIds
+                      .filter((id) => !view.memories.some((m) => m.id === id))
+                      .map((id) => (
+                        <label key={id}>
+                          <input
+                            type="checkbox"
+                            checked
+                            onChange={() => toggleMemory(id, false)}
+                          />
+                          {uiText("Unavailable note: ")}
+                          {id}
+                        </label>
+                      ))}
+                  </fieldset>
+                )}
+                <div className="agent-form-grid">
                   <label>
-                    {uiText("Spending limit ($)")}
+                    {uiText("Maximum input tokens")}
                     <input
                       type="number"
-                      min={0.000001}
-                      step="0.000001"
-                      max={
-                        (selectedAccess?.catalog?.models.find(
-                          (m) => m.id === model,
-                        )?.policy?.maxRequestBudgetMicrousd || 1000000) /
-                        1000000
-                      }
+                      min={1000}
+                      max={32000}
                       required
-                      value={budget / 1_000_000}
-                      onChange={(e) =>
-                        setBudget(
-                          Math.round(e.target.valueAsNumber * 1_000_000),
-                        )
-                      }
+                      value={input}
+                      onChange={(e) => setInput(e.target.valueAsNumber)}
                     />
                   </label>
-                )}
+                  <label>
+                    {uiText("Maximum output tokens")}
+                    <input
+                      type="number"
+                      min={128}
+                      max={1024}
+                      required
+                      value={output}
+                      onChange={(e) => setOutput(e.target.valueAsNumber)}
+                    />
+                  </label>
+                  <label>
+                    {uiText("Request deadline (seconds)")}
+                    <input
+                      type="number"
+                      min={1}
+                      max={selectedPolicy?.provider === "local" ? 120 : 5}
+                      required
+                      value={deadline}
+                      onChange={(e) => setDeadline(e.target.valueAsNumber)}
+                    />
+                  </label>
+                  {!planUsage && (
+                    <label>
+                      {uiText("Spending limit ($)")}
+                      <input
+                        type="number"
+                        min={0.000001}
+                        step="0.000001"
+                        max={
+                          (selectedAccess?.catalog?.models.find(
+                            (m) => m.id === model,
+                          )?.policy?.maxRequestBudgetMicrousd || 1000000) /
+                          1000000
+                        }
+                        required
+                        value={budget / 1_000_000}
+                        onChange={(e) =>
+                          setBudget(
+                            Math.round(e.target.valueAsNumber * 1_000_000),
+                          )
+                        }
+                      />
+                    </label>
+                  )}
+                </div>
               </div>
             </details>
+          </div>
+          <div className="composer-actions">
+            {latest?.chatPermissionId &&
+            ["queued", "running"].includes(latest.state) ? (
+              <button
+                type="button"
+                className="primary composer-submit"
+                aria-label={tr("Stop")}
+                title={tr("Stop")}
+                disabled={agents.busy}
+                onClick={() =>
+                  void agents.change({ action: "ai-cancel", id: latest.id })
+                }
+              >
+                <Square size={16} fill="currentColor" aria-hidden="true" />
+              </button>
+            ) : (
+              <button
+                className="primary composer-submit"
+                aria-label={
+                  remembering
+                    ? tr("Remember")
+                    : researchSelection
+                      ? uiText("Prepare research disclosure")
+                      : tr("Send")
+                }
+                title={
+                  remembering
+                    ? tr("Remember")
+                    : researchSelection
+                      ? uiText("Prepare research disclosure")
+                      : tr("Send")
+                }
+                disabled={
+                  agents.busy ||
+                  !prompt.trim() ||
+                  (!remembering && !replyReady) ||
+                  prompt.length > 2000 ||
+                  researchPreparing ||
+                  draftBusy ||
+                  (!remembering &&
+                    memoryMode === "selected" &&
+                    memoryIds.length === 0)
+                }
+              >
+                {remembering ? (
+                  <BookOpen size={18} aria-hidden="true" />
+                ) : (
+                  <ArrowUp size={20} aria-hidden="true" />
+                )}
+              </button>
+            )}
           </div>
           {!replyReady && (
             <div className="reply-unavailable" role="status">
@@ -1075,109 +1283,6 @@ function AgentAIForm({
               </button>
             </div>
           )}
-          {researchSelection && (
-            <fieldset
-              className="agent-form-grid"
-              aria-label={uiText("Research turn limits")}
-            >
-              <legend>{uiText("Research turn limits")}</legend>
-              <label>
-                {uiText("Model attempts")}
-                <input
-                  type="number"
-                  min={1}
-                  max={3}
-                  required
-                  value={modelAttempts}
-                  onChange={(e) => setModelAttempts(e.target.valueAsNumber)}
-                />
-              </label>
-              <label>
-                {uiText("Read attempts")}
-                <input
-                  type="number"
-                  min={1}
-                  max={8}
-                  required
-                  value={toolAttempts}
-                  onChange={(e) => setToolAttempts(e.target.valueAsNumber)}
-                />
-              </label>
-              <label>
-                {uiText("Research deadline (seconds)")}
-                <input
-                  type="number"
-                  min={1}
-                  max={90}
-                  required
-                  value={turnSeconds}
-                  onChange={(e) => setTurnSeconds(e.target.valueAsNumber)}
-                />
-              </label>
-              {!planUsage && (
-                <label>
-                  {uiText("Turn budget (micro USD)")}
-                  <input
-                    type="number"
-                    min={1}
-                    max={3000000}
-                    required
-                    value={turnBudget}
-                    onChange={(e) => setTurnBudget(e.target.valueAsNumber)}
-                  />
-                </label>
-              )}
-            </fieldset>
-          )}
-          <div className="composer-actions">
-            <button
-              type="button"
-              className="icon-button"
-              aria-label={tr("Remember a fact")}
-              title={tr("Remember a fact")}
-              disabled={agents.busy || draftBusy}
-              onClick={() => {
-                if (!remembering) setPrompt("/remember " + prompt.trim());
-                questionRef.current?.focus();
-              }}
-            >
-              <BookOpen size={16} />
-            </button>
-            {latest?.chatPermissionId &&
-            ["queued", "running"].includes(latest.state) ? (
-              <button
-                type="button"
-                className="primary"
-                disabled={agents.busy}
-                onClick={() =>
-                  void agents.change({ action: "ai-cancel", id: latest.id })
-                }
-              >
-                {tr("Stop")}
-              </button>
-            ) : (
-              <button
-                className="primary"
-                disabled={
-                  agents.busy ||
-                  !prompt.trim() ||
-                  (!remembering && !replyReady) ||
-                  prompt.length > 2000 ||
-                  researchPreparing ||
-                  draftBusy ||
-                  (!remembering &&
-                    memoryMode === "selected" &&
-                    memoryIds.length === 0)
-                }
-              >
-                {remembering
-                  ? tr("Remember")
-                  : researchSelection
-                    ? uiText("Prepare research disclosure")
-                    : tr("Send")}
-              </button>
-            )}
-          </div>
         </form>
       </section>
     </>

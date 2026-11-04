@@ -1,3 +1,4 @@
+import { previewModel } from "../ui-language-preview";
 import { ResearchReadPanel, type ResearchSelection } from "./ResearchReadPanel";
 import { MemoryRecall, memoryEvidenceStatuses } from "./MemoryRecall";
 import { useUI } from "../ui-preferences";
@@ -6,7 +7,15 @@ import { NewsInputs } from "./NewsInputs";
 import { modelForProviderChange } from "../agent-defaults";
 import { AIModelPicker, useAIConnection } from "./AIConnection";
 import { useRef, useState, type FormEvent } from "react";
-import { BookOpen, Bot, Plus, Settings2, History } from "../icons";
+import {
+  BookOpen,
+  Bot,
+  Plus,
+  Settings2,
+  History,
+  Plug,
+  ArrowUp,
+} from "../icons";
 import { Badge, SectionHead, Dialog } from "../components/shared";
 import { useWorkspace, type AgentSettingsDraft } from "../workspace";
 import { providerNames, type Provider } from "../state";
@@ -164,6 +173,10 @@ function LocalAgentEditor({
   const { view: connection } = useAIConnection();
   const [session, setSession] = useState("");
   const [sessionName, setSessionName] = useState("");
+  const [firstSend, setFirstSend] = useState<{
+    sessionId: string;
+    text: string;
+  } | null>(null);
   const [search, setSearch] = useState("");
   const { chatDrafts: messageDrafts, setChatDrafts: setMessageDrafts } =
     useWorkspace();
@@ -250,7 +263,7 @@ function LocalAgentEditor({
     ? (messageDrafts.get(
         `${core.instanceId}:${v.profileId}:${activeSession.id}`,
       ) ?? "")
-    : "";
+    : (messageDrafts.get(`${core.instanceId}:${v.profileId}:new`) ?? "");
   function updateMessage(sessionId: string, text: string) {
     setMessageDrafts((drafts) => {
       const next = new Map(drafts);
@@ -343,7 +356,7 @@ function LocalAgentEditor({
       )}
       {tab === "chat" && (
         <section
-          className={`panel agent-chat ${activeSession ? "has-conversation" : ""} ${railOpen ? "rail-open" : ""}`}
+          className={`panel agent-chat has-conversation ${railOpen ? "rail-open" : ""}`}
           aria-label={uiText("Agent chat workspace")}
         >
           <button
@@ -430,6 +443,7 @@ function LocalAgentEditor({
                   }
                   key={s.id}
                   onClick={() => {
+                    setFirstSend(null);
                     setSession(s.id);
                     setRailOpen(false);
                   }}
@@ -484,8 +498,17 @@ function LocalAgentEditor({
                     sessionId={activeSession.id}
                     composer={{
                       value: message,
+                      submitOnMount:
+                        firstSend?.sessionId === activeSession.id &&
+                        firstSend.text === message,
+                      onSubmittedMount: () => {
+                        setFirstSend(null);
+                      },
                       onInteract: () => setRailOpen(false),
-                      onChange: (text) => updateMessage(activeSession.id, text),
+                      onChange: (text) => {
+                        setFirstSend(null);
+                        updateMessage(activeSession.id, text);
+                      },
                       onSave: async () => {
                         const submitted = message;
                         const thread = activeSession.id;
@@ -540,32 +563,96 @@ function LocalAgentEditor({
                 )}
               </>
             ) : (
-              <div className="chat-empty">
-                <h3>
-                  {search
-                    ? uiText("No matching conversations")
-                    : uiText("Start a conversation")}
-                </h3>
-                <button
-                  className="primary"
-                  disabled={agents.busy}
-                  onClick={() => {
-                    void agents
-                      .change({
+              <div className="chat-thread">
+                <form
+                  className="chat-message-form"
+                  onSubmit={submit(async () => {
+                    if (agents.busy || !message.trim()) return;
+                    const submitted = message;
+                    const existing = new Set(v.sessions.map((s) => s.id));
+                    await agents.change(
+                      {
                         action: "session-create",
-                        name: "New conversation",
-                      })
-                      .then((ok) => {
-                        if (ok) {
-                          setSearch("");
-                          setSession("");
-                          setRailOpen(false);
-                        }
-                      });
-                  }}
+                        profileId: v.profileId,
+                        revision: v.revision,
+                        name: t("New conversation"),
+                      },
+                      (created) => {
+                        const thread = created.sessions.find(
+                          (s) =>
+                            s.profileId === v.profileId && !existing.has(s.id),
+                        );
+                        if (!thread) return;
+                        updateMessage(thread.id, submitted);
+                        updateMessage("new", "");
+                        setFirstSend({ sessionId: thread.id, text: submitted });
+                        setSearch("");
+                        setSession(thread.id);
+                        setRailOpen(false);
+                      },
+                    );
+                  })}
                 >
-                  {t("Start chat")}
-                </button>
+                  <label className="chat-input">
+                    <span>{t("Message")}</span>
+                    <textarea
+                      aria-label={t("Message")}
+                      placeholder={t("Message your agent…")}
+                      disabled={agents.busy}
+                      required
+                      maxLength={2000}
+                      value={message}
+                      onChange={(e) => updateMessage("new", e.target.value)}
+                      onKeyDown={(e) => {
+                        if (
+                          e.key === "Enter" &&
+                          !e.shiftKey &&
+                          !e.nativeEvent.isComposing &&
+                          !e.repeat
+                        ) {
+                          e.preventDefault();
+                          e.currentTarget.form?.requestSubmit();
+                        }
+                      }}
+                    />
+                  </label>
+                  <div className="chat-composer-toolbar">
+                    <details className="reply-model-menu">
+                      <summary
+                        aria-label={t("Reply model")}
+                        title={previewModel(profile.model, t) || t("No AI")}
+                      >
+                        {previewModel(profile.model, t) || t("No AI")}
+                      </summary>
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={() => navigate("agents/settings")}
+                      >
+                        {t("Agents")}
+                      </button>
+                    </details>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label={t("Providers")}
+                      title={t("Providers")}
+                      onClick={() => setProvidersOpen(true)}
+                    >
+                      <Plug size={16} aria-hidden="true" />
+                    </button>
+                  </div>
+                  <div className="composer-actions">
+                    <button
+                      className="primary composer-submit"
+                      aria-label={t("Send")}
+                      title={t("Send")}
+                      disabled={agents.busy || !message.trim()}
+                    >
+                      <ArrowUp size={20} aria-hidden="true" />
+                    </button>
+                  </div>
+                </form>
               </div>
             )}
           </div>
@@ -742,7 +829,7 @@ function LocalAgentEditor({
                 setMemoryOpen(true);
               }}
             >
-              {t("Add fact")}
+              {t("Remember")}
             </button>
           </div>
           <div className="agent-record-body memory-workspace">
@@ -783,8 +870,8 @@ function LocalAgentEditor({
                   memoryRestore
                     ? t("Restore a memory")
                     : memoryID
-                      ? t("Correct a memory")
-                      : t("Add fact")
+                      ? t("Edit")
+                      : t("Remember")
                 }
                 onClose={resetMemory}
               >
@@ -847,11 +934,11 @@ function LocalAgentEditor({
                       >
                         <h4>{uiText("Recorded source")}</h4>
                         <p>
-                          {
+                          {uiText(
                             memoryEvidenceStatuses[
                               memoryRestore.evidence.status
-                            ]
-                          }
+                            ],
+                          )}
                         </p>
                         {memoryRestore.evidence.text && (
                           <blockquote>{memoryRestore.evidence.text}</blockquote>
@@ -867,9 +954,9 @@ function LocalAgentEditor({
                     </section>
                   )}
                   <label>
-                    {t("Fact")}
+                    {t("Note")}
                     <textarea
-                      aria-label={t("Fact")}
+                      aria-label={t("Note")}
                       required
                       maxLength={4000}
                       value={memory}

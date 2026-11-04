@@ -545,50 +545,70 @@
   min-height: 26px;
 }
 .wt .chat-message-form {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   flex-shrink: 0;
-  gap: 7px;
-  padding: 10px 16px 12px;
-  background: var(--wt-surface);
-  border-top: 1px solid var(--line);
-  max-height: 65%;
-  overflow-y: auto;
+  gap: 6px 8px;
+  margin: 10px 16px 14px;
+  padding: 10px;
+  background: var(--wt-bg);
+  border: 1px solid var(--wt-border);
+  border-radius: 16px;
+  min-width: 0;
 }
-.wt .chat-message-form > label {
+.wt .chat-message-form:focus-within {
+  border-color: var(--wt-muted);
+}
+.wt .chat-message-form > :is(label, fieldset, .reply-unavailable) {
   grid-column: 1 / -1;
-  font-size: 11px;
-  color: var(--wt-muted);
+  min-width: 0;
+  margin: 0;
 }
 .wt .chat-message-form textarea {
-  min-height: 62px;
+  display: block;
+  min-height: 54px;
   max-height: 150px;
-  resize: vertical;
+  resize: none;
+  field-sizing: content;
   width: 100%;
+  padding: 4px 6px;
+  border: 0;
+  outline: 0;
+  box-shadow: none;
+  background: transparent;
+  font-size: 14px;
+  line-height: 1.5;
 }
 .wt .composer-actions {
   grid-column: 2;
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  gap: 8px;
 }
-.wt .composer-actions > .primary {
+.wt .composer-actions > .composer-submit {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
   background: var(--wt-coral);
   color: var(--wt-bg);
-  padding: 7px 22px;
-  min-width: 88px;
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
 }
 .wt .chat-composer-toolbar {
-  display: grid;
-  grid-column: 1 / -1;
-  grid-template-columns: minmax(0, 240px) minmax(0, 240px) 30px;
+  display: flex;
+  grid-column: 1;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
+  min-width: 0;
 }
 .wt .chat-composer-toolbar label {
   display: block;
-  flex: 1 1 140px;
   min-width: 0;
 }
 .wt .chat-composer-toolbar label > span,
@@ -605,8 +625,17 @@
   min-height: 32px;
   font-size: 12px;
 }
-.wt .chat-composer-toolbar button {
-  margin-left: auto;
+.wt .chat-composer-toolbar > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  background: transparent;
+  border: 0;
   font-size: 12px;
 }
 .wt .reply-review-title {
@@ -1105,7 +1134,8 @@
     font-size: 12px;
   }
   .wt .chat-message-form {
-    padding: 8px 10px;
+    margin: 8px;
+    padding: 8px;
   }
   .wt .composer-actions button {
     font-size: 11px;

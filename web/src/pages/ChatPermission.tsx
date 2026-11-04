@@ -64,19 +64,7 @@ export function ChatPermissionReview({
             <>
               <div>
                 <dt>{t("Usage")}</dt>
-                <dd>
-                  {t(
-                    policy?.model === "gemma4:cloud"
-                      ? "Ollama Cloud"
-                      : policy?.provider === "local"
-                        ? "Local"
-                        : policy?.provider === "ollama-cloud"
-                          ? "Ollama Cloud"
-                          : policy?.provider === "kimi-code"
-                            ? "Kimi Code"
-                            : "ChatGPT",
-                  )}
-                </dd>
+                <dd>{providerName}</dd>
               </div>
               <div>
                 <dt>{t("App limits")}</dt>

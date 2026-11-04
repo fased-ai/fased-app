@@ -528,6 +528,37 @@
     min-height: 44px;
   }
 }
+/* Chat fills the available viewport, including wrapped mobile navigation. */
+.wt .workspace-shell:has(.agent-page:not([hidden]) .agent-chat) {
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+.wt .shell-body:has(.agent-page:not([hidden]) .agent-chat),
+.wt .main-content:has(.agent-page:not([hidden]) .agent-chat),
+.wt .agent-page:not([hidden]):has(.agent-chat),
+.wt .local-agents:has(> .agent-chat) {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.wt .agent-page:not([hidden]):has(.agent-chat) > .section-head {
+  flex-shrink: 0;
+}
+.wt .local-agents > .agent-chat {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+.wt .workspace-shell:has(.agent-page:not([hidden]) .agent-chat) .shell-rail {
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+}
+.wt .chat-thread > .chat-message-form {
+  margin-top: auto;
+}
 /* Connected agent controls share the compact Meteora toolbar. */
 .wt .shell-demo {
   color: var(--wt-muted);
@@ -540,10 +571,22 @@
   position: relative;
 }
 .wt .chat-composer-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 7px;
   min-width: 0;
+}
+.wt .chat-composer-toolbar > .reply-model-menu {
+  flex: 0 1 auto;
+  max-width: min(280px, calc(100% - 108px));
+}
+.wt .chat-composer-toolbar > .reply-model-menu > summary {
+  display: block;
+  line-height: 22px;
+  max-width: 100%;
+}
+.wt .chat-composer-toolbar > .message-options > summary {
+  width: 32px;
+  min-height: 32px;
+  justify-content: center;
+  padding: 0;
 }
 .wt .reply-model-menu,
 .wt .message-options {
@@ -596,12 +639,22 @@
   width: 100%;
   margin-top: 5px;
 }
+.wt .chat-workspace {
+  container-type: size;
+}
+.wt .chat-composer-toolbar > .message-options,
 .wt .chat-composer-toolbar > .message-options[open] {
+  position: static;
+  display: block;
+  flex: 0 0 32px;
+}
+.wt .message-options-panel {
   position: absolute;
+  z-index: 30;
   bottom: 44px;
   right: 8px;
   width: min(480px, calc(100% - 16px));
-  max-height: min(65dvh, 540px);
+  max-height: min(55dvh, calc(100cqh - 52px));
   overflow: auto;
   background: var(--wt-raised);
   border: 1px solid var(--wt-border);
@@ -609,8 +662,14 @@
   box-shadow: 0 8px 30px var(--shell-shadow);
   padding: 10px;
 }
-.wt .chat-composer-toolbar > .message-options[open] > summary {
-  margin-left: auto;
+.wt .composer-context {
+  grid-column: 1 / -1;
+  min-width: 0;
+  max-height: min(25dvh, 18cqh);
+  overflow: auto;
+}
+.wt .composer-context > summary {
+  font-size: 12px;
 }
 .wt .reply-unavailable {
   display: flex;
