@@ -8,6 +8,8 @@ import (
 // ApplicationReaderBootstrapRequest is constructed by the independently
 // authenticated owner release driver, never a browser or source/path override.
 // Its predecessor receipt comes from the original core's protected pause API.
+// Version4 admits the current Remote format without migration. It retains the
+// existing forward-only recovery contract, not same-schema rollback authority.
 type ApplicationReaderBootstrapRequest struct {
 	Version              int                     `json:"version"`
 	OperationID          string                  `json:"operationId"`
@@ -39,9 +41,25 @@ func ApplicationReaderRequestVersion(schema int) (int, error) {
 		return 2, nil
 	case 36:
 		return 3, nil
+	case RemoteOwnerStateSchema:
+		// A current Remote owner is admitted without migrating or recreating
+		// its identity tables. Old request versions must never adopt this state.
+		return 4, nil
 	default:
 		return 0, errors.New("unsupported installed reader schema")
 	}
+}
+
+// ApplicationReaderTargetSchema describes the exact handoff, not a permissive
+// schema range. The old migrations end at36; enrolled Remote stays at38.
+func ApplicationReaderTargetSchema(source int) (int, error) {
+	if _, err := ApplicationReaderRequestVersion(source); err != nil {
+		return 0, err
+	}
+	if source == RemoteOwnerStateSchema {
+		return RemoteOwnerStateSchema, nil
+	}
+	return StateSchema, nil
 }
 
 func (r ApplicationReaderBootstrapRequest) validIntent() bool {

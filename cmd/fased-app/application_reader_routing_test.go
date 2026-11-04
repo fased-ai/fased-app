@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -108,9 +109,16 @@ func TestRemoteApplicationOrdinaryRollbackDoesNotProbeReaderHelper(t *testing.T)
 }
 
 func TestCurrentRemoteReaderRequiresPublicUpdaterHandoff(t *testing.T) {
+	for _, schema := range []int{core.StateSchema, core.RemoteOwnerStateSchema} {
+		t.Run(fmt.Sprint(schema), func(t *testing.T) { currentRemoteReaderRouting(t, schema) })
+	}
+}
+
+func currentRemoteReaderRouting(t *testing.T, schema int) {
+	t.Helper()
 	id := update.NewProbe()
-	snapshot := update.CoreSnapshot{InstanceID: "existing", State: update.State{Version: core.StateSchema}}
-	view := core.ApplicationUpdateView{Version: 1, Schema: core.StateSchema, InstanceID: "existing", Operation: core.ApplicationUpdateOperation{Phase: "idle"}}
+	snapshot := update.CoreSnapshot{InstanceID: "existing", State: update.State{Version: schema}}
+	view := core.ApplicationUpdateView{Version: 1, Schema: schema, InstanceID: "existing", Operation: core.ApplicationUpdateOperation{Phase: "idle"}}
 	required, err := currentReaderNeedsBootstrap(snapshot, view, id, true)
 	if err != nil || !required {
 		t.Fatal("same schema without public updater skipped handoff", required, err)
@@ -144,5 +152,10 @@ func TestCurrentRemoteReaderRequiresPublicUpdaterHandoff(t *testing.T) {
 	view.InstanceID = "foreign"
 	if _, err = currentReaderNeedsBootstrap(snapshot, view, id, true); err == nil {
 		t.Fatal("foreign workspace adopted")
+	}
+	view.InstanceID = snapshot.InstanceID
+	view.Schema++
+	if _, err = currentReaderNeedsBootstrap(snapshot, view, id, true); err == nil {
+		t.Fatal("mismatched reader status accepted")
 	}
 }
