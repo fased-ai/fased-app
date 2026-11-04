@@ -101,11 +101,14 @@ func (c *remoteApplicationOwner) call(ctx context.Context, action string, p *cor
 	return v, e
 }
 func maintainRemoteUpdate(ctx context.Context, m vpsinstall.Manifest, id string, rollback bool, source func(context.Context, core.ApplicationRelease, string) (*bootstrap.Prepared, error), out io.Writer) error {
-	return maintainRemoteUpdateWithSystem(ctx, m, id, rollback, source, out, &custodyinstall.System{In: os.Stdin, Out: os.Stderr, NonInteractive: true})
+	return maintainRemoteUpdateWithSystem(ctx, m, id, rollback, source, out, &custodyinstall.System{In: os.Stdin, Out: os.Stderr, NonInteractive: true}, true)
 }
-func maintainRemoteUpdateWithSystem(ctx context.Context, m vpsinstall.Manifest, id string, rollback bool, source func(context.Context, core.ApplicationRelease, string) (*bootstrap.Prepared, error), out io.Writer, system *custodyinstall.System) error {
+func maintainRemoteUpdateWithSystem(ctx context.Context, m vpsinstall.Manifest, id string, rollback bool, source func(context.Context, core.ApplicationRelease, string) (*bootstrap.Prepared, error), out io.Writer, system *custodyinstall.System, bootstrapSourceSession bool) error {
 	status, statusErr := vpsinstall.ApplicationUpdateState(m.OwnerUID)
-	if statusErr != nil || status.ID != id {
+	// Only an explicit verified bootstrap may stage a newer source helper.
+	// The installed actor uses its existing fixed AppUID helper and grants;
+	// the installed reader renews its own session without setup privileges.
+	if bootstrapSourceSession && (statusErr != nil || status.ID != id) {
 		if err := prepareRemoteSourceSession(ctx, m, system); err != nil {
 			return err
 		}
