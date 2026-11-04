@@ -91,7 +91,7 @@ jobs:
           test "${#fased_other_packages[@]}" -gt 0
           go test -race -p 1 "${fased_other_packages[@]}"
           go test -race -p 1 ./internal/core -skip '^Test(SwapRecovery|VenueCredential|.*WEN)'
-          go test -race -p 1 ./internal/core -run '^Test(SwapRecovery|VenueCredential|.*WEN)'
+          # The exact complementary partition is required in core-scenarios.
       - if: needs.classify.outputs.scope == 'rpc'
         run: go test -race ./internal/core -run 'Test(RPC|AccountRPC|PublicRPC|ProviderRPC)'
       - run: npm run build:core
@@ -151,6 +151,25 @@ jobs:
             .evidence/browser/
             .evidence/core-browser/
           retention-days: 7
+  core-scenarios:
+    needs: classify
+    if: needs.classify.outputs.scope == 'full'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - run: npm run build
+      - name: Complementary core race scenarios
+        run: go test -race -p 1 ./internal/core -run '^Test(SwapRecovery|VenueCredential|.*WEN)'
   desktop:
     needs: classify
     if: needs.classify.outputs.desktop == 'true'
@@ -531,6 +550,7 @@ jobs:
         documentation,
         classify,
         core,
+        core-scenarios,
         desktop,
         signer,
         handoff,

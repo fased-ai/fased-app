@@ -44,13 +44,17 @@ test("Ubuntu acceptance executes Remote maintenance and the actual older reader"
   );
 });
 
-test("full race groups retain every package and require delegated update coverage", async () => {
+test("full race groups retain every package and require parallel scenarios and delegated update coverage", async () => {
   const workflow = await readFile(
     new URL("../.github/workflows/checks.yml", import.meta.url),
     "utf8",
   );
   const core = workflow.slice(
     workflow.indexOf("  core:\n"),
+    workflow.indexOf("  core-scenarios:\n"),
+  );
+  const scenarios = workflow.slice(
+    workflow.indexOf("  core-scenarios:\n"),
     workflow.indexOf("  desktop:\n"),
   );
   const handoff = workflow.slice(
@@ -91,7 +95,7 @@ test("full race groups retain every package and require delegated update coverag
   const skip = core.match(
     /go test -race -p 1 \.\/internal\/core -skip '([^']+)'/,
   );
-  const run = core.match(
+  const run = scenarios.match(
     /go test -race -p 1 \.\/internal\/core -run '([^']+)'/,
   );
   assert.ok(
@@ -103,11 +107,63 @@ test("full race groups retain every package and require delegated update coverag
     run[1],
     "skip/run expressions must cover disjoint exhaustive groups",
   );
+  assert.equal(run[1], "^Test(SwapRecovery|VenueCredential|.*WEN)");
+  assert.equal(
+    workflow.split(
+      "go test -race -p 1 ./internal/core -run '^Test(SwapRecovery|VenueCredential|.*WEN)'",
+    ).length - 1,
+    1,
+    "the complementary partition must execute exactly once",
+  );
+  assert.doesNotMatch(
+    core,
+    /go test -race -p 1 \.\/internal\/core -run '\^Test\(SwapRecovery/,
+  );
+  assert.match(
+    scenarios,
+    /needs: classify\n\s+if: needs.classify.outputs.scope == 'full'/,
+  );
+  assert.match(scenarios, /runs-on: ubuntu-24\.04\n\s+timeout-minutes: 10/);
+  for (const prerequisite of [
+    "actions/checkout@v4",
+    "actions/setup-node@v4",
+    'node-version: "24"',
+    "npm ci",
+    "actions/setup-go@v5",
+    'go-version: "1.26.x"',
+    "npm run build",
+  ])
+    assert.ok(
+      scenarios.includes(prerequisite),
+      `retain scenario prerequisite: ${prerequisite}`,
+    );
+  const aggregate = workflow.slice(workflow.indexOf("  prototype:\n"));
+  assert.match(aggregate, /\n\s+core-scenarios,/);
   assert.match(
     handoff,
     /name: Update unit race coverage\n\s+if: needs.classify.outputs.scope == 'full'\n\s+run: go test -race -p 1 \.\/internal\/update/,
   );
   assert.match(core, /timeout-minutes: 20/);
+  for (const [job, minutes] of Object.entries({
+    documentation: 3,
+    core: 20,
+    "core-scenarios": 10,
+    desktop: 15,
+    signer: 5,
+    handoff: 5,
+    "handoff-uid": 5,
+    "inspection-installed": 10,
+  })) {
+    const body = workflow.match(
+      new RegExp(`^  ${job}:\\n[\\s\\S]*?(?=^  [a-z-]+:|$(?![\\s\\S]))`, "m"),
+    )?.[0];
+    assert.ok(body, `required job exists: ${job}`);
+    assert.match(
+      body,
+      new RegExp(`timeout-minutes: ${minutes}(?:\\n|$)`),
+      `fixed job budget: ${job}`,
+    );
+  }
   for (const path of [
     "cmd/fased-app/host.go",
     "internal/core/onchain.go",
@@ -126,6 +182,7 @@ test("full race groups retain every package and require delegated update coverag
     };
     for (const name of [
       "core",
+      "core-scenarios",
       "desktop",
       "signer",
       "handoff",
