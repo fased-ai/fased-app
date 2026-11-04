@@ -95,8 +95,11 @@ func sessionBridgeImage(o hostOps, path, digest string) error {
 	})
 }
 func ValidateSourceSessionHelper(config, image, record string, uid int) (Manifest, error) {
+	return validateSourceSessionHelper(config, image, record, uid, liveOps(nil))
+}
+
+func validateSourceSessionHelper(config, image, record string, uid int, o hostOps) (Manifest, error) {
 	var empty Manifest
-	o := liveOps(nil)
 	data, err := rootFile(o, record)
 	if err != nil {
 		return empty, err
@@ -105,12 +108,15 @@ func ValidateSourceSessionHelper(config, image, record string, uid int) (Manifes
 	if strict(data.Data, &binding) != nil || !sessionBindingMatches(binding, config, image, uid) || record != filepath.Join(filepath.Dir(image), "binding.json") {
 		return empty, errors.New("fixed Remote source-session helper required")
 	}
-	m, err := ValidateApplicationOwnerHelper(config, binding.Installation.Core, uid)
+	m, err := validateApplicationHelperIdentity(config, image, uid, o)
 	if err != nil {
 		return empty, err
 	}
 	if hash(encoded(m)) != hash(encoded(binding.Installation)) {
 		return empty, errors.New("Remote source identity changed")
+	}
+	if err = verifyFiles(o, m); err != nil {
+		return empty, err
 	}
 	if err = sessionBridgeImage(o, image, binding.HelperSHA256); err != nil {
 		return empty, err
