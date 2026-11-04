@@ -92,7 +92,7 @@ func maintainUpdateCommand(args []string, out, errOut io.Writer) error {
 			if err = vpsinstall.ValidateApplicationMaintenanceEntry(m, image); err != nil {
 				return err
 			}
-			return maintainRemoteUpdateWithSystem(ctx, m, *id, *rollback, source, out, &custodyinstall.System{NonInteractive: true, Out: errOut})
+			return maintainRemoteUpdateWithSystem(ctx, m, *id, *rollback, source, out, &custodyinstall.System{NonInteractive: true, Out: errOut}, false)
 		}
 		return maintainRemoteUpdate(ctx, m, *id, *rollback, source, out)
 	}

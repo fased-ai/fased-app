@@ -30,6 +30,8 @@ The local listener stays on loopback. The browser session is authorized by the l
 5. Before closing public access, verify private access, a private administrator/recovery route and an independent provider console or rescue path. Setup stages the network change with automatic rollback if confirmation fails.
 6. After verification, setup closes public SSH/web/application access, saves the firewall policy and finishes. Close the bootstrap connection. Fased starts at reboot and works without an SSH session, forwarding tunnel or open browser.
 
+Approve only devices you control. Remote access trusts the approved device, not a separate browser password. In **Settings → Devices**, use **Add device** to create a one-use link for another device on the same Tailscale account; **Remove** revokes that device and its saved sessions.
+
 Tailscale is separate OS software on the VPS and your accessing device. Fased guides enrollment but cannot silently sign in another device. Other VPNs can interfere with setup; resolve conflicting routing before accepting private access. See [Tailscale setup](https://tailscale.com/docs/how-to/quickstart).
 
 ## Accounts and ports

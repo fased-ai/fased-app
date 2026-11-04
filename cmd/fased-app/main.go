@@ -39,8 +39,11 @@ func main() {
 	}
 }
 func run(args []string, in *os.File, out, errOut io.Writer) error {
+	if len(args) > 0 && args[0] == "reader-session-client" {
+		return readerSessionClient(args[1:], out)
+	}
 	if len(args) > 0 && args[0] == "remote-setup-link" {
-		return remoteOwnerSetupLink(args[1:], out)
+		return remoteOwnerSetupLink(args[1:], in, out)
 	}
 	if len(args) > 0 && args[0] == "install-command" {
 		return installedCommandCommand(args[1:], out, errOut)

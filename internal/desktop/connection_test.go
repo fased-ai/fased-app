@@ -6,17 +6,23 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
-func TestRemoteConnectionDoesNotRequireOrStartLocalEngine(t *testing.T) {
+func TestConnectionDoesNotStartLocalEngineAndRefusesRemoteTunnel(t *testing.T) {
 	id := strings.Repeat("x", 43)
+	var remote atomic.Bool
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/health" || r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" {
 			t.Fatal("unexpected probe")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(core.Health{Status: "ok", APIVersion: "1", InstanceID: id, Connection: &core.ConnectionInfo{Location: "remote", Transport: "loopback"}})
+		location := "local"
+		if remote.Load() {
+			location = "remote"
+		}
+		json.NewEncoder(w).Encode(core.Health{Status: "ok", APIVersion: "1", InstanceID: id, Connection: &core.ConnectionInfo{Location: location, Transport: "loopback"}})
 	}))
 	defer target.Close()
 	h := NewHandler("/nonexistent/fased-fixture-no-local-engine", nil)
@@ -42,6 +48,11 @@ func TestRemoteConnectionDoesNotRequireOrStartLocalEngine(t *testing.T) {
 	w := request("http://wails.localhost", string(body))
 	if w.Code != 200 || opened != 1 || !strings.Contains(w.Body.String(), `"installationCreated":false`) {
 		t.Fatal(w.Code, w.Body.String(), opened)
+	}
+	remote.Store(true)
+	w = request("http://wails.localhost", string(body))
+	if w.Code != 400 || opened != 1 || !strings.Contains(w.Body.String(), "Tailscale HTTPS") {
+		t.Fatal("native Remote tunnel opened", w.Code, w.Body.String(), opened)
 	}
 	w = request("https://evil.invalid", string(body))
 	if w.Code != 403 || opened != 1 {

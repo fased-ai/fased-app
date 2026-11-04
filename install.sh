@@ -125,7 +125,9 @@ if [[ $(/usr/bin/id -u) != 0 ]]; then
   [[ -z $operator ]] || die '--operator is only for the root bootstrap.'
   [[ -x /usr/bin/sudo ]] || die 'This account needs administrator preparation (sudo).'
   missing=()
-  for package in ca-certificates curl; do
+  packages=(ca-certificates curl)
+  if [[ $profile == remote ]]; then packages+=(nftables openssh-server); fi
+  for package in "${packages[@]}"; do
     [[ $(/usr/bin/dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true) == 'install ok installed' ]] || missing+=("$package")
   done
   if ((${#missing[@]})); then
@@ -141,7 +143,9 @@ fi
 # Only fixed Ubuntu utilities run here. Never execute downloaded/project Go as root.
 printf 'Preparing Ubuntu for Fased…\n' >&2
 missing=()
-for package in ca-certificates curl sudo util-linux; do
+packages=(ca-certificates curl sudo util-linux)
+if [[ $profile == remote ]]; then packages+=(nftables openssh-server); fi
+for package in "${packages[@]}"; do
   [[ $(/usr/bin/dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true) == 'install ok installed' ]] || missing+=("$package")
 done
 if ((${#missing[@]})); then
@@ -226,7 +230,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 expires=$(/usr/bin/date -u -d '+45 minutes' '+%Y%m%d%H%M%SZ')
 printf '# Fased temporary bootstrap OS administration; no app runtime rights.\nDefaults:%s verifypw=never\n' "$operator" > "$stage/authorization"
-for command in /usr/bin/true /usr/bin/apt-get /usr/bin/cat /usr/bin/cmp /usr/bin/find /usr/bin/flock /usr/bin/getent /usr/bin/id /usr/bin/install /usr/bin/ln /usr/bin/mkdir /usr/bin/mv /usr/bin/passwd /usr/bin/pkcheck /usr/bin/rm /usr/bin/setpriv /usr/bin/stat /usr/bin/sync /usr/bin/systemctl /usr/bin/tailscale /usr/sbin/apparmor_parser /usr/sbin/useradd; do
+for command in /usr/bin/true /usr/bin/apt-get /usr/bin/cat /usr/bin/cmp /usr/bin/find /usr/bin/flock /usr/bin/getent /usr/bin/id /usr/bin/install /usr/bin/ln /usr/bin/mkdir /usr/bin/mv /usr/bin/passwd /usr/bin/pkcheck /usr/bin/rm /usr/bin/setpriv /usr/bin/stat /usr/bin/sync /usr/bin/systemctl /usr/bin/tailscale /usr/sbin/apparmor_parser /usr/sbin/useradd /usr/sbin/nft /usr/sbin/sshd; do
   printf '%s ALL=(root) NOTAFTER=%s NOPASSWD: %s\n' "$operator" "$expires" "$command" >> "$stage/authorization"
 done
 /usr/bin/chmod 0440 "$stage/authorization"
@@ -240,8 +244,15 @@ if [[ $profile == local ]]; then
   runtime="/run/user/$owner_uid"
   [[ -d $runtime && ! -L $runtime && $(/usr/bin/stat -c '%u:%a' "$runtime") == "$owner_uid:700" ]] || die 'Sign in to the ordinary Local desktop account and retry.'
 else runtime=''; fi
+# Offer one explicitly approved bootstrap public key, never a copied key list.
+# The unprivileged wizard confirms it and writes only its own recovery account.
+recovery_key=''
+if [[ $profile == remote && $action == install && $ssh_user == root && -f /root/.ssh/authorized_keys && ! -L /root/.ssh/authorized_keys ]]; then
+  mapfile -t recovery_candidates < <(/usr/bin/awk '($1 == "ssh-ed25519" || $1 == "ssh-rsa" || $1 ~ /^ecdsa-sha2-nistp(256|384|521)$/) && NF >= 2 { print $1 " " $2 }' /root/.ssh/authorized_keys)
+  if [[ ${#recovery_candidates[@]} == 1 ]]; then recovery_key=${recovery_candidates[0]}; fi
+fi
 body="$(declare -f die owner_install); owner_install"
-/usr/sbin/runuser -u "$operator" -- /usr/bin/env -i HOME="$owner_home" USER="$operator" LOGNAME="$operator" PATH=/usr/sbin:/usr/bin:/sbin:/bin SSH_CONNECTION="${SSH_CONNECTION:-}" FASED_INSTALL_SSH_USER="$ssh_user" FASED_INSTALL_ROOT_ENTRY=1 action="$action" entry_version="$entry_version" installer_url="$installer_url" installer_sha256="$installer_sha256" seed_base64="$seed_base64" seed_sha256="$seed_sha256" fixture_ca_base64="$fixture_ca_base64" development_only="$development_only" listen="$listen" profile="$profile" XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="${runtime:+unix:path=$runtime/bus}" /bin/bash -c "$body" <&3
+/usr/sbin/runuser -u "$operator" -- /usr/bin/env -i HOME="$owner_home" USER="$operator" LOGNAME="$operator" PATH=/usr/sbin:/usr/bin:/sbin:/bin SSH_CONNECTION="${SSH_CONNECTION:-}" FASED_INSTALL_SSH_USER="$ssh_user" FASED_INSTALL_ROOT_ENTRY=1 FASED_BOOTSTRAP_RECOVERY_KEY="$recovery_key" action="$action" entry_version="$entry_version" installer_url="$installer_url" installer_sha256="$installer_sha256" seed_base64="$seed_base64" seed_sha256="$seed_sha256" fixture_ca_base64="$fixture_ca_base64" development_only="$development_only" listen="$listen" profile="$profile" XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="${runtime:+unix:path=$runtime/bus}" /bin/bash -c "$body" <&3
 
 # The root-owned command contains only fixed OS identity/drop operations. All
 # Fased/user-owned code starts AFTER runuser; updates still use the installed

@@ -37,6 +37,7 @@ type snapshotReader interface {
 func (s *Store) snapshotTx(ctx context.Context, tx snapshotReader, probe string) (update.CoreSnapshot, error) {
 	var e error
 	var v struct {
+		RemoteOwner                     string `json:",omitempty"`
 		History                         string
 		Schema                          int
 		Instance, Setup, Accounts       string
@@ -69,10 +70,14 @@ func (s *Store) snapshotTx(ctx context.Context, tx snapshotReader, probe string)
 	if e != nil {
 		return update.CoreSnapshot{}, e
 	}
+	v.RemoteOwner, e = remoteOwnerSnapshot(ctx, tx, v.Schema)
+	if e != nil {
+		return update.CoreSnapshot{}, e
+	}
 	contract := UpdateContract()
 	features := make([]string, 0, len(contract.State[0].Features))
 	for _, feature := range contract.State[0].Features {
-		if v.Schema == StateSchema && feature == localOwnerFeature {
+		if (v.Schema < RemoteOwnerStateSchema && feature == remoteOwnerFeature) || (v.Schema == StateSchema && feature == localOwnerFeature) {
 			continue
 		}
 		features = append(features, feature)

@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/vpsinstall"
 	"io"
@@ -41,19 +40,16 @@ func completeInstalledEntry(profile string, in io.Reader, out, errOut io.Writer)
 	return c.Run()
 }
 
-// Reuse the installed reader's original terminal authentication. The verifier
-// never reads its password or exports a cookie, including locked Remote owners.
+// Local predecessors retain their original terminal authentication. Remote
+// authority comes from the verified current bootstrap's fixed dropped-AppUID
+// bridge, before old-reader inventory; never invoke the old password login.
 func signInForEntryUpgrade(ctx context.Context, profile string, in io.Reader, out, errOut io.Writer) error {
+	if profile == "remote" {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
 	fmt.Fprintln(errOut, "Sign in to update this workspace.")
-	if profile == "remote" {
-		m, e := vpsinstall.Load(os.Getuid())
-		if e != nil {
-			return e
-		}
-		return vpsinstall.ApplicationReaderSignIn(ctx, m, &custodyinstall.System{In: in, Out: errOut})
-	}
 	paths, e := localinstall.DefaultPaths()
 	if e != nil {
 		return e

@@ -92,7 +92,7 @@ func TestManagedRemoteWizardAndHandoff(t *testing.T) {
 		want  bool
 	}{{"\n", true}, {"bad\nyes\n", true}, {"no\n", false}} {
 		got, err := installationManagedRemote(bufio.NewReader(strings.NewReader(c.input)), io.Discard)
-		if err != nil || got != c.want {
+		if c.want && (err != nil || !got) || !c.want && err == nil {
 			t.Fatal(c, got, err)
 		}
 	}

@@ -81,7 +81,7 @@ if not a.resume:
      content: |
        # Isolated VM only. No shells or project executables may run as root.
        Defaults:ubuntu verifypw=any
-       Cmnd_Alias FASED_FIXTURE_OS = /usr/bin/install, /usr/bin/mkdir, /usr/bin/ln, /usr/bin/mv, /usr/bin/sync, /usr/bin/rm, /usr/bin/cat, /usr/bin/systemctl, /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/apparmor_parser, /usr/sbin/nft, /usr/sbin/sshd, /usr/bin/cmp
+       Cmnd_Alias FASED_FIXTURE_OS = /usr/bin/install, /usr/bin/mkdir, /usr/bin/ln, /usr/bin/mv, /usr/bin/sync, /usr/bin/rm, /usr/bin/cat, /usr/bin/systemctl, /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/apparmor_parser, /usr/sbin/nft, /usr/sbin/sshd, /usr/bin/cmp, /usr/bin/curl
        ubuntu ALL=(root) NOPASSWD: FASED_FIXTURE_OS
        ubuntu ALL=(root) NOPASSWD: /usr/bin/passwd -S fased-vps-1000
        ubuntu ALL=(root) NOPASSWD: /usr/bin/flock --version
@@ -89,6 +89,8 @@ if not a.resume:
        ubuntu ALL=(root) NOPASSWD: /usr/bin/setpriv ^--reuid [1-9][0-9]* --regid [1-9][0-9]* --clear-groups --no-new-privs --inh-caps=-all --ambient-caps=-all --bounding-set=-all -- .*$
  packages: [sudo, python3, bubblewrap, apparmor, apparmor-utils, nftables]
  ''')
+ if a.network_only:
+  (work/'user-data').write_text((work/'user-data').read_text().replace('nftables]','nftables, curl]'))
  if a.staged_package_only:
   data=(work/'user-data').read_text()
   users=''

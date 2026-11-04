@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 	"io/fs"
 	"log"
 	"net"
@@ -18,6 +19,8 @@ type Server struct {
 	Listener     net.Listener
 	IPC          net.Listener
 	IPCServer    *http.Server
+	Remote       net.Listener
+	RemoteHTTP   *http.Server
 	Lock         *InstanceLock
 	URL          string
 	agentFixture bool
@@ -186,9 +189,12 @@ func (s *Server) startAgentTasks() {
 	}()
 }
 func (s *Server) Serve() error {
-	errorsC := make(chan error, 2)
+	errorsC := make(chan error, 3)
 	go func() { errorsC <- s.HTTP.Serve(s.Listener) }()
 	go func() { errorsC <- s.IPCServer.Serve(s.IPC) }()
+	if s.RemoteHTTP != nil {
+		go func() { errorsC <- s.RemoteHTTP.Serve(s.Remote) }()
+	}
 	err := <-errorsC
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
@@ -201,6 +207,10 @@ func (s *Server) Close(ctx context.Context) error {
 		<-s.taskDone
 	}
 	err := errors.Join(s.HTTP.Shutdown(ctx), s.IPCServer.Shutdown(ctx))
+	if s.RemoteHTTP != nil {
+		err = errors.Join(err, s.RemoteHTTP.Shutdown(ctx))
+		_ = s.RemoteHTTP.Close()
+	}
 	if err != nil {
 		_ = s.HTTP.Close()
 		_ = s.IPCServer.Close()
@@ -231,6 +241,18 @@ func (s *Server) ConfigureConnection(location string, owner ...int) error {
 		return errors.New("dedicated owner identity requires a verified managed profile and a valid UID")
 	}
 	h := s.HTTP.Handler.(*HTTPHandler)
+	if location == "remote" && h.publicHost != "" {
+		if s.RemoteHTTP != nil {
+			return errors.New("Remote ingress is already configured")
+		}
+		listener, err := tailnet.Listen(s.dir)
+		if err != nil {
+			return err
+		}
+		s.Remote = listener
+		h.remoteIngress = true
+		s.RemoteHTTP = &http.Server{Handler: h.remoteProxy(tailnet.WhoIs), ConnContext: tailnet.ConnContext, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
+	}
 	h.instanceLocation, h.instanceOwnerUID = location, uid
 	h.instanceOwnerKind = ""
 	if uid > 0 && s.Store != nil && s.Store.fixture != nil && s.Store.custodyNetwork != "" {

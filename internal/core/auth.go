@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -10,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -33,7 +35,20 @@ func (s *Store) IssueClaimCode(ctx context.Context) (ClaimCode, error) {
 		return ClaimCode{}, err
 	}
 	result := ClaimCode{Code: code, ExpiresAt: s.now().Add(ClaimLifetime)}
-	updated, err := s.db.ExecContext(ctx, "UPDATE instance SET claim_hash=?,claim_expires=? WHERE id=1 AND password_hash IS NULL", tokenHash(code), result.ExpiresAt.Unix())
+	var previous string
+	if err = s.db.QueryRowContext(ctx, "SELECT COALESCE(claim_hash,'') FROM instance WHERE id=1").Scan(&previous); err != nil {
+		return ClaimCode{}, err
+	}
+	prefix := ""
+	if strings.HasPrefix(previous, "remote-v1:") {
+		parts := strings.Split(previous, ":")
+		if len(parts) != 4 {
+			return ClaimCode{}, ErrUnauthorized
+		}
+		prefix = strings.Join(parts[:3], ":") + ":"
+	}
+
+	updated, err := s.db.ExecContext(ctx, "UPDATE instance SET claim_hash=?,claim_expires=? WHERE id=1 AND password_hash IS NULL", prefix+tokenHash(code), result.ExpiresAt.Unix())
 	if err != nil {
 		return ClaimCode{}, err
 	}
@@ -89,7 +104,7 @@ func (s *Store) Login(ctx context.Context, password string) (string, error) {
 	if err := s.db.QueryRowContext(ctx, "SELECT password_salt,password_hash FROM instance WHERE id=1 AND password_hash IS NOT NULL").Scan(&salt, &expected); err != nil {
 		return "", ErrUnauthorized
 	}
-	if localPasswordDisabled(salt) {
+	if localPasswordDisabled(salt) || bytes.Equal(salt, remoteOwnerSalt) {
 		return "", ErrUnauthorized
 	}
 	derived := passwordHash(password, salt)

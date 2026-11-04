@@ -6976,11 +6976,26 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
     .getByRole("button", { name: "Review schedule", exact: true })
     .click();
   await expect(review).toContainText("No task has been created");
+  const beforeNote = (await read()).revision;
+  // Idle refresh runs every five seconds, equal to the assertion budget.
+  // Observe the real updated workspace response before checking its render;
+  // do not race an arbitrary phase of the timer or lengthen the assertion.
+  const workspaceRefreshed = page.waitForResponse(async (response) => {
+    if (
+      response.request().method() !== "GET" ||
+      new URL(response.url()).pathname !== "/api/v1/agents" ||
+      response.status() !== 200
+    )
+      return false;
+    const value = await response.json();
+    return value.profileId === profileId && value.revision > beforeNote;
+  });
   await command({
     action: "memory-put",
     text: "An unrelated owner note",
     source: "owner",
   });
+  await workspaceRefreshed;
   await expect(review).toContainText("Workspace changed or review expired");
   await expect(create).toBeDisabled();
   await review
@@ -10871,7 +10886,7 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
   await expect(activity).not.toContainText("V3 activity reminder");
 });
 
-test("installation connection uses runtime identity and opens Remote without changing Local data", async ({
+test("installation connection rejects Remote tunnels without changing Local data", async ({
   page,
   isMobile,
 }) => {
@@ -10966,7 +10981,6 @@ test("installation connection uses runtime identity and opens Remote without cha
   ]);
   remote.stdout!.on("data", (data) => (remoteOutput += String(data)));
   remote.stderr!.on("data", (data) => (remoteOutput += String(data)));
-  let popup: import("@playwright/test").Page | undefined;
   try {
     await expect
       .poll(() => remoteOutput.includes('"event":"listening"'))
@@ -10980,42 +10994,21 @@ test("installation connection uses runtime identity and opens Remote without cha
     const health = await (
       await page.request.get(remoteURL + "/api/v1/health")
     ).json();
-    const inspected = JSON.parse(
-      (
-        await exec(binary, [
-          "connect",
-          "--url",
-          remoteURL,
-          "--instance-id",
-          health.instanceId,
-          "--print",
-        ])
-      ).stdout,
-    );
-    expect(inspected.installationCreated).toBe(false);
-    expect(inspected.instanceId).toBe(health.instanceId);
-    expect(inspected.location).toBe("remote");
+    await expect(
+      exec(binary, [
+        "connect",
+        "--url",
+        remoteURL,
+        "--instance-id",
+        health.instanceId,
+        "--print",
+      ]),
+    ).rejects.toThrow(/Tailscale HTTPS/);
     await page.getByLabel("Instance URL").fill(remoteURL);
-    const opened = page.context().waitForEvent("page");
+    const pageCount = page.context().pages().length;
     await page.getByRole("button", { name: "Connect", exact: true }).click();
-    popup = await opened;
-    await expect(popup.getByText("Remote", { exact: true })).toBeVisible();
-    await popup.getByText("Instance details", { exact: true }).click();
-    await expect(
-      popup.getByText(health.instanceId, { exact: true }),
-    ).toBeVisible();
-    expect(
-      await popup.evaluate(() =>
-        sessionStorage.getItem("fased.core.session.v1"),
-      ),
-    ).toBeNull();
-    await expect(
-      popup.getByRole("heading", { name: "Claim this workspace", exact: true }),
-    ).toBeVisible();
-    await popup.screenshot({
-      path: `.evidence/installation-remote-${isMobile ? "mobile" : "desktop"}.png`,
-      fullPage: true,
-    });
+    await expect(page.getByRole("alert")).toContainText("Tailscale HTTPS");
+    expect(page.context().pages()).toHaveLength(pageCount);
     const after = await page.evaluate(async () => {
       const headers = {
         Authorization:
@@ -11039,7 +11032,6 @@ test("installation connection uses runtime identity and opens Remote without cha
     ])
       expect(health.capabilities[name]).toBe(false);
   } finally {
-    await popup?.close();
     if (remote.exitCode === null) {
       const done = once(remote, "exit");
       remote.kill("SIGTERM");
@@ -15733,4 +15725,91 @@ for (const method of ["create", "import"] as const) {
       await rm(root, { recursive: true, force: true });
     }
   });
+}
+
+for (const restored of [false, true]) {
+  test(
+    restored
+      ? "Remote restored session stays signed out"
+      : "Remote approved device connects without a password and logout stays final",
+    async ({ page }) => {
+      await exec(binary, ["setup", "--data-dir", dir]);
+      const saved = JSON.parse(
+        await readFile(join(dir, "cli-session.json"), "utf8"),
+      ) as { token: string };
+      const auth = await page.request.get(url + "/api/v1/auth/state", {
+        headers: { Authorization: `Bearer ${saved.token}` },
+      });
+      const state = (await auth.json()) as { csrfToken: string };
+      let signedIn = restored,
+        connections = 0;
+      await page.route("**/api/v1/health", async (route) => {
+        const response = await route.fetch();
+        const health = await response.json();
+        await route.fulfill({
+          json: {
+            ...health,
+            connection: { location: "remote", transport: "private-https" },
+          },
+        });
+      });
+      await page.route("**/api/v1/auth/state", async (route) => {
+        await route.fulfill({
+          json: {
+            claimed: true,
+            authenticated:
+              signedIn &&
+              route.request().headers().authorization ===
+                `Bearer ${saved.token}`,
+            csrfToken: state.csrfToken,
+            remoteAccess: true,
+            remoteEnrolled: true,
+          },
+        });
+      });
+      await page.route("**/api/v1/auth/remote", async (route) => {
+        expect(route.request().method()).toBe("POST");
+        expect(route.request().postDataJSON()).not.toHaveProperty("password");
+        connections++;
+        signedIn = true;
+        await route.fulfill({
+          json: {
+            authenticated: true,
+            csrfToken: state.csrfToken,
+            sessionToken: saved.token,
+            sessionMode: "bearer",
+          },
+        });
+      });
+      await page.route("**/api/v1/auth/logout", async (route) => {
+        signedIn = false;
+        await route.fulfill({ json: { authenticated: false } });
+      });
+      if (restored)
+        await page.addInitScript(
+          (token) => sessionStorage.setItem("fased.core.session.v1", token),
+          saved.token,
+        );
+      await page.goto(url);
+      await expect(
+        page.getByRole("button", { name: "Sign out", exact: true }),
+      ).toBeVisible();
+      await expect(page.locator('input[type="password"]')).toHaveCount(0);
+      expect(connections).toBe(restored ? 0 : 1);
+      await page.getByRole("button", { name: "Sign out", exact: true }).click();
+      await expect(
+        page.getByRole("heading", { name: "Open Fased", exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Connect", exact: true }),
+      ).toBeVisible();
+      expect(connections).toBe(restored ? 0 : 1);
+      await page.getByRole("button", { name: "Connect", exact: true }).click();
+      await expect(
+        page.getByRole("button", { name: "Sign out", exact: true }),
+      ).toBeVisible();
+      expect(connections).toBe(restored ? 1 : 2);
+      await expect(page.locator('input[type="password"]')).toHaveCount(0);
+    },
+  );
 }

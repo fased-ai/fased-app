@@ -1,3 +1,4 @@
+import { RemoteDevices } from "../components/RemoteDevices";
 import {
   InstanceSummary,
   RemoteConnection,
@@ -44,6 +45,7 @@ export function Settings() {
               </button>
             </div>
           </section>
+          <RemoteDevices />
           {core.mode === "ready" && (
             <button
               className="panel provider-entry"

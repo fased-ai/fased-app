@@ -153,6 +153,25 @@ func TestNetworkUbuntuVM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Actual Unix peer credentials distinguish tailscaled/root from the app UID.
+	// Health is public readiness only; owner access still requires live WhoIs.
+	curl := []string{"/usr/bin/curl", "--silent", "--show-error", "--max-time", "5", "--unix-socket", m.Data + "/tailscale.sock", "--header", "X-Forwarded-Host:controlled.owner.ts.net", "--header", "X-Forwarded-Proto:https", "--header", "X-Forwarded-For:100.90.0.1", "--output", "/dev/null", "--write-out", "%{http_code}", "http://localhost/api/v1/health"}
+	readCode := func(args []string) string {
+		t.Helper()
+		command := exec.CommandContext(ctx, "/usr/bin/sudo", append([]string{"-n", "--"}, args...)...)
+		data, e := command.CombinedOutput()
+		if e != nil {
+			t.Fatal("trusted OS ingress probe", e, string(data))
+		}
+		return string(data)
+	}
+	if code := readCode(curl); code != "200" {
+		t.Fatal("root Serve ingress was not accepted", code)
+	}
+	dropped := []string{"/usr/bin/setpriv", "--reuid", strconv.Itoa(m.AppUID), "--regid", strconv.Itoa(m.AppGID), "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--"}
+	if code := readCode(append(dropped, curl...)); code != "403" {
+		t.Fatal("app UID spoofed Serve", code)
+	}
 	proof := networkAccess{SessionID: "controlled-private-connection-one", PeerIP: "100.90.0.1", ServerIP: "100.90.0.2", SSHPort: 22}
 	// The private test clock makes the calendar deadline arrive in 30 seconds;
 	// production still writes the fixed five-minute policy and has no override.

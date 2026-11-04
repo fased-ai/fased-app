@@ -199,52 +199,37 @@ func TestInstallationHandoffStoppedDoesNotOfferUnreadyUI(t *testing.T) {
 }
 
 func TestInstallationPrivateAccessChoice(t *testing.T) {
-	for _, input := range []string{"\n", "TAILSCALE\n", "invalid\ntailscale\n"} {
-		var out bytes.Buffer
-		mode, err := installationPrivateAccessChoice(bufio.NewReader(strings.NewReader(input)), &out)
+	for _, input := range []string{"\n", "TAILSCALE\n", "yes\n"} {
+		mode, err := installationPrivateAccessChoice(bufio.NewReader(strings.NewReader(input)), io.Discard)
 		if err != nil || mode != "tailscale" {
-			t.Fatal(mode, err, out.String())
+			t.Fatal(mode, err)
 		}
 	}
-	mode, err := installationPrivateAccessChoice(bufio.NewReader(strings.NewReader("SSH\n")), io.Discard)
-	if err != nil || mode != "ssh" {
-		t.Fatal(mode, err)
-	}
-	if _, err := installationPrivateAccessChoice(bufio.NewReader(strings.NewReader("")), io.Discard); err == nil {
-		t.Fatal("EOF selected private access")
+	for _, input := range []string{"SSH\n", "no\n", "invalid\n", ""} {
+		if _, err := installationPrivateAccessChoice(bufio.NewReader(strings.NewReader(input)), io.Discard); err == nil {
+			t.Fatal("decline or SSH accepted", input)
+		}
 	}
 }
-
 func TestInstallationPrivateAccessRecovery(t *testing.T) {
-	for _, tc := range []struct {
-		name, input string
-		succeedsAt  int
-		want        string
-	}{
-		{"explicit SSH fallback", "ssh\n", 0, "ssh"},
-		{"retry prepared Tailscale", "\n", 2, "tailscale"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var out bytes.Buffer
-			var modes []string
-			plan := func(ctx context.Context, mode, listen string) (privateaccess.Plan, error) {
-				if listen != "127.0.0.1:7441" {
-					t.Fatal("listener changed", listen)
-				}
-				modes = append(modes, mode)
-				if mode == "tailscale" && len(modes) != tc.succeedsAt {
-					return privateaccess.Plan{}, errors.New("Tailscale is not enrolled")
-				}
-				return privateaccess.Plan{Mode: mode, Origin: "fixture-origin", Target: "http://" + listen}, nil
-			}
-			got, err := installationPrivateAccess(t.Context(), bufio.NewReader(strings.NewReader(tc.input)), &out, "tailscale", "127.0.0.1:7441", plan)
-			if err != nil || got.Mode != tc.want || len(modes) != 2 || modes[0] != "tailscale" || modes[1] != tc.want {
-				t.Fatal(got, modes, err)
-			}
-			if !strings.Contains(out.String(), "Tailscale is not enrolled") || !strings.Contains(out.String(), "SSH") {
-				t.Fatal("missing actionable recovery", out.String())
-			}
-		})
+	calls := 0
+	planner := func(context.Context, string, string) (privateaccess.Plan, error) {
+		calls++
+		if calls == 1 {
+			return privateaccess.Plan{}, errors.New("Tailscale is not enrolled")
+		}
+		return privateaccess.Plan{Mode: "tailscale"}, nil
+	}
+	got, err := installationPrivateAccess(t.Context(), bufio.NewReader(strings.NewReader("\n")), io.Discard, "tailscale", "127.0.0.1:7441", planner)
+	if err != nil || got.Mode != "tailscale" || calls != 2 {
+		t.Fatal(got, err, calls)
+	}
+	calls = 0
+	if _, err = installationPrivateAccess(t.Context(), bufio.NewReader(strings.NewReader("ssh\n")), io.Discard, "tailscale", "127.0.0.1:7441", planner); err == nil || calls != 1 {
+		t.Fatal("SSH fallback survived", err, calls)
+	}
+	if _, err = installationPrivateAccess(t.Context(), nil, io.Discard, "ssh", "127.0.0.1:7441", planner); err == nil || calls != 1 {
+		t.Fatal("noninteractive bypass survived", err, calls)
 	}
 }
 
@@ -318,7 +303,7 @@ func TestInstallationPrivateAccessRejectsInvalidListenerBeforePrompt(t *testing.
 }
 
 func TestInstallationPrivateAccessGuidesPreparationOnlyForChosenActivity(t *testing.T) {
-	for _, mode := range []string{"local", "ssh", "tailscale"} {
+	for _, mode := range []string{"local", "tailscale"} {
 		t.Run(mode, func(t *testing.T) {
 			prepared := 0
 			planned := 0
@@ -345,7 +330,7 @@ func TestInstallationPrivateAccessGuidesPreparationOnlyForChosenActivity(t *test
 		})
 	}
 }
-func TestInstallationDeclinedTailscaleSetupRequiresExplicitSSH(t *testing.T) {
+func TestInstallationDeclinedTailscaleCannotDeploy(t *testing.T) {
 	prepared := 0
 	planned := 0
 	prepare := func(context.Context, *bufio.Reader, io.Writer) error {
@@ -360,7 +345,7 @@ func TestInstallationDeclinedTailscaleSetupRequiresExplicitSSH(t *testing.T) {
 		return (privateaccess.Manager{}).Plan(ctx, mode, listen)
 	}
 	got, e := installationPrivateAccess(t.Context(), bufio.NewReader(strings.NewReader("ssh\n")), io.Discard, "tailscale", "127.0.0.1:7331", plan, prepare)
-	if e != nil || got.Mode != "ssh" || prepared != 1 || planned != 1 {
+	if e == nil || got.Mode != "" || prepared != 1 || planned != 0 {
 		t.Fatal(got, e, prepared, planned)
 	}
 	ctx, cancel := context.WithCancel(t.Context())

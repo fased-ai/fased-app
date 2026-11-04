@@ -89,7 +89,7 @@ func OpenStore(dir string) (_ *Store, resultErr error) {
 	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&schema); err != nil {
 		return nil, err
 	}
-	if schema > LocalOwnerStateSchema {
+	if schema > RemoteOwnerStateSchema {
 		return nil, errors.New("core state schema is newer than this binary; refusing downgrade")
 	}
 	if schema == 0 {

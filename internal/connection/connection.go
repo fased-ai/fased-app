@@ -23,7 +23,7 @@ var identity = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
 func Origin(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if len(value) > 2048 || strings.ContainsAny(value, "\\\r\n\t\x00") {
-		return "", errors.New("enter an HTTPS instance address, or HTTP loopback for an SSH tunnel")
+		return "", errors.New("enter an HTTPS instance address, or HTTP loopback for Local")
 	}
 	u, e := url.Parse(value)
 	if e != nil || u.Host == "" || u.User != nil || u.Opaque != "" || (u.Path != "" && u.Path != "/") || u.RawPath != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
@@ -32,7 +32,7 @@ func Origin(value string) (string, error) {
 	host := strings.ToLower(u.Hostname())
 	ip := net.ParseIP(host)
 	if u.Scheme != "https" && !(u.Scheme == "http" && (host == "localhost" || ip != nil && ip.IsLoopback())) {
-		return "", errors.New("Remote requires HTTPS; HTTP is allowed only for a loopback SSH tunnel")
+		return "", errors.New("Remote requires HTTPS; HTTP is allowed only for Local loopback")
 	}
 	if strings.HasSuffix(u.Host, ":") {
 		return "", errors.New("invalid instance port")
@@ -51,10 +51,22 @@ type Result struct {
 	InstanceID          string `json:"instanceId"`
 	Location            string `json:"location"`
 	Transport           string `json:"transport"`
+	RemoteReady         bool   `json:"remoteReady,omitempty"`
 	InstallationCreated bool   `json:"installationCreated"`
 }
 
 func Probe(ctx context.Context, value, expected string) (Result, error) {
+	result, err := Inspect(ctx, value, expected)
+	if err == nil && result.Location == "remote" && (!strings.HasPrefix(result.URL, "https://") || !strings.HasSuffix(result.URL, ".ts.net")) {
+		return Result{}, errors.New("Remote requires its Tailscale HTTPS address")
+	}
+	return result, err
+}
+
+// Inspect reads public health only. Existing-instance maintenance/enrollment may
+// inspect a legacy loopback backend; this grants no connection/session authority.
+// Browser/native/CLI Connect must use Probe's mandatory Tailscale admission.
+func Inspect(ctx context.Context, value, expected string) (Result, error) {
 	client, close := instanceClient()
 	defer close()
 	return probe(ctx, value, expected, client)
@@ -79,6 +91,10 @@ func claimedOwnerURL(ctx context.Context, value, expected string, client *http.C
 	instance, err := probe(ctx, value, expected, client)
 	if err != nil {
 		return "", false, err
+	}
+	if instance.RemoteReady {
+		address, e := OwnerSetupURL(instance.URL, instance.InstanceID, "")
+		return address, true, e
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, instance.URL+"/api/v1/auth/state", nil)
 	if err != nil {
@@ -128,7 +144,7 @@ func probe(ctx context.Context, value, expected string, client *http.Client) (Re
 	if e != nil {
 		return Result{}, e
 	}
-	return Result{URL: origin, InstanceID: h.InstanceID, Location: h.Connection.Location, Transport: h.Connection.Transport}, nil
+	return Result{URL: origin, InstanceID: h.InstanceID, Location: h.Connection.Location, Transport: h.Connection.Transport, RemoteReady: h.Connection.RemoteReady}, nil
 }
 
 // ReadHealth applies the same instance readiness contract to ordinary Connect

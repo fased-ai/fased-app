@@ -2,13 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -147,12 +150,36 @@ func ordinaryUpdateCommand(args []string, in *os.File, out, errOut io.Writer) er
 		return e
 	}
 	dir := f.String("data-dir", base, "existing instance")
+	remote := f.Bool("remote", false, "update the connected Tailscale instance")
 	prefix := f.String("prefix", "", "installed root for custom recovery; defaults to this installed executable")
 	if e = f.Parse(args); e != nil {
 		return e
 	}
 	if f.NArg() != 0 {
 		return errors.New("unexpected update arguments")
+	}
+	if *remote {
+		data, err := core.ReadPrivateFile(filepath.Join(*dir, "remote-connection.json"))
+		if err != nil {
+			return errors.New("choose your Remote instance with fased connect --url https://your-instance.ts.net")
+		}
+		var profile connection.Result
+		if json.Unmarshal(data, &profile) != nil || profile.Location != "remote" || profile.Transport != "private-https" {
+			return errors.New("invalid Remote profile; preserve it and reconnect")
+		}
+		ctx := context.Background()
+		client, err := core.NewRemoteClient(ctx, profile.URL, profile.InstanceID)
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+		call := func(action string, dest io.Writer) error {
+			return applicationUpdatesWithClient(ctx, client, action, in, dest, errOut)
+		}
+		if action == "wizard" {
+			return updateWizard(call, out, errOut)
+		}
+		return call(action, out)
 	}
 	call := func(action string, dest io.Writer) error {
 		return applicationUpdatesCommand([]string{action, "--data-dir", *dir}, in, dest, errOut)

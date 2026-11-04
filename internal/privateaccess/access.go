@@ -40,6 +40,7 @@ type Plan struct {
 type receipt struct {
 	Schema int    `json:"schema"`
 	Phase  string `json:"phase"`
+	Next   *Plan  `json:"next,omitempty"`
 	Plan   Plan   `json:"plan"`
 }
 
@@ -150,14 +151,18 @@ func load(root string) (receipt, error) {
 	if err != nil {
 		return r, err
 	}
-	if json.Unmarshal(data, &r) != nil || r.Schema != 1 || r.Plan.Mode != "tailscale" || (r.Phase != "preparing" && r.Phase != "ready") || !dnsName.MatchString(strings.TrimPrefix(r.Plan.Origin, "https://")) {
+	if json.Unmarshal(data, &r) != nil || r.Schema != 1 || r.Plan.Mode != "tailscale" || (r.Phase != "preparing" && r.Phase != "ready" && r.Phase != "switching") || !dnsName.MatchString(strings.TrimPrefix(r.Plan.Origin, "https://")) {
 		return r, errors.New("unknown private-access receipt; preserve it for recovery")
 	}
-	if !strings.HasPrefix(r.Plan.Target, "http://") {
-		return r, errors.New("invalid private target")
+	if r.Phase == "switching" {
+		if r.Next == nil || r.Next.Mode != "tailscale" || r.Next.Origin != r.Plan.Origin || !validTarget(r.Next.Target) || !strings.HasPrefix(r.Next.Target, "unix:") {
+			return r, errors.New("invalid private ingress transition; preserve it")
+		}
+	} else if r.Next != nil {
+		return r, errors.New("unexpected private ingress transition; preserve it")
 	}
-	if _, err = target(strings.TrimPrefix(r.Plan.Target, "http://")); err != nil {
-		return r, err
+	if !validTarget(r.Plan.Target) {
+		return r, errors.New("invalid private target")
 	}
 	return r, nil
 }
@@ -165,7 +170,7 @@ func (m Manager) Enable(ctx context.Context, root string, p Plan, instanceID str
 	if p.Mode != "tailscale" {
 		return nil
 	}
-	if !dnsName.MatchString(strings.TrimPrefix(p.Origin, "https://")) {
+	if !dnsName.MatchString(strings.TrimPrefix(p.Origin, "https://")) || !validTarget(p.Target) {
 		return errors.New("invalid private origin")
 	}
 	if err := core.EnsurePrivateDirectory(root); err != nil {
@@ -191,6 +196,8 @@ func (m Manager) Enable(ctx context.Context, root string, p Plan, instanceID str
 		}
 	} else if err != nil {
 		return err
+	} else if r.Plan.Origin == p.Origin && strings.HasPrefix(r.Plan.Target, "http://") && strings.HasPrefix(p.Target, "unix:") && (r.Phase == "ready" || r.Phase == "switching") {
+		return m.switchIngress(ctx, root, r, p, instanceID, cfg, etag)
 	} else if r.Plan.Origin != p.Origin || r.Plan.Target != p.Target {
 		return errors.New("private-access identity changed; recover the existing route first")
 	}
@@ -324,4 +331,41 @@ func (m Manager) Remove(ctx context.Context, root string) error {
 		}
 	}
 	return os.Remove(filepath.Join(root, "private-access.json"))
+}
+
+// switchIngress resumes the exact owned HTTP→Unix transition. A lost response
+// does not reset Serve, discard ownership or reopen access. Once device binding
+// may have happened, recover forward instead of silently restoring legacy HTTP.
+func (m Manager) switchIngress(ctx context.Context, root string, r receipt, next Plan, instance string, cfg map[string]any, etag string) error {
+	if r.Next != nil && (r.Next.Mode != next.Mode || r.Next.Origin != next.Origin || r.Next.Target != next.Target) {
+		return errors.New("another private ingress transition owns this receipt")
+	}
+	oldConfig, newConfig := expected(r.Plan), expected(next)
+	if !reflect.DeepEqual(cfg, oldConfig) && !reflect.DeepEqual(cfg, newConfig) {
+		return errors.New("private route changed; preserve its transition receipt")
+	}
+	if r.Phase != "switching" {
+		r.Phase = "switching"
+		r.Next = &next
+		if err := core.WritePrivateJSON(filepath.Join(root, "private-access.json"), r); err != nil {
+			return err
+		}
+	}
+	if reflect.DeepEqual(cfg, oldConfig) {
+		data, _ := json.Marshal(newConfig)
+		if err := m.SetConfig(ctx, data, etag); err != nil {
+			return err
+		}
+	}
+	if err := m.waitForPreparingEndpoint(ctx, next, instance); err != nil {
+		return err
+	}
+	current, _, err := m.config(ctx)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(current, newConfig) {
+		return errors.New("private route changed before transition completion")
+	}
+	return core.WritePrivateJSON(filepath.Join(root, "private-access.json"), receipt{Schema: 1, Phase: "ready", Plan: next})
 }

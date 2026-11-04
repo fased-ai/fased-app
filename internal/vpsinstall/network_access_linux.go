@@ -19,6 +19,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 	"golang.org/x/sys/unix"
 )
 
@@ -73,7 +74,7 @@ func networkProof(ctx context.Context, m Manifest) (networkAccess, error) {
 	// Reuse the private access inventory guard; HTTPS alone does not exclude Funnel.
 	access := privateaccess.System()
 	access.Client = client
-	if err = access.Verify(ctx, privateaccess.Plan{Mode: "tailscale", Origin: m.PublicOrigin, Target: "http://" + m.Listen}, identity); err != nil {
+	if err = access.Verify(ctx, privateaccess.Plan{Mode: "tailscale", Origin: m.PublicOrigin, Target: tailnet.Target(m.Data)}, identity); err != nil {
 		return empty, err
 	}
 	return p, nil
@@ -206,21 +207,21 @@ func checkPrivateApplicationBound(ctx context.Context, m Manifest, client *http.
 	if _, err = health(m.PublicOrigin, identity); err != nil {
 		return "", err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.PublicOrigin+"/api/v1/auth/state", nil)
+	// Health discloses only readiness, never credentials. The new ingress may
+	// refuse this server's unapproved device on owner endpoints; do not weaken
+	// device approval merely so a server can inspect its own readiness.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.PublicOrigin+"/api/v1/health", nil)
 	if err != nil {
 		return "", err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", errors.New("cannot verify private owner setup")
+		return "", err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 16385))
-	var state struct {
-		Claimed bool `json:"claimed"`
-	}
-	if err != nil || len(body) > 16384 || resp.StatusCode != http.StatusOK || json.Unmarshal(body, &state) != nil || !state.Claimed {
-		return "", fmt.Errorf("finish owner setup and sign in at %s before lockdown", m.PublicOrigin)
+	state, err := connection.ReadHealth(resp, identity)
+	if err != nil || state.Connection == nil || !state.Connection.RemoteReady {
+		return "", errors.New("finish private owner/device setup before lockdown")
 	}
 	return identity, nil
 }

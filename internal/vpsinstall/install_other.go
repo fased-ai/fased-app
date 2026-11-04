@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 	"io"
 )
 
@@ -26,7 +27,7 @@ func Status(context.Context, Manifest, *custodyinstall.System) (ServiceStatus, e
 }
 func CheckApplication(string, string, string, string, string) error { return unsupported }
 
-func SetupLink(context.Context, Manifest, *custodyinstall.System, io.Writer) error {
+func SetupLink(context.Context, Manifest, *custodyinstall.System, io.Writer, ...tailnet.Identity) error {
 	return unsupported
 }
 

@@ -466,7 +466,7 @@ func applicationReaderSourceSnapshot(ctx context.Context, tx snapshotReader, pro
 	}
 	features := []string{}
 	for _, f := range UpdateContract().State[0].Features {
-		if (source != 33 || f != "application-updates-v1") && f != "ordinary-custody-admission-v1" && f != localOwnerFeature {
+		if (source != 33 || f != "application-updates-v1") && f != "ordinary-custody-admission-v1" && f != localOwnerFeature && f != remoteOwnerFeature {
 			features = append(features, f)
 		}
 	}

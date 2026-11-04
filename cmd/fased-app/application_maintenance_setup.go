@@ -39,7 +39,12 @@ func vpsUpdatesCommand(args []string, in io.Reader, out, errOut io.Writer) error
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), remoteUpdateCommandBudget(args[0]))
 	defer cancel()
-	system := &custodyinstall.System{In: in, Out: errOut}
+	system := &custodyinstall.System{In: in, Out: errOut, NonInteractive: args[0] != "prepare"}
+	if args[0] != "prepare" && args[0] != "recover" && !offline {
+		if e = prepareRemoteSourceSession(ctx, m, system); e != nil {
+			return e
+		}
+	}
 	if args[0] == "recover" {
 		// A reader upgrade can stop before the original core has an application
 		// update row. Its durable installer journal, not idle source IPC, owns
@@ -113,7 +118,7 @@ func vpsUpdatesCommand(args []string, in io.Reader, out, errOut io.Writer) error
 				}
 				_, e = dest.Write(result.Bytes())
 				return e
-			}, func() error { return vpsinstall.ApplicationReaderSignIn(ctx, m, system) }, out, errOut)
+			}, func() error { return errors.New("Update access is unavailable; finish Remote setup") }, out, errOut)
 		}
 
 		return vpsinstall.ApplicationUpdateClient(ctx, m, args[0], system, out)

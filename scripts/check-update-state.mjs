@@ -119,6 +119,7 @@ try {
       a.probeId === probe &&
       a.state.name === "core-db" &&
       a.state.version === 36 &&
+      !a.state.features.includes("remote-device-owner-v1") &&
       a.state.features.includes("application-updates-v1") &&
       a.state.features.includes("agents-onchain-swaps-v1") &&
       a.state.features.includes("agents-venue-credentials-v1") &&

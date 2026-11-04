@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 	"io"
 	"io/fs"
 	"mime"
@@ -28,6 +29,7 @@ type HTTPHandler struct {
 	origins           map[string]bool
 	hosts             map[string]bool
 	publicHost        string
+	remoteIngress     bool
 	instanceLocation  string
 	instanceOwnerUID  int
 	instanceOwnerKind string
@@ -74,6 +76,10 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'")
 	w.Header().Set("X-Frame-Options", "DENY")
+	if h.remoteIngress && !h.legacyRemoteAccess(r.Context()) && r.Context().Value(remoteIdentityKey{}) == nil && ((r.Host == h.publicHost) || (r.Context().Value(privateIPCKey{}) != true && strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/v1/health")) {
+		writeError(w, 403, "Private Tailscale access required")
+		return
+	}
 	if !h.hosts[r.Host] {
 		writeError(w, http.StatusForbidden, "unexpected request host")
 		return
@@ -94,7 +100,17 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.static(w, r)
 }
 func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
+	if expected := r.Header.Get("X-Fased-Instance"); expected != "" && expected != h.store.instanceID {
+		writeError(w, 409, "Remote instance changed")
+		return
+	}
 	switch r.URL.Path {
+	case "/api/v1/auth/devices":
+		h.remoteDevicesAPI(w, r)
+		return
+	case "/api/v1/auth/remote":
+		h.remoteOwnerAPI(w, r)
+		return
 	case "/api/v1/auth/local":
 		h.localOwnerAPI(w, r)
 		return
@@ -111,7 +127,8 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		if h.publicHost != "" && r.Host == h.publicHost {
 			location, transport = "remote", "private-https"
 		}
-		health.Connection = &ConnectionInfo{Location: location, Transport: transport, OwnerUID: h.instanceOwnerUID, OwnerKind: h.instanceOwnerKind}
+		owner, _ := h.store.remoteOwner(r.Context())
+		health.Connection = &ConnectionInfo{RemoteReady: owner.UserID != 0, Location: location, Transport: transport, OwnerUID: h.instanceOwnerUID, OwnerKind: h.instanceOwnerKind}
 		writeJSON(w, 200, health)
 		return
 	case "/api/v1/auth/state":
@@ -125,8 +142,21 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		token := h.session(r)
-		valid := h.store.Session(r.Context(), token)
+		valid := h.ownerSession(r, token)
 		result := map[string]any{"claimed": claimed, "authenticated": valid}
+		if _, ok := r.Context().Value(remoteIdentityKey{}).(tailnet.Identity); ok {
+			result["remoteAccess"] = true
+			owner, e := h.store.remoteOwner(r.Context())
+			if e != nil {
+				writeError(w, 500, "Remote owner recovery required")
+				return
+			}
+			result["remoteEnrolled"] = owner.UserID != 0
+			result["legacyAuthenticated"] = h.store.Session(r.Context(), token)
+			if result["legacyAuthenticated"] == true {
+				result["csrfToken"] = csrfToken(token)
+			}
+		}
 		if h.localOwnerAllowed() {
 			result["localAccess"] = true
 			var salt []byte
@@ -191,7 +221,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		h.store.venueCredentials.mu.Unlock()
 	}
 	token := h.session(r)
-	if !h.store.Session(r.Context(), token) {
+	if !h.ownerSession(r, token) {
 		writeError(w, 401, "owner authentication required")
 		return
 	}
@@ -359,7 +389,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		if !decodeJSON(w, r, &input) {
 			return
 		}
-		result, err := h.store.readWallet(r.Context(), input, func() bool { return h.store.Session(r.Context(), token) })
+		result, err := h.store.readWallet(r.Context(), input, func() bool { return h.ownerSession(r, token) })
 		if err != nil {
 			writeError(w, 400, err.Error())
 			return
@@ -533,7 +563,7 @@ func (h *HTTPHandler) mutation(w http.ResponseWriter, r *http.Request) bool {
 	// Freeze ordinary writes from durable dispatch through recovery. Sessions and
 	// protected maintenance remain reachable. The existing metadata fence remains
 	// the authority across processes; this closes dispatch-to-fence HTTP races.
-	if !strings.HasPrefix(r.URL.Path, "/api/v1/updates/") && !oneOf(r.URL.Path, "/api/v1/login", "/api/v1/logout", "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/local") {
+	if !strings.HasPrefix(r.URL.Path, "/api/v1/updates/") && !oneOf(r.URL.Path, "/api/v1/login", "/api/v1/logout", "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/local", "/api/v1/auth/remote") {
 		o, _, e := readApplicationUpdate(r.Context(), h.store.db)
 		if e != nil || oneOf(o.Phase, "applying", "recovery") {
 			writeError(w, 409, "Update in progress. Inspect recovery before changing this instance.")
