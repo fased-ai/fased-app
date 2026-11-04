@@ -100,7 +100,7 @@ func enableRemoteAccess(ctx context.Context, m vpsinstall.Manifest, system *cust
 	if m.PublicOrigin == "" {
 		return status.URL, nil
 	}
-	manager := privateaccess.System()
+	manager := remotePrivateAccess(system)
 	plan, err := manager.Plan(ctx, "tailscale", m.Listen)
 	if err != nil {
 		return "", err
@@ -147,7 +147,7 @@ func managedRemoteInstall(ctx context.Context, corePath, hash, listen string, pl
 	}
 	gateCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	owner, err := privateaccess.System().BeforeInstall(gateCtx, accessDir, plan, errOut)
+	owner, err := remotePrivateAccess(system).BeforeInstall(gateCtx, accessDir, plan, errOut)
 	if err != nil {
 		return err
 	}
@@ -389,7 +389,7 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 				if e != nil {
 					return e
 				}
-				if e = privateaccess.System().Remove(ctx, dir); e != nil {
+				if e = remotePrivateAccess(system).Remove(ctx, dir); e != nil {
 					return e
 				}
 			}
@@ -399,7 +399,7 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 				if e = enrolledLifecycle(ctx, target, action, true, true, sink, enrolledSystem(system)); e != nil {
 					return e
 				}
-				url, e := enableEnrolledRemoteAccess(ctx, m, target)
+				url, e := enableEnrolledRemoteAccess(ctx, m, target, system)
 				if e != nil {
 					return e
 				}
@@ -474,7 +474,7 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if err = privateaccess.System().Remove(ctx, dir); err != nil {
+		if err = remotePrivateAccess(system).Remove(ctx, dir); err != nil {
 			return err
 		}
 		if err = vpsinstall.Remove(ctx, m, system); err != nil {
@@ -493,7 +493,7 @@ func validateRuntimeUID(uid, euid int) error {
 	return nil
 }
 
-func enableEnrolledRemoteAccess(ctx context.Context, source vpsinstall.Manifest, target custodyinstall.Manifest) (string, error) {
+func enableEnrolledRemoteAccess(ctx context.Context, source vpsinstall.Manifest, target custodyinstall.Manifest, system *custodyinstall.System) (string, error) {
 	if target.Location != "remote" || target.Listen != source.Listen || target.PublicOrigin != source.PublicOrigin || target.Owner != source.OwnerUID {
 		return "", errors.New("Remote enrollment binding changed")
 	}
@@ -504,7 +504,7 @@ func enableEnrolledRemoteAccess(ctx context.Context, source vpsinstall.Manifest,
 	if target.PublicOrigin == "" {
 		return enrolledURL(target), nil
 	}
-	manager := privateaccess.System()
+	manager := remotePrivateAccess(system)
 	plan, e := manager.Plan(ctx, "tailscale", target.Listen)
 	if e != nil {
 		return "", e
@@ -558,7 +558,7 @@ func configureRemoteAccess(ctx context.Context, m vpsinstall.Manifest, system *c
 		return e
 	}
 	confirm := func(ctx context.Context, target vpsinstall.Manifest) error {
-		manager := privateaccess.System()
+		manager := remotePrivateAccess(system)
 		if target.PublicOrigin == "" {
 			return manager.Remove(ctx, dir)
 		}

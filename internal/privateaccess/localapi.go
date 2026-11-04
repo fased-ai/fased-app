@@ -3,11 +3,17 @@ package privateaccess
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"reflect"
+	"regexp"
 	"runtime"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -39,6 +45,9 @@ func localRequest(ctx context.Context, method string, data []byte, etag string) 
 		return nil, "", errors.New("Tailscale local daemon unavailable; use SSH access or check its installation")
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden {
+		return nil, "", servePermissionError{}
+	}
 	if resp.StatusCode != 200 {
 		return nil, "", errors.New("Tailscale refused conditional Serve access: confirm this OS user's operator permission and tailnet HTTPS; a concurrent configuration change must be inspected before retry")
 	}
@@ -48,10 +57,117 @@ func localRequest(ctx context.Context, method string, data []byte, etag string) 
 	}
 	return b, resp.Header.Get("ETag"), nil
 }
+
+// WithServeAuthorization is reserved for an administrator's setup/lifecycle
+// command. Ordinary runtime has no elevated transport.
+func (m Manager) WithServeAuthorization(authorize func(context.Context, []byte, string) error) Manager {
+	direct := m.SetConfig
+	m.SetConfig = func(ctx context.Context, data []byte, etag string) error {
+		err := direct(ctx, data, etag)
+		var denied servePermissionError
+		if !errors.As(err, &denied) || authorize == nil {
+			return err
+		}
+		if _, e := serveCommand(data, etag); e != nil {
+			return e
+		}
+		// Only an explicit403 proves this attempt did not commit. A timeout,
+		// conflict or other error must reconcile through the saved receipt.
+		return authorize(ctx, data, etag)
+	}
+	return m
+}
+
+type servePermissionError struct{}
+
+func (servePermissionError) Error() string { return "Tailscale Serve OS authorization required" }
+
 func systemConfig(ctx context.Context) ([]byte, string, error) {
 	return localRequest(ctx, http.MethodGet, nil, "")
 }
 func systemSetConfig(ctx context.Context, b []byte, etag string) error {
 	_, _, e := localRequest(ctx, http.MethodPost, b, etag)
 	return e
+}
+
+// No filesystem path, URL, proxy, curl config or response file comes from the
+// caller. Only the owned Serve body and its daemon-issued conditional identity
+// cross the setup OS boundary; neither is a credential.
+var serveCurlPrefix = []string{
+	"/usr/bin/curl", "--disable", "--silent", "--show-error", "--fail",
+	"--max-time", "15", "--connect-timeout", "5", "--max-filesize", "1048576",
+	"--noproxy", "*", "--proto", "=http", "--unix-socket", "/var/run/tailscale/tailscaled.sock",
+	"--request", "POST", "--header", "Content-Type: application/json", "--header",
+}
+var serveETag = regexp.MustCompile(`^[a-f0-9]{64}$`)
+
+func serveCommand(data []byte, etag string) ([]string, error) {
+	if !serveETag.MatchString(etag) || len(data) > 16*1024 {
+		return nil, errors.New("invalid private Serve conditional request")
+	}
+	var cfg map[string]any
+	if json.Unmarshal(data, &cfg) != nil || cfg == nil {
+		return nil, errors.New("invalid private Serve configuration")
+	}
+	if len(cfg) > 0 {
+		// Admit exactly one HTTPS443 / handler to the dedicated Unix ingress.
+		web, ok := cfg["Web"].(map[string]any)
+		if !ok || len(web) != 1 {
+			return nil, errors.New("only the owned private Serve endpoint may be authorized")
+		}
+		var plan Plan
+		for host, entry := range web {
+			if !strings.HasSuffix(host, ":443") {
+				return nil, errors.New("private Serve port changed")
+			}
+			plan.Origin = "https://" + strings.TrimSuffix(host, ":443")
+			value, ok := entry.(map[string]any)
+			if !ok {
+				return nil, errors.New("invalid private Serve handlers")
+			}
+			handlers, ok := value["Handlers"].(map[string]any)
+			if !ok {
+				return nil, errors.New("invalid private Serve handlers")
+			}
+			root, ok := handlers["/"].(map[string]any)
+			if !ok {
+				return nil, errors.New("invalid private Serve root")
+			}
+			plan.Target, _ = root["Proxy"].(string)
+		}
+		if !dnsName.MatchString(strings.TrimPrefix(plan.Origin, "https://")) || !strings.HasPrefix(plan.Target, "unix:") || !validTarget(plan.Target) || !reflect.DeepEqual(cfg, expected(plan)) {
+			return nil, errors.New("only the owned private Unix Serve endpoint may be authorized")
+		}
+	}
+	args := append([]string(nil), serveCurlPrefix...)
+	return append(args, "If-Match: "+etag, "--data-binary", "@-", "--write-out", "%{http_code}", "http://local-tailscaled.sock/localapi/v0/serve-config"), nil
+}
+
+// AllowedServeCommand is also the OS runner's allowlist. It is deliberately not
+// a general elevated curl or Tailscale client.
+func AllowedServeCommand(input []byte, args []string) bool {
+	if len(args) != len(serveCurlPrefix)+6 {
+		return false
+	}
+	header := args[len(serveCurlPrefix)]
+	if !strings.HasPrefix(header, "If-Match: ") {
+		return false
+	}
+	expected, err := serveCommand(input, strings.TrimPrefix(header, "If-Match: "))
+	return err == nil && slices.Equal(args, expected)
+}
+
+func SetServeWithOS(ctx context.Context, data []byte, etag string, run func(context.Context, []byte, ...string) ([]byte, error)) error {
+	args, err := serveCommand(data, etag)
+	if err != nil {
+		return err
+	}
+	response, err := run(ctx, data, args...)
+	if err != nil {
+		return fmt.Errorf("private Serve OS setup did not complete; preserve its receipt and retry the same setup: %w", err)
+	}
+	if len(response) > 1024*1024+3 || !bytes.HasSuffix(response, []byte("200")) {
+		return errors.New("private Serve OS response unconfirmed; preserve its receipt before retry")
+	}
+	return nil
 }
