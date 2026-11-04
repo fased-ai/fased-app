@@ -24,20 +24,99 @@ export async function refreshFixtureAccounts(page) {
     .click();
 }
 
-export async function revealFixtureApproval(page, name) {
+export function verifiedFixtureApproval(view, managed, proposal) {
+  assert.deepEqual(
+    proposal.policy.account,
+    managed.signer,
+    "policy signer identity changed",
+  );
+  assert.deepEqual(
+    proposal.grant.account,
+    managed.signer,
+    "grant signer identity changed",
+  );
+  const account = view.record.accounts.find((item) => item.id === managed.id);
+  assert.ok(account, "approved managed account missing from public read");
+  assert.equal(
+    account.mode,
+    "fixture-managed",
+    "approval account mode changed",
+  );
+  assert.deepEqual(
+    account.signer,
+    managed.signer,
+    "approval account identity changed",
+  );
+  assert.equal(
+    account.network,
+    managed.network,
+    "approval account network changed",
+  );
+  assert.equal(
+    account.publicKey,
+    managed.publicKey,
+    "approval public key changed",
+  );
+  const drafts = view.record.proposals.filter(
+    (item) => item.accountId === managed.id,
+  );
+  const row = drafts.findIndex((item) => item.proposal.id === proposal.id);
+  assert.ok(row >= 0, "target proposal is not bound to the managed account");
+  assert.deepEqual(drafts[row].proposal, proposal, "approved proposal changed");
+  const proof = view.proposals.find((item) => item.id === proposal.id);
+  assert.ok(proof, "target proposal receipt missing from public read");
+  assert.equal(
+    proof.receipt.proposalId,
+    proposal.id,
+    "receipt proposal identity changed",
+  );
+  assert.equal(
+    proof.receipt.state,
+    "approved",
+    "target receipt is not approved",
+  );
+  assert.deepEqual(
+    proof.receipt.account,
+    managed.signer,
+    "receipt signer identity changed",
+  );
+  assert.match(proof.digest, /^[a-f0-9]{64}$/, "invalid proposal digest");
+  assert.equal(
+    proof.receipt.digest,
+    proof.digest,
+    "approved receipt digest mismatch",
+  );
+  return {
+    accountId: managed.id,
+    proposalId: proposal.id,
+    digest: proof.digest,
+    row,
+  };
+}
+
+export async function revealFixtureApproval(page, name, proposalId, row) {
+  assert.match(proposalId, /^[a-f0-9]{32}$/);
+  assert.ok(
+    Number.isInteger(row) && row >= 0,
+    "verified account receipt row required",
+  );
   const wallet = page.getByRole("article", {
     name: `Account ${name}`,
     exact: true,
   });
   const current = wallet
     .locator(".account-permission")
+    .nth(row)
     .getByText("approved", { exact: true });
-  const predecessor = page
-    .locator(".account-advanced")
-    .getByText("approved", { exact: true });
-  // Refresh starts an asynchronous read. Receipt absence in the old render is
-  // not a layout signal: wait for the verified result in either known view.
-  await current.or(predecessor).first().waitFor({ state: "attached" });
+  // Genuine lifecycle3 UI at d2f1fb2 renders this separate proposal article.
+  // It has no .account-permission or .account-advanced container.
+  const legacyArticle = page.getByRole("article", {
+    name: `Proposal ${proposalId}`,
+    exact: true,
+    includeHidden: true,
+  });
+  const legacy = legacyArticle.getByText("approved", { exact: true });
+  await current.or(legacy).first().waitFor({ state: "attached" });
   if (await current.count()) {
     const details = wallet.locator(".account-details");
     if (!(await details.evaluate((element) => element.open)))
@@ -45,12 +124,36 @@ export async function revealFixtureApproval(page, name) {
     await current.waitFor({ state: "visible" });
     return;
   }
-  // Pinned predecessors keep receipt history in Advanced. Open that history,
-  // without depending on an unrelated fixture key/name editor being present.
-  const details = page.locator(".account-advanced");
-  if (!(await details.evaluate((element) => element.open)))
-    await details.locator(":scope > summary").click();
-  await predecessor.waitFor({ state: "visible" });
+  // Later historical UIs may put this exact proposal inside a disclosure.
+  // Open only ancestors of that proposal, never an unrelated key editor.
+  const disclosures = page.locator("details").filter({ has: legacyArticle });
+  for (let index = 0; index < (await disclosures.count()); index++) {
+    const details = disclosures.nth(index);
+    if (!(await details.evaluate((element) => element.open)))
+      await details.locator(":scope > summary").click();
+  }
+  await legacy.waitFor({ state: "visible" });
+}
+
+function publicApprovalView(view) {
+  return {
+    revision: view.record.revision,
+    accounts: view.record.accounts.map(
+      ({ id, name, version, mode, network, publicKey, signer }) => ({
+        id,
+        name,
+        version,
+        mode,
+        network,
+        publicKey,
+        signer,
+      }),
+    ),
+    proposals: view.record.proposals,
+    receipts: view.proposals,
+    fixtureAvailable: view.fixture.available,
+    accountStates: view.accountStates,
+  };
 }
 
 export async function fixtureAccountJourney({
@@ -72,6 +175,7 @@ export async function fixtureAccountJourney({
 }) {
   const browser = await chromium.launch({ headless: true });
   let page;
+  const approvalDiagnostic = {};
   try {
     const context = await browser.newContext({
       viewport: { width: 1400, height: 1000 },
@@ -268,18 +372,38 @@ finally:
       terminal("approve").passwordEcho === false,
     );
     check("accounts:approvalCompletionLocksVault", ownerStatus().locked);
-    await refreshFixtureAccounts(page);
-    await revealFixtureApproval(page, managed.name);
+    approvalDiagnostic.target = {
+      accountId: managed.id,
+      proposalId: proposal.id,
+    };
     current = JSON.parse(cli(["accounts", "--prepare-host"]));
-    const proof = current.proposals.find((item) => item.id === proposal.id);
+    approvalDiagnostic.cli = publicApprovalView(current);
+    const cliProof = verifiedFixtureApproval(current, managed, proposal);
+    const origin = new URL(url).origin;
+    const refreshed = page.waitForResponse((response) => {
+      const endpoint = new URL(response.url());
+      return (
+        response.request().method() === "GET" &&
+        endpoint.origin === origin &&
+        endpoint.pathname === "/api/v1/accounts"
+      );
+    });
+    await refreshFixtureAccounts(page);
+    const response = await refreshed;
+    approvalDiagnostic.httpStatus = response.status();
+    assert.equal(response.status(), 200, "public approval read failed");
+    const api = await response.json();
+    approvalDiagnostic.api = publicApprovalView(api);
+    const apiProof = verifiedFixtureApproval(api, managed, proposal);
+    assert.deepEqual(
+      apiProof,
+      cliProof,
+      "public CLI/API approval snapshots disagree",
+    );
+    await revealFixtureApproval(page, managed.name, proposal.id, apiProof.row);
     check(
       "accounts:verifiedApprovalSharedUIAndCLI",
-      current.record.proposals.some(
-        (item) =>
-          item.accountId === managed.id && item.proposal.id === proposal.id,
-      ) &&
-        proof?.receipt.state === "approved" &&
-        proof.receipt.digest === proof.digest,
+      apiProof.digest === cliProof.digest,
     );
     ownerUnlock(walletPassword);
     const operation = {
@@ -322,6 +446,39 @@ finally:
     });
     check("accounts:actualManagedUIResponsive", true);
   } catch (error) {
+    if (page) {
+      // Public receipt DTOs and structural names only: never auth headers,
+      // input values, private storage, URLs, passwords or backup material.
+      const dom = await page
+        .evaluate(() => ({
+          language: document.documentElement.lang,
+          accounts: [
+            ...document.querySelectorAll('article[aria-label^="Account "]'),
+          ].map((node) => ({
+            name: node.getAttribute("aria-label"),
+            receipts: [
+              ...node.querySelectorAll(".account-permission .badge"),
+            ].map((badge) => badge.textContent),
+          })),
+          proposals: [
+            ...document.querySelectorAll('article[aria-label^="Proposal "]'),
+          ].map((node) => ({
+            name: node.getAttribute("aria-label"),
+            states: [...node.querySelectorAll(".badge")].map(
+              (badge) => badge.textContent,
+            ),
+          })),
+          disclosures: [...document.querySelectorAll("details")].map(
+            (node) => ({ class: node.className, open: node.open }),
+          ),
+        }))
+        .catch(() => ({ unavailable: true }));
+      await writeFile(
+        evidence + "/accounts-approval-public.json",
+        JSON.stringify({ ...approvalDiagnostic, dom }, null, 2) + "\n",
+        { mode: 0o600 },
+      ).catch(() => {});
+    }
     if (page)
       await page
         .screenshot({

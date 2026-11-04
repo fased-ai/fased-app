@@ -4,6 +4,7 @@ import {
   refreshFixtureAccounts,
   revealFixtureAccountEntry,
   revealFixtureApproval,
+  verifiedFixtureApproval,
 } from "../../scripts/fixture-account-journey.mjs";
 
 test.use({ colorScheme: "dark" });
@@ -4899,17 +4900,153 @@ test("managed account entry supports current and predecessor layouts", async ({
 test("managed fixture approval inspection supports current and predecessor details", async ({
   page,
 }) => {
+  const proposalId = "7".repeat(32);
   await page.setContent(
-    '<article aria-label="Account Wallet"><details class="account-details"><summary>Details</summary><div class="account-permission">approved</div></details></article>',
+    '<article aria-label="Account Wallet"><details class="account-details"><summary>Details</summary><div class="account-permission"><span class="badge">approved</span></div></details></article>',
   );
-  await revealFixtureApproval(page, "Wallet");
+  await revealFixtureApproval(page, "Wallet", proposalId, 0);
   await expect(page.locator(".account-details")).toHaveAttribute("open", "");
   await expect(page.locator(".account-permission")).toBeVisible();
   await page.setContent(
-    '<article aria-label="Account Wallet"></article><details class="account-advanced"><summary>Advanced</summary><span>approved</span></details>',
+    `<article aria-label="Account Wallet"></article><details><summary>History</summary><article aria-label="Proposal ${proposalId}"><span class="badge">approved</span></article></details>`,
   );
-  await revealFixtureApproval(page, "Wallet");
+  await revealFixtureApproval(page, "Wallet", proposalId, 0);
   await expect(page.getByText("approved", { exact: true })).toBeVisible();
+});
+
+test("approval inspection reads exact genuine lifecycle3 proposal article without invented layout", async ({
+  page,
+}) => {
+  page.setDefaultTimeout(1500);
+  const target = "7".repeat(32),
+    other = "8".repeat(32);
+  // Genuine pinned d2f1fb22149a3c5190eb97d1e2ba58a9a3a0eb2a
+  // AccountManagement.tsx505-516: separate Proposal article, no Details/Advanced.
+  await page.setContent(
+    `<section class="panel account-panel"><article class="account-entry" aria-label="Account Wallet"><h3>Wallet</h3></article></section><section class="panel account-panel"><div class="panel-heading"><h2>Permission proposals</h2></div><article class="account-entry" aria-label="Proposal ${other}"><div class="panel-heading"><h3>Disposable mandate</h3><span class="badge">approved</span></div></article><article class="account-entry" aria-label="Proposal ${target}"><div class="panel-heading"><h3>Disposable mandate</h3><span class="badge">not-approved</span></div></article></section>`,
+  );
+  await expect(
+    page.locator(".account-permission,.account-advanced"),
+  ).toHaveCount(0);
+  const inspection = revealFixtureApproval(page, "Wallet", target, 0);
+  await expect(
+    page.getByRole("article", { name: `Proposal ${target}`, exact: true }),
+  ).toContainText("not-approved");
+  await page
+    .getByRole("article", { name: `Proposal ${target}`, exact: true })
+    .locator(".badge")
+    .evaluate((el) => {
+      el.textContent = "approved";
+    });
+  await inspection;
+  await expect(
+    page
+      .getByRole("article", { name: `Proposal ${target}`, exact: true })
+      .getByText("approved", { exact: true }),
+  ).toBeVisible();
+});
+
+test("public approval validation binds exact proposal account digest and receipt row", async () => {
+  const identity = {
+    version: 1,
+    signerId: "1".repeat(32),
+    walletId: "2".repeat(32),
+    epoch: "3".repeat(32),
+    network: "disposable-fixture:v1",
+    publicKey: "4".repeat(64),
+  };
+  const managed = {
+    version: 1,
+    id: "6".repeat(32),
+    name: "Wallet",
+    mode: "fixture-managed",
+    network: identity.network,
+    publicKey: identity.publicKey,
+    signer: identity,
+  };
+  const policy = {
+    account: identity,
+    asset: "fixture-credit:v1",
+    budget: "150",
+    maxOperation: "10",
+    destinations: ["fixture:treasury"],
+    expiresAt: 2000000000,
+  };
+  const proposal = {
+    version: 1,
+    id: "7".repeat(32),
+    policy,
+    grant: {
+      ...policy,
+      id: "7".repeat(32),
+      botId: "8".repeat(32),
+      budget: "20",
+      revoked: false,
+    },
+  };
+  const older = structuredClone(proposal);
+  older.id = "9".repeat(32);
+  older.grant.id = older.id;
+  const receipt = (item: typeof proposal) => ({
+    id: item.id,
+    digest: "a".repeat(64),
+    receipt: {
+      proposalId: item.id,
+      account: identity,
+      approvedAt: 1,
+      state: "approved",
+      digest: "a".repeat(64),
+    },
+  });
+  const view = {
+    record: {
+      accounts: [managed],
+      proposals: [
+        { accountId: managed.id, proposal: older },
+        { accountId: managed.id, proposal },
+      ],
+    },
+    proposals: [receipt(older), receipt(proposal)],
+  };
+  expect(verifiedFixtureApproval(view, managed, proposal)).toEqual({
+    accountId: managed.id,
+    proposalId: proposal.id,
+    digest: "a".repeat(64),
+    row: 1,
+  });
+  for (const state of [
+    "not-approved",
+    "unverified",
+    "mismatched",
+    "stale",
+    "revoked",
+  ]) {
+    const bad = structuredClone(view);
+    bad.proposals[1].receipt.state = state;
+    expect(() => verifiedFixtureApproval(bad, managed, proposal)).toThrow(
+      "target receipt is not approved",
+    );
+  }
+  const foreign = structuredClone(view);
+  foreign.record.proposals[1].accountId = "f".repeat(32);
+  expect(() => verifiedFixtureApproval(foreign, managed, proposal)).toThrow(
+    "not bound to the managed account",
+  );
+  const changed = structuredClone(view);
+  changed.proposals[1].receipt.account = { ...identity, epoch: "e".repeat(32) };
+  expect(() => verifiedFixtureApproval(changed, managed, proposal)).toThrow(
+    "receipt signer identity changed",
+  );
+  const digest = structuredClone(view);
+  digest.proposals[1].receipt.digest = "b".repeat(64);
+  expect(() => verifiedFixtureApproval(digest, managed, proposal)).toThrow(
+    "receipt digest mismatch",
+  );
+  const wrong = structuredClone(view);
+  wrong.proposals[1].receipt.proposalId = older.id;
+  expect(() => verifiedFixtureApproval(wrong, managed, proposal)).toThrow(
+    "receipt proposal identity changed",
+  );
 });
 
 test("installed ordinary approval inspection waits for refreshed receipt without test editors", async ({
@@ -4987,7 +5124,13 @@ test("installed ordinary approval inspection waits for refreshed receipt without
               {
                 id: proposal.id,
                 digest: "a".repeat(64),
-                receipt: { digest: "a".repeat(64), state: "approved" },
+                receipt: {
+                  proposalId: proposal.id,
+                  account: account.signer,
+                  approvedAt: 1,
+                  digest: "a".repeat(64),
+                  state: "approved",
+                },
               },
             ]
           : [],
@@ -5011,13 +5154,22 @@ test("installed ordinary approval inspection waits for refreshed receipt without
   await expect(page.locator(".account-advanced")).toHaveCount(0);
   await expect(page.getByLabel("Name", { exact: true })).toHaveCount(0);
   refreshing = true;
+  const publicRead = page.waitForResponse(
+    (response) =>
+      response.request().method() === "GET" &&
+      new URL(response.url()).pathname === "/api/v1/accounts",
+  );
   await refreshFixtureAccounts(page);
   await readStarted;
-  const inspection = revealFixtureApproval(page, "Wallet");
+  const inspection = revealFixtureApproval(page, "Wallet", proposal.id, 0);
   // Keep the refreshed read pending until the helper observes the current
   // no-receipt DOM. This is the installed race, not a delayed editor fixture.
   await expect(wallet.locator(".account-permission")).toHaveCount(0);
   release();
+  expect(
+    verifiedFixtureApproval(await (await publicRead).json(), account, proposal)
+      .row,
+  ).toBe(0);
   await inspection;
   await expect(wallet.locator(".account-details")).toHaveAttribute("open", "");
   await expect(
