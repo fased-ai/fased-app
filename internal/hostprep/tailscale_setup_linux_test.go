@@ -120,6 +120,38 @@ func TestGuidedTailscaleFreshInstallUsesPinnedSignedPackages(t *testing.T) {
 		t.Fatal("missing or secret-bearing recovery receipt", e)
 	}
 }
+
+// Fresh/minimal Ubuntu images may have no distro indexes cached. A refresh
+// restricted to Tailscale cannot resolve its Ubuntu dependencies (e.g. iptables).
+func TestGuidedTailscaleFreshMinimalUbuntuRefreshesDependencyIndexes(t *testing.T) {
+	f := setupFixture()
+	distroReady := false
+	runner := func(ctx context.Context, body []byte, args ...string) ([]byte, error) {
+		call := strings.Join(args, " ")
+		if args[0] == "/usr/bin/apt-get" {
+			if args[len(args)-1] == "update" && !strings.Contains(call, "Dir::Etc::source") {
+				if !strings.Contains(call, "APT::Update::Error-Mode=any") || !strings.Contains(call, "Acquire::AllowInsecureRepositories=false") || !strings.Contains(call, "APT::Get::AllowUnauthenticated=false") {
+					return nil, errors.New("dependency indexes must refresh with authentication and complete-success enforcement")
+				}
+				distroReady = true
+			}
+			if strings.Contains(call, " install ") && !distroReady {
+				return nil, errors.New("tailscale depends on iptables but no distro package candidate is available")
+			}
+			if strings.Contains(call, " upgrade") || strings.Contains(call, "dist-upgrade") || strings.Contains(call, "autoremove") {
+				t.Fatal("prerequisite setup upgraded unrelated host packages")
+			}
+		}
+		return f.run(ctx, body, args...)
+	}
+	if err := prepareTailscale(t.Context(), preparationDirectory(t), 1000, "owner", &bytes.Buffer{}, f.read, runner); err != nil {
+		t.Fatal(err)
+	}
+	if !distroReady || f.operator != "owner" {
+		t.Fatal("fresh prerequisite setup did not finish")
+	}
+}
+
 func TestGuidedTailscalePreservesExistingAccountAndOperator(t *testing.T) {
 	for _, tc := range []struct {
 		name, state, operator string
@@ -135,6 +167,9 @@ func TestGuidedTailscalePreservesExistingAccountAndOperator(t *testing.T) {
 			if (e != nil) != tc.wantErr {
 				t.Fatal(e)
 			}
+			if e != nil && strings.Contains(e.Error(), "choose SSH") {
+				t.Fatal("Remote refusal offered SSH-only installation", e)
+			}
 			calls := strings.Join(f.calls, "\n")
 			if strings.Contains(calls, "apt-get") || strings.Contains(calls, " login ") || strings.Contains(calls, " set ") {
 				t.Fatal("existing account/operator was changed", calls)
@@ -146,7 +181,7 @@ func TestGuidedTailscalePreservesExistingAccountAndOperator(t *testing.T) {
 	}
 }
 func TestGuidedTailscaleInterruptedPackagePreparationResumes(t *testing.T) {
-	for _, fault := range []string{"/usr/bin/install", "/usr/bin/ln", "/usr/bin/rm", "sourceparts=-", "--no-remove"} {
+	for _, fault := range []string{"/usr/bin/install", "/usr/bin/ln", "/usr/bin/rm", "APT::Update::Error-Mode=any", "--no-remove"} {
 		t.Run(fault, func(t *testing.T) {
 			f := setupFixture()
 			f.fault = fault
@@ -205,6 +240,9 @@ func TestGuidedTailscaleReusesExactOfficialRepository(t *testing.T) {
 			e := prepareTailscale(t.Context(), preparationDirectory(t), 1000, "owner", &bytes.Buffer{}, f.read, f.run)
 			if (e != nil) != foreign {
 				t.Fatal(e)
+			}
+			if e != nil && strings.Contains(e.Error(), "choose SSH") {
+				t.Fatal("Remote refusal offered SSH-only installation", e)
 			}
 			for _, call := range f.calls {
 				if strings.HasPrefix(call, "/usr/bin/install") || strings.HasPrefix(call, "/usr/bin/ln") || strings.HasPrefix(call, "/usr/bin/rm") {
