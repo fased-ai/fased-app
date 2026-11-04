@@ -39,6 +39,9 @@ func main() {
 	}
 }
 func run(args []string, in *os.File, out, errOut io.Writer) error {
+	if len(args) > 0 && args[0] == "acceptance-update" {
+		return candidateAcceptanceCommand(args[1:], out, errOut)
+	}
 	if len(args) > 0 && args[0] == "reader-session-client" {
 		return readerSessionClient(args[1:], out)
 	}

@@ -69,6 +69,7 @@ type Prepared struct {
 	invoked          bool
 	closed           bool
 	startedAt        time.Time
+	candidate        *CandidateAdmission
 }
 
 // RetainAcquisitionEvidence opts an owned update acquisition into bounded cleanup
@@ -278,7 +279,7 @@ func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepa
 				return nil, e
 			}
 		}
-		return &Prepared{descriptor: descriptor, report: Report{MetadataVerified: true, DescriptorSHA256: digest(docs["descriptor.json"])}}, nil
+		return &Prepared{descriptor: descriptor, report: Report{MetadataVerified: true, DescriptorSHA256: applicationIdentity(descriptor, digest(docs["descriptor.json"]))}}, nil
 	}
 	if err = parentRoot.Mkdir(base, 0700); err != nil {
 		return nil, err
@@ -348,7 +349,7 @@ func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepa
 	if err = writeNew(root, "seed.json", o.Seed); err != nil {
 		return prepared, err
 	}
-	prepared.report = Report{Version: seed.Version, DevelopmentOnly: seed.DevelopmentOnly, Purpose: seed.Purpose, MetadataVerified: true, ArchiveVerified: true, BundleVerified: true, Sequence: descriptor.Sequence, Target: descriptor.Target, SeedSHA256: o.SeedSHA256, DescriptorSHA256: digest(docs["descriptor.json"]), ArchiveSHA256: descriptor.Archive.SHA256, BundleSHA256: descriptor.BundleSHA256, BundleDirectory: filepath.Join(o.Directory, "bundle"), GitHubTransport: seed.Version >= 2, ProvenanceVerified: seed.Version >= 3, ProvenanceSHA256: decision.BundleSHA256, TrustPolicySHA256: decision.PolicySHA256}
+	prepared.report = Report{Version: seed.Version, DevelopmentOnly: seed.DevelopmentOnly, Purpose: seed.Purpose, MetadataVerified: true, ArchiveVerified: true, BundleVerified: true, Sequence: descriptor.Sequence, Target: descriptor.Target, SeedSHA256: o.SeedSHA256, DescriptorSHA256: applicationIdentity(descriptor, digest(docs["descriptor.json"])), ArchiveSHA256: descriptor.Archive.SHA256, BundleSHA256: descriptor.BundleSHA256, BundleDirectory: filepath.Join(o.Directory, "bundle"), GitHubTransport: seed.Version >= 2, ProvenanceVerified: seed.Version >= 3, ProvenanceSHA256: decision.BundleSHA256, TrustPolicySHA256: decision.PolicySHA256}
 	b, err := json.Marshal(prepared.report)
 	if err != nil {
 		return prepared, err
@@ -373,7 +374,11 @@ func (p *Prepared) revalidate() error {
 		return err
 	}
 	d := p.descriptor
-	if seed.Version == 4 {
+	if p.candidate != nil {
+		if err = p.revalidateCandidate(seed, now); err != nil {
+			return err
+		}
+	} else if seed.Version == 4 {
 		if err = revalidateAttested(seed, p.metadata, d, now); err != nil {
 			return err
 		}

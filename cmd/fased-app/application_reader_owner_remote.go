@@ -179,12 +179,8 @@ func routeRemoteApplicationMaintenance(status vpsinstall.ApplicationUpdateStatus
 	return ordinary()
 }
 
-func maintainRemoteReaderUpdate(ctx context.Context, m vpsinstall.Manifest, id string, rollback bool, source func(context.Context, string) (*bootstrap.Prepared, error), out io.Writer, system *custodyinstall.System) error {
-	if rollback {
-		return errors.New("reader-bootstrap preserves forward recovery; it never downgrades migrated metadata")
-	}
+func readerRemoteCallbacks(m vpsinstall.Manifest, id string, request *core.ApplicationReaderBootstrapRequest, system *custodyinstall.System) (*remoteApplicationOwner, vpsinstall.ApplicationUpdateCallbacks) {
 	actor := &remoteApplicationOwner{m: m, id: id, system: system}
-	var request core.ApplicationReaderBootstrapRequest
 	callbacks := vpsinstall.ApplicationUpdateCallbacks{
 		BeforeStop: func(ctx context.Context, a, b vpsinstall.Manifest) error {
 			if a.CoreSHA256 != request.PreviousEngineSHA256 || b.CoreSHA256 != request.Release.EngineSHA256 {
@@ -192,7 +188,7 @@ func maintainRemoteReaderUpdate(ctx context.Context, m vpsinstall.Manifest, id s
 			}
 			c := core.ApplicationOwnerCommand{Action: "reader-prepare", ID: id, Lease: request.OwnerLease}
 			if request.Predecessor.Request == nil {
-				c.ReaderBootstrap = &request
+				c.ReaderBootstrap = request
 			}
 			v, e := vpsinstall.ApplicationOwnerCall(ctx, actor.m, c, system)
 			if e != nil {
@@ -201,13 +197,13 @@ func maintainRemoteReaderUpdate(ctx context.Context, m vpsinstall.Manifest, id s
 			if v.ReaderBootstrap == nil {
 				return errors.New("predecessor pause proof missing")
 			}
-			request = *v.ReaderBootstrap
+			*request = *v.ReaderBootstrap
 			actor.lease = request.OwnerLease
 			actor.instance = request.Predecessor.Core.InstanceID
 			return nil
 		},
 		AfterStop: func(ctx context.Context, _, _ vpsinstall.Manifest) error {
-			_, e := vpsinstall.ApplicationOwnerCall(ctx, actor.m, core.ApplicationOwnerCommand{Action: "reader-bootstrap", ID: id, Lease: request.OwnerLease, ReaderBootstrap: &request}, system)
+			_, e := vpsinstall.ApplicationOwnerCall(ctx, actor.m, core.ApplicationOwnerCommand{Action: "reader-bootstrap", ID: id, Lease: request.OwnerLease, ReaderBootstrap: request}, system)
 			return e
 		},
 		Health: func(ctx context.Context, target vpsinstall.Manifest) error {
@@ -235,6 +231,15 @@ func maintainRemoteReaderUpdate(ctx context.Context, m vpsinstall.Manifest, id s
 			return e
 		},
 	}
+	return actor, callbacks
+}
+
+func maintainRemoteReaderUpdate(ctx context.Context, m vpsinstall.Manifest, id string, rollback bool, source func(context.Context, string) (*bootstrap.Prepared, error), out io.Writer, system *custodyinstall.System) error {
+	if rollback {
+		return errors.New("reader-bootstrap preserves forward recovery; it never downgrades migrated metadata")
+	}
+	var request core.ApplicationReaderBootstrapRequest
+	actor, callbacks := readerRemoteCallbacks(m, id, &request, system)
 	if journal, e := vpsinstall.ApplicationUpdateState(m.OwnerUID); e == nil && journal.ID == id {
 		v, e := vpsinstall.ApplicationOwnerCall(ctx, m, core.ApplicationOwnerCommand{Action: "reader-prepare", ID: id}, system)
 		if e == nil && v.ReaderBootstrap != nil {

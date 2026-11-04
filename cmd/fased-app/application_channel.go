@@ -51,8 +51,8 @@ func channelSource(options channelOptionsFactory, parent string) func(context.Co
 			return nil, e
 		}
 		p.RetainAcquisitionEvidence()
-		got, e := p.ApplicationRelease()
-		if e != nil || got == nil || *got != release {
+		e = p.BindApplicationRelease(release)
+		if e != nil {
 			_ = p.Close()
 			return nil, errors.New("independent owner release differs from the approved update")
 		}
@@ -73,10 +73,10 @@ func channelCheck(options channelOptionsFactory, parent string, installedSequenc
 		if e != nil {
 			return nil, e
 		}
-		if descriptor.Sequence < installedSequence || descriptor.Sequence == installedSequence && digest != installedRelease {
+		if descriptor.Sequence < installedSequence || descriptor.Sequence == installedSequence && digest != installedRelease && !bootstrap.ApplicationDescriptorMatches(descriptor, installedRelease) {
 			return nil, errors.New("release rollback or identity change refused")
 		}
-		if descriptor.Sequence == installedSequence && digest == installedRelease {
+		if descriptor.Sequence == installedSequence && (digest == installedRelease || bootstrap.ApplicationDescriptorMatches(descriptor, installedRelease)) {
 			return nil, nil
 		}
 		p, e := bootstrap.Prepare(ctx, o)
