@@ -223,13 +223,13 @@ test("agent memory and archives keep recall sources journals and results through
   await expect(memoryCard).toContainText(note.text);
   await memoryCard.getByRole("button", { name: "Edit", exact: true }).click();
   const edit = page.getByRole("dialog", {
-    name: "Correct a memory",
+    name: "Edit",
     exact: true,
   });
   await expect(edit).toBeVisible();
   await expect(edit.getByLabel("Evidence or source")).not.toBeVisible();
   await edit
-    .getByLabel("Fact", { exact: true })
+    .getByLabel("Note", { exact: true })
     .fill("My SOL risk budget is 250 units");
   await edit
     .getByRole("button", { name: "Save correction", exact: true })
@@ -369,6 +369,7 @@ test("reviewed recurring tasks preserve named zones bounds CLI results pause and
   await page
     .getByLabel("Reminder text", { exact: true })
     .fill("Review saved positions and task results");
+  await revealControl(page, page.getByLabel("Schedule", { exact: true }));
   await page.getByLabel("Schedule", { exact: true }).selectOption("cron");
   await page.getByLabel("Recurrence", { exact: true }).selectOption("weekdays");
   await page.getByLabel("Time", { exact: true }).fill("09:30");
@@ -882,6 +883,7 @@ test.describe("calendar reminders", () => {
     await page
       .getByLabel("Reminder text", { exact: true })
       .fill("Review the saved fixture journal.");
+    await revealControl(page, page.getByLabel("Schedule", { exact: true }));
     await page
       .getByRole("combobox", { name: "Schedule", exact: true })
       .selectOption("calendar");
@@ -1083,6 +1085,7 @@ test("compact Tasks reviews without writes and preserves bounded runs across UI 
   await page
     .getByLabel("Reminder text", { exact: true })
     .fill("Review the saved fixture results.");
+  await revealControl(page, page.getByLabel("Schedule", { exact: true }));
   await page
     .getByRole("combobox", { name: "Schedule", exact: true })
     .selectOption("repeat");
@@ -1421,7 +1424,17 @@ test("normal Chat keeps a draft when its selected connection locks and stops a p
     passphrase: "lock-disposable-passphrase",
   });
   await page.reload();
-  await page.getByRole("button", { name: "Start chat", exact: true }).click();
+  await revealControl(
+    page,
+    page.getByLabel("Conversation name", { exact: true }),
+    "Conversation name",
+  );
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("New conversation");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
   const chat = page.getByRole("region", { name: "Optional AI request review" });
   await revealControl(
     page,
@@ -1605,8 +1618,8 @@ async function revealControl(
       await page
         .getByRole("button", { name: "New conversation", exact: true })
         .click();
-    } else if (hint.includes("Fact"))
-      await page.getByRole("button", { name: "Add fact", exact: true }).click();
+    } else if (hint.includes("Fact") || hint.includes("Note"))
+      await page.getByRole("button", { name: "Remember", exact: true }).click();
     else if (hint.includes("Task name"))
       await page.getByRole("button", { name: "New task", exact: true }).click();
   }
@@ -2034,11 +2047,11 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
   });
   await revealControl(
     page,
-    memory.getByRole("textbox", { name: "Fact", exact: true }),
+    memory.getByRole("textbox", { name: "Note", exact: true }),
     "",
   );
   await memory
-    .getByRole("textbox", { name: "Fact", exact: true })
+    .getByRole("textbox", { name: "Note", exact: true })
     .fill("Fixture digest sources must be checked before reuse.");
   expect((await read()).memories).toHaveLength(1);
   await memory
@@ -2248,7 +2261,7 @@ test("reviewed memory restoration shares inert UI CLI drafts, expiry, current-on
     page.getByRole("article", { name: "Current memory revision", exact: true }),
   ).toContainText("Current owner preference");
   await expect(
-    page.getByRole("textbox", { name: "Fact", exact: true }),
+    page.getByRole("textbox", { name: "Note", exact: true }),
   ).toHaveValue(original.text);
   expect(await read()).toEqual(before);
   expect(writes).toHaveLength(0);
@@ -3901,8 +3914,8 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   await reminder
     .getByLabel("Reminder text", { exact: true })
     .fill(`Review saved headline: ${item.title}`);
-  await revealControl(page, reminder.getByLabel("Repeat every (seconds)"), "");
-  await reminder.getByLabel("Repeat every (seconds)").fill("60");
+  await reminder.getByLabel("Unit", { exact: true }).selectOption("60");
+  await reminder.getByLabel("First run in", { exact: true }).fill("1");
   await revealControl(page, reminder.getByLabel("Maximum reminder runs"), "");
   await reminder.getByLabel("Maximum reminder runs").fill("1");
   await reminder
@@ -3983,10 +3996,10 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     "Review retained headline provenance before planning the next reminder";
   await revealControl(
     page,
-    memoryReview.getByLabel("Fact", { exact: true }),
+    memoryReview.getByLabel("Note", { exact: true }),
     "",
   );
-  await memoryReview.getByLabel("Fact", { exact: true }).fill(noteText);
+  await memoryReview.getByLabel("Note", { exact: true }).fill(noteText);
   expect((await read()).memories).toHaveLength(0);
   await memoryReview
     .getByRole("button", { name: "Save memory", exact: true })
@@ -5348,8 +5361,8 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
     page.getByText("Concise answers", { exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Edit", exact: true }).click();
-  await revealControl(page, page.getByLabel("Fact", { exact: true }), "Fact");
-  await page.getByLabel("Fact", { exact: true }).fill("Detailed answers");
+  await revealControl(page, page.getByLabel("Note", { exact: true }), "Fact");
+  await page.getByLabel("Note", { exact: true }).fill("Detailed answers");
   await revealControl(page, page.getByLabel("Evidence or source"), "");
   await page
     .getByLabel("Evidence or source")
@@ -5836,7 +5849,7 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
   await page.reload();
   await openProviders(page);
   await expect(panel.getByRole("status")).toContainText("Unlocked");
-  await panel.getByText("Credentials", { exact: true }).click();
+  await panel.getByText("Edit", { exact: true }).click();
   await panel.getByRole("button", { name: "Lock", exact: true }).click();
   await expect(panel.getByRole("status")).toContainText("Locked");
   expect((await privateCLI(["ai-connection"])).locked).toBe(true);
@@ -6953,8 +6966,8 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
   await review
     .getByLabel("Reminder text", { exact: true })
     .fill("Read the saved headlines and my notes");
-  await revealControl(page, review.getByLabel("Repeat every (seconds)"), "");
-  await review.getByLabel("Repeat every (seconds)").fill("3600");
+  await review.getByLabel("Unit", { exact: true }).selectOption("3600");
+  await review.getByLabel("First run in", { exact: true }).fill("1");
   await revealControl(page, review.getByLabel("Maximum reminder runs"), "");
   await review.getByLabel("Maximum reminder runs").fill("2");
   await review
@@ -7239,11 +7252,11 @@ test("chat memory requires explicit source-backed UI and CLI save and survives r
     .getByRole("button", { name: "Remember this", exact: true })
     .click();
   const review = source.getByRole("region", { name: "Chat memory review" });
-  await expect(review.getByLabel("Fact", { exact: true })).toHaveValue(
+  await expect(review.getByLabel("Note", { exact: true })).toHaveValue(
     message.text,
   );
-  await revealControl(page, review.getByLabel("Fact", { exact: true }), "");
-  await review.getByLabel("Fact", { exact: true }).fill("Cancelled draft");
+  await revealControl(page, review.getByLabel("Note", { exact: true }), "");
+  await review.getByLabel("Note", { exact: true }).fill("Cancelled draft");
   expect((await read()).memories).toHaveLength(0);
   await review
     .getByRole("button", { name: "Cancel memory", exact: true })
@@ -7271,9 +7284,9 @@ test("chat memory requires explicit source-backed UI and CLI save and survives r
   await source
     .getByRole("button", { name: "Remember this", exact: true })
     .click();
-  await revealControl(page, review.getByLabel("Fact", { exact: true }), "");
+  await revealControl(page, review.getByLabel("Note", { exact: true }), "");
   await review
-    .getByLabel("Fact", { exact: true })
+    .getByLabel("Note", { exact: true })
     .fill("Owner-reviewed preference: concise sourced answers");
   const expiry = new Date(Date.now() + 3600000).toISOString().slice(0, 16);
   await revealControl(
@@ -7330,11 +7343,11 @@ test("chat memory requires explicit source-backed UI and CLI save and survives r
   });
   await revealControl(
     page,
-    answerReview.getByLabel("Fact", { exact: true }),
+    answerReview.getByLabel("Note", { exact: true }),
     "",
   );
   await answerReview
-    .getByLabel("Fact", { exact: true })
+    .getByLabel("Note", { exact: true })
     .fill("Owner interpretation of the fixture answer");
   await answerReview
     .getByRole("button", { name: "Save memory", exact: true })
@@ -7507,6 +7520,22 @@ test("task run chat shares historical UI and CLI capture, explicit fixture expla
   await expect(page.locator(".local-messages")).toContainText(
     "Historical reminder run",
   );
+  const runArticle = page
+    .locator(".chat-message")
+    .filter({ hasText: "Journal review" });
+  await expect(
+    runArticle.getByText("Compare retained sources", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    runArticle.getByText("Saved reminder", { exact: false }),
+  ).toBeVisible();
+  await expect(runArticle.locator("details")).not.toHaveAttribute("open");
+  await expect(runArticle.locator("details p")).not.toBeVisible();
+  await runArticle.getByText("Source", { exact: true }).click();
+  await expect(runArticle.locator("details p")).toContainText(
+    "Snapshot SHA-256:",
+  );
+  await runArticle.getByText("Source", { exact: true }).click();
   v = await read();
   expect({
     tasks: v.tasks,
@@ -7543,9 +7572,12 @@ test("task run chat shares historical UI and CLI capture, explicit fixture expla
     .click();
   const review = page.getByRole("region", { name: "Chat memory review" });
   expect((await read()).memories).toHaveLength(0);
-  await revealControl(page, review.getByLabel("Fact", { exact: true }), "");
+  await expect(review.getByLabel("Note", { exact: true })).toHaveValue(
+    "Journal review\nCompare retained sources",
+  );
+  await revealControl(page, review.getByLabel("Note", { exact: true }), "");
   await review
-    .getByLabel("Fact", { exact: true })
+    .getByLabel("Note", { exact: true })
     .fill("Review saved reminder outcomes before planning");
   await review
     .getByRole("button", { name: "Save memory", exact: true })
@@ -7893,9 +7925,9 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
     .click();
   const review = page.getByRole("region", { name: "Chat memory review" });
   expect((await read()).memories).toHaveLength(0);
-  await revealControl(page, review.getByLabel("Fact", { exact: true }), "");
+  await revealControl(page, review.getByLabel("Note", { exact: true }), "");
   await review
-    .getByLabel("Fact", { exact: true })
+    .getByLabel("Note", { exact: true })
     .fill(
       "Check the recorded age and original source before interpreting news",
     );
@@ -11339,6 +11371,7 @@ test("Dashboard drag and resize autosave without a duplicate home rail shortcut"
 
 test("compact agent pages share one provider editor and keep feed settings off the page", async ({
   page,
+  isMobile,
 }) => {
   page.setDefaultTimeout(10000);
   await stop();
@@ -11396,6 +11429,14 @@ test("compact agent pages share one provider editor and keep feed settings off t
     .click();
   const provider = page.getByRole("region", { name: "Providers", exact: true });
   await expect(provider.locator(".ai-connection")).toHaveCount(1);
+  await expect(
+    provider.getByLabel("API key", { exact: true }),
+  ).not.toBeVisible();
+  await page.screenshot({
+    path: `.evidence/providers-account-first-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+  await provider.getByText("Connect", { exact: true }).click();
   await revealControl(
     page,
     provider.getByLabel("Vault passphrase", { exact: true }),
@@ -11428,7 +11469,25 @@ test("compact agent pages share one provider editor and keep feed settings off t
   await expect(
     page.getByRole("button", { name: "playbooks", exact: true }),
   ).toHaveCount(0);
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  await expect(page.getByLabel("Task name", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Schedule", { exact: true })).not.toBeVisible();
+  await page.getByLabel("Task name", { exact: true }).fill("Draft only");
+  await page
+    .getByLabel("Reminder text", { exact: true })
+    .fill("Keep this task draft");
+  await page.screenshot({
+    path: `.evidence/tasks-progressive-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: true,
+  });
+  await revealControl(page, page.getByLabel("Schedule", { exact: true }));
+  await expect(page.getByLabel("First run in", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel task", exact: true }).click();
   await page.goto(url + "/#agents/memory");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole("button", { name: "Remember", exact: true }).click();
+  await expect(page.getByLabel("Note", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
   await expect(page.getByText("PROFILE ONLY", { exact: true })).toHaveCount(0);
   const health = await (await page.request.get(url + "/api/v1/health")).json();
   for (const capability of [
@@ -11586,8 +11645,49 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     )
     .toBe("gpt-6.1-terra");
   await page.goto(url + "/#agents/chat");
-  await page.getByRole("button", { name: "Start chat", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Start chat", exact: true }),
+  ).toHaveCount(0);
+  await expect(page.getByLabel("Message", { exact: true })).toBeVisible();
+  expect((await read()).sessions).toHaveLength(0);
+  await page.screenshot({
+    path: `.evidence/chat-empty-composer-${isMobile ? "mobile" : "desktop"}.png`,
+    fullPage: false,
+  });
   const input = page.getByLabel("Message", { exact: true });
+  const assertCompactComposer = async () => {
+    const form = page.locator(".chat-message-form");
+    const send = form.getByRole("button", { name: "Send", exact: true });
+    const model = form.locator(".reply-model-menu>summary");
+    const [formBox, sendBox, modelBox, inputBox] = await Promise.all([
+      form.boundingBox(),
+      send.boundingBox(),
+      model.boundingBox(),
+      input.boundingBox(),
+    ]);
+    expect(formBox && sendBox && modelBox && inputBox).toBeTruthy();
+    expect(
+      Math.abs(
+        sendBox!.y + sendBox!.height / 2 - modelBox!.y - modelBox!.height / 2,
+      ),
+    ).toBeLessThan(5);
+    expect(sendBox!.width).toBeLessThanOrEqual(44);
+    expect(formBox!.y + formBox!.height).toBeLessThanOrEqual(
+      page.viewportSize()!.height,
+    );
+    expect(sendBox!.y + sendBox!.height).toBeLessThanOrEqual(
+      page.viewportSize()!.height,
+    );
+    expect(sendBox!.x + sendBox!.width).toBeLessThanOrEqual(
+      formBox!.x + formBox!.width,
+    );
+    expect(sendBox!.y + sendBox!.height).toBeLessThanOrEqual(
+      formBox!.y + formBox!.height,
+    );
+    expect(inputBox!.y + inputBox!.height).toBeLessThanOrEqual(sendBox!.y + 1);
+    expect(await send.textContent()).toBe("");
+  };
+  await assertCompactComposer();
   await expect(page.locator(".reply-model-menu>summary")).toHaveText(
     "gpt-6.1-terra",
   );
@@ -11616,6 +11716,27 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
   const q = v.aiRequests.at(-1);
   expect(q.connectionRef).toBe(connection.ref);
   expect(q.model).toBe("gpt-6.1-terra");
+  await assertCompactComposer();
+  const form = page.locator(".chat-message-form");
+  const beforeOptions = await form.boundingBox();
+  await form.getByLabel("Options", { exact: true }).click();
+  const options = form.locator(
+    ".message-options[open] > .message-options-panel",
+  );
+  await expect(options).toBeVisible();
+  const optionsBox = await options.boundingBox();
+  expect(optionsBox!.y).toBeGreaterThanOrEqual(0);
+  expect(optionsBox!.x).toBeGreaterThanOrEqual(0);
+  expect(optionsBox!.x + optionsBox!.width).toBeLessThanOrEqual(
+    page.viewportSize()!.width,
+  );
+  expect((await form.boundingBox())!.y).toBe(beforeOptions!.y);
+  await form.getByLabel("Options", { exact: true }).click();
+  await expect(options).not.toBeVisible();
+  await form.getByLabel("Options", { exact: true }).click();
+  await form.getByLabel("Options", { exact: true }).press("Escape");
+  await expect(options).not.toBeVisible();
+  await expect(form.getByLabel("Options", { exact: true })).toBeFocused();
   await page.screenshot({
     path: `.evidence/chat-${isMobile ? "mobile" : "desktop"}.png`,
     fullPage: false,
@@ -11650,7 +11771,7 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     .last()
     .click();
   await page
-    .getByLabel("Fact", { exact: true })
+    .getByLabel("Note", { exact: true })
     .fill("Prefer daily SOL risk summaries");
   await page.getByRole("button", { name: "Save memory", exact: true }).click();
   await expect.poll(async () => (await read()).memories.length).toBe(1);
@@ -11661,10 +11782,62 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
   await expect(
     page.getByText("Prefer daily SOL risk summaries", { exact: true }),
   ).toBeVisible();
+  const note = page
+    .locator(".memory-card")
+    .filter({ hasText: "Prefer daily SOL risk summaries" });
+  await note.getByRole("button", { name: "Source", exact: true }).click();
+  const memorySource = note.getByRole("region", {
+    name: "Memory source",
+    exact: true,
+  });
+  await expect(
+    memorySource.getByRole("button", { name: "Open Chat", exact: true }),
+  ).toBeVisible();
+  await expect(
+    memorySource.getByText("Inspect the saved SOL risk limits", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(memorySource.locator(".task-inspection > p")).not.toBeVisible();
+  await expect(memorySource.locator("details small")).not.toBeVisible();
+  await memorySource.getByText("Details", { exact: true }).click();
+  await expect(memorySource.locator("details small")).toContainText("SHA-256");
+  await memorySource.getByText("Details", { exact: true }).click();
   await page.screenshot({
     path: `.evidence/connected-memory-${isMobile ? "mobile" : "desktop"}.png`,
     fullPage: true,
   });
+  await memorySource
+    .getByRole("button", { name: "Open Chat", exact: true })
+    .click();
+  await openEvidence(page);
+  const inspection = page.getByRole("region", {
+    name: "Local agent evidence inspection",
+    exact: true,
+  });
+  await inspection
+    .getByRole("combobox", { name: "Evidence type", exact: true })
+    .selectOption("memory");
+  const savedNote = (await read()).memories[0];
+  await inspection
+    .getByRole("combobox", { name: "Saved record", exact: true })
+    .selectOption(JSON.stringify([savedNote.id, ""]));
+  await inspection
+    .getByRole("button", { name: "Inspect evidence", exact: true })
+    .click();
+  await inspection
+    .getByRole("button", { name: "Use in AI review", exact: true })
+    .click();
+  const attached = page
+    .locator(".composer-context")
+    .filter({ has: page.getByText("Selected evidence", { exact: true }) });
+  await expect(attached).toBeVisible();
+  await expect(attached).not.toHaveAttribute("open");
+  await assertCompactComposer();
+  await attached.locator(":scope > summary").click();
+  await expect(attached.locator("fieldset")).toBeVisible();
+  await assertCompactComposer();
+  await attached.locator(":scope > summary").click();
   await page.locator(".shell-brand").click();
   await expect(page.locator('[data-widget="tasks"]')).toContainText(
     "Daily SOL review",
@@ -12134,6 +12307,9 @@ for (const location of ["local", "remote"]) {
       planUse: true,
       liveCallsEnabled: false,
     });
+    await expect(
+      editor.locator(`[data-account="${account.ref}"] small`),
+    ).toHaveText("Sign in");
     expect((await privateCLI(["agents"])).revision).toBe(before.revision);
     await page.getByRole("button", { name: "Back", exact: true }).click();
     await expect(creation).toBeVisible();
@@ -12169,7 +12345,17 @@ for (const location of ["local", "remote"]) {
         await new Promise((resolve) => setTimeout(resolve, 1000));
       await route.fulfill({ response, json: body });
     });
-    await page.getByRole("button", { name: "Start chat", exact: true }).click();
+    await revealControl(
+      page,
+      page.getByLabel("Conversation name", { exact: true }),
+      "Conversation name",
+    );
+    await page
+      .getByLabel("Conversation name", { exact: true })
+      .fill("New conversation");
+    await page
+      .getByRole("button", { name: "Create conversation", exact: true })
+      .click();
     await page
       .getByLabel("Message", { exact: true })
       .fill("Summarize this synthetic note");
@@ -12178,6 +12364,16 @@ for (const location of ["local", "remote"]) {
       name: "Allow replies",
       exact: true,
     });
+    await expect(
+      replyReview
+        .locator(".review-list > div")
+        .filter({ has: page.getByText("Provider", { exact: true }) }),
+    ).toContainText("OpenAI");
+    await expect(
+      replyReview
+        .locator(".review-list > div")
+        .filter({ has: page.getByText("Usage", { exact: true }) }),
+    ).toContainText("OpenAI");
     await expect(
       replyReview.getByText("App limits", { exact: true }),
     ).toBeVisible();
@@ -12316,7 +12512,7 @@ for (const location of ["local", "remote"]) {
         .last()
         .click();
       await page
-        .getByLabel("Fact", { exact: true })
+        .getByLabel(/^(?:Fact|Note)$/, { exact: true })
         .fill("Keep fictional event summaries brief");
       await page
         .getByRole("button", { name: "Save memory", exact: true })
@@ -12416,7 +12612,17 @@ test("configured agent joins account Chat task result and memory without partial
   await expect(page.getByLabel("Agent", { exact: true })).toHaveValue(
     profile.id,
   );
-  await page.getByRole("button", { name: "Start chat", exact: true }).click();
+  await revealControl(
+    page,
+    page.getByLabel("Conversation name", { exact: true }),
+    "Conversation name",
+  );
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("New conversation");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
   await page
     .getByLabel("Message", { exact: true })
     .fill("Help me draft a reminder to inspect SOL risk");
@@ -12464,7 +12670,7 @@ test("configured agent joins account Chat task result and memory without partial
     .last()
     .click();
   await page
-    .getByLabel("Fact", { exact: true })
+    .getByLabel("Note", { exact: true })
     .fill("Prefer daily SOL risk summaries");
   await page.getByRole("button", { name: "Save memory", exact: true }).click();
   await expect.poll(async () => (await read()).memories.length).toBe(1);
@@ -12833,8 +13039,8 @@ test("scoped pilot controls keep review allow and revoke exact while ordinary co
   ).toBeDisabled();
   const credentials = editor
     .locator("details.connection-options")
-    .filter({ has: page.locator("summary", { hasText: /^Credentials$/ }) });
-  await credentials.getByText("Credentials", { exact: true }).click();
+    .filter({ has: page.locator("summary", { hasText: /^Edit$/ }) });
+  await credentials.getByText("Edit", { exact: true }).click();
   await credentials
     .getByLabel("API key", { exact: true })
     .fill("fased-test-pilot-replacement-refused");
@@ -12846,7 +13052,7 @@ test("scoped pilot controls keep review allow and revoke exact while ordinary co
   ).toBeDisabled();
   await credentials.getByLabel("API key", { exact: true }).fill("");
   await credentials.getByLabel("Vault passphrase", { exact: true }).fill("");
-  await credentials.getByText("Credentials", { exact: true }).click();
+  await credentials.getByText("Edit", { exact: true }).click();
   await editor.getByText("Pilot", { exact: true }).click();
   const pilot = editor
     .locator("details")
@@ -12979,16 +13185,7 @@ test("local provider connects in UI and shares configured agent Chat without API
     .getByRole("navigation", { name: "Main navigation", exact: true })
     .getByRole("link", { name: "Chat", exact: true })
     .click();
-  await openConversationList(page);
-  await page
-    .getByRole("button", { name: "New conversation", exact: true })
-    .click();
-  await page
-    .getByLabel("Conversation name", { exact: true })
-    .fill("Local browser conversation");
-  await page
-    .getByRole("button", { name: "Create conversation", exact: true })
-    .click();
+  await expect(page.getByLabel("Message", { exact: true })).toBeVisible();
   await page
     .getByLabel("Message", { exact: true })
     .fill("Explain this synthetic local note.");
@@ -13012,6 +13209,7 @@ test("local provider connects in UI and shares configured agent Chat without API
   const result = (
     await privateCLI(["agents", "--profile", profile])
   ).aiRequests.at(-1);
+  expect(result.limits.deadlineSeconds).toBe(60);
   expect(result.connectionRef).toBe(account.ref);
   expect(result.costBasis).toBe("local-reported-usage");
   expect(result.spentMicrousd).toBe(0);
@@ -13595,7 +13793,7 @@ test("Named local servers share setup models and agent Chat without retargeting 
   const account = accounts[1],
     model = "google/gemma-4-e2b";
   await editor.locator(`[data-account="${account.ref}"]`).click();
-  await editor.getByText("Credentials", { exact: true }).click();
+  await editor.getByText("Edit", { exact: true }).click();
   await editor.getByRole("button", { name: "Lock", exact: true }).click();
   await expect(editor.getByLabel("Endpoint", { exact: true })).toHaveValue("");
   await expect(
@@ -14990,7 +15188,7 @@ test("provider-free News watch reviews rules deduplicates across restart and joi
     .click();
   const memory = page.getByRole("dialog", { name: "Memory", exact: true });
   await memory
-    .getByLabel("Fact", { exact: true })
+    .getByLabel("Note", { exact: true })
     .fill("Paper feed: repeated headlines do not notify again.");
   await memory
     .getByRole("button", { name: "Save memory", exact: true })
@@ -15241,7 +15439,7 @@ test("normal Tasks joins optional News analysis and granted analysis-only result
     .click();
   let memory = page.getByRole("dialog", { name: "Memory", exact: true });
   await memory
-    .getByLabel("Fact", { exact: true })
+    .getByLabel("Note", { exact: true })
     .fill(
       "Paper watch keeps its result when optional analysis is unavailable.",
     );
@@ -15328,7 +15526,7 @@ test("normal Tasks joins optional News analysis and granted analysis-only result
     .click();
   memory = page.getByRole("dialog", { name: "Memory", exact: true });
   await memory
-    .getByLabel("Fact", { exact: true })
+    .getByLabel("Note", { exact: true })
     .fill(
       "Synthetic analysis is a saved result, not a reminder or trading authority.",
     );
@@ -15813,3 +16011,100 @@ for (const restored of [false, true]) {
     },
   );
 }
+
+test("first Send retains its exact draft when conversation changes during account loading", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  await stop();
+  await start(true);
+  await page.goto(url + "/#agents/chat");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await openOwnerSetup(page, claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const binding = await fixtureProviderSelection("openai");
+  let view = await privateCLI(["agents"]);
+  const profileId = view.profileId;
+  const read = () => privateCLI(["agents", "--profile", profileId]);
+  const command = async (fields: Record<string, unknown>) =>
+    privateCLI(["agents", "--request-stdin"], {
+      profileId,
+      revision: (await read()).revision,
+      ...fields,
+    });
+  const profile = view.profiles.find((p: any) => p.id === profileId);
+  await command({
+    action: "profile-update",
+    name: profile.name,
+    text: profile.persona,
+    ...binding,
+  });
+  await command({ action: "session-create", name: "Previous conversation" });
+  await page.reload();
+  const input = page.getByLabel("Message", { exact: true });
+  await input.fill("Preserved previous draft");
+  await openConversationList(page);
+  await page
+    .getByLabel("Search conversations", { exact: true })
+    .fill("no such conversation");
+  await input.fill("New explicit first-send draft");
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let blocked = 0;
+  await page.route("**/api/v1/ai/connection", async (route) => {
+    if (route.request().method() === "GET") {
+      blocked++;
+      await held;
+    }
+    await route.continue();
+  });
+  try {
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect.poll(() => blocked).toBeGreaterThan(0);
+    await openConversationList(page);
+    await page
+      .getByRole("button", { name: "Previous conversation", exact: true })
+      .click();
+  } finally {
+    release();
+  }
+  await page.unrouteAll({ behavior: "wait" });
+  await expect(input).toHaveValue("Preserved previous draft");
+  await expect(page.locator(".reply-model-menu > summary")).toHaveText(
+    binding.model,
+  );
+  await expect(
+    page.getByRole("dialog", { name: "Allow replies", exact: true }),
+  ).toHaveCount(0);
+  expect((await read()).aiRequests).toHaveLength(0);
+  await openConversationList(page);
+  await page
+    .getByRole("button", { name: "New conversation", exact: true })
+    .filter({ hasNot: page.locator("svg") })
+    .click();
+  await expect(input).toHaveValue("New explicit first-send draft");
+  await expect(page.locator(".reply-model-menu > summary")).toHaveText(
+    binding.model,
+  );
+  await expect(
+    page.getByRole("dialog", { name: "Allow replies", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(
+    page.getByRole("dialog", { name: "Allow replies", exact: true }),
+  ).toBeVisible();
+  expect((await read()).aiRequests).toHaveLength(0);
+});

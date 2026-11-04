@@ -3,6 +3,7 @@ import { useUI } from "../ui-preferences";
 import { useState } from "react";
 import type { AgentView, ChatMemorySource } from "../agents";
 import { useWorkspace } from "../workspace";
+import { reminderRun } from "./ReminderRunMessage";
 
 export function ChatMemoryReview({
   view,
@@ -19,9 +20,22 @@ export function ChatMemoryReview({
 }) {
   const { t: uiText } = useUI();
   const { agents, navigate } = useWorkspace();
+  const message =
+    sourceKind === "message"
+      ? view.messages.find(
+          (m) =>
+            m.id === sourceId &&
+            m.sessionId === sessionId &&
+            m.text === sourceText,
+        )
+      : undefined;
+  const reminder = message && reminderRun(message, view.profileId);
+  const initialText = reminder
+    ? `${reminder.name}\n${reminder.text}`
+    : sourceText;
   const [revision, setRevision] = useState<number>();
   const [saved, setSaved] = useState(false);
-  const [text, setText] = useState(sourceText);
+  const [text, setText] = useState(initialText);
   const [expiry, setExpiry] = useState("");
   if (revision === undefined)
     return (
@@ -43,7 +57,7 @@ export function ChatMemoryReview({
           disabled={agents.busy}
           onClick={() => {
             setSaved(false);
-            setText(sourceText);
+            setText(initialText);
             setExpiry("");
             setRevision(view.revision);
           }}
@@ -98,9 +112,9 @@ export function ChatMemoryReview({
           }}
         >
           <label>
-            {uiText("Fact")}
+            {uiText("Note")}
             <textarea
-              aria-label={uiText("Fact")}
+              aria-label={uiText("Note")}
               required
               maxLength={4000}
               value={text}

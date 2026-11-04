@@ -1,3 +1,4 @@
+import { providerNames, type Provider } from "../state";
 import { previewModel } from "../ui-language-preview";
 import { useUI } from "../ui-preferences";
 import type { AgentAIRequest, AgentView } from "../agents";
@@ -68,7 +69,7 @@ export function ChatReply({
         <strong>{uiText(q.state)}</strong>
         <small>
           {planUsage ? (
-            uiText(q.policy?.provider === "local" ? "Local" : "ChatGPT")
+            uiText(providerNames[q.policy?.provider as Provider] || "Provider")
           ) : (
             <>
               {uiText("Demo · ")}
@@ -89,7 +90,7 @@ export function ChatReply({
             <>
               {" · "}
               {money(q.limits.budgetMicrousd)}
-              {uiText(" fixture budget")}
+              {uiText(" budget")}
             </>
           )}
         </p>
@@ -111,7 +112,7 @@ export function ChatReply({
               {uiText(" · Held ")}
               {money(q.heldMicrousd)}
               {uiText(" · Spent")} {money(q.spentMicrousd)}
-              {uiText(" (fixture only)")}
+              {uiText(" (preview)")}
             </>
           )}
         </p>
@@ -184,11 +185,7 @@ export function ChatReply({
               checked={consent === q.digest}
               onChange={(e) => setConsent(e.target.checked ? q.digest : "")}
             />
-            {uiText(
-              planUsage
-                ? "I reviewed this context and these limits"
-                : "I reviewed this context and these fixture limits",
-            )}
+            {uiText("I reviewed this context and these limits")}
           </label>
           <button
             className="primary"
@@ -209,14 +206,10 @@ export function ChatReply({
                 });
             }}
           >
-            {uiText(planUsage ? "Run" : "Run development fixture")}
+            {uiText(planUsage ? "Run" : "Run preview")}
           </button>
           {!(view.aiExecutionAvailable ?? view.aiFixtureAvailable) && (
-            <p className="subtle">
-              {uiText(
-                "Execution is disabled in this core. Only an explicitly started local development fixture can run.",
-              )}
-            </p>
+            <p className="subtle">{uiText("Execution unavailable")}</p>
           )}
         </>
       )}

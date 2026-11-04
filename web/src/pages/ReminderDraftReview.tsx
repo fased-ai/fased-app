@@ -3,6 +3,7 @@ import { useUI } from "../ui-preferences";
 import { useEffect, useState } from "react";
 import type { AgentView, AgentAIRequest, ReminderReview } from "../agents";
 import { useWorkspace } from "../workspace";
+import { intervalWithUnit, taskInterval } from "../task-timing";
 
 export function ReminderDraftReview({
   view,
@@ -17,6 +18,7 @@ export function ReminderDraftReview({
   const [name, setName] = useState(card.title);
   const [text, setText] = useState(card.text);
   const [interval, setInterval] = useState(3600);
+  const [unit, setUnit] = useState(3600);
   const [runs, setRuns] = useState(1);
   const [review, setReview] = useState<ReminderReview>();
   const [consent, setConsent] = useState("");
@@ -77,8 +79,9 @@ export function ReminderDraftReview({
           }}
         >
           <label>
-            {uiText("Reminder task name")}
+            {uiText("Name")}
             <input
+              aria-label={uiText("Reminder task name")}
               required
               maxLength={80}
               value={name}
@@ -89,7 +92,7 @@ export function ReminderDraftReview({
             />
           </label>
           <label>
-            {uiText("Reminder text")}
+            {uiText("Text")}
             <textarea
               aria-label={uiText("Reminder text")}
               required
@@ -101,24 +104,44 @@ export function ReminderDraftReview({
               }}
             />
           </label>
+          <div className="task-timing">
+            <label>
+              {uiText(runs === 1 ? "First run in" : "Every")}
+              <input
+                type="number"
+                required
+                min={60 / unit}
+                max={604800 / unit}
+                step="any"
+                value={interval / unit}
+                onChange={(e) => {
+                  clear();
+                  setInterval(Math.round(Number(e.target.value) * unit));
+                }}
+              />
+            </label>
+            <label>
+              {uiText("Unit")}
+              <select
+                aria-label={uiText("Unit")}
+                value={unit}
+                onChange={(e) => {
+                  clear();
+                  const next = Number(e.target.value);
+                  setInterval(intervalWithUnit(interval, unit, next));
+                  setUnit(next);
+                }}
+              >
+                <option value={60}>{uiText("Minutes")}</option>
+                <option value={3600}>{uiText("Hours")}</option>
+                <option value={86400}>{uiText("Days")}</option>
+              </select>
+            </label>
+          </div>
           <label>
-            {uiText("Repeat every (seconds)")}
+            {uiText("Runs")}
             <input
-              type="number"
-              required
-              min={60}
-              max={604800}
-              step={1}
-              value={interval}
-              onChange={(e) => {
-                clear();
-                setInterval(Number(e.target.value));
-              }}
-            />
-          </label>
-          <label>
-            {uiText("Maximum reminder runs")}
-            <input
+              aria-label={uiText("Maximum reminder runs")}
               type="number"
               required
               min={1}
@@ -140,13 +163,18 @@ export function ReminderDraftReview({
             <strong>{review.name}</strong>
             <p>{review.text}</p>
             <p>
-              {uiText("First reminder ")}
-              {review.intervalSeconds}
               {uiText(
-                " seconds after creation; repeat at that interval for at most ",
+                review.maxRuns === 1
+                  ? "Once, after {duration}"
+                  : "Every {duration} · {count} runs",
+                {
+                  duration: taskInterval(
+                    review.intervalSeconds,
+                    document.documentElement.lang,
+                  ),
+                  count: review.maxRuns,
+                },
               )}
-              {review.maxRuns}
-              {uiText(" runs while the core runs. Missed intervals coalesce.")}
             </p>
             <p>
               {uiText("Review expires ")}
@@ -155,6 +183,11 @@ export function ReminderDraftReview({
             </p>
             <details>
               <summary>{uiText("Reminder source and review evidence")}</summary>
+              <p>
+                {uiText(
+                  "Runs while Fased is running. Missed intervals coalesce.",
+                )}
+              </p>
               <p>
                 {uiText("Chat request: ")}
                 <code>{review.requestId}</code>

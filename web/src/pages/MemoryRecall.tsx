@@ -1,3 +1,4 @@
+import { reminderRun, ReminderRunMessage } from "./ReminderRunMessage";
 import { SlidersHorizontal, Trash2, Eye, History, Search } from "../icons";
 import { useEffect, useRef, useState } from "react";
 import type {
@@ -120,6 +121,18 @@ export function MemoryRecall({
     }
   }
   const source = inspection?.source;
+  const sourceMessage =
+    source?.status === "matched" && source.kind === "message"
+      ? view.messages.find(
+          (message) =>
+            message.id === source.id &&
+            message.sessionId === source.sessionId &&
+            message.text === source.text,
+        )
+      : undefined;
+  const sourceRun = sourceMessage
+    ? reminderRun(sourceMessage, view.profileId)
+    : undefined;
   const current =
     inspection?.revision === view.revision &&
     inspection?.profileId === view.profileId;
@@ -153,13 +166,13 @@ export function MemoryRecall({
           <Search size={16} />
         </button>
       </form>
-      {error && <p role="alert">{error}</p>}
+      {error && <p role="alert">{uiText(error)}</p>}
       {!records && !error && <p role="status">{uiText("Loading memories…")}</p>}
       {records?.memories.map((m) => (
         <article
           className="memory-card"
           key={m.id}
-          aria-label={`Memory ${m.id}`}
+          aria-label={`${uiText("Memory")} ${m.id}`}
         >
           <p>{m.text}</p>
           {m.expired && <small>{uiText("Expired")}</small>}
@@ -217,7 +230,12 @@ export function MemoryRecall({
                 {uiText(" previous revision(s)")}
               </summary>
               {m.history.map((h, i) => (
-                <section key={i} aria-label={`Memory revision ${i + 1}`}>
+                <section
+                  key={i}
+                  aria-label={uiText("Memory revision {count}", {
+                    count: i + 1,
+                  })}
+                >
                   <p>{h.text}</p>
                   <small>
                     {h.source}
@@ -244,12 +262,22 @@ export function MemoryRecall({
               <p>{uiText(memoryEvidenceStatuses[source.status])}</p>
               {source.status === "matched" && (
                 <>
-                  <p>{source.text}</p>
-                  <small>
-                    {source.kind} · {source.id}
-                    {uiText(" · SHA-256 ")}
-                    {source.sha256}
-                  </small>
+                  {sourceRun ? (
+                    <ReminderRunMessage
+                      result={sourceRun}
+                      source={source.text!}
+                    />
+                  ) : (
+                    <p>{source.text}</p>
+                  )}
+                  <details>
+                    <summary>{uiText("Details")}</summary>
+                    <small>
+                      {source.kind} · {source.id}
+                      {uiText(" · SHA-256 ")}
+                      {source.sha256}
+                    </small>
+                  </details>
                   <button
                     className="secondary"
                     disabled={!current || agents.busy}

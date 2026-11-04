@@ -839,7 +839,10 @@ export function useAgents(core: ReturnType<typeof useCore>) {
     setError("");
     await refresh(profile).catch(() => {});
   }
-  async function change(command: AgentCommand) {
+  async function change(
+    command: AgentCommand,
+    onAccepted?: (view: AgentView) => void,
+  ) {
     if (!current.current || writing.current || disconnected.current)
       return false;
     writing.current = true;
@@ -857,6 +860,7 @@ export function useAgents(core: ReturnType<typeof useCore>) {
           requestedProfile.current = v.profileId;
         accept(v);
         generation.current++;
+        onAccepted?.(v);
       }
       return true;
     } catch (e) {
