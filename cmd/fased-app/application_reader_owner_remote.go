@@ -90,7 +90,7 @@ func readerApplicationOwnerHelper(ctx context.Context, m vpsinstall.Manifest, im
 			} else if e = core.CheckApplicationReaderPredecessor(ctx, m.Data, snapshot); e != nil {
 				return out, true, e
 			}
-			if e = client.Do(ctx, http.MethodPost, "/api/v1/updates/pause", update.CorePauseCommand{Action: "status", ProbeID: update.NewProbe()}, &r.Predecessor); e != nil {
+			if e = readRemoteReaderPauseStatus(ctx, client, &r.Predecessor); e != nil {
 				return out, true, e
 			}
 			if r.Predecessor.State == "paused" {
@@ -130,6 +130,17 @@ func readerApplicationOwnerHelper(ctx context.Context, m vpsinstall.Manifest, im
 	v, e := core.ReadApplicationOwnerOffline(ctx, m.Data, c.ID)
 	v.ReaderBootstrap = &r
 	return v, true, e
+}
+
+func readRemoteReaderPauseStatus(ctx context.Context, client *core.Client, predecessor *update.CorePauseReceipt) error {
+	// A new prepared receipt points at the pending pause request. Decode into a
+	// fresh value so an older released status cannot overwrite that authority.
+	var status update.CorePauseReceipt
+	if err := client.Do(ctx, http.MethodPost, "/api/v1/updates/pause", update.CorePauseCommand{Action: "status", ProbeID: update.NewProbe()}, &status); err != nil {
+		return err
+	}
+	*predecessor = status
+	return nil
 }
 
 func remoteReaderUpdateApplicable(ctx context.Context, m vpsinstall.Manifest, id string, system *custodyinstall.System) (bool, error) {
