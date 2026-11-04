@@ -455,9 +455,12 @@ function AgentAIForm({
     (m) => m.id === permissionReview?.model,
   )?.policy;
   const permissionProvider =
-    accounts?.catalog?.providers.find(
-      (p) => p.id === permissionAccount?.provider,
-    )?.name || tr("Unavailable");
+    permissionPolicy?.provider === "ollama-cloud" ||
+    permissionPolicy?.model === "gemma4:cloud"
+      ? "Ollama Cloud"
+      : accounts?.catalog?.providers.find(
+          (p) => p.id === permissionAccount?.provider,
+        )?.name || tr("Unavailable");
   return (
     <>
       {permissionReview && (
@@ -599,6 +602,10 @@ function AgentAIForm({
           onSubmit={async (e) => {
             e.preventDefault();
             setOptionsOpen(false);
+            const modelMenu = e.currentTarget.querySelector<HTMLDetailsElement>(
+              ".reply-model-menu[open]",
+            );
+            if (modelMenu) modelMenu.open = false;
             if (agents.busy || draftBusy || preparing.current) return;
             preparing.current = true;
             setDraftError("");
@@ -853,6 +860,63 @@ function AgentAIForm({
                 >
                   {uiText("Remove evidence")}
                 </button>
+              </fieldset>
+            </details>
+          )}
+          {researchSelection && (
+            <details className="composer-context">
+              <summary>{uiText("Limits")}</summary>
+              <fieldset
+                className="agent-form-grid"
+                aria-label={uiText("Research turn limits")}
+              >
+                <legend>{uiText("Research turn limits")}</legend>
+                <label>
+                  {uiText("Model attempts")}
+                  <input
+                    type="number"
+                    min={1}
+                    max={3}
+                    required
+                    value={modelAttempts}
+                    onChange={(e) => setModelAttempts(e.target.valueAsNumber)}
+                  />
+                </label>
+                <label>
+                  {uiText("Read attempts")}
+                  <input
+                    type="number"
+                    min={1}
+                    max={8}
+                    required
+                    value={toolAttempts}
+                    onChange={(e) => setToolAttempts(e.target.valueAsNumber)}
+                  />
+                </label>
+                <label>
+                  {uiText("Research deadline (seconds)")}
+                  <input
+                    type="number"
+                    min={1}
+                    max={90}
+                    required
+                    value={turnSeconds}
+                    onChange={(e) => setTurnSeconds(e.target.valueAsNumber)}
+                  />
+                </label>
+                {!planUsage && (
+                  <label>
+                    {uiText("Turn budget (micro USD)")}
+                    <input
+                      type="number"
+                      min={1}
+                      max={3000000}
+                      required
+                      value={turnBudget}
+                      onChange={(e) => setTurnBudget(e.target.valueAsNumber)}
+                    />
+                  </label>
+                )}
               </fieldset>
             </details>
           )}
@@ -1218,63 +1282,6 @@ function AgentAIForm({
                 {tr("Configure")}
               </button>
             </div>
-          )}
-          {researchSelection && (
-            <details className="composer-context">
-              <summary>{uiText("Limits")}</summary>
-              <fieldset
-                className="agent-form-grid"
-                aria-label={uiText("Research turn limits")}
-              >
-                <legend>{uiText("Research turn limits")}</legend>
-                <label>
-                  {uiText("Model attempts")}
-                  <input
-                    type="number"
-                    min={1}
-                    max={3}
-                    required
-                    value={modelAttempts}
-                    onChange={(e) => setModelAttempts(e.target.valueAsNumber)}
-                  />
-                </label>
-                <label>
-                  {uiText("Read attempts")}
-                  <input
-                    type="number"
-                    min={1}
-                    max={8}
-                    required
-                    value={toolAttempts}
-                    onChange={(e) => setToolAttempts(e.target.valueAsNumber)}
-                  />
-                </label>
-                <label>
-                  {uiText("Research deadline (seconds)")}
-                  <input
-                    type="number"
-                    min={1}
-                    max={90}
-                    required
-                    value={turnSeconds}
-                    onChange={(e) => setTurnSeconds(e.target.valueAsNumber)}
-                  />
-                </label>
-                {!planUsage && (
-                  <label>
-                    {uiText("Turn budget (micro USD)")}
-                    <input
-                      type="number"
-                      min={1}
-                      max={3000000}
-                      required
-                      value={turnBudget}
-                      onChange={(e) => setTurnBudget(e.target.valueAsNumber)}
-                    />
-                  </label>
-                )}
-              </fieldset>
-            </details>
           )}
         </form>
       </section>

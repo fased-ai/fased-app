@@ -152,11 +152,11 @@ test("agent memory and archives keep recall sources journals and results through
   const card = page.locator(".ai-request").last();
   await card
     .getByRole("checkbox", {
-      name: "I reviewed this context and these test limits",
+      name: "I reviewed this context and these limits",
       exact: true,
     })
     .check();
-  await card.getByRole("button", { name: "Run test", exact: true }).click();
+  await card.getByRole("button", { name: "Run preview", exact: true }).click();
   await expect
     .poll(async () => (await read()).aiRequests[0].state)
     .toBe("completed");
@@ -659,6 +659,7 @@ test("Meteora shell preserves drafts and records through navigation theme langua
   await expect(
     page.getByRole("button", { name: "Preferences", exact: true }),
   ).toBeVisible();
+  await openConversationList(page);
   await page
     .getByRole("button", { name: "New conversation", exact: true })
     .click();
@@ -3694,7 +3695,7 @@ test("conversation search follows matching records and closes hidden conversatio
   ).toBeVisible();
   await expect(
     page.getByRole("textbox", { name: "Message", exact: true }),
-  ).toHaveCount(0);
+  ).toHaveValue("");
   await expect(
     page.getByRole("region", {
       name: "Optional AI request review",
@@ -3874,18 +3875,16 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   expect((await read()).tasks).toHaveLength(0);
   const request = review.locator(".ai-request").last();
   const runFixture = request.getByRole("button", {
-    name: "Run test",
+    name: "Run preview",
     exact: true,
   });
   await expect(runFixture).toBeDisabled();
   await revealControl(
     page,
-    request.getByLabel("I reviewed this context and these test limits"),
+    request.getByLabel("I reviewed this context and these limits"),
     "",
   );
-  await request
-    .getByLabel("I reviewed this context and these test limits")
-    .check();
+  await request.getByLabel("I reviewed this context and these limits").check();
   await runFixture.click();
   await expect
     .poll(async () => (await read()).aiRequests[0]?.state)
@@ -4173,7 +4172,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   await expect(review.locator(".ai-request")).toContainText(prepared.prompt);
   await expect(
     review.getByRole("button", {
-      name: "Run test",
+      name: "Run preview",
       exact: true,
     }),
   ).toHaveCount(0);
@@ -5289,6 +5288,7 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
     .getByLabel("Name", { exact: true })
     .fill("Local acceptance researcher");
   await page.getByRole("button", { name: "Create agent", exact: true }).click();
+  await openConversationList(page);
   await expect(
     page.getByRole("heading", {
       name: "Conversations",
@@ -5805,13 +5805,11 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
   await expect(review).toContainText(firstRef);
   await revealControl(
     page,
-    review.getByLabel("I reviewed this context and these test limits"),
+    review.getByLabel("I reviewed this context and these limits"),
     "",
   );
-  await review
-    .getByLabel("I reviewed this context and these test limits")
-    .check();
-  await review.getByRole("button", { name: "Run test" }).click();
+  await review.getByLabel("I reviewed this context and these limits").check();
+  await review.getByRole("button", { name: "Run preview" }).click();
   await expect(review.getByText("completed", { exact: true })).toBeVisible({
     timeout: 12000,
   });
@@ -5924,18 +5922,16 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
   await exactReplyReview(page);
   await panel.getByRole("button", { name: "Send" }).click();
   await expect(panel.getByText("prepared", { exact: true })).toBeVisible();
-  const run = panel.getByRole("button", { name: "Run test" });
+  const run = panel.getByRole("button", { name: "Run preview" });
   await expect(run).toBeDisabled();
   await panel.getByText("Details", { exact: true }).click();
   await expect(panel.locator("pre")).toContainText('"store":false');
   await revealControl(
     page,
-    panel.getByLabel("I reviewed this context and these test limits"),
+    panel.getByLabel("I reviewed this context and these limits"),
     "",
   );
-  await panel
-    .getByLabel("I reviewed this context and these test limits")
-    .check();
+  await panel.getByLabel("I reviewed this context and these limits").check();
   await run.click();
   await expect(panel.getByText("completed", { exact: true })).toBeVisible({
     timeout: 12000,
@@ -6362,13 +6358,11 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
   await expect(review).toContainText("All three API operations are simulated");
   await revealControl(
     page,
-    review.getByLabel("I reviewed this context and these test limits"),
+    review.getByLabel("I reviewed this context and these limits"),
     "",
   );
-  await review
-    .getByLabel("I reviewed this context and these test limits")
-    .check();
-  await review.getByRole("button", { name: "Run test" }).click();
+  await review.getByLabel("I reviewed this context and these limits").check();
+  await review.getByRole("button", { name: "Run preview" }).click();
   await expect(review.getByText("completed", { exact: true })).toBeVisible({
     timeout: 12000,
   });
@@ -6767,7 +6761,7 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
   await expect(request.locator("pre")).toContainText(task.wen.digest);
   await expect(
     request.getByRole("button", {
-      name: "Run test",
+      name: "Run preview",
       exact: true,
     }),
   ).toBeDisabled();
@@ -6785,13 +6779,13 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
   request = review.locator(".ai-request").last();
   await revealControl(
     page,
-    request.getByLabel("I reviewed this context and these test limits"),
+    request.getByLabel("I reviewed this context and these limits"),
     "",
   );
+  await request.getByLabel("I reviewed this context and these limits").check();
   await request
-    .getByLabel("I reviewed this context and these test limits")
-    .check();
-  await request.getByRole("button", { name: "Run test", exact: true }).click();
+    .getByRole("button", { name: "Run preview", exact: true })
+    .click();
   await expect
     .poll(async () => {
       v = await privateCLI(["agents"]);
@@ -6935,13 +6929,13 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
   const request = ai.locator(".ai-request").last();
   await revealControl(
     page,
-    request.getByLabel("I reviewed this context and these test limits"),
+    request.getByLabel("I reviewed this context and these limits"),
     "",
   );
+  await request.getByLabel("I reviewed this context and these limits").check();
   await request
-    .getByLabel("I reviewed this context and these test limits")
-    .check();
-  await request.getByRole("button", { name: "Run test", exact: true }).click();
+    .getByRole("button", { name: "Run preview", exact: true })
+    .click();
   await expect
     .poll(async () => (await read()).aiRequests[0]?.state)
     .toBe("completed");
@@ -8557,7 +8551,7 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
   expect(selected.q.context).not.toContain(second.text);
   await expect(
     selected.card.getByRole("button", {
-      name: "Run test",
+      name: "Run preview",
       exact: true,
     }),
   ).toBeDisabled();
@@ -8634,18 +8628,18 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
   await revealControl(
     page,
     fresh.card.getByRole("checkbox", {
-      name: "I reviewed this context and these test limits",
+      name: "I reviewed this context and these limits",
       exact: true,
     }),
   );
   await fresh.card
     .getByRole("checkbox", {
-      name: "I reviewed this context and these test limits",
+      name: "I reviewed this context and these limits",
       exact: true,
     })
     .check();
   await fresh.card
-    .getByRole("button", { name: "Run test", exact: true })
+    .getByRole("button", { name: "Run preview", exact: true })
     .click();
   await expect
     .poll(
@@ -9066,14 +9060,14 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
   await expect(freshCard.locator("pre").first()).toHaveText(fresh.disclosure);
   await expect(
     freshCard.getByRole("button", {
-      name: "Run test",
+      name: "Run preview",
       exact: true,
     }),
   ).toBeDisabled();
   await revealControl(page, freshCard.getByRole("checkbox"));
   await freshCard.getByRole("checkbox").check();
   await freshCard
-    .getByRole("button", { name: "Run test", exact: true })
+    .getByRole("button", { name: "Run preview", exact: true })
     .click();
   await expect
     .poll(async () => (await read()).aiRequests.at(-1).state)
@@ -9239,7 +9233,7 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
   expect({ ...restored, revision: shared.revision }).toEqual(shared);
   await expect(
     sourceCard.getByRole("button", {
-      name: "Run test",
+      name: "Run preview",
       exact: true,
     }),
   ).toBeDisabled();
@@ -9802,6 +9796,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
   const selected = review.getByRole("group", {
     name: "AI evidence selection",
     exact: true,
+    includeHidden: true,
   });
   const choose = async (kind: string, id: string, itemId = "") => {
     await openEvidence(page);
@@ -9849,9 +9844,14 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
   ]) {
     const baseline = await read();
     const data = await choose(q.kind, q.id, q.itemId);
+    await openEvidence(page);
     await inspector
       .getByRole("button", { name: "Use in AI review", exact: true })
       .click();
+    await expect(
+      review.getByRole("textbox", { name: "Message", exact: true }),
+    ).toBeFocused();
+    await revealControl(page, selected);
     await expect(selected).toContainText(data.sha256);
     expect(
       await page.evaluate(
@@ -9865,9 +9865,6 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
         ),
         fullPage: true,
       });
-    await expect(
-      review.getByRole("textbox", { name: "Message", exact: true }),
-    ).toBeFocused();
     await revealControl(
       page,
       review.getByRole("combobox", {
@@ -9883,6 +9880,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
         includeHidden: true,
       })
       .selectOption("none");
+    await review.locator(".message-options > summary").click();
     await revealControl(
       page,
       review.getByRole("textbox", { name: "Message", exact: true }),
@@ -9897,6 +9895,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
       .click();
     await expect(selected).toHaveCount(0);
     expect(await read()).toEqual(baseline);
+    await openEvidence(page);
     await inspector
       .getByRole("button", { name: "Use in AI review", exact: true })
       .click();
@@ -9937,7 +9936,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
     await expect(card.locator("pre")).toHaveText(request.disclosure);
     await expect(
       card.getByRole("button", {
-        name: "Run test",
+        name: "Run preview",
         exact: true,
       }),
     ).toBeDisabled();
@@ -9947,17 +9946,19 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
     await revealControl(
       page,
       card.getByRole("checkbox", {
-        name: "I reviewed this context and these test limits",
+        name: "I reviewed this context and these limits",
         exact: true,
       }),
     );
     await card
       .getByRole("checkbox", {
-        name: "I reviewed this context and these test limits",
+        name: "I reviewed this context and these limits",
         exact: true,
       })
       .check();
-    await card.getByRole("button", { name: "Run test", exact: true }).click();
+    await card
+      .getByRole("button", { name: "Run preview", exact: true })
+      .click();
     await expect
       .poll(
         async () =>
@@ -10018,6 +10019,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
   await memoryCard()
     .getByRole("button", { name: "Use as draft", exact: true })
     .click();
+  await revealControl(page, selected);
   await expect(selected).toContainText(
     JSON.parse(memoryRequest.context).evidenceSelection.sha256,
   );
@@ -10153,7 +10155,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
   });
   await expect(
     correctedCard.getByRole("button", {
-      name: "Run test",
+      name: "Run preview",
       exact: true,
     }),
   ).toBeDisabled();
@@ -10193,6 +10195,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
   await review.getByRole("button", { name: "Send", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("exceed 8000 bytes");
   expect(await read()).toEqual(beforeOversize);
+  await revealControl(page, selected);
   await selected
     .getByRole("button", { name: "Remove evidence", exact: true })
     .click();
@@ -10249,6 +10252,7 @@ test("R1 workspace uses a compact branded shell and on-demand chat task memory c
   await page
     .getByLabel("Agent", { exact: true })
     .selectOption("trading-analyst");
+  await openConversationList(page);
   await page
     .getByRole("button", { name: "New conversation", exact: true })
     .click();
@@ -10363,23 +10367,25 @@ test("R1 workspace uses a compact branded shell and on-demand chat task memory c
   const review = page.locator(".ai-request").last();
   await expect(
     review.getByRole("button", {
-      name: "Run test",
+      name: "Run preview",
       exact: true,
     }),
   ).toBeDisabled();
   await revealControl(
     page,
-    review.getByLabel("I reviewed this context and these test limits", {
+    review.getByLabel("I reviewed this context and these limits", {
       exact: true,
     }),
     "",
   );
   await review
-    .getByLabel("I reviewed this context and these test limits", {
+    .getByLabel("I reviewed this context and these limits", {
       exact: true,
     })
     .check();
-  await review.getByRole("button", { name: "Run test", exact: true }).click();
+  await review
+    .getByRole("button", { name: "Run preview", exact: true })
+    .click();
   await expect(review).toContainText("Development fixture response");
   await page.screenshot({
     path: `.evidence/r1-chat-${test.info().project.name}.png`,
@@ -15078,6 +15084,7 @@ test("provider-free News watch reviews rules deduplicates across restart and joi
     .getByLabel("News source", { exact: true })
     .selectOption({ label: "Paper feed" });
   await editor.getByLabel("Contains", { exact: true }).fill("paper");
+  await revealControl(page, editor.getByLabel("Schedule", { exact: true }));
   await editor.getByLabel("Schedule", { exact: true }).selectOption("repeat");
   await editor.getByLabel("Maximum evaluations", { exact: true }).fill("3");
   await editor
