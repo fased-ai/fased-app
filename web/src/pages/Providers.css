@@ -120,7 +120,7 @@
   .wt .providers-layout {
     grid-template-columns: minmax(0, 1fr);
   }
-  .wt .providers-list {
+  .wt .providers-layout > .providers-list {
     position: static;
     max-height: 240px;
     overflow: auto;

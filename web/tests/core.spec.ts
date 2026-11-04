@@ -2075,6 +2075,29 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
   await stop();
   await start(false, listen);
   await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Templates", exact: true }),
+  ).toHaveCount(0);
+  await expect(panel).toHaveCount(0);
+  const ordinary = await read();
+  const ordinaryReview = await command({
+    action: "playbook-run-review",
+    id,
+    playbookVersion: 2,
+    sessionId,
+  });
+  await expect(command(ordinaryReview.playbookReview.command)).rejects.toThrow(
+    /explicit development AI fixture/,
+  );
+  expect(await read()).toEqual(ordinary);
+  // Resume only the explicit regression constructor. A new boot must still
+  // require fresh unchecked consent; receiving the old result grants nothing.
+  await stop();
+  await start(true, listen);
+  await page.reload();
   await page.getByRole("button", { name: "Templates", exact: true }).click();
   await panel
     .getByRole("button", {
@@ -2092,7 +2115,8 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
   await panel
     .getByRole("button", { name: "Prepare run review", exact: true })
     .click();
-  await expect(consent).toBeDisabled();
+  await expect(consent).toBeEnabled();
+  await expect(consent).not.toBeChecked();
   await expect(runButton).toBeDisabled();
   expect((await read()).runs).toHaveLength(1);
   expect(external).toEqual([]);
@@ -6515,7 +6539,7 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
   await expect(review).toContainText(
     `input ${price(currentModel.input)}, cached input ${price(currentModel.cached)}, output ${price(currentModel.output)}`,
   );
-  await expect(review).toContainText("All three API operations are simulated");
+  await expect(review).toContainText("Live execution disabled");
   await revealControl(
     page,
     review.getByLabel("I reviewed this context and these limits"),
@@ -6709,6 +6733,28 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
       external.push(r.url());
   });
   await page.goto(url + "/#terminals/satcoin");
+  await expect(
+    page.getByRole("heading", {
+      name: "Mining is not available yet",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "WEN paper journey" }),
+  ).toHaveCount(0);
+  const ordinary = await privateCLI(["agents"]);
+  expect(ordinary.providerCallsEnabled).toBe(false);
+  expect(ordinary.financialExecution).toBe(false);
+  const listen = new URL(url).host;
+  await stop();
+  await start(true, listen);
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const fixtureView = await privateCLI(["agents"]);
+  expect(fixtureView.tasks).toEqual(ordinary.tasks);
+  expect(fixtureView.runs).toEqual(ordinary.runs);
   const journey = page.getByRole("region", { name: "WEN paper journey" });
   await revealControl(page, journey.getByLabel("Paper entry name"), "");
   await journey.getByLabel("Paper entry name").fill("UI range C");
@@ -6741,7 +6787,7 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
   v = await command({ action: "task-pause", id: task.id });
   expect(v.tasks[0].state).toBe("paused");
   await stop();
-  await start();
+  await start(true);
   await page.goto(url + "/#terminals/satcoin");
   await revealControl(
     page,
@@ -6802,7 +6848,7 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
   await journey.getByLabel("Paper agent profile").selectOption("wen-operator");
   await expect(card).toBeVisible();
   await stop();
-  await start();
+  await start(true);
   await page.goto(url + "/#terminals/satcoin");
   await revealControl(
     page,
@@ -15778,6 +15824,7 @@ for (const method of ["create", "import"] as const) {
     test.setTimeout(90000);
     page.setDefaultTimeout(10000);
     await stop();
+    await mkdir(".evidence/b05-wallet-setup", { recursive: true });
     const fixtureBase = resolve(".evidence/b5-fixtures");
     await mkdir(fixtureBase, { recursive: true, mode: 0o700 });
     const root = await mkdtemp(join(fixtureBase, "f-"));
@@ -15932,33 +15979,60 @@ for (const method of ["create", "import"] as const) {
         .getByRole("button", { name: "Add wallet", exact: true })
         .click();
       dialog = page.getByRole("dialog", { name: "Add wallet", exact: true });
-      await dialog
-        .getByRole("button", {
-          name: method === "create" ? "Create" : "Import",
-          exact: true,
-        })
-        .click();
-      await dialog.getByLabel("Wallet name").fill(`Vault ${method}`);
+      const methods = dialog.getByRole("group", {
+        name: "Wallet type",
+        exact: true,
+      });
       await expect(
-        dialog.getByLabel("Network", { exact: true }),
+        methods.getByRole("button", { name: "Watch", exact: true }),
+      ).toBeEnabled();
+      await expect(
+        methods.getByRole("button", { name: "Create", exact: true }),
       ).toBeDisabled();
-      await expect(dialog).toContainText(
-        `fased-app custody ${method === "create" ? "setup" : "import"}`,
-      );
+      await expect(
+        methods.getByRole("button", { name: "Import", exact: true }),
+      ).toBeDisabled();
+      await expect(dialog).toContainText("Protected setup unavailable");
+      await expect(dialog.locator(".wallet-terminal")).toHaveCount(0);
+      await expect(dialog).not.toContainText("fased-app custody");
       expect(await dialog.locator('input[type="password"]').count()).toBe(0);
       await expect(
         dialog.getByRole("button", { name: "Attach", exact: true }),
-      ).toBeDisabled();
+      ).toHaveCount(0);
+      await dialog.getByLabel("Wallet name").fill(`Vault ${method}`);
       expect((await cli(["accounts"])).record.accounts).toHaveLength(1);
-      await owner(method);
       await dialog
-        .getByRole("button", { name: "Refresh status", exact: true })
+        .getByRole("button", { name: "Close dialog", exact: true })
+        .click();
+      // Keys stay in the existing protected owner CLI fixture, never an AI
+      // constructor or browser form. Only its public status returns to UI.
+      const ownerResult = await owner(method);
+      const ownerOutput = ownerResult.stdout + ownerResult.stderr;
+      expect(ownerOutput).not.toContain("disposable-wallet-owner-unlock");
+      expect(ownerOutput).not.toContain("disposable-wallet-owner-backup");
+      expect(ownerOutput).not.toContain("42".repeat(32));
+      await refreshFixtureAccounts(page);
+      await page
+        .getByRole("button", { name: "Add wallet", exact: true })
+        .click();
+      dialog = page.getByRole("dialog", { name: "Add wallet", exact: true });
+      await dialog
+        .getByRole("group", { name: "Wallet type", exact: true })
+        .getByRole("button", { name: "Attach", exact: true })
         .click();
       await expect(dialog.getByLabel("Wallet name")).toHaveValue(
         `Vault ${method}`,
       );
+      await expect(
+        dialog.getByLabel("Network", { exact: true }),
+      ).toBeDisabled();
+      await expect(dialog).not.toContainText("fased-app custody");
+      expect(await dialog.locator('input[type="password"]').count()).toBe(0);
       await expect(dialog).toContainText("Recovery required");
-      await dialog.getByRole("button", { name: "Attach", exact: true }).click();
+      const attach = dialog.locator("form > button.primary");
+      await expect(attach).toHaveText("Attach");
+      await expect(attach).toBeEnabled();
+      await attach.click();
       await expect(dialog).toHaveCount(0);
       let state = await cli(["accounts"]);
       expect(state.record.accounts[0]).toEqual(original);
@@ -16084,15 +16158,15 @@ for (const method of ["create", "import"] as const) {
         exact: true,
       });
       await recoveryDialog
-        .getByRole("button", {
-          name: method === "create" ? "Create" : "Import",
-          exact: true,
-        })
-        .click();
-      await recoveryDialog.getByLabel("Wallet name").fill("Recovered wallet");
-      await recoveryDialog
+        .getByRole("group", { name: "Wallet type", exact: true })
         .getByRole("button", { name: "Attach", exact: true })
         .click();
+      await expect(recoveryDialog.locator(".wallet-terminal")).toHaveCount(0);
+      await expect(recoveryDialog).not.toContainText("fased-app custody");
+      await recoveryDialog.getByLabel("Wallet name").fill("Recovered wallet");
+      const reattach = recoveryDialog.locator("form > button.primary");
+      await expect(reattach).toHaveText("Attach");
+      await reattach.click();
       await expect(recoveryDialog).toHaveCount(0);
       const rebound = await cli(["accounts"]);
       expect(rebound.record.accounts).toHaveLength(3);
@@ -16490,4 +16564,101 @@ test("Chat Options closes on Escape before the native toggle event without losin
   await expect(input).toHaveValue("Preserve this keyboard draft");
   const after = await privateCLI(["agents"]);
   expect(after).toEqual(before);
+});
+
+test("ordinary mobile Providers scrolls all brands and its saved lower account without overlays", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(!isMobile, "narrow provider pane regression");
+  await stop();
+  await start(true);
+  const link = (
+    await exec(binary, ["setup-link", "--data-dir", dir])
+  ).stdout.trim();
+  await page.goto(link);
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const saved = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "add",
+    provider: "opencode",
+    name: "Saved lower account",
+    key: "fased-test-opencode-scroll-disposable",
+    passphrase: "disposable-provider-scroll-vault",
+  });
+  expect(saved.liveCallsEnabled).toBe(false);
+  const listen = new URL(url).host;
+  await stop();
+  await start(false, listen);
+  await page.goto(url + "/#providers");
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  expect((await privateCLI(["agents"])).aiFixtureAvailable).toBeFalsy();
+  const before = await privateCLI(["ai-connection"]);
+  expect(before.connections.find((a: any) => a.ref === saved.ref).locked).toBe(
+    true,
+  );
+  const writes: string[] = [],
+    external: string[] = [];
+  page.on("request", (request) => {
+    if (!ownedFixtureOrigins.has(new URL(request.url()).origin))
+      external.push(request.url());
+    if (request.method() !== "GET" && request.url().includes("/api/v1/"))
+      writes.push(request.url());
+  });
+  const providers = page.getByRole("region", {
+    name: "Providers",
+    exact: true,
+  });
+  const list = providers.locator(".providers-list");
+  await expect(list).toHaveCSS("overflow-y", "auto");
+  expect(await list.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(
+    true,
+  );
+  const brands = await providers
+    .locator(".provider-brand")
+    .evaluateAll((elements) =>
+      elements.map((el) => el.getAttribute("data-provider")!),
+    );
+  expect(brands).toContain("local");
+  expect(brands).toContain("opencode");
+  for (const id of brands) {
+    const button = providers.locator(
+      `[data-provider="${id}"] > .provider-brand-button`,
+    );
+    await button.click();
+    await expect(button).toHaveAttribute("aria-pressed", "true");
+    await expect(providers.locator(".provider-editor")).toBeVisible();
+  }
+  const lower = providers.locator(
+    `.provider-account[data-account="${saved.ref}"]`,
+  );
+  await lower.click();
+  await expect(lower).toHaveAttribute("aria-pressed", "true");
+  await expect(providers.locator(".connection-status")).toContainText("Locked");
+  expect(await list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  const bounds = await providers.evaluate((el) => {
+    const list = el.querySelector(".providers-list")!.getBoundingClientRect();
+    const editor = el
+      .querySelector(".provider-editor")!
+      .getBoundingClientRect();
+    return {
+      listBottom: list.bottom,
+      editorTop: editor.top,
+      editorRight: editor.right,
+      width: innerWidth,
+      scroll: document.documentElement.scrollWidth,
+    };
+  });
+  expect(bounds.editorTop).toBeGreaterThanOrEqual(bounds.listBottom);
+  expect(bounds.editorRight).toBeLessThanOrEqual(bounds.width);
+  expect(bounds.scroll).toBeLessThanOrEqual(bounds.width);
+  expect((await privateCLI(["ai-connection"])).connections).toEqual(
+    before.connections,
+  );
+  expect((await privateCLI(["agents"])).aiRequests).toHaveLength(0);
+  expect(writes).toEqual([]);
+  expect(external).toEqual([]);
 });

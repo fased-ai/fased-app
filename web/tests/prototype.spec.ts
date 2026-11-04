@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { initialState, reducer, STORAGE_KEY } from "../src/state";
 
 test.use({ colorScheme: "dark" });
 test("setup resumes after reload and never creates signing authority", async ({
@@ -238,26 +239,61 @@ test("shared WEN Activity distinguishes browser demo notices", async ({
   page,
   isMobile,
 }) => {
-  await page.goto("/#agents/bots");
-  await page.getByRole("button", { name: /Pause demo|Resume demo/ }).click();
+  const notice = {
+    id: "controlled-browser-notice",
+    title: "Browser preview notice",
+    detail: "Stored in this browser. No core action was requested.",
+    read: false,
+    tone: "info" as const,
+  };
+  const fixture = reducer(
+    { ...initialState(), notices: [] },
+    { type: "notice", notice },
+  );
   await page.goto("/#activity");
+  await page.evaluate(
+    ({ key, state }) => localStorage.setItem(key, JSON.stringify(state)),
+    { key: STORAGE_KEY, state: fixture },
+  );
+  await page.reload();
+  const mutations: string[] = [],
+    external: string[] = [];
+  page.on("request", (request) => {
+    if (!["127.0.0.1", "localhost"].includes(new URL(request.url()).hostname))
+      external.push(request.url());
+    if (!["GET", "HEAD"].includes(request.method()))
+      mutations.push(request.url());
+  });
   const activity = page.getByRole("region", {
     name: "Activity records",
     exact: true,
   });
   await expect(
     activity.getByRole("heading", {
-      name: "Recent prototype activity",
+      name: fixture.profiles.find((p) => p.id === fixture.selectedProfile)!
+        .name,
       exact: true,
     }),
   ).toBeVisible();
   const event = activity
     .getByRole("listitem")
-    .filter({ hasText: /Demo bot paused|Demo bot resumed/ });
+    .filter({ hasText: notice.title });
   await expect(event).toBeVisible();
   await expect(event.getByText("DEMO", { exact: true })).toBeVisible();
-  await expect(activity.getByText("LOCAL ONLY", { exact: true })).toBeVisible();
-  await expect(activity).toHaveCSS("background-color", "rgb(30, 30, 42)");
+  await expect(event).toContainText(notice.detail);
+  await expect(page.getByLabel("Instance location")).toHaveText("Preview");
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toHaveCount(0);
+  await expect(activity).toHaveCSS("background-color", "rgb(34, 32, 45)");
+  expect(
+    await page.evaluate(
+      (key) => JSON.parse(localStorage.getItem(key)!).notices,
+      STORAGE_KEY,
+    ),
+  ).toEqual(fixture.notices);
+  expect(mutations).toEqual([]);
+  expect(external).toEqual([]);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
