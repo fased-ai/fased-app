@@ -29,17 +29,28 @@ export async function revealFixtureApproval(page, name) {
     name: `Account ${name}`,
     exact: true,
   });
-  const permission = wallet.locator(".account-permission");
-  if (await permission.count()) {
+  const current = wallet
+    .locator(".account-permission")
+    .getByText("approved", { exact: true });
+  const predecessor = page
+    .locator(".account-advanced")
+    .getByText("approved", { exact: true });
+  // Refresh starts an asynchronous read. Receipt absence in the old render is
+  // not a layout signal: wait for the verified result in either known view.
+  await current.or(predecessor).first().waitFor({ state: "attached" });
+  if (await current.count()) {
     const details = wallet.locator(".account-details");
     if (!(await details.evaluate((element) => element.open)))
       await details.locator(":scope > summary").click();
-    await permission.getByText("approved", { exact: true }).waitFor();
+    await current.waitFor({ state: "visible" });
     return;
   }
-  // A pinned predecessor still keeps its verified proposal history in Advanced.
-  await revealFixtureAccountEntry(page);
-  await page.getByText("approved", { exact: true }).waitFor();
+  // Pinned predecessors keep receipt history in Advanced. Open that history,
+  // without depending on an unrelated fixture key/name editor being present.
+  const details = page.locator(".account-advanced");
+  if (!(await details.evaluate((element) => element.open)))
+    await details.locator(":scope > summary").click();
+  await predecessor.waitFor({ state: "visible" });
 }
 
 export async function fixtureAccountJourney({
@@ -260,10 +271,15 @@ finally:
     await refreshFixtureAccounts(page);
     await revealFixtureApproval(page, managed.name);
     current = JSON.parse(cli(["accounts", "--prepare-host"]));
+    const proof = current.proposals.find((item) => item.id === proposal.id);
     check(
       "accounts:verifiedApprovalSharedUIAndCLI",
-      current.proposals[0].receipt.state === "approved" &&
-        current.proposals[0].receipt.digest === current.proposals[0].digest,
+      current.record.proposals.some(
+        (item) =>
+          item.accountId === managed.id && item.proposal.id === proposal.id,
+      ) &&
+        proof?.receipt.state === "approved" &&
+        proof.receipt.digest === proof.digest,
     );
     ownerUnlock(walletPassword);
     const operation = {

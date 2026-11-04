@@ -4882,10 +4882,126 @@ test("managed fixture approval inspection supports current and predecessor detai
   await expect(page.locator(".account-details")).toHaveAttribute("open", "");
   await expect(page.locator(".account-permission")).toBeVisible();
   await page.setContent(
-    '<article aria-label="Account Wallet"></article><details><summary>Advanced</summary><label>Name<input></label><span>approved</span></details>',
+    '<article aria-label="Account Wallet"></article><details class="account-advanced"><summary>Advanced</summary><span>approved</span></details>',
   );
   await revealFixtureApproval(page, "Wallet");
   await expect(page.getByText("approved", { exact: true })).toBeVisible();
+});
+
+test("installed ordinary approval inspection waits for refreshed receipt without test editors", async ({
+  page,
+}) => {
+  page.setDefaultTimeout(1500);
+  const before = await privateCLI(["accounts"]);
+  const account = {
+    version: 1,
+    id: "6".repeat(32),
+    name: "Wallet",
+    mode: "fixture-managed",
+    network: "disposable-fixture:v1",
+    publicKey: "4".repeat(64),
+    signer: {
+      version: 1,
+      signerId: "1".repeat(32),
+      walletId: "2".repeat(32),
+      epoch: "3".repeat(32),
+      network: "disposable-fixture:v1",
+      publicKey: "4".repeat(64),
+    },
+  };
+  const proposal = {
+    version: 1,
+    id: "7".repeat(32),
+    policy: {
+      account: account.signer,
+      asset: "fixture-credit:v1",
+      budget: "150",
+      maxOperation: "10",
+      destinations: ["fixture:treasury"],
+      expiresAt: Math.floor(Date.now() / 1000) + 900,
+    },
+    grant: {
+      id: "7".repeat(32),
+      account: account.signer,
+      asset: "fixture-credit:v1",
+      budget: "20",
+      maxOperation: "10",
+      destinations: ["fixture:treasury"],
+      expiresAt: Math.floor(Date.now() / 1000) + 900,
+      botId: "8".repeat(32),
+      revoked: false,
+    },
+  };
+  let refreshing = false;
+  let release!: () => void;
+  let entered!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const readStarted = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  await page.route("**/api/v1/accounts", async (route) => {
+    expect(route.request().method()).toBe("GET");
+    if (refreshing) {
+      entered();
+      await pending;
+    }
+    await route.fulfill({
+      json: {
+        version: 1,
+        record: {
+          version: 1,
+          revision: refreshing ? 2 : 1,
+          accounts: [account],
+          proposals: refreshing ? [{ accountId: account.id, proposal }] : [],
+        },
+        fixture: { available: false },
+        accountStates: { [account.id]: "unverified" },
+        proposals: refreshing
+          ? [
+              {
+                id: proposal.id,
+                digest: "a".repeat(64),
+                receipt: { digest: "a".repeat(64), state: "approved" },
+              },
+            ]
+          : [],
+      },
+    });
+  });
+  const link = (
+    await exec(binary, ["setup-link", "--data-dir", dir])
+  ).stdout.trim();
+  await page.goto(link);
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  expect((await privateCLI(["agents"])).aiFixtureAvailable).toBeFalsy();
+  await page.goto(url + "/#wallets/overview");
+  const wallet = page.getByRole("article", {
+    name: "Account Wallet",
+    exact: true,
+  });
+  await expect(wallet).toBeVisible();
+  await expect(page.locator(".account-advanced")).toHaveCount(0);
+  await expect(page.getByLabel("Name", { exact: true })).toHaveCount(0);
+  refreshing = true;
+  await refreshFixtureAccounts(page);
+  await readStarted;
+  const inspection = revealFixtureApproval(page, "Wallet");
+  // Keep the refreshed read pending until the helper observes the current
+  // no-receipt DOM. This is the installed race, not a delayed editor fixture.
+  await expect(wallet.locator(".account-permission")).toHaveCount(0);
+  release();
+  await inspection;
+  await expect(wallet.locator(".account-details")).toHaveAttribute("open", "");
+  await expect(
+    wallet
+      .locator(".account-permission")
+      .getByText("approved", { exact: true }),
+  ).toBeVisible();
+  expect((await privateCLI(["accounts"])).record).toEqual(before.record);
 });
 
 test("public account records share UI/CLI state without wallet authority", async ({
