@@ -22,6 +22,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/localinstall"
+	"github.com/fased-ai/fased-app/internal/privateaccess"
 )
 
 const PolicySHA256 = "11d39094f044f0cda0febb3ad517b830301da6b2ce929664af09ee9e4dd264f9"
@@ -122,6 +123,10 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 		return nil, errors.New("missing OS operation")
 	}
 	switch args[0] {
+	case "/usr/bin/curl":
+		if !privateaccess.AllowedServeCommand(input, args) {
+			return nil, errors.New("only the fixed conditional private Serve setup request is allowed")
+		}
 	case "/usr/bin/apt-get", "/usr/bin/cat", "/usr/bin/install", "/usr/bin/ln", "/usr/bin/rm", "/usr/bin/sync", "/usr/sbin/apparmor_parser":
 	case "/usr/bin/systemctl":
 		if strings.Join(args[1:], " ") != "enable --now tailscaled.service" {

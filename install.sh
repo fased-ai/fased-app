@@ -233,6 +233,12 @@ printf '# Fased temporary bootstrap OS administration; no app runtime rights.\nD
 for command in /usr/bin/true /usr/bin/apt-get /usr/bin/cat /usr/bin/cmp /usr/bin/find /usr/bin/flock /usr/bin/getent /usr/bin/id /usr/bin/install /usr/bin/ln /usr/bin/mkdir /usr/bin/mv /usr/bin/passwd /usr/bin/pkcheck /usr/bin/rm /usr/bin/setpriv /usr/bin/stat /usr/bin/sync /usr/bin/systemctl /usr/bin/tailscale /usr/sbin/apparmor_parser /usr/sbin/useradd /usr/sbin/nft /usr/sbin/sshd; do
   printf '%s ALL=(root) NOTAFTER=%s NOPASSWD: %s\n' "$operator" "$expires" "$command" >> "$stage/authorization"
 done
+# Only Remote setup may authorize this exact local daemon write. No general
+# elevated curl is granted; this expires and is removed with bootstrap authority.
+if [[ $profile == remote ]]; then
+  serve_command='/usr/bin/curl ^--disable --silent --show-error --fail --max-time 15 --connect-timeout 5 --max-filesize 1048576 --noproxy [*] --proto =http --unix-socket /var/run/tailscale/tailscaled[.]sock --request POST --header Content-Type\: application/json --header If-Match\: [a-f0-9]{64} --data-binary @- --write-out %[{]http_code[}] http\://local-tailscaled[.]sock/localapi/v0/serve-config$'
+  printf '%s ALL=(root) NOTAFTER=%s NOPASSWD: %s\n' "$operator" "$expires" "$serve_command" >> "$stage/authorization"
+fi
 /usr/bin/chmod 0440 "$stage/authorization"
 /usr/sbin/visudo -c -f "$stage/authorization" >/dev/null
 read -r policy_sha _ < <(/usr/bin/sha256sum "$stage/authorization")

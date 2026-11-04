@@ -99,7 +99,7 @@ test("literal process-substitution entry keeps the terminal through sanitized ow
   const code =
     entryTerminalCode() +
     `
-operator=fixture owner_home=/tmp action=update entry_version=1.0.0 installer_url='' installer_sha256='' seed_base64='' seed_sha256='' fixture_ca_base64='' development_only=1 listen=127.0.0.1:7331 profile=remote runtime='' ssh_user=root
+operator=fixture owner_home=/tmp action=update entry_version=1.0.0 installer_url='' installer_sha256='' seed_base64='' seed_sha256='' fixture_ca_base64='' development_only=1 listen=127.0.0.1:7331 profile=remote runtime='' ssh_user=root recovery_key=''
 owner_install() {
   [[ $(id -u) != 0 && -t 0 ]]
   printf 'Owner sign-in: '
@@ -367,4 +367,60 @@ os.close(fd);sys.stdout.buffer.write(out);sys.exit(os.waitstatus_to_exitcode(sta
   );
   assert.equal(result.status, 0, result.stderr?.toString());
   assert.match(result.stdout.toString(), /SELECTED:remote/);
+});
+
+test("Remote bootstrap scopes and expires only the fixed conditional Serve OS write", () => {
+  const block = template.match(
+    /# Only Remote setup may authorize[\s\S]*?\nfi\n/,
+  )[0];
+  const outputs = {};
+  for (const profile of ["local", "remote"]) {
+    const dir = mkdtempSync(join(tmpdir(), "fased-serve-rule-"));
+    try {
+      const result = spawnSync("bash", ["-c", block], {
+        env: {
+          ...process.env,
+          stage: dir,
+          profile,
+          operator: "ubuntu",
+          expires: "20990101000000Z",
+        },
+      });
+      assert.equal(result.status, 0, result.stderr.toString());
+      if (profile === "local") {
+        assert.throws(() => readFileSync(join(dir, "authorization")));
+        continue;
+      }
+      outputs.remote = readFileSync(join(dir, "authorization"), "utf8");
+      assert.match(outputs.remote, /NOTAFTER=20990101000000Z/);
+      assert.equal(outputs.remote.trim().split("\n").length, 1);
+      const parsed = spawnSync("/usr/bin/visudo", ["-cf", "-"], {
+        input: outputs.remote,
+      });
+      assert.equal(parsed.status, 0, parsed.stderr.toString());
+      const rule = block.match(/serve_command='([^']+)'/)[1];
+      // sudoers unescapes its colon separators before POSIX ERE matching.
+      const expression = rule
+        .slice("/usr/bin/curl ".length)
+        .replaceAll("\\:", ":");
+      const args =
+        "--disable --silent --show-error --fail --max-time 15 --connect-timeout 5 --max-filesize 1048576 --noproxy * --proto =http --unix-socket /var/run/tailscale/tailscaled.sock --request POST --header Content-Type: application/json --header If-Match: " +
+        "a".repeat(64) +
+        " --data-binary @- --write-out %{http_code} http://local-tailscaled.sock/localapi/v0/serve-config";
+      const match = spawnSync("python3", [
+        "-c",
+        `import re,sys
+pattern=re.compile(sys.argv[1]); command=sys.argv[2]
+assert pattern.fullmatch(command)
+for bad in [command+' --output /etc/sudoers',command.replace('/var/run/tailscale/tailscaled.sock','/run/docker.sock'),command.replace('http://local-tailscaled.sock/localapi/v0/serve-config','http://outside.invalid/'),command.replace('POST','GET')]:
+ assert not pattern.fullmatch(bad)
+`,
+        expression,
+        args,
+      ]);
+      assert.equal(match.status, 0, match.stderr.toString());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
 });
