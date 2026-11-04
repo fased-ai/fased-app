@@ -44,6 +44,10 @@ func (p *Prepared) LocalApplicationController(paths localinstall.Paths, h locali
 	if e != nil {
 		return nil, e
 	}
+	prior, _ := localinstall.ApplicationUpdateState(paths)
+	if e = p.candidateInstallation(localinstall.ManifestSHA256(m), m.Root, m.Data, prior); e != nil {
+		return nil, e
+	}
 	return &LocalApplicationController{prepared: p, paths: paths, callbacks: h, expectedManifest: applicationBaseline(paths, m, p.report.Sequence, p.report.DescriptorSHA256, p.engine.SHA256)}, nil
 }
 func (d *LocalApplicationController) Check(ctx context.Context) (*core.ApplicationRelease, error) {
@@ -75,7 +79,7 @@ func (d *LocalApplicationController) Check(ctx context.Context) (*core.Applicati
 			return nil, errors.New("release is below the consumed controller floor")
 		}
 		if prior.Sequence == p.report.Sequence {
-			if prior.Phase != "completed" || prior.ReleaseSHA256 != p.report.DescriptorSHA256 || prior.TargetManifestSHA256 != localinstall.ManifestSHA256(m) {
+			if prior.Phase != "completed" || !p.matchesApplicationIdentity(prior.ReleaseSHA256) || prior.TargetManifestSHA256 != localinstall.ManifestSHA256(m) {
 				return nil, errors.New("consumed release has contradictory installed state; inspect recovery")
 			}
 			if e := verifyApplicationFiles(m); e != nil {
@@ -88,7 +92,7 @@ func (d *LocalApplicationController) Check(ctx context.Context) (*core.Applicati
 		return nil, err
 	}
 	if m.ApplicationSequence >= p.report.Sequence {
-		if m.ApplicationSequence == p.report.Sequence && m.ApplicationReleaseSHA256 == p.report.DescriptorSHA256 {
+		if m.ApplicationSequence == p.report.Sequence && p.matchesApplicationIdentity(m.ApplicationReleaseSHA256) {
 			if e := verifyApplicationFiles(m); e != nil {
 				return nil, e
 			}
@@ -106,6 +110,9 @@ func (d *LocalApplicationController) Apply(ctx context.Context, o core.Applicati
 	p := d.prepared
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.candidate != nil && (o.ID != p.candidate.OperationID || o.Automatic) {
+		return core.ApplicationUpdateReceipt{}, fmt.Errorf("%w: candidate requires its exact manual operation", core.ErrApplicationUpdateNotStarted)
+	}
 	if p.closed || o.Release == nil || o.Release.EngineSHA256 != p.engine.SHA256 || o.Release.Sequence != p.report.Sequence || o.Release.ManifestSHA256 != p.report.DescriptorSHA256 || o.Release.Version != p.descriptor.ProductVersion || o.Release.Target != p.report.Target {
 		return core.ApplicationUpdateReceipt{}, fmt.Errorf("%w: update differs from the authenticated release", core.ErrApplicationUpdateNotStarted)
 	}

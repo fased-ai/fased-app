@@ -35,6 +35,10 @@ func (p *Prepared) RemoteApplicationController(m vpsinstall.Manifest, h vpsinsta
 	if e := p.revalidate(); e != nil {
 		return nil, e
 	}
+	prior, _ := vpsinstall.ApplicationUpdateState(m.OwnerUID)
+	if e := p.candidateInstallation(vpsinstall.ManifestSHA256(m), m.Root, m.Data, prior); e != nil {
+		return nil, e
+	}
 	return &RemoteApplicationController{p: p, m: m, h: h, s: s}, nil
 }
 func (d *RemoteApplicationController) Check(context.Context) (*core.ApplicationRelease, error) {
@@ -54,7 +58,7 @@ func (d *RemoteApplicationController) Check(context.Context) (*core.ApplicationR
 			return nil, errors.New("existing Remote transaction requires recovery or newer release")
 		}
 		if prior.Sequence == p.report.Sequence {
-			if prior.Phase == "completed" && prior.ReleaseSHA256 == p.report.DescriptorSHA256 && prior.TargetManifestSHA256 == vpsinstall.ManifestSHA256(d.m) {
+			if prior.Phase == "completed" && p.matchesApplicationIdentity(prior.ReleaseSHA256) && prior.TargetManifestSHA256 == vpsinstall.ManifestSHA256(d.m) {
 				got, err := bundle.Inspect(d.m.Core)
 				if err != nil || got.SHA256 != d.m.CoreSHA256 {
 					return nil, errors.New("Remote completed bytes differ from receipt")
@@ -67,7 +71,7 @@ func (d *RemoteApplicationController) Check(context.Context) (*core.ApplicationR
 		return nil, e
 	}
 	if d.m.ApplicationSequence >= p.report.Sequence {
-		if d.m.ApplicationSequence == p.report.Sequence && d.m.ApplicationReleaseSHA256 == p.report.DescriptorSHA256 {
+		if d.m.ApplicationSequence == p.report.Sequence && p.matchesApplicationIdentity(d.m.ApplicationReleaseSHA256) {
 			got, e := bundle.Inspect(d.m.Core)
 			if e == nil && got.SHA256 == d.m.CoreSHA256 {
 				return nil, nil
@@ -83,6 +87,9 @@ func (d *RemoteApplicationController) Apply(ctx context.Context, o core.Applicat
 	p := d.p
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.candidate != nil && (o.ID != p.candidate.OperationID || o.Automatic) {
+		return core.ApplicationUpdateReceipt{}, fmt.Errorf("%w: candidate requires its exact manual operation", core.ErrApplicationUpdateNotStarted)
+	}
 	if p.closed || o.Release == nil || o.Release.EngineSHA256 != p.engine.SHA256 || o.Release.Sequence != p.report.Sequence || o.Release.ManifestSHA256 != p.report.DescriptorSHA256 || o.Release.Version != p.descriptor.ProductVersion || o.Release.Target != p.report.Target {
 		return core.ApplicationUpdateReceipt{}, fmt.Errorf("%w: Remote release mismatch", core.ErrApplicationUpdateNotStarted)
 	}

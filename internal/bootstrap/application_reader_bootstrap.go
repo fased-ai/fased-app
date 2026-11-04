@@ -25,6 +25,9 @@ func (p *Prepared) ApplicationReaderBootstrapRequest(id, lease, previousEngine s
 	if p.closed || p.invoked {
 		return out, errors.New("fresh authenticated reader-bootstrap release required")
 	}
+	if p.candidate != nil && id != p.candidate.OperationID {
+		return out, errors.New("reader bootstrap differs from the admitted candidate operation")
+	}
 	if e := p.revalidate(); e != nil {
 		return out, e
 	}
