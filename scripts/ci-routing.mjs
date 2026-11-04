@@ -54,6 +54,8 @@ export function verifyGate(needs) {
   const outputs = needs.classify.outputs;
   if (!outputs || !["none", "rpc", "ui", "full"].includes(outputs.scope))
     throw new Error("invalid scope");
+  if (outputs.signer === "true" && outputs.scope !== "full")
+    throw new Error("signer checks require full scope");
   if (
     needs["core-scenarios"]?.result !==
     (outputs.scope === "full" ? "success" : "skipped")

@@ -95,6 +95,29 @@ test("core scenarios are required only for full scope and cannot be omitted or s
     );
   }
 });
+test("selected signer checks cannot escape the full-scope parallel admission job", () => {
+  for (const files of [
+    [],
+    ["internal/core/store.go"],
+    ["web/src/core.tsx"],
+    ["internal/core/rpc_public.go"],
+    ["docs/chat.md"],
+  ]) {
+    const plan = classify(files);
+    if (plan.signer) assert.equal(plan.scope, "full");
+    else assert.notEqual(plan.scope, "full");
+  }
+  for (const files of [
+    ["web/src/core.tsx"],
+    ["internal/core/rpc_public.go"],
+    ["docs/chat.md"],
+  ]) {
+    const needs = result(classify(files));
+    needs.classify.outputs.signer = "true";
+    needs.signer.result = "success";
+    assert.throws(() => verifyGate(needs), /signer checks require full scope/);
+  }
+});
 test("aggregate accepts intentional skips only and rejects absent/failing gates", () => {
   for (const p of [
     classify(["docs/signer.md"]),
