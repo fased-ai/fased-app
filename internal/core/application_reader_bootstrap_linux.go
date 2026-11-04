@@ -121,7 +121,7 @@ func CheckApplicationReaderPredecessor(ctx context.Context, directory string, ex
 }
 
 func checkApplicationReaderPredecessor(ctx context.Context, directory string, expected update.CoreSnapshot, pause *update.CorePauseReceipt) error {
-	if (expected.State.Version != 33 && expected.State.Version != 35 && expected.State.Version != 36) || !update.IDOK(expected.ProbeID) || !update.IDOK(expected.BootID) {
+	if _, err := ApplicationReaderRequestVersion(expected.State.Version); err != nil || !update.IDOK(expected.ProbeID) || !update.IDOK(expected.BootID) {
 		return errors.New("admitted predecessor snapshot required")
 	}
 	d, e := openApplicationMetadataDirectory(directory)
@@ -156,7 +156,7 @@ func checkApplicationReaderPredecessor(ctx context.Context, directory string, ex
 			return errors.New("exact original source pause required before staging")
 		}
 	}
-	if schema == 35 || schema == 36 {
+	if schema == 35 || schema == 36 || schema == RemoteOwnerStateSchema {
 		if pause == nil {
 			phase, p, err := readPause(ctx, tx)
 			if err != nil {
@@ -254,7 +254,8 @@ func bootstrapApplicationReader(ctx context.Context, directory string, request A
 		return out, e
 	}
 	source := request.Predecessor.Core.State.Version
-	if schema != source && schema != StateSchema || StateSchema != 36 {
+	targetSchema, targetErr := ApplicationReaderTargetSchema(source)
+	if targetErr != nil || schema != source && schema != targetSchema || StateSchema != 36 {
 		return out, errors.New("unsupported installed reader; preserve original installation")
 	}
 	phase, held, e := readPause(ctx, c)
@@ -269,7 +270,7 @@ func bootstrapApplicationReader(ctx context.Context, directory string, request A
 		return out, errors.New("predecessor records changed before reader handoff")
 	}
 	alreadyAdmitted := false
-	if source == 36 {
+	if source == 36 || source == RemoteOwnerStateSchema {
 		operation, _, err := readApplicationUpdate(ctx, c)
 		if err != nil {
 			return out, err
@@ -332,6 +333,10 @@ func bootstrapApplicationReader(ctx context.Context, directory string, request A
 		raw, _ := json.Marshal(o)
 		if source == 33 {
 			_, e = c.ExecContext(ctx, "CREATE TABLE application_updates(id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, document TEXT NOT NULL); INSERT INTO application_updates(id,revision,document) VALUES(1,0,?); PRAGMA user_version=36;", string(raw))
+		} else if source == RemoteOwnerStateSchema {
+			// Current-format admission changes only updater authority. In
+			// particular, never stamp36 over protected Remote owner records.
+			_, e = c.ExecContext(ctx, "UPDATE application_updates SET revision=revision+1,document=? WHERE id=1", string(raw))
 		} else {
 			_, e = c.ExecContext(ctx, "UPDATE application_updates SET revision=revision+1,document=? WHERE id=1; PRAGMA user_version=36;", string(raw))
 		}
@@ -380,7 +385,11 @@ func bootstrapApplicationReader(ctx context.Context, directory string, request A
 	if e != nil {
 		return out, e
 	}
-	return ApplicationReaderBootstrapReceipt{Version: 1, RequestSHA256: index.RequestSHA256, Original: index.Original, Checkpoint: checkpoint, Phase: "reader-migrated-forward-only"}, nil
+	phaseName := "reader-migrated-forward-only"
+	if source == RemoteOwnerStateSchema {
+		phaseName = "current-reader-admitted"
+	}
+	return ApplicationReaderBootstrapReceipt{Version: 1, RequestSHA256: index.RequestSHA256, Original: index.Original, Checkpoint: checkpoint, Phase: phaseName}, nil
 }
 
 func publishApplicationReaderIndex(s *Store, d int, index applicationReaderBootstrapIndex) error {
@@ -430,7 +439,7 @@ func applicationReaderLegacySnapshot(ctx context.Context, tx snapshotReader, pro
 	return applicationReaderSourceSnapshot(ctx, tx, probe, boot, 33)
 }
 func applicationReaderSourceSnapshot(ctx context.Context, tx snapshotReader, probe, boot string, source int) (update.CoreSnapshot, error) {
-	if source == StateSchema {
+	if source == StateSchema || source == RemoteOwnerStateSchema {
 		return (&Store{bootID: boot}).snapshotTx(ctx, tx, probe)
 	}
 	// Exact schema33 snapshot shape. Only the schema number and declared new
@@ -496,7 +505,7 @@ func verifyApplicationReaderOriginal(ctx context.Context, d int, index applicati
 	if e != nil || !update.SameCoreMetadata(got, p) {
 		return errors.New("original reader snapshot differs from predecessor")
 	}
-	if p.State.Version == 35 || p.State.Version == 36 {
+	if p.State.Version == 35 || p.State.Version == 36 || p.State.Version == RemoteOwnerStateSchema {
 		return verifyReader35Preparation(ctx, db, directory, index.Request)
 	}
 	return nil
