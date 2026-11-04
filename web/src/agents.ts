@@ -573,6 +573,7 @@ export type AgentView = {
   aiRequests: AgentAIRequest[];
   aiExecutionAvailable?: boolean;
   aiFixtureAvailable: boolean;
+  sessionFixtureAvailable?: boolean;
   revision: number;
   profileId: string;
   profiles: AgentProfile[];

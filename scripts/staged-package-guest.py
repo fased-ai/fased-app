@@ -32,6 +32,9 @@ PREPARATION_ANSWERS = {
     "Authorize required Ubuntu preparation with sudo? [y/N]: ": "y",
     "Authorize Ubuntu preparation, isolated service and bounded update maintenance with sudo? [y/N]: ": "y",
 }
+LOCAL_REQUIRED_CHECKS = ("entry", "local", "ownerAuth", "uiUpdate", "cliUpdate", "restart",
+                         "alreadyCurrent", "preservation", "recovery", "logoutSignIn",
+                         "rebootReconnect", "controlledAutomatic", "passwordFreeLocalSetup")
 
 
 def digest(raw):
@@ -63,6 +66,7 @@ def write_private(path, value):
 
 
 def redacted(text):
+    text = re.sub(r"https://login\.tailscale\.com/a/[^\s]+", "[redacted Tailscale enrollment link]", text, flags=re.IGNORECASE)
     return re.sub(r"(#(?:setup|local)=)[^\s]+", r"\1[redacted]", text.replace(PASSWORD, "[redacted]"))
 
 
@@ -101,6 +105,19 @@ def binding(candidate):
     packet = candidate["packet"]
     assets = json.dumps(candidate["assets"], separators=(",", ":"))
     return {"schemaVersion": 1, "source": packet["source"], "sourceTree": packet["release"]["sourceTree"], "productVersion": packet["productVersion"], "runId": packet["release"]["runId"], "runAttempt": packet["release"]["runAttempt"], "platform": "ubuntu-24.04-amd64", "artifactSetSha256": digest(assets.encode())}
+
+
+def require_local_acceptance(candidate, path):
+    receipt = document(path)
+    if (any(receipt.get(key) != value for key, value in binding(candidate).items()) or
+        receipt.get("result") != "PASS" or receipt.get("localOnly") is not True or
+        receipt.get("upgradeApplied") is not True or
+        any(receipt.get(name) != "applied" for name in ("uiOutcome", "cliOutcome", "automaticOutcome")) or
+        receipt.get("automaticPolicyRestored") != "manual" or
+        any(receipt.get(name) is not False for name in ("mining", "liveFeatures", "automaticUpdates")) or
+        any(receipt.get("checks", {}).get(name) != "PASS" for name in LOCAL_REQUIRED_CHECKS)):
+        raise RuntimeError("matching completed Local acceptance required before fresh Remote")
+    return digest(P(path).read_bytes())
 
 
 def vm_guard():
@@ -244,7 +261,7 @@ def network(work):
     write_private(work / "server.json", {"pid": process.pid})
 
 
-def terminal(args, answers, timeout=180):
+def terminal(args, answers, timeout=180, password_free=False, observer=None):
     pid, fd = pty.fork()
     if pid == 0:
         os.execvpe(args[0], args, {"HOME": str(P.home()), "USER": P.home().name, "LOGNAME": P.home().name, "PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "XDG_RUNTIME_DIR": "/run/user/" + str(os.getuid()), "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/" + str(os.getuid()) + "/bus", "LANG": "C.UTF-8"})
@@ -265,6 +282,10 @@ def terminal(args, answers, timeout=180):
                 if len(output) > 2 * 1024 * 1024:
                     raise RuntimeError("bounded terminal output exceeded")
                 text = output.decode(errors="replace")
+                if password_free and re.search(r"(?:password|passphrase)[^\r\n]{0,120}:\s*$", text, re.IGNORECASE):
+                    raise RuntimeError("Unexpected password prompt; no credential submitted")
+                if observer is not None:
+                    observer(text)
                 for prompt, answer in answers.items():
                     if prompt not in matched and prompt in text:
                         os.write(fd, (answer + "\n").encode())
@@ -372,7 +393,7 @@ def owner(args):
         before = health(port)
         if before["version"] == args.version:
             raise RuntimeError("apply requires an older running reader")
-        code, output = terminal([command_path(), "update"], prompts, timeout=300)
+        code, output = terminal([command_path(), "update"], prompts, timeout=300, password_free=True)
         (state_dir / "apply.log").write_text(redacted(output))
         current = health(port)
         if code or "Updated" not in output or current["version"] != args.version or current["instanceId"] != before["instanceId"]:
@@ -381,7 +402,7 @@ def owner(args):
         write_private(state_dir / "state.json", state)
         return {"result": "PASS", "cliOutcome": "applied", "health": current, "passwordPrompt": "Owner password:" in output}
     if args.owner_action == "check":
-        code, output = terminal([command_path(), "update"], prompts)
+        code, output = terminal([command_path(), "update"], prompts, password_free=True)
         if code or "Already current" not in output:
             raise RuntimeError("ordinary installed CLI Update/no-op failed")
         return {"result": "PASS", "cliOutcome": "alreadyCurrent", "health": health(port), "passwordPrompt": "Owner password:" in output}

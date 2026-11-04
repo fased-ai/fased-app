@@ -456,8 +456,28 @@ for (const variant of ["consent", "unknown"] as const) {
           ),
         ).toContain("session-fixture");
         await expect(
-          card().getByRole("button", { name: "Review resume", exact: true }),
-        ).toBeDisabled();
+          page.getByRole("heading", {
+            name: "Mining is not available yet",
+            exact: true,
+          }),
+        ).toBeVisible();
+        await expect(
+          page.getByRole("region", {
+            name: "Automatic test runs",
+            exact: true,
+          }),
+        ).toHaveCount(0);
+        // Continue the retained private regression only through the existing
+        // explicit constructor; ordinary pages never expose its controls.
+        await stop();
+        await start(true);
+        await loginCLI();
+        await page.close();
+        page = await context.newPage();
+        page.setDefaultTimeout(15000);
+        await loginUI();
+        expect((await read()).runs[0].operations).toEqual(v.runs[0].operations);
+        expect((await read()).runs[0].deadline).toBe(originalDeadline);
       }
       if (!(await read()).runs[0].stopRequested) {
         let stoppedByOwner = false;

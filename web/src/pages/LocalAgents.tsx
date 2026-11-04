@@ -7,16 +7,8 @@ import { NewsInputs } from "./NewsInputs";
 import { modelForProviderChange } from "../agent-defaults";
 import { AIModelPicker, useAIConnection } from "./AIConnection";
 import { useRef, useState, type FormEvent } from "react";
-import {
-  BookOpen,
-  Bot,
-  Plus,
-  Settings2,
-  History,
-  Plug,
-  ArrowUp,
-} from "../icons";
-import { Badge, SectionHead, Dialog } from "../components/shared";
+import { BookOpen, Plus, Settings2, History, Plug, ArrowUp } from "../icons";
+import { SectionHead, Dialog } from "../components/shared";
 import { useWorkspace, type AgentSettingsDraft } from "../workspace";
 import { providerNames, type Provider } from "../state";
 import type {
@@ -90,16 +82,6 @@ export function LocalAgents() {
             >
               <Settings2 size={17} />
             </button>
-            {tab === "settings" && (
-              <button
-                className="icon-button"
-                aria-label={uiText("Bots")}
-                data-tooltip={uiText("Bots")}
-                onClick={() => navigate("agents/bots")}
-              >
-                <Bot size={17} />
-              </button>
-            )}
             <button
               className="icon-button"
               aria-label={t("New agent")}
@@ -230,10 +212,7 @@ function LocalAgentEditor({
       return next;
     });
   }
-  const [botName, setBotName] = useState("");
-  const [quantity, setQuantity] = useState(1);
-  const [price, setPrice] = useState(100);
-  const [budget, setBudget] = useState(500);
+
   const memoryRevision = useRef(v.revision);
   const query = search.toLowerCase();
   const matching = v.sessions.filter(
@@ -425,7 +404,7 @@ function LocalAgentEditor({
               </form>
             )}
             <label>
-              {t("Search conversations")}
+              <span className="sr-only">{t("Search conversations")}</span>
               <input
                 type="search"
                 value={search}
@@ -452,7 +431,11 @@ function LocalAgentEditor({
                 </button>
               ))}
               {matching.length === 0 && (
-                <p>{uiText("No matching conversations.")}</p>
+                <p>
+                  {uiText(
+                    query ? "No matching conversations." : "No conversations",
+                  )}
+                </p>
               )}
             </div>
           </aside>
@@ -620,9 +603,9 @@ function LocalAgentEditor({
                     <details className="reply-model-menu">
                       <summary
                         aria-label={t("Reply model")}
-                        title={previewModel(profile.model, t) || t("No AI")}
+                        title={previewModel(profile.model, t) || t("Provider")}
                       >
-                        {previewModel(profile.model, t) || t("No AI")}
+                        {previewModel(profile.model, t) || t("Provider")}
                       </summary>
                       <button
                         type="button"
@@ -660,6 +643,25 @@ function LocalAgentEditor({
       )}
       {tab === "settings" && (
         <div className="agent-settings-workspace">
+          <nav
+            className="panel agent-profile-list"
+            aria-label={uiText("Agents")}
+          >
+            {v.profiles.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                aria-pressed={item.id === v.profileId}
+                onClick={() => void agents.select(item.id)}
+                disabled={agents.busy}
+              >
+                <span className="avatar small" aria-hidden="true">
+                  {item.name.slice(0, 2).toUpperCase()}
+                </span>
+                <span>{item.name}</span>
+              </button>
+            ))}
+          </nav>
           <section className="panel" aria-label={uiText("Agent settings")}>
             <div className="panel-heading">
               <h2>{uiText("Agent")}</h2>
@@ -708,8 +710,8 @@ function LocalAgentEditor({
                   onChange={(e) => setPersona(e.target.value)}
                 />
               </label>
-              <details className="profile-defaults">
-                <summary>{uiText("Model")}</summary>
+              <fieldset className="profile-defaults">
+                <legend className="sr-only">{uiText("Model")}</legend>
                 <label>
                   {uiText("Provider")}
                   <select
@@ -788,32 +790,37 @@ function LocalAgentEditor({
                     </select>
                   </label>
                 )}
-                <AIModelPicker
-                  value={model}
-                  onChange={setModel}
-                  connectionRef={
-                    provider !== "none"
-                      ? accountRef ||
-                        (connection?.provider === provider
-                          ? connection.ref
-                          : "") ||
-                        ""
-                      : ""
-                  }
-                  allowDemo={provider === "none"}
-                  disabled={agents.busy}
-                />
-              </details>
-              <button className="primary" disabled={agents.busy}>
-                {uiText("Save agent")}
-              </button>
-              <button
-                type="button"
-                className="text-button"
-                onClick={() => reloadProfile()}
-              >
-                {uiText("Reload")}
-              </button>
+                <div hidden={provider === "none"}>
+                  {" "}
+                  <AIModelPicker
+                    value={model}
+                    onChange={setModel}
+                    connectionRef={
+                      provider !== "none"
+                        ? accountRef ||
+                          (connection?.provider === provider
+                            ? connection.ref
+                            : "") ||
+                          ""
+                        : ""
+                    }
+                    allowDemo={provider === "none"}
+                    disabled={agents.busy}
+                  />
+                </div>
+              </fieldset>
+              <div className="row-actions">
+                <button className="primary" disabled={agents.busy}>
+                  {uiText("Save agent")}
+                </button>
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => reloadProfile()}
+                >
+                  {uiText("Reload")}
+                </button>
+              </div>
             </form>
           </section>
         </div>
@@ -823,13 +830,15 @@ function LocalAgentEditor({
           <div className="panel-heading">
             <h2>{uiText("Memory")}</h2>
             <button
-              className="secondary"
+              className="icon-button"
+              aria-label={t("Remember")}
+              title={t("Remember")}
               onClick={() => {
                 resetMemory();
                 setMemoryOpen(true);
               }}
             >
-              {t("Remember")}
+              <Plus size={17} />
             </button>
           </div>
           <div className="agent-record-body memory-workspace">
@@ -1020,111 +1029,6 @@ function LocalAgentEditor({
                 </form>
               </Dialog>
             )}
-          </div>
-        </section>
-      )}
-      {tab === "bots" && (
-        <section className="panel paper-strategies">
-          <div className="panel-heading">
-            <h2>{uiText("Paper strategies")}</h2>
-            <Badge>{uiText("FIXED EXAMPLE INPUTS")}</Badge>
-          </div>
-          <div className="agent-split paper-workspace">
-            <div className="agent-record-body paper-library">
-              <p>
-                {uiText(
-                  "No exchange, wallet, live price or return calculation is connected. These examples exercise budgets and restart handling using integer fixture units.",
-                )}
-              </p>
-              {v.bots.map((b) => (
-                <article
-                  className="memory-card"
-                  key={b.id}
-                  aria-label={`Paper strategy ${b.name}`}
-                >
-                  <strong>{b.name}</strong>
-                  <p>
-                    {b.strategy}
-                    {uiText(" · Quantity ")}
-                    {b.quantity}
-                    {uiText(" × fixed price")} {b.priceCents}
-                    {uiText(" · Used ")}
-                    {b.spentCents} / {b.budgetCents} {uiText("fixture units")}
-                  </p>
-                </article>
-              ))}
-              {!v.bots.length && (
-                <p className="subtle">{uiText("No paper strategies saved.")}</p>
-              )}
-            </div>
-            <aside
-              className="agent-record-body paper-composer"
-              aria-label={uiText("Create paper strategy")}
-            >
-              <h3>{uiText("New paper strategy")}</h3>
-              <form
-                onSubmit={submit(async () => {
-                  if (
-                    await agents.change({
-                      action: "bot-create",
-                      name: botName,
-                      quantity,
-                      priceCents: price,
-                      budgetCents: budget,
-                    })
-                  )
-                    setBotName("");
-                })}
-              >
-                <label>
-                  {uiText("Paper bot name")}
-                  <input
-                    required
-                    maxLength={80}
-                    value={botName}
-                    onChange={(e) => setBotName(e.target.value)}
-                  />
-                </label>
-                <div className="agent-grid">
-                  <label>
-                    {uiText("Example quantity")}
-                    <input
-                      type="number"
-                      min={1}
-                      max={1000000}
-                      required
-                      value={quantity}
-                      onChange={(e) => setQuantity(Number(e.target.value))}
-                    />
-                  </label>
-                  <label>
-                    {uiText("Fixed example price")}
-                    <input
-                      type="number"
-                      min={1}
-                      max={100000000}
-                      required
-                      value={price}
-                      onChange={(e) => setPrice(Number(e.target.value))}
-                    />
-                  </label>
-                  <label>
-                    {uiText("Total fixture budget")}
-                    <input
-                      type="number"
-                      min={1}
-                      max={1000000000000}
-                      required
-                      value={budget}
-                      onChange={(e) => setBudget(Number(e.target.value))}
-                    />
-                  </label>
-                </div>
-                <button className="primary" disabled={agents.busy}>
-                  {uiText("Create paper bot")}
-                </button>
-              </form>{" "}
-            </aside>
           </div>
         </section>
       )}

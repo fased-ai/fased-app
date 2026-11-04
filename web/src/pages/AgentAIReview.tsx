@@ -84,6 +84,13 @@ function AgentAIForm({
   const { core, agents, navigate } = useWorkspace();
   const tr = uiText;
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const optionsMenu = useRef<HTMLDetailsElement>(null);
+  function closeOptions() {
+    // Native details opens before its queued toggle event updates React state.
+    // Close the actual disclosure as well, even when state is already false.
+    if (optionsMenu.current) optionsMenu.current.open = false;
+    setOptionsOpen(false);
+  }
   const [permissionReview, setPermissionReview] = useState<ChatPermission>();
   const [permissionPrompt, setPermissionPrompt] = useState("");
   const [reviewEach, setReviewEach] = useState(false);
@@ -259,7 +266,7 @@ function AgentAIForm({
     setConsent("");
   }
   async function useDraft(id: string) {
-    setOptionsOpen(false);
+    closeOptions();
     onClearResearch?.();
     const epoch = ++generation.current;
     setDraftBusy(true);
@@ -587,9 +594,9 @@ function AgentAIForm({
             const modelMenu = e.currentTarget.querySelector<HTMLDetailsElement>(
               ".reply-model-menu[open]",
             );
-            if (optionsOpen) {
+            if (optionsMenu.current?.open || optionsOpen) {
               e.preventDefault();
-              setOptionsOpen(false);
+              closeOptions();
               e.currentTarget
                 .querySelector<HTMLElement>(".message-options > summary")
                 ?.focus();
@@ -601,7 +608,7 @@ function AgentAIForm({
           }}
           onSubmit={async (e) => {
             e.preventDefault();
-            setOptionsOpen(false);
+            closeOptions();
             const modelMenu = e.currentTarget.querySelector<HTMLDetailsElement>(
               ".reply-model-menu[open]",
             );
@@ -1014,6 +1021,7 @@ function AgentAIForm({
             </button>
             <details
               className="message-options"
+              ref={optionsMenu}
               open={optionsOpen}
               onToggle={(e) => {
                 setOptionsOpen(e.currentTarget.open);
@@ -1043,7 +1051,7 @@ function AgentAIForm({
                         });
                         setEvidencePreview(e);
                         setConsent("");
-                        setOptionsOpen(false);
+                        closeOptions();
                         questionRef.current?.focus();
                       }}
                     />
@@ -1089,7 +1097,7 @@ function AgentAIForm({
                     className="text-button"
                     disabled={agents.busy || !prompt.trim()}
                     onClick={async () => {
-                      setOptionsOpen(false);
+                      closeOptions();
                       await composer.onSave();
                     }}
                   >

@@ -88,16 +88,7 @@ function WorkspaceShell() {
                   aria-label={uiText("Activity records")}
                 >
                   <div className="panel-heading">
-                    <h2>
-                      {core.mode === "ready"
-                        ? uiText("Profile activity")
-                        : uiText("Recent prototype activity")}
-                    </h2>
-                    <Badge>
-                      {core.mode === "ready"
-                        ? uiText("PROFILE ONLY")
-                        : uiText("LOCAL ONLY")}
-                    </Badge>
+                    <h2>{profile.name}</h2>
                   </div>
                   {core.mode === "ready" && (agents.error || !agents.view) ? (
                     <p
@@ -156,17 +147,14 @@ function WorkspaceShell() {
               </button>
             </div>
             <div className="context-inner">
-              <Badge tone="lime">{uiText("SELECTED PROFILE")}</Badge>
               <Avatar profile={profile} />
               <h2>{profile.name}</h2>
-              <p>{profile.role}</p>
+
               <div className="context-detail">
                 <small>{uiText("Provider")}</small>
                 <strong>{providerNames[profile.provider]}</strong>
                 <small>{uiText("Wallet authority")}</small>
                 <strong>{uiText("None assigned")}</strong>
-                <small>{uiText("Current workspace")}</small>
-                <strong>{section}</strong>
               </div>
               <button
                 className="secondary"

@@ -8,13 +8,13 @@
   font-display: swap;
 }
 :root.wt {
-  --wt-bg: #191922;
-  --wt-surface: #1e1e2a;
-  --wt-raised: #252534;
-  --wt-border: #2e2e3e;
+  --wt-bg: #17161e;
+  --wt-surface: #22202d;
+  --wt-raised: #2b283a;
+  --wt-border: #34313f;
   --wt-text: #f9f9fb;
   --wt-muted: #aaaac0;
-  --wt-coral: #ff647c;
+  --wt-coral: #ff4f7c;
   --wt-cyan: #27c5da;
   --wt-violet: #ad96ff;
   --shell-header: #19161e;
@@ -27,7 +27,7 @@
   color-scheme: dark;
   font-family: "Fased Inter", Inter, ui-sans-serif, system-ui, sans-serif;
   font-size: 14px;
-  --radius: 8px;
+  --radius: 12px;
   scroll-padding-top: 58px;
 }
 :root.wt[data-theme="light"] {
@@ -244,7 +244,7 @@
   min-width: 0;
 }
 .wt .shell-body .main-content {
-  padding: 6px;
+  padding: 12px;
   margin: 0;
   width: 100%;
   max-width: none;
@@ -421,17 +421,18 @@
   color-scheme: inherit;
 }
 .wt .panel {
-  border-radius: 8px;
+  border-radius: var(--radius);
+  overflow: clip;
 }
 .wt .agent-chat {
-  gap: 6px;
+  gap: 12px;
   background: var(--wt-bg);
   border: 0;
 }
 .wt .agent-chat > :is(.conversation-rail, .chat-workspace) {
   background: var(--wt-surface);
-  border-radius: 8px;
-  border: 0;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
 }
 .wt .context-panel {
   background: var(--wt-surface);
@@ -911,8 +912,69 @@
 }
 
 .wt .agent-settings-workspace {
-  grid-template-columns: minmax(0, 1fr);
-  max-width: 880px;
+  grid-template-columns: 240px minmax(0, 1fr);
+  max-width: 1100px;
+  gap: 12px;
+}
+.wt .agent-profile-list {
+  padding: 8px;
+  align-self: start;
+}
+.wt .agent-profile-list button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px;
+  background: transparent;
+  border: 0;
+  text-align: start;
+  border-radius: 8px;
+}
+.wt .agent-profile-list button[aria-pressed="true"] {
+  background: var(--shell-active);
+  color: var(--wt-coral);
+}
+.wt .agent-profile-list button:hover {
+  background: var(--shell-hover);
+}
+.wt .profile-defaults {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.wt .deferred-workspace {
+  min-height: 340px;
+}
+.wt .deferred-workspace > .section-head {
+  margin: 0;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.wt .deferred-workspace .empty-state {
+  padding: 64px 20px;
+}
+.wt .dashboard-footer-status {
+  color: var(--wt-muted);
+  font-size: 12px;
+  padding-top: 10px;
+}
+@media (max-width: 760px) {
+  .wt .agent-settings-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .wt .agent-profile-list {
+    display: flex;
+    overflow-x: auto;
+    gap: 4px;
+  }
+  .wt .agent-profile-list button {
+    flex: 0 0 auto;
+    width: auto;
+  }
 }
 
 .wt .notice-result {
@@ -921,4 +983,24 @@
   gap: 6px;
   margin-top: 6px;
   color: var(--wt-coral);
+}
+
+.wt .profile-defaults > :only-of-type {
+  grid-column: 1 / -1;
+}
+.wt .profile-defaults > div[hidden] {
+  display: none;
+}
+.wt .account-permission {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-block-start: 1px solid var(--line);
+}
+@media (pointer: coarse) {
+  .wt .tasks-toolbar :is(button, select) {
+    min-height: 44px;
+  }
 }

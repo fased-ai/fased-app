@@ -455,9 +455,7 @@ export function AIConnectionSettings({
               <button
                 type="button"
                 className="provider-brand-button"
-                aria-pressed={
-                  !!selected && providerFamily === p.id && !view?.ref
-                }
+                aria-pressed={providerFamily === p.id && !view?.ref}
                 disabled={busy || !!signIn}
                 onClick={() => chooseProvider(p.id)}
               >
@@ -512,9 +510,7 @@ export function AIConnectionSettings({
           aria-label={uiText("Connection")}
         >
           <div className="panel-heading">
-            <h3>
-              {uiText(!selected && !view?.ref ? "Providers" : providerName)}
-            </h3>
+            <h3>{uiText(providerName)}</h3>
             {view?.authMethod === "oauth" && view.googleProject && (
               <span className="provider-route">{view.googleProject}</span>
             )}
@@ -660,7 +656,7 @@ export function AIConnectionSettings({
             <details
               className="connection-options"
               key={selected || view?.ref || "new"}
-              open={startNew || selected === "new"}
+              open={startNew || selected === "new" || !view?.ref}
             >
               <summary>{uiText(view?.ref ? "Edit" : "Connect")}</summary>
               <form
@@ -1090,7 +1086,7 @@ export function AIAdmissionReview({
       <details className="ai-admission">
         <summary>{uiText("Model")}</summary>
         <p>{previewModel(policy.model, uiText)}</p>
-        <p>{uiText("Fixture allowance")}</p>
+        <p>{uiText("Access")}</p>
         {admission && (
           <dl>
             <dt>{uiText("Input bound")}</dt>
@@ -1144,11 +1140,7 @@ export function AIAdmissionReview({
           "Owner consent covers model visibility and input-token preflight using the same scoped text, instructions and output schema, then one bounded response. Model visibility does not guarantee billing, quota or response permission. Each run checks again; no cache or fallback.",
         )}
       </p>
-      <p>
-        {uiText(
-          "All three API operations are simulated in this build. Test credentials only; real calls stay disabled. The compiled fixture returns a simulated count of 256 tokens, not a local tokenizer.",
-        )}
-      </p>
+      <p>{uiText("Live execution disabled")}</p>
       {admission && (
         <>
           <p>

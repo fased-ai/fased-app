@@ -7,7 +7,7 @@
   --muted: var(--wt-muted);
   --lime: var(--wt-coral);
   --lime-text: var(--wt-coral);
-  --radius: 4px;
+  --radius: 12px;
   container-type: normal;
   container-name: none;
   font-size: 13px;
@@ -27,7 +27,7 @@
 }
 .wt button {
   min-height: 30px;
-  border-radius: 4px;
+  border-radius: 8px;
   box-shadow: none;
 }
 .wt button:hover {
@@ -54,7 +54,7 @@
   background: var(--wt-coral);
   color: #151116;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: 8px;
   min-height: 32px;
   padding: 6px 13px;
   font-weight: 600;
@@ -65,7 +65,7 @@
 .wt .secondary {
   border: 1px solid var(--line);
   background: var(--wt-raised);
-  border-radius: 4px;
+  border-radius: 8px;
   color: var(--wt-text);
   min-height: 30px;
   padding: 5px 10px;
@@ -75,7 +75,7 @@
   background: #292835;
 }
 .wt .icon-button {
-  border-radius: 4px;
+  border-radius: 8px;
   width: 30px;
   height: 30px;
   min-height: 30px;
@@ -94,7 +94,7 @@
   border: 1px solid var(--line);
   background: var(--wt-bg);
   color: var(--wt-text);
-  border-radius: 4px;
+  border-radius: 8px;
   padding: 7px 9px;
   box-shadow: none;
 }
@@ -156,7 +156,7 @@
   background: var(--wt-surface);
   border: 1px solid var(--line);
   height: 27px;
-  border-radius: 4px;
+  border-radius: 8px;
 }
 .wt .search-wrap input {
   font-size: 11px;
@@ -238,7 +238,7 @@
 }
 .wt .panel {
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 8px;
   background: var(--panel);
   box-shadow: none;
   min-width: 0;
@@ -321,7 +321,7 @@
 .wt .info-banner {
   background: var(--wt-surface);
   border-color: var(--line);
-  border-radius: 4px;
+  border-radius: 8px;
   color: var(--wt-text);
   padding: 10px 12px;
 }
@@ -352,7 +352,7 @@
 }
 .wt .agent-record-body :is(input, select, textarea) {
   padding: 7px 9px;
-  border-radius: 4px;
+  border-radius: 8px;
 }
 .wt .agent-record-body textarea {
   min-height: 76px;
@@ -708,7 +708,7 @@
   padding: 10px;
   margin: 10px 0;
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 8px;
 }
 .wt .memory-workspace {
   display: grid;
@@ -1318,7 +1318,7 @@
   padding: 4px 10px;
   min-height: 28px;
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 8px;
   background: var(--wt-raised);
 }
 

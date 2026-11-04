@@ -21,6 +21,16 @@ export const installedAcceptanceChecks = [
   "logoutSignIn",
   "rebootReconnect",
   "controlledAutomatic",
+  "localBeforeRemote",
+  "mandatoryTailscale",
+  "protectedOwnerDevice",
+  "privateAdminRecovery",
+  "independentConsoleRecovery",
+  "publicIPv4Closure",
+  "publicIPv6Closure",
+  "privateHTTPSWithoutSSH",
+  "passwordFreeUIAndCLI",
+  "ordinaryRemoteUpdate",
 ];
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const number = /^[1-9][0-9]*$/;
@@ -100,6 +110,24 @@ export function validateInstalledAcceptance(receipt, packet, inventory) {
     receipt.ordinaryUpdateApply === "PASS";
   if (!installed)
     throw Error("Ordinary installed UI and CLI application evidence required");
+  // A same-source compatibility reader and SSH-forwarded private listener are
+  // useful historical proofs, but neither is the accepted customer journey.
+  // Bind its actual released predecessor independently of candidate source.
+  const released = receipt.releasedPredecessor;
+  if (
+    receipt.result !== "PASS" ||
+    receipt.localBeforeRemote !== true ||
+    receipt.remoteTransport !== "tailscale-https" ||
+    receipt.sshControlSessionRequired !== false ||
+    receipt.passwordPrompt !== false ||
+    released?.version !== "0.1.6" ||
+    released.source !== "738bd835b8c86c7cf7b3abfb2945240635f51fe7" ||
+    released.artifactSetSha256 !==
+      "aea00a0d9e1b7ed05a1346428cdf8cc277cbe40f93cfcd86d40fc9b45c559460"
+  )
+    throw Error(
+      "Actual released Local-first and password-free Tailscale journey required",
+    );
   const predecessor = receipt.compatibilityPredecessor;
   const legacy = receipt.legacyBootstrap;
   if (

@@ -14,7 +14,7 @@ import type {
 import { useCore } from "../core";
 import { useWorkspace, type TaskComposerDraft } from "../workspace";
 import { RefreshCw } from "../icons";
-import { Badge } from "../components/shared";
+import { Badge, Dialog } from "../components/shared";
 import { TaskHistory } from "./TaskHistory";
 import {
   intervalWithUnit,
@@ -155,12 +155,17 @@ export function AgentTasks({
   const [reuse, setReuse] = useState("");
   const [createdFrom, setCreatedFrom] = useState<string[]>();
   const [strategyRequest, setStrategyRequest] = useState<string>();
-  const advanced = useRef<HTMLDetailsElement>(null);
+  const [legacyAIReview, setLegacyAIReview] = useState(false);
   const runCards = useRef(new Map<string, HTMLElement>());
   const tasks = v.tasks.filter((t) => !t.wen);
   const selectedTask = tasks.find((t) => t.id === selected);
   useEffect(() => {
     if (!focusedTask) return;
+    if (focusedTask === "strategies") {
+      setPanel("strategies");
+      setFocusedTask("");
+      return;
+    }
     setPanel("automations");
     if (focusedTask === "new") {
       setReviewTask(undefined);
@@ -180,10 +185,7 @@ export function AgentTasks({
     }
   }, [createdFrom, tasks]);
   function reviewAI() {
-    if (advanced.current) {
-      advanced.current.open = true;
-      advanced.current.scrollIntoView({ block: "start" });
-    }
+    setLegacyAIReview(true);
   }
   function showRun(id: string) {
     setResultId(id);
@@ -511,29 +513,31 @@ export function AgentTasks({
             "inbox",
             "playbooks",
             "archive",
-          ].map((t) => (
-            <button
-              key={t}
-              aria-pressed={panel === t}
-              onClick={() => {
-                setPanel(t);
-                if (t === "history") setResultId("");
-              }}
-            >
-              {uiText(
-                (
-                  {
-                    automations: "Tasks",
-                    strategies: "Strategies",
-                    history: "Results",
-                    inbox: "Inbox",
-                    playbooks: "Templates",
-                    archive: "Archive",
-                  } as Record<string, string>
-                )[t],
-              )}
-            </button>
-          ))}
+          ]
+            .filter((t) => t !== "playbooks" || v.aiFixtureAvailable)
+            .map((t) => (
+              <button
+                key={t}
+                aria-pressed={panel === t}
+                onClick={() => {
+                  setPanel(t);
+                  if (t === "history") setResultId("");
+                }}
+              >
+                {uiText(
+                  (
+                    {
+                      automations: "Tasks",
+                      strategies: "Strategies",
+                      history: "Results",
+                      inbox: "Inbox",
+                      playbooks: "Templates",
+                      archive: "Archive",
+                    } as Record<string, string>
+                  )[t],
+                )}
+              </button>
+            ))}
         </nav>
         <div className="row-actions">
           <button
@@ -583,9 +587,11 @@ export function AgentTasks({
           }}
         />
       </div>
-      <div hidden={panel !== "playbooks"}>
-        <AgentPlaybooks key={v.profileId} view={v} />
-      </div>
+      {v.aiFixtureAvailable && (
+        <div hidden={panel !== "playbooks"}>
+          <AgentPlaybooks key={v.profileId} view={v} />
+        </div>
+      )}
       {panel === "archive" && <TaskHistory key={v.profileId} view={v} />}
       <section className="panel task-board" hidden={panel !== "automations"}>
         <div
@@ -861,38 +867,51 @@ export function AgentTasks({
           </div>
         </section>
       </div>
-      <details className="task-inspection schedule-behavior">
-        <summary>{uiText("Timing")}</summary>
-        <p>
-          {uiText(
-            "Tasks run while Fased runs, even with the browser closed. Missed intervals become one run. Resume starts a new interval. Calendar reminders keep their original date; overdue reminders run once after resume or restart. Run now completes a calendar reminder early; it will not run again on its date. For a recurring calendar, Run now consumes the upcoming occurrence.",
-          )}
-        </p>
-        <p>
-          {uiText(
-            "Intervals: 1 minute–7 days, up to 20 runs. Calendar reminders: one date within 366 days. Recurring calendars use a named time zone, an end date within one year and up to 20 runs. Missing local times are skipped; repeated times run once.",
-          )}
-        </p>
-        {v.taskCapacity && (
-          <p>
-            {uiText("Workspace capacity: ")}
-            {v.taskCapacity.tasks}
-            {uiText("/100 tasks ·")} {v.taskCapacity.evaluations}
-            {uiText("/200 allocated runs ·")} {v.taskCapacity.runs}
-            {uiText("/200 results · ")}
-            {v.taskCapacity.notices}
-            {uiText("/200 notifications · ")}
-            {Math.ceil(v.taskCapacity.bytes / 1024)}
-            {uiText(
-              "/512 KiB. Future output also reserves space. History is retained; reaching a limit stops further writes. Continuous operation beyond these limits is not available yet.",
+      {v.aiFixtureAvailable && (
+        <div className="fixture-regression-tools">
+          {" "}
+          <details className="task-inspection schedule-behavior">
+            <summary>{uiText("Timing")}</summary>
+            <p>
+              {uiText(
+                "Tasks run while Fased runs, even with the browser closed. Missed intervals become one run. Resume starts a new interval. Calendar reminders keep their original date; overdue reminders run once after resume or restart. Run now completes a calendar reminder early; it will not run again on its date. For a recurring calendar, Run now consumes the upcoming occurrence.",
+              )}
+            </p>
+            <p>
+              {uiText(
+                "Intervals: 1 minute–7 days, up to 20 runs. Calendar reminders: one date within 366 days. Recurring calendars use a named time zone, an end date within one year and up to 20 runs. Missing local times are skipped; repeated times run once.",
+              )}
+            </p>
+            {v.taskCapacity && (
+              <p>
+                {uiText("Workspace capacity: ")}
+                {v.taskCapacity.tasks}
+                {uiText("/100 tasks ·")} {v.taskCapacity.evaluations}
+                {uiText("/200 allocated runs ·")} {v.taskCapacity.runs}
+                {uiText("/200 results · ")}
+                {v.taskCapacity.notices}
+                {uiText("/200 notifications · ")}
+                {Math.ceil(v.taskCapacity.bytes / 1024)}
+                {uiText(
+                  "/512 KiB. Future output also reserves space. History is retained; reaching a limit stops further writes. Continuous operation beyond these limits is not available yet.",
+                )}
+              </p>
             )}
-          </p>
-        )}
-      </details>
-      <details className="scheduled-ai-disclosure" ref={advanced}>
-        <summary>{uiText("Advanced")}</summary>
-        <ScheduledAITasks key={v.profileId} view={v} />
-      </details>
+          </details>
+          <details className="scheduled-ai-disclosure">
+            <summary>{uiText("Advanced")}</summary>
+            <ScheduledAITasks key={v.profileId} view={v} />
+          </details>
+        </div>
+      )}
+      {legacyAIReview && (
+        <Dialog
+          title={uiText("Review task")}
+          onClose={() => setLegacyAIReview(false)}
+        >
+          <ScheduledAITasks key={v.profileId} view={v} />
+        </Dialog>
+      )}
     </div>
   );
 }

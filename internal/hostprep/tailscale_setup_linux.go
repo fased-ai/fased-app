@@ -130,7 +130,7 @@ func PrepareTailscale(ctx context.Context, in *bufio.Reader, out io.Writer) erro
 		return e
 	}
 	if v := strings.ToLower(strings.TrimSpace(line)); v != "y" && v != "yes" {
-		return errors.New("Tailscale setup deferred; retry or explicitly choose SSH")
+		return errors.New("Tailscale setup deferred; connect Tailscale and retry Remote setup")
 	}
 	base, e := core.DefaultDataDir()
 	if e != nil {
@@ -171,7 +171,7 @@ func prepareTailscale(ctx context.Context, dir string, uid int, username string,
 		return errors.New("invalid Tailscale preferences; preserve existing settings")
 	}
 	if p.OperatorUser != "" && p.OperatorUser != username {
-		return errors.New("Tailscale already has a different operator; ask its administrator or choose SSH")
+		return errors.New("Tailscale already has a different operator; ask its administrator before retrying Remote setup")
 	}
 	status, e := run(ctx, nil, "/usr/bin/tailscale", "status", "--json")
 	if e != nil || len(status) > 1024*1024 {
@@ -186,14 +186,14 @@ func prepareTailscale(ctx context.Context, dir string, uid int, username string,
 	case "NeedsLogin":
 		fmt.Fprintln(out, "Open the Tailscale sign-in URL printed below in your computer's browser. No auth key is needed. Keep this SSH connection open.")
 		if _, e = run(ctx, nil, "/usr/bin/tailscale", "login", "--timeout=120s"); e != nil {
-			return errors.New("Tailscale sign-in was not completed; retry or choose SSH; existing settings are preserved")
+			return errors.New("Tailscale sign-in was not completed; retry Tailscale sign-in; existing settings are preserved")
 		}
 	default:
-		return errors.New("Tailscale needs owner attention (for example device approval or a deliberately stopped connection); preserve its settings, then retry or choose SSH")
+		return errors.New("Tailscale needs owner attention (for example device approval or a deliberately stopped connection); preserve its settings, then retry Remote setup")
 	}
 	if p.OperatorUser == "" {
 		if _, e = run(ctx, nil, "/usr/bin/tailscale", "set", "--operator="+username); e != nil {
-			return errors.New("Tailscale operator permission was not granted; ask its administrator or choose SSH")
+			return errors.New("Tailscale operator permission was not granted; ask its administrator before retrying Remote setup")
 		}
 	}
 	fmt.Fprintln(out, "On the computer you will use, install Tailscale from https://tailscale.com/download and sign in to the same tailnet. Enable tailnet HTTPS and allow only your intended devices. Fased will verify private HTTPS; keep SSH/console recovery.")
@@ -233,7 +233,6 @@ func prepareTailscalePackage(ctx context.Context, dir string, uid int, read prep
 		path string
 		data []byte
 	}{{tailscaleKeyPath, tailscaleAPTKey}, {tailscaleSourcePath, []byte(source)}}
-	sourcePath := tailscaleSourcePath
 	// Reuse an exact already-configured official repository instead of adding a
 	// conflicting Signed-By definition. Never rewrite an administrator's files.
 	if existing, err := read(standardTailscaleSourcePath); err == nil {
@@ -247,10 +246,9 @@ func prepareTailscalePackage(ctx context.Context, dir string, uid int, read prep
 		}
 		key, keyErr := read(standardTailscaleKeyPath)
 		if !existing.root || !existing.regular || existing.mode&0022 != 0 || strings.Join(lines, "\n") != strings.TrimSpace(want) || keyErr != nil || !knownPreparationFile(key, tailscaleAPTKey) {
-			return errors.New("existing Tailscale repository differs; ask its administrator or choose SSH")
+			return errors.New("existing Tailscale repository differs; ask its administrator before retrying Remote setup")
 		}
 		files = nil
-		sourcePath = standardTailscaleSourcePath
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -301,8 +299,12 @@ func prepareTailscalePackage(ctx context.Context, dir string, uid int, read prep
 			return e
 		}
 	}
-	if _, e = run(ctx, nil, "/usr/bin/apt-get", "-o", "Dir::Etc::sourcelist="+sourcePath, "-o", "Dir::Etc::sourceparts=-", "-o", "Acquire::AllowInsecureRepositories=false", "-o", "Acquire::AllowDowngradeToInsecureRepositories=false", "-o", "APT::Get::AllowUnauthenticated=false", "update"); e != nil {
-		return errors.New("signed Tailscale package index refresh failed; retry preserves preparation")
+	// Refresh the administrator's configured OS indexes as well as the signed
+	// Tailscale source. Minimal images may not cache distro dependencies, and a
+	// source-restricted update can discard those lists. Keep the configured trust
+	// roots; refresh metadata only, never upgrade unrelated installed packages.
+	if _, e = run(ctx, nil, "/usr/bin/apt-get", "-o", "Acquire::AllowInsecureRepositories=false", "-o", "Acquire::AllowDowngradeToInsecureRepositories=false", "-o", "APT::Get::AllowUnauthenticated=false", "-o", "APT::Update::Error-Mode=any", "update"); e != nil {
+		return errors.New("signed OS and Tailscale package index refresh failed; retry preserves preparation")
 	}
 	if _, e = run(ctx, nil, "/usr/bin/apt-get", "-o", "APT::Get::AllowUnauthenticated=false", "install", "-y", "--no-remove", "--no-install-recommends", "tailscale"); e != nil {
 		return errors.New("Tailscale package installation failed; repair and retry, no source or account reset")

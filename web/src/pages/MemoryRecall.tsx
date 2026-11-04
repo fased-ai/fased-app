@@ -178,7 +178,7 @@ export function MemoryRecall({
           {m.expired && <small>{uiText("Expired")}</small>}
           <div className="agent-inline memory-actions">
             <button
-              className="text-button"
+              className="icon-button"
               disabled={
                 agents.busy || busy || records.revision !== view.revision
               }
@@ -189,7 +189,7 @@ export function MemoryRecall({
               <SlidersHorizontal size={15} />
             </button>
             <button
-              className="text-button"
+              className="icon-button"
               disabled={
                 agents.busy || busy || records.revision !== view.revision
               }
@@ -202,7 +202,7 @@ export function MemoryRecall({
               <Trash2 size={15} />
             </button>
             <button
-              className="text-button"
+              className="icon-button"
               disabled={
                 agents.busy || busy || records.revision !== view.revision
               }
@@ -226,8 +226,7 @@ export function MemoryRecall({
           {m.history.length > 0 && (
             <details>
               <summary>
-                {m.history.length}
-                {uiText(" previous revision(s)")}
+                {uiText("History")} · {m.history.length}
               </summary>
               {m.history.map((h, i) => (
                 <section

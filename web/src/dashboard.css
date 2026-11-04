@@ -26,7 +26,7 @@
 .wt .dashboard-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: 12px;
   grid-auto-flow: row;
 }
 .wt .dashboard-widget {
@@ -35,7 +35,7 @@
   min-height: 144px;
   background: var(--wt-surface);
   border: 1px solid var(--wt-border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   display: flex;
   flex-direction: column;
 }

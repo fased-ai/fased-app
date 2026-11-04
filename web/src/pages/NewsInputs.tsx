@@ -180,7 +180,12 @@ export function NewsInputs({
             );
           })}
         {!headlines.length && (
-          <div className="news-empty">{t("No headlines")}</div>
+          <div className="news-empty">
+            <h3>{t("No headlines")}</h3>
+            <button className="secondary" onClick={() => setSettings(true)}>
+              {t("Add source")}
+            </button>
+          </div>
         )}
         {headlines.map(({ fetch: f, item }) => {
           const source = v.newsSources.find((s) => s.id === f.sourceId);

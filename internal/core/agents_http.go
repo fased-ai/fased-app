@@ -161,6 +161,7 @@ func (h *HTTPHandler) agentsAPI(w http.ResponseWriter, r *http.Request, token st
 			return
 		}
 		v.AIFixtureAvailable = h.agentFixture
+		v.SessionFixtureAvailable = h.store.sessionFixture
 		v.AIExecutionAvailable = h.store.aiExecutionAvailable(h.agentFixture)
 		writeJSON(w, 200, v)
 		return
@@ -196,6 +197,7 @@ func (h *HTTPHandler) agentsAPI(w http.ResponseWriter, r *http.Request, token st
 		return
 	}
 	v.AIFixtureAvailable = h.agentFixture
+	v.SessionFixtureAvailable = h.store.sessionFixture
 	v.AIExecutionAvailable = h.store.aiExecutionAvailable(h.agentFixture)
 	writeJSON(w, 200, v)
 }

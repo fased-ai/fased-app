@@ -24,6 +24,52 @@ class VMLifecycleTest(unittest.TestCase):
         exec(compile(ast.Module(body=nodes, type_ignores=[]), '<vm-lifecycle>', 'exec'), values)
         return values
 
+    def test_fresh_remote_runs_literal_entry_and_never_claims_complete_acceptance(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            calls = []
+            def ssh(command, timeout):
+                calls.append(command)
+                if 'echo clean' in command: return 'clean'
+                if 'echo undeployed' in command: return 'undeployed'
+                if command == 'tailscale status --json': return json.dumps({'BackendState':'Running','Self':{'Online':True}})
+                if 'systemctl show' in command: return 'fased-vps-1000'
+                if 'id -u' in command: return '997'
+                if 'getent passwd' in command: return 'fased-vps-1000:x:997:997::/var/empty:/usr/sbin/nologin'
+                if 'passwd -S' in command: return 'fased-vps-1000 L 2026-11-01'
+                if command == 'tailscale serve status --json': return json.dumps({'Web':{'fased.tail-example.ts.net:443':{'Handlers':{'/':{'Proxy':'unix:/var/lib/fased-app-vps-1000/app-state/tailscale.sock'}}}}})
+                if '/usr/bin/stat' in command: return 'socket:600:fased-vps-1000'
+                if 'tailscale logout' in command: return ''
+                self.fail('unexpected VM command: '+command)
+            def terminal(args, answers, **options):
+                self.assertEqual(args[-1], 'bash <(curl -fsSL https://github.com/fased-ai/fased-app/releases/latest/download/install.sh) --remote --operator ubuntu --listen 127.0.0.1:17482')
+                self.assertTrue(options['password_free'])
+                self.assertNotIn('ssh', answers.values())
+                self.assertNotIn(guest.PASSWORD, answers.values())
+                options['observer']('https://login.tailscale.com/a/disposableactionsecret\n')
+                options['observer']('https://fased.tail-example.ts.net/?instance=owner#setup=private\n')
+                return 0, 'https://login.tailscale.com/a/disposableactionsecret\nRemote setup finished'
+            candidate={'packet':{'source':'a'*40,'productVersion':'0.2.0','release':{'sourceTree':'b'*40,'runId':'12','runAttempt':'1'}},'assets':[]}
+            health={'version':'0.2.0','capabilities':{'aiConnections':False,'financialExecution':False,'walletSigner':False}}
+            response=Mock();response.__enter__=Mock(return_value=io.BytesIO(json.dumps(health).encode()));response.__exit__=Mock(return_value=False)
+            opener=Mock();opener.open.return_value=response
+            fixture=SimpleNamespace(binding=guest.binding,write_private=guest.write_private,redacted=guest.redacted,terminal=terminal,PREPARATION_ANSWERS=guest.PREPARATION_ANSWERS)
+            saved={}
+            scope=self.functions(['fresh_remote_acceptance'],{'root':root,'ssh':ssh,'sshbase':['ssh','ubuntu@127.0.0.1'],'json':json,'urllib':SimpleNamespace(request=SimpleNamespace(build_opener=lambda _:opener,ProxyHandler=lambda _:None)),'subprocess':subprocess,'save':lambda n,v:saved.update({n:v})})
+            result=scope['fresh_remote_acceptance'](fixture,candidate,'/guest','/delivery','f'*64)
+            self.assertEqual(result['result'],'SUPPORTING')
+            self.assertFalse(result['upgradeApplied'])
+            self.assertEqual(result['checks']['tailBeforeDeployment'],'PASS')
+            self.assertEqual(result['localAcceptanceSha256'],'f'*64)
+            opener.open.assert_called_once_with('https://fased.tail-example.ts.net/api/v1/health',timeout=20)
+            self.assertIn('sudo -n /usr/bin/tailscale logout',calls)
+            self.assertNotIn('private', (root/'root-entry.log').read_text())
+            self.assertNotIn('https://login.tailscale.com/a/', (root/'root-entry.log').read_text())
+            self.assertNotIn('disposableactionsecret', (root/'root-entry.log').read_text())
+            self.assertEqual(guest.document(root/'enrollment.json')['url'],'https://login.tailscale.com/a/disposableactionsecret')
+            self.assertEqual((root/'enrollment.json').stat().st_mode & 0o777,0o600)
+            self.assertEqual((root/'root-entry.log').stat().st_mode & 0o777,0o600)
+
     def test_snapshot_stops_owned_transport_before_vm_without_changing_other_modes(self):
         for staged, expected in [(True, ['tunnel terminate', 'tunnel wait', 'vm kill', 'vm wait']),
                                  (False, ['vm kill', 'vm wait'])]:
@@ -107,24 +153,57 @@ class DeliveryFixtureTest(unittest.TestCase):
             guest.browser_link(setup + '\n' + setup.replace('owner', 'other'))
 
     def test_terminal_deadline_retains_the_unanswered_prompt_without_secrets(self):
-        command = [sys.executable, '-c', 'print("disposable-staged-owner-password #setup=private-token\\nUnanswered consent? [y/N]: ", flush=True); input()']
+        command = [sys.executable, '-c', 'print("disposable-staged-owner-password #setup=private-token https://login.tailscale.com/a/timeout-action-secret\\nUnanswered consent? [y/N]: ", flush=True); input()']
         with self.assertRaisesRegex(TimeoutError, r'Unanswered consent\?') as caught:
             guest.terminal(command, {}, timeout=1)
         self.assertNotIn(guest.PASSWORD, str(caught.exception))
         self.assertNotIn('private-token', str(caught.exception))
+        self.assertNotIn('https://login.tailscale.com/a/', str(caught.exception))
+        self.assertNotIn('timeout-action-secret', str(caught.exception))
+
+    def test_routine_terminal_refuses_password_before_sending_any_answer(self):
+        for prompt in ('Owner password: ', '[sudo] password for user: ', 'Signing password: '):
+            command = [sys.executable, '-c', 'print(' + repr(prompt) + ', flush=True); input(); print("credential sent")']
+            with self.assertRaisesRegex(RuntimeError, 'Unexpected password prompt'):
+                guest.terminal(command, {prompt: guest.PASSWORD}, timeout=2, password_free=True)
+
+    def test_fresh_remote_requires_matching_completed_local_journey(self):
+        candidate = {'packet': {'source': 'a' * 40, 'productVersion': '0.2.0', 'release':
+                     {'sourceTree': 'b' * 40, 'runId': '12', 'runAttempt': '1'}}, 'assets': []}
+        receipt = {**guest.binding(candidate), 'result': 'PASS', 'localOnly': True,
+                   'upgradeApplied': True, 'uiOutcome': 'applied', 'cliOutcome': 'applied',
+                   'automaticOutcome': 'applied', 'automaticPolicyRestored': 'manual',
+                   'mining': False, 'liveFeatures': False, 'automaticUpdates': False,
+                   'checks': {name: 'PASS' for name in guest.LOCAL_REQUIRED_CHECKS}}
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary) / 'local.json'
+            guest.write_private(path, receipt)
+            self.assertEqual(guest.require_local_acceptance(candidate, path), guest.digest(path.read_bytes()))
+            for key, value in [('source', 'c' * 40), ('runAttempt', '2'), ('result', 'SUPPORTING'),
+                               ('upgradeApplied', False), ('automaticPolicyRestored', 'automatic'),
+                               ('liveFeatures', True), ('cliOutcome', 'alreadyCurrent')]:
+                guest.write_private(path, {**receipt, key: value})
+                with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, 'Local acceptance'):
+                    guest.require_local_acceptance(candidate, path)
+            guest.write_private(path, {**receipt, 'checks': {**receipt['checks'], 'recovery': 'FAIL'}})
+            with self.assertRaisesRegex(RuntimeError, 'Local acceptance'):
+                guest.require_local_acceptance(candidate, path)
 
     def test_failed_owner_reply_is_bounded_private_and_redacted(self):
         with tempfile.TemporaryDirectory() as temporary:
             receipt = pathlib.Path(temporary) / 'failure.json'
-            error = ('x' * 10000 + guest.PASSWORD + ' #setup=private-setup-token\nPermission denied').encode()
+            error = ('x' * 10000 + guest.PASSWORD + ' #setup=private-setup-token https://login.tailscale.com/a/failure-action-secret\nPermission denied').encode()
             result = subprocess.CompletedProcess(['ssh'], 2, b'private stdout', error)
-            with self.assertRaisesRegex(RuntimeError, '(?s)fased-local/install.*Permission denied'):
+            with self.assertRaisesRegex(RuntimeError, '(?s)fased-local/install.*Permission denied') as caught:
                 guest.checked_reply(result, 'fased-local', 'install', receipt)
             saved = guest.document(receipt)
             self.assertEqual(saved['returncode'], 2)
             self.assertLessEqual(len(saved['stderr']), 8192)
             self.assertNotIn(guest.PASSWORD, saved['stderr'])
             self.assertNotIn('private-setup-token', saved['stderr'])
+            for text in (saved['stderr'],str(caught.exception)):
+                self.assertNotIn('https://login.tailscale.com/a/',text)
+                self.assertNotIn('failure-action-secret',text)
             self.assertNotIn('private stdout', receipt.read_text())
             self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
             success = subprocess.CompletedProcess(['ssh'], 0, b'{"result":"PASS"}', b'')

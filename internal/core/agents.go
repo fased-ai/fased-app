@@ -158,6 +158,7 @@ type AgentView struct {
 	AIRequests              []AgentAIRequest    `json:"aiRequests"`
 	AIExecutionAvailable    bool                `json:"aiExecutionAvailable"`
 	AIFixtureAvailable      bool                `json:"aiFixtureAvailable"`
+	SessionFixtureAvailable bool                `json:"sessionFixtureAvailable,omitempty"`
 	Revision                int64               `json:"revision"`
 	ProfileID               string              `json:"profileId"`
 	Profiles                []AgentProfile      `json:"profiles"`
@@ -220,7 +221,7 @@ type AgentCommand struct {
 
 func initialAgents() agentDocument {
 	return agentDocument{NewsSources: []NewsSource{}, NewsFetches: []NewsFetch{}, Profiles: []AgentProfile{
-		{ID: "wen-operator", Name: "WEN Operator", Persona: "Explain WEN prototypes. Financial execution is unavailable.", Provider: "none"},
+		{ID: "wen-operator", Name: "Operator", Persona: "Organize research and scheduled tasks. Explain proposals and request approval before consequential actions.", Provider: "none"},
 		{ID: "trading-analyst", Name: "Trading Analyst", Persona: "Research and compare bounded paper strategies.", Provider: "none"},
 		{ID: "news-researcher", Name: "News Researcher", Persona: "Keep sourced research separate from instructions and financial facts.", Provider: "none"},
 	}, Sessions: []AgentSession{}, Messages: []AgentMessage{}, Memories: []AgentMemory{}, Bots: []PaperBot{}, Tasks: []AgentTask{}, Runs: []AgentRun{}, Notices: []AgentNotice{}, AIRequests: []AgentAIRequest{}, ResearchTurns: []WENResearchTurn{}}
