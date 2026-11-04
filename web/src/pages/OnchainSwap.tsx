@@ -200,7 +200,7 @@ export function OnchainSwap() {
       <div className="section-head">
         <h1>{t("Onchain")}</h1>
         <div className="row-actions">
-          <Badge>{t(active?.available ? "Fixture" : "Unavailable")}</Badge>
+          <Badge>{t("Live execution disabled")}</Badge>
           <button
             type="button"
             className="icon-btn"
@@ -534,19 +534,21 @@ export function OnchainSwap() {
                       <Download size={14} />
                       {t("Download approval")}
                     </button>
-                    <button
-                      type="button"
-                      className="icon-btn"
-                      title={t("Copy command")}
-                      aria-label={t("Copy command")}
-                      onClick={() =>
-                        void navigator.clipboard.writeText(
-                          `fased-app custody approve-swap --proposal-file swap-${review.proposal.quote.id}.json --disposable-fixture`,
-                        )
-                      }
-                    >
-                      <Copy size={14} />
-                    </button>
+                    {agents.view?.aiFixtureAvailable && (
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        title={t("Copy command")}
+                        aria-label={t("Copy command")}
+                        onClick={() =>
+                          void navigator.clipboard.writeText(
+                            `fased-app custody approve-swap --proposal-file swap-${review.proposal.quote.id}.json --disposable-fixture`,
+                          )
+                        }
+                      >
+                        <Copy size={14} />
+                      </button>
+                    )}
                   </div>
                 </details>
                 <div className="row-actions">

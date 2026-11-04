@@ -38,6 +38,7 @@ for (const variant of ["review", "notify", "unknown"] as const) {
       output = "";
       process = spawn(binary, [
         "serve",
+        "--session-fixture",
         "--listen",
         "127.0.0.1:0",
         "--data-dir",

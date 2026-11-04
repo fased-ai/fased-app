@@ -8,11 +8,11 @@ import {
   type FormEvent,
 } from "react";
 import { initialState, reducer, restoreState, STORAGE_KEY } from "./state";
-import { terminalData } from "./fixtures";
 import { useUI } from "./ui-preferences";
 import { useCore } from "./core";
 import { useAgents } from "./agents";
 import type { Action, Provider } from "./state";
+import type { AccountsView } from "./accounts";
 export type AgentSettingsDraft = {
   values: {
     name: string;
@@ -76,6 +76,8 @@ function getRoute() {
     agents: "agents/settings",
     news: "agents/news",
     memory: "agents/memory",
+    "agents/bots": "agents/tasks",
+    terminals: "terminals/jupiter",
     mining: "terminals/satcoin",
     onchain: "terminals/jupiter",
     hyperliquid: "terminals/hyperliquid",
@@ -162,6 +164,48 @@ function useWorkspaceState() {
     localDispatch(action);
   }
   const [route, setRoute] = useState(getRoute);
+  const [walletSnapshot, setWalletSnapshot] = useState<{
+    instance: string;
+    view: AccountsView | null;
+    error: string;
+    loading: boolean;
+  }>();
+  const [walletRefresh, setWalletRefresh] = useState(0);
+  useEffect(() => {
+    let active = true;
+    if (core.mode !== "ready") {
+      setWalletSnapshot(undefined);
+      return;
+    }
+    if (route !== "overview") return;
+    const instance = core.instanceId;
+    setWalletSnapshot({ instance, view: null, error: "", loading: true });
+    void core.request<AccountsView>("accounts").then(
+      (view) => {
+        if (active)
+          setWalletSnapshot({ instance, view, error: "", loading: false });
+      },
+      (error: unknown) => {
+        if (active)
+          setWalletSnapshot({
+            instance,
+            view: null,
+            error:
+              error instanceof Error ? error.message : "Wallets unavailable",
+            loading: false,
+          });
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [core.mode, core.instanceId, core.request, route, walletRefresh]);
+  const wallets = {
+    ...(core.mode === "ready" && walletSnapshot?.instance === core.instanceId
+      ? walletSnapshot
+      : { view: null, error: "", loading: false }),
+    refresh: () => setWalletRefresh((revision) => revision + 1),
+  };
   const [focusedTask, setFocusedTask] = useState("");
   const [chatDrafts, setChatDrafts] = useState(new Map<string, string>());
   const [agentSettingsDrafts, setAgentSettingsDrafts] = useState(
@@ -199,6 +243,12 @@ function useWorkspaceState() {
   useEffect(() => {
     const fn = () => {
       const next = getRoute();
+      if (window.location.hash === "#terminals")
+        window.history.replaceState(window.history.state, "", `#${next}`);
+      if (window.location.hash === "#agents/bots") {
+        setFocusedTask("strategies");
+        window.history.replaceState(window.history.state, "", `#${next}`);
+      }
       if (next === "terminals/satcoin" && window.location.hash !== `#${next}`)
         window.history.replaceState(window.history.state, "", `#${next}`);
       setRoute(next);
@@ -272,15 +322,18 @@ function useWorkspaceState() {
       ["Settings", "settings"],
       ["Activity", "activity"],
     ].map(([title, path]) => ({ title, path })),
-    ...terminalData.map((t) => ({ title: t.name, path: `terminals/${t.id}` })),
+    { title: "Mining", path: "terminals/satcoin" },
+    { title: "Onchain", path: "terminals/jupiter" },
+    { title: "Hyperliquid", path: "terminals/hyperliquid" },
     { title: "Memory", path: "agents/memory" },
     { title: "Permissions", path: "wallets/permissions" },
-    { title: "AI connections", path: "settings" },
+    { title: "Providers", path: "providers" },
   ].filter((item) => t(item.title).toLowerCase().includes(query.toLowerCase()));
 
   return {
     core,
     agents,
+    wallets,
     focusedTask,
     setFocusedTask,
     chatDrafts,

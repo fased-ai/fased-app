@@ -1,5 +1,56 @@
 // Product UI vocabulary; records and protocol identifiers remain unchanged.
 export const priorityCopy = {
+  "No conversations": [
+    "Нет диалогов",
+    "Sin conversaciones",
+    "暂无对话",
+    "대화 없음",
+  ],
+  "Protected setup unavailable": [
+    "Защищённая настройка недоступна",
+    "Configuración protegida no disponible",
+    "受保护设置暂不可用",
+    "보호된 설정을 사용할 수 없습니다",
+  ],
+
+  "Mining is not available yet": [
+    "Майнинг пока недоступен",
+    "La minería aún no está disponible",
+    "挖矿暂未开放",
+    "채굴은 아직 사용할 수 없습니다",
+  ],
+  "Hyperliquid is not available yet": [
+    "Hyperliquid пока недоступен",
+    "Hyperliquid aún no está disponible",
+    "Hyperliquid 暂未开放",
+    "Hyperliquid는 아직 사용할 수 없습니다",
+  ],
+  "Choose a workspace": [
+    "Выберите раздел",
+    "Elige un espacio",
+    "选择工作区",
+    "작업 공간 선택",
+  ],
+  "RPC configured": [
+    "RPC настроен",
+    "RPC configurado",
+    "RPC 已配置",
+    "RPC 설정됨",
+  ],
+  "Set up RPC": ["Настроить RPC", "Configurar RPC", "设置 RPC", "RPC 설정"],
+  "Wallets unavailable": [
+    "Кошельки недоступны",
+    "Carteras no disponibles",
+    "钱包不可用",
+    "지갑을 사용할 수 없습니다",
+  ],
+  "Live execution disabled": [
+    "Торговые операции отключены",
+    "Operaciones reales desactivadas",
+    "实盘执行已停用",
+    "실거래 실행 비활성화",
+  ],
+
   Transaction: ["Транзакция", "Transacción", "交易", "트랜잭션"],
   Fee: ["Комиссия", "Comisión", "手续费", "수수료"],
   Payer: ["Плательщик", "Pagador", "付款方", "수수료 납부자"],

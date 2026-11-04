@@ -26,6 +26,7 @@ const inventory = {
 };
 const receipt = () => ({
   ...acceptanceBinding(packet, inventory),
+  result: "PASS",
   fixtureOnly: true,
   mining: false,
   liveFeatures: false,
@@ -40,6 +41,16 @@ const receipt = () => ({
   uiOutcome: "applied",
   cliOutcome: "applied",
   ordinaryUpdateApply: "PASS",
+  localBeforeRemote: true,
+  remoteTransport: "tailscale-https",
+  sshControlSessionRequired: false,
+  passwordPrompt: false,
+  releasedPredecessor: {
+    version: "0.1.6",
+    source: "738bd835b8c86c7cf7b3abfb2945240635f51fe7",
+    artifactSetSha256:
+      "aea00a0d9e1b7ed05a1346428cdf8cc277cbe40f93cfcd86d40fc9b45c559460",
+  },
   compatibilityPredecessor: {
     fixtureOnly: true,
     published: false,
@@ -91,6 +102,12 @@ test("incomplete, changed and activated journeys cannot authorize publication", 
     { uiOutcome: "alreadyCurrent" },
     { cliOutcome: "alreadyCurrent" },
     { ordinaryUpdateApply: "DEFERRED_PROFILE_TRANSITION" },
+    { result: "SUPPORTING" },
+    { localBeforeRemote: false },
+    { remoteTransport: "ssh-forward" },
+    { sshControlSessionRequired: true },
+    { passwordPrompt: true },
+    { releasedPredecessor: { version: "0.1.6", source: packet.source } },
   ])
     assert.throws(() =>
       validateInstalledAcceptance(
@@ -99,6 +116,23 @@ test("incomplete, changed and activated journeys cannot authorize publication", 
         inventory,
       ),
     );
+});
+test("historical SSH and rebuilt-reader receipts cannot authorize publication", () => {
+  const old = receipt();
+  for (const field of [
+    "releasedPredecessor",
+    "localBeforeRemote",
+    "remoteTransport",
+    "sshControlSessionRequired",
+    "passwordPrompt",
+  ])
+    delete old[field];
+  assert.throws(() => validateInstalledAcceptance(old, packet, inventory));
+  for (const field of ["version", "source", "artifactSetSha256"]) {
+    const value = receipt();
+    value.releasedPredecessor[field] = "changed";
+    assert.throws(() => validateInstalledAcceptance(value, packet, inventory));
+  }
 });
 test("a legacy bootstrap bridge cannot stand in for ordinary installed application", () => {
   assert.throws(() =>

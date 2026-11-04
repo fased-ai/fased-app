@@ -2,7 +2,7 @@
 // PTY drivers run as its ordinary owner. No project program executes as root.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { chromium } from "@playwright/test";
 
@@ -24,6 +24,138 @@ export async function refreshFixtureAccounts(page) {
     .click();
 }
 
+export function verifiedFixtureApproval(view, managed, proposal) {
+  assert.deepEqual(
+    proposal.policy.account,
+    managed.signer,
+    "policy signer identity changed",
+  );
+  assert.deepEqual(
+    proposal.grant.account,
+    managed.signer,
+    "grant signer identity changed",
+  );
+  const account = view.record.accounts.find((item) => item.id === managed.id);
+  assert.ok(account, "approved managed account missing from public read");
+  assert.equal(
+    account.mode,
+    "fixture-managed",
+    "approval account mode changed",
+  );
+  assert.deepEqual(
+    account.signer,
+    managed.signer,
+    "approval account identity changed",
+  );
+  assert.equal(
+    account.network,
+    managed.network,
+    "approval account network changed",
+  );
+  assert.equal(
+    account.publicKey,
+    managed.publicKey,
+    "approval public key changed",
+  );
+  const drafts = view.record.proposals.filter(
+    (item) => item.accountId === managed.id,
+  );
+  const row = drafts.findIndex((item) => item.proposal.id === proposal.id);
+  assert.ok(row >= 0, "target proposal is not bound to the managed account");
+  assert.deepEqual(drafts[row].proposal, proposal, "approved proposal changed");
+  const proof = view.proposals.find((item) => item.id === proposal.id);
+  assert.ok(proof, "target proposal receipt missing from public read");
+  assert.equal(
+    proof.receipt.proposalId,
+    proposal.id,
+    "receipt proposal identity changed",
+  );
+  assert.equal(
+    proof.receipt.state,
+    "approved",
+    "target receipt is not approved",
+  );
+  assert.deepEqual(
+    proof.receipt.account,
+    managed.signer,
+    "receipt signer identity changed",
+  );
+  assert.match(proof.digest, /^[a-f0-9]{64}$/, "invalid proposal digest");
+  assert.equal(
+    proof.receipt.digest,
+    proof.digest,
+    "approved receipt digest mismatch",
+  );
+  return {
+    accountId: managed.id,
+    proposalId: proposal.id,
+    digest: proof.digest,
+    row,
+  };
+}
+
+export async function revealFixtureApproval(page, name, proposalId, row) {
+  assert.match(proposalId, /^[a-f0-9]{32}$/);
+  assert.ok(
+    Number.isInteger(row) && row >= 0,
+    "verified account receipt row required",
+  );
+  const wallet = page.getByRole("article", {
+    name: `Account ${name}`,
+    exact: true,
+  });
+  const current = wallet
+    .locator(".account-permission")
+    .nth(row)
+    .getByText("approved", { exact: true });
+  // Genuine lifecycle3 UI at d2f1fb2 renders this separate proposal article.
+  // It has no .account-permission or .account-advanced container.
+  const legacyArticle = page.getByRole("article", {
+    name: `Proposal ${proposalId}`,
+    exact: true,
+    includeHidden: true,
+  });
+  const legacy = legacyArticle.getByText("approved", { exact: true });
+  await current.or(legacy).first().waitFor({ state: "attached" });
+  if (await current.count()) {
+    const details = wallet.locator(".account-details");
+    if (!(await details.evaluate((element) => element.open)))
+      await details.locator(":scope > summary").click();
+    await current.waitFor({ state: "visible" });
+    return;
+  }
+  // Later historical UIs may put this exact proposal inside a disclosure.
+  // Open only ancestors of that proposal, never an unrelated key editor.
+  const disclosures = page.locator("details").filter({ has: legacyArticle });
+  for (let index = 0; index < (await disclosures.count()); index++) {
+    const details = disclosures.nth(index);
+    if (!(await details.evaluate((element) => element.open)))
+      await details.locator(":scope > summary").click();
+  }
+  await legacy.waitFor({ state: "visible" });
+}
+
+function publicApprovalView(view) {
+  return {
+    revision: view.record.revision,
+    accounts: view.record.accounts.map(
+      ({ id, name, version, mode, network, publicKey, signer }) => ({
+        id,
+        name,
+        version,
+        mode,
+        network,
+        publicKey,
+        signer,
+      }),
+    ),
+    proposals: view.record.proposals,
+    receipts: view.proposals,
+    fixtureAvailable: view.fixture.available,
+    accountStates: view.accountStates,
+  };
+}
+
 export async function fixtureAccountJourney({
   url,
   engine,
@@ -43,6 +175,7 @@ export async function fixtureAccountJourney({
 }) {
   const browser = await chromium.launch({ headless: true });
   let page;
+  const approvalDiagnostic = {};
   try {
     const context = await browser.newContext({
       viewport: { width: 1400, height: 1000 },
@@ -54,23 +187,28 @@ export async function fixtureAccountJourney({
     await page
       .getByRole("heading", { name: "Wallets", level: 1, exact: true })
       .waitFor();
-    await revealFixtureAccountEntry(page);
-    await page.getByLabel("Name", { exact: true }).fill("Disposable UI watch");
-    await page
-      .getByLabel("Disposable public key (64 lowercase hex)")
-      .fill(account.publicKey);
-    await page
-      .getByRole("button", { name: "Save public account", exact: true })
-      .click();
+    // Seed historical disposable records through the existing owner CLI. The
+    // ordinary Wallets page no longer exposes test-key/proposal editors.
+    cli(["login", "--prepare-host", "--password-stdin"], appPassword + "\n");
+    let current = JSON.parse(cli(["accounts", "--prepare-host"]));
+    current.record.accounts.push({
+      version: 1,
+      id: randomBytes(16).toString("hex"),
+      name: "Disposable UI watch",
+      mode: "watch",
+      network: account.network,
+      publicKey: account.publicKey,
+    });
+    cli(
+      ["accounts", "--prepare-host", "--request-stdin"],
+      JSON.stringify(current.record),
+    );
+    await refreshFixtureAccounts(page);
     await page
       .getByRole("heading", { name: "Disposable UI watch", exact: true })
       .waitFor();
-    cli(["login", "--prepare-host", "--password-stdin"], appPassword + "\n");
-    let current = JSON.parse(cli(["accounts", "--prepare-host"]));
-    check(
-      "accounts:UIWriteCLIRead",
-      current.record.accounts[0].name === "Disposable UI watch",
-    );
+    check("accounts:CLISeedUIRead", true);
+    current = JSON.parse(cli(["accounts", "--prepare-host"]));
     const stale = structuredClone(current.record);
     await page.getByRole("button", { name: "Rename", exact: true }).click();
     await page.getByLabel("New account name").fill("Shared UI and CLI watch");
@@ -80,6 +218,11 @@ export async function fixtureAccountJourney({
     await page
       .getByRole("heading", { name: "Shared UI and CLI watch", exact: true })
       .waitFor();
+    check(
+      "accounts:UIWriteCLIRead",
+      JSON.parse(cli(["accounts", "--prepare-host"])).record.accounts[0]
+        .name === "Shared UI and CLI watch",
+    );
     check(
       "accounts:staleCLIRevisionDenied",
       fails(() =>
@@ -107,46 +250,61 @@ export async function fixtureAccountJourney({
       .getByRole("heading", { name: "CLI external manual", exact: true })
       .waitFor();
     check("accounts:CLIWriteUIRead", true);
-    await page
-      .getByRole("button", { name: "Record disposable signer", exact: true })
-      .click();
-    await page
-      .getByRole("heading", {
-        // This journey also runs the pinned predecessor UI during bootstrap.
-        name: /^(Wallet|Disposable operating account)$/,
-      })
-      .waitFor();
     current = JSON.parse(cli(["accounts", "--prepare-host"]));
-    const managed = current.record.accounts.find(
-      (a) => a.mode === "fixture-managed",
+    const managed = {
+      version: 1,
+      id: randomBytes(16).toString("hex"),
+      name: "Wallet",
+      mode: "fixture-managed",
+      publicKey: account.publicKey,
+      network: account.network,
+      signer: account,
+    };
+    current.record.accounts.push(managed);
+    cli(
+      ["accounts", "--prepare-host", "--request-stdin"],
+      JSON.stringify(current.record),
     );
+    await refreshFixtureAccounts(page);
     await page
       .getByRole("heading", { name: managed.name, exact: true })
       .waitFor();
+    current = JSON.parse(cli(["accounts", "--prepare-host"]));
     check(
       "accounts:realConfiguredPublicReference",
-      managed.signer.epoch === account.epoch &&
-        managed.publicKey === account.publicKey,
+      current.record.accounts.find((a) => a.id === managed.id).signer.epoch ===
+        account.epoch && managed.publicKey === account.publicKey,
     );
-    await page
-      // The same journey also verifies pinned older packaged interfaces.
-      .getByLabel(/^(?:Test|Fixture) account$/)
-      .selectOption(managed.id);
-    await page.getByLabel("Wallet lifetime cap", { exact: true }).fill("150");
-    await page.getByLabel("Bot grant cap", { exact: true }).fill("20");
-    await page
-      .getByRole("button", { name: "Create permission proposal", exact: true })
-      .click();
-    await page
-      .getByRole("button", { name: "Download public proposal", exact: true })
-      .waitFor();
-    const downloadPromise = page.waitForEvent("download");
-    await page
-      .getByRole("button", { name: "Download public proposal", exact: true })
-      .click();
+    const id = randomBytes(16).toString("hex");
+    const policy = {
+      account,
+      asset: "fixture-credit:v1",
+      budget: "150",
+      maxOperation: "10",
+      destinations: ["fixture:treasury"],
+      expiresAt: Math.floor(Date.now() / 1000) + 900,
+    };
+    const proposal = {
+      version: 1,
+      id,
+      policy,
+      grant: {
+        ...policy,
+        id,
+        botId: randomBytes(16).toString("hex"),
+        budget: "20",
+        revoked: false,
+      },
+    };
+    current.record.proposals.push({ accountId: managed.id, proposal });
+    cli(
+      ["accounts", "--prepare-host", "--request-stdin"],
+      JSON.stringify(current.record),
+    );
     const proposalFile = backups + "/public-proposal.json";
-    await (await downloadPromise).saveAs(proposalFile);
-    const proposal = JSON.parse(await readFile(proposalFile, "utf8"));
+    await writeFile(proposalFile, JSON.stringify(proposal) + "\n", {
+      mode: 0o600,
+    });
     check(
       "accounts:proposalHasNoAuthority",
       app("fixture-approvals", { proposalIds: [proposal.id] }).approvals[0]
@@ -214,13 +372,38 @@ finally:
       terminal("approve").passwordEcho === false,
     );
     check("accounts:approvalCompletionLocksVault", ownerStatus().locked);
-    await refreshFixtureAccounts(page);
-    await page.getByText("approved", { exact: true }).waitFor();
+    approvalDiagnostic.target = {
+      accountId: managed.id,
+      proposalId: proposal.id,
+    };
     current = JSON.parse(cli(["accounts", "--prepare-host"]));
+    approvalDiagnostic.cli = publicApprovalView(current);
+    const cliProof = verifiedFixtureApproval(current, managed, proposal);
+    const origin = new URL(url).origin;
+    const refreshed = page.waitForResponse((response) => {
+      const endpoint = new URL(response.url());
+      return (
+        response.request().method() === "GET" &&
+        endpoint.origin === origin &&
+        endpoint.pathname === "/api/v1/accounts"
+      );
+    });
+    await refreshFixtureAccounts(page);
+    const response = await refreshed;
+    approvalDiagnostic.httpStatus = response.status();
+    assert.equal(response.status(), 200, "public approval read failed");
+    const api = await response.json();
+    approvalDiagnostic.api = publicApprovalView(api);
+    const apiProof = verifiedFixtureApproval(api, managed, proposal);
+    assert.deepEqual(
+      apiProof,
+      cliProof,
+      "public CLI/API approval snapshots disagree",
+    );
+    await revealFixtureApproval(page, managed.name, proposal.id, apiProof.row);
     check(
       "accounts:verifiedApprovalSharedUIAndCLI",
-      current.proposals[0].receipt.state === "approved" &&
-        current.proposals[0].receipt.digest === current.proposals[0].digest,
+      apiProof.digest === cliProof.digest,
     );
     ownerUnlock(walletPassword);
     const operation = {
@@ -263,6 +446,39 @@ finally:
     });
     check("accounts:actualManagedUIResponsive", true);
   } catch (error) {
+    if (page) {
+      // Public receipt DTOs and structural names only: never auth headers,
+      // input values, private storage, URLs, passwords or backup material.
+      const dom = await page
+        .evaluate(() => ({
+          language: document.documentElement.lang,
+          accounts: [
+            ...document.querySelectorAll('article[aria-label^="Account "]'),
+          ].map((node) => ({
+            name: node.getAttribute("aria-label"),
+            receipts: [
+              ...node.querySelectorAll(".account-permission .badge"),
+            ].map((badge) => badge.textContent),
+          })),
+          proposals: [
+            ...document.querySelectorAll('article[aria-label^="Proposal "]'),
+          ].map((node) => ({
+            name: node.getAttribute("aria-label"),
+            states: [...node.querySelectorAll(".badge")].map(
+              (badge) => badge.textContent,
+            ),
+          })),
+          disclosures: [...document.querySelectorAll("details")].map(
+            (node) => ({ class: node.className, open: node.open }),
+          ),
+        }))
+        .catch(() => ({ unavailable: true }));
+      await writeFile(
+        evidence + "/accounts-approval-public.json",
+        JSON.stringify({ ...approvalDiagnostic, dom }, null, 2) + "\n",
+        { mode: 0o600 },
+      ).catch(() => {});
+    }
     if (page)
       await page
         .screenshot({

@@ -63,8 +63,61 @@ function result(plan) {
     ["inspection-installed", "inspection"],
   ])
     needs[job] = { result: plan[flag] ? "success" : "skipped" };
+  needs["core-scenarios"] = {
+    result: plan.scope === "full" ? "success" : "skipped",
+  };
   return needs;
 }
+test("core scenarios are required only for full scope and cannot be omitted or skipped", () => {
+  const full = result(classify([]));
+  assert.doesNotThrow(() => verifyGate(full));
+  for (const state of [undefined, "skipped", "failure", "cancelled"]) {
+    const needs = structuredClone(full);
+    if (state === undefined) delete needs["core-scenarios"];
+    else needs["core-scenarios"].result = state;
+    assert.throws(
+      () => verifyGate(needs),
+      /required result missing: core-scenarios/,
+    );
+  }
+  for (const files of [
+    ["docs/chat.md"],
+    ["web/src/pages/Chat.tsx"],
+    ["internal/core/rpc_check.go"],
+  ]) {
+    const needs = result(classify(files));
+    assert.equal(needs["core-scenarios"].result, "skipped");
+    assert.doesNotThrow(() => verifyGate(needs));
+    needs["core-scenarios"].result = "success";
+    assert.throws(
+      () => verifyGate(needs),
+      /required result missing: core-scenarios/,
+    );
+  }
+});
+test("selected signer checks cannot escape the full-scope parallel admission job", () => {
+  for (const files of [
+    [],
+    ["internal/core/store.go"],
+    ["web/src/core.tsx"],
+    ["internal/core/rpc_public.go"],
+    ["docs/chat.md"],
+  ]) {
+    const plan = classify(files);
+    if (plan.signer) assert.equal(plan.scope, "full");
+    else assert.notEqual(plan.scope, "full");
+  }
+  for (const files of [
+    ["web/src/core.tsx"],
+    ["internal/core/rpc_public.go"],
+    ["docs/chat.md"],
+  ]) {
+    const needs = result(classify(files));
+    needs.classify.outputs.signer = "true";
+    needs.signer.result = "success";
+    assert.throws(() => verifyGate(needs), /signer checks require full scope/);
+  }
+});
 test("aggregate accepts intentional skips only and rejects absent/failing gates", () => {
   for (const p of [
     classify(["docs/signer.md"]),
@@ -155,7 +208,7 @@ test("ordinary recovery checks leave signer time for privileged bootstrap withou
   );
   const core = workflow.slice(
     workflow.indexOf("  core:\n"),
-    workflow.indexOf("  desktop:\n"),
+    workflow.indexOf("  core-scenarios:\n"),
   );
   const signer = workflow.slice(
     workflow.indexOf("  signer:\n"),
@@ -223,7 +276,7 @@ test("full UI journey uses the existing Linux job while focused paths retain cor
   );
   const core = workflow.slice(
     workflow.indexOf("  core:\n"),
-    workflow.indexOf("  desktop:\n"),
+    workflow.indexOf("  core-scenarios:\n"),
   );
   const desktop = workflow.slice(
     workflow.indexOf("  desktop:\n"),

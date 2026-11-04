@@ -44,13 +44,17 @@ test("Ubuntu acceptance executes Remote maintenance and the actual older reader"
   );
 });
 
-test("full race groups retain every package and require delegated update coverage", async () => {
+test("full race groups retain every package and require parallel scenarios and delegated update coverage", async () => {
   const workflow = await readFile(
     new URL("../.github/workflows/checks.yml", import.meta.url),
     "utf8",
   );
   const core = workflow.slice(
     workflow.indexOf("  core:\n"),
+    workflow.indexOf("  core-scenarios:\n"),
+  );
+  const scenarios = workflow.slice(
+    workflow.indexOf("  core-scenarios:\n"),
     workflow.indexOf("  desktop:\n"),
   );
   const handoff = workflow.slice(
@@ -91,7 +95,7 @@ test("full race groups retain every package and require delegated update coverag
   const skip = core.match(
     /go test -race -p 1 \.\/internal\/core -skip '([^']+)'/,
   );
-  const run = core.match(
+  const run = scenarios.match(
     /go test -race -p 1 \.\/internal\/core -run '([^']+)'/,
   );
   assert.ok(
@@ -103,11 +107,63 @@ test("full race groups retain every package and require delegated update coverag
     run[1],
     "skip/run expressions must cover disjoint exhaustive groups",
   );
+  assert.equal(run[1], "^Test(SwapRecovery|VenueCredential|.*WEN)");
+  assert.equal(
+    workflow.split(
+      "go test -race -p 1 ./internal/core -run '^Test(SwapRecovery|VenueCredential|.*WEN)'",
+    ).length - 1,
+    1,
+    "the complementary partition must execute exactly once",
+  );
+  assert.doesNotMatch(
+    core,
+    /go test -race -p 1 \.\/internal\/core -run '\^Test\(SwapRecovery/,
+  );
+  assert.match(
+    scenarios,
+    /needs: classify\n\s+if: needs.classify.outputs.scope == 'full'/,
+  );
+  assert.match(scenarios, /runs-on: ubuntu-24\.04\n\s+timeout-minutes: 10/);
+  for (const prerequisite of [
+    "actions/checkout@v4",
+    "actions/setup-node@v4",
+    'node-version: "24"',
+    "npm ci",
+    "actions/setup-go@v5",
+    'go-version: "1.26.x"',
+    "npm run build",
+  ])
+    assert.ok(
+      scenarios.includes(prerequisite),
+      `retain scenario prerequisite: ${prerequisite}`,
+    );
+  const aggregate = workflow.slice(workflow.indexOf("  prototype:\n"));
+  assert.match(aggregate, /\n\s+core-scenarios,/);
   assert.match(
     handoff,
     /name: Update unit race coverage\n\s+if: needs.classify.outputs.scope == 'full'\n\s+run: go test -race -p 1 \.\/internal\/update/,
   );
   assert.match(core, /timeout-minutes: 20/);
+  for (const [job, minutes] of Object.entries({
+    documentation: 3,
+    core: 20,
+    "core-scenarios": 10,
+    desktop: 15,
+    signer: 5,
+    handoff: 5,
+    "handoff-uid": 5,
+    "inspection-installed": 10,
+  })) {
+    const body = workflow.match(
+      new RegExp(`^  ${job}:\\n[\\s\\S]*?(?=^  [a-z-]+:|$(?![\\s\\S]))`, "m"),
+    )?.[0];
+    assert.ok(body, `required job exists: ${job}`);
+    assert.match(
+      body,
+      new RegExp(`timeout-minutes: ${minutes}(?:\\n|$)`),
+      `fixed job budget: ${job}`,
+    );
+  }
   for (const path of [
     "cmd/fased-app/host.go",
     "internal/core/onchain.go",
@@ -126,6 +182,7 @@ test("full race groups retain every package and require delegated update coverag
     };
     for (const name of [
       "core",
+      "core-scenarios",
       "desktop",
       "signer",
       "handoff",
@@ -137,4 +194,110 @@ test("full race groups retain every package and require delegated update coverag
     needs.handoff.result = "skipped";
     assert.throws(() => verifyGate(needs), /required result missing: handoff/);
   }
+});
+
+test("ordinary admission checks run once in parallel without consuming the managed signer budget", async () => {
+  const workflow = await readFile(
+    new URL("../.github/workflows/checks.yml", import.meta.url),
+    "utf8",
+  );
+  const scenarios = workflow.slice(
+    workflow.indexOf("  core-scenarios:\n"),
+    workflow.indexOf("  desktop:\n"),
+  );
+  const signer = workflow.slice(
+    workflow.indexOf("  signer:\n"),
+    workflow.indexOf("  handoff:\n"),
+  );
+  const build = scenarios.indexOf(
+    "      - name: Build ordinary admission CLI binaries\n",
+  );
+  assert.ok(
+    build > scenarios.indexOf("      - run: npm run build\n"),
+    "current UI assets precede ordinary CLI binaries",
+  );
+  assert.match(
+    scenarios.slice(build),
+    /run: \|\n\s+npm run build:core\n\s+go build -trimpath -o \.evidence\/bin\/fased-signer \.\/cmd\/fased-signer/,
+  );
+  for (const [name, command, env] of [
+    [
+      "Read-only signed development manifest and compatibility journey",
+      "node scripts/check-update-manifest.mjs",
+      "FASED_UPDATE_EVIDENCE: .evidence/p4-complete",
+    ],
+    [
+      "Development HTTPS acquisition and independently pinned bootstrap trust",
+      "node scripts/check-update-acquisition.mjs",
+      null,
+    ],
+    [
+      "Compiled private core state inventory journey",
+      "node scripts/check-update-state.mjs",
+      "FASED_STATE_EVIDENCE: .evidence/p4-complete",
+    ],
+    [
+      "Inert release-unit and fixture provenance admission",
+      "go test -v ./internal/update -run '^TestReleaseAdmissionCompiledCLI$'",
+      "FASED_ADMISSION_EVIDENCE: ${{ github.workspace }}/.evidence/p4-release-admission",
+    ],
+  ]) {
+    assert.equal(
+      workflow.split(command).length,
+      2,
+      `one required execution: ${name}`,
+    );
+    assert.ok(
+      !signer.includes(command),
+      `ordinary work must leave signer: ${name}`,
+    );
+    const start = scenarios.indexOf(`      - name: ${name}\n`);
+    assert.ok(start > build, `compiled binaries before check: ${name}`);
+    const end = scenarios.indexOf("\n      - ", start + 1);
+    const step = scenarios.slice(start, end < 0 ? undefined : end);
+    assert.ok(
+      step.includes("if: needs.classify.outputs.signer == 'true'"),
+      `same selected-signing boundary: ${name}`,
+    );
+    if (env) assert.ok(step.includes(env), `same evidence location: ${name}`);
+  }
+  assert.ok(
+    scenarios.includes(
+      "FASED_ADMISSION_CORE: ${{ github.workspace }}/.evidence/bin/fased-app",
+    ),
+  );
+  assert.match(
+    scenarios,
+    /if: always\(\) && needs.classify.outputs.signer == 'true'[\s\S]*?name: core-scenarios-evidence/,
+  );
+  for (const evidence of [
+    ".evidence/p4-release-admission/admission-cli-result.json",
+    ".evidence/p4-release-admission/admission-cli.log",
+    ".evidence/p4-acquisition/acquisition-cli-result.json",
+    ".evidence/p4-acquisition/acquisition-cli.log",
+    ".evidence/p4-complete/manifest-cli-result.json",
+    ".evidence/p4-complete/manifest-cli.log",
+    ".evidence/p4-complete/core-cli-result.json",
+    ".evidence/p4-complete/core-cli.log",
+  ]) {
+    assert.ok(
+      scenarios.includes(evidence),
+      `standalone ordinary evidence retained: ${evidence}`,
+    );
+    assert.ok(
+      signer.includes(evidence),
+      `overlapping managed evidence retained: ${evidence}`,
+    );
+  }
+  for (const name of [
+    "Installer-managed identities and protected owner recovery",
+    "Compile pinned predecessor and bad-health bootstrap fixtures",
+    "Actual older-helper bootstrap and subsequent coordinated update",
+  ])
+    assert.ok(
+      signer.includes(name),
+      `privileged managed journey stays intact: ${name}`,
+    );
+  assert.match(scenarios, /timeout-minutes: 10/);
+  assert.match(signer, /timeout-minutes: 5/);
 });

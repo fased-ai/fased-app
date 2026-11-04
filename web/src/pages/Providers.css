@@ -14,7 +14,7 @@
 .wt .providers-layout {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
-  gap: 8px;
+  gap: 12px;
   align-items: start;
 }
 .wt .providers-list {
@@ -120,7 +120,7 @@
   .wt .providers-layout {
     grid-template-columns: minmax(0, 1fr);
   }
-  .wt .providers-list {
+  .wt .providers-layout > .providers-list {
     position: static;
     max-height: 240px;
     overflow: auto;
@@ -136,7 +136,7 @@
 .wt .providers-layout > .provider-editor {
   background: var(--wt-surface);
   border: 1px solid var(--wt-border);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 @media (pointer: coarse) {

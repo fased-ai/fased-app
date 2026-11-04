@@ -21,7 +21,7 @@ import {
   ArrowLeftRight,
   TrendingUp,
 } from "../icons";
-import { Avatar, Badge, Dialog } from "../components/shared";
+import { Avatar, Dialog } from "../components/shared";
 import { useWorkspace } from "../workspace";
 import {
   defaultDashboard,
@@ -66,6 +66,7 @@ export function Overview() {
   const { t } = useUI();
   const {
     state,
+    wallets,
     core,
     agents,
     navigate,
@@ -292,13 +293,83 @@ export function Overview() {
           )}
         </div>
       );
+    if (id === "wallets" || id === "onchain") {
+      const accounts = wallets.view?.record.accounts || [];
+      const supported =
+        id === "onchain"
+          ? accounts.filter(
+              (a) =>
+                [2, 3].includes(a.version) &&
+                ["devnet", "mainnet-beta"].includes(a.network),
+            )
+          : accounts;
+      return (
+        <div className="dashboard-rows">
+          {wallets.loading && (
+            <div className="dashboard-empty" role="status">
+              {t("Loading…")}
+            </div>
+          )}
+          {wallets.error && (
+            <div className="dashboard-empty" role="alert">
+              {t("Wallets unavailable")}
+              <button className="text-button" onClick={() => wallets.refresh()}>
+                {t("Retry")}
+              </button>
+            </div>
+          )}
+          {supported.slice(0, 5).map((account) => (
+            <button
+              key={account.id}
+              className="dashboard-row"
+              onClick={() => open(paths[id])}
+            >
+              <Wallet size={17} />
+              <span className="dashboard-copy">
+                <strong>{account.name}</strong>
+                <small>
+                  {t(
+                    account.network === "mainnet-beta"
+                      ? "Mainnet"
+                      : account.network === "devnet"
+                        ? "Devnet"
+                        : "Paper",
+                  )}{" "}
+                  · {t(account.rpc ? "RPC configured" : "Set up RPC")}
+                </small>
+              </span>
+              <ArrowRight size={14} />
+            </button>
+          ))}
+          {!wallets.loading && !wallets.error && !supported.length && (
+            <div className="dashboard-empty">
+              {t("No wallets")}
+              <button
+                className="text-button"
+                onClick={() => open("wallets/overview")}
+              >
+                {t("Add wallet")}
+                <ArrowRight size={14} />
+              </button>
+            </div>
+          )}
+          {id === "onchain" && supported.length > 0 && (
+            <div className="dashboard-footer-status">
+              {t("Live execution disabled")}
+            </div>
+          )}
+        </div>
+      );
+    }
     return (
       <div className="dashboard-empty">
-        <Badge>{t("Unavailable")}</Badge>
-        <button className="text-button" onClick={() => open(paths[id])}>
-          {t("Details")}
-          <ArrowRight size={14} />
-        </button>
+        <span>
+          {t(
+            id === "mining"
+              ? "Mining is not available yet"
+              : "Hyperliquid is not available yet",
+          )}
+        </span>
       </div>
     );
   }

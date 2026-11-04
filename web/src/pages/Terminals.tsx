@@ -14,7 +14,7 @@ import { WENPaperJourney } from "./WENPaperJourney";
 import { WENSessionRehearsal } from "./WENSessionRehearsal";
 import { WENSessionAutomatic } from "./WENSessionAutomatic";
 import { OnchainSwap } from "./OnchainSwap";
-export function Terminals() {
+function FixtureTerminals() {
   const { t: uiText } = useUI();
   const { tab, navigate } = useWorkspace();
   const active = terminalData.find((t) => t.id === tab);
@@ -219,5 +219,50 @@ export function Terminals() {
         </>
       )}
     </>
+  );
+}
+
+export function Terminals() {
+  const { t } = useUI();
+  const { tab, agents, navigate } = useWorkspace();
+  if (tab === "jupiter") return <OnchainSwap />;
+  // Fixture constructors retain their dedicated regression journeys. Ordinary
+  // installations never mount sample charts, test runners or imitation orders.
+  if (agents.view?.aiFixtureAvailable || agents.view?.sessionFixtureAvailable)
+    return <FixtureTerminals />;
+  const mining = tab === "satcoin";
+  return (
+    <section
+      className="panel deferred-workspace"
+      aria-label={t(
+        mining ? "Mining" : tab === "hyperliquid" ? "Hyperliquid" : "Trading",
+      )}
+    >
+      <SectionHead
+        title={t(
+          mining ? "Mining" : tab === "hyperliquid" ? "Hyperliquid" : "Trading",
+        )}
+      />
+      <Empty
+        icon={<TerminalSquare size={24} />}
+        title={t(
+          mining
+            ? "Mining is not available yet"
+            : tab === "hyperliquid"
+              ? "Hyperliquid is not available yet"
+              : "Choose a workspace",
+        )}
+      >
+        {tab === "" && (
+          <button
+            className="secondary"
+            onClick={() => navigate("terminals/jupiter")}
+          >
+            {t("Onchain")}
+            <ArrowRight size={15} />
+          </button>
+        )}
+      </Empty>
+    </section>
   );
 }

@@ -3,6 +3,8 @@ import { expect, test, type Request, type Route } from "@playwright/test";
 import {
   refreshFixtureAccounts,
   revealFixtureAccountEntry,
+  revealFixtureApproval,
+  verifiedFixtureApproval,
 } from "../../scripts/fixture-account-journey.mjs";
 
 test.use({ colorScheme: "dark" });
@@ -702,7 +704,7 @@ test("Meteora shell preserves drafts and records through navigation theme langua
     await more.getByRole("link", { name: "Tasks", exact: true }).click();
     await expect(page.locator(".shell-more-toggle")).toHaveCSS(
       "color",
-      "rgb(255, 100, 124)",
+      "rgb(255, 79, 124)",
     );
     await page.getByRole("button", { name: "More", exact: true }).click();
   }
@@ -2074,6 +2076,29 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
   await stop();
   await start(false, listen);
   await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Templates", exact: true }),
+  ).toHaveCount(0);
+  await expect(panel).toHaveCount(0);
+  const ordinary = await read();
+  const ordinaryReview = await command({
+    action: "playbook-run-review",
+    id,
+    playbookVersion: 2,
+    sessionId,
+  });
+  await expect(command(ordinaryReview.playbookReview.command)).rejects.toThrow(
+    /explicit development AI fixture/,
+  );
+  expect(await read()).toEqual(ordinary);
+  // Resume only the explicit regression constructor. A new boot must still
+  // require fresh unchecked consent; receiving the old result grants nothing.
+  await stop();
+  await start(true, listen);
+  await page.reload();
   await page.getByRole("button", { name: "Templates", exact: true }).click();
   await panel
     .getByRole("button", {
@@ -2091,7 +2116,8 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
   await panel
     .getByRole("button", { name: "Prepare run review", exact: true })
     .click();
-  await expect(consent).toBeDisabled();
+  await expect(consent).toBeEnabled();
+  await expect(consent).not.toBeChecked();
   await expect(runButton).toBeDisabled();
   expect((await read()).runs).toHaveLength(1);
   expect(external).toEqual([]);
@@ -3035,7 +3061,7 @@ test("agent selection survives reload and core restart with scoped preference fa
   };
   await expect(
     page.getByLabel("Agent", { exact: true }).locator("option:checked"),
-  ).toHaveText("WEN Operator");
+  ).toHaveText("Operator");
   const health = await (await page.request.get(url + "/api/v1/health")).json();
   const prefix = "fased.agent-profile.v1:";
   const key = prefix + health.instanceId;
@@ -3046,7 +3072,7 @@ test("agent selection survives reload and core restart with scoped preference fa
   await page.reload();
   await expect(
     page.getByLabel("Agent", { exact: true }).locator("option:checked"),
-  ).toHaveText("WEN Operator");
+  ).toHaveText("Operator");
   await choose("Trading Analyst");
   await page.reload();
   await expect(
@@ -3079,13 +3105,13 @@ test("agent selection survives reload and core restart with scoped preference fa
   await page.reload();
   await expect(
     page.getByLabel("Agent", { exact: true }).locator("option:checked"),
-  ).toHaveText("WEN Operator");
+  ).toHaveText("Operator");
   expect(unknownRequests).toEqual([]);
   await page.evaluate((key) => localStorage.removeItem(key), key);
   await page.reload();
   await expect(
     page.getByLabel("Agent", { exact: true }).locator("option:checked"),
-  ).toHaveText("WEN Operator");
+  ).toHaveText("Operator");
   await page.addInitScript((prefix) => {
     const read = Storage.prototype.getItem;
     const write = Storage.prototype.setItem;
@@ -3107,7 +3133,7 @@ test("agent selection survives reload and core restart with scoped preference fa
   await page.reload();
   await expect(
     page.getByLabel("Agent", { exact: true }).locator("option:checked"),
-  ).toHaveText("WEN Operator");
+  ).toHaveText("Operator");
   await choose("Trading Analyst");
   expect(await read()).toEqual(baseline);
   expect(external).toEqual([]);
@@ -4728,7 +4754,7 @@ test("claim, UI/CLI setup, restart and logout preserve one Local instance", asyn
   expect((await page.request.get(`${url}/api/v1/setup`)).status()).toBe(401);
 });
 
-test("Satcoin prototype preserves legacy links and disabled authority across core restart", async ({
+test("Deferred Mining preserves existing links and disabled authority across core restart", async ({
   page,
   isMobile,
 }) => {
@@ -4759,9 +4785,19 @@ test("Satcoin prototype preserves legacy links and disabled authority across cor
       page.getByRole("heading", { name: "Mining", exact: true }),
     ).toBeVisible();
     await expect(
+      page.getByRole("heading", {
+        name: "Mining is not available yet",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.locator(
+        ".terminal-workspace,.demo-chart,.session-rehearsal,.session-automatic",
+      ),
+    ).toHaveCount(0);
+    await expect(
       page.getByRole("button", { name: "Execution unavailable" }),
-    ).toBeDisabled();
-    await expect(page.getByText("Not loaded", { exact: true })).toBeVisible();
+    ).toHaveCount(0);
     await expect(page.locator("main")).not.toContainText(
       /Asset Mining|Loss Mining|district|arena/i,
     );
@@ -4791,8 +4827,16 @@ test("Satcoin prototype preserves legacy links and disabled authority across cor
     page.getByRole("heading", { name: "Mining", exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Execution unavailable" }),
-  ).toBeDisabled();
+    page.getByRole("heading", {
+      name: "Mining is not available yet",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.locator(
+      ".terminal-workspace,.demo-chart,.session-rehearsal,.session-automatic",
+    ),
+  ).toHaveCount(0);
   const after = await (await page.request.get(`${url}/api/v1/health`)).json();
   expect(after.instanceId).toBe(before.instanceId);
   expect(after.capabilities.walletSigner).toBe(false);
@@ -4853,9 +4897,294 @@ test("managed account entry supports current and predecessor layouts", async ({
   await expect(page.getByLabel("Name", { exact: true })).toBeVisible();
 });
 
+test("managed fixture approval inspection supports current and predecessor details", async ({
+  page,
+}) => {
+  const proposalId = "7".repeat(32);
+  await page.setContent(
+    '<article aria-label="Account Wallet"><details class="account-details"><summary>Details</summary><div class="account-permission"><span class="badge">approved</span></div></details></article>',
+  );
+  await revealFixtureApproval(page, "Wallet", proposalId, 0);
+  await expect(page.locator(".account-details")).toHaveAttribute("open", "");
+  await expect(page.locator(".account-permission")).toBeVisible();
+  await page.setContent(
+    `<article aria-label="Account Wallet"></article><details><summary>History</summary><article aria-label="Proposal ${proposalId}"><span class="badge">approved</span></article></details>`,
+  );
+  await revealFixtureApproval(page, "Wallet", proposalId, 0);
+  await expect(page.getByText("approved", { exact: true })).toBeVisible();
+});
+
+test("approval inspection reads exact genuine lifecycle3 proposal article without invented layout", async ({
+  page,
+}) => {
+  page.setDefaultTimeout(1500);
+  const target = "7".repeat(32),
+    other = "8".repeat(32);
+  // Genuine pinned d2f1fb22149a3c5190eb97d1e2ba58a9a3a0eb2a
+  // AccountManagement.tsx505-516: separate Proposal article, no Details/Advanced.
+  await page.setContent(
+    `<section class="panel account-panel"><article class="account-entry" aria-label="Account Wallet"><h3>Wallet</h3></article></section><section class="panel account-panel"><div class="panel-heading"><h2>Permission proposals</h2></div><article class="account-entry" aria-label="Proposal ${other}"><div class="panel-heading"><h3>Disposable mandate</h3><span class="badge">approved</span></div></article><article class="account-entry" aria-label="Proposal ${target}"><div class="panel-heading"><h3>Disposable mandate</h3><span class="badge">not-approved</span></div></article></section>`,
+  );
+  await expect(
+    page.locator(".account-permission,.account-advanced"),
+  ).toHaveCount(0);
+  const inspection = revealFixtureApproval(page, "Wallet", target, 0);
+  await expect(
+    page.getByRole("article", { name: `Proposal ${target}`, exact: true }),
+  ).toContainText("not-approved");
+  await page
+    .getByRole("article", { name: `Proposal ${target}`, exact: true })
+    .locator(".badge")
+    .evaluate((el) => {
+      el.textContent = "approved";
+    });
+  await inspection;
+  await expect(
+    page
+      .getByRole("article", { name: `Proposal ${target}`, exact: true })
+      .getByText("approved", { exact: true }),
+  ).toBeVisible();
+});
+
+test("public approval validation binds exact proposal account digest and receipt row", async () => {
+  const identity = {
+    version: 1,
+    signerId: "1".repeat(32),
+    walletId: "2".repeat(32),
+    epoch: "3".repeat(32),
+    network: "disposable-fixture:v1",
+    publicKey: "4".repeat(64),
+  };
+  const managed = {
+    version: 1,
+    id: "6".repeat(32),
+    name: "Wallet",
+    mode: "fixture-managed",
+    network: identity.network,
+    publicKey: identity.publicKey,
+    signer: identity,
+  };
+  const policy = {
+    account: identity,
+    asset: "fixture-credit:v1",
+    budget: "150",
+    maxOperation: "10",
+    destinations: ["fixture:treasury"],
+    expiresAt: 2000000000,
+  };
+  const proposal = {
+    version: 1,
+    id: "7".repeat(32),
+    policy,
+    grant: {
+      ...policy,
+      id: "7".repeat(32),
+      botId: "8".repeat(32),
+      budget: "20",
+      revoked: false,
+    },
+  };
+  const older = structuredClone(proposal);
+  older.id = "9".repeat(32);
+  older.grant.id = older.id;
+  const receipt = (item: typeof proposal) => ({
+    id: item.id,
+    digest: "a".repeat(64),
+    receipt: {
+      proposalId: item.id,
+      account: identity,
+      approvedAt: 1,
+      state: "approved",
+      digest: "a".repeat(64),
+    },
+  });
+  const view = {
+    record: {
+      accounts: [managed],
+      proposals: [
+        { accountId: managed.id, proposal: older },
+        { accountId: managed.id, proposal },
+      ],
+    },
+    proposals: [receipt(older), receipt(proposal)],
+  };
+  expect(verifiedFixtureApproval(view, managed, proposal)).toEqual({
+    accountId: managed.id,
+    proposalId: proposal.id,
+    digest: "a".repeat(64),
+    row: 1,
+  });
+  for (const state of [
+    "not-approved",
+    "unverified",
+    "mismatched",
+    "stale",
+    "revoked",
+  ]) {
+    const bad = structuredClone(view);
+    bad.proposals[1].receipt.state = state;
+    expect(() => verifiedFixtureApproval(bad, managed, proposal)).toThrow(
+      "target receipt is not approved",
+    );
+  }
+  const foreign = structuredClone(view);
+  foreign.record.proposals[1].accountId = "f".repeat(32);
+  expect(() => verifiedFixtureApproval(foreign, managed, proposal)).toThrow(
+    "not bound to the managed account",
+  );
+  const changed = structuredClone(view);
+  changed.proposals[1].receipt.account = { ...identity, epoch: "e".repeat(32) };
+  expect(() => verifiedFixtureApproval(changed, managed, proposal)).toThrow(
+    "receipt signer identity changed",
+  );
+  const digest = structuredClone(view);
+  digest.proposals[1].receipt.digest = "b".repeat(64);
+  expect(() => verifiedFixtureApproval(digest, managed, proposal)).toThrow(
+    "receipt digest mismatch",
+  );
+  const wrong = structuredClone(view);
+  wrong.proposals[1].receipt.proposalId = older.id;
+  expect(() => verifiedFixtureApproval(wrong, managed, proposal)).toThrow(
+    "receipt proposal identity changed",
+  );
+});
+
+test("installed ordinary approval inspection waits for refreshed receipt without test editors", async ({
+  page,
+}) => {
+  page.setDefaultTimeout(1500);
+  const before = await privateCLI(["accounts"]);
+  const account = {
+    version: 1,
+    id: "6".repeat(32),
+    name: "Wallet",
+    mode: "fixture-managed",
+    network: "disposable-fixture:v1",
+    publicKey: "4".repeat(64),
+    signer: {
+      version: 1,
+      signerId: "1".repeat(32),
+      walletId: "2".repeat(32),
+      epoch: "3".repeat(32),
+      network: "disposable-fixture:v1",
+      publicKey: "4".repeat(64),
+    },
+  };
+  const proposal = {
+    version: 1,
+    id: "7".repeat(32),
+    policy: {
+      account: account.signer,
+      asset: "fixture-credit:v1",
+      budget: "150",
+      maxOperation: "10",
+      destinations: ["fixture:treasury"],
+      expiresAt: Math.floor(Date.now() / 1000) + 900,
+    },
+    grant: {
+      id: "7".repeat(32),
+      account: account.signer,
+      asset: "fixture-credit:v1",
+      budget: "20",
+      maxOperation: "10",
+      destinations: ["fixture:treasury"],
+      expiresAt: Math.floor(Date.now() / 1000) + 900,
+      botId: "8".repeat(32),
+      revoked: false,
+    },
+  };
+  let refreshing = false;
+  let release!: () => void;
+  let entered!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const readStarted = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  await page.route("**/api/v1/accounts", async (route) => {
+    expect(route.request().method()).toBe("GET");
+    if (refreshing) {
+      entered();
+      await pending;
+    }
+    await route.fulfill({
+      json: {
+        version: 1,
+        record: {
+          version: 1,
+          revision: refreshing ? 2 : 1,
+          accounts: [account],
+          proposals: refreshing ? [{ accountId: account.id, proposal }] : [],
+        },
+        fixture: { available: false },
+        accountStates: { [account.id]: "unverified" },
+        proposals: refreshing
+          ? [
+              {
+                id: proposal.id,
+                digest: "a".repeat(64),
+                receipt: {
+                  proposalId: proposal.id,
+                  account: account.signer,
+                  approvedAt: 1,
+                  digest: "a".repeat(64),
+                  state: "approved",
+                },
+              },
+            ]
+          : [],
+      },
+    });
+  });
+  const link = (
+    await exec(binary, ["setup-link", "--data-dir", dir])
+  ).stdout.trim();
+  await page.goto(link);
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  expect((await privateCLI(["agents"])).aiFixtureAvailable).toBeFalsy();
+  await page.goto(url + "/#wallets/overview");
+  const wallet = page.getByRole("article", {
+    name: "Account Wallet",
+    exact: true,
+  });
+  await expect(wallet).toBeVisible();
+  await expect(page.locator(".account-advanced")).toHaveCount(0);
+  await expect(page.getByLabel("Name", { exact: true })).toHaveCount(0);
+  refreshing = true;
+  const publicRead = page.waitForResponse(
+    (response) =>
+      response.request().method() === "GET" &&
+      new URL(response.url()).pathname === "/api/v1/accounts",
+  );
+  await refreshFixtureAccounts(page);
+  await readStarted;
+  const inspection = revealFixtureApproval(page, "Wallet", proposal.id, 0);
+  // Keep the refreshed read pending until the helper observes the current
+  // no-receipt DOM. This is the installed race, not a delayed editor fixture.
+  await expect(wallet.locator(".account-permission")).toHaveCount(0);
+  release();
+  expect(
+    verifiedFixtureApproval(await (await publicRead).json(), account, proposal)
+      .row,
+  ).toBe(0);
+  await inspection;
+  await expect(wallet.locator(".account-details")).toHaveAttribute("open", "");
+  await expect(
+    wallet
+      .locator(".account-permission")
+      .getByText("approved", { exact: true }),
+  ).toBeVisible();
+  expect((await privateCLI(["accounts"])).record).toEqual(before.record);
+});
+
 test("public account records share UI/CLI state without wallet authority", async ({
   page,
 }) => {
+  await stop();
+  await start(true);
   await page.goto(url);
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
@@ -5169,6 +5498,8 @@ test("public account records share UI/CLI state without wallet authority", async
 test("proposal form uses explicit fixture labels (UI mock only)", async ({
   page,
 }) => {
+  await stop();
+  await start(true);
   const ref = {
     version: 1,
     signerId: "1".repeat(32),
@@ -5260,7 +5591,11 @@ test("proposal form uses explicit fixture labels (UI mock only)", async ({
   expect(record.proposals[0].proposal.policy.budget).toBe("100");
   expect(record.proposals[0].proposal.grant.budget).toBe("50");
   expect(record.proposals[0].proposal.grant.account).toEqual(ref);
-  await expect(page.getByText("not-approved", { exact: true })).toBeVisible();
+  await expect(
+    page
+      .locator(".account-advanced")
+      .getByText("not-approved", { exact: true }),
+  ).toBeVisible();
 });
 
 test("local agents share UI and CLI records, isolate profiles and survive core restart", async ({
@@ -5418,15 +5753,16 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
         ).provider,
     )
     .toBe("openai");
-  await page.evaluate(() => {
-    window.location.hash = "agents/bots";
+  view = await privateCLI(["agents", "--request-stdin"], {
+    action: "bot-create",
+    profileId: p,
+    revision: (await privateCLI(["agents", "--profile", p])).revision,
+    name: "Fixed example",
+    quantity: 1,
+    priceCents: 100,
+    budgetCents: 500,
   });
-  await revealControl(page, page.getByLabel("Paper bot name"), "");
-  await page.getByLabel("Paper bot name").fill("Fixed example");
-  await page
-    .getByRole("button", { name: "Create paper bot", exact: true })
-    .click();
-  await expect(page.getByText("Fixed example", { exact: true })).toBeVisible();
+  expect(view.bots[0].name).toBe("Fixed example");
   await page.evaluate(() => {
     window.location.hash = "agents/tasks";
   });
@@ -6355,7 +6691,7 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
   await expect(review).toContainText(
     `input ${price(currentModel.input)}, cached input ${price(currentModel.cached)}, output ${price(currentModel.output)}`,
   );
-  await expect(review).toContainText("All three API operations are simulated");
+  await expect(review).toContainText("Live execution disabled");
   await revealControl(
     page,
     review.getByLabel("I reviewed this context and these limits"),
@@ -6549,6 +6885,28 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
       external.push(r.url());
   });
   await page.goto(url + "/#terminals/satcoin");
+  await expect(
+    page.getByRole("heading", {
+      name: "Mining is not available yet",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "WEN paper journey" }),
+  ).toHaveCount(0);
+  const ordinary = await privateCLI(["agents"]);
+  expect(ordinary.providerCallsEnabled).toBe(false);
+  expect(ordinary.financialExecution).toBe(false);
+  const listen = new URL(url).host;
+  await stop();
+  await start(true, listen);
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const fixtureView = await privateCLI(["agents"]);
+  expect(fixtureView.tasks).toEqual(ordinary.tasks);
+  expect(fixtureView.runs).toEqual(ordinary.runs);
   const journey = page.getByRole("region", { name: "WEN paper journey" });
   await revealControl(page, journey.getByLabel("Paper entry name"), "");
   await journey.getByLabel("Paper entry name").fill("UI range C");
@@ -6581,7 +6939,7 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
   v = await command({ action: "task-pause", id: task.id });
   expect(v.tasks[0].state).toBe("paused");
   await stop();
-  await start();
+  await start(true);
   await page.goto(url + "/#terminals/satcoin");
   await revealControl(
     page,
@@ -6642,7 +7000,7 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
   await journey.getByLabel("Paper agent profile").selectOption("wen-operator");
   await expect(card).toBeVisible();
   await stop();
-  await start();
+  await start(true);
   await page.goto(url + "/#terminals/satcoin");
   await revealControl(
     page,
@@ -8233,7 +8591,10 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
     page.getByText("No matching memories.", { exact: true }),
   ).toBeVisible();
   await search("Corrected source preference");
-  await page.getByText("1 previous revision(s)", { exact: true }).click();
+  await page
+    .locator(".memory-card > details > summary")
+    .filter({ hasText: "History" })
+    .click();
   await expect(page.locator("article[aria-label^='Memory ']")).toContainText(
     "Edited concise preference",
   );
@@ -10441,6 +10802,8 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
 }) => {
   test.setTimeout(90000);
   page.setDefaultTimeout(10000);
+  await stop();
+  await start(true);
   await page.goto(url);
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
@@ -10464,7 +10827,7 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
     await expect(layout).toBeVisible();
     await expect(page.locator("html")).toHaveCSS(
       "background-color",
-      "rgb(25, 25, 34)",
+      "rgb(23, 22, 30)",
     );
     await expect(
       layout
@@ -10472,7 +10835,7 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
           selector === ".dashboard-grid" ? ".dashboard-widget" : ".panel",
         )
         .first(),
-    ).toHaveCSS("background-color", "rgb(30, 30, 42)");
+    ).toHaveCSS("background-color", "rgb(34, 32, 45)");
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth,
@@ -10531,7 +10894,7 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
   ).toBeVisible();
   await expect(page.locator(".hero-card, .hero-art")).toHaveCount(0);
   await expect(page.locator('[data-widget="wallets"]')).toContainText(
-    "Unavailable",
+    "No wallets",
   );
   await expect(page.locator('[data-widget="mining"]')).toHaveCount(0);
   await checkLayout("dashboard", ".dashboard-grid");
@@ -10554,7 +10917,9 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
   await expect(
     page.getByRole("heading", { name: "Wallets", exact: true }),
   ).toBeVisible();
-  await expect(page.getByText("Test only", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Live execution disabled", { exact: true }),
+  ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Record disposable signer", exact: true }),
   ).toBeDisabled();
@@ -10673,10 +11038,10 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
       await pane.evaluate(
         (el) => getComputedStyle(el).gridTemplateColumns.split(" ").length,
       ),
-    ).toBe(isMobile || name === "settings" ? 1 : 2);
+    ).toBe(isMobile || name === "strategies" ? 1 : 2);
     await expect(page.locator("html")).toHaveCSS(
       "background-color",
-      "rgb(25, 25, 34)",
+      "rgb(23, 22, 30)",
     );
     expect(
       await page.evaluate(
@@ -10762,19 +11127,32 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
     path: `.evidence/news-feed-${isMobile ? "mobile" : "desktop"}.png`,
     fullPage: true,
   });
-  await page.evaluate(() => {
-    window.location.hash = "agents/bots";
+  const paperView = await privateCLI([
+    "agents",
+    "--profile",
+    "trading-analyst",
+  ]);
+  const paperSeed = await privateCLI(["agents", "--request-stdin"], {
+    action: "bot-create",
+    profileId: "trading-analyst",
+    revision: paperView.revision,
+    name: "V3 paper budget",
+    quantity: 1,
+    priceCents: 100,
+    budgetCents: 500,
   });
-  await revealControl(page, page.getByLabel("Paper bot name"), "");
-  await page.getByLabel("Paper bot name").fill("V3 paper budget");
-  await page
-    .getByRole("button", { name: "Create paper bot", exact: true })
-    .click();
-  await expect(page.locator(".paper-library")).toContainText("V3 paper budget");
-  await expect(page.locator(".paper-library")).toContainText(
-    "Used 0 / 500 test units",
-  );
-  await layout("bots", ".paper-workspace");
+  expect(paperSeed.bots[0]).toMatchObject({
+    name: "V3 paper budget",
+    spentCents: 0,
+    budgetCents: 500,
+  });
+  await page.goto(url + "/#agents/bots");
+  await expect(page).toHaveURL(/#agents\/tasks$/);
+  await expect(
+    page.getByRole("button", { name: "Strategies", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByLabel("Paper bot name")).toHaveCount(0);
+  await layout("strategies", ".tasks-screen");
   await page.evaluate(() => {
     window.location.hash = "agents/settings";
   });
@@ -10840,7 +11218,7 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
     exact: true,
   });
   await expect(
-    activity.getByRole("heading", { name: "Profile activity", exact: true }),
+    activity.getByRole("heading", { name: "Trading Analyst", exact: true }),
   ).toBeVisible();
   await expect(
     activity.getByText("No activity for this profile.", { exact: true }),
@@ -10999,7 +11377,7 @@ test("installation connection rejects Remote tunnels without changing Local data
   await page.goto(url + "/#settings");
   await page.getByText("Connect to Remote", { exact: true }).click();
   const connect = page.getByRole("button", { name: "Connect", exact: true });
-  await expect(connect).toHaveCSS("background-color", "rgb(255, 100, 124)");
+  await expect(connect).toHaveCSS("background-color", "rgb(255, 79, 124)");
   await connect.hover();
   await expect(connect).toHaveCSS("background-color", "rgb(255, 122, 142)");
   await page.getByLabel("Instance URL").fill("http://untrusted.example");
@@ -11355,9 +11733,9 @@ test("Dashboard drag and resize autosave without a duplicate home rail shortcut"
       font: style(".shell-header").fontFamily,
     };
   });
-  expect(geometry.gridGap).toBe("8px");
-  expect(geometry.surface).toBe("rgb(30, 30, 42)");
-  expect(geometry.border).toBe("rgb(46, 46, 62)");
+  expect(geometry.gridGap).toBe("12px");
+  expect(geometry.surface).toBe("rgb(34, 32, 45)");
+  expect(geometry.border).toBe("rgb(52, 49, 63)");
   if (!isMobile) {
     expect(geometry.headerHeight).toBe(50);
     expect(geometry.navFontSize).toBe("14px");
@@ -11435,14 +11813,17 @@ test("compact agent pages share one provider editor and keep feed settings off t
     .click();
   const provider = page.getByRole("region", { name: "Providers", exact: true });
   await expect(provider.locator(".ai-connection")).toHaveCount(1);
-  await expect(
-    provider.getByLabel("API key", { exact: true }),
-  ).not.toBeVisible();
+  await expect(provider.getByLabel("API key", { exact: true })).toBeVisible();
+  await expect(provider.getByLabel("API key", { exact: true })).toHaveValue("");
   await page.screenshot({
     path: `.evidence/providers-account-first-${isMobile ? "mobile" : "desktop"}.png`,
     fullPage: true,
   });
-  await provider.getByText("Connect", { exact: true }).click();
+  await revealControl(
+    page,
+    provider.getByLabel("Vault passphrase", { exact: true }),
+    "",
+  );
   await revealControl(
     page,
     provider.getByLabel("Vault passphrase", { exact: true }),
@@ -13251,14 +13632,14 @@ test("Providers page preserves agent drafts and shares account models without ge
   expect((await once(login, "exit"))[0]).toBe(0);
   // An empty provider draft may return to No AI without resurrecting the
   // previous selection while account/model fields reset in the same event.
-  await page.locator("details.profile-defaults > summary").click();
+  await expect(page.getByLabel("Provider", { exact: true })).toBeVisible();
   await page.getByLabel("Provider", { exact: true }).selectOption("xai");
   await expect(page.getByLabel("Provider", { exact: true })).toHaveValue("xai");
   await page.getByLabel("Provider", { exact: true }).selectOption("none");
   await expect(page.getByLabel("Provider", { exact: true })).toHaveValue(
     "none",
   );
-  await page.locator("details.profile-defaults > summary").click();
+  await expect(page.getByLabel("Provider", { exact: true })).toBeVisible();
   await page
     .getByRole("textbox", { name: "Instructions", exact: true })
     .fill("Preserve this unsaved agent draft");
@@ -13287,11 +13668,11 @@ test("Providers page preserves agent drafts and shares account models without ge
   ).toBeVisible();
   await expect(providers.locator(".provider-editor")).toHaveCSS(
     "background-color",
-    "rgb(30, 30, 42)",
+    "rgb(34, 32, 45)",
   );
   await expect(providers.locator(".provider-editor")).toHaveCSS(
     "border-radius",
-    "8px",
+    "12px",
   );
 
   await providers.locator('[data-provider="anthropic"] > button').click();
@@ -13351,7 +13732,7 @@ test("Providers page preserves agent drafts and shares account models without ge
   await page
     .getByRole("textbox", { name: "Name", exact: true })
     .fill(draftName);
-  await page.locator("details.profile-defaults > summary").click();
+  await expect(page.getByLabel("Provider", { exact: true })).toBeVisible();
   await page.getByLabel("Provider", { exact: true }).selectOption("anthropic");
   await page
     .getByLabel("Model", { exact: true })
@@ -13375,7 +13756,7 @@ test("Providers page preserves agent drafts and shares account models without ge
   await expect(
     page.getByRole("textbox", { name: "Instructions", exact: true }),
   ).toHaveValue("Preserve this unsaved agent draft");
-  await page.locator("details.profile-defaults > summary").click();
+  await expect(page.getByLabel("Provider", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Provider", { exact: true })).toHaveValue(
     "anthropic",
   );
@@ -13425,7 +13806,7 @@ test("Providers page preserves agent drafts and shares account models without ge
   await page
     .getByRole("textbox", { name: "Name", exact: true })
     .fill("Saved research agent");
-  await page.locator("details.profile-defaults > summary").click();
+  await expect(page.getByLabel("Provider", { exact: true })).toBeVisible();
   await page.getByLabel("Provider", { exact: true }).selectOption("anthropic");
   await page
     .getByLabel("Model", { exact: true })
@@ -15595,6 +15976,7 @@ for (const method of ["create", "import"] as const) {
     test.setTimeout(90000);
     page.setDefaultTimeout(10000);
     await stop();
+    await mkdir(".evidence/b05-wallet-setup", { recursive: true });
     const fixtureBase = resolve(".evidence/b5-fixtures");
     await mkdir(fixtureBase, { recursive: true, mode: 0o700 });
     const root = await mkdtemp(join(fixtureBase, "f-"));
@@ -15749,33 +16131,60 @@ for (const method of ["create", "import"] as const) {
         .getByRole("button", { name: "Add wallet", exact: true })
         .click();
       dialog = page.getByRole("dialog", { name: "Add wallet", exact: true });
-      await dialog
-        .getByRole("button", {
-          name: method === "create" ? "Create" : "Import",
-          exact: true,
-        })
-        .click();
-      await dialog.getByLabel("Wallet name").fill(`Vault ${method}`);
+      const methods = dialog.getByRole("group", {
+        name: "Wallet type",
+        exact: true,
+      });
       await expect(
-        dialog.getByLabel("Network", { exact: true }),
+        methods.getByRole("button", { name: "Watch", exact: true }),
+      ).toBeEnabled();
+      await expect(
+        methods.getByRole("button", { name: "Create", exact: true }),
       ).toBeDisabled();
-      await expect(dialog).toContainText(
-        `fased-app custody ${method === "create" ? "setup" : "import"}`,
-      );
+      await expect(
+        methods.getByRole("button", { name: "Import", exact: true }),
+      ).toBeDisabled();
+      await expect(dialog).toContainText("Protected setup unavailable");
+      await expect(dialog.locator(".wallet-terminal")).toHaveCount(0);
+      await expect(dialog).not.toContainText("fased-app custody");
       expect(await dialog.locator('input[type="password"]').count()).toBe(0);
       await expect(
         dialog.getByRole("button", { name: "Attach", exact: true }),
-      ).toBeDisabled();
+      ).toHaveCount(0);
+      await dialog.getByLabel("Wallet name").fill(`Vault ${method}`);
       expect((await cli(["accounts"])).record.accounts).toHaveLength(1);
-      await owner(method);
       await dialog
-        .getByRole("button", { name: "Refresh status", exact: true })
+        .getByRole("button", { name: "Close dialog", exact: true })
+        .click();
+      // Keys stay in the existing protected owner CLI fixture, never an AI
+      // constructor or browser form. Only its public status returns to UI.
+      const ownerResult = await owner(method);
+      const ownerOutput = ownerResult.stdout + ownerResult.stderr;
+      expect(ownerOutput).not.toContain("disposable-wallet-owner-unlock");
+      expect(ownerOutput).not.toContain("disposable-wallet-owner-backup");
+      expect(ownerOutput).not.toContain("42".repeat(32));
+      await refreshFixtureAccounts(page);
+      await page
+        .getByRole("button", { name: "Add wallet", exact: true })
+        .click();
+      dialog = page.getByRole("dialog", { name: "Add wallet", exact: true });
+      await dialog
+        .getByRole("group", { name: "Wallet type", exact: true })
+        .getByRole("button", { name: "Attach", exact: true })
         .click();
       await expect(dialog.getByLabel("Wallet name")).toHaveValue(
         `Vault ${method}`,
       );
+      await expect(
+        dialog.getByLabel("Network", { exact: true }),
+      ).toBeDisabled();
+      await expect(dialog).not.toContainText("fased-app custody");
+      expect(await dialog.locator('input[type="password"]').count()).toBe(0);
       await expect(dialog).toContainText("Recovery required");
-      await dialog.getByRole("button", { name: "Attach", exact: true }).click();
+      const attach = dialog.locator("form > button.primary");
+      await expect(attach).toHaveText("Attach");
+      await expect(attach).toBeEnabled();
+      await attach.click();
       await expect(dialog).toHaveCount(0);
       let state = await cli(["accounts"]);
       expect(state.record.accounts[0]).toEqual(original);
@@ -15901,15 +16310,15 @@ for (const method of ["create", "import"] as const) {
         exact: true,
       });
       await recoveryDialog
-        .getByRole("button", {
-          name: method === "create" ? "Create" : "Import",
-          exact: true,
-        })
-        .click();
-      await recoveryDialog.getByLabel("Wallet name").fill("Recovered wallet");
-      await recoveryDialog
+        .getByRole("group", { name: "Wallet type", exact: true })
         .getByRole("button", { name: "Attach", exact: true })
         .click();
+      await expect(recoveryDialog.locator(".wallet-terminal")).toHaveCount(0);
+      await expect(recoveryDialog).not.toContainText("fased-app custody");
+      await recoveryDialog.getByLabel("Wallet name").fill("Recovered wallet");
+      const reattach = recoveryDialog.locator("form > button.primary");
+      await expect(reattach).toHaveText("Attach");
+      await reattach.click();
       await expect(recoveryDialog).toHaveCount(0);
       const rebound = await cli(["accounts"]);
       expect(rebound.record.accounts).toHaveLength(3);
@@ -16114,4 +16523,294 @@ test("first Send retains its exact draft when conversation changes during accoun
     page.getByRole("dialog", { name: "Allow replies", exact: true }),
   ).toBeVisible();
   expect((await read()).aiRequests).toHaveLength(0);
+});
+
+test("ordinary customer pages exclude test tools and connect Dashboard accounts", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  const external: string[] = [];
+  await page.route("**/*", (route) => {
+    if (!ownedFixtureOrigins.has(new URL(route.request().url()).origin)) {
+      external.push(route.request().url());
+      return route.abort();
+    }
+    return route.continue();
+  });
+  const link = (
+    await exec(binary, ["setup-link", "--data-dir", dir])
+  ).stdout.trim();
+  await page.goto(link);
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const read = () => privateCLI(["agents"]);
+  const initial = await read();
+  expect(initial.aiFixtureAvailable).toBeFalsy();
+  await page.goto(url + "/#agents/tasks");
+  await expect(
+    page.getByRole("button", { name: "Templates", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.locator(".schedule-behavior,.scheduled-ai-disclosure"),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  await expect(
+    page.getByRole("complementary", { name: "Create a task", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".scheduled-ai")).toHaveCount(0);
+  await page.getByRole("button", { name: "Cancel task", exact: true }).click();
+  for (const route of ["terminals/satcoin", "terminals/hyperliquid"]) {
+    await page.goto(url + "/#" + route);
+    await expect(page.locator(".deferred-workspace")).toBeVisible();
+    await expect(
+      page.locator(
+        ".terminal-card,.terminal-workspace,.wen-paper-journey,.session-rehearsal,.session-automatic",
+      ),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: /mine|claim|run now/i }),
+    ).toHaveCount(0);
+  }
+  await page.goto(url + "/#terminals");
+  await expect(page).toHaveURL(/#terminals\/jupiter$/);
+  await expect(
+    page.getByRole("region", { name: "Onchain swaps", exact: true }),
+  ).toBeVisible();
+  await page.goto(url + "/#wallets/overview");
+  await expect(page.locator(".account-advanced")).toHaveCount(0);
+  await expect(
+    page.getByLabel("Disposable public key (64 lowercase hex)"),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Add wallet", exact: true }).click();
+  const setup = page.getByRole("dialog", { name: "Add wallet", exact: true });
+  await expect(
+    setup.getByRole("button", { name: "Watch", exact: true }),
+  ).toBeEnabled();
+  await expect(
+    setup.getByRole("button", { name: "Create", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    setup.getByRole("button", { name: "Import", exact: true }),
+  ).toBeDisabled();
+  await expect(setup.locator(".wallet-terminal")).toHaveCount(0);
+  await expect(setup).not.toContainText("--disposable-fixture");
+  await setup
+    .getByRole("button", { name: "Close dialog", exact: true })
+    .click();
+  const record = (await privateCLI(["accounts"])).record;
+  const account = {
+    version: 1,
+    id: "4".repeat(32),
+    name: "Saved account",
+    mode: "watch",
+    network: "disposable-fixture:v1",
+    publicKey: "5".repeat(64),
+  };
+  await privateCLI(["accounts", "--request-stdin"], {
+    ...record,
+    accounts: [...record.accounts, account],
+  });
+  await page.goto(url + "/#overview");
+  // Add the optional Wallets card through the same saved Dashboard layout.
+  await page.getByRole("button", { name: "Add widgets", exact: true }).click();
+  const add = page.getByRole("dialog");
+  const wallet = add.getByRole("button", { name: "Wallets", exact: true });
+  if (await wallet.isEnabled()) await wallet.click();
+  await page.keyboard.press("Escape");
+  await expect(page.locator('[data-widget="wallets"]')).toContainText(
+    "Saved account",
+  );
+  await page.locator('[data-widget="wallets"] .dashboard-row').click();
+  await expect(
+    page.getByRole("heading", { name: "Saved account", exact: true }),
+  ).toBeVisible();
+  await page.goto(url + "/#agents/bots");
+  await expect(page).toHaveURL(/#agents\/tasks$/);
+  await expect(
+    page.getByRole("button", { name: "Strategies", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByLabel("Paper bot name")).toHaveCount(0);
+  for (const [name, route] of [
+    ["dashboard", "overview"],
+    ["providers", "providers"],
+    ["agents", "agents/settings"],
+    ["chat", "agents/chat"],
+    ["tasks", "agents/tasks"],
+    ["memory", "agents/memory"],
+    ["news", "agents/news"],
+    ["wallets", "wallets/overview"],
+    ["onchain", "terminals/jupiter"],
+    ["mining", "terminals/satcoin"],
+    ["hyperliquid", "terminals/hyperliquid"],
+    ["activity", "activity"],
+    ["settings", "settings"],
+  ]) {
+    await page.goto(url + "/#" + route);
+    await expect(page.locator("main")).toBeVisible();
+    if (route === "agents/tasks")
+      await page.getByRole("button", { name: "Tasks", exact: true }).click();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: `.evidence/customer-ui-closure/${test.info().project.name}-${name}.png`,
+      fullPage: true,
+    });
+  }
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await expect(page.getByText("Saved account", { exact: true })).toHaveCount(0);
+  const after = await read();
+  expect(after.tasks).toEqual(initial.tasks);
+  expect(after.memories).toEqual(initial.memories);
+  expect(after.aiRequests).toEqual(initial.aiRequests);
+  expect(external).toEqual([]);
+});
+
+test("Chat Options closes on Escape before the native toggle event without losing its draft", async ({
+  page,
+}) => {
+  const link = (
+    await exec(binary, ["setup-link", "--data-dir", dir])
+  ).stdout.trim();
+  await page.goto(link);
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const initial = await privateCLI(["agents"]);
+  await privateCLI(["agents", "--request-stdin"], {
+    action: "session-create",
+    profileId: initial.profileId,
+    revision: initial.revision,
+    name: "Options keyboard",
+  });
+  await page.goto(url + "/#agents/chat");
+  const form = page.locator(".chat-message-form");
+  const input = page.getByLabel("Message", { exact: true });
+  await input.fill("Preserve this keyboard draft");
+  const before = await privateCLI(["agents"]);
+  // Exercise both native actions synchronously, before the queued details
+  // toggle event can hydrate the controlled disclosure state.
+  await form
+    .locator(".message-options > summary")
+    .evaluate((summary: HTMLElement) => {
+      summary.click();
+      if (!(summary.parentElement as HTMLDetailsElement).open)
+        throw Error("Native summary did not open");
+      summary.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+  await expect(form.locator(".message-options")).not.toHaveAttribute(
+    "open",
+    "",
+  );
+  await expect(form.locator(".message-options-panel")).not.toBeVisible();
+  await expect(form.getByLabel("Options", { exact: true })).toBeFocused();
+  await expect(input).toHaveValue("Preserve this keyboard draft");
+  const after = await privateCLI(["agents"]);
+  expect(after).toEqual(before);
+});
+
+test("ordinary mobile Providers scrolls all brands and its saved lower account without overlays", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(!isMobile, "narrow provider pane regression");
+  await stop();
+  await start(true);
+  const link = (
+    await exec(binary, ["setup-link", "--data-dir", dir])
+  ).stdout.trim();
+  await page.goto(link);
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const saved = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "add",
+    provider: "opencode",
+    name: "Saved lower account",
+    key: "fased-test-opencode-scroll-disposable",
+    passphrase: "disposable-provider-scroll-vault",
+  });
+  expect(saved.liveCallsEnabled).toBe(false);
+  const listen = new URL(url).host;
+  await stop();
+  await start(false, listen);
+  await page.goto(url + "/#providers");
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  expect((await privateCLI(["agents"])).aiFixtureAvailable).toBeFalsy();
+  const before = await privateCLI(["ai-connection"]);
+  expect(before.connections.find((a: any) => a.ref === saved.ref).locked).toBe(
+    true,
+  );
+  const writes: string[] = [],
+    external: string[] = [];
+  page.on("request", (request) => {
+    if (!ownedFixtureOrigins.has(new URL(request.url()).origin))
+      external.push(request.url());
+    if (request.method() !== "GET" && request.url().includes("/api/v1/"))
+      writes.push(request.url());
+  });
+  const providers = page.getByRole("region", {
+    name: "Providers",
+    exact: true,
+  });
+  const list = providers.locator(".providers-list");
+  await expect(list).toHaveCSS("overflow-y", "auto");
+  expect(await list.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(
+    true,
+  );
+  const brands = await providers
+    .locator(".provider-brand")
+    .evaluateAll((elements) =>
+      elements.map((el) => el.getAttribute("data-provider")!),
+    );
+  expect(brands).toContain("local");
+  expect(brands).toContain("opencode");
+  for (const id of brands) {
+    const button = providers.locator(
+      `[data-provider="${id}"] > .provider-brand-button`,
+    );
+    await button.click();
+    await expect(button).toHaveAttribute("aria-pressed", "true");
+    await expect(providers.locator(".provider-editor")).toBeVisible();
+  }
+  const lower = providers.locator(
+    `.provider-account[data-account="${saved.ref}"]`,
+  );
+  await lower.click();
+  await expect(lower).toHaveAttribute("aria-pressed", "true");
+  await expect(providers.locator(".connection-status")).toContainText("Locked");
+  expect(await list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  const bounds = await providers.evaluate((el) => {
+    const list = el.querySelector(".providers-list")!.getBoundingClientRect();
+    const editor = el
+      .querySelector(".provider-editor")!
+      .getBoundingClientRect();
+    return {
+      listBottom: list.bottom,
+      editorTop: editor.top,
+      editorRight: editor.right,
+      width: innerWidth,
+      scroll: document.documentElement.scrollWidth,
+    };
+  });
+  expect(bounds.editorTop).toBeGreaterThanOrEqual(bounds.listBottom);
+  expect(bounds.editorRight).toBeLessThanOrEqual(bounds.width);
+  expect(bounds.scroll).toBeLessThanOrEqual(bounds.width);
+  expect((await privateCLI(["ai-connection"])).connections).toEqual(
+    before.connections,
+  );
+  expect((await privateCLI(["agents"])).aiRequests).toHaveLength(0);
+  expect(writes).toEqual([]);
+  expect(external).toEqual([]);
 });

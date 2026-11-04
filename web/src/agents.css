@@ -172,10 +172,8 @@ form.agent-inline {
 }
 .memory-library .memory-card > p {
   margin: 0;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .memory-library .memory-card > .agent-inline {
   grid-column: 2;

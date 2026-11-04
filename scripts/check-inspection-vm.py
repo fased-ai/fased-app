@@ -6,7 +6,17 @@ Evidence survives snapshot rollback; large reconstructible VM outputs are remove
 import argparse, base64, selectors, hashlib, json, os, pathlib, shutil, signal, socket, subprocess, tarfile, time, urllib.request
 P=pathlib.Path
 repo=P.cwd(); root=repo/'.evidence/p4-fault-reboot'; root.mkdir(parents=True,exist_ok=True)
-p=argparse.ArgumentParser(); p.add_argument('--released-local-only',action='store_true'); p.add_argument('--full',action='store_true'); p.add_argument('--resume',action='store_true'); p.add_argument('--inspection-only',action='store_true'); p.add_argument('--keep-failed-vm',action='store_true'); p.add_argument('--managed-remote-only',action='store_true'); p.add_argument('--network-only',action='store_true'); p.add_argument('--owner-browser-only',action='store_true'); p.add_argument('--maintenance-only',action='store_true'); p.add_argument('--installed-remote-update-only',action='store_true'); p.add_argument('--installed-finalizer-update-only',action='store_true'); p.add_argument('--staged-package-only',action='store_true'); p.add_argument('--candidate',type=P); p.add_argument('--predecessor',type=P); p.add_argument('--legacy-predecessor',type=P); a=p.parse_args()
+p=argparse.ArgumentParser(); p.add_argument('--fresh-remote-only',action='store_true'); p.add_argument('--local-acceptance',type=P); p.add_argument('--released-local-only',action='store_true'); p.add_argument('--full',action='store_true'); p.add_argument('--resume',action='store_true'); p.add_argument('--inspection-only',action='store_true'); p.add_argument('--keep-failed-vm',action='store_true'); p.add_argument('--managed-remote-only',action='store_true'); p.add_argument('--network-only',action='store_true'); p.add_argument('--owner-browser-only',action='store_true'); p.add_argument('--maintenance-only',action='store_true'); p.add_argument('--installed-remote-update-only',action='store_true'); p.add_argument('--installed-finalizer-update-only',action='store_true'); p.add_argument('--staged-package-only',action='store_true'); p.add_argument('--candidate',type=P); p.add_argument('--predecessor',type=P); p.add_argument('--legacy-predecessor',type=P); a=p.parse_args()
+if a.fresh_remote_only:
+ assert a.staged_package_only and not a.released_local_only, 'fresh Remote requires its own staged package VM'
+ assert a.candidate and a.local_acceptance, 'exact candidate and completed Local acceptance required'
+ import importlib.util
+ spec=importlib.util.spec_from_file_location('fased_staged_prerequisite',repo/'scripts/staged-package-guest.py')
+ prerequisite=importlib.util.module_from_spec(spec);spec.loader.exec_module(prerequisite)
+ local_acceptance_sha=prerequisite.require_local_acceptance(prerequisite.package(a.candidate),a.local_acceptance)
+ # Validate before downloads, VM creation, or any remote side effect. Only the
+ # candidate is needed: a fresh setup cannot masquerade as a version upgrade.
+ a.predecessor=a.candidate;a.legacy_predecessor=a.candidate
 if a.released_local_only:
  assert a.staged_package_only, 'released Local proof uses the existing staged package runner'
 if a.installed_finalizer_update_only:
@@ -22,7 +32,7 @@ single_case=a.staged_package_only or a.managed_remote_only or a.network_only or 
 if a.staged_package_only:
  assert not any([a.full,a.resume,a.inspection_only,a.managed_remote_only,a.network_only,a.owner_browser_only,a.maintenance_only,a.installed_remote_update_only]),'one staged package acceptance mode required'
  assert a.candidate and a.predecessor and a.legacy_predecessor,'exact retained package directories required'
- root=repo/('.evidence/b01-staged-installed/local' if a.released_local_only else '.evidence/b01-staged-installed/vm'); root.mkdir(parents=True,exist_ok=True)
+ root=repo/('.evidence/b01-staged-installed/fresh-remote' if a.fresh_remote_only else '.evidence/b01-staged-installed/local' if a.released_local_only else '.evidence/b01-staged-installed/vm'); root.mkdir(parents=True,exist_ok=True)
  assert os.path.exists('/dev/kvm') and os.access('/dev/kvm',os.R_OK|os.W_OK),'KVM staged acceptance prerequisite unavailable'
 if a.maintenance_only:
  root=repo/'.evidence/b01-connected-install/vm'; root.mkdir(parents=True,exist_ok=True)
@@ -95,7 +105,7 @@ if not a.resume:
   data=(work/'user-data').read_text()
   users=''
   public=(work/'ssh-key.pub').read_text().strip()
-  for name,uid in ([('fased-local',1100),('fased-fresh',1400)] if a.released_local_only else [('fased-local',1100),('fased-remote',1200),('fased-legacy',1300)]):
+  for name,uid in ([] if a.fresh_remote_only else [('fased-local',1100),('fased-fresh',1400)] if a.released_local_only else [('fased-local',1100),('fased-remote',1200),('fased-legacy',1300)]):
    users+='   - name: '+name+'\n     uid: '+str(uid)+'\n     groups: [sudo]\n     shell: /bin/bash\n     lock_passwd: true\n     ssh_authorized_keys:\n       - '+public+'\n'
   if not a.released_local_only:users+='   - name: root\n     lock_passwd: true\n     ssh_authorized_keys:\n       - '+public+'\n'
   data=data.replace(' disable_root: true',' disable_root: true' if a.released_local_only else ' disable_root: false').replace(' write_files:',users+' write_files:')
@@ -103,6 +113,8 @@ if not a.resume:
   utilities='/usr/bin/apt-get, /usr/bin/install, /usr/bin/mkdir, /usr/bin/ln, /usr/bin/mv, /usr/bin/sync, /usr/bin/rm, /usr/bin/cat, /usr/bin/cmp, /usr/bin/cp, /usr/bin/chmod, /usr/bin/chown, /usr/bin/find, /usr/bin/flock, /usr/bin/getent, /usr/bin/id, /usr/bin/passwd, /usr/bin/pkcheck, /usr/bin/setpriv, /usr/bin/stat, /usr/bin/systemctl, /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/apparmor_parser, /usr/sbin/nft, /usr/sbin/ip, /usr/sbin/update-ca-certificates'
   for name in (['ubuntu','fased-local','fased-fresh'] if a.released_local_only else ['ubuntu','fased-local','fased-remote','fased-legacy']):
    extra+='       Defaults:'+name+' verifypw=any\n       '+name+' ALL=(root) NOPASSWD: '+utilities+'\n'
+  if a.fresh_remote_only:
+   extra+='       ubuntu ALL=(root) NOPASSWD: /usr/bin/tailscale status --json, /usr/bin/tailscale debug prefs, /usr/bin/tailscale login --timeout=120s, /usr/bin/tailscale set --operator=ubuntu, /usr/bin/tailscale logout\n'
   data=data.replace(' packages:',extra+' packages:').replace('nftables]', 'nftables, polkitd, curl, ca-certificates, openssl, iproute2]')
   (work/'user-data').write_text(data)
  if a.maintenance_only:
@@ -272,8 +284,8 @@ def staged_package_acceptance():
  packages={k:fixture.package(v) for k,v in [('candidate',a.candidate),('predecessor',a.predecessor),('legacy',a.legacy_predecessor)]}
  target=packages['candidate']['packet'];version=target['productVersion']
  assert target['version']==2 and packages['predecessor']['packet']['version']==2
- if not a.released_local_only:assert packages['predecessor']['packet']['productVersion']=='0.1.4'
- if not a.released_local_only:assert packages['legacy']['packet']['version']==1 and packages['legacy']['packet']['productVersion']=='0.1.5'
+ if not (a.released_local_only or a.fresh_remote_only):assert packages['predecessor']['packet']['productVersion']=='0.1.4'
+ if not (a.released_local_only or a.fresh_remote_only):assert packages['legacy']['packet']['version']==1 and packages['legacy']['packet']['productVersion']=='0.1.5'
  for field in ['source','productVersion']:
   assert isinstance(target[field],str)
  for field in ([] if a.released_local_only else ['source','sourceTree','runId','runAttempt']):
@@ -337,9 +349,11 @@ def staged_package_acceptance():
  # Private disposable source is readable by the three fixture owners. They
  # execute as themselves; only the verified shell entry's OS bootstrap is root.
  ssh('chmod 755 '+guest+' '+guest+'/scripts '+guest+'/packages; chmod -R a+rX '+guest+'/packages '+guest+'/scripts',30)
- guest_call(['setup','--work',remote_work,'--candidate',guest+'/packages/candidate','--predecessor',guest+'/packages/predecessor','--legacy',guest+'/packages/legacy',*(['--released-local-only'] if a.released_local_only else [])])
+ guest_call(['setup','--work',remote_work,'--candidate',guest+'/packages/candidate','--predecessor',guest+'/packages/predecessor','--legacy',guest+'/packages/legacy',*(['--released-local-only'] if a.released_local_only or a.fresh_remote_only else [])])
  for label in ['candidate','predecessor']:
   ssh('chmod 700 '+guest+'/packages/'+label+'/fased-install-linux-amd64; '+guest+'/packages/'+label+'/fased-install-linux-amd64 --verify-candidate '+guest+'/packages/'+label,90)
+ if a.fresh_remote_only:
+  select_package('candidate');return fresh_remote_acceptance(fixture,packages['candidate'],guest,remote_work,local_acceptance_sha)
  start_tunnel();select_package('predecessor')
  installed={}
  installed['local']=owner_call('local','install',packages['predecessor']['packet']['productVersion'])
@@ -471,6 +485,73 @@ def staged_package_acceptance():
  pred=packages['predecessor']['packet'];result['compatibilityPredecessor']={'fixtureOnly':True,'published':False,'packetVersion':2,'productVersion':'0.1.4','source':pred['source'],'sourceTree':pred['release']['sourceTree'],'runId':pred['release']['runId'],'runAttempt':pred['release']['runAttempt'],'artifactSetSha256':result['inputs']['predecessor']['artifactSetSha256']}
  save('installed-acceptance.json',result)
  return result
+
+def fresh_remote_acceptance(fixture,candidate,guest,remote_work,local_receipt_sha):
+ # Run the actual official shell entry. Only HTTPS delivery is controlled;
+ # Tailscale packages, daemon, enrollment, identity and private TLS are real.
+ import re,shlex,os
+ receipt={**fixture.binding(candidate),'result':'FAIL','fixtureOnly':True,'freshRemote':True,
+          'mining':False,'liveFeatures':False,'automaticUpdates':False,
+          'localAcceptanceSha256':local_receipt_sha,'checks':{}}
+ assert ssh('test ! -e /var/lib/fased-app-vps-1000 && test ! -e /usr/bin/tailscale && echo clean',15).strip()=='clean','fresh setup requires a clean disposable baseline'
+ observed={}
+ def observe(text):
+  links=re.findall(r'https://login\.tailscale\.com/a/[A-Za-z0-9]+',text)
+  if links and links[-1]!=observed.get('enrollment'):
+   assert ssh('test ! -e /var/lib/fased-app-vps-1000 && echo undeployed',15).strip()=='undeployed','Fased deployed before Tailscale enrollment'
+   observed['enrollment']=links[-1]
+   fixture.write_private(root/'enrollment.json',{'url':links[-1],'realDaemon':True,'fasedNotDeployed':True})
+   print('Fresh Remote: Tailscale approval required; private enrollment.json contains the URL',flush=True)
+  # Retain the setup handoff privately; never print owner/session material.
+  links=re.findall(r'https://[a-z0-9.-]+\.ts\.net/[^\s]*',text)
+  if links:
+   observed['private']=links[-1]
+   fixture.write_private(root/'private-setup.json',{'url':links[-1],'transport':'direct-tailscale-https'})
+ entry='bash <(curl -fsSL https://github.com/fased-ai/fased-app/releases/latest/download/install.sh) --remote --operator ubuntu --listen 127.0.0.1:17482'
+ answers={
+  'Connect Tailscale for private Remote access? [Y/n]: ':'y',
+  'Use a dedicated app account with no login or sudo? [Y/n]: ':'y',
+  'Keep Fased running after logout and reboot? [Y/n]: ':'y',
+  'Set up Tailscale packages, service, browser sign-in and access for this OS user? [y/N]: ':'y',
+  'Authorize this operation with sudo? [y/N]: ':'y',**fixture.PREPARATION_ANSWERS}
+ try:
+  code,output=fixture.terminal(sshbase[:-1]+['-tt','root@127.0.0.1',entry],answers,timeout=1200,password_free=True,observer=observe)
+  descriptor=os.open(root/'root-entry.log',os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
+  with os.fdopen(descriptor,'w') as log:log.write(fixture.redacted(output))
+  assert code==0,'literal fresh Remote entry failed; inspect the redacted terminal log'
+  assert observed.get('enrollment') and observed.get('private'),'real enrollment and private HTTPS handoff required'
+  tail=json.loads(ssh('tailscale status --json',15))
+  assert tail.get('BackendState')=='Running' and tail.get('Self',{}).get('Online') is True,'Tailscale must remain running'
+  service=ssh('systemctl show --property User --value fased-vps-1000.service',15).strip()
+  assert service and ssh('id -u '+shlex.quote(service),15).strip() not in ('0','1000'),'dedicated non-root app identity required'
+  assert ssh('getent passwd '+shlex.quote(service),15).strip().endswith('/usr/sbin/nologin'),'app account must have no login'
+  account=ssh('sudo -n /usr/bin/passwd -S '+shlex.quote(service),15).split()
+  assert len(account)>1 and account[1]=='L','app account must be locked'
+  serve=json.loads(ssh('tailscale serve status --json',15))
+  proxies=[handler.get('Proxy') for web in serve.get('Web',{}).values() for handler in web.get('Handlers',{}).values()]
+  assert 'unix:/var/lib/fased-app-vps-1000/app-state/tailscale.sock' in proxies,'fresh Serve must target the protected Unix proxy'
+  assert not any(serve.get('AllowFunnel',{}).values()),'public Funnel must remain disabled'
+  protected=ssh("sudo -n /usr/bin/stat -c '%F:%a:%U' /var/lib/fased-app-vps-1000/app-state/tailscale.sock",15).strip().split(':')
+  assert len(protected)==3 and protected[0]=='socket' and int(protected[1],8)&0o007==0 and protected[2]==service,'Unix proxy must belong to the isolated app, without other-user access'
+  # Never use a port forward, claimed owner cookie, or test TLS exception.
+  endpoint=observed['private'].split('#',1)[0].split('?',1)[0]+'api/v1/health'
+  opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+  with opener.open(endpoint,timeout=20) as response:health=json.load(response)
+  assert health.get('version')==candidate['packet']['productVersion'],'direct private HTTPS must reach the installed candidate'
+  assert all(health.get('capabilities',{}).get(name) is False for name in ('aiConnections','financialExecution','walletSigner')),'live capabilities remain held'
+  receipt['checks'].update(literalEntry='PASS',tailBeforeDeployment='PASS',freshProtectedProxy='PASS',directPrivateHTTPS='PASS',lockedAppIdentity='PASS',noExtraPassword='PASS')
+  # This first fresh-install leg is not whole Remote/upgrade/lockdown acceptance.
+  # Continue the existing private UI/closure/update runner only with the SAME VM
+  # and independent console proof; never promote this narrower receipt.
+  receipt.update(result='SUPPORTING',publicAcceptance=False,upgradeApplied=False,
+                 remaining=['owner-device enrollment','private-admin and independent console recovery','public IPv4/IPv6 closure and rollback','actual predecessor UI/CLI upgrade','reboot/reconnect'])
+  return receipt
+ finally:
+  save('fresh-remote-setup.json',receipt)
+  # Explicitly revoke only this disposable node. The old working VPS and host
+  # Tailscale state are never touched; cleanup cannot silently retain access.
+  try:ssh('sudo -n /usr/bin/tailscale logout',15)
+  except (subprocess.SubprocessError,OSError):pass
 
 if a.staged_package_only:
  started=time.time();staged_result={'result':'FAIL','fixtureOnly':True}

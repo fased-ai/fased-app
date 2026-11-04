@@ -604,3 +604,51 @@ func TestWENSessionLifecycleBackwardAckDoesNotRenew(t *testing.T) {
 		t.Fatal("acknowledgement renewed an old proposal under a backward clock")
 	}
 }
+
+// Session-only constructors retain their test views without enabling AI or
+// exposing them to ordinary owners; a normal command must preserve that view.
+func TestSessionFixtureUICapabilityIsIndependentOfAI(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+			s := fixtureStore(t)
+			s.sessionFixture = enabled
+			token := claimFixture(t, s)
+			origin := "http://127.0.0.1:7331"
+			h, err := NewHTTPHandler(s, origin, "", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			check := func(method, body string) AgentView {
+				t.Helper()
+				response := apiRequest(h, method, "/api/v1/agents", body, token, origin, csrfToken(token))
+				if response.Code != 200 {
+					t.Fatalf("%s: %d %s", method, response.Code, response.Body.String())
+				}
+				var flags struct {
+					Session   bool `json:"sessionFixtureAvailable"`
+					AI        bool `json:"aiFixtureAvailable"`
+					LiveAI    bool `json:"providerCallsEnabled"`
+					Financial bool `json:"financialExecution"`
+				}
+				if err := json.Unmarshal(response.Body.Bytes(), &flags); err != nil {
+					t.Fatal(err)
+				}
+				if flags.Session != enabled || flags.AI || flags.LiveAI || flags.Financial {
+					t.Fatalf("incorrect constructor capability: %+v", flags)
+				}
+				var view AgentView
+				if err := json.Unmarshal(response.Body.Bytes(), &view); err != nil {
+					t.Fatal(err)
+				}
+				return view
+			}
+			v := check("GET", "")
+			p := v.Profiles[agentProfile(agentDocument{Profiles: v.Profiles}, v.ProfileID)]
+			body, err := json.Marshal(AgentCommand{Revision: v.Revision, Action: "profile-update", ProfileID: v.ProfileID, Name: p.Name, Text: p.Persona, Provider: "none"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			check("POST", string(body))
+		})
+	}
+}

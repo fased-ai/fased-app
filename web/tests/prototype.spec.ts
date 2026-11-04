@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { initialState, reducer, STORAGE_KEY } from "../src/state";
 
 test.use({ colorScheme: "dark" });
 test("setup resumes after reload and never creates signing authority", async ({
@@ -83,7 +84,7 @@ test("profiles keep separate model preferences and memories", async ({
     page.getByText("Use a conservative research baseline.", { exact: true }),
   ).toHaveCount(0);
 });
-test("terminal mockups cannot execute and make no remote requests", async ({
+test("deferred trading pages contain no imitation controls and make no remote requests", async ({
   page,
   isMobile,
 }) => {
@@ -96,11 +97,10 @@ test("terminal mockups cannot execute and make no remote requests", async ({
       mutations.push(request.url());
   });
   await page.goto("/#terminals");
-  await expect(page.locator(".terminal-card")).toHaveCount(3);
-  await expect(
-    page.getByRole("heading", { name: "Mining", exact: true }),
-  ).toHaveCount(1);
-  await page.getByRole("button", { name: "Mining", exact: true }).click();
+  await expect(page).toHaveURL(/#terminals\/jupiter$/);
+  await expect(page.locator(".terminal-card,.terminal-workspace")).toHaveCount(
+    0,
+  );
   for (const route of ["satcoin", "asset", "loss"]) {
     await page.goto(`/#terminals/${route}`);
     await expect(page).toHaveURL(/#terminals\/satcoin$/);
@@ -108,20 +108,19 @@ test("terminal mockups cannot execute and make no remote requests", async ({
       page.getByRole("heading", { name: "Mining", exact: true }),
     ).toBeVisible();
     await expect(
-      page.getByText("Mining is a design prototype.", {
+      page.getByRole("heading", {
+        name: "Mining is not available yet",
         exact: true,
       }),
     ).toBeVisible();
     await expect(
-      page.getByText("All values below are illustrative.", { exact: false }),
-    ).toBeVisible();
+      page.locator(
+        ".terminal-workspace,.demo-chart,.session-rehearsal,.session-automatic",
+      ),
+    ).toHaveCount(0);
     await expect(
       page.getByRole("button", { name: "Execution unavailable" }),
-    ).toBeDisabled();
-    await expect(page.getByText("Not loaded", { exact: true })).toBeVisible();
-    await expect(
-      page.getByRole("heading", { name: "Results & claims", exact: true }),
-    ).toBeVisible();
+    ).toHaveCount(0);
     await expect(page.locator("main")).not.toContainText(
       /Asset Mining|Loss Mining|district|arena|eligible loss|paid winnings/i,
     );
@@ -139,16 +138,20 @@ test("terminal mockups cannot execute and make no remote requests", async ({
     window.location.hash = "terminals/asset";
   });
   await expect(page).toHaveURL(/#terminals\/satcoin$/);
-  await page.getByRole("button", { name: "Hyperliquid", exact: true }).click();
+  await page.getByRole("link", { name: "Hyperliquid", exact: true }).click();
   await expect(page).toHaveURL(/#terminals\/hyperliquid$/);
   await expect(
-    page.getByRole("button", { name: "Execution unavailable" }),
-  ).toBeDisabled();
+    page.getByRole("heading", {
+      name: "Hyperliquid is not available yet",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page.locator(".terminal-workspace,.demo-chart")).toHaveCount(0);
   await page.goBack();
   await expect(
     page.getByRole("heading", { name: "Mining", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Onchain", exact: true }).click();
+  await page.getByRole("link", { name: "Onchain", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Quote", exact: true }),
   ).toBeDisabled();
@@ -160,7 +163,7 @@ test("terminal mockups cannot execute and make no remote requests", async ({
     .click();
   await page.getByRole("button", { name: "Done", exact: true }).click();
   const mining = page.locator('[data-widget="mining"]');
-  await expect(mining).toContainText("Unavailable");
+  await expect(mining).toContainText("Mining is not available yet");
   await mining.locator("button.dashboard-title").click();
   await expect(page).toHaveURL(/#terminals\/satcoin$/);
   await page.getByRole("heading", { name: "Mining", exact: true }).click();
@@ -236,26 +239,61 @@ test("shared WEN Activity distinguishes browser demo notices", async ({
   page,
   isMobile,
 }) => {
-  await page.goto("/#agents/bots");
-  await page.getByRole("button", { name: /Pause demo|Resume demo/ }).click();
+  const notice = {
+    id: "controlled-browser-notice",
+    title: "Browser preview notice",
+    detail: "Stored in this browser. No core action was requested.",
+    read: false,
+    tone: "info" as const,
+  };
+  const fixture = reducer(
+    { ...initialState(), notices: [] },
+    { type: "notice", notice },
+  );
   await page.goto("/#activity");
+  await page.evaluate(
+    ({ key, state }) => localStorage.setItem(key, JSON.stringify(state)),
+    { key: STORAGE_KEY, state: fixture },
+  );
+  await page.reload();
+  const mutations: string[] = [],
+    external: string[] = [];
+  page.on("request", (request) => {
+    if (!["127.0.0.1", "localhost"].includes(new URL(request.url()).hostname))
+      external.push(request.url());
+    if (!["GET", "HEAD"].includes(request.method()))
+      mutations.push(request.url());
+  });
   const activity = page.getByRole("region", {
     name: "Activity records",
     exact: true,
   });
   await expect(
     activity.getByRole("heading", {
-      name: "Recent prototype activity",
+      name: fixture.profiles.find((p) => p.id === fixture.selectedProfile)!
+        .name,
       exact: true,
     }),
   ).toBeVisible();
   const event = activity
     .getByRole("listitem")
-    .filter({ hasText: /Demo bot paused|Demo bot resumed/ });
+    .filter({ hasText: notice.title });
   await expect(event).toBeVisible();
   await expect(event.getByText("DEMO", { exact: true })).toBeVisible();
-  await expect(activity.getByText("LOCAL ONLY", { exact: true })).toBeVisible();
-  await expect(activity).toHaveCSS("background-color", "rgb(30, 30, 42)");
+  await expect(event).toContainText(notice.detail);
+  await expect(page.getByLabel("Instance location")).toHaveText("Preview");
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toHaveCount(0);
+  await expect(activity).toHaveCSS("background-color", "rgb(34, 32, 45)");
+  expect(
+    await page.evaluate(
+      (key) => JSON.parse(localStorage.getItem(key)!).notices,
+      STORAGE_KEY,
+    ),
+  ).toEqual(fixture.notices);
+  expect(mutations).toEqual([]);
+  expect(external).toEqual([]);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
