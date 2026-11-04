@@ -36,3 +36,26 @@ func TestChannelSourceUsesValidatedIDUnderOwnerControl(t *testing.T) {
 		t.Fatal("ordinary channel activated")
 	}
 }
+
+func TestChannelReleaseCurrentNeverOffersDowngradeOrReplacement(t *testing.T) {
+	d := bootstrap.Descriptor{Sequence: 1000008}
+	identity := strings.Repeat("a", 64)
+	for _, tc := range []struct {
+		name            string
+		installed       uint64
+		identity        string
+		current, refuse bool
+	}{
+		{"installed candidate ahead of public", 1000009, identity, true, false},
+		{"same release", 1000008, identity, true, false},
+		{"same sequence different content", 1000008, strings.Repeat("b", 64), false, true},
+		{"genuinely newer public release", 1000007, identity, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current, err := channelReleaseCurrent(d, identity, tc.installed, tc.identity)
+			if current != tc.current || (err != nil) != tc.refuse {
+				t.Fatalf("current=%v err=%v", current, err)
+			}
+		})
+	}
+}

@@ -49,9 +49,6 @@ func attestedDescriptor(seed Seed, docs map[string][]byte) (Descriptor, error) {
 	if _, e := strconv.ParseUint(release.ID, 10, 64); e != nil || release.ID == "0" {
 		return d, errors.New("release ID invalid")
 	}
-	if current, e := releaseSequence(core.Version); e == nil && sequence < current {
-		return d, errors.New("release is older than this verified reader")
-	}
 	if packet.Release.InstallerSHA256 != packet.Installer.SHA256 || !hashOK(packet.Release.InstallerSHA256) {
 		return d, errors.New("attested installer digest required")
 	}
@@ -77,6 +74,16 @@ func attestedDescriptor(seed Seed, docs map[string][]byte) (Descriptor, error) {
 		return d, errors.New("attested build identity invalid")
 	}
 	return d, nil
+}
+
+// Inspection may authenticate an older public head while an accepted staged
+// installation is ahead of it. Executable preparation and every later use
+// still refuse crossing below the reader's version.
+func checkReaderRelease(sequence uint64) error {
+	if current, err := releaseSequence(core.Version); err == nil && sequence < current {
+		return errors.New("release is older than this verified reader")
+	}
+	return nil
 }
 
 func attestedInputs(ctx context.Context, g *releaseops.GitHubTransport, seed Seed) (Descriptor, map[string][]byte, error) {

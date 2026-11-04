@@ -73,10 +73,11 @@ func channelCheck(options channelOptionsFactory, parent string, installedSequenc
 		if e != nil {
 			return nil, e
 		}
-		if descriptor.Sequence < installedSequence || descriptor.Sequence == installedSequence && digest != installedRelease && !bootstrap.ApplicationDescriptorMatches(descriptor, installedRelease) {
-			return nil, errors.New("release rollback or identity change refused")
+		current, e := channelReleaseCurrent(descriptor, digest, installedSequence, installedRelease)
+		if e != nil {
+			return nil, e
 		}
-		if descriptor.Sequence == installedSequence && (digest == installedRelease || bootstrap.ApplicationDescriptorMatches(descriptor, installedRelease)) {
+		if current {
 			return nil, nil
 		}
 		p, e := bootstrap.Prepare(ctx, o)
@@ -101,6 +102,22 @@ func channelCheck(options channelOptionsFactory, parent string, installedSequenc
 		}
 		return got, nil
 	}
+}
+
+// An authenticated public head behind an installed candidate offers no update.
+// It never authorizes fetching/applying that older executable. Equal-sequence
+// replacement remains a hard identity error, including for staged builds.
+func channelReleaseCurrent(descriptor bootstrap.Descriptor, digest string, installedSequence uint64, installedRelease string) (bool, error) {
+	if descriptor.Sequence < installedSequence {
+		return true, nil
+	}
+	if descriptor.Sequence == installedSequence {
+		if digest != installedRelease && !bootstrap.ApplicationDescriptorMatches(descriptor, installedRelease) {
+			return false, errors.New("release identity change refused")
+		}
+		return true, nil
+	}
+	return false, nil
 }
 func installedChannelSource(parent string) func(context.Context, core.ApplicationRelease, string) (*bootstrap.Prepared, error) {
 	if compiledApplicationChannel == nil {
