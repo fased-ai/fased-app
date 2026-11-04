@@ -75,6 +75,9 @@ func PrepareAttestedCandidate(ctx context.Context, o Options, directory string, 
 	if err != nil || sequence < seed.MinimumSequence {
 		return nil, errors.New("candidate below trusted floor")
 	}
+	if err = checkReaderRelease(sequence); err != nil {
+		return nil, err
+	}
 	d := Descriptor{Binding: seed.Binding, Sequence: sequence, ProductVersion: packet.ProductVersion, Source: packet.Source, BundleSHA256: packet.BundleSHA256, Archive: packet.Archive, Release: packet.Release}
 	proof, err := update.ReadDocument(filepath.Join(directory, provenanceFile))
 	if err != nil {

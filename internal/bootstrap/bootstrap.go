@@ -281,6 +281,11 @@ func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepa
 		}
 		return &Prepared{descriptor: descriptor, report: Report{MetadataVerified: true, DescriptorSHA256: applicationIdentity(descriptor, digest(docs["descriptor.json"]))}}, nil
 	}
+	if seed.Version == 4 {
+		if err = checkReaderRelease(descriptor.Sequence); err != nil {
+			return nil, err
+		}
+	}
 	if err = parentRoot.Mkdir(base, 0700); err != nil {
 		return nil, err
 	}
@@ -374,6 +379,11 @@ func (p *Prepared) revalidate() error {
 		return err
 	}
 	d := p.descriptor
+	if seed.Version == 4 {
+		if err = checkReaderRelease(d.Sequence); err != nil {
+			return err
+		}
+	}
 	if p.candidate != nil {
 		if err = p.revalidateCandidate(seed, now); err != nil {
 			return err

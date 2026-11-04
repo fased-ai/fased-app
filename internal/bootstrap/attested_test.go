@@ -16,11 +16,55 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/releaseops"
 	"github.com/fased-ai/fased-app/internal/releaseprovenance"
 	"github.com/fased-ai/fased-app/internal/releaseprovenance/fixture"
 	"github.com/fased-ai/fased-app/internal/update"
 )
+
+func TestAttestedInspectOlderPublicReleaseWithoutExecutingIt(t *testing.T) {
+	previous := core.Version
+	core.Version = "1.2.4"
+	t.Cleanup(func() { core.Version = previous })
+	_, o, _ := attestedFixture(t, "staged")
+	d, identity, err := Inspect(t.Context(), o)
+	if err != nil || d.ProductVersion != "1.2.3" || identity == "" {
+		t.Fatalf("authenticated older-public metadata must remain inspectable: %v %v", d, err)
+	}
+	if _, err := os.Stat(o.Directory); !os.IsNotExist(err) {
+		t.Fatal("metadata inspection created executable output", err)
+	}
+	if p, err := Prepare(t.Context(), o); err == nil {
+		p.Close()
+		t.Fatal("metadata inspection authorized an older executable")
+	}
+	if _, err := os.Stat(o.Directory); !os.IsNotExist(err) {
+		t.Fatal("refused older executable created output", err)
+	}
+}
+
+func TestOlderPublicInspectionStillRequiresAuthenticProof(t *testing.T) {
+	previous := core.Version
+	core.Version = "1.2.4"
+	t.Cleanup(func() { core.Version = previous })
+	_, o, _ := attestedFixture(t, "bad-proof")
+	if _, _, err := Inspect(t.Context(), o); err == nil {
+		t.Fatal("older public metadata bypassed provenance validation")
+	}
+}
+
+func TestLegacyBootstrapSequenceIsNotAnAttestedProductVersion(t *testing.T) {
+	previous := core.Version
+	core.Version = "9999.0.0"
+	t.Cleanup(func() { core.Version = previous })
+	f := newFirstFixture(t)
+	p, err := Prepare(t.Context(), f.options())
+	if err != nil {
+		t.Fatal("legacy metadata sequence was compared to a product version", err)
+	}
+	p.Close()
+}
 
 func attestedFixture(t *testing.T, variant string) (*firstFixture, Options, map[string][]byte) {
 	t.Helper()

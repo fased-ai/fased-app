@@ -365,7 +365,14 @@ def staged_package_acceptance():
   assert failure['acquisitionFailurePreserved'] is True
   assert json.loads(ssh('cat '+remote_work+'/selection.json',15)).get('archiveFailureObserved') is True,'check failed before the injected archive acquisition'
   select_package('candidate');manual=browser('local','ui-update',version);assert manual['uiOutcome']=='applied'
-  owner_call('local','restart');passwordless_current('local');assert browser('local','check',version)['uiOutcome']=='alreadyCurrent'
+  owner_call('local','restart')
+  # A held candidate can be ahead of public latest. Exercise ordinary UI/CLI
+  # Check against the actual older published predecessor, without reapplying it.
+  select_package('predecessor')
+  passwordless_current('local');assert browser('local','check',version)['uiOutcome']=='alreadyCurrent'
+  checks['installedAheadOfPublic']='PASS'
+  result['olderPublicHead']={'version':pred['productVersion'],'uiOutcome':'alreadyCurrent','cliOutcome':'alreadyCurrent','downgradeApplied':False}
+  select_package('candidate')
   assert browser('local','auth-cycle',version)['logoutSignIn'] is True
   result['reboot']=reboot();assert browser('local','reconnect',version)['reconnected'] is True
   checks.update(entry='PASS',local='PASS',ownerAuth='PASS',uiUpdate='PASS',restart='PASS',alreadyCurrent='PASS',preservation='PASS',recovery='PASS',logoutSignIn='PASS',rebootReconnect='PASS')
