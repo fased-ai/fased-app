@@ -1,5 +1,32 @@
 // Static interface copy; user records, model output and raw receipts are never catalog keys.
 export const pageCopy = {
+  "Memory revision {count}": [
+    "Версия памяти {count}",
+    "Revisión de memoria {count}",
+    "记忆版本 {count}",
+    "메모리 버전 {count}",
+  ],
+  budget: ["бюджет", "de presupuesto", "预算", "예산"],
+  "(preview)": ["(предпросмотр)", "(vista previa)", "（预览）", "(미리보기)"],
+  "Run preview": [
+    "Запустить предпросмотр",
+    "Ejecutar vista previa",
+    "运行预览",
+    "미리보기 실행",
+  ],
+  "Saved reminder": [
+    "Сохранённое напоминание",
+    "Recordatorio guardado",
+    "已保存的提醒",
+    "저장된 알림",
+  ],
+  Note: ["Заметка", "Nota", "备注", "메모"],
+  "Runs while Fased is running. Missed intervals coalesce.": [
+    "Выполняется, пока Fased работает. Пропущенные запуски объединяются.",
+    "Se ejecuta mientras Fased está en funcionamiento. Los intervalos omitidos se agrupan.",
+    "在 Fased 运行时执行。错过的执行会合并。",
+    "Fased가 실행 중일 때 실행합니다. 놓친 실행은 하나로 합칩니다.",
+  ],
   Sun: ["Вс", "Dom", "周日", "일"],
   Mon: ["Пн", "Lun", "周一", "월"],
   Tue: ["Вт", "Mar", "周二", "화"],
