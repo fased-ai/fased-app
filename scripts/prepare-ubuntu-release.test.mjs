@@ -2446,24 +2446,29 @@ test("local signing private terminal hides passphrases and restores modes on can
 module=sys.argv[1]
 secret=b'Disposable terminal phrase only'
 results=[]
-for action in ['enter','ctrl-c','sigterm']:
+for action in ['enter','ctrl-c','sigterm','eof-before-exit']:
  pid,fd=pty.fork()
  if pid==0:
   code='import {privateSigningPassphrase} from '+json.dumps(module)+';try{const p=await privateSigningPassphrase();p.fill(0);console.log("fixture done");}catch{console.log("fixture cancelled");process.exitCode=1;}'
+  if action=='eof-before-exit':
+   result=subprocess.call(['node','--input-type=module','-e',code])
+   for childfd in [0,1,2]:os.close(childfd)
+   time.sleep(0.05)
+   os._exit(result)
   os.execvp('node',['node','--input-type=module','-e',code])
- data=b'';end=time.monotonic()+10;sent=False;status=None
+ data=b'';end=time.monotonic()+10;sent=False;status=None;eof=False
  try:
   while time.monotonic()<end:
-   ready,_,_=select.select([fd],[],[],0.1)
+   ready,_,_=select.select([] if eof else [fd],[],[],0.1)
    if ready:
     try:
      part=os.read(fd,8192)
     except OSError:part=b''
     data+=part
-    if not part:break
+    if not part:eof=True
    if not sent and b'Release passphrase:' in data:
     sent=True
-    if action=='enter':os.write(fd,secret+b'\r')
+    if action in ['enter','eof-before-exit']:os.write(fd,secret+b'\r')
     elif action=='ctrl-c':os.write(fd,b'\x03')
     else:os.kill(pid,signal.SIGTERM)
    done,code=os.waitpid(pid,os.WNOHANG)
@@ -2475,7 +2480,7 @@ for action in ['enter','ctrl-c','sigterm']:
   if not sent or secret in data:raise AssertionError('private terminal input was exposed')
   if not termios.tcgetattr(fd)[3]&termios.ECHO:raise AssertionError('private terminal echo was not restored')
   exitcode=os.waitstatus_to_exitcode(status)
-  if exitcode!=(0 if action=='enter' else 1):raise AssertionError('private terminal wrong outcome')
+  if exitcode!=(0 if action in ['enter','eof-before-exit'] else 1):raise AssertionError('private terminal wrong outcome')
   results.append(action)
  finally:
   if status is None:
