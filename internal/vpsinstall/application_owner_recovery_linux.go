@@ -180,7 +180,10 @@ func ValidateApplicationOwnerHelper(config, actualExecutable string, uid int) (M
 	return validateApplicationOwnerHelper(config, actualExecutable, uid, liveOps(nil))
 }
 
-func validateApplicationOwnerHelper(config, actualExecutable string, uid int, o hostOps) (Manifest, error) {
+// Shared identity checks attest the process actually running, not the image it
+// happens to validate on behalf of the installed application. Each caller must
+// additionally admit its own immutable image/generation before returning.
+func validateApplicationHelperIdentity(config, actualExecutable string, uid int, o hostOps) (Manifest, error) {
 	var m Manifest
 	f, e := rootFile(o, config)
 	if e != nil || strict(f.Data, &m) != nil || m.validate() != nil || m.Config != config {
@@ -202,6 +205,14 @@ func validateApplicationOwnerHelper(config, actualExecutable string, uid int, o 
 			return Manifest{}, errors.New("Remote helper has unexpected supplementary groups")
 		}
 	}
+	return m, nil
+}
+
+func validateApplicationOwnerHelper(config, actualExecutable string, uid int, o hostOps) (Manifest, error) {
+	m, e := validateApplicationHelperIdentity(config, actualExecutable, uid, o)
+	if e != nil {
+		return Manifest{}, e
+	}
 	if actualExecutable == m.Core {
 		return m, verifyFiles(o, m)
 	}
@@ -214,7 +225,7 @@ func validateApplicationOwnerHelper(config, actualExecutable string, uid int, o 
 	}
 	id := tail[:32]
 	dir := m.Root + "-update-" + id
-	f, e = rootFile(o, dir+"/owner-helper.json")
+	f, e := rootFile(o, dir+"/owner-helper.json")
 	var j applicationJournal
 	if e != nil || strict(f.Data, &j) != nil || !applicationJournalValid(j, m.OwnerUID) || j.Status.ID != id || j.Status.Phase != "prepared" || m != j.Previous && m != j.Target || !known(f, encoded(j), 0644) {
 		return Manifest{}, errors.New("Remote retained helper admission is missing or foreign")
