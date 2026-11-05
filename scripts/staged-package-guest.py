@@ -32,9 +32,8 @@ PREPARATION_ANSWERS = {
     "Authorize required Ubuntu preparation with sudo? [y/N]: ": "y",
     "Authorize Ubuntu preparation, isolated service and bounded update maintenance with sudo? [y/N]: ": "y",
 }
-LOCAL_REQUIRED_CHECKS = ("entry", "local", "ownerAuth", "uiUpdate", "cliUpdate", "restart",
-                         "alreadyCurrent", "preservation", "recovery", "logoutSignIn",
-                         "rebootReconnect", "controlledAutomatic", "passwordFreeLocalSetup")
+STAGED_ACCEPTANCE_CONTRACT = json.loads(P(__file__).with_name('staged-acceptance-contract.json').read_text())
+LOCAL_REQUIRED_CHECKS = tuple(STAGED_ACCEPTANCE_CONTRACT['local'])
 
 
 def digest(raw):
@@ -67,7 +66,63 @@ def write_private(path, value):
 
 def redacted(text):
     text = re.sub(r"https://login\.tailscale\.com/a/[^\s]+", "[redacted Tailscale enrollment link]", text, flags=re.IGNORECASE)
+    text = re.sub(r"https://[a-z0-9.-]+\.ts\.net/[^\s]*", "[redacted private Tailscale link]", text, flags=re.IGNORECASE)
     return re.sub(r"(#(?:setup|local)=)[^\s]+", r"\1[redacted]", text.replace(PASSWORD, "[redacted]"))
+
+
+def private_tailnet_origin(status, suffix):
+    if (not re.fullmatch(r"[a-z0-9-]+\.ts\.net", suffix or "") or
+            status.get("BackendState") != "Running" or
+            status.get("Self", {}).get("Online") is not True or
+            status.get("MagicDNSSuffix") != suffix):
+        raise RuntimeError("Tailscale must be Running and online on the expected tailnet")
+    name = status["Self"].get("DNSName", "").rstrip(".")
+    if not re.fullmatch(r"[a-z0-9-]+\." + re.escape(suffix), name):
+        raise RuntimeError("Tailscale node DNS name does not match the expected tailnet")
+    return "https://" + name
+
+
+class RemoteEnrollmentRetry:
+    """One known reissued prompt, at most twelve throttled readiness checks."""
+    prompt = "Connect Tailscale for private Remote access? [Y/n]: "
+    failure = "Connect Tailscale and retry. Fased has not been installed."
+
+    def __init__(self, ready, clock=time.monotonic):
+        self.ready, self.clock = ready, clock
+        self.checks, self.next_check, self.used = 0, 0, False
+        self.expires_at, self.pending_ended = None, False
+
+    def end_pending(self):
+        self.pending_ended = True
+        raise RuntimeError("Tailscale enrollment is not ready; no retry sent. Finish enrollment before rerunning fresh acceptance.")
+
+    def __call__(self, text):
+        count = text.count(self.prompt)
+        if count > 2:
+            raise RuntimeError("Remote enrollment prompt repeated more than once; no retry sent")
+        if count != 2 or self.used:
+            return None
+        _, remainder = text.split(self.prompt, 1)
+        if self.failure not in remainder.split(self.prompt, 1)[0]:
+            raise RuntimeError("unrecognized Remote enrollment failure; no retry sent")
+        now = self.clock()
+        if self.expires_at is None:
+            self.expires_at = now + 60
+        if self.pending_ended or self.checks >= 12 or now >= self.expires_at:
+            self.end_pending()
+        if now < self.next_check:
+            return None
+        self.checks += 1
+        self.next_check = now + 5
+        ready = self.ready()
+        if self.clock() >= self.expires_at:
+            self.end_pending()
+        if ready:
+            self.used = True
+            return self.prompt
+        if self.checks >= 12:
+            self.end_pending()
+        return None
 
 
 def checked_reply(result, owner, action, failure_file):
@@ -99,6 +154,65 @@ def package(directory):
         assets.append({"name": name, "size": size, "sha256": identity["sha256"]})
     assets.append({"name": ASSETS[4], "size": len(raw), "sha256": digest(raw)})
     return {"directory": str(directory), "packet": packet, "assets": assets}
+
+
+class RemoteJourney:
+    """Private resume journal, not authenticated publication evidence.
+
+    Never restore an earlier disk snapshot or revoke enrollment between phases.
+    A different package, owner instance or Tailscale node needs explicit review.
+    """
+    phases = ('new', 'enrolled', 'private-browser', 'installed', 'owner',
+              'private-admin', 'console', 'restricted', 'disconnected',
+              'rebooted', 'current')
+
+    def __init__(self, path, identity, local_sha):
+        self.path = P(path)
+        if self.path.exists() or self.path.is_symlink():
+            info = self.path.lstat()
+            if self.path.is_symlink() or not self.path.is_file() or info.st_uid != os.getuid() or info.st_mode & 0o777 != 0o600 or info.st_size > 65536:
+                raise RuntimeError('Remote journal must be a private owned file')
+            self.value = document(self.path)
+            if self.value.get('schemaVersion') != 1 or self.value.get('binding') != identity:
+                raise RuntimeError('Remote journal belongs to a different package')
+            if self.value.get('localAcceptanceSha256') != local_sha:
+                raise RuntimeError('Remote journal Local receipt differs')
+            if self.value.get('phase') not in self.phases:
+                raise RuntimeError('Unknown Remote journal phase')
+        else:
+            self.value = {'schemaVersion': 1, 'binding': identity,
+                          'localAcceptanceSha256': local_sha, 'phase': 'new'}
+            write_private(self.path, self.value)
+
+    def enrolled(self, status, suffix):
+        origin = private_tailnet_origin(status, suffix)
+        node = status.get('Self', {}).get('ID', '')
+        if not isinstance(node, str) or not node or len(node) > 256:
+            raise RuntimeError('Tailscale stable node identity required')
+        fingerprint = digest(node.encode())
+        if self.value.get('origin', origin) != origin or self.value.get('nodeIdentitySha256', fingerprint) != fingerprint:
+            raise RuntimeError('Remote Tailscale identity changed; preserve the journal')
+        self.value.update(origin=origin, nodeIdentitySha256=fingerprint)
+        if self.value['phase'] == 'new':
+            self.advance('enrolled')
+
+    def advance(self, phase, *, instance_id=None):
+        if phase not in self.phases:
+            raise RuntimeError('Unknown Remote phase')
+        current = self.phases.index(self.value['phase'])
+        proposed = self.phases.index(phase)
+        if proposed > current + 1:
+            raise RuntimeError('Remote phase cannot skip required evidence')
+        if instance_id is not None:
+            if not re.fullmatch(r'[A-Za-z0-9_-]{43}', instance_id):
+                raise RuntimeError('Remote owner instance identity required')
+            if self.value.get('instanceId', instance_id) != instance_id:
+                raise RuntimeError('Remote owner instance changed')
+            self.value['instanceId'] = instance_id
+        # Rechecking an earlier predicate cannot rewind the recovery checkpoint.
+        if proposed >= current:
+            self.value['phase'] = phase
+        write_private(self.path, self.value)
 
 
 def binding(candidate):
@@ -261,12 +375,13 @@ def network(work):
     write_private(work / "server.json", {"pid": process.pid})
 
 
-def terminal(args, answers, timeout=180, password_free=False, observer=None):
+def terminal(args, answers, timeout=180, password_free=False, observer=None, prompt_retry=None, transcript=None):
     pid, fd = pty.fork()
     if pid == 0:
         os.execvpe(args[0], args, {"HOME": str(P.home()), "USER": P.home().name, "LOGNAME": P.home().name, "PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "XDG_RUNTIME_DIR": "/run/user/" + str(os.getuid()), "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/" + str(os.getuid()) + "/bus", "LANG": "C.UTF-8"})
     output = bytearray()
     matched = set()
+    retried = set()
     status = None
     deadline = time.monotonic() + timeout
     try:
@@ -290,6 +405,13 @@ def terminal(args, answers, timeout=180, password_free=False, observer=None):
                     if prompt not in matched and prompt in text:
                         os.write(fd, (answer + "\n").encode())
                         matched.add(prompt)
+            if prompt_retry is not None:
+                prompt = prompt_retry(output.decode(errors="replace"))
+                if prompt is not None:
+                    if prompt not in matched or prompt in retried or output.decode(errors="replace").count(prompt) != 2:
+                        raise RuntimeError("invalid repeated terminal prompt; no retry sent")
+                    os.write(fd, (answers[prompt] + "\n").encode())
+                    retried.add(prompt)
             done, child_status = os.waitpid(pid, os.WNOHANG)
             if done:
                 status = child_status
@@ -297,12 +419,19 @@ def terminal(args, answers, timeout=180, password_free=False, observer=None):
         else:
             raise TimeoutError("packaged terminal journey deadline: " + redacted(output.decode(errors="replace"))[-8192:])
     finally:
-        os.close(fd)
-        if status is None:
-            done, status = os.waitpid(pid, os.WNOHANG)
-            if not done:
-                os.kill(pid, signal.SIGKILL)
-                _, status = os.waitpid(pid, 0)
+        try:
+            os.close(fd)
+            if status is None:
+                done, status = os.waitpid(pid, os.WNOHANG)
+                if not done:
+                    os.kill(pid, signal.SIGKILL)
+                    _, status = os.waitpid(pid, 0)
+        finally:
+            if transcript is not None:
+                descriptor = os.open(transcript, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+                os.fchmod(descriptor, 0o600)
+                with os.fdopen(descriptor, "w") as stream:
+                    stream.write(redacted(output.decode(errors="replace")))
     text = output.decode(errors="replace")
     return os.waitstatus_to_exitcode(status), text
 
@@ -432,6 +561,7 @@ def main():
     parser.add_argument("--owner-action", choices=["install", "failed-bootstrap", "bootstrap", "open", "login", "apply", "check", "restart"])
     parser.add_argument("--version")
     parser.add_argument("--released-local-only", action="store_true")
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     vm_guard()
     if args.action == "owner":
@@ -443,9 +573,14 @@ def main():
         candidate, predecessor, legacy = package(args.candidate), package(args.predecessor), package(args.legacy)
         if candidate["packet"]["version"] != 2 or predecessor["packet"]["version"] != 2 or (not args.released_local_only and predecessor["packet"]["productVersion"] != "0.1.4") or (not args.released_local_only and legacy["packet"]["version"] != 1):
             raise RuntimeError("target, attested compatibility reader and original legacy bridge inputs required")
-        args.work.mkdir(mode=0o700, parents=True)
-        write_private(args.work / "fixture.json", {"candidate": str(args.candidate), "predecessor": str(args.predecessor), "legacy": str(args.legacy)})
-        write_private(args.work / "selection.json", {"release": "predecessor"})
+        identity = {"candidate": str(args.candidate), "predecessor": str(args.predecessor), "legacy": str(args.legacy)}
+        if args.resume:
+            if document(args.work / "fixture.json") != identity:
+                raise RuntimeError("retained delivery belongs to different package paths")
+        else:
+            args.work.mkdir(mode=0o700, parents=True)
+            write_private(args.work / "fixture.json", identity)
+            write_private(args.work / "selection.json", {"release": "predecessor"})
         network(args.work)
     elif args.action == "network":
         network(args.work)

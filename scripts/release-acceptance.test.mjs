@@ -7,6 +7,8 @@ import {
   installedAcceptanceChecks,
   validateInstalledAcceptance,
   verifyInstalledAcceptance,
+  recordRemoteAcceptance,
+  stagedAcceptanceContract,
 } from "./release-acceptance.mjs";
 const packet = {
   version: 2,
@@ -285,4 +287,324 @@ test("lost dispatch acknowledgement reconciles without a duplicate build", async
   visible = true;
   assert.equal((await stagedWorkflowRun(options)).databaseId, 123);
   assert.equal(dispatched, 1);
+});
+
+test("structured actual Local and independent Remote legs join without synthetic predecessor evidence", async () => {
+  const { composeInstalledAcceptance, stagedAcceptanceContract } =
+    await import("./release-acceptance.mjs");
+  const target = { ...packet, productVersion: "0.1.10" };
+  const bind = { ...acceptanceBinding(target, inventory) };
+  const base = {
+    ...bind,
+    result: "PASS",
+    fixtureOnly: true,
+    mining: false,
+    liveFeatures: false,
+    automaticUpdates: false,
+  };
+  const local = {
+    ...base,
+    localOnly: true,
+    remoteTested: false,
+    upgradeApplied: true,
+    uiOutcome: "applied",
+    cliOutcome: "applied",
+    automaticOutcome: "applied",
+    automaticPolicyRestored: "manual",
+    customerActivation: false,
+    releasedPredecessor: {
+      version: "0.1.6",
+      source: "738bd835b8c86c7cf7b3abfb2945240635f51fe7",
+      artifactSetSha256:
+        "aea00a0d9e1b7ed05a1346428cdf8cc277cbe40f93cfcd86d40fc9b45c559460",
+    },
+    checks: Object.fromEntries(
+      stagedAcceptanceContract.local.map((k) => [k, "PASS"]),
+    ),
+  };
+  const localSha = createHash("sha256")
+    .update(JSON.stringify(local) + "\n")
+    .digest("hex");
+  const remote = (kind) => ({
+    ...base,
+    scenario: kind,
+    localReceiptSha256: localSha,
+    transport: "tailscale-https",
+    normalTLS: true,
+    ownerAuthMode: "tailscale-device-v1",
+    sshControlSessionRequired: false,
+    passwordPrompt: false,
+    instanceId: (kind === "fresh" ? "F" : "U").repeat(43),
+    nodeIdentitySha256: (kind === "fresh" ? "e" : "f").repeat(64),
+    checks: Object.fromEntries(
+      [
+        ...stagedAcceptanceContract.remoteCommon,
+        ...stagedAcceptanceContract[
+          kind === "fresh" ? "remoteFresh" : "remoteUpgrade"
+        ],
+      ].map((k) => [k, "PASS"]),
+    ),
+  });
+  const fresh = remote("fresh"),
+    upgrade = {
+      ...remote("upgrade"),
+      predecessor: {
+        version: "0.1.9",
+        source: "d".repeat(40),
+        artifactSetSha256: "e".repeat(64),
+        packetVersion: 2,
+      },
+      upgradeApplied: true,
+      uiOutcome: "applied",
+      cliOutcome: "applied",
+      automaticOutcome: "applied",
+      automaticPolicyRestored: "manual",
+      customerActivation: false,
+    };
+  const complete = composeInstalledAcceptance(
+    local,
+    fresh,
+    upgrade,
+    target,
+    inventory,
+    localSha,
+  );
+  assert.equal(complete.schemaVersion, 2);
+  assert.doesNotThrow(() =>
+    validateInstalledAcceptance(complete, target, inventory),
+  );
+  for (const mutate of [
+    (r) => {
+      r.remoteFresh.checks.publicIPv6Closure = "SUPPORTING";
+    },
+    (r) => {
+      r.remoteUpgrade.predecessor.version = "0.1.10";
+    },
+    (r) => {
+      r.remoteUpgrade.predecessor.source = target.source;
+    },
+    (r) => {
+      r.remoteUpgrade.sshControlSessionRequired = true;
+    },
+    (r) => {
+      r.remoteFresh.normalTLS = false;
+    },
+    (r) => {
+      r.local.checks.uiUpdate = "FAIL";
+    },
+    (r) => {
+      r.localReceiptSha256 = "0".repeat(64);
+    },
+    (r) => {
+      r.remoteUpgrade.artifactSetSha256 = "0".repeat(64);
+    },
+    (r) => {
+      r.remoteUpgrade.upgradeApplied = false;
+    },
+  ]) {
+    const bad = structuredClone(complete);
+    mutate(bad);
+    assert.throws(() => validateInstalledAcceptance(bad, target, inventory));
+  }
+  assert.throws(() =>
+    composeInstalledAcceptance(local, fresh, null, target, inventory, localSha),
+  );
+});
+
+test("owner-reviewed Remote proof joins exact Local CI and rejects substitution, edits and wrong actors", async () => {
+  const target = { ...packet, productVersion: "0.1.10" };
+  const binding = acceptanceBinding(target, inventory);
+  const local = {
+    ...receipt(),
+    ...binding,
+    localOnly: true,
+    remoteTested: false,
+    checks: Object.fromEntries(
+      stagedAcceptanceContract.local.map((k) => [k, "PASS"]),
+    ),
+  };
+  const localText = JSON.stringify(local) + "\n";
+  const localSha = createHash("sha256").update(localText).digest("hex");
+  // Preserve the exact UTF-8 receipt bytes, including their newline.
+  const raw = execFileSync(
+    "python3",
+    [
+      "-c",
+      "import io,sys,zipfile; b=io.BytesIO(); z=zipfile.ZipFile(b,'w'); z.writestr('installed-acceptance.json',sys.stdin.buffer.read()); z.close(); sys.stdout.buffer.write(b.getvalue())",
+    ],
+    { input: localText, timeout: 5000 },
+  );
+  const artifactDigest =
+    "sha256:" + createHash("sha256").update(raw).digest("hex");
+  const remote = (scenario) => ({
+    ...binding,
+    result: "PASS",
+    fixtureOnly: true,
+    mining: false,
+    liveFeatures: false,
+    automaticUpdates: false,
+    scenario,
+    localReceiptSha256: localSha,
+    transport: "tailscale-https",
+    normalTLS: true,
+    ownerAuthMode: "tailscale-device-v1",
+    sshControlSessionRequired: false,
+    passwordPrompt: false,
+    instanceId: (scenario === "fresh" ? "F" : "U").repeat(43),
+    nodeIdentitySha256: "f".repeat(64),
+    checks: Object.fromEntries(
+      [
+        ...stagedAcceptanceContract.remoteCommon,
+        ...stagedAcceptanceContract[
+          scenario === "fresh" ? "remoteFresh" : "remoteUpgrade"
+        ],
+      ].map((k) => [k, "PASS"]),
+    ),
+  });
+  const fresh = remote("fresh"),
+    upgrade = {
+      ...remote("upgrade"),
+      predecessor: {
+        version: "0.1.9",
+        source: "d".repeat(40),
+        artifactSetSha256: "e".repeat(64),
+        packetVersion: 2,
+      },
+      upgradeApplied: true,
+      uiOutcome: "applied",
+      cliOutcome: "applied",
+      automaticOutcome: "applied",
+      automaticPolicyRestored: "manual",
+      customerActivation: false,
+    };
+  let actor = { login: "fcode-ai", id: 155309118 },
+    comments = [],
+    posted = 0;
+  const api = async (method, url, data) => {
+    if (url === "/user") return actor;
+    if (url.endsWith("/jobs"))
+      return {
+        jobs: [
+          {
+            name: "installed-acceptance",
+            status: "completed",
+            conclusion: "success",
+          },
+        ],
+      };
+    if (url.endsWith("/artifacts"))
+      return {
+        artifacts: [
+          {
+            id: 9,
+            name: "ubuntu-amd64-installed-acceptance-2",
+            expired: false,
+            digest: artifactDigest,
+            workflow_run: { id: 123, head_sha: target.source },
+          },
+        ],
+      };
+    if (url.includes("/attempts/"))
+      return {
+        id: 123,
+        run_attempt: 2,
+        head_sha: target.source,
+        head_branch: "main",
+        event: "workflow_dispatch",
+        path: ".github/workflows/release.yml",
+        status: "completed",
+        conclusion: "success",
+        repository: { id: 1426211857, owner: { id: 279582504 } },
+      };
+    if (url.includes("/comments?")) return comments;
+    if (method === "POST") {
+      posted++;
+      const c = {
+        id: 99,
+        user: actor,
+        body: data.body,
+        commit_id: target.source,
+        created_at: "2026-11-04T12:00:00Z",
+        updated_at: "2026-11-04T12:00:00Z",
+        path: null,
+      };
+      comments = [c];
+      return c;
+    }
+    if (url.endsWith("/comments/99")) return comments[0];
+    assert.fail(`unexpected API ${method} ${url}`);
+  };
+  const options = { downloadArtifact: () => raw };
+  await assert.rejects(
+    verifyInstalledAcceptance(target, inventory, api, options),
+    /One reviewed/,
+  );
+  actor = { login: "someone-else", id: 1 };
+  await assert.rejects(
+    recordRemoteAcceptance(target, inventory, api, fresh, upgrade, options),
+    /approved GitHub owner/,
+  );
+  assert.equal(posted, 0);
+  actor = { login: "fcode-ai", id: 155309118 };
+  fresh.setupUrl = "https://private.example/#setup=secret-never-publish";
+  fresh.uiOutcome = { privateKey: "secret-never-publish" };
+  fresh.diagnostics = { privateKey: "secret-never-publish" };
+  upgrade.predecessor.privatePath = "/private/owner-recovery";
+  const recorded = await recordRemoteAcceptance(
+    target,
+    inventory,
+    api,
+    fresh,
+    upgrade,
+    options,
+  );
+  assert.equal(recorded.remoteReviewCommentId, "99");
+  assert.ok(!comments[0].body.includes("secret-never-publish"));
+  assert.ok(!comments[0].body.includes("/private/owner-recovery"));
+  assert.ok(!comments[0].body.includes(fresh.instanceId));
+  assert.ok(comments[0].body.includes("instanceIdentitySha256"));
+  await recordRemoteAcceptance(target, inventory, api, fresh, upgrade, options);
+  assert.equal(posted, 1, "reconciliation must not post a duplicate review");
+  const verified = await verifyInstalledAcceptance(
+    target,
+    inventory,
+    api,
+    options,
+  );
+  assert.equal(verified.remoteReviewSha256, recorded.remoteReviewSha256);
+  const original = structuredClone(comments[0]);
+  for (const mutate of [
+    (c) => {
+      c.user.id = 1;
+    },
+    (c) => {
+      c.commit_id = "e".repeat(40);
+    },
+    (c) => {
+      c.updated_at = "2026-11-04T13:00:00Z";
+    },
+    (c) => {
+      c.body = c.body.replace(localSha, "0".repeat(64));
+    },
+    (c) => {
+      c.body = c.body.replace('"normalTLS":true', '"normalTLS":false');
+    },
+    (c) => {
+      c.body = c.body.replace(
+        '"localCIArtifactDigest":"sha256:',
+        '"localCIArtifactDigest":"sha256:0',
+      );
+    },
+  ]) {
+    comments = [structuredClone(original)];
+    mutate(comments[0]);
+    await assert.rejects(
+      verifyInstalledAcceptance(target, inventory, api, options),
+    );
+  }
+  comments = [original, structuredClone(original)];
+  await assert.rejects(
+    verifyInstalledAcceptance(target, inventory, api, options),
+    /One reviewed/,
+  );
 });

@@ -174,19 +174,45 @@ export function browserAddress(config) {
     ].includes(config.action),
   );
   const address = new URL(config.url);
-  assert.equal(address.protocol, "http:");
-  assert.equal(address.hostname, "127.0.0.1");
   assert.equal(address.username + address.password, "");
-  assert.ok(["17481", "17482", "17483", "17484"].includes(address.port));
-  if (address.port === "17484")
-    assert.ok(
-      ["claim", "check", "preserve", "reconnect"].includes(config.action),
+  if (config.transport === "tailscale-https") {
+    const origin = new URL(config.expectedOrigin);
+    assert.equal(origin.protocol, "https:");
+    assert.match(origin.hostname, /^[a-z0-9-]+\.[a-z0-9-]+\.ts\.net$/);
+    assert.equal(origin.href, origin.origin + "/");
+    assert.equal(origin.username + origin.password + origin.port, "");
+    assert.equal(address.origin, origin.origin);
+    assert.equal(address.pathname, "/");
+    assert.match(config.instanceId, /^[A-Za-z0-9_-]{43}$/);
+    assert.deepEqual(
+      [...address.searchParams],
+      [["instance", config.instanceId]],
     );
-  if (address.port === "17483")
-    assert.ok(
-      ["claim", "preserve"].includes(config.action),
-      "legacy browser only claims and preserves the public bridge",
+    assert.equal(
+      config.sessionFile,
+      undefined,
+      "Remote cannot import a CLI/owner session",
     );
+    if (config.action === "claim")
+      assert.match(address.hash, /^#setup=[A-Za-z0-9_-]{43}$/);
+    else assert.equal(address.hash, "");
+  } else {
+    assert.ok(
+      config.transport === undefined || config.transport === "loopback",
+    );
+    assert.equal(address.protocol, "http:");
+    assert.equal(address.hostname, "127.0.0.1");
+    assert.ok(["17481", "17482", "17483", "17484"].includes(address.port));
+    if (address.port === "17484")
+      assert.ok(
+        ["claim", "check", "preserve", "reconnect"].includes(config.action),
+      );
+    if (address.port === "17483")
+      assert.ok(
+        ["claim", "preserve"].includes(config.action),
+        "legacy browser only claims and preserves the public bridge",
+      );
+  }
   assert.match(config.version, /^\d+\.\d+\.\d+$/);
   const applying = ["ui-update", "automatic-update"].includes(config.action);
   if (applying) {
@@ -196,10 +222,73 @@ export function browserAddress(config) {
   return address;
 }
 
+export function privatePreflightAddress(config) {
+  assert.equal(config.fixtureOnly, true);
+  assert.equal(config.action, "private-preflight");
+  const origin = new URL(config.expectedOrigin),
+    address = new URL(config.url);
+  assert.match(origin.hostname, /^[a-z0-9-]+\.[a-z0-9-]+\.ts\.net$/);
+  assert.equal(origin.protocol, "https:");
+  assert.equal(origin.username + origin.password + origin.port, "");
+  assert.equal(origin.href, origin.origin + "/");
+  assert.equal(address.origin, origin.origin);
+  assert.equal(address.username + address.password, "");
+  assert.equal(address.pathname, "/");
+  assert.equal(address.search, "");
+  assert.match(address.hash, /^#[A-Za-z0-9_-]{43}$/);
+  return address;
+}
+
+export async function runPrivatePreflight(config, { chromium, expect }) {
+  assert.equal(process.env.FASED_DISPOSABLE_VM_ACCEPTANCE, "1");
+  assert.ok(process.getuid() > 0);
+  const address = privatePreflightAddress(config);
+  const browser = await chromium.launch({
+    headless: true,
+    ...(process.env.FASED_TEST_BROWSER
+      ? { executablePath: process.env.FASED_TEST_BROWSER }
+      : {}),
+  });
+  try {
+    // Fresh context: no owner cookie, session injection or saved credentials.
+    const context = await browser.newContext({ locale: "en-US" });
+    const external = [];
+    await context.route("**/*", async (route) => {
+      if (new URL(route.request().url()).origin !== address.origin) {
+        external.push(true);
+        return route.abort();
+      }
+      return route.continue();
+    });
+    const page = await context.newPage();
+    const approved = page.waitForResponse(
+      (response) =>
+        response.url() === address.origin + "/approve" &&
+        response.request().method() === "POST",
+    );
+    await page.goto(address.href);
+    assert.equal((await approved).status(), 204);
+    await expect(page.locator("#status")).toHaveText(
+      "Connected. Continue in your installation terminal.",
+    );
+    assert.equal(page.url(), address.origin + "/");
+    assert.deepEqual(external, []);
+    await context.close();
+    return {
+      result: "PASS",
+      action: config.action,
+      privateBrowserApproved: true,
+    };
+  } finally {
+    await browser.close();
+  }
+}
+
 export async function runStagedBrowser(config, { chromium, expect }) {
   assert.equal(process.env.FASED_DISPOSABLE_VM_ACCEPTANCE, "1");
   assert.ok(process.getuid() > 0);
   const address = browserAddress(config);
+  const directRemote = config.transport === "tailscale-https";
   const applying = ["ui-update", "automatic-update"].includes(config.action);
   if (config.action === "claim")
     assert.ok(
@@ -220,7 +309,7 @@ export async function runStagedBrowser(config, { chromium, expect }) {
   });
   const sessionFile =
     config.sessionFile ?? config.storageFile + ".session.json";
-  if (existsSync(sessionFile)) {
+  if (!directRemote && existsSync(sessionFile)) {
     const token = JSON.parse(await readFile(sessionFile, "utf8")).token;
     assert.equal(typeof token, "string");
     await context.addInitScript(
@@ -274,7 +363,7 @@ export async function runStagedBrowser(config, { chromium, expect }) {
   try {
     await page.goto(config.url);
     if (config.action === "claim") {
-      if (new URL(config.url).hash.startsWith("#local=")) {
+      if (directRemote || new URL(config.url).hash.startsWith("#local=")) {
         await waitAuthenticated();
         await expect(page.locator('input[type="password"]')).toHaveCount(0);
       } else {
@@ -322,6 +411,15 @@ export async function runStagedBrowser(config, { chromium, expect }) {
         await page.goto(reopened.href);
         await waitAuthenticated();
         await expect(page.locator('input[type="password"]')).toHaveCount(0);
+      } else if (directRemote) {
+        await expect
+          .poll(async () => (await request("auth/state")).authenticated)
+          .toBe(false);
+        await expect(page.locator('input[type="password"]')).toHaveCount(0);
+        await page
+          .getByRole("button", { name: "Connect", exact: true })
+          .click();
+        await waitAuthenticated();
       } else {
         if (
           await page
@@ -545,14 +643,16 @@ export async function runStagedBrowser(config, { chromium, expect }) {
     assert.deepEqual(external, []);
     await context.storageState({ path: config.storageFile });
     await chmod(config.storageFile, 0o600);
-    const token = await page.evaluate(
-      (key) => sessionStorage.getItem(key) ?? "",
-      sessionKey,
-    );
-    await writeFile(sessionFile, JSON.stringify({ token }) + "\n", {
-      mode: 0o600,
-    });
-    await chmod(sessionFile, 0o600);
+    if (!directRemote) {
+      const token = await page.evaluate(
+        (key) => sessionStorage.getItem(key) ?? "",
+        sessionKey,
+      );
+      await writeFile(sessionFile, JSON.stringify({ token }) + "\n", {
+        mode: 0o600,
+      });
+      await chmod(sessionFile, 0o600);
+    }
     return {
       result: "PASS",
       action: config.action,
@@ -561,7 +661,10 @@ export async function runStagedBrowser(config, { chromium, expect }) {
       workspaceSha256,
       ownerAuth: true,
       ...(config.action === "claim"
-        ? { passwordFreeSetup: new URL(config.url).hash.startsWith("#local=") }
+        ? {
+            passwordFreeSetup:
+              directRemote || new URL(config.url).hash.startsWith("#local="),
+          }
         : {}),
       ...(config.action === "failed-check"
         ? { acquisitionFailurePreserved: true }
@@ -596,9 +699,10 @@ if (
   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
 ) {
   const config = JSON.parse(await readFile(process.argv[2], "utf8"));
-  const result = await runStagedBrowser(
-    config,
-    await import("@playwright/test"),
-  );
+  const result = await (
+    config.action === "private-preflight"
+      ? runPrivatePreflight
+      : runStagedBrowser
+  )(config, await import("@playwright/test"));
   console.log(JSON.stringify(result));
 }

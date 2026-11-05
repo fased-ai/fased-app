@@ -58,7 +58,11 @@ The updater preserves data and authentication, restarts Fased and reports the re
 
 ## Recovery and availability
 
-Keep the verified provider recovery route. If private-access verification fails during setup, the staged change rolls back and setup remains incomplete. A later Tailscale outage never automatically reopens public ports or resets ownership.
+Keep a provider console or rescue route that works without Tailscale. Private SSH through Tailscale is useful for administration, but cannot replace that independent route. If your host offers no console/rescue, this Remote setup cannot safely finish its public-access lockdown. Use a host with recovery; do not remove your last working access path.
+
+A temporary Tailscale coordination outage may leave established connections working, but new connections and changes can fail. Do not rely on that for a permanent outage or account loss. Setup failure rolls back the staged network change; a later outage never automatically reopens public ports, resets ownership or unlocks wallets. [Tailscale availability](https://tailscale.com/docs/concepts/control-data-planes).
+
+Wallet recovery must not depend on the VPS or Tailscale account. Before using real funds, keep a protected recovery copy outside the VPS and verify that it restores on another accepted installation. Wallet recovery remains under acceptance; it is not enabled by this guide.
 
 Existing records, credentials and recovery rights must survive upgrades and removal. Do not overwrite an installation to repair its updater. Wallet recovery is separate from app access and software updates.
 
