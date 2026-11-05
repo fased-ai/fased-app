@@ -91,6 +91,7 @@ jobs:
           node scripts/build-inspection-predecessor.mjs
       - name: Build archived application reader fixtures
         run: |
+          node --test --test-isolation=none scripts/fixture-core-storage.test.mjs
           node scripts/build-inspection-predecessor.mjs --application-reader
           node scripts/build-inspection-predecessor.mjs --application-reader35
           node scripts/build-inspection-predecessor.mjs --application-reader36

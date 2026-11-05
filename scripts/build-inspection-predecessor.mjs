@@ -8,6 +8,7 @@ import { sha } from "./handoff-transport-evidence.mjs";
 import {
   currentStorageFixture,
   projectPasswordOnlyContract,
+  runReaderStage,
 } from "./fixture-core-storage.mjs";
 assert.ok(
   process.env.GITHUB_ACTIONS === "true" ||
@@ -39,6 +40,14 @@ if (
   };
   // Archived core sources with an inert entrypoint and no public updater.
   const [sourceSchema, source] = readers[args[0]];
+  const run = (stage, tool, argv, options) =>
+    runReaderStage(
+      { schema: sourceSchema, ref: source },
+      stage,
+      tool,
+      argv,
+      options,
+    );
   const suffix = sourceSchema === 33 ? "" : String(sourceSchema);
   const output = path.resolve(
     process.env.FASED_PREDECESSOR_OUTPUT ?? ".evidence/b01-connected-install",
@@ -46,18 +55,24 @@ if (
   const scratch = path.join(output, "reader-predecessor-source" + suffix);
   await mkdir(output, { recursive: true, mode: 0o700 });
   await mkdir(scratch, { mode: 0o700 });
+  let report;
   try {
     try {
-      execFileSync("git", ["cat-file", "-e", source + "^{commit}"]);
-    } catch {
-      execFileSync("git", ["fetch", "--depth=1", "origin", source], {
-        stdio: "inherit",
-      });
+      run("object", "git", ["cat-file", "-e", source + "^{commit}"]);
+    } catch (error) {
+      // Only an absent object may use the existing acquisition path. A stalled
+      // or interrupted tool fails this reader; it is never retried as a fetch.
+      if (error.cause?.status !== 128 || error.cause?.signal) throw error;
+      run("fetch", "git", ["fetch", "--depth=1", "origin", source]);
     }
-    const archive = execFileSync("git", ["archive", "--format=tar", source], {
+    const archive = run("archive", "git", ["archive", "--format=tar", source], {
       maxBuffer: 32 << 20,
+      stdio: ["ignore", "pipe", "inherit"],
     });
-    execFileSync("tar", ["-xf", "-", "-C", scratch], { input: archive });
+    run("extract", "tar", ["-xf", "-", "-C", scratch], {
+      input: archive,
+      stdio: ["pipe", "inherit", "inherit"],
+    });
     assert.match(
       await readFile(path.join(scratch, "internal/core/update.go"), "utf8"),
       new RegExp(`const StateSchema = ${sourceSchema}\\b`),
@@ -75,7 +90,8 @@ if (
       output,
       `reader-predecessor-schema${sourceSchema}`,
     );
-    execFileSync(
+    run(
+      "build",
       "go",
       [
         "build",
@@ -85,29 +101,35 @@ if (
         binary,
         "./cmd/fased-reader-fixture",
       ],
-      { cwd: scratch, stdio: "inherit" },
+      { cwd: scratch, env: { ...process.env, GOTOOLCHAIN: "local" } },
     );
-    await writeFile(
-      path.join(output, `reader-predecessor${suffix}-build.json`),
-      JSON.stringify(
-        {
-          result: "PASS",
-          sourceCommit: source,
-          sourceSchema,
-          fixtureOnly: true,
-          exactHistoricalBinary: false,
-          classification: `Actual archived schema${sourceSchema} core; minimal standalone fixture entry; no installed-service or release acceptance`,
-          archiveSha256: sha(archive),
-          entrySha256: sha(entry),
-          binarySha256: sha(await readFile(binary)),
-        },
-        null,
-        2,
-      ) + "\n",
-    );
+    report = {
+      result: "PASS",
+      sourceCommit: source,
+      sourceSchema,
+      fixtureOnly: true,
+      exactHistoricalBinary: false,
+      classification: `Actual archived schema${sourceSchema} core; minimal standalone fixture entry; no installed-service or release acceptance`,
+      archiveSha256: sha(archive),
+      entrySha256: sha(entry),
+      binarySha256: sha(await readFile(binary)),
+    };
   } finally {
-    await rm(scratch, { recursive: true, force: true });
+    // This exact private source directory was exclusively created above; it
+    // contains only the immutable archive and injected fixture entrypoint.
+    // Async recursive fs cleanup stalled after successful CI compilation.
+    run("cleanup", "/usr/bin/rm", [
+      "--recursive",
+      "--force",
+      "--one-file-system",
+      "--",
+      scratch,
+    ]);
   }
+  await writeFile(
+    path.join(output, `reader-predecessor${suffix}-build.json`),
+    JSON.stringify(report, null, 2) + "\n",
+  );
   process.exit(0);
 }
 const ref = "6c53e34eca22486dcef856cb701f3cd72e30eaa4",

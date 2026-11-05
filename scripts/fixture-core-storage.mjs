@@ -5,6 +5,33 @@ import { execFileSync } from "node:child_process";
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
+
+// Immutable-reader acquisition/compiler work must not consume a whole VM job
+// silently. No retry or success projection; preserve the original tool result.
+export function runReaderStage(
+  reader,
+  stage,
+  tool,
+  args,
+  options = {},
+  execute = execFileSync,
+) {
+  const label = `reader schema${reader.schema} ${reader.ref} ${stage}`;
+  console.log(`${label}: start`);
+  try {
+    const value = execute(tool, args, {
+      stdio: ["ignore", "inherit", "inherit"],
+      ...options,
+      timeout: 120000,
+      killSignal: "SIGKILL",
+    });
+    console.log(`${label}: done`);
+    return value;
+  } catch (cause) {
+    throw new Error(`${label}: failed`, { cause });
+  }
+}
+
 export async function currentStorageFixture(archivedRoot) {
   assert.ok(process.getuid() > 0);
   const storage = {};
