@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,10 +51,16 @@ func TestManagedRemoteUbuntuVM(t *testing.T) {
 	sum := sha256.Sum256(data)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	sys := &custodyinstall.System{In: strings.NewReader(""), Out: io.Discard}
+	var setupDiagnostics bytes.Buffer
+	sys := &custodyinstall.System{In: strings.NewReader(""), Out: &setupDiagnostics}
 	m, err := vpsinstall.Install(ctx, vpsinstall.Options{Core: image, CoreSHA256: hex.EncodeToString(sum[:]), Listen: "127.0.0.1:17445", PrepareHost: true, Start: true}, sys)
 	if err != nil {
-		t.Fatal(err)
+		// Only fixed OS setup diagnostics: no stdin, encrypted output or env.
+		diagnostic := setupDiagnostics.Bytes()
+		if len(diagnostic) > 8192 {
+			diagnostic = diagnostic[len(diagnostic)-8192:]
+		}
+		t.Fatalf("Remote OS setup failed: %v\n%s", err, diagnostic)
 	}
 	cleanup := true
 	defer func() {

@@ -369,7 +369,7 @@ os.close(fd);sys.stdout.buffer.write(out);sys.exit(os.waitstatus_to_exitcode(sta
   assert.match(result.stdout.toString(), /SELECTED:remote/);
 });
 
-test("Remote bootstrap scopes and expires only the fixed conditional Serve OS write", () => {
+test("Remote bootstrap scopes and expires fixed Serve and credential setup", () => {
   const block = template.match(
     /# Only Remote setup may authorize[\s\S]*?\nfi\n/,
   )[0];
@@ -382,6 +382,7 @@ test("Remote bootstrap scopes and expires only the fixed conditional Serve OS wr
           ...process.env,
           stage: dir,
           profile,
+          action: "install",
           operator: "ubuntu",
           expires: "20990101000000Z",
         },
@@ -393,7 +394,14 @@ test("Remote bootstrap scopes and expires only the fixed conditional Serve OS wr
       }
       outputs.remote = readFileSync(join(dir, "authorization"), "utf8");
       assert.match(outputs.remote, /NOTAFTER=20990101000000Z/);
-      assert.equal(outputs.remote.trim().split("\n").length, 1);
+      assert.equal(outputs.remote.trim().split("\n").length, 2);
+      assert.ok(
+        outputs.remote
+          .split("\n")
+          .includes(
+            "ubuntu ALL=(root) NOTAFTER=20990101000000Z NOPASSWD: /usr/bin/systemd-creds encrypt --with-key=host --name=fased-provider-task-key - -",
+          ),
+      );
       const parsed = spawnSync("/usr/bin/visudo", ["-cf", "-"], {
         input: outputs.remote,
       });
@@ -423,4 +431,87 @@ for bad in [command+' --output /etc/sudoers',command.replace('/var/run/tailscale
       rmSync(dir, { recursive: true, force: true });
     }
   }
+});
+
+test("credential setup is exact, temporary and absent from Local or routine Update", () => {
+  const block = template.match(
+    /# Only Remote setup may authorize[\s\S]*?\nfi\n/,
+  )[0];
+  const command = block.match(/provider_credential_command='([^']+)'/)[1];
+  assert.equal(
+    command,
+    "/usr/bin/systemd-creds encrypt --with-key=host --name=fased-provider-task-key - -",
+  );
+  assert.doesNotMatch(command, /[?*\[\]]|decrypt|setup|list/);
+  assert.doesNotMatch(
+    template.match(/for command in .*; do/)[0],
+    /systemd-creds/,
+  );
+  for (const profile of ["local", "remote"]) {
+    for (const action of [
+      "install",
+      "setup",
+      "update",
+      "recover",
+      "status",
+      "open",
+    ]) {
+      const dir = mkdtempSync(join(tmpdir(), "fased-credential-rule-"));
+      try {
+        const result = spawnSync("bash", ["-c", block], {
+          env: {
+            ...process.env,
+            stage: dir,
+            profile,
+            action,
+            operator: "ubuntu",
+            expires: "20990101000000Z",
+          },
+        });
+        assert.equal(result.status, 0, result.stderr.toString());
+        const policy =
+          profile === "remote"
+            ? readFileSync(join(dir, "authorization"), "utf8")
+            : "";
+        const rules = policy
+          .split("\n")
+          .filter((line) => line.includes("systemd-creds"));
+        const allowed = profile === "remote" && action === "install";
+        assert.deepEqual(
+          rules,
+          allowed
+            ? [
+                `ubuntu ALL=(root) NOTAFTER=20990101000000Z NOPASSWD: ${command}`,
+              ]
+            : [],
+          `${profile}/${action}`,
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  }
+  const vm = readFileSync(
+    new URL("./check-inspection-vm.py", import.meta.url),
+    "utf8",
+  );
+  assert.equal(vm.match(/provider_credential_setup='([^']+)'/)[1], command);
+  assert.doesNotMatch(
+    vm.match(/Cmnd_Alias FASED_FIXTURE_OS = .*/)[0],
+    /systemd-creds/,
+  );
+  assert.doesNotMatch(vm.match(/utilities='([^']+)'/)[1], /systemd-creds/);
+  assert.match(vm, /provider_credential_rule='' if a\.released_local_only/);
+  assert.match(
+    vm,
+    /name in \('fased-remote','fased-legacy'\) and not a\.released_local_only/,
+  );
+  const maintenance = readFileSync(
+    new URL(
+      "../internal/vpsinstall/application_maintenance.go",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.doesNotMatch(maintenance, /systemd-creds/);
 });
