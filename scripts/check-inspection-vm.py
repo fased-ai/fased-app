@@ -30,7 +30,7 @@ assert not a.maintenance_only or not (a.resume or a.full or a.inspection_only or
 assert not a.installed_remote_update_only or not (a.resume or a.full or a.inspection_only or a.managed_remote_only or a.network_only or a.owner_browser_only or a.maintenance_only),'installed Remote update requires one fresh disposable VM'
 single_case=a.staged_package_only or a.managed_remote_only or a.network_only or a.owner_browser_only or a.maintenance_only or a.installed_remote_update_only
 if a.staged_package_only:
- assert not any([a.full,a.resume,a.inspection_only,a.managed_remote_only,a.network_only,a.owner_browser_only,a.maintenance_only,a.installed_remote_update_only]),'one staged package acceptance mode required'
+ assert not any([a.full,(a.resume and not a.fresh_remote_only),a.inspection_only,a.managed_remote_only,a.network_only,a.owner_browser_only,a.maintenance_only,a.installed_remote_update_only]),'one staged package acceptance mode required'
  assert a.candidate and a.predecessor and a.legacy_predecessor,'exact retained package directories required'
  root=repo/('.evidence/b01-staged-installed/fresh-remote' if a.fresh_remote_only else '.evidence/b01-staged-installed/local' if a.released_local_only else '.evidence/b01-staged-installed/vm'); root.mkdir(parents=True,exist_ok=True)
  assert os.path.exists('/dev/kvm') and os.access('/dev/kvm',os.R_OK|os.W_OK),'KVM staged acceptance prerequisite unavailable'
@@ -136,7 +136,7 @@ if not a.resume:
  run(['qemu-img','resize',str(work/'disk.qcow2'),'12G'])
 with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
 kvm=os.path.exists('/dev/kvm') and os.access('/dev/kvm',os.R_OK|os.W_OK)
-serial=(root/'vm-serial.log').open('wb');stderr=(root/'qemu.stderr').open('wb')
+serial=(root/'vm-serial.log').open('ab' if a.fresh_remote_only and a.resume else 'wb');stderr=(root/'qemu.stderr').open('ab' if a.fresh_remote_only and a.resume else 'wb')
 cmd=['qemu-system-x86_64','-machine','q35,accel='+('kvm' if kvm else 'tcg'),'-cpu','host' if kvm else 'max','-smp','2','-m','2048','-nographic','-monitor','none','-qmp',f'unix:{work}/qmp.sock,server=on,wait=off','-drive',f'file={work}/disk.qcow2,if=virtio,format=qcow2','-drive',f'file={work}/seed.iso,if=virtio,format=raw,readonly=on','-netdev',f'user,id=n,hostfwd=tcp:127.0.0.1:{port}-:22','-device','virtio-net-pci,netdev=n','-device','virtio-rng-pci','-smbios','type=1,serial=ds=nocloud']
 if a.installed_remote_update_only or a.staged_package_only:
  # These modes reboot through the guest, never QMP. Do not leave an unused
@@ -161,7 +161,7 @@ def disk_snapshot(name,restore=False):
   listing=run(['qemu-img','snapshot','-l',str(work/'disk.qcow2')]).stdout.decode()
   if name in listing:run(['qemu-img','snapshot','-d',name,str(work/'disk.qcow2')])
   run(['qemu-img','snapshot','-c',name,str(work/'disk.qcow2')])
-if a.resume and not a.inspection_only:disk_snapshot('baseline',True)
+if a.resume and not (a.inspection_only or a.fresh_remote_only):disk_snapshot('baseline',True)
 start_vm()
 def interrupted(signum, frame): raise KeyboardInterrupt("fixture runner interrupted")
 signal.signal(signal.SIGTERM, interrupted)
@@ -338,18 +338,18 @@ def staged_package_acceptance():
   return {'before':previous,'after':current}
  payload=work/'staged-payload.tar'
  with tarfile.open(payload,'w') as arc:
-  for name in ['staged-package-guest.py']:arc.add(repo/'scripts'/name,'scripts/'+name)
+  for name in ['staged-package-guest.py','staged-acceptance-contract.json']:arc.add(repo/'scripts'/name,'scripts/'+name)
   for label,value in packages.items():
    directory=P(value['directory'])
    for asset in fixture.ASSETS:arc.add(directory/asset,'packages/'+label+'/'+asset)
    seed=directory/'first-install-seed.json'
    if seed.exists():arc.add(seed,'packages/'+label+'/first-install-seed.json')
  result['inputs']={name:{'source':v['packet']['source'],'version':v['packet']['productVersion'],'artifactSetSha256':fixture.binding(v)['artifactSetSha256']} for name,v in packages.items()}
- with payload.open('rb') as stream:run(sshbase+['umask 077; mkdir -- '+guest+'; tar -xf - -C '+guest],stdin=stream,timeout=120)
+ with payload.open('rb') as stream:run(sshbase+['umask 077; mkdir '+('-p -- ' if a.fresh_remote_only and a.resume else '-- ')+guest+'; tar -xf - -C '+guest],stdin=stream,timeout=120)
  # Private disposable source is readable by the three fixture owners. They
  # execute as themselves; only the verified shell entry's OS bootstrap is root.
  ssh('chmod 755 '+guest+' '+guest+'/scripts '+guest+'/packages; chmod -R a+rX '+guest+'/packages '+guest+'/scripts',30)
- guest_call(['setup','--work',remote_work,'--candidate',guest+'/packages/candidate','--predecessor',guest+'/packages/predecessor','--legacy',guest+'/packages/legacy',*(['--released-local-only'] if a.released_local_only or a.fresh_remote_only else [])])
+ guest_call(['setup',*(['--resume'] if a.fresh_remote_only and a.resume else []),'--work',remote_work,'--candidate',guest+'/packages/candidate','--predecessor',guest+'/packages/predecessor','--legacy',guest+'/packages/legacy',*(['--released-local-only'] if a.released_local_only or a.fresh_remote_only else [])])
  for label in ['candidate','predecessor']:
   ssh('chmod 700 '+guest+'/packages/'+label+'/fased-install-linux-amd64; '+guest+'/packages/'+label+'/fased-install-linux-amd64 --verify-candidate '+guest+'/packages/'+label,90)
  if a.fresh_remote_only:
@@ -493,8 +493,27 @@ def fresh_remote_acceptance(fixture,candidate,guest,remote_work,local_receipt_sh
  receipt={**fixture.binding(candidate),'result':'FAIL','fixtureOnly':True,'freshRemote':True,
           'mining':False,'liveFeatures':False,'automaticUpdates':False,
           'localAcceptanceSha256':local_receipt_sha,'checks':{}}
- assert ssh('test ! -e /var/lib/fased-app-vps-1000 && test ! -e /usr/bin/tailscale && echo clean',15).strip()=='clean','fresh setup requires a clean disposable baseline'
+ journal=fixture.RemoteJourney(root/'remote-journey.json',fixture.binding(candidate),local_receipt_sha)
+ assert journal.value['phase']=='new' or a.resume,'resume the retained Remote journey explicitly'
+ if not a.resume:
+  assert ssh('test ! -e /var/lib/fased-app-vps-1000 && test ! -e /usr/bin/tailscale && echo clean',15).strip()=='clean','fresh setup requires a clean disposable baseline'
+ host_tail=json.loads(subprocess.run(['tailscale','status','--json'],check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=15).stdout)
+ suffix=host_tail.get('MagicDNSSuffix','')
+ fixture.private_tailnet_origin(host_tail,suffix)
  observed={}
+ if journal.value['phase']!='new':
+  observed.update(origin=journal.value['origin'],enrolled=True)
+  if journal.phases.index(journal.value['phase'])>=journal.phases.index('private-browser'):observed['browserApproved']=True
+ def enrollment_ready():
+  tail=json.loads(ssh('tailscale status --json',15))
+  assert ssh('test ! -e /var/lib/fased-app-vps-1000 && echo undeployed',15).strip()=='undeployed','Fased deployed before private browser proof'
+  if tail.get('BackendState')=='NeedsLogin':return False
+  origin=fixture.private_tailnet_origin(tail,suffix)
+  assert observed.get('origin',origin)==origin,'enrolled Tailscale node identity changed before deployment'
+  journal.enrolled(tail,suffix)
+  observed.update(origin=origin,enrolled=True)
+  return True
+ retry=fixture.RemoteEnrollmentRetry(enrollment_ready)
  def observe(text):
   links=re.findall(r'https://login\.tailscale\.com/a/[A-Za-z0-9]+',text)
   if links and links[-1]!=observed.get('enrollment'):
@@ -502,11 +521,32 @@ def fresh_remote_acceptance(fixture,candidate,guest,remote_work,local_receipt_sh
    observed['enrollment']=links[-1]
    fixture.write_private(root/'enrollment.json',{'url':links[-1],'realDaemon':True,'fasedNotDeployed':True})
    print('Fresh Remote: Tailscale approval required; private enrollment.json contains the URL',flush=True)
-  # Retain the setup handoff privately; never print owner/session material.
+  # Predeployment browser proof and final owner handoff are distinct URLs.
+  # Never open an enrollment or final setup URL as the private browser probe.
   links=re.findall(r'https://[a-z0-9.-]+\.ts\.net/[^\s]*',text)
-  if links:
-   observed['private']=links[-1]
-   fixture.write_private(root/'private-setup.json',{'url':links[-1],'transport':'direct-tailscale-https'})
+  for link in links:
+   parsed=urllib.parse.urlsplit(link)
+   if re.fullmatch(r'[A-Za-z0-9_-]{43}',parsed.fragment) and not parsed.query:
+    if observed.get('preflight')==link:continue
+    assert not observed.get('preflight'),'a second private browser proof is not authorized'
+    assert enrollment_ready(),'Tailscale enrollment must precede private browser proof'
+    assert parsed.scheme+'://'+parsed.netloc==observed['origin'] and parsed.path=='/','unexpected private browser origin'
+    observed['preflight']=link
+    request=root/'private-preflight-request.json'
+    fixture.write_private(request,{'fixtureOnly':True,'action':'private-preflight','url':link,'expectedOrigin':observed['origin']})
+    print('Fresh Remote: verifying private browser access before deployment',flush=True)
+    reply=subprocess.run(['node','scripts/staged-package-browser.mjs',str(request)],timeout=360,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    fixture.write_private(root/'private-preflight-browser.json',{'returncode':reply.returncode,'stdout':fixture.redacted(reply.stdout.decode(errors='replace')),'stderr':fixture.redacted(reply.stderr.decode(errors='replace'))})
+    assert reply.returncode==0,'private browser check failed; inspect private-preflight-browser.json'
+    proof=json.loads(reply.stdout)
+    assert proof=={'result':'PASS','action':'private-preflight','privateBrowserApproved':True},'private browser approval was not confirmed'
+    observed['browserApproved']=True
+    journal.advance('private-browser')
+   elif parsed.query and parsed.fragment.startswith('setup='):
+    assert observed.get('browserApproved'),'final setup appeared before private browser approval'
+    assert parsed.scheme+'://'+parsed.netloc==observed['origin'] and parsed.path=='/','unexpected final private origin'
+    observed['private']=link
+    fixture.write_private(root/'private-setup.json',{'url':link,'transport':'direct-tailscale-https'})
  entry='bash <(curl -fsSL https://github.com/fased-ai/fased-app/releases/latest/download/install.sh) --remote --operator ubuntu --listen 127.0.0.1:17482'
  answers={
   'Connect Tailscale for private Remote access? [Y/n]: ':'y',
@@ -515,13 +555,27 @@ def fresh_remote_acceptance(fixture,candidate,guest,remote_work,local_receipt_sh
   'Set up Tailscale packages, service, browser sign-in and access for this OS user? [y/N]: ':'y',
   'Authorize this operation with sudo? [y/N]: ':'y',**fixture.PREPARATION_ANSWERS}
  try:
-  code,output=fixture.terminal(sshbase[:-1]+['-tt','root@127.0.0.1',entry],answers,timeout=1200,password_free=True,observer=observe)
-  descriptor=os.open(root/'root-entry.log',os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
-  with os.fdopen(descriptor,'w') as log:log.write(fixture.redacted(output))
-  assert code==0,'literal fresh Remote entry failed; inspect the redacted terminal log'
-  assert observed.get('enrollment') and observed.get('private'),'real enrollment and private HTTPS handoff required'
+  if journal.phases.index(journal.value['phase'])>=journal.phases.index('installed'):
+   # Resume the actual installation, not a snapshot or a second node.
+   tail=json.loads(ssh('tailscale status --json',15));journal.enrolled(tail,suffix)
+   observed['private'],_=fixture.browser_link(ssh('fased open',30))
+  else:
+   present=a.resume and ssh('test -e /var/lib/fased-app-vps-1000 && echo present || echo absent',15).strip()=='present'
+   if present:
+    # The process may have completed before its final journal write. Inspect
+    # the actual protected installation; never re-claim, reinstall or rewind it.
+    status=json.loads(ssh('fased vps status',30))
+    assert status.get('installed') is True and status.get('active') is True,'retained installation is not active; inspect fased vps status and its existing update/recovery transaction'
+    tail=json.loads(ssh('tailscale status --json',15));journal.enrolled(tail,suffix)
+    observed['private'],_=fixture.browser_link(ssh('fased open',30))
+    assert urllib.parse.parse_qs(urllib.parse.urlsplit(observed['private']).query).get('instance')==[status.get('instanceId')],'installed owner handoff differs from protected service identity'
+   else:
+    code,output=fixture.terminal(sshbase[:-1]+['-tt','root@127.0.0.1',entry],answers,timeout=1200,password_free=True,observer=observe,prompt_retry=retry,transcript=root/'root-entry.log')
+    assert code==0,'literal fresh Remote entry failed; inspect the redacted terminal log'
+  assert observed.get('enrolled') and observed.get('browserApproved') and observed.get('private'),'real enrollment, browser proof and private HTTPS handoff required'
   tail=json.loads(ssh('tailscale status --json',15))
   assert tail.get('BackendState')=='Running' and tail.get('Self',{}).get('Online') is True,'Tailscale must remain running'
+  assert fixture.private_tailnet_origin(tail,suffix)==observed['origin'],'enrolled node identity changed'
   service=ssh('systemctl show --property User --value fased-vps-1000.service',15).strip()
   assert service and ssh('id -u '+shlex.quote(service),15).strip() not in ('0','1000'),'dedicated non-root app identity required'
   assert ssh('getent passwd '+shlex.quote(service),15).strip().endswith('/usr/sbin/nologin'),'app account must have no login'
@@ -539,7 +593,11 @@ def fresh_remote_acceptance(fixture,candidate,guest,remote_work,local_receipt_sh
   with opener.open(endpoint,timeout=20) as response:health=json.load(response)
   assert health.get('version')==candidate['packet']['productVersion'],'direct private HTTPS must reach the installed candidate'
   assert all(health.get('capabilities',{}).get(name) is False for name in ('aiConnections','financialExecution','walletSigner')),'live capabilities remain held'
-  receipt['checks'].update(literalEntry='PASS',tailBeforeDeployment='PASS',freshProtectedProxy='PASS',directPrivateHTTPS='PASS',lockedAppIdentity='PASS',noExtraPassword='PASS')
+  identity=urllib.parse.parse_qs(urllib.parse.urlsplit(observed['private']).query).get('instance',[])
+  assert len(identity)==1,'one Remote owner identity required'
+  journal.advance('installed',instance_id=identity[0])
+  receipt.update(instanceId=identity[0],nodeIdentitySha256=journal.value['nodeIdentitySha256'],transport='tailscale-https',normalTLS=True)
+  receipt['checks'].update(literalEntry='PASS',tailBeforeDeployment='PASS',predeploymentBrowser='PASS',freshProtectedProxy='PASS',directPrivateHTTPS='PASS',lockedAppIdentity='PASS',noExtraPassword='PASS')
   # This first fresh-install leg is not whole Remote/upgrade/lockdown acceptance.
   # Continue the existing private UI/closure/update runner only with the SAME VM
   # and independent console proof; never promote this narrower receipt.
@@ -547,11 +605,14 @@ def fresh_remote_acceptance(fixture,candidate,guest,remote_work,local_receipt_sh
                  remaining=['owner-device enrollment','private-admin and independent console recovery','public IPv4/IPv6 closure and rollback','actual predecessor UI/CLI upgrade','reboot/reconnect'])
   return receipt
  finally:
+  receipt['enrollmentRetry']={'readinessChecks':retry.checks,'resendSent':retry.used,
+                            'outcome':'sent' if retry.used else 'pending-ended' if retry.pending_ended else 'not-needed-or-not-sent'}
   save('fresh-remote-setup.json',receipt)
-  # Explicitly revoke only this disposable node. The old working VPS and host
-  # Tailscale state are never touched; cleanup cannot silently retain access.
-  try:ssh('sudo -n /usr/bin/tailscale logout',15)
-  except (subprocess.SubprocessError,OSError):pass
+  # This is a leg of the parent journey. Stop the owned VM at runner exit, but
+  # retain its encrypted state/enrollment and journal until all legs complete.
+  # Never log out here: that destroys the next phase's original identity.
+  receipt['retainedPhase']=journal.value['phase']
+  save('fresh-remote-setup.json',receipt)
 
 if a.staged_package_only:
  started=time.time();staged_result={'result':'FAIL','fixtureOnly':True}
@@ -572,10 +633,10 @@ if a.staged_package_only:
   if tunnel is not None and tunnel.poll() is None:tunnel.terminate();tunnel.wait(10)
   stop_vm();serial.close();stderr.close()
   staged_result['durationSeconds']=round(time.time()-started,3)
-  if staged_result['result']=='PASS' or not a.keep_failed_vm:
+  if not a.fresh_remote_only and (staged_result['result']=='PASS' or not a.keep_failed_vm):
    assert work.is_dir() and not work.is_symlink() and work.stat().st_uid==os.getuid()
    shutil.rmtree(work);staged_result['cleanup']='PASS: disposable VM, payload, disk, authentication and SSH keys removed'
-  else:staged_result['cleanup']='RETAINED: exact task-owned failed VM only'
+  else:staged_result['cleanup']='RETAINED: same Remote node/disk/journal until parent journey acceptance; VM stopped'
   save('vm-result.json',staged_result)
  raise SystemExit(0)
 

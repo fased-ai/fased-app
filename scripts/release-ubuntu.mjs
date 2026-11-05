@@ -16,6 +16,7 @@ import { prepareReleaseCandidate } from "./release-source.mjs";
 import {
   attestedInventory,
   verifyInstalledAcceptance,
+  recordRemoteAcceptance,
 } from "./release-acceptance.mjs";
 import { validateConfig } from "./prepare-ubuntu-release.mjs";
 import {
@@ -492,9 +493,12 @@ export async function publishAttested(
 }
 export async function main(args = process.argv.slice(2)) {
   const operation = args[0] ?? "ship";
-  if (!["ship", "publish"].includes(operation) || args.length > 2)
+  if (
+    !["ship", "publish", "accept-remote"].includes(operation) ||
+    (operation === "accept-remote" ? args.length !== 4 : args.length > 2)
+  )
     throw Error(
-      "Use npm run release -- [ship [PR] | publish [candidate-directory]]",
+      "Use npm run release -- [ship [PR] | publish [candidate-directory] | accept-remote candidate-directory fresh-receipt upgrade-receipt]",
     );
   const c = JSON.parse(readFileSync("release/ubuntu.json", "utf8"));
   let token = process.env.GH_TOKEN;
@@ -512,6 +516,17 @@ export async function main(args = process.argv.slice(2)) {
     operation === "ship"
       ? await prepareReleaseCandidate(c.version, args[1])
       : path.resolve(args[1] ?? ".evidence/ubuntu-release");
+  if (operation === "accept-remote") {
+    const raw = readPublisherFile(path.join(directory, "fased-release.json"));
+    const packet = JSON.parse(raw);
+    return recordRemoteAcceptance(
+      packet,
+      attestedInventory(c, packet, raw),
+      githubPublisher(token),
+      JSON.parse(readPublisherFile(args[2])),
+      JSON.parse(readPublisherFile(args[3])),
+    );
+  }
   return publishAttested(c, directory, {
     api: githubPublisher(token),
     progress: (s) => process.stdout.write(`Release: ${s}\n`),

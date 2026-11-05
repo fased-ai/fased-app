@@ -276,9 +276,8 @@ func remoteHandoff(out io.Writer, m vpsinstall.Manifest, plan privateaccess.Plan
 			}
 			fmt.Fprintln(out, line)
 		}
-		fmt.Fprintln(out, "Open Fased and choose your password:")
+		fmt.Fprintln(out, "Open Fased:")
 		fmt.Fprintln(out, setupURL)
-		fmt.Fprintln(out, "Already set up? Sign in with your owner password.")
 	}
 	if os.Getenv("FASED_INSTALL_ROOT_ENTRY") == "1" {
 		fmt.Fprintln(out, "From your administrator SSH shell, rerun the installer with --status, --stop, --start, --update or --recover. Fased itself runs as the ordinary installation owner.")

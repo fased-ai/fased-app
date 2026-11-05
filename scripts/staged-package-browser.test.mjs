@@ -3,10 +3,144 @@ import assert from "node:assert/strict";
 import {
   browserAddress,
   completedApplication,
+  privatePreflightAddress,
+  runPrivatePreflight,
   retainedWorkspace,
   seedWorkspace,
   updateMode,
 } from "./staged-package-browser.mjs";
+
+test("private preflight accepts only the verified node's bare nonce URL", () => {
+  const config = {
+    fixtureOnly: true,
+    action: "private-preflight",
+    expectedOrigin: "https://node.tail-example.ts.net",
+    url: "https://node.tail-example.ts.net/#" + "A".repeat(43),
+  };
+  assert.equal(privatePreflightAddress(config).origin, config.expectedOrigin);
+  for (const url of [
+    "http://node.tail-example.ts.net/#" + "A".repeat(43),
+    "https://other.tail-example.ts.net/#" + "A".repeat(43),
+    "https://node.other.ts.net/#" + "A".repeat(43),
+    "https://node.tail-example.ts.net:8443/#" + "A".repeat(43),
+    "https://user@node.tail-example.ts.net/#" + "A".repeat(43),
+    "https://node.tail-example.ts.net/?instance=owner#setup=proof",
+    "https://node.tail-example.ts.net/approve#" + "A".repeat(43),
+    "https://node.tail-example.ts.net/?other=value#" + "A".repeat(43),
+    "https://node.tail-example.ts.net/#" + "A".repeat(42),
+  ])
+    assert.throws(() => privatePreflightAddress({ ...config, url }));
+  for (const expectedOrigin of [
+    "https://node.tail-example.ts.net/path",
+    "https://node.example.org",
+    "https://node.tail-example.ts.net/#proof",
+  ])
+    assert.throws(() => privatePreflightAddress({ ...config, expectedOrigin }));
+  assert.throws(() =>
+    privatePreflightAddress({ ...config, fixtureOnly: false }),
+  );
+});
+
+test("private preflight uses fresh normal-TLS browser and real approval response only", async () => {
+  const previous = process.env.FASED_DISPOSABLE_VM_ACCEPTANCE;
+  process.env.FASED_DISPOSABLE_VM_ACCEPTANCE = "1";
+  const config = {
+    fixtureOnly: true,
+    action: "private-preflight",
+    expectedOrigin: "https://node.tail-example.ts.net",
+    url: "https://node.tail-example.ts.net/#" + "A".repeat(43),
+  };
+  try {
+    for (const status of [204, 403]) {
+      const calls = [],
+        response = {
+          url: () => config.expectedOrigin + "/approve",
+          request: () => ({ method: () => "POST" }),
+          status: () => status,
+        };
+      const page = {
+        waitForResponse: (accept) => {
+          assert.equal(accept(response), true);
+          assert.equal(
+            accept({ ...response, url: () => "https://other.ts.net/approve" }),
+            false,
+          );
+          assert.equal(
+            accept({ ...response, request: () => ({ method: () => "GET" }) }),
+            false,
+          );
+          calls.push("response registered");
+          return Promise.resolve(response);
+        },
+        goto: async (url) => {
+          assert.equal(url, config.url);
+          calls.push("visit exact proof");
+        },
+        locator: (selector) => {
+          assert.equal(selector, "#status");
+          return "connected status";
+        },
+        url: () => config.expectedOrigin + "/",
+      };
+      const context = {
+        route: async (pattern, handler) => {
+          assert.equal(pattern, "**/*");
+          await handler({
+            request: () => ({ url: () => config.expectedOrigin + "/" }),
+            continue: () => calls.push("same origin only"),
+          });
+        },
+        newPage: async () => page,
+        close: async () => calls.push("context closed"),
+      };
+      const browser = {
+        newContext: async (options) => {
+          assert.deepEqual(options, { locale: "en-US" });
+          return context;
+        },
+        close: async () => calls.push("browser closed"),
+      };
+      const runtime = {
+        chromium: {
+          launch: async (options) => {
+            assert.equal(options.headless, true);
+            assert.equal(options.ignoreHTTPSErrors, undefined);
+            assert.equal(options.args, undefined);
+            return browser;
+          },
+        },
+        expect: (value) => ({
+          toHaveText: async (text) => {
+            assert.equal(value, "connected status");
+            assert.equal(
+              text,
+              "Connected. Continue in your installation terminal.",
+            );
+            calls.push("real connected response");
+          },
+        }),
+      };
+      if (status === 204) {
+        assert.deepEqual(await runPrivatePreflight(config, runtime), {
+          result: "PASS",
+          action: "private-preflight",
+          privateBrowserApproved: true,
+        });
+        assert.ok(calls.includes("real connected response"));
+        assert.ok(calls.includes("context closed"));
+      } else await assert.rejects(runPrivatePreflight(config, runtime));
+      assert.ok(calls.includes("browser closed"));
+      assert.ok(
+        calls.indexOf("response registered") <
+          calls.indexOf("visit exact proof"),
+      );
+    }
+  } finally {
+    if (previous === undefined)
+      delete process.env.FASED_DISPOSABLE_VM_ACCEPTANCE;
+    else process.env.FASED_DISPOSABLE_VM_ACCEPTANCE = previous;
+  }
+});
 
 test("the installed policy's omitted default is Manual, never Automatic", () => {
   for (const mode of [undefined, "manual", "automatic"])
@@ -199,4 +333,42 @@ test("baseline seeding appends harmless owner records and leaves its reminder pa
   assert.deepEqual(view.messages[0], originals.messages[0]);
   assert.deepEqual(view.memories[0], originals.memories[0]);
   assert.notEqual(retainedWorkspace(view), retainedWorkspace(originals));
+});
+
+test("ordinary Remote browser uses exact private HTTPS and no copied CLI session", () => {
+  const config = {
+    fixtureOnly: true,
+    action: "claim",
+    transport: "tailscale-https",
+    expectedOrigin: "https://node.tail-example.ts.net",
+    instanceId: "I".repeat(43),
+    version: "0.1.9",
+    url:
+      "https://node.tail-example.ts.net/?instance=" +
+      "I".repeat(43) +
+      "#setup=" +
+      "S".repeat(43),
+  };
+  assert.equal(browserAddress(config).origin, config.expectedOrigin);
+  for (const change of [
+    { url: config.url.replace("https:", "http:") },
+    { url: config.url.replace("node.tail-example", "other.tail-example") },
+    { url: config.url.replace(".ts.net/", ".ts.net:8443/") },
+    { url: config.url.replace("?instance=", "?other=") },
+    { url: config.url + "&unexpected=1" },
+    { instanceId: "J".repeat(43) },
+    { sessionFile: "/tmp/copied-session.json" },
+    { expectedOrigin: config.expectedOrigin + "/extra" },
+    { transport: "ssh-forwarded" },
+  ])
+    assert.throws(() => browserAddress({ ...config, ...change }));
+  assert.equal(
+    browserAddress({
+      ...config,
+      action: "ui-update",
+      url: config.expectedOrigin + "/?instance=" + config.instanceId,
+      fromVersion: "0.1.8",
+    }).protocol,
+    "https:",
+  );
 });

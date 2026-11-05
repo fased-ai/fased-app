@@ -1,0 +1,50 @@
+{
+  "version": 2,
+  "local": [
+    "entry",
+    "local",
+    "ownerAuth",
+    "uiUpdate",
+    "cliUpdate",
+    "restart",
+    "alreadyCurrent",
+    "preservation",
+    "recovery",
+    "logoutSignIn",
+    "rebootReconnect",
+    "controlledAutomatic",
+    "passwordFreeLocalSetup"
+  ],
+  "remoteCommon": [
+    "ownerAuth",
+    "protectedOwnerDevice",
+    "privateAdminRecovery",
+    "independentConsoleRecovery",
+    "publicIPv4Closure",
+    "publicIPv6Closure",
+    "privateHTTPSWithoutSSH",
+    "passwordFreeUIAndCLI",
+    "preservation",
+    "recovery",
+    "logoutSignIn",
+    "rebootReconnect"
+  ],
+  "remoteFresh": [
+    "literalEntry",
+    "tailBeforeDeployment",
+    "predeploymentBrowser",
+    "freshProtectedProxy",
+    "directPrivateHTTPS",
+    "lockedAppIdentity",
+    "noExtraPassword",
+    "alreadyCurrent"
+  ],
+  "remoteUpgrade": [
+    "uiUpdate",
+    "cliUpdate",
+    "restart",
+    "alreadyCurrent",
+    "ordinaryRemoteUpdate",
+    "controlledAutomatic"
+  ]
+}

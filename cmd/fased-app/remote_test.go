@@ -110,6 +110,9 @@ func TestManagedRemoteWizardAndHandoff(t *testing.T) {
 		if strings.Contains(text, "claim-code") || started != strings.Contains(text, "PRIVATE-SETUP-LINK") || started != strings.Contains(text, "PRIVATE-GUIDE") {
 			t.Fatal("unready UI was offered or ready handoff absent", text)
 		}
+		if strings.Contains(text, "password") {
+			t.Fatal("handoff invented another password step", text)
+		}
 	}
 	if remotePublicOrigin(privateaccess.Plan{Mode: "ssh", Origin: "http://127.0.0.1:7331"}) != "" {
 		t.Fatal("SSH exposed as public origin")
