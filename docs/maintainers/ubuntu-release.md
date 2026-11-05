@@ -2,7 +2,7 @@
 
 Fased uses saved GitHub authentication and automated build attestations. Customers install a compiled package through one entry and use Settings → Update or the installed `fased update`. They need no Go compiler, Node, source checkout or release-signing password.
 
-The selected candidate, installed identities, active checkout, results and exact action authority live in [Current](/home/fc/fasedbot/docs/fased/execution.md#agent-usability-pass) in the workspace implementation record. Preserve its original Local PASS within that package's scope. Changes to candidate bytes require matching affected installed evidence; this guide never grants delivery, publication or activation authority.
+The selected candidate, installed identities, active checkout, results and exact action authority live in Current (`/home/fc/fasedbot/docs/fased/execution.md`, active checkpoint) in the workspace implementation record. Preserve its original Local PASS within that package's scope. Changes to candidate bytes require matching affected installed evidence; this guide never grants delivery, publication or activation authority.
 
 The protected workflow produces authenticated Local proof. Actual persistent Remote evidence is separately reviewed under the owner-selected GitHub contract below. Current records completed and missing legs; the publisher refuses missing or incomplete evidence.
 

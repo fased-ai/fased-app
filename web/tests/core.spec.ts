@@ -11573,12 +11573,19 @@ test("reviewed task credential allowance is scoped, finite and revocable in Prov
   await provider
     .getByRole("checkbox", { name: "Continue after sign-out", exact: true })
     .check();
+  const persistent = process.platform === "linux";
+  if (persistent)
+    await provider
+      .getByRole("checkbox", { name: "Continue after restart", exact: true })
+      .check();
   await provider
     .getByRole("button", { name: "Review access", exact: true })
     .click();
   await expect(
     provider.getByText(
-      "Selected tasks continue after sign-out until expiry. Lock, revoke or restart stops access.",
+      persistent
+        ? "Selected tasks continue after restart until expiry. Lock or revoke stops access."
+        : "Selected tasks continue after sign-out until expiry. Lock, revoke or restart stops access.",
       { exact: true },
     ),
   ).toBeVisible();
@@ -11624,6 +11631,25 @@ test("reviewed task credential allowance is scoped, finite and revocable in Prov
         (await privateCLI(["ai-connection"])).taskAccess?.usedRequests,
     )
     .toBe(1);
+  if (persistent) {
+    const before = (await privateCLI(["ai-connection"])).taskAccess;
+    const listen = new URL(url).host;
+    await stop();
+    await start(true, listen);
+    await page.reload();
+    const recovered = await privateCLI(["ai-connection"]);
+    expect(recovered.locked).toBe(true);
+    expect(recovered.taskAccess.id).toBe(before.id);
+    expect(recovered.taskAccess.usedRequests).toBe(1);
+    expect(recovered.taskAccess.allocatedMicrousd).toBe(
+      before.allocatedMicrousd,
+    );
+    await openProviders(page);
+    await provider.getByText("Background access", { exact: true }).click();
+    await expect(
+      provider.getByText("After restart", { exact: true }),
+    ).toBeVisible();
+  }
   await provider.getByRole("button", { name: "Revoke", exact: true }).click();
   await expect
     .poll(async () => (await privateCLI(["ai-connection"])).taskAccess)

@@ -40,6 +40,7 @@ type AIConnectionCommand struct {
 	TaskIDs              []string              `json:"taskIds,omitempty"`
 	AuthorizationSeconds int64                 `json:"authorizationSeconds,omitempty"`
 	ContinueOnSignOut    bool                  `json:"continueOnSignOut,omitempty"`
+	ContinueAfterRestart bool                  `json:"continueAfterRestart,omitempty"`
 	Allowance            *TaskAccessAllowance  `json:"allowance,omitempty"`
 	ConsentDigest        string                `json:"consentDigest,omitempty"`
 	Action               string                `json:"action"`
@@ -48,38 +49,39 @@ type AIConnectionCommand struct {
 	Passphrase           string                `json:"passphrase,omitempty"`
 }
 type AIConnectionView struct {
-	Workspace              string                `json:"workspace,omitempty"`
-	GoogleProject          string                `json:"googleProject,omitempty"`
-	GoogleSignInAvailable  bool                  `json:"googleSignInAvailable"`
-	Endpoint               string                `json:"endpoint,omitempty"`
-	AuthMethod             string                `json:"authMethod"`
-	PlanUse                bool                  `json:"planUse"`
-	PlanPaused             bool                  `json:"planPaused"`
-	PlanFailure            string                `json:"planFailure,omitempty"`
-	SignInAvailable        bool                  `json:"signInAvailable"`
-	SignIn                 *ProviderSignInView   `json:"signIn,omitempty"`
-	PilotEnrollment        bool                  `json:"pilotEnrollment,omitempty"`
-	PilotAvailable         bool                  `json:"pilotAvailable,omitempty"`
-	Pilot                  *OpenAIPilotAllowance `json:"pilot,omitempty"`
-	PilotReview            *OpenAIPilotAllowance `json:"pilotReview,omitempty"`
-	PilotState             string                `json:"pilotState,omitempty"`
-	Name                   string                `json:"name,omitempty"`
-	Connections            []AIConnectionView    `json:"connections,omitempty"`
-	Catalog                ProviderCatalog       `json:"catalog"`
-	CredentialModes        []string              `json:"credentialModes"`
-	CredentialMode         string                `json:"credentialMode"`
-	TaskAccess             *TaskAccessAllowance  `json:"taskAccess,omitempty"`
-	AccessReview           *TaskAccessAllowance  `json:"accessReview,omitempty"`
-	AdmissionPolicy        OpenAIModelPolicy     `json:"admissionPolicy"`
-	Ref                    string                `json:"ref"`
-	Provider               string                `json:"provider"`
-	Model                  string                `json:"model"`
-	Locked                 bool                  `json:"locked"`
-	UnlockExpires          int64                 `json:"unlockExpires"`
-	TestOnly               bool                  `json:"testOnly"`
-	LiveCallsEnabled       bool                  `json:"liveCallsEnabled"`
-	InputMicrousdPerToken  int64                 `json:"inputMicrousdPerToken,omitempty"`
-	OutputMicrousdPerToken int64                 `json:"outputMicrousdPerToken,omitempty"`
+	Workspace                     string                `json:"workspace,omitempty"`
+	GoogleProject                 string                `json:"googleProject,omitempty"`
+	GoogleSignInAvailable         bool                  `json:"googleSignInAvailable"`
+	Endpoint                      string                `json:"endpoint,omitempty"`
+	AuthMethod                    string                `json:"authMethod"`
+	PlanUse                       bool                  `json:"planUse"`
+	PlanPaused                    bool                  `json:"planPaused"`
+	PlanFailure                   string                `json:"planFailure,omitempty"`
+	SignInAvailable               bool                  `json:"signInAvailable"`
+	SignIn                        *ProviderSignInView   `json:"signIn,omitempty"`
+	PilotEnrollment               bool                  `json:"pilotEnrollment,omitempty"`
+	PilotAvailable                bool                  `json:"pilotAvailable,omitempty"`
+	Pilot                         *OpenAIPilotAllowance `json:"pilot,omitempty"`
+	PilotReview                   *OpenAIPilotAllowance `json:"pilotReview,omitempty"`
+	PilotState                    string                `json:"pilotState,omitempty"`
+	Name                          string                `json:"name,omitempty"`
+	Connections                   []AIConnectionView    `json:"connections,omitempty"`
+	Catalog                       ProviderCatalog       `json:"catalog"`
+	CredentialModes               []string              `json:"credentialModes"`
+	CredentialMode                string                `json:"credentialMode"`
+	TaskAccess                    *TaskAccessAllowance  `json:"taskAccess,omitempty"`
+	PersistentTaskAccessAvailable bool                  `json:"persistentTaskAccessAvailable"`
+	AccessReview                  *TaskAccessAllowance  `json:"accessReview,omitempty"`
+	AdmissionPolicy               OpenAIModelPolicy     `json:"admissionPolicy"`
+	Ref                           string                `json:"ref"`
+	Provider                      string                `json:"provider"`
+	Model                         string                `json:"model"`
+	Locked                        bool                  `json:"locked"`
+	UnlockExpires                 int64                 `json:"unlockExpires"`
+	TestOnly                      bool                  `json:"testOnly"`
+	LiveCallsEnabled              bool                  `json:"liveCallsEnabled"`
+	InputMicrousdPerToken         int64                 `json:"inputMicrousdPerToken,omitempty"`
+	OutputMicrousdPerToken        int64                 `json:"outputMicrousdPerToken,omitempty"`
 }
 type aiVaultEnvelope struct {
 	TestOnly   bool   `json:"testOnly,omitempty"`
@@ -111,6 +113,7 @@ type providerCredential struct {
 	epoch          uint64
 	taskAccessLast int64
 	taskAccess     *TaskAccessAllowance
+	durableAccess  bool
 	ref            string
 	key            []byte
 	expires        int64
@@ -123,9 +126,10 @@ func testAICredential(key string) bool {
 func (s *Store) aiVaultPath() string { return filepath.Join(s.dir, "ai-credentials.json") }
 
 type aiVaultCollection struct {
-	Version  int               `json:"version"`
-	Default  string            `json:"default"`
-	Accounts []aiVaultEnvelope `json:"accounts"`
+	Version    int                `json:"version"`
+	Default    string             `json:"default"`
+	Accounts   []aiVaultEnvelope  `json:"accounts"`
+	TaskAccess []sealedTaskAccess `json:"taskAccess,omitempty"`
 }
 
 // Sixteen maximum sign-in envelopes include base64 expansion and JSON metadata.
@@ -161,8 +165,12 @@ func (s *Store) readAIVaultCollection() (aiVaultCollection, error) {
 	if json.Unmarshal(b, &legacy) != nil {
 		return col, errors.New("invalid credential vault")
 	}
-	if legacy.Version == 3 {
-		if json.Unmarshal(b, &col) != nil || len(col.Accounts) > aiMaxAccounts {
+	if legacy.Version == 3 || legacy.Version == taskAccessVaultVersion {
+		decoder := json.NewDecoder(bytes.NewReader(b))
+		if legacy.Version == taskAccessVaultVersion {
+			decoder.DisallowUnknownFields()
+		}
+		if decoder.Decode(&col) != nil || decoder.Decode(new(any)) != io.EOF || len(col.Accounts) > aiMaxAccounts {
 			return col, errors.New("invalid credential collection")
 		}
 	} else {
@@ -174,7 +182,7 @@ func (s *Store) readAIVaultCollection() (aiVaultCollection, error) {
 	return col, nil
 }
 func validateAIVaultCollection(col aiVaultCollection) error {
-	if col.Version != 3 || len(col.Accounts) > aiMaxAccounts {
+	if col.Version != 3 && col.Version != taskAccessVaultVersion || len(col.Accounts) > aiMaxAccounts {
 		return errors.New("invalid credential collection")
 	}
 	seen := map[string]bool{}
@@ -187,9 +195,15 @@ func validateAIVaultCollection(col aiVaultCollection) error {
 	if col.Default != "" && !seen[col.Default] {
 		return errors.New("invalid default connection")
 	}
-	return nil
+	return validateSealedTaskAccess(col)
 }
 func (s *Store) writeAIVaultCollection(col aiVaultCollection) error {
+	if s.providerVaultFault != nil {
+		if err := s.providerVaultFault(); err != nil {
+			return err
+		}
+	}
+	col.TaskAccess = retainedTaskAccess(col)
 	if err := validateAIVaultCollection(col); err != nil {
 		return err
 	}
@@ -197,7 +211,7 @@ func (s *Store) writeAIVaultCollection(col aiVaultCollection) error {
 		return os.Remove(s.aiVaultPath())
 	}
 	var value any = col
-	if len(col.Accounts) == 1 && col.Default == col.Accounts[0].Ref {
+	if col.Version == 3 && len(col.Accounts) == 1 && col.Default == col.Accounts[0].Ref {
 		value = col.Accounts[0]
 	}
 	serialized, err := json.Marshal(value)
@@ -251,6 +265,7 @@ func (s *Store) clearAIConnectionLocked(refs ...string) {
 	state.epoch = s.provider.nextEpoch
 	clear(state.key)
 	state.taskAccess = nil
+	state.durableAccess = false
 	state.taskAccessLast = 0
 	state.key = nil
 	state.discovery = modelDiscovery{}
@@ -271,6 +286,7 @@ func (s *Store) lockAIConnection() {
 func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err error) {
 	v = AIConnectionView{CredentialMode: "test", AdmissionPolicy: openAIModelPolicy(), Provider: "openai", Model: fixtureAIModel, Locked: true, TestOnly: true, InputMicrousdPerToken: 1, OutputMicrousdPerToken: 4}
 	defer func() {
+		v.PersistentTaskAccessAvailable = s.persistentTaskAccessAvailable
 		v.SignInAvailable = s.providerSignInAvailableLocked()
 		v.SignIn = s.providerSignInViewLocked()
 		v.AuthMethod = "api-key"
@@ -405,6 +421,12 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 			copy.Tasks = append([]TaskAccessBinding(nil), copy.Tasks...)
 			v.TaskAccess = &copy
 		} else {
+			if state.taskAccess != nil && state.taskAccess.ContinueAfterRestart {
+				if e = s.removeDurableTaskAccess(env.Ref); e != nil {
+					s.clearAIConnectionLocked(env.Ref)
+					return v, e
+				}
+			}
 			state.taskAccess = nil
 		}
 		if v.Locked && v.TaskAccess == nil {
@@ -419,6 +441,7 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 func (s *Store) AIConnection(refs ...string) (AIConnectionView, error) {
 	s.provider.mu.Lock()
 	defer s.provider.mu.Unlock()
+	s.probeTaskSecrets(context.Background())
 	v, e := s.aiConnectionLocked(refs...)
 	if e != nil {
 		return v, e
@@ -449,15 +472,19 @@ func (s *Store) aiConnectionValid(ref string) bool {
 
 // An unmetered-provider failure revokes permissions without deleting its
 // credentials. Only an explicit successful owner unlock clears this pause.
-func (s *Store) pauseSignInAccount(ref, failure string) {
+func (s *Store) pauseSignInAccount(ref, failure string) error {
 	s.provider.mu.Lock()
 	defer s.provider.mu.Unlock()
 	env, err := s.readAIVault(ref)
 	quotaAPI := env.Version == 4 && (env.Provider == "kimi-code" || env.Provider == "ollama-cloud") && (env.Mode == "test" || env.Mode == env.Provider)
 	if err != nil || env.Ref != ref || !(quotaAPI || env.Version == 5 && aiVaultMode(env) == "openai-signin" || env.Version == 6 && env.Provider == "local" && aiVaultMode(env) == "local") {
-		return
+		return nil
 	}
 	state := s.credentialLocked(ref)
+	if err = s.removeDurableTaskAccess(ref); err != nil {
+		s.clearAIConnectionLocked(ref)
+		return errors.New("background revocation could not be saved; preserve the pending request")
+	}
 	s.provider.nextEpoch++
 	state.epoch = s.provider.nextEpoch
 	state.taskAccess, state.taskAccessLast = nil, 0
@@ -469,9 +496,10 @@ func (s *Store) pauseSignInAccount(ref, failure string) {
 		}
 	}
 	state.planFailure = failure
+	return nil
 }
 func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (AIConnectionView, error) {
-	if c.ContinueOnSignOut && c.Action != "task-access-review" {
+	if (c.ContinueOnSignOut || c.ContinueAfterRestart) && c.Action != "task-access-review" {
 		return AIConnectionView{}, errors.New("logout policy requires a task access review")
 	}
 	if c.Workspace != "" && (c.Provider != "anthropic" || (c.Action != "add" && c.Action != "save") || !validAnthropicWorkspace(c.Workspace)) {
@@ -572,7 +600,7 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		}
 	}
 	// All paths needing both locks acquire SQLite before the in-memory mutex.
-	if !taskAccessAction(c.Action) && (c.Allowance != nil || len(c.TaskIDs) > 0 || c.ProfileID != "" || c.AuthorizationSeconds != 0 || c.ContinueOnSignOut || c.ConsentDigest != "" || c.Revision != 0) {
+	if !taskAccessAction(c.Action) && (c.Allowance != nil || len(c.TaskIDs) > 0 || c.ProfileID != "" || c.AuthorizationSeconds != 0 || c.ContinueOnSignOut || c.ContinueAfterRestart || c.ConsentDigest != "" || c.Revision != 0) {
 		return AIConnectionView{}, errors.New("task credential scope requires a dedicated review")
 	}
 	if c.Action == "lock" {
@@ -587,6 +615,10 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		}
 		if c.Ref != v.Ref {
 			return v, ErrConflict
+		}
+		if e = s.removeDurableTaskAccess(c.Ref); e != nil {
+			s.clearAIConnectionLocked(c.Ref)
+			return v, e
 		}
 		s.clearAIConnectionLocked(c.Ref)
 		return s.aiConnectionLocked(c.Ref)
@@ -675,11 +707,25 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 			return v, errors.New("vault unlock failed")
 		}
 		if c.Action == "unlock" {
+			old := s.credentialLocked(env.Ref)
+			var taskAccess *TaskAccessAllowance
+			durable, last := old.durableAccess, int64(0)
+			encoded, _ := json.Marshal(env)
+			if !old.planPaused && !s.pilotTargetLocked(env.Ref) && old.digest == sha256.Sum256(encoded) && s.taskAccessCurrent(old.taskAccess, old) {
+				copy := *old.taskAccess
+				taskAccess = &copy
+				last = old.taskAccessLast
+			}
+			if taskAccess == nil {
+				if e = s.removeDurableTaskAccess(env.Ref); e != nil {
+					return v, e
+				}
+			}
 			s.clearAIConnectionLocked(env.Ref)
 			state := s.credentialLocked(env.Ref)
-			encoded, _ := json.Marshal(env)
 			state.digest = sha256.Sum256(encoded)
 			state.ref, state.key, state.expires = env.Ref, append([]byte(nil), plain...), s.now().Add(15*time.Minute).Unix()
+			state.taskAccess, state.durableAccess, state.taskAccessLast = taskAccess, durable && taskAccess != nil, last
 			state.planPaused, state.planFailure = false, ""
 			return s.aiConnectionLocked(env.Ref)
 		}

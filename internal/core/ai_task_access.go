@@ -17,21 +17,22 @@ type TaskAccessBinding struct {
 	Digest string `json:"digest"`
 }
 type TaskAccessAllowance struct {
-	ID                string              `json:"id"`
-	ConnectionRef     string              `json:"connectionRef"`
-	ProfileID         string              `json:"profileId"`
-	Model             string              `json:"model"`
-	Tasks             []TaskAccessBinding `json:"tasks"`
-	Limits            AILimits            `json:"limits"`
-	BootID            string              `json:"bootId"`
-	Revision          int64               `json:"revision"`
-	CreatedAt         int64               `json:"createdAt"`
-	ExpiresAt         int64               `json:"expiresAt"`
-	MaxRequests       int                 `json:"maxRequests"`
-	BudgetMicrousd    int64               `json:"budgetMicrousd"`
-	UsedRequests      int                 `json:"usedRequests"`
-	AllocatedMicrousd int64               `json:"allocatedMicrousd"`
-	ContinueOnSignOut bool                `json:"continueOnSignOut,omitempty"`
+	ID                   string              `json:"id"`
+	ConnectionRef        string              `json:"connectionRef"`
+	ProfileID            string              `json:"profileId"`
+	Model                string              `json:"model"`
+	Tasks                []TaskAccessBinding `json:"tasks"`
+	Limits               AILimits            `json:"limits"`
+	BootID               string              `json:"bootId"`
+	Revision             int64               `json:"revision"`
+	CreatedAt            int64               `json:"createdAt"`
+	ExpiresAt            int64               `json:"expiresAt"`
+	MaxRequests          int                 `json:"maxRequests"`
+	BudgetMicrousd       int64               `json:"budgetMicrousd"`
+	UsedRequests         int                 `json:"usedRequests"`
+	AllocatedMicrousd    int64               `json:"allocatedMicrousd"`
+	ContinueOnSignOut    bool                `json:"continueOnSignOut,omitempty"`
+	ContinueAfterRestart bool                `json:"continueAfterRestart,omitempty"`
 }
 
 func taskAccessDigest(a TaskAccessAllowance) string {
@@ -44,7 +45,7 @@ func taskAccessDigest(a TaskAccessAllowance) string {
 }
 func (s *Store) taskAccessCurrent(a *TaskAccessAllowance, state *providerCredential) bool {
 	now := s.now().Unix()
-	if a == nil || a.ID != taskAccessDigest(*a) || a.BootID != s.bootID || now < a.CreatedAt || now >= a.ExpiresAt || now < state.taskAccessLast || a.ConnectionRef != state.ref || len(state.key) == 0 {
+	if a == nil || a.ID != taskAccessDigest(*a) || (a.BootID != s.bootID && !(a.ContinueAfterRestart && state.durableAccess)) || now < a.CreatedAt || now >= a.ExpiresAt || now < state.taskAccessLast || a.ConnectionRef != state.ref || len(state.key) == 0 {
 		return false
 	}
 	state.taskAccessLast = now
@@ -52,10 +53,13 @@ func (s *Store) taskAccessCurrent(a *TaskAccessAllowance, state *providerCredent
 }
 func (s *Store) reviewTaskAccess(d agentDocument, c AIConnectionCommand, revision int64) (TaskAccessAllowance, error) {
 	now := s.now().Unix()
-	if c.ContinueOnSignOut && s.pilotTargetLocked(c.Ref) {
+	if (c.ContinueOnSignOut || c.ContinueAfterRestart) && s.pilotTargetLocked(c.Ref) {
 		return TaskAccessAllowance{}, errors.New("pilot access ends at sign-out")
 	}
-	a := TaskAccessAllowance{ConnectionRef: c.Ref, ProfileID: c.ProfileID, Revision: revision, BootID: s.bootID, CreatedAt: now, ExpiresAt: now + c.AuthorizationSeconds, Tasks: []TaskAccessBinding{}, ContinueOnSignOut: c.ContinueOnSignOut}
+	if c.ContinueAfterRestart && (!c.ContinueOnSignOut || !s.probeTaskSecrets(context.Background())) {
+		return TaskAccessAllowance{}, errors.New("protected background access unavailable")
+	}
+	a := TaskAccessAllowance{ConnectionRef: c.Ref, ProfileID: c.ProfileID, Revision: revision, BootID: s.bootID, CreatedAt: now, ExpiresAt: now + c.AuthorizationSeconds, Tasks: []TaskAccessBinding{}, ContinueOnSignOut: c.ContinueOnSignOut, ContinueAfterRestart: c.ContinueAfterRestart}
 	if c.Revision != revision || agentProfile(d, c.ProfileID) < 0 || len(c.TaskIDs) < 1 || len(c.TaskIDs) > 10 || c.AuthorizationSeconds < 60 || c.AuthorizationSeconds > 86400 {
 		return a, errors.New("select current-profile reviewed tasks and 1 minute–24 hours of credential access")
 	}
@@ -123,10 +127,15 @@ func (s *Store) reviewTaskAccess(d agentDocument, c AIConnectionCommand, revisio
 func (s *Store) changeTaskAccess(ctx context.Context, tx *sql.Tx, c AIConnectionCommand, v AIConnectionView) (AIConnectionView, error) {
 	state := s.credentialLocked(c.Ref)
 	if c.Action == "task-access-revoke" {
-		if c.Passphrase != "" || c.Key != "" || c.Allowance != nil || c.ContinueOnSignOut {
+		if c.Passphrase != "" || c.Key != "" || c.Allowance != nil || c.ContinueOnSignOut || c.ContinueAfterRestart {
 			return v, errors.New("revoke accepts no secrets or new allowance")
 		}
+		if e := s.removeDurableTaskAccess(c.Ref); e != nil {
+			s.clearAIConnectionLocked(c.Ref)
+			return v, e
+		}
 		state.taskAccess = nil
+		state.durableAccess = false
 		if state.expires <= s.now().Unix() {
 			s.clearAIConnectionLocked(c.Ref)
 		}
@@ -153,7 +162,7 @@ func (s *Store) changeTaskAccess(ctx context.Context, tx *sql.Tx, c AIConnection
 	if c.Action != "task-access-allow" || c.Allowance == nil || c.Key != "" || !validPassword(c.Passphrase) {
 		return v, errors.New("exact reviewed allowance and vault passphrase required")
 	}
-	if c.ContinueOnSignOut {
+	if c.ContinueOnSignOut || c.ContinueAfterRestart {
 		return v, errors.New("logout policy belongs to the reviewed allowance")
 	}
 	p := *c.Allowance
@@ -161,7 +170,7 @@ func (s *Store) changeTaskAccess(ctx context.Context, tx *sql.Tx, c AIConnection
 	for _, task := range p.Tasks {
 		ids = append(ids, task.ID)
 	}
-	expected, e := s.reviewTaskAccess(d, AIConnectionCommand{Ref: c.Ref, ProfileID: p.ProfileID, Revision: p.Revision, TaskIDs: ids, AuthorizationSeconds: p.ExpiresAt - s.now().Unix(), ContinueOnSignOut: p.ContinueOnSignOut}, revision)
+	expected, e := s.reviewTaskAccess(d, AIConnectionCommand{Ref: c.Ref, ProfileID: p.ProfileID, Revision: p.Revision, TaskIDs: ids, AuthorizationSeconds: p.ExpiresAt - s.now().Unix(), ContinueOnSignOut: p.ContinueOnSignOut, ContinueAfterRestart: p.ContinueAfterRestart}, revision)
 	if e != nil {
 		return v, e
 	}
@@ -180,6 +189,13 @@ func (s *Store) changeTaskAccess(ctx context.Context, tx *sql.Tx, c AIConnection
 	if e != nil {
 		return v, errors.New("vault unlock failed")
 	}
+	if p.ContinueAfterRestart {
+		if e = s.persistTaskAccess(ctx, p, plain, env, s.now().Unix()); e != nil {
+			return v, e
+		}
+	} else if e = s.removeDurableTaskAccess(c.Ref); e != nil {
+		return v, e
+	}
 	// Preserve the original interactive expiry; this access is task-scoped only.
 	clear(state.key)
 	state.key = append([]byte(nil), plain...)
@@ -187,6 +203,7 @@ func (s *Store) changeTaskAccess(ctx context.Context, tx *sql.Tx, c AIConnection
 	encoded, _ := json.Marshal(env)
 	state.digest = sha256.Sum256(encoded)
 	state.taskAccess = &p
+	state.durableAccess = p.ContinueAfterRestart
 	state.taskAccessLast = s.now().Unix()
 	return s.aiConnectionLocked(c.Ref)
 }
@@ -245,8 +262,19 @@ func (s *Store) reserveTaskAccess(q *AgentAIRequest) bool {
 		return false
 	}
 	a := state.taskAccess
-	a.UsedRequests++
-	a.AllocatedMicrousd += aiRequestReservation(*q)
+	next := *a
+	next.UsedRequests++
+	next.AllocatedMicrousd += aiRequestReservation(*q)
+	// The durable reservation is synced before the metadata dispatch commits.
+	// A later transaction failure can burn allowance, but cannot refill it.
+	if next.ContinueAfterRestart {
+		env, e := s.readAIVault(q.ConnectionRef)
+		if e != nil || s.persistTaskAccess(context.Background(), next, state.key, env, s.now().Unix()) != nil {
+			s.clearAIConnectionLocked(q.ConnectionRef)
+			return false
+		}
+	}
+	*a = next
 	q.taskAccessID = a.ID
 	return true
 }

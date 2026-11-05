@@ -69,6 +69,7 @@ export type Connection = {
   credentialMode?: CredentialMode;
   credentialModes?: CredentialMode[];
   taskAccess?: TaskAccessAllowance;
+  persistentTaskAccessAvailable?: boolean;
   accessReview?: TaskAccessAllowance;
   admissionPolicy: OpenAIModelPolicy;
   ref: string;
@@ -623,7 +624,7 @@ export function AIConnectionSettings({
             )}
             <p className="connection-status" role="status">
               {view?.ref
-                ? `${uiText(view.planPaused ? "Paused" : view.locked ? "Locked" : "Unlocked")} · ${providerName}`
+                ? `${uiText(view.planPaused ? "Paused" : view.locked ? (view.taskAccess ? "Chat locked" : "Locked") : "Unlocked")} · ${providerName}`
                 : uiText(
                     selected && selected !== "new"
                       ? "Unavailable"

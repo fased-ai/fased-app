@@ -767,6 +767,11 @@ func (s *Store) renewProviderSignIn(ctx context.Context, c AIConnectionCommand) 
 		s.provider.mu.Unlock()
 		return AIConnectionView{}, errors.New("reconnect this signed-out account")
 	}
+	if err = s.removeDurableTaskAccess(c.Ref); err != nil {
+		s.clearAIConnectionLocked(c.Ref)
+		s.provider.mu.Unlock()
+		return AIConnectionView{}, errors.New("background revocation could not be saved; account remains locked")
+	}
 	s.provider.signInRenewals[c.Ref] = true
 	defer func() { s.provider.mu.Lock(); delete(s.provider.signInRenewals, c.Ref); s.provider.mu.Unlock() }()
 	encoded, _ := json.Marshal(env)

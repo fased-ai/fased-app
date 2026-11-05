@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"github.com/fased-ai/fased-app/internal/providersecrets"
 	"github.com/fased-ai/fased-app/internal/tailnet"
 	"io/fs"
 	"log"
@@ -66,7 +67,11 @@ func startModes(ctx context.Context, dir, listen, publicOrigin string, assets fs
 	if err != nil {
 		return nil, err
 	}
-	store, err := OpenStore(dir)
+	var taskSecrets providersecrets.Source = providersecrets.Native{}
+	if fixture {
+		taskSecrets = fixtureTaskSecrets{}
+	}
+	store, err := openStoreWithTaskSecrets(dir, taskSecrets)
 	if err != nil {
 		lock.Close()
 		return nil, err

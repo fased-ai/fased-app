@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/providersecrets"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 	_ "modernc.org/sqlite"
@@ -26,36 +27,43 @@ type Store struct {
 	onchain            *onchainRuntime // Explicit controlled constructor only; ordinary/live admission stays closed.
 	installationSource atomic.Uint32   // Verified installer class, never a browser preference.
 
-	rpcCheckFixture       func(context.Context, RPCCheckRequest) (RPCCheckResult, error) // Tests only; never configuration or IPC.
-	providerFixture       bool
-	rpcAdmission          bool         // Disabled in ordinary constructors; tests only.
-	walletReadFixture     walletReader // Compiled Go tests only; never configuration or IPC.
-	walletReadMu          sync.Mutex
-	sessionFixture        bool
-	aiMu                  sync.Mutex
-	chatEpoch             atomic.Uint64
-	progressMu            sync.Mutex
-	aiProgress            map[string]string
-	newsMu                sync.Mutex
-	provider              providerState
-	pilot                 openAIPilotState // No ordinary constructor configures a target.
-	db                    *sql.DB
-	dir                   string
-	instanceID            string
-	pauseFault            func(string) error // Test-only interruption injection, never configuration or IPC.
-	backupFault           func(string) error // Test-only partial write/crash injection.
-	bootID                string
-	now                   func() time.Time
-	authMu                sync.Mutex
-	localLaunchHash       string
-	localLaunchExpires    time.Time
-	fixture               func(context.Context, signer.Request) (signer.Response, error)
-	custodyOwnerSupported bool
-	custodyNetwork        string                                                             // Public immutable v2 configuration; no key material.
-	researchRead          func(context.Context, researchFactResult) (json.RawMessage, error) // Test-only local projection fault; never configuration/IPC.
+	rpcCheckFixture               func(context.Context, RPCCheckRequest) (RPCCheckResult, error) // Tests only; never configuration or IPC.
+	providerFixture               bool
+	rpcAdmission                  bool         // Disabled in ordinary constructors; tests only.
+	walletReadFixture             walletReader // Compiled Go tests only; never configuration or IPC.
+	walletReadMu                  sync.Mutex
+	sessionFixture                bool
+	aiMu                          sync.Mutex
+	chatEpoch                     atomic.Uint64
+	progressMu                    sync.Mutex
+	aiProgress                    map[string]string
+	newsMu                        sync.Mutex
+	provider                      providerState
+	taskSecrets                   providersecrets.Source
+	providerVaultFault            func() error // Controlled interruption tests only; never configuration or IPC.
+	persistentTaskAccessAvailable bool
+	pilot                         openAIPilotState // No ordinary constructor configures a target.
+	db                            *sql.DB
+	dir                           string
+	instanceID                    string
+	pauseFault                    func(string) error // Test-only interruption injection, never configuration or IPC.
+	backupFault                   func(string) error // Test-only partial write/crash injection.
+	bootID                        string
+	now                           func() time.Time
+	authMu                        sync.Mutex
+	localLaunchHash               string
+	localLaunchExpires            time.Time
+	fixture                       func(context.Context, signer.Request) (signer.Response, error)
+	custodyOwnerSupported         bool
+	custodyNetwork                string                                                             // Public immutable v2 configuration; no key material.
+	researchRead                  func(context.Context, researchFactResult) (json.RawMessage, error) // Test-only local projection fault; never configuration/IPC.
 }
 
 func OpenStore(dir string) (_ *Store, resultErr error) {
+	return openStoreWithTaskSecrets(dir, providersecrets.Native{})
+}
+
+func openStoreWithTaskSecrets(dir string, secrets providersecrets.Source) (_ *Store, resultErr error) {
 	dir, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -312,7 +320,7 @@ PRAGMA user_version=1;`)
 	if _, _, err = readAgents(ctx, db); err != nil {
 		return nil, err
 	}
-	store := &Store{db: db, dir: dir, now: time.Now, bootID: update.NewProbe(), provider: providerState{apiCredentials: providerActivationEnabled}}
+	store := &Store{db: db, dir: dir, now: time.Now, bootID: update.NewProbe(), provider: providerState{apiCredentials: providerActivationEnabled}, taskSecrets: secrets}
 	if err = store.recoverOnchain(ctx); err != nil {
 		return nil, err
 	}
@@ -329,6 +337,9 @@ PRAGMA user_version=1;`)
 		return nil, err
 	}
 	if err = store.bindOpenAIPilot(compiledOpenAIPilotBinding, openAIPilotActivationEnabled); err != nil {
+		return nil, err
+	}
+	if err = store.restoreTaskAccess(ctx); err != nil {
 		return nil, err
 	}
 	return store, nil

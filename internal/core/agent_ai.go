@@ -955,7 +955,9 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, fixtur
 				}
 			}
 			if unmeteredRequest(q) && q.State != "completed" && q.Failure != "" {
-				s.pauseSignInAccount(q.ConnectionRef, q.Failure)
+				if e = s.pauseSignInAccount(q.ConnectionRef, q.Failure); e != nil {
+					return e
+				}
 			}
 			if isResearchAI(q) {
 				if cancelled {

@@ -17,6 +17,7 @@ export type TaskAccessAllowance = {
   usedRequests: number;
   allocatedMicrousd: number;
   continueOnSignOut?: boolean;
+  continueAfterRestart?: boolean;
 };
 export function TaskAccessSettings({
   connection,
@@ -30,6 +31,7 @@ export function TaskAccessSettings({
   const [ids, setIDs] = useState<string[]>([]);
   const [minutes, setMinutes] = useState(60);
   const [continueOnSignOut, setContinueOnSignOut] = useState(false);
+  const [continueAfterRestart, setContinueAfterRestart] = useState(false);
   const [review, setReview] = useState<TaskAccessAllowance>();
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
@@ -43,11 +45,18 @@ export function TaskAccessSettings({
     setIDs([]);
     setReview(undefined);
     setContinueOnSignOut(false);
+    setContinueAfterRestart(false);
     setPassphrase("");
     return () => {
       generation.current++;
     };
   }, [v?.profileId, core.instanceId, connection.ref]);
+  useEffect(() => {
+    if (!connection.persistentTaskAccessAvailable) {
+      setContinueAfterRestart(false);
+      setReview((r) => (r?.continueAfterRestart ? undefined : r));
+    }
+  }, [connection.persistentTaskAccessAvailable]);
   const tasks =
     v?.tasks.filter(
       (task) =>
@@ -73,6 +82,7 @@ export function TaskAccessSettings({
               taskIds: ids,
               authorizationSeconds: minutes * 60,
               continueOnSignOut,
+              continueAfterRestart,
             }
           : {}),
         ...(action === "task-access-allow"
@@ -97,6 +107,15 @@ export function TaskAccessSettings({
       {error && <p role="alert">{t(error)}</p>}
       {connection.taskAccess && (
         <div className="agent-inline">
+          <span className="badge">
+            {t(
+              connection.taskAccess.continueAfterRestart
+                ? "After restart"
+                : connection.taskAccess.continueOnSignOut
+                  ? "After sign-out"
+                  : "This session",
+            )}
+          </span>
           <span>
             {
               v?.profiles.find((p) => p.id === connection.taskAccess?.profileId)
@@ -188,10 +207,28 @@ export function TaskAccessSettings({
                   checked={continueOnSignOut}
                   onChange={(e) => {
                     setContinueOnSignOut(e.target.checked);
+                    if (!e.target.checked) setContinueAfterRestart(false);
                     setReview(undefined);
                   }}
                 />
                 {t("Continue after sign-out")}
+              </label>
+            )}
+          {connection.persistentTaskAccessAvailable &&
+            !connection.pilotEnrollment &&
+            !connection.pilotAvailable &&
+            !connection.pilot && (
+              <label className="ai-consent">
+                <input
+                  type="checkbox"
+                  checked={continueAfterRestart}
+                  onChange={(e) => {
+                    setContinueAfterRestart(e.target.checked);
+                    if (e.target.checked) setContinueOnSignOut(true);
+                    setReview(undefined);
+                  }}
+                />
+                {t("Continue after restart")}
               </label>
             )}
         </>
@@ -218,9 +255,11 @@ export function TaskAccessSettings({
           </p>
           <p>
             {t(
-              review.continueOnSignOut
-                ? "Selected tasks continue after sign-out until expiry. Lock, revoke or restart stops access."
-                : "Selected tasks only. Closing the browser keeps them running. Lock, sign-out, expiry or restart stops credential access.",
+              review.continueAfterRestart
+                ? "Selected tasks continue after restart until expiry. Lock or revoke stops access."
+                : review.continueOnSignOut
+                  ? "Selected tasks continue after sign-out until expiry. Lock, revoke or restart stops access."
+                  : "Selected tasks only. Closing the browser keeps them running. Lock, sign-out, expiry or restart stops credential access.",
             )}
           </p>
           <label>

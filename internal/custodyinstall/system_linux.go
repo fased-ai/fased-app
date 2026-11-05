@@ -91,6 +91,10 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 	}
 	switch args[0] {
 	case "/usr/bin/install", "/usr/bin/mkdir", "/usr/bin/ln", "/usr/bin/mv", "/usr/bin/sync", "/usr/bin/rm", "/usr/bin/cat", "/usr/bin/systemctl", "/usr/bin/setpriv", "/usr/sbin/useradd":
+	case "/usr/bin/systemd-creds":
+		if !providerCredentialEncryption(input, args) {
+			return nil, errors.New("only fixed provider service-key encryption is allowed")
+		}
 	case "/usr/bin/find":
 		maintenance := len(args) == 8 && args[2] == "-maxdepth" && args[3] == "1" && args[4] == "-name" && args[6] == "-printf" && args[7] == "%U:%G:%m:%y" && maintenancePolicyInput(args[1]+"/"+args[5])
 		if !maintenance && (len(args) != 9 || args[1] != Root(os.Getuid())+"/signer-state" || strings.Join(args[2:], " ") != "-mindepth 1 -maxdepth 1 -printf x -quit") {
@@ -169,6 +173,10 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 	c.Stdin = bytes.NewReader(input)
 	c.Stderr = s.Out
 	return c.Output()
+}
+
+func providerCredentialEncryption(input []byte, args []string) bool {
+	return len(input) == 32 && len(args) == 6 && args[0] == "/usr/bin/systemd-creds" && strings.Join(args[1:], " ") == "encrypt --with-key=host --name=fased-provider-task-key - -"
 }
 
 // AppHelper elevates the OS credential switcher, which drops UID, groups and

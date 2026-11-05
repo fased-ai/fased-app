@@ -95,6 +95,8 @@ jobs:
       - if: needs.classify.outputs.scope == 'rpc'
         run: go test -race ./internal/core -run 'Test(RPC|AccountRPC|PublicRPC|ProviderRPC)'
       - run: npm run build:core
+      - name: Native protected provider credential runtime
+        run: node scripts/check-native-provider-secret.mjs
       - name: Portable encrypted history and quarantined recovery checks
         if: needs.classify.outputs.signer == 'true'
         run: node scripts/check-portable-recovery.mjs
@@ -120,6 +122,8 @@ jobs:
             .evidence/p4-portable-recovery/source-inputs.json
             .evidence/p4-trust-rehearsal/trust-cli-result.json
             .evidence/p4-trust-rehearsal/trust-cli.log
+            .evidence/native-provider-secret/result.json
+            .evidence/native-provider-secret/service-starts.log
           retention-days: 7
       - name: Headless Windows compilation
         if: needs.classify.outputs.desktop != 'true'
