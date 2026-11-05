@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { githubPublisher } from "./publish-ubuntu-release.mjs";
 import {
   acceptanceBinding,
   installedAcceptanceChecks,
@@ -411,7 +412,7 @@ test("structured actual Local and independent Remote legs join without synthetic
   );
 });
 
-test("owner-reviewed Remote proof joins exact Local CI and rejects substitution, edits and wrong actors", async () => {
+test("owner-reviewed Remote proof joins exact Local CI and rejects substitution, edits and wrong actors", async (t) => {
   const target = { ...packet, productVersion: "0.1.10" };
   const binding = acceptanceBinding(target, inventory);
   const local = {
@@ -480,7 +481,7 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
   let actor = { login: "fcode-ai", id: 155309118 },
     comments = [],
     posted = 0;
-  const api = async (method, url, data) => {
+  const fixtureAPI = async (method, url, data) => {
     if (url === "/user") return actor;
     if (url.endsWith("/jobs"))
       return {
@@ -534,6 +535,27 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
     if (url.endsWith("/comments/99")) return comments[0];
     assert.fail(`unexpected API ${method} ${url}`);
   };
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    const address = new URL(url);
+    assert.equal(address.origin, "https://api.github.com");
+    const value = await fixtureAPI(
+      init.method,
+      address.pathname + address.search,
+      init.body ? JSON.parse(init.body) : undefined,
+    );
+    return new Response(JSON.stringify(value), {
+      headers: { "Content-Type": "application/json" },
+    });
+  });
+  const api = githubPublisher("disposable-publisher-fixture-token");
+  await assert.rejects(api("POST", "/user"), /Fixed repository/);
+  await assert.rejects(
+    api(
+      "GET",
+      `/repos/fased-ai/fased-app/commits/${target.source}/comments?per_page=101`,
+    ),
+    /Fixed repository/,
+  );
   const options = { downloadArtifact: () => raw };
   await assert.rejects(
     verifyInstalledAcceptance(target, inventory, api, options),

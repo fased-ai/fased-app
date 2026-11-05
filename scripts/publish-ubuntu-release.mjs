@@ -302,6 +302,12 @@ export function githubPublisher(token) {
   if (typeof token !== "string" || token.length < 8 || /\s/.test(token))
     throw Error("Explicit publisher credential required");
   return async (method, path, body) => {
+    const acceptanceRead =
+      method === "GET" &&
+      (path === "/user" ||
+        /^\/repos\/fased-ai\/fased-app\/commits\/[a-f0-9]{40}\/comments\?per_page=100$/.test(
+          path,
+        ));
     const upload =
       method === "UPLOAD" &&
       /^\/repos\/fased-ai\/fased-app\/releases\/[1-9][0-9]*\/assets\?name=(fased-app-linux-amd64\.tar\.gz|fased-install-linux-amd64|fased-app-linux-amd64\.provenance\.sigstore\.json|install\.sh|fased-release\.json)$/.test(
@@ -310,6 +316,7 @@ export function githubPublisher(token) {
       Buffer.isBuffer(body);
     if (
       !upload &&
+      !acceptanceRead &&
       (!["GET", "POST", "PATCH"].includes(method) ||
         !/^\/repos\/fased-ai\/fased-app(?:\/[A-Za-z0-9._/-]+)?(?:\?recursive=1)?$/.test(
           path,
