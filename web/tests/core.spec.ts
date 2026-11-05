@@ -11571,11 +11571,14 @@ test("reviewed task credential allowance is scoped, finite and revocable in Prov
     .getByRole("checkbox", { name: task.name, exact: true })
     .check();
   await provider
+    .getByRole("checkbox", { name: "Continue after sign-out", exact: true })
+    .check();
+  await provider
     .getByRole("button", { name: "Review access", exact: true })
     .click();
   await expect(
     provider.getByText(
-      "Selected tasks only. Closing the browser keeps them running. Lock, sign-out, expiry or restart stops credential access.",
+      "Selected tasks continue after sign-out until expiry. Lock, revoke or restart stops access.",
       { exact: true },
     ),
   ).toBeVisible();
@@ -11592,6 +11595,23 @@ test("reviewed task credential allowance is scoped, finite and revocable in Prov
       async () => (await privateCLI(["ai-connection"])).taskAccess?.tasks[0].id,
     )
     .toBe(task.id);
+  expect(
+    (await privateCLI(["ai-connection"])).taskAccess.continueOnSignOut,
+  ).toBe(true);
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await page.getByRole("button", { name: "Use password", exact: true }).click();
+  await expect(
+    page.getByLabel("Owner password", { exact: true }),
+  ).toBeVisible();
+  const afterSignOut = await privateCLI(["ai-connection"]);
+  expect(afterSignOut.locked).toBe(true);
+  expect(afterSignOut.taskAccess.continueOnSignOut).toBe(true);
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await openProviders(page);
+  await provider.getByText("Background access", { exact: true }).click();
   await change({ action: "task-run", id: task.id });
   await expect
     .poll(async () => (await privateCLI(["agents"])).tasks[0].runs, {

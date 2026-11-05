@@ -16,6 +16,7 @@ export type TaskAccessAllowance = {
   budgetMicrousd: number;
   usedRequests: number;
   allocatedMicrousd: number;
+  continueOnSignOut?: boolean;
 };
 export function TaskAccessSettings({
   connection,
@@ -28,6 +29,7 @@ export function TaskAccessSettings({
   const { t } = useUI();
   const [ids, setIDs] = useState<string[]>([]);
   const [minutes, setMinutes] = useState(60);
+  const [continueOnSignOut, setContinueOnSignOut] = useState(false);
   const [review, setReview] = useState<TaskAccessAllowance>();
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
@@ -40,11 +42,12 @@ export function TaskAccessSettings({
     setError("");
     setIDs([]);
     setReview(undefined);
+    setContinueOnSignOut(false);
     setPassphrase("");
     return () => {
       generation.current++;
     };
-  }, [v?.profileId, core.instanceId]);
+  }, [v?.profileId, core.instanceId, connection.ref]);
   const tasks =
     v?.tasks.filter(
       (task) =>
@@ -69,6 +72,7 @@ export function TaskAccessSettings({
               profileId: v.profileId,
               taskIds: ids,
               authorizationSeconds: minutes * 60,
+              continueOnSignOut,
             }
           : {}),
         ...(action === "task-access-allow"
@@ -175,6 +179,21 @@ export function TaskAccessSettings({
           >
             {t("Review access")}
           </button>
+          {!connection.pilotEnrollment &&
+            !connection.pilotAvailable &&
+            !connection.pilot && (
+              <label className="ai-consent">
+                <input
+                  type="checkbox"
+                  checked={continueOnSignOut}
+                  onChange={(e) => {
+                    setContinueOnSignOut(e.target.checked);
+                    setReview(undefined);
+                  }}
+                />
+                {t("Continue after sign-out")}
+              </label>
+            )}
         </>
       ) : (
         <form
@@ -199,7 +218,9 @@ export function TaskAccessSettings({
           </p>
           <p>
             {t(
-              "Selected tasks only. Closing the browser keeps them running. Lock, sign-out, expiry or restart stops credential access.",
+              review.continueOnSignOut
+                ? "Selected tasks continue after sign-out until expiry. Lock, revoke or restart stops access."
+                : "Selected tasks only. Closing the browser keeps them running. Lock, sign-out, expiry or restart stops credential access.",
             )}
           </p>
           <label>
@@ -214,7 +235,12 @@ export function TaskAccessSettings({
           </label>
           <details>
             <summary>{t("Limits")}</summary>
-            <pre>{JSON.stringify(review, null, 2)}</pre>
+            <dl>
+              <dt>{t("Tasks")}</dt>
+              <dd>{review.tasks.length}</dd>
+              <dt>{t("Expires")}</dt>
+              <dd>{new Date(review.expiresAt * 1000).toLocaleString()}</dd>
+            </dl>
           </details>
           <div className="agent-actions">
             <button

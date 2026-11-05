@@ -31,6 +31,7 @@ type TaskAccessAllowance struct {
 	BudgetMicrousd    int64               `json:"budgetMicrousd"`
 	UsedRequests      int                 `json:"usedRequests"`
 	AllocatedMicrousd int64               `json:"allocatedMicrousd"`
+	ContinueOnSignOut bool                `json:"continueOnSignOut,omitempty"`
 }
 
 func taskAccessDigest(a TaskAccessAllowance) string {
@@ -51,7 +52,10 @@ func (s *Store) taskAccessCurrent(a *TaskAccessAllowance, state *providerCredent
 }
 func (s *Store) reviewTaskAccess(d agentDocument, c AIConnectionCommand, revision int64) (TaskAccessAllowance, error) {
 	now := s.now().Unix()
-	a := TaskAccessAllowance{ConnectionRef: c.Ref, ProfileID: c.ProfileID, Revision: revision, BootID: s.bootID, CreatedAt: now, ExpiresAt: now + c.AuthorizationSeconds, Tasks: []TaskAccessBinding{}}
+	if c.ContinueOnSignOut && s.pilotTargetLocked(c.Ref) {
+		return TaskAccessAllowance{}, errors.New("pilot access ends at sign-out")
+	}
+	a := TaskAccessAllowance{ConnectionRef: c.Ref, ProfileID: c.ProfileID, Revision: revision, BootID: s.bootID, CreatedAt: now, ExpiresAt: now + c.AuthorizationSeconds, Tasks: []TaskAccessBinding{}, ContinueOnSignOut: c.ContinueOnSignOut}
 	if c.Revision != revision || agentProfile(d, c.ProfileID) < 0 || len(c.TaskIDs) < 1 || len(c.TaskIDs) > 10 || c.AuthorizationSeconds < 60 || c.AuthorizationSeconds > 86400 {
 		return a, errors.New("select current-profile reviewed tasks and 1 minute–24 hours of credential access")
 	}
@@ -119,7 +123,7 @@ func (s *Store) reviewTaskAccess(d agentDocument, c AIConnectionCommand, revisio
 func (s *Store) changeTaskAccess(ctx context.Context, tx *sql.Tx, c AIConnectionCommand, v AIConnectionView) (AIConnectionView, error) {
 	state := s.credentialLocked(c.Ref)
 	if c.Action == "task-access-revoke" {
-		if c.Passphrase != "" || c.Key != "" || c.Allowance != nil {
+		if c.Passphrase != "" || c.Key != "" || c.Allowance != nil || c.ContinueOnSignOut {
 			return v, errors.New("revoke accepts no secrets or new allowance")
 		}
 		state.taskAccess = nil
@@ -149,12 +153,15 @@ func (s *Store) changeTaskAccess(ctx context.Context, tx *sql.Tx, c AIConnection
 	if c.Action != "task-access-allow" || c.Allowance == nil || c.Key != "" || !validPassword(c.Passphrase) {
 		return v, errors.New("exact reviewed allowance and vault passphrase required")
 	}
+	if c.ContinueOnSignOut {
+		return v, errors.New("logout policy belongs to the reviewed allowance")
+	}
 	p := *c.Allowance
 	ids := []string{}
 	for _, task := range p.Tasks {
 		ids = append(ids, task.ID)
 	}
-	expected, e := s.reviewTaskAccess(d, AIConnectionCommand{Ref: c.Ref, ProfileID: p.ProfileID, Revision: p.Revision, TaskIDs: ids, AuthorizationSeconds: p.ExpiresAt - s.now().Unix()}, revision)
+	expected, e := s.reviewTaskAccess(d, AIConnectionCommand{Ref: c.Ref, ProfileID: p.ProfileID, Revision: p.Revision, TaskIDs: ids, AuthorizationSeconds: p.ExpiresAt - s.now().Unix(), ContinueOnSignOut: p.ContinueOnSignOut}, revision)
 	if e != nil {
 		return v, e
 	}
@@ -244,3 +251,22 @@ func (s *Store) reserveTaskAccess(q *AgentAIRequest) bool {
 	return true
 }
 func taskAccessAction(action string) bool { return strings.HasPrefix(action, "task-access-") }
+
+// Logout always removes interactive provider authority. Only a separately
+// reviewed, finite task lease can retain its already-scoped in-memory key.
+// Close/restart and explicit provider lock still clear every credential.
+func (s *Store) logoutAIConnections() {
+	s.chatEpoch.Add(1)
+	s.provider.mu.Lock()
+	defer s.provider.mu.Unlock()
+	s.cancelProviderSignInLocked()
+	for ref, state := range s.provider.accounts {
+		if !state.planPaused && !s.pilotTargetLocked(ref) && state.taskAccess != nil && state.taskAccess.ContinueOnSignOut && s.taskAccessCurrent(state.taskAccess, state) {
+			state.expires = 0
+			state.discovery = modelDiscovery{}
+			state.modelRefresh++
+			continue
+		}
+		s.clearAIConnectionLocked(ref)
+	}
+}

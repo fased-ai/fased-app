@@ -39,6 +39,7 @@ type AIConnectionCommand struct {
 	ProfileID            string                `json:"profileId,omitempty"`
 	TaskIDs              []string              `json:"taskIds,omitempty"`
 	AuthorizationSeconds int64                 `json:"authorizationSeconds,omitempty"`
+	ContinueOnSignOut    bool                  `json:"continueOnSignOut,omitempty"`
 	Allowance            *TaskAccessAllowance  `json:"allowance,omitempty"`
 	ConsentDigest        string                `json:"consentDigest,omitempty"`
 	Action               string                `json:"action"`
@@ -470,6 +471,9 @@ func (s *Store) pauseSignInAccount(ref, failure string) {
 	state.planFailure = failure
 }
 func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (AIConnectionView, error) {
+	if c.ContinueOnSignOut && c.Action != "task-access-review" {
+		return AIConnectionView{}, errors.New("logout policy requires a task access review")
+	}
 	if c.Workspace != "" && (c.Provider != "anthropic" || (c.Action != "add" && c.Action != "save") || !validAnthropicWorkspace(c.Workspace)) {
 		return AIConnectionView{}, errors.New("workspace belongs to Anthropic API-key setup")
 	}
@@ -568,7 +572,7 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		}
 	}
 	// All paths needing both locks acquire SQLite before the in-memory mutex.
-	if !taskAccessAction(c.Action) && (c.Allowance != nil || len(c.TaskIDs) > 0 || c.ProfileID != "" || c.AuthorizationSeconds != 0 || c.ConsentDigest != "" || c.Revision != 0) {
+	if !taskAccessAction(c.Action) && (c.Allowance != nil || len(c.TaskIDs) > 0 || c.ProfileID != "" || c.AuthorizationSeconds != 0 || c.ContinueOnSignOut || c.ConsentDigest != "" || c.Revision != 0) {
 		return AIConnectionView{}, errors.New("task credential scope requires a dedicated review")
 	}
 	if c.Action == "lock" {

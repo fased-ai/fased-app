@@ -646,6 +646,19 @@ export const pageCopy = {
     "审核访问",
     "접근 검토",
   ],
+  "Continue after sign-out": [
+    "Продолжать после выхода",
+    "Continuar tras cerrar sesión",
+    "退出登录后继续",
+    "로그아웃 후 계속",
+  ],
+  "Selected tasks continue after sign-out until expiry. Lock, revoke or restart stops access.":
+    [
+      "Выбранные задачи работают после выхода до конца срока. Блокировка, отзыв или перезапуск закрывают доступ.",
+      "Las tareas seleccionadas continúan tras cerrar sesión hasta que caduque el permiso. Bloquear, revocar o reiniciar detiene el acceso.",
+      "所选任务在退出登录后继续运行，直到权限到期。锁定、撤销或重启将停止访问。",
+      "선택한 작업은 로그아웃 후에도 권한 만료까지 계속됩니다. 잠금, 철회 또는 재시작 시 접근이 중단됩니다.",
+    ],
   "Selected tasks only. Closing the browser keeps them running. Lock, sign-out, expiry or restart stops credential access.":
     [
       "Только выбранные задачи. Они работают после закрытия браузера. Блокировка, выход, истечение срока или перезапуск закрывают доступ к ключу.",
