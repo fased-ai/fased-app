@@ -183,6 +183,146 @@ export function validateInstalledAcceptance(receipt, packet, inventory) {
   return binding;
 }
 
+export function completeRemoteUpgrade(
+  manual,
+  security,
+  automatic,
+  originalPredecessor,
+) {
+  const keys = [
+    "source",
+    "sourceTree",
+    "productVersion",
+    "runId",
+    "runAttempt",
+    "platform",
+    "artifactSetSha256",
+    "localReceiptSha256",
+    "instanceId",
+    "nodeIdentitySha256",
+  ];
+  const mapped = {
+    authenticationPreservation: "authenticationPreservation",
+    uiUpdate: "uiApply",
+    cliUpdate: "cliApply",
+    restart: "serviceRestart",
+    ordinaryRemoteUpdate: "distinctEntryOperations",
+  };
+  const browser = automatic?.browser;
+  const after = automatic?.postUpdateState;
+  if (
+    manual?.result !== "PASS" ||
+    manual.scenario !== "manual-remote-replacement" ||
+    manual.ownerAuthMode !== "existing-password-account-preserved" ||
+    manual.fixtureOnly !== true ||
+    ["mining", "liveFeatures", "automaticUpdates"].some(
+      (key) => manual[key] !== false,
+    ) ||
+    manual.upgradeApplied !== true ||
+    manual.updatePasswordPrompt !== false ||
+    manual.uiOutcome !== "applied" ||
+    manual.cliOutcome !== "applied" ||
+    originalPredecessor?.version !== 2 ||
+    originalPredecessor.source !== manual.predecessor?.source ||
+    originalPredecessor.productVersion !== manual.predecessor?.version ||
+    (manual.predecessor.packetVersion !== undefined &&
+      manual.predecessor.packetVersion !== originalPredecessor.version) ||
+    manual.checks?.actualPublicPredecessor !== "PASS" ||
+    Object.values(mapped).some((key) => manual.checks?.[key] !== "PASS") ||
+    [security, automatic].some(
+      (v) =>
+        !v ||
+        v.result !== "PASS" ||
+        keys.some((key) => v[key] !== manual[key]) ||
+        v.fixtureOnly !== true ||
+        ["mining", "liveFeatures", "automaticUpdates"].some(
+          (key) => v[key] !== false,
+        ),
+    ) ||
+    stagedAcceptanceContract.remoteCommon.some(
+      (key) => security.checks?.[key] !== "PASS",
+    ) ||
+    security.checks?.alreadyCurrent !== "PASS" ||
+    security.checks?.authenticationPreservation !== "PASS" ||
+    security.ownerAuthMode !== "tailscale-device-v1" ||
+    security.ownerEnrollment !== "existing-owner-ui-v1" ||
+    security.transport !== "tailscale-https" ||
+    security.normalTLS !== true ||
+    security.sshControlSessionRequired !== false ||
+    automatic.sshControlSessionRequired !== false ||
+    automatic.ownedSSHSessionDuringApply !== false ||
+    browser?.result !== "PASS" ||
+    browser.instanceId !== manual.instanceId ||
+    browser.version !== manual.productVersion ||
+    browser.fromVersion !== manual.predecessor?.version ||
+    browser.automaticOutcome !== "applied" ||
+    browser.policyRestored !== "manual" ||
+    browser.customerActivation !== false ||
+    browser.browserClosedDuringApply !== true ||
+    browser.preservation !== true ||
+    browser.appliedManifestSha256 !== manual.manifestSha256 ||
+    !/^[a-f0-9]{32}$/.test(browser.automaticOperation?.id ?? "") ||
+    browser.automaticOperation.automatic !== true ||
+    browser.automaticOperation.receipt?.phase !== "completed" ||
+    browser.automaticOperation.receipt.id !== browser.automaticOperation.id ||
+    browser.automaticOperation.receipt.manifestSha256 !==
+      manual.manifestSha256 ||
+    [manual.uiOperationId, manual.cliOperationId].includes(
+      browser.automaticOperation.id,
+    ) ||
+    after?.instanceId !== manual.instanceId ||
+    after.installedVersion !== manual.productVersion ||
+    after.operation?.id !== browser.automaticOperation.id ||
+    after.operation.automatic !== true ||
+    after.operation.phase !== "completed" ||
+    after.operation.receipt?.id !== browser.automaticOperation.id ||
+    after.operation.receipt.phase !== "completed" ||
+    after.operation.receipt.manifestSha256 !== manual.manifestSha256 ||
+    after.activationEnabled !== false ||
+    (after.policy?.mode ?? "manual") !== "manual"
+  )
+    throw Error(
+      "Matching actual manual, security and detached Automatic upgrade proofs required",
+    );
+  return {
+    schemaVersion: 1,
+    ...Object.fromEntries(keys.map((key) => [key, manual[key]])),
+    result: "PASS",
+    fixtureOnly: true,
+    mining: false,
+    liveFeatures: false,
+    automaticUpdates: false,
+    scenario: "upgrade",
+    predecessor: {
+      ...manual.predecessor,
+      packetVersion: originalPredecessor.version,
+      ownerAuthMode: "password-v1",
+    },
+    transport: security.transport,
+    normalTLS: true,
+    ownerAuthMode: security.ownerAuthMode,
+    ownerEnrollment: security.ownerEnrollment,
+    sshControlSessionRequired: false,
+    passwordPrompt: false,
+    upgradeApplied: true,
+    uiOutcome: manual.uiOutcome,
+    cliOutcome: manual.cliOutcome,
+    automaticOutcome: "applied",
+    automaticPolicyRestored: "manual",
+    customerActivation: false,
+    checks: {
+      ...security.checks,
+      ...Object.fromEntries(
+        Object.entries(mapped).map(([key, source]) => [
+          key,
+          manual.checks[source],
+        ]),
+      ),
+      controlledAutomatic: "PASS",
+    },
+  };
+}
+
 function validateJoinedAcceptance(receipt, packet, inventory) {
   const binding = acceptanceBinding(packet, inventory);
   const leg = (value, names) => {
@@ -231,12 +371,31 @@ function validateJoinedAcceptance(receipt, packet, inventory) {
     [receipt.remoteUpgrade, "upgrade", stagedAcceptanceContract.remoteUpgrade],
   ]) {
     leg(value, [...stagedAcceptanceContract.remoteCommon, ...specific]);
+    const deviceOwner =
+      value.ownerAuthMode === "tailscale-device-v1" &&
+      value.checks.protectedOwnerDevice === "PASS";
+    // The actual supported public predecessor has an existing password owner.
+    // Its normal UI can add device ownership without replacing that account.
+    const preservedEnrollment =
+      scenario === "upgrade" &&
+      value.ownerEnrollment === "existing-owner-ui-v1" &&
+      value.predecessor?.ownerAuthMode === "password-v1" &&
+      value.predecessor.version === "0.1.6" &&
+      value.predecessor.source === "738bd835b8c86c7cf7b3abfb2945240635f51fe7" &&
+      value.predecessor.artifactSetSha256 ===
+        "aea00a0d9e1b7ed05a1346428cdf8cc277cbe40f93cfcd86d40fc9b45c559460";
     if (
       value.scenario !== scenario ||
       value.localReceiptSha256 !== localDigest ||
       value.transport !== "tailscale-https" ||
       value.normalTLS !== true ||
-      value.ownerAuthMode !== "tailscale-device-v1" ||
+      !deviceOwner ||
+      (scenario === "upgrade" &&
+        !preservedEnrollment &&
+        !(
+          value.predecessor?.ownerAuthMode === "tailscale-device-v1" &&
+          value.ownerEnrollment === undefined
+        )) ||
       value.sshControlSessionRequired !== false ||
       value.passwordPrompt !== false ||
       !(value.instanceId !== undefined &&
@@ -247,7 +406,7 @@ function validateJoinedAcceptance(receipt, packet, inventory) {
       !/^[a-f0-9]{64}$/.test(value.nodeIdentitySha256 ?? "")
     )
       throw Error(
-        "Persistent Local-first password-free private Remote leg required",
+        "Persistent Local-first private Remote owner and password-free Update required",
       );
   }
   const upgrade = receipt.remoteUpgrade;
@@ -446,6 +605,7 @@ function publicRemoteLeg(value) {
     "transport",
     "normalTLS",
     "ownerAuthMode",
+    "ownerEnrollment",
     "sshControlSessionRequired",
     "passwordPrompt",
     "nodeIdentitySha256",
@@ -475,10 +635,13 @@ function publicRemoteLeg(value) {
   );
   if (value.scenario === "upgrade")
     projected.predecessor = Object.fromEntries(
-      ["version", "source", "artifactSetSha256", "packetVersion"].map((k) => [
-        k,
-        value.predecessor[k],
-      ]),
+      [
+        "version",
+        "source",
+        "artifactSetSha256",
+        "packetVersion",
+        "ownerAuthMode",
+      ].map((k) => [k, value.predecessor[k]]),
     );
   return projected;
 }

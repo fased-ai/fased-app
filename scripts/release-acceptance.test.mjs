@@ -339,6 +339,7 @@ test("structured actual Local and independent Remote legs join without synthetic
     nodeIdentitySha256: (kind === "fresh" ? "e" : "f").repeat(64),
     checks: Object.fromEntries(
       [
+        "protectedOwnerDevice",
         ...stagedAcceptanceContract.remoteCommon,
         ...stagedAcceptanceContract[
           kind === "fresh" ? "remoteFresh" : "remoteUpgrade"
@@ -354,6 +355,7 @@ test("structured actual Local and independent Remote legs join without synthetic
         source: "d".repeat(40),
         artifactSetSha256: "e".repeat(64),
         packetVersion: 2,
+        ownerAuthMode: "tailscale-device-v1",
       },
       upgradeApplied: true,
       uiOutcome: "applied",
@@ -374,6 +376,55 @@ test("structured actual Local and independent Remote legs join without synthetic
   assert.doesNotThrow(() =>
     validateInstalledAcceptance(complete, target, inventory),
   );
+  // An actual public predecessor retains its existing password account.
+  // That is separate from fresh setup and password-free routine Update.
+  const preserved = structuredClone(upgrade);
+  preserved.ownerAuthMode = "tailscale-device-v1";
+  preserved.ownerEnrollment = "existing-owner-ui-v1";
+  preserved.predecessor = {
+    ...local.releasedPredecessor,
+    packetVersion: 2,
+    ownerAuthMode: "password-v1",
+  };
+  preserved.checks.authenticationPreservation = "PASS";
+  const preservedComplete = composeInstalledAcceptance(
+    local,
+    fresh,
+    preserved,
+    target,
+    inventory,
+    localSha,
+  );
+  assert.doesNotThrow(() =>
+    validateInstalledAcceptance(preservedComplete, target, inventory),
+  );
+  for (const mutate of [
+    (r) => {
+      r.remoteFresh.ownerAuthMode = "existing-password-account-preserved";
+    },
+    (r) => {
+      r.remoteUpgrade.ownerAuthMode = "existing-password-account-preserved";
+    },
+    (r) => {
+      r.remoteUpgrade.predecessor.source = "0".repeat(40);
+    },
+    (r) => {
+      r.remoteUpgrade.predecessor.ownerAuthMode = "tailscale-device-v1";
+    },
+    (r) => {
+      delete r.remoteUpgrade.checks.authenticationPreservation;
+    },
+    (r) => {
+      r.remoteUpgrade.checks.privateAdminRecovery = "SUPPORTING";
+    },
+    (r) => {
+      r.remoteUpgrade.automaticOutcome = "NOT_RUN";
+    },
+  ]) {
+    const bad = structuredClone(preservedComplete);
+    mutate(bad);
+    assert.throws(() => validateInstalledAcceptance(bad, target, inventory));
+  }
   for (const mutate of [
     (r) => {
       r.remoteFresh.checks.publicIPv6Closure = "SUPPORTING";
@@ -401,6 +452,9 @@ test("structured actual Local and independent Remote legs join without synthetic
     },
     (r) => {
       r.remoteUpgrade.upgradeApplied = false;
+    },
+    (r) => {
+      delete r.remoteUpgrade.checks.protectedOwnerDevice;
     },
   ]) {
     const bad = structuredClone(complete);
@@ -455,6 +509,7 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
     nodeIdentitySha256: "f".repeat(64),
     checks: Object.fromEntries(
       [
+        "protectedOwnerDevice",
         ...stagedAcceptanceContract.remoteCommon,
         ...stagedAcceptanceContract[
           scenario === "fresh" ? "remoteFresh" : "remoteUpgrade"
@@ -470,6 +525,7 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
         source: "d".repeat(40),
         artifactSetSha256: "e".repeat(64),
         packetVersion: 2,
+        ownerAuthMode: "tailscale-device-v1",
       },
       upgradeApplied: true,
       uiOutcome: "applied",
@@ -629,4 +685,209 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
     verifyInstalledAcceptance(target, inventory, api, options),
     /One reviewed/,
   );
+  comments = [];
+  posted = 0;
+  const preserved = structuredClone(upgrade);
+  preserved.ownerAuthMode = "tailscale-device-v1";
+  preserved.ownerEnrollment = "existing-owner-ui-v1";
+  preserved.predecessor = {
+    ...local.releasedPredecessor,
+    packetVersion: 2,
+    ownerAuthMode: "password-v1",
+  };
+  const legacyRecorded = await recordRemoteAcceptance(
+    target,
+    inventory,
+    api,
+    fresh,
+    preserved,
+    options,
+  );
+  const legacyVerified = await verifyInstalledAcceptance(
+    target,
+    inventory,
+    api,
+    options,
+  );
+  assert.equal(
+    legacyVerified.remoteReviewSha256,
+    legacyRecorded.remoteReviewSha256,
+  );
+  assert.ok(comments[0].body.includes('"ownerAuthMode":"password-v1"'));
+  assert.equal(posted, 1);
+});
+
+test("Remote upgrade completion refuses missing or mismatched actual legs", async () => {
+  const { completeRemoteUpgrade } = await import("./release-acceptance.mjs");
+  const bind = {
+    ...acceptanceBinding(packet, inventory),
+    localReceiptSha256: "a".repeat(64),
+    instanceId: "I".repeat(43),
+    nodeIdentitySha256: "b".repeat(64),
+  };
+  const manual = {
+    ...bind,
+    result: "PASS",
+    scenario: "manual-remote-replacement",
+    ownerAuthMode: "existing-password-account-preserved",
+    fixtureOnly: true,
+    mining: false,
+    liveFeatures: false,
+    automaticUpdates: false,
+    upgradeApplied: true,
+    updatePasswordPrompt: false,
+    predecessor: {
+      version: "0.1.6",
+      source: "738bd835b8c86c7cf7b3abfb2945240635f51fe7",
+    },
+    manifestSha256: "c".repeat(64),
+    uiOperationId: "a".repeat(32),
+    cliOperationId: "b".repeat(32),
+    uiOutcome: "applied",
+    cliOutcome: "applied",
+    checks: Object.fromEntries(
+      [
+        "actualPublicPredecessor",
+        "authenticationPreservation",
+        "uiApply",
+        "cliApply",
+        "serviceRestart",
+        "distinctEntryOperations",
+      ].map((k) => [k, "PASS"]),
+    ),
+  };
+  const security = {
+    ...bind,
+    result: "PASS",
+    fixtureOnly: true,
+    mining: false,
+    liveFeatures: false,
+    automaticUpdates: false,
+    transport: "tailscale-https",
+    normalTLS: true,
+    ownerAuthMode: "tailscale-device-v1",
+    ownerEnrollment: "existing-owner-ui-v1",
+    sshControlSessionRequired: false,
+    checks: {
+      ...Object.fromEntries(
+        stagedAcceptanceContract.remoteCommon.map((k) => [k, "PASS"]),
+      ),
+      alreadyCurrent: "PASS",
+      authenticationPreservation: "PASS",
+    },
+  };
+  const automatic = {
+    ...security,
+    ownedSSHSessionDuringApply: false,
+    browser: {
+      result: "PASS",
+      instanceId: bind.instanceId,
+      version: packet.productVersion,
+      fromVersion: "0.1.6",
+      automaticOutcome: "applied",
+      policyRestored: "manual",
+      customerActivation: false,
+      browserClosedDuringApply: true,
+      preservation: true,
+      appliedManifestSha256: manual.manifestSha256,
+      automaticOperation: {
+        id: "c".repeat(32),
+        automatic: true,
+        receipt: {
+          id: "c".repeat(32),
+          phase: "completed",
+          manifestSha256: manual.manifestSha256,
+        },
+      },
+    },
+    postUpdateState: {
+      instanceId: bind.instanceId,
+      installedVersion: packet.productVersion,
+      activationEnabled: false,
+      policy: { mode: "manual" },
+      operation: {
+        id: "c".repeat(32),
+        automatic: true,
+        phase: "completed",
+        receipt: {
+          id: "c".repeat(32),
+          phase: "completed",
+          manifestSha256: manual.manifestSha256,
+        },
+      },
+    },
+  };
+  const originalPredecessor = {
+    version: 2,
+    productVersion: "0.1.6",
+    source: manual.predecessor.source,
+  };
+  assert.equal(
+    completeRemoteUpgrade(manual, security, automatic, originalPredecessor)
+      .checks.controlledAutomatic,
+    "PASS",
+  );
+  assert.throws(() =>
+    completeRemoteUpgrade(manual, security, automatic, {
+      ...originalPredecessor,
+      version: 1,
+    }),
+  );
+  assert.throws(() =>
+    completeRemoteUpgrade(manual, security, automatic, {
+      ...originalPredecessor,
+      source: "e".repeat(40),
+    }),
+  );
+  for (const mutate of [
+    (v) => {
+      v.security.checks.publicIPv6Closure = "SUPPORTING";
+    },
+    (v) => {
+      v.security.checks.protectedOwnerDevice = "FAIL";
+    },
+    (v) => {
+      v.security.ownerAuthMode = "existing-password-account-preserved";
+    },
+    (v) => {
+      v.automatic.nodeIdentitySha256 = "d".repeat(64);
+    },
+    (v) => {
+      v.automatic.browser.automaticOperation.id = manual.cliOperationId;
+    },
+    (v) => {
+      v.automatic.browser.browserClosedDuringApply = false;
+    },
+    (v) => {
+      v.automatic.postUpdateState.activationEnabled = true;
+    },
+    (v) => {
+      v.automatic.browser.automaticOperation.receipt.id = "d".repeat(32);
+    },
+    (v) => {
+      v.automatic.postUpdateState.operation.id = "d".repeat(32);
+    },
+    (v) => {
+      v.automatic.postUpdateState.operation.automatic = false;
+    },
+    (v) => {
+      v.automatic.postUpdateState.operation.receipt.manifestSha256 = "e".repeat(
+        64,
+      );
+    },
+    (v) => {
+      v.manual.checks.authenticationPreservation = "FAIL";
+    },
+  ]) {
+    const v = structuredClone({ manual, security, automatic });
+    mutate(v);
+    assert.throws(() =>
+      completeRemoteUpgrade(
+        v.manual,
+        v.security,
+        v.automatic,
+        originalPredecessor,
+      ),
+    );
+  }
 });

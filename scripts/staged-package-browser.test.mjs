@@ -8,7 +8,80 @@ import {
   retainedWorkspace,
   seedWorkspace,
   updateMode,
+  restoreFixtureManualPolicy,
+  detachedFixtureObserver,
 } from "./staged-package-browser.mjs";
+
+test("detached Remote cookie and Local bearer observers cannot dispatch", async () => {
+  const calls = [];
+  const remote = detachedFixtureObserver("https://node.tail-example.ts.net", {
+    cookieRequest: {
+      get: async (url, options) => {
+        calls.push({ url, options });
+        return { ok: () => true, json: async () => ({ readonly: true }) };
+      },
+    },
+  });
+  assert.deepEqual(await remote("health"), { readonly: true });
+  assert.deepEqual(calls[0], {
+    url: "https://node.tail-example.ts.net/api/v1/health",
+    options: { maxRedirects: 0, timeout: 10000 },
+  });
+  await assert.rejects(remote("updates/application", "PUT", {}));
+  await assert.rejects(remote("updates/preferences"));
+  assert.equal(calls.length, 1);
+  const local = detachedFixtureObserver("http://127.0.0.1:1234", {
+    token: "A".repeat(43),
+    fetchImpl: async (_, options) => {
+      assert.equal(options.headers.Authorization, "Bearer " + "A".repeat(43));
+      return { ok: true, json: async () => ({ readonly: true }) };
+    },
+  });
+  assert.deepEqual(await local("health"), { readonly: true });
+});
+
+test("Automatic fixture failure cleanup restores only Manual policy", async () => {
+  let state = {
+    policyRevision: 7,
+    activationEnabled: true,
+    policy: {
+      mode: "automatic",
+      notify: true,
+      pin: "0.1.9",
+    },
+  };
+  const writes = [];
+  const request = async (route, method = "GET", body) => {
+    if (method === "GET") {
+      assert.equal(route, "updates/application");
+      return structuredClone(state);
+    }
+    assert.equal(route, "updates/preferences");
+    assert.equal(method, "PUT");
+    writes.push(body);
+    state = { ...state, policy: body.policy, activationEnabled: false };
+  };
+  await restoreFixtureManualPolicy(request);
+  assert.deepEqual(writes, [
+    {
+      revision: 7,
+      action: "policy",
+      policy: {
+        mode: "manual",
+        notify: true,
+        pin: "0.1.9",
+      },
+    },
+  ]);
+  await restoreFixtureManualPolicy(request);
+  assert.equal(writes.length, 1, "already-Manual state must not be rewritten");
+  await assert.rejects(
+    restoreFixtureManualPolicy(async () => ({
+      policy: { mode: "manual" },
+      activationEnabled: true,
+    })),
+  );
+});
 
 test("private preflight accepts only the verified node's bare nonce URL", () => {
   const config = {
@@ -400,4 +473,45 @@ test("older Remote password setup is limited to the declared public 0.1.6 claim"
     { transport: "loopback", url: "http://127.0.0.1:17482/" },
   ])
     assert.throws(() => browserAddress({ ...config, ...change }));
+});
+
+test("preserved password fixture access is pinned to the real predecessor", () => {
+  const instanceId = "I".repeat(43),
+    origin = "https://node.tail-example.ts.net";
+  const config = {
+    fixtureOnly: true,
+    action: "auth-cycle",
+    transport: "tailscale-https",
+    expectedOrigin: origin,
+    url: origin + "/?instance=" + instanceId,
+    instanceId,
+    version: "0.1.9",
+    ownerAuthMode: "existing-password-account-preserved",
+    predecessor: {
+      version: "0.1.6",
+      ownerAuthMode: "password-v1",
+      source: "738bd835b8c86c7cf7b3abfb2945240635f51fe7",
+      artifactSetSha256:
+        "aea00a0d9e1b7ed05a1346428cdf8cc277cbe40f93cfcd86d40fc9b45c559460",
+    },
+  };
+  assert.doesNotThrow(() => browserAddress(config));
+  for (const mutate of [
+    (v) => {
+      v.action = "claim";
+    },
+    (v) => {
+      v.ownerAuthMode = "arbitrary";
+    },
+    (v) => {
+      v.predecessor.source = "0".repeat(40);
+    },
+    (v) => {
+      v.predecessor.ownerAuthMode = "tailscale-device-v1";
+    },
+  ]) {
+    const bad = structuredClone(config);
+    mutate(bad);
+    assert.throws(() => browserAddress(bad));
+  }
 });
