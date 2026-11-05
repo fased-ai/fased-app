@@ -214,6 +214,21 @@ export function browserAddress(config) {
       );
   }
   assert.match(config.version, /^\d+\.\d+\.\d+$/);
+  if (config.ownerAuthMode !== undefined) {
+    assert.equal(config.ownerAuthMode, "existing-password-account-preserved");
+    assert.equal(config.transport, "tailscale-https");
+    assert.ok(["auth-cycle", "automatic-update"].includes(config.action));
+    assert.equal(config.predecessor?.version, "0.1.6");
+    assert.equal(config.predecessor.ownerAuthMode, "password-v1");
+    assert.equal(
+      config.predecessor.source,
+      "738bd835b8c86c7cf7b3abfb2945240635f51fe7",
+    );
+    assert.equal(
+      config.predecessor.artifactSetSha256,
+      "aea00a0d9e1b7ed05a1346428cdf8cc277cbe40f93cfcd86d40fc9b45c559460",
+    );
+  }
   if (config.legacyRemotePasswordSetup !== undefined) {
     // Only the immutable public predecessor needs an initial test password.
     // Routine Update and current Remote setup must stay password-free.
@@ -292,12 +307,55 @@ export async function runPrivatePreflight(config, { chromium, expect }) {
   }
 }
 
+export async function restoreFixtureManualPolicy(request) {
+  const before = await request("updates/application");
+  if (updateMode(before) === "automatic")
+    await request("updates/preferences", "PUT", {
+      revision: before.policyRevision,
+      action: "policy",
+      policy: { ...before.policy, mode: "manual" },
+    });
+  const after = await request("updates/application");
+  assert.equal(updateMode(after), "manual");
+  assert.equal(after.activationEnabled, false);
+}
+
+export function detachedFixtureObserver(
+  origin,
+  { cookieRequest, token, fetchImpl = fetch },
+) {
+  if (!cookieRequest) assert.match(token, /^[A-Za-z0-9_-]{43}$/);
+  return async (route, method = "GET", body) => {
+    assert.equal(method, "GET");
+    assert.equal(body, undefined);
+    assert.ok(
+      ["updates/application", "health", "auth/state", "agents"].includes(route),
+    );
+    const url = origin + "/api/v1/" + route;
+    const response = cookieRequest
+      ? await cookieRequest.get(url, { maxRedirects: 0, timeout: 10000 })
+      : await fetchImpl(url, {
+          headers: { Authorization: "Bearer " + token },
+          redirect: "error",
+          signal: AbortSignal.timeout(10000),
+        });
+    if (!(cookieRequest ? response.ok() : response.ok))
+      throw Error(
+        "Read-only fixture observer HTTP " +
+          (cookieRequest ? response.status() : response.status),
+      );
+    return response.json();
+  };
+}
+
 export async function runStagedBrowser(config, { chromium, expect }) {
   assert.equal(process.env.FASED_DISPOSABLE_VM_ACCEPTANCE, "1");
   assert.ok(process.getuid() > 0);
   const address = browserAddress(config);
   const directRemote = config.transport === "tailscale-https";
   const legacyRemotePasswordSetup = config.legacyRemotePasswordSetup === true;
+  const preservedPasswordOwner =
+    config.ownerAuthMode === "existing-password-account-preserved";
   const applying = ["ui-update", "automatic-update"].includes(config.action);
   if (config.action === "claim")
     assert.ok(
@@ -337,6 +395,7 @@ export async function runStagedBrowser(config, { chromium, expect }) {
   });
   let page = await context.newPage();
   let detachedRequest;
+  let automaticPolicyStarted = false;
   const request = (route, method, body) =>
     detachedRequest
       ? detachedRequest(route, method, body)
@@ -387,6 +446,15 @@ export async function runStagedBrowser(config, { chromium, expect }) {
           .click();
       }
     }
+    // Re-establish only the captured disposable account's initial UI sign-in.
+    // Never supply a credential after Automatic has been enabled.
+    if (
+      preservedPasswordOwner &&
+      !(await request("auth/state")).authenticated
+    ) {
+      await page.getByLabel("Owner password", { exact: true }).fill(password);
+      await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    }
     await waitAuthenticated();
     const before = await checkHealth(
       applying ? config.fromVersion : config.version,
@@ -423,7 +491,7 @@ export async function runStagedBrowser(config, { chromium, expect }) {
         await page.goto(reopened.href);
         await waitAuthenticated();
         await expect(page.locator('input[type="password"]')).toHaveCount(0);
-      } else if (directRemote) {
+      } else if (directRemote && !preservedPasswordOwner) {
         await expect
           .poll(async () => (await request("auth/state")).authenticated)
           .toBe(false);
@@ -466,6 +534,7 @@ export async function runStagedBrowser(config, { chromium, expect }) {
         const original = await request("updates/application");
         assert.equal(updateMode(original), "manual");
         assert.equal(original.activationEnabled, false);
+        automaticPolicyStarted = true;
         await updates
           .getByLabel("Update mode", { exact: true })
           .selectOption("automatic");
@@ -488,34 +557,21 @@ export async function runStagedBrowser(config, { chromium, expect }) {
             false,
             "detached completion must start before the target is complete",
           );
-          const token = await page.evaluate(
-            (key) => sessionStorage.getItem(key),
-            sessionKey,
-          );
-          assert.match(token, /^[A-Za-z0-9_-]{43}$/);
+          const observer = directRemote
+            ? detachedFixtureObserver(address.origin, {
+                cookieRequest: context.request,
+              })
+            : detachedFixtureObserver(address.origin, {
+                token: await page.evaluate(
+                  (key) => sessionStorage.getItem(key),
+                  sessionKey,
+                ),
+              });
           await page.close();
+          assert.equal(context.pages().length, 0);
           // No tab/JavaScript client remains during completion. The observer
           // performs authenticated read-only checks; it cannot start an update.
-          detachedRequest = async (route, method = "GET", body) => {
-            assert.equal(method, "GET");
-            assert.equal(body, undefined);
-            assert.ok(
-              [
-                "updates/application",
-                "health",
-                "auth/state",
-                "agents",
-              ].includes(route),
-            );
-            const response = await fetch(address.origin + "/api/v1/" + route, {
-              headers: { Authorization: "Bearer " + token },
-              redirect: "error",
-              signal: AbortSignal.timeout(10000),
-            });
-            if (!response.ok)
-              throw Error("Local update observer HTTP " + response.status);
-            return response.json();
-          };
+          detachedRequest = observer;
         }
         await expect
           .poll(
@@ -562,6 +618,7 @@ export async function runStagedBrowser(config, { chromium, expect }) {
           })
           .toBe(true);
         automaticOutcome = "applied";
+        automaticPolicyStarted = false;
       } else if (config.action === "failed-check") {
         await updates
           .getByRole("button", { name: "Check", exact: true })
@@ -705,8 +762,20 @@ export async function runStagedBrowser(config, { chromium, expect }) {
       ...(config.action === "reconnect" ? { reconnected: true } : {}),
     };
   } finally {
-    await context.close();
-    await browser.close();
+    try {
+      if (automaticPolicyStarted) {
+        if (page.isClosed()) {
+          page = await context.newPage();
+          detachedRequest = undefined;
+          await page.goto(address.origin + "/#settings");
+        }
+        await waitAuthenticated();
+        await restoreFixtureManualPolicy(request);
+      }
+    } finally {
+      await context.close();
+      await browser.close();
+    }
   }
 }
 

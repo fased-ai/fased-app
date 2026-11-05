@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "local": [
     "entry",
     "local",
@@ -40,6 +40,7 @@
     "alreadyCurrent"
   ],
   "remoteUpgrade": [
+    "authenticationPreservation",
     "uiUpdate",
     "cliUpdate",
     "restart",
