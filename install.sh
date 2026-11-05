@@ -236,6 +236,12 @@ done
 # Only Remote setup may authorize this exact local daemon write. No general
 # elevated curl is granted; this expires and is removed with bootstrap authority.
 if [[ $profile == remote ]]; then
+  # Initial installation only. Existing access setup and routine Update get
+  # no credential preparation authority or general systemd-creds access.
+  if [[ $action == install ]]; then
+    provider_credential_command='/usr/bin/systemd-creds encrypt --with-key=host --name=fased-provider-task-key - -'
+    printf '%s ALL=(root) NOTAFTER=%s NOPASSWD: %s\n' "$operator" "$expires" "$provider_credential_command" >> "$stage/authorization"
+  fi
   serve_command='/usr/bin/curl ^--disable --silent --show-error --fail --max-time 15 --connect-timeout 5 --max-filesize 1048576 --noproxy [*] --proto =http --unix-socket /var/run/tailscale/tailscaled[.]sock --request POST --header Content-Type\: application/json --header If-Match\: [a-f0-9]{64} --data-binary @- --write-out %[{]http_code[}] http\://local-tailscaled[.]sock/localapi/v0/serve-config$'
   printf '%s ALL=(root) NOTAFTER=%s NOPASSWD: %s\n' "$operator" "$expires" "$serve_command" >> "$stage/authorization"
 fi

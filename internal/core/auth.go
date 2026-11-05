@@ -135,7 +135,7 @@ func (s *Store) Session(ctx context.Context, token string) bool {
 func (s *Store) Logout(ctx context.Context, token string) error {
 	s.lockVenueCredentials()
 	defer s.lockVenueCredentials() // Close the admission window before session deletion completes.
-	s.lockAIConnection()
+	s.logoutAIConnections()
 	_, err := s.db.ExecContext(ctx, "DELETE FROM sessions WHERE token_hash=?", tokenHash(token))
 	return err
 }

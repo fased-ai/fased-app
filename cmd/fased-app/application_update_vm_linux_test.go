@@ -74,7 +74,7 @@ func TestApplicationUpdateInstalledRemotePrepareUbuntuVM(t *testing.T) {
 	}); e != nil {
 		t.Fatal(e)
 	}
-	policy := "Defaults:" + maintenanceProbeUser + " verifypw=any\n" + maintenanceProbeUser + " ALL=(root) NOPASSWD: /usr/bin/install, /usr/bin/mkdir, /usr/bin/ln, /usr/bin/mv, /usr/bin/sync, /usr/bin/rm, /usr/bin/cat, /usr/bin/find, /usr/bin/systemctl, /usr/sbin/useradd, /usr/sbin/apparmor_parser\n" + maintenanceProbeUser + " ALL=(root) NOPASSWD: /usr/bin/passwd -S fased-vps-1100\n" + maintenanceProbeUser + " ALL=(root) NOPASSWD: /usr/bin/apt-get install --yes --no-install-recommends polkitd\n" + maintenanceProbeUser + " ALL=(root) NOPASSWD: /usr/bin/setpriv ^--.*$\n"
+	policy := maintenanceProbeSetupPolicy()
 	setup("/usr/bin/install", []byte(policy), "-m", "440", "-o", "root", "-g", "root", "--", "/dev/stdin", applicationUpdateVMSetup)
 	// Failure cleanup is also finite. A successful launch intentionally keeps its
 	// protected install and unit on this disk so the next boot resumes that ID.

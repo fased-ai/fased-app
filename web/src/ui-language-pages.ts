@@ -646,6 +646,51 @@ export const pageCopy = {
     "审核访问",
     "접근 검토",
   ],
+  "Continue after sign-out": [
+    "Продолжать после выхода",
+    "Continuar tras cerrar sesión",
+    "退出登录后继续",
+    "로그아웃 후 계속",
+  ],
+  "Chat locked": [
+    "Чат заблокирован",
+    "Chat bloqueado",
+    "聊天已锁定",
+    "채팅 잠김",
+  ],
+  "Continue after restart": [
+    "Продолжать после перезапуска",
+    "Continuar tras reiniciar",
+    "重启后继续",
+    "재시작 후 계속",
+  ],
+  "After restart": [
+    "После перезапуска",
+    "Tras reiniciar",
+    "重启后",
+    "재시작 후",
+  ],
+  "After sign-out": [
+    "После выхода",
+    "Tras cerrar sesión",
+    "退出登录后",
+    "로그아웃 후",
+  ],
+  "This session": ["Этот сеанс", "Esta sesión", "当前会话", "현재 세션"],
+  "Selected tasks continue after restart until expiry. Lock or revoke stops access.":
+    [
+      "Выбранные задачи работают после перезапуска до конца срока. Блокировка или отзыв закрывают доступ.",
+      "Las tareas seleccionadas continúan tras reiniciar hasta que caduque el permiso. Bloquear o revocar detiene el acceso.",
+      "所选任务在重启后继续运行，直到权限到期。锁定或撤销将停止访问。",
+      "선택한 작업은 재시작 후에도 권한 만료까지 계속됩니다. 잠금 또는 철회 시 접근이 중단됩니다.",
+    ],
+  "Selected tasks continue after sign-out until expiry. Lock, revoke or restart stops access.":
+    [
+      "Выбранные задачи работают после выхода до конца срока. Блокировка, отзыв или перезапуск закрывают доступ.",
+      "Las tareas seleccionadas continúan tras cerrar sesión hasta que caduque el permiso. Bloquear, revocar o reiniciar detiene el acceso.",
+      "所选任务在退出登录后继续运行，直到权限到期。锁定、撤销或重启将停止访问。",
+      "선택한 작업은 로그아웃 후에도 권한 만료까지 계속됩니다. 잠금, 철회 또는 재시작 시 접근이 중단됩니다.",
+    ],
   "Selected tasks only. Closing the browser keeps them running. Lock, sign-out, expiry or restart stops credential access.":
     [
       "Только выбранные задачи. Они работают после закрытия браузера. Блокировка, выход, истечение срока или перезапуск закрывают доступ к ключу.",

@@ -6368,6 +6368,11 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
   await page
     .getByLabel("Agent", { exact: true })
     .selectOption({ label: "News Researcher" });
+  // Profile loading remounts the conversation panel. Wait for that response
+  // before opening its mobile disclosure, rather than opening the old panel.
+  await expect(page.getByLabel("Agent", { exact: true })).toHaveValue(
+    "news-researcher",
+  );
   await revealControl(page, page.getByLabel("Search conversations"), "");
   await page.getByLabel("Search conversations").fill(answer);
   await expect(page.locator(".agent-session-list button")).toHaveCount(0);
@@ -6375,6 +6380,9 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
   await page
     .getByLabel("Agent", { exact: true })
     .selectOption({ label: profileName });
+  await expect(page.getByLabel("Agent", { exact: true })).toHaveValue(
+    saved.profileId,
+  );
   await page.evaluate(() => {
     window.location.hash = "agents/settings";
   });
@@ -11571,11 +11579,21 @@ test("reviewed task credential allowance is scoped, finite and revocable in Prov
     .getByRole("checkbox", { name: task.name, exact: true })
     .check();
   await provider
+    .getByRole("checkbox", { name: "Continue after sign-out", exact: true })
+    .check();
+  const persistent = process.platform === "linux";
+  if (persistent)
+    await provider
+      .getByRole("checkbox", { name: "Continue after restart", exact: true })
+      .check();
+  await provider
     .getByRole("button", { name: "Review access", exact: true })
     .click();
   await expect(
     provider.getByText(
-      "Selected tasks only. Closing the browser keeps them running. Lock, sign-out, expiry or restart stops credential access.",
+      persistent
+        ? "Selected tasks continue after restart until expiry. Lock or revoke stops access."
+        : "Selected tasks continue after sign-out until expiry. Lock, revoke or restart stops access.",
       { exact: true },
     ),
   ).toBeVisible();
@@ -11592,6 +11610,23 @@ test("reviewed task credential allowance is scoped, finite and revocable in Prov
       async () => (await privateCLI(["ai-connection"])).taskAccess?.tasks[0].id,
     )
     .toBe(task.id);
+  expect(
+    (await privateCLI(["ai-connection"])).taskAccess.continueOnSignOut,
+  ).toBe(true);
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await page.getByRole("button", { name: "Use password", exact: true }).click();
+  await expect(
+    page.getByLabel("Owner password", { exact: true }),
+  ).toBeVisible();
+  const afterSignOut = await privateCLI(["ai-connection"]);
+  expect(afterSignOut.locked).toBe(true);
+  expect(afterSignOut.taskAccess.continueOnSignOut).toBe(true);
+  await page
+    .getByLabel("Owner password", { exact: true })
+    .fill(fixturePassword);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await openProviders(page);
+  await provider.getByText("Background access", { exact: true }).click();
   await change({ action: "task-run", id: task.id });
   await expect
     .poll(async () => (await privateCLI(["agents"])).tasks[0].runs, {
@@ -11604,6 +11639,25 @@ test("reviewed task credential allowance is scoped, finite and revocable in Prov
         (await privateCLI(["ai-connection"])).taskAccess?.usedRequests,
     )
     .toBe(1);
+  if (persistent) {
+    const before = (await privateCLI(["ai-connection"])).taskAccess;
+    const listen = new URL(url).host;
+    await stop();
+    await start(true, listen);
+    await page.reload();
+    const recovered = await privateCLI(["ai-connection"]);
+    expect(recovered.locked).toBe(true);
+    expect(recovered.taskAccess.id).toBe(before.id);
+    expect(recovered.taskAccess.usedRequests).toBe(1);
+    expect(recovered.taskAccess.allocatedMicrousd).toBe(
+      before.allocatedMicrousd,
+    );
+    await openProviders(page);
+    await provider.getByText("Background access", { exact: true }).click();
+    await expect(
+      provider.getByText("After restart", { exact: true }),
+    ).toBeVisible();
+  }
   await provider.getByRole("button", { name: "Revoke", exact: true }).click();
   await expect
     .poll(async () => (await privateCLI(["ai-connection"])).taskAccess)

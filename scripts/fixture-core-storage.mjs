@@ -5,6 +5,33 @@ import { execFileSync } from "node:child_process";
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
+
+// Immutable-reader acquisition/compiler work must not consume a whole VM job
+// silently. No retry or success projection; preserve the original tool result.
+export function runReaderStage(
+  reader,
+  stage,
+  tool,
+  args,
+  options = {},
+  execute = execFileSync,
+) {
+  const label = `reader schema${reader.schema} ${reader.ref} ${stage}`;
+  console.log(`${label}: start`);
+  try {
+    const value = execute(tool, args, {
+      stdio: ["ignore", "inherit", "inherit"],
+      ...options,
+      timeout: 120000,
+      killSignal: "SIGKILL",
+    });
+    console.log(`${label}: done`);
+    return value;
+  } catch (cause) {
+    throw new Error(`${label}: failed`, { cause });
+  }
+}
+
 export async function currentStorageFixture(archivedRoot) {
   assert.ok(process.getuid() > 0);
   const storage = {};
@@ -61,6 +88,8 @@ export async function currentStorageFixture(archivedRoot) {
     "agent_chat.go",
     "agent_ai_stream.go",
     "ai_task_access.go",
+    "ai_task_persistence.go",
+    "ai_task_persistence_fixture.go",
     "agent_playbooks.go",
     "wen_paper.go",
     "agent_ai.go",
@@ -279,6 +308,15 @@ func ValidManagedAccountRef(r AccountRef) bool {
     storage[name] = sha(b);
   }
   const localRoot = path.join(archivedRoot, "internal/localprovider");
+  const secretRoot = path.join(archivedRoot, "internal/providersecrets");
+  await mkdir(secretRoot, { recursive: true });
+  for (const file of (await readdir("internal/providersecrets")).filter(
+    (name) => name.endsWith(".go") && !name.endsWith("_test.go"),
+  )) {
+    const bytes = await readFile(path.join("internal/providersecrets", file));
+    await writeFile(path.join(secretRoot, file), bytes);
+    storage["providersecrets/" + file] = sha(bytes);
+  }
   await mkdir(localRoot, { recursive: true });
   for (const file of (await readdir("internal/localprovider")).filter(
     (name) => name.endsWith(".go") && !name.endsWith("_test.go"),
@@ -392,14 +430,17 @@ func ValidManagedAccountRef(r AccountRef) bool {
   await writeFile(
     store,
     before
-      .replace('"sync"', '"sync"\n"sync/atomic"')
+      .replace(
+        '"sync"',
+        '"sync"\n"sync/atomic"\n"github.com/fased-ai/fased-app/internal/providersecrets"',
+      )
       .replace(
         "func (s *Store) Close() error { return s.db.Close() }",
         "func (s *Store) Close() error { s.lockVenueCredentials(); return s.db.Close() }",
       )
       .replace(
         "type Store struct {",
-        "type Store struct {\n\tappUpdates applicationUpdates\n\tvenueCredentials venueCredentials\n\trpcAdmission bool\n\twalletReadFixture walletReader\n\twalletReadMu sync.Mutex\n\trpcCheckFixture func(context.Context, RPCCheckRequest) (RPCCheckResult, error)\n\tcustodyNetwork string\n\tonchain *onchainRuntime\n\tproviderFixture bool\n\tchatEpoch atomic.Uint64\n\tprogressMu sync.Mutex\n\taiProgress map[string]string\n\tsessionFixture bool\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState\n\tpilot openAIPilotState\n\tresearchRead func(context.Context, researchFactResult) (json.RawMessage, error)",
+        "type Store struct {\n\ttaskSecrets providersecrets.Source\n\tpersistentTaskAccessAvailable bool\n\tproviderVaultFault func() error\n\tappUpdates applicationUpdates\n\tvenueCredentials venueCredentials\n\trpcAdmission bool\n\twalletReadFixture walletReader\n\twalletReadMu sync.Mutex\n\trpcCheckFixture func(context.Context, RPCCheckRequest) (RPCCheckResult, error)\n\tcustodyNetwork string\n\tonchain *onchainRuntime\n\tproviderFixture bool\n\tchatEpoch atomic.Uint64\n\tprogressMu sync.Mutex\n\taiProgress map[string]string\n\tsessionFixture bool\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState\n\tpilot openAIPilotState\n\tresearchRead func(context.Context, researchFactResult) (json.RawMessage, error)",
       )
       .replace(
         marker,

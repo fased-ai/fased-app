@@ -342,6 +342,11 @@ func (s *Store) renewGoogleSignIn(ctx context.Context, c AIConnectionCommand) (A
 		s.provider.mu.Unlock()
 		return AIConnectionView{}, errors.New("unlock or reconnect this Google account")
 	}
+	if err = s.removeDurableTaskAccess(c.Ref); err != nil {
+		s.clearAIConnectionLocked(c.Ref)
+		s.provider.mu.Unlock()
+		return AIConnectionView{}, errors.New("background revocation could not be saved; account remains locked")
+	}
 	s.provider.signInRenewals[c.Ref] = true
 	defer func() { s.provider.mu.Lock(); delete(s.provider.signInRenewals, c.Ref); s.provider.mu.Unlock() }()
 	raw, _ := json.Marshal(env)

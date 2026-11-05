@@ -47,6 +47,7 @@ func fixtureStore(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	s.providerFixture = true
+	s.taskSecrets = fixtureTaskSecrets{}
 	return s
 }
 func claimFixture(t *testing.T, s *Store) string {

@@ -73,6 +73,8 @@ key=work/'ssh-key'
 if not a.resume:
  run(['ssh-keygen','-q','-t','ed25519','-N','','-f',str(key)])
  (work/'meta-data').write_text('instance-id: fased-disposable-p4\nlocal-hostname: fased-fixture\n')
+ provider_credential_setup='/usr/bin/systemd-creds encrypt --with-key=host --name=fased-provider-task-key - -'
+ provider_credential_rule='' if a.released_local_only else '       ubuntu ALL=(root) NOPASSWD: '+provider_credential_setup+'\n'
  (work/'user-data').write_text('''#cloud-config
  ssh_pwauth: false
  disable_root: true
@@ -93,6 +95,7 @@ if not a.resume:
        Defaults:ubuntu verifypw=any
        Cmnd_Alias FASED_FIXTURE_OS = /usr/bin/install, /usr/bin/mkdir, /usr/bin/ln, /usr/bin/mv, /usr/bin/sync, /usr/bin/rm, /usr/bin/cat, /usr/bin/systemctl, /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/apparmor_parser, /usr/sbin/nft, /usr/sbin/sshd, /usr/bin/cmp, /usr/bin/curl
        ubuntu ALL=(root) NOPASSWD: FASED_FIXTURE_OS
+'''+provider_credential_rule+'''
        ubuntu ALL=(root) NOPASSWD: /usr/bin/passwd -S fased-vps-1000
        ubuntu ALL=(root) NOPASSWD: /usr/bin/flock --version
        ubuntu ALL=(root) NOPASSWD: /usr/bin/setpriv --version
@@ -113,6 +116,8 @@ if not a.resume:
   utilities='/usr/bin/apt-get, /usr/bin/install, /usr/bin/mkdir, /usr/bin/ln, /usr/bin/mv, /usr/bin/sync, /usr/bin/rm, /usr/bin/cat, /usr/bin/cmp, /usr/bin/cp, /usr/bin/chmod, /usr/bin/chown, /usr/bin/find, /usr/bin/flock, /usr/bin/getent, /usr/bin/id, /usr/bin/passwd, /usr/bin/pkcheck, /usr/bin/setpriv, /usr/bin/stat, /usr/bin/systemctl, /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/apparmor_parser, /usr/sbin/nft, /usr/sbin/ip, /usr/sbin/update-ca-certificates'
   for name in (['ubuntu','fased-local','fased-fresh'] if a.released_local_only else ['ubuntu','fased-local','fased-remote','fased-legacy']):
    extra+='       Defaults:'+name+' verifypw=any\n       '+name+' ALL=(root) NOPASSWD: '+utilities+'\n'
+   if name in ('fased-remote','fased-legacy') and not a.released_local_only:
+    extra+='       '+name+' ALL=(root) NOPASSWD: '+provider_credential_setup+'\n'
   if a.fresh_remote_only:
    extra+='       ubuntu ALL=(root) NOPASSWD: /usr/bin/tailscale status --json, /usr/bin/tailscale debug prefs, /usr/bin/tailscale login --timeout=120s, /usr/bin/tailscale set --operator=ubuntu, /usr/bin/tailscale logout\n'
   data=data.replace(' packages:',extra+' packages:').replace('nftables]', 'nftables, polkitd, curl, ca-certificates, openssl, iproute2]')

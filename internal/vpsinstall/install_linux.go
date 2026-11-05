@@ -637,7 +637,7 @@ func loaded(ctx context.Context, o hostOps, m Manifest) error {
 	if e != nil {
 		return e
 	}
-	if p["LoadState"] != "loaded" || p["FragmentPath"] != m.UnitPath || p["DropInPaths"] != "" || p["User"] != strconv.Itoa(m.AppUID) || p["Group"] != strconv.Itoa(m.AppGID) || p["NoNewPrivileges"] != "yes" || p["ProtectSystem"] != "strict" || p["ProtectHome"] != "yes" || p["PrivateTmp"] != "yes" || p["ReadWritePaths"] != m.Data || p["CapabilityBoundingSet"] != "" || p["AmbientCapabilities"] != "" || !strings.Contains(p["ExecStart"], "path="+m.Core+" ;") || !strings.Contains(p["ExecStart"], m.Core+" serve ") || !strings.Contains(p["ExecStart"], "--remote-config "+m.Config) {
+	if p["LoadState"] != "loaded" || p["FragmentPath"] != m.UnitPath || !validTaskCredentialDropIn(o, m, p["DropInPaths"]) || p["User"] != strconv.Itoa(m.AppUID) || p["Group"] != strconv.Itoa(m.AppGID) || p["NoNewPrivileges"] != "yes" || p["ProtectSystem"] != "strict" || p["ProtectHome"] != "yes" || p["PrivateTmp"] != "yes" || p["ReadWritePaths"] != m.Data || p["CapabilityBoundingSet"] != "" || p["AmbientCapabilities"] != "" || !strings.Contains(p["ExecStart"], "path="+m.Core+" ;") || !strings.Contains(p["ExecStart"], m.Core+" serve ") || !strings.Contains(p["ExecStart"], "--remote-config "+m.Config) {
 		return errors.New("unexpected loaded Remote service identity or override")
 	}
 	return nil
@@ -837,6 +837,9 @@ func install(ctx context.Context, opt Options, o hostOps) (Manifest, error) {
 	if e = verify(ctx, o, m); e != nil {
 		return m, e
 	}
+	if e = prepareTaskCredential(ctx, o, m); e != nil {
+		return m, e
+	}
 	if e = publish(ctx, o, m.UnitPath, m.ID, unit(m), 0644); e != nil {
 		return m, e
 	}
@@ -972,6 +975,9 @@ func remove(ctx context.Context, o hostOps, m Manifest) error {
 		if _, e = o.run(ctx, nil, "/usr/bin/sync", "-f", filepath.Dir(m.UnitPath)); e != nil {
 			return e
 		}
+	}
+	if e = removeTaskCredentialDropIn(ctx, o, m); e != nil {
+		return e
 	}
 	if _, e = o.run(ctx, nil, "/usr/bin/systemctl", "daemon-reload"); e != nil {
 		return e
