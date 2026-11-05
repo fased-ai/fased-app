@@ -296,13 +296,14 @@ test("full UI journey uses the existing Linux job while focused paths retain cor
   );
   assert.match(
     desktop,
-    /if: runner.os == 'Linux' && needs.classify.outputs.scope == 'full'\n\s+env:[\s\S]*?run: \|[\s\S]*?npm run test:core-ui\n/,
+    /if: runner.os == 'Linux' && needs.classify.outputs.scope == 'full'\n\s+env:[\s\S]*?run: \|[\s\S]*?npm run test:core-ui -- --fully-parallel --workers=3\n/,
   );
   assert.ok(
     !workflow.includes("--project="),
     "every selected journey retains desktop and mobile",
   );
   assert.match(desktop, /npx playwright install --only-shell chromium/);
+  assert.match(desktop, /timeout-minutes: 15\n/);
   for (const job of [core, desktop]) {
     for (const [env, binary, pkg] of [
       ["FASED_WALLET_BROWSER_BINARY", "wallet-core.test", "core"],

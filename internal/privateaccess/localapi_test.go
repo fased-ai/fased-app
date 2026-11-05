@@ -179,3 +179,45 @@ func TestProtectedIngressHandoffRecoversCommittedOSWriteForward(t *testing.T) {
 		t.Fatal("transition receipt lost", r, err)
 	}
 }
+
+func TestServeUnixAdminRefusalUsesRestrictedAuthorization(t *testing.T) {
+	body := []byte(`{"TCP":{"443":{"HTTPS":true}},"Web":{"node.owner.ts.net:443":{"Handlers":{"/":{"Proxy":"unix:/var/lib/fased-app-vps-1000/app-state/tailscale.sock"}}}}}`)
+	tag := strings.Repeat("a", 64)
+	daemon := "must be root, or be an operator and able to run 'sudo tailscale' to serve a path or Unix socket\n"
+	for _, tc := range []struct {
+		name, method, message string
+		status                int
+		authorize             bool
+	}{
+		{"linux unix admin", http.MethodPost, daemon, 401, true},
+		{"other unauthorized", http.MethodPost, "auth required: secret-token", 401, false},
+		{"read unauthorized", http.MethodGet, daemon, 401, false},
+		{"conflict", http.MethodPost, daemon, 412, false},
+		{"server failure", http.MethodPost, daemon, 500, false},
+		{"oversized", http.MethodPost, daemon + strings.Repeat("x", 4096), 401, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			m := Manager{SetConfig: func(context.Context, []byte, string) error {
+				_, _, err := readServeResponse(&http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.message))}, tc.method)
+				return err
+			}}.WithServeAuthorization(func(ctx context.Context, data []byte, etag string) error {
+				return SetServeWithOS(ctx, data, etag, func(_ context.Context, input []byte, args ...string) ([]byte, error) {
+					calls++
+					if !AllowedServeCommand(input, args) || !bytes.Equal(input, body) || etag != tag {
+						t.Fatal("authorization expanded beyond the exact conditional Unix request")
+					}
+					return []byte("200"), nil
+				})
+			})
+			err := m.SetConfig(t.Context(), body, tag)
+			if tc.authorize {
+				if err != nil || calls != 1 {
+					t.Fatalf("definite Unix permission refusal did not reach protected OS handoff: calls=%d err=%v", calls, err)
+				}
+			} else if err == nil || calls != 0 || strings.Contains(err.Error(), "secret-token") {
+				t.Fatalf("unexpected refusal replayed or leaked daemon body: calls=%d err=%v", calls, err)
+			}
+		})
+	}
+}

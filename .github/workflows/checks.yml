@@ -312,7 +312,7 @@ jobs:
         run: |
           go test -c -o .evidence/bin/wallet-core.test ./internal/core
           go test -c -o .evidence/bin/wallet-owner.test ./internal/signer
-          npm run test:core-ui
+          npm run test:core-ui -- --fully-parallel --workers=3
       - name: Remove owned Ubuntu acceptance policy after native window
         if: always() && runner.os == 'Linux'
         run: node --input-type=module -e "const m = await import('./scripts/ubuntu-preparation.mjs'); await m.cleanupUbuntuPreparation();"

@@ -44,12 +44,30 @@ func localRequest(ctx context.Context, method string, data []byte, etag string) 
 	if e != nil {
 		return nil, "", errors.New("Tailscale local daemon unavailable; use SSH access or check its installation")
 	}
+	return readServeResponse(resp, method)
+}
+
+// readServeResponse keeps response classification independent of the local socket.
+func readServeResponse(resp *http.Response, method string) ([]byte, string, error) {
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusForbidden {
 		return nil, "", servePermissionError{}
 	}
-	if resp.StatusCode != 200 {
-		return nil, "", errors.New("Tailscale refused conditional Serve access: confirm this OS user's operator permission and tailnet HTTPS; a concurrent configuration change must be inspected before retry")
+	if resp.StatusCode != http.StatusOK {
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 4097))
+		if err != nil || len(body) > 4096 {
+			return nil, "", fmt.Errorf("invalid Tailscale Serve refusal (HTTP %d); preserve its configuration", resp.StatusCode)
+		}
+		// Linux operators can write ordinary Serve settings but Unix ingress
+		// additionally requires local-admin authority. Tailscale 1.104.5
+		// refuses that operation with this specific401 before any mutation.
+		// Unrelated401s must not trigger the administrator's fixed OS action.
+		if method == http.MethodPost && resp.StatusCode == http.StatusUnauthorized && strings.TrimSpace(string(body)) == serveUnixAdminRefusal {
+			return nil, "", servePermissionError{}
+		}
+		// Keep the status for diagnosis without disclosing an arbitrary daemon
+		// body (which may contain credentials or private configuration).
+		return nil, "", fmt.Errorf("Tailscale Serve request refused (HTTP %d); preserve its configuration and inspect the daemon response before retry", resp.StatusCode)
 	}
 	b, e := io.ReadAll(io.LimitReader(resp.Body, 1024*1024+1))
 	if e != nil || len(b) > 1024*1024 {
@@ -71,8 +89,9 @@ func (m Manager) WithServeAuthorization(authorize func(context.Context, []byte, 
 		if _, e := serveCommand(data, etag); e != nil {
 			return e
 		}
-		// Only an explicit403 proves this attempt did not commit. A timeout,
-		// conflict or other error must reconcile through the saved receipt.
+		// Only a definite permission refusal (403 or the recognized Unix401)
+		// proves this attempt did not commit. A timeout, conflict or other
+		// error must reconcile through the saved receipt.
 		return authorize(ctx, data, etag)
 	}
 	return m
@@ -81,6 +100,8 @@ func (m Manager) WithServeAuthorization(authorize func(context.Context, []byte, 
 type servePermissionError struct{}
 
 func (servePermissionError) Error() string { return "Tailscale Serve OS authorization required" }
+
+const serveUnixAdminRefusal = "must be root, or be an operator and able to run 'sudo tailscale' to serve a path or Unix socket"
 
 func systemConfig(ctx context.Context) ([]byte, string, error) {
 	return localRequest(ctx, http.MethodGet, nil, "")
