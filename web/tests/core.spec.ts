@@ -6368,6 +6368,11 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
   await page
     .getByLabel("Agent", { exact: true })
     .selectOption({ label: "News Researcher" });
+  // Profile loading remounts the conversation panel. Wait for that response
+  // before opening its mobile disclosure, rather than opening the old panel.
+  await expect(page.getByLabel("Agent", { exact: true })).toHaveValue(
+    "news-researcher",
+  );
   await revealControl(page, page.getByLabel("Search conversations"), "");
   await page.getByLabel("Search conversations").fill(answer);
   await expect(page.locator(".agent-session-list button")).toHaveCount(0);
@@ -6375,6 +6380,9 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
   await page
     .getByLabel("Agent", { exact: true })
     .selectOption({ label: profileName });
+  await expect(page.getByLabel("Agent", { exact: true })).toHaveValue(
+    saved.profileId,
+  );
   await page.evaluate(() => {
     window.location.hash = "agents/settings";
   });
