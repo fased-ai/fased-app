@@ -34,6 +34,35 @@ const maintenanceProbeSetup = "/etc/sudoers.d/98-fased-maintenance-probe-setup"
 const maintenanceProbeMarker = "/run/fased-maintenance-authority-probe"
 const maintenanceProbeID = "22222222222222222222222222222222"
 
+// Only disposable initial installation uses this temporary setup authority.
+// Controllers remove the file before exercising installed maintenance rights.
+func maintenanceProviderSetupArgs() []string {
+	return []string{"/usr/bin/systemd-creds", "encrypt", "--with-key=host", "--name=fased-provider-task-key", "-", "-"}
+}
+func maintenanceProbeSetupPolicy() string {
+	return "Defaults:" + maintenanceProbeUser + " verifypw=any\n" + maintenanceProbeUser + " ALL=(root) NOPASSWD: /usr/bin/install, /usr/bin/mkdir, /usr/bin/ln, /usr/bin/mv, /usr/bin/sync, /usr/bin/rm, /usr/bin/cat, /usr/bin/find, /usr/bin/systemctl, /usr/sbin/useradd, /usr/sbin/apparmor_parser\n" + maintenanceProbeUser + " ALL=(root) NOPASSWD: /usr/bin/passwd -S fased-vps-1100\n" + maintenanceProbeUser + " ALL=(root) NOPASSWD: /usr/bin/apt-get install --yes --no-install-recommends polkitd\n" + maintenanceProbeUser + " ALL=(root) NOPASSWD: /usr/bin/setpriv ^--.*$\n" + maintenanceProbeUser + " ALL=(root) NOPASSWD: " + strings.Join(maintenanceProviderSetupArgs(), " ") + "\n"
+}
+
+func TestMaintenanceProviderSetupPolicy(t *testing.T) {
+	policy := maintenanceProbeSetupPolicy()
+	command := "/usr/bin/systemd-creds encrypt --with-key=host --name=fased-provider-task-key - -"
+	if strings.Join(maintenanceProviderSetupArgs(), " ") != command || strings.Count(policy, "systemd-creds") != 1 {
+		t.Fatal("credential preparation must be one exact setup command")
+	}
+	if !strings.Contains(policy, maintenanceProbeUser+" ALL=(root) NOPASSWD: "+command+"\n") || strings.Contains(policy, "decrypt") {
+		t.Fatal("unexpected credential preparation authority")
+	}
+	tool, e := exec.LookPath("visudo")
+	if e != nil {
+		t.Skip("OS sudoers parser unavailable")
+	}
+	cmd := exec.Command(tool, "-cf", "-")
+	cmd.Stdin = strings.NewReader(policy)
+	if b, e := cmd.CombinedOutput(); e != nil {
+		t.Fatalf("invalid temporary setup policy: %v %s", e, b)
+	}
+}
+
 func maintenanceVMGuard(t *testing.T, uid int) {
 	t.Helper()
 	if os.Getenv("FASED_DISPOSABLE_VM") != "1" {
@@ -112,7 +141,7 @@ func TestRemoteMaintenanceAuthorityUbuntuVM(t *testing.T) {
 	setup("/usr/bin/install", nil, "-d", "-m", "755", "-o", "root", "-g", "root", "--", "/var/lib/fased-maintenance-probe-input")
 	setup("/usr/bin/install", nil, "-m", "755", "-o", "root", "-g", "root", "--", image, maintenanceProbeImage)
 	setup("/usr/bin/install", []byte("B01 disposable kernel authority only\n"), "-m", "644", "-o", "root", "-g", "root", "--", "/dev/stdin", maintenanceProbeMarker)
-	policy := "Defaults:" + maintenanceProbeUser + " verifypw=any\n" + maintenanceProbeUser + " ALL=(root) NOPASSWD: /usr/bin/install, /usr/bin/mkdir, /usr/bin/ln, /usr/bin/mv, /usr/bin/sync, /usr/bin/rm, /usr/bin/cat, /usr/bin/find, /usr/bin/systemctl, /usr/sbin/useradd, /usr/sbin/apparmor_parser\n" + maintenanceProbeUser + " ALL=(root) NOPASSWD: /usr/bin/passwd -S fased-vps-1100\n" + maintenanceProbeUser + " ALL=(root) NOPASSWD: /usr/bin/apt-get install --yes --no-install-recommends polkitd\n" + maintenanceProbeUser + " ALL=(root) NOPASSWD: /usr/bin/setpriv ^--.*$\n"
+	policy := maintenanceProbeSetupPolicy()
 	setup("/usr/bin/install", []byte(policy), "-m", "440", "-o", "root", "-g", "root", "--", "/dev/stdin", maintenanceProbeSetup)
 	defer func() {
 		for _, path := range []string{maintenanceProbeSetup, maintenanceProbeMarker, "/etc/polkit-1/rules.d/60-fased-vps-1100-updates.rules", "/etc/sudoers.d/fased-vps-1100-updates"} {
@@ -245,6 +274,11 @@ func TestRemoteMaintenanceOwnerUbuntuVM(t *testing.T) {
 	}
 	if _, e = exec.CommandContext(ctx, "/usr/bin/sudo", "-n", "--", "/usr/bin/systemctl", "stop", "--", "ssh.service").Output(); e == nil {
 		t.Fatal("foreign system service action allowed")
+	}
+	credentialProbe := exec.CommandContext(ctx, "/usr/bin/sudo", append([]string{"-n", "--"}, maintenanceProviderSetupArgs()...)...)
+	credentialProbe.Stdin = bytes.NewReader(make([]byte, 32))
+	if _, e = credentialProbe.Output(); e == nil {
+		t.Fatal("initial credential preparation authority survived setup teardown")
 	}
 	limited := &custodyinstall.System{NonInteractive: true, Out: os.Stderr}
 	id := update.NewProbe()
