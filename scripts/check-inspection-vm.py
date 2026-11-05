@@ -277,6 +277,15 @@ def observe_committed_boot(attempt,offset,failed=False):
  raise RuntimeError('committed firewall service did not reach actual boot readiness; console rescue will recover this fixture')
 # Same pinned VM lifecycle; this mode executes the literal packaged customer
 # entries and records installed outcomes, rather than only verifying files.
+def staged_browser_directory(work,resume):
+ directory=work/'browser'
+ if directory.is_symlink():raise RuntimeError('private owned browser directory required')
+ directory.mkdir(mode=0o700,exist_ok=resume)
+ info=directory.stat()
+ if not directory.is_dir() or info.st_uid!=os.getuid() or info.st_mode&0o777!=0o700:
+  raise RuntimeError('private owned browser directory required')
+ return directory
+
 def staged_package_acceptance():
  import importlib.util, shlex
  spec=importlib.util.spec_from_file_location('fased_staged_guest',repo/'scripts/staged-package-guest.py')
@@ -295,7 +304,7 @@ def staged_package_acceptance():
  # Shared public inputs must not sit below ubuntu's private (0750) home.
  # The neutral directory is ubuntu-owned; delivery state remains mode0700.
  checks=result['checks']; guest='/var/tmp/fased-staged'; remote_work=guest+'/delivery'
- host_browser=work/'browser';host_browser.mkdir(mode=0o700)
+ host_browser=staged_browser_directory(work,a.resume)
  def guest_call(args,owner='ubuntu',timeout=360):
   command='FASED_DISPOSABLE_VM=1 python3 '+shlex.quote(guest+'/scripts/staged-package-guest.py')+' '+shlex.join(args)
   connection=sshbase[:-1]+[owner+'@127.0.0.1',command]
@@ -513,13 +522,15 @@ def fresh_remote_acceptance(fixture,candidate,guest,remote_work,local_receipt_sh
   journal.enrolled(tail,suffix)
   observed.update(origin=origin,enrolled=True)
   return True
- retry=fixture.RemoteEnrollmentRetry(enrollment_ready)
+ def waiting_for_owner():
+  return bool(observed.get('enrollment')) and json.loads((root/'enrollment.json').read_text()).get('waitingForOwner') is True
+ retry=fixture.RemoteEnrollmentRetry(enrollment_ready,handoff_pending=waiting_for_owner)
  def observe(text):
   links=re.findall(r'https://login\.tailscale\.com/a/[A-Za-z0-9]+',text)
   if links and links[-1]!=observed.get('enrollment'):
    assert ssh('test ! -e /var/lib/fased-app-vps-1000 && echo undeployed',15).strip()=='undeployed','Fased deployed before Tailscale enrollment'
    observed['enrollment']=links[-1]
-   fixture.write_private(root/'enrollment.json',{'url':links[-1],'realDaemon':True,'fasedNotDeployed':True})
+   fixture.write_private(root/'enrollment.json',{'url':links[-1],'realDaemon':True,'fasedNotDeployed':True,'waitingForOwner':True})
    print('Fresh Remote: Tailscale approval required; private enrollment.json contains the URL',flush=True)
   # Predeployment browser proof and final owner handoff are distinct URLs.
   # Never open an enrollment or final setup URL as the private browser probe.
@@ -564,8 +575,8 @@ def fresh_remote_acceptance(fixture,candidate,guest,remote_work,local_receipt_sh
    if present:
     # The process may have completed before its final journal write. Inspect
     # the actual protected installation; never re-claim, reinstall or rewind it.
-    status=json.loads(ssh('fased vps status',30))
-    assert status.get('installed') is True and status.get('active') is True,'retained installation is not active; inspect fased vps status and its existing update/recovery transaction'
+    status=json.loads(ssh('fased status',30))
+    assert status.get('installed') is True and status.get('active') is True,'retained installation is not active; inspect fased status and its existing update/recovery transaction'
     tail=json.loads(ssh('tailscale status --json',15));journal.enrolled(tail,suffix)
     observed['private'],_=fixture.browser_link(ssh('fased open',30))
     assert urllib.parse.parse_qs(urllib.parse.urlsplit(observed['private']).query).get('instance')==[status.get('instanceId')],'installed owner handoff differs from protected service identity'
@@ -577,16 +588,20 @@ def fresh_remote_acceptance(fixture,candidate,guest,remote_work,local_receipt_sh
   assert tail.get('BackendState')=='Running' and tail.get('Self',{}).get('Online') is True,'Tailscale must remain running'
   assert fixture.private_tailnet_origin(tail,suffix)==observed['origin'],'enrolled node identity changed'
   service=ssh('systemctl show --property User --value fased-vps-1000.service',15).strip()
-  assert service and ssh('id -u '+shlex.quote(service),15).strip() not in ('0','1000'),'dedicated non-root app identity required'
-  assert ssh('getent passwd '+shlex.quote(service),15).strip().endswith('/usr/sbin/nologin'),'app account must have no login'
-  account=ssh('sudo -n /usr/bin/passwd -S '+shlex.quote(service),15).split()
+  assert service,'dedicated non-root app identity required'
+  passwd=ssh('getent passwd '+shlex.quote(service),15).strip().split(':')
+  assert len(passwd)==7 and re.fullmatch(r'[a-z_][a-z0-9_-]*',passwd[0]) and passwd[-1]=='/usr/sbin/nologin','app account must have no login'
+  account_name=passwd[0]
+  assert passwd[2].isdigit() and passwd[2] not in ('0','1000') and (service==passwd[2] if service.isdigit() else service==account_name),'dedicated non-root app identity required'
+  assert ssh('id -u '+shlex.quote(account_name),15).strip()==passwd[2],'app UID must match the installed service'
+  account=ssh('sudo -n /usr/bin/passwd -S '+shlex.quote(account_name),15).split()
   assert len(account)>1 and account[1]=='L','app account must be locked'
   serve=json.loads(ssh('tailscale serve status --json',15))
   proxies=[handler.get('Proxy') for web in serve.get('Web',{}).values() for handler in web.get('Handlers',{}).values()]
   assert 'unix:/var/lib/fased-app-vps-1000/app-state/tailscale.sock' in proxies,'fresh Serve must target the protected Unix proxy'
   assert not any(serve.get('AllowFunnel',{}).values()),'public Funnel must remain disabled'
   protected=ssh("sudo -n /usr/bin/stat -c '%F:%a:%U' /var/lib/fased-app-vps-1000/app-state/tailscale.sock",15).strip().split(':')
-  assert len(protected)==3 and protected[0]=='socket' and int(protected[1],8)&0o007==0 and protected[2]==service,'Unix proxy must belong to the isolated app, without other-user access'
+  assert len(protected)==3 and protected[0]=='socket' and int(protected[1],8)&0o007==0 and protected[2]==account_name,'Unix proxy must belong to the isolated app, without other-user access'
   # Never use a port forward, claimed owner cookie, or test TLS exception.
   endpoint=observed['private'].split('#',1)[0].split('?',1)[0]+'api/v1/health'
   opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -605,8 +620,9 @@ def fresh_remote_acceptance(fixture,candidate,guest,remote_work,local_receipt_sh
                  remaining=['owner-device enrollment','private-admin and independent console recovery','public IPv4/IPv6 closure and rollback','actual predecessor UI/CLI upgrade','reboot/reconnect'])
   return receipt
  finally:
-  receipt['enrollmentRetry']={'readinessChecks':retry.checks,'resendSent':retry.used,
+  receipt['enrollmentRetry']={'readinessChecks':retry.checks+retry.waiting_checks,'resendSent':retry.used,
                             'outcome':'sent' if retry.used else 'pending-ended' if retry.pending_ended else 'not-needed-or-not-sent'}
+  receipt['enrollmentRetry']['ownerWaitChecks']=retry.waiting_checks
   save('fresh-remote-setup.json',receipt)
   # This is a leg of the parent journey. Stop the owned VM at runner exit, but
   # retain its encrypted state/enrollment and journal until all legs complete.

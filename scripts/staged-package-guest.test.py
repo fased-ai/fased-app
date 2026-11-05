@@ -79,6 +79,29 @@ class RemotePreflightDriverTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'unrecognized'):
             unknown(first + '\nUnexpected failure\n' + self.prompt)
 
+    def test_owner_handoff_does_not_consume_readiness_retry_window(self):
+        now = [0]; ready = [False]; reads = []; waiting = [True]
+        def check():
+            reads.append(now[0]); return ready[0]
+        retry = guest.RemoteEnrollmentRetry(check, clock=lambda: now[0], handoff_pending=lambda: waiting[0])
+        text = self.prompt+'y\n'+self.retry+'\n'+self.prompt
+        for moment in [0, 5, 60, 120, 180]:
+            now[0]=moment; self.assertIsNone(retry(text))
+        self.assertEqual(retry.checks, 0)
+        self.assertIsNone(retry.expires_at)
+        self.assertEqual(retry.waiting_checks, 5)
+        now[0]=185; ready[0]=True
+        self.assertEqual(retry(text), self.prompt)
+        self.assertIsNone(retry(text))
+        self.assertTrue(retry.used)
+        self.assertEqual(reads,[0,5,60,120,180,185])
+        # Once owner input ends, the original bounded readiness policy applies.
+        ready[0]=False; waiting[0]=False
+        bounded=guest.RemoteEnrollmentRetry(check,clock=lambda:now[0],handoff_pending=lambda:waiting[0])
+        self.assertIsNone(bounded(text));now[0]+=60
+        with self.assertRaisesRegex(RuntimeError,'not ready; no retry'):
+            bounded(text)
+
     def test_tailnet_origin_requires_exact_running_online_expected_network(self):
         good = {'BackendState':'Running', 'MagicDNSSuffix':'tail-example.ts.net',
                 'Self':{'Online':True, 'DNSName':'node.tail-example.ts.net.'}}
@@ -105,6 +128,25 @@ class RemotePreflightDriverTest(unittest.TestCase):
             self.assertIn(self.retry, log.read_text())
 
 class VMLifecycleTest(unittest.TestCase):
+    def test_browser_workspace_resume_preserves_private_state_and_refuses_foreign_paths(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            scope = self.functions(['staged_browser_directory'], {'os': __import__('os')})
+            directory = scope['staged_browser_directory'](root, False)
+            (directory/'owner-state.json').write_text('retained disposable browser state')
+            self.assertEqual(scope['staged_browser_directory'](root, True), directory)
+            self.assertEqual((directory/'owner-state.json').read_text(), 'retained disposable browser state')
+            with self.assertRaises(FileExistsError):
+                scope['staged_browser_directory'](root, False)
+            directory.chmod(0o755)
+            with self.assertRaisesRegex(RuntimeError, 'private owned'):
+                scope['staged_browser_directory'](root, True)
+            directory.chmod(0o700)
+            other = root/'other';other.mkdir()
+            (other/'browser').symlink_to(directory, target_is_directory=True)
+            with self.assertRaisesRegex(RuntimeError, 'private owned'):
+                scope['staged_browser_directory'](other, True)
+
     def test_remote_resume_keeps_binding_node_and_completed_phases(self):
         with tempfile.TemporaryDirectory() as temporary:
             file = pathlib.Path(temporary) / 'remote-journey.json'
@@ -148,18 +190,23 @@ class VMLifecycleTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             calls = []
+            service = ['fased-vps-1000']
             def ssh(command, timeout):
                 calls.append(command)
                 if 'echo clean' in command: return 'clean'
                 if 'echo undeployed' in command: return 'undeployed'
-                if command == 'fased vps status': return json.dumps({'installed':True,'active':True,'instanceId':'A'*43})
+                if command == 'fased status': return json.dumps({'installed':True,'active':True,'instanceId':'A'*43})
                 if command == 'test -e /var/lib/fased-app-vps-1000 && echo present || echo absent':return 'present'
                 if command == 'fased open': return 'https://fased.tail-example.ts.net/?instance='+'A'*43+'#setup='+'B'*43
                 if command == 'tailscale status --json': return json.dumps({'BackendState':'Running','MagicDNSSuffix':'tail-example.ts.net','Self':{'ID':'node-one','Online':True,'DNSName':'fased.tail-example.ts.net.'}})
-                if 'systemctl show' in command: return 'fased-vps-1000'
-                if 'id -u' in command: return '997'
+                if 'systemctl show' in command: return service[0]
+                if 'id -u' in command:
+                    self.assertEqual(command, 'id -u fased-vps-1000')
+                    return '997'
                 if 'getent passwd' in command: return 'fased-vps-1000:x:997:997::/var/empty:/usr/sbin/nologin'
-                if 'passwd -S' in command: return 'fased-vps-1000 L 2026-11-01'
+                if 'passwd -S' in command:
+                    self.assertEqual(command, 'sudo -n /usr/bin/passwd -S fased-vps-1000')
+                    return 'fased-vps-1000 L 2026-11-01'
                 if command == 'tailscale serve status --json': return json.dumps({'Web':{'fased.tail-example.ts.net:443':{'Handlers':{'/':{'Proxy':'unix:/var/lib/fased-app-vps-1000/app-state/tailscale.sock'}}}}})
                 if '/usr/bin/stat' in command: return 'socket:600:fased-vps-1000'
                 if 'tailscale logout' in command: return ''
@@ -199,7 +246,7 @@ class VMLifecycleTest(unittest.TestCase):
             self.assertEqual(result['checks']['tailBeforeDeployment'],'PASS')
             self.assertEqual(result['checks']['predeploymentBrowser'],'PASS')
             self.assertEqual(result['localAcceptanceSha256'],'f'*64)
-            self.assertEqual(result['enrollmentRetry'],{'readinessChecks':1,'resendSent':True,'outcome':'sent'})
+            self.assertEqual(result['enrollmentRetry'],{'readinessChecks':1,'resendSent':True,'outcome':'sent','ownerWaitChecks':1})
             opener.open.assert_called_once_with('https://fased.tail-example.ts.net/api/v1/health',timeout=20)
             self.assertNotIn('sudo -n /usr/bin/tailscale logout',calls)
             self.assertEqual(guest.document(root/'remote-journey.json')['phase'], 'installed')
@@ -214,6 +261,7 @@ class VMLifecycleTest(unittest.TestCase):
             guest.write_private(root/'remote-journey.json',interrupted)
             response.__enter__.return_value = io.BytesIO(json.dumps(health).encode())
             scope['a'].resume = True
+            service[0] = '997'  # systemd may expose a numeric User= identity.
             fixture.terminal = lambda *args, **kw: self.fail('resume reran installation')
             resumed = scope['fresh_remote_acceptance'](fixture,candidate,'/guest','/delivery','f'*64)
             self.assertEqual(resumed['instanceId'], result['instanceId'])
@@ -242,7 +290,7 @@ class VMLifecycleTest(unittest.TestCase):
                     options['transcript'].write_text(repeated);options['transcript'].chmod(0o600)
             fixture=SimpleNamespace(RemoteJourney=guest.RemoteJourney,binding=lambda _: {},terminal=terminal,PREPARATION_ANSWERS={},
                 private_tailnet_origin=guest.private_tailnet_origin,
-                RemoteEnrollmentRetry=lambda ready:guest.RemoteEnrollmentRetry(ready,clock=lambda:now[0]))
+                RemoteEnrollmentRetry=lambda ready,**kw:guest.RemoteEnrollmentRetry(ready,clock=lambda:now[0],**kw))
             process=SimpleNamespace(run=lambda *args,**kw:subprocess.CompletedProcess(args,0,json.dumps(tail).encode(),b''),
                 PIPE=subprocess.PIPE,SubprocessError=subprocess.SubprocessError)
             scope=self.functions(['fresh_remote_acceptance'],{'a':SimpleNamespace(resume=False),'root':root,'ssh':ssh,'sshbase':['ssh','ubuntu@127.0.0.1'],
@@ -251,7 +299,7 @@ class VMLifecycleTest(unittest.TestCase):
                 scope['fresh_remote_acceptance'](fixture,{},'/guest','/delivery','f'*64)
             receipt=saved['fresh-remote-setup.json']
             self.assertEqual(receipt['result'],'FAIL')
-            self.assertEqual(receipt['enrollmentRetry'],{'readinessChecks':12,'resendSent':False,'outcome':'pending-ended'})
+            self.assertEqual(receipt['enrollmentRetry'],{'readinessChecks':12,'resendSent':False,'outcome':'pending-ended','ownerWaitChecks':0})
             self.assertEqual(calls.count('tailscale status --json'),12)
             self.assertNotIn('sudo -n /usr/bin/tailscale logout',calls)
             self.assertEqual(guest.document(root/'remote-journey.json')['phase'], 'new')

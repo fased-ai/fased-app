@@ -83,12 +83,13 @@ def private_tailnet_origin(status, suffix):
 
 
 class RemoteEnrollmentRetry:
-    """One known reissued prompt, at most twelve throttled readiness checks."""
+    """One resend; owner input uses the existing enclosing wizard deadline."""
     prompt = "Connect Tailscale for private Remote access? [Y/n]: "
     failure = "Connect Tailscale and retry. Fased has not been installed."
 
-    def __init__(self, ready, clock=time.monotonic):
+    def __init__(self, ready, clock=time.monotonic, handoff_pending=lambda: False):
         self.ready, self.clock = ready, clock
+        self.handoff_pending, self.waiting_checks = handoff_pending, 0
         self.checks, self.next_check, self.used = 0, 0, False
         self.expires_at, self.pending_ended = None, False
 
@@ -106,6 +107,17 @@ class RemoteEnrollmentRetry:
         if self.failure not in remainder.split(self.prompt, 1)[0]:
             raise RuntimeError("unrecognized Remote enrollment failure; no retry sent")
         now = self.clock()
+        # Human sign-in is a separate gate, not twelve failed network probes.
+        # The enclosing terminal's existing 1200s deadline remains unchanged.
+        if self.expires_at is None and self.handoff_pending():
+            if now < self.next_check:
+                return None
+            self.waiting_checks += 1
+            self.next_check = now + 5
+            if self.ready():
+                self.used = True
+                return self.prompt
+            return None
         if self.expires_at is None:
             self.expires_at = now + 60
         if self.pending_ended or self.checks >= 12 or now >= self.expires_at:
