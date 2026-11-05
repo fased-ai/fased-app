@@ -2,7 +2,7 @@
 
 Fased uses saved GitHub authentication and automated build attestations. Customers install a compiled package through one entry and use Settings → Update or the installed `fased update`. They need no Go compiler, Node, source checkout or release-signing password.
 
-The selected candidate, installed identities, active checkout and exact action authority live in [Current](/home/fc/fasedbot/docs/fased/execution.md). Preserve its original Local PASS within that package's scope. Changes to candidate bytes require matching affected installed evidence; this guide never grants delivery, publication or activation authority.
+The selected candidate, installed identities, active checkout and exact action authority live in the implementation record’s Current checkpoint. Preserve its original Local PASS within that package's scope. Changes to candidate bytes require matching affected installed evidence; this guide never grants delivery, publication or activation authority.
 
 The protected workflow produces authenticated Local proof. Actual persistent Remote evidence is separately reviewed under the owner-selected GitHub contract below. State retention, private-browser access and the admission code are implemented; the remaining installed Remote recovery/update legs must still pass. The publisher refuses missing or incomplete evidence.
 
@@ -72,7 +72,7 @@ This is an implementation requirement, not a claim that the current code already
 
 Before public-port closure prove non-root private administration AND provider console/rescue independent of Tailscale and its login provider. Private SSH over the same tailnet is not a substitute. Without independent access, leave installation incomplete rather than lock out the owner or silently open a public listener. A different provider/access design requires explicit acceptance. Preserve essential networking and unrelated host policy.
 
-Access loss, expired identity, reboot, device replacement and vendor failure must preserve state and deny unverified authority. No access failure may unlock the signer, enlarge grants or replay uncertain tasks. Actual independent recovery and closure rollback remain B01 exits. Portable encrypted key/state restore outside the original VPS/tailnet is B05's prerequisite for real-wallet use, not an install-time wallet/password requirement. See [recovery contract](/home/fc/fasedbot/docs/fased/plan.md#access-provider-outage-and-wallet-recovery).
+Access loss, expired identity, reboot, device replacement and vendor failure must preserve state and deny unverified authority. No access failure may unlock the signer, enlarge grants or replay uncertain tasks. Actual independent recovery and closure rollback remain B01 exits. Portable encrypted key/state restore outside the original VPS/tailnet is B05's prerequisite for real-wallet use, not an install-time wallet/password requirement. See [recovery guidance](../guide/install.md#recovery-and-availability).
 
 ### Evidence and completion
 
