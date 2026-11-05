@@ -372,3 +372,32 @@ test("ordinary Remote browser uses exact private HTTPS and no copied CLI session
     "https:",
   );
 });
+
+test("older Remote password setup is limited to the declared public 0.1.6 claim", () => {
+  const config = {
+    fixtureOnly: true,
+    action: "claim",
+    transport: "tailscale-https",
+    expectedOrigin: "https://node.tail-example.ts.net",
+    instanceId: "I".repeat(43),
+    version: "0.1.6",
+    legacyRemotePasswordSetup: true,
+    url:
+      "https://node.tail-example.ts.net/?instance=" +
+      "I".repeat(43) +
+      "#setup=" +
+      "S".repeat(43),
+  };
+  assert.equal(browserAddress(config).origin, config.expectedOrigin);
+  for (const change of [
+    { version: "0.1.9" },
+    { legacyRemotePasswordSetup: "true" },
+    { legacyRemotePasswordSetup: false },
+    {
+      action: "reconnect",
+      url: config.expectedOrigin + "/?instance=" + config.instanceId,
+    },
+    { transport: "loopback", url: "http://127.0.0.1:17482/" },
+  ])
+    assert.throws(() => browserAddress({ ...config, ...change }));
+});

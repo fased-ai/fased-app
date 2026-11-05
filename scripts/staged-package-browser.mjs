@@ -214,6 +214,14 @@ export function browserAddress(config) {
       );
   }
   assert.match(config.version, /^\d+\.\d+\.\d+$/);
+  if (config.legacyRemotePasswordSetup !== undefined) {
+    // Only the immutable public predecessor needs an initial test password.
+    // Routine Update and current Remote setup must stay password-free.
+    assert.equal(config.legacyRemotePasswordSetup, true);
+    assert.equal(config.transport, "tailscale-https");
+    assert.equal(config.action, "claim");
+    assert.equal(config.version, "0.1.6");
+  }
   const applying = ["ui-update", "automatic-update"].includes(config.action);
   if (applying) {
     assert.match(config.fromVersion, /^\d+\.\d+\.\d+$/);
@@ -289,6 +297,7 @@ export async function runStagedBrowser(config, { chromium, expect }) {
   assert.ok(process.getuid() > 0);
   const address = browserAddress(config);
   const directRemote = config.transport === "tailscale-https";
+  const legacyRemotePasswordSetup = config.legacyRemotePasswordSetup === true;
   const applying = ["ui-update", "automatic-update"].includes(config.action);
   if (config.action === "claim")
     assert.ok(
@@ -363,7 +372,10 @@ export async function runStagedBrowser(config, { chromium, expect }) {
   try {
     await page.goto(config.url);
     if (config.action === "claim") {
-      if (directRemote || new URL(config.url).hash.startsWith("#local=")) {
+      if (
+        (directRemote && !legacyRemotePasswordSetup) ||
+        new URL(config.url).hash.startsWith("#local=")
+      ) {
         await waitAuthenticated();
         await expect(page.locator('input[type="password"]')).toHaveCount(0);
       } else {
@@ -663,7 +675,11 @@ export async function runStagedBrowser(config, { chromium, expect }) {
       ...(config.action === "claim"
         ? {
             passwordFreeSetup:
-              directRemote || new URL(config.url).hash.startsWith("#local="),
+              !legacyRemotePasswordSetup &&
+              (directRemote || new URL(config.url).hash.startsWith("#local=")),
+            ...(legacyRemotePasswordSetup
+              ? { legacyInitialPasswordSetup: true }
+              : {}),
           }
         : {}),
       ...(config.action === "failed-check"
