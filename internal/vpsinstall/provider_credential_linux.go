@@ -29,18 +29,21 @@ func prepareTaskCredential(ctx context.Context, o hostOps, m Manifest) error {
 	if e = trustedTool(o, "/usr/bin/systemd-creds"); e != nil {
 		return e
 	}
-	directory := "/etc/credstore.encrypted"
+	// Only the host-encrypted envelope is readable for ordinary-owner integrity
+	// verification. Its plaintext wrapping key stays in systemd's root-only
+	// store; no privileged read interface or shared OS directory is relaxed.
+	directory := taskCredentialDirectory
 	entry, e := o.read(directory)
 	if errors.Is(e, os.ErrNotExist) {
-		if _, e = o.run(ctx, nil, "/usr/bin/install", "-d", "-m", "0700", "-o", "root", "-g", "root", "--", directory); e != nil {
+		if _, e = o.run(ctx, nil, "/usr/bin/install", "-d", "-m", "0755", "-o", "root", "-g", "root", "--", directory); e != nil {
 			return e
 		}
-	} else if e != nil || !entry.Directory || entry.UID != 0 || entry.Mode.Perm()&0022 != 0 {
+	} else if e != nil || !entry.Directory || entry.UID != 0 || entry.Mode.Perm() != 0755 {
 		return errors.New("preserve foreign credential directory")
 	}
 	target := filepath.Join(directory, taskCredentialID(m))
 	if f, e := rootFile(o, target); e == nil {
-		if !f.Regular || f.Mode.Perm() != 0600 || len(f.Data) < 32 || len(f.Data) > 16384 {
+		if !f.Regular || f.Mode.Perm() != 0644 || len(f.Data) < 32 || len(f.Data) > 16384 {
 			return errors.New("preserve foreign protected credential")
 		}
 		return prepareTaskCredentialDropIn(ctx, o, m)
@@ -50,7 +53,7 @@ func prepareTaskCredential(ctx context.Context, o hostOps, m Manifest) error {
 	stage := filepath.Join(directory, "."+filepath.Base(target)+"-"+m.ID+".pending")
 	var encrypted []byte
 	if f, e := rootFile(o, stage); e == nil {
-		if !f.Regular || f.Mode.Perm() != 0600 || len(f.Data) < 32 || len(f.Data) > 16384 {
+		if !f.Regular || f.Mode.Perm() != 0644 || len(f.Data) < 32 || len(f.Data) > 16384 {
 			return errors.New("preserve protected credential staging")
 		}
 		encrypted = f.Data
@@ -71,7 +74,7 @@ func prepareTaskCredential(ctx context.Context, o hostOps, m Manifest) error {
 		}
 	}
 	// Keep this encrypted OS key on removal/repair just like retained app state.
-	if e = publish(ctx, o, target, m.ID, encrypted, 0600); e != nil {
+	if e = publish(ctx, o, target, m.ID, encrypted, 0644); e != nil {
 		return e
 	}
 	return prepareTaskCredentialDropIn(ctx, o, m)

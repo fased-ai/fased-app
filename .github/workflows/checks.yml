@@ -77,6 +77,8 @@ jobs:
           go-version: "1.26.x"
           cache: true
       - run: node scripts/source-evidence.mjs
+      - name: Native protected provider credential runtime
+        run: node scripts/check-native-provider-secret.mjs
       - run: npm run check
       - name: Verify reviewed provider maintenance contracts
         run: node --test --test-isolation=none scripts/provider-models.test.mjs scripts/provider-models-local.test.mjs
@@ -95,8 +97,6 @@ jobs:
       - if: needs.classify.outputs.scope == 'rpc'
         run: go test -race ./internal/core -run 'Test(RPC|AccountRPC|PublicRPC|ProviderRPC)'
       - run: npm run build:core
-      - name: Native protected provider credential runtime
-        run: node scripts/check-native-provider-secret.mjs
       - name: Portable encrypted history and quarantined recovery checks
         if: needs.classify.outputs.signer == 'true'
         run: node scripts/check-portable-recovery.mjs

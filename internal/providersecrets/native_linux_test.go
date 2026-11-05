@@ -7,15 +7,18 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/godbus/dbus/v5"
+	"golang.org/x/sys/unix"
 )
 
 type testDesktopSecret struct {
@@ -157,6 +160,77 @@ func TestNativeServiceCredentialRefusesUnsafePaths(t *testing.T) {
 	}
 }
 
+func serviceACLFixture(uid uint32) []byte {
+	b := make([]byte, 44)
+	binary.LittleEndian.PutUint32(b, 2)
+	for i, e := range [][3]uint32{{1, 4, ^uint32(0)}, {2, 4, uid}, {4, 0, ^uint32(0)}, {16, 4, ^uint32(0)}, {32, 0, ^uint32(0)}} {
+		o := 4 + i*8
+		binary.LittleEndian.PutUint16(b[o:], uint16(e[0]))
+		binary.LittleEndian.PutUint16(b[o+2:], uint16(e[1]))
+		binary.LittleEndian.PutUint32(b[o+4:], e[2])
+	}
+	return b
+}
+
+func TestNativeSystemdNamedUserACL(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("ordinary credential reader required")
+	}
+	f, err := os.CreateTemp(t.TempDir(), "disposable-credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err = f.Write(bytes.Repeat([]byte{17}, 32)); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.Chmod(0400); err != nil {
+		t.Fatal(err)
+	}
+	private, err := readServiceCredential(f)
+	clear(private)
+	if err != nil {
+		t.Fatal("private owner mode refused", err)
+	}
+	if err = unix.Fsetxattr(int(f.Fd()), "system.posix_acl_access", serviceACLFixture(uint32(os.Geteuid())), 0); err != nil {
+		t.Fatal("local ACL fixture unavailable", err)
+	}
+	info, err := f.Stat()
+	if err != nil || info.Mode().Perm() != 0440 {
+		t.Fatal("ACL mask not represented in stat mode", err)
+	}
+	key, err := readServiceCredential(f)
+	defer clear(key)
+	if err != nil || len(key) != 32 {
+		t.Fatal("systemd named-user credential ACL refused", err)
+	}
+	if err = unix.Fremovexattr(int(f.Fd()), "system.posix_acl_access"); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.Chmod(0440); err != nil {
+		t.Fatal(err)
+	}
+	if key, err = readServiceCredential(f); err == nil {
+		clear(key)
+		t.Fatal("generic group access accepted")
+	}
+}
+
+func TestNativeSystemdACLRejectsExtraAuthority(t *testing.T) {
+	uid := uint32(os.Geteuid())
+	valid := serviceACLFixture(uid)
+	for i := range valid {
+		changed := bytes.Clone(valid)
+		changed[i] ^= 1
+		if exactServiceACL(changed, uid) {
+			t.Fatal("changed ACL admitted", i)
+		}
+	}
+	if exactServiceACL(valid[:43], uid) || exactServiceACL(append(bytes.Clone(valid), make([]byte, 8)...), uid) {
+		t.Fatal("malformed or extra ACL entry accepted")
+	}
+}
+
 // The existing Ubuntu CI job invokes this test as an ordinary-user systemd
 // service with a disposable encrypted credential. Never run project code as root.
 func TestNativeSystemdRuntimeCredential(t *testing.T) {
@@ -169,6 +243,13 @@ func TestNativeSystemdRuntimeCredential(t *testing.T) {
 	}
 	key, e := (Native{}).Key(context.Background(), "disposable-native-service", false)
 	if e != nil {
+		if info, statErr := os.Stat(filepath.Join(os.Getenv("CREDENTIALS_DIRECTORY"), CredentialName)); statErr == nil {
+			if owner, ok := info.Sys().(*syscall.Stat_t); ok {
+				t.Logf("runtime metadata only: mode=%#o uid=%d size=%d", info.Mode().Perm(), owner.Uid, info.Size())
+			}
+		} else {
+			t.Log("runtime metadata unavailable", statErr)
+		}
 		t.Fatal(e)
 	}
 	defer clear(key)

@@ -5,6 +5,7 @@ package providersecrets
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"golang.org/x/sys/unix"
 )
 
 // Secret Service is the desktop OS keyring. Remote system services instead
@@ -32,20 +34,7 @@ func (Native) Key(ctx context.Context, instance string, create bool) ([]byte, er
 			return nil, ErrUnavailable
 		}
 		defer f.Close()
-		info, err := f.Stat()
-		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() != 32 {
-			return nil, ErrUnavailable
-		}
-		owner, ok := info.Sys().(*syscall.Stat_t)
-		if !ok || owner.Uid != uint32(os.Geteuid()) && owner.Uid != 0 {
-			return nil, ErrUnavailable
-		}
-		key := make([]byte, 32)
-		if _, err = f.ReadAt(key, 0); err != nil {
-			clear(key)
-			return nil, ErrUnavailable
-		}
-		return key, nil
+		return readServiceCredential(f)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -119,4 +108,48 @@ func (Native) Key(ctx context.Context, instance string, create bool) ([]byte, er
 		return nil, ErrUnavailable
 	}
 	return key, nil
+}
+
+func readServiceCredential(f *os.File) ([]byte, error) {
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() != 32 {
+		return nil, ErrUnavailable
+	}
+	owner, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || owner.Uid != uint32(os.Geteuid()) && owner.Uid != 0 {
+		return nil, ErrUnavailable
+	}
+	if info.Mode().Perm() != 0400 {
+		// systemd prefers a root-owned file with a named service-UID read ACL.
+		// Its ACL mask appears as 0440 in stat; that is not generic group access.
+		if info.Mode().Perm() != 0440 {
+			return nil, ErrUnavailable
+		}
+		acl := make([]byte, 44)
+		n, err := unix.Fgetxattr(int(f.Fd()), "system.posix_acl_access", acl)
+		if err != nil || n != len(acl) || !exactServiceACL(acl, uint32(os.Geteuid())) {
+			return nil, ErrUnavailable
+		}
+	}
+	key := make([]byte, 32)
+	if _, err = f.ReadAt(key, 0); err != nil {
+		clear(key)
+		return nil, ErrUnavailable
+	}
+	return key, nil
+}
+
+func exactServiceACL(acl []byte, uid uint32) bool {
+	if len(acl) != 44 || binary.LittleEndian.Uint32(acl) != 2 {
+		return false
+	}
+	// Linux POSIX ACL v2, canonical order. No additional users/groups, write,
+	// execute, group-owner access, other access or broader effective mask.
+	for i, e := range [][3]uint32{{1, 4, ^uint32(0)}, {2, 4, uid}, {4, 0, ^uint32(0)}, {16, 4, ^uint32(0)}, {32, 0, ^uint32(0)}} {
+		o := 4 + i*8
+		if uint32(binary.LittleEndian.Uint16(acl[o:])) != e[0] || uint32(binary.LittleEndian.Uint16(acl[o+2:])) != e[1] || binary.LittleEndian.Uint32(acl[o+4:]) != e[2] {
+			return false
+		}
+	}
+	return true
 }
