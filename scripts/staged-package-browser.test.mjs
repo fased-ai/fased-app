@@ -5,6 +5,7 @@ import {
   installedAccount,
   installedNavigate,
   stopInstalledReply,
+  installedTaskSchedule,
   completedApplication,
   applicationUpdateFailure,
   privatePreflightAddress,
@@ -857,4 +858,45 @@ test("installed Stop preserves completion races but refuses unrelated click fail
     async () => ({ id: "reply", state: "running" }),
   );
   assert.equal(actual, true);
+});
+
+test("installed schedule uses the actual wrapped Unit label and finite pause-friendly timing", async () => {
+  // Labels observed in the unchanged shipping UI, including select options.
+  const fields = [
+    "Schedule",
+    "Maximum evaluations",
+    "UnitMinutesHoursDays",
+    "Every",
+  ];
+  const writes = [];
+  const schedule = {
+    locator: () => ({ click: async () => writes.push(["open"]) }),
+    getByLabel: (label, options) => {
+      const matching = fields.filter((field) =>
+        label instanceof RegExp
+          ? label.test(field)
+          : options?.exact
+            ? field === label
+            : field.includes(label),
+      );
+      assert.equal(matching.length, 1, "one actual rendered field required");
+      const put = async (value) => writes.push([matching[0], value]);
+      return { fill: put, selectOption: put };
+    },
+  };
+  assert.throws(() => schedule.getByLabel("Unit", { exact: true }));
+  assert.throws(() => schedule.getByLabel(/^Unit\b/));
+  await installedTaskSchedule(
+    { locator: () => ({}) },
+    {
+      locator: () => ({ filter: () => schedule }),
+    },
+  );
+  assert.deepEqual(writes, [
+    ["open"],
+    ["Schedule", "repeat"],
+    ["Maximum evaluations", "2"],
+    ["UnitMinutesHoursDays", "60"],
+    ["Every", "20"],
+  ]);
 });
