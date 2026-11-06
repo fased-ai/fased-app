@@ -18,6 +18,7 @@ type Options struct {
 	ApplicationReleaseSHA256               string
 	Core, CoreSHA256, Listen, PublicOrigin string
 	PrepareHost, Start                     bool
+	ProviderFixture                        bool // Explicit controlled installer input, not an ordinary UI preference.
 }
 
 // Manifest is root-owned configuration. Only the authenticated app-only
@@ -43,6 +44,7 @@ type Manifest struct {
 	Listen                   string `json:"listen"`
 	PublicOrigin             string `json:"publicOrigin"`
 	CoreSHA256               string `json:"coreSha256"`
+	ProviderFixture          bool   `json:"providerFixture,omitempty"`
 }
 
 type ServiceStatus struct {
@@ -79,6 +81,9 @@ func validateEndpoint(listen, origin string) error {
 	return nil
 }
 func (m Manifest) validate() error {
+	if m.ProviderFixture && m.PublicOrigin == "" {
+		return errors.New("installed provider fixture requires its private HTTPS origin")
+	}
 	if (m.ApplicationSequence == 0) != (m.ApplicationReleaseSHA256 == "") || m.ApplicationReleaseSHA256 != "" && !canonicalHex(m.ApplicationReleaseSHA256, 32) {
 		return errors.New("invalid Remote application release identity")
 	}
@@ -92,6 +97,9 @@ func unit(m Manifest) []byte {
 	command := m.Core + " serve --data-dir " + m.Data + " --listen " + m.Listen + " --instance-location remote --require-sandbox --installation-root " + m.Root + " --remote-config " + m.Config
 	if m.PublicOrigin != "" {
 		command += " --public-origin " + m.PublicOrigin
+	}
+	if m.ProviderFixture {
+		command += " --ai-fixture"
 	}
 	return []byte(fmt.Sprintf("[Unit]\nDescription=Fased App Remote core\nAfter=network.target\n\n[Service]\nType=simple\nUser=%d\nGroup=%d\nSupplementaryGroups=\nExecStart=%s\nRestart=on-failure\nRestartSec=3\nTimeoutStopSec=15\nUMask=0077\nNoNewPrivileges=yes\nProtectSystem=strict\nProtectHome=yes\nPrivateTmp=yes\nReadOnlyPaths=%s\nReadWritePaths=%s\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectControlGroups=yes\nCapabilityBoundingSet=\nAmbientCapabilities=\nRestrictSUIDSGID=yes\nLockPersonality=yes\nRestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\nWorkingDirectory=/\nEnvironment=HOME=/nonexistent\n\n[Install]\nWantedBy=multi-user.target\n", m.AppUID, m.AppGID, command, m.Root, m.Data))
 }

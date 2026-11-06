@@ -24,6 +24,7 @@ const uid = process.getuid(),
 const evidence = path.resolve(".evidence/native-provider-secret");
 mkdirSync(evidence, { recursive: true, mode: 0o700 });
 const binary = path.join(evidence, "providersecrets.test");
+const agentBinary = path.join(evidence, "core.test");
 const run = (tool, args, options = {}) =>
   execFileSync(tool, args, {
     stdio: ["pipe", "pipe", "pipe"],
@@ -33,6 +34,7 @@ const run = (tool, args, options = {}) =>
 const osRun = (tool, args, options = {}) =>
   run("sudo", ["-n", "--", tool, ...args], options);
 run("go", ["test", "-c", "-o", binary, "./internal/providersecrets"]);
+run("go", ["test", "-c", "-o", agentBinary, "./internal/core"]);
 let created = false;
 try {
   osRun("/usr/bin/mkdir", ["-m", "0700", "--", dir]);
@@ -40,6 +42,8 @@ try {
   osRun("/usr/bin/chown", [`${uid}:${gid}`, "--", dir]);
   copyFileSync(binary, path.join(dir, "providersecrets.test"));
   chmodSync(path.join(dir, "providersecrets.test"), 0o755);
+  copyFileSync(agentBinary, path.join(dir, "core.test"));
+  chmodSync(path.join(dir, "core.test"), 0o755);
   const secret = randomBytes(32),
     expected = createHash("sha256").update(secret).digest("hex");
   let encrypted;
@@ -61,7 +65,12 @@ try {
   const encryptedPath = path.join(dir, "disposable.cred");
   writeFileSync(encryptedPath, encrypted, { mode: 0o600 });
   const outputs = [];
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const cases = [
+    [0, "providersecrets.test", "TestNativeSystemdRuntimeCredential"],
+    [1, "providersecrets.test", "TestNativeSystemdRuntimeCredential"],
+    ["agent", "core.test", "TestInstalledProviderFixtureNativeRuntime"],
+  ];
+  for (const [attempt, executable, test] of cases) {
     const output = osRun(
       "/usr/bin/systemd-run",
       [
@@ -80,13 +89,13 @@ try {
         "--property=AmbientCapabilities=",
         `--property=LoadCredentialEncrypted=fased-provider-task-key:${encryptedPath}`,
         `--setenv=FASED_NATIVE_EXPECTED_SHA256=${expected}`,
-        path.join(dir, "providersecrets.test"),
-        "-test.run=^TestNativeSystemdRuntimeCredential$",
+        path.join(dir, executable),
+        `-test.run=^${test}$`,
         "-test.v",
       ],
       { encoding: "utf8" },
     );
-    if (!output.includes("--- PASS: TestNativeSystemdRuntimeCredential"))
+    if (!output.includes(`--- PASS: ${test}`))
       throw Error("Native service test did not pass");
     outputs.push(output);
   }
@@ -96,8 +105,10 @@ try {
       {
         result: "PASS",
         scope:
-          "actual systemd encrypted credential delivery to unprivileged test process",
+          "actual systemd encrypted credential delivery and installed-provider source composition in an unprivileged test service; not packaged acceptance",
         runs: outputs.length,
+        installedProviderJourney: "PASS",
+        shippingPackageAcceptance: false,
         user: uid,
         secretPrinted: false,
         liveFeatures: false,
@@ -108,10 +119,10 @@ try {
   );
   writeFileSync(path.join(evidence, "service-starts.log"), outputs.join("\n"));
   console.log(
-    "PASS: native encrypted credential delivered to ordinary-user service twice",
+    "PASS: native encrypted credential delivery and installed-provider task/restart/revoke source journey",
   );
 } finally {
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (const attempt of [0, 1, "agent"]) {
     try {
       osRun("/usr/bin/systemctl", [
         "stop",

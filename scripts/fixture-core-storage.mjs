@@ -440,7 +440,7 @@ func ValidManagedAccountRef(r AccountRef) bool {
       )
       .replace(
         "type Store struct {",
-        "type Store struct {\n\ttaskSecrets providersecrets.Source\n\tpersistentTaskAccessAvailable bool\n\tproviderVaultFault func() error\n\tappUpdates applicationUpdates\n\tvenueCredentials venueCredentials\n\trpcAdmission bool\n\twalletReadFixture walletReader\n\twalletReadMu sync.Mutex\n\trpcCheckFixture func(context.Context, RPCCheckRequest) (RPCCheckResult, error)\n\tcustodyNetwork string\n\tonchain *onchainRuntime\n\tproviderFixture bool\n\tchatEpoch atomic.Uint64\n\tprogressMu sync.Mutex\n\taiProgress map[string]string\n\tsessionFixture bool\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState\n\tpilot openAIPilotState\n\tresearchRead func(context.Context, researchFactResult) (json.RawMessage, error)",
+        "type Store struct {\n\ttaskSecrets providersecrets.Source\n\tpersistentTaskAccessAvailable bool\n\tproviderVaultFault func() error\n\tappUpdates applicationUpdates\n\tvenueCredentials venueCredentials\n\trpcAdmission bool\n\twalletReadFixture walletReader\n\twalletReadMu sync.Mutex\n\trpcCheckFixture func(context.Context, RPCCheckRequest) (RPCCheckResult, error)\n\tcustodyNetwork string\n\tonchain *onchainRuntime\n\tproviderFixture bool\n\tproviderOnlyFixture bool\n\tchatEpoch atomic.Uint64\n\tprogressMu sync.Mutex\n\taiProgress map[string]string\n\tsessionFixture bool\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState\n\tpilot openAIPilotState\n\tresearchRead func(context.Context, researchFactResult) (json.RawMessage, error)",
       )
       .replace(
         marker,

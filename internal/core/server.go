@@ -40,6 +40,16 @@ func StartAgentFixture(ctx context.Context, dir, listen, publicOrigin string, as
 	return start(ctx, dir, listen, publicOrigin, assets, true)
 }
 
+// StartInstalledProviderFixture is the installed launcher composition after
+// identity/sandbox validation. Only compiled provider transports are selected;
+// credentials use the OS source before restoration, never the standalone key.
+func StartInstalledProviderFixture(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS, custodyConfig ...string) (*Server, error) {
+	if len(custodyConfig) != 0 {
+		return nil, errors.New("installed provider fixture cannot configure a signer")
+	}
+	return startModesWithTaskSecrets(ctx, dir, listen, publicOrigin, assets, true, false, providersecrets.Native{}, true)
+}
+
 // StartSessionFixture enables only finite compiled shadow sessions. It cannot
 // configure a signer, model transport, external news or research endpoint.
 func StartSessionFixture(ctx context.Context, dir, listen string, assets fs.FS) (*Server, error) {
@@ -49,6 +59,14 @@ func start(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS, 
 	return startModes(ctx, dir, listen, publicOrigin, assets, fixture, false, custodyConfig...)
 }
 func startModes(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS, fixture, sessionFixture bool, custodyConfig ...string) (*Server, error) {
+	var taskSecrets providersecrets.Source = providersecrets.Native{}
+	if fixture {
+		taskSecrets = fixtureTaskSecrets{}
+	}
+	return startModesWithTaskSecrets(ctx, dir, listen, publicOrigin, assets, fixture, sessionFixture, taskSecrets, false, custodyConfig...)
+}
+
+func startModesWithTaskSecrets(ctx context.Context, dir, listen, publicOrigin string, assets fs.FS, fixture, sessionFixture bool, taskSecrets providersecrets.Source, providerOnly bool, custodyConfig ...string) (*Server, error) {
 	if sessionFixture && (fixture || len(custodyConfig) > 0 || publicOrigin != "") {
 		return nil, errors.New("session fixture requires a standalone local core")
 	}
@@ -67,10 +85,6 @@ func startModes(ctx context.Context, dir, listen, publicOrigin string, assets fs
 	if err != nil {
 		return nil, err
 	}
-	var taskSecrets providersecrets.Source = providersecrets.Native{}
-	if fixture {
-		taskSecrets = fixtureTaskSecrets{}
-	}
 	store, err := openStoreWithTaskSecrets(dir, taskSecrets)
 	if err != nil {
 		lock.Close()
@@ -78,6 +92,7 @@ func startModes(ctx context.Context, dir, listen, publicOrigin string, assets fs
 	}
 	store.sessionFixture = sessionFixture
 	store.providerFixture = fixture
+	store.providerOnlyFixture = providerOnly
 	failed := true
 	defer func() {
 		if failed {

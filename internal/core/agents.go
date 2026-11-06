@@ -426,7 +426,7 @@ func (s *Store) Agents(ctx context.Context, profile, query string) (AgentView, e
 	if s.onchain != nil || len(projection.Tasks) > 0 || len(projection.Runs) > 0 {
 		v.Onchain = &projection
 	}
-	v.PaperExecutionAvailable = s.providerFixture
+	v.PaperExecutionAvailable = s.paperExecutionAvailable()
 	return s.chatView(v), e
 }
 func validAgentText(v string, max int, required bool) bool {
@@ -524,7 +524,7 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		return s.controlSwapTask(ctx, c)
 	}
 
-	defer func() { resultView.PaperExecutionAvailable = s.providerFixture }()
+	defer func() { resultView.PaperExecutionAvailable = s.paperExecutionAvailable() }()
 	if (c.Strategy != nil && c.Action != "strategy-save") || ((c.StrategyID != "" || c.StrategyVersion != 0) && c.Action != "task-review" && c.Action != "task-reviewed-create") {
 		return AgentView{}, errors.New("strategy fields require their own save or task review")
 	}
@@ -900,7 +900,7 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 			return AgentView{}, errors.New("task review changed; review again")
 		}
 		if review.StrategyPlan != nil {
-			if !s.providerFixture {
+			if !s.paperExecutionAvailable() {
 				return AgentView{}, errors.New("paper runs unavailable in this instance")
 			}
 			e = appendStrategyTask(&d, c, profile, id, now, review)
@@ -948,7 +948,7 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 						return AgentView{}, err
 					}
 					binding, err := boundStrategyAccount(accounts, t.StrategyPlan.Plan)
-					if err != nil || binding != t.StrategyPlan.Binding || !s.providerFixture || version.SpentMicros >= version.Plan.TotalBudgetMicros {
+					if err != nil || binding != t.StrategyPlan.Binding || !s.paperExecutionAvailable() || version.SpentMicros >= version.Plan.TotalBudgetMicros {
 						return AgentView{}, errors.New("strategy binding, allocation or paper access changed; review again")
 					}
 				}

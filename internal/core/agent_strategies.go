@@ -342,7 +342,11 @@ func (s *Store) evaluateStrategyTask(ctx context.Context, tx *sql.Tx, d *agentDo
 	if e != nil {
 		return e
 	}
-	return runStrategyTask(d, i, now, s.providerFixture, accounts, compiledStrategyQuote(*d.Tasks[i].StrategyPlan, now))
+	return runStrategyTask(d, i, now, s.paperExecutionAvailable(), accounts, compiledStrategyQuote(*d.Tasks[i].StrategyPlan, now))
+}
+
+func (s *Store) paperExecutionAvailable() bool {
+	return s.providerFixture && !s.providerOnlyFixture
 }
 
 // Inspect root names once, without recursively walking unrelated chat/history.

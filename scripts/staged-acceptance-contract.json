@@ -39,6 +39,19 @@
     "noExtraPassword",
     "alreadyCurrent"
   ],
+  "installedAgent": [
+    "providerConnection",
+    "agentModel",
+    "chatSendStop",
+    "reviewedTask",
+    "taskResult",
+    "memoryOptional",
+    "profileIsolation",
+    "protectedCredentials",
+    "restartCredentialPolicy",
+    "revocation",
+    "preservation"
+  ],
   "remoteUpgrade": [
     "authenticationPreservation",
     "uiUpdate",

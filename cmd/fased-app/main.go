@@ -193,7 +193,9 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	if *instanceLocation != "local" && *instanceLocation != "remote" {
 		return errors.New("instance location must be local or remote")
 	}
-	if (*aiFixture || *sessionFixture) && *instanceLocation != "local" {
+	installedProviderFixture := *aiFixture && *requireSandbox && *installationRoot != "" && *custodyConfig == "" && *researchOrigin == "" &&
+		(*instanceLocation == "local" && *remoteConfig == "" && *publicOrigin == "" || *instanceLocation == "remote" && *remoteConfig != "" && *publicOrigin != "")
+	if (*aiFixture && !installedProviderFixture || *sessionFixture) && *instanceLocation != "local" {
 		return errors.New("development fixtures are local-only")
 	}
 	if *sessionFixture && (args[0] != "serve" || *aiFixture || *custodyConfig != "" || *requireSandbox || *publicOrigin != "" || *researchOrigin != "") {
@@ -205,7 +207,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	if *aiFixture && args[0] != "serve" {
 		return errors.New("AI fixture is a serve-only development option")
 	}
-	if *remoteConfig != "" && (args[0] != "serve" || *custodyConfig != "" || !*requireSandbox || *instanceLocation != "remote" || *aiFixture || *sessionFixture || *researchOrigin != "") {
+	if *remoteConfig != "" && (args[0] != "serve" || *custodyConfig != "" || !*requireSandbox || *instanceLocation != "remote" || *aiFixture && !installedProviderFixture || *sessionFixture || *researchOrigin != "") {
 		return errors.New("managed Remote requires its installed service, sandbox and remote identity")
 	}
 	if flags.NArg() != 0 {
@@ -225,7 +227,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 			}
 		}
 		if *remoteConfig != "" {
-			if err = vpsinstall.CheckApplication(*remoteConfig, *installationRoot, *dir, *listen, *publicOrigin); err != nil {
+			if err = vpsinstall.CheckApplication(*remoteConfig, *installationRoot, *dir, *listen, *publicOrigin, installedProviderFixture); err != nil {
 				return err
 			}
 			ownerUID, err = managedRemoteOwner(*installationRoot)
@@ -256,6 +258,11 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 				return err
 			}
 		}
+		if *requireSandbox && *installationRoot != "" && *remoteConfig == "" && *custodyConfig == "" {
+			if err = localinstall.CheckProviderFixture(localinstall.Paths{Root: *installationRoot, Data: *dir}, installedProviderFixture); err != nil {
+				return err
+			}
+		}
 		if *sessionFixture {
 			server, e := core.StartSessionFixture(context.Background(), *dir, *listen, fasedapp.UI())
 			if e != nil {
@@ -263,7 +270,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 			}
 			return serveStarted(server, out)
 		}
-		if *aiFixture {
+		if *aiFixture && !installedProviderFixture {
 			if *custodyConfig != "" || *requireSandbox || *publicOrigin != "" {
 				return errors.New("AI fixture requires a standalone local development core")
 			}
@@ -276,7 +283,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 				source = "remote"
 			}
 		}
-		return serveInstalledRuntimeAt(*installationRoot, *dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, source, ownerUID, out, *custodyConfig)
+		return serveInstalledRuntimeWithProviderFixture(*installationRoot, *dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, source, ownerUID, installedProviderFixture, out, *custodyConfig)
 	case "setup-link":
 		return ownerSetupLink(ctx, *dir, *publicOrigin, out)
 	case "claim-code":
@@ -426,7 +433,18 @@ func serveInstalledRuntime(dir, listen, publicOrigin, researchOrigin, location, 
 	return serveInstalledRuntimeAt("", dir, listen, publicOrigin, researchOrigin, location, source, ownerUID, out, custodyConfig...)
 }
 func serveInstalledRuntimeAt(installationRoot, dir, listen, publicOrigin, researchOrigin, location, source string, ownerUID int, out io.Writer, custodyConfig ...string) error {
-	server, err := core.Start(context.Background(), dir, listen, publicOrigin, fasedapp.UI(), custodyConfig...)
+	return serveInstalledRuntimeWithProviderFixture(installationRoot, dir, listen, publicOrigin, researchOrigin, location, source, ownerUID, false, out, custodyConfig...)
+}
+func serveInstalledRuntimeWithProviderFixture(installationRoot, dir, listen, publicOrigin, researchOrigin, location, source string, ownerUID int, fixture bool, out io.Writer, custodyConfig ...string) error {
+	start := core.Start
+	if fixture {
+		if installationRoot == "" || source != location || (source != "local" && source != "remote") || researchOrigin != "" || len(custodyConfig) > 1 || len(custodyConfig) == 1 && custodyConfig[0] != "" {
+			return errors.New("provider fixture requires its validated app-only installation")
+		}
+		start = core.StartInstalledProviderFixture
+		custodyConfig = nil
+	}
+	server, err := start(context.Background(), dir, listen, publicOrigin, fasedapp.UI(), custodyConfig...)
 	if err != nil {
 		return err
 	}

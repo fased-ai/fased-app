@@ -495,10 +495,10 @@ export async function main(args = process.argv.slice(2)) {
   const operation = args[0] ?? "ship";
   if (
     !["ship", "publish", "accept-remote"].includes(operation) ||
-    (operation === "accept-remote" ? args.length !== 4 : args.length > 2)
+    (operation === "accept-remote" ? args.length !== 5 : args.length > 2)
   )
     throw Error(
-      "Use npm run release -- [ship [PR] | publish [candidate-directory] | accept-remote candidate-directory fresh-receipt upgrade-receipt]",
+      "Use npm run release -- [ship [PR] | publish [candidate-directory] | accept-remote candidate-directory fresh-receipt upgrade-receipt installed-agent-receipt]",
     );
   const c = JSON.parse(readFileSync("release/ubuntu.json", "utf8"));
   let token = process.env.GH_TOKEN;
@@ -525,6 +525,7 @@ export async function main(args = process.argv.slice(2)) {
       githubPublisher(token),
       JSON.parse(readPublisherFile(args[2])),
       JSON.parse(readPublisherFile(args[3])),
+      { installedAgent: JSON.parse(readPublisherFile(args[4])) },
     );
   }
   return publishAttested(c, directory, {

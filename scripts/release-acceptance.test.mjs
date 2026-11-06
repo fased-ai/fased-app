@@ -11,9 +11,13 @@ import {
   recordRemoteAcceptance,
   stagedAcceptanceContract,
 } from "./release-acceptance.mjs";
+const bundleManifest = JSON.stringify({
+  files: { "fased-app": { sha256: "1".repeat(64), bytes: 1 } },
+});
 const packet = {
   version: 2,
   productVersion: "0.0.777",
+  bundleSha256: createHash("sha256").update(bundleManifest).digest("hex"),
   source: "a".repeat(40),
   release: {
     sourceTree: "b".repeat(40),
@@ -27,8 +31,38 @@ const inventory = {
   ownerId: "279582504",
   assets: [{ name: "install.sh", size: 1, sha256: "c".repeat(64) }],
 };
+function installedAgent(target = packet, localSha = "a".repeat(64)) {
+  return {
+    ...acceptanceBinding(target, inventory),
+    localReceiptSha256: localSha,
+    mode: "installed-provider",
+    profile: "local",
+    result: "PASS",
+    fixtureOnly: true,
+    sandboxed: true,
+    shippingArtifactUnmodified: true,
+    testCodeOverlay: false,
+    realProviderCalls: false,
+    mining: false,
+    liveFeatures: false,
+    automaticUpdates: false,
+    engineSha256: "1".repeat(64),
+    bundleSha256: target.bundleSha256,
+    bundleManifest,
+    instanceIdentitySha256: "2".repeat(64),
+    evidenceSha256: "3".repeat(64),
+    checks: Object.fromEntries(
+      stagedAcceptanceContract.installedAgent.map((key) => [key, "PASS"]),
+    ),
+  };
+}
 const receipt = () => ({
   ...acceptanceBinding(packet, inventory),
+  localReceiptSha256: "a".repeat(64),
+  installedAgent: installedAgent(),
+  uiOperationId: "1".repeat(32),
+  cliOperationId: "2".repeat(32),
+  automaticOperationId: "3".repeat(32),
   result: "PASS",
   fixtureOnly: true,
   mining: false,
@@ -234,6 +268,14 @@ test("acceptance comes from exact authenticated attempt artifact, not local JSON
       .runAttempt,
     "2",
   );
+  const foreignRemote = receipt();
+  foreignRemote.installedAgent.profile = "remote";
+  raw = zipped(foreignRemote);
+  await assert.rejects(
+    verifyInstalledAcceptance(packet, inventory, api, options),
+    /Structured Remote instance evidence/,
+  );
+  raw = zipped(receipt());
   changed = true;
   await assert.rejects(
     verifyInstalledAcceptance(packet, inventory, api, options),
@@ -363,6 +405,9 @@ test("structured actual Local and independent Remote legs join without synthetic
       automaticOutcome: "applied",
       automaticPolicyRestored: "manual",
       customerActivation: false,
+      uiOperationId: "1".repeat(32),
+      cliOperationId: "2".repeat(32),
+      automaticOperationId: "3".repeat(32),
     };
   const complete = composeInstalledAcceptance(
     local,
@@ -533,6 +578,9 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
       automaticOutcome: "applied",
       automaticPolicyRestored: "manual",
       customerActivation: false,
+      uiOperationId: "1".repeat(32),
+      cliOperationId: "2".repeat(32),
+      automaticOperationId: "3".repeat(32),
     };
   let actor = { login: "fcode-ai", id: 155309118 },
     comments = [],
@@ -612,7 +660,14 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
     ),
     /Fixed repository/,
   );
-  const options = { downloadArtifact: () => raw };
+  const options = {
+    downloadArtifact: () => raw,
+    installedAgent: installedAgent(target, localSha),
+  };
+  options.installedAgent.profile = "remote";
+  options.installedAgent.instanceIdentitySha256 = createHash("sha256")
+    .update(upgrade.instanceId)
+    .digest("hex");
   await assert.rejects(
     verifyInstalledAcceptance(target, inventory, api, options),
     /One reviewed/,
@@ -624,6 +679,26 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
   );
   assert.equal(posted, 0);
   actor = { login: "fcode-ai", id: 155309118 };
+  await assert.rejects(
+    recordRemoteAcceptance(
+      target,
+      inventory,
+      api,
+      fresh,
+      { ...upgrade, cliOperationId: upgrade.uiOperationId },
+      options,
+    ),
+    /Distinct canonical/,
+  );
+  assert.equal(posted, 0, "duplicate operations must refuse before posting");
+  await assert.rejects(
+    recordRemoteAcceptance(target, inventory, api, fresh, upgrade, {
+      downloadArtifact: options.downloadArtifact,
+    }),
+    /installed-provider journey/,
+  );
+  assert.equal(posted, 0, "missing installed agent must refuse before posting");
+  options.installedAgent.diagnostics = "secret-never-publish";
   fresh.setupUrl = "https://private.example/#setup=secret-never-publish";
   fresh.uiOutcome = { privateKey: "secret-never-publish" };
   fresh.diagnostics = { privateKey: "secret-never-publish" };
@@ -666,6 +741,28 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
     },
     (c) => {
       c.body = c.body.replace('"normalTLS":true', '"normalTLS":false');
+    },
+    (c) => {
+      c.body = c.body.replace(
+        '"installed-provider"',
+        '"standalone-provider-fixture"',
+      );
+    },
+    (c) => {
+      c.body = c.body.replace(
+        '"instanceIdentitySha256":"' +
+          options.installedAgent.instanceIdentitySha256,
+        '"instanceIdentitySha256":"' + "e".repeat(64),
+      );
+    },
+    (c) => {
+      c.body = c.body.replace('"version":2,', '"version":1,');
+    },
+    (c) => {
+      c.body = c.body.replace(
+        '"cliOperationId":"' + "2".repeat(32),
+        '"cliOperationId":"' + "1".repeat(32),
+      );
     },
     (c) => {
       c.body = c.body.replace(
@@ -715,6 +812,50 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
   );
   assert.ok(comments[0].body.includes('"ownerAuthMode":"password-v1"'));
   assert.equal(posted, 1);
+});
+
+test("installed agent gate rejects standalone, patched, unbound and incomplete evidence", async () => {
+  const { validateInstalledAgent } = await import("./release-acceptance.mjs");
+  const localSha = "a".repeat(64);
+  const proof = installedAgent(packet, localSha);
+  assert.doesNotThrow(() =>
+    validateInstalledAgent(proof, packet, inventory, localSha),
+  );
+  assert.throws(() =>
+    validateInstalledAgent(undefined, packet, inventory, localSha),
+  );
+  for (const patch of [
+    { mode: "standalone-provider-fixture" },
+    { mode: "installed-deterministic" },
+    { source: "e".repeat(40) },
+    { localReceiptSha256: "b".repeat(64) },
+    { engineSha256: "e".repeat(64) },
+    { bundleManifest: bundleManifest + "\n" },
+    { sandboxed: false },
+    { shippingArtifactUnmodified: false },
+    { testCodeOverlay: true },
+    { realProviderCalls: true },
+    { liveFeatures: true },
+    { checks: { ...proof.checks, chatSendStop: "HELD" } },
+    { checks: { ...proof.checks, restartCredentialPolicy: "OPEN" } },
+  ]) {
+    assert.throws(() =>
+      validateInstalledAgent(
+        { ...proof, ...patch },
+        packet,
+        inventory,
+        localSha,
+      ),
+    );
+  }
+});
+
+test("accept-remote CLI requires the installed-agent receipt before authentication", async () => {
+  const { main } = await import("./release-ubuntu.mjs");
+  await assert.rejects(
+    main(["accept-remote", "candidate", "fresh", "upgrade"]),
+    /installed-agent-receipt/,
+  );
 });
 
 test("Remote upgrade completion refuses missing or mismatched actual legs", async () => {
@@ -877,6 +1018,15 @@ test("Remote upgrade completion refuses missing or mismatched actual legs", asyn
     },
     (v) => {
       v.manual.checks.authenticationPreservation = "FAIL";
+    },
+    (v) => {
+      v.manual.cliOperationId = v.manual.uiOperationId;
+    },
+    (v) => {
+      delete v.manual.uiOperationId;
+    },
+    (v) => {
+      v.manual.cliOperationId = "not-a-canonical-operation";
     },
   ]) {
     const v = structuredClone({ manual, security, automatic });

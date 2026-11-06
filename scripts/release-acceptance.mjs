@@ -183,6 +183,19 @@ export function validateInstalledAcceptance(receipt, packet, inventory) {
   return binding;
 }
 
+function validateRemoteOperations(value) {
+  const ids = [
+    value.uiOperationId,
+    value.cliOperationId,
+    value.automaticOperationId,
+  ];
+  if (
+    ids.some((id) => !/^[a-f0-9]{32}$/.test(id ?? "")) ||
+    new Set(ids).size !== 3
+  )
+    throw Error("Distinct canonical UI, CLI and Automatic operations required");
+}
+
 export function completeRemoteUpgrade(
   manual,
   security,
@@ -284,6 +297,12 @@ export function completeRemoteUpgrade(
     throw Error(
       "Matching actual manual, security and detached Automatic upgrade proofs required",
     );
+  const operations = {
+    uiOperationId: manual.uiOperationId,
+    cliOperationId: manual.cliOperationId,
+    automaticOperationId: browser.automaticOperation.id,
+  };
+  validateRemoteOperations(operations);
   return {
     schemaVersion: 1,
     ...Object.fromEntries(keys.map((key) => [key, manual[key]])),
@@ -310,6 +329,7 @@ export function completeRemoteUpgrade(
     automaticOutcome: "applied",
     automaticPolicyRestored: "manual",
     customerActivation: false,
+    ...operations,
     checks: {
       ...security.checks,
       ...Object.fromEntries(
@@ -411,6 +431,7 @@ function validateJoinedAcceptance(receipt, packet, inventory) {
   }
   const upgrade = receipt.remoteUpgrade;
   applied(upgrade);
+  validateRemoteOperations(upgrade);
   const previous = upgrade.predecessor;
   const parts = (v) =>
     /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(v ?? "")
@@ -583,6 +604,96 @@ async function readCIInstalledAcceptance(
 
 const reviewPrefix = "FASED_REMOTE_ACCEPTANCE_V1\n";
 const reviewOwner = { login: "fcode-ai", id: "155309118" };
+export function validateInstalledAgent(value, packet, inventory, localSha256) {
+  if (
+    !value ||
+    Object.entries(acceptanceBinding(packet, inventory)).some(
+      ([key, expected]) => value[key] !== expected,
+    ) ||
+    value.localReceiptSha256 !== localSha256 ||
+    !/^[a-f0-9]{64}$/.test(localSha256 ?? "") ||
+    value.mode !== "installed-provider" ||
+    !["local", "remote"].includes(value.profile) ||
+    value.result !== "PASS" ||
+    value.fixtureOnly !== true ||
+    value.sandboxed !== true ||
+    value.shippingArtifactUnmodified !== true ||
+    value.testCodeOverlay !== false ||
+    value.realProviderCalls !== false ||
+    ["mining", "liveFeatures", "automaticUpdates"].some(
+      (key) => value[key] !== false,
+    ) ||
+    !/^[a-f0-9]{64}$/.test(value.engineSha256 ?? "") ||
+    !/^[a-f0-9]{64}$/.test(value.bundleSha256 ?? "") ||
+    value.bundleSha256 !== packet.bundleSha256 ||
+    typeof value.bundleManifest !== "string" ||
+    value.bundleManifest.length > 65536 ||
+    sha(value.bundleManifest) !== packet.bundleSha256 ||
+    !/^[a-f0-9]{64}$/.test(value.instanceIdentitySha256 ?? "") ||
+    !/^[a-f0-9]{64}$/.test(value.evidenceSha256 ?? "") ||
+    stagedAcceptanceContract.installedAgent.some(
+      (key) => value.checks?.[key] !== "PASS",
+    )
+  )
+    throw Error(
+      "Complete unmodified installed-provider journey bound to package and Local proof required",
+    );
+  const manifest = JSON.parse(value.bundleManifest);
+  if (manifest.files?.["fased-app"]?.sha256 !== value.engineSha256)
+    throw Error(
+      "Installed agent engine differs from authenticated bundle manifest",
+    );
+}
+function publicInstalledAgent(value) {
+  return {
+    ...Object.fromEntries(
+      [
+        "schemaVersion",
+        "source",
+        "sourceTree",
+        "productVersion",
+        "runId",
+        "runAttempt",
+        "platform",
+        "artifactSetSha256",
+        "localReceiptSha256",
+        "mode",
+        "profile",
+        "result",
+        "fixtureOnly",
+        "sandboxed",
+        "shippingArtifactUnmodified",
+        "testCodeOverlay",
+        "realProviderCalls",
+        "mining",
+        "liveFeatures",
+        "automaticUpdates",
+        "engineSha256",
+        "bundleSha256",
+        "bundleManifest",
+        "instanceIdentitySha256",
+        "evidenceSha256",
+      ].map((key) => [key, value[key]]),
+    ),
+    checks: Object.fromEntries(
+      stagedAcceptanceContract.installedAgent.map((key) => [
+        key,
+        value.checks[key],
+      ]),
+    ),
+  };
+}
+function validateAgentInstance(agent, legs) {
+  if (
+    agent.profile === "remote" &&
+    !legs.some(
+      (leg) =>
+        (leg.instanceIdentitySha256 ?? sha(leg.instanceId)) ===
+        agent.instanceIdentitySha256,
+    )
+  )
+    throw Error("Installed agent must use the accepted Remote instance");
+}
 function publicRemoteLeg(value) {
   // Runtime receipts can contain private links and diagnostics. Publish only
   // validated typed evidence; hash the instance identity instead of exposing it.
@@ -617,6 +728,9 @@ function publicRemoteLeg(value) {
           "automaticOutcome",
           "automaticPolicyRestored",
           "customerActivation",
+          "uiOperationId",
+          "cliOperationId",
+          "automaticOperationId",
         ]
       : []),
   ];
@@ -663,7 +777,7 @@ function reviewedRemote(comment, packet, inventory, proof) {
     review = JSON.parse(text);
   if (
     JSON.stringify(review) !== text ||
-    review.version !== 1 ||
+    review.version !== 2 ||
     JSON.stringify(review.binding) !==
       JSON.stringify(acceptanceBinding(packet, inventory)) ||
     review.localReceiptSha256 !== proof.sha256 ||
@@ -671,6 +785,19 @@ function reviewedRemote(comment, packet, inventory, proof) {
   )
     throw Error(
       "Remote review differs from authenticated Local/package evidence",
+    );
+  validateInstalledAgent(
+    review.installedAgent,
+    packet,
+    inventory,
+    proof.sha256,
+  );
+  if (
+    JSON.stringify(review.installedAgent) !==
+    JSON.stringify(publicInstalledAgent(review.installedAgent))
+  )
+    throw Error(
+      "Installed agent review must contain only public acceptance fields",
     );
   if (
     [review.remoteFresh, review.remoteUpgrade].some(
@@ -689,10 +816,15 @@ function reviewedRemote(comment, packet, inventory, proof) {
     inventory,
     proof.sha256,
   );
+  validateAgentInstance(review.installedAgent, [
+    review.remoteFresh,
+    review.remoteUpgrade,
+  ]);
   return {
     receipt,
     remoteReviewCommentId: String(comment.id),
     remoteReviewSha256: sha(comment.body),
+    installedAgentEvidenceSha256: review.installedAgent.evidenceSha256,
   };
 }
 async function remoteReviews(packet, api) {
@@ -722,11 +854,33 @@ export async function verifyInstalledAcceptance(
     if (comments.length !== 1)
       throw Error("One reviewed Remote acceptance is required");
     review = reviewedRemote(comments[0], packet, inventory, proof);
-  } else validateInstalledAcceptance(proof.receipt, packet, inventory);
+  } else {
+    validateInstalledAcceptance(proof.receipt, packet, inventory);
+    validateRemoteOperations(proof.receipt.remoteUpgrade ?? proof.receipt);
+    validateInstalledAgent(
+      proof.receipt.installedAgent,
+      packet,
+      inventory,
+      proof.receipt.localReceiptSha256,
+    );
+    if (proof.receipt.installedAgent.profile === "remote") {
+      if (proof.receipt.schemaVersion !== 2)
+        throw Error(
+          "Structured Remote instance evidence required for installed agent",
+        );
+      validateAgentInstance(proof.receipt.installedAgent, [
+        proof.receipt.remoteFresh,
+        proof.receipt.remoteUpgrade,
+      ]);
+    }
+    review.installedAgentEvidenceSha256 =
+      proof.receipt.installedAgent.evidenceSha256;
+  }
   return {
     ...acceptanceBinding(packet, inventory),
     artifactId: proof.artifactId,
     artifactDigest: proof.artifactDigest,
+    installedAgentEvidenceSha256: review.installedAgentEvidenceSha256,
     ...(review.remoteReviewCommentId
       ? {
           remoteReviewCommentId: review.remoteReviewCommentId,
@@ -763,18 +917,26 @@ export async function recordRemoteAcceptance(
     inventory,
     proof.sha256,
   );
+  validateInstalledAgent(
+    options.installedAgent,
+    packet,
+    inventory,
+    proof.sha256,
+  );
+  validateAgentInstance(options.installedAgent, [remoteFresh, remoteUpgrade]);
   const actor = await api("GET", "/user");
   if (String(actor.id) !== reviewOwner.id || actor.login !== reviewOwner.login)
     throw Error("Only the approved GitHub owner may record Remote acceptance");
   const body =
     reviewPrefix +
     JSON.stringify({
-      version: 1,
+      version: 2,
       binding: acceptanceBinding(packet, inventory),
       localReceiptSha256: proof.sha256,
       localCIArtifactDigest: proof.artifactDigest,
       remoteFresh: publicRemoteLeg(remoteFresh),
       remoteUpgrade: publicRemoteLeg(remoteUpgrade),
+      installedAgent: publicInstalledAgent(options.installedAgent),
     });
   if (body.length > 60000) throw Error("Bounded Remote evidence required");
   const existing = await remoteReviews(packet, api);
