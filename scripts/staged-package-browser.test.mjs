@@ -2,6 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   browserAddress,
+  installedAccount,
+  installedNavigate,
+  stopInstalledReply,
   completedApplication,
   applicationUpdateFailure,
   privatePreflightAddress,
@@ -758,4 +761,100 @@ test("receipt CLI writes the same typed receipt consumed by the gate without ope
   } finally {
     await rm(work, { recursive: true, force: true });
   }
+});
+
+test("installed account reads use existing collection API and preserve account isolation", async () => {
+  const accounts = [
+    { ref: "account-a", provider: "openai" },
+    { ref: "account-b", provider: "anthropic" },
+  ];
+  const request = async (route) => {
+    assert.equal(route, "ai/connection");
+    return { connections: accounts };
+  };
+  assert.deepEqual(await installedAccount(request, "account-b"), accounts[1]);
+  await assert.rejects(installedAccount(request, "missing"), /exact unique/);
+  await assert.rejects(installedAccount(request, ""), /exact installed/);
+  await assert.rejects(
+    installedAccount(
+      async () => ({ connections: [accounts[0], accounts[0]] }),
+      "account-a",
+    ),
+    /exact unique/,
+  );
+});
+
+test("installed navigation keeps one UI profile context across internal pages", async () => {
+  const target = { location: { hash: "#agents/settings" } };
+  const original = globalThis.window;
+  globalThis.window = target;
+  try {
+    const page = {
+      evaluate: async (fn, arg) => fn(arg),
+      goto: () =>
+        assert.fail(
+          "internal navigation must not reload and reset the selected profile",
+        ),
+    };
+    for (const hash of [
+      "#providers",
+      "#agents/chat",
+      "#agents/tasks",
+      "#agents/memory",
+    ]) {
+      await installedNavigate(page, hash);
+      assert.equal(target.location.hash, hash);
+      assert.equal(globalThis.window, target);
+    }
+    await assert.rejects(installedNavigate(page, "https://foreign.invalid"));
+  } finally {
+    globalThis.window = original;
+  }
+});
+
+test("installed Stop preserves completion races but refuses unrelated click failures", async () => {
+  const failure = new Error("Stop disappeared");
+  let clicks = 0;
+  const page = {
+    getByRole: () => ({
+      click: async () => {
+        clicks++;
+        throw failure;
+      },
+    }),
+  };
+  await stopInstalledReply(page, async () => ({
+    id: "reply",
+    state: "completed",
+  }));
+  assert.equal(clicks, 0);
+  for (const after of [
+    { id: "reply", state: "completed" },
+    { id: "reply", state: "running" },
+    { id: "different", state: "completed" },
+    undefined,
+  ]) {
+    let reads = 0;
+    const latest = async () =>
+      ++reads === 1 ? { id: "reply", state: "running" } : after;
+    if (after?.id === "reply" && after.state === "completed")
+      await stopInstalledReply(page, latest);
+    else await assert.rejects(stopInstalledReply(page, latest), failure);
+    assert.equal(reads, 2);
+  }
+  let actual = false;
+  await stopInstalledReply(
+    {
+      getByRole: (_, options) => {
+        assert.equal(options.name, "Stop");
+        return {
+          click: async () => {
+            actual = true;
+          },
+        };
+      },
+    },
+    async () => ({ id: "reply", state: "running" }),
+  );
+  assert.equal(actual, true);
 });

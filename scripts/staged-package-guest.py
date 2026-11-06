@@ -21,6 +21,7 @@ import threading
 import tarfile
 import time
 import urllib.parse
+import urllib.error
 import urllib.request
 
 P = pathlib.Path
@@ -476,18 +477,33 @@ def health(port):
     return result
 
 
+def provider_health(port, version, clock=time.monotonic, pause=time.sleep):
+    deadline = clock() + 10
+    while True:
+        try:
+            current = health(port)
+        except urllib.error.URLError as error:
+            if not isinstance(error.reason, ConnectionRefusedError) or clock() >= deadline:
+                raise
+            pause(0.05)
+            continue
+        if current.get("version") != version:
+            raise RuntimeError("shipping engine version differs")
+        return current
+
+
 def verified_provider_bundle(candidate, target):
     """Extract only the two exact bound members; never replace an attempt."""
     target = P(target)
     target.mkdir(mode=0o700)
     with tarfile.open(P(candidate["directory"]) / ASSETS[0], "r:gz") as archive:
-        for name, maximum in [("manifest.json", 65536), ("fased-app", 64 * 1024 * 1024)]:
+        for name, maximum in [("bundle.json", 65536), ("fased-app", 64 * 1024 * 1024)]:
             entries = [v for v in archive.getmembers() if P(v.name).name == name]
             if len(entries) != 1 or not entries[0].isfile() or ".." in P(entries[0].name).parts or not 0 < entries[0].size <= maximum:
                 raise RuntimeError("one bounded original bundle member required")
             raw = archive.extractfile(entries[0]).read()
             (target / name).write_bytes(raw)
-    manifest = (target / "manifest.json").read_bytes()
+    manifest = (target / "bundle.json").read_bytes()
     if digest(manifest) != candidate["packet"]["bundleSha256"]:
         raise RuntimeError("original bundle manifest differs")
     expected = json.loads(manifest)["files"]["fased-app"]["sha256"]
@@ -523,14 +539,13 @@ def owner(args):
             raise RuntimeError("installer-owned mode/hash missing")
         probe = json.loads(run([str(args.provider_helper), "installed-provider", "--inspect"], env=env).stdout)
         if probe.get("sandboxed") is not True or probe["engineSha256"] != expected: raise RuntimeError("installed sandbox/engine observation missing")
-        current = health(port)
-        if current["version"] != candidate["packet"]["productVersion"]:
-            raise RuntimeError("shipping engine version differs")
+        current = provider_health(port, candidate["packet"]["productVersion"])
         state = {"instanceId": current["instanceId"], "version": current["version"], "engineSha256": expected, "bundleManifest": manifest.decode(), "installerOwnedProviderMode": True, "sandboxed": probe["sandboxed"], "root": installed["root"], "data": installed["data"], "initialPid": probe["pid"]}
         write_private(state_dir / "state.json", state)
         return {"result": "PASS", **state}
     if args.profile == "agent" and args.owner_action == "provider-inspect":
         if not args.provider_helper: raise RuntimeError("reviewed inspector required")
+        provider_health(port, state["version"])
         probe=json.loads(run([str(args.provider_helper),"installed-provider","--inspect"]).stdout)
         if probe.get("sandboxed") is not True or probe["engineSha256"] != state["engineSha256"]:
             raise RuntimeError("installed sandbox or engine changed")
@@ -547,7 +562,7 @@ def owner(args):
         for action in ("stop", "start"):
             code, _ = terminal([engine, "service", action, *scope], {})
             if code: raise RuntimeError("installed Local service restart refused")
-        current = health(port)
+        current = provider_health(port, state["version"])
         if current["instanceId"] != before["instanceId"]: raise RuntimeError("restart changed owner identity")
         return {"result":"PASS","instanceId":current["instanceId"]}
     if args.owner_action == "open":

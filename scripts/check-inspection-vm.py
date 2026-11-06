@@ -303,6 +303,13 @@ def staged_browser_directory(work,resume):
   raise RuntimeError('private owned browser directory required')
  return directory
 
+def shared_provider_helper(directory):
+ import shlex
+ path=shlex.quote(directory+'/fased-release-fixture')
+ # A non-root tar extraction applies umask077, including to archive mode0555.
+ # Normalize only this public fixture tool, never private state or all members.
+ ssh('test -f '+path+' && test ! -L '+path+' && test "$(stat -c %u '+path+')" = "$(id -u)" && chmod 555 -- '+path,30)
+
 def staged_package_acceptance():
  import importlib.util, shlex
  spec=importlib.util.spec_from_file_location('fased_staged_guest',repo/'scripts/staged-package-guest.py')
@@ -375,6 +382,7 @@ def staged_package_acceptance():
    if seed.exists():arc.add(seed,'packages/'+label+'/first-install-seed.json')
  result['inputs']={name:{'source':v['packet']['source'],'version':v['packet']['productVersion'],'artifactSetSha256':fixture.binding(v)['artifactSetSha256']} for name,v in packages.items()}
  with payload.open('rb') as stream:run(sshbase+['umask 077; mkdir '+('-p -- ' if a.fresh_remote_only and a.resume else '-- ')+guest+'; tar -xf - -C '+guest],stdin=stream,timeout=120)
+ if a.installed_agent:shared_provider_helper(guest)
  # Private disposable source is readable by the three fixture owners. They
  # execute as themselves; only the verified shell entry's OS bootstrap is root.
  ssh('chmod 755 '+guest+' '+guest+'/scripts '+guest+'/packages; chmod -R a+rX '+guest+'/packages '+guest+'/scripts',30)

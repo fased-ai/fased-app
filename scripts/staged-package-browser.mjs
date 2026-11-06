@@ -230,6 +230,24 @@ export async function seedWorkspace(request) {
   };
 }
 
+export async function installedNavigate(page, hash) {
+  assert.match(hash, /^#(?:providers|agents\/(?:settings|chat|tasks|memory))$/);
+  await page.evaluate((hash) => {
+    window.location.hash = hash;
+  }, hash);
+}
+
+export async function installedAccount(request, ref) {
+  assert.ok(
+    typeof ref === "string" && ref.length > 0,
+    "exact installed account required",
+  );
+  const view = await request("ai/connection");
+  const matches = view.connections?.filter((c) => c.ref === ref) ?? [];
+  assert.equal(matches.length, 1, "exact unique installed account required");
+  return matches[0];
+}
+
 export async function browserRequest(page, route, method = "GET", body) {
   return page.evaluate(
     async ({ route, method, body, sessionKey }) => {
@@ -485,6 +503,22 @@ export function detachedFixtureObserver(
 // Runs against the installed service using its ordinary authenticated API and UI.
 // Private phase state is retained beside the existing browser session; it is not
 // an acceptance receipt. Only the final observed result may become one.
+export async function stopInstalledReply(page, latest) {
+  const before = await latest();
+  assert.ok(before?.id, "exact reply required before Stop");
+  if (before.state === "completed") return;
+  try {
+    await page.getByRole("button", { name: "Stop", exact: true }).click({
+      timeout: 1000,
+    });
+  } catch (error) {
+    const after = await latest();
+    // Completion can remove Stop between reading state and clicking. Only
+    // that same completed reply justifies accepting an unavailable control.
+    if (after?.id !== before.id || after.state !== "completed") throw error;
+  }
+}
+
 export async function runInstalledAgentPhase(
   config,
   { page, request, expect },
@@ -511,8 +545,7 @@ export async function runInstalledAgentPhase(
       ...command,
     });
   };
-  const account = () =>
-    request("ai/connection?ref=" + encodeURIComponent(state.ref));
+  const account = () => installedAccount(request, state.ref);
   if (phase === "agent-prepare") {
     assert.equal(
       existsSync(stateFile),
@@ -520,30 +553,46 @@ export async function runInstalledAgentPhase(
       "do not duplicate an existing agent journey",
     );
     const passphrase = "disposable-installed-agent-vault";
-    await page.goto(new URL("/#providers", config.url).href);
-    const providers = page.getByRole("region", {
-      name: "Providers",
-      exact: true,
-    });
-    await providers.locator('[data-provider="openai"] > button').click();
-    await providers
-      .getByLabel("Name", { exact: true })
-      .fill("Installed account");
-    await providers
-      .getByLabel("API key", { exact: true })
-      .fill("fased-test-installed-agent-key");
-    await providers
-      .getByLabel("Vault passphrase", { exact: true })
-      .fill(passphrase);
-    await providers.getByRole("button", { name: "Save", exact: true }).click();
-    let c;
-    await expect
-      .poll(async () => {
-        const all = await request("ai/connection");
-        c = all.connections?.find((c) => c.name === "Installed account");
-        return !!c && !c.locked;
-      })
-      .toBe(true);
+    assert.equal(
+      (await view()).sessions.some((s) => s.name === "Installed journey"),
+      false,
+      "reconcile a partial journey before dispatching again",
+    );
+    const prior =
+      (await request("ai/connection")).connections?.filter(
+        (c) => c.name === "Installed account",
+      ) ?? [];
+    assert.ok(prior.length <= 1, "ambiguous existing fixture account");
+    let c = prior[0];
+    if (!c) {
+      await installedNavigate(page, "#providers");
+      const providers = page.getByRole("region", {
+        name: "Providers",
+        exact: true,
+      });
+      await providers.locator('[data-provider="openai"] > button').click();
+      await providers
+        .getByLabel("Name", { exact: true })
+        .fill("Installed account");
+      await providers
+        .getByLabel("API key", { exact: true })
+        .fill("fased-test-installed-agent-key");
+      await providers
+        .getByLabel("Vault passphrase", { exact: true })
+        .fill(passphrase);
+      await providers
+        .getByRole("button", { name: "Save", exact: true })
+        .click();
+      await expect
+        .poll(async () => {
+          const all = await request("ai/connection");
+          c = all.connections?.find((c) => c.name === "Installed account");
+          return !!c && !c.locked;
+        })
+        .toBe(true);
+    }
+    assert.equal(c.provider, "openai");
+    assert.equal(c.locked, false);
     assert.equal(c.testOnly, true);
     assert.equal(c.liveCallsEnabled, false);
     state.ref = c.ref;
@@ -552,10 +601,13 @@ export async function runInstalledAgentPhase(
     const model = c.admissionPolicy?.model;
     assert.ok(model);
     state.checks.providerConnection = "PASS";
-    await page.goto(new URL("/#agents/settings", config.url).href);
+    await installedNavigate(page, "#agents/settings");
     await page
       .getByLabel("Agent", { exact: true })
       .selectOption(state.profileId);
+    await expect(page.getByLabel("Name", { exact: true })).toHaveValue(
+      (await view()).profiles.find((p) => p.id === state.profileId).name,
+    );
     await page.getByLabel("Provider", { exact: true }).selectOption("openai");
     await page.getByLabel("Account", { exact: true }).selectOption(c.ref);
     await page.getByLabel("Model", { exact: true }).selectOption(model);
@@ -579,7 +631,7 @@ export async function runInstalledAgentPhase(
     const session = v.sessions.at(-1);
     assert.equal(session.name, "Installed journey");
     state.sessionId = session.id;
-    await page.goto(new URL("/#agents/chat", config.url).href);
+    await installedNavigate(page, "#agents/chat");
     await page
       .getByLabel("Agent", { exact: true })
       .selectOption(state.profileId);
@@ -622,7 +674,11 @@ export async function runInstalledAgentPhase(
     ).toHaveCount(0);
     await expect(page.locator(".ai-answer").last()).toContainText("fixture");
     await send("Stop this synthetic comparison before completing it.");
-    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await stopInstalledReply(page, async () =>
+      (await view()).aiRequests
+        .filter((q) => q.sessionId === session.id)
+        .at(-1),
+    );
     await expect
       .poll(
         async () =>
@@ -631,9 +687,55 @@ export async function runInstalledAgentPhase(
             .at(-1)?.state,
         { timeout: 10000 },
       )
+      .toMatch(/^(cancelled|completed)$/);
+    const raced = (await view()).aiRequests
+      .filter((q) => q.sessionId === session.id)
+      .at(-1);
+    if (raced.state === "completed") assert.match(raced.answer, /fixture/i);
+    else assert.equal(raced.answer || "", "");
+    // Fast compiled replies may win Stop. Also exercise a prepared reply where
+    // no dispatch is possible, and require real cancellation with zero spend.
+    const picker = page.getByRole("combobox", {
+      name: "Provider",
+      exact: true,
+      includeHidden: true,
+    });
+    const modelMenu = picker.locator("xpath=ancestor::details").first();
+    if ((await modelMenu.getAttribute("open")) === null)
+      await modelMenu.locator(":scope > summary").click();
+    await picker.selectOption("");
+    const options = page.locator("details.message-options");
+    if ((await options.getAttribute("open")) === null)
+      await options.locator(":scope > summary").click();
+    await page
+      .getByRole("checkbox", { name: "Review each reply", exact: true })
+      .check();
+    await send("Cancel this prepared synthetic reply without dispatching it.");
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await expect
+      .poll(
+        async () =>
+          (await view()).aiRequests
+            .filter((q) => q.sessionId === session.id)
+            .at(-1)?.state,
+      )
       .toBe("cancelled");
+    const prepared = (await view()).aiRequests
+      .filter((q) => q.sessionId === session.id)
+      .at(-1);
+    assert.equal(prepared.connectionRef || "", "");
+    assert.equal(prepared.spentMicrousd, 0);
+    state.stopObservation = {
+      transportTerminal: raced.state,
+      preparedId: prepared.id,
+      preparedState: prepared.state,
+      preparedSpentMicrousd: prepared.spentMicrousd,
+    };
+    if ((await modelMenu.getAttribute("open")) === null)
+      await modelMenu.locator(":scope > summary").click();
+    await picker.selectOption(c.ref);
     state.checks.chatSendStop = "PASS";
-    await page.goto(new URL("/#agents/tasks", config.url).href);
+    await installedNavigate(page, "#agents/tasks");
     await page.getByRole("button", { name: "New task", exact: true }).click();
     const editor = page.getByRole("complementary", {
       name: "Create a task",
@@ -646,6 +748,16 @@ export async function runInstalledAgentPhase(
     await editor
       .getByLabel("Prompt", { exact: true })
       .fill("Compare only synthetic fixed inputs.");
+    const schedule = editor.locator("details").filter({
+      has: page.locator("summary", { hasText: /^Schedule$/ }),
+    });
+    await schedule.locator(":scope > summary").click();
+    await schedule
+      .getByLabel("Schedule", { exact: true })
+      .selectOption("repeat");
+    await schedule.getByLabel("Maximum evaluations", { exact: true }).fill("2");
+    await schedule.getByLabel("Unit", { exact: true }).selectOption("60");
+    await schedule.getByLabel("Every", { exact: true }).fill("20");
     await editor
       .getByRole("button", { name: "Review task", exact: true })
       .click();
@@ -666,8 +778,27 @@ export async function runInstalledAgentPhase(
     const task = v.tasks.find((t) => t.name === "Installed bounded task");
     assert.ok(task?.ai);
     state.taskId = task.id;
+    assert.equal(task.maxRuns, 2);
+    // A scheduler must not consume the grant before the restart assertion.
+    // Leave one finite request unspent for reboot/revocation verification.
+    await page
+      .getByRole("button", {
+        name: "Pause: Installed bounded task",
+        exact: true,
+      })
+      .click();
+    await expect
+      .poll(
+        async () =>
+          (await view()).tasks.find((t) => t.id === state.taskId)?.state,
+      )
+      .toBe("paused");
+    assert.equal(
+      (await view()).tasks.find((t) => t.id === state.taskId).runs,
+      0,
+    );
     state.checks.reviewedTask = "PASS";
-    await page.goto(new URL("/#providers", config.url).href);
+    await installedNavigate(page, "#providers");
     const providerPage = page.getByRole("region", {
       name: "Providers",
       exact: true,
@@ -706,7 +837,10 @@ export async function runInstalledAgentPhase(
       .toBe(true);
     const allowed = await account();
     assert.ok(allowed.taskAccess?.continueAfterRestart);
+    assert.equal(allowed.taskAccess.maxRequests, 2);
+    assert.equal(allowed.taskAccess.usedRequests, 0);
     state.grantId = allowed.taskAccess.id;
+    state.grantExpiresAt = allowed.taskAccess.expiresAt;
     state.checks.protectedCredentials = "PASS";
     state.instanceId = health.instanceId;
     state.requestCount = (await view()).aiRequests.length;
@@ -716,12 +850,29 @@ export async function runInstalledAgentPhase(
       state.instanceId,
       "preserve the installed owner instance",
     );
+    await installedNavigate(page, "#agents/settings");
+    await page
+      .getByLabel("Agent", { exact: true })
+      .selectOption(state.profileId);
+    await expect(page.getByLabel("Name", { exact: true })).toHaveValue(
+      (await view()).profiles.find((p) => p.id === state.profileId).name,
+    );
     const c = await account();
     assert.equal(c.locked, true, "restart must not unlock Chat");
     if (phase === "agent-run") {
       assert.equal(c.taskAccess?.id, state.grantId);
       assert.equal(c.taskAccess.usedRequests, 0);
-      await page.goto(new URL("/#agents/tasks", config.url).href);
+      assert.equal(c.taskAccess.maxRequests, 2);
+      const waiting = (await view()).tasks.find((t) => t.id === state.taskId);
+      assert.equal(waiting.state, "paused");
+      assert.equal(waiting.runs, 0);
+      await installedNavigate(page, "#agents/tasks");
+      await page
+        .getByRole("button", {
+          name: "Resume: Installed bounded task",
+          exact: true,
+        })
+        .click();
       await page
         .getByRole("button", {
           name: "Run now: Installed bounded task",
@@ -735,6 +886,18 @@ export async function runInstalledAgentPhase(
           { timeout: 30000 },
         )
         .toBe(1);
+      await page
+        .getByRole("button", {
+          name: "Pause: Installed bounded task",
+          exact: true,
+        })
+        .click();
+      await expect
+        .poll(
+          async () =>
+            (await view()).tasks.find((t) => t.id === state.taskId)?.state,
+        )
+        .toBe("paused");
       const after = await account();
       assert.equal(after.taskAccess.usedRequests, 1);
       state.allocated = after.taskAccess.allocatedMicrousd;
@@ -744,7 +907,7 @@ export async function runInstalledAgentPhase(
         .at(-1);
       assert.equal(result.state, "completed");
       state.resultId = result.id;
-      await page.goto(new URL("/#agents/tasks", config.url).href);
+      await installedNavigate(page, "#agents/tasks");
       const withResult = await view();
       const run = withResult.runs.find((r) => r.taskId === state.taskId);
       assert.ok(run);
@@ -777,7 +940,7 @@ export async function runInstalledAgentPhase(
       const remembered = (await view()).memories.find((m) => m.text === note);
       assert.ok(remembered);
       state.memoryId = remembered.id;
-      await page.goto(new URL("/#agents/memory", config.url).href);
+      await installedNavigate(page, "#agents/memory");
       await expect(page.getByText(note, { exact: true }).first()).toBeVisible();
       const other = await request("agents?profile=news-researcher");
       assert.ok(!other.memories.some((m) => m.id === state.memoryId));
@@ -795,12 +958,20 @@ export async function runInstalledAgentPhase(
         assert.equal(c.taskAccess.id, state.grantId);
         assert.equal(c.taskAccess.usedRequests, 1);
         assert.equal(c.taskAccess.allocatedMicrousd, state.allocated);
+      } else {
+        assert.ok(
+          c.persistentTaskAccessAvailable === false ||
+            Date.now() >= state.grantExpiresAt * 1000,
+          "unexpired, unspent grant disappeared while Native access is available",
+        );
       }
       // A desktop keyring may be locked after reboot: held is correct, not
       // unattended success. No reconnection/refill or duplicate dispatch.
       state.rebootCredentialState = c.taskAccess
         ? "retained-scoped"
-        : "held-native-unavailable";
+        : Date.now() >= state.grantExpiresAt * 1000
+          ? "retired-expired"
+          : "held-native-unavailable";
       state.rebooted = true;
       state.checks.restartCredentialPolicy = "PASS";
       await request("ai/connection", "POST", {
