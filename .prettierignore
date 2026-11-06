@@ -14,3 +14,5 @@ internal/wenstrategy/testdata/preview-strategy.json
 web/src/vendor/wen-design/style.css
 # Original byte-pinned GitHub attestation; its regression checks the exact bytes.
 internal/releaseprovenance/testdata/github-v0.1.2/attestation.sigstore.json
+# Retained authenticated descriptor; the regression binds these exact bytes.
+cmd/fased-app/testdata/consecutive-update-descriptor.json
