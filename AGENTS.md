@@ -1,6 +1,6 @@
 # Fased App contributor notes
 
-**Remote acceptance authority:** Local evidence comes from the exact protected candidate CI artifact. Reviewed actual Remote legs are recorded by the approved fcode-ai GitHub account as an immutable-in-effect, source/package-bound commit comment; the publisher validates both. No local PASS file alone authorizes publication. Keep the node through the parent journey and preserve failure/recovery state.
+**Remote acceptance authority:** Local evidence comes from the exact protected candidate CI artifact, including an authenticated acceptance-only replay of unchanged original bytes when its consumer needs repair. Keep the original producer source/run separate from the reviewed consumer source/run; a replay must skip building. Reviewed actual Remote legs are recorded by the approved fcode-ai GitHub account as an immutable-in-effect, source/package-bound commit comment; the publisher validates both. No local PASS file alone authorizes publication. Keep the node through the parent journey and preserve failure/recovery state.
 
 ## Authority and scope
 

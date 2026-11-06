@@ -186,6 +186,48 @@ class VMLifecycleTest(unittest.TestCase):
         exec(compile(ast.Module(body=nodes, type_ignores=[]), '<vm-lifecycle>', 'exec'), values)
         return values
 
+    def test_verified_public_installers_remain_readable_by_other_fixture_owners(self):
+        source = pathlib.Path(__file__).with_name('check-inspection-vm.py').read_text()
+        tree = ast.parse(source)
+        parent = next(node for node in tree.body
+                      if isinstance(node, ast.FunctionDef) and node.name == 'staged_package_acceptance')
+        verification = next(node for node in parent.body
+                            if isinstance(node, ast.For) and isinstance(node.target, ast.Name)
+                            and node.target.id == 'label' and isinstance(node.iter, ast.List)
+                            and [item.value for item in node.iter.elts] == ['candidate', 'predecessor'])
+        # Execute the actual driver commands, including their mode transition.
+        # These are public attested assets, not credentials or private state.
+        code = compile(ast.Module(body=[verification], type_ignores=[]), '<shared-verification>', 'exec')
+        for status in [0, 17]:
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                installers = []
+                for label in ['candidate', 'predecessor']:
+                    directory = root / 'packages' / label
+                    directory.mkdir(parents=True)
+                    installer = directory / 'fased-install-linux-amd64'
+                    installer.write_text('#!/bin/sh\ntest "$1" = --verify-candidate || exit 23\nexit ' + str(status) + '\n')
+                    installer.chmod(0o700)
+                    installers.append(installer)
+                calls = []
+                def ssh(command, timeout):
+                    calls.append(command)
+                    return subprocess.run(['/bin/sh', '-c', command], check=True,
+                                          capture_output=True, text=True, timeout=timeout).stdout
+                if status:
+                    with self.assertRaises(subprocess.CalledProcessError) as failed:
+                        exec(code, {'guest': str(root), 'ssh': ssh})
+                    self.assertEqual(failed.exception.returncode, status)
+                    self.assertEqual(len(calls), 1)
+                    self.assertEqual(installers[1].stat().st_mode & 0o777, 0o700)
+                else:
+                    exec(code, {'guest': str(root), 'ssh': ssh})
+                    self.assertEqual(len(calls), 2)
+                    for installer in installers:
+                        self.assertEqual(installer.stat().st_mode & 0o777, 0o555)
+                        self.assertTrue(installer.stat().st_mode & 0o004)
+                        self.assertEqual(installer.read_bytes()[:9], b'#!/bin/sh')
+
     def test_fresh_remote_runs_literal_entry_and_never_claims_complete_acceptance(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)

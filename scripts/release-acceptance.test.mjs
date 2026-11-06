@@ -10,6 +10,8 @@ import {
   verifyInstalledAcceptance,
   recordRemoteAcceptance,
   stagedAcceptanceContract,
+  attestedInventory,
+  verifyCandidateReplay,
 } from "./release-acceptance.mjs";
 const bundleManifest = JSON.stringify({
   files: { "fased-app": { sha256: "1".repeat(64), bytes: 1 } },
@@ -299,7 +301,7 @@ test("acceptance comes from exact authenticated attempt artifact, not local JSON
 });
 
 import { stagedWorkflowRun } from "./release-source.mjs";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 test("lost dispatch acknowledgement reconciles without a duplicate build", async (t) => {
@@ -1040,4 +1042,437 @@ test("Remote upgrade completion refuses missing or mismatched actual legs", asyn
       ),
     );
   }
+});
+
+test("acceptance-only replay acquires exact original bytes without a build", async (t) => {
+  const config = {
+    version: packet.productVersion,
+    releaseAuthority: "github-attestation-v1",
+    repository: "fased-ai/fased-app",
+    repositoryId: inventory.repositoryId,
+    ownerId: inventory.ownerId,
+  };
+  const files = new Map(
+    [
+      "fased-app-linux-amd64.tar.gz",
+      "fased-install-linux-amd64",
+      "fased-app-linux-amd64.provenance.sigstore.json",
+      "install.sh",
+    ].map((name) => [name, Buffer.from(name)]),
+  );
+  const identity = (name) => ({
+    file: name,
+    size: files.get(name).length,
+    sha256: createHash("sha256").update(files.get(name)).digest("hex"),
+  });
+  const target = {
+    ...packet,
+    archive: identity("fased-app-linux-amd64.tar.gz"),
+    installer: identity("fased-install-linux-amd64"),
+    entry: identity("install.sh"),
+    release: {
+      ...packet.release,
+      tagObject: "",
+      provenance: identity("fased-app-linux-amd64.provenance.sigstore.json"),
+    },
+  };
+  files.set("fased-release.json", Buffer.from(JSON.stringify(target)));
+  for (const name of [
+    "fased-app-linux-amd64.json",
+    "verified-provenance.json",
+    "expected-provenance.json",
+    "provenance-policy.json",
+    "first-install-seed.json",
+    "build-inputs.json",
+    "artifact-inventory.json",
+    "signing-inputs.json",
+  ])
+    files.set(name, Buffer.from("{}"));
+  const zip = execFileSync(
+    "python3",
+    [
+      "-c",
+      "import io,json,sys,zipfile;b=io.BytesIO();z=zipfile.ZipFile(b,'w');[z.writestr(n,v) for n,v in json.load(sys.stdin)];z.close();sys.stdout.buffer.write(b.getvalue())",
+    ],
+    {
+      input: JSON.stringify([...files].map(([k, v]) => [k, v.toString()])),
+      timeout: 5000,
+    },
+  );
+  const run = {
+    id: 123,
+    run_attempt: 2,
+    head_sha: packet.source,
+    head_branch: "main",
+    event: "workflow_dispatch",
+    path: ".github/workflows/release.yml",
+    status: "completed",
+    conclusion: "failure",
+    repository: { id: 1426211857, owner: { id: 279582504 } },
+  };
+  const producer = {
+    name: "ubuntu-amd64",
+    status: "completed",
+    conclusion: "success",
+    steps: [
+      {
+        name: "Verify original provenance offline and stage public signing inputs",
+        conclusion: "success",
+      },
+    ],
+  };
+  const artifact = {
+    id: 19,
+    name: "ubuntu-amd64-release-candidate-2",
+    expired: false,
+    digest: "sha256:" + createHash("sha256").update(zip).digest("hex"),
+    workflow_run: { id: 123, head_sha: packet.source },
+  };
+  let reads = 0;
+  const api = async (method, url) => {
+    assert.equal(method, "GET");
+    reads++;
+    if (url.endsWith("/jobs")) return { jobs: [producer] };
+    if (url.endsWith("/artifacts")) return { artifacts: [artifact] };
+    return run;
+  };
+  const common = {
+    runId: "123",
+    attempt: "2",
+    api,
+    read: (name) => files.get(path.basename(name)),
+  };
+  const verified = await verifyCandidateReplay(config, "/retained", common);
+  assert.equal(verified.candidateArtifactId, "19");
+  assert.equal(verified.buildPerformed, false);
+  assert.deepEqual(
+    attestedInventory(
+      config,
+      target,
+      files.get("fased-release.json"),
+    ).assets.map((a) => a.name),
+    [...files.keys()].slice(0, 5),
+  );
+  const workspace = mkdtempSync(path.join(tmpdir(), "fased-candidate-replay-"));
+  t.after(() => rmSync(workspace, { recursive: true }));
+  reads = 0;
+  const directory = path.join(workspace, "original");
+  const acquired = await verifyCandidateReplay(config, directory, {
+    runId: "123",
+    attempt: "2",
+    api,
+    downloadArtifact: (id) => {
+      assert.equal(id, "19");
+      return zip;
+    },
+  });
+  assert.equal(acquired.artifactSetSha256, verified.artifactSetSha256);
+  assert.equal(
+    reads,
+    3,
+    "producer and inventory reads are cached during acquisition",
+  );
+  for (const [name, bytes] of files)
+    assert.deepEqual(
+      (await import("node:fs")).readFileSync(path.join(directory, name)),
+      bytes,
+    );
+  await assert.rejects(
+    verifyCandidateReplay(config, directory, {
+      ...common,
+      downloadArtifact: () => Buffer.from("changed"),
+      execute: () => assert.fail("tampered ZIP executed"),
+    }),
+    /ZIP digest differs/,
+  );
+  await assert.rejects(
+    verifyCandidateReplay(config, "/retained", { ...common, attempt: "3" }),
+    /cannot rebind/,
+  );
+  await assert.rejects(
+    verifyCandidateReplay(config, "/retained", {
+      ...common,
+      read: (name) =>
+        path.basename(name) === "install.sh"
+          ? Buffer.from("changed")
+          : files.get(path.basename(name)),
+    }),
+    /asset differs/,
+  );
+  const entries = [...files].map(([name, bytes]) => [
+    name,
+    bytes.toString(),
+    0o100600,
+  ]);
+  const malformed = (records, oversized = false) =>
+    execFileSync(
+      "python3",
+      [
+        "-c",
+        `
+import io,json,struct,sys,zipfile
+b=io.BytesIO()
+with zipfile.ZipFile(b,'w') as z:
+ for name,value,mode in json.load(sys.stdin):
+  f=zipfile.ZipInfo(name);f.external_attr=mode<<16;z.writestr(f,value)
+raw=bytearray(b.getvalue())
+if sys.argv[1]=='large':struct.pack_into('<I',raw,raw.index(b'PK\\x01\\x02')+24,128*1024*1024+1)
+sys.stdout.buffer.write(raw)
+`,
+        oversized ? "large" : "normal",
+      ],
+      { input: JSON.stringify(records), timeout: 5000 },
+    );
+  for (const [label, records, oversized] of [
+    ["extra", [...entries, ["extra.json", "{}", 0o100600]]],
+    ["missing", entries.slice(1)],
+    ["duplicate", [entries[0], ...entries.slice(0, -1)]],
+    ["symlink", [[entries[0][0], "target", 0o120777], ...entries.slice(1)]],
+    ["traversal", [["../escape", "{}", 0o100600], ...entries.slice(1)]],
+    ["oversized", entries, true],
+  ]) {
+    const bad = malformed(records, oversized);
+    const destination = path.join(workspace, label);
+    artifact.digest =
+      "sha256:" + createHash("sha256").update(bad).digest("hex");
+    await assert.rejects(
+      verifyCandidateReplay(config, destination, {
+        runId: "123",
+        attempt: "2",
+        api,
+        downloadArtifact: () => bad,
+      }),
+    );
+    assert.equal(
+      existsSync(destination),
+      false,
+      "invalid ZIP refuses before writing candidate files",
+    );
+  }
+  artifact.digest = "sha256:" + createHash("sha256").update(zip).digest("hex");
+  await assert.rejects(
+    verifyCandidateReplay(config, directory, {
+      runId: "123",
+      attempt: "2",
+      api,
+      downloadArtifact: () => zip,
+    }),
+  );
+  assert.deepEqual(
+    readFileSync(path.join(directory, "install.sh")),
+    files.get("install.sh"),
+    "existing candidate is never overwritten",
+  );
+  producer.conclusion = "failure";
+  await assert.rejects(
+    verifyCandidateReplay(config, "/retained", common),
+    /attested build must have succeeded/,
+  );
+  producer.conclusion = "success";
+  run.head_branch = "feature";
+  await assert.rejects(
+    verifyCandidateReplay(config, "/retained", common),
+    /protected candidate producer/,
+  );
+});
+
+test("authenticated replay proof keeps original package identity and rejects replacement builds", async () => {
+  const raw = zipped(receipt());
+  const original = {
+    id: 123,
+    run_attempt: 2,
+    head_sha: packet.source,
+    head_branch: "main",
+    event: "workflow_dispatch",
+    path: ".github/workflows/release.yml",
+    status: "completed",
+    conclusion: "failure",
+    repository: { id: 1426211857, owner: { id: 279582504 } },
+  };
+  const replay = {
+    ...original,
+    id: 456,
+    run_attempt: 1,
+    head_sha: "d".repeat(40),
+    conclusion: "success",
+  };
+  const producer = {
+    name: "ubuntu-amd64",
+    status: "completed",
+    conclusion: "success",
+    steps: [
+      {
+        name: "Verify original provenance offline and stage public signing inputs",
+        conclusion: "success",
+      },
+    ],
+  };
+  const skipped = { name: "ubuntu-amd64", conclusion: "skipped" };
+  const artifact = {
+    id: 29,
+    name: "ubuntu-amd64-installed-acceptance-replay-123-2",
+    expired: false,
+    digest: "sha256:" + createHash("sha256").update(raw).digest("hex"),
+    workflow_run: { id: 456, head_sha: replay.head_sha },
+  };
+  let duplicates = false,
+    stale = false;
+  const api = async (method, url) => {
+    assert.equal(method, "GET");
+    if (url.endsWith("/123/attempts/2/jobs"))
+      return {
+        jobs: [
+          producer,
+          {
+            name: "installed-acceptance",
+            status: "completed",
+            conclusion: "failure",
+          },
+        ],
+      };
+    if (url.endsWith("/456/attempts/1/jobs"))
+      return {
+        jobs: [
+          skipped,
+          {
+            name: "installed-acceptance",
+            status: "completed",
+            conclusion: "success",
+          },
+        ],
+      };
+    if (url.includes("/actions/artifacts?"))
+      return {
+        artifacts: duplicates
+          ? [artifact, artifact]
+          : stale
+            ? [
+                {
+                  ...artifact,
+                  id: 30,
+                  workflow_run: { ...artifact.workflow_run, id: 888 },
+                },
+                artifact,
+              ]
+            : [artifact],
+      };
+    if (url.endsWith("/456/artifacts")) return { artifacts: [artifact] };
+    if (url.endsWith("/456")) return replay;
+    if (url.endsWith("/888"))
+      return { ...replay, id: 888, conclusion: "failure" };
+    if (url.endsWith("/123/attempts/2")) return original;
+    assert.fail("unexpected API " + url);
+  };
+  const options = {
+    downloadArtifact: (id) => {
+      assert.equal(id, "29");
+      return raw;
+    },
+  };
+  const result = await verifyInstalledAcceptance(
+    packet,
+    inventory,
+    api,
+    options,
+  );
+  assert.equal(result.runId, "123");
+  assert.equal(result.runAttempt, "2");
+  assert.equal(result.artifactId, "29");
+  stale = true;
+  assert.equal(
+    (await verifyInstalledAcceptance(packet, inventory, api, options))
+      .artifactId,
+    "29",
+    "a failed replay parent does not hide successful proof",
+  );
+  stale = false;
+  skipped.conclusion = "success";
+  await assert.rejects(
+    verifyInstalledAcceptance(packet, inventory, api, options),
+    /must not perform another build/,
+  );
+  skipped.conclusion = "skipped";
+  producer.conclusion = "failure";
+  await assert.rejects(
+    verifyInstalledAcceptance(packet, inventory, api, options),
+    /attested build must have succeeded/,
+  );
+  producer.conclusion = "success";
+  replay.head_branch = "feature";
+  await assert.rejects(
+    verifyInstalledAcceptance(packet, inventory, api, options),
+    /protected acceptance-only/,
+  );
+  replay.head_branch = "main";
+  replay.run_attempt = 2;
+  await assert.rejects(
+    verifyInstalledAcceptance(packet, inventory, api, options),
+    /protected acceptance-only/,
+  );
+  replay.run_attempt = 1;
+  duplicates = true;
+  await assert.rejects(
+    verifyInstalledAcceptance(packet, inventory, api, options),
+    /One retained same-artifact/,
+  );
+  duplicates = false;
+  artifact.workflow_run.head_sha = "e".repeat(40);
+  await assert.rejects(
+    verifyInstalledAcceptance(packet, inventory, api, options),
+    /protected acceptance-only/,
+  );
+});
+
+test("workflow input preflight fails partial replay modes before either job", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/release.yml", import.meta.url),
+    "utf8",
+  );
+  const block = workflow
+    .split("  candidate-inputs:\n")[1]
+    ?.split("  ubuntu-amd64:\n")[0];
+  assert.ok(block, "always-run input preflight exists");
+  const script = block
+    .split("        run: |\n")[1]
+    .split("\n")
+    .map((line) => line.slice(10))
+    .join("\n");
+  assert.match(workflow, /ubuntu-amd64:\n    needs: candidate-inputs/);
+  assert.match(
+    workflow,
+    /installed-acceptance:\n    needs: \[candidate-inputs, ubuntu-amd64\]/,
+  );
+  const env = {
+    ...process.env,
+    GITHUB_REF: "refs/heads/main",
+    GITHUB_SHA: "a".repeat(40),
+    GITHUB_RUN_ATTEMPT: "1",
+    FASED_INPUT_SOURCE: "a".repeat(40),
+    FASED_REPLAY_RUN_ID: "",
+    FASED_REPLAY_RUN_ATTEMPT: "",
+  };
+  const run = (change) =>
+    execFileSync("bash", ["-c", script], {
+      env: { ...env, ...change },
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 5000,
+    });
+  assert.doesNotThrow(() => run({}));
+  assert.doesNotThrow(() =>
+    run({ FASED_REPLAY_RUN_ID: "123", FASED_REPLAY_RUN_ATTEMPT: "2" }),
+  );
+  for (const change of [
+    { FASED_REPLAY_RUN_ID: "123" },
+    { FASED_REPLAY_RUN_ATTEMPT: "2" },
+    { FASED_REPLAY_RUN_ID: "0123", FASED_REPLAY_RUN_ATTEMPT: "2" },
+    { FASED_REPLAY_RUN_ID: "123", FASED_REPLAY_RUN_ATTEMPT: "0" },
+    {
+      FASED_REPLAY_RUN_ID: "123",
+      FASED_REPLAY_RUN_ATTEMPT: "2",
+      GITHUB_RUN_ATTEMPT: "2",
+    },
+    { FASED_INPUT_SOURCE: "b".repeat(40) },
+    { GITHUB_REF: "refs/heads/feature" },
+  ])
+    assert.throws(() => run(change));
 });

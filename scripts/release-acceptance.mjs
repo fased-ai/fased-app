@@ -526,6 +526,171 @@ with zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read())) as z:
   );
   return JSON.parse(output);
 }
+
+function protectedCandidateRun(run, packet, inventory) {
+  return (
+    String(run.id) === packet.release.runId &&
+    String(run.run_attempt) === packet.release.runAttempt &&
+    run.head_sha === packet.source &&
+    run.head_branch === "main" &&
+    run.event === "workflow_dispatch" &&
+    run.path === ".github/workflows/release.yml" &&
+    run.status === "completed" &&
+    ["success", "failure"].includes(run.conclusion) &&
+    String(run.repository?.id) === inventory.repositoryId &&
+    String(run.repository?.owner?.id) === inventory.ownerId
+  );
+}
+
+async function verifiedProducer(packet, inventory, api) {
+  const run = await api(
+    "GET",
+    `${repo}/actions/runs/${packet.release.runId}/attempts/${packet.release.runAttempt}`,
+  );
+  if (!protectedCandidateRun(run, packet, inventory))
+    throw Error("Exact protected candidate producer required");
+  const jobs = await api(
+    "GET",
+    `${repo}/actions/runs/${packet.release.runId}/attempts/${packet.release.runAttempt}/jobs`,
+  );
+  const producer = jobs.jobs?.filter((j) => j.name === "ubuntu-amd64");
+  if (
+    producer?.length !== 1 ||
+    producer[0].status !== "completed" ||
+    producer[0].conclusion !== "success" ||
+    !producer[0].steps?.some(
+      (s) =>
+        s.name ===
+          "Verify original provenance offline and stage public signing inputs" &&
+        s.conclusion === "success",
+    )
+  )
+    throw Error(
+      "Original attested build must have succeeded; no rebuild is permitted",
+    );
+  return run;
+}
+
+export async function verifyCandidateReplay(
+  config,
+  directory,
+  {
+    runId,
+    attempt,
+    api,
+    read = readFileSync,
+    downloadArtifact,
+    execute = execFileSync,
+  },
+) {
+  if (!number.test(runId ?? "") || !number.test(attempt ?? ""))
+    throw Error("Exact original candidate run and attempt required");
+  if (downloadArtifact) {
+    const originalAPI = api,
+      cache = new Map();
+    api = async (method, url) => {
+      if (method !== "GET") throw Error("Replay acquisition is read-only");
+      if (!cache.has(url)) cache.set(url, await originalAPI(method, url));
+      return cache.get(url);
+    };
+    const run = await api(
+      "GET",
+      `${repo}/actions/runs/${runId}/attempts/${attempt}`,
+    );
+    if (!/^[a-f0-9]{40}$/.test(run.head_sha ?? ""))
+      throw Error("Original candidate source required");
+    await verifiedProducer(
+      { source: run.head_sha, release: { runId, runAttempt: attempt } },
+      config,
+      api,
+    );
+    const listed = await api("GET", `${repo}/actions/runs/${runId}/artifacts`);
+    const artifacts = listed.artifacts?.filter(
+      (a) =>
+        a.name === `ubuntu-amd64-release-candidate-${attempt}` && !a.expired,
+    );
+    if (
+      artifacts?.length !== 1 ||
+      !number.test(String(artifacts[0].id)) ||
+      !/^sha256:[a-f0-9]{64}$/.test(artifacts[0].digest ?? "") ||
+      String(artifacts[0].workflow_run?.id) !== runId ||
+      artifacts[0].workflow_run?.head_sha !== run.head_sha
+    )
+      throw Error("Exact original candidate artifact required for replay");
+    const zip = await downloadArtifact(String(artifacts[0].id));
+    if (
+      !Buffer.isBuffer(zip) ||
+      zip.length === 0 ||
+      zip.length > 128 * 1024 * 1024 ||
+      `sha256:${sha(zip)}` !== artifacts[0].digest
+    )
+      throw Error("Original replay ZIP digest differs");
+    execute(
+      "python3",
+      [
+        "-c",
+        `
+import io,pathlib,stat,sys,zipfile
+names=set('fased-app-linux-amd64.tar.gz fased-app-linux-amd64.json fased-install-linux-amd64 fased-app-linux-amd64.provenance.sigstore.json verified-provenance.json expected-provenance.json provenance-policy.json first-install-seed.json install.sh build-inputs.json artifact-inventory.json signing-inputs.json fased-release.json'.split())
+with zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read())) as z:
+ entries=z.infolist();seen=set();total=0
+ if len(entries)!=len(names):raise ValueError('exact original public candidate entries required')
+ for f in entries:
+  if f.filename not in names or f.filename in seen or f.is_dir() or stat.S_IFMT(f.external_attr>>16) not in (0,stat.S_IFREG):raise ValueError('invalid original candidate entry')
+  seen.add(f.filename);total+=f.file_size
+  if not 0<f.file_size<=128*1024*1024 or total>256*1024*1024:raise ValueError('bounded candidate required')
+ out=pathlib.Path(sys.argv[1]);out.mkdir(mode=0o700)
+ for f in entries:
+  target=out/f.filename
+  with target.open('xb') as stream:stream.write(z.read(f))
+  target.chmod(0o600)
+`,
+        directory,
+      ],
+      {
+        input: zip,
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
+        timeout: 30000,
+        maxBuffer: 1024 * 1024,
+      },
+    );
+  }
+  const raw = read(`${directory}/fased-release.json`),
+    packet = JSON.parse(raw);
+  if (
+    packet.version !== 2 ||
+    packet.release?.runId !== runId ||
+    packet.release?.runAttempt !== attempt
+  )
+    throw Error("Replay cannot rebind candidate source, run or attempt");
+  const inventory = attestedInventory(config, packet, raw);
+  await verifiedProducer(packet, inventory, api);
+  const listed = await api("GET", `${repo}/actions/runs/${runId}/artifacts`);
+  const artifacts = listed.artifacts?.filter(
+    (a) => a.name === `ubuntu-amd64-release-candidate-${attempt}` && !a.expired,
+  );
+  if (
+    artifacts?.length !== 1 ||
+    !number.test(String(artifacts[0].id)) ||
+    !/^sha256:[a-f0-9]{64}$/.test(artifacts[0].digest ?? "") ||
+    String(artifacts[0].workflow_run?.id) !== runId ||
+    artifacts[0].workflow_run?.head_sha !== packet.source
+  )
+    throw Error("Exact original candidate artifact required for replay");
+  for (const asset of inventory.assets) {
+    const bytes = read(`${directory}/${asset.name}`);
+    if (bytes.length !== asset.size || sha(bytes) !== asset.sha256)
+      throw Error("Original replay candidate asset differs: " + asset.name);
+  }
+  return {
+    ...acceptanceBinding(packet, inventory),
+    candidateArtifactId: String(artifacts[0].id),
+    candidateArtifactDigest: artifacts[0].digest,
+    buildPerformed: false,
+  };
+}
+
 async function readCIInstalledAcceptance(
   packet,
   inventory,
@@ -554,22 +719,65 @@ async function readCIInstalledAcceptance(
     "GET",
     `${repo}/actions/runs/${id}/attempts/${attempt}`,
   );
-  if (
-    String(run.id) !== id ||
-    String(run.run_attempt) !== attempt ||
-    run.head_sha !== packet.source ||
-    run.head_branch !== "main" ||
-    run.event !== "workflow_dispatch" ||
-    run.path !== ".github/workflows/release.yml" ||
-    run.status !== "completed" ||
-    run.conclusion !== "success" ||
-    String(run.repository?.id) !== inventory.repositoryId ||
-    String(run.repository?.owner?.id) !== inventory.ownerId
-  )
+  if (!protectedCandidateRun(run, packet, inventory))
     throw Error("Successful exact protected candidate workflow required");
+  const replay = run.conclusion === "failure";
+  let acceptanceRun = run;
+  if (replay) {
+    await verifiedProducer(packet, inventory, api);
+    const name = `ubuntu-amd64-installed-acceptance-replay-${id}-${attempt}`;
+    const listed = await api(
+      "GET",
+      `${repo}/actions/artifacts?name=${name}&per_page=100`,
+    );
+    const matching = listed.artifacts?.filter(
+      (a) => a.name === name && !a.expired,
+    );
+    if (
+      !Array.isArray(listed.artifacts) ||
+      listed.artifacts.length >= 100 ||
+      !matching?.length
+    )
+      throw Error("One retained same-artifact acceptance replay required");
+    const accepted = [];
+    for (const artifact of matching) {
+      if (
+        !number.test(String(artifact.workflow_run?.id)) ||
+        String(artifact.workflow_run.id) === id
+      )
+        throw Error("Independent protected acceptance run required");
+      const candidate = await api(
+        "GET",
+        `${repo}/actions/runs/${artifact.workflow_run.id}`,
+      );
+      if (
+        candidate.status === "completed" &&
+        ["failure", "cancelled", "timed_out"].includes(candidate.conclusion)
+      )
+        continue;
+      if (
+        String(candidate.id) !== String(artifact.workflow_run.id) ||
+        candidate.run_attempt !== 1 ||
+        candidate.head_sha !== artifact.workflow_run.head_sha ||
+        !/^[a-f0-9]{40}$/.test(candidate.head_sha ?? "") ||
+        candidate.head_branch !== "main" ||
+        candidate.event !== "workflow_dispatch" ||
+        candidate.path !== ".github/workflows/release.yml" ||
+        candidate.status !== "completed" ||
+        candidate.conclusion !== "success" ||
+        String(candidate.repository?.id) !== inventory.repositoryId ||
+        String(candidate.repository?.owner?.id) !== inventory.ownerId
+      )
+        throw Error("Successful protected acceptance-only replay required");
+      accepted.push(candidate);
+    }
+    if (accepted.length !== 1)
+      throw Error("One retained same-artifact acceptance replay required");
+    acceptanceRun = accepted[0];
+  }
   const result = await api(
     "GET",
-    `${repo}/actions/runs/${id}/attempts/${attempt}/jobs`,
+    `${repo}/actions/runs/${acceptanceRun.id}/attempts/${acceptanceRun.run_attempt}/jobs`,
   );
   const jobs = result.jobs?.filter((j) => j.name === "installed-acceptance");
   if (
@@ -578,17 +786,28 @@ async function readCIInstalledAcceptance(
     jobs[0].conclusion !== "success"
   )
     throw Error("Installed acceptance job did not complete");
-  const listed = await api("GET", `${repo}/actions/runs/${id}/artifacts`);
+  if (replay) {
+    const producer = result.jobs?.filter((j) => j.name === "ubuntu-amd64");
+    if (producer?.length !== 1 || producer[0].conclusion !== "skipped")
+      throw Error("Acceptance replay must not perform another build");
+  }
+  const listed = await api(
+    "GET",
+    `${repo}/actions/runs/${acceptanceRun.id}/artifacts`,
+  );
   const artifacts = listed.artifacts?.filter(
     (a) =>
-      a.name === `ubuntu-amd64-installed-acceptance-${attempt}` && !a.expired,
+      a.name ===
+        (replay
+          ? `ubuntu-amd64-installed-acceptance-replay-${id}-${attempt}`
+          : `ubuntu-amd64-installed-acceptance-${attempt}`) && !a.expired,
   );
   if (
     artifacts?.length !== 1 ||
     !number.test(String(artifacts[0].id)) ||
     !/^sha256:[a-f0-9]{64}$/.test(artifacts[0].digest) ||
-    String(artifacts[0].workflow_run?.id) !== id ||
-    artifacts[0].workflow_run?.head_sha !== packet.source
+    String(artifacts[0].workflow_run?.id) !== String(acceptanceRun.id) ||
+    artifacts[0].workflow_run?.head_sha !== acceptanceRun.head_sha
   )
     throw Error("Exact retained CI acceptance artifact required");
   const raw = await downloadArtifact(String(artifacts[0].id));

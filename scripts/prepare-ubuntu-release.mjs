@@ -36,6 +36,7 @@ import {
   privateSigningPassphrase,
 } from "./local-release-signing.mjs";
 import { openPublisherJournal } from "./publisher-journal.mjs";
+import { verifyCandidateReplay } from "./release-acceptance.mjs";
 
 export let evidence = ".evidence/ubuntu-release";
 // A private, independently attested current-reader fixture. This version is
@@ -993,6 +994,52 @@ if (
     }
     const missing = validateConfig(c);
     switch (command) {
+      case "replay": {
+        if (
+          process.env.GITHUB_REF !== "refs/heads/main" ||
+          process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
+          process.env.GITHUB_RUN_ATTEMPT !== "1"
+        )
+          throw Error(
+            "Acceptance-only replay requires one reviewed-main dispatch",
+          );
+        console.log(
+          JSON.stringify(
+            await verifyCandidateReplay(c, evidence, {
+              runId: process.env.FASED_REPLAY_RUN_ID,
+              attempt: process.env.FASED_REPLAY_RUN_ATTEMPT,
+              downloadArtifact: (id) =>
+                execFileSync(
+                  "gh",
+                  [
+                    "api",
+                    `/repos/fased-ai/fased-app/actions/artifacts/${id}/zip`,
+                  ],
+                  {
+                    encoding: "buffer",
+                    maxBuffer: 128 * 1024 * 1024,
+                    timeout: 60000,
+                    stdio: ["ignore", "pipe", "pipe"],
+                  },
+                ),
+              api: async (method, url) => {
+                if (method !== "GET")
+                  throw Error("Replay preparation is read-only");
+                return JSON.parse(
+                  execFileSync("gh", ["api", url], {
+                    encoding: "utf8",
+                    maxBuffer: 2 * 1024 * 1024,
+                    timeout: 30000,
+                  }),
+                );
+              },
+            }),
+            null,
+            2,
+          ),
+        );
+        break;
+      }
       case "plan":
         console.log(
           JSON.stringify(
