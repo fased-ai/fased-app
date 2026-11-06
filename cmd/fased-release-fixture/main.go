@@ -11,6 +11,9 @@ import (
 )
 
 func run(args []string, out io.Writer) error {
+	if len(args) > 0 && args[0] == "installed-provider" {
+		return installedProvider(args[1:], out)
+	}
 	if os.Geteuid() == 0 || len(args) != 2 || args[0] != "readiness" || args[1] != "--disposable-fixture" {
 		return errors.New("ordinary-user readiness --disposable-fixture only; no production or activation command")
 	}

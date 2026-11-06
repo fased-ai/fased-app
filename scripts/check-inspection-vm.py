@@ -6,7 +6,9 @@ Evidence survives snapshot rollback; large reconstructible VM outputs are remove
 import argparse, base64, selectors, hashlib, json, os, pathlib, shutil, signal, socket, subprocess, tarfile, time, urllib.request
 P=pathlib.Path
 repo=P.cwd(); root=repo/'.evidence/p4-fault-reboot'; root.mkdir(parents=True,exist_ok=True)
-p=argparse.ArgumentParser(); p.add_argument('--fresh-remote-only',action='store_true'); p.add_argument('--local-acceptance',type=P); p.add_argument('--released-local-only',action='store_true'); p.add_argument('--full',action='store_true'); p.add_argument('--resume',action='store_true'); p.add_argument('--inspection-only',action='store_true'); p.add_argument('--keep-failed-vm',action='store_true'); p.add_argument('--managed-remote-only',action='store_true'); p.add_argument('--network-only',action='store_true'); p.add_argument('--owner-browser-only',action='store_true'); p.add_argument('--maintenance-only',action='store_true'); p.add_argument('--installed-remote-update-only',action='store_true'); p.add_argument('--installed-finalizer-update-only',action='store_true'); p.add_argument('--staged-package-only',action='store_true'); p.add_argument('--candidate',type=P); p.add_argument('--predecessor',type=P); p.add_argument('--legacy-predecessor',type=P); a=p.parse_args()
+p=argparse.ArgumentParser(); p.add_argument('--installed-agent',action='store_true'); p.add_argument('--fresh-remote-only',action='store_true'); p.add_argument('--local-acceptance',type=P); p.add_argument('--released-local-only',action='store_true'); p.add_argument('--full',action='store_true'); p.add_argument('--resume',action='store_true'); p.add_argument('--inspection-only',action='store_true'); p.add_argument('--keep-failed-vm',action='store_true'); p.add_argument('--managed-remote-only',action='store_true'); p.add_argument('--network-only',action='store_true'); p.add_argument('--owner-browser-only',action='store_true'); p.add_argument('--maintenance-only',action='store_true'); p.add_argument('--installed-remote-update-only',action='store_true'); p.add_argument('--installed-finalizer-update-only',action='store_true'); p.add_argument('--staged-package-only',action='store_true'); p.add_argument('--candidate',type=P); p.add_argument('--predecessor',type=P); p.add_argument('--legacy-predecessor',type=P); a=p.parse_args()
+if a.installed_agent:
+ assert a.released_local_only and a.staged_package_only, 'installed agent requires the existing complete Local package journey'
 if a.fresh_remote_only:
  assert a.staged_package_only and not a.released_local_only, 'fresh Remote requires its own staged package VM'
  assert a.candidate and a.local_acceptance, 'exact candidate and completed Local acceptance required'
@@ -57,6 +59,14 @@ def run(args,**kw): return subprocess.run(args,check=True,stdout=subprocess.PIPE
 def download(url,path):
  if not path.exists():
   with urllib.request.urlopen(url,timeout=45) as src,path.open('wb') as dst: shutil.copyfileobj(src,dst)
+if a.installed_agent:
+ for name in ['installed-agent-acceptance.json','installed-agent-observations.json']:
+  assert not (root/name).exists(), 'preserve prior agent proof; inspect before another attempt'
+ provider_packet=json.loads((a.candidate/'fased-release.json').read_text())
+ provider_version=provider_packet['productVersion']
+ assert __import__('re').fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+',provider_version)
+ provider_helper=root/'fased-release-fixture'
+ run(['go','build','-trimpath','-ldflags','-X github.com/fased-ai/fased-app/internal/core.Version='+provider_version,'-o',str(provider_helper),'./cmd/fased-release-fixture'])
 image=repo/'.evidence/p4-fault-reboot/ubuntu.img'; download(URL,image); assert sha(image.read_bytes())==IMAGE_SHA,'official Ubuntu image digest changed; review a new pinned image'
 if not single_case:
  nodearchive=root/f'node-v{NODE}-linux-x64.tar.xz'; download(f'https://nodejs.org/dist/v{NODE}/{nodearchive.name}',nodearchive)
@@ -110,6 +120,7 @@ if not a.resume:
   public=(work/'ssh-key.pub').read_text().strip()
   for name,uid in ([] if a.fresh_remote_only else [('fased-local',1100),('fased-fresh',1400)] if a.released_local_only else [('fased-local',1100),('fased-remote',1200),('fased-legacy',1300)]):
    users+='   - name: '+name+'\n     uid: '+str(uid)+'\n     groups: [sudo]\n     shell: /bin/bash\n     lock_passwd: true\n     ssh_authorized_keys:\n       - '+public+'\n'
+  if a.installed_agent:users+='   - name: fased-agent\n     uid: 1500\n     shell: /bin/bash\n     lock_passwd: true\n     ssh_authorized_keys:\n       - '+public+'\n'
   if not a.released_local_only:users+='   - name: root\n     lock_passwd: true\n     ssh_authorized_keys:\n       - '+public+'\n'
   data=data.replace(' disable_root: true',' disable_root: true' if a.released_local_only else ' disable_root: false').replace(' write_files:',users+' write_files:')
   extra=''
@@ -121,6 +132,7 @@ if not a.resume:
   if a.fresh_remote_only:
    extra+='       ubuntu ALL=(root) NOPASSWD: /usr/bin/tailscale status --json, /usr/bin/tailscale debug prefs, /usr/bin/tailscale login --timeout=120s, /usr/bin/tailscale set --operator=ubuntu, /usr/bin/tailscale logout\n'
   data=data.replace(' packages:',extra+' packages:').replace('nftables]', 'nftables, polkitd, curl, ca-certificates, openssl, iproute2]')
+  if a.installed_agent:data=data.replace('iproute2]', 'iproute2, dbus-user-session, gnome-keyring]')
   (work/'user-data').write_text(data)
  if a.maintenance_only:
   # One fixed root OS switcher for the controlling ubuntu fixture. It drops to
@@ -316,20 +328,22 @@ def staged_package_acceptance():
   reply=subprocess.run(connection,timeout=timeout,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
   return fixture.checked_reply(reply,owner,args[0],root/'staged-owner-failure.json')
  def owner_call(profile,action,expected=None):
-  return guest_call(['owner','--profile',profile,'--owner-action',action,*(['--version',expected] if expected else [])],fixture.PROFILES[profile][0])
+  extra=['--candidate',guest+'/packages/candidate','--provider-helper',guest+'/fased-release-fixture'] if profile=='agent' else []
+  return guest_call(['owner','--profile',profile,'--owner-action',action,*extra,*(['--version',expected] if expected else [])],fixture.PROFILES[profile][0])
  def select_package(name,fail=False):
   return guest_call(['select','--work',remote_work,'--selection',name,*(['--fail-archive-once'] if fail else [])])
  def start_tunnel():
   global tunnel
   if tunnel is not None and tunnel.poll() is None:tunnel.terminate();tunnel.wait(10)
   forwards=[]
-  for _,_,listen in ([fixture.PROFILES['local'],fixture.PROFILES['fresh']] if a.released_local_only else [fixture.PROFILES[name] for name in ['local','remote','legacy']]):forwards+=['-L',f'127.0.0.1:{listen}:127.0.0.1:{listen}']
+  for _,_,listen in ([fixture.PROFILES[name] for name in (['local','fresh','agent'] if a.installed_agent else ['local','fresh'])] if a.released_local_only else [fixture.PROFILES[name] for name in ['local','remote','legacy']]):forwards+=['-L',f'127.0.0.1:{listen}:127.0.0.1:{listen}']
   # Model a logged-in Local desktop while retaining the same private forwards.
   # Remote's system service must still boot without its operator logging in.
   tunnel=subprocess.Popen(sshbase[:-1]+['-o','ExitOnForwardFailure=yes',*forwards,'fased-local@127.0.0.1','sleep 3600'],stdout=subprocess.DEVNULL,stderr=(root/'staged-tunnel.stderr').open('ab'))
  def browser(profile,action,expected,link=None):
   listen=fixture.PROFILES[profile][2]
   cfg={'fixtureOnly':True,'action':action,'url':link or 'http://127.0.0.1:'+str(listen),'version':expected,'storageFile':str(host_browser/(profile+'-storage.json')),'baselineFile':str(host_browser/(profile+'-baseline.json'))}
+  if profile=='agent':cfg['installedProviderProfile']=True
   if action in ['ui-update','automatic-update']:cfg['fromVersion']=packages['predecessor']['packet']['productVersion']
   if a.released_local_only and action=='auth-cycle':cfg['reopenUrl']=owner_call(profile,'open')['url']
   if a.released_local_only and action=='automatic-update':cfg['closeForAutomatic']=True
@@ -353,6 +367,7 @@ def staged_package_acceptance():
  payload=work/'staged-payload.tar'
  with tarfile.open(payload,'w') as arc:
   for name in ['staged-package-guest.py','staged-acceptance-contract.json']:arc.add(repo/'scripts'/name,'scripts/'+name)
+  if a.installed_agent:arc.add(provider_helper,'fased-release-fixture')
   for label,value in packages.items():
    directory=P(value['directory'])
    for asset in fixture.ASSETS:arc.add(directory/asset,'packages/'+label+'/'+asset)
@@ -422,7 +437,30 @@ def staged_package_acceptance():
    if fresh_session.poll() is None:fresh_session.terminate();fresh_session.wait(10)
   checks['passwordFreeLocalSetup']='PASS'
   result.update(result='PASS',uiOutcome='applied',cliOutcome='applied',automaticOutcome='applied',automaticPolicyRestored='manual',upgradeApplied=True,customerActivation=False,controlledAutomatic=[{'profile':'local',**automatic}],predecessorPacketVersion=2,candidatePacketVersion=2)
-  save('installed-acceptance.json',result);return result
+  save('installed-acceptance.json',result)
+  if a.installed_agent:
+   # Keep the already complete Local receipt unchanged: the agent proof binds
+   # its raw bytes and cannot recursively rewrite or manufacture Local PASS.
+   agent_session=subprocess.Popen(sshbase[:-1]+['fased-agent@127.0.0.1','sleep 3600'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+   try:
+    setup=owner_call('agent','provider-install')
+    opened=owner_call('agent','open');browser('agent','claim',version,opened['url'])
+    browser('agent','agent-prepare',version)
+    restart=owner_call('agent','restart');assert restart['instanceId']==setup['instanceId']
+    restarted_probe=owner_call('agent','provider-inspect');assert restarted_probe['pid']!=setup['initialPid'];browser('agent','agent-run',version)
+    boot=reboot();assert boot['before']!=boot['after']
+    owner_call('agent','provider-inspect');opened=owner_call('agent','open');browser('agent','agent-reboot',version,opened['url'])
+    owner_call('agent','restart');owner_call('agent','provider-inspect');observed=browser('agent','agent-finish',version)
+    observed.update(serviceRestart={'beforePID':setup['initialPid'],'afterPID':restarted_probe['pid']},kernelReboot=boot,**fixture.binding(packages['candidate']),profile='local',engineSha256=setup['engineSha256'],installerOwnedProviderMode=setup['installerOwnedProviderMode'],sandboxed=setup['sandboxed'],testCodeOverlay=False,realProviderCalls=False)
+    save('installed-agent-observations.json',observed)
+    request={'action':'agent-receipt','packet':target,'inventory':{'assets':packages['candidate']['assets']},'localReceiptSha256':sha((root/'installed-acceptance.json').read_bytes()),'bundleManifest':setup['bundleManifest'],'observed':observed,'observedRaw':(root/'installed-agent-observations.json').read_text()}
+    request_path=host_browser/'agent-receipt-request.json';fixture.write_private(request_path,request)
+    reply=run(['node','scripts/staged-package-browser.mjs',str(request_path)],timeout=30)
+    receipt=json.loads(reply.stdout);assert receipt['result']=='PASS'
+    save('installed-agent-acceptance.json',receipt)
+   finally:
+    if agent_session.poll() is None:agent_session.terminate();agent_session.wait(10)
+  return result
  # Exact URL entry in a real root SSH terminal. The reviewed shell performs
  # fixed OS preparation and drops to the selected ordinary operator before Go.
  entry='bash <(curl -fsSL https://github.com/fased-ai/fased-app/releases/download/v0.1.4/install.sh) --operator fased-remote --listen 127.0.0.1:17482'

@@ -112,6 +112,10 @@ jobs:
         with:
           name: ubuntu-amd64-release-candidate-${{ github.run_attempt }}
           path: .evidence/ubuntu-release
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
       - name: Prepare the existing disposable Ubuntu acceptance runner
         run: |
           sudo apt-get update
@@ -134,7 +138,7 @@ jobs:
       - name: Run the actual released-predecessor Local journey only
         env:
           FASED_DISPOSABLE_VM_ACCEPTANCE: "1"
-        run: python3 scripts/check-inspection-vm.py --staged-package-only --released-local-only --candidate .evidence/ubuntu-release --predecessor .evidence/ubuntu-release-predecessor --legacy-predecessor .evidence/ubuntu-release-predecessor
+        run: python3 scripts/check-inspection-vm.py --staged-package-only --released-local-only --installed-agent --candidate .evidence/ubuntu-release --predecessor .evidence/ubuntu-release-predecessor --legacy-predecessor .evidence/ubuntu-release-predecessor
       - name: Remove only the owned CI KVM rule
         if: always()
         run: |
@@ -147,7 +151,10 @@ jobs:
         with:
           name: ubuntu-amd64-installed-acceptance-${{ github.run_attempt }}
           if-no-files-found: error
-          path: .evidence/b01-staged-installed/local/installed-acceptance.json
+          path: |
+            .evidence/b01-staged-installed/local/installed-acceptance.json
+            .evidence/b01-staged-installed/local/installed-agent-acceptance.json
+            .evidence/b01-staged-installed/local/installed-agent-observations.json
       - name: Retain a bounded sanitized owner failure
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
