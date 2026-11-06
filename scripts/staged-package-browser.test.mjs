@@ -16,7 +16,48 @@ import {
   updateMode,
   restoreFixtureManualPolicy,
   detachedFixtureObserver,
+  restoreCapturedOwner,
 } from "./staged-package-browser.mjs";
+
+test("captured old owner reconnects through the actual upgraded device UI", async () => {
+  const actions = [];
+  const page = {
+    locator: () => ({ count: async () => 0 }),
+    getByRole: (_, value) => ({
+      count: async () => (value.name === "Use password" ? 1 : 0),
+      click: async () => actions.push(value.name),
+    }),
+    getByLabel: () => ({ fill: async () => actions.push("password") }),
+  };
+  const options = {
+    directRemote: true,
+    preservedPasswordOwner: true,
+    password: "disposable",
+  };
+  await restoreCapturedOwner(
+    page,
+    { remoteAccess: true, remoteEnrolled: true },
+    options,
+  );
+  assert.deepEqual(actions, []);
+  actions.length = 0;
+  await restoreCapturedOwner(page, { remoteAccess: true }, options);
+  assert.deepEqual(actions, ["Use password", "password", "Sign in"]);
+  actions.length = 0;
+  await restoreCapturedOwner(
+    page,
+    { authenticated: true, remoteAccess: true, remoteEnrolled: true },
+    options,
+  );
+  assert.deepEqual(actions, []);
+  await assert.rejects(
+    restoreCapturedOwner(
+      { ...page, locator: () => ({ count: async () => 1 }) },
+      { remoteAccess: true, remoteEnrolled: true },
+      options,
+    ),
+  );
+});
 
 test("Apply observation reports a terminal refusal instead of waiting for restart", () => {
   for (const phase of ["check-failed", "recovery", "rolled-back"]) {
@@ -181,6 +222,7 @@ test("private preflight uses fresh normal-TLS browser and real approval response
           status: () => status,
         };
       const page = {
+        on: () => {},
         waitForResponse: (accept) => {
           assert.equal(accept(response), true);
           assert.equal(
@@ -197,6 +239,7 @@ test("private preflight uses fresh normal-TLS browser and real approval response
         goto: async (url) => {
           assert.equal(url, config.url);
           calls.push("visit exact proof");
+          return { status: () => 200 };
         },
         locator: (selector) => {
           assert.equal(selector, "#status");
@@ -261,6 +304,70 @@ test("private preflight uses fresh normal-TLS browser and real approval response
     if (previous === undefined)
       delete process.env.FASED_DISPOSABLE_VM_ACCEPTANCE;
     else process.env.FASED_DISPOSABLE_VM_ACCEPTANCE = previous;
+  }
+});
+
+test("private preflight rejects actual HTTP refusal before approval and records its cause", async () => {
+  const original = process.env.FASED_DISPOSABLE_VM_ACCEPTANCE;
+  process.env.FASED_DISPOSABLE_VM_ACCEPTANCE = "1";
+  let closed = false;
+  const page = {
+    on: () => {},
+    waitForResponse: async () => ({ status: () => 204 }),
+    goto: async () => ({ status: () => 403 }),
+    locator: () => ({
+      innerText: async () => "Private Tailscale access required",
+    }),
+  };
+  const runtime = {
+    chromium: {
+      launch: async () => ({
+        newContext: async () => ({
+          route: async () => {},
+          newPage: async () => page,
+        }),
+        close: async () => {
+          closed = true;
+        },
+      }),
+    },
+    expect: () => {
+      throw Error("must not accept the page");
+    },
+  };
+  try {
+    await assert.rejects(
+      runPrivatePreflight(
+        {
+          fixtureOnly: true,
+          action: "private-preflight",
+          expectedOrigin: "https://node.tail-example.ts.net",
+          url: "https://node.tail-example.ts.net/#" + "A".repeat(43),
+        },
+        runtime,
+      ),
+      /navigation refused.*403.*Private Tailscale access required/,
+    );
+    assert.equal(closed, true);
+    page.goto = async () => {
+      throw new Error("actual navigation timeout");
+    };
+    await assert.rejects(
+      runPrivatePreflight(
+        {
+          fixtureOnly: true,
+          action: "private-preflight",
+          expectedOrigin: "https://node.tail-example.ts.net",
+          url: "https://node.tail-example.ts.net/#" + "A".repeat(43),
+        },
+        runtime,
+      ),
+      /navigation failed.*actual navigation timeout/,
+    );
+  } finally {
+    if (original === undefined)
+      delete process.env.FASED_DISPOSABLE_VM_ACCEPTANCE;
+    else process.env.FASED_DISPOSABLE_VM_ACCEPTANCE = original;
   }
 });
 
@@ -545,6 +652,18 @@ test("preserved password fixture access is pinned to the real predecessor", () =
     },
   };
   assert.doesNotThrow(() => browserAddress(config));
+  for (const action of [
+    "ui-update",
+    "preserve",
+    "inspect",
+    "check",
+    "reconnect",
+    "automatic-restore",
+  ]) {
+    assert.doesNotThrow(() =>
+      browserAddress({ ...config, action, fromVersion: "0.1.6" }),
+    );
+  }
   for (const mutate of [
     (v) => {
       v.action = "claim";

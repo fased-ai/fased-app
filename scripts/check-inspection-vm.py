@@ -6,19 +6,23 @@ Evidence survives snapshot rollback; large reconstructible VM outputs are remove
 import argparse, base64, selectors, hashlib, json, os, pathlib, shutil, signal, socket, subprocess, tarfile, time, urllib.request
 P=pathlib.Path
 repo=P.cwd(); root=repo/'.evidence/p4-fault-reboot'; root.mkdir(parents=True,exist_ok=True)
-p=argparse.ArgumentParser(); p.add_argument('--installed-agent',action='store_true'); p.add_argument('--fresh-remote-only',action='store_true'); p.add_argument('--local-acceptance',type=P); p.add_argument('--released-local-only',action='store_true'); p.add_argument('--full',action='store_true'); p.add_argument('--resume',action='store_true'); p.add_argument('--inspection-only',action='store_true'); p.add_argument('--keep-failed-vm',action='store_true'); p.add_argument('--managed-remote-only',action='store_true'); p.add_argument('--network-only',action='store_true'); p.add_argument('--owner-browser-only',action='store_true'); p.add_argument('--maintenance-only',action='store_true'); p.add_argument('--installed-remote-update-only',action='store_true'); p.add_argument('--installed-finalizer-update-only',action='store_true'); p.add_argument('--staged-package-only',action='store_true'); p.add_argument('--candidate',type=P); p.add_argument('--predecessor',type=P); p.add_argument('--legacy-predecessor',type=P); a=p.parse_args()
+p=argparse.ArgumentParser(); p.add_argument('--installed-agent',action='store_true'); p.add_argument('--fresh-remote-only',action='store_true'); p.add_argument('--released-remote-only',action='store_true'); p.add_argument('--local-acceptance',type=P); p.add_argument('--evidence-dir',type=P); p.add_argument('--released-local-only',action='store_true'); p.add_argument('--full',action='store_true'); p.add_argument('--resume',action='store_true'); p.add_argument('--inspection-only',action='store_true'); p.add_argument('--keep-failed-vm',action='store_true'); p.add_argument('--managed-remote-only',action='store_true'); p.add_argument('--network-only',action='store_true'); p.add_argument('--owner-browser-only',action='store_true'); p.add_argument('--maintenance-only',action='store_true'); p.add_argument('--installed-remote-update-only',action='store_true'); p.add_argument('--installed-finalizer-update-only',action='store_true'); p.add_argument('--staged-package-only',action='store_true'); p.add_argument('--candidate',type=P); p.add_argument('--predecessor',type=P); p.add_argument('--legacy-predecessor',type=P); a=p.parse_args()
 if a.installed_agent:
  assert a.released_local_only and a.staged_package_only, 'installed agent requires the existing complete Local package journey'
-if a.fresh_remote_only:
+if a.fresh_remote_only or a.released_remote_only:
+ assert not (a.fresh_remote_only and a.released_remote_only), 'choose fresh or actual released Remote'
  assert a.staged_package_only and not a.released_local_only, 'fresh Remote requires its own staged package VM'
  assert a.candidate and a.local_acceptance, 'exact candidate and completed Local acceptance required'
  import importlib.util
  spec=importlib.util.spec_from_file_location('fased_staged_prerequisite',repo/'scripts/staged-package-guest.py')
  prerequisite=importlib.util.module_from_spec(spec);spec.loader.exec_module(prerequisite)
- local_acceptance_sha=prerequisite.require_local_acceptance(prerequisite.package(a.candidate),a.local_acceptance)
+ remote_candidate=prerequisite.package(a.candidate)
+ local_acceptance_sha=prerequisite.require_local_acceptance(remote_candidate,a.local_acceptance)
  # Validate before downloads, VM creation, or any remote side effect. Only the
- # candidate is needed: a fresh setup cannot masquerade as a version upgrade.
- a.predecessor=a.candidate;a.legacy_predecessor=a.candidate
+ # candidate is needed for fresh setup; released mode pins a distinct predecessor.
+ if a.fresh_remote_only:a.predecessor=a.candidate
+ assert a.predecessor, 'actual public predecessor required'
+ a.legacy_predecessor=a.predecessor
 if a.released_local_only:
  assert a.staged_package_only, 'released Local proof uses the existing staged package runner'
 if a.installed_finalizer_update_only:
@@ -32,9 +36,17 @@ assert not a.maintenance_only or not (a.resume or a.full or a.inspection_only or
 assert not a.installed_remote_update_only or not (a.resume or a.full or a.inspection_only or a.managed_remote_only or a.network_only or a.owner_browser_only or a.maintenance_only),'installed Remote update requires one fresh disposable VM'
 single_case=a.staged_package_only or a.managed_remote_only or a.network_only or a.owner_browser_only or a.maintenance_only or a.installed_remote_update_only
 if a.staged_package_only:
- assert not any([a.full,(a.resume and not a.fresh_remote_only),a.inspection_only,a.managed_remote_only,a.network_only,a.owner_browser_only,a.maintenance_only,a.installed_remote_update_only]),'one staged package acceptance mode required'
+ assert not any([a.full,(a.resume and not (a.fresh_remote_only or a.released_remote_only)),a.inspection_only,a.managed_remote_only,a.network_only,a.owner_browser_only,a.maintenance_only,a.installed_remote_update_only]),'one staged package acceptance mode required'
  assert a.candidate and a.predecessor and a.legacy_predecessor,'exact retained package directories required'
- root=repo/('.evidence/b01-staged-installed/fresh-remote' if a.fresh_remote_only else '.evidence/b01-staged-installed/local' if a.released_local_only else '.evidence/b01-staged-installed/vm'); root.mkdir(parents=True,exist_ok=True)
+ root=repo/('.evidence/b01-staged-installed/released-remote' if a.released_remote_only else '.evidence/b01-staged-installed/fresh-remote' if a.fresh_remote_only else '.evidence/b01-staged-installed/local' if a.released_local_only else '.evidence/b01-staged-installed/vm'); root.mkdir(parents=True,exist_ok=True)
+ if a.evidence_dir:
+  assert a.fresh_remote_only or a.released_remote_only, 'explicit evidence directory is Remote-only'
+  selected=P(os.path.abspath(a.evidence_dir));owned=(repo/'.evidence').absolute()
+  assert selected.is_relative_to(owned) and selected!=owned, 'Remote evidence must stay under the existing ignored evidence root'
+  for component in [selected,*selected.parents]:
+   if component==repo:break
+   assert not component.is_symlink(), 'Remote evidence path cannot follow a symlink'
+  root=selected;root.mkdir(mode=0o700,parents=True,exist_ok=True)
  assert os.path.exists('/dev/kvm') and os.access('/dev/kvm',os.R_OK|os.W_OK),'KVM staged acceptance prerequisite unavailable'
 if a.maintenance_only:
  root=repo/'.evidence/b01-connected-install/vm'; root.mkdir(parents=True,exist_ok=True)
@@ -118,7 +130,7 @@ if not a.resume:
   data=(work/'user-data').read_text()
   users=''
   public=(work/'ssh-key.pub').read_text().strip()
-  for name,uid in ([] if a.fresh_remote_only else [('fased-local',1100),('fased-fresh',1400)] if a.released_local_only else [('fased-local',1100),('fased-remote',1200),('fased-legacy',1300)]):
+  for name,uid in ([] if a.fresh_remote_only or a.released_remote_only else [('fased-local',1100),('fased-fresh',1400)] if a.released_local_only else [('fased-local',1100),('fased-remote',1200),('fased-legacy',1300)]):
    users+='   - name: '+name+'\n     uid: '+str(uid)+'\n     groups: [sudo]\n     shell: /bin/bash\n     lock_passwd: true\n     ssh_authorized_keys:\n       - '+public+'\n'
   if a.installed_agent:users+='   - name: fased-agent\n     uid: 1500\n     shell: /bin/bash\n     lock_passwd: true\n     ssh_authorized_keys:\n       - '+public+'\n'
   if not a.released_local_only:users+='   - name: root\n     lock_passwd: true\n     ssh_authorized_keys:\n       - '+public+'\n'
@@ -129,10 +141,24 @@ if not a.resume:
    extra+='       Defaults:'+name+' verifypw=any\n       '+name+' ALL=(root) NOPASSWD: '+utilities+'\n'
    if name in ('fased-remote','fased-legacy') and not a.released_local_only:
     extra+='       '+name+' ALL=(root) NOPASSWD: '+provider_credential_setup+'\n'
-  if a.fresh_remote_only:
+  if a.fresh_remote_only or a.released_remote_only:
    extra+='       ubuntu ALL=(root) NOPASSWD: /usr/bin/tailscale status --json, /usr/bin/tailscale debug prefs, /usr/bin/tailscale login --timeout=120s, /usr/bin/tailscale set --operator=ubuntu, /usr/bin/tailscale logout\n'
   data=data.replace(' packages:',extra+' packages:').replace('nftables]', 'nftables, polkitd, curl, ca-certificates, openssl, iproute2]')
   if a.installed_agent:data=data.replace('iproute2]', 'iproute2, dbus-user-session, gnome-keyring]')
+  if a.fresh_remote_only or a.released_remote_only:
+   # Independent local serial recovery is disposable-VM-only. No network login
+   # or root shell is added; it is the same ordinary Ubuntu operator.
+   data=data.replace(' packages:', '''   - path: /etc/systemd/system/serial-getty@ttyS0.service.d/fased-console.conf
+     owner: root:root
+     permissions: '0644'
+     content: |
+       [Service]
+       ExecStart=
+       ExecStart=-/sbin/agetty --autologin ubuntu --noclear %I $TERM
+ runcmd:
+   - [systemctl, daemon-reload]
+   - [systemctl, restart, serial-getty@ttyS0.service]
+ packages:''')
   (work/'user-data').write_text(data)
  if a.maintenance_only:
   # One fixed root OS switcher for the controlling ubuntu fixture. It drops to
@@ -153,24 +179,30 @@ if not a.resume:
  run(['qemu-img','resize',str(work/'disk.qcow2'),'12G'])
 with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
 kvm=os.path.exists('/dev/kvm') and os.access('/dev/kvm',os.R_OK|os.W_OK)
-serial=(root/'vm-serial.log').open('ab' if a.fresh_remote_only and a.resume else 'wb');stderr=(root/'qemu.stderr').open('ab' if a.fresh_remote_only and a.resume else 'wb')
+serial=(root/'vm-serial.log').open('ab' if (a.fresh_remote_only or a.released_remote_only) and a.resume else 'wb');stderr=(root/'qemu.stderr').open('ab' if a.fresh_remote_only and a.resume else 'wb')
 cmd=['qemu-system-x86_64','-machine','q35,accel='+('kvm' if kvm else 'tcg'),'-cpu','host' if kvm else 'max','-smp','2','-m','2048','-nographic','-monitor','none','-qmp',f'unix:{work}/qmp.sock,server=on,wait=off','-drive',f'file={work}/disk.qcow2,if=virtio,format=qcow2','-drive',f'file={work}/seed.iso,if=virtio,format=raw,readonly=on','-netdev',f'user,id=n,hostfwd=tcp:127.0.0.1:{port}-:22','-device','virtio-net-pci,netdev=n','-device','virtio-rng-pci','-smbios','type=1,serial=ds=nocloud']
 if a.installed_remote_update_only or a.staged_package_only:
  # These modes reboot through the guest, never QMP. Do not leave an unused
  # monitor socket behind when the snapshot lifecycle terminates QEMU.
  i=cmd.index('-qmp'); del cmd[i:i+2]
+console_dir_fd=None
+if a.staged_package_only and (a.fresh_remote_only or a.released_remote_only):
+ # AF_UNIX paths are limited to 108 bytes. An inherited owned directory FD
+ # keeps the existing private work directory without a public /tmp socket.
+ console_dir_fd=os.open(work,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+ cmd += ['-serial', 'unix:/proc/self/fd/'+str(console_dir_fd)+'/console.sock,server=on,wait=off']
 vm=None;tunnel=None;vm_stderr_start=0
 def start_vm():
  global vm,vm_stderr_start
  vm_stderr_start=stderr.tell()
- vm=subprocess.Popen(cmd,stdout=serial,stderr=stderr)
+ vm=subprocess.Popen(cmd,stdout=serial,stderr=stderr,pass_fds=(() if console_dir_fd is None else (console_dir_fd,)))
 def stop_vm():
  if a.staged_package_only and tunnel is not None and tunnel.poll() is None:
   tunnel.terminate();tunnel.wait(10)
  if vm is not None and vm.poll() is None:
   vm.kill();vm.wait(10)
 def disk_snapshot(name,restore=False):
- assert name in ['baseline','held-baseline','inspection-ready']
+ assert name in ['baseline','held-baseline','inspection-ready','remote-predecessor','remote-ui-result','remote-cli-result','remote-auto-result']
  stop_vm()
  if restore:
   run(['qemu-img','snapshot','-a',name,str(work/'disk.qcow2')])
@@ -178,7 +210,7 @@ def disk_snapshot(name,restore=False):
   listing=run(['qemu-img','snapshot','-l',str(work/'disk.qcow2')]).stdout.decode()
   if name in listing:run(['qemu-img','snapshot','-d',name,str(work/'disk.qcow2')])
   run(['qemu-img','snapshot','-c',name,str(work/'disk.qcow2')])
-if a.resume and not (a.inspection_only or a.fresh_remote_only):disk_snapshot('baseline',True)
+if a.resume and not (a.inspection_only or a.fresh_remote_only or a.released_remote_only):disk_snapshot('baseline',True)
 start_vm()
 def interrupted(signum, frame): raise KeyboardInterrupt("fixture runner interrupted")
 signal.signal(signal.SIGTERM, interrupted)
@@ -196,6 +228,10 @@ def check_vm_running():
   save('staged-vm-failure.json',{'returncode':code,'stderr':detail,'kvmDevice':device,'process':{'uid':os.geteuid(),'gid':os.getegid(),'groups':os.getgroups()}})
  raise RuntimeError('QEMU exited ('+str(code)+'): '+detail)
 def ready(timeout=300):
+ if a.staged_package_only and (a.fresh_remote_only or a.released_remote_only) and a.resume and (root/'remote-journey.json').exists():
+  journal=prerequisite.RemoteJourney(root/'remote-journey.json',prerequisite.binding(remote_candidate),local_acceptance_sha)
+  if journal.phases.index(journal.value['phase'])>=journal.phases.index('private-admin'):
+   private_remote_connection(prerequisite,journal.value['origin'],resume=True,connect=False)
  end=time.monotonic()+timeout
  while time.monotonic()<end:
   check_vm_running()
@@ -310,6 +346,128 @@ def shared_provider_helper(directory):
  # Normalize only this public fixture tool, never private state or all members.
  ssh('test -f '+path+' && test ! -L '+path+' && test "$(stat -c %u '+path+')" = "$(id -u)" && chmod 555 -- '+path,30)
 
+def remote_console(fixture):
+ # A real serial connection is independent of Tailscale, SSH and application
+ # authentication. Only trusted OS identity/read commands run in this shell.
+ import re
+ marker='FASED_CONSOLE_'+os.urandom(8).hex()
+ with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as connection:
+  connection.settimeout(2);connection.connect('/proc/self/fd/'+str(console_dir_fd)+'/console.sock')
+  command="\nprintf '\\n"+marker+":%s:%s\\n' \"$(/usr/bin/id -u)\" \"$(/usr/bin/cat /proc/sys/kernel/random/boot_id)\"\n"
+  connection.sendall(command.encode());output=b'';deadline=time.monotonic()+15
+  while time.monotonic()<deadline:
+   try:chunk=connection.recv(8192)
+   except socket.timeout:continue
+   if not chunk:break
+   output+=chunk
+   match=re.search(marker.encode()+rb':1000:([a-f0-9-]{36})\r?\n',output)
+   if match:
+    return {'result':'PASS','transport':'qemu-serial','uid':1000,'bootId':match[1].decode()}
+   if len(output)>65536:break
+ raise RuntimeError('independent ordinary-user console is not responsive; do not restrict access')
+
+def private_remote_connection(fixture,origin,*,resume=False,connect=True):
+ import shlex,urllib.parse,re
+ global sshbase
+ host=urllib.parse.urlsplit(origin).hostname
+ assert re.fullmatch(r'[a-z0-9-]+\.[a-z0-9-]+\.ts\.net',host or ''),'approved private DNS required'
+ known=work/'private-known-hosts'
+ if resume:
+  info=known.lstat()
+  assert not known.is_symlink() and known.is_file() and info.st_uid==os.getuid() and info.st_mode&0o777==0o600,'private administrator pin required'
+  row=known.read_text().strip().split();assert len(row)==3 and row[0]==host,'private administrator origin differs'
+  public=row[1:]
+ else:public=ssh('cat /etc/ssh/ssh_host_ed25519_key.pub',15).split()
+ assert len(public)>=2 and public[0]=='ssh-ed25519' and re.fullmatch(r'[A-Za-z0-9+/=]+',public[1]),'actual host key required'
+ line=host+' '+public[0]+' '+public[1]+'\n'
+ if known.exists():assert known.read_text()==line,'private administrator host key changed'
+ else:known.write_text(line);known.chmod(0o600)
+ private=['ssh','-F','/dev/null','-o','BatchMode=yes','-o','ControlMaster=no','-o','ControlPath=none','-i',str(key),'-o','IdentitiesOnly=yes','-o','StrictHostKeyChecking=yes','-o','UserKnownHostsFile='+str(known),'-o','ConnectTimeout=5','ubuntu@'+host]
+ if connect:assert run(private+['id -u'],timeout=15).stdout.strip()==b'1000','private ordinary administrator required'
+ sshbase=private
+ return private
+
+def complete_remote_security(fixture,candidate,receipt,journal,observed,guest_call,owner_call,browser,reboot):
+ """Complete one real persistent node; never infer security from installation."""
+ origin=observed['origin'];instance=receipt['instanceId']
+ claim=browser('claim',observed['private']) if journal.value['phase']=='installed' and not observed.get('preservedOwner') else browser('preserve')
+ assert claim['instanceId']==instance and claim['protectedOwnerDevice'] is True,'actual protected owner device required'
+ assert claim['ownerState']['remoteEnrolled'] is True and claim['ownerState']['authenticated'] is True
+ journal.advance('owner')
+ owner_call('adopt',candidate['packet']['productVersion'])
+ current=owner_call('metadata');before_path=root/'remote-metadata-before.json'
+ assert current['engineSha256']==fixture.package_engine_sha(candidate),'unmodified bound shipping engine required'
+ if before_path.exists():
+  before=fixture.document(before_path)
+  assert current['passwordRecordSha256']==before['passwordRecordSha256'] and current['manifest']['id']==before['manifest']['id'],'retained owner metadata changed'
+ else:before=current;save('remote-metadata-before.json',before)
+ private_remote_connection(fixture,origin);journal.advance('private-admin')
+ console=remote_console(fixture);assert console['bootId']==current['bootId']
+ if not (root/'remote-console.json').exists():save('remote-console.json',console)
+ journal.advance('console')
+ probe_path=root/'remote-public-baseline.json'
+ live_probe=guest_call(['public-probe-prepare'])
+ if probe_path.exists():baseline=fixture.document(probe_path)
+ else:
+  baseline=live_probe;save('remote-public-baseline.json',baseline)
+ assert all(baseline[f]['reachable'] and baseline[f]['exit']==0 for f in ('ipv4','ipv6')),'both public families must be reachable before the new restriction'
+ def blocked(label):
+  probe=guest_call(['public-probe']);save(label+'.json',probe)
+  assert all(not probe[f]['reachable'] and probe[f]['exit']!=0 for f in ('ipv4','ipv6')),'new public SSH connections were reachable'
+  assert browser('preserve')['protectedOwnerDevice'] is True,'fresh private UI connection failed'
+ if journal.phases.index(journal.value['phase'])<journal.phases.index('restricted'):
+  status=owner_call('network-network')
+  if status['phase']=='pending':
+   # An interrupted probe resumes through the existing rollback entry, never
+   # replaces a pending transaction with an invented success record.
+   owner_call('network-rollback')
+  if status['phase']=='committed':
+   pending=fixture.document(root/'remote-pending.json');rolled=fixture.document(root/'remote-rollback-recovery.json')
+   assert status['attemptId']==pending['attemptId'] and all(rolled[f]['reachable'] and rolled[f]['exit']==0 for f in ('ipv4','ipv6')),'preserve an unrecorded restriction for review'
+   blocked('remote-resumed-committed-denial');committed=status
+  else:
+   pending=owner_call('network-harden');assert pending['phase']=='pending';save('remote-rollback-pending.json',pending)
+   blocked('remote-rollback-denial')
+   owner_call('network-rollback')
+   rolled=guest_call(['public-probe']);save('remote-rollback-recovery.json',rolled)
+   assert all(rolled[f]['reachable'] and rolled[f]['exit']==0 for f in ('ipv4','ipv6')),'actual rollback did not recover public access'
+   pending=owner_call('network-harden');assert pending['phase']=='pending';save('remote-pending.json',pending)
+   blocked('remote-pending-denial')
+   # owner_call uses a new nonmultiplexed private SSH TCP connection each time.
+   committed=owner_call('network-finish');assert committed['phase']=='committed' and committed['attemptId']==pending['attemptId']
+  save('remote-committed.json',committed);journal.advance('restricted')
+ blocked('remote-committed-denial')
+ # Every invocation is short-lived; no SSH tunnel or session remains. The
+ # independent delivery process and installed app/maintainer continue alone.
+ journal.advance('disconnected')
+ assert browser('auth-cycle')['logoutSignIn'] is True
+ boot_path=root/'remote-kernel-reboot.json'
+ if journal.phases.index(journal.value['phase'])<journal.phases.index('rebooted'):
+  boot=reboot();assert boot['before']!=boot['after'];save('remote-kernel-reboot.json',boot);journal.advance('rebooted')
+ else:boot=fixture.document(boot_path)
+ assert browser('reconnect')['reconnected'] is True
+ after=owner_call('metadata');save('remote-metadata-after.json',after)
+ assert before['passwordRecordSha256']==after['passwordRecordSha256'],'original password record changed'
+ assert before['serve']==after['serve'],'foreign or owned Serve configuration changed'
+ assert before['foreignFirewallSha256']==after['foreignFirewallSha256'],'foreign firewall rules changed'
+ assert before['manifest']['appUid']==after['manifest']['appUid'] and before['manifest']['appGid']==after['manifest']['appGid']
+ journal.enrolled(after['tailnet'],after['tailnet']['MagicDNSSuffix'])
+ assert remote_console(fixture)['bootId']==after['bootId'],'independent console recovery failed after reboot'
+ assert owner_call('network-network')['phase']=='committed','restriction did not survive reboot'
+ # Network namespaces are deliberately volatile; fresh dual-stack connections
+ # must still be denied by the persisted product firewall after reboot.
+ post=guest_call(['public-probe-prepare']);save('remote-reboot-public-denial.json',post)
+ assert all(not post[f]['reachable'] and post[f]['exit']!=0 for f in ('ipv4','ipv6'))
+ check=browser('check');cli=owner_call('check')
+ assert check['uiOutcome']=='alreadyCurrent' and cli['cliOutcome']=='alreadyCurrent' and cli['passwordPrompt'] is False
+ journal.advance('current')
+ checks={name:'PASS' for name in fixture.STAGED_ACCEPTANCE_CONTRACT['remoteCommon']}
+ checks['alreadyCurrent']='PASS'
+ return {**receipt,'result':'PASS','scenario':'fresh','localReceiptSha256':receipt['localAcceptanceSha256'],
+         'ownerAuthMode':'tailscale-device-v1','sshControlSessionRequired':False,'passwordPrompt':False,
+         'checks':{**receipt['checks'],**checks},'evidenceFiles':['remote-metadata-before.json','remote-metadata-after.json','remote-console.json','remote-public-baseline.json','remote-rollback-recovery.json','remote-committed.json','remote-kernel-reboot.json','remote-reboot-public-denial.json'],
+         'publicAcceptance':False}
+
 def staged_package_acceptance():
  import importlib.util, shlex
  spec=importlib.util.spec_from_file_location('fased_staged_guest',repo/'scripts/staged-package-guest.py')
@@ -317,11 +475,11 @@ def staged_package_acceptance():
  packages={k:fixture.package(v) for k,v in [('candidate',a.candidate),('predecessor',a.predecessor),('legacy',a.legacy_predecessor)]}
  target=packages['candidate']['packet'];version=target['productVersion']
  assert target['version']==2 and packages['predecessor']['packet']['version']==2
- if not (a.released_local_only or a.fresh_remote_only):assert packages['predecessor']['packet']['productVersion']=='0.1.4'
- if not (a.released_local_only or a.fresh_remote_only):assert packages['legacy']['packet']['version']==1 and packages['legacy']['packet']['productVersion']=='0.1.5'
+ if not (a.released_local_only or a.fresh_remote_only or a.released_remote_only):assert packages['predecessor']['packet']['productVersion']=='0.1.4'
+ if not (a.released_local_only or a.fresh_remote_only or a.released_remote_only):assert packages['legacy']['packet']['version']==1 and packages['legacy']['packet']['productVersion']=='0.1.5'
  for field in ['source','productVersion']:
   assert isinstance(target[field],str)
- for field in ([] if a.released_local_only else ['source','sourceTree','runId','runAttempt']):
+ for field in ([] if a.released_local_only or a.released_remote_only else ['source','sourceTree','runId','runAttempt']):
   left=target if field=='source' else target['release'];right=packages['predecessor']['packet'] if field=='source' else packages['predecessor']['packet']['release']
   assert left[field]==right[field],'compatibility fixture must have the exact target source/run identity'
  result={**fixture.binding(packages['candidate']),'result':'FAIL','fixtureOnly':True,'mining':False,'liveFeatures':False,'automaticUpdates':False,'checks':{},'profiles':{}}
@@ -331,7 +489,7 @@ def staged_package_acceptance():
  host_browser=staged_browser_directory(work,a.resume)
  def guest_call(args,owner='ubuntu',timeout=360):
   command='FASED_DISPOSABLE_VM=1 python3 '+shlex.quote(guest+'/scripts/staged-package-guest.py')+' '+shlex.join(args)
-  connection=sshbase[:-1]+[owner+'@127.0.0.1',command]
+  connection=sshbase[:-1]+[owner+'@'+sshbase[-1].split('@',1)[1],command]
   reply=subprocess.run(connection,timeout=timeout,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
   return fixture.checked_reply(reply,owner,args[0],root/'staged-owner-failure.json')
  def owner_call(profile,action,expected=None):
@@ -369,11 +527,44 @@ def staged_package_acceptance():
    except (subprocess.SubprocessError,OSError):pass
    time.sleep(1)
   else:raise RuntimeError('disposable Remote reboot did not complete')
-  ready(60);guest_call(['network','--work',remote_work]);start_tunnel()
+  ready(60);guest_call(['network','--work',remote_work])
+  if not (a.fresh_remote_only or a.released_remote_only):start_tunnel()
   return {'before':previous,'after':current}
+ def remote_browser_factory(origin,instance,expected,predecessor=None):
+  def invoke(action,link=None):
+   if action=='claim' and predecessor:
+    save('released-private-https-readiness.json',fixture.wait_private_https(origin))
+   cfg={'fixtureOnly':True,'action':action,'transport':'tailscale-https','expectedOrigin':origin,'instanceId':instance,
+        'url':link or origin+'/?instance='+instance,'version':expected,
+        'storageFile':str(host_browser/'private-storage.json'),'baselineFile':str(host_browser/'private-baseline.json')}
+   if predecessor:
+    cfg.update(fromVersion=predecessor['version'],predecessor=predecessor)
+    if action=='claim':cfg['legacyRemotePasswordSetup']=True
+    else:cfg['ownerAuthMode']='existing-password-account-preserved'
+   if action=='automatic-update':cfg['closeForAutomatic']=True
+   if action in ('ui-update','automatic-update'):
+    cfg['entryObservationFile']=str(host_browser/(action+'-issued.json'))
+    cfg['evidenceBinding']={**fixture.binding(packages['candidate']),'localReceiptSha256':local_acceptance_sha,'instanceId':instance}
+   path=host_browser/'private-request.json';fixture.write_private(path,cfg)
+   reply=subprocess.run(['node','scripts/staged-package-browser.mjs',str(path)],timeout=360,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+   value=fixture.checked_reply(reply,'private','browser-'+action,root/'staged-browser-failure.json')
+   assert value['result']=='PASS';save('remote-browser-'+action+'.json',value);return value
+  return invoke
+ def finish_fresh(receipt,journal,observed):
+  baseline=host_browser/'private-baseline.json'
+  if baseline.exists():
+   original=fixture.document(baseline)
+   assert original['instanceId']==receipt['instanceId'] and original['sourceVersion']==version,'preserve a foreign or older owner baseline'
+   observed={**observed,'preservedOwner':True}
+  remote_browser=remote_browser_factory(observed['origin'],receipt['instanceId'],version)
+  def private_owner(action,expected=None):return owner_call('private',action,expected)
+  final=complete_remote_security(fixture,packages['candidate'],receipt,journal,observed,guest_call,private_owner,remote_browser,reboot)
+  final.pop('remaining',None)
+  save('remote-fresh-acceptance.json',final);return final
  payload=work/'staged-payload.tar'
  with tarfile.open(payload,'w') as arc:
   for name in ['staged-package-guest.py','staged-acceptance-contract.json']:arc.add(repo/'scripts'/name,'scripts/'+name)
+  if a.released_remote_only:arc.add(repo/'internal/hostprep/tailscale-noble-key.gpg','scripts/tailscale-noble-key.gpg')
   if a.installed_agent:arc.add(provider_helper,'fased-release-fixture')
   for label,value in packages.items():
    directory=P(value['directory'])
@@ -381,18 +572,21 @@ def staged_package_acceptance():
    seed=directory/'first-install-seed.json'
    if seed.exists():arc.add(seed,'packages/'+label+'/first-install-seed.json')
  result['inputs']={name:{'source':v['packet']['source'],'version':v['packet']['productVersion'],'artifactSetSha256':fixture.binding(v)['artifactSetSha256']} for name,v in packages.items()}
- with payload.open('rb') as stream:run(sshbase+['umask 077; mkdir '+('-p -- ' if a.fresh_remote_only and a.resume else '-- ')+guest+'; tar -xf - -C '+guest],stdin=stream,timeout=120)
+ with payload.open('rb') as stream:run(sshbase+['umask 077; mkdir '+('-p -- ' if (a.fresh_remote_only or a.released_remote_only) and a.resume else '-- ')+guest+'; tar -xf - -C '+guest],stdin=stream,timeout=120)
  if a.installed_agent:shared_provider_helper(guest)
  # Private disposable source is readable by the three fixture owners. They
  # execute as themselves; only the verified shell entry's OS bootstrap is root.
  ssh('chmod 755 '+guest+' '+guest+'/scripts '+guest+'/packages; chmod -R a+rX '+guest+'/packages '+guest+'/scripts',30)
- guest_call(['setup',*(['--resume'] if a.fresh_remote_only and a.resume else []),'--work',remote_work,'--candidate',guest+'/packages/candidate','--predecessor',guest+'/packages/predecessor','--legacy',guest+'/packages/legacy',*(['--released-local-only'] if a.released_local_only or a.fresh_remote_only else [])])
+ retained_delivery=(a.fresh_remote_only or a.released_remote_only) and a.resume and ssh('test -f '+shlex.quote(remote_work+'/fixture.json')+' && echo retained || echo new',15).strip()=='retained'
+ guest_call(['setup',*(['--resume'] if retained_delivery else []),'--work',remote_work,'--candidate',guest+'/packages/candidate','--predecessor',guest+'/packages/predecessor','--legacy',guest+'/packages/legacy',*(['--released-local-only'] if a.released_local_only or a.fresh_remote_only or a.released_remote_only else [])])
  for label in ['candidate','predecessor']:
   # Original public assets are shared by the ordinary fixture owners. Keep
   # them readable/executable, without granting any owner write permission.
   ssh('chmod 555 '+guest+'/packages/'+label+'/fased-install-linux-amd64 && '+guest+'/packages/'+label+'/fased-install-linux-amd64 --verify-candidate '+guest+'/packages/'+label,90)
+ if a.released_remote_only:
+  return released_remote_acceptance(fixture,packages,guest,remote_work,host_browser,guest_call,owner_call,select_package,remote_browser_factory,reboot)
  if a.fresh_remote_only:
-  select_package('candidate');return fresh_remote_acceptance(fixture,packages['candidate'],guest,remote_work,local_acceptance_sha)
+  select_package('candidate');return fresh_remote_acceptance(fixture,packages['candidate'],guest,remote_work,local_acceptance_sha,complete=finish_fresh)
  start_tunnel();select_package('predecessor')
  installed={}
  installed['local']=owner_call('local','install',packages['predecessor']['packet']['productVersion'])
@@ -548,7 +742,192 @@ def staged_package_acceptance():
  save('installed-acceptance.json',result)
  return result
 
-def fresh_remote_acceptance(fixture,candidate,guest,remote_work,local_receipt_sha):
+def released_remote_acceptance(fixture,packages,guest,remote_work,host_browser,guest_call,owner_call,select_package,browser_factory,reboot):
+ """Real released baseline, isolated sequential entry branches, original bytes."""
+ import re,urllib.parse
+ target=packages['candidate'];pred=packages['predecessor'];packet=pred['packet'];version=target['packet']['productVersion']
+ assert packet['version']==2 and packet['productVersion']=='0.1.6' and packet['source']=='738bd835b8c86c7cf7b3abfb2945240635f51fe7'
+ assert fixture.binding(pred)['artifactSetSha256']=='aea00a0d9e1b7ed05a1346428cdf8cc277cbe40f93cfcd86d40fc9b45c559460','actual public predecessor required'
+ assert version!=packet['productVersion'],'a no-op cannot demonstrate replacement'
+ predecessor={'version':packet['productVersion'],'source':packet['source'],'artifactSetSha256':fixture.binding(pred)['artifactSetSha256'],'packetVersion':2,'ownerAuthMode':'password-v1'}
+ base_path=root/'remote-predecessor.json'
+ if not base_path.exists():
+  select_package('predecessor')
+  tail=guest_call(['tailnet-prepare','--work',remote_work])
+  if tail.get('BackendState')!='Running':
+   def enrollment(text):
+    links=re.findall(r'https://login\.tailscale\.com/a/[A-Za-z0-9]+',text)
+    if links:
+     fixture.write_private(root/'enrollment.json',{'url':links[-1],'waitingForOwner':True,'realDaemon':True,'parent':'released-remote'})
+     if not getattr(enrollment,'announced',False):
+      print('Released Remote: connect this disposable parent using private enrollment.json',flush=True);enrollment.announced=True
+   def begin_enrollment():
+    fixture.terminal(sshbase[:-1]+['-tt',sshbase[-1],'sudo -n /usr/bin/tailscale login --timeout=120s'],{},timeout=180,password_free=True,observer=enrollment,transcript=root/'tailnet-login.log')
+   tail=fixture.await_tailnet_enrollment(lambda:json.loads(ssh('tailscale status --json',15)),begin_enrollment,enrollment)
+   fixture.write_private(root/'enrollment.json',{'waitingForOwner':False,'realDaemon':True,'parent':'released-remote','nodeIdentitySha256':fixture.digest(tail['Self']['ID'].encode())})
+  host_tail=json.loads(run(['tailscale','status','--json'],timeout=15).stdout)
+  origin=fixture.private_tailnet_origin(tail,host_tail['MagicDNSSuffix'])
+  # This reconstructs the actual older release, not today's fresh wizard. Its
+  # initial password is synthetic and is never supplied to Update.
+  entry='bash <(curl -fsSL https://github.com/fased-ai/fased-app/releases/download/v0.1.6/install.sh) --remote --operator ubuntu --listen 127.0.0.1:17482'
+  answers={'Private access [':'tailscale','Use a dedicated app account':'y','Keep Fased running':'y','Start Fased at login?':'y',fixture.RemoteEnrollmentRetry.setup_prompt:'y',**fixture.PREPARATION_ANSWERS}
+  present=ssh('test -e /var/lib/fased-app-vps-1000 && echo present || echo absent',15).strip()=='present'
+  if present:
+   assert a.resume,'existing installation requires explicit resume'
+   assert json.loads(ssh('fased status',30))['installed'] is True,'preserve the existing incomplete installation for recovery'
+  else:
+   code,output=fixture.terminal(sshbase[:-1]+['-tt','root@127.0.0.1',entry],answers,timeout=360,password_free=True,transcript=root/'released-entry.log')
+   assert code==0,'actual released Remote installation failed; preserve this baseline'
+  opened=owner_call('private','open');link=opened['url'];address=urllib.parse.urlsplit(link)
+  assert address.scheme+'://'+address.netloc==origin,'actual older private browser entry required'
+  instance=urllib.parse.parse_qs(address.query).get('instance',[]);assert len(instance)==1
+  if not (host_browser/'private-baseline.json').exists():
+   claimed=browser_factory(origin,instance[0],packet['productVersion'],predecessor)('claim',link)
+   assert claimed['legacyInitialPasswordSetup'] is True
+  owner_call('private','adopt',packet['productVersion']);owner_call('private','login')
+  metadata=owner_call('private','metadata')
+  assert metadata['engineSha256']==fixture.package_engine_sha(pred),'actual original predecessor engine required'
+  base={'binding':fixture.binding(target),'localReceiptSha256':local_acceptance_sha,'predecessor':predecessor,'instanceId':instance[0],'origin':origin,
+        'nodeIdentitySha256':fixture.digest(tail['Self']['ID'].encode()),'metadata':metadata}
+  for name in ('private-storage.json','private-baseline.json'):
+   shutil.copyfile(host_browser/name,host_browser/('predecessor-'+name));(host_browser/('predecessor-'+name)).chmod(0o600)
+  # Clean shutdown before freezing the declared test-only predecessor. Each
+  # completed branch is retained separately; no accepted owner disk is reset.
+  subprocess.run(sshbase+['sudo -n -- /usr/bin/systemctl poweroff'],capture_output=True,timeout=15)
+  vm.wait(45);disk_snapshot('remote-predecessor');fixture.write_private(base_path,base)
+ else:
+  base=fixture.document(base_path)
+  assert base['binding']==fixture.binding(target) and base['localReceiptSha256']==local_acceptance_sha and base['predecessor']==predecessor,'original baseline/package binding changed'
+ origin,instance=base['origin'],base['instanceId']
+ def restore():
+  # Explicit isolated sequential predecessor branches only, never a downgrade
+  # of fased-upgrade, the working VPS, or a retained accepted owner instance.
+  disk_snapshot('remote-predecessor',True);start_vm();ready(90)
+  guest_call(['network','--work',remote_work]);select_package('candidate')
+  for name in ('private-storage.json','private-baseline.json'):
+   shutil.copyfile(host_browser/('predecessor-'+name),host_browser/name);(host_browser/name).chmod(0o600)
+ def retain(name):
+  ssh('sync',15)
+  subprocess.run(sshbase+['sudo -n -- /usr/bin/systemctl poweroff'],capture_output=True,timeout=15)
+  vm.wait(45)
+  listing=run(['qemu-img','snapshot','-l',str(work/'disk.qcow2')]).stdout.decode()
+  if name not in listing:disk_snapshot(name)
+ browser=browser_factory(origin,instance,version,predecessor)
+ def private_owner(action,expected=None):return owner_call('private',action,expected)
+ def bound_metadata():
+  value=private_owner('metadata')
+  assert value['passwordRecordSha256']==base['metadata']['passwordRecordSha256'],'original password record changed'
+  assert fixture.digest(value['tailnet']['Self']['ID'].encode())==base['nodeIdentitySha256'],'parent Tailscale node changed'
+  assert value['manifest']['appUid']==base['metadata']['manifest']['appUid'],'app identity changed'
+  assert value['engineSha256']==fixture.package_engine_sha(target),'actual original candidate engine required'
+  return value
+ journal=fixture.RemoteJourney(root/'remote-journey.json',fixture.binding(target),local_acceptance_sha)
+ def bind(value):return fixture.bind_remote_observation(value,target,local_acceptance_sha,instance)
+ def loaded(path):return fixture.read_remote_observation(path,target,local_acceptance_sha,instance)
+ def start_branch(name):
+  phase=journal.begin_branch(name)
+  if phase=='preparing':
+   restore();journal.activate_branch(name);return False
+  if phase=='active':
+   # Never restore an active branch. Reconcile the retained OS and real core
+   # operation before inspecting its original entry observations.
+   ready(90);guest_call(['network','--work',remote_work]);select_package('candidate');return True
+  return True
+ def reconcile(name):
+  state=private_owner('state');operation=fixture.completed_remote_application(state,version,name=='automatic')
+  inspected=browser('inspect')
+  assert inspected['preservation'] is True and inspected['instanceId']==instance
+  if name=='ui':
+   issued=loaded(host_browser/'ui-update-issued.json')
+   assert issued['observedApplyRequest'] is True and issued['operationId']==operation['id']
+   assert issued['fromVersion']==predecessor['version'] and issued['version']==version and issued['manifestSha256']==operation['receipt']['manifestSha256']
+   return {**inspected,'uiOutcome':'applied','operation':operation,'applicationState':state,
+           'appliedManifestSha256':operation['receipt']['manifestSha256'],'fromVersion':predecessor['version']}
+  if name=='cli':
+   entry=state.get('fixtureCLIEntry',{})
+   assert entry=={'instanceId':instance,'fromVersion':predecessor['version'],'targetVersion':version,'argv':['fased','update']},'original CLI invocation proof is missing'
+   return {'result':'PASS','instanceId':instance,'cliOutcome':'applied','passwordPrompt':False,
+           'health':{'instanceId':instance,'version':version},'operation':operation}
+  issued=loaded(host_browser/'automatic-update-issued.json')
+  assert issued['policyWasAutomatic'] is True and issued['browserClosedDuringApply'] is True and issued['fromVersion']==predecessor['version'] and issued['version']==version
+  if state.get('policy',{}).get('mode','manual')!='manual' or state.get('activationEnabled'):
+   inspected=browser('automatic-restore');state=private_owner('state')
+  observed={**inspected,'automaticOutcome':'applied','automaticOperation':{'id':operation['id'],'automatic':True,'receipt':operation['receipt']},
+            'fromVersion':predecessor['version'],'policyRestored':'manual','customerActivation':False,'browserClosedDuringApply':True,'appliedManifestSha256':operation['receipt']['manifestSha256']}
+  return {**security,'browser':observed,'postUpdateState':state,'ownedSSHSessionDuringApply':False,'sshControlSessionRequired':False}
+ ui_path=root/'remote-ui-apply.json';security_path=root/'remote-upgrade-security.json'
+ phase=journal.value.get('replacementBranch',{})
+ if phase.get('name') in ('cli','automatic') or phase.get('phase')=='completed':
+  ui=loaded(ui_path);security=loaded(security_path)
+ else:
+  resuming=start_branch('ui')
+  if ui_path.exists():ui=loaded(ui_path)
+  else:
+   ui=bind(reconcile('ui') if resuming else browser('ui-update'))
+   fixture.completed_remote_application(ui['applicationState'],version,False);save('remote-ui-apply.json',ui)
+  fixture.completed_remote_application(ui['applicationState'],version,False)
+  if security_path.exists():security=loaded(security_path)
+  else:
+   previous=bound_metadata();private_owner('restart');restarted=bound_metadata()
+   assert previous['service']['MainPID']!=restarted['service']['MainPID'],'actual service restart missing'
+   save('remote-service-restart.json',{'beforePID':previous['service']['MainPID'],'afterPID':restarted['service']['MainPID']})
+   journal.enrolled(restarted['tailnet'],restarted['tailnet']['MagicDNSSuffix']);journal.advance('private-browser');journal.advance('installed',instance_id=instance)
+   receipt={**fixture.binding(target),'result':'FAIL','fixtureOnly':True,'mining':False,'liveFeatures':False,'automaticUpdates':False,
+            'localAcceptanceSha256':local_acceptance_sha,'instanceId':instance,'nodeIdentitySha256':base['nodeIdentitySha256'],'transport':'tailscale-https','normalTLS':True,'checks':{}}
+   security=complete_remote_security(fixture,target,receipt,journal,{'origin':origin,'private':origin+'/?instance='+instance,'preservedOwner':True},guest_call,private_owner,browser,reboot)
+   security.update(ownerEnrollment='existing-owner-ui-v1');bound_metadata()
+   security['checks']['authenticationPreservation']='PASS'
+   save('remote-upgrade-security.json',bind(security))
+  retain('remote-ui-result');journal.finish_branch('ui',ui['operation']['id'])
+ # Always revalidate previously saved raw completion, not only its PASS label.
+ fixture.completed_remote_application(ui['applicationState'],version,False)
+ assert ui['operation']['id']==ui['applicationState']['operation']['id']
+ cli_path=root/'remote-cli-apply.json'
+ phase=journal.value.get('replacementBranch',{})
+ if phase.get('name')=='automatic' or phase.get('name')=='cli' and phase.get('phase')=='completed':cli=loaded(cli_path)
+ else:
+  resuming=start_branch('cli')
+  if cli_path.exists():cli=loaded(cli_path)
+  else:
+   cli=bind(reconcile('cli') if resuming else private_owner('apply',version));save('remote-cli-apply.json',cli)
+  assert cli['cliOutcome']=='applied' and cli['passwordPrompt'] is False
+  fixture.completed_remote_application({'installedVersion':version,'operation':cli['operation']},version,False)
+  assert browser('preserve')['preservation'] is True;bound_metadata()
+  assert cli['operation']['receipt']['manifestSha256']==ui['appliedManifestSha256'],'UI/CLI applied different packets'
+  retain('remote-cli-result');journal.finish_branch('cli',cli['operation']['id'])
+ fixture.completed_remote_application({'installedVersion':version,'operation':cli['operation']},version,False)
+ automatic_path=root/'remote-automatic-apply.json'
+ phase=journal.value.get('replacementBranch',{})
+ if phase.get('name')=='automatic' and phase.get('phase')=='completed':automatic=loaded(automatic_path)
+ else:
+  resuming=start_branch('automatic')
+  if automatic_path.exists():automatic=loaded(automatic_path)
+  elif resuming:automatic=bind(reconcile('automatic'));save('remote-automatic-apply.json',automatic)
+  else:
+   private_remote_connection(fixture,origin)
+   assert tunnel is None or tunnel.poll() is not None,'no owned SSH tunnel/session may remain during Automatic'
+   automatic_browser=browser('automatic-update');assert automatic_browser['browserClosedDuringApply'] is True
+   state=private_owner('state');fixture.completed_remote_application(state,version,True)
+   assert state.get('activationEnabled') is False and state.get('policy',{}).get('mode','manual')=='manual'
+   bound_metadata()
+   automatic=bind({**security,'browser':automatic_browser,'postUpdateState':state,'ownedSSHSessionDuringApply':False,'sshControlSessionRequired':False})
+   save('remote-automatic-apply.json',automatic)
+  fixture.completed_remote_application(automatic['postUpdateState'],version,True)
+  retain('remote-auto-result');journal.finish_branch('automatic',automatic['browser']['automaticOperation']['id'])
+ manual={**fixture.binding(target),'localReceiptSha256':local_acceptance_sha,'instanceId':instance,'nodeIdentitySha256':base['nodeIdentitySha256'],
+         'result':'PASS','scenario':'manual-remote-replacement','ownerAuthMode':'existing-password-account-preserved','fixtureOnly':True,
+         'mining':False,'liveFeatures':False,'automaticUpdates':False,'predecessor':predecessor,'upgradeApplied':True,'updatePasswordPrompt':False,
+         'uiOutcome':ui['uiOutcome'],'cliOutcome':cli['cliOutcome'],'uiOperationId':ui['operation']['id'],'cliOperationId':cli['operation']['id'],
+         'manifestSha256':ui['appliedManifestSha256'],'checks':{'actualPublicPredecessor':'PASS','authenticationPreservation':'PASS','uiApply':'PASS','cliApply':'PASS','serviceRestart':'PASS','distinctEntryOperations':'PASS'}}
+ assert len({manual['uiOperationId'],manual['cliOperationId'],automatic['browser']['automaticOperation']['id']})==3
+ save('remote-manual-apply.json',manual)
+ request_path=host_browser/'remote-upgrade-receipt-request.json'
+ fixture.write_private(request_path,{'action':'remote-upgrade-receipt','manual':manual,'security':security,'automatic':automatic,'predecessor':packet})
+ reply=run(['node','scripts/staged-package-browser.mjs',str(request_path)],timeout=30)
+ result=json.loads(reply.stdout);assert result['result']=='PASS';save('remote-upgrade-acceptance.json',result)
+ return result
+
+def fresh_remote_acceptance(fixture,candidate,guest,remote_work,local_receipt_sha,complete=None):
  # Run the actual official shell entry. Only HTTPS delivery is controlled;
  # Tailscale packages, daemon, enrollment, identity and private TLS are real.
  import re,shlex,os
@@ -597,10 +976,28 @@ def fresh_remote_acceptance(fixture,candidate,guest,remote_work,local_receipt_sh
     assert parsed.scheme+'://'+parsed.netloc==observed['origin'] and parsed.path=='/','unexpected private browser origin'
     observed['preflight']=link
     request=root/'private-preflight-request.json'
-    fixture.write_private(request,{'fixtureOnly':True,'action':'private-preflight','url':link,'expectedOrigin':observed['origin']})
+    fixture.write_private(request,{'fixtureOnly':True,'action':'private-preflight','url':link,'expectedOrigin':observed['origin'],
+                                   'diagnosticFile':str(root/'private-preflight-response.json'),'screenshotFile':str(root/'private-preflight.png')})
+    save('private-https-readiness.json',fixture.wait_private_https(observed['origin']))
     print('Fresh Remote: verifying private browser access before deployment',flush=True)
     reply=subprocess.run(['node','scripts/staged-package-browser.mjs',str(request)],timeout=360,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     fixture.write_private(root/'private-preflight-browser.json',{'returncode':reply.returncode,'stdout':fixture.redacted(reply.stdout.decode(errors='replace')),'stderr':fixture.redacted(reply.stderr.decode(errors='replace'))})
+    if reply.returncode!=0:
+     # Capture transport evidence while this SAME preflight server is alive.
+     # These read-only diagnostics never approve the nonce or replace browser
+     # acceptance. No proxy, certificate or identity exception is installed.
+     diagnostic={}
+     try:
+      opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+      with opener.open(observed['origin']+'/',timeout=5) as response:
+       diagnostic['directHTTPS']={'status':response.status,'body':response.read(1500).decode(errors='replace')}
+     except urllib.error.HTTPError as error:diagnostic['directHTTPS']={'status':error.code,'body':error.read(1500).decode(errors='replace')}
+     except Exception as error:diagnostic['directHTTPS']={'error':fixture.redacted(str(error))}
+     for name,command in [('serve','tailscale serve status --json'),('tailscaled','sudo -n /usr/bin/systemctl status --no-pager tailscaled.service')]:
+      try:diagnostic[name]=fixture.redacted(ssh(command,15))[-8000:]
+      except subprocess.CalledProcessError as error:diagnostic[name]=fixture.redacted((error.stdout or b'').decode(errors='replace'))[-8000:]
+      except Exception as error:diagnostic[name]=fixture.redacted(str(error))
+     fixture.write_private(root/'private-preflight-transport.json',diagnostic)
     assert reply.returncode==0,'private browser check failed; inspect private-preflight-browser.json'
     proof=json.loads(reply.stdout)
     assert proof=={'result':'PASS','action':'private-preflight','privateBrowserApproved':True},'private browser approval was not confirmed'
@@ -618,6 +1015,7 @@ def fresh_remote_acceptance(fixture,candidate,guest,remote_work,local_receipt_sh
   'Keep Fased running after logout and reboot? [Y/n]: ':'y',
   'Set up Tailscale packages, service, browser sign-in and access for this OS user? [y/N]: ':'y',
   'Authorize this operation with sudo? [y/N]: ':'y',**fixture.PREPARATION_ANSWERS}
+ answers['Use the SSH public key from this bootstrap connection for private recovery? [Y/n]:']='y'
  try:
   if journal.phases.index(journal.value['phase'])>=journal.phases.index('installed'):
    # Resume the actual installation, not a snapshot or a second node.
@@ -671,6 +1069,9 @@ def fresh_remote_acceptance(fixture,candidate,guest,remote_work,local_receipt_sh
   # and independent console proof; never promote this narrower receipt.
   receipt.update(result='SUPPORTING',publicAcceptance=False,upgradeApplied=False,
                  remaining=['owner-device enrollment','private-admin and independent console recovery','public IPv4/IPv6 closure and rollback','actual predecessor UI/CLI upgrade','reboot/reconnect'])
+  if complete is not None:
+   receipt=complete(receipt,journal,observed)
+   receipt.pop('remaining',None)
   return receipt
  finally:
   receipt['enrollmentRetry']={'readinessChecks':retry.checks+retry.waiting_checks,'resendSent':retry.used,
@@ -701,8 +1102,9 @@ if a.staged_package_only:
   except (subprocess.SubprocessError,OSError):pass
   if tunnel is not None and tunnel.poll() is None:tunnel.terminate();tunnel.wait(10)
   stop_vm();serial.close();stderr.close()
+  if console_dir_fd is not None:os.close(console_dir_fd)
   staged_result['durationSeconds']=round(time.time()-started,3)
-  if not a.fresh_remote_only and (staged_result['result']=='PASS' or not a.keep_failed_vm):
+  if not (a.fresh_remote_only or a.released_remote_only) and (staged_result['result']=='PASS' or not a.keep_failed_vm):
    assert work.is_dir() and not work.is_symlink() and work.stat().st_uid==os.getuid()
    shutil.rmtree(work);staged_result['cleanup']='PASS: disposable VM, payload, disk, authentication and SSH keys removed'
   else:staged_result['cleanup']='RETAINED: same Remote node/disk/journal until parent journey acceptance; VM stopped'

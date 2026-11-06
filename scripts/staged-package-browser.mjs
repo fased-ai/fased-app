@@ -4,6 +4,7 @@ import {
   acceptanceBinding,
   validateInstalledAgent,
   stagedAcceptanceContract,
+  completeRemoteUpgrade,
 } from "./release-acceptance.mjs";
 import { readFile, writeFile, chmod } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -295,6 +296,8 @@ export function browserAddress(config) {
       "reconnect",
       "auth-cycle",
       "failed-check",
+      "inspect",
+      "automatic-restore",
       "agent-prepare",
       "agent-run",
       "agent-reboot",
@@ -369,7 +372,18 @@ export function browserAddress(config) {
   if (config.ownerAuthMode !== undefined) {
     assert.equal(config.ownerAuthMode, "existing-password-account-preserved");
     assert.equal(config.transport, "tailscale-https");
-    assert.ok(["auth-cycle", "automatic-update"].includes(config.action));
+    assert.ok(
+      [
+        "auth-cycle",
+        "automatic-update",
+        "automatic-restore",
+        "ui-update",
+        "preserve",
+        "check",
+        "inspect",
+        "reconnect",
+      ].includes(config.action),
+    );
     assert.equal(config.predecessor?.version, "0.1.6");
     assert.equal(config.predecessor.ownerAuthMode, "password-v1");
     assert.equal(
@@ -436,13 +450,63 @@ export async function runPrivatePreflight(config, { chromium, expect }) {
       return route.continue();
     });
     const page = await context.newPage();
-    const approved = page.waitForResponse(
-      (response) =>
-        response.url() === address.origin + "/approve" &&
-        response.request().method() === "POST",
+    const diagnostic = { pageErrors: [], failedRequests: [] };
+    page.on("pageerror", (error) => diagnostic.pageErrors.push(error.message));
+    page.on("requestfailed", (request) =>
+      diagnostic.failedRequests.push({
+        path: new URL(request.url()).pathname,
+        method: request.method(),
+        error: request.failure()?.errorText,
+      }),
     );
-    await page.goto(address.href);
-    assert.equal((await approved).status(), 204);
+    const approved = page
+      .waitForResponse(
+        (response) =>
+          response.url() === address.origin + "/approve" &&
+          response.request().method() === "POST",
+      )
+      .then(
+        (response) => ({ response }),
+        (error) => ({ error }),
+      );
+    const fail = async (reason) => {
+      try {
+        diagnostic.body = (
+          await page.locator("body").innerText({ timeout: 5000 })
+        ).slice(0, 1500);
+      } catch (error) {
+        diagnostic.bodyError = error.message;
+      }
+      if (config.screenshotFile) {
+        try {
+          await page.screenshot({ path: config.screenshotFile, timeout: 5000 });
+          await chmod(config.screenshotFile, 0o600);
+        } catch (error) {
+          diagnostic.screenshotError = error.message;
+        }
+      }
+      if (config.diagnosticFile)
+        await writeFile(
+          config.diagnosticFile,
+          JSON.stringify(diagnostic) + "\n",
+          { mode: 0o600 },
+        );
+      throw new Error(`${reason}: ${JSON.stringify(diagnostic)}`);
+    };
+    let navigation;
+    try {
+      navigation = await page.goto(address.href);
+    } catch (error) {
+      diagnostic.navigationError = error.message;
+      await fail("Private preflight navigation failed");
+    }
+    diagnostic.navigationStatus = navigation?.status();
+    if (diagnostic.navigationStatus !== 200)
+      await fail("Private preflight navigation refused");
+    const outcome = await approved;
+    if (outcome.error)
+      await fail("Private preflight approval response missing");
+    assert.equal(outcome.response.status(), 204);
     await expect(page.locator("#status")).toHaveText(
       "Connected. Continue in your installation terminal.",
     );
@@ -1047,6 +1111,26 @@ export async function runInstalledAgentPhase(
   return { result: "PASS", ...state };
 }
 
+export async function restoreCapturedOwner(page, auth, options) {
+  if (auth.authenticated) return;
+  if (options.directRemote && auth.remoteAccess && auth.remoteEnrolled) {
+    assert.equal(await page.locator('input[type="password"]').count(), 0);
+    // CoreGate already starts the device reconnect on initial navigation.
+    // Observe its authenticated result instead of clicking a disappearing UI.
+    return;
+  } else if (options.preservedPasswordOwner) {
+    const passwordChoice = page.getByRole("button", {
+      name: "Use password",
+      exact: true,
+    });
+    if (await passwordChoice.count()) await passwordChoice.click();
+    await page
+      .getByLabel("Owner password", { exact: true })
+      .fill(options.password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  }
+}
+
 export async function runStagedBrowser(config, { chromium, expect }) {
   assert.equal(process.env.FASED_DISPOSABLE_VM_ACCEPTANCE, "1");
   assert.ok(process.getuid() > 0);
@@ -1056,6 +1140,26 @@ export async function runStagedBrowser(config, { chromium, expect }) {
   const preservedPasswordOwner =
     config.ownerAuthMode === "existing-password-account-preserved";
   const applying = ["ui-update", "automatic-update"].includes(config.action);
+  const retainIssuedEntry = async (value) => {
+    if (!config.entryObservationFile) return;
+    assert.equal(directRemote, true);
+    assert.equal(
+      path.dirname(config.entryObservationFile),
+      path.dirname(config.storageFile),
+    );
+    assert.equal(config.evidenceBinding?.instanceId, config.instanceId);
+    await writeFile(
+      config.entryObservationFile,
+      JSON.stringify({
+        ...config.evidenceBinding,
+        action: config.action,
+        version: config.version,
+        fromVersion: config.fromVersion,
+        ...value,
+      }) + "\n",
+      { mode: 0o600, flag: "wx" },
+    );
+  };
   if (config.action === "claim")
     assert.ok(
       !existsSync(config.baselineFile),
@@ -1147,13 +1251,11 @@ export async function runStagedBrowser(config, { chromium, expect }) {
     }
     // Re-establish only the captured disposable account's initial UI sign-in.
     // Never supply a credential after Automatic has been enabled.
-    if (
-      preservedPasswordOwner &&
-      !(await request("auth/state")).authenticated
-    ) {
-      await page.getByLabel("Owner password", { exact: true }).fill(password);
-      await page.getByRole("button", { name: "Sign in", exact: true }).click();
-    }
+    await restoreCapturedOwner(page, await request("auth/state"), {
+      directRemote,
+      preservedPasswordOwner,
+      password,
+    });
     await waitAuthenticated();
     if (config.action.startsWith("agent-")) {
       const observed = await runInstalledAgentPhase(config, {
@@ -1192,6 +1294,8 @@ export async function runStagedBrowser(config, { chromium, expect }) {
       );
     }
     if (config.action === "auth-cycle") {
+      const deviceSession =
+        directRemote && (await request("auth/state")).remoteEnrolled === true;
       await page.getByRole("button", { name: "Sign out", exact: true }).click();
       if (config.reopenUrl) {
         const reopened = new URL(config.reopenUrl);
@@ -1203,7 +1307,7 @@ export async function runStagedBrowser(config, { chromium, expect }) {
         await page.goto(reopened.href);
         await waitAuthenticated();
         await expect(page.locator('input[type="password"]')).toHaveCount(0);
-      } else if (directRemote && !preservedPasswordOwner) {
+      } else if (deviceSession) {
         await expect
           .poll(async () => (await request("auth/state")).authenticated)
           .toBe(false);
@@ -1234,6 +1338,7 @@ export async function runStagedBrowser(config, { chromium, expect }) {
     }
     if (
       applying ||
+      config.action === "automatic-restore" ||
       config.action === "check" ||
       config.action === "failed-check"
     ) {
@@ -1242,7 +1347,20 @@ export async function runStagedBrowser(config, { chromium, expect }) {
         name: "Updates",
         exact: true,
       });
-      if (config.action === "automatic-update") {
+      if (config.action === "automatic-restore") {
+        await updates
+          .getByLabel("Update mode", { exact: true })
+          .selectOption("manual");
+        await expect
+          .poll(async () => {
+            const state = await request("updates/application");
+            return (
+              updateMode(state) === "manual" &&
+              state.activationEnabled === false
+            );
+          })
+          .toBe(true);
+      } else if (config.action === "automatic-update") {
         const original = await request("updates/application");
         assert.equal(updateMode(original), "manual");
         assert.equal(original.activationEnabled, false);
@@ -1281,6 +1399,10 @@ export async function runStagedBrowser(config, { chromium, expect }) {
               });
           await page.close();
           assert.equal(context.pages().length, 0);
+          await retainIssuedEntry({
+            policyWasAutomatic: true,
+            browserClosedDuringApply: true,
+          });
           // No tab/JavaScript client remains during completion. The observer
           // performs authenticated read-only checks; it cannot start an update.
           detachedRequest = observer;
@@ -1382,6 +1504,11 @@ export async function runStagedBrowser(config, { chromium, expect }) {
           (await applied).postDataJSON().manifestSha256,
           appliedManifestSha256,
         );
+        await retainIssuedEntry({
+          observedApplyRequest: true,
+          operationId: available.operation.id,
+          manifestSha256: appliedManifestSha256,
+        });
         await expect
           .poll(
             async () => {
@@ -1444,6 +1571,13 @@ export async function runStagedBrowser(config, { chromium, expect }) {
       });
       await chmod(sessionFile, 0o600);
     }
+    const applicationState = directRemote
+      ? await request("updates/application")
+      : undefined;
+    const ownerState = directRemote ? await request("auth/state") : undefined;
+    const devices = ownerState?.remoteEnrolled
+      ? await request("auth/devices")
+      : undefined;
     return {
       result: "PASS",
       action: config.action,
@@ -1451,6 +1585,22 @@ export async function runStagedBrowser(config, { chromium, expect }) {
       version: health.version,
       workspaceSha256,
       ownerAuth: true,
+      ...(directRemote
+        ? {
+            applicationState,
+            ownerState: {
+              authenticated: ownerState.authenticated,
+              remoteAccess: ownerState.remoteAccess,
+              remoteEnrolled: ownerState.remoteEnrolled,
+              legacyAuthenticated: ownerState.legacyAuthenticated,
+            },
+            protectedOwnerDevice:
+              !!devices?.current &&
+              devices.devices.some(
+                (device) => device.nodeId === devices.current,
+              ),
+          }
+        : {}),
       ...(config.action === "claim"
         ? {
             passwordFreeSetup:
@@ -1470,7 +1620,12 @@ export async function runStagedBrowser(config, { chromium, expect }) {
       ...(appliedManifestSha256
         ? { appliedManifestSha256, fromVersion: config.fromVersion }
         : {}),
-      ...(config.action === "ui-update" ? { ordinaryUpdateApply: "PASS" } : {}),
+      ...(config.action === "ui-update"
+        ? {
+            ordinaryUpdateApply: "PASS",
+            ...(directRemote ? { operation: applicationState.operation } : {}),
+          }
+        : {}),
       ...(automaticOutcome
         ? {
             automaticOutcome,
@@ -1507,12 +1662,19 @@ if (
 ) {
   const config = JSON.parse(await readFile(process.argv[2], "utf8"));
   const result =
-    config.action === "agent-receipt"
-      ? installedAgentReceipt(config)
-      : await (
-          config.action === "private-preflight"
-            ? runPrivatePreflight
-            : runStagedBrowser
-        )(config, await import("@playwright/test"));
+    config.action === "remote-upgrade-receipt"
+      ? completeRemoteUpgrade(
+          config.manual,
+          config.security,
+          config.automatic,
+          config.predecessor,
+        )
+      : config.action === "agent-receipt"
+        ? installedAgentReceipt(config)
+        : await (
+            config.action === "private-preflight"
+              ? runPrivatePreflight
+              : runStagedBrowser
+          )(config, await import("@playwright/test"));
   console.log(JSON.stringify(result));
 }
