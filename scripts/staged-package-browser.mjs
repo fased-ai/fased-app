@@ -503,6 +503,18 @@ export function detachedFixtureObserver(
 // Runs against the installed service using its ordinary authenticated API and UI.
 // Private phase state is retained beside the existing browser session; it is not
 // an acceptance receipt. Only the final observed result may become one.
+export async function installedTaskSchedule(page, editor) {
+  const schedule = editor.locator("details").filter({
+    has: page.locator("summary", { hasText: /^Schedule$/ }),
+  });
+  await schedule.locator(":scope > summary").click();
+  await schedule.getByLabel("Schedule", { exact: true }).selectOption("repeat");
+  await schedule.getByLabel("Maximum evaluations", { exact: true }).fill("2");
+  // The wrapped select's label includes its option text (UnitMinutesHoursDays).
+  await schedule.getByLabel(/^Unit/).selectOption("60");
+  await schedule.getByLabel("Every", { exact: true }).fill("20");
+}
+
 export async function stopInstalledReply(page, latest) {
   const before = await latest();
   assert.ok(before?.id, "exact reply required before Stop");
@@ -748,16 +760,7 @@ export async function runInstalledAgentPhase(
     await editor
       .getByLabel("Prompt", { exact: true })
       .fill("Compare only synthetic fixed inputs.");
-    const schedule = editor.locator("details").filter({
-      has: page.locator("summary", { hasText: /^Schedule$/ }),
-    });
-    await schedule.locator(":scope > summary").click();
-    await schedule
-      .getByLabel("Schedule", { exact: true })
-      .selectOption("repeat");
-    await schedule.getByLabel("Maximum evaluations", { exact: true }).fill("2");
-    await schedule.getByLabel("Unit", { exact: true }).selectOption("60");
-    await schedule.getByLabel("Every", { exact: true }).fill("20");
+    await installedTaskSchedule(page, editor);
     await editor
       .getByRole("button", { name: "Review task", exact: true })
       .click();
