@@ -26,7 +26,7 @@ import urllib.request
 
 P = pathlib.Path
 ASSETS = ["fased-app-linux-amd64.tar.gz", "fased-install-linux-amd64", "fased-app-linux-amd64.provenance.sigstore.json", "install.sh", "fased-release.json"]
-PROFILES = {"local": ("fased-local", 1100, 17481), "remote": ("fased-remote", 1200, 17482), "legacy": ("fased-legacy", 1300, 17483), "fresh": ("fased-fresh", 1400, 17484), "agent": ("fased-agent", 1500, 17485)}
+PROFILES = {"local": ("fased-local", 1100, 17481), "remote": ("fased-remote", 1200, 17482), "legacy": ("fased-legacy", 1300, 17483), "fresh": ("fased-fresh", 1400, 17484), "agent": ("fased-agent", 1500, 17485), "private": ("ubuntu", 1000, 17482)}
 HOSTS = ["github.com", "api.github.com", "release-assets.githubusercontent.com"]
 ADDRESS = "140.82.112.3"
 PASSWORD = "disposable-staged-owner-password"
@@ -84,16 +84,75 @@ def private_tailnet_origin(status, suffix):
     return "https://" + name
 
 
+def await_tailnet_enrollment(status, begin, announce, *, clock=time.monotonic, pause=time.sleep):
+    """Keep the existing node/request alive through the human approval gate."""
+    deadline = clock() + 1200
+    current = status()
+    if current.get('BackendState') == 'Running':
+        return current
+    if current.get('BackendState') not in ('NeedsLogin', 'NeedsMachineAuth', 'Starting'):
+        raise RuntimeError('Tailscale enrollment stopped; preserve the same node')
+    if current.get('BackendState') == 'NeedsLogin' and not current.get('AuthURL'):
+        begin()  # One bounded CLI request; its timeout does not revoke owner input.
+        current = status()
+    while clock() < deadline:
+        if current.get('BackendState') == 'Running':
+            return current
+        if current.get('BackendState') not in ('NeedsLogin', 'NeedsMachineAuth', 'Starting'):
+            raise RuntimeError('Tailscale enrollment stopped; preserve the same node')
+        link = current.get('AuthURL', '')
+        if current.get('BackendState') == 'NeedsLogin' and not link:
+            raise RuntimeError('Tailscale login produced no pending request; preserve the same node')
+        if link:
+            if not re.fullmatch(r'https://login\.tailscale\.com/a/[A-Za-z0-9]+', link):
+                raise RuntimeError('unexpected Tailscale enrollment URL')
+            announce(link)
+        pause(min(5, max(0, deadline - clock())))
+        current = status()
+    raise RuntimeError('Tailscale owner approval pending; preserve the SAME node/request')
+
+
+class PrivateHTTPSNoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def wait_private_https(origin, *, clock=time.monotonic, pause=time.sleep, opener=None):
+    """Warm on-demand TLS before the browser timer; this never approves setup."""
+    if not re.fullmatch(r'https://[a-z0-9-]+\.[a-z0-9-]+\.ts\.net', origin):
+        raise RuntimeError('validated private origin required')
+    client = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}), PrivateHTTPSNoRedirect())
+    started = clock();deadline = started + 60;attempts = 0;last = ''
+    while clock() < deadline:
+        attempts += 1
+        try:
+            with client.open(origin + '/', timeout=min(5, max(0.1, deadline - clock()))) as response:
+                if response.status != 200: raise RuntimeError('private HTTPS returned ' + str(response.status))
+                return {'result':'PASS','scope':'TLS readiness only; not browser approval',
+                        'attempts':attempts,'elapsedSeconds':round(clock()-started,3)}
+        except urllib.error.HTTPError as error:
+            error.close()
+            raise RuntimeError('private HTTPS refused with status ' + str(error.code)) from error
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+            if isinstance(getattr(error, 'reason', error), ssl.SSLCertVerificationError):
+                raise RuntimeError('private certificate verification failed') from error
+            last = redacted(str(error))
+            pause(min(1, max(0, deadline-clock())))
+    raise RuntimeError('private HTTPS readiness deadline; preserve enrollment: ' + last)
+
+
 class RemoteEnrollmentRetry:
     """One resend; owner input uses the existing enclosing wizard deadline."""
     prompt = "Connect Tailscale for private Remote access? [Y/n]: "
     failure = "Connect Tailscale and retry. Fased has not been installed."
+    setup_prompt = "Set up Tailscale packages, service, browser sign-in and access for this OS user? [y/N]: "
 
     def __init__(self, ready, clock=time.monotonic, handoff_pending=lambda: False):
         self.ready, self.clock = ready, clock
         self.handoff_pending, self.waiting_checks = handoff_pending, 0
         self.checks, self.next_check, self.used = 0, 0, False
         self.expires_at, self.pending_ended = None, False
+        self.setup_retried = False
 
     def end_pending(self):
         self.pending_ended = True
@@ -103,7 +162,16 @@ class RemoteEnrollmentRetry:
         count = text.count(self.prompt)
         if count > 2:
             raise RuntimeError("Remote enrollment prompt repeated more than once; no retry sent")
-        if count != 2 or self.used:
+        if self.used:
+            setup_count = text.count(self.setup_prompt)
+            if setup_count > 2:
+                raise RuntimeError('Remote setup consent repeated more than once; no retry sent')
+            if setup_count == 2 and not self.setup_retried and text.rfind(self.setup_prompt) > text.rfind(self.prompt):
+                if self.ready():
+                    self.setup_retried = True
+                    return self.setup_prompt
+            return None
+        if count != 2:
             return None
         _, remainder = text.split(self.prompt, 1)
         if self.failure not in remainder.split(self.prompt, 1)[0]:
@@ -228,6 +296,35 @@ class RemoteJourney:
             self.value['phase'] = phase
         write_private(self.path, self.value)
 
+    def begin_branch(self, name):
+        order = ('ui', 'cli', 'automatic')
+        if name not in order: raise RuntimeError('unknown Remote entry branch')
+        previous = self.value.get('replacementBranch')
+        if previous and previous['name'] == name:
+            return previous['phase']
+        index = order.index(name)
+        if (index and (not previous or previous['name'] != order[index - 1] or previous['phase'] != 'completed') or
+                not index and previous):
+            raise RuntimeError('preserve the active Remote branch; no predecessor restore')
+        self.value['replacementBranch'] = {'name': name, 'phase': 'preparing'}
+        write_private(self.path, self.value)
+        return 'preparing'
+
+    def activate_branch(self, name):
+        if self.value.get('replacementBranch') != {'name': name, 'phase': 'preparing'}:
+            raise RuntimeError('Remote branch is not preparing')
+        self.value['replacementBranch']['phase'] = 'active'
+        write_private(self.path, self.value)
+
+    def finish_branch(self, name, operation_id):
+        branch = self.value.get('replacementBranch', {})
+        if (branch.get('name') != name or branch.get('phase') not in ('active', 'completed') or
+                not re.fullmatch(r'[a-f0-9]{32}', operation_id) or
+                branch.get('operationId', operation_id) != operation_id):
+            raise RuntimeError('preserve Remote branch operation identity')
+        branch.update(phase='completed', operationId=operation_id)
+        write_private(self.path, self.value)
+
 
 def binding(candidate):
     packet = candidate["packet"]
@@ -257,11 +354,18 @@ def vm_guard():
 
 
 def run(args, **kwargs):
-    return subprocess.run(args, check=True, capture_output=True, timeout=90, **kwargs)
+    kwargs.setdefault('timeout', 90)
+    return subprocess.run(args, check=True, capture_output=True, **kwargs)
 
 
 def os_tool(tool, *args):
-    if tool not in {"/usr/bin/install", "/usr/sbin/ip", "/usr/sbin/nft", "/usr/sbin/update-ca-certificates"}:
+    preparation = {
+        ('/usr/bin/apt-get', 'update', '-qq'),
+        ('/usr/bin/apt-get', 'install', '-y', 'tailscale'),
+        ('/usr/bin/systemctl', 'enable', '--now', 'tailscaled.service'),
+        ('/usr/bin/tailscale', 'set', '--operator=ubuntu'),
+    }
+    if tool not in {"/usr/bin/install", "/usr/sbin/ip", "/usr/sbin/nft", "/usr/sbin/update-ca-certificates"} and (tool, *args) not in preparation:
         raise RuntimeError("fixed guest OS tool required")
     return run(["/usr/bin/sudo", "-n", "--", tool, *args])
 
@@ -392,12 +496,22 @@ def network(work):
 def terminal(args, answers, timeout=180, password_free=False, observer=None, prompt_retry=None, transcript=None):
     pid, fd = pty.fork()
     if pid == 0:
-        os.execvpe(args[0], args, {"HOME": str(P.home()), "USER": P.home().name, "LOGNAME": P.home().name, "PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "XDG_RUNTIME_DIR": "/run/user/" + str(os.getuid()), "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/" + str(os.getuid()) + "/bus", "LANG": "C.UTF-8"})
+        environment = {"HOME": str(P.home()), "USER": P.home().name, "LOGNAME": P.home().name, "PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "XDG_RUNTIME_DIR": "/run/user/" + str(os.getuid()), "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/" + str(os.getuid()) + "/bus", "LANG": "C.UTF-8"}
+        # Preserve sshd/logind's actual connection provenance. The real network
+        # controller validates it; a PTY must not turn private SSH into local IO.
+        environment.update({key: os.environ[key] for key in ('SSH_CONNECTION', 'SSH_CLIENT', 'SSH_TTY', 'XDG_SESSION_ID') if key in os.environ})
+        os.execvpe(args[0], args, environment)
     output = bytearray()
     matched = set()
     retried = set()
     status = None
     deadline = time.monotonic() + timeout
+    def retain_transcript():
+        if transcript is None: return
+        descriptor = os.open(transcript, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, 'w') as stream:
+            stream.write(redacted(output.decode(errors='replace')))
     try:
         while time.monotonic() < deadline:
             if select.select([fd], [], [], 0.2)[0]:
@@ -410,6 +524,7 @@ def terminal(args, answers, timeout=180, password_free=False, observer=None, pro
                 output.extend(chunk)
                 if len(output) > 2 * 1024 * 1024:
                     raise RuntimeError("bounded terminal output exceeded")
+                retain_transcript()
                 text = output.decode(errors="replace")
                 if password_free and re.search(r"(?:password|passphrase)[^\r\n]{0,120}:\s*$", text, re.IGNORECASE):
                     raise RuntimeError("Unexpected password prompt; no credential submitted")
@@ -441,11 +556,7 @@ def terminal(args, answers, timeout=180, password_free=False, observer=None, pro
                     os.kill(pid, signal.SIGKILL)
                     _, status = os.waitpid(pid, 0)
         finally:
-            if transcript is not None:
-                descriptor = os.open(transcript, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-                os.fchmod(descriptor, 0o600)
-                with os.fdopen(descriptor, "w") as stream:
-                    stream.write(redacted(output.decode(errors="replace")))
+            retain_transcript()
     text = output.decode(errors="replace")
     return os.waitstatus_to_exitcode(status), text
 
@@ -513,6 +624,149 @@ def verified_provider_bundle(candidate, target):
     return expected, manifest
 
 
+def completed_remote_application(state, version, automatic):
+    """Return the real controller receipt; health/no-op cannot stand in for Apply."""
+    operation = state.get('operation', {})
+    release, receipt = operation.get('release', {}), operation.get('receipt', {})
+    if (state.get('installedVersion') != version or operation.get('phase') != 'completed' or
+            not re.fullmatch(r'[a-f0-9]{32}', operation.get('id', '')) or
+            (operation.get('automatic') is True) != automatic or
+            release.get('version') != version or receipt.get('phase') != 'completed' or
+            receipt.get('id') != operation['id'] or
+            any(receipt.get(k) != release.get(k) for k in ('manifestSha256', 'engineSha256', 'sequence')) or
+            any(not re.fullmatch(r'[a-f0-9]{64}', release.get(k, '')) for k in ('manifestSha256', 'engineSha256')) or
+            not re.fullmatch(r'[1-9][0-9]*', str(release.get('sequence', '')))):
+        raise RuntimeError('actual matching completed application operation required')
+    return operation
+
+
+def remote_metadata():
+    """Read only public installation metadata and an opaque password-record hash."""
+    manifest = json.loads(run(['sudo', '-n', '/usr/bin/cat', '/var/lib/fased-app-vps-1000/install.json']).stdout)
+    if (manifest.get('ownerUid') != 1000 or manifest.get('appUid', 0) in (0, 1000) or
+            manifest.get('data') != '/var/lib/fased-app-vps-1000/app-state'):
+        raise RuntimeError('fixed isolated Remote installation required')
+    # Drop all root privileges before the read-only SQLite observation. Never
+    # emit password bytes, sessions, signing material or database copies.
+    script = "import sqlite3,hashlib; c=sqlite3.connect('file:/var/lib/fased-app-vps-1000/app-state/core.sqlite?mode=ro',uri=True); r=c.execute('SELECT password_salt,password_hash FROM instance').fetchone(); print(hashlib.sha256(b''.join(bytes(v) for v in r if v is not None)).hexdigest())"
+    args = ['sudo', '-n', '/usr/bin/setpriv', '--reuid', str(manifest['appUid']),
+            '--regid', str(manifest['appGid']), '--clear-groups', '--no-new-privs',
+            '--inh-caps=-all', '--ambient-caps=-all', '--bounding-set=-all',
+            '--', '/usr/bin/python3', '-c', script]
+    password_record = run(args).stdout.decode().strip()
+    service = run(['/usr/bin/systemctl', 'show', 'fased-vps-1000.service',
+                   '--property=User,NoNewPrivileges,ProtectSystem,ActiveState,MainPID']).stdout.decode()
+    properties = dict(line.split('=', 1) for line in service.splitlines() if '=' in line)
+    if (properties.get('NoNewPrivileges') != 'yes' or properties.get('ProtectSystem') != 'strict' or
+            properties.get('ActiveState') != 'active' or properties.get('User') not in (str(manifest['appUid']), manifest['appUser'])):
+        raise RuntimeError('installed Remote service sandbox is not active')
+    if not re.fullmatch(r'[a-f0-9]{64}', password_record):
+        raise RuntimeError('opaque original password record observation missing')
+    rules = json.loads(run(['sudo', '-n', '/usr/sbin/nft', '--stateless', '--json', 'list', 'ruleset']).stdout)
+    engine = run(['/usr/bin/sha256sum', '/var/lib/fased-app-vps-1000/fased-app']).stdout.decode().split()[0]
+    if engine != manifest.get('coreSha256'): raise RuntimeError('installed engine differs from protected manifest')
+    return {'manifest': manifest, 'engineSha256': engine, 'passwordRecordSha256': password_record,
+            'foreignFirewallSha256': foreign_firewall_digest(rules, manifest['id']),
+            'service': properties, 'bootId': P('/proc/sys/kernel/random/boot_id').read_text().strip(),
+            'serve': json.loads(run(['tailscale', 'serve', 'status', '--json']).stdout),
+            'tailnet': json.loads(run(['tailscale', 'status', '--json']).stdout)}
+
+
+def foreign_firewall_digest(rules, manifest_id):
+    """Ignore only this instance's restriction table and volatile rule handles."""
+    if not re.fullmatch(r'[a-f0-9]{32}', manifest_id): raise RuntimeError('instance manifest identity required')
+    def clean(value):
+        if isinstance(value, dict):
+            return {k: (clean({a:b for a,b in v.items() if a not in ('packets','bytes')}) if k == 'counter' and isinstance(v, dict) else clean(v)) for k, v in value.items() if k != 'handle'}
+        return [clean(v) for v in value] if isinstance(value, list) else value
+    declarations, chains = [], {}
+    for item in rules['nftables']:
+        if 'metainfo' in item: continue
+        kind, value = next(iter(item.items()))
+        table = value.get('name') if kind == 'table' else value.get('table', '')
+        if re.fullmatch(r'fased_vps_1000_'+manifest_id[:12]+r'_[a-f0-9]{32}', table or ''): continue
+        if kind == 'rule':
+            key = (value['family'], table, value['chain'])
+            chains.setdefault(key, []).append(clean(value))  # rule order matters
+        else: declarations.append(clean(item))
+    canonical = {'objects': sorted(declarations, key=lambda v: json.dumps(v, sort_keys=True)),
+                 'chains': [(key, chains[key]) for key in sorted(chains)]}
+    return digest(json.dumps(canonical, sort_keys=True, separators=(',', ':')).encode())
+
+
+def remote_public_probe(prepare=False):
+    """Actual new IPv4/IPv6 SSH connections from a non-tailnet namespace."""
+    namespace, host, peer = 'fased_staged_probe', 'fstaged-host', 'fstaged-peer'
+    if prepare:
+        namespaces = run(['/usr/sbin/ip', '-j', 'netns', 'list']).stdout.strip()
+        exists = any(row.get('name') == namespace for row in json.loads(namespaces or b'[]'))
+        state_path = P.home() / '.cache/fased-staged/state.json'
+        state = document(state_path)
+        ownership = {'namespace': namespace, 'host': host, 'peer': peer, 'instanceId': state['instanceId']}
+        if exists and state.get('publicProbe') != ownership:
+            raise RuntimeError('preserve a foreign probe namespace')
+        state['publicProbe'] = ownership
+        write_private(state_path, state)
+        commands = [
+            ['netns', 'add', namespace], ['link', 'add', host, 'type', 'veth', 'peer', 'name', peer],
+            ['link', 'set', peer, 'netns', namespace],
+            ['address', 'add', '198.18.20.1/30', 'dev', host],
+            ['-6', 'address', 'add', 'fd00:fa5e:b020::1/64', 'dev', host, 'nodad'],
+            ['link', 'set', host, 'up'], ['netns', 'exec', namespace, '/usr/sbin/ip', 'link', 'set', 'lo', 'up'],
+            ['netns', 'exec', namespace, '/usr/sbin/ip', 'address', 'add', '198.18.20.2/30', 'dev', peer],
+            ['netns', 'exec', namespace, '/usr/sbin/ip', '-6', 'address', 'add', 'fd00:fa5e:b020::2/64', 'dev', peer, 'nodad'],
+            ['netns', 'exec', namespace, '/usr/sbin/ip', 'link', 'set', peer, 'up'],
+        ]
+        if not exists:
+            for args in commands: os_tool('/usr/sbin/ip', *args)
+    # A missing namespace, failed sudo or down/unconfigured interface must not
+    # look like a successful firewall denial.
+    peer_state = json.loads(run(['sudo', '-n', '/usr/sbin/ip', 'netns', 'exec', namespace,
+                                 '/usr/sbin/ip', '-j', 'address', 'show', 'dev', peer], timeout=5).stdout)
+    host_state = json.loads(run(['/usr/sbin/ip', '-j', 'address', 'show', 'dev', host], timeout=5).stdout)
+    for state, expected in [(peer_state, {'198.18.20.2', 'fd00:fa5e:b020::2'}),
+                            (host_state, {'198.18.20.1', 'fd00:fa5e:b020::1'})]:
+        if len(state) != 1 or 'UP' not in state[0].get('flags', []) or not expected.issubset({v['local'] for v in state[0].get('addr_info', [])}):
+            raise RuntimeError('dual-stack public probe interfaces are not ready')
+    values = {}
+    for family, address in [('ipv4', '198.18.20.1'), ('ipv6', 'fd00:fa5e:b020::1')]:
+        reply = subprocess.run(['sudo', '-n', '/usr/sbin/ip', 'netns', 'exec', namespace,
+                                '/usr/bin/ssh-keyscan', '-4' if family == 'ipv4' else '-6',
+                                '-T', '2', '-t', 'ed25519', address], capture_output=True, timeout=5)
+        if reply.returncode != 0 and reply.stderr.strip():
+            raise RuntimeError('public probe failed before a verifiable network denial: ' + redacted(reply.stderr.decode(errors='replace'))[-256:])
+        values[family] = {'exit': reply.returncode, 'reachable': bool(reply.stdout.strip()),
+                          'hostKeySha256': digest(reply.stdout) if reply.stdout else None}
+    return values
+
+
+def bind_remote_observation(value, candidate, local_sha, instance_id):
+    expected = {**binding(candidate), 'localReceiptSha256': local_sha, 'instanceId': instance_id}
+    if any(key in value and value[key] != field for key, field in expected.items()):
+        raise RuntimeError('Remote observation binding differs')
+    return {**value, **expected}
+
+
+def read_remote_observation(path, candidate, local_sha, instance_id):
+    value = document(path)
+    expected = {**binding(candidate), 'localReceiptSha256': local_sha, 'instanceId': instance_id}
+    if any(value.get(key) != field for key, field in expected.items()):
+        raise RuntimeError('retained Remote observation binding differs')
+    return value
+
+
+def package_engine_sha(candidate):
+    with tarfile.open(P(candidate['directory']) / ASSETS[0], 'r:gz') as archive:
+        entries = [entry for entry in archive.getmembers() if P(entry.name).name == 'bundle.json']
+        if len(entries) != 1 or not entries[0].isfile() or not 0 < entries[0].size <= 65536:
+            raise RuntimeError('one bounded original bundle manifest required')
+        raw = archive.extractfile(entries[0]).read()
+    if digest(raw) != candidate['packet']['bundleSha256']: raise RuntimeError('original bundle differs')
+    expected = json.loads(raw)['files']['fased-app']['sha256']
+    if not re.fullmatch(r'[a-f0-9]{64}', expected): raise RuntimeError('original engine digest required')
+    return expected
+
+
 def owner(args):
     user, uid, port = PROFILES[args.profile]
     if os.getuid() != uid or P.home() != P("/home") / user:
@@ -520,6 +774,37 @@ def owner(args):
     state_dir = P.home() / ".cache/fased-staged"
     state_dir.mkdir(mode=0o700, exist_ok=True)
     state = document(state_dir / "state.json") if (state_dir / "state.json").exists() else {}
+    if args.profile == 'private' and args.owner_action == 'adopt':
+        current = health(port)
+        if current['version'] != args.version or state and state['instanceId'] != current['instanceId']:
+            raise RuntimeError('preserve the original private instance')
+        state.update(instanceId=current['instanceId'], version=current['version'])
+        write_private(state_dir / 'state.json', state)
+        return {'result': 'PASS', **state}
+    if args.owner_action == 'state':
+        current = json.loads(run([command_path(), 'update', 'status']).stdout)
+        entry = state_dir / 'apply-entry.json'
+        if args.profile == 'private' and entry.exists(): current['fixtureCLIEntry'] = document(entry)
+        return current
+    if args.profile == 'private' and args.owner_action == 'metadata':
+        return remote_metadata()
+    if args.profile == 'private' and args.owner_action.startswith('network-'):
+        action = args.owner_action.removeprefix('network-')
+        answers = {'Have you signed in to this instance through its private HTTPS address? [y/N]: ': 'y',
+                   'Have you tested your VPS provider console as an independent recovery path? [y/N]: ': 'y'} if action == 'harden' else {}
+        code, output = terminal(['/var/lib/fased-app-vps-1000/fased-app', 'vps', action], answers, password_free=True,
+                                transcript=state_dir / (args.owner_action + '.log'))
+        if code:
+            raise RuntimeError('private network operation refused: ' + redacted(output)[-2048:])
+        # The CLI prints one JSON document to stdout after its terminal review.
+        decoder = json.JSONDecoder()
+        for index, character in enumerate(output):
+            if character != '{': continue
+            try: value, _ = decoder.raw_decode(output[index:])
+            except ValueError: continue
+            if isinstance(value, dict) and 'phase' in value:
+                return value
+        raise RuntimeError('network operation did not return its controller status')
     prompts = {"Private access [": "ssh", "Use a dedicated app account": "y", "Keep Fased running": "y", "Start Fased at login?": "y", "Owner password: ": PASSWORD, **PREPARATION_ANSWERS}
     if args.version and args.owner_action in ("apply", "bootstrap", "failed-bootstrap"):
         prompts["Update to " + args.version + "? [y/N]: "] = "y"
@@ -614,14 +899,21 @@ def owner(args):
         before = health(port)
         if before["version"] == args.version:
             raise RuntimeError("apply requires an older running reader")
-        code, output = terminal([command_path(), "update"], prompts, timeout=300, password_free=True)
+        write_private(state_dir / 'apply-entry.json', {'instanceId': before['instanceId'], 'fromVersion': before['version'],
+                                                      'targetVersion': args.version, 'argv': ['fased', 'update']})
+        code, output = terminal([command_path(), "update"], prompts, timeout=300, password_free=True,
+                                transcript=state_dir / 'apply.log')
         (state_dir / "apply.log").write_text(redacted(output))
         current = health(port)
         if code or "Updated" not in output or current["version"] != args.version or current["instanceId"] != before["instanceId"]:
             raise RuntimeError("ordinary installed CLI did not apply the candidate: " + redacted(output)[-8192:])
         state["version"] = current["version"]
         write_private(state_dir / "state.json", state)
-        return {"result": "PASS", "cliOutcome": "applied", "health": current, "passwordPrompt": "Owner password:" in output}
+        result = {"result": "PASS", "cliOutcome": "applied", "health": current, "passwordPrompt": "Owner password:" in output}
+        if args.profile == 'private':
+            after = json.loads(run([command_path(), 'update', 'status']).stdout)
+            result['operation'] = completed_remote_application(after, args.version, False)
+        return result
     if args.owner_action == "check":
         code, output = terminal([command_path(), "update"], prompts, password_free=True)
         if code or "Already current" not in output:
@@ -640,9 +932,26 @@ def owner(args):
     raise RuntimeError("unknown owner journey action")
 
 
+def prepare_remote_tailnet(work):
+    """Prepare an actual older-release baseline using the reviewed OS package."""
+    key = P(__file__).with_name('tailscale-noble-key.gpg')
+    if digest(key.read_bytes()) != '3e03dacf222698c60b8e2f990b809ca1b3e104de127767864284e6c228f1fb39':
+        raise RuntimeError('reviewed Tailscale package key differs')
+    if not P('/usr/bin/tailscale').exists():
+        listing = work / 'tailscale.list'
+        listing.write_text('deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main\n')
+        os_tool('/usr/bin/install', '-m', '0644', str(key), '/usr/share/keyrings/tailscale-archive-keyring.gpg')
+        os_tool('/usr/bin/install', '-m', '0644', str(listing), '/etc/apt/sources.list.d/tailscale.list')
+        os_tool('/usr/bin/apt-get', 'update', '-qq')
+        os_tool('/usr/bin/apt-get', 'install', '-y', 'tailscale')
+    os_tool('/usr/bin/systemctl', 'enable', '--now', 'tailscaled.service')
+    os_tool('/usr/bin/tailscale', 'set', '--operator=ubuntu')
+    return json.loads(run(['tailscale', 'status', '--json']).stdout)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["setup", "network", "serve", "select", "owner"])
+    parser.add_argument("action", choices=["setup", "network", "serve", "select", "owner", "public-probe", "public-probe-prepare", "tailnet-prepare"])
     parser.add_argument("--work", type=P)
     parser.add_argument("--candidate", type=P)
     parser.add_argument("--predecessor", type=P)
@@ -651,7 +960,7 @@ def main():
     parser.add_argument("--fail-archive-once", action="store_true")
     parser.add_argument("--provider-helper", type=P)
     parser.add_argument("--profile", choices=PROFILES)
-    parser.add_argument("--owner-action", choices=["install", "failed-bootstrap", "bootstrap", "open", "login", "apply", "check", "restart", "provider-install", "provider-inspect"])
+    parser.add_argument("--owner-action", choices=["install", "failed-bootstrap", "bootstrap", "open", "login", "apply", "check", "restart", "provider-install", "provider-inspect", "adopt", "state", "metadata", "network-harden", "network-finish", "network-rollback", "network-network"])
     parser.add_argument("--version")
     parser.add_argument("--released-local-only", action="store_true")
     parser.add_argument("--resume", action="store_true")
@@ -660,9 +969,15 @@ def main():
     if args.action == "owner":
         print(json.dumps(owner(args), separators=(",", ":")))
         return
+    if args.action in ('public-probe', 'public-probe-prepare'):
+        if os.getuid() != 1000: raise RuntimeError('disposable administrator required')
+        print(json.dumps(remote_public_probe(args.action == 'public-probe-prepare')))
+        return
     if os.getuid() != 1000 or args.work is None:
         raise RuntimeError("fixed VM fixture administrator required")
-    if args.action == "setup":
+    if args.action == "tailnet-prepare":
+        print(json.dumps(prepare_remote_tailnet(args.work)))
+    elif args.action == "setup":
         candidate, predecessor, legacy = package(args.candidate), package(args.predecessor), package(args.legacy)
         if candidate["packet"]["version"] != 2 or predecessor["packet"]["version"] != 2 or (not args.released_local_only and predecessor["packet"]["productVersion"] != "0.1.4") or (not args.released_local_only and legacy["packet"]["version"] != 1):
             raise RuntimeError("target, attested compatibility reader and original legacy bridge inputs required")
