@@ -3,6 +3,35 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { classify, verifyGate } from "./ci-routing.mjs";
 
+test("Native installed-provider compilation follows the real UI build", async () => {
+  const workflow = await readFile(
+    new URL("../.github/workflows/checks.yml", import.meta.url),
+    "utf8",
+  );
+  const core = workflow.slice(
+    workflow.indexOf("  core:\n"),
+    workflow.indexOf("  core-scenarios:\n"),
+  );
+  const prepared = core.indexOf("- run: npm run check");
+  const native = core.indexOf(
+    "- name: Native protected provider credential runtime",
+  );
+  const pkg = JSON.parse(
+    await readFile(new URL("../package.json", import.meta.url), "utf8"),
+  );
+  assert.match(pkg.scripts.check, /\bnpm run build\b/);
+  assert.ok(
+    prepared >= 0 && native > prepared,
+    "generate the embedded dist before compiling core.test",
+  );
+  const harness = await readFile(
+    new URL("./check-native-provider-secret.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(harness, /"\.\/internal\/core"/);
+  assert.match(harness, /TestInstalledProviderFixtureNativeRuntime/);
+});
+
 test("Ubuntu acceptance executes Remote maintenance and the actual older reader", async () => {
   const workflow = await readFile(
     new URL("../.github/workflows/inspection-acceptance.yml", import.meta.url),
