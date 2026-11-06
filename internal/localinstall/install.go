@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/fased-ai/fased-app/internal/core"
@@ -27,6 +28,7 @@ type Options struct {
 	Engine, Desktop, Listen, PublicOrigin, Location string
 	EngineSHA256, DesktopSHA256                     string
 	Start, Autostart                                bool
+	ProviderFixture                                 bool // Controlled installer harness only; never a wizard choice.
 }
 type Manifest struct {
 	ApplicationSequence      uint64            `json:"applicationSequence,omitempty"`
@@ -41,6 +43,7 @@ type Manifest struct {
 	Autostart                bool              `json:"autostart"`
 	Listen                   string            `json:"listen,omitempty"`
 	PublicOrigin             string            `json:"publicOrigin,omitempty"`
+	ProviderFixture          bool              `json:"providerFixture,omitempty"`
 }
 type State struct {
 	Installed bool   `json:"installed"`
@@ -52,12 +55,22 @@ type State struct {
 
 // Validate rejects bad paths/listeners before an installer authorizes OS work.
 func Validate(p Paths, o Options) error {
+	if err := validateProviderFixtureOptions(o); err != nil {
+		return err
+	}
 	p, e := normalize(p)
 	if e != nil {
 		return e
 	}
 	_, e = definition(p, o)
 	return e
+}
+
+func validateProviderFixtureOptions(o Options) error {
+	if o.ProviderFixture && (runtime.GOOS != "linux" || o.Location == "remote" || o.PublicOrigin != "") {
+		return errors.New("provider fixture requires an isolated Linux Local installation")
+	}
+	return nil
 }
 
 func DefaultPaths() (Paths, error) {
@@ -154,7 +167,37 @@ func verify(m Manifest) error {
 	}
 	return nil
 }
+
+// The launcher invokes this only after enforcing the installed namespace.
+// A flag alone cannot adopt a writable/unclassified application as a fixture.
+func CheckProviderFixture(paths Paths, requested bool) error {
+	image, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	return checkProviderFixture(paths, requested, image)
+}
+
+func checkProviderFixture(paths Paths, requested bool, image string) error {
+	m, err := Load(paths)
+	if err != nil {
+		return err
+	}
+	if m.Phase != "ready" || m.ProviderFixture != requested || requested && (m.Location == "remote" || m.PublicOrigin != "") || image != filepath.Join(m.Root, engineName) {
+		return errors.New("provider fixture differs from the immutable Local installation")
+	}
+	if requested {
+		unit, err := definition(Paths{Root: m.Root, Data: m.Data}, Options{Listen: m.Listen, PublicOrigin: m.PublicOrigin, Location: m.Location, ProviderFixture: true})
+		if err != nil || bytesDigest(unit) != m.Files[definitionName] {
+			return errors.New("provider fixture differs from the generated Local service")
+		}
+	}
+	return verify(m)
+}
 func Install(ctx context.Context, paths Paths, options Options) (Manifest, error) {
+	if err := validateProviderFixtureOptions(options); err != nil {
+		return Manifest{}, err
+	}
 	if (options.ApplicationSequence == 0) != (options.ApplicationReleaseSHA256 == "") || options.ApplicationReleaseSHA256 != "" && !validExpectedDigest(options.ApplicationReleaseSHA256) {
 		return Manifest{}, errors.New("paired authenticated initial release identity required")
 	}
@@ -211,6 +254,9 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 	}
 	m, loadErr := Load(p)
 	if loadErr == nil {
+		if m.ProviderFixture != options.ProviderFixture {
+			return m, errors.New("installation provider mode differs; preserve the existing installation")
+		}
 		if options.ApplicationSequence != 0 && (m.ApplicationSequence != options.ApplicationSequence || m.ApplicationReleaseSHA256 != options.ApplicationReleaseSHA256) {
 			return m, errors.New("existing installation release identity differs; use authenticated update, never relabel install retry")
 		}
@@ -238,7 +284,7 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 				return m, errors.New("installation directory contains unclassified files; refusing adoption")
 			}
 		}
-		m = Manifest{ApplicationSequence: options.ApplicationSequence, ApplicationReleaseSHA256: options.ApplicationReleaseSHA256, Schema: 1, Phase: "preparing", Version: core.Version, Root: p.Root, Data: p.Data, Files: files, Listen: options.Listen, PublicOrigin: options.PublicOrigin, Location: options.Location}
+		m = Manifest{ApplicationSequence: options.ApplicationSequence, ApplicationReleaseSHA256: options.ApplicationReleaseSHA256, Schema: 1, Phase: "preparing", Version: core.Version, Root: p.Root, Data: p.Data, Files: files, Listen: options.Listen, PublicOrigin: options.PublicOrigin, Location: options.Location, ProviderFixture: options.ProviderFixture}
 		if err = core.WritePrivateJSON(filepath.Join(p.Root, "install.json"), m); err != nil {
 			return m, err
 		}

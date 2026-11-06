@@ -62,6 +62,7 @@ type intent struct {
 	ID                               string `json:"id"`
 	OwnerUID, OwnerGID               int
 	CoreSHA256, Listen, PublicOrigin string
+	ProviderFixture                  bool `json:"providerFixture,omitempty"`
 }
 type lifecycle struct {
 	Version                   int `json:"version"`
@@ -525,7 +526,7 @@ func account(ctx context.Context, o hostOps, j intent, create bool) (int, int, e
 	return uid, gid, nil
 }
 func intentFor(m Manifest) intent {
-	return intent{ApplicationSequence: m.ApplicationSequence, ApplicationReleaseSHA256: m.ApplicationReleaseSHA256, Version: 1, ID: m.ID, OwnerUID: m.OwnerUID, OwnerGID: m.OwnerGID, CoreSHA256: m.CoreSHA256, Listen: m.Listen, PublicOrigin: m.PublicOrigin}
+	return intent{ApplicationSequence: m.ApplicationSequence, ApplicationReleaseSHA256: m.ApplicationReleaseSHA256, Version: 1, ID: m.ID, OwnerUID: m.OwnerUID, OwnerGID: m.OwnerGID, CoreSHA256: m.CoreSHA256, Listen: m.Listen, PublicOrigin: m.PublicOrigin, ProviderFixture: m.ProviderFixture}
 }
 func verifyFiles(o hostOps, m Manifest) error {
 	if e := verifyImmutableFiles(o, m); e != nil {
@@ -671,6 +672,9 @@ func Install(ctx context.Context, options Options, s *custodyinstall.System) (Ma
 }
 func install(ctx context.Context, opt Options, o hostOps) (Manifest, error) {
 	var m Manifest
+	if opt.ProviderFixture && opt.PublicOrigin == "" {
+		return m, errors.New("installed provider fixture requires its private HTTPS origin")
+	}
 	if (opt.ApplicationSequence == 0) != (opt.ApplicationReleaseSHA256 == "") || opt.ApplicationReleaseSHA256 != "" && !canonicalHex(opt.ApplicationReleaseSHA256, 32) {
 		return m, errors.New("paired authenticated initial Remote release identity required")
 	}
@@ -709,7 +713,7 @@ func install(ctx context.Context, opt Options, o hostOps) (Manifest, error) {
 		return m, e
 	}
 	defer lock.Close()
-	j := intent{ApplicationSequence: opt.ApplicationSequence, ApplicationReleaseSHA256: opt.ApplicationReleaseSHA256, Version: 1, OwnerUID: o.uid, OwnerGID: o.gid, CoreSHA256: opt.CoreSHA256, Listen: opt.Listen, PublicOrigin: opt.PublicOrigin}
+	j := intent{ApplicationSequence: opt.ApplicationSequence, ApplicationReleaseSHA256: opt.ApplicationReleaseSHA256, Version: 1, OwnerUID: o.uid, OwnerGID: o.gid, CoreSHA256: opt.CoreSHA256, Listen: opt.Listen, PublicOrigin: opt.PublicOrigin, ProviderFixture: opt.ProviderFixture}
 	existing, le := manifestAt(o, o.uid)
 	if le != nil && !errors.Is(le, os.ErrNotExist) {
 		return m, le
@@ -796,7 +800,7 @@ func install(ctx context.Context, opt Options, o hostOps) (Manifest, error) {
 		if e != nil {
 			return m, e
 		}
-		m = Manifest{ApplicationSequence: j.ApplicationSequence, ApplicationReleaseSHA256: j.ApplicationReleaseSHA256, Version: 1, ID: j.ID, Phase: "installed", OwnerUID: o.uid, OwnerGID: o.gid, AppUID: appUID, AppGID: appGID, AppUser: accountName(o.uid), Root: root, Data: root + "/app-state", Core: root + "/fased-app", Config: ConfigPath(o.uid), Unit: unitName(o.uid), UnitPath: "/etc/systemd/system/" + unitName(o.uid), Listen: opt.Listen, PublicOrigin: opt.PublicOrigin, CoreSHA256: opt.CoreSHA256}
+		m = Manifest{ApplicationSequence: j.ApplicationSequence, ApplicationReleaseSHA256: j.ApplicationReleaseSHA256, Version: 1, ID: j.ID, Phase: "installed", OwnerUID: o.uid, OwnerGID: o.gid, AppUID: appUID, AppGID: appGID, AppUser: accountName(o.uid), Root: root, Data: root + "/app-state", Core: root + "/fased-app", Config: ConfigPath(o.uid), Unit: unitName(o.uid), UnitPath: "/etc/systemd/system/" + unitName(o.uid), Listen: opt.Listen, PublicOrigin: opt.PublicOrigin, CoreSHA256: opt.CoreSHA256, ProviderFixture: opt.ProviderFixture}
 		if e = m.validate(); e != nil {
 			return m, e
 		}
@@ -1116,16 +1120,17 @@ func status(ctx context.Context, o hostOps, m Manifest) (ServiceStatus, error) {
 
 // CheckApplication runs as the app UID before state/listeners are opened. It
 // authenticates immutable code/configuration and refuses runtime retargeting.
-func CheckApplication(config, installationRoot, dataDir, listen, publicOrigin string) error {
-	return checkApplication(config, installationRoot, dataDir, listen, publicOrigin, liveOps(nil))
+func CheckApplication(config, installationRoot, dataDir, listen, publicOrigin string, providerFixture ...bool) error {
+	return checkApplication(config, installationRoot, dataDir, listen, publicOrigin, liveOps(nil), providerFixture...)
 }
-func checkApplication(config, installationRoot, dataDir, listen, publicOrigin string, o hostOps) error {
+func checkApplication(config, installationRoot, dataDir, listen, publicOrigin string, o hostOps, providerFixture ...bool) error {
 	f, e := rootFile(o, config)
 	if e != nil {
 		return e
 	}
 	var m Manifest
-	if strict(f.Data, &m) != nil || m.validate() != nil || config != m.Config || installationRoot != m.Root || dataDir != m.Data || listen != m.Listen || publicOrigin != m.PublicOrigin {
+	wanted := len(providerFixture) == 1 && providerFixture[0]
+	if len(providerFixture) > 1 || strict(f.Data, &m) != nil || m.validate() != nil || config != m.Config || installationRoot != m.Root || dataDir != m.Data || listen != m.Listen || publicOrigin != m.PublicOrigin || m.ProviderFixture != wanted {
 		return errors.New("Remote runtime arguments differ from immutable manifest")
 	}
 	if o.uid != m.AppUID || o.euid != m.AppUID || o.gid != m.AppGID {

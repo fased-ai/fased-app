@@ -29,6 +29,7 @@ type Store struct {
 
 	rpcCheckFixture               func(context.Context, RPCCheckRequest) (RPCCheckResult, error) // Tests only; never configuration or IPC.
 	providerFixture               bool
+	providerOnlyFixture           bool         // Installed provider proof never grants paper/mining/signer fixture authority.
 	rpcAdmission                  bool         // Disabled in ordinary constructors; tests only.
 	walletReadFixture             walletReader // Compiled Go tests only; never configuration or IPC.
 	walletReadMu                  sync.Mutex

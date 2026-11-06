@@ -91,7 +91,7 @@ func validApplicationJournal(j applicationUpdateJournal, p Paths) bool {
 	if s.Sequence == 0 || !validExpectedDigest(s.ReleaseSHA256) || j.Target.ApplicationSequence != s.Sequence || j.Target.ApplicationReleaseSHA256 != s.ReleaseSHA256 || s.Version != 1 || !applicationUpdateID(s.ID) || s.PreviousManifestSHA256 != ManifestSHA256(j.Previous) || s.TargetManifestSHA256 != ManifestSHA256(j.Target) || s.EngineSHA256 != j.Target.Files[engineName] || s.DesktopSHA256 != j.Target.Files[desktopName] {
 		return false
 	}
-	if j.Previous.Root != p.Root || j.Previous.Data != p.Data || j.Target.Root != p.Root || j.Target.Data != p.Data || j.Previous.Phase != "ready" || j.Target.Phase != "ready" || j.Previous.Autostart != j.Target.Autostart || j.Previous.Listen != j.Target.Listen || j.Previous.PublicOrigin != j.Target.PublicOrigin || j.Previous.Location != j.Target.Location || len(j.Previous.Files) != len(j.Target.Files) {
+	if j.Previous.Root != p.Root || j.Previous.Data != p.Data || j.Target.Root != p.Root || j.Target.Data != p.Data || j.Previous.Phase != "ready" || j.Target.Phase != "ready" || j.Previous.Autostart != j.Target.Autostart || j.Previous.Listen != j.Target.Listen || j.Previous.PublicOrigin != j.Target.PublicOrigin || j.Previous.Location != j.Target.Location || j.Previous.ProviderFixture != j.Target.ProviderFixture || len(j.Previous.Files) != len(j.Target.Files) {
 		return false
 	}
 	for n, h := range j.Previous.Files {
