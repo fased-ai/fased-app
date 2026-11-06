@@ -28,6 +28,10 @@ The release command must require the trusted workflow’s matching Local install
 
 The candidate identity is the source commit/tree, proposed version, platform, workflow identity, run ID/actual attempt and artifact inventory digests. Preserve that identity in the existing candidate directory and publisher journal. Changing relevant bytes or inputs creates a new unpublished candidate under the same proposed version and invalidates affected evidence. No duplicate full journey before and after a tag is required. A tag does not rebuild the candidate.
 
+Acceptance-consumer corrections do not require replacing unchanged shipping bytes. After reviewed integration, dispatch this same workflow with `source` set to the reviewed consumer main commit and both `candidate_run` and `candidate_attempt` set to the original producer. Empty paired inputs select the normal build; incomplete, noncanonical or repeated replay inputs fail. Replay skips the build, authenticates the original successful producer/provenance step, verifies the original artifact ZIP digest and bounded regular-file inventory, then executes the existing installed journey. Preserve the original package source/tree/run/attempt; the consumer commit and acceptance run are separate evidence identities.
+
+The Local receipt remains the strict one-file authenticated artifact. Agent receipt and observations are retained separately for the existing package/Local-hash-bound owner review. The verifier discovers replay proof by the original producer identity and requires exactly one successful protected-main attempt1 with installed acceptance PASS and build SKIPPED. Failed-parent artifacts cannot substitute for proof or hide one subsequent successful result; multiple successful results refuse ambiguity. Consumer repair and replay never create a release, tag or activation permission.
+
 ## Staged acquisition and trust boundary
 
 Use the existing candidate verifier, controlled transport fixtures, packaged installer, wizard and update controller. Extend those facilities only where the joined route is missing. No new service, trust system or customer setup command is required.

@@ -380,7 +380,9 @@ def staged_package_acceptance():
  ssh('chmod 755 '+guest+' '+guest+'/scripts '+guest+'/packages; chmod -R a+rX '+guest+'/packages '+guest+'/scripts',30)
  guest_call(['setup',*(['--resume'] if a.fresh_remote_only and a.resume else []),'--work',remote_work,'--candidate',guest+'/packages/candidate','--predecessor',guest+'/packages/predecessor','--legacy',guest+'/packages/legacy',*(['--released-local-only'] if a.released_local_only or a.fresh_remote_only else [])])
  for label in ['candidate','predecessor']:
-  ssh('chmod 700 '+guest+'/packages/'+label+'/fased-install-linux-amd64; '+guest+'/packages/'+label+'/fased-install-linux-amd64 --verify-candidate '+guest+'/packages/'+label,90)
+  # Original public assets are shared by the ordinary fixture owners. Keep
+  # them readable/executable, without granting any owner write permission.
+  ssh('chmod 555 '+guest+'/packages/'+label+'/fased-install-linux-amd64 && '+guest+'/packages/'+label+'/fased-install-linux-amd64 --verify-candidate '+guest+'/packages/'+label,90)
  if a.fresh_remote_only:
   select_package('candidate');return fresh_remote_acceptance(fixture,packages['candidate'],guest,remote_work,local_acceptance_sha)
  start_tunnel();select_package('predecessor')
