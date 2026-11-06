@@ -307,6 +307,9 @@ export function githubPublisher(token) {
       (path === "/user" ||
         /^\/repos\/fased-ai\/fased-app\/commits\/[a-f0-9]{40}\/comments\?per_page=100$/.test(
           path,
+        ) ||
+        /^\/repos\/fased-ai\/fased-app\/actions\/artifacts\?name=ubuntu-amd64-installed-acceptance-replay-[1-9][0-9]*-[1-9][0-9]*&per_page=100$/.test(
+          path,
         ));
     const upload =
       method === "UPLOAD" &&

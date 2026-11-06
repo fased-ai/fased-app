@@ -1276,7 +1276,33 @@ sys.stdout.buffer.write(raw)
   );
 });
 
-test("authenticated replay proof keeps original package identity and rejects replacement builds", async () => {
+test("publisher replay lookup permits only its exact bounded GET route", async (t) => {
+  const requests = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    requests.push({ url, method: init.method, redirect: init.redirect });
+    return new Response(JSON.stringify({ artifacts: [] }));
+  });
+  const api = githubPublisher("disposable-publisher-fixture-token");
+  const route =
+    "/repos/fased-ai/fased-app/actions/artifacts?name=ubuntu-amd64-installed-acceptance-replay-123-2&per_page=100";
+  await assert.doesNotReject(api("GET", route));
+  for (const method of ["POST", "PATCH", "DELETE", "UPLOAD"])
+    await assert.rejects(api(method, route, {}), /Fixed repository/);
+  for (const denied of [
+    route.replace("fased-ai/fased-app", "someone/else"),
+    route.replace("replay-123-2", "replay-0-2"),
+    route.replace("replay-123-2", "replay-123-0"),
+    route.replace("per_page=100", "per_page=101"),
+    route.replace("installed-acceptance-replay", "arbitrary"),
+    route + "&page=2",
+  ])
+    await assert.rejects(api("GET", denied), /Fixed repository/);
+  assert.deepEqual(requests, [
+    { url: "https://api.github.com" + route, method: "GET", redirect: "error" },
+  ]);
+});
+
+test("authenticated replay proof keeps original package identity and rejects replacement builds", async (t) => {
   const raw = zipped(receipt());
   const original = {
     id: 123,
@@ -1317,7 +1343,7 @@ test("authenticated replay proof keeps original package identity and rejects rep
   };
   let duplicates = false,
     stale = false;
-  const api = async (method, url) => {
+  const fixtureAPI = async (method, url) => {
     assert.equal(method, "GET");
     if (url.endsWith("/123/attempts/2/jobs"))
       return {
@@ -1363,6 +1389,16 @@ test("authenticated replay proof keeps original package identity and rejects rep
     if (url.endsWith("/123/attempts/2")) return original;
     assert.fail("unexpected API " + url);
   };
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    const address = new URL(url);
+    assert.equal(address.origin, "https://api.github.com");
+    const value = await fixtureAPI(
+      init.method,
+      address.pathname + address.search,
+    );
+    return new Response(JSON.stringify(value));
+  });
+  const api = githubPublisher("disposable-publisher-fixture-token");
   const options = {
     downloadArtifact: (id) => {
       assert.equal(id, "29");
