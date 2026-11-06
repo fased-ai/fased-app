@@ -15,10 +15,11 @@ type EntryCapabilities struct {
 	Version               int   `json:"version"`
 	Update                bool  `json:"update"`
 	ReleasePacketVersions []int `json:"releasePacketVersions"`
+	MaintenanceDescriptor bool  `json:"maintenanceDescriptor"`
 }
 
 func CurrentEntryCapabilities() EntryCapabilities {
-	return EntryCapabilities{Version: 1, Update: true, ReleasePacketVersions: []int{1, 2}}
+	return EntryCapabilities{Version: 1, Update: true, ReleasePacketVersions: []int{1, 2}, MaintenanceDescriptor: true}
 }
 
 type entryCapabilityOutput struct{ data []byte }
@@ -32,7 +33,9 @@ func (b *entryCapabilityOutput) Write(p []byte) (int, error) {
 }
 
 // InstalledUpdateEntrySupported probes only the existing installed executable.
-// Generic update support cannot establish that an older command parses packet2.
+// Packet2 support alone does not prove compatibility with retained maintenance.
+// Older cores without the descriptor contract need the existing verified reader
+// handoff once; no running image, grant, lease or floor is silently rewritten.
 func InstalledUpdateEntrySupported(ctx context.Context, corePath string) bool {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -44,7 +47,7 @@ func InstalledUpdateEntrySupported(ctx context.Context, corePath string) bool {
 		return false
 	}
 	var capability EntryCapabilities
-	if json.Unmarshal(out.data, &capability) != nil || capability.Version != 1 || !capability.Update {
+	if json.Unmarshal(out.data, &capability) != nil || capability.Version != 1 || !capability.Update || !capability.MaintenanceDescriptor {
 		return false
 	}
 	supported := false

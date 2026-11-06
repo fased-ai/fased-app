@@ -20,19 +20,20 @@ func TestInstalledUpdateEntryCapabilitiesFailClosed(t *testing.T) {
 		ok   bool
 	}{
 		{"legacy generic entry", `printf '{"version":1,"update":true}\n'`, false},
-		{"packet1 only", `printf '{"version":1,"update":true,"releasePacketVersions":[1]}\n'`, false},
-		{"packet1 and packet2", `printf '{"version":1,"update":true,"releasePacketVersions":[1,2]}\n'`, true},
-		{"update disabled", `printf '{"version":1,"update":false,"releasePacketVersions":[1,2]}\n'`, false},
-		{"missing update", `printf '{"version":1,"releasePacketVersions":[1,2]}\n'`, false},
-		{"missing version", `printf '{"update":true,"releasePacketVersions":[1,2]}\n'`, false},
+		{"packet1 only", `printf '{"version":1,"update":true,"releasePacketVersions":[1],"maintenanceDescriptor":true}\n'`, false},
+		{"0.1.9 packet support without maintenance agreement", `printf '{"version":1,"update":true,"releasePacketVersions":[1,2]}\n'`, false},
+		{"packet1 and packet2 with maintenance agreement", `printf '{"version":1,"update":true,"releasePacketVersions":[1,2],"maintenanceDescriptor":true}\n'`, true},
+		{"update disabled", `printf '{"version":1,"update":false,"releasePacketVersions":[1,2],"maintenanceDescriptor":true}\n'`, false},
+		{"missing update", `printf '{"version":1,"releasePacketVersions":[1,2],"maintenanceDescriptor":true}\n'`, false},
+		{"missing version", `printf '{"update":true,"releasePacketVersions":[1,2],"maintenanceDescriptor":true}\n'`, false},
 		{"malformed version", `printf '{"version":"old"}\n'`, false},
-		{"malformed packet versions", `printf '{"version":1,"update":true,"releasePacketVersions":["2"]}\n'`, false},
-		{"null packet version", `printf '{"version":1,"update":true,"releasePacketVersions":[1,null,2]}\n'`, false},
-		{"invalid trailing packet version", `printf '{"version":1,"update":true,"releasePacketVersions":[2,0]}\n'`, false},
-		{"empty packet versions", `printf '{"version":1,"update":true,"releasePacketVersions":[]}\n'`, false},
-		{"trailing response", `printf '{"version":1,"update":true,"releasePacketVersions":[1,2]}{}\n'`, false},
+		{"malformed packet versions", `printf '{"version":1,"update":true,"releasePacketVersions":["2"],"maintenanceDescriptor":true}\n'`, false},
+		{"null packet version", `printf '{"version":1,"update":true,"releasePacketVersions":[1,null,2],"maintenanceDescriptor":true}\n'`, false},
+		{"invalid trailing packet version", `printf '{"version":1,"update":true,"releasePacketVersions":[2,0],"maintenanceDescriptor":true}\n'`, false},
+		{"empty packet versions", `printf '{"version":1,"update":true,"releasePacketVersions":[],"maintenanceDescriptor":true}\n'`, false},
+		{"trailing response", `printf '{"version":1,"update":true,"releasePacketVersions":[1,2],"maintenanceDescriptor":true}{}\n'`, false},
 		{"failed command", `exit 2`, false},
-		{"future entry ABI", `printf '{"version":2,"update":true,"releasePacketVersions":[1,2]}\n'`, false},
+		{"future entry ABI", `printf '{"version":2,"update":true,"releasePacketVersions":[1,2],"maintenanceDescriptor":true}\n'`, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "core")
@@ -48,7 +49,7 @@ func TestInstalledUpdateEntryCapabilitiesFailClosed(t *testing.T) {
 }
 
 func TestInstalledUpdateEntryCapabilityProbeBounds(t *testing.T) {
-	const capability = `{"version":1,"update":true,"releasePacketVersions":[1,2]}`
+	const capability = `{"version":1,"update":true,"releasePacketVersions":[1,2],"maintenanceDescriptor":true}`
 	for _, size := range []int{8192, 8193} {
 		path := filepath.Join(t.TempDir(), "core")
 		body := capability + strings.Repeat(" ", size-len(capability))

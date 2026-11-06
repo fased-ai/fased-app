@@ -11,7 +11,7 @@ func TestCurrentEntryCapabilitiesPreservesVersion1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(raw) != `{"version":1,"update":true,"releasePacketVersions":[1,2]}` {
+	if string(raw) != `{"version":1,"update":true,"releasePacketVersions":[1,2],"maintenanceDescriptor":true}` {
 		t.Fatalf("entry wire contract changed: %s", raw)
 	}
 	value.ReleasePacketVersions[0] = 99
