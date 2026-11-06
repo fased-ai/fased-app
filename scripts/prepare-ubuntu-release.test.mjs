@@ -542,7 +542,13 @@ test("staged release has one pinned unpublished Ubuntu build", () => {
     workflow,
     /signer-sign|npm run release -- credentials|passphrase|keys\.enc/,
   );
-  assert.equal((workflow.match(/runs-on:/g) ?? []).length, 2);
+  assert.equal((workflow.match(/runs-on:/g) ?? []).length, 3);
+  assert.match(workflow, /candidate-inputs:\n/);
+  assert.match(workflow, /ubuntu-amd64:\n    needs: candidate-inputs/);
+  assert.match(
+    workflow,
+    /installed-acceptance:\n    needs: \[candidate-inputs, ubuntu-amd64\]/,
+  );
   assert.match(workflow, /runs-on: ubuntu-24\.04/);
   for (const line of workflow.split("\n").filter((s) => s.includes("uses:")))
     assert.match(line, /uses: actions\/[a-z-]+@[a-f0-9]{40}(?: |$)/);
