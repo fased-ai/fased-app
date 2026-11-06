@@ -559,3 +559,203 @@ test("preserved password fixture access is pinned to the real predecessor", () =
     assert.throws(() => browserAddress(bad));
   }
 });
+
+test("installed-agent producer binds observed stages and refuses missing or substituted proof", async () => {
+  const { installedAgentReceipt } =
+    await import("./staged-package-browser.mjs");
+  const {
+    acceptanceBinding,
+    stagedAcceptanceContract,
+    validateInstalledAgent,
+  } = await import("./release-acceptance.mjs");
+  const { createHash } = await import("node:crypto");
+  const hash = (s) => createHash("sha256").update(s).digest("hex");
+  const bundleManifest = JSON.stringify({
+    files: { "fased-app": { sha256: "1".repeat(64), bytes: 1 } },
+  });
+  const packet = {
+    source: "a".repeat(40),
+    productVersion: "0.1.11",
+    bundleSha256: hash(bundleManifest),
+    release: { sourceTree: "b".repeat(40), runId: "123", runAttempt: "1" },
+  };
+  const inventory = {
+    assets: [{ name: "engine", sha256: "1".repeat(64), size: 1 }],
+  };
+  const observed = {
+    ...acceptanceBinding(packet, inventory),
+    result: "PASS",
+    profile: "local",
+    instanceId: "disposable-instance",
+    engineSha256: "1".repeat(64),
+    installerOwnedProviderMode: true,
+    sandboxed: true,
+    testCodeOverlay: false,
+    realProviderCalls: false,
+    serviceRestarted: true,
+    serviceRestart: { beforePID: "101", afterPID: "102" },
+    kernelReboot: {
+      before: "11111111-1111-1111-1111-111111111111",
+      after: "22222222-2222-2222-2222-222222222222",
+    },
+    rebooted: true,
+    revoked: true,
+    checks: Object.fromEntries(
+      stagedAcceptanceContract.installedAgent.map((k) => [k, "PASS"]),
+    ),
+  };
+  const input = {
+    packet,
+    inventory,
+    localReceiptSha256: "c".repeat(64),
+    bundleManifest,
+    observed,
+    observedRaw: JSON.stringify(observed),
+  };
+  const receipt = installedAgentReceipt(input);
+  assert.doesNotThrow(() =>
+    validateInstalledAgent(
+      receipt,
+      packet,
+      inventory,
+      input.localReceiptSha256,
+    ),
+  );
+  assert.equal(receipt.instanceIdentitySha256, hash(observed.instanceId));
+  assert.equal(receipt.evidenceSha256, hash(input.observedRaw));
+  assert.throws(() => installedAgentReceipt({ ...input, observedRaw: "{}" }));
+  for (const change of [
+    { result: "FAIL" },
+    { serviceRestart: undefined },
+    { serviceRestart: { beforePID: "1", afterPID: "1" } },
+    { serviceRestart: { beforePID: "0", afterPID: "2" } },
+    { kernelReboot: undefined },
+    {
+      kernelReboot: {
+        before: "11111111-1111-1111-1111-111111111111",
+        after: "11111111-1111-1111-1111-111111111111",
+      },
+    },
+    {
+      kernelReboot: {
+        before: "invalid",
+        after: "22222222-2222-2222-2222-222222222222",
+      },
+    },
+    { profile: "remote" },
+    { installerOwnedProviderMode: false },
+    { serviceRestarted: false },
+    { rebooted: false },
+    { revoked: false },
+    { source: "d".repeat(40) },
+    { engineSha256: "2".repeat(64) },
+    { realProviderCalls: true },
+    { testCodeOverlay: true },
+    { checks: { ...observed.checks, protectedCredentials: "OPEN" } },
+  ])
+    assert.throws(() =>
+      installedAgentReceipt({
+        ...input,
+        observed: { ...observed, ...change },
+        observedRaw: JSON.stringify({ ...observed, ...change }),
+      }),
+    );
+});
+
+test("installed provider browser actions require their dedicated profile and retain legacy refusal", () => {
+  const config = {
+    fixtureOnly: true,
+    action: "agent-prepare",
+    installedProviderProfile: true,
+    url: "http://127.0.0.1:17485",
+    version: "0.1.11",
+  };
+  assert.equal(browserAddress(config).port, "17485");
+  assert.throws(() =>
+    browserAddress({ ...config, installedProviderProfile: false }),
+  );
+  assert.throws(() =>
+    browserAddress({ ...config, url: "http://127.0.0.1:17481" }),
+  );
+  assert.throws(() =>
+    browserAddress({ ...config, action: "ui-update", fromVersion: "0.1.10" }),
+  );
+});
+
+test("receipt CLI writes the same typed receipt consumed by the gate without opening a browser", async () => {
+  const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { execFileSync } = await import("node:child_process");
+  const { createHash } = await import("node:crypto");
+  const {
+    acceptanceBinding,
+    stagedAcceptanceContract,
+    validateInstalledAgent,
+  } = await import("./release-acceptance.mjs");
+  const hash = (s) => createHash("sha256").update(s).digest("hex");
+  const bundleManifest = JSON.stringify({
+    files: { "fased-app": { sha256: "1".repeat(64), bytes: 1 } },
+  });
+  const packet = {
+    source: "a".repeat(40),
+    productVersion: "0.1.11",
+    bundleSha256: hash(bundleManifest),
+    release: { sourceTree: "b".repeat(40), runId: "123", runAttempt: "1" },
+  };
+  const inventory = {
+    assets: [{ name: "engine", sha256: "1".repeat(64), size: 1 }],
+  };
+  const observed = {
+    ...acceptanceBinding(packet, inventory),
+    result: "PASS",
+    profile: "local",
+    instanceId: "disposable-contract-instance",
+    engineSha256: "1".repeat(64),
+    installerOwnedProviderMode: true,
+    sandboxed: true,
+    testCodeOverlay: false,
+    realProviderCalls: false,
+    serviceRestarted: true,
+    serviceRestart: { beforePID: "101", afterPID: "102" },
+    kernelReboot: {
+      before: "11111111-1111-1111-1111-111111111111",
+      after: "22222222-2222-2222-2222-222222222222",
+    },
+    rebooted: true,
+    revoked: true,
+    checks: Object.fromEntries(
+      stagedAcceptanceContract.installedAgent.map((k) => [k, "PASS"]),
+    ),
+  };
+  const observedRaw = JSON.stringify(observed, null, 2) + "\n";
+  const work = await mkdtemp(join(tmpdir(), "fased-agent-producer-"));
+  try {
+    const request = join(work, "request.json");
+    await writeFile(
+      request,
+      JSON.stringify({
+        action: "agent-receipt",
+        packet,
+        inventory,
+        localReceiptSha256: "c".repeat(64),
+        bundleManifest,
+        observed,
+        observedRaw,
+      }),
+      { mode: 0o600 },
+    );
+    const receipt = JSON.parse(
+      execFileSync(
+        process.execPath,
+        ["scripts/staged-package-browser.mjs", request],
+        { encoding: "utf8", timeout: 10000 },
+      ),
+    );
+    validateInstalledAgent(receipt, packet, inventory, "c".repeat(64));
+    assert.equal(receipt.evidenceSha256, hash(observedRaw));
+    assert.notEqual(receipt.evidenceSha256, hash(JSON.stringify(observed)));
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+});

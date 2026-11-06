@@ -494,5 +494,29 @@ class DeliveryFixtureTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'regular'):
                 guest.package(path)
 
+class ProviderBundleProducerTest(unittest.TestCase):
+    def test_exact_bundle_extraction_and_preserved_attempt(self):
+        import tarfile
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d); engine=b"disposable-contract-engine"; manifest=json.dumps({"files":{"fased-app":{"sha256":guest.digest(engine),"bytes":len(engine)}}}).encode()
+            with tarfile.open(root/guest.ASSETS[0],"w:gz") as archive:
+                for name,raw in [("manifest.json",manifest),("fased-app",engine)]:
+                    entry=tarfile.TarInfo(name);entry.size=len(raw);archive.addfile(entry,io.BytesIO(raw))
+            candidate={"directory":str(root),"packet":{"bundleSha256":guest.digest(manifest)}}
+            expected,raw=guest.verified_provider_bundle(candidate,root/"owned")
+            self.assertEqual(expected,guest.digest(engine));self.assertEqual(raw,manifest)
+            self.assertEqual((root/"owned/fased-app").read_bytes(),engine)
+            with self.assertRaises(FileExistsError):guest.verified_provider_bundle(candidate,root/"owned")
+            with self.assertRaisesRegex(RuntimeError,"manifest differs"):guest.verified_provider_bundle({**candidate,"packet":{"bundleSha256":"0"*64}},root/"wrong")
+
+    def test_link_member_never_becomes_an_installed_engine(self):
+        import tarfile
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)
+            with tarfile.open(root/guest.ASSETS[0],"w:gz") as archive:
+                entry=tarfile.TarInfo("manifest.json");entry.type=tarfile.SYMTYPE;entry.linkname="/etc/passwd";archive.addfile(entry)
+            with self.assertRaisesRegex(RuntimeError,"bounded original"):
+                guest.verified_provider_bundle({"directory":str(root),"packet":{"bundleSha256":"0"*64}},root/"owned")
+
 if __name__ == '__main__':
     unittest.main()

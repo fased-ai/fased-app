@@ -1,10 +1,107 @@
 // Actual packaged UI through the disposable guest's SSH-forwarded listener.
 import assert from "node:assert/strict";
+import {
+  acceptanceBinding,
+  validateInstalledAgent,
+  stagedAcceptanceContract,
+} from "./release-acceptance.mjs";
 import { readFile, writeFile, chmod } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+
+// The producer consumes actual runner observations, never an all-PASS template.
+export function installedAgentReceipt({
+  packet,
+  inventory,
+  localReceiptSha256,
+  bundleManifest,
+  observed,
+  observedRaw,
+}) {
+  const hash = (s) => createHash("sha256").update(s).digest("hex");
+  const binding = acceptanceBinding(packet, inventory);
+  assert.equal(
+    typeof observedRaw,
+    "string",
+    "raw retained observations required",
+  );
+  assert.deepEqual(
+    JSON.parse(observedRaw),
+    observed,
+    "raw observations differ",
+  );
+  assert.ok(
+    observed && Object.entries(binding).every(([k, v]) => observed[k] === v),
+    "installed observation belongs to another package",
+  );
+  for (const key of [
+    "installerOwnedProviderMode",
+    "sandboxed",
+    "serviceRestarted",
+    "rebooted",
+    "revoked",
+  ])
+    assert.equal(observed[key], true, `observed ${key} required`);
+  for (const key of ["testCodeOverlay", "realProviderCalls"])
+    assert.equal(observed[key], false);
+  assert.equal(observed.result, "PASS");
+  assert.ok(
+    typeof observed.instanceId === "string" && observed.instanceId.length > 16,
+  );
+  assert.equal(
+    observed.profile,
+    "local",
+    "this producer supports the Local installed agent only",
+  );
+  const restart = observed.serviceRestart;
+  assert.ok(
+    restart &&
+      /^[1-9][0-9]*$/.test(restart.beforePID) &&
+      /^[1-9][0-9]*$/.test(restart.afterPID) &&
+      restart.beforePID !== restart.afterPID,
+    "actual changed service PID required",
+  );
+  const boot = observed.kernelReboot;
+  const bootID =
+    /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
+  assert.ok(
+    boot &&
+      bootID.test(boot.before) &&
+      bootID.test(boot.after) &&
+      boot.before !== boot.after,
+    "actual changed kernel boot required",
+  );
+  const receipt = {
+    ...binding,
+    localReceiptSha256,
+    mode: "installed-provider",
+    profile: observed.profile,
+    result: "PASS",
+    fixtureOnly: true,
+    sandboxed: true,
+    shippingArtifactUnmodified: true,
+    testCodeOverlay: false,
+    realProviderCalls: false,
+    mining: false,
+    liveFeatures: false,
+    automaticUpdates: false,
+    engineSha256: observed.engineSha256,
+    bundleSha256: packet.bundleSha256,
+    bundleManifest,
+    instanceIdentitySha256: hash(observed.instanceId),
+    evidenceSha256: hash(observedRaw),
+    checks: Object.fromEntries(
+      stagedAcceptanceContract.installedAgent.map((k) => [
+        k,
+        observed.checks?.[k],
+      ]),
+    ),
+  };
+  validateInstalledAgent(receipt, packet, inventory, localReceiptSha256);
+  return receipt;
+}
 
 const password = "disposable-staged-owner-password";
 const sessionKey = "fased.core.session.v1";
@@ -180,8 +277,20 @@ export function browserAddress(config) {
       "reconnect",
       "auth-cycle",
       "failed-check",
+      "agent-prepare",
+      "agent-run",
+      "agent-reboot",
+      "agent-finish",
     ].includes(config.action),
   );
+  if (config.action.startsWith("agent-")) {
+    assert.equal(config.installedProviderProfile, true);
+    assert.notEqual(
+      config.transport,
+      "tailscale-https",
+      "Local producer cannot operate on Remote owner state",
+    );
+  }
   const address = new URL(config.url);
   assert.equal(address.username + address.password, "");
   if (config.transport === "tailscale-https") {
@@ -211,7 +320,23 @@ export function browserAddress(config) {
     );
     assert.equal(address.protocol, "http:");
     assert.equal(address.hostname, "127.0.0.1");
-    assert.ok(["17481", "17482", "17483", "17484"].includes(address.port));
+    assert.ok(
+      ["17481", "17482", "17483", "17484", "17485"].includes(address.port),
+    );
+    if (address.port === "17485") {
+      assert.equal(
+        config.installedProviderProfile,
+        true,
+        "dedicated installed provider profile required",
+      );
+      assert.ok(
+        config.action === "claim" || config.action.startsWith("agent-"),
+      );
+    } else
+      assert.ok(
+        !config.action.startsWith("agent-"),
+        "agent actions require their isolated installed profile",
+      );
     if (address.port === "17484")
       assert.ok(
         ["claim", "check", "preserve", "reconnect"].includes(config.action),
@@ -243,7 +368,7 @@ export function browserAddress(config) {
     // Routine Update and current Remote setup must stay password-free.
     assert.equal(config.legacyRemotePasswordSetup, true);
     assert.equal(config.transport, "tailscale-https");
-    assert.equal(config.action, "claim");
+    assert.ok(config.action === "claim" || config.action.startsWith("agent-"));
     assert.equal(config.version, "0.1.6");
   }
   const applying = ["ui-update", "automatic-update"].includes(config.action);
@@ -357,6 +482,353 @@ export function detachedFixtureObserver(
   };
 }
 
+// Runs against the installed service using its ordinary authenticated API and UI.
+// Private phase state is retained beside the existing browser session; it is not
+// an acceptance receipt. Only the final observed result may become one.
+export async function runInstalledAgentPhase(
+  config,
+  { page, request, expect },
+) {
+  const stateFile = config.storageFile + ".agent.json";
+  const phase = config.action;
+  const state = existsSync(stateFile)
+    ? JSON.parse(await readFile(stateFile, "utf8"))
+    : { checks: {} };
+  const health = await request("health");
+  assert.equal(health.version, config.version);
+  for (const key of ["financialExecution", "walletSigner"])
+    assert.equal(health.capabilities[key], false);
+  const view = () =>
+    request(
+      "agents?profile=" +
+        encodeURIComponent(state.profileId ?? "trading-analyst"),
+    );
+  const change = async (command) => {
+    const v = await view();
+    return request("agents", "POST", {
+      profileId: v.profileId,
+      revision: v.revision,
+      ...command,
+    });
+  };
+  const account = () =>
+    request("ai/connection?ref=" + encodeURIComponent(state.ref));
+  if (phase === "agent-prepare") {
+    assert.equal(
+      existsSync(stateFile),
+      false,
+      "do not duplicate an existing agent journey",
+    );
+    const passphrase = "disposable-installed-agent-vault";
+    await page.goto(new URL("/#providers", config.url).href);
+    const providers = page.getByRole("region", {
+      name: "Providers",
+      exact: true,
+    });
+    await providers.locator('[data-provider="openai"] > button').click();
+    await providers
+      .getByLabel("Name", { exact: true })
+      .fill("Installed account");
+    await providers
+      .getByLabel("API key", { exact: true })
+      .fill("fased-test-installed-agent-key");
+    await providers
+      .getByLabel("Vault passphrase", { exact: true })
+      .fill(passphrase);
+    await providers.getByRole("button", { name: "Save", exact: true }).click();
+    let c;
+    await expect
+      .poll(async () => {
+        const all = await request("ai/connection");
+        c = all.connections?.find((c) => c.name === "Installed account");
+        return !!c && !c.locked;
+      })
+      .toBe(true);
+    assert.equal(c.testOnly, true);
+    assert.equal(c.liveCallsEnabled, false);
+    state.ref = c.ref;
+    state.profileId = "trading-analyst";
+    c = await account();
+    const model = c.admissionPolicy?.model;
+    assert.ok(model);
+    state.checks.providerConnection = "PASS";
+    await page.goto(new URL("/#agents/settings", config.url).href);
+    await page
+      .getByLabel("Agent", { exact: true })
+      .selectOption(state.profileId);
+    await page.getByLabel("Provider", { exact: true }).selectOption("openai");
+    await page.getByLabel("Account", { exact: true }).selectOption(c.ref);
+    await page.getByLabel("Model", { exact: true }).selectOption(model);
+    await page.getByRole("button", { name: "Save agent", exact: true }).click();
+    await expect
+      .poll(
+        async () =>
+          (await view()).profiles.find((p) => p.id === state.profileId)
+            ?.connectionRef,
+      )
+      .toBe(c.ref);
+    const assigned = (await view()).profiles.find(
+      (p) => p.id === state.profileId,
+    );
+    assert.equal(assigned.model, model);
+    state.checks.agentModel = "PASS";
+    let v = await change({
+      action: "session-create",
+      name: "Installed journey",
+    });
+    const session = v.sessions.at(-1);
+    assert.equal(session.name, "Installed journey");
+    state.sessionId = session.id;
+    await page.goto(new URL("/#agents/chat", config.url).href);
+    await page
+      .getByLabel("Agent", { exact: true })
+      .selectOption(state.profileId);
+    const conversations = page.getByRole("button", {
+      name: "Conversations",
+      exact: true,
+    });
+    if (
+      (await conversations.isVisible()) &&
+      (await conversations.getAttribute("aria-expanded")) !== "true"
+    )
+      await conversations.click();
+    await page.getByRole("button", { name: "Installed journey" }).click();
+    const send = async (text, allow = false) => {
+      await page.getByLabel("Message", { exact: true }).fill(text);
+      await page.getByRole("button", { name: "Send", exact: true }).click();
+      const review = page.getByRole("dialog", {
+        name: "Allow replies",
+        exact: true,
+      });
+      if (allow) {
+        await expect(review).toBeVisible();
+        await review
+          .getByRole("button", { name: "Allow and send", exact: true })
+          .click();
+      }
+    };
+    await send("Compare only these synthetic inputs: A=1 and B=2.", true);
+    await expect
+      .poll(
+        async () =>
+          (await view()).aiRequests
+            .filter((q) => q.sessionId === session.id)
+            .at(-1)?.state,
+        { timeout: 30000 },
+      )
+      .toBe("completed");
+    await expect(
+      page.getByRole("button", { name: "Stop", exact: true }),
+    ).toHaveCount(0);
+    await expect(page.locator(".ai-answer").last()).toContainText("fixture");
+    await send("Stop this synthetic comparison before completing it.");
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await expect
+      .poll(
+        async () =>
+          (await view()).aiRequests
+            .filter((q) => q.sessionId === session.id)
+            .at(-1)?.state,
+        { timeout: 10000 },
+      )
+      .toBe("cancelled");
+    state.checks.chatSendStop = "PASS";
+    await page.goto(new URL("/#agents/tasks", config.url).href);
+    await page.getByRole("button", { name: "New task", exact: true }).click();
+    const editor = page.getByRole("complementary", {
+      name: "Create a task",
+      exact: true,
+    });
+    await editor.getByLabel("Type", { exact: true }).selectOption("analysis");
+    await editor
+      .getByLabel("Task name", { exact: true })
+      .fill("Installed bounded task");
+    await editor
+      .getByLabel("Prompt", { exact: true })
+      .fill("Compare only synthetic fixed inputs.");
+    await editor
+      .getByRole("button", { name: "Review task", exact: true })
+      .click();
+    const taskReview = page.getByRole("complementary", {
+      name: "Review task",
+      exact: true,
+    });
+    await expect(taskReview).toContainText("Installed bounded task");
+    await taskReview
+      .getByRole("button", { name: "Create task", exact: true })
+      .click();
+    await expect
+      .poll(async () =>
+        (await view()).tasks.some((t) => t.name === "Installed bounded task"),
+      )
+      .toBe(true);
+    v = await view();
+    const task = v.tasks.find((t) => t.name === "Installed bounded task");
+    assert.ok(task?.ai);
+    state.taskId = task.id;
+    state.checks.reviewedTask = "PASS";
+    await page.goto(new URL("/#providers", config.url).href);
+    const providerPage = page.getByRole("region", {
+      name: "Providers",
+      exact: true,
+    });
+    await providerPage.locator('[data-account="' + c.ref + '"]').click();
+    const access = providerPage.locator("details").filter({
+      has: page.locator("summary", { hasText: /^Background access$/ }),
+    });
+    await access.locator(":scope > summary").click();
+    await access
+      .getByRole("checkbox", { name: "Installed bounded task", exact: true })
+      .check();
+    await access
+      .getByRole("checkbox", { name: /Continue after sign.?out/ })
+      .check();
+    await access
+      .getByRole("checkbox", { name: "Continue after restart", exact: true })
+      .check();
+    await access
+      .getByRole("button", { name: "Review access", exact: true })
+      .click();
+    await access
+      .getByLabel("Vault passphrase", { exact: true })
+      .fill(passphrase);
+    await access
+      .getByRole("button", { name: "Allow task access", exact: true })
+      .click();
+    await expect
+      .poll(async () => {
+        const access = (await account()).taskAccess;
+        return (
+          !!access?.continueAfterRestart &&
+          access.tasks.some((t) => t.id === state.taskId)
+        );
+      })
+      .toBe(true);
+    const allowed = await account();
+    assert.ok(allowed.taskAccess?.continueAfterRestart);
+    state.grantId = allowed.taskAccess.id;
+    state.checks.protectedCredentials = "PASS";
+    state.instanceId = health.instanceId;
+    state.requestCount = (await view()).aiRequests.length;
+  } else {
+    assert.equal(
+      health.instanceId,
+      state.instanceId,
+      "preserve the installed owner instance",
+    );
+    const c = await account();
+    assert.equal(c.locked, true, "restart must not unlock Chat");
+    if (phase === "agent-run") {
+      assert.equal(c.taskAccess?.id, state.grantId);
+      assert.equal(c.taskAccess.usedRequests, 0);
+      await page.goto(new URL("/#agents/tasks", config.url).href);
+      await page
+        .getByRole("button", {
+          name: "Run now: Installed bounded task",
+          exact: true,
+        })
+        .click();
+      await expect
+        .poll(
+          async () =>
+            (await view()).tasks.find((t) => t.id === state.taskId)?.runs,
+          { timeout: 30000 },
+        )
+        .toBe(1);
+      const after = await account();
+      assert.equal(after.taskAccess.usedRequests, 1);
+      state.allocated = after.taskAccess.allocatedMicrousd;
+      assert.ok(state.allocated > 0);
+      const result = (await view()).aiRequests
+        .filter((q) => q.taskId === state.taskId)
+        .at(-1);
+      assert.equal(result.state, "completed");
+      state.resultId = result.id;
+      await page.goto(new URL("/#agents/tasks", config.url).href);
+      const withResult = await view();
+      const run = withResult.runs.find((r) => r.taskId === state.taskId);
+      assert.ok(run);
+      await page
+        .getByRole("navigation", { name: "Task views" })
+        .getByRole("button", { name: "Results", exact: true })
+        .click();
+      const card = page.getByRole("article", {
+        name: "Run " + run.id,
+        exact: true,
+      });
+      await expect(card).toBeVisible();
+      await card.getByRole("button", { name: "Discuss", exact: true }).click();
+      const message = page
+        .locator(".chat-message")
+        .filter({ hasText: "Installed bounded task" })
+        .last();
+      await message
+        .getByRole("button", { name: "Remember this", exact: true })
+        .click();
+      const memory = page.getByRole("dialog", { name: "Memory", exact: true });
+      const note = "Retain only this synthetic preference.";
+      await memory.getByLabel("Note", { exact: true }).fill(note);
+      await memory
+        .getByRole("button", { name: "Save memory", exact: true })
+        .click();
+      await expect
+        .poll(async () => (await view()).memories.some((m) => m.text === note))
+        .toBe(true);
+      const remembered = (await view()).memories.find((m) => m.text === note);
+      assert.ok(remembered);
+      state.memoryId = remembered.id;
+      await page.goto(new URL("/#agents/memory", config.url).href);
+      await expect(page.getByText(note, { exact: true }).first()).toBeVisible();
+      const other = await request("agents?profile=news-researcher");
+      assert.ok(!other.memories.some((m) => m.id === state.memoryId));
+      assert.ok(!other.tasks.some((t) => t.id === state.taskId));
+      state.checks.memoryOptional = "PASS";
+      state.checks.profileIsolation = "PASS";
+      state.checks.taskResult = "PASS";
+      state.serviceRestarted = true;
+      state.requestCount = (await view()).aiRequests.length;
+    } else if (phase === "agent-reboot") {
+      const v = await view();
+      assert.equal(v.aiRequests.length, state.requestCount);
+      assert.equal(v.tasks.find((t) => t.id === state.taskId).runs, 1);
+      if (c.taskAccess) {
+        assert.equal(c.taskAccess.id, state.grantId);
+        assert.equal(c.taskAccess.usedRequests, 1);
+        assert.equal(c.taskAccess.allocatedMicrousd, state.allocated);
+      }
+      // A desktop keyring may be locked after reboot: held is correct, not
+      // unattended success. No reconnection/refill or duplicate dispatch.
+      state.rebootCredentialState = c.taskAccess
+        ? "retained-scoped"
+        : "held-native-unavailable";
+      state.rebooted = true;
+      state.checks.restartCredentialPolicy = "PASS";
+      await request("ai/connection", "POST", {
+        action: "task-access-revoke",
+        ref: state.ref,
+      });
+      assert.equal((await account()).taskAccess, undefined);
+      state.revoked = true;
+    } else if (phase === "agent-finish") {
+      assert.equal(
+        c.taskAccess,
+        undefined,
+        "revocation survives real service restart",
+      );
+      const v = await view();
+      assert.equal(v.aiRequests.length, state.requestCount);
+      assert.ok(v.memories.some((m) => m.id === state.memoryId));
+      assert.equal(v.tasks.find((t) => t.id === state.taskId).runs, 1);
+      state.checks.revocation = "PASS";
+      state.checks.preservation = "PASS";
+      state.result = "PASS";
+    } else throw Error("unknown installed-agent phase");
+  }
+  await writeFile(stateFile, JSON.stringify(state), { mode: 0o600 });
+  await chmod(stateFile, 0o600);
+  return { result: "PASS", ...state };
+}
+
 export async function runStagedBrowser(config, { chromium, expect }) {
   assert.equal(process.env.FASED_DISPOSABLE_VM_ACCEPTANCE, "1");
   assert.ok(process.getuid() > 0);
@@ -465,6 +937,19 @@ export async function runStagedBrowser(config, { chromium, expect }) {
       await page.getByRole("button", { name: "Sign in", exact: true }).click();
     }
     await waitAuthenticated();
+    if (config.action.startsWith("agent-")) {
+      const observed = await runInstalledAgentPhase(config, {
+        page,
+        request,
+        expect,
+      });
+      assert.deepEqual(
+        external,
+        [],
+        "installed journey attempted an external browser request",
+      );
+      return observed;
+    }
     const before = await checkHealth(
       applying ? config.fromVersion : config.version,
     );
@@ -803,10 +1288,13 @@ if (
   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
 ) {
   const config = JSON.parse(await readFile(process.argv[2], "utf8"));
-  const result = await (
-    config.action === "private-preflight"
-      ? runPrivatePreflight
-      : runStagedBrowser
-  )(config, await import("@playwright/test"));
+  const result =
+    config.action === "agent-receipt"
+      ? installedAgentReceipt(config)
+      : await (
+          config.action === "private-preflight"
+            ? runPrivatePreflight
+            : runStagedBrowser
+        )(config, await import("@playwright/test"));
   console.log(JSON.stringify(result));
 }

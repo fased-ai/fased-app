@@ -18,13 +18,14 @@ import ssl
 import subprocess
 import sys
 import threading
+import tarfile
 import time
 import urllib.parse
 import urllib.request
 
 P = pathlib.Path
 ASSETS = ["fased-app-linux-amd64.tar.gz", "fased-install-linux-amd64", "fased-app-linux-amd64.provenance.sigstore.json", "install.sh", "fased-release.json"]
-PROFILES = {"local": ("fased-local", 1100, 17481), "remote": ("fased-remote", 1200, 17482), "legacy": ("fased-legacy", 1300, 17483), "fresh": ("fased-fresh", 1400, 17484)}
+PROFILES = {"local": ("fased-local", 1100, 17481), "remote": ("fased-remote", 1200, 17482), "legacy": ("fased-legacy", 1300, 17483), "fresh": ("fased-fresh", 1400, 17484), "agent": ("fased-agent", 1500, 17485)}
 HOSTS = ["github.com", "api.github.com", "release-assets.githubusercontent.com"]
 ADDRESS = "140.82.112.3"
 PASSWORD = "disposable-staged-owner-password"
@@ -475,6 +476,27 @@ def health(port):
     return result
 
 
+def verified_provider_bundle(candidate, target):
+    """Extract only the two exact bound members; never replace an attempt."""
+    target = P(target)
+    target.mkdir(mode=0o700)
+    with tarfile.open(P(candidate["directory"]) / ASSETS[0], "r:gz") as archive:
+        for name, maximum in [("manifest.json", 65536), ("fased-app", 64 * 1024 * 1024)]:
+            entries = [v for v in archive.getmembers() if P(v.name).name == name]
+            if len(entries) != 1 or not entries[0].isfile() or ".." in P(entries[0].name).parts or not 0 < entries[0].size <= maximum:
+                raise RuntimeError("one bounded original bundle member required")
+            raw = archive.extractfile(entries[0]).read()
+            (target / name).write_bytes(raw)
+    manifest = (target / "manifest.json").read_bytes()
+    if digest(manifest) != candidate["packet"]["bundleSha256"]:
+        raise RuntimeError("original bundle manifest differs")
+    expected = json.loads(manifest)["files"]["fased-app"]["sha256"]
+    if digest((target / "fased-app").read_bytes()) != expected:
+        raise RuntimeError("unmodified shipping engine required")
+    (target / "fased-app").chmod(0o700)
+    return expected, manifest
+
+
 def owner(args):
     user, uid, port = PROFILES[args.profile]
     if os.getuid() != uid or P.home() != P("/home") / user:
@@ -485,15 +507,58 @@ def owner(args):
     prompts = {"Private access [": "ssh", "Use a dedicated app account": "y", "Keep Fased running": "y", "Start Fased at login?": "y", "Owner password: ": PASSWORD, **PREPARATION_ANSWERS}
     if args.version and args.owner_action in ("apply", "bootstrap", "failed-bootstrap"):
         prompts["Update to " + args.version + "? [y/N]: "] = "y"
+    if args.owner_action == "provider-install":
+        if args.profile != "agent" or not args.provider_helper or not args.candidate:
+            raise RuntimeError("dedicated agent profile and reviewed helper required")
+        candidate = package(args.candidate)
+        target = state_dir / "verified-provider-package"
+        expected, manifest = verified_provider_bundle(candidate, target)
+        env = {**os.environ, "XDG_RUNTIME_DIR": "/run/user/1500", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1500/bus"}
+        # Native desktop protection, in this disposable profile only. No store
+        # substitute or plaintext wrapping-key fallback enters the application.
+        run(["/usr/bin/gnome-keyring-daemon", "--unlock"], input=b"disposable-installed-native-keyring\n", env=env)
+        installed = run([str(args.provider_helper), "installed-provider", "--disposable-fixture", "--engine", str(target / "fased-app"), "--engine-sha256", expected], env=env)
+        installed = json.loads(installed.stdout)
+        if installed.get("providerFixture") is not True or installed["files"]["fased-app"] != expected:
+            raise RuntimeError("installer-owned mode/hash missing")
+        probe = json.loads(run([str(args.provider_helper), "installed-provider", "--inspect"], env=env).stdout)
+        if probe.get("sandboxed") is not True or probe["engineSha256"] != expected: raise RuntimeError("installed sandbox/engine observation missing")
+        current = health(port)
+        if current["version"] != candidate["packet"]["productVersion"]:
+            raise RuntimeError("shipping engine version differs")
+        state = {"instanceId": current["instanceId"], "version": current["version"], "engineSha256": expected, "bundleManifest": manifest.decode(), "installerOwnedProviderMode": True, "sandboxed": probe["sandboxed"], "root": installed["root"], "data": installed["data"], "initialPid": probe["pid"]}
+        write_private(state_dir / "state.json", state)
+        return {"result": "PASS", **state}
+    if args.profile == "agent" and args.owner_action == "provider-inspect":
+        if not args.provider_helper: raise RuntimeError("reviewed inspector required")
+        probe=json.loads(run([str(args.provider_helper),"installed-provider","--inspect"]).stdout)
+        if probe.get("sandboxed") is not True or probe["engineSha256"] != state["engineSha256"]:
+            raise RuntimeError("installed sandbox or engine changed")
+        return {"result":"PASS",**probe}
+    if args.profile == "agent" and args.owner_action in ("open", "restart"):
+        engine = str(P(state["root"]) / "fased-app")
+        scope = ["--prefix", state["root"], "--data-dir", state["data"]]
+        if args.owner_action == "open":
+            code, output = terminal([engine, "open", *scope, "--print"], {})
+            if code: raise RuntimeError("installed Local owner open refused: " + redacted(output)[-1024:])
+            url, count = browser_link(output)
+            return {"result":"PASS","url":url,"urlCount":count}
+        before = health(port)
+        for action in ("stop", "start"):
+            code, _ = terminal([engine, "service", action, *scope], {})
+            if code: raise RuntimeError("installed Local service restart refused")
+        current = health(port)
+        if current["instanceId"] != before["instanceId"]: raise RuntimeError("restart changed owner identity")
+        return {"result":"PASS","instanceId":current["instanceId"]}
     if args.owner_action == "open":
-        code, output = terminal([command_path(), "open", *(["--print"] if args.profile in ("local", "fresh") else [])], {})
+        code, output = terminal([command_path(), "open", *(["--print"] if args.profile in ("local", "fresh", "agent") else [])], {})
         if code:
             raise RuntimeError("ordinary private browser handoff missing: " + redacted(output)[-8192:])
         url, count = browser_link(output)
         return {"result": "PASS", "url": url, "urlCount": count}
     if args.owner_action in ("install", "bootstrap", "failed-bootstrap"):
         version = args.version
-        install_profile = "local" if args.profile in ("local", "fresh") else "remote"
+        install_profile = "local" if args.profile in ("local", "fresh", "agent") else "remote"
         if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version or ""):
             raise RuntimeError("fixed verified release version required")
         url = "https://github.com/fased-ai/fased-app/releases/download/v" + version + "/install.sh"
@@ -519,14 +584,14 @@ def owner(args):
             raise RuntimeError("bootstrap did not preserve the instance and install candidate")
         state["version"] = current["version"]
         write_private(state_dir / "state.json", state)
-        code, opened = terminal([command_path(), "open", *(["--print"] if args.profile in ("local", "fresh") else [])], {})
+        code, opened = terminal([command_path(), "open", *(["--print"] if args.profile in ("local", "fresh", "agent") else [])], {})
         if code:
             raise RuntimeError("normal private browser handoff missing: " + redacted(opened)[-8192:])
         url, count = browser_link(opened)
         return {"result": "PASS", "url": url, "urlCount": count, "health": current}
     if args.owner_action == "login":
         code, output = terminal([command_path(), "login"], {"Owner password: ": PASSWORD})
-        confirmation = "CLI authenticated" if args.profile in ("local", "fresh") else "Signed in"
+        confirmation = "CLI authenticated" if args.profile in ("local", "fresh", "agent") else "Signed in"
         if code or confirmation not in output:
             raise RuntimeError("ordinary CLI owner sign-in failed: " + redacted(output)[-8192:])
         return {"result": "PASS"}
@@ -569,8 +634,9 @@ def main():
     parser.add_argument("--legacy", type=P)
     parser.add_argument("--selection", choices=["candidate", "predecessor", "legacy"])
     parser.add_argument("--fail-archive-once", action="store_true")
+    parser.add_argument("--provider-helper", type=P)
     parser.add_argument("--profile", choices=PROFILES)
-    parser.add_argument("--owner-action", choices=["install", "failed-bootstrap", "bootstrap", "open", "login", "apply", "check", "restart"])
+    parser.add_argument("--owner-action", choices=["install", "failed-bootstrap", "bootstrap", "open", "login", "apply", "check", "restart", "provider-install", "provider-inspect"])
     parser.add_argument("--version")
     parser.add_argument("--released-local-only", action="store_true")
     parser.add_argument("--resume", action="store_true")
