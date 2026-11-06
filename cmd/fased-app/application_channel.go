@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"github.com/fased-ai/fased-app/internal/bootstrap"
 	"github.com/fased-ai/fased-app/internal/core"
@@ -32,6 +36,65 @@ func channelOptions(binding *applicationChannelBinding, directory string) (boots
 }
 
 type channelOptionsFactory func(string) (bootstrap.Options, error)
+
+func channelMaintenanceRelease(d bootstrap.Descriptor, release core.ApplicationRelease) (core.ApplicationRelease, error) {
+	if release.Version != d.ProductVersion || release.Sequence != d.Sequence || release.Target != d.Target {
+		return core.ApplicationRelease{}, errors.New("verified descriptor differs from checked release")
+	}
+	// Other trust profiles retain their original verified identity, including
+	// their original serialization. Only attested main-dispatch changed ABI.
+	if d.Version != 4 || d.Release.BuildRef != "refs/heads/main" || d.Release.TagObject != "" {
+		return release, nil
+	}
+	if !bootstrap.ApplicationDescriptorMatches(d, release.ManifestSHA256) {
+		return core.ApplicationRelease{}, errors.New("verified descriptor differs from checked release")
+	}
+	// Retained maintenance readers compare the complete authenticated delivery
+	// descriptor. Keep that wire identity; do not replace their executable,
+	// weaken the tuple comparison, or rewrite any previously approved operation.
+	release.ManifestSHA256 = channelDescriptorDigest(d)
+	return release, nil
+}
+
+func channelDescriptorDigest(d bootstrap.Descriptor) string {
+	b, _ := json.Marshal(d)
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
+}
+
+func channelRememberDescriptor(parent string, d bootstrap.Descriptor) error {
+	return core.WritePrivateJSON(filepath.Join(parent, "descriptors", channelDescriptorDigest(d)+".json"), d)
+}
+
+// An old staged descriptor is only an equality witness for an already installed
+// immutable floor. It can never select a source, authorize Apply or advance it.
+func channelReleaseCurrentWithProof(parent string, d bootstrap.Descriptor, digest string, sequence uint64, installed string) (bool, error) {
+	current, err := channelReleaseCurrent(d, digest, sequence, installed)
+	if err == nil || d.Sequence != sequence || len(installed) != 64 {
+		return current, err
+	}
+	if _, decodeErr := hex.DecodeString(installed); decodeErr != nil {
+		return false, err
+	}
+	proofPath := filepath.Join(parent, "descriptors", installed+".json")
+	if e := core.EnsurePrivateDirectory(filepath.Dir(proofPath)); e != nil {
+		return false, err
+	}
+	info, e := os.Lstat(proofPath)
+	if e != nil || !info.Mode().IsRegular() || info.Size() > 65536 {
+		return false, err
+	}
+	b, e := update.ReadDocument(proofPath)
+	if e != nil || len(b) > 65536 {
+		return false, err
+	}
+	h := sha256.Sum256(bytes.TrimSuffix(b, []byte("\n")))
+	var prior bootstrap.Descriptor
+	if hex.EncodeToString(h[:]) != installed || update.StrictJSON(b, &prior) != nil || prior.Sequence != sequence || !bootstrap.ApplicationDescriptorMatches(prior, installed) || bootstrap.ApplicationDescriptorIdentity(prior) != digest || bootstrap.ApplicationDescriptorIdentity(d) != digest {
+		return false, err
+	}
+	return true, nil
+}
 
 func channelSource(options channelOptionsFactory, parent string) func(context.Context, core.ApplicationRelease, string) (*bootstrap.Prepared, error) {
 	return func(ctx context.Context, release core.ApplicationRelease, id string) (*bootstrap.Prepared, error) {
@@ -73,7 +136,7 @@ func channelCheck(options channelOptionsFactory, parent string, installedSequenc
 		if e != nil {
 			return nil, e
 		}
-		current, e := channelReleaseCurrent(descriptor, digest, installedSequence, installedRelease)
+		current, e := channelReleaseCurrentWithProof(parent, descriptor, digest, installedSequence, installedRelease)
 		if e != nil {
 			return nil, e
 		}
@@ -100,7 +163,19 @@ func channelCheck(options channelOptionsFactory, parent string, installedSequenc
 		if got.ManifestSHA256 != digest || got.Sequence != descriptor.Sequence {
 			return nil, errors.New("release changed during check")
 		}
-		return got, nil
+		ownerRelease, e := channelMaintenanceRelease(descriptor, *got)
+		if e != nil {
+			return nil, e
+		}
+		// Bind against Prepare's independently verified full descriptor too:
+		// delivery metadata may have changed between Inspect and acquisition.
+		if e = p.BindApplicationRelease(ownerRelease); e != nil {
+			return nil, e
+		}
+		if e = channelRememberDescriptor(parent, descriptor); e != nil {
+			return nil, e
+		}
+		return p.ApplicationRelease()
 	}
 }
 

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   browserAddress,
   completedApplication,
+  applicationUpdateFailure,
   privatePreflightAddress,
   runPrivatePreflight,
   retainedWorkspace,
@@ -11,6 +12,49 @@ import {
   restoreFixtureManualPolicy,
   detachedFixtureObserver,
 } from "./staged-package-browser.mjs";
+
+test("Apply observation reports a terminal refusal instead of waiting for restart", () => {
+  for (const phase of ["check-failed", "recovery", "rolled-back"]) {
+    const error = applicationUpdateFailure({
+      operation: {
+        id: "a0426465c8e3888946a5aca206aa63a4",
+        phase,
+        failure: "independent owner release differs from the approved update",
+      },
+    });
+    assert.match(error.message, /a0426465c8e3888946a5aca206aa63a4/);
+    assert.ok(error.message.includes(phase));
+    assert.match(error.message, /independent owner release/);
+  }
+  for (const phase of ["applying", "completed", "idle"])
+    assert.equal(applicationUpdateFailure({ operation: { phase } }), undefined);
+});
+
+test("the actual poller stops on a terminal update failure", async () => {
+  const { expect } = await import("@playwright/test");
+  let observations = 0;
+  await assert.rejects(
+    expect
+      .poll(
+        () => {
+          observations++;
+          const failure = applicationUpdateFailure({
+            operation: {
+              id: "retained-operation",
+              phase: "check-failed",
+              failure: "identity mismatch",
+            },
+          });
+          if (failure) throw failure;
+          return false;
+        },
+        { timeout: 1000, intervals: [1] },
+      )
+      .toBe(true),
+    /retained-operation check-failed: identity mismatch/,
+  );
+  assert.equal(observations, 1, "terminal operation was polled again");
+});
 
 test("detached Remote cookie and Local bearer observers cannot dispatch", async () => {
   const calls = [];

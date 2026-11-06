@@ -57,6 +57,15 @@ export function completedApplication(state, version, automatic) {
   );
 }
 
+export function applicationUpdateFailure(state) {
+  const operation = state?.operation;
+  if (["check-failed", "recovery", "rolled-back"].includes(operation?.phase)) {
+    return new Error(
+      `Update ${operation.id ?? "unknown"} ${operation.phase}: ${operation.failure || "preserve the transaction"}`,
+    );
+  }
+}
+
 // Seed only the disposable, explicitly claimed instance through its ordinary API.
 // Keep the reminder paused so a preservation comparison cannot race its scheduler.
 export async function seedWorkspace(request) {
@@ -576,16 +585,19 @@ export async function runStagedBrowser(config, { chromium, expect }) {
         await expect
           .poll(
             async () => {
+              let state;
               try {
-                const state = await request("updates/application");
-                return (
-                  completedApplication(state, config.version, true) &&
-                  updateMode(state) === "automatic" &&
-                  state.activationEnabled === true
-                );
+                state = await request("updates/application");
               } catch {
                 return false;
               }
+              const failure = applicationUpdateFailure(state);
+              if (failure) throw failure;
+              return (
+                completedApplication(state, config.version, true) &&
+                updateMode(state) === "automatic" &&
+                state.activationEnabled === true
+              );
             },
             { timeout: 180000 },
           )
@@ -670,16 +682,23 @@ export async function runStagedBrowser(config, { chromium, expect }) {
         await expect
           .poll(
             async () => {
+              let health, state;
               try {
-                const health = await request("health"),
-                  state = await request("updates/application");
-                return (
-                  health.version === config.version &&
-                  completedApplication(state, config.version, false)
-                );
+                state = await request("updates/application");
               } catch {
                 return false;
               }
+              const failure = applicationUpdateFailure(state);
+              if (failure) throw failure;
+              try {
+                health = await request("health");
+              } catch {
+                return false;
+              }
+              return (
+                health.version === config.version &&
+                completedApplication(state, config.version, false)
+              );
             },
             { timeout: 180000 },
           )

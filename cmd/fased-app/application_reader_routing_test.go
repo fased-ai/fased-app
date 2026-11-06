@@ -134,6 +134,17 @@ func currentRemoteReaderRouting(t *testing.T, schema int) {
 	if required, err = currentReaderNeedsBootstrap(snapshot, view, id, false); err != nil || !required {
 		t.Fatal("failed older format check skipped bootstrap", required, err)
 	}
+	// The corrected entry also treats packet-capable 0.1.9 as unsupported when
+	// it lacks retained-owner descriptor agreement. Its new bootstrap operation
+	// may hand off; the original failed operation is never silently repurposed.
+	view.Operation.ID = id
+	if required, err = currentReaderNeedsBootstrap(snapshot, view, id, false); err != nil || required {
+		t.Fatal("old operation was reinterpreted as a new reader handoff", required, err)
+	}
+	view.Operation.ID = "prior-refused-update"
+	if required, err = currentReaderNeedsBootstrap(snapshot, view, id, false); err != nil || !required {
+		t.Fatal("verified fresh handoff skipped mixed-maintenance compatibility", required, err)
+	}
 	view.Operation.Phase = "recovery"
 	if _, err = currentReaderNeedsBootstrap(snapshot, view, id, false); err == nil {
 		t.Fatal("older packet capability bypassed unresolved recovery")

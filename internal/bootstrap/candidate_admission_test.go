@@ -45,6 +45,63 @@ func TestAttestedContentIdentityKeepsTransportAndLegacySeparate(t *testing.T) {
 	}
 }
 
+// Reacquiring through the real verifier must reproduce the exact tuple an old
+// immutable maintenance executable returns. A canonical-only approval cannot.
+func TestAttestedConsecutiveMaintenanceBindingSurvivesReacquisition(t *testing.T) {
+	_, options, _ := attestedFixture(t, "staged")
+	check, err := Prepare(t.Context(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check.Close()
+	canonical, err := check.ApplicationRelease()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(check.descriptor)
+	legacy := *canonical
+	legacy.ManifestSHA256 = digest(raw)
+	if legacy == *canonical {
+		t.Fatal("fixture does not exercise mixed-reader identity")
+	}
+	if err = check.BindApplicationRelease(legacy); err != nil {
+		t.Fatal(err)
+	}
+	options.Directory += "-unchanged-owner"
+	owner, err := Prepare(t.Context(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	// This is the old owner's equality gate, using its verified full descriptor.
+	ownerRelease, err := owner.ApplicationRelease()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerRaw, _ := json.Marshal(owner.descriptor)
+	ownerRelease.ManifestSHA256 = digest(ownerRaw)
+	approved, err := check.ApplicationRelease()
+	if err != nil || *ownerRelease != *approved {
+		t.Fatal("consecutive update cannot pass unchanged legacy owner", approved, ownerRelease, err)
+	}
+	for _, mutate := range []func(*core.ApplicationRelease){
+		func(r *core.ApplicationRelease) { r.EngineSHA256 = strings.Repeat("f", 64) },
+		func(r *core.ApplicationRelease) { r.Sequence++ },
+		func(r *core.ApplicationRelease) { r.ManifestSHA256 = strings.Repeat("e", 64) },
+		func(r *core.ApplicationRelease) { r.Version = "different" },
+		func(r *core.ApplicationRelease) { r.Target.Arch = "different" },
+	} {
+		changed := *approved
+		mutate(&changed)
+		if err = owner.BindApplicationRelease(changed); err == nil {
+			t.Fatal("independent binding accepted changed authority", changed)
+		}
+	}
+	if err = owner.BindApplicationRelease(*approved); err != nil {
+		t.Fatal("valid pending identity was damaged by refusals", err)
+	}
+}
+
 func TestCandidateAdmissionUsesExistingControllerAndRejectsScopeExpansion(t *testing.T) {
 	f, options, payloads := attestedFixture(t, "staged")
 	published, err := Prepare(t.Context(), options)
