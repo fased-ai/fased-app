@@ -6,6 +6,7 @@ import {
   installedNavigate,
   stopInstalledReply,
   installedTaskSchedule,
+  pauseInstalledTask,
   completedApplication,
   applicationUpdateFailure,
   privatePreflightAddress,
@@ -899,4 +900,57 @@ test("installed schedule uses the actual wrapped Unit label and finite pause-fri
     ["UnitMinutesHoursDays", "60"],
     ["Every", "20"],
   ]);
+});
+
+test("installed Pause refreshes the UI revision and checks its real command response", async () => {
+  for (const accepted of [true, false]) {
+    let revision = 1;
+    const waiting = new Map();
+    const view = {
+      profileId: "trading-analyst",
+      revision: 4,
+      tasks: [{ id: "task", name: "Bounded task" }],
+    };
+    const request = (method) => ({
+      method: () => method,
+      postDataJSON: () => ({ action: "task-pause", id: "task", revision }),
+    });
+    const response = (method) => ({
+      url: () => "https://fixture.invalid/api/v1/agents",
+      request: () => request(method),
+      ok: () => method === "GET" || accepted,
+      status: () => (accepted ? 200 : 409),
+      json: async () => view,
+    });
+    const page = {
+      waitForResponse: (predicate) =>
+        new Promise((resolve) => {
+          for (const method of ["GET", "POST"])
+            if (predicate(response(method))) waiting.set(method, resolve);
+        }),
+      getByRole: (_, options) =>
+        options?.name === "Tasks"
+          ? { getByRole: () => ({ filter: () => ({ locator: () => ({}) }) }) }
+          : {
+              click: async () => {
+                const method = options.name === "Refresh" ? "GET" : "POST";
+                if (method === "GET") revision = view.revision;
+                else
+                  assert.equal(revision, 4, "Pause used stale rendered state");
+                assert.ok(waiting.has(method));
+                waiting.get(method)(response(method));
+              },
+            },
+    };
+    const expect = () => ({
+      toHaveText: async (value) => assert.equal(value, "Scheduled"),
+    });
+    if (accepted)
+      await pauseInstalledTask(page, expect, "Bounded task", view.profileId);
+    else
+      await assert.rejects(
+        pauseInstalledTask(page, expect, "Bounded task", view.profileId),
+        /HTTP 409/,
+      );
+  }
 });

@@ -515,6 +515,39 @@ export async function installedTaskSchedule(page, editor) {
   await schedule.getByLabel("Every", { exact: true }).fill("20");
 }
 
+export async function pauseInstalledTask(page, expect, name, profileId) {
+  const route = (response, method) =>
+    new URL(response.url()).pathname === "/api/v1/agents" &&
+    response.request().method() === method;
+  // A direct observer GET does not update React's revision-checked command view.
+  const [loaded] = await Promise.all([
+    page.waitForResponse((response) => route(response, "GET")),
+    page.getByRole("button", { name: "Refresh", exact: true }).click(),
+  ]);
+  assert.ok(loaded.ok(), "task view refresh refused");
+  const current = await loaded.json();
+  assert.equal(current.profileId, profileId);
+  const matching = current.tasks.filter((task) => task.name === name);
+  assert.equal(matching.length, 1);
+  const row = page
+    .getByRole("table", { name: "Tasks", exact: true })
+    .getByRole("row")
+    .filter({ hasText: name });
+  await expect(row.locator(".task-state")).toHaveText("Scheduled");
+  const [paused] = await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        route(response, "POST") &&
+        response.request().postDataJSON().action === "task-pause",
+    ),
+    page.getByRole("button", { name: "Pause: " + name, exact: true }).click(),
+  ]);
+  const command = paused.request().postDataJSON();
+  assert.equal(command.id, matching[0].id);
+  assert.equal(command.revision, current.revision);
+  assert.ok(paused.ok(), "task Pause refused (HTTP " + paused.status() + ")");
+}
+
 export async function stopInstalledReply(page, latest) {
   const before = await latest();
   assert.ok(before?.id, "exact reply required before Stop");
@@ -784,12 +817,12 @@ export async function runInstalledAgentPhase(
     assert.equal(task.maxRuns, 2);
     // A scheduler must not consume the grant before the restart assertion.
     // Leave one finite request unspent for reboot/revocation verification.
-    await page
-      .getByRole("button", {
-        name: "Pause: Installed bounded task",
-        exact: true,
-      })
-      .click();
+    await pauseInstalledTask(
+      page,
+      expect,
+      "Installed bounded task",
+      state.profileId,
+    );
     await expect
       .poll(
         async () =>
@@ -884,17 +917,28 @@ export async function runInstalledAgentPhase(
         .click();
       await expect
         .poll(
-          async () =>
-            (await view()).tasks.find((t) => t.id === state.taskId)?.runs,
+          async () => {
+            const v = await view();
+            const task = v.tasks.find((t) => t.id === state.taskId);
+            const replies = v.aiRequests.filter(
+              (q) => q.taskId === state.taskId,
+            );
+            assert.ok(replies.length <= 1, "duplicate task execution");
+            return (
+              task?.runs === 1 &&
+              task.state === "scheduled" &&
+              replies[0]?.state === "completed"
+            );
+          },
           { timeout: 30000 },
         )
-        .toBe(1);
-      await page
-        .getByRole("button", {
-          name: "Pause: Installed bounded task",
-          exact: true,
-        })
-        .click();
+        .toBe(true);
+      await pauseInstalledTask(
+        page,
+        expect,
+        "Installed bounded task",
+        state.profileId,
+      );
       await expect
         .poll(
           async () =>
