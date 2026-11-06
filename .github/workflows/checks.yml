@@ -44,8 +44,9 @@ jobs:
       - run: node --test scripts/ci-routing.test.mjs scripts/ci-core-coverage.test.mjs
       - name: Verify installer and release acceptance contracts
         run: |
+          node --test --test-isolation=none scripts/prepare-ubuntu-release.test.mjs scripts/release-acceptance.test.mjs
           # The actual Playwright poller runs in core after dependency installation.
-          node --test --test-isolation=none --test-skip-pattern='^the actual poller stops on a terminal update failure$' scripts/prepare-ubuntu-release.test.mjs scripts/release-acceptance.test.mjs scripts/staged-package-browser.test.mjs
+          node --test --test-isolation=none --test-skip-pattern='^the actual poller stops on a terminal update failure$' scripts/staged-package-browser.test.mjs
           python3 scripts/staged-package-guest.test.py
       - id: route
         env:
