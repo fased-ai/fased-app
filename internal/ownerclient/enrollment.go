@@ -88,6 +88,7 @@ func prepareEnrollment(ctx context.Context, c *Client, pair Package) (*Enrollmen
 		}
 	}
 	mode := "local"
+	recoverSuspended := false
 	if c.host != "" {
 		mode = "remote"
 	}
@@ -98,16 +99,24 @@ func prepareEnrollment(ctx context.Context, c *Client, pair Package) (*Enrollmen
 		}
 		b, err := c.invoke(ctx, e.core, args, nil)
 		var resume struct {
-			Version int  `json:"version"`
-			Resume  bool `json:"resume"`
+			Version          int  `json:"version"`
+			Resume           bool `json:"resume"`
+			RecoverSuspended bool `json:"recoverSuspended,omitempty"`
 		}
 		if err != nil || decode(b, &resume) != nil || resume.Version != 1 || !resume.Resume {
 			return nil, errors.New("existing custody state does not match this retained owner enrollment")
 		}
+		if resume.RecoverSuspended && mode != "remote" {
+			return nil, errors.New("suspended recovery requires the retained Remote owner")
+		}
+		recoverSuspended = resume.RecoverSuspended
 	}
 	e.arguments = []string{"custody", "enroll", "--ordinary-custody", "--source", mode, "--expected-instance", c.Intent.InstanceID, "--network", c.Intent.Network, "--signer-binary", e.signer, "--disposable-fixture", "--prepare-host"}
-	if existing {
+	if existing && !recoverSuspended {
 		e.arguments = append(e.arguments, "--start-existing")
+	}
+	if recoverSuspended {
+		e.arguments = append(e.arguments, "--recover-suspended")
 	}
 	if mode == "local" {
 		e.arguments = append(e.arguments, "--native-owner")
