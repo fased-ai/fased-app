@@ -35,7 +35,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		return inspectionFixtureCommand(args, input, out, errOut)
 	}
 	if len(args) == 1 && args[0] == "ordinary-custody-compatibility" {
-		return json.NewEncoder(out).Encode(signer.OrdinaryCustodyReadContract())
+		return json.NewEncoder(out).Encode(signer.OrdinaryUpdateContract())
 	}
 	if len(args) == 1 && args[0] == "custody-compatibility" {
 		return json.NewEncoder(out).Encode(signer.ManagedUpdateContract())
@@ -95,6 +95,16 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	}
 	if *ordinary && (c.Version != 3 || c.Mode != signer.OrdinaryCustodyMode) {
 		return signer.ErrUnavailable
+	}
+	if args[0] == "ordinary-reader-handoff" {
+		if *passwordStdin || *requestStdin || *approvalStdin || *documentPath != "" {
+			return signer.ErrUnavailable
+		}
+		r, e := signer.CommitOrdinaryReaderHandoff(c, *intentID)
+		if e != nil {
+			return e
+		}
+		return json.NewEncoder(out).Encode(r)
 	}
 	if args[0] == "fixture-install-inspect" || args[0] == "fixture-update-inspect" {
 		if *passwordStdin || *requestStdin || *approvalStdin || *documentPath != "" {

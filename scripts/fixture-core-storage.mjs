@@ -32,6 +32,39 @@ export function runReaderStage(
   }
 }
 
+// The composed historical reader keeps its old update package and authority.
+// Do not copy a new maintenance field (or decoder) into that test-only reader:
+// its strict JSON parser must continue refusing ordinary handoff records.
+export function projectReadOnlySignerJournal(source) {
+  const field =
+    /^\s*OrdinaryHandoff[ \t]+\*update\.OrdinaryHandoffReceipt[ \t]+`json:"ordinaryHandoff,omitempty"`\r?\n/gm;
+  assert.equal(
+    [...source.matchAll(field)].length,
+    1,
+    "exact ordinary handoff field projection required",
+  );
+  return source.replace(field, "");
+}
+
+// Keep the guarded/current command surface aligned with its projected core.
+// Historical CLI sources already lack this route and are left untouched.
+export function projectReadOnlyUpdateCommand(source) {
+  const choice = ' || args[0] == "ordinary-custody-compatibility"';
+  const branch =
+    /\t\tif args\[0\] == "ordinary-custody-compatibility" \{\n\t\t\tcontract = core\.OrdinaryUpdateContract\(\)\n\t\t\}\n/g;
+  assert.equal(
+    source.split(choice).length,
+    2,
+    "exact ordinary CLI choice required",
+  );
+  assert.equal(
+    [...source.matchAll(branch)].length,
+    1,
+    "exact ordinary CLI branch required",
+  );
+  return source.replace(choice, "").replace(branch, "");
+}
+
 export async function currentStorageFixture(archivedRoot) {
   assert.ok(process.getuid() > 0);
   const storage = {};
@@ -135,6 +168,12 @@ export async function currentStorageFixture(archivedRoot) {
   // The composed predecessor remains a password-only schema36 reader. It
   // must not advertise or accept the new Local owner format.
   storage["update.go"] = await projectPasswordOnlyContract(archivedRoot);
+  const projectedCommand = path.join(archivedRoot, "cmd/fased-app/updates.go");
+  try {
+    storage["cmd/fased-app/updates.go"] = sha(await readFile(projectedCommand));
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
   // Public-reader-only dependency: never activate owner/vault/terminal migration.
   await writeFile(
     path.join(archivedRoot, "internal/core/ordinary_custody_projection.go"),
@@ -231,7 +270,11 @@ func ValidManagedAccountRef(r AccountRef) bool {
     "history_recovery.go",
     "history_reader_test.go",
   ]) {
-    const b = await readFile("internal/signer/" + name);
+    const source = await readFile("internal/signer/" + name);
+    const b =
+      name === "journal.go"
+        ? Buffer.from(projectReadOnlySignerJournal(source.toString("utf8")))
+        : source;
     await writeFile(path.join(signerRoot, name), b);
     storage["signer/" + name] = sha(b);
   }
@@ -534,7 +577,11 @@ export async function projectPasswordOnlyContract(root) {
       "Features: []string{",
     ],
   ];
-  let projected = source;
+  // Historical app-only storage readers cannot acquire the new paired
+  // ordinary-custody controller contract or its update-package dependency.
+  const ordinaryMaintenance =
+    /\nfunc OrdinaryUpdateContract\(\) update\.Contract \{[\s\S]*?\n\}/g;
+  let projected = source.replace(ordinaryMaintenance, "");
   for (const [before, after] of replacements) {
     assert.equal(
       projected.split(before).length,
@@ -542,6 +589,26 @@ export async function projectPasswordOnlyContract(root) {
       "exact Local contract projection required",
     );
     projected = projected.replace(before, after);
+  }
+  const commandFile = path.join(root, "cmd/fased-app/updates.go");
+  let command;
+  try {
+    command = await readFile(commandFile, "utf8");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  if (command !== undefined) {
+    const hasChoice = command.includes(
+      ' || args[0] == "ordinary-custody-compatibility"',
+    );
+    const hasBranch = command.includes("core.OrdinaryUpdateContract()");
+    assert.equal(
+      hasChoice,
+      hasBranch,
+      "partial ordinary CLI projection is not historical",
+    );
+    if (hasChoice)
+      await writeFile(commandFile, projectReadOnlyUpdateCommand(command));
   }
   await writeFile(file, projected);
   return createHash("sha256").update(projected).digest("hex");

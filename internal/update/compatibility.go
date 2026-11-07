@@ -161,9 +161,12 @@ func containsAll(have, need []string) bool {
 func validateComponents(cs []Component) error { return validateComponentsFor(cs, lifecycleOK) }
 func validateComponentsFor(cs []Component, lifecycle func(*LifecycleContract) bool) error {
 	managed := managedComponents(cs)
+	ordinary := ordinaryComponents(cs)
 	owners := stateOwner
 	if managed {
 		owners, _ = managedStateProfile()
+	} else if ordinary {
+		owners, _ = ordinaryStateProfile()
 	}
 	if len(cs) != 2 {
 		return errors.New("complete core and signer pair required")
@@ -204,7 +207,7 @@ func validateComponentsFor(cs []Component, lifecycle func(*LifecycleContract) bo
 	}
 	// This package begins after schema 2/approval journals. An old protocol-1
 	// signer without approval support is not a compatible downgrade.
-	if !containsAll(core.Features, []string{"account-registry-v1", "fixture-proposals-v1"}) || (!managed && !containsAll(signer.Features, []string{"fixture-public-status-v1", "fixture-approval-receipts-v1", "fixture-update-preflight-v1"})) {
+	if !containsAll(core.Features, []string{"account-registry-v1", "fixture-proposals-v1"}) || (!managed && !ordinary && !containsAll(signer.Features, []string{"fixture-public-status-v1", "fixture-approval-receipts-v1", "fixture-update-preflight-v1"})) {
 		return errors.New("pre-approval component is unsupported")
 	}
 	return nil
@@ -226,6 +229,12 @@ func Compatible(m Manifest, sha string, inv Inventory) (Plan, error) {
 		owners, required = managedStateProfile()
 		if !inv.RecoveryHold || inv.Pending != 0 || inv.Unknown != 0 {
 			return p, errors.New("managed recovery hold required")
+		}
+	}
+	if ordinaryComponents(m.Components) {
+		owners, required = ordinaryStateProfile()
+		if !inv.RecoveryHold || inv.Pending != 0 || inv.Unknown != 0 {
+			return p, errors.New("ordinary custody requires held key-only history")
 		}
 	}
 	if len(inv.States) != len(owners) || inv.Pending < 0 || inv.Pending > 1024 || inv.Unknown < 0 || inv.Unknown > inv.Pending {

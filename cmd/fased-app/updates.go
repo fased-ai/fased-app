@@ -25,10 +25,13 @@ func updatesCommand(args []string, out, errOut io.Writer) error {
 	if len(args) > 0 && args[0] == "status" {
 		return updateStatusCommand(args[1:], out, errOut)
 	}
-	if len(args) == 1 && (args[0] == "compatibility" || args[0] == "custody-compatibility") {
+	if len(args) == 1 && (args[0] == "compatibility" || args[0] == "custody-compatibility" || args[0] == "ordinary-custody-compatibility") {
 		contract := core.UpdateContract()
 		if args[0] == "custody-compatibility" {
 			contract = core.ManagedUpdateContract()
+		}
+		if args[0] == "ordinary-custody-compatibility" {
+			contract = core.OrdinaryUpdateContract()
 		}
 		return json.NewEncoder(out).Encode(struct {
 			Version            int             `json:"version"`

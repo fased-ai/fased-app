@@ -26,10 +26,15 @@ func inspectFixtureMetadata(ctx context.Context, dir, probe string, pause *Fixtu
 	if e != nil || !st.Mode().IsRegular() || st.Mode().Perm() != 0600 {
 		return out, errors.New("private existing database required")
 	}
-	if w, e := os.Stat(p + "-wal"); e == nil && w.Size() > 0 {
-		return out, errors.New("cold database has uncheckpointed WAL; hold without repair")
-	} else if e != nil && !os.IsNotExist(e) {
-		return out, e
+	for _, suffix := range []string{"-wal", "-journal"} {
+		st, e := os.Lstat(p + suffix)
+		if e == nil {
+			if !st.Mode().IsRegular() || st.Mode().Perm() != 0600 || st.Size() != 0 || protectPath(p+suffix, st) != nil {
+				return out, errors.New("cold database has foreign or pending journal; hold without repair")
+			}
+		} else if !os.IsNotExist(e) {
+			return out, e
+		}
 	}
 	db, e := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: p, RawQuery: "mode=ro&immutable=1&_pragma=query_only(1)"}).String())
 	if e != nil {

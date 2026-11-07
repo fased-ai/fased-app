@@ -29,6 +29,7 @@ func bootstrapCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	f := flag.NewFlagSet("custody bootstrap", flag.ContinueOnError)
 	f.SetOutput(errOut)
 	id := f.String("intent-id", "", "exact reader handoff identity")
+	rollback := f.Bool("rollback", false, "cancel an unchanged ordinary predecessor handoff before its forward fence")
 	bundlePath := f.String("bundle", "", "signed predecessor/target development bundle")
 	trustPath := f.String("trust-file", "", "explicit development public trust")
 	artifacts := f.String("artifact-dir", "", "verified current pair")
@@ -42,13 +43,17 @@ func bootstrapCommand(args []string, in *os.File, out, errOut io.Writer) error {
 		return errors.New("ordinary owner, exact id and explicit disposable bootstrap required")
 	}
 	runner, e := custodyinstall.BootstrapRunner(os.Getuid(), *id)
-	if errors.Is(e, os.ErrNotExist) {
+	if errors.Is(e, os.ErrNotExist) && !*rollback {
 		runner, e = prepareBootstrapCommand(*id, *bundlePath, *trustPath, *artifacts, *automation, in, errOut)
 	}
 	if e != nil {
 		return e
 	}
-	c := exec.Command(runner, "owner-bootstrap", "--intent-id", *id, "--disposable-fixture", "--prepare-host")
+	childArgs := []string{"owner-bootstrap", "--intent-id", *id, "--disposable-fixture", "--prepare-host"}
+	if *rollback {
+		childArgs = append(childArgs, "--rollback")
+	}
+	c := exec.Command(runner, childArgs...)
 	c.Stdin = in
 	c.Stdout = out
 	c.Stderr = errOut
@@ -108,17 +113,32 @@ func prepareBootstrapCommand(id, bundlePath, trustPath, artifacts string, automa
 
 	// An owner-downloaded verifier cannot use the signer socket. The installed,
 	// immutable predecessor owns that read; its executable/UID checks stay intact.
-	var output bytes.Buffer
-	command := exec.Command(m.Root+"/fased-app", "owner-updates", "--action", "inventory", "--config", m.Root+"/identity.json", "--disposable-fixture", "--prepare-host")
-	command.Stdin = in
-	command.Stdout = &output
-	command.Stderr = review
-	if e = command.Run(); e != nil {
-		return "", e
-	}
-	core, snapshot, e := decodeBootstrapInventory(output.Bytes())
-	if e != nil {
-		return "", e
+	var coreSnapshot update.CoreSnapshot
+	var snapshot update.SignerSnapshot
+	if m.Version == 3 && bundle.Version == 2 {
+		// The immutable read-only signer has no inventory RPC. Only its actual old
+		// app entrypoint supplies core state; signer genesis is captured cold later.
+		system := &custodyinstall.System{In: in, Out: review}
+		var output bytes.Buffer
+		if e = system.UpdateInventory(context.Background(), m, update.NewProbe(), &output); e != nil {
+			return "", e
+		}
+		if e = update.StrictJSON(output.Bytes(), &coreSnapshot); e != nil {
+			return "", e
+		}
+	} else {
+		var output bytes.Buffer
+		command := exec.Command(m.Root+"/fased-app", "owner-updates", "--action", "inventory", "--config", m.Root+"/identity.json", "--disposable-fixture", "--prepare-host")
+		command.Stdin = in
+		command.Stdout = &output
+		command.Stderr = review
+		if e = command.Run(); e != nil {
+			return "", e
+		}
+		coreSnapshot, snapshot, e = decodeBootstrapInventory(output.Bytes())
+		if e != nil {
+			return "", e
+		}
 	}
 	lock, e := custodyinstall.OwnerLock()
 	if e != nil {
@@ -134,7 +154,10 @@ func prepareBootstrapCommand(id, bundlePath, trustPath, artifacts string, automa
 	}
 	system := &custodyinstall.System{In: in, Out: review}
 	ctx := context.Background()
-	tx := custodyinstall.BootstrapTransaction{Version: 1, ID: id, Base: m, Target: m, Bundle: bundle, Trust: trust, ReviewedAt: now, Core: core, Signer: snapshot}
+	tx := custodyinstall.BootstrapTransaction{Version: 1, ID: id, Base: m, Target: m, Bundle: bundle, Trust: trust, ReviewedAt: now, Core: coreSnapshot, Signer: snapshot}
+	if m.Version == 3 && bundle.Version == 2 {
+		tx.Version = 2
+	}
 	for _, c := range plan.Target.Components {
 		if c.Contract.Component == "core" {
 			tx.Target.CoreHash = c.Artifact.SHA256
@@ -145,9 +168,16 @@ func prepareBootstrapCommand(id, bundlePath, trustPath, artifacts string, automa
 	if _, e = tx.Plan(); e != nil {
 		return "", e
 	}
+	if tx.Version == 2 {
+		fmt.Fprintln(review, "Ordinary custody: a read-only cold trial precedes a durable forward-only reader floor. After commitment, interruption resumes this exact pair; old readers cannot be restored. Keys stay locked and all recovery holds remain.")
+	}
 	pretty, _ := json.MarshalIndent(tx, "", "  ")
 	want := "BOOTSTRAP " + tx.Digest()
-	fmt.Fprintf(review, "DISPOSABLE READER BOOTSTRAP ONLY\nPreserve all financial state. Reserve a predecessor-readable maintenance sequence; install only the signed reader pair. On failed health, restore compatible readers and abort only the maintenance intent. No installed release, automatic unlock or resume.\n%s\nType %s, or anything else to cancel: ", pretty, want)
+	description := "Reserve a predecessor-readable maintenance sequence; install only the signed reader pair. On failed health, restore compatible readers and abort only the maintenance intent."
+	if tx.Version == 2 {
+		description = "Stop both roles for an unchanged-state cold trial, then durably commit a forward-only reader floor. After commitment, resume only this signed target pair; failed health never restores old readers. Keys stay locked and recovery holds remain."
+	}
+	fmt.Fprintf(review, "DISPOSABLE READER BOOTSTRAP ONLY\nPreserve all financial state. %s No installed release or financial authority.\n%s\nType %s, or anything else to cancel: ", description, pretty, want)
 	if !automation && !term.IsTerminal(int(in.Fd())) {
 		return "", errors.New("protected owner terminal required")
 	}
@@ -165,6 +195,7 @@ func ownerBootstrapCommand(args []string, in *os.File, out, errOut io.Writer) er
 	f := flag.NewFlagSet("owner-bootstrap", flag.ContinueOnError)
 	f.SetOutput(errOut)
 	id := f.String("intent-id", "", "exact bootstrap id")
+	rollback := f.Bool("rollback", false, "cancel unchanged ordinary readers before commitment")
 	disposable := f.Bool("disposable-fixture", false, "test-only")
 	prepare := f.Bool("prepare-host", false, "fixed OS consent")
 	if e := f.Parse(args); e != nil {
@@ -191,7 +222,11 @@ func ownerBootstrapCommand(args []string, in *os.File, out, errOut io.Writer) er
 	}
 	system := &custodyinstall.System{In: in, Out: errOut}
 	ctx := context.Background()
+	if *rollback && tx.Version != 2 {
+		return errors.New("explicit cancellation is ordinary predecessor only")
+	}
 	callbacks := maintenanceCallbacks(tx, system, cfg, tx.Dir(), tx.Plan, tx.AdmissionCurrent)
+	callbacks.CancelOrdinary = *rollback
 	receipt, e := custodyinstall.RunBootstrap(ctx, tx, system, callbacks)
 	if e != nil {
 		return e

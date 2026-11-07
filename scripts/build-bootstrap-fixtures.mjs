@@ -152,6 +152,9 @@ try {
   // This bootstrap verifies lifecycle replacement with unchanged financial
   // state. Use an explicit schema36-only current helper, not a37 migration.
   report.targetContractSource = await projectPasswordOnlyContract(bad);
+  report.targetCommandSource = createHash("sha256")
+    .update(await readFile(path.join(bad, "cmd/fased-app/updates.go")))
+    .digest("hex");
   const compatible = path.join(root, "fased-app-same-format");
   execFileSync(
     "go",
