@@ -1611,16 +1611,24 @@ async function revealControl(
         name: "Conversations",
         exact: true,
       });
-      if (
-        (await toggle.isVisible()) &&
-        !(await page
-          .getByRole("button", { name: "New conversation", exact: true })
-          .isVisible())
-      )
-        await toggle.click();
-      await page
-        .getByRole("button", { name: "New conversation", exact: true })
-        .click();
+      const create = page.getByRole("button", {
+        name: "New conversation",
+        exact: true,
+      });
+      // Reload can finish before Chat's navigation is attached. A one-shot
+      // isVisible() must not skip opening the mobile conversation disclosure.
+      await expect
+        .poll(
+          async () =>
+            (await control.isVisible()) ||
+            (await create.isVisible()) ||
+            (await toggle.isVisible()),
+        )
+        .toBe(true);
+      if (!(await control.isVisible())) {
+        await openConversationList(page);
+        await create.click();
+      }
     } else if (hint.includes("Fact") || hint.includes("Note"))
       await page.getByRole("button", { name: "Remember", exact: true }).click();
     else if (hint.includes("Task name"))
