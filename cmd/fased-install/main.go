@@ -60,6 +60,8 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	profile := f.String("profile", "", "preselected Local/Remote/Connect terminal setup")
 	listen := f.String("listen", "", "optional fixed loopback listener for installation")
 	receipt := f.String("receipt-file", "", "private bootstrap acquisition receipt")
+	walletInstance := f.String("wallet-instance", "", "exact existing Remote workspace for optional Wallets enrollment")
+	walletNetwork := f.String("wallet-network", "", "network for optional protected Wallets enrollment")
 	entryAction := f.String("entry-action", "", "fixed installed-instance action for the entry launcher")
 	verifyCandidate := f.String("verify-candidate", "", "verify a retained release candidate without installation")
 	if err := f.Parse(args); err != nil {
@@ -93,9 +95,16 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	if *receipt != "" && (!*install || *profile == "" || *upgrade) {
 		return errors.New("private entry receipt requires an installation profile")
 	}
+	if *entryAction == "wallets" {
+		if !*install || !*start || *upgrade || *profile != "remote" || !bootstrap.ValidWalletEnrollment(*walletInstance, *walletNetwork) || *prefix != "" || *data != "" {
+			return errors.New("Wallets setup requires the existing Remote workspace and network")
+		}
+	} else if *walletInstance != "" || *walletNetwork != "" {
+		return errors.New("wallet options require the Wallets setup action")
+	}
 	entryProfile := *profile
 	retailEntry := *entryAction != "" || *profile != ""
-	if *entryAction != "" {
+	if *entryAction != "" && *entryAction != "wallets" {
 		if *profile == "" || !*install || *upgrade {
 			return errors.New("entry actions require an installation profile")
 		}
@@ -174,7 +183,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	}
 
 	if *install {
-		if err = p.Run(context.Background(), bootstrap.InstallOptions{Prefix: *prefix, DataDirectory: *data, Start: *start, Profile: *profile, Listen: *listen}, in, out, errOut); err != nil {
+		if err = p.Run(context.Background(), bootstrap.InstallOptions{WalletSigner: walletPayload(), WalletInstance: *walletInstance, WalletNetwork: *walletNetwork, Prefix: *prefix, DataDirectory: *data, Start: *start, Profile: *profile, Listen: *listen}, in, out, errOut); err != nil {
 			return err
 		}
 	}

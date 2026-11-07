@@ -10,6 +10,7 @@ import {
   walletNetwork,
   walletNetworks,
   walletOwnerCommands,
+  walletOwnerLink,
   walletSetupLabel,
   walletSetupReference,
   type WalletMode,
@@ -315,11 +316,46 @@ export function AccountManagement() {
       : [];
   const fixtureTools = agents.view?.aiFixtureAvailable === true;
   const protectedSetupHeld = !fixtureTools && !setupReference;
+  const ownerWindowReady =
+    !!view?.setup?.ownerSupported &&
+    ["empty", "not-installed"].includes(view.setup.state) &&
+    walletNetwork(network) &&
+    !!view.setup.source;
+  async function openOwnerWindow(action: "setup" | "import") {
+    if (!view?.setup || !ownerWindowReady) return;
+    const link = walletOwnerLink(
+      core.instanceId,
+      network,
+      action,
+      view.setup.source === "remote" ? location.origin : "",
+    );
+    if (!link) return;
+    if (["wails", "wails.localhost"].includes(location.hostname)) {
+      try {
+        await request("installation/wallet-owner", "POST", { link });
+      } catch (e) {
+        setError(
+          e instanceof Error ? e.message : uiText("Wallet setup failed"),
+        );
+      }
+    } else {
+      location.href = link;
+    }
+  }
+  useEffect(() => {
+    if (!adding || draft.mode === "watch") return;
+    const reconnect = () => {
+      void refresh();
+    };
+    window.addEventListener("focus", reconnect);
+    return () => window.removeEventListener("focus", reconnect);
+  }, [adding, draft.mode, core.instanceId]);
   const alreadyAttached =
     !!setupReference &&
     !!view?.record.accounts.some(
       (a) =>
-        a.signer?.version === 2 &&
+        !!a.signer &&
+        [2, 3].includes(a.signer.version) &&
         a.signer.signerId === setupReference.signerId &&
         a.signer.walletId === setupReference.walletId &&
         a.signer.epoch === setupReference.epoch &&
@@ -565,14 +601,29 @@ export function AccountManagement() {
                         }
                         aria-pressed={draft.mode === mode}
                         disabled={
-                          busy || (mode !== "watch" && protectedSetupHeld)
+                          busy ||
+                          (mode !== "watch" &&
+                            protectedSetupHeld &&
+                            !ownerWindowReady)
                         }
                         title={
-                          mode !== "watch" && protectedSetupHeld
+                          mode !== "watch" &&
+                          protectedSetupHeld &&
+                          !ownerWindowReady
                             ? uiText("Protected setup unavailable")
                             : undefined
                         }
-                        onClick={() => updateDraft({ mode })}
+                        onClick={() => {
+                          updateDraft({ mode });
+                          if (
+                            mode !== "watch" &&
+                            protectedSetupHeld &&
+                            ownerWindowReady
+                          )
+                            void openOwnerWindow(
+                              mode === "create" ? "setup" : "import",
+                            );
+                        }}
                       >
                         {uiText(
                           mode === "watch"
@@ -586,7 +637,7 @@ export function AccountManagement() {
                       </button>
                     ))}
                 </div>
-                {protectedSetupHeld && (
+                {protectedSetupHeld && !ownerWindowReady && (
                   <p className="subtle" role="status">
                     {uiText("Protected setup unavailable")}
                   </p>

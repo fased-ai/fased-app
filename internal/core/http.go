@@ -171,6 +171,9 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, result)
 		return
+	case "/api/v1/auth/native-local":
+		h.nativeLocalOwnerAPI(w, r)
+		return
 	case "/api/v1/auth/claim", "/api/v1/auth/login":
 		if r.Method != http.MethodPost {
 			writeError(w, 405, "method not allowed")
@@ -563,7 +566,7 @@ func (h *HTTPHandler) mutation(w http.ResponseWriter, r *http.Request) bool {
 	// Freeze ordinary writes from durable dispatch through recovery. Sessions and
 	// protected maintenance remain reachable. The existing metadata fence remains
 	// the authority across processes; this closes dispatch-to-fence HTTP races.
-	if !strings.HasPrefix(r.URL.Path, "/api/v1/updates/") && !oneOf(r.URL.Path, "/api/v1/login", "/api/v1/logout", "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/local", "/api/v1/auth/remote") {
+	if !strings.HasPrefix(r.URL.Path, "/api/v1/updates/") && !oneOf(r.URL.Path, "/api/v1/login", "/api/v1/logout", "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/local", "/api/v1/auth/remote", "/api/v1/auth/native-local") {
 		o, _, e := readApplicationUpdate(r.Context(), h.store.db)
 		if e != nil || oneOf(o.Phase, "applying", "recovery") {
 			writeError(w, 409, "Update in progress. Inspect recovery before changing this instance.")

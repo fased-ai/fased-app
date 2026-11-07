@@ -26,6 +26,7 @@ func main() {
 	}
 	state := flag.String("data-dir", dir, "private instance state directory")
 	remote := flag.String("connect", "", "open an existing Remote Fased instance without installing locally")
+	ownerLink := flag.String("wallet-owner", "", "open a separate protected wallet owner window from a public Fased link")
 	version := flag.Bool("version", false, "show version")
 	flag.Parse()
 	if *version {
@@ -35,6 +36,17 @@ func main() {
 	if flag.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "unexpected arguments")
 		os.Exit(1)
+	}
+	if *ownerLink != "" {
+		if *remote != "" {
+			fmt.Fprintln(os.Stderr, "wallet target must come from its public Fased link")
+			os.Exit(1)
+		}
+		if err := ownerWindow(*ownerLink); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
 	}
 	if *remote != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -84,10 +96,19 @@ func main() {
 			if e == nil {
 				terminal, e = prepareDesktopHost(ctx, firstPackage, paths)
 				if e == nil && !terminal {
-					var installed localinstall.Manifest
-					installed, e = localinstall.Install(ctx, paths, localinstall.Options{Engine: filepath.Join(firstPackage, localinstall.EngineName()), Desktop: filepath.Join(firstPackage, localinstall.DesktopName()), Listen: "127.0.0.1:7331", Start: true, Location: "local"})
-					if e == nil {
-						localinstall.PrepareInstallationMaintenance(ctx, installed, true, os.Stderr)
+					verified, verifyErr := bundle.Verify(firstPackage)
+					if verifyErr != nil {
+						e = verifyErr
+					} else {
+						signerPath := ""
+						if verified.Files["fased-signer"].SHA256 != "" {
+							signerPath = filepath.Join(firstPackage, "fased-signer")
+						}
+						var installed localinstall.Manifest
+						installed, e = localinstall.Install(ctx, paths, localinstall.Options{Engine: filepath.Join(firstPackage, localinstall.EngineName()), Desktop: filepath.Join(firstPackage, localinstall.DesktopName()), Signer: signerPath, SignerSHA256: verified.Files["fased-signer"].SHA256, Listen: "127.0.0.1:7331", Start: true, Location: "local"})
+						if e == nil {
+							localinstall.PrepareInstallationMaintenance(ctx, installed, true, os.Stderr)
+						}
 					}
 				}
 			}

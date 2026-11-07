@@ -56,26 +56,42 @@ func preflightOwnerFile(path string) error {
 }
 
 func writeOwnerFile(path string, data []byte) error {
+	return publishOwnerFile(path, data, nil)
+}
+
+// Publish only a complete fsynced document, without replacing an existing
+// backup/operation. A killed writer may leave an unreferenced private staging
+// file, never a partial final file that prevents safe same-operation recovery.
+func publishOwnerFile(path string, data []byte, beforePublish func() error) error {
 	dir, err := ownerDirectory(path)
 	if err != nil {
 		return err
 	}
 	defer unix.Close(dir)
-	fd, err := unix.Openat(dir, filepath.Base(path), unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".fased-owner-pending-")
 	if err != nil {
 		return err
 	}
-	f := os.NewFile(uintptr(fd), filepath.Base(path))
-	_, err = f.Write(data)
+	name := filepath.Base(tmp.Name())
+	defer unix.Unlinkat(dir, name, 0)
+	_, err = tmp.Write(data)
 	if err == nil {
-		err = f.Sync()
+		err = tmp.Sync()
 	}
-	closeErr := f.Close()
+	closeErr := tmp.Close()
 	if err != nil {
 		return err
 	}
 	if closeErr != nil {
 		return closeErr
+	}
+	if beforePublish != nil {
+		if err = beforePublish(); err != nil {
+			return err
+		}
+	}
+	if err = unix.Renameat2(dir, name, dir, filepath.Base(path), unix.RENAME_NOREPLACE); err != nil {
+		return err
 	}
 	return unix.Fsync(dir)
 }

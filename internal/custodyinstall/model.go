@@ -14,6 +14,7 @@ import (
 )
 
 type Options struct {
+	NativeOwnerAccess             bool
 	Core, Signer, Listen, Network string
 	PrepareHost, Disposable       bool
 	Mode, Profile, Provenance     string
@@ -26,38 +27,40 @@ type Identity struct {
 	GID  int    `json:"gid"`
 }
 type Manifest struct {
-	Profile          string   `json:"profile,omitempty"`
-	Provenance       string   `json:"provenance,omitempty"`
-	Enrollment       bool     `json:"enrollment,omitempty"`
-	Location         string   `json:"location,omitempty"`
-	PublicOrigin     string   `json:"publicOrigin,omitempty"`
-	Network          string   `json:"network,omitempty"`
-	InspectionBridge string   `json:"inspectionBridge,omitempty"`
-	Version          int      `json:"version"`
-	Mode             string   `json:"mode"`
-	ID               string   `json:"id"`
-	Owner            int      `json:"owner"`
-	Root             string   `json:"root"`
-	Listen           string   `json:"listen"`
-	CoreHash         string   `json:"coreHash"`
-	SignerHash       string   `json:"signerHash"`
-	App              Identity `json:"app"`
-	Signer           Identity `json:"signer"`
+	NativeOwnerAccess bool     `json:"nativeOwnerAccess,omitempty"`
+	Profile           string   `json:"profile,omitempty"`
+	Provenance        string   `json:"provenance,omitempty"`
+	Enrollment        bool     `json:"enrollment,omitempty"`
+	Location          string   `json:"location,omitempty"`
+	PublicOrigin      string   `json:"publicOrigin,omitempty"`
+	Network           string   `json:"network,omitempty"`
+	InspectionBridge  string   `json:"inspectionBridge,omitempty"`
+	Version           int      `json:"version"`
+	Mode              string   `json:"mode"`
+	ID                string   `json:"id"`
+	Owner             int      `json:"owner"`
+	Root              string   `json:"root"`
+	Listen            string   `json:"listen"`
+	CoreHash          string   `json:"coreHash"`
+	SignerHash        string   `json:"signerHash"`
+	App               Identity `json:"app"`
+	Signer            Identity `json:"signer"`
 }
 type journal struct {
-	Mode         string `json:"mode,omitempty"`
-	Profile      string `json:"profile,omitempty"`
-	Provenance   string `json:"provenance,omitempty"`
-	Enrollment   bool   `json:"enrollment,omitempty"`
-	Location     string `json:"location,omitempty"`
-	PublicOrigin string `json:"publicOrigin,omitempty"`
-	Network      string `json:"network,omitempty"`
-	Version      int    `json:"version"`
-	ID           string `json:"id"`
-	Owner        int    `json:"owner"`
-	CoreHash     string `json:"coreHash"`
-	SignerHash   string `json:"signerHash"`
-	Listen       string `json:"listen"`
+	NativeOwnerAccess bool   `json:"nativeOwnerAccess,omitempty"`
+	Mode              string `json:"mode,omitempty"`
+	Profile           string `json:"profile,omitempty"`
+	Provenance        string `json:"provenance,omitempty"`
+	Enrollment        bool   `json:"enrollment,omitempty"`
+	Location          string `json:"location,omitempty"`
+	PublicOrigin      string `json:"publicOrigin,omitempty"`
+	Network           string `json:"network,omitempty"`
+	Version           int    `json:"version"`
+	ID                string `json:"id"`
+	Owner             int    `json:"owner"`
+	CoreHash          string `json:"coreHash"`
+	SignerHash        string `json:"signerHash"`
+	Listen            string `json:"listen"`
 }
 
 func Root(uid int) string                     { return fmt.Sprintf("/var/lib/fased-app-custody-%d", uid) }
@@ -77,6 +80,9 @@ func validListen(s string) bool {
 	return e == nil && n >= 1024 && n <= 65535 && strconv.Itoa(n) == p
 }
 func (m Manifest) validate() error {
+	if m.NativeOwnerAccess && (m.Version != 3 || !m.Enrollment || m.Location != "local") {
+		return errors.New("native owner access requires Local enrolled ordinary custody")
+	}
 	if !validLocation(m.Location, m.PublicOrigin) || m.Enrollment && m.Location == "" {
 		return errors.New("invalid enrolled instance profile")
 	}
@@ -100,6 +106,9 @@ func (m Manifest) validate() error {
 	return nil
 }
 func (j journal) validate(uid int) error {
+	if j.NativeOwnerAccess && (j.Version != 3 || !j.Enrollment || j.Location != "local") {
+		return errors.New("invalid native owner enrollment")
+	}
 	if !custodyContext(j.Version, j.Profile, j.Provenance) || j.Version == 3 && !j.Enrollment || !custodyMode(j.Version, j.mode(), j.Network) || j.Owner != uid || !validHex(j.ID, 16) || !validHex(j.CoreHash, 32) || !validHex(j.SignerHash, 32) || !validListen(j.Listen) || !validLocation(j.Location, j.PublicOrigin) || j.Enrollment && j.Location == "" {
 		return errors.New("invalid installer intent; preserve and investigate it")
 	}

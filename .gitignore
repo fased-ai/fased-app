@@ -6,3 +6,6 @@ dist/
 !.env.example
 *.log
 .DS_Store
+
+# Temporary installer payload, created exclusively and removed by build-core.
+/cmd/fased-install/wallet-signer.bin

@@ -95,6 +95,40 @@ export type AccountsView = {
 export const fixtureNetwork = "disposable-fixture:v1";
 export const publicID = () => crypto.randomUUID().replaceAll("-", "");
 
+// Public intent only. The isolated native window independently selects/verifies
+// the OS owner and signer before it accepts any secret.
+export function walletOwnerLink(
+  instance: string,
+  network: string,
+  action: "setup" | "import" | "recover",
+  origin = "",
+): string {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(instance) || !walletNetwork(network))
+    return "";
+  const q = new URLSearchParams({ action, instance, network });
+  if (origin) {
+    try {
+      const u = new URL(origin);
+      if (
+        u.protocol !== "https:" ||
+        !u.hostname.endsWith(".ts.net") ||
+        u.port ||
+        u.username ||
+        u.password ||
+        u.search ||
+        u.hash ||
+        u.pathname !== "/"
+      )
+        return "";
+      q.set("origin", u.origin);
+    } catch {
+      return "";
+    }
+  }
+  q.sort();
+  return `fased://wallet-owner?${q.toString()}`;
+}
+
 export function accountAddress(a: Account, view: AccountsView): string {
   if (view.addresses?.[a.id]) return view.addresses[a.id];
   const status = view.fixture.status;

@@ -73,14 +73,15 @@ jobs:
         run: |
           npm ci
           npm run build
-      - name: Build and package the reviewed core and verifier once
+      - name: Build and package the reviewed core, signer and verifier once
         env:
           FASED_RELEASE_VERSION: ${{ steps.prepare.outputs.version }}
           GOFLAGS: -mod=readonly -overlay=${{ steps.prepare.outputs.overlay }}
         run: |
           go mod verify
           node scripts/build-core.mjs --version="$FASED_RELEASE_VERSION"
-          node scripts/build-core.mjs --installer --version="$FASED_RELEASE_VERSION"
+          go build -trimpath -o .evidence/bin/fased-signer ./cmd/fased-signer
+          node scripts/build-core.mjs --installer --version="$FASED_RELEASE_VERSION" --wallet-signer=.evidence/bin/fased-signer --source="$GITHUB_SHA"
           go run -ldflags "-X github.com/fased-ai/fased-app/internal/core.Version=$FASED_RELEASE_VERSION" ./cmd/fased-package --engine .evidence/bin/fased-app --source "$GITHUB_SHA" --out .evidence/ubuntu-release --ubuntu-release-format
           cp .evidence/bin/fased-install .evidence/ubuntu-release/fased-install-linux-amd64
           node scripts/prepare-ubuntu-release.mjs inventory

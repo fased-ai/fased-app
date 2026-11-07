@@ -450,6 +450,7 @@ test("credential setup is exact, temporary and absent from Local or routine Upda
   for (const profile of ["local", "remote"]) {
     for (const action of [
       "install",
+      "wallets",
       "setup",
       "update",
       "recover",
@@ -476,7 +477,9 @@ test("credential setup is exact, temporary and absent from Local or routine Upda
         const rules = policy
           .split("\n")
           .filter((line) => line.includes("systemd-creds"));
-        const allowed = profile === "remote" && action === "install";
+        const allowed =
+          profile === "remote" &&
+          (action === "install" || action === "wallets");
         assert.deepEqual(
           rules,
           allowed
@@ -514,4 +517,33 @@ test("credential setup is exact, temporary and absent from Local or routine Upda
     "utf8",
   );
   assert.doesNotMatch(maintenance, /systemd-creds/);
+});
+
+test("Wallets console consent keeps verified acquisition, owner drop and temporary cleanup", () => {
+  const script = renderEntry(template, config);
+  assert.equal(spawnSync("bash", ["-n"], { input: script }).status, 0);
+  for (const text of [
+    "--wallets)",
+    "--wallet-instance",
+    "--wallet-network",
+    '--entry-action "$action"',
+    '--wallet-instance "$wallet_instance"',
+    '--wallet-network "$wallet_network"',
+    'action="$action" wallet_instance="${wallet_instance:-}" wallet_network="${wallet_network:-}"',
+    "trap bootstrap_cleanup EXIT",
+    "NOTAFTER=%s NOPASSWD:",
+    '/usr/sbin/runuser -u "$operator"',
+  ])
+    assert.ok(script.includes(text), text);
+  assert.ok(
+    script.indexOf("Wallets setup requires Remote") <
+      script.indexOf("Preparing Ubuntu for Fased"),
+  );
+  assert.match(
+    script,
+    /\[\[ \$action == install \|\| -n \$entry \]\] \|\| die 'No installed operator\.'/,
+  );
+  assert.ok(!script.includes("PermitRootLogin yes"));
+  assert.ok(!script.includes("NOPASSWD: ALL"));
+  assert.ok(!script.includes("--wallet-key"));
 });

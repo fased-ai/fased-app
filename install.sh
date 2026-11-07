@@ -15,21 +15,29 @@ root_file() { [[ -f $1 && ! -L $1 && $(/usr/bin/stat -c '%u:%g:%a:%h' "$1") == "
 operator_record() { [[ $1 =~ ^(pending:[a-f0-9]{32}|ready:[1-9][0-9]*:[1-9][0-9]*:(external|[a-f0-9]{32}))$ ]]; }
 die() { printf 'Fased: %s\n' "$*" >&2; exit 1; }
 profile='' operator='' action=install listen='127.0.0.1:7331'
+wallet_instance='' wallet_network=''
 while (($#)); do
   case "$1" in
     --local) profile=local; shift ;;
     --remote) profile=remote; shift ;;
     --connect) profile=connect; shift ;;
-    --open|--start|--stop|--status|--recover|--update|--setup)
+    --open|--start|--stop|--status|--recover|--update|--setup|--wallets)
       [[ $action == install ]] || die 'Choose one management action.'
       action=${1#--}; shift ;;
+    --wallet-instance) (($# >= 2)) || die 'Missing workspace.'; wallet_instance=$2; shift 2 ;;
+    --wallet-network) (($# >= 2)) || die 'Missing network.'; wallet_network=$2; shift 2 ;;
     --operator) (($# >= 2)) || die 'Missing operator.'; operator=$2; shift 2 ;;
     --listen) (($# >= 2)) || die 'Missing listener.'; listen=$2; shift 2 ;;
-    --help|-h) printf 'Usage: install.sh [--local|--remote|--connect] [--open|--start|--stop|--status|--recover|--update|--setup] [--operator USER] [--listen 127.0.0.1:PORT]\n'; exit 0 ;;
+    --help|-h) printf 'Usage: install.sh [--local|--remote|--connect] [--open|--start|--stop|--status|--recover|--update|--setup|--wallets] [--wallet-instance ID --wallet-network NETWORK] [--operator USER] [--listen 127.0.0.1:PORT]\n'; exit 0 ;;
     *) die "Unknown option: $1" ;;
   esac
 done
 [[ $entry_version =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][a-zA-Z0-9.-]+)?$ && $installer_sha256 =~ ^[a-f0-9]{64}$ && $seed_sha256 =~ ^[a-f0-9]{64}$ ]] || die 'No trusted installer release is published yet.'
+if [[ $action == wallets ]]; then
+  [[ $profile == remote && $wallet_instance =~ ^[A-Za-z0-9_-]{43}$ && ( $wallet_network == devnet || $wallet_network == mainnet-beta ) ]] || die 'Wallets setup requires Remote, the exact workspace and network.'
+else
+  [[ -z $wallet_instance && -z $wallet_network ]] || die 'Wallet options require --wallets.'
+fi
 [[ -z $operator || $operator =~ ^[a-z_][a-z0-9_-]{0,30}$ && $operator != root ]] || die 'Invalid ordinary operator.'
 [[ $listen =~ ^127\.0\.0\.1:([0-9]{4,5})$ ]] || die 'Use a fixed loopback port.'
 port=${BASH_REMATCH[1]}
@@ -108,6 +116,7 @@ owner_install() {
   [[ $actual == "$seed_sha256" ]] || die 'Installer trust binding differs.'
   curl_args=(-q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --noproxy '*' --connect-timeout 10 --max-time 180 --max-filesize 134217728 -H 'Accept-Encoding: identity')
   verifier_args=(--seed-file "$work/seed.json" --seed-sha256 "$seed_sha256" --output "$work/verified" --install --profile "$profile" --listen "$listen" --receipt-file "$work/verification.json" --entry-action "$action")
+  if [[ $action == wallets ]]; then verifier_args+=(--wallet-instance "$wallet_instance" --wallet-network "$wallet_network"); fi
   if [[ $development_only == 1 ]]; then
     printf '%s' "$fixture_ca_base64" | /usr/bin/base64 --decode > "$work/ca.pem"
     curl_args+=(--cacert "$work/ca.pem")
@@ -238,7 +247,7 @@ done
 if [[ $profile == remote ]]; then
   # Initial installation only. Existing access setup and routine Update get
   # no credential preparation authority or general systemd-creds access.
-  if [[ $action == install ]]; then
+  if [[ $action == install || $action == wallets ]]; then
     provider_credential_command='/usr/bin/systemd-creds encrypt --with-key=host --name=fased-provider-task-key - -'
     printf '%s ALL=(root) NOTAFTER=%s NOPASSWD: %s\n' "$operator" "$expires" "$provider_credential_command" >> "$stage/authorization"
   fi
@@ -264,7 +273,7 @@ if [[ $profile == remote && $action == install && $ssh_user == root && -f /root/
   if [[ ${#recovery_candidates[@]} == 1 ]]; then recovery_key=${recovery_candidates[0]}; fi
 fi
 body="$(declare -f die owner_install); owner_install"
-/usr/sbin/runuser -u "$operator" -- /usr/bin/env -i HOME="$owner_home" USER="$operator" LOGNAME="$operator" PATH=/usr/sbin:/usr/bin:/sbin:/bin SSH_CONNECTION="${SSH_CONNECTION:-}" FASED_INSTALL_SSH_USER="$ssh_user" FASED_INSTALL_ROOT_ENTRY=1 FASED_BOOTSTRAP_RECOVERY_KEY="$recovery_key" action="$action" entry_version="$entry_version" installer_url="$installer_url" installer_sha256="$installer_sha256" seed_base64="$seed_base64" seed_sha256="$seed_sha256" fixture_ca_base64="$fixture_ca_base64" development_only="$development_only" listen="$listen" profile="$profile" XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="${runtime:+unix:path=$runtime/bus}" /bin/bash -c "$body" <&3
+/usr/sbin/runuser -u "$operator" -- /usr/bin/env -i HOME="$owner_home" USER="$operator" LOGNAME="$operator" PATH=/usr/sbin:/usr/bin:/sbin:/bin SSH_CONNECTION="${SSH_CONNECTION:-}" FASED_INSTALL_SSH_USER="$ssh_user" FASED_INSTALL_ROOT_ENTRY=1 FASED_BOOTSTRAP_RECOVERY_KEY="$recovery_key" action="$action" wallet_instance="${wallet_instance:-}" wallet_network="${wallet_network:-}" entry_version="$entry_version" installer_url="$installer_url" installer_sha256="$installer_sha256" seed_base64="$seed_base64" seed_sha256="$seed_sha256" fixture_ca_base64="$fixture_ca_base64" development_only="$development_only" listen="$listen" profile="$profile" XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="${runtime:+unix:path=$runtime/bus}" /bin/bash -c "$body" <&3
 
 # The root-owned command contains only fixed OS identity/drop operations. All
 # Fased/user-owned code starts AFTER runuser; updates still use the installed

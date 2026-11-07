@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' wails://wails; style-src 'self' wails://wails; connect-src 'self' wails://wails; img-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'"
+    />
+    <title>Fased Wallet</title>
+    <link rel="stylesheet" href="owner.css" />
+  </head>
+  <body>
+    <main>
+      <header><strong>Fased</strong><span id="network"></span></header>
+      <h1 id="title">Wallet</h1>
+      <p id="instance"></p>
+      <section id="connect">
+        <label id="remote-target" hidden
+          >Private address<input
+            id="target"
+            type="url"
+            autocomplete="off"
+            placeholder="https://your-server.ts.net" /></label
+        ><label id="remote-user" hidden
+          >OS account<input
+            id="user"
+            autocomplete="username"
+            maxlength="32" /></label
+        ><button id="connect-button">Connect wallet</button
+        ><button id="enable-button" class="secondary" hidden>
+          Enable Wallets
+        </button>
+        <p id="setup-status" role="status" hidden>
+          Approve setup in the system window.
+        </p>
+      </section>
+      <section id="admin-setup" hidden>
+        <h2>Server setup</h2>
+        <p>Run once in your server’s administrator console, then reconnect.</p>
+        <input
+          id="setup-command"
+          readonly
+          aria-label="Server setup command"
+        /><button id="copy-setup" class="secondary">Copy</button>
+      </section>
+      <form id="wallet" hidden>
+        <label id="seed-field" hidden
+          >Private seed<input
+            id="seed"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            maxlength="64" /></label
+        ><label id="restore-field" hidden
+          >Encrypted backup<input
+            id="restore"
+            type="file"
+            accept="application/json,.json" /><span
+            >Checksum<input
+              id="checksum"
+              autocomplete="off"
+              spellcheck="false"
+              maxlength="64" /></span></label
+        ><label
+          >Wallet password<input
+            id="unlock"
+            type="password"
+            autocomplete="new-password"
+            minlength="16"
+            maxlength="1024"
+            required /></label
+        ><label
+          >Confirm password<input
+            id="confirm"
+            type="password"
+            autocomplete="new-password"
+            minlength="16"
+            maxlength="1024"
+            required /></label
+        ><label
+          >Backup password<input
+            id="backup"
+            type="password"
+            autocomplete="new-password"
+            minlength="16"
+            maxlength="1024"
+            required /></label
+        ><label
+          >Confirm backup password<input
+            id="backup-confirm"
+            type="password"
+            autocomplete="new-password"
+            minlength="16"
+            maxlength="1024"
+            required /></label
+        ><button id="submit">Save wallet</button>
+      </form>
+      <p id="error" role="alert" aria-live="polite"></p>
+      <section id="result" hidden>
+        <h2>Wallet saved</h2>
+        <label>Address<output id="address" aria-label="Address"></output></label
+        ><label
+          >Encrypted backup<output
+            id="backup-file"
+            aria-label="Encrypted backup"
+          ></output></label
+        ><label
+          >Checksum<output id="fingerprint" aria-label="Checksum"></output
+        ></label>
+        <p>Recovery stays locked.</p>
+        <p>Return to Wallets to attach this account.</p>
+      </section>
+      <footer><button id="close" class="secondary">Close</button></footer>
+    </main>
+    <script type="module" src="owner.js"></script>
+  </body>
+</html>

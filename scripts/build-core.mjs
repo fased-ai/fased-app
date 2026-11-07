@@ -1,38 +1,76 @@
 import { execFileSync } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { constants } from "node:fs";
+import { copyFile, mkdir, readFile, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
 const args = process.argv.slice(2);
 const installer = args.includes("--installer");
-const versionArgs = args.filter((arg) => arg.startsWith("--version="));
+const one = (prefix) => {
+  const values = args.filter((a) => a.startsWith(prefix));
+  if (values.length > 1) throw Error("Duplicate build option");
+  return values[0]?.slice(prefix.length);
+};
+const version = one("--version="),
+  signer = one("--wallet-signer="),
+  source = one("--source=");
 if (
-  args.some((arg) => arg !== "--installer" && !arg.startsWith("--version=")) ||
-  args.filter((arg) => arg === "--installer").length > 1 ||
-  versionArgs.length > 1
+  args.some(
+    (a) =>
+      a !== "--installer" &&
+      !a.startsWith("--version=") &&
+      !a.startsWith("--wallet-signer=") &&
+      !a.startsWith("--source="),
+  ) ||
+  args.filter((a) => a === "--installer").length > 1
 )
-  throw new Error(
-    "Use build:core/build:installer with optional --version=x.y.z",
-  );
-const version = versionArgs[0]?.slice("--version=".length);
+  throw Error("Invalid core build option");
 if (version && !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/.test(version))
-  throw new Error("Invalid release version");
+  throw Error("Invalid release version");
+if (
+  (signer || source) &&
+  (!installer || !signer || !version || !/^[a-f0-9]{40}$/.test(source ?? ""))
+)
+  throw Error(
+    "Wallet payload needs installer, version, signer and exact source",
+  );
 const target = installer ? "fased-install" : "fased-app";
+const staged = "cmd/fased-install/wallet-signer.bin";
+let owned = false;
 await mkdir(".evidence/bin", { recursive: true });
-execFileSync(
-  "go",
-  [
-    "build",
-    "-trimpath",
-    ...(version
-      ? [
-          "-ldflags",
-          `-X github.com/fased-ai/fased-app/internal/core.Version=${version}`,
-        ]
-      : []),
-    "-o",
-    `.evidence/bin/${target}${process.platform === "win32" ? ".exe" : ""}`,
-    `./cmd/${target}`,
-  ],
-  {
-    stdio: "inherit",
-    env: installer ? { ...process.env, CGO_ENABLED: "0" } : process.env,
-  },
-);
+try {
+  const flags = version
+    ? [`-X github.com/fased-ai/fased-app/internal/core.Version=${version}`]
+    : [];
+  if (signer) {
+    const bytes = await readFile(signer);
+    if (!bytes.length || bytes.length > 64 * 1024 * 1024)
+      throw Error("Bounded compiled wallet signer required");
+    await copyFile(signer, staged, constants.COPYFILE_EXCL);
+    owned = true;
+    const copied = await readFile(staged);
+    const hash = createHash("sha256").update(bytes).digest("hex");
+    if (createHash("sha256").update(copied).digest("hex") !== hash)
+      throw Error("Signer changed during embedding");
+    flags.push(
+      `-X main.compiledWalletSource=${source}`,
+      `-X main.compiledWalletSHA256=${hash}`,
+    );
+  }
+  execFileSync(
+    "go",
+    [
+      "build",
+      "-trimpath",
+      ...(signer ? ["-tags", "wallet_payload"] : []),
+      ...(flags.length ? ["-ldflags", flags.join(" ")] : []),
+      "-o",
+      `.evidence/bin/${target}${process.platform === "win32" ? ".exe" : ""}`,
+      `./cmd/${target}`,
+    ],
+    {
+      stdio: "inherit",
+      env: installer ? { ...process.env, CGO_ENABLED: "0" } : process.env,
+    },
+  );
+} finally {
+  if (owned) await rm(staged);
+}

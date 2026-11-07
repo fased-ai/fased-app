@@ -461,7 +461,7 @@ func runInstalled(ctx context.Context, s Source, o Options, system *custodyinsta
 		save: func(j journal) error { return core.WritePrivateJSON(h.state, j) }, node: realNode,
 		targetExists: func() bool { _, e := os.Lstat(custodyinstall.Root(os.Getuid())); return !errors.Is(e, os.ErrNotExist) },
 		prepare: func(ctx context.Context, j journal, o Options) (custodyinstall.Manifest, error) {
-			options := custodyinstall.Options{Mode: o.Mode, Profile: o.Profile, Provenance: o.Provenance, Core: o.Core, Signer: o.Signer, Network: o.Network, Listen: j.Source.Listen, Location: j.Source.Profile, PublicOrigin: j.Source.PublicOrigin, PrepareHost: true, Disposable: true, StageOnly: true}
+			options := custodyinstall.Options{NativeOwnerAccess: o.NativeOwnerAccess, Mode: o.Mode, Profile: o.Profile, Provenance: o.Provenance, Core: o.Core, Signer: o.Signer, Network: o.Network, Listen: j.Source.Listen, Location: j.Source.Profile, PublicOrigin: j.Source.PublicOrigin, PrepareHost: true, Disposable: true, StageOnly: true}
 			if controlled {
 				return custodyinstall.InstallControlledOwnerCustody(ctx, options, system)
 			}
@@ -487,6 +487,17 @@ func runInstalled(ctx context.Context, s Source, o Options, system *custodyinsta
 				return err
 			}
 			return custodyinstall.ActivateEnrollment(ctx, j.Target, j.Source.ExpectedInstanceID, j.Digest, j.Source.Running, j.Source.Autostart, system)
+		}, restart: func(ctx context.Context, j journal) error {
+			if err := h.checkFence(ctx, j); err != nil {
+				return err
+			}
+			commit, err := custodyinstall.ReadEnrollmentCommit(j.Target)
+			if err != nil || commit.InstanceID != j.Source.ExpectedInstanceID || commit.Digest != j.Digest {
+				return errState
+			}
+			// The explicit native resume starts existing roles; it neither reimports
+			// the original image nor enables/disables login/reboot autostart.
+			return custodyinstall.ActivateEnrollment(ctx, j.Target, j.Source.ExpectedInstanceID, j.Digest, true, false, system)
 		}, finish: h.finish,
 	}
 	return run(ctx, s, o, coreHash, signerHash, op)

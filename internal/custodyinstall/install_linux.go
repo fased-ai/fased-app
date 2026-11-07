@@ -148,6 +148,9 @@ func InstallControlledOwnerCustody(ctx context.Context, o Options, s *System) (M
 }
 func install(ctx context.Context, o Options, s *System, controlled bool) (Manifest, error) {
 	var m Manifest
+	if o.NativeOwnerAccess && (o.Mode != signer.OrdinaryCustodyMode || !o.StageOnly || o.Location != "local") {
+		return m, errors.New("native access requires Local ordinary enrollment")
+	}
 	if o.Mode == signer.OrdinaryCustodyMode && (!o.StageOnly || !controlled && (!signer.OrdinaryOwnerAdmissionEnabled() || o.Provenance != signer.OwnerKeyProvenance)) {
 		return m, signer.ErrUnavailable
 	}
@@ -227,6 +230,7 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 	j := journal{Version: versionNumber, Network: o.Network, Owner: uid, CoreHash: sum(coreBytes), SignerHash: sum(signerBytes), Listen: o.Listen, Enrollment: o.StageOnly, Location: o.Location, PublicOrigin: o.PublicOrigin}
 	if versionNumber == 3 {
 		j.Mode = mode
+		j.NativeOwnerAccess = o.NativeOwnerAccess
 		j.Profile = o.Profile
 		j.Provenance = o.Provenance
 	}
@@ -247,7 +251,7 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 	}
 	if b, re := core.ReadPrivateFile(jdir + "/intent.json"); re == nil {
 		var old journal
-		if strict(b, &old) != nil || old.validate(uid) != nil || old.CoreHash != j.CoreHash || old.SignerHash != j.SignerHash || old.Listen != j.Listen || old.Network != j.Network || old.Version != j.Version || old.Mode != j.Mode || old.Profile != j.Profile || old.Provenance != j.Provenance || old.Enrollment != j.Enrollment || old.Location != j.Location || old.PublicOrigin != j.PublicOrigin {
+		if strict(b, &old) != nil || old.validate(uid) != nil || old.NativeOwnerAccess != j.NativeOwnerAccess || old.CoreHash != j.CoreHash || old.SignerHash != j.SignerHash || old.Listen != j.Listen || old.Network != j.Network || old.Version != j.Version || old.Mode != j.Mode || old.Profile != j.Profile || old.Provenance != j.Provenance || old.Enrollment != j.Enrollment || old.Location != j.Location || old.PublicOrigin != j.PublicOrigin {
 			return m, errors.New("installer intent conflicts with requested inputs; preserving it")
 		}
 		j = old
@@ -256,7 +260,7 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 		return m, re
 	}
 	if loadErr == nil {
-		if existing.CoreHash != j.CoreHash || existing.SignerHash != j.SignerHash || existing.Listen != j.Listen || existing.Network != j.Network || existing.Version != j.Version || existing.Mode != j.mode() || existing.Profile != j.Profile || existing.Provenance != j.Provenance || existing.Enrollment != j.Enrollment || existing.Location != j.Location || existing.PublicOrigin != j.PublicOrigin || (j.ID != "" && existing.ID != j.ID) {
+		if existing.NativeOwnerAccess != j.NativeOwnerAccess || existing.CoreHash != j.CoreHash || existing.SignerHash != j.SignerHash || existing.Listen != j.Listen || existing.Network != j.Network || existing.Version != j.Version || existing.Mode != j.mode() || existing.Profile != j.Profile || existing.Provenance != j.Provenance || existing.Enrollment != j.Enrollment || existing.Location != j.Location || existing.PublicOrigin != j.PublicOrigin || (j.ID != "" && existing.ID != j.ID) {
 			return m, errors.New("existing installation differs; automatic replacement/update is unavailable")
 		}
 		j.ID = existing.ID
@@ -296,7 +300,7 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 		if e != nil {
 			return m, e
 		}
-		m = Manifest{Version: versionNumber, Mode: mode, Profile: o.Profile, Provenance: o.Provenance, Network: o.Network, ID: j.ID, Owner: uid, Root: root, Listen: o.Listen, CoreHash: j.CoreHash, SignerHash: j.SignerHash, App: app, Signer: key, Enrollment: j.Enrollment, Location: j.Location, PublicOrigin: j.PublicOrigin}
+		m = Manifest{NativeOwnerAccess: o.NativeOwnerAccess, Version: versionNumber, Mode: mode, Profile: o.Profile, Provenance: o.Provenance, Network: o.Network, ID: j.ID, Owner: uid, Root: root, Listen: o.Listen, CoreHash: j.CoreHash, SignerHash: j.SignerHash, App: app, Signer: key, Enrollment: j.Enrollment, Location: j.Location, PublicOrigin: j.PublicOrigin}
 		if e = m.validate(); e != nil {
 			return m, e
 		}
@@ -350,6 +354,9 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 		}
 	}
 	if e = Verify(m); e != nil {
+		return m, e
+	}
+	if e = installNativePolicy(ctx, m, s); e != nil {
 		return m, e
 	}
 	if o.StageOnly {

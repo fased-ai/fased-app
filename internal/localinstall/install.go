@@ -27,6 +27,7 @@ type Options struct {
 	ApplicationReleaseSHA256                        string
 	Engine, Desktop, Listen, PublicOrigin, Location string
 	EngineSHA256, DesktopSHA256                     string
+	Signer, SignerSHA256                            string
 	Start, Autostart                                bool
 	ProviderFixture                                 bool // Controlled installer harness only; never a wizard choice.
 }
@@ -149,7 +150,7 @@ func Load(paths Paths) (Manifest, error) {
 		return m, errors.New("invalid installed application release identity")
 	}
 	for name := range m.Files {
-		if name != engineName && name != desktopName && name != definitionName && name != shortcutName {
+		if name != engineName && name != desktopName && name != definitionName && name != shortcutName && !(runtime.GOOS == "linux" && name == "fased-signer" && m.Files[desktopName] != "") {
 			return m, errors.New("unknown installation file in receipt")
 		}
 	}
@@ -225,7 +226,17 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 	if options.DesktopSHA256 != "" && (options.Desktop == "" || !validExpectedDigest(options.DesktopSHA256)) {
 		return Manifest{}, errors.New("verified desktop digest requires the selected desktop binary")
 	}
+	if options.Signer != "" && (runtime.GOOS != "linux" || options.Desktop == "" || !validExpectedDigest(options.SignerSHA256)) || options.Signer == "" && options.SignerSHA256 != "" {
+		return Manifest{}, errors.New("signer requires a verified Linux native package")
+	}
 	files := map[string]string{engineName: engineHash, definitionName: bytesDigest(unit)}
+	if options.Signer != "" {
+		got, err := digest(options.Signer)
+		if err != nil || got != options.SignerSHA256 {
+			return Manifest{}, errors.New("signer differs from the verified native package")
+		}
+		files["fased-signer"] = got
+	}
 	if options.Desktop != "" {
 		files[desktopName], err = digest(options.Desktop)
 		if err != nil {
@@ -310,6 +321,9 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 				source := options.Engine
 				if name == desktopName {
 					source = options.Desktop
+				}
+				if name == "fased-signer" {
+					source = options.Signer
 				}
 				var f *os.File
 				f, err = os.Open(source)

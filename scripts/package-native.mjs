@@ -10,6 +10,16 @@ const desktop = resolve(`.evidence/bin/fased-desktop${windows ? ".exe" : ""}`);
 const source = execFileSync("git", ["rev-parse", "HEAD"], {
   encoding: "utf8",
 }).trim();
+// The owner client carries a matching Linux core/signer pair. The server app
+// package and old native inventories remain supported without this optional file.
+const signer = resolve(".evidence/bin/fased-signer");
+if (process.platform === "linux") {
+  execFileSync(
+    "go",
+    ["build", "-trimpath", "-o", signer, "./cmd/fased-signer"],
+    { stdio: "inherit" },
+  );
+}
 execFileSync(
   "go",
   [
@@ -19,6 +29,7 @@ execFileSync(
     resolve(`.evidence/bin/fased-app${windows ? ".exe" : ""}`),
     "--desktop",
     desktop,
+    ...(process.platform === "linux" ? ["--signer", signer] : []),
     "--out",
     output,
     "--source",

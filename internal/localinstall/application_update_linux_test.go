@@ -73,6 +73,43 @@ func applicationFixtureFor(t *testing.T) *applicationFixture {
 	f.services = applicationServices{stop: func(_ context.Context, m Manifest) error { f.calls = append(f.calls, "stop-"+m.Version); return nil }, start: func(_ context.Context, m Manifest) error { f.calls = append(f.calls, "start-"+m.Version); return nil }}
 	return f
 }
+
+func TestApplicationUpdatePreservesVerifiedNativeSignerInventory(t *testing.T) {
+	f := applicationFixtureFor(t)
+	for _, name := range []string{desktopName, "fased-signer"} {
+		path := filepath.Join(f.paths.Root, name)
+		if err := os.WriteFile(path, []byte("inert retained "+name), 0700); err != nil {
+			t.Fatal(err)
+		}
+		hash, err := digest(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.old.Files[name] = hash
+	}
+	if err := core.WritePrivateJSON(filepath.Join(f.paths.Root, "install.json"), f.old); err != nil {
+		t.Fatal(err)
+	}
+	f.candidate.ExpectedManifestSHA256 = ManifestSHA256(f.old)
+	native := filepath.Join(filepath.Dir(f.paths.Root), "next-native")
+	if err := os.WriteFile(native, []byte("inert retained "+desktopName), 0700); err != nil {
+		t.Fatal(err)
+	}
+	f.candidate.Desktop = native
+	f.candidate.DesktopSHA256 = f.old.Files[desktopName]
+	before := f.old.Files["fased-signer"]
+	m, err := f.apply(t, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Files["fased-signer"] != before {
+		t.Fatal("app-only update replaced/dropped signer")
+	}
+	got, err := digest(filepath.Join(m.Root, "fased-signer"))
+	if err != nil || got != before {
+		t.Fatal("verified native signer changed", err)
+	}
+}
 func (f *applicationFixture) apply(t *testing.T, fault func(string) error, rollback bool) (Manifest, error) {
 	t.Helper()
 	return replaceApplication(t.Context(), f.paths, f.candidate, f.callbacks, f.services, fault, rollback)

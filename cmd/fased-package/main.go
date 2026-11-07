@@ -32,6 +32,7 @@ func runArgs(args []string) error {
 	packageFlags := flag.NewFlagSet("fased-package", flag.ContinueOnError)
 	engine := packageFlags.String("engine", ".evidence/bin/fased-app", "native core binary")
 	desktop := packageFlags.String("desktop", "", "optional matching native desktop binary")
+	signer := packageFlags.String("signer", "", "matching Linux signer carried by the native owner client")
 	out := packageFlags.String("out", ".evidence/packages", "generated package output directory")
 	source := packageFlags.String("source", "working-tree", "source revision identity")
 	releaseFormat := packageFlags.Bool("ubuntu-release-format", false, "headless Ubuntu schema2 format only; no publisher authentication or publication")
@@ -40,6 +41,9 @@ func runArgs(args []string) error {
 	}
 	if packageFlags.NArg() != 0 {
 		return fmt.Errorf("unexpected packaging argument")
+	}
+	if *signer != "" && (runtime.GOOS != "linux" || *desktop == "" || *releaseFormat) {
+		return fmt.Errorf("signer payload requires a Linux native package")
 	}
 	if *releaseFormat {
 		commit, err := hex.DecodeString(*source)
@@ -79,6 +83,9 @@ func runArgs(args []string) error {
 	}
 	if *desktop != "" {
 		files[dn] = *desktop
+	}
+	if *signer != "" {
+		files["fased-signer"] = *signer
 	}
 	m := bundle.Manifest{Schema: 1, Platform: runtime.GOOS, Arch: runtime.GOARCH, Version: core.Version, Source: *source, Desktop: *desktop != "", UnsignedEngineering: true, Files: map[string]bundle.File{}}
 	if *releaseFormat {

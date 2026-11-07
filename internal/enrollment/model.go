@@ -17,6 +17,8 @@ type Source struct {
 }
 
 type Options struct {
+	StartExisting             bool // Explicit native resume; starts committed roles without changing autostart.
+	NativeOwnerAccess         bool
 	Core, Signer, Network     string
 	Mode, Profile, Provenance string
 	PrepareHost, Disposable   bool
@@ -47,20 +49,21 @@ type node struct {
 }
 
 type journal struct {
-	Mode       string                  `json:"mode,omitempty"`
-	Profile    string                  `json:"profile,omitempty"`
-	Provenance string                  `json:"provenance,omitempty"`
-	Version    int                     `json:"version"`
-	ID         string                  `json:"id"`
-	Owner      int                     `json:"owner"`
-	Phase      string                  `json:"phase"`
-	Source     sourceRecord            `json:"source"`
-	Node       node                    `json:"node"`
-	CoreHash   string                  `json:"coreHash"`
-	SignerHash string                  `json:"signerHash"`
-	Network    string                  `json:"network"`
-	Digest     string                  `json:"digest,omitempty"`
-	Target     custodyinstall.Manifest `json:"target"`
+	NativeOwnerAccess bool                    `json:"nativeOwnerAccess,omitempty"`
+	Mode              string                  `json:"mode,omitempty"`
+	Profile           string                  `json:"profile,omitempty"`
+	Provenance        string                  `json:"provenance,omitempty"`
+	Version           int                     `json:"version"`
+	ID                string                  `json:"id"`
+	Owner             int                     `json:"owner"`
+	Phase             string                  `json:"phase"`
+	Source            sourceRecord            `json:"source"`
+	Node              node                    `json:"node"`
+	CoreHash          string                  `json:"coreHash"`
+	SignerHash        string                  `json:"signerHash"`
+	Network           string                  `json:"network"`
+	Digest            string                  `json:"digest,omitempty"`
+	Target            custodyinstall.Manifest `json:"target"`
 }
 
 type fence struct {

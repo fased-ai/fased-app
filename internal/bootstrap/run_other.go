@@ -12,10 +12,12 @@ import (
 func owned(os.FileInfo) bool { return false }
 
 type InstallOptions struct {
-	Prefix, DataDirectory string
-	Start                 bool
-	Profile, Listen       string
-	upgrade               *UpgradeOptions
+	WalletSigner                  *WalletPayload
+	WalletInstance, WalletNetwork string
+	Prefix, DataDirectory         string
+	Start                         bool
+	Profile, Listen               string
+	upgrade                       *UpgradeOptions
 }
 
 func (*Prepared) Run(context.Context, InstallOptions, io.Reader, io.Writer, io.Writer) error {

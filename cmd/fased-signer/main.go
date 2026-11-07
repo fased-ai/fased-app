@@ -69,11 +69,15 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	lifetime := flags.Duration("unlock-for", 15*time.Minute, "manual unlock lifetime, at most one hour")
 	requestStdin := flags.Bool("request-stdin", false, "public typed fixture policy/intent JSON from stdin; no credentials")
 	intentID := flags.String("intent-id", "", "exact disposable installation intent for cold inspection")
+	windowInstance := flags.String("window-instance", "", "exact enrolled instance for the isolated owner window")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 || (*fixture == *ordinary) || *configPath == "" {
 		return errors.New("select one custody mode and an identity configuration")
+	}
+	if *windowInstance != "" && args[0] != "window" {
+		return errors.New("window instance requires protected window input")
 	}
 	if *ordinary && !signer.OrdinaryOwnerAdmissionEnabled() {
 		return signer.ErrUnavailable
@@ -117,7 +121,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		<-ctx.Done()
 		return nil
 	}
-	if args[0] != "owner" && args[0] != "app" && args[0] != "setup" && args[0] != "recover" && args[0] != "approve" && args[0] != "approve-swap" && args[0] != "import" {
+	if args[0] != "owner" && args[0] != "app" && args[0] != "setup" && args[0] != "recover" && args[0] != "approve" && args[0] != "approve-swap" && args[0] != "import" && args[0] != "window" {
 		return errors.New("unsupported fixture command")
 	}
 	owner := args[0] != "app"
@@ -125,6 +129,12 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		if err = signer.CheckOwner(c); err != nil {
 			return err
 		}
+	}
+	if args[0] == "window" {
+		if *requestStdin || *passwordStdin || *approvalStdin || *documentPath != "" || *seedPath != "" || *rpcOrigin != "" || *action != "status" {
+			return errors.New("protected window accepts only its private input protocol")
+		}
+		return ownerWindow(ctx, c, *windowInstance, input, out)
 	}
 	if !owner && !signer.AppActionAllowed(*action) {
 		return errors.New("owner administration denied")
