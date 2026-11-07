@@ -72,6 +72,27 @@ class RemotePreflightDriverTest(unittest.TestCase):
             handler=next(value for value in built.call_args.args if isinstance(value,guest.PrivateHTTPSNoRedirect))
             self.assertIsNone(handler.redirect_request(None,None,302,'redirect',{},'https://outside.example/'))
 
+    def test_terminal_drains_tail_after_child_exit_before_first_read(self):
+        import os, select
+        real_select,real_wait=select.select,os.waitpid
+        skipped=[False];waits=[]
+        def selected(read,write,error,timeout):
+            if not skipped[0]:
+                skipped[0]=True
+                return [],[],[]
+            return real_select(read,write,error,timeout)
+        def reaped(pid,flags):
+            waits.append(pid)
+            return real_wait(pid,0)
+        with tempfile.TemporaryDirectory() as directory:
+            log=pathlib.Path(directory)/'tail.log'
+            with patch.object(guest.select,'select',side_effect=selected),patch.object(guest.os,'waitpid',side_effect=reaped):
+                code,out=guest.terminal([sys.executable,'-c',"print('finished-tail',flush=True)"],{},timeout=4,transcript=log)
+            self.assertEqual(code,0)
+            self.assertIn('finished-tail',out)
+            self.assertIn('finished-tail',log.read_text())
+            self.assertEqual(len(waits),1)
+
     def test_real_terminal_repeats_setup_consent_only_after_verified_enrollment_retry(self):
         import sys
         setup=guest.RemoteEnrollmentRetry.setup_prompt
