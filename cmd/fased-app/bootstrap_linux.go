@@ -19,11 +19,25 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 	"golang.org/x/term"
 )
+
+func bootstrapLocalInventoryCommand(ctx context.Context, data string, owner int, id, hash, probe string, out io.Writer) error {
+	instance, e := custodyinstall.LocalBootstrapInventoryInstance(owner, id, hash, data)
+	if e != nil {
+		return e
+	}
+	c, e := core.NewClient(ctx, data)
+	if e != nil {
+		return e
+	}
+	defer c.Close()
+	return readBootstrapLocalInventory(ctx, c, instance, owner, probe, out)
+}
 
 func bootstrapCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	f := flag.NewFlagSet("custody bootstrap", flag.ContinueOnError)
@@ -110,17 +124,36 @@ func prepareBootstrapCommand(id, bundlePath, trustPath, artifacts string, automa
 	if fileSHA(self) != targetCoreHash {
 		return "", errors.New("run the exact signed target core to bootstrap an older helper")
 	}
+	tx := custodyinstall.BootstrapTransaction{Version: 1, ID: id, Base: m, Target: m, Bundle: bundle, Trust: trust, ReviewedAt: now}
+	if m.Version == 3 && bundle.Version == 2 {
+		tx.Version = 2
+	}
+	for _, c := range plan.Target.Components {
+		if c.Contract.Component == "core" {
+			tx.Target.CoreHash = c.Artifact.SHA256
+		} else {
+			tx.Target.SignerHash = c.Artifact.SHA256
+		}
+	}
 
 	// An owner-downloaded verifier cannot use the signer socket. The installed,
 	// immutable predecessor owns that read; its executable/UID checks stay intact.
 	var coreSnapshot update.CoreSnapshot
 	var snapshot update.SignerSnapshot
 	if m.Version == 3 && bundle.Version == 2 {
-		// The immutable read-only signer has no inventory RPC. Only its actual old
-		// app entrypoint supplies core state; signer genesis is captured cold later.
+		// The old Local inventory adapter cannot obtain native owner authentication
+		// without a saved CLI session. Stage only the signed new core and use the
+		// existing private-IPC native authentication under the same app UID.
+		// Remote retains its independently validated predecessor helper.
 		system := &custodyinstall.System{In: in, Out: review}
 		var output bytes.Buffer
-		if e = system.UpdateInventory(context.Background(), m, update.NewProbe(), &output); e != nil {
+		probe := update.NewProbe()
+		if m.Location == "local" {
+			e = system.LocalBootstrapInventory(context.Background(), tx, artifacts, probe, &output)
+		} else {
+			e = system.UpdateInventory(context.Background(), m, probe, &output)
+		}
+		if e != nil {
 			return "", e
 		}
 		if e = update.StrictJSON(output.Bytes(), &coreSnapshot); e != nil {
@@ -154,20 +187,19 @@ func prepareBootstrapCommand(id, bundlePath, trustPath, artifacts string, automa
 	}
 	system := &custodyinstall.System{In: in, Out: review}
 	ctx := context.Background()
-	tx := custodyinstall.BootstrapTransaction{Version: 1, ID: id, Base: m, Target: m, Bundle: bundle, Trust: trust, ReviewedAt: now, Core: coreSnapshot, Signer: snapshot}
-	if m.Version == 3 && bundle.Version == 2 {
-		tx.Version = 2
-	}
-	for _, c := range plan.Target.Components {
-		if c.Contract.Component == "core" {
-			tx.Target.CoreHash = c.Artifact.SHA256
-		} else {
-			tx.Target.SignerHash = c.Artifact.SHA256
-		}
-	}
+	tx.Core, tx.Signer = coreSnapshot, snapshot
 	if _, e = tx.Plan(); e != nil {
 		return "", e
 	}
+	if e = finishBootstrapReview(tx, automation, in, review, func() error {
+		return custodyinstall.PrepareBootstrap(ctx, tx, artifacts, system)
+	}); e != nil {
+		return "", e
+	}
+	return custodyinstall.BootstrapRunner(os.Getuid(), id)
+}
+
+func finishBootstrapReview(tx custodyinstall.BootstrapTransaction, automation bool, in *os.File, review io.Writer, prepare func() error) error {
 	if tx.Version == 2 {
 		fmt.Fprintln(review, "Ordinary custody: a read-only cold trial precedes a durable forward-only reader floor. After commitment, interruption resumes this exact pair; old readers cannot be restored. Keys stay locked and all recovery holds remain.")
 	}
@@ -178,17 +210,14 @@ func prepareBootstrapCommand(id, bundlePath, trustPath, artifacts string, automa
 		description = "Stop both roles for an unchanged-state cold trial, then durably commit a forward-only reader floor. After commitment, resume only this signed target pair; failed health never restores old readers. Keys stay locked and recovery holds remain."
 	}
 	fmt.Fprintf(review, "DISPOSABLE READER BOOTSTRAP ONLY\nPreserve all financial state. %s No installed release or financial authority.\n%s\nType %s, or anything else to cancel: ", description, pretty, want)
-	if !automation && !term.IsTerminal(int(in.Fd())) {
-		return "", errors.New("protected owner terminal required")
+	if in == nil || (!automation && !term.IsTerminal(int(in.Fd()))) {
+		return errors.New("protected owner terminal required")
 	}
 	line, e := bufio.NewReader(in).ReadString('\n')
 	if e != nil || line != want+"\n" {
-		return "", errors.New("bootstrap review cancelled")
+		return errors.New("bootstrap review cancelled")
 	}
-	if e = custodyinstall.PrepareBootstrap(ctx, tx, artifacts, system); e != nil {
-		return "", e
-	}
-	return custodyinstall.BootstrapRunner(os.Getuid(), id)
+	return prepare()
 }
 
 func ownerBootstrapCommand(args []string, in *os.File, out, errOut io.Writer) error {

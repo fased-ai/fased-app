@@ -106,6 +106,27 @@ func installNativePolicy(ctx context.Context, m Manifest, s *System) error {
 	return err
 }
 
+// Inventory may verify existing OS consent but cannot create/repair it before
+// the owner reviews maintenance. In particular, do not call the installer here.
+func verifyNativePolicy(ctx context.Context, m Manifest, s *System) error {
+	info, err := os.Lstat(nativePolicyPath(m))
+	if err != nil {
+		return err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || st.Uid != 0 || info.Mode().Perm() != 0440 || !info.Mode().IsRegular() {
+		return errors.New("existing exact native policy required")
+	}
+	b, err := s.Run(ctx, nil, "/usr/bin/cat", "--", nativePolicyPath(m))
+	if err != nil {
+		return err
+	}
+	if string(b) != string(nativePolicy(m)) {
+		return errors.New("foreign native policy is preserved")
+	}
+	return nil
+}
+
 // NativeChannel is one exact existing app-identity client. The rule installed
 // at initial OS consent grants only the OS owner this fixed command, without a
 // later sudo/app/signing password. AppUID receives no sudo permission.
