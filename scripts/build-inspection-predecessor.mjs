@@ -254,6 +254,9 @@ try {
   for (const file of ["cmd", "internal", "dist", "go.mod", "go.sum", "ui.go"])
     await cp(file, path.join(guardedSource, file), { recursive: true });
   const guardedContractSHA = await projectPasswordOnlyContract(guardedSource);
+  const guardedCommandSHA = sha(
+    await readFile(path.join(guardedSource, "cmd/fased-app/updates.go")),
+  );
   await writeFile(
     path.join(guardedSource, "cmd/fased-app/zz_disposable_guarded_reader.go"),
     `package main
@@ -329,6 +332,7 @@ func init() { if len(os.Args)>1 && os.Args[1]=="serve" { os.Exit(92) } }
   );
   outputs.guardedApp = sha(await readFile(guarded));
   outputs.guardedContractSource = guardedContractSHA;
+  outputs.guardedCommandSource = guardedCommandSHA;
   await writeFile(
     path.join(root, "predecessor-build.json"),
     JSON.stringify(

@@ -46,6 +46,25 @@ export function projectReadOnlySignerJournal(source) {
   return source.replace(field, "");
 }
 
+// Keep the guarded/current command surface aligned with its projected core.
+// Historical CLI sources already lack this route and are left untouched.
+export function projectReadOnlyUpdateCommand(source) {
+  const choice = ' || args[0] == "ordinary-custody-compatibility"';
+  const branch =
+    /\t\tif args\[0\] == "ordinary-custody-compatibility" \{\n\t\t\tcontract = core\.OrdinaryUpdateContract\(\)\n\t\t\}\n/g;
+  assert.equal(
+    source.split(choice).length,
+    2,
+    "exact ordinary CLI choice required",
+  );
+  assert.equal(
+    [...source.matchAll(branch)].length,
+    1,
+    "exact ordinary CLI branch required",
+  );
+  return source.replace(choice, "").replace(branch, "");
+}
+
 export async function currentStorageFixture(archivedRoot) {
   assert.ok(process.getuid() > 0);
   const storage = {};
@@ -149,6 +168,12 @@ export async function currentStorageFixture(archivedRoot) {
   // The composed predecessor remains a password-only schema36 reader. It
   // must not advertise or accept the new Local owner format.
   storage["update.go"] = await projectPasswordOnlyContract(archivedRoot);
+  const projectedCommand = path.join(archivedRoot, "cmd/fased-app/updates.go");
+  try {
+    storage["cmd/fased-app/updates.go"] = sha(await readFile(projectedCommand));
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
   // Public-reader-only dependency: never activate owner/vault/terminal migration.
   await writeFile(
     path.join(archivedRoot, "internal/core/ordinary_custody_projection.go"),
@@ -564,6 +589,26 @@ export async function projectPasswordOnlyContract(root) {
       "exact Local contract projection required",
     );
     projected = projected.replace(before, after);
+  }
+  const commandFile = path.join(root, "cmd/fased-app/updates.go");
+  let command;
+  try {
+    command = await readFile(commandFile, "utf8");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  if (command !== undefined) {
+    const hasChoice = command.includes(
+      ' || args[0] == "ordinary-custody-compatibility"',
+    );
+    const hasBranch = command.includes("core.OrdinaryUpdateContract()");
+    assert.equal(
+      hasChoice,
+      hasBranch,
+      "partial ordinary CLI projection is not historical",
+    );
+    if (hasChoice)
+      await writeFile(commandFile, projectReadOnlyUpdateCommand(command));
   }
   await writeFile(file, projected);
   return createHash("sha256").update(projected).digest("hex");

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   runReaderStage,
   projectReadOnlySignerJournal,
+  projectReadOnlyUpdateCommand,
 } from "./fixture-core-storage.mjs";
 
 const reader = { schema: 36, ref: "ad910705246844c333eae8b41b742cb818a58069" };
@@ -147,4 +148,56 @@ test("historical signer journal excludes new maintenance decoder dependencies", 
     () => projectReadOnlySignerJournal(source + source),
     /exact ordinary handoff field/,
   );
+});
+
+test("projected guarded CLI refuses ordinary maintenance instead of advertising an absent core method", async (t) => {
+  const { mkdtemp, mkdir, writeFile, readFile, rm } =
+    await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  const { projectPasswordOnlyContract } =
+    await import("./fixture-core-storage.mjs");
+  const dir = await mkdtemp(path.join(tmpdir(), "fased-guarded-command-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await mkdir(path.join(dir, "internal/core"), { recursive: true });
+  await mkdir(path.join(dir, "cmd/fased-app"), { recursive: true });
+  const core = readFileSync(
+    new URL("../internal/core/update.go", import.meta.url),
+    "utf8",
+  );
+  const command = readFileSync(
+    new URL("../cmd/fased-app/updates.go", import.meta.url),
+    "utf8",
+  );
+  await writeFile(path.join(dir, "internal/core/update.go"), core);
+  await writeFile(path.join(dir, "cmd/fased-app/updates.go"), command);
+  await projectPasswordOnlyContract(dir);
+  const projected = await readFile(
+    path.join(dir, "cmd/fased-app/updates.go"),
+    "utf8",
+  );
+  assert.equal(projected, projectReadOnlyUpdateCommand(command));
+  assert.ok(!projected.includes("OrdinaryUpdateContract"));
+  assert.ok(!projected.includes("ordinary-custody-compatibility"));
+  assert.ok(projected.includes("core.UpdateContract()"));
+  assert.ok(projected.includes("core.ManagedUpdateContract()"));
+  assert.throws(
+    () => projectReadOnlyUpdateCommand(projected),
+    /exact ordinary CLI/,
+  );
+  assert.throws(
+    () => projectReadOnlyUpdateCommand(command + command),
+    /exact ordinary CLI/,
+  );
+  for (const partial of [
+    command.replace("core.OrdinaryUpdateContract()", "core.UpdateContract()"),
+    command.replace(' || args[0] == "ordinary-custody-compatibility"', ""),
+  ]) {
+    await writeFile(path.join(dir, "internal/core/update.go"), core);
+    await writeFile(path.join(dir, "cmd/fased-app/updates.go"), partial);
+    await assert.rejects(
+      projectPasswordOnlyContract(dir),
+      /partial ordinary CLI/,
+    );
+  }
 });
