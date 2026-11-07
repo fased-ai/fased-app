@@ -59,5 +59,5 @@ func validHeldSignerShape(s SignerSnapshot) bool {
 	if s.Version == 1 {
 		return len(s.States) == 3
 	}
-	return validManagedSignerShape(s)
+	return validManagedSignerShape(s) || validOrdinarySignerShape(s)
 }

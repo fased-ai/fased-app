@@ -8,6 +8,9 @@ import (
 )
 
 func (v *Vault) updateSnapshot(probe string) (update.SignerSnapshot, error) {
+	if v.ordinary {
+		return v.ordinaryUpdateSnapshot(probe)
+	}
 	if v.network != "" {
 		return v.managedUpdateSnapshot(probe)
 	}

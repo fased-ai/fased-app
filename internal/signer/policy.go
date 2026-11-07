@@ -88,6 +88,8 @@ type PublicInput struct {
 }
 
 type ledger struct {
+	ordinaryAdmission *CustodyAdmission
+	ordinaryHandoff   *update.OrdinaryHandoffReceipt
 	receiptRPC        *receiptRPCEnvelope
 	managedFresh      bool
 	swaps             map[string]SwapReceipt
@@ -206,15 +208,29 @@ func (l *ledger) authorize(i FixtureIntent, at int64) error {
 // apply validates the transition as well as its recorded time. Replay uses the
 // same checks as live append; no persisted app counter is trusted.
 func (l *ledger) apply(r journalRecord) error {
-	if l.ref.Version == 3 {
-		return ErrUnavailable
-	}
-	if l.ref.Version == 2 {
+	if l.ref.Version == 2 || l.ref.Version == 3 {
 		expected := journalRecord{Version: r.Version, Sequence: r.Sequence, Previous: r.Previous, Hash: r.Hash, At: r.At, Kind: r.Kind}
+		if l.ref.Version == 3 {
+			if l.ordinaryAdmission == nil || r.Admission == nil || *r.Admission != *l.ordinaryAdmission {
+				return ErrUnavailable
+			}
+			expected.Admission = l.ordinaryAdmission
+		}
 		switch r.Kind {
+		case "ordinary-reader-handoff":
+			if l.ref.Version != 3 {
+				return ErrUnavailable
+			}
+			expected.OrdinaryHandoff = r.OrdinaryHandoff
 		case "onchain-rpc-credential":
+			if l.ref.Version == 3 {
+				return ErrUnavailable
+			}
 			expected.ReceiptRPC = r.ReceiptRPC
 		case "onchain-approve", "onchain-sign", "onchain-settled", "onchain-cancel":
+			if l.ref.Version == 3 {
+				return ErrUnavailable
+			}
 			if !l.managedFresh {
 				return errors.New("managed key recovery history is incomplete")
 			}
@@ -223,7 +239,7 @@ func (l *ledger) apply(r journalRecord) error {
 			expected.Original = r.Original
 			expected.SwapObservation = r.SwapObservation
 		case "update-prepare":
-			if r.Update == nil || r.Update.Signer.Version != 2 || !r.Update.Signer.RecoveryHold {
+			if r.Update == nil || r.Update.Signer.Version != l.ref.Version || !r.Update.Signer.RecoveryHold {
 				return errors.New("managed maintenance intent required")
 			}
 			expected.Update = r.Update
@@ -250,6 +266,13 @@ func (l *ledger) apply(r journalRecord) error {
 		return errors.New("exclusive update intent blocks financial mutation")
 	}
 	switch r.Kind {
+	case "ordinary-reader-handoff":
+		rh := r.OrdinaryHandoff
+		if l.ref.Version != 3 || rh == nil || !update.ValidOrdinaryHandoff(*rh) || l.updateFloor != 0 || l.installedSequence != 0 || l.activeUpdate != "" || l.ordinaryHandoff != nil || len(l.updates) != 0 || len(l.installations) != 0 {
+			return errors.New("ordinary genesis-only handoff required")
+		}
+		l.ordinaryHandoff = clone(rh)
+		l.updateFloor = rh.Sequence
 	case "onchain-rpc-credential":
 		if e := l.applyReceiptRPC(r); e != nil {
 			return e
@@ -264,7 +287,7 @@ func (l *ledger) apply(r journalRecord) error {
 		}
 	case "update-prepare":
 		i := r.Update
-		if i == nil || update.ValidateIntent(*i) != nil || i.CreatedAt != r.At || i.Sequence <= l.updateFloor || len(l.updates) >= 256 || l.updates[i.ID].ID != "" {
+		if i == nil || update.ValidateIntent(*i) != nil || i.CreatedAt != r.At || i.Sequence <= l.updateFloor || l.ordinaryHandoff != nil && i.ID == l.ordinaryHandoff.ID || len(l.updates) >= 256 || l.updates[i.ID].ID != "" {
 			return errors.New("invalid durable update intent")
 		}
 		l.updates[i.ID] = clone(*i)
@@ -437,6 +460,9 @@ func (l *ledger) apply(r journalRecord) error {
 }
 
 func (l *ledger) append(v *Vault, r journalRecord) error {
+	if l.ref.Version == 3 && r.Admission == nil {
+		r.Admission = clone(l.ordinaryAdmission)
+	}
 	if r.At == 0 {
 		r.At = v.now().Unix()
 	}

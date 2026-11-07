@@ -23,6 +23,9 @@ func predecessorLifecycle(c *LifecycleContract) bool {
 	return c != nil && c.Version == 1 && c.Entrypoint == 3 && c.StageFormat == 1 && SnapshotDigest("features", c.Features) == SnapshotDigest("features", CurrentLifecycle().Features[:5])
 }
 func VerifyBootstrap(b BootstrapBundle, trust []byte, now int64) (BootstrapPlan, error) {
+	if b.Version == 2 {
+		return verifyOrdinaryBootstrap(b, trust, now)
+	}
 	var p BootstrapPlan
 	t, e := ParseTrust(trust, now)
 	if e != nil {

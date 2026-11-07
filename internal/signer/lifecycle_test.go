@@ -40,6 +40,12 @@ func intentFixture(t *testing.T, v *Vault, sequence uint64) update.IntentRequest
 		core.Features = append(core.Features, "managed-custody-updates-v2")
 		core.RequiresPeer = []string{"managed-custody-updates-v2"}
 	}
+	if v.ordinary {
+		sc = OrdinaryUpdateContract()
+		core.PeerProtocol = update.Range{Min: 3, Max: 3}
+		core.Features = []string{"account-registry-v1", "fixture-proposals-v1", update.OrdinaryMaintenanceFeature}
+		core.RequiresPeer = []string{update.OrdinaryMaintenanceFeature}
+	}
 	for _, contract := range []update.Contract{core, sc} {
 		m.Components = append(m.Components, update.Component{Version: "0.0.0-fixture.1", Artifact: update.Artifact{File: contract.Component, Size: 1, SHA256: update.SnapshotDigest("artifact", contract.Component)}, Contract: contract})
 	}

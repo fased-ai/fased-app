@@ -165,6 +165,8 @@ func probeRollbackCompatibility(ctx context.Context, t InstallTransaction, s *Sy
 		}
 		if t.Base.Version == 2 {
 			args[len(args)-1] = "custody-compatibility"
+		} else if t.Base.Version == 3 {
+			args[len(args)-1] = "ordinary-custody-compatibility"
 		}
 		cmd := []string{"/usr/bin/setpriv", "--reuid", strconv.Itoa(i.UID), "--regid", strconv.Itoa(i.GID), "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--", t.dir() + "/" + name}
 		cmd = append(cmd, args...)

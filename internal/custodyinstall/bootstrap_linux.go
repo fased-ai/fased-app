@@ -35,13 +35,18 @@ func (t BootstrapTransaction) Plan() (update.BootstrapPlan, error) {
 	if e != nil {
 		return p, e
 	}
-	if _, e := update.JoinSnapshots(t.Core, t.Signer, p.Maintenance.Target); e != nil {
+	ordinary := t.Version == 2 && t.Bundle.Version == 2 && t.Base.Version == 3
+	if ordinary {
+		if update.SnapshotDigest("empty-signer", t.Signer) != update.SnapshotDigest("empty-signer", update.SignerSnapshot{}) || t.Core.Version != 1 || !update.IDOK(t.Core.ProbeID) || !update.IDOK(t.Core.BootID) || t.Core.State.Name != "core-db" {
+			return p, errors.New("ordinary handoff requires old core snapshot and cold-only signer capture")
+		}
+	} else if _, e := update.JoinSnapshots(t.Core, t.Signer, p.Maintenance.Target); e != nil {
 		return p, e
 	}
 	b := t.Target
 	b.CoreHash = t.Base.CoreHash
 	b.SignerHash = t.Base.SignerHash
-	if t.Version != 1 || t.Base.Version != 1 || !update.IDOK(t.ID) || t.Base.validate() != nil || t.Target.validate() != nil || b != t.Base || t.Signer.ActiveIntentID != "" || t.Signer.InstalledSequence != 0 || p.Target.Sequence <= t.Signer.SequenceFloor {
+	if (!ordinary && (t.Version != 1 || t.Base.Version != 1 || t.Bundle.Version != 1)) || !update.IDOK(t.ID) || t.Base.validate() != nil || t.Target.validate() != nil || b != t.Base || t.Signer.ActiveIntentID != "" || t.Signer.InstalledSequence != 0 || p.Target.Sequence <= t.Signer.SequenceFloor {
 		return p, errors.New("unsupported bootstrap identity or financial floor")
 	}
 	for _, c := range p.Maintenance.Components {
@@ -143,7 +148,7 @@ func PrepareBootstrap(ctx context.Context, t BootstrapTransaction, dir string, s
 			if e = publish(ctx, t.Dir()+"/"+group.name+"/"+c.Artifact.File, t.Base.ID, data, 0755, readRoot, s.Run); e != nil {
 				return e
 			}
-			contract, e := probeReader(ctx, t.Dir()+"/"+group.name+"/"+c.Artifact.File, c.Contract.Component == "core", t.Base, s)
+			contract, e := probeReader(ctx, t.Dir()+"/"+group.name+"/"+c.Artifact.File, c.Contract.Component == "core", t.Base, s, t.Version == 2 && group.name == "candidate")
 			if e != nil {
 				return e
 			}
@@ -154,12 +159,15 @@ func PrepareBootstrap(ctx context.Context, t BootstrapTransaction, dir string, s
 	}
 	return publish(ctx, t.Dir()+"/transaction.json", t.Base.ID, mustJSON(t), 0644, readRoot, s.Run)
 }
-func probeReader(ctx context.Context, path string, isCore bool, m Manifest, s *System) (update.Contract, error) {
+func probeReader(ctx context.Context, path string, isCore bool, m Manifest, s *System, ordinaryTarget ...bool) (update.Contract, error) {
 	identity := m.Signer
 	args := []string{"fixture-compatibility"}
 	if isCore {
 		identity = m.App
 		args = []string{"updates", "compatibility"}
+	}
+	if m.Version == 3 && (!isCore || len(ordinaryTarget) > 0 && ordinaryTarget[0]) {
+		args[len(args)-1] = "ordinary-custody-compatibility"
 	}
 	cmd := []string{"/usr/bin/setpriv", "--reuid", strconv.Itoa(identity.UID), "--regid", strconv.Itoa(identity.GID), "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--", path}
 	cmd = append(cmd, args...)
@@ -190,9 +198,10 @@ func probeReader(ctx context.Context, path string, isCore bool, m Manifest, s *S
 }
 
 type BootstrapCallbacks struct {
-	Maintain func(context.Context, BootstrapTransaction) (update.RecoveryIndex, error)
-	Observe  func(context.Context, BootstrapTransaction, update.RecoveryIndex, bool, bool) error // require core, allow aborted
-	Finish   func(context.Context, BootstrapTransaction, update.RecoveryIndex) error
+	CancelOrdinary bool // Protected owner CLI only; never decoded from RPC.
+	Maintain       func(context.Context, BootstrapTransaction) (update.RecoveryIndex, error)
+	Observe        func(context.Context, BootstrapTransaction, update.RecoveryIndex, bool, bool) error // require core, allow aborted
+	Finish         func(context.Context, BootstrapTransaction, update.RecoveryIndex) error
 }
 type BootstrapReceipt struct {
 	Version                    int    `json:"version"`
@@ -221,6 +230,9 @@ func RunBootstrap(ctx context.Context, t BootstrapTransaction, s *System, c Boot
 		if write {
 			return ownerCompletionRecord(InstallTransaction{Base: t.Base, Target: t.Target}, true)
 		}
+		if t.Version == 2 {
+			return ownerCompletionRecord(InstallTransaction{Base: t.Base, Target: t.Target}, false)
+		}
 		dir, e := ownerJournal()
 		if e != nil {
 			return e
@@ -241,6 +253,21 @@ func RunBootstrap(ctx context.Context, t BootstrapTransaction, s *System, c Boot
 		}
 		return nil
 	}}
+	o.ownerCurrent = func(m Manifest) error {
+		d, e := ownerJournal()
+		if e != nil {
+			return e
+		}
+		b, e := core.ReadPrivateFile(d + "/intent.json")
+		var j journal
+		if e != nil || strict(b, &j) != nil || j != installerIntent(m) {
+			return errors.New("ordinary owner record is not the exact installed generation")
+		}
+		return nil
+	}
+	if t.Version == 2 {
+		return runOrdinaryBootstrap(ctx, t, o, ordinaryBootstrapCallbacks(t, s), c.CancelOrdinary)
+	}
 	return runBootstrap(ctx, t, c, o)
 }
 
@@ -496,8 +523,11 @@ func bootstrapRecords(ctx context.Context, t BootstrapTransaction, o installOps,
 // Expiry is checked again when the predecessor has not yet acquired its hold;
 // retained exact recovery remains possible after the original validity window.
 func (t BootstrapTransaction) AdmissionCurrent() bool {
-	p, e := t.Plan()
-	return e == nil && time.Now().Unix() < p.Maintenance.ExpiresAt
+	if _, e := t.Plan(); e != nil {
+		return false
+	}
+	_, e := update.VerifyBootstrap(t.Bundle, t.Trust, time.Now().Unix())
+	return e == nil
 }
 
 func clearBootstrapActive(ctx context.Context, t BootstrapTransaction, o installOps) error {

@@ -94,3 +94,29 @@ test("all application-reader tool stages are bounded without extending VM time",
   );
   assert.match(workflow, /timeout-minutes: 35/);
 });
+
+test("historical app-only projection never acquires ordinary maintenance authority", async (t) => {
+  const { mkdtemp, mkdir, writeFile, readFile, rm } =
+    await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  const { projectPasswordOnlyContract } =
+    await import("./fixture-core-storage.mjs");
+  const dir = await mkdtemp(path.join(tmpdir(), "fased-contract-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await mkdir(path.join(dir, "internal/core"), { recursive: true });
+  const source = readFileSync(
+    new URL("../internal/core/update.go", import.meta.url),
+    "utf8",
+  );
+  await writeFile(path.join(dir, "internal/core/update.go"), source);
+  await projectPasswordOnlyContract(dir);
+  const projected = await readFile(
+    path.join(dir, "internal/core/update.go"),
+    "utf8",
+  );
+  assert.ok(projected.includes("func OrdinaryCustodyReadContract()"));
+  assert.ok(!projected.includes("func OrdinaryUpdateContract()"));
+  assert.ok(!projected.includes("update.OrdinaryMaintenanceFeature"));
+  assert.ok(projected.includes("return schema == StateSchema"));
+});
