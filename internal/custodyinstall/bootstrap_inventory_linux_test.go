@@ -78,7 +78,7 @@ func TestLocalBootstrapInventoryStagesOnlySignedCore(t *testing.T) {
 				return []byte(`{"inventory":"only"}`), nil
 			}
 			var out bytes.Buffer
-			err := stageLocalBootstrapInventory(t.Context(), tx, artifacts, probe, &out, localBootstrapInventoryOps{read: model.read, run: run, mkdir: func(_ context.Context, path string) error {
+			err := stageBootstrapInventory(t.Context(), tx, artifacts, probe, &out, bootstrapInventoryOps{read: model.read, run: run, mkdir: func(_ context.Context, path string) error {
 				return os.MkdirAll(dir+strings.TrimPrefix(path, tx.Base.Root), 0700)
 			}})
 			if (err == nil) != (scenario == "ok") {
@@ -146,7 +146,7 @@ func TestLocalBootstrapInventoryOSBindings(t *testing.T) {
 			case "hash":
 				hash = "invalid"
 			}
-			if err := validateLocalBootstrapInventory(m, uid, euid, gid, exe, data, id, hash); (err == nil) != (bad == "") {
+			if err := validateBootstrapInventory(m, uid, euid, gid, exe, data, id, hash); (err == nil) != (bad == "") {
 				t.Fatal("foreign Local bootstrap binding", bad, err)
 			}
 		})
@@ -165,5 +165,108 @@ func TestLocalBootstrapPairDoesNotMakeSnapshotOptional(t *testing.T) {
 	tx.Target.CoreHash = strings.Repeat("e", 64)
 	if _, err := tx.pairPlan(); err == nil {
 		t.Fatal("foreign staged hash admitted")
+	}
+}
+
+// The installed Remote custody app and ordinary VPS app are separate identities.
+// Source regression: the exact custody pair must not require the VPS app session.
+func TestRemoteBootstrapInventoryUsesCustodyIdentityWithoutSession(t *testing.T) {
+	tx, dir, _, _ := ordinaryBootstrapModel(t)
+	tx.Base.Location, tx.Target.Location = "remote", "remote"
+	tx.Base.NativeOwnerAccess, tx.Target.NativeOwnerAccess = false, false
+	tx.Base.PublicOrigin, tx.Target.PublicOrigin = "https://fased-fixture-2.tail7bbde2.ts.net", "https://fased-fixture-2.tail7bbde2.ts.net"
+	tx.Base.App.UID, tx.Target.App.UID = 996, 996
+	tx.Base.App.GID, tx.Target.App.GID = 989, 989
+	tx.Base.Signer.UID, tx.Target.Signer.UID = 995, 995
+	tx.Base.Signer.GID, tx.Target.Signer.GID = 988, 988
+	if err := os.RemoveAll(dir + "/bootstraps"); err != nil {
+		t.Fatal(err)
+	}
+	artifacts := t.TempDir()
+	if err := os.WriteFile(filepath.Join(artifacts, "fased-app"), []byte("next-core"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	model := modelOps(t, InstallTransaction{Base: tx.Base, Target: tx.Target}, dir)
+	probe := strings.Repeat("d", 32)
+	calls := 0
+	run := func(ctx context.Context, b []byte, args ...string) ([]byte, error) {
+		if args[0] != "/usr/bin/setpriv" {
+			return model.run(ctx, b, args...)
+		}
+		calls++
+		prefix := []string{"/usr/bin/setpriv", "--reuid", "996", "--regid", "989", "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--", tx.Dir() + "/candidate/fased-app"}
+		if len(args) < len(prefix) || !reflect.DeepEqual(args[:len(prefix)], prefix) {
+			t.Fatal("borrowed ordinary VPS identity/root", args)
+		}
+		if calls == 1 {
+			return mustJSON(map[string]any{"version": 1, "target": update.Target{OS: "linux", Arch: "amd64"}, "contract": core.OrdinaryUpdateContract(), "walletSigner": false, "financialExecution": false, "updaterEnabled": false}), nil
+		}
+		want := []string{"update-inventory", "--data-dir", tx.Base.Root + "/app-state", "--probe-id", probe, "--bootstrap-owner", strconv.Itoa(tx.Base.Owner), "--bootstrap-id", tx.ID, "--bootstrap-core-sha256", tx.Target.CoreHash}
+		if !reflect.DeepEqual(args[len(prefix):], want) {
+			t.Fatal("not the typed custody inventory", args)
+		}
+		return []byte(`{"inventory":"custody-without-saved-session"}`), nil
+	}
+	var out bytes.Buffer
+	if err := stageBootstrapInventory(t.Context(), tx, artifacts, probe, &out, bootstrapInventoryOps{read: model.read, run: run, mkdir: func(_ context.Context, path string) error {
+		return os.MkdirAll(dir+strings.TrimPrefix(path, tx.Base.Root), 0700)
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || out.String() != `{"inventory":"custody-without-saved-session"}` {
+		t.Fatal("incomplete custody inventory path")
+	}
+	if _, err := os.Stat(dir + "/update-active.json"); !os.IsNotExist(err) {
+		t.Fatal("pre-review controller mutation")
+	}
+}
+
+func TestRemoteBootstrapInventoryOSBindings(t *testing.T) {
+	tx, _, _, _ := ordinaryBootstrapModel(t)
+	tx.Base.Location = "remote"
+	tx.Base.NativeOwnerAccess = false
+	tx.Base.PublicOrigin = "https://fased-fixture-2.tail7bbde2.ts.net"
+	tx.Base.App.UID = 996
+	tx.Base.App.GID = 989
+	tx.Base.Signer.UID = 995
+	tx.Base.Signer.GID = 988
+	for _, bad := range []string{"", "vps-app-uid", "root-euid", "wrong-gid", "native-local", "missing-origin", "no-enrollment", "managed", "foreign-owner", "foreign-root", "data", "image", "id", "hash"} {
+		t.Run(bad, func(t *testing.T) {
+			m := tx.Base
+			uid, euid, gid := m.App.UID, m.App.UID, m.App.GID
+			id, hash := tx.ID, tx.Target.CoreHash
+			data, exe := m.Root+"/app-state", tx.Dir()+"/candidate/fased-app"
+			switch bad {
+			case "vps-app-uid":
+				uid, euid = 999, 999
+			case "root-euid":
+				euid = 0
+			case "wrong-gid":
+				gid++
+			case "native-local":
+				m.NativeOwnerAccess = true
+			case "missing-origin":
+				m.PublicOrigin = ""
+			case "no-enrollment":
+				m.Enrollment = false
+			case "managed":
+				m.Version = 2
+			case "foreign-owner":
+				m.Owner++
+			case "foreign-root":
+				m.Root = "/var/lib/fased-app-vps-1000"
+			case "data":
+				data = "/var/lib/fased-app-vps-1000/app-state"
+			case "image":
+				exe = m.Root + "/fased-app"
+			case "id":
+				id = strings.Repeat("d", 32)
+			case "hash":
+				hash = "invalid"
+			}
+			if err := validateBootstrapInventory(m, uid, euid, gid, exe, data, id, hash); (err == nil) != (bad == "") {
+				t.Fatal("foreign Remote bootstrap role", bad, err)
+			}
+		})
 	}
 }
