@@ -196,7 +196,7 @@ func (m Manager) Enable(ctx context.Context, root string, p Plan, instanceID str
 		}
 	} else if err != nil {
 		return err
-	} else if r.Plan.Origin == p.Origin && strings.HasPrefix(r.Plan.Target, "http://") && strings.HasPrefix(p.Target, "unix:") && (r.Phase == "ready" || r.Phase == "switching") {
+	} else if r.Plan.Origin == p.Origin && r.Plan.Target != p.Target && strings.HasPrefix(p.Target, "unix:") && (r.Phase == "ready" || r.Phase == "switching") {
 		return m.switchIngress(ctx, root, r, p, instanceID, cfg, etag)
 	} else if r.Plan.Origin != p.Origin || r.Plan.Target != p.Target {
 		return errors.New("private-access identity changed; recover the existing route first")
@@ -333,7 +333,7 @@ func (m Manager) Remove(ctx context.Context, root string) error {
 	return os.Remove(filepath.Join(root, "private-access.json"))
 }
 
-// switchIngress resumes the exact owned HTTP→Unix transition. A lost response
+// switchIngress resumes the exact owned transition to protected Unix ingress. A lost response
 // does not reset Serve, discard ownership or reopen access. Once device binding
 // may have happened, recover forward instead of silently restoring legacy HTTP.
 func (m Manager) switchIngress(ctx context.Context, root string, r receipt, next Plan, instance string, cfg map[string]any, etag string) error {

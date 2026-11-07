@@ -13,7 +13,21 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/privateaccess"
 )
+
+func TestEnrolledPrivateAccessPlanUsesCustodySocket(t *testing.T) {
+	target := custodyinstall.Manifest{Owner: 1000, Root: custodyinstall.Root(1000), Location: "remote", PublicOrigin: "https://controlled.owner.ts.net", Listen: "127.0.0.1:17482"}
+	old := privateaccess.Plan{Mode: "tailscale", Origin: target.PublicOrigin, Target: "http://127.0.0.1:7332"}
+	next, err := enrolledPrivateAccessPlan(old, target)
+	if err != nil || next.Target != "unix:/var/lib/fased-app-custody-1000/app-state/tailscale.sock" || next.Origin != old.Origin || next.Mode != old.Mode {
+		t.Fatal("custody ingress not selected", next, err)
+	}
+	old.Origin = "https://foreign.owner.ts.net"
+	if _, err = enrolledPrivateAccessPlan(old, target); err == nil {
+		t.Fatal("foreign origin accepted")
+	}
+}
 
 func TestEnrolledEntryPointsUseOneInstanceAndPreserveProfile(t *testing.T) {
 	for _, profile := range []string{"local", "remote"} {

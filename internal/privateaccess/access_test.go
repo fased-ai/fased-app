@@ -16,6 +16,57 @@ import (
 
 type roundTrip func(*http.Request) (*http.Response, error)
 
+func TestOwnedUnixIngressHandoff(t *testing.T) {
+	for _, scenario := range []string{"success", "lost-response", "foreign"} {
+		t.Run(scenario, func(t *testing.T) {
+			root := fixture(t)
+			old := Plan{Mode: "tailscale", Origin: "https://node.owner.ts.net", Target: "unix:/var/lib/fased-app-vps-1000/app-state/tailscale.sock"}
+			next := old
+			next.Target = "unix:/var/lib/fased-app-custody-1000/app-state/tailscale.sock"
+			if err := core.WritePrivateJSON(filepath.Join(root, "private-access.json"), receipt{Schema: 1, Phase: "ready", Plan: old}); err != nil {
+				t.Fatal(err)
+			}
+			cfg, _ := json.Marshal(expected(old))
+			writes := 0
+			manager := Manager{
+				GetConfig: func(context.Context) ([]byte, string, error) { return cfg, "etag", nil },
+				SetConfig: func(_ context.Context, data []byte, etag string) error {
+					if etag != "etag" {
+						t.Fatal("conditional ownership lost")
+					}
+					writes++
+					cfg = append([]byte(nil), data...)
+					if scenario != "success" && writes == 1 {
+						return errors.New("lost committed response")
+					}
+					return nil
+				},
+				Client: &http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"status":"ok","apiVersion":"1","instanceId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","connection":{"location":"remote","transport":"private-https"}}`)), Header: http.Header{"Content-Type": []string{"application/json"}}}, nil
+				})},
+			}
+			err := manager.Enable(t.Context(), root, next, strings.Repeat("a", 43))
+			if (err == nil) != (scenario == "success") || writes != 1 {
+				t.Fatal("owned Unix handoff", err, writes)
+			}
+			if scenario == "foreign" {
+				cfg = []byte(`{"AllowFunnel":{"node.owner.ts.net:443":true}}`)
+				if err = manager.Enable(t.Context(), root, next, strings.Repeat("a", 43)); err == nil || writes != 1 {
+					t.Fatal("foreign route overwritten", err, writes)
+				}
+				return
+			}
+			if err = manager.Enable(t.Context(), root, next, strings.Repeat("a", 43)); err != nil {
+				t.Fatal(err)
+			}
+			r, err := load(root)
+			if err != nil || r.Phase != "ready" || r.Plan.Target != next.Target || r.Next != nil || writes != 1 {
+				t.Fatal("handoff did not reconcile", r, err, writes)
+			}
+		})
+	}
+}
+
 func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 func fixture(t *testing.T) string {
 	t.Helper()
