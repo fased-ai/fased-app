@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fased-ai/fased-app/internal/bundle"
 	"github.com/fased-ai/fased-app/internal/localinstall"
@@ -58,6 +59,14 @@ func TestNativeEnrollmentLocalPlanRetainsConsentAndExactPair(t *testing.T) {
 	if path != p.Core || !strings.Contains(strings.Join(args, " "), "--native-owner") || !strings.Contains(strings.Join(args, " "), "--ordinary-custody") || !strings.Contains(strings.Join(args, " "), "--prepare-host") {
 		t.Fatal("enrollment lost explicit consent", args)
 	}
+	// Once a synchronous terminal has exited, an unfinished enrollment must
+	// fail now; it cannot become success by waiting for an unrelated process.
+	deadline, cancel := context.WithTimeout(t.Context(), time.Second)
+	if _, err := plan.Wait(deadline); err == nil || deadline.Err() != nil {
+		cancel()
+		t.Fatal("unfinished setup was polled instead of refused", err)
+	}
+	cancel()
 	ready = true
 	bound, err := plan.Wait(t.Context())
 	if err != nil || bound.Peer.SignerSHA256 != p.SignerSHA256 {

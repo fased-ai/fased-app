@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -14,6 +15,45 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/core"
 )
+
+func TestNativePublicWalletRoutesMatchCoreMethods(t *testing.T) {
+	for _, row := range [][2]string{
+		{http.MethodPut, "/api/v1/accounts/setup"},
+		{http.MethodPut, "/api/v1/accounts/rpc"},
+		{http.MethodPut, "/api/v1/accounts/rpc-credential"},
+		{http.MethodPut, "/api/v1/accounts/venue-credential"},
+		{http.MethodPost, "/api/v1/accounts/rpc-check"},
+		{http.MethodPost, "/api/v1/accounts/read"},
+	} {
+		if !PublicRequestAllowed(httptest.NewRequest(row[0], "http://wails.localhost"+row[1], nil)) {
+			t.Error("public Wallets operation denied", row)
+		}
+		if PublicRequestAllowed(httptest.NewRequest(http.MethodGet, "http://wails.localhost"+row[1], nil)) || PublicRequestAllowed(httptest.NewRequest(row[0], "http://wails.localhost"+row[1]+"?override=true", nil)) {
+			t.Error("unsupported Wallets method/query admitted", row)
+		}
+	}
+}
+
+func TestNativeWalletResponseFitsBoundedCoreProjection(t *testing.T) {
+	key, amount := strings.Repeat("1", 44), "18446744073709551615"
+	v := core.WalletSnapshot{Address: key, Network: "devnet", Lamports: amount, Transaction: &core.WalletTransaction{Payer: key}}
+	for i := 0; i < 128; i++ {
+		v.Tokens = append(v.Tokens, core.WalletTokenBalance{Program: key, Mint: key, Amount: amount, Decimals: 255, Slot: amount})
+	}
+	for i := 0; i < 20; i++ {
+		v.Activity = append(v.Activity, core.WalletActivity{Signature: strings.Repeat("1", 88), Slot: amount})
+	}
+	for i := 0; i < 256; i++ {
+		v.Transaction.Tokens = append(v.Transaction.Tokens, core.WalletTokenChange{Account: key, Program: key, Mint: key, Decimals: 255, Before: amount, After: amount, Change: "-" + amount})
+	}
+	b, err := json.Marshal(v)
+	if err != nil || len(b) <= 32*1024 || int64(len(b)) > responseLimit("/api/v1/accounts/read") {
+		t.Fatal("valid bounded wallet output would be truncated", len(b), err)
+	}
+	if responseLimit("/api/v1/accounts/read") > 256*1024 || responseLimit("/api/v1/accounts") != 32*1024 {
+		t.Fatal("response allowance expanded beyond the affected read route")
+	}
+}
 
 func TestNativeTransportDoesNotSupplyAuthority(t *testing.T) {
 	root, err := filepath.Abs("../../.evidence/desktop-fixtures")

@@ -10,6 +10,23 @@ import (
 	"testing"
 )
 
+func TestInstalledLocalCommandRoutesAccounts(t *testing.T) {
+	home := t.TempDir()
+	corePath := filepath.Join(home, "core")
+	if err := os.WriteFile(corePath, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	data := filepath.Join(home, "data")
+	path, err := installCommandAt(home, corePath, home, data, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := exec.Command(path, "accounts").CombinedOutput()
+	if err != nil || string(got) != "accounts\n--data-dir\n"+data+"\n" {
+		t.Fatal("installed accounts entry unavailable", err, string(got))
+	}
+}
+
 func TestInstalledCommandPreservesForeignFilesAndRoutesUpdate(t *testing.T) {
 	home := t.TempDir()
 	root := filepath.Join(home, "app 'quoted")

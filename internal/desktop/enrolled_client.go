@@ -14,7 +14,9 @@ import (
 	"github.com/fased-ai/fased-app/internal/enrollment"
 )
 
-func nativeClient(ctx context.Context, dir string) (*core.Client, bool, error) {
+// NewPublicClient reuses the installed Local OS-owner transport for native UI
+// and ordinary CLI. It grants no signer or administrative operation.
+func NewPublicClient(ctx context.Context, dir string) (*core.Client, bool, error) {
 	if runtime.GOOS != "linux" {
 		c, err := core.NewClient(ctx, dir)
 		return c, false, err

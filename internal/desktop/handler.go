@@ -134,7 +134,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(result)
 		return
 	}
-	client, enrolled, err := nativeClient(r.Context(), h.dir)
+	client, enrolled, err := NewPublicClient(r.Context(), h.dir)
 	if err != nil {
 		fail(w, 503, "Fased is unavailable. Reopen the app.")
 		return
@@ -232,9 +232,9 @@ func allowed(method, route string) bool {
 		return method == "GET" || method == "POST"
 	case "/api/v1/accounts", "/api/v1/updates/preferences":
 		return method == "GET" || method == "PUT"
-	case "/api/v1/accounts/rpc", "/api/v1/accounts/rpc-credential":
+	case "/api/v1/accounts/setup", "/api/v1/accounts/rpc", "/api/v1/accounts/rpc-credential", "/api/v1/accounts/venue-credential":
 		return method == "PUT"
-	case "/api/v1/accounts/rpc-check":
+	case "/api/v1/accounts/rpc-check", "/api/v1/accounts/read":
 		return method == "POST"
 	case "/api/v1/updates/status":
 		return method == "GET"
@@ -277,6 +277,11 @@ func responseLimit(route string) int64 {
 	// progress and view fields. Other routes keep their original small bound.
 	if route == "/api/v1/agents" {
 		return 4 * 1024 * 1024
+	}
+	if route == "/api/v1/accounts/read" {
+		// One bounded wallet projection may contain 128 token balances,
+		// 20 activity rows and 256 transaction token changes.
+		return 256 * 1024
 	}
 	return 32 * 1024
 }

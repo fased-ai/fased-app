@@ -34,9 +34,10 @@ esac
  connect) exec "$core" connect --data-dir "$data" "$@" ;;
  start|stop) exec "$core" service "$action" --prefix "$root" --data-dir "$data" "$@" ;;
  status|login|logout) exec "$core" "$action" --data-dir "$data" "$@" ;;
+ accounts) exec "$core" accounts --data-dir "$data" "$@" ;;
  update) exec "$core" update "$@" --data-dir "$data" ;;
  uninstall) exec "$core" uninstall --prefix "$root" --data-dir "$data" "$@" ;;
- --help|-h) printf 'Fased: open, connect, status, start, stop, setup, login, update, uninstall\n' ;;
+ --help|-h) printf 'Fased: open, connect, status, start, stop, setup, login, accounts, update, uninstall\n' ;;
  *) printf 'Unknown command. Use fased --help.\n' >&2; exit 1 ;;
 esac
 `)
@@ -89,7 +90,7 @@ func installCommandAt(home, corePath, root, data string, remote bool) (string, e
 			if re == nil && bytes.Equal(prior, body) {
 				return path, nil
 			}
-			if re == nil && bytes.Equal(prior, priorLauncherBody(corePath, root, data, remote)) {
+			if re == nil && (bytes.Equal(prior, priorLauncherBody(corePath, root, data, remote)) || bytes.Equal(prior, preWalletLauncherBody(corePath, root, data, remote))) {
 				temp, e := os.CreateTemp(directory, ".fased-command-")
 				if e != nil {
 					return "", e
@@ -168,7 +169,7 @@ func removeCommand(corePath, root, data string, remote bool) error {
 		if e != nil {
 			return e
 		}
-		if bytes.Equal(b, body) || bytes.Equal(b, priorLauncherBody(corePath, root, data, remote)) {
+		if bytes.Equal(b, body) || (bytes.Equal(b, priorLauncherBody(corePath, root, data, remote)) || bytes.Equal(b, preWalletLauncherBody(corePath, root, data, remote))) {
 			if e = os.Remove(path); e != nil {
 				return e
 			}
@@ -192,7 +193,7 @@ func verifiedInstalledCommand(home, corePath, root, data string, remote bool) (s
 			continue
 		}
 		b, e := os.ReadFile(path)
-		if e == nil && (bytes.Equal(b, want) || bytes.Equal(b, priorLauncherBody(corePath, root, data, remote))) {
+		if e == nil && (bytes.Equal(b, want) || (bytes.Equal(b, priorLauncherBody(corePath, root, data, remote)) || bytes.Equal(b, preWalletLauncherBody(corePath, root, data, remote)))) {
 			return path, nil
 		}
 	}
@@ -201,7 +202,7 @@ func verifiedInstalledCommand(home, corePath, root, data string, remote bool) (s
 
 // Exact known v1 template only. Unknown owner scripts are never rewritten.
 func priorLauncherBody(corePath, root, data string, remote bool) []byte {
-	body := string(launcherBody(corePath, root, data, remote))
+	body := string(preWalletLauncherBody(corePath, root, data, remote))
 	body = strings.ReplaceAll(body, "Fased: open, connect, status, start, stop, setup, login, update, uninstall", "Fased: open, status, start, stop, setup, login, update, uninstall")
 	if remote {
 		body = strings.Replace(body, ` open) exec "$core" vps access "$@" ;;
@@ -211,6 +212,16 @@ func priorLauncherBody(corePath, root, data string, remote bool) []byte {
 	} else {
 		body = strings.Replace(body, ` connect) exec "$core" connect --data-dir "$data" "$@" ;;
 `, "", 1)
+	}
+	return []byte(body)
+}
+
+// Exact generated predecessor only; owner-edited commands remain foreign.
+func preWalletLauncherBody(corePath, root, data string, remote bool) []byte {
+	body := string(launcherBody(corePath, root, data, remote))
+	if !remote {
+		body = strings.Replace(body, ` accounts) exec "$core" accounts --data-dir "$data" "$@" ;;`+"\n", "", 1)
+		body = strings.Replace(body, "login, accounts, update", "login, update", 1)
 	}
 	return []byte(body)
 }
