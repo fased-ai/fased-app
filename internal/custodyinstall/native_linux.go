@@ -33,6 +33,12 @@ func (s *System) EnsureNativeRunning(ctx context.Context, m Manifest) error {
 	if Runtime(m) == nil {
 		return nil
 	}
+	if err := noActiveController(m); err != nil {
+		return err
+	}
+	if _, err := ReadEnrollmentCommit(m); err != nil {
+		return err
+	}
 	// These exact starts are the only service operations in the native grant.
 	for _, role := range []string{"signer", "app"} {
 		f, err := readRoot("/etc/systemd/system/" + Unit(m.Owner, role))

@@ -4,7 +4,6 @@ import (
 	"context"
 	"embed"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -205,11 +204,12 @@ func (w *WalletOwner) Run(unlock, password, seed, recovery, fingerprint string) 
 		}
 	}
 	if input.Intent.Action == "recover" {
-		var b ownerclient.Backup
-		if len(recovery) > signer.MaxOwnerInput || json.Unmarshal([]byte(recovery), &b) != nil || b.Version != 1 || b.Network != input.Intent.Network || fingerprint != b.Fingerprint {
+		var err error
+		input.Backup, err = signer.RecoveryDocument([]byte(recovery), fingerprint, input.Intent.Network)
+		if err != nil {
 			return walletResult{}, errors.New("choose the encrypted backup and its independent checksum")
 		}
-		input.Backup, input.Fingerprint = b.Document, fingerprint
+		input.Fingerprint = fingerprint
 	}
 	if err := input.Validate(); err != nil {
 		return walletResult{}, err

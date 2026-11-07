@@ -194,13 +194,7 @@ func RememberTarget(root, origin, user string, peer Peer) error {
 	return writeState(path, target)
 }
 
-type Backup struct {
-	Version     int    `json:"version"`
-	InstanceID  string `json:"instanceId"`
-	Network     string `json:"network"`
-	Fingerprint string `json:"fingerprint"`
-	Document    []byte `json:"document"`
-}
+type Backup = signer.OwnerBackup
 
 // SaveBackup writes only ciphertext; a lost reply/relaunch reuses exactly the
 // original file. Conflicting or foreign files are never overwritten.
