@@ -17,6 +17,7 @@ type Source struct {
 }
 
 type Options struct {
+	RecoverSuspended          bool // Explicit pre-import Remote core recovery; signer and identity never change.
 	StartExisting             bool // Explicit native resume; starts committed roles without changing autostart.
 	NativeOwnerAccess         bool
 	Core, Signer, Network     string
@@ -49,6 +50,7 @@ type node struct {
 }
 
 type journal struct {
+	CoreRecovery      *coreRecovery           `json:"coreRecovery,omitempty"`
 	NativeOwnerAccess bool                    `json:"nativeOwnerAccess,omitempty"`
 	Mode              string                  `json:"mode,omitempty"`
 	Profile           string                  `json:"profile,omitempty"`
@@ -64,6 +66,14 @@ type journal struct {
 	Network           string                  `json:"network"`
 	Digest            string                  `json:"digest,omitempty"`
 	Target            custodyinstall.Manifest `json:"target"`
+}
+
+// The original binding remains durable; only a separately admitted empty-target
+// code recovery can move the current core forward. Signer/topology never change.
+type coreRecovery struct {
+	Version      int                     `json:"version"`
+	Previous     custodyinstall.Manifest `json:"previous"`
+	NextCoreHash string                  `json:"nextCoreHash"`
 }
 
 type fence struct {

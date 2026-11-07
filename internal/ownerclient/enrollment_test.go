@@ -56,7 +56,7 @@ func TestNativeEnrollmentLocalPlanRetainsConsentAndExactPair(t *testing.T) {
 		t.Fatal(err)
 	}
 	path, args := plan.Terminal()
-	if path != p.Core || !strings.Contains(strings.Join(args, " "), "--native-owner") || !strings.Contains(strings.Join(args, " "), "--ordinary-custody") || !strings.Contains(strings.Join(args, " "), "--prepare-host") {
+	if strings.Contains(strings.Join(args, " "), "--recover-suspended") || path != p.Core || !strings.Contains(strings.Join(args, " "), "--native-owner") || !strings.Contains(strings.Join(args, " "), "--ordinary-custody") || !strings.Contains(strings.Join(args, " "), "--prepare-host") {
 		t.Fatal("enrollment lost explicit consent", args)
 	}
 	// Once a synchronous terminal has exited, an unfinished enrollment must
@@ -75,8 +75,10 @@ func TestNativeEnrollmentLocalPlanRetainsConsentAndExactPair(t *testing.T) {
 }
 
 func TestNativeEnrollmentRemoteStagesPairBeforePTYAndResumes(t *testing.T) {
-	for _, existing := range []bool{false, true} {
-		t.Run(map[bool]string{false: "fresh", true: "retained-stage"}[existing], func(t *testing.T) {
+	for _, state := range []string{"fresh", "retained-stage", "suspended-recovery"} {
+		existing := state != "fresh"
+		recovery := state == "suspended-recovery"
+		t.Run(state, func(t *testing.T) {
 			p := enrollmentPair(t)
 			i := intent()
 			ready := false
@@ -142,7 +144,11 @@ func TestNativeEnrollmentRemoteStagesPairBeforePTYAndResumes(t *testing.T) {
 				default:
 					if strings.Contains(joined, "enrollment-resume") {
 						reconciled = true
-						return []byte(`{"version":1,"resume":true}`), nil
+						return json.Marshal(struct {
+							Version  int  `json:"version"`
+							Resume   bool `json:"resume"`
+							Recovery bool `json:"recoverSuspended,omitempty"`
+						}{1, true, recovery})
 					}
 					if !ready {
 						return nil, &commandExit{127}
@@ -154,7 +160,7 @@ func TestNativeEnrollmentRemoteStagesPairBeforePTYAndResumes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if copies != 2 || reconciled != existing || strings.Contains(strings.Join(plan.arguments, " "), "--start-existing") != existing {
+			if copies != 2 || reconciled != existing || strings.Contains(strings.Join(plan.arguments, " "), "--start-existing") != (existing && !recovery) || strings.Contains(strings.Join(plan.arguments, " "), "--recover-suspended") != recovery {
 				t.Fatal("matching pair/resume was not checked")
 			}
 			path, args := plan.Terminal()

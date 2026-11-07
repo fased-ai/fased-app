@@ -30,6 +30,7 @@ func enrollmentCommand(args []string, in io.Reader, out, errOut io.Writer) error
 	f := flag.NewFlagSet("custody enroll", flag.ContinueOnError)
 	f.SetOutput(errOut)
 	startExisting := f.Bool("start-existing", false, "explicitly start already committed custody roles without changing autostart")
+	recoverSuspended := f.Bool("recover-suspended", false, "recover the exact empty suspended Remote enrollment core; no key or identity change")
 	nativeOwner := f.Bool("native-owner", false, "preserve Local OS-owner access through its exact protected helper")
 	ordinary := f.Bool("ordinary-custody", false, "ordinary signer custody")
 	mode := f.String("source", "", "owned installation: local or remote")
@@ -72,7 +73,7 @@ func enrollmentCommand(args []string, in io.Reader, out, errOut io.Writer) error
 	if e != nil {
 		return e
 	}
-	options := enrollment.Options{StartExisting: *startExisting, NativeOwnerAccess: *nativeOwner, Core: binary, Signer: key, Network: *network, PrepareHost: *prepare, Disposable: *disposable}
+	options := enrollment.Options{RecoverSuspended: *recoverSuspended, StartExisting: *startExisting, NativeOwnerAccess: *nativeOwner, Core: binary, Signer: key, Network: *network, PrepareHost: *prepare, Disposable: *disposable}
 	runEnrollment := enrollment.Run
 	if *ordinary {
 		options.Mode = signer.OrdinaryCustodyMode

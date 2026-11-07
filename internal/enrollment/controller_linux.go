@@ -22,6 +22,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -53,6 +54,12 @@ func sourceValid(s sourceRecord) bool {
 }
 
 func (j journal) valid(owner int) bool {
+	if j.CoreRecovery != nil {
+		r := j.CoreRecovery
+		if r.Version != 1 || !hexID(r.NextCoreHash, 32) || r.Previous.CoreHash == r.NextCoreHash || custodyinstall.EnrollmentIdentity(r.Previous) != custodyinstall.EnrollmentIdentity(j.Target) || r.Previous.SignerHash != j.SignerHash || j.Source.Profile != "remote" || j.NativeOwnerAccess || (j.CoreHash != r.Previous.CoreHash && j.CoreHash != r.NextCoreHash) || (j.CoreHash == r.Previous.CoreHash && (j.Phase != "suspended" || j.Digest != "")) {
+			return false
+		}
+	}
 	if j.NativeOwnerAccess && (j.Source.Profile != "local" || j.Mode == "") {
 		return false
 	}
@@ -78,22 +85,24 @@ type imageLease struct {
 // The private dependency seam executes the same phase controller in fixtures;
 // ordinary callers cannot inject OS operations or helper transports.
 type operations struct {
-	owner        int
-	load         func() (journal, error)
-	save         func(journal) error
-	node         func(string) (node, error)
-	targetExists func() bool
-	prepare      func(context.Context, journal, Options) (custodyinstall.Manifest, error)
-	target       func(custodyinstall.Manifest) error
-	emptySigner  func(context.Context, custodyinstall.Manifest) error
-	export       func(context.Context, custodyinstall.Manifest, sourceRecord) (*imageLease, error)
-	importImage  func(context.Context, journal, core.EnrollmentImage) error
-	fence        func(context.Context, journal) error
-	publish      func(context.Context, journal) error
-	verifyTarget func(context.Context, journal) error
-	activate     func(context.Context, journal) error
-	restart      func(context.Context, journal) error
-	finish       func(context.Context, journal) error
+	archiveRecovery func(journal) error
+	recoverCore     func(context.Context, journal, Options, string) (custodyinstall.Manifest, error)
+	owner           int
+	load            func() (journal, error)
+	save            func(journal) error
+	node            func(string) (node, error)
+	targetExists    func() bool
+	prepare         func(context.Context, journal, Options) (custodyinstall.Manifest, error)
+	target          func(custodyinstall.Manifest) error
+	emptySigner     func(context.Context, custodyinstall.Manifest) error
+	export          func(context.Context, custodyinstall.Manifest, sourceRecord) (*imageLease, error)
+	importImage     func(context.Context, journal, core.EnrollmentImage) error
+	fence           func(context.Context, journal) error
+	publish         func(context.Context, journal) error
+	verifyTarget    func(context.Context, journal) error
+	activate        func(context.Context, journal) error
+	restart         func(context.Context, journal) error
+	finish          func(context.Context, journal) error
 }
 
 func run(ctx context.Context, s Source, o Options, coreHash, signerHash string, op operations) (_ custodyinstall.Manifest, resultErr error) {
@@ -106,6 +115,9 @@ func run(ctx context.Context, s Source, o Options, coreHash, signerHash string, 
 	}
 	j, err := op.load()
 	if errors.Is(err, os.ErrNotExist) {
+		if o.RecoverSuspended {
+			return empty, errState
+		}
 		if op.targetExists() {
 			return empty, errors.New("an existing custody target is not enrolled by this source; preserve it")
 		}
@@ -129,8 +141,24 @@ func run(ctx context.Context, s Source, o Options, coreHash, signerHash string, 
 	}
 	want, saved := record(s), j.Source
 	want.Running, want.Autostart = saved.Running, saved.Autostart
+	if o.RecoverSuspended && j.CoreHash == coreHash && j.CoreRecovery == nil {
+		return empty, errState
+	}
+	if o.RecoverSuspended && (j.CoreHash != coreHash || j.CoreRecovery != nil && j.CoreHash == j.CoreRecovery.Previous.CoreHash) {
+		j, err = recoverSuspendedCore(ctx, s, o, j, coreHash, signerHash, op)
+		if err != nil {
+			return empty, err
+		}
+	}
 	if !j.valid(op.owner) || want != saved || j.NativeOwnerAccess != o.NativeOwnerAccess || j.CoreHash != coreHash || j.SignerHash != signerHash || j.Network != o.Network || j.Mode != o.Mode || j.Profile != o.Profile || j.Provenance != o.Provenance {
 		return empty, errState
+	}
+	if o.RecoverSuspended && j.CoreRecovery != nil {
+		defer func() {
+			if resultErr != nil && j.Phase == "suspended" && j.Digest == "" {
+				resultErr = errors.Join(resultErr, s.Restore(ctx, j.Source.Running, j.Source.Autostart))
+			}
+		}()
 	}
 	set := func(phase string) error { j.Phase = phase; return op.save(j) }
 	if j.Target.ID == "" {
@@ -190,6 +218,11 @@ func run(ctx context.Context, s Source, o Options, coreHash, signerHash string, 
 				return j.Target, errors.Join(err, restore)
 			}
 			if err = set("suspended"); err != nil {
+				return j.Target, err
+			}
+		}
+		if o.RecoverSuspended && j.CoreRecovery != nil && j.Phase == "suspended" {
+			if err = s.Suspend(ctx); err != nil {
 				return j.Target, err
 			}
 		}
@@ -302,6 +335,60 @@ func run(ctx context.Context, s Source, o Options, coreHash, signerHash string, 
 		return j.Target, err
 	}
 	return j.Target, nil
+}
+
+func recoverSuspendedCore(ctx context.Context, s Source, o Options, j journal, coreHash, signerHash string, op operations) (journal, error) {
+	want := record(s)
+	want.Running, want.Autostart = j.Source.Running, j.Source.Autostart
+	if !j.valid(op.owner) || j.Source != want || j.Phase != "suspended" || j.Digest != "" || j.Source.Profile != "remote" || j.NativeOwnerAccess || j.Mode != signer.OrdinaryCustodyMode || j.Mode != o.Mode || j.Profile != o.Profile || j.Provenance != o.Provenance || o.NativeOwnerAccess || !o.Disposable || !o.PrepareHost || j.SignerHash != signerHash || !hexID(coreHash, 32) || coreHash == j.CoreHash || op.archiveRecovery == nil || op.recoverCore == nil {
+		return j, errState
+	}
+	if err := s.Validate(ctx); err != nil {
+		return j, err
+	}
+	if n, err := op.node(j.Source.Data); err != nil || n != j.Node {
+		return j, errState
+	}
+	if j.CoreRecovery == nil {
+		if err := op.target(j.Target); err != nil {
+			return j, err
+		}
+		if err := op.emptySigner(ctx, j.Target); err != nil {
+			return j, err
+		}
+		if err := op.archiveRecovery(j); err != nil {
+			return j, err
+		}
+		j.CoreRecovery = &coreRecovery{Version: 1, Previous: j.Target, NextCoreHash: coreHash}
+		if err := op.save(j); err != nil {
+			return j, err
+		}
+	} else if j.CoreRecovery.NextCoreHash != coreHash || j.Target != j.CoreRecovery.Previous {
+		return j, errState
+	} else {
+		previous := j
+		previous.CoreRecovery = nil
+		if err := op.archiveRecovery(previous); err != nil {
+			return j, err
+		}
+	}
+	// The source may have been restored after the original failed export.
+	// Re-suspend through the same entrypoint, retaining its original run intent.
+	if err := s.Suspend(ctx); err != nil {
+		return j, errors.Join(err, s.Restore(ctx, j.Source.Running, j.Source.Autostart))
+	}
+	m, err := op.recoverCore(ctx, j, o, coreHash)
+	if err != nil {
+		return j, errors.Join(err, s.Restore(ctx, j.Source.Running, j.Source.Autostart))
+	}
+	if custodyinstall.EnrollmentIdentity(m) != custodyinstall.EnrollmentIdentity(j.Target) || m.CoreHash != coreHash || m.SignerHash != signerHash || op.target(m) != nil {
+		return j, errors.Join(errState, s.Restore(ctx, j.Source.Running, j.Source.Autostart))
+	}
+	j.CoreHash, j.Target = coreHash, m
+	if err := op.save(j); err != nil {
+		return j, errors.Join(err, s.Restore(ctx, j.Source.Running, j.Source.Autostart))
+	}
+	return j, nil
 }
 
 type imageResult struct {

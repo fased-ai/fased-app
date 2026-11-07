@@ -97,8 +97,9 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 		}
 	case "/usr/bin/find":
 		maintenance := len(args) == 8 && args[2] == "-maxdepth" && args[3] == "1" && args[4] == "-name" && args[6] == "-printf" && args[7] == "%U:%G:%m:%y" && maintenancePolicyInput(args[1]+"/"+args[5])
-		if !maintenance && (len(args) != 9 || args[1] != Root(os.Getuid())+"/signer-state" || strings.Join(args[2:], " ") != "-mindepth 1 -maxdepth 1 -printf x -quit") {
-			return nil, errors.New("only the empty target signer-state enrollment probe is allowed")
+		empty := len(args) == 9 && (args[1] == Root(os.Getuid())+"/signer-state" || args[1] == Root(os.Getuid())+"/app-state" || args[1] == Root(os.Getuid())+"/signer-ipc") && strings.Join(args[2:], " ") == "-mindepth 1 -maxdepth 1 -printf x -quit"
+		if !maintenance && !empty {
+			return nil, errors.New("only fixed empty target-state enrollment probes are allowed")
 		}
 	case "/usr/bin/stat":
 		if len(args) != 5 || args[1] != "--printf" || args[2] != "%d %i %u %g %f" || args[3] != "--" || filepath.Clean(args[4]) != args[4] || !regexp.MustCompile(`^/proc/[1-9][0-9]*/fd/[0-9]+/[^/]+/\.original/data$`).MatchString(args[4]) {

@@ -457,6 +457,25 @@ func runInstalled(ctx context.Context, s Source, o Options, system *custodyinsta
 		return out, err
 	}
 	op := operations{
+		archiveRecovery: func(j journal) error {
+			if err := h.unchangedParent(); err != nil {
+				return err
+			}
+			path := filepath.Join(filepath.Dir(h.state), "before-core-recovery-"+j.ID+".json")
+			if raw, err := core.ReadPrivateFile(path); err == nil {
+				var saved journal
+				if update.StrictJSON(raw, &saved) != nil || saved != j {
+					return errState
+				}
+				return nil
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			return core.WritePrivateJSON(path, j)
+		},
+		recoverCore: func(ctx context.Context, j journal, o Options, next string) (custodyinstall.Manifest, error) {
+			return system.RecoverEnrollmentCore(ctx, j.CoreRecovery.Previous, j.ID, o.Core, next)
+		},
 		owner: os.Getuid(), load: func() (journal, error) { return readOwnerJournal(h.state) },
 		save: func(j journal) error { return core.WritePrivateJSON(h.state, j) }, node: realNode,
 		targetExists: func() bool { _, e := os.Lstat(custodyinstall.Root(os.Getuid())); return !errors.Is(e, os.ErrNotExist) },
