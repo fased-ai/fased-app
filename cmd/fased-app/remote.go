@@ -508,8 +508,9 @@ func enableEnrolledRemoteAccess(ctx context.Context, source vpsinstall.Manifest,
 	if e != nil {
 		return "", e
 	}
-	if plan.Origin != target.PublicOrigin {
-		return "", errors.New("Tailscale identity changed; original private origin is preserved")
+	plan, e = enrolledPrivateAccessPlan(plan, target)
+	if e != nil {
+		return "", e
 	}
 	dir, e := remoteAccessDirectory()
 	if e != nil {
@@ -519,6 +520,14 @@ func enableEnrolledRemoteAccess(ctx context.Context, source vpsinstall.Manifest,
 		return "", e
 	}
 	return plan.Origin, nil
+}
+
+func enrolledPrivateAccessPlan(plan privateaccess.Plan, target custodyinstall.Manifest) (privateaccess.Plan, error) {
+	if plan.Origin != target.PublicOrigin {
+		return privateaccess.Plan{}, errors.New("Tailscale identity changed; original private origin is preserved")
+	}
+	plan.Target = tailnet.Target(target.Root + "/app-state")
+	return plan, nil
 }
 
 // Network recovery owns its pending-fence guard. A lifecycle redirect must not
