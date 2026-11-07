@@ -20,6 +20,9 @@ func managedRefValid(r AccountRef) bool {
 	return r.Version == 2 && managedNetwork(r.Network) && validID(r.SignerID) && validID(r.WalletID) && validID(r.Epoch) && err == nil && len(b) == 32 && hex.EncodeToString(b) == r.PublicKey
 }
 func validEnvelopeIdentity(e envelope) bool {
+	if !validHistoryHold(e) {
+		return false
+	}
 	return e.Admission == nil && (e.Version == 1 && !e.FreshManaged && validRef(e.Ref) || e.Version == 2 && !e.FreshManaged && e.RecoveryRequired && managedRefValid(e.Ref) || e.Version == 3 && e.FreshManaged && e.Purpose == "vault" && e.RecoveryRequired && managedRefValid(e.Ref)) || ordinaryEnvelope(e)
 }
 func envelopeForNetwork(e envelope, network string) bool {
@@ -95,7 +98,10 @@ func (v *Vault) openManagedHistory() error {
 			return err
 		}
 	}
-	if v.record != nil && len(records) > 1 && v.record.Ref.SignerID != ref.SignerID {
+	// Historical owner recovery may change installation identity, but never
+	// authority. Its AEAD-bound marker permanently holds execution; ordinary
+	// key-only restore still refuses foreign installation history.
+	if v.record != nil && len(records) > 1 && v.record.Ref.SignerID != ref.SignerID && v.record.RecoveredHistorySHA256 == "" {
 		return errors.New("maintenance history belongs to another installation")
 	}
 	v.ledger = l
@@ -153,6 +159,9 @@ func (v *Vault) managedUpdateSnapshot(probe string) (update.SignerSnapshot, erro
 		features = append(features, receiptRPCCredentialFeature)
 	}
 	vaultFeatures := []string{"managed-key-v2", "authority-epoch-v1"}
+	if disk.RecoveredHistorySHA256 != "" {
+		vaultFeatures = append(vaultFeatures, historyRecoveryFeature)
+	}
 	if v.ledger.managedFresh {
 		features = append(features, "managed-swap-fixture-v1")
 	}

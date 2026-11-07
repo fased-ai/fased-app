@@ -56,6 +56,7 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 	network := f.String("network", "", "disposable key network: devnet or mainnet-beta; install only")
 	key := f.String("signer-binary", "", "matching engineering fased-signer executable")
 	listen := f.String("listen", "127.0.0.1:7332", "managed private loopback listener")
+	snapshotPin := f.String("snapshot-sha256", "", "independent checksum of the selected history backup; recover only")
 	file := f.String("backup-file", "", "owner-selected private encrypted backup file")
 	seedFile := f.String("seed-file", "", "private owner disposable seed file; import only")
 	proposalFile := f.String("proposal-file", "", "owner-selected public proposal JSON")
@@ -68,6 +69,9 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 	}
 	if f.NArg() != 0 || !*disposable {
 		return errors.New("explicit --disposable-fixture confirmation is required; real wallets unavailable")
+	}
+	if *snapshotPin != "" && args[0] != "recover" {
+		return errors.New("snapshot fingerprint requires wallet recovery")
 	}
 	if *readStdin && (args[0] != "accounts" || *requestStdin || *passwordStdin) {
 		return errors.New("wallet read input requires accounts only; no update or login input")
@@ -187,6 +191,9 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 			return errors.New("choose --backup-file in a private owner directory")
 		}
 		command := []string{args[0], "--config", m.Root + "/identity.json", signerFlag, "--file", *file}
+		if *snapshotPin != "" {
+			command = append(command, "--snapshot-sha256", *snapshotPin)
+		}
 		if args[0] == "import" {
 			if *seedFile == "" {
 				return errors.New("choose --seed-file in a private owner directory")

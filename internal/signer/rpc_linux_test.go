@@ -3,6 +3,7 @@
 package signer
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net"
@@ -148,5 +149,27 @@ func TestKernelPeerUIDDenialBeforeHandshake(t *testing.T) {
 			t.Fatal("foreign UID obtained handshake")
 		}
 		conn.Close()
+	}
+}
+
+func TestOwnerRecoveryWireBoundDoesNotExpandApp(t *testing.T) {
+	payload, _ := json.Marshal(Request{Action: "restore", Document: bytes.Repeat([]byte{'x'}, 70*1024)})
+	payload = append(payload, '\n')
+	for _, owner := range []bool{false, true} {
+		client, server := net.Pipe()
+		go func() { defer client.Close(); client.Write(payload) }()
+		var got Request
+		limit := 64 * 1024
+		if owner {
+			limit = MaxOwnerInput
+		}
+		err := readWireBounded(server, &got, limit)
+		server.Close()
+		if owner && (err != nil || len(got.Document) != 70*1024) {
+			t.Fatal("owner recovery frame rejected", err)
+		}
+		if !owner && err == nil {
+			t.Fatal("application acquired expanded owner frame")
+		}
 	}
 }

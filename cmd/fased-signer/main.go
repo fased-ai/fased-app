@@ -64,6 +64,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	action := flags.String("action", "status", "owner administration or bounded fixture operation; app: status and fixture operations only")
 	approvalStdin := flags.Bool("approval-stdin", false, "fixture CI only: approval challenge line from stdin")
 	passwordStdin := flags.Bool("password-stdin", false, "fixture automation only: password lines from private stdin")
+	snapshotPin := flags.String("snapshot-sha256", "", "independent checksum of the selected encrypted history backup")
 	documentPath := flags.String("file", "", "exclusive owner output or encrypted restore input")
 	seedPath := flags.String("seed-file", "", "private owner file containing a disposable 32-byte seed")
 	lifetime := flags.Duration("unlock-for", 15*time.Minute, "manual unlock lifetime, at most one hour")
@@ -75,6 +76,9 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	}
 	if flags.NArg() != 0 || (*fixture == *ordinary) || *configPath == "" {
 		return errors.New("select one custody mode and an identity configuration")
+	}
+	if *snapshotPin != "" && args[0] != "recover" && !(args[0] == "owner" && *action == "restore") {
+		return errors.New("snapshot fingerprint requires owner recovery")
 	}
 	if *windowInstance != "" && args[0] != "window" {
 		return errors.New("window instance requires protected window input")
@@ -237,7 +241,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		}, importAction)
 	}
 	if args[0] == "setup" || args[0] == "recover" {
-		return ownerFlow(ctx, c, args[0], *documentPath, password, out)
+		return ownerFlow(ctx, c, args[0], *documentPath, password, out, *snapshotPin)
 	}
 	switch r.Action {
 	case "receipt-rpc-save":
@@ -259,7 +263,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		r.ProbeID = update.NewProbe()
 	case "status", "lock":
 	case "fixture-approvals", "fixture-state", "fixture-policy", "fixture-grant", "fixture-revoke", "fixture-recover-authority", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation":
-	case "create", "unlock", "backup":
+	case "create", "unlock", "backup", "backup-history":
 		r.Password, err = password("Fixture password", r.Action != "unlock")
 		if r.Action == "unlock" {
 			if *lifetime < time.Second || *lifetime > signer.MaxUnlock {
@@ -273,7 +277,8 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 			r.Password, err = password("New fixture unlock password", true)
 		}
 	case "restore", "verify-backup":
-		r.Document, err = readOwnerFile(*documentPath)
+		r.Document, err = readPrivateBoundedFile(*documentPath, signer.MaxRecoveryBackup)
+		r.SnapshotSHA256 = *snapshotPin
 		if err == nil {
 			r.Password, err = password("Backup password", false)
 		}
@@ -291,7 +296,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if (r.Action == "backup" || r.Action == "export-fixture-seed") && *documentPath == "" {
+	if (r.Action == "backup" || r.Action == "backup-history" || r.Action == "export-fixture-seed") && *documentPath == "" {
 		return errors.New("choose an exclusive owner output file; secret documents never go to stdout")
 	}
 	response, err := signer.Call(ctx, c, owner, r)
@@ -299,7 +304,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		return err
 	}
 	defer clear(response.Document)
-	if r.Action == "backup" || r.Action == "export-fixture-seed" {
+	if r.Action == "backup" || r.Action == "backup-history" || r.Action == "export-fixture-seed" {
 		if err = writeOwnerFile(*documentPath, response.Document); err != nil {
 			return err
 		}

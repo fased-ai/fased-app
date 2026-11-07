@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/fased-ai/fased-app/internal/signer"
 )
@@ -83,7 +84,7 @@ func TestOwnerWindowInterruptedImportResumesSameKey(t *testing.T) {
 	call := flowCall(v)
 	failed := false
 	err := conductWindow(t.Context(), c, root, in, &bytes.Buffer{}, func(ctx context.Context, r signer.Request) (signer.Response, error) {
-		if r.Action == "backup" && !failed {
+		if r.Action == "backup-history" && !failed {
 			failed = true
 			return signer.Response{}, context.Canceled
 		}
@@ -125,7 +126,9 @@ func TestOwnerWindowIndependentKeyRestoreRemainsHeld(t *testing.T) {
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("source backup changed")
 	}
-	// This proves independent KEY recovery, not migration of financial history.
+	// This controlled owner-profile history is key-only genesis. The general
+	// signer history test covers nonzero spent/held financial journals; neither
+	// path confers spending/admission authority.
 	if !restored.Status.RecoveryRequired || !restored.Status.AdmissionHeld {
 		t.Fatal("key-only recovery released history/admission hold")
 	}
@@ -153,5 +156,39 @@ func TestOwnerWindowPrivateParserIsBoundedStrictAndInstanceBound(t *testing.T) {
 	}
 	if err = readOwnerWindowInput(c, "another-instance", bytes.NewReader(valid), &parsed); err == nil {
 		t.Fatal("different instance accepted")
+	}
+}
+
+func TestOwnerWindowLegacyKeyBackupStaysHeld(t *testing.T) {
+	in := windowInput("setup", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	source, _ := windowVault(t, in.SignerID)
+	if err := source.Create(flowUnlock); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Unlock(flowUnlock, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := source.Backup(flowBackup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Close()
+	target, next := windowVault(t, "33333333333333333333333333333333")
+	in.Intent.Action = "recover"
+	in.SignerID = next.SignerID
+	in.Backup = legacy
+	in.Fingerprint = signer.BackupFingerprint(legacy)
+	call := flowCall(target)
+	err = conductWindow(t.Context(), next, ownerFixture(t), in, &bytes.Buffer{}, func(ctx context.Context, r signer.Request) (signer.Response, error) {
+		if r.Action == "restore" && r.SnapshotSHA256 != "" {
+			return signer.Response{}, errors.New("key-only restore must not carry a history fingerprint")
+		}
+		return call(ctx, r)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !target.Status().RecoveryRequired || !target.Status().Locked || target.Status().WalletSigner {
+		t.Fatal("old key-only backup acquired authority")
 	}
 }

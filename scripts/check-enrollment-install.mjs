@@ -400,6 +400,7 @@ async function ordinaryWalletJourney(mode, target, url, session) {
         `${walletPassword}\n${walletPassword}\n${walletPassword}\n${walletPassword}\n`,
       ),
     );
+    const recoveryBackupSHA256 = sha(await readFile(backup));
     const status = ownerStatus();
     check(
       `${mode}:ordinaryProtectedOwner`,
@@ -473,7 +474,15 @@ async function ordinaryWalletJourney(mode, target, url, session) {
     await waitSigner();
     const recovered = JSON.parse(
       cli(
-        ["custody", "recover", ...ownerArgs, "--backup-file", backup],
+        [
+          "custody",
+          "recover",
+          ...ownerArgs,
+          "--backup-file",
+          backup,
+          "--snapshot-sha256",
+          recoveryBackupSHA256,
+        ],
         `${walletPassword}\n${walletPassword}\n${walletPassword}\n`,
       ),
     );

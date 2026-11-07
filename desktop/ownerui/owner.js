@@ -98,7 +98,7 @@ byId("wallet").onsubmit = async (event) => {
     let recovery = "";
     if (info.action === "recover") {
       const file = byId("restore").files[0];
-      if (!file || file.size > 262144)
+      if (!file || file.size > 2 * 18 * 1024 * 1024 + 65536)
         throw new Error("Choose an encrypted backup");
       recovery = await file.text();
     }

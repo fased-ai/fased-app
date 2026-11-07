@@ -127,13 +127,15 @@ func peerUID(conn *net.UnixConn) (int, error) {
 	return int(credentials.Uid), nil
 }
 
-func readWire(conn net.Conn, v any) error {
-	r := bufio.NewReader(io.LimitReader(conn, 64*1024+1))
+func readWire(conn net.Conn, v any) error { return readWireBounded(conn, v, 64*1024) }
+func readWireBounded(conn net.Conn, v any, limit int) error {
+	r := bufio.NewReader(io.LimitReader(conn, int64(limit)+1))
 	b, err := r.ReadBytes('\n')
-	if err != nil {
-		return errors.New("incomplete local message")
+	defer clear(b)
+	if err != nil || len(b) > limit {
+		return errors.New("incomplete or oversized local message")
 	}
-	return strictWire(b, v)
+	return decodeWire(b, v)
 }
 
 type Server struct {
@@ -398,7 +400,11 @@ func (s *Server) accept(listener *net.UnixListener, c Config, uid int, owner boo
 				return
 			}
 			var request wireRequest
-			if readWire(conn, &request) != nil {
+			limit := 64 * 1024
+			if owner {
+				limit = MaxOwnerInput
+			}
+			if readWireBounded(conn, &request, limit) != nil {
 				return
 			}
 			defer wipe(request.Request.Password)
@@ -479,7 +485,11 @@ func call(ctx context.Context, c Config, owner bool, request Request) (Response,
 	if err = json.NewEncoder(conn).Encode(wireRequest{Version: c.Version, SignerID: c.SignerID, Challenge: hello.Challenge, Request: request}); err != nil {
 		return response, err
 	}
-	if err = readWire(conn, &response); err != nil {
+	limit := 64 * 1024
+	if owner && request.Action == "backup-history" {
+		limit = MaxOwnerInput
+	}
+	if err = readWireBounded(conn, &response, limit); err != nil {
 		return response, err
 	}
 	if response.Error != "" {

@@ -38,19 +38,20 @@ func (c Config) Validate() error {
 // Request is a closed set of owner and fixture operations. No real sign/submit.
 // Passwords are bytes so callers can clear their own buffers after use.
 type Request struct {
-	RPCOrigin     string                   `json:"rpcOrigin,omitempty"`
-	RPCKey        []byte                   `json:"rpcKey,omitempty"`
-	Install       *update.InstallRequest   `json:"install,omitempty"`
-	Preflight     *update.PreflightRequest `json:"preflight,omitempty"`
-	Stage         *update.StageRequest     `json:"stage,omitempty"`
-	Update        *update.IntentRequest    `json:"update,omitempty"`
-	ProbeID       string                   `json:"probeId,omitempty"`
-	IntentID      string                   `json:"intentId,omitempty"`
-	Action        string                   `json:"action"`
-	Password      []byte                   `json:"password,omitempty"`
-	NewPassword   []byte                   `json:"newPassword,omitempty"`
-	Document      []byte                   `json:"document,omitempty"`
-	UnlockSeconds int                      `json:"unlockSeconds,omitempty"`
+	SnapshotSHA256 string                   `json:"snapshotSha256,omitempty"`
+	RPCOrigin      string                   `json:"rpcOrigin,omitempty"`
+	RPCKey         []byte                   `json:"rpcKey,omitempty"`
+	Install        *update.InstallRequest   `json:"install,omitempty"`
+	Preflight      *update.PreflightRequest `json:"preflight,omitempty"`
+	Stage          *update.StageRequest     `json:"stage,omitempty"`
+	Update         *update.IntentRequest    `json:"update,omitempty"`
+	ProbeID        string                   `json:"probeId,omitempty"`
+	IntentID       string                   `json:"intentId,omitempty"`
+	Action         string                   `json:"action"`
+	Password       []byte                   `json:"password,omitempty"`
+	NewPassword    []byte                   `json:"newPassword,omitempty"`
+	Document       []byte                   `json:"document,omitempty"`
+	UnlockSeconds  int                      `json:"unlockSeconds,omitempty"`
 	PublicInput
 }
 type Response struct {
@@ -77,10 +78,13 @@ func execute(v *Vault, r Request, owner bool) Response {
 	}
 	if v.ordinary {
 		switch r.Action {
-		case "status", "create", "import-ordinary-seed", "unlock", "lock", "backup", "verify-backup", "restore":
+		case "status", "create", "import-ordinary-seed", "unlock", "lock", "backup", "backup-history", "verify-backup", "restore":
 		default:
 			return Response{Error: ErrUnavailable.Error()}
 		}
+	}
+	if r.SnapshotSHA256 != "" && (r.Action != "restore" || !IsHistoryBackup(r.Document)) {
+		return Response{Error: "snapshot fingerprint requires history recovery"}
 	}
 	var document []byte
 	var err error
@@ -117,7 +121,7 @@ func execute(v *Vault, r Request, owner bool) Response {
 	}
 	if v.network != "" {
 		switch r.Action {
-		case "receipt-rpc-save", "receipt-rpc-unlock", "swap-approve", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel", "status", "create", "import-managed-seed", "import-ordinary-seed", "unlock", "lock", "backup", "verify-backup", "restore", "fixture-update-inventory", "fixture-update-status", "fixture-update-prepare", "fixture-update-abort", "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish", "fixture-update-preflight", "fixture-install-controller":
+		case "receipt-rpc-save", "receipt-rpc-unlock", "swap-approve", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel", "status", "create", "import-managed-seed", "import-ordinary-seed", "unlock", "lock", "backup", "backup-history", "verify-backup", "restore", "fixture-update-inventory", "fixture-update-status", "fixture-update-prepare", "fixture-update-abort", "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish", "fixture-update-preflight", "fixture-install-controller":
 		default:
 			return Response{Error: ErrUnavailable.Error()}
 		}
@@ -239,10 +243,16 @@ func execute(v *Vault, r Request, owner bool) Response {
 		v.Lock()
 	case "backup":
 		document, err = v.Backup(r.Password)
+	case "backup-history":
+		document, err = v.BackupHistory(r.Password)
 	case "verify-backup":
 		err = v.VerifyBackup(r.Document, r.Password)
 	case "restore":
-		err = v.Restore(r.Document, r.Password, r.NewPassword)
+		if IsHistoryBackup(r.Document) {
+			err = v.RestoreHistory(r.Document, r.Password, r.NewPassword, r.SnapshotSHA256)
+		} else {
+			err = v.Restore(r.Document, r.Password, r.NewPassword)
+		}
 	case "export-fixture-seed":
 		document, err = v.ExportFixtureSeed()
 	case "fixture-approve-proposal":

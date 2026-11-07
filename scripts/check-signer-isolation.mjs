@@ -768,13 +768,23 @@ print(json.dumps(result))
     socketDir: `${root}/network-restored-sockets`,
   });
   server = await start(signer, networkRestorePath);
+  const networkRecoverySHA256 = as(owner, "/usr/bin/sha256sum", [networkBackup])
+    .trim()
+    .split(/\s+/)[0];
+  assert.match(networkRecoverySHA256, /^[a-f0-9]{64}$/);
   const networkRecovered = invoke(
     owner,
     networkRestorePath,
     "recover",
     "status",
     `${backupPassword}\n${replacement}\n${replacement}\n`,
-    ["--password-stdin", "--file", networkBackup],
+    [
+      "--password-stdin",
+      "--file",
+      networkBackup,
+      "--snapshot-sha256",
+      networkRecoverySHA256,
+    ],
   );
   check(
     "network:protectedRecovery",

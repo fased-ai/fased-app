@@ -44,16 +44,17 @@ type AccountRef struct {
 }
 
 type envelope struct {
-	Admission        *CustodyAdmission `json:"admission,omitempty"`
-	FreshManaged     bool              `json:"freshManaged,omitempty"`
-	Version          int               `json:"version"`
-	Purpose          string            `json:"purpose"`
-	KDF              string            `json:"kdf"`
-	Ref              AccountRef        `json:"account"`
-	RecoveryRequired bool              `json:"recoveryRequired"`
-	Salt             []byte            `json:"salt"`
-	Nonce            []byte            `json:"nonce"`
-	Ciphertext       []byte            `json:"ciphertext"`
+	RecoveredHistorySHA256 string            `json:"recoveredHistorySha256,omitempty"`
+	Admission              *CustodyAdmission `json:"admission,omitempty"`
+	FreshManaged           bool              `json:"freshManaged,omitempty"`
+	Version                int               `json:"version"`
+	Purpose                string            `json:"purpose"`
+	KDF                    string            `json:"kdf"`
+	Ref                    AccountRef        `json:"account"`
+	RecoveryRequired       bool              `json:"recoveryRequired"`
+	Salt                   []byte            `json:"salt"`
+	Nonce                  []byte            `json:"nonce"`
+	Ciphertext             []byte            `json:"ciphertext"`
 }
 
 type Status struct {
@@ -148,6 +149,9 @@ func sealOrigin(seed, password []byte, ref AccountRef, purpose string, recovery,
 	return sealAdmission(seed, password, ref, purpose, recovery, fresh, nil)
 }
 func sealAdmission(seed, password []byte, ref AccountRef, purpose string, recovery, fresh bool, admission *CustodyAdmission) (envelope, error) {
+	return sealAdmissionHistory(seed, password, ref, purpose, recovery, fresh, admission, "")
+}
+func sealAdmissionHistory(seed, password []byte, ref AccountRef, purpose string, recovery, fresh bool, admission *CustodyAdmission, history string) (envelope, error) {
 	if !validPassword(password) {
 		return envelope{}, errors.New("use 12 or more characters, at most 1024 bytes")
 	}
@@ -167,6 +171,10 @@ func sealAdmission(seed, password []byte, ref AccountRef, purpose string, recove
 		e.Version = 4
 		e.Admission = &copy
 	} else if admission != nil {
+		return envelope{}, ErrUnavailable
+	}
+	e.RecoveredHistorySHA256 = history
+	if !validHistoryHold(e) {
 		return envelope{}, ErrUnavailable
 	}
 	key := argon2.IDKey(password, e.Salt, 3, 64*1024, 2, 32)
@@ -436,6 +444,9 @@ func (v *Vault) Backup(password []byte) ([]byte, error) {
 	if v.closed {
 		return nil, ErrUnavailable
 	}
+	if v.record != nil && v.record.RecoveredHistorySHA256 != "" {
+		return nil, ErrHeld
+	}
 	if !v.unlocked() {
 		return nil, ErrLocked
 	}
@@ -449,6 +460,9 @@ func (v *Vault) Backup(password []byte) ([]byte, error) {
 // VerifyBackup compares an authenticated backup to the currently unlocked key.
 // It never returns the seed or alters grants, epochs or recovery holds.
 func (v *Vault) VerifyBackup(document, password []byte) error {
+	if IsHistoryBackup(document) {
+		return v.verifyHistoryBackup(document, password)
+	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.closed {

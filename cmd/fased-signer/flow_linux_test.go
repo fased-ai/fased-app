@@ -44,10 +44,16 @@ func flowCall(v *signer.Vault) ownerCall {
 			e = v.Create(r.Password)
 		case "unlock":
 			e = v.Unlock(r.Password, 60*1000000000)
+		case "backup-history":
+			doc, e = v.BackupHistory(r.Password)
 		case "backup":
 			doc, e = v.Backup(r.Password)
 		case "restore":
-			e = v.Restore(r.Document, r.Password, r.NewPassword)
+			if signer.IsHistoryBackup(r.Document) {
+				e = v.RestoreHistory(r.Document, r.Password, r.NewPassword, r.SnapshotSHA256)
+			} else {
+				e = v.Restore(r.Document, r.Password, r.NewPassword)
+			}
 		case "verify-backup":
 			e = v.VerifyBackup(r.Document, r.Password)
 		default:
@@ -90,7 +96,7 @@ func TestProtectedSetupBackupAndRecoveryFlow(t *testing.T) {
 		t.Fatal("recovery overwrote existing key")
 	}
 	restored := flowVault(t)
-	if e = conductFlow(context.Background(), "recover", file, flowAsk(flowBackup, flowUnlock), &out, flowCall(restored)); e != nil {
+	if e = conductFlow(context.Background(), "recover", file, flowAsk(flowBackup, flowUnlock), &out, flowCall(restored), signer.BackupFingerprint(backup)); e != nil {
 		t.Fatal(e)
 	}
 	s := restored.Status()
@@ -104,7 +110,7 @@ func TestInterruptedOwnerFlowsResumeWithoutReplacingKey(t *testing.T) {
 	out := &bytes.Buffer{}
 	call := flowCall(v)
 	fail := func(ctx context.Context, r signer.Request) (signer.Response, error) {
-		if r.Action == "backup" {
+		if r.Action == "backup-history" || r.Action == "backup" {
 			return signer.Response{}, errors.New("disposable owner interruption")
 		}
 		return call(ctx, r)
@@ -127,14 +133,18 @@ func TestInterruptedOwnerFlowsResumeWithoutReplacingKey(t *testing.T) {
 		}
 		return restoreCall(ctx, r)
 	}
-	if conductFlow(context.Background(), "recover", file, flowAsk(flowBackup, flowUnlock), out, failRestore) == nil {
+	archive, e := readPrivateBoundedFile(file, signer.MaxRecoveryBackup)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if conductFlow(context.Background(), "recover", file, flowAsk(flowBackup, flowUnlock), out, failRestore, signer.BackupFingerprint(archive)) == nil {
 		t.Fatal("recovery injection")
 	}
 	hold := restored.Status()
 	if !hold.Locked || !hold.RecoveryRequired {
 		t.Fatal("interrupted restore was not held/locked")
 	}
-	if e := conductFlow(context.Background(), "recover", file, flowAsk(flowBackup, flowUnlock), out, restoreCall); e != nil {
+	if e := conductFlow(context.Background(), "recover", file, flowAsk(flowBackup, flowUnlock), out, restoreCall, signer.BackupFingerprint(archive)); e != nil {
 		t.Fatal(e)
 	}
 	if *restored.Status().Account != *hold.Account {
@@ -227,7 +237,7 @@ func TestProtectedImportFailureLocksAndPreserves(t *testing.T) {
 			}
 			call := flowCall(v)
 			wrapped := func(ctx context.Context, r signer.Request) (signer.Response, error) {
-				if kind == "backup-failure" && r.Action == "backup" {
+				if kind == "backup-failure" && (r.Action == "backup-history" || r.Action == "backup") {
 					return signer.Response{}, errors.New("injected backup failure")
 				}
 				return call(ctx, r)

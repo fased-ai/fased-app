@@ -515,6 +515,9 @@ func (v *Vault) openLedger() error {
 // Thus a crash during first setup preserves the encrypted original and cannot
 // be mistaken for permission to reset an existing wallet's counters.
 func (s *storage) ensureInitialHistory(e envelope) error {
+	if e.RecoveredHistorySHA256 != "" {
+		return s.ensureRecoveredHistory(e)
+	}
 	if e.Version == 4 {
 		return s.ensureOrdinaryHistory(e)
 	}
@@ -548,7 +551,7 @@ func (s *storage) ensureInitialHistory(e envelope) error {
 }
 
 func (v *Vault) recoveryRequired() bool {
-	return v.record != nil && (v.network != "" || v.ledger == nil || v.ledger.ref != v.record.Ref || v.ledger.missingHistory)
+	return v.record != nil && (v.network != "" || v.record.RecoveredHistorySHA256 != "" || v.ledger == nil || v.ledger.ref != v.record.Ref || v.ledger.missingHistory)
 }
 func (v *Vault) fixtureReady(unlock bool) error {
 	if v.network != "" || v.closed || v.store.failedState() || v.record == nil || v.ledger == nil {
@@ -735,6 +738,9 @@ func (v *Vault) RecoverFixtureAuthority(ref AccountRef) error {
 	defer v.mu.Unlock()
 	if v.network != "" || v.closed || v.store.failedState() || v.record == nil || v.ledger == nil || !v.unlocked() {
 		return ErrLocked
+	}
+	if v.record.RecoveredHistorySHA256 != "" {
+		return ErrHeld
 	}
 	l := v.ledger
 	if ref != v.record.Ref || l.missingHistory || !sameWallet(ref, l.ref) {
