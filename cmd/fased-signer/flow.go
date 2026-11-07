@@ -30,11 +30,23 @@ func conductFlow(ctx context.Context, action, path string, ask askPassword, out 
 		return err
 	}
 	// Preflight input/output without creating, truncating or overwriting a file.
-	backup, readErr := readPrivateBoundedFile(path, signer.MaxRecoveryBackup)
+	backup, readErr := readPrivateBoundedFile(path, signer.MaxOwnerInput)
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		return readErr
 	}
 	defer clear(backup)
+	if action == "recover" && readErr == nil {
+		fingerprint := ""
+		if len(snapshotPin) == 1 {
+			fingerprint = snapshotPin[0]
+		}
+		document, err := signer.RecoveryDocument(backup, fingerprint, "")
+		if err != nil {
+			return err
+		}
+		backup = document
+		defer clear(backup)
+	}
 	pin := ""
 	if action == "recover" && signer.IsHistoryBackup(backup) {
 		if len(snapshotPin) != 1 || snapshotPin[0] != signer.BackupFingerprint(backup) {

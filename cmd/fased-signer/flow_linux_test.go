@@ -5,6 +5,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -15,6 +17,51 @@ import (
 
 var flowUnlock = []byte("Disposable flow unlock password")
 var flowBackup = []byte("Disposable flow backup password")
+
+func TestNativeBackupFileThroughCLIRecovery(t *testing.T) {
+	source, err := signer.OpenControlledOwnerCustody(ownerFixture(t), "11111111111111111111111111111111", "devnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	file := filepath.Join(ownerFixture(t), "backup.json")
+	if err = conductFlow(t.Context(), "setup", file, flowAsk(flowBackup, flowUnlock), &bytes.Buffer{}, flowCall(source)); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := signer.BackupFingerprint(raw)
+	native, err := json.Marshal(struct {
+		Version     int    `json:"version"`
+		InstanceID  string `json:"instanceId"`
+		Network     string `json:"network"`
+		Fingerprint string `json:"fingerprint"`
+		Document    []byte `json:"document"`
+	}{1, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)), "devnet", pin, raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(file, native, 0600); err != nil {
+		t.Fatal(err)
+	}
+	target, err := signer.OpenControlledOwnerCustody(ownerFixture(t), "22222222222222222222222222222222", "devnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	if conductFlow(t.Context(), "recover", file, flowAsk(flowBackup, flowUnlock), &bytes.Buffer{}, flowCall(target), signer.BackupFingerprint(native)) == nil || target.Status().Account != nil {
+		t.Fatal("container checksum accepted as archive checksum")
+	}
+	if err = conductFlow(t.Context(), "recover", file, flowAsk(flowBackup, flowUnlock), &bytes.Buffer{}, flowCall(target), pin); err != nil {
+		t.Fatal(err)
+	}
+	a, b := source.Status(), target.Status()
+	if !b.Locked || !b.RecoveryRequired || b.Account == nil || b.Account.PublicKey != a.Account.PublicKey || b.Account.Epoch == a.Account.Epoch {
+		t.Fatal("native backup recovery lost identity or hold")
+	}
+}
 
 func flowVault(t *testing.T) *signer.Vault {
 	t.Helper()
