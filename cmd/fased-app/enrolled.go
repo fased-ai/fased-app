@@ -48,6 +48,11 @@ func enrolledSystem(s *custodyinstall.System) enrolledOps {
 	return enrolledOps{
 		commit: custodyinstall.ReadEnrollmentCommit, runtime: custodyinstall.Runtime,
 		control: func(ctx context.Context, m custodyinstall.Manifest, role, action string) error {
+			if m.NativeOwnerAccess && m.Location == "local" && action == "start" && (role == "app" || role == "signer") {
+				// Reuse the same already-authorized, exact OS starts as the
+				// native client; generic management asks for fresh OS consent.
+				return s.EnsureNativeRunning(ctx, m)
+			}
 			return custodyinstall.Control(ctx, m, role, action, s)
 		},
 		probe: connection.Inspect,
@@ -97,7 +102,7 @@ func enrolledLifecycle(ctx context.Context, m custodyinstall.Manifest, action st
 	}
 	active := o.runtime(m) == nil
 	if !active && (action == "start" || action == "open") {
-		if !prepare {
+		if !prepare && !(m.NativeOwnerAccess && m.Location == "local") {
 			return errors.New("start the protected instance with --prepare-host")
 		}
 		for _, role := range []string{"signer", "app"} {

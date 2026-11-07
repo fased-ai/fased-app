@@ -9,6 +9,7 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -103,6 +104,11 @@ func TestOwnerConnectRetainedStateExposesSetupThenReconnects(t *testing.T) {
 	defer cancel()
 	i := signer.OwnerIntent{Version: 1, InstanceID: base64.RawURLEncoding.EncodeToString(make([]byte, 32)), OperationID: strings.Repeat("a", 32), Action: "setup", Network: "devnet"}
 	w := &WalletOwner{ctx: ctx, cancel: cancel, intent: i, origin: "https://chosen.ts.net", root: t.TempDir() + "/owner"}
+	// The owner store refuses writable ancestors even inside a private temp
+	// parent. Go's numbered TempDir child follows the process umask.
+	if err := os.Chmod(filepath.Dir(w.root), 0700); err != nil {
+		t.Fatal(err)
+	}
 	w.openOwner = func(context.Context, signer.OwnerIntent, string, string) (*ownerclient.Client, error) {
 		return nil, ownerclient.ErrEnrollmentRequired
 	}

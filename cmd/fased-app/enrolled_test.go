@@ -29,6 +29,50 @@ func TestEnrolledPrivateAccessPlanUsesCustodySocket(t *testing.T) {
 	}
 }
 
+func TestEnrolledNativeStartUsesExistingOwnerAuthority(t *testing.T) {
+	for _, prepare := range []bool{false, true} {
+		m := custodyinstall.Manifest{Owner: os.Getuid(), Enrollment: true, NativeOwnerAccess: true, Location: "local", Listen: "127.0.0.1:19090"}
+		active := false
+		calls := 0
+		o := enrolledOps{
+			commit: func(custodyinstall.Manifest) (custodyinstall.EnrollmentCommit, error) {
+				return custodyinstall.EnrollmentCommit{InstanceID: "same-instance"}, nil
+			},
+			runtime: func(custodyinstall.Manifest) error {
+				if active {
+					return nil
+				}
+				return errors.New("stopped")
+			},
+			control: func(_ context.Context, _ custodyinstall.Manifest, role, action string) error {
+				if action != "start" {
+					t.Fatal("unexpected operation")
+				}
+				calls++
+				if role == "app" {
+					active = true
+				}
+				return nil
+			},
+			probe: func(_ context.Context, url, expected string) (connection.Result, error) {
+				return connection.Result{URL: url, InstanceID: expected, Location: "local"}, nil
+			},
+		}
+		if err := enrolledLifecycle(t.Context(), m, "start", prepare, false, &bytes.Buffer{}, o); err != nil || calls != 2 {
+			t.Fatalf("existing native startup required new preparation: %v calls=%d", err, calls)
+		}
+		// This exemption never authorizes stop/remove or a non-native Remote start.
+		if enrolledLifecycle(t.Context(), m, "stop", false, false, &bytes.Buffer{}, o) == nil {
+			t.Fatal("native start widened stop authority")
+		}
+		active = false
+		m.Location = "remote"
+		if enrolledLifecycle(t.Context(), m, "start", false, false, &bytes.Buffer{}, o) == nil {
+			t.Fatal("native local startup widened Remote authority")
+		}
+	}
+}
+
 func TestEnrolledEntryPointsUseOneInstanceAndPreserveProfile(t *testing.T) {
 	for _, profile := range []string{"local", "remote"} {
 		t.Run(profile, func(t *testing.T) {
