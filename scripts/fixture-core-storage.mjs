@@ -32,6 +32,20 @@ export function runReaderStage(
   }
 }
 
+// The composed historical reader keeps its old update package and authority.
+// Do not copy a new maintenance field (or decoder) into that test-only reader:
+// its strict JSON parser must continue refusing ordinary handoff records.
+export function projectReadOnlySignerJournal(source) {
+  const field =
+    /^\s*OrdinaryHandoff[ \t]+\*update\.OrdinaryHandoffReceipt[ \t]+`json:"ordinaryHandoff,omitempty"`\r?\n/gm;
+  assert.equal(
+    [...source.matchAll(field)].length,
+    1,
+    "exact ordinary handoff field projection required",
+  );
+  return source.replace(field, "");
+}
+
 export async function currentStorageFixture(archivedRoot) {
   assert.ok(process.getuid() > 0);
   const storage = {};
@@ -231,7 +245,11 @@ func ValidManagedAccountRef(r AccountRef) bool {
     "history_recovery.go",
     "history_reader_test.go",
   ]) {
-    const b = await readFile("internal/signer/" + name);
+    const source = await readFile("internal/signer/" + name);
+    const b =
+      name === "journal.go"
+        ? Buffer.from(projectReadOnlySignerJournal(source.toString("utf8")))
+        : source;
     await writeFile(path.join(signerRoot, name), b);
     storage["signer/" + name] = sha(b);
   }

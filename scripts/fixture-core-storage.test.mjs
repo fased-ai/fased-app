@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { runReaderStage } from "./fixture-core-storage.mjs";
+import {
+  runReaderStage,
+  projectReadOnlySignerJournal,
+} from "./fixture-core-storage.mjs";
 
 const reader = { schema: 36, ref: "ad910705246844c333eae8b41b742cb818a58069" };
 
@@ -119,4 +122,29 @@ test("historical app-only projection never acquires ordinary maintenance authori
   assert.ok(!projected.includes("func OrdinaryUpdateContract()"));
   assert.ok(!projected.includes("update.OrdinaryMaintenanceFeature"));
   assert.ok(projected.includes("return schema == StateSchema"));
+});
+
+test("historical signer journal excludes new maintenance decoder dependencies", () => {
+  const source = readFileSync(
+    new URL("../internal/signer/journal.go", import.meta.url),
+    "utf8",
+  );
+  const projected = projectReadOnlySignerJournal(source);
+  assert.ok(!projected.includes("OrdinaryHandoff"));
+  assert.ok(!projected.includes('json:"ordinaryHandoff'));
+  for (const retained of [
+    'json:"admission,omitempty"',
+    'json:"installation,omitempty"',
+    'json:"update,omitempty"',
+    "func recordHash(",
+  ])
+    assert.ok(projected.includes(retained), retained);
+  assert.throws(
+    () => projectReadOnlySignerJournal(projected),
+    /exact ordinary handoff field/,
+  );
+  assert.throws(
+    () => projectReadOnlySignerJournal(source + source),
+    /exact ordinary handoff field/,
+  );
 });
