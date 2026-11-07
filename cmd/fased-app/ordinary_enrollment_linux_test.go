@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/fased-ai/fased-app/internal/core"
@@ -106,5 +107,54 @@ func TestCustodyRuntimeOwnerIdentity(t *testing.T) {
 				t.Fatalf("connection owner %d, want protected owner %d", got, row.expected)
 			}
 		})
+	}
+}
+
+func TestCustodySourceProjectionRequiresMatchingOwnerManifest(t *testing.T) {
+	c := signer.Config{OwnerUID: 1000, AppUID: 1001, SignerUID: 1002, SignerID: strings.Repeat("a", 32), Network: "devnet"}
+	base := custodyinstall.Manifest{Owner: 1000, Root: "/var/lib/fased-app-custody-1000", ID: c.SignerID, Network: "devnet", Enrollment: true, Location: "local", App: custodyinstall.Identity{UID: 1001}, Signer: custodyinstall.Identity{UID: 1002}}
+	for _, location := range []string{"local", "remote"} {
+		m := base
+		m.Location = location
+		if location == "remote" {
+			m.PublicOrigin = "https://owner.example.ts.net"
+		}
+		got, err := custodySourceProjection(m, c, m.Root, m.Root+"/app-state", m.Location, m.PublicOrigin)
+		if err != nil || got != location {
+			t.Fatal("verified installer source lost", got, err)
+		}
+		for _, mode := range []string{"owner", "app", "signer", "identity", "network", "root", "data", "location", "origin"} {
+			wrong := m
+			root, data, loc, origin := m.Root, m.Root+"/app-state", m.Location, m.PublicOrigin
+			switch mode {
+			case "owner":
+				wrong.Owner++
+			case "app":
+				wrong.App.UID++
+			case "signer":
+				wrong.Signer.UID++
+			case "identity":
+				wrong.ID = strings.Repeat("b", 32)
+			case "network":
+				wrong.Network = "mainnet-beta"
+			case "root":
+				root += "-foreign"
+			case "data":
+				data += "-foreign"
+			case "location":
+				loc = "foreign"
+			case "origin":
+				origin = "https://foreign.example.ts.net"
+			}
+			if got, err := custodySourceProjection(wrong, c, root, data, loc, origin); err == nil || got != "" {
+				t.Fatal("foreign source accepted", mode, got, err)
+			}
+		}
+	}
+	base.Enrollment = false
+	base.Location = ""
+	base.PublicOrigin = ""
+	if got, err := custodySourceProjection(base, c, base.Root, base.Root+"/app-state", "local", ""); err != nil || got != "" {
+		t.Fatal("legacy non-enrollment adopted", got, err)
 	}
 }

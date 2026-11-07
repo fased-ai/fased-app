@@ -16,6 +16,10 @@ func launchOwnerEnrollment(ctx context.Context, path string, args []string) erro
 	if err != nil {
 		return errors.New("a system terminal is required for initial OS approval")
 	}
+	base := filepath.Base(resolved)
+	if base == "gnome-terminal.wrapper" {
+		resolved, base = "/usr/bin/gnome-terminal", "gnome-terminal"
+	}
 	i, err := os.Stat(resolved)
 	if err != nil {
 		return err
@@ -24,12 +28,24 @@ func launchOwnerEnrollment(ctx context.Context, path string, args []string) erro
 	if !ok || st.Uid != 0 || !i.Mode().IsRegular() || i.Mode().Perm()&0022 != 0 {
 		return errors.New("system approval terminal is not trusted")
 	}
-	// No shell string or password enters the native process. Fased stays the
-	// ordinary owner; the enrollment controller elevates fixed OS tools only.
-	cmd := exec.CommandContext(ctx, resolved, append([]string{"-e", path}, args...)...)
-	if err = cmd.Start(); err != nil {
-		return err
+	// Wait for the delegated controller, not merely a terminal launcher. No
+	// shell string, private input or password enters this process.
+	var terminalArgs []string
+	switch base {
+	case "xterm", "uxterm", "lxterm":
+		terminalArgs = []string{"-e"}
+	case "gnome-terminal":
+		terminalArgs = []string{"--wait", "--"}
+	case "konsole":
+		terminalArgs = []string{"--nofork", "-e"}
+	default:
+		return errors.New("wallet setup requires xterm, GNOME Terminal or Konsole")
 	}
-	go func() { _ = cmd.Wait() }()
+	cmd := exec.CommandContext(ctx, resolved, append(append(terminalArgs, path), args...)...)
+	if err = cmd.Run(); err != nil {
+		return errors.New("wallet setup did not complete in the system window; reconnect to resume")
+	}
+	// Some terminals return zero even after a failed delegated command. The
+	// caller must inspect the existing enrollment's readiness after this exit.
 	return nil
 }

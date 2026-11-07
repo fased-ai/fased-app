@@ -124,6 +124,9 @@ func (c *Client) Do(ctx context.Context, method, route string, input, output any
 	}
 	if output != nil {
 		limit := int64(32 * 1024)
+		if route == "/api/v1/accounts/read" {
+			limit = WalletReadResponseLimit
+		}
 		if route == "/api/v1/agents" || strings.HasPrefix(route, "/api/v1/agents?") {
 			limit = agentDocumentLimit + 32*1024
 		}

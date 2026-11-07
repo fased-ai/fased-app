@@ -10,7 +10,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/fased-ai/fased-app/internal/signer"
 )
@@ -163,20 +162,14 @@ func (e *Enrollment) Terminal() (string, []string) {
 	return "/usr/bin/ssh", append(args, e.arguments...)
 }
 
+// Wait reconciles the installed target after the synchronous approval terminal
+// exits. A failed controller is not a reason to poll for five more minutes.
 func (e *Enrollment) Wait(ctx context.Context) (*Client, error) {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	for {
-		if err := e.client.inspect(ctx); err == nil {
-			if e.client.Peer.CoreSHA256 != e.pair.CoreSHA256 || e.client.Peer.SignerSHA256 != e.pair.SignerSHA256 {
-				return nil, errors.New("enrolled images differ from the approved native package")
-			}
-			return e.client, nil
-		}
-		select {
-		case <-ctx.Done():
-			return nil, errors.New("wallet setup is unfinished; resume the same enrollment")
-		case <-ticker.C:
-		}
+	if err := e.client.inspect(ctx); err != nil {
+		return nil, errors.New("wallet setup is unfinished; resume the same enrollment")
 	}
+	if e.client.Peer.CoreSHA256 != e.pair.CoreSHA256 || e.client.Peer.SignerSHA256 != e.pair.SignerSHA256 {
+		return nil, errors.New("enrolled images differ from the approved native package")
+	}
+	return e.client, nil
 }

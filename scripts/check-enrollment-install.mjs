@@ -282,6 +282,11 @@ print(json.dumps(out,separators=(',',':')))
 }
 
 async function ordinaryWalletJourney(mode, target, url, session) {
+  const installedView = await api(url, session, "/api/v1/accounts");
+  check(
+    `${mode}:ordinaryInstalledSourcePreserved`,
+    installedView.setup?.source === mode,
+  );
   const ownerDir = await mkdtemp(join(evidence, "owner-"));
   const ownerArgs = ["--disposable-fixture", "--password-stdin"];
   const walletKey = `${key}-${mode}`;

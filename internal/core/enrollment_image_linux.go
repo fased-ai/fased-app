@@ -170,7 +170,10 @@ func enrollmentPath(name string) (included bool, max int64, ok bool) {
 
 func enrollmentDirectory(name string) bool {
 	parts := strings.Split(name, "/")
-	return name == "lifecycle" || len(parts) == 2 && parts[0] == "lifecycle" && update.IDOK(parts[1])
+	// The installed updater creates this working directory even when it has
+	// no cached metadata. Classify the directory, not arbitrary contents: the
+	// ordinary walk still refuses every unclassified child and preserves it.
+	return name == "update-channel" || name == "lifecycle" || len(parts) == 2 && parts[0] == "lifecycle" && update.IDOK(parts[1])
 }
 
 func enrollmentRead(fd int, name string, max int64) (enrollmentEntry, error) {
@@ -329,11 +332,11 @@ func exportEnrollmentImage(ctx context.Context, dir string) (_ EnrollmentImage, 
 	for name, entry := range before {
 		contents[name] = entry.data
 	}
-	serialized, id, err := enrollmentSQLite(ctx, db.data, before["core.sqlite-wal"].data, true, contents)
+	serialized, id, schema, err := enrollmentSQLite(ctx, db.data, before["core.sqlite-wal"].data, true, contents)
 	if err != nil {
 		return out, nil, fmt.Errorf("enrollment source snapshot: %w", err)
 	}
-	out = EnrollmentImage{Version: 1, InstanceID: id, Schema: StateSchema}
+	out = EnrollmentImage{Version: 1, InstanceID: id, Schema: schema}
 	for path, entry := range before {
 		included, _, _ := enrollmentPath(path)
 		if included {
@@ -363,18 +366,18 @@ func exportEnrollmentImage(ctx context.Context, dir string) (_ EnrollmentImage, 
 
 // SQLite reads and WAL reconstruction operate only on a disposable private copy.
 // Even a read-only WAL connection may create SHM; never let it touch the source.
-func enrollmentSQLite(ctx context.Context, data, wal []byte, serialize bool, files map[string][]byte) ([]byte, string, error) {
+func enrollmentSQLite(ctx context.Context, data, wal []byte, serialize bool, files map[string][]byte) ([]byte, string, int, error) {
 	if len(data) == 0 || len(data) > MaxEnrollmentFileBytes || len(wal) > MaxEnrollmentFileBytes {
-		return nil, "", errEnrollmentImage
+		return nil, "", 0, errEnrollmentImage
 	}
 	dir, err := os.MkdirTemp("", "fased-enrollment-snapshot-")
 	if err != nil {
-		return nil, "", errEnrollmentImage
+		return nil, "", 0, errEnrollmentImage
 	}
 	defer os.RemoveAll(dir)
 	path := filepath.Join(dir, "core.sqlite")
 	if os.WriteFile(path, data, 0600) != nil || len(wal) > 0 && os.WriteFile(path+"-wal", wal, 0600) != nil {
-		return nil, "", errEnrollmentImage
+		return nil, "", 0, errEnrollmentImage
 	}
 	query := "mode=ro&_pragma=query_only(1)&_pragma=trusted_schema(0)"
 	if !serialize {
@@ -382,66 +385,72 @@ func enrollmentSQLite(ctx context.Context, data, wal []byte, serialize bool, fil
 	}
 	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path, RawQuery: query}).String())
 	if err != nil {
-		return nil, "", errEnrollmentImage
+		return nil, "", 0, errEnrollmentImage
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 	c, err := db.Conn(ctx)
 	if err != nil {
-		return nil, "", errEnrollmentImage
+		return nil, "", 0, errEnrollmentImage
 	}
 	defer c.Close()
 	if _, err = c.ExecContext(ctx, "BEGIN"); err != nil {
-		return nil, "", errEnrollmentImage
+		return nil, "", 0, errEnrollmentImage
 	}
 	defer c.ExecContext(context.Background(), "ROLLBACK")
 	var check, id string
 	var schema, count int
-	if c.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&check) != nil || check != "ok" || c.QueryRowContext(ctx, "PRAGMA user_version").Scan(&schema) != nil || schema != StateSchema || c.QueryRowContext(ctx, "SELECT count(*),min(instance_id) FROM instance").Scan(&count, &id) != nil || count != 1 || !validConnectionRef(id) {
-		return nil, "", errEnrollmentImage
+	if c.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&check) != nil || check != "ok" || c.QueryRowContext(ctx, "PRAGMA user_version").Scan(&schema) != nil || !supportedCoreStateSchema(schema) || c.QueryRowContext(ctx, "SELECT count(*),min(instance_id) FROM instance").Scan(&count, &id) != nil || count != 1 || !validConnectionRef(id) {
+		return nil, "", 0, errEnrollmentImage
 	}
-	tables, err := c.QueryContext(ctx, "SELECT name FROM sqlite_schema WHERE type IN ('table','view')")
+	tables, err := c.QueryContext(ctx, "SELECT name,type FROM sqlite_schema WHERE type IN ('table','view')")
 	if err != nil {
-		return nil, "", errEnrollmentImage
+		return nil, "", 0, errEnrollmentImage
 	}
 	classified := map[string]bool{"instance": true, "sessions": true, "accounts": true, "update_pause": true, "application_updates": true, "agent_workspace": true, "wen_research": true, "agent_history": true, "sqlite_sequence": true}
+	if schema == RemoteOwnerStateSchema {
+		classified["remote_owner"], classified["remote_sessions"] = true, true
+	}
 	for tables.Next() {
-		var name string
-		if tables.Scan(&name) != nil || !classified[name] {
+		var name, kind string
+		if tables.Scan(&name, &kind) != nil || kind != "table" || !classified[name] {
 			tables.Close()
-			return nil, "", errEnrollmentImage
+			return nil, "", 0, errEnrollmentImage
 		}
 		delete(classified, name)
 	}
 	err = errors.Join(tables.Err(), tables.Close())
 	if err != nil || len(classified) != 0 {
-		return nil, "", errEnrollmentImage
+		return nil, "", 0, errEnrollmentImage
+	}
+	if err = enrollmentOwner(ctx, c, schema); err != nil {
+		return nil, "", 0, err
 	}
 	phase, pause, err := readPause(ctx, c)
 	if err != nil || phase == "paused" {
-		return nil, "", errors.New("finish existing update recovery before enrollment")
+		return nil, "", 0, errors.New("finish existing update recovery before enrollment")
 	}
 	if err = enrollmentApplicationUpdates(ctx, c, id, phase, pause, files); err != nil {
-		return nil, "", err
+		return nil, "", 0, err
 	}
 	// Parse existing current-schema records without migration, execution, recovery
 	// mutation or credential decryption; snapshot validates the archive contract.
 	s := &Store{db: db}
 	if _, _, err = readAgents(ctx, c); err != nil {
-		return nil, "", errEnrollmentImage
+		return nil, "", 0, errEnrollmentImage
 	}
 	if _, err = readSetupRecord(ctx, c); err != nil {
-		return nil, "", errEnrollmentImage
+		return nil, "", 0, errEnrollmentImage
 	}
 	if _, err = s.snapshotTx(ctx, c, "enrollment-image"); err != nil {
-		return nil, "", errEnrollmentImage
+		return nil, "", 0, errEnrollmentImage
 	}
 	if !serialize {
-		return nil, id, nil
+		return nil, id, schema, nil
 	}
 	var pages, pageSize int64
 	if c.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pages) != nil || c.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize) != nil || pages <= 0 || pageSize <= 0 || pages > MaxEnrollmentFileBytes/pageSize {
-		return nil, "", errEnrollmentImage
+		return nil, "", 0, errEnrollmentImage
 	}
 	var image []byte
 	err = c.Raw(func(raw any) error {
@@ -454,9 +463,65 @@ func enrollmentSQLite(ctx context.Context, data, wal []byte, serialize bool, fil
 		return e
 	})
 	if err != nil || len(image) == 0 || len(image) > MaxEnrollmentFileBytes {
-		return nil, "", errEnrollmentImage
+		return nil, "", 0, errEnrollmentImage
 	}
-	return image, id, nil
+	return image, id, schema, nil
+}
+
+func enrollmentOwner(ctx context.Context, c snapshotReader, schema int) error {
+	if schema == StateSchema {
+		return nil
+	}
+	var salt, hash []byte
+	if c.QueryRowContext(ctx, "SELECT password_salt,password_hash FROM instance WHERE id=1").Scan(&salt, &hash) != nil {
+		return errEnrollmentImage
+	}
+	marker := localPasswordDisabled(salt) || bytes.Equal(salt, remoteOwnerSalt)
+	if schema == LocalOwnerStateSchema {
+		if !localPasswordDisabled(salt) || !validConnectionRef(string(hash)) {
+			return errEnrollmentImage
+		}
+		return nil
+	}
+	// Remote enrollment preserves existing password identities as well as
+	// OS/device-owned identities; it never invents or resets authentication.
+	if marker && !validConnectionRef(string(hash)) || !marker && (len(salt) != 16 || len(hash) != 32) {
+		return errEnrollmentImage
+	}
+	var count int
+	var document string
+	var owner remoteOwner
+	if c.QueryRowContext(ctx, "SELECT count(*) FROM remote_owner").Scan(&count) != nil || count != 1 || c.QueryRowContext(ctx, "SELECT document FROM remote_owner WHERE id=1").Scan(&document) != nil || update.StrictJSON([]byte(document), &owner) != nil || owner.UserID <= 0 || len(owner.Devices) == 0 || len(owner.Devices) > 16 {
+		return errEnrollmentImage
+	}
+	if owner.InviteHash == "" && owner.InviteExpires != 0 || owner.InviteHash != "" && (!validConnectionRef(owner.InviteHash) || owner.InviteExpires <= 0) {
+		return errEnrollmentImage
+	}
+	devices := map[string]bool{}
+	for _, device := range owner.Devices {
+		if device.UserID != owner.UserID || device.NodeID == "" || len(device.NodeID) > 128 || device.Login == "" || devices[device.NodeID] {
+			return errEnrollmentImage
+		}
+		devices[device.NodeID] = true
+	}
+	rows, err := c.QueryContext(ctx, "SELECT r.token_hash,r.node_id,s.expires FROM remote_sessions r LEFT JOIN sessions s ON s.token_hash=r.token_hash")
+	if err != nil {
+		return errEnrollmentImage
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	for rows.Next() {
+		var token, node string
+		var expires sql.NullInt64
+		if rows.Scan(&token, &node, &expires) != nil || !validConnectionRef(token) || seen[token] || !devices[node] || !expires.Valid || expires.Int64 <= 0 {
+			return errEnrollmentImage
+		}
+		seen[token] = true
+	}
+	if rows.Err() != nil {
+		return errEnrollmentImage
+	}
+	return nil
 }
 
 // Preserve the exact row/revision through SQLite serialization. Only idle or
@@ -497,7 +562,7 @@ func enrollmentApplicationUpdates(ctx context.Context, c snapshotReader, instanc
 }
 
 func validateEnrollmentImage(image EnrollmentImage) error {
-	if os.Geteuid() == 0 || image.Version != 1 || image.Schema != StateSchema || !validConnectionRef(image.InstanceID) || len(image.Files) == 0 || len(image.Files) > MaxEnrollmentFiles {
+	if os.Geteuid() == 0 || image.Version != 1 || !supportedCoreStateSchema(image.Schema) || !validConnectionRef(image.InstanceID) || len(image.Files) == 0 || len(image.Files) > MaxEnrollmentFiles {
 		return errEnrollmentImage
 	}
 	var total int64
@@ -524,8 +589,8 @@ func validateEnrollmentImage(image EnrollmentImage) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, id, err := enrollmentSQLite(ctx, database, nil, false, contents)
-	if err != nil || id != image.InstanceID {
+	_, id, schema, err := enrollmentSQLite(ctx, database, nil, false, contents)
+	if err != nil || id != image.InstanceID || schema != image.Schema {
 		return errEnrollmentImage
 	}
 	return nil

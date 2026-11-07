@@ -12,6 +12,10 @@ import (
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
+// WalletReadResponseLimit bounds the same wallet projection in native and CLI
+// clients: balances, recent activity and supported transaction balance changes.
+const WalletReadResponseLimit int64 = 256 * 1024
+
 type WalletReadCommand struct {
 	Selection  *WalletSelection `json:"selection,omitempty"`
 	AccountID  string           `json:"accountId"`

@@ -17,8 +17,127 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/tailnet"
 	"github.com/fased-ai/fased-app/internal/update"
 )
+
+func TestEnrollmentImagePreservesOSAndDeviceOwner(t *testing.T) {
+	for _, profile := range []string{"local", "remote", "remote-password"} {
+		t.Run(profile, func(t *testing.T) {
+			s := fixtureStore(t)
+			var token string
+			var err error
+			wantSchema := LocalOwnerStateSchema
+			remote := profile != "local"
+			if remote {
+				id := tailnet.Identity{UserID: 7, NodeID: "enrollment-device", Login: "owner@example.test"}
+				var code, existing string
+				if profile == "remote-password" {
+					existing = claimFixture(t, s)
+				} else {
+					claim, e := s.IssueRemoteClaim(t.Context(), id)
+					if e != nil {
+						t.Fatal(e)
+					}
+					code = claim.Code
+				}
+				token, err = s.remoteSession(t.Context(), id, code, existing)
+				wantSchema = RemoteOwnerStateSchema
+			} else {
+				token, err = s.localOwnerSession(t.Context())
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var salt, hash []byte
+			if err = s.db.QueryRow("SELECT password_salt,password_hash FROM instance WHERE id=1").Scan(&salt, &hash); err != nil {
+				t.Fatal(err)
+			}
+			if err = s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			image, lease, err := ExportEnrollmentImage(t.Context(), s.dir)
+			if err != nil {
+				t.Fatal("ordinary installed owner cannot enroll", err)
+			}
+			defer lease.Close()
+			if image.Schema != wantSchema {
+				t.Fatal("owner schema rewritten", image.Schema)
+			}
+			stage := enrollmentStage(t)
+			if err = ImportEnrollmentImage(t.Context(), stage, image); err != nil {
+				t.Fatal(err)
+			}
+			next, err := OpenStore(stage)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer next.Close()
+			var gotSalt, gotHash []byte
+			if err = next.db.QueryRow("SELECT password_salt,password_hash FROM instance WHERE id=1").Scan(&gotSalt, &gotHash); err != nil || !bytes.Equal(salt, gotSalt) || !bytes.Equal(hash, gotHash) || next.instanceID != s.instanceID || !next.Session(t.Context(), token) {
+				t.Fatal("owner identity/authentication changed", err)
+			}
+			if remote {
+				owner, err := next.remoteOwner(t.Context())
+				if err != nil || owner.UserID != 7 || len(owner.Devices) != 1 || owner.Devices[0].NodeID != "enrollment-device" {
+					t.Fatal("device ownership changed", err)
+				}
+			}
+			image.Schema = StateSchema
+			if ValidateEnrollmentImage(image) == nil {
+				t.Fatal("mismatched declared owner schema accepted")
+			}
+		})
+	}
+}
+
+func TestEnrollmentImageClassifiesEmptyUpdateChannel(t *testing.T) {
+	for _, populated := range []bool{false, true} {
+		t.Run(fmt.Sprint(populated), func(t *testing.T) {
+			s := fixtureStore(t)
+			id := s.instanceID
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			channel := filepath.Join(s.dir, "update-channel")
+			if err := os.Mkdir(channel, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if populated {
+				if err := os.WriteFile(filepath.Join(channel, "unclassified.json"), []byte("preserve"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			image, lease, err := ExportEnrollmentImage(t.Context(), s.dir)
+			if populated {
+				if err == nil || lease != nil || len(image.Files) != 0 {
+					t.Fatal("unclassified update state was silently omitted")
+				}
+				got, readErr := os.ReadFile(filepath.Join(channel, "unclassified.json"))
+				if readErr != nil || string(got) != "preserve" {
+					t.Fatal("original update state changed", readErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal("installed updater's empty working directory rejected", err)
+			}
+			defer lease.Close()
+			stage := enrollmentStage(t)
+			if err = ImportEnrollmentImage(t.Context(), stage, image); err != nil {
+				t.Fatal(err)
+			}
+			next, err := OpenStore(stage)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer next.Close()
+			if next.instanceID != id {
+				t.Fatal("instance identity changed")
+			}
+		})
+	}
+}
 
 func TestEnrollmentImagePreservesSameInstance(t *testing.T) {
 	s := fixtureStore(t)
@@ -822,5 +941,72 @@ func TestEnrollmentImagePreservesLargeEncryptedVault(t *testing.T) {
 	}
 	if enrollmentCredential("ai-credentials.json", bytes.Repeat([]byte(" "), aiVaultMaxSerializedBytes+1)) == nil {
 		t.Fatal("vault size bound ignored")
+	}
+}
+
+func TestEnrollmentImageRejectsCorruptDeviceOwner(t *testing.T) {
+	for _, mode := range []string{"owner-json", "foreign-device", "duplicate-device", "invite", "orphan-session", "foreign-session", "marker", "owner-view", "session-view"} {
+		t.Run(mode, func(t *testing.T) {
+			s := fixtureStore(t)
+			id := tailnet.Identity{UserID: 7, NodeID: "owner-device", Login: "owner@example.test"}
+			code, err := s.IssueRemoteClaim(t.Context(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			token, err := s.remoteSession(t.Context(), id, code.Code, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner, err := s.remoteOwner(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "owner-json":
+				_, err = s.db.Exec("UPDATE remote_owner SET document='{}'")
+			case "foreign-device", "duplicate-device", "invite":
+				if mode == "foreign-device" {
+					owner.Devices[0].UserID = 99
+				}
+				if mode == "duplicate-device" {
+					owner.Devices = append(owner.Devices, owner.Devices[0])
+				}
+				if mode == "invite" {
+					owner.InviteHash = "not-a-token"
+					owner.InviteExpires = 1
+				}
+				raw, _ := json.Marshal(owner)
+				_, err = s.db.Exec("UPDATE remote_owner SET document=?", string(raw))
+			case "foreign-session":
+				_, err = s.db.Exec("UPDATE remote_sessions SET node_id='unapproved-device'")
+			case "marker":
+				_, err = s.db.Exec("UPDATE instance SET password_hash=?", []byte("invalid"))
+			case "owner-view":
+				raw, _ := json.Marshal(owner)
+				_, err = s.db.Exec("DROP TABLE remote_owner; CREATE VIEW remote_owner AS SELECT 1 AS id,'" + strings.ReplaceAll(string(raw), "'", "''") + "' AS document")
+			case "session-view":
+				_, err = s.db.Exec("DROP TABLE remote_sessions; CREATE VIEW remote_sessions AS SELECT '" + tokenHash(token) + "' AS token_hash,'owner-device' AS node_id")
+			case "orphan-session":
+				c, e := s.db.Conn(t.Context())
+				if e != nil {
+					t.Fatal(e)
+				}
+				_, err = c.ExecContext(t.Context(), "PRAGMA foreign_keys=OFF")
+				if err == nil {
+					_, err = c.ExecContext(t.Context(), "DELETE FROM sessions WHERE token_hash=?", tokenHash(token))
+				}
+				c.Close()
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if _, lease, err := ExportEnrollmentImage(t.Context(), s.dir); err == nil {
+				lease.Close()
+				t.Fatal("corrupt device owner accepted", mode)
+			}
+		})
 	}
 }

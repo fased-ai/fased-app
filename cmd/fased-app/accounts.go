@@ -11,6 +11,7 @@ import (
 	"os"
 
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/desktop"
 )
 
 func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
@@ -45,12 +46,19 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 		return errors.New("choose one account operation")
 	}
 	ctx := context.Background()
-	c, e := core.NewClient(ctx, *dir)
+	c, enrolled, e := desktop.NewPublicClient(ctx, *dir)
 	if e != nil {
 		return e
 	}
 	defer c.Close()
-	if e = c.LoadSession(ctx, *dir); e != nil {
+	if enrolled {
+		// The exact OS-owner helper authenticates the same public core path as
+		// the native window; protected AppUID state is never opened by the CLI.
+		e = c.NativeLocalOwner(ctx)
+	} else {
+		e = c.LoadSession(ctx, *dir)
+	}
+	if e != nil {
 		return e
 	}
 	if *walletRead {

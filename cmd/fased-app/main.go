@@ -20,6 +20,7 @@ import (
 	fasedapp "github.com/fased-ai/fased-app"
 	"github.com/fased-ai/fased-app/internal/bootstrap"
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/vpsinstall"
@@ -452,7 +453,13 @@ func serveInstalledRuntimeWithProviderFixture(installationRoot, dir, listen, pub
 		return err
 	}
 	if err = server.ConfigureConnection(location, ownerUID); err == nil {
-		err = server.ConfigureInstallationSource(source)
+		projectionSource := source
+		if len(custodyConfig) == 1 && custodyConfig[0] != "" {
+			projectionSource, err = verifiedCustodyInstallationSource(custodyConfig[0], installationRoot, dir, location, publicOrigin)
+		}
+		if err == nil {
+			err = server.ConfigureInstallationSource(projectionSource)
+		}
 	}
 	if err == nil {
 		err = server.ConfigureWENResearch(researchOrigin)
@@ -481,6 +488,33 @@ func serveInstalledRuntimeWithProviderFixture(installationRoot, dir, listen, pub
 		return err
 	}
 	return serveStarted(server, out)
+}
+
+// Custody keeps its own maintenance controller. Expose its verified installer
+// class to Wallets without selecting app-only update authority from that class.
+func verifiedCustodyInstallationSource(configPath, root, dir, location, origin string) (string, error) {
+	c, err := signer.LoadConfig(configPath)
+	if err != nil {
+		return "", err
+	}
+	m, err := custodyinstall.Load(c.OwnerUID)
+	if err != nil || custodyinstall.Verify(m) != nil {
+		return "", errors.New("custody installation source is not verified")
+	}
+	return custodySourceProjection(m, c, root, dir, location, origin)
+}
+
+func custodySourceProjection(m custodyinstall.Manifest, c signer.Config, root, dir, location, origin string) (string, error) {
+	if m.Owner != c.OwnerUID || m.Root != root || dir != filepath.Join(root, "app-state") || m.ID != c.SignerID || m.App.UID != c.AppUID || m.Signer.UID != c.SignerUID || m.Network != c.Network {
+		return "", errors.New("custody installation source is not verified")
+	}
+	if !m.Enrollment {
+		return "", nil
+	}
+	if m.Location != location || m.PublicOrigin != origin || (m.Location != "local" && m.Location != "remote") {
+		return "", errors.New("custody installation source differs from its owner manifest")
+	}
+	return m.Location, nil
 }
 func serveAgentFixture(dir, listen string, out io.Writer) error {
 	server, err := core.StartAgentFixture(context.Background(), dir, listen, "", fasedapp.UI())
