@@ -539,6 +539,11 @@ func enrollmentApplicationUpdates(ctx context.Context, c snapshotReader, instanc
 	if o == (ApplicationUpdateOperation{Phase: "idle"}) {
 		return nil
 	}
+	// An Already current check did not start a replacement transaction. Keep
+	// its original row and revision, without inventing a receipt or a pause.
+	if o.Phase == "current" && o.Release == nil && o.OwnerLease == "" && o.Receipt == nil && o.CheckedAt > 0 && o.FinishedAt == o.CheckedAt && o.BootID == "" && o.Failure == "" {
+		return nil
+	}
 	if !oneOf(o.Phase, "completed", "rolled-back") || o.Release == nil || o.Receipt == nil || o.Receipt.Phase != o.Phase || !update.IDOK(o.OwnerLease) || phase != "released" || pause.Request.IntentID != o.ID || pause.Request.Sequence != o.Release.Sequence || pause.Request.ManifestSHA256 != o.Release.ManifestSHA256 || pause.Request.Expected.InstanceID != instance {
 		return errors.New("finish application update work before enrollment")
 	}

@@ -189,50 +189,53 @@ func TestEnrollmentImagePreservesSameInstance(t *testing.T) {
 	}
 }
 
-func TestEnrollmentImageApplicationUpdateIdleRowPreserved(t *testing.T) {
-	s := fixtureStore(t)
-	prefs, e := s.UpdatePreferences(t.Context())
-	if e != nil {
-		t.Fatal(e)
-	}
-	policy := prefs.Policy
-	policy.Notify = false
-	policy.Mode = "manual"
-	if _, e = s.ChangeUpdatePreferences(t.Context(), UpdatePreferencesRequest{Action: "policy", Revision: prefs.Revision, Policy: &policy}); e != nil {
-		t.Fatal(e)
-	}
-	raw := `{"phase":"idle", "id":""}`
-	if _, e = s.db.Exec("UPDATE application_updates SET revision=9,document=? WHERE id=1", raw); e != nil {
-		t.Fatal(e)
-	}
-	var setup string
-	if e = s.db.QueryRow("SELECT setup FROM instance WHERE id=1").Scan(&setup); e != nil {
-		t.Fatal(e)
-	}
-	if e = s.Close(); e != nil {
-		t.Fatal(e)
-	}
-	image, lease, e := ExportEnrollmentImage(t.Context(), s.dir)
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer lease.Close()
-	stage := enrollmentStage(t)
-	if e = ImportEnrollmentImage(t.Context(), stage, image); e != nil {
-		t.Fatal(e)
-	}
-	next, e := OpenStore(stage)
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer next.Close()
-	var got, gotSetup string
-	var revision int64
-	if e = next.db.QueryRow("SELECT document,revision FROM application_updates WHERE id=1").Scan(&got, &revision); e != nil || got != raw || revision != 9 {
-		t.Fatal("idle row rewritten", got, revision, e)
-	}
-	if e = next.db.QueryRow("SELECT setup FROM instance WHERE id=1").Scan(&gotSetup); e != nil || gotSetup != setup {
-		t.Fatal("update preferences changed", e)
+func TestEnrollmentImageApplicationUpdateQuiescentRowPreserved(t *testing.T) {
+	for _, raw := range []string{`{"phase":"idle", "id":""}`, `{"id":"ed4e62f092e9658589ca0fcf8f538beb","phase":"current","checkedAt":1793995915,"finishedAt":1793995915}`} {
+		t.Run(raw, func(t *testing.T) {
+			s := fixtureStore(t)
+			prefs, e := s.UpdatePreferences(t.Context())
+			if e != nil {
+				t.Fatal(e)
+			}
+			policy := prefs.Policy
+			policy.Notify = false
+			policy.Mode = "manual"
+			if _, e = s.ChangeUpdatePreferences(t.Context(), UpdatePreferencesRequest{Action: "policy", Revision: prefs.Revision, Policy: &policy}); e != nil {
+				t.Fatal(e)
+			}
+			if _, e = s.db.Exec("UPDATE application_updates SET revision=9,document=? WHERE id=1", raw); e != nil {
+				t.Fatal(e)
+			}
+			var setup string
+			if e = s.db.QueryRow("SELECT setup FROM instance WHERE id=1").Scan(&setup); e != nil {
+				t.Fatal(e)
+			}
+			if e = s.Close(); e != nil {
+				t.Fatal(e)
+			}
+			image, lease, e := ExportEnrollmentImage(t.Context(), s.dir)
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer lease.Close()
+			stage := enrollmentStage(t)
+			if e = ImportEnrollmentImage(t.Context(), stage, image); e != nil {
+				t.Fatal(e)
+			}
+			next, e := OpenStore(stage)
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer next.Close()
+			var got, gotSetup string
+			var revision int64
+			if e = next.db.QueryRow("SELECT document,revision FROM application_updates WHERE id=1").Scan(&got, &revision); e != nil || got != raw || revision != 9 {
+				t.Fatal("idle row rewritten", got, revision, e)
+			}
+			if e = next.db.QueryRow("SELECT setup FROM instance WHERE id=1").Scan(&gotSetup); e != nil || gotSetup != setup {
+				t.Fatal("update preferences changed", e)
+			}
+		})
 	}
 }
 
@@ -334,12 +337,18 @@ func TestEnrollmentImageApplicationUpdateSettledHistory(t *testing.T) {
 }
 
 func TestEnrollmentImageApplicationUpdateAuthorityRefused(t *testing.T) {
-	for _, mode := range []string{"queued", "applying", "recovery", "checking", "available", "unknown", "idle-lease", "unknown-field", "negative-revision", "extra-row", "schema34"} {
+	for _, mode := range []string{"queued", "applying", "recovery", "checking", "available", "current", "current-lease", "current-unfinished", "unknown", "idle-lease", "unknown-field", "negative-revision", "extra-row", "schema34"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
 			o := ApplicationUpdateOperation{ID: update.NewProbe(), Phase: mode, Release: &ApplicationRelease{Version: "0.0.0-fixture", Sequence: 7, ManifestSHA256: strings.Repeat("a", 64), EngineSHA256: strings.Repeat("b", 64), Target: update.Target{OS: "linux", Arch: runtime.GOARCH}}}
 			if mode == "idle-lease" {
 				o = ApplicationUpdateOperation{Phase: "idle", OwnerLease: update.NewProbe()}
+			}
+			if mode == "current-lease" || mode == "current-unfinished" {
+				o = ApplicationUpdateOperation{ID: update.NewProbe(), Phase: "current", CheckedAt: 1793995915}
+				if mode == "current-lease" {
+					o.FinishedAt, o.OwnerLease = o.CheckedAt, update.NewProbe()
+				}
 			}
 			raw, _ := json.Marshal(o)
 			if mode == "unknown-field" {
