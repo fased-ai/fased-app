@@ -6,12 +6,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 	"golang.org/x/sys/unix"
 )
@@ -31,7 +33,7 @@ type BootstrapTransaction struct {
 func (t BootstrapTransaction) Dir() string    { return t.Base.Root + "/bootstraps/" + t.ID }
 func (t BootstrapTransaction) Digest() string { return update.SnapshotDigest("reader-bootstrap:v1", t) }
 func (t BootstrapTransaction) Plan() (update.BootstrapPlan, error) {
-	p, e := update.VerifyBootstrap(t.Bundle, t.Trust, t.ReviewedAt)
+	p, e := t.pairPlan()
 	if e != nil {
 		return p, e
 	}
@@ -43,6 +45,17 @@ func (t BootstrapTransaction) Plan() (update.BootstrapPlan, error) {
 	} else if _, e := update.JoinSnapshots(t.Core, t.Signer, p.Maintenance.Target); e != nil {
 		return p, e
 	}
+	return p, nil
+}
+
+// Pair validation also precedes the narrowly scoped Local inventory read. A
+// loadable transaction still requires the real snapshot through Plan above.
+func (t BootstrapTransaction) pairPlan() (update.BootstrapPlan, error) {
+	p, e := update.VerifyBootstrap(t.Bundle, t.Trust, t.ReviewedAt)
+	if e != nil {
+		return p, e
+	}
+	ordinary := t.Version == 2 && t.Bundle.Version == 2 && t.Base.Version == 3
 	b := t.Target
 	b.CoreHash = t.Base.CoreHash
 	b.SignerHash = t.Base.SignerHash
@@ -68,6 +81,131 @@ func (t BootstrapTransaction) Plan() (update.BootstrapPlan, error) {
 		}
 	}
 	return p, nil
+}
+
+// This stages only an inert signed core. No transaction, intent, active marker
+// or forward fence exists until the owner reviews the resulting snapshot.
+func (s *System) LocalBootstrapInventory(ctx context.Context, t BootstrapTransaction, artifacts, probe string, out io.Writer) error {
+	_, e := t.pairPlan()
+	if e != nil {
+		return e
+	}
+	m := t.Base
+	if t.Version != 2 || t.Bundle.Version != 2 || m.Version != 3 || m.Location != "local" || !m.Enrollment || !m.NativeOwnerAccess || m.Owner != os.Getuid() || os.Geteuid() != m.Owner || !update.IDOK(probe) || Verify(m) != nil {
+		return errors.New("exact native Local predecessor required")
+	}
+	lock, e := OwnerLock()
+	if e != nil {
+		return e
+	}
+	defer lock.Close()
+	if e = noActiveController(m); e != nil {
+		return e
+	}
+	if _, e = ReadEnrollmentCommit(m); e != nil {
+		return e
+	}
+	if e = verifyNativePolicy(ctx, m, s); e != nil {
+		return e
+	}
+	if e = Runtime(m); e != nil {
+		return errors.New("open the existing Local instance before bootstrap review")
+	}
+	return stageLocalBootstrapInventory(ctx, t, artifacts, probe, out, localBootstrapInventoryOps{
+		read: readRoot, run: s.Run,
+		mkdir: func(ctx context.Context, path string) error { return directory(ctx, path, 0, 0, 0755, s) },
+	})
+}
+
+type localBootstrapInventoryOps struct {
+	read  readHost
+	run   runHost
+	mkdir func(context.Context, string) error
+}
+
+func stageLocalBootstrapInventory(ctx context.Context, t BootstrapTransaction, artifacts, probe string, out io.Writer, ops localBootstrapInventoryOps) error {
+	p, e := t.pairPlan()
+	if e != nil {
+		return e
+	}
+	m := t.Base
+	if t.Version != 2 || t.Bundle.Version != 2 || m.Version != 3 || m.Location != "local" || !m.Enrollment || !m.NativeOwnerAccess || !update.IDOK(probe) {
+		return errors.New("exact native Local predecessor required")
+	}
+	for _, d := range []string{m.Root + "/bootstraps", t.Dir(), t.Dir() + "/candidate"} {
+		if e = ops.mkdir(ctx, d); e != nil {
+			return e
+		}
+	}
+	for _, c := range p.Target.Components {
+		if c.Contract.Component != "core" {
+			continue
+		}
+		b, e := source(filepath.Join(artifacts, c.Artifact.File))
+		if e != nil {
+			return e
+		}
+		if int64(len(b)) != c.Artifact.Size || sum(b) != c.Artifact.SHA256 {
+			return errors.New("Local inventory core differs from signed target")
+		}
+		path := t.Dir() + "/candidate/fased-app"
+		if e = publish(ctx, path, m.ID, b, 0755, ops.read, ops.run); e != nil {
+			return e
+		}
+		contract, e := probeReaderWithRun(ctx, path, true, m, ops.run, true)
+		if e != nil {
+			return e
+		}
+		if update.SnapshotDigest("contract", contract) != update.SnapshotDigest("contract", c.Contract) {
+			return errors.New("Local inventory core contract changed")
+		}
+		args := []string{"/usr/bin/setpriv", "--reuid", strconv.Itoa(m.App.UID), "--regid", strconv.Itoa(m.App.GID), "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--", path, "update-inventory", "--data-dir", m.Root + "/app-state", "--probe-id", probe, "--bootstrap-owner", strconv.Itoa(m.Owner), "--bootstrap-id", t.ID, "--bootstrap-core-sha256", c.Artifact.SHA256}
+		result, e := ops.run(ctx, nil, args...)
+		if e != nil {
+			return e
+		}
+		_, e = out.Write(result)
+		return e
+	}
+	return errors.New("signed Local inventory core missing")
+}
+
+// The staged child independently checks its OS role and immutable selected image
+// before touching protected IPC. It grants neither signer nor setup authority.
+func LocalBootstrapInventoryInstance(owner int, id, hash, data string) (string, error) {
+	m, e := Load(owner)
+	if e != nil {
+		return "", e
+	}
+	executable, e := os.Executable()
+	if e != nil {
+		return "", e
+	}
+	if e = validateLocalBootstrapInventory(m, os.Getuid(), os.Geteuid(), os.Getgid(), executable, data, id, hash); e != nil {
+		return "", e
+	}
+	if e = Verify(m); e != nil {
+		return "", e
+	}
+	if e = noActiveController(m); e != nil {
+		return "", e
+	}
+	if e = signer.CheckApplication(m.Root+"/identity.json", m.Root, data); e != nil {
+		return "", e
+	}
+	f, e := readRoot(executable)
+	if e != nil || f.Mode != 0755 || sum(f.Data) != hash {
+		return "", errors.New("signed staged Local inventory core changed")
+	}
+	c, e := ReadEnrollmentCommit(m)
+	return c.InstanceID, e
+}
+
+func validateLocalBootstrapInventory(m Manifest, uid, euid, gid int, executable, data, id, hash string) error {
+	if m.validate() != nil || m.Version != 3 || m.Location != "local" || !m.Enrollment || !m.NativeOwnerAccess || uid != m.App.UID || euid != uid || gid != m.App.GID || !update.IDOK(id) || !validHex(hash, 32) || data != m.Root+"/app-state" || executable != m.Root+"/bootstraps/"+id+"/candidate/fased-app" {
+		return errors.New("exact staged native Local inventory role required")
+	}
+	return nil
 }
 func LoadBootstrap(uid int, id string) (BootstrapTransaction, error) {
 	var t BootstrapTransaction
@@ -160,6 +298,10 @@ func PrepareBootstrap(ctx context.Context, t BootstrapTransaction, dir string, s
 	return publish(ctx, t.Dir()+"/transaction.json", t.Base.ID, mustJSON(t), 0644, readRoot, s.Run)
 }
 func probeReader(ctx context.Context, path string, isCore bool, m Manifest, s *System, ordinaryTarget ...bool) (update.Contract, error) {
+	return probeReaderWithRun(ctx, path, isCore, m, s.Run, ordinaryTarget...)
+}
+
+func probeReaderWithRun(ctx context.Context, path string, isCore bool, m Manifest, run runHost, ordinaryTarget ...bool) (update.Contract, error) {
 	identity := m.Signer
 	args := []string{"fixture-compatibility"}
 	if isCore {
@@ -171,7 +313,7 @@ func probeReader(ctx context.Context, path string, isCore bool, m Manifest, s *S
 	}
 	cmd := []string{"/usr/bin/setpriv", "--reuid", strconv.Itoa(identity.UID), "--regid", strconv.Itoa(identity.GID), "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--", path}
 	cmd = append(cmd, args...)
-	b, e := s.Run(ctx, nil, cmd...)
+	b, e := run(ctx, nil, cmd...)
 	var c update.Contract
 	if e != nil {
 		return c, e

@@ -3,12 +3,45 @@
 package main
 
 import (
+	"bytes"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/fased-ai/fased-app/internal/custodyinstall"
 )
+
+func TestBootstrapReviewCancellationDoesNotPrepare(t *testing.T) {
+	tx := custodyinstall.BootstrapTransaction{Version: 2, ID: strings.Repeat("a", 32)}
+	for _, choice := range []string{"CANCEL\n", "BOOTSTRAP " + strings.Repeat("b", 64) + "\n", "", "BOOTSTRAP " + tx.Digest() + "\n"} {
+		t.Run(choice, func(t *testing.T) {
+			r, w, e := os.Pipe()
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer r.Close()
+			_, _ = io.WriteString(w, choice)
+			_ = w.Close()
+			dir := t.TempDir()
+			marker := filepath.Join(dir, "transaction.json")
+			called := false
+			err := finishBootstrapReview(tx, true, r, &bytes.Buffer{}, func() error { called = true; return os.WriteFile(marker, []byte("prepared"), 0600) })
+			approved := choice == "BOOTSTRAP "+tx.Digest()+"\n"
+			if (err == nil) != approved || called != approved {
+				t.Fatal("review did not gate preparation", err)
+			}
+			_, stat := os.Stat(marker)
+			if !approved && !os.IsNotExist(stat) {
+				t.Fatal("cancellation wrote transaction")
+			}
+		})
+	}
+}
 
 func TestBootstrapRequiresExplicitProtectedInputs(t *testing.T) {
 	for _, args := range [][]string{{"custody", "bootstrap"}, {"owner-bootstrap"}, {"custody", "bootstrap", "--disposable-fixture", "--prepare-host", "--intent-id", "invalid"}} {
