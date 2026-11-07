@@ -17,15 +17,21 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/ownerclient"
 )
 
 type Handler struct {
-	openBrowser func(string, string) error
-	dir         string
-	assets      http.Handler
-	mu          sync.Mutex
-	instance    string
+	openBrowser     func(string, string) error
+	openWalletOwner func(string) error
+	dir             string
+	assets          http.Handler
+	mu              sync.Mutex
+	instance        string
 }
+
+// The native launcher installs this public-intent callback. It cannot receive a
+// key/password or provide owner RPC authority to the ordinary core-proxy window.
+func (h *Handler) SetWalletOwnerOpener(open func(string) error) { h.openWalletOwner = open }
 
 func NewHandler(dir string, assets fs.FS) *Handler {
 	return &Handler{dir: dir, assets: http.FileServer(http.FS(assets)), openBrowser: func(url, id string) error { return connection.OpenBrowser(url, id) }}
@@ -78,6 +84,32 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, 413, "request too large")
 		return
 	}
+	if r.URL.Path == "/api/v1/installation/wallet-owner" {
+		var request struct {
+			Link string `json:"link"`
+		}
+		d := json.NewDecoder(bytes.NewReader(body))
+		d.DisallowUnknownFields()
+		if d.Decode(&request) != nil || d.Decode(new(any)) != io.EOF {
+			fail(w, 400, "invalid wallet owner intent")
+			return
+		}
+		if _, _, err := ownerclient.ParseLink(request.Link); err != nil {
+			fail(w, 400, "invalid wallet owner intent")
+			return
+		}
+		if h.openWalletOwner == nil {
+			fail(w, 503, "open the protected wallet in Fased")
+			return
+		}
+		if err := h.openWalletOwner(request.Link); err != nil {
+			fail(w, 503, "cannot open the protected owner window")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"opened": true})
+		return
+	}
 	if r.URL.Path == "/api/v1/installation/connect" {
 		var target struct {
 			URL        string `json:"url"`
@@ -102,9 +134,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(result)
 		return
 	}
-	client, err := core.NewClient(r.Context(), h.dir)
+	client, enrolled, err := nativeClient(r.Context(), h.dir)
 	if err != nil {
-		fail(w, 503, "Private core unavailable. Start the installed engine and retry.")
+		fail(w, 503, "Fased is unavailable. Reopen the app.")
 		return
 	}
 	defer client.Close()
@@ -123,7 +155,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(w, 400, "invalid Local access request")
 			return
 		}
-		if err = client.LocalOwner(r.Context()); err != nil {
+		if enrolled {
+			err = client.NativeLocalOwner(r.Context())
+		} else {
+			err = client.LocalOwner(r.Context())
+		}
+		if err != nil {
 			fail(w, 403, "Local OS owner access required")
 			return
 		}
@@ -160,7 +197,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	response, err := forward(r.Context(), client, r, body)
 	if err != nil {
-		fail(w, 503, "Private core unavailable. Retry the connection.")
+		fail(w, 503, "Fased is unavailable. Reconnect.")
 		return
 	}
 	defer response.Body.Close()
@@ -170,6 +207,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, 502, "invalid private core response")
 		return
 	}
+	if enrolled && r.URL.Path == "/api/v1/auth/state" && response.StatusCode == 200 {
+		var state map[string]any
+		if json.Unmarshal(data, &state) != nil {
+			fail(w, 502, "invalid protected owner state")
+			return
+		}
+		state["localAccess"] = true
+		data, _ = json.Marshal(state)
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(response.StatusCode)
 	_, _ = w.Write(data)
@@ -178,7 +224,7 @@ func allowed(method, route string) bool {
 	switch route {
 	case "/api/v1/health", "/api/v1/auth/state", "/api/v1/signer/status", "/api/v1/installation/claim-code":
 		return method == "GET"
-	case "/api/v1/installation/connect", "/api/v1/installation/local-owner":
+	case "/api/v1/installation/connect", "/api/v1/installation/local-owner", "/api/v1/installation/wallet-owner":
 		return method == "POST"
 	case "/api/v1/agents":
 		return method == "GET" || method == "POST"
@@ -198,6 +244,12 @@ func allowed(method, route string) bool {
 		return method == "POST"
 	}
 	return false
+}
+
+// PublicRequestAllowed is shared by the protected app-identity stdio client.
+// Native-only bootstrap and every private owner/signer route stay excluded.
+func PublicRequestAllowed(r *http.Request) bool {
+	return !strings.HasPrefix(r.URL.Path, "/api/v1/installation/") && allowed(r.Method, r.URL.Path) && allowedQuery(r)
 }
 func forward(ctx context.Context, client *core.Client, original *http.Request, body []byte) (*http.Response, error) {
 	r, err := http.NewRequestWithContext(ctx, original.Method, client.Endpoint.URL+original.URL.RequestURI(), bytes.NewReader(body))

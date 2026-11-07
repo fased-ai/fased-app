@@ -53,13 +53,16 @@ func sourceValid(s sourceRecord) bool {
 }
 
 func (j journal) valid(owner int) bool {
+	if j.NativeOwnerAccess && (j.Source.Profile != "local" || j.Mode == "") {
+		return false
+	}
 	if !custodyContext(j.Mode, j.Profile, j.Provenance) || j.Version != 1 || j.Owner != owner || owner <= 0 || !hexID(j.ID, 16) || rank(j.Phase) < 0 || !sourceValid(j.Source) || !hexID(j.CoreHash, 32) || !hexID(j.SignerHash, 32) || j.Network != "devnet" && j.Network != "mainnet-beta" || j.Node.Inode == 0 || j.Node.UID != j.Source.UID || j.Node.GID != j.Source.GID || j.Node.Mode != 0700 {
 		return false
 	}
 	if j.Digest != "" && !hexID(j.Digest, 32) || rank(j.Phase) >= rank("importing") && !hexID(j.Digest, 32) {
 		return false
 	}
-	if j.Target.ID != "" && (j.Target.Owner != owner || !j.Target.Enrollment || j.Target.Location != j.Source.Profile || j.Target.Listen != j.Source.Listen || j.Target.PublicOrigin != j.Source.PublicOrigin || j.Target.CoreHash != j.CoreHash || j.Target.SignerHash != j.SignerHash || j.Target.Network != j.Network || j.Target.Profile != j.Profile || j.Target.Provenance != j.Provenance || j.Mode != "" && (j.Target.Mode != j.Mode || j.Target.Version != 3) || j.Target.App.UID == j.Source.UID || j.Target.Signer.UID == j.Source.UID) {
+	if j.Target.ID != "" && (j.Target.NativeOwnerAccess != j.NativeOwnerAccess || j.Target.Owner != owner || !j.Target.Enrollment || j.Target.Location != j.Source.Profile || j.Target.Listen != j.Source.Listen || j.Target.PublicOrigin != j.Source.PublicOrigin || j.Target.CoreHash != j.CoreHash || j.Target.SignerHash != j.SignerHash || j.Target.Network != j.Network || j.Target.Profile != j.Profile || j.Target.Provenance != j.Provenance || j.Mode != "" && (j.Target.Mode != j.Mode || j.Target.Version != 3) || j.Target.App.UID == j.Source.UID || j.Target.Signer.UID == j.Source.UID) {
 		return false
 	}
 	return rank(j.Phase) < rank("suspending") || j.Target.ID != ""
@@ -89,11 +92,15 @@ type operations struct {
 	publish      func(context.Context, journal) error
 	verifyTarget func(context.Context, journal) error
 	activate     func(context.Context, journal) error
+	restart      func(context.Context, journal) error
 	finish       func(context.Context, journal) error
 }
 
 func run(ctx context.Context, s Source, o Options, coreHash, signerHash string, op operations) (_ custodyinstall.Manifest, resultErr error) {
 	var empty custodyinstall.Manifest
+	if o.NativeOwnerAccess && (s.Profile != "local" || o.Mode == "") {
+		return empty, errors.New("native owner access requires Local ordinary enrollment")
+	}
 	if !custodyContext(o.Mode, o.Profile, o.Provenance) || !o.Disposable || !o.PrepareHost || s.Validate == nil || s.Suspend == nil || s.Restore == nil || !sourceValid(record(s)) || !hexID(coreHash, 32) || !hexID(signerHash, 32) || o.Network != "devnet" && o.Network != "mainnet-beta" {
 		return empty, errors.New("verified Local/Remote source and explicit disposable host consent required")
 	}
@@ -113,7 +120,7 @@ func run(ctx context.Context, s Source, o Options, coreHash, signerHash string, 
 		if _, err = rand.Read(id[:]); err != nil {
 			return empty, err
 		}
-		j = journal{Mode: o.Mode, Profile: o.Profile, Provenance: o.Provenance, Version: 1, ID: hex.EncodeToString(id[:]), Owner: op.owner, Phase: "prepared", Source: record(s), Node: n, CoreHash: coreHash, SignerHash: signerHash, Network: o.Network}
+		j = journal{NativeOwnerAccess: o.NativeOwnerAccess, Mode: o.Mode, Profile: o.Profile, Provenance: o.Provenance, Version: 1, ID: hex.EncodeToString(id[:]), Owner: op.owner, Phase: "prepared", Source: record(s), Node: n, CoreHash: coreHash, SignerHash: signerHash, Network: o.Network}
 		if err = op.save(j); err != nil {
 			return empty, err
 		}
@@ -122,7 +129,7 @@ func run(ctx context.Context, s Source, o Options, coreHash, signerHash string, 
 	}
 	want, saved := record(s), j.Source
 	want.Running, want.Autostart = saved.Running, saved.Autostart
-	if !j.valid(op.owner) || want != saved || j.CoreHash != coreHash || j.SignerHash != signerHash || j.Network != o.Network || j.Mode != o.Mode || j.Profile != o.Profile || j.Provenance != o.Provenance {
+	if !j.valid(op.owner) || want != saved || j.NativeOwnerAccess != o.NativeOwnerAccess || j.CoreHash != coreHash || j.SignerHash != signerHash || j.Network != o.Network || j.Mode != o.Mode || j.Profile != o.Profile || j.Provenance != o.Provenance {
 		return empty, errState
 	}
 	set := func(phase string) error { j.Phase = phase; return op.save(j) }
@@ -141,6 +148,14 @@ func run(ctx context.Context, s Source, o Options, coreHash, signerHash string, 
 		return empty, err
 	}
 	if j.Phase == "complete" {
+		if o.StartExisting {
+			if op.restart == nil {
+				return j.Target, errState
+			}
+			if err = op.restart(ctx, j); err != nil {
+				return j.Target, err
+			}
+		}
 		if err = op.finish(ctx, j); err != nil {
 			return j.Target, err
 		}

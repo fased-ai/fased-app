@@ -39,6 +39,9 @@ func main() {
 	}
 }
 func run(args []string, in *os.File, out, errOut io.Writer) error {
+	if len(args) > 0 && args[0] == "native-client" {
+		return nativeAppClient(args[1:], in, out)
+	}
 	if len(args) > 0 && args[0] == "acceptance-update" {
 		return candidateAcceptanceCommand(args[1:], out, errOut)
 	}

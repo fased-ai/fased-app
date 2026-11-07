@@ -1,0 +1,138 @@
+:root {
+  color-scheme: dark;
+  font:
+    14px system-ui,
+    sans-serif;
+  color: #eeeaf5;
+  background: #17161f;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+main {
+  padding: 24px;
+  max-width: 600px;
+  margin: auto;
+}
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #34313e;
+  padding-bottom: 16px;
+}
+header strong {
+  font-size: 20px;
+}
+header span {
+  color: #aaa4ba;
+}
+h1 {
+  font-size: 24px;
+  margin: 24px 0 8px;
+}
+p {
+  color: #aaa4ba;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+label {
+  display: grid;
+  gap: 6px;
+  margin: 16px 0;
+}
+label span {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+input {
+  width: 100%;
+  border: 1px solid #3a3547;
+  background: #252230;
+  color: inherit;
+  padding: 12px;
+  border-radius: 8px;
+  font: inherit;
+}
+input:focus {
+  outline: 2px solid #8871e5;
+  outline-offset: 2px;
+}
+button {
+  border: 0;
+  border-radius: 8px;
+  padding: 12px 18px;
+  color: #fff;
+  background: #fd4f80;
+  font: 600 14px system-ui;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+button:focus-visible {
+  outline: 2px solid #a794f8;
+  outline-offset: 3px;
+}
+.secondary {
+  background: #302c3e;
+}
+form > button {
+  width: 100%;
+  margin-top: 10px;
+}
+output {
+  overflow-wrap: anywhere;
+  padding: 10px;
+  background: #252230;
+  border-radius: 6px;
+  color: #c6bfd6;
+}
+#error {
+  color: #ff93ae;
+  min-height: 20px;
+}
+footer {
+  border-top: 1px solid #34313e;
+  margin-top: 20px;
+  padding-top: 16px;
+}
+section[hidden],
+form[hidden],
+label[hidden] {
+  display: none;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    color: #252131;
+    background: #f6f5fa;
+  }
+  header,
+  footer {
+    border-color: #ded9e7;
+  }
+  header span,
+  p {
+    color: #70677f;
+  }
+  input,
+  output {
+    color: #302a3d;
+    background: #fff;
+    border-color: #d6cfdf;
+  }
+  .secondary {
+    color: #302a3d;
+    background: #e7e2ef;
+  }
+  #error {
+    color: #ab244c;
+  }
+}

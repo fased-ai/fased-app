@@ -20,6 +20,19 @@ import (
 )
 
 func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result error) {
+	if len(args) > 0 && args[0] == "enrollment-resume" {
+		return nativeEnrollmentResume(args[1:], out)
+	}
+	if len(args) == 1 && args[0] == "enrollment-capability" {
+		return json.NewEncoder(out).Encode(struct {
+			Version      int  `json:"version"`
+			Supported    bool `json:"supported"`
+			WalletSigner bool `json:"walletSigner"`
+		}{1, ordinaryEnrollmentSupported(), false})
+	}
+	if len(args) > 0 && args[0] == "window" {
+		return custodyWindowCommand(args[1:], in, out, errOut)
+	}
 	if len(args) > 0 && args[0] == "enroll" {
 		return enrollmentCommand(args[1:], in, out, errOut)
 	}

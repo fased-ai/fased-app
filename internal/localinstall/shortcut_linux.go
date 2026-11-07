@@ -13,7 +13,7 @@ func desktopQuote(s string) string {
 	return "\"" + strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "$", "\\$", "`", "\\`", "%", "%%").Replace(s) + "\""
 }
 func shortcutDefinition(p Paths) []byte {
-	return []byte("[Desktop Entry]\nType=Application\nName=Fased App\nComment=Private trading automation workspace\nExec=" + desktopQuote(filepath.Join(p.Root, engineName)) + " open --prefix " + desktopQuote(p.Root) + " --data-dir " + desktopQuote(p.Data) + "\nTerminal=false\nCategories=Finance;\n")
+	return []byte("[Desktop Entry]\nType=Application\nName=Fased App\nComment=Private trading automation workspace\nExec=" + desktopQuote(filepath.Join(p.Root, engineName)) + " open --prefix " + desktopQuote(p.Root) + " --data-dir " + desktopQuote(p.Data) + " %u\nTerminal=false\nCategories=Finance;\nMimeType=x-scheme-handler/fased;\n")
 }
 func shortcutLink() (string, error) {
 	h, e := os.UserHomeDir()

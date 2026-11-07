@@ -22,6 +22,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/hostprep"
 	"github.com/fased-ai/fased-app/internal/localinstall"
+	"github.com/fased-ai/fased-app/internal/ownerclient"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
 	"github.com/fased-ai/fased-app/internal/vpsinstall"
 	"golang.org/x/term"
@@ -67,7 +68,13 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	if err = f.Parse(remaining); err != nil {
 		return err
 	}
-	if f.NArg() != 0 {
+	ownerLink := ""
+	if command == "open" && f.NArg() == 1 {
+		ownerLink = f.Arg(0)
+		if _, _, err = ownerclient.ParseLink(ownerLink); err != nil {
+			return err
+		}
+	} else if f.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
 	if *packageSHA256 != "" && (command != "install" || *packageDir == "") {
@@ -255,7 +262,11 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		if err = desktopRuntime(ctx, *desktop, *packageDir, *data, *installRuntime, *prepareHost, os.Stdin, errOut); err != nil {
 			return err
 		}
-		m, err := localinstall.Install(ctx, paths, localinstall.Options{ApplicationSequence: sequence, ApplicationReleaseSHA256: release, Engine: engine, EngineSHA256: inventory.Files[localinstall.EngineName()].SHA256, Desktop: *desktop, DesktopSHA256: inventory.Files[localinstall.DesktopName()].SHA256, Listen: *listen, PublicOrigin: *origin, Start: *start, Autostart: *autostart, Location: installLocation(*vps)})
+		signerPath := ""
+		if inventory.Files["fased-signer"].SHA256 != "" {
+			signerPath = filepath.Join(filepath.Dir(engine), "fased-signer")
+		}
+		m, err := localinstall.Install(ctx, paths, localinstall.Options{ApplicationSequence: sequence, ApplicationReleaseSHA256: release, Engine: engine, EngineSHA256: inventory.Files[localinstall.EngineName()].SHA256, Desktop: *desktop, DesktopSHA256: inventory.Files[localinstall.DesktopName()].SHA256, Signer: signerPath, SignerSHA256: inventory.Files["fased-signer"].SHA256, Listen: *listen, PublicOrigin: *origin, Start: *start, Autostart: *autostart, Location: installLocation(*vps)})
 		if err != nil {
 			return err
 		}
@@ -352,6 +363,17 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			return errors.New("service action must be start, stop or status")
 		}
 	case "open":
+		if ownerLink != "" {
+			m, err := localinstall.Load(paths)
+			if err != nil || m.Files[localinstall.DesktopName()] == "" {
+				return errors.New("install the Fased native client to open protected wallets")
+			}
+			process := exec.Command(filepath.Join(m.Root, localinstall.DesktopName()), "--wallet-owner", ownerLink)
+			if err = process.Start(); err != nil {
+				return err
+			}
+			return process.Process.Release()
+		}
 		if err = localinstall.Start(ctx, paths); err != nil {
 			return err
 		}

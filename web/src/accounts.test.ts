@@ -4,12 +4,38 @@ import {
   fixtureNetwork,
   rpcEndpoint,
   walletOwnerCommands,
+  walletOwnerLink,
   walletSetupLabel,
   walletSetupReference,
   type Account,
   type AccountsView,
 } from "./accounts";
 import { translate } from "./ui-language";
+
+it("opens only a public native wallet intent", () => {
+  const instance = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE";
+  const link = walletOwnerLink(
+    instance,
+    "devnet",
+    "setup",
+    "https://my-server.ts.net",
+  );
+  expect(link).toBe(
+    `fased://wallet-owner?action=setup&instance=${instance}&network=devnet&origin=https%3A%2F%2Fmy-server.ts.net`,
+  );
+  expect(
+    walletOwnerLink(instance, "devnet", "import", "https://public.example"),
+  ).toBe("");
+  expect(
+    walletOwnerLink(
+      instance,
+      "devnet",
+      "import",
+      "https://my-server.ts.net/?key=secret",
+    ),
+  ).toBe("");
+  expect(walletOwnerLink("bad", "devnet", "setup")).toBe("");
+});
 it("uses a signer address only for a current disposable account", () => {
   const a: Account = {
     version: 1,

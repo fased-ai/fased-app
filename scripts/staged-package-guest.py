@@ -530,21 +530,25 @@ def terminal(args, answers, timeout=180, password_free=False, observer=None, pro
                     raise RuntimeError("Unexpected password prompt; no credential submitted")
                 if observer is not None:
                     observer(text)
-                for prompt, answer in answers.items():
-                    if prompt not in matched and prompt in text:
-                        os.write(fd, (answer + "\n").encode())
-                        matched.add(prompt)
-            if prompt_retry is not None:
+                if status is None:
+                    for prompt, answer in answers.items():
+                        if prompt not in matched and prompt in text:
+                            os.write(fd, (answer + "\n").encode())
+                            matched.add(prompt)
+            if status is None and prompt_retry is not None:
                 prompt = prompt_retry(output.decode(errors="replace"))
                 if prompt is not None:
                     if prompt not in matched or prompt in retried or output.decode(errors="replace").count(prompt) != 2:
                         raise RuntimeError("invalid repeated terminal prompt; no retry sent")
                     os.write(fd, (answers[prompt] + "\n").encode())
                     retried.add(prompt)
-            done, child_status = os.waitpid(pid, os.WNOHANG)
-            if done:
-                status = child_status
-                break
+            if status is None:
+                done, child_status = os.waitpid(pid, os.WNOHANG)
+                if done:
+                    # Reaping is not PTY EOF: final bytes can still be queued.
+                    # Drain under the original deadline, without sending input
+                    # or reaping this child twice after its exit is recorded.
+                    status = child_status
         else:
             raise TimeoutError("packaged terminal journey deadline: " + redacted(output.decode(errors="replace"))[-8192:])
     finally:

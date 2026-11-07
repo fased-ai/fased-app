@@ -25,10 +25,12 @@ func owned(i os.FileInfo) bool {
 }
 
 type InstallOptions struct {
-	Prefix, DataDirectory string
-	Start                 bool
-	Profile, Listen       string
-	upgrade               *UpgradeOptions
+	WalletSigner                  *WalletPayload
+	WalletInstance, WalletNetwork string
+	Prefix, DataDirectory         string
+	Start                         bool
+	Profile, Listen               string
+	upgrade                       *UpgradeOptions
 }
 
 // Run uses the already-reviewed ordinary installer/wizard. No arbitrary command,
@@ -88,6 +90,15 @@ func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader
 	}
 	if options.upgrade != nil {
 		args, err = p.upgradeArguments(*options.upgrade)
+		if err != nil {
+			return err
+		}
+	}
+	if options.WalletInstance != "" || options.WalletNetwork != "" {
+		if !options.Start || options.Profile != "remote" || options.Prefix != "" || options.DataDirectory != "" || options.upgrade != nil {
+			return errors.New("Wallets setup is a separate existing-Remote operation")
+		}
+		args, err = p.walletEnrollmentArguments(options.WalletInstance, options.WalletNetwork, options.WalletSigner)
 		if err != nil {
 			return err
 		}

@@ -12,6 +12,32 @@ import (
 	"testing"
 )
 
+func TestNativeSignerInventoryIsOptionalVerifiedAndLinuxOnly(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux native signer")
+	}
+	dir, m := bundleFixture(t)
+	_, desktop := Names()
+	m.Desktop = true
+	for _, name := range []string{desktop, "fased-signer"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("inert "+name), 0700); err != nil {
+			t.Fatal(err)
+		}
+		f, _ := Inspect(filepath.Join(dir, name))
+		m.Files[name] = f
+	}
+	writeBundleManifest(t, dir, m)
+	if _, err := Verify(dir); err != nil {
+		t.Fatal("native signer refused", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "fased-signer"), []byte("corrupt"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(dir); err == nil {
+		t.Fatal("modified signer accepted")
+	}
+}
+
 func TestBundlePinnedManifestAndGuideCompatibility(t *testing.T) {
 	dir, m := bundleFixture(t)
 	b := writeBundleManifest(t, dir, m)

@@ -362,3 +362,243 @@ test("wallet Refresh joins encrypted RPC and CLI without changing saved data", a
     );
   }
 });
+
+// Executes the real isolated owner assets with a controlled Wails binding. This
+// is browser interaction proof, not OS-owner/SSH/installed-signer acceptance.
+test("isolated owner form keeps secrets in the native binding and clears them", async ({
+  page,
+}) => {
+  const assets = resolve("desktop/ownerui");
+  const requested: string[] = [];
+  page.on("request", (r) => requested.push(new URL(r.url()).pathname));
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      runtime: { Quit() {} },
+      go: {
+        main: {
+          WalletOwner: {
+            async Info() {
+              return { network: "devnet", action: "setup", origin: "" };
+            },
+            async Connect(origin: string, user: string) {
+              if (origin || user) throw new Error("unexpected remote target");
+            },
+            async Run(unlock: string, backup: string, seed: string) {
+              if (
+                unlock !== "Disposable owner password" ||
+                backup !== "Disposable backup password" ||
+                seed
+              )
+                throw new Error("unexpected protected input");
+              return {
+                address: "controlled-public-address",
+                backupFile: "private encrypted backup",
+                fingerprint: "public-checksum",
+                recoveryHeld: true,
+              };
+            },
+            async Cancel() {},
+          },
+        },
+      },
+    });
+  });
+  await page.route("http://owner-window.test/**", async (route) => {
+    const name =
+      new URL(route.request().url()).pathname.slice(1) || "index.html";
+    if (!["index.html", "owner.js", "owner.css"].includes(name))
+      throw new Error("unexpected owner request");
+    await route.fulfill({
+      body: await readFile(resolve(assets, name)),
+      contentType: name.endsWith("js")
+        ? "text/javascript"
+        : name.endsWith("css")
+          ? "text/css"
+          : "text/html",
+    });
+  });
+  await page.goto("http://owner-window.test/");
+  await page.getByRole("button", { name: "Connect wallet" }).click();
+  await page
+    .getByLabel("Wallet password", { exact: true })
+    .fill("Disposable owner password");
+  await page.getByLabel("Confirm password").fill("Disposable owner password");
+  await page
+    .getByLabel("Backup password", { exact: true })
+    .fill("Disposable backup password");
+  await page
+    .getByLabel("Confirm backup password")
+    .fill("Disposable backup password");
+  await page.getByRole("button", { name: "Save wallet" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Wallet saved" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Address", { exact: true })).toHaveText(
+    "controlled-public-address",
+  );
+  await expect(page.locator("#unlock")).toHaveValue("");
+  await expect(page.locator("#backup")).toHaveValue("");
+  await page.screenshot({ path: test.info().outputPath("owner-window.png") });
+  expect(
+    requested.every((p) =>
+      ["/", "/owner.js", "/owner.css", "/favicon.ico"].includes(p),
+    ),
+  ).toBe(true);
+});
+
+// Actual owner assets with controlled OS approval; no private input before ready.
+test("guided native enrollment waits for OS approval before wallet input", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    let release: () => void;
+    const approval = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    Object.assign(window, {
+      approveWalletSetup: () => release(),
+      runtime: { Quit() {} },
+      go: {
+        main: {
+          WalletOwner: {
+            async Info() {
+              return {
+                network: "devnet",
+                action: "setup",
+                origin: "https://suggested.ts.net",
+              };
+            },
+            async Connect(origin: string, user: string) {
+              if (origin !== "https://chosen.ts.net" || user !== "alice")
+                throw Error("choose the owner target");
+              return false;
+            },
+            async Enable(origin: string, user: string) {
+              if (origin !== "https://chosen.ts.net" || user !== "alice")
+                throw Error("owner target changed");
+              await approval;
+            },
+            async Cancel() {},
+          },
+        },
+      },
+    });
+  });
+  await page.route("http://owner-window.test/**", async (route) => {
+    const name =
+      new URL(route.request().url()).pathname.slice(1) || "index.html";
+    if (!["index.html", "owner.js", "owner.css"].includes(name))
+      throw Error("unexpected owner request");
+    await route.fulfill({
+      body: await readFile(resolve("desktop/ownerui", name)),
+      contentType: name.endsWith("js")
+        ? "text/javascript"
+        : name.endsWith("css")
+          ? "text/css"
+          : "text/html",
+    });
+  });
+  await page.goto("http://owner-window.test/");
+  await page.getByLabel("Private address").fill("https://chosen.ts.net");
+  await page.getByLabel("OS account").fill("alice");
+  await page.getByRole("button", { name: "Connect wallet" }).click();
+  await expect(
+    page.getByLabel("Wallet password", { exact: true }),
+  ).toBeHidden();
+  await page.getByRole("button", { name: "Enable Wallets" }).click();
+  await expect(page.getByRole("status")).toBeVisible();
+  await expect(page.getByLabel("Private address")).toBeDisabled();
+  await expect(
+    page.getByLabel("Wallet password", { exact: true }),
+  ).toBeHidden();
+  await page.evaluate(() =>
+    (
+      window as unknown as { approveWalletSetup: () => void }
+    ).approveWalletSetup(),
+  );
+  await expect(
+    page.getByLabel("Wallet password", { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator("#instance")).toHaveText("https://chosen.ts.net");
+});
+
+test("Remote wallet setup exposes only console consent then reconnects", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    let pending = false,
+      approved = false;
+    Object.assign(window, {
+      approveConsole: () => {
+        approved = true;
+      },
+      runtime: { Quit() {} },
+      go: {
+        main: {
+          WalletOwner: {
+            async Info() {
+              return {
+                network: "devnet",
+                action: "setup",
+                origin: "https://chosen.ts.net",
+                setup: pending
+                  ? "bash official-installer --remote --operator alice --wallets --wallet-instance public-id --wallet-network devnet"
+                  : "",
+              };
+            },
+            async Connect() {
+              return false;
+            },
+            async Enable() {
+              if (!approved) {
+                pending = true;
+                throw Error(
+                  "Approve Wallets once in the server console, then reconnect.",
+                );
+              }
+              pending = false;
+            },
+            async Cancel() {},
+          },
+        },
+      },
+    });
+  });
+  await page.route("http://owner-window.test/**", async (route) => {
+    const name =
+      new URL(route.request().url()).pathname.slice(1) || "index.html";
+    if (!["index.html", "owner.js", "owner.css"].includes(name))
+      throw Error("unexpected owner request");
+    await route.fulfill({
+      body: await readFile(resolve("desktop/ownerui", name)),
+      contentType: name.endsWith("js")
+        ? "text/javascript"
+        : name.endsWith("css")
+          ? "text/css"
+          : "text/html",
+    });
+  });
+  await page.goto("http://owner-window.test/");
+  await page.getByLabel("Private address").fill("https://chosen.ts.net");
+  await page.getByLabel("OS account").fill("alice");
+  await page.getByRole("button", { name: "Connect wallet" }).click();
+  await page.getByRole("button", { name: "Enable Wallets" }).click();
+  await expect(page.getByLabel("Server setup command")).toHaveValue(
+    /--operator alice --wallets/,
+  );
+  await expect(page.getByLabel("Server setup command")).toHaveAttribute(
+    "readonly",
+    "",
+  );
+  await expect(
+    page.getByLabel("Wallet password", { exact: true }),
+  ).toBeHidden();
+  await page.evaluate(() =>
+    (window as unknown as { approveConsole: () => void }).approveConsole(),
+  );
+  await page.getByRole("button", { name: "Enable Wallets" }).click();
+  await expect(page.getByLabel("Server setup command")).toBeHidden();
+  await expect(
+    page.getByLabel("Wallet password", { exact: true }),
+  ).toBeVisible();
+});

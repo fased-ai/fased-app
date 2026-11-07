@@ -134,6 +134,12 @@ func VerifyPinned(dir, manifestSHA256 string) (Manifest, error) {
 	if m.Desktop {
 		allowed[desktop] = true
 	}
+	// The native Linux owner client carries its matching signer for guided
+	// enrollment. Older/headless packages remain valid without this optional
+	// payload; a foreign executable is never discovered beside the package.
+	if _, present := m.Files["fased-signer"]; present && m.Desktop && m.Platform == "linux" {
+		allowed["fased-signer"] = true
+	}
 	if _, present := m.Files["INSTALL.txt"]; present {
 		allowed["INSTALL.txt"] = true
 	}
