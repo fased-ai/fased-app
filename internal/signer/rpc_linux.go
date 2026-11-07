@@ -413,7 +413,10 @@ func (s *Server) accept(listener *net.UnixListener, c Config, uid int, owner boo
 			if request.Version != c.Version || request.SignerID != c.SignerID || request.Challenge != nonce {
 				return
 			}
-			response := execute(s.vault, request.Request, owner)
+			response := Response{Error: "ordinary custody maintenance in progress"}
+			if ordinaryHandoffRPCAllowed(c, request.Request.Action, s.vault) {
+				response = execute(s.vault, request.Request, owner)
+			}
 			defer wipe(response.Document)
 			_ = json.NewEncoder(conn).Encode(response)
 		}()

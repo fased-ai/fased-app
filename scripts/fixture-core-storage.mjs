@@ -534,7 +534,11 @@ export async function projectPasswordOnlyContract(root) {
       "Features: []string{",
     ],
   ];
-  let projected = source;
+  // Historical app-only storage readers cannot acquire the new paired
+  // ordinary-custody controller contract or its update-package dependency.
+  const ordinaryMaintenance =
+    /\nfunc OrdinaryUpdateContract\(\) update\.Contract \{[\s\S]*?\n\}/g;
+  let projected = source.replace(ordinaryMaintenance, "");
   for (const [before, after] of replacements) {
     assert.equal(
       projected.split(before).length,

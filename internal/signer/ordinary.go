@@ -62,7 +62,7 @@ func (v *Vault) ImportControlledOrdinarySeed(seed, password []byte) error {
 }
 
 func ordinaryHistory(rs []journalRecord) (*AccountRef, *CustodyAdmission, error) {
-	if len(rs) != 1 {
+	if len(rs) < 1 {
 		return nil, nil, errors.New("ordinary custody requires complete key-only genesis; preserve history")
 	}
 	r := rs[0]
@@ -74,6 +74,15 @@ func ordinaryHistory(rs []journalRecord) (*AccountRef, *CustodyAdmission, error)
 		return nil, nil, errors.New("ordinary admission cannot carry authority")
 	}
 	ref, admission := *r.Account, *r.Admission
+	l := newLedger()
+	l.ref = ref
+	l.ordinaryAdmission = &admission
+	l.lastTime = r.At
+	for _, record := range rs[1:] {
+		if err := l.apply(record); err != nil {
+			return nil, nil, err
+		}
+	}
 	return &ref, &admission, nil
 }
 
@@ -98,8 +107,14 @@ func (v *Vault) openOrdinaryHistory() error {
 	v.managedRef = ref
 	v.ledger = newLedger()
 	v.ledger.ref = *ref
+	v.ledger.ordinaryAdmission = admission
 	v.ledger.main = main
 	v.ledger.lastTime = rs[0].At
+	for _, record := range rs[1:] {
+		if err := v.ledger.apply(record); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

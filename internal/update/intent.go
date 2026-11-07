@@ -77,6 +77,9 @@ func JoinSnapshots(c CoreSnapshot, s SignerSnapshot, target Target) (Inventory, 
 	if s.Version == 2 {
 		snapshotOK = validManagedSignerShape(s) && s.InstalledSequence <= s.SequenceFloor
 	}
+	if s.Version == 3 {
+		snapshotOK = validOrdinarySignerShape(s)
+	}
 	if c.Version != 1 || !snapshotOK || !IDOK(c.ProbeID) || c.ProbeID != s.ProbeID || !IDOK(c.BootID) || !IDOK(s.BootID) || !tokenOK(c.InstanceID) || !hashOK(s.AuthoritySHA256) || c.State.Name != "core-db" || s.ActiveIntentID != "" && !IDOK(s.ActiveIntentID) {
 		return Inventory{}, errors.New("invalid service snapshot identity")
 	}
@@ -84,6 +87,9 @@ func JoinSnapshots(c CoreSnapshot, s SignerSnapshot, target Target) (Inventory, 
 	return Inventory{Version: 1, FixtureOnly: true, Target: target, SequenceFloor: s.SequenceFloor, States: states, Pending: s.Pending, Unknown: s.Unknown, RecoveryHold: s.RecoveryHold}, nil
 }
 func ValidateIntent(i Intent) error {
+	if i.Signer.Version == 3 && !OrdinaryContracts(i.Contracts) {
+		return errors.New("ordinary paired maintenance contracts required")
+	}
 	if i.Signer.Version == 2 && !ManagedContracts(i.Contracts) {
 		return errors.New("managed maintenance contracts required")
 	}
@@ -100,7 +106,7 @@ func ValidateIntent(i Intent) error {
 	if e != nil {
 		return e
 	}
-	if (i.Signer.Version == 1 && len(inv.States) != 4 || i.Signer.Version == 2 && len(inv.States) != 3) || inv.Pending < 0 || inv.Unknown < 0 || inv.Unknown > inv.Pending {
+	if (i.Signer.Version == 1 && len(inv.States) != 4 || (i.Signer.Version == 2 || i.Signer.Version == 3) && len(inv.States) != 3) || inv.Pending < 0 || inv.Unknown < 0 || inv.Unknown > inv.Pending {
 		return errors.New("invalid intent state")
 	}
 	return nil

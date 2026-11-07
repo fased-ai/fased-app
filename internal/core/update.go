@@ -36,3 +36,10 @@ func OrdinaryCustodyReadContract() update.Contract {
 	c.RequiresPeer = []string{"ordinary-custody-read-v1"}
 	return c
 }
+
+func OrdinaryUpdateContract() update.Contract {
+	c := OrdinaryCustodyReadContract()
+	c.Features = append(c.Features, update.OrdinaryMaintenanceFeature)
+	c.RequiresPeer = []string{update.OrdinaryMaintenanceFeature}
+	return c
+}

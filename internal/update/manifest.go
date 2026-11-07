@@ -235,6 +235,9 @@ func Authenticate(b []byte, trust Trust, now int64) (Manifest, string, error) {
 	return authenticate(b, trust, now, lifecycleOK)
 }
 func authenticate(b []byte, trust Trust, now int64, lifecycle func(*LifecycleContract) bool) (Manifest, string, error) {
+	return authenticateComponents(b, trust, now, func(cs []Component) error { return validateComponentsFor(cs, lifecycle) })
+}
+func authenticateComponents(b []byte, trust Trust, now int64, components func([]Component) error) (Manifest, string, error) {
 	var m Manifest
 	var e Envelope
 	if err := StrictJSON(b, &e); err != nil {
@@ -270,7 +273,7 @@ func authenticate(b []byte, trust Trust, now int64, lifecycle func(*LifecycleCon
 	if m.IssuedAt <= 0 || m.IssuedAt > now || m.IssuedAt < key.NotBefore || m.ExpiresAt <= now || m.ExpiresAt <= m.IssuedAt || m.ExpiresAt-m.IssuedAt > 7*86400 || m.ExpiresAt > key.NotAfter {
 		return m, "", errors.New("stale or invalid manifest validity")
 	}
-	if err = validateComponentsFor(m.Components, lifecycle); err != nil {
+	if err = components(m.Components); err != nil {
 		return m, "", fmt.Errorf("manifest: %w", err)
 	}
 	return m, digest(e.Payload), nil

@@ -17,29 +17,30 @@ type journal struct {
 }
 
 type journalRecord struct {
-	Admission       *CustodyAdmission    `json:"admission,omitempty"`
-	ReceiptRPC      *receiptRPCEnvelope  `json:"receiptRPC,omitempty"`
-	FreshManaged    bool                 `json:"freshManaged,omitempty"`
-	Swap            *SwapProposal        `json:"swap,omitempty"`
-	SwapObservation *onchain.Observation `json:"swapObservation,omitempty"`
-	Installation    *update.Installation `json:"installation,omitempty"`
-	Update          *update.Intent       `json:"update,omitempty"`
-	Proposal        *FixtureProposal     `json:"proposal,omitempty"`
-	Version         int                  `json:"version"`
-	Sequence        int                  `json:"sequence"`
-	Previous        string               `json:"previous"`
-	Hash            string               `json:"hash"`
-	At              int64                `json:"at"`
-	Kind            string               `json:"kind"`
-	Account         *AccountRef          `json:"account,omitempty"`
-	MissingHistory  bool                 `json:"missingHistory,omitempty"`
-	Policy          *FixturePolicy       `json:"policy,omitempty"`
-	Grant           *FixtureGrant        `json:"grant,omitempty"`
-	Intent          *FixtureIntent       `json:"intent,omitempty"`
-	ID              string               `json:"id,omitempty"`
-	Original        []byte               `json:"original,omitempty"`
-	OriginalHash    string               `json:"originalHash,omitempty"`
-	Outcome         string               `json:"outcome,omitempty"`
+	OrdinaryHandoff *update.OrdinaryHandoffReceipt `json:"ordinaryHandoff,omitempty"`
+	Admission       *CustodyAdmission              `json:"admission,omitempty"`
+	ReceiptRPC      *receiptRPCEnvelope            `json:"receiptRPC,omitempty"`
+	FreshManaged    bool                           `json:"freshManaged,omitempty"`
+	Swap            *SwapProposal                  `json:"swap,omitempty"`
+	SwapObservation *onchain.Observation           `json:"swapObservation,omitempty"`
+	Installation    *update.Installation           `json:"installation,omitempty"`
+	Update          *update.Intent                 `json:"update,omitempty"`
+	Proposal        *FixtureProposal               `json:"proposal,omitempty"`
+	Version         int                            `json:"version"`
+	Sequence        int                            `json:"sequence"`
+	Previous        string                         `json:"previous"`
+	Hash            string                         `json:"hash"`
+	At              int64                          `json:"at"`
+	Kind            string                         `json:"kind"`
+	Account         *AccountRef                    `json:"account,omitempty"`
+	MissingHistory  bool                           `json:"missingHistory,omitempty"`
+	Policy          *FixturePolicy                 `json:"policy,omitempty"`
+	Grant           *FixtureGrant                  `json:"grant,omitempty"`
+	Intent          *FixtureIntent                 `json:"intent,omitempty"`
+	ID              string                         `json:"id,omitempty"`
+	Original        []byte                         `json:"original,omitempty"`
+	OriginalHash    string                         `json:"originalHash,omitempty"`
+	Outcome         string                         `json:"outcome,omitempty"`
 }
 
 func recordHash(r journalRecord) string {

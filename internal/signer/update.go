@@ -32,3 +32,13 @@ func OrdinaryCustodyReadContract() update.Contract {
 		{Name: "operations", Versions: update.Range{Min: 1, Max: 1}, Features: []string{"ordinary-key-genesis-v1"}},
 	}}
 }
+
+// OrdinaryUpdateContract preserves the old read contract, adding only explicit
+// owner-controlled maintenance and its append-only, old-reader-refusing records.
+func OrdinaryUpdateContract() update.Contract {
+	c := OrdinaryCustodyReadContract()
+	c.Features = append(c.Features, update.OrdinaryMaintenanceFeature)
+	c.RequiresPeer = []string{update.OrdinaryMaintenanceFeature}
+	c.State[1].Features = append(c.State[1].Features, "ordinary-maintenance-v1", "install-completion-v1")
+	return c
+}

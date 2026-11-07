@@ -99,20 +99,11 @@ func historyFor(v *Vault, files [3][]byte) (PortableHistory, error) {
 	return historyForLocked(v, files)
 }
 func historyForLocked(v *Vault, files [3][]byte) (PortableHistory, error) {
-	var s update.SignerSnapshot
-	var e error
-	if v.ordinary {
-		_, rs, err := v.store.readJournal("operations.log")
-		if err != nil {
-			return PortableHistory{}, err
-		}
-		ref, admission, err := ordinaryHistory(rs)
-		if err != nil || !sameWallet(*ref, v.record.Ref) || *admission != *v.record.Admission {
-			return PortableHistory{}, errors.New("ordinary history mismatch")
-		}
-		s.AuthoritySHA256 = update.SnapshotDigest("ordinary-portable-authority", []AccountRef{v.record.Ref, *ref})
-	} else {
-		s, e = v.updateSnapshot(update.NewProbe())
+	s, e := v.updateSnapshot(update.NewProbe())
+	if e == nil && v.ordinary {
+		// Keep the original portable reader/authority identity for old genesis
+		// archives, but never drop active maintenance or durable floors.
+		s.AuthoritySHA256 = update.SnapshotDigest("ordinary-portable-authority", []AccountRef{v.record.Ref, *v.managedRef})
 	}
 	if e != nil {
 		return PortableHistory{}, e

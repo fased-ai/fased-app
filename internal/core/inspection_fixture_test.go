@@ -37,3 +37,44 @@ func TestInspectionColdMetadataNoMigration(t *testing.T) {
 		t.Fatal("missing database initialized")
 	}
 }
+
+func TestInspectionColdRefusesPendingRollbackJournal(t *testing.T) {
+	dir := t.TempDir()
+	os.Chmod(dir, 0700)
+	s, e := OpenStore(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	s.Close()
+	p := filepath.Join(dir, "core.sqlite")
+	before, _ := os.ReadFile(p)
+	if e = os.WriteFile(p+"-journal", []byte("uncertain transaction"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = InspectFixtureColdMetadata(context.Background(), dir, update.NewProbe()); e == nil {
+		t.Fatal("pending rollback journal admitted")
+	}
+	after, _ := os.ReadFile(p)
+	if string(after) != string(before) {
+		t.Fatal("pending database repaired")
+	}
+}
+
+func TestInspectionColdRefusesForeignWAL(t *testing.T) {
+	dir := t.TempDir()
+	os.Chmod(dir, 0700)
+	s, e := OpenStore(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	s.Close()
+	p := filepath.Join(dir, "core.sqlite-wal")
+	target := filepath.Join(dir, "foreign-empty")
+	os.WriteFile(target, nil, 0600)
+	if e = os.Symlink(target, p); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = InspectFixtureColdMetadata(context.Background(), dir, update.NewProbe()); e == nil {
+		t.Fatal("symlink WAL admitted")
+	}
+}

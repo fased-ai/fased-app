@@ -19,7 +19,8 @@ func InspectInstallation(c Config, id string) (*update.Installation, error) {
 	defer v.Close()
 	return v.Installation(update.InstallRequest{Action: "status", IntentID: id})
 }
-func inspectVault(c Config) (*Vault, error) {
+func inspectVault(c Config) (*Vault, error) { return inspectVaultMode(c, false) }
+func inspectVaultMode(c Config, readOnly bool) (*Vault, error) {
 	if e := c.Validate(); e != nil {
 		return nil, e
 	}
@@ -38,7 +39,21 @@ func inspectVault(c Config) (*Vault, error) {
 	if e := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); e != nil {
 		return nil, e
 	}
-	v, e := openVaultNetwork(c.StateDir, c.SignerID, false, c.Network)
+	network := c.Network
+	if c.Version == 3 {
+		if c.Provenance == ControlledCustodyProfile {
+			if c.Profile == OwnerCustodyProfile {
+				network = ordinaryOwnerTestNamespace + network
+			} else {
+				network = ordinaryNamespace + network
+			}
+		} else if c.Provenance == OwnerKeyProvenance && OrdinaryOwnerAdmissionEnabled() {
+			network = ordinaryOwnerNamespace + network
+		} else {
+			return nil, ErrUnavailable
+		}
+	}
+	v, e := openVaultNetwork(c.StateDir, c.SignerID, readOnly, network)
 	if e != nil {
 		return nil, e
 	}
@@ -46,12 +61,12 @@ func inspectVault(c Config) (*Vault, error) {
 }
 
 func InspectUpdate(c Config, id string) (Response, error) {
-	v, e := inspectVault(c)
+	v, e := inspectVaultMode(c, true)
 	if e != nil {
 		return Response{}, e
 	}
 	defer v.Close()
-	if c.Version == 2 && id == "" {
+	if (c.Version == 2 || c.Version == 3) && id == "" {
 		if id != "" {
 			return Response{}, ErrUnavailable
 		}
