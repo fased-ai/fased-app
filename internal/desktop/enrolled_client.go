@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -20,6 +21,13 @@ func NewPublicClient(ctx context.Context, dir string) (*core.Client, bool, error
 	if runtime.GOOS != "linux" {
 		c, err := core.NewClient(ctx, dir)
 		return c, false, err
+	}
+	// CLI callers may use a relative data directory. Resolve it before the
+	// enrolled-target inspection, which intentionally requires an absolute path
+	// and still checks for symlinks, exact ownership and the source fence.
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, false, err
 	}
 	m, err := enrollment.EnrolledTarget(dir, os.Getuid())
 	if errors.Is(err, os.ErrNotExist) {
