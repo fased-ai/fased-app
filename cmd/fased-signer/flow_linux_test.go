@@ -110,7 +110,7 @@ func TestInterruptedOwnerFlowsResumeWithoutReplacingKey(t *testing.T) {
 	out := &bytes.Buffer{}
 	call := flowCall(v)
 	fail := func(ctx context.Context, r signer.Request) (signer.Response, error) {
-		if r.Action == "backup-history" {
+		if r.Action == "backup-history" || r.Action == "backup" {
 			return signer.Response{}, errors.New("disposable owner interruption")
 		}
 		return call(ctx, r)
@@ -237,7 +237,7 @@ func TestProtectedImportFailureLocksAndPreserves(t *testing.T) {
 			}
 			call := flowCall(v)
 			wrapped := func(ctx context.Context, r signer.Request) (signer.Response, error) {
-				if kind == "backup-failure" && r.Action == "backup-history" {
+				if kind == "backup-failure" && (r.Action == "backup-history" || r.Action == "backup") {
 					return signer.Response{}, errors.New("injected backup failure")
 				}
 				return call(ctx, r)

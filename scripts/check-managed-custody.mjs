@@ -783,9 +783,19 @@ try {
     ]);
     osTool("/usr/bin/systemctl", ["start", units[1]]);
     await readySigner();
+    const networkRecoverySHA256 = sha(
+      osTool("/usr/bin/cat", [backup], { encoding: null }),
+    );
     const recovered = JSON.parse(
       cli(
-        ["recover", "--backup-file", backup, "--password-stdin"],
+        [
+          "recover",
+          "--backup-file",
+          backup,
+          "--password-stdin",
+          "--snapshot-sha256",
+          networkRecoverySHA256,
+        ],
         `${backupPassword}\n${replacement}\n${replacement}\n`,
       ),
     );

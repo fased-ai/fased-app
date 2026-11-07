@@ -228,6 +228,8 @@ func ValidManagedAccountRef(r AccountRef) bool {
     "testdata/onchain-reader.json",
     "journal.go",
     "ordinary_public.go",
+    "history_recovery.go",
+    "history_reader_test.go",
   ]) {
     const b = await readFile("internal/signer/" + name);
     await writeFile(path.join(signerRoot, name), b);
@@ -243,7 +245,31 @@ func ValidManagedAccountRef(r AccountRef) bool {
     await writeFile(target, b);
     storage["signer/" + file] = sha(Buffer.from(b));
   };
+  // Read-only historical-hold support. No backup writer, recovery entrypoint,
+  // observer, grant or protocol upgrade is copied into the predecessor.
+  await amend("vault.go", [
+    [
+      "type envelope struct {",
+      'type envelope struct {\n RecoveredHistorySHA256 string `json:"recoveredHistorySha256,omitempty"`',
+    ],
+    [
+      "func (e envelope) validate(purpose string) error {",
+      "func (e envelope) validate(purpose string) error {\n if !validHistoryHold(e) {return ErrUnavailable}",
+    ],
+    [
+      "func (v *Vault) Backup(password []byte) ([]byte, error) {\n\tv.mu.Lock()\n\tdefer v.mu.Unlock()",
+      'func (v *Vault) Backup(password []byte) ([]byte, error) {\n\tv.mu.Lock()\n\tdefer v.mu.Unlock()\n if v.record!=nil && v.record.RecoveredHistorySHA256!="" {return nil,ErrHeld}',
+    ],
+  ]);
   await amend("policy.go", [
+    [
+      "v.record != nil && (v.ledger == nil",
+      'v.record != nil && (v.record.RecoveredHistorySHA256!="" || v.ledger == nil',
+    ],
+    [
+      "l := v.ledger\n\tif ref != v.record.Ref",
+      'if v.record.RecoveredHistorySHA256!="" {return ErrHeld}\n l := v.ledger\n\tif ref != v.record.Ref',
+    ],
     [
       "type ledger struct {",
       "type ledger struct {\n managedFresh bool\n receiptRPC *receiptRPCEnvelope\n swaps map[string]SwapReceipt",
@@ -268,11 +294,15 @@ func ValidManagedAccountRef(r AccountRef) bool {
   ]);
   await amend("update.go", [
     ['"approvals-v1",', '"approvals-v1", "onchain-swap-fixture-v1",'],
+    [
+      '"fixture-key-v1", "authority-epoch-v1"',
+      '"fixture-key-v1", "authority-epoch-v1", historyRecoveryFeature',
+    ],
   ]);
   await amend("lifecycle.go", [
     [
       "Features: append([]string{}, contract.Features...)",
-      "Features: func() []string { features:=[]string{};for _,feature:=range l.swapStateFeatures(contract.Features) {if feature!=receiptRPCCredentialFeature || l.receiptRPC!=nil {features=append(features,feature)}};return features}()",
+      'Features: func() []string { features:=[]string{};for _,feature:=range l.swapStateFeatures(contract.Features) {if (feature!=receiptRPCCredentialFeature || l.receiptRPC!=nil) && (feature!=historyRecoveryFeature || disk.RecoveredHistorySHA256!="") {features=append(features,feature)}};return features}()',
     ],
     [
       "return s, nil",
@@ -465,7 +495,12 @@ func ValidManagedAccountRef(r AccountRef) bool {
   storage["store.go"] = sha(await readFile(store));
   const readerLog = execFileSync(
     "go",
-    ["test", "./internal/signer", "-run", "^TestSwapStateReader$"],
+    [
+      "test",
+      "./internal/signer",
+      "-run",
+      "^TestSwapStateReader(HistoricalHold)?$",
+    ],
     {
       cwd: archivedRoot,
       env: { ...process.env, FASED_COMPOSED_SWAP_READER: "1" },

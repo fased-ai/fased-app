@@ -99,11 +99,18 @@ func conductFlow(ctx context.Context, action, path string, ask askPassword, out 
 			return err
 		}
 	}
-	if _, err = call(ctx, signer.Request{Action: "unlock", Password: unlock, UnlockSeconds: 60}); err != nil {
+	unlocked, err := call(ctx, signer.Request{Action: "unlock", Password: unlock, UnlockSeconds: 60})
+	if err != nil {
 		return err
 	}
 	if action == "setup" && readErr != nil {
-		response, err := call(ctx, signer.Request{Action: "backup-history", Password: backupPassword})
+		backupAction := "backup-history"
+		// Protocol1 is the legacy deterministic engineering fixture. Preserve its
+		// existing key-backup/reconciliation contract; network custody gets history.
+		if unlocked.Status.Account != nil && unlocked.Status.Account.Version == 1 {
+			backupAction = "backup"
+		}
+		response, err := call(ctx, signer.Request{Action: backupAction, Password: backupPassword})
 		if err != nil {
 			return err
 		}

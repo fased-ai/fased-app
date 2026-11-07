@@ -57,7 +57,7 @@ func clearPortable(d *portableData) {
 func (v *Vault) verifyHistoryBackup(document, password []byte) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.closed || v.record == nil || !v.unlocked() {
+	if v.closed || v.store.failedState() || v.record == nil || !v.unlocked() {
 		return ErrLocked
 	}
 	d, err := unsealPortable(document, password, BackupFingerprint(document))
@@ -78,7 +78,7 @@ func (v *Vault) verifyHistoryBackup(document, password []byte) error {
 		return ErrCredential
 	}
 	// On a restored wallet the retained history must be the archive's exact
-	// history. A source backup may be older than current activity; never rewind it.
+	// history or its validated append-only extension. Never rewind newer data.
 	if v.record.RecoveredHistorySHA256 != "" {
 		if v.record.RecoveredHistorySHA256 != BackupFingerprint(document) {
 			return ErrCredential
@@ -87,8 +87,11 @@ func (v *Vault) verifyHistoryBackup(document, password []byte) error {
 			if i == 1 && len(d.files[2]) == 0 {
 				continue
 			}
+			if _, _, err = v.store.readJournal(name); err != nil {
+				return err
+			}
 			b, err := portableJournal(v.store, name)
-			if err != nil || !bytes.Equal(b, d.files[i+1]) {
+			if err != nil || !bytes.HasPrefix(b, d.files[i+1]) {
 				return errors.New("recovered history differs from selected backup")
 			}
 		}
@@ -102,8 +105,11 @@ func (v *Vault) verifyHistoryBackup(document, password []byte) error {
 func (v *Vault) RestoreHistory(document, password, newPassword []byte, pin string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.closed || v.store.failedState() || v.record != nil || v.ledger != nil || v.managedRef != nil {
-		return errors.New("history recovery requires an empty signer; preserve existing state")
+	if v.closed || v.store.failedState() || v.record != nil || (v.ledger == nil && v.managedRef != nil) {
+		return errors.New("history recovery requires an empty key slot; preserve existing state")
+	}
+	if v.ledger != nil && v.ledger.activeUpdate != "" {
+		return errors.New("active update requires its original recovery")
 	}
 	d, err := unsealPortable(document, password, pin)
 	defer clearPortable(&d)
@@ -116,6 +122,23 @@ func (v *Vault) RestoreHistory(document, password, newPassword []byte, pin strin
 	}
 	if err = validatePortable(d, v.store.path); err != nil {
 		return err
+	}
+	if v.ledger != nil {
+		if !sameWallet(v.ledger.ref, source.Ref) {
+			return errors.New("backup conflicts with retained wallet history")
+		}
+		for i, name := range []string{"operations.log", "mock-receipts.log"} {
+			if i == 1 && len(d.files[2]) == 0 {
+				continue
+			}
+			if _, _, err = v.store.readJournal(name); err != nil {
+				return err
+			}
+			b, e := portableJournal(v.store, name)
+			if e != nil || !bytes.HasPrefix(b, d.files[i+1]) {
+				return errors.New("retained history is not an extension of the selected backup")
+			}
+		}
 	}
 	seed, err := unseal(source, password, "vault")
 	defer clear(seed)
@@ -184,7 +207,10 @@ func (s *storage) ensureRecoveredHistory(e envelope) error {
 func (s *storage) publishRecoveredHistory(name string, want []byte) error {
 	b, err := portableJournal(s, name)
 	if err == nil {
-		if !bytes.Equal(b, want) {
+		if _, _, err = s.readJournal(name); err != nil {
+			return err
+		}
+		if !bytes.HasPrefix(b, want) {
 			return errors.New("existing financial history is preserved")
 		}
 		return nil

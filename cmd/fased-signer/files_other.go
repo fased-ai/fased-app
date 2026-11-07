@@ -11,3 +11,5 @@ func writeOwnerFile(string, []byte) error  { return errors.New("signer unsupport
 func readOwnerFile(string) ([]byte, error) { return nil, errors.New("signer unsupported on this OS") }
 
 func readPublicProposal(string) ([]byte, error) { return nil, signer.ErrUnavailable }
+
+func readPrivateBoundedFile(string, int64) ([]byte, error) { return nil, signer.ErrUnavailable }

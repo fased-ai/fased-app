@@ -421,3 +421,103 @@ func TestHistoryRecoveryManagedCredentialStaysLocked(t *testing.T) {
 		t.Fatal("credential restored authority")
 	}
 }
+
+func TestHistoryRecoveryPreservesNewerRetainedJournals(t *testing.T) {
+	dir := fixtureDir(t)
+	source, _, grant := configuredFixture(t, dir)
+	doc, err := source.BackupHistory(backupPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spent := intentFor(grant, 17)
+	if _, err = source.ReserveFixture(spent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = source.ExecuteFixture(spent.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	held := intentFor(grant, 13)
+	if _, err = source.ReserveFixture(held); err != nil {
+		t.Fatal(err)
+	}
+	id := source.signerID
+	old := *source.Status().Account
+	source.Close()
+	before := map[string][]byte{}
+	for _, n := range []string{"operations.log", "mock-receipts.log"} {
+		before[n], err = os.ReadFile(filepath.Join(dir, n))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = os.Remove(filepath.Join(dir, "vault.json")); err != nil {
+		t.Fatal(err)
+	} // disposable simulated key loss only
+	target, err := Open(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	if err = target.RestoreHistory(doc, backupPassword, fixturePassword, BackupFingerprint(doc)); err != nil {
+		t.Fatal(err)
+	}
+	for n, want := range before {
+		got, err := os.ReadFile(filepath.Join(dir, n))
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatal("newer retained journal overwritten", n, err)
+		}
+	}
+	state, err := target.FixtureState()
+	if err != nil || state.Spent != 17 || state.Held != 13 || !state.RecoveryRequired {
+		t.Fatal("newer exposure lost", state, err)
+	}
+	if target.Status().Account.Epoch == old.Epoch {
+		t.Fatal("old epoch retained")
+	}
+	if err = target.Unlock(fixturePassword, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err = target.VerifyBackup(doc, backupPassword); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHistoryVerificationRefusesTornRetainedTail(t *testing.T) {
+	dir, id := portableFixture(t)
+	source, err := Open(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = source.Unlock(fixturePassword, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := source.BackupHistory(backupPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Close()
+	targetDir := fixtureDir(t)
+	target, err := Open(targetDir, randomID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	if err = target.RestoreHistory(doc, backupPassword, fixturePassword, BackupFingerprint(doc)); err != nil {
+		t.Fatal(err)
+	}
+	if err = target.Unlock(fixturePassword, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(targetDir, "operations.log")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.Write([]byte("torn")); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if target.VerifyBackup(doc, backupPassword) == nil {
+		t.Fatal("damaged retained history verified as complete")
+	}
+}
