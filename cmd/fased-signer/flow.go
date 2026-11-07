@@ -14,15 +14,15 @@ import (
 type askPassword func(string, bool) ([]byte, error)
 type ownerCall func(context.Context, signer.Request) (signer.Response, error)
 
-func ownerFlow(ctx context.Context, c signer.Config, action, path string, password askPassword, out io.Writer) error {
+func ownerFlow(ctx context.Context, c signer.Config, action, path string, password askPassword, out io.Writer, snapshotPin ...string) error {
 	return conductFlow(ctx, action, path, password, out, func(ctx context.Context, r signer.Request) (signer.Response, error) {
 		return signer.Call(ctx, c, true, r)
-	})
+	}, snapshotPin...)
 }
 
 // All secret input belongs to this root-owned helper running as the owner, never
 // the app service. A killed helper leaves at most a 60-second manual unlock.
-func conductFlow(ctx context.Context, action, path string, ask askPassword, out io.Writer, call ownerCall) (result error) {
+func conductFlow(ctx context.Context, action, path string, ask askPassword, out io.Writer, call ownerCall, snapshotPin ...string) (result error) {
 	if path == "" {
 		return errors.New("choose a private owner backup file before setup/recovery")
 	}
@@ -30,11 +30,18 @@ func conductFlow(ctx context.Context, action, path string, ask askPassword, out 
 		return err
 	}
 	// Preflight input/output without creating, truncating or overwriting a file.
-	backup, readErr := readOwnerFile(path)
+	backup, readErr := readPrivateBoundedFile(path, signer.MaxRecoveryBackup)
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		return readErr
 	}
 	defer clear(backup)
+	pin := ""
+	if action == "recover" && signer.IsHistoryBackup(backup) {
+		if len(snapshotPin) != 1 || snapshotPin[0] != signer.BackupFingerprint(backup) {
+			return errors.New("select the encrypted history backup and its independent checksum")
+		}
+		pin = snapshotPin[0]
+	}
 	if action == "recover" && readErr != nil {
 		return readErr
 	}
@@ -65,7 +72,7 @@ func conductFlow(ctx context.Context, action, path string, ask askPassword, out 
 			if err != nil {
 				return err
 			}
-			if _, err = call(ctx, signer.Request{Action: "restore", Document: backup, Password: backupPassword, NewPassword: unlock}); err != nil {
+			if _, err = call(ctx, signer.Request{Action: "restore", Document: backup, Password: backupPassword, NewPassword: unlock, SnapshotSHA256: pin}); err != nil {
 				return err
 			}
 		} else {
@@ -96,7 +103,7 @@ func conductFlow(ctx context.Context, action, path string, ask askPassword, out 
 		return err
 	}
 	if action == "setup" && readErr != nil {
-		response, err := call(ctx, signer.Request{Action: "backup", Password: backupPassword})
+		response, err := call(ctx, signer.Request{Action: "backup-history", Password: backupPassword})
 		if err != nil {
 			return err
 		}
@@ -104,7 +111,7 @@ func conductFlow(ctx context.Context, action, path string, ask askPassword, out 
 		if err = writeOwnerFile(path, response.Document); err != nil {
 			return err
 		}
-		backup, err = readOwnerFile(path)
+		backup, err = readPrivateBoundedFile(path, signer.MaxRecoveryBackup)
 		if err != nil {
 			return err
 		}

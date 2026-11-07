@@ -24,9 +24,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const MaxPortableSnapshot = 18 << 20
-const portableMagic = "FASED-ENCRYPTED-HISTORY-FIXTURE:v1\n"
-const portablePurpose = "fased-app-portable-history-fixture:v1"
+const MaxPortableSnapshot = MaxRecoveryBackup
 
 type PortableHistory struct {
 	Account           AccountRef `json:"account"`
@@ -96,14 +94,33 @@ func portableJournal(s *storage, name string) ([]byte, error) {
 	return b, nil
 }
 func historyFor(v *Vault, files [3][]byte) (PortableHistory, error) {
-	s, e := v.UpdateInventory(update.NewProbe())
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return historyForLocked(v, files)
+}
+func historyForLocked(v *Vault, files [3][]byte) (PortableHistory, error) {
+	var s update.SignerSnapshot
+	var e error
+	if v.ordinary {
+		_, rs, err := v.store.readJournal("operations.log")
+		if err != nil {
+			return PortableHistory{}, err
+		}
+		ref, admission, err := ordinaryHistory(rs)
+		if err != nil || !sameWallet(*ref, v.record.Ref) || *admission != *v.record.Admission {
+			return PortableHistory{}, errors.New("ordinary history mismatch")
+		}
+		s.AuthoritySHA256 = update.SnapshotDigest("ordinary-portable-authority", []AccountRef{v.record.Ref, *ref})
+	} else {
+		s, e = v.updateSnapshot(update.NewProbe())
+	}
 	if e != nil {
 		return PortableHistory{}, e
 	}
 	if s.ActiveIntentID != "" {
 		return PortableHistory{}, errors.New("active update requires its original controller recovery; portable capture refused")
 	}
-	return PortableHistory{Account: *v.Status().Account, AuthoritySHA256: s.AuthoritySHA256, Spent: s.Spent, Held: s.Held, Pending: s.Pending, Unknown: s.Unknown, InstalledSequence: s.InstalledSequence, ReservedFloor: s.SequenceFloor, VaultSHA256: portableHash(files[0]), OperationsSHA256: portableHash(files[1]), MockSHA256: portableHash(files[2])}, nil
+	return PortableHistory{Account: v.record.Ref, AuthoritySHA256: s.AuthoritySHA256, Spent: s.Spent, Held: s.Held, Pending: s.Pending, Unknown: s.Unknown, InstalledSequence: s.InstalledSequence, ReservedFloor: s.SequenceFloor, VaultSHA256: portableHash(files[0]), OperationsSHA256: portableHash(files[1]), MockSHA256: portableHash(files[2])}, nil
 }
 
 // PackPortableSnapshot requires the daemon to be stopped: the existing exclusive
@@ -143,7 +160,7 @@ func PackPortableSnapshot(dir, signerID string, sourcePassword, password []byte)
 	if e != nil {
 		return nil, PortableReceipt{}, e
 	}
-	d.header = portableHeader{Version: 1, Purpose: portablePurpose, FixtureOnly: true, CapturedAt: time.Now().Unix(), ContractSHA256: update.SnapshotDigest("portable-reader-contract", UpdateContract())}
+	d.header = portableHeader{Version: 1, Purpose: portablePurpose, FixtureOnly: true, CapturedAt: time.Now().Unix(), ContractSHA256: portableContract(v.record.Ref)}
 	d.header.History, e = historyFor(v, d.files)
 	if e != nil {
 		return nil, PortableReceipt{}, e
@@ -209,7 +226,7 @@ func unsealPortable(document, password []byte, expected string) (portableData, e
 	r := bytes.NewReader(p)
 	for i, limit := range []uint32{maxDocument, maxDocument, maxJournal, maxJournal} {
 		var size uint32
-		if binary.Read(r, binary.BigEndian, &size) != nil || size == 0 || size > limit || uint64(size) > uint64(r.Len()) {
+		if binary.Read(r, binary.BigEndian, &size) != nil || (size == 0 && !(i == 3 && d.header.History.Account.Network != FixtureNetwork)) || size > limit || uint64(size) > uint64(r.Len()) {
 			return d, errors.New("invalid fixed recovery frame")
 		}
 		b := make([]byte, int(size))
@@ -224,7 +241,7 @@ func unsealPortable(document, password []byte, expected string) (portableData, e
 			d.files[i-1] = b
 		}
 	}
-	if r.Len() != 0 || d.header.Version != 1 || d.header.Purpose != portablePurpose || !d.header.FixtureOnly || d.header.CapturedAt <= 0 || !validRef(d.header.History.Account) || d.header.ContractSHA256 != update.SnapshotDigest("portable-reader-contract", UpdateContract()) {
+	if r.Len() != 0 || d.header.Version != 1 || d.header.Purpose != portablePurpose || !d.header.FixtureOnly || d.header.CapturedAt <= 0 || !portableRef(d.header.History.Account) || d.header.ContractSHA256 != portableContract(d.header.History.Account) {
 		return d, errors.New("unsupported recovery profile or reader")
 	}
 	return d, nil
@@ -273,11 +290,18 @@ func validatePortable(d portableData, parent string) error {
 		if i < 3 {
 			b = d.files[i]
 		}
+		if i == 2 && len(b) == 0 {
+			continue
+		}
 		if e = os.WriteFile(filepath.Join(dir, name), b, 0600); e != nil {
 			return e
 		}
 	}
-	v, e := openVault(dir, d.header.History.Account.SignerID, true)
+	network, e := portableNetwork(d.files[0])
+	if e != nil {
+		return e
+	}
+	v, e := openVaultNetwork(dir, d.header.History.Account.SignerID, true, network)
 	if e != nil {
 		return e
 	}
@@ -289,6 +313,49 @@ func validatePortable(d portableData, parent string) error {
 	return nil
 }
 
+func portableRef(ref AccountRef) bool {
+	return validRef(ref) || managedRefValid(ref) || ValidOrdinaryAccountRef(ref)
+}
+func portableContract(ref AccountRef) string {
+	c := UpdateContract()
+	if ref.Version == 2 {
+		c = ManagedUpdateContract()
+	}
+	if ref.Version == 3 {
+		c = OrdinaryCustodyReadContract()
+	}
+	// Preserve the existing snapshot reader identity for unchanged old packets.
+	for i := range c.State {
+		var fs []string
+		for _, f := range c.State[i].Features {
+			if f != historyRecoveryFeature {
+				fs = append(fs, f)
+			}
+		}
+		c.State[i].Features = fs
+	}
+	return update.SnapshotDigest("portable-reader-contract", c)
+}
+func portableNetwork(document []byte) (string, error) {
+	var e envelope
+	if decode(document, &e) != nil || e.validate("vault") != nil {
+		return "", ErrCredential
+	}
+	if e.Ref.Version == 1 {
+		return "", nil
+	}
+	if e.Ref.Version == 2 {
+		return e.Ref.Network, nil
+	}
+	if e.Admission.Provenance != ControlledCustodyProfile {
+		return "", ErrUnavailable
+	}
+	prefix := ordinaryNamespace
+	if e.Admission.Profile == OwnerCustodyProfile {
+		prefix = ordinaryOwnerTestNamespace
+	}
+	return prefix + e.Ref.Network, nil
+}
 func readPortableFile(r *os.Root, name string) ([]byte, error) {
 	s, e := r.Lstat(name)
 	if e != nil {

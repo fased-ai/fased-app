@@ -39,7 +39,7 @@ type OwnerInput struct {
 	Fingerprint    string      `json:"fingerprint,omitempty"`
 }
 
-const MaxOwnerInput = 256 * 1024
+const MaxOwnerInput = 2*MaxRecoveryBackup + 64*1024
 
 func (i *OwnerInput) Clear() {
 	clear(i.Unlock)
@@ -63,7 +63,7 @@ func (i OwnerInput) Validate() error {
 		return errors.New("seed is accepted only for import")
 	}
 	if i.Intent.Action == "recover" || i.Phase == "verify" {
-		if len(i.Backup) == 0 || len(i.Backup) > 128*1024 || i.Fingerprint != BackupFingerprint(i.Backup) {
+		if len(i.Backup) == 0 || len(i.Backup) > MaxRecoveryBackup || i.Fingerprint != BackupFingerprint(i.Backup) {
 			return errors.New("recovery requires the encrypted backup and its independent fingerprint")
 		}
 	} else if len(i.Backup) != 0 || i.Fingerprint != "" {

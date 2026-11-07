@@ -55,6 +55,15 @@ func (v *Vault) updateSnapshot(probe string) (update.SignerSnapshot, error) {
 			}{mock.seq, mock.hash})
 		}
 		features := l.swapStateFeatures(contract.Features)
+		if contract.Name == "vault" && disk.RecoveredHistorySHA256 == "" {
+			var kept []string
+			for _, f := range features {
+				if f != historyRecoveryFeature {
+					kept = append(kept, f)
+				}
+			}
+			features = kept
+		}
 		s.States = append(s.States, update.State{Name: contract.Name, Version: contract.Versions.Min, Features: features, Anchor: anchor})
 	}
 	for _, op := range l.ops {

@@ -14,6 +14,7 @@ import (
 var errAbsent = os.ErrNotExist
 
 type storage struct {
+	path     string
 	network  string
 	dir      int
 	lock     int
@@ -32,7 +33,7 @@ func openNetworkStorage(dir string, readOnly bool, network string) (*storage, er
 	if err != nil {
 		return nil, err
 	}
-	s := &storage{network: network, dir: fd, lock: -1, readOnly: readOnly}
+	s := &storage{path: dir, network: network, dir: fd, lock: -1, readOnly: readOnly}
 	ok := false
 	defer func() {
 		if !ok {

@@ -94,7 +94,7 @@ func conductWindow(ctx context.Context, c signer.Config, root string, request si
 	backupPath := filepath.Join(root, "backup.json")
 	if request.Phase == "prepare" {
 		if request.Intent.Action == "recover" {
-			prior, err := readOwnerFile(backupPath)
+			prior, err := readPrivateBoundedFile(backupPath, signer.MaxRecoveryBackup)
 			if err == nil && !bytes.Equal(prior, request.Backup) {
 				return errors.New("existing recovery backup is preserved")
 			}
@@ -137,11 +137,11 @@ func conductWindow(ctx context.Context, c signer.Config, root string, request si
 			action = "recover"
 		}
 		// The conductor's output includes an owner path; it stays private here.
-		if err := conductFlow(ctx, action, backupPath, ask, io.Discard, wrapped); err != nil {
+		if err := conductFlow(ctx, action, backupPath, ask, io.Discard, wrapped, request.Fingerprint); err != nil {
 			return err
 		}
 	} else {
-		backup, err := readOwnerFile(backupPath)
+		backup, err := readPrivateBoundedFile(backupPath, signer.MaxRecoveryBackup)
 		if err != nil || !bytes.Equal(backup, request.Backup) {
 			return errors.New("local backup acknowledgement differs from the original")
 		}
@@ -152,7 +152,7 @@ func conductWindow(ctx context.Context, c signer.Config, root string, request si
 			return err
 		}
 	}
-	backup, err := readOwnerFile(backupPath)
+	backup, err := readPrivateBoundedFile(backupPath, signer.MaxRecoveryBackup)
 	if err != nil {
 		return err
 	}
