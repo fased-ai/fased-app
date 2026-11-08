@@ -48,7 +48,7 @@ func (t BootstrapTransaction) Plan() (update.BootstrapPlan, error) {
 	return p, nil
 }
 
-// Pair validation also precedes the narrowly scoped Local inventory read. A
+// Pair validation also precedes the narrowly scoped custody inventory read. A
 // loadable transaction still requires the real snapshot through Plan above.
 func (t BootstrapTransaction) pairPlan() (update.BootstrapPlan, error) {
 	p, e := update.VerifyBootstrap(t.Bundle, t.Trust, t.ReviewedAt)
@@ -85,14 +85,14 @@ func (t BootstrapTransaction) pairPlan() (update.BootstrapPlan, error) {
 
 // This stages only an inert signed core. No transaction, intent, active marker
 // or forward fence exists until the owner reviews the resulting snapshot.
-func (s *System) LocalBootstrapInventory(ctx context.Context, t BootstrapTransaction, artifacts, probe string, out io.Writer) error {
+func (s *System) BootstrapInventory(ctx context.Context, t BootstrapTransaction, artifacts, probe string, out io.Writer) error {
 	_, e := t.pairPlan()
 	if e != nil {
 		return e
 	}
 	m := t.Base
-	if t.Version != 2 || t.Bundle.Version != 2 || m.Version != 3 || m.Location != "local" || !m.Enrollment || !m.NativeOwnerAccess || m.Owner != os.Getuid() || os.Geteuid() != m.Owner || !update.IDOK(probe) || Verify(m) != nil {
-		return errors.New("exact native Local predecessor required")
+	if t.Version != 2 || t.Bundle.Version != 2 || !bootstrapInventoryProfile(m) || m.Owner != os.Getuid() || os.Geteuid() != m.Owner || !update.IDOK(probe) || Verify(m) != nil {
+		return errors.New("exact enrolled custody predecessor required")
 	}
 	lock, e := OwnerLock()
 	if e != nil {
@@ -105,32 +105,34 @@ func (s *System) LocalBootstrapInventory(ctx context.Context, t BootstrapTransac
 	if _, e = ReadEnrollmentCommit(m); e != nil {
 		return e
 	}
-	if e = verifyNativePolicy(ctx, m, s); e != nil {
-		return e
+	if m.Location == "local" {
+		if e = verifyNativePolicy(ctx, m, s); e != nil {
+			return e
+		}
 	}
 	if e = Runtime(m); e != nil {
-		return errors.New("open the existing Local instance before bootstrap review")
+		return errors.New("open the existing custody instance before bootstrap review")
 	}
-	return stageLocalBootstrapInventory(ctx, t, artifacts, probe, out, localBootstrapInventoryOps{
+	return stageBootstrapInventory(ctx, t, artifacts, probe, out, bootstrapInventoryOps{
 		read: readRoot, run: s.Run,
 		mkdir: func(ctx context.Context, path string) error { return directory(ctx, path, 0, 0, 0755, s) },
 	})
 }
 
-type localBootstrapInventoryOps struct {
+type bootstrapInventoryOps struct {
 	read  readHost
 	run   runHost
 	mkdir func(context.Context, string) error
 }
 
-func stageLocalBootstrapInventory(ctx context.Context, t BootstrapTransaction, artifacts, probe string, out io.Writer, ops localBootstrapInventoryOps) error {
+func stageBootstrapInventory(ctx context.Context, t BootstrapTransaction, artifacts, probe string, out io.Writer, ops bootstrapInventoryOps) error {
 	p, e := t.pairPlan()
 	if e != nil {
 		return e
 	}
 	m := t.Base
-	if t.Version != 2 || t.Bundle.Version != 2 || m.Version != 3 || m.Location != "local" || !m.Enrollment || !m.NativeOwnerAccess || !update.IDOK(probe) {
-		return errors.New("exact native Local predecessor required")
+	if t.Version != 2 || t.Bundle.Version != 2 || !bootstrapInventoryProfile(m) || !update.IDOK(probe) {
+		return errors.New("exact enrolled custody predecessor required")
 	}
 	for _, d := range []string{m.Root + "/bootstraps", t.Dir(), t.Dir() + "/candidate"} {
 		if e = ops.mkdir(ctx, d); e != nil {
@@ -146,7 +148,7 @@ func stageLocalBootstrapInventory(ctx context.Context, t BootstrapTransaction, a
 			return e
 		}
 		if int64(len(b)) != c.Artifact.Size || sum(b) != c.Artifact.SHA256 {
-			return errors.New("Local inventory core differs from signed target")
+			return errors.New("custody inventory core differs from signed target")
 		}
 		path := t.Dir() + "/candidate/fased-app"
 		if e = publish(ctx, path, m.ID, b, 0755, ops.read, ops.run); e != nil {
@@ -157,7 +159,7 @@ func stageLocalBootstrapInventory(ctx context.Context, t BootstrapTransaction, a
 			return e
 		}
 		if update.SnapshotDigest("contract", contract) != update.SnapshotDigest("contract", c.Contract) {
-			return errors.New("Local inventory core contract changed")
+			return errors.New("custody inventory core contract changed")
 		}
 		args := []string{"/usr/bin/setpriv", "--reuid", strconv.Itoa(m.App.UID), "--regid", strconv.Itoa(m.App.GID), "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--", path, "update-inventory", "--data-dir", m.Root + "/app-state", "--probe-id", probe, "--bootstrap-owner", strconv.Itoa(m.Owner), "--bootstrap-id", t.ID, "--bootstrap-core-sha256", c.Artifact.SHA256}
 		result, e := ops.run(ctx, nil, args...)
@@ -167,43 +169,49 @@ func stageLocalBootstrapInventory(ctx context.Context, t BootstrapTransaction, a
 		_, e = out.Write(result)
 		return e
 	}
-	return errors.New("signed Local inventory core missing")
+	return errors.New("signed custody inventory core missing")
 }
 
 // The staged child independently checks its OS role and immutable selected image
 // before touching protected IPC. It grants neither signer nor setup authority.
-func LocalBootstrapInventoryInstance(owner int, id, hash, data string) (string, error) {
+func BootstrapInventoryIdentity(owner int, id, hash, data string) (Manifest, string, error) {
 	m, e := Load(owner)
 	if e != nil {
-		return "", e
+		return Manifest{}, "", e
 	}
 	executable, e := os.Executable()
 	if e != nil {
-		return "", e
+		return Manifest{}, "", e
 	}
-	if e = validateLocalBootstrapInventory(m, os.Getuid(), os.Geteuid(), os.Getgid(), executable, data, id, hash); e != nil {
-		return "", e
+	if e = validateBootstrapInventory(m, os.Getuid(), os.Geteuid(), os.Getgid(), executable, data, id, hash); e != nil {
+		return Manifest{}, "", e
 	}
 	if e = Verify(m); e != nil {
-		return "", e
+		return Manifest{}, "", e
 	}
 	if e = noActiveController(m); e != nil {
-		return "", e
+		return Manifest{}, "", e
 	}
 	if e = signer.CheckApplication(m.Root+"/identity.json", m.Root, data); e != nil {
-		return "", e
+		return Manifest{}, "", e
 	}
 	f, e := readRoot(executable)
 	if e != nil || f.Mode != 0755 || sum(f.Data) != hash {
-		return "", errors.New("signed staged Local inventory core changed")
+		return Manifest{}, "", errors.New("signed staged custody inventory core changed")
 	}
 	c, e := ReadEnrollmentCommit(m)
-	return c.InstanceID, e
+	return m, c.InstanceID, e
 }
 
-func validateLocalBootstrapInventory(m Manifest, uid, euid, gid int, executable, data, id, hash string) error {
-	if m.validate() != nil || m.Version != 3 || m.Location != "local" || !m.Enrollment || !m.NativeOwnerAccess || uid != m.App.UID || euid != uid || gid != m.App.GID || !update.IDOK(id) || !validHex(hash, 32) || data != m.Root+"/app-state" || executable != m.Root+"/bootstraps/"+id+"/candidate/fased-app" {
-		return errors.New("exact staged native Local inventory role required")
+// Local retains native-owner authentication; Remote uses only its own enrolled
+// custody identity. A separately installed VPS app is never an identity source.
+func bootstrapInventoryProfile(m Manifest) bool {
+	return m.Version == 3 && m.Enrollment && ((m.Location == "local" && m.NativeOwnerAccess) || (m.Location == "remote" && !m.NativeOwnerAccess && m.PublicOrigin != ""))
+}
+
+func validateBootstrapInventory(m Manifest, uid, euid, gid int, executable, data, id, hash string) error {
+	if m.validate() != nil || !bootstrapInventoryProfile(m) || uid != m.App.UID || euid != uid || gid != m.App.GID || !update.IDOK(id) || !validHex(hash, 32) || data != m.Root+"/app-state" || executable != m.Root+"/bootstraps/"+id+"/candidate/fased-app" {
+		return errors.New("exact staged custody inventory role required")
 	}
 	return nil
 }

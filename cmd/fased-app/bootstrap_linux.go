@@ -26,8 +26,8 @@ import (
 	"golang.org/x/term"
 )
 
-func bootstrapLocalInventoryCommand(ctx context.Context, data string, owner int, id, hash, probe string, out io.Writer) error {
-	instance, e := custodyinstall.LocalBootstrapInventoryInstance(owner, id, hash, data)
+func bootstrapCustodyInventoryCommand(ctx context.Context, data string, owner int, id, hash, probe string, out io.Writer) error {
+	m, instance, e := custodyinstall.BootstrapInventoryIdentity(owner, id, hash, data)
 	if e != nil {
 		return e
 	}
@@ -36,7 +36,7 @@ func bootstrapLocalInventoryCommand(ctx context.Context, data string, owner int,
 		return e
 	}
 	defer c.Close()
-	return readBootstrapLocalInventory(ctx, c, instance, owner, probe, out)
+	return readBootstrapCustodyInventory(ctx, c, m, instance, probe, out)
 }
 
 func bootstrapCommand(args []string, in *os.File, out, errOut io.Writer) error {
@@ -141,18 +141,13 @@ func prepareBootstrapCommand(id, bundlePath, trustPath, artifacts string, automa
 	var coreSnapshot update.CoreSnapshot
 	var snapshot update.SignerSnapshot
 	if m.Version == 3 && bundle.Version == 2 {
-		// The old Local inventory adapter cannot obtain native owner authentication
-		// without a saved CLI session. Stage only the signed new core and use the
-		// existing private-IPC native authentication under the same app UID.
-		// Remote retains its independently validated predecessor helper.
+		// Neither old Local inventory nor Remote custody inventory may borrow a
+		// saved session or the distinct ordinary VPS app's OS identity. Stage
+		// only the signed new core and authenticate its exact custody role.
 		system := &custodyinstall.System{In: in, Out: review}
 		var output bytes.Buffer
 		probe := update.NewProbe()
-		if m.Location == "local" {
-			e = system.LocalBootstrapInventory(context.Background(), tx, artifacts, probe, &output)
-		} else {
-			e = system.UpdateInventory(context.Background(), m, probe, &output)
-		}
+		e = system.BootstrapInventory(context.Background(), tx, artifacts, probe, &output)
 		if e != nil {
 			return "", e
 		}
