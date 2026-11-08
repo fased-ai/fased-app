@@ -35,7 +35,7 @@ func readerSessionClient(args []string, out io.Writer) error {
 		}
 		defer client.Close()
 		defer func() { client.Token, client.CSRF = "", "" }()
-		if err = prepareLocalReaderSession(ctx, client, m, instance); err != nil {
+		if err = prepareCustodyReaderSession(ctx, client, m, instance); err != nil {
 			return err
 		}
 		_, err = fmt.Fprintln(out, "Ready")
@@ -106,4 +106,24 @@ func prepareLocalReaderSession(ctx context.Context, c *core.Client, m custodyins
 		return err
 	}
 	return c.SaveSession(dir)
+}
+
+// The root-owned bound helper has already proved its exact custody AppUID,
+// image, generation and enrollment. The session remains app-private so the
+// immutable predecessor can consume it through its unchanged update commands.
+func prepareCustodyReaderSession(ctx context.Context, c *core.Client, m custodyinstall.Manifest, instance string) error {
+	if m.Location == "local" {
+		return prepareLocalReaderSession(ctx, c, m, instance)
+	}
+	if m.Location != "remote" || m.NativeOwnerAccess || m.Owner <= 0 || instance == "" || c.Endpoint.InstanceID != instance {
+		return errors.New("exact Remote custody reader required")
+	}
+	var h core.Health
+	if err := c.Do(ctx, "GET", "/api/v1/health", nil, &h); err != nil {
+		return err
+	}
+	if h.InstanceID != instance || h.Connection == nil || h.Connection.Location != "remote" || h.Connection.OwnerKind != "custody" || h.Connection.OwnerUID != m.Owner {
+		return errors.New("Remote custody reader owner changed")
+	}
+	return loadRemoteAppUpdateSession(ctx, c, m.Root+"/app-state", m.Owner, m.App.UID)
 }

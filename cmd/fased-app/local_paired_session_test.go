@@ -257,7 +257,9 @@ func TestLocalPairedUpdateConsentAndDispatch(t *testing.T) {
 
 // Actual server/private IPC and command adapters; only the managed OS/native
 // owner peer/profile are simulated. No installed service, signer or VM exists.
-func TestLocalPairedCommandPaths(t *testing.T) {
+func TestLocalPairedCommandPaths(t *testing.T)  { testCustodyPairedCommandPaths(t, false) }
+func TestRemotePairedCommandPaths(t *testing.T) { testCustodyPairedCommandPaths(t, true) }
+func testCustodyPairedCommandPaths(t *testing.T, remote bool) {
 	if runtime.GOOS != "linux" {
 		t.Skip("protected custody requires Linux")
 	}
@@ -287,6 +289,9 @@ func TestLocalPairedCommandPaths(t *testing.T) {
 		if r.URL.Path == "/api/v1/health" {
 			h := store.Health()
 			h.Connection = &core.ConnectionInfo{Location: "local", OwnerUID: 1400}
+			if remote {
+				h.Connection.Location, h.Connection.OwnerKind = "remote", "custody"
+			}
 			_ = json.NewEncoder(w).Encode(h)
 			return
 		}
@@ -317,7 +322,11 @@ func TestLocalPairedCommandPaths(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer client.Close()
-	if e = prepareLocalReaderSession(t.Context(), client, custodyinstall.Manifest{Root: root, Location: "local", Owner: 1400, NativeOwnerAccess: true}, instance); e != nil {
+	m := custodyinstall.Manifest{Root: root, Location: "local", Owner: 1400, NativeOwnerAccess: true}
+	if remote {
+		m.Location, m.NativeOwnerAccess, m.App.UID = "remote", false, os.Getuid()
+	}
+	if e = prepareCustodyReaderSession(t.Context(), client, m, instance); e != nil {
 		t.Fatal(e)
 	}
 	snapshot, e := store.UpdateSnapshot(t.Context(), strings.Repeat("d", 32))
@@ -360,7 +369,7 @@ func TestLocalPairedCommandPaths(t *testing.T) {
 		})
 	}
 	after, e := store.UpdateSnapshot(t.Context(), strings.Repeat("d", 32))
-	if e != nil || snapshot.State.Anchor != after.State.Anchor || !store.Session(t.Context(), original) || native.Load() != 1 {
+	if e != nil || snapshot.State.Anchor != after.State.Anchor || !store.Session(t.Context(), original) || native.Load() != map[bool]int32{true: 0, false: 1}[remote] {
 		t.Fatal("command preflight changed protected state or repeated authentication", e)
 	}
 }

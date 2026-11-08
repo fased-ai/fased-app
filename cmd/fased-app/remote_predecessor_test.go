@@ -3,14 +3,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,13 +26,23 @@ import (
 // Run the exact retained installed executable only against fresh disposable
 // state. Never read the owner VPS database, credentials or recovery files.
 func TestRemoteMaintenanceActualReleasedPredecessor(t *testing.T) {
+	testRemoteMaintenancePredecessor(t, false)
+}
+func TestRemoteCustodyBridgeActualPredecessor(t *testing.T) {
+	testRemoteMaintenancePredecessor(t, true)
+}
+func testRemoteMaintenancePredecessor(t *testing.T, custody bool) {
 	image := os.Getenv("FASED_REMOTE_PREDECESSOR")
 	if image == "" {
 		t.Skip("actual retained predecessor supplied by focused acceptance")
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
-	dir := filepath.Join(t.TempDir(), "fased")
+	name := "fased"
+	if custody {
+		name = "app-state"
+	}
+	dir := filepath.Join(t.TempDir(), name)
 	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +98,30 @@ func TestRemoteMaintenanceActualReleasedPredecessor(t *testing.T) {
 	}
 	defer fresh.Close()
 	m := vpsinstall.Manifest{Data: dir, AppUID: os.Getuid(), OwnerUID: os.Getuid() + 1}
-	if err = loadRemoteHelperSession(ctx, fresh, m); err != nil {
+	if custody {
+		baseTransport := fresh.HTTP.Transport
+		if baseTransport == nil {
+			baseTransport = http.DefaultTransport
+		}
+		fresh.HTTP.Transport = bootstrapInventoryTransport(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path == "/api/v1/health" {
+				rec := httptest.NewRecorder()
+				json.NewEncoder(rec).Encode(core.Health{InstanceID: fresh.Endpoint.InstanceID, Connection: &core.ConnectionInfo{Location: "remote", OwnerKind: "custody", OwnerUID: m.OwnerUID}})
+				return rec.Result(), nil
+			}
+			return baseTransport.RoundTrip(req)
+		})
+		manifest := custodyinstall.Manifest{Root: filepath.Dir(dir), Owner: m.OwnerUID, Location: "remote"}
+		manifest.App.UID = m.AppUID
+		// OS/image binding is exercised separately by installer tests.
+		if filepath.Base(dir) != "app-state" {
+			t.Fatal("custody fixture requires app-state")
+		}
+		err = prepareCustodyReaderSession(ctx, fresh, manifest, fresh.Endpoint.InstanceID)
+	} else {
+		err = loadRemoteHelperSession(ctx, fresh, m)
+	}
+	if err != nil {
 		t.Fatal("password-free predecessor session", err)
 	}
 	probe := update.NewProbe()
@@ -96,6 +133,17 @@ func TestRemoteMaintenanceActualReleasedPredecessor(t *testing.T) {
 	if json.Unmarshal(result, &snapshot) != nil || snapshot.ProbeID != probe || snapshot.InstanceID != c.Endpoint.InstanceID || snapshot.State.Version != beforeVersion {
 		t.Fatal("source identity/schema changed", string(result))
 	}
+	if custody {
+		for _, action := range []string{"update-pause", "update-backup", "update-recovery"} {
+			command := exec.CommandContext(ctx, image, action, "--data-dir", dir, "--request-stdin")
+			command.Stdin = bytes.NewBufferString("{}\n")
+			result, e := command.CombinedOutput()
+			if e == nil || (!strings.Contains(string(result), "(400)") && !strings.Contains(string(result), "(409)")) {
+				t.Fatalf("%s did not reach typed refusal after authentication: %v %s", action, e, result)
+			}
+		}
+	}
+
 	var afterVersion int
 	var afterSalt, afterHash []byte
 	if err = db.QueryRow("PRAGMA user_version").Scan(&afterVersion); err != nil {

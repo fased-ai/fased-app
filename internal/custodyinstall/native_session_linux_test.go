@@ -63,10 +63,14 @@ func TestNativeUpdateSessionBindingAndGeneration(t *testing.T) {
 	}
 }
 func TestNativeUpdateSessionStageDropsAndPreservesForeignState(t *testing.T) {
-	for _, kind := range []string{"ok", "repeat", "foreign-helper", "foreign-binding", "refused-auth", "wrong-output"} {
+	for _, kind := range []string{"ok", "repeat", "foreign-helper", "foreign-binding", "refused-auth", "wrong-output", "remote-ok", "remote-repeat", "remote-foreign-helper", "remote-foreign-binding", "remote-refused-auth", "remote-wrong-output"} {
 		t.Run(kind, func(t *testing.T) {
 			tx, dir, _, _ := ordinaryBootstrapModel(t)
 			m := tx.Base
+			if strings.HasPrefix(kind, "remote-") {
+				m.Location, m.NativeOwnerAccess, m.PublicOrigin = "remote", false, "https://owner.example.ts.net"
+				kind = strings.TrimPrefix(kind, "remote-")
+			}
 			body := []byte("verified current source reader")
 			binding := nativeUpdateSessionBinding{1, m, sum(body)}
 			path := func(s string) string { return dir + strings.TrimPrefix(s, m.Root) }
@@ -146,6 +150,39 @@ func TestNativeUpdateSessionStageDropsAndPreservesForeignState(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Join(dir, "update-active.json")); !os.IsNotExist(err) {
 				t.Fatal("session preflight created update state")
+			}
+		})
+	}
+}
+
+func TestRemoteSourceSessionBinding(t *testing.T) {
+	tx, _, _, _ := ordinaryBootstrapModel(t, true)
+	m := tx.Base
+	b := nativeUpdateSessionBinding{1, m, sum([]byte("current source helper"))}
+	for _, kind := range []string{"ok", "uid", "gid", "image", "generation", "native", "origin", "enrollment"} {
+		t.Run(kind, func(t *testing.T) {
+			current := m
+			uid, gid := m.App.UID, m.App.GID
+			image := b.dir() + "/helper"
+			switch kind {
+			case "uid":
+				uid = m.Owner
+			case "gid":
+				gid++
+			case "image":
+				image = m.Root + "/fased-app"
+			case "generation":
+				current.CoreHash = strings.Repeat("f", 64)
+			case "native":
+				current.NativeOwnerAccess = true
+			case "origin":
+				current.PublicOrigin = ""
+			case "enrollment":
+				current.Enrollment = false
+			}
+			err := validateNativeUpdateSession(current, b, uid, uid, gid, image, b.dir()+"/binding.json")
+			if (err == nil) != (kind == "ok") {
+				t.Fatal(kind, err)
 			}
 		})
 	}
