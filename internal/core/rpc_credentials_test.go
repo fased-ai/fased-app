@@ -226,3 +226,64 @@ func TestRPCCredentialManagedReference(t *testing.T) {
 		t.Fatal("stale secret cannot be removed", e)
 	}
 }
+
+func TestRPCCredentialActionCapabilities(t *testing.T) {
+	s, err := OpenStore(fixtureDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	c := providerAccount(t, s, "https://devnet.helius-rpc.com", "devnet")
+	saved, err := s.RPCCredential(t.Context(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !saved.CanVerify || saved.CanCheck {
+		t.Fatal("local verification and disabled network check conflated", saved)
+	}
+	original, err := os.ReadFile(s.rpcVaultPath(c.AccountID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Key = ""
+	c.Ref = saved.Ref
+	c.Action = "status"
+	c.Passphrase = ""
+	s.rpcAdmission = false
+	held, err := s.RPCCredential(t.Context(), c)
+	if err != nil || held.CanVerify || held.CanCheck || !held.Saved {
+		t.Fatal(held, err)
+	}
+	for _, action := range []string{"verify", "check"} {
+		c.Action = action
+		c.Passphrase = "Disposable provider vault password 123"
+		if _, e := s.RPCCredential(t.Context(), c); e == nil {
+			t.Fatal("held operation admitted", action)
+		}
+	}
+	s.rpcAdmission = true
+	c.Action = "verify"
+	c.Passphrase = "wrong disposable password"
+	if _, e := s.RPCCredential(t.Context(), c); e == nil {
+		t.Fatal("wrong password admitted")
+	}
+	c.Passphrase = "Disposable provider vault password 123"
+	verified, err := s.RPCCredential(t.Context(), c)
+	if err != nil || !verified.CanVerify || verified.CanCheck {
+		t.Fatal(verified, err)
+	}
+	after, err := os.ReadFile(s.rpcVaultPath(c.AccountID))
+	if err != nil || !bytes.Equal(original, after) {
+		t.Fatal("status/verify changed encrypted vault")
+	}
+	fixture, err := OpenStore(fixtureDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fixture.Close()
+	input := rpcSecretSetup(t, fixture)
+	v, err := fixture.RPCCredential(t.Context(), input)
+	if err != nil || !v.CanVerify || !v.CanCheck {
+		t.Fatal(v, err)
+	}
+}

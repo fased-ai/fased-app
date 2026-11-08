@@ -29,6 +29,8 @@ type RPCCredentialCommand struct {
 	Backup     *RPCCredentialBackup `json:"backup,omitempty"`
 }
 type RPCCredentialView struct {
+	CanVerify      bool                 `json:"canVerify"`
+	CanCheck       bool                 `json:"canCheck"`
 	Backup         *RPCCredentialBackup `json:"backup,omitempty"`
 	BackupVerified bool                 `json:"backupVerified,omitempty"`
 	Ref            string               `json:"ref"`
@@ -87,12 +89,17 @@ func (s *Store) readRPCVault(id string) (rpcVault, error) {
 	return v, nil
 }
 func (s *Store) RPCCredential(ctx context.Context, c RPCCredentialCommand) (RPCCredentialView, error) {
-	return s.rpcCredential(ctx, c, func(ctx context.Context, in RPCCheckRequest, key []byte, valid func() error) (RPCCheckResult, error) {
-		if in.Endpoint == FixtureRPCURL {
-			return checkCredentialRPC(ctx, in, key, valid)
+	transport := newPublicRPCTransport()
+	var check func(context.Context, RPCCheckRequest, []byte, func() error) (RPCCheckResult, error)
+	if transport.enabled {
+		check = func(ctx context.Context, in RPCCheckRequest, key []byte, valid func() error) (RPCCheckResult, error) {
+			if in.Endpoint == FixtureRPCURL {
+				return checkCredentialRPC(ctx, in, key, valid)
+			}
+			return checkProviderRPC(ctx, in, key, valid, transport)
 		}
-		return checkProviderRPC(ctx, in, key, valid, newPublicRPCTransport())
-	})
+	}
+	return s.rpcCredential(ctx, c, check)
 }
 func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check func(context.Context, RPCCheckRequest, []byte, func() error) (RPCCheckResult, error)) (RPCCredentialView, error) {
 	if c.Action == "save" || c.Action == "remove" || c.Action == "restore" {
@@ -156,6 +163,11 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		version = 2
 		view.TestOnly = false
 	}
+	if check == nil && version == 1 && account.RPC != nil && account.RPC.Endpoint == FixtureRPCURL {
+		check = checkCredentialRPC
+	}
+	view.CanVerify = version == 1 || s.rpcAdmission
+	view.CanCheck = view.CanVerify && check != nil
 	configurationOnly := (c.Action == "save" || c.Action == "restore") && s.controlledOrdinaryAccount(ctx, *account)
 	if version == 2 && !s.rpcAdmission && !configurationOnly && (c.Action == "save" || c.Action == "verify" || c.Action == "check" || c.Action == "restore") {
 		return view, errors.New("live RPC credentials disabled")
@@ -272,7 +284,7 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		if os.Remove(s.rpcVaultPath(c.AccountID)) != nil {
 			return view, fail
 		}
-		return RPCCredentialView{Locked: true, TestOnly: true}, nil
+		return RPCCredentialView{Locked: true, TestOnly: true, CanVerify: view.CanVerify, CanCheck: view.CanCheck}, nil
 	}
 	v = rpcVault{Version: version, Binding: rpcBinding(*account), Salt: make([]byte, 16), Nonce: make([]byte, 12)}
 	if v.Ref, e = randomToken(); e != nil {
@@ -297,7 +309,7 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 	if WritePrivateJSON(s.rpcVaultPath(c.AccountID), v) != nil {
 		return view, fail
 	}
-	return RPCCredentialView{Ref: v.Ref, Saved: true, Locked: true, TestOnly: version == 1}, nil
+	return RPCCredentialView{Ref: v.Ref, Saved: true, Locked: true, TestOnly: version == 1, CanVerify: view.CanVerify, CanCheck: view.CanCheck}, nil
 }
 
 // Every caller owns only one operation's plaintext and must clear it. This
