@@ -8,9 +8,154 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/fased-ai/fased-app/internal/update"
 )
+
+func TestRecoveredOrdinaryPairedMaintenanceRestart(t *testing.T) {
+	sourceDir := fixtureDir(t)
+	source := ordinaryVault(t, sourceDir)
+	if err := source.Create(fixturePassword); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Unlock(fixturePassword, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	document, err := source.BackupHistory(backupPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := *source.Status().Account
+	source.Close()
+	if err = os.Rename(sourceDir, sourceDir+".offline"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sourceDir + ".offline") })
+	dir := fixtureDir(t)
+	id := "abababababababababababababababab"
+	open := func() *Vault {
+		v, e := OpenControlledOrdinaryCustody(dir, id, "devnet")
+		if e != nil {
+			t.Fatal(e)
+		}
+		t.Cleanup(func() { _ = v.Close() })
+		return v
+	}
+	v := open()
+	if err = v.RestoreHistory(document, backupPassword, fixturePassword, BackupFingerprint(document)); err != nil {
+		t.Fatal(err)
+	}
+	ref := *v.Status().Account
+	if ref.SignerID == original.SignerID || !sameWallet(ref, original) || v.ledger.ref != original {
+		t.Fatal("recovery did not preserve the historical identity and create a distinct receiver")
+	}
+	key, _ := os.ReadFile(filepath.Join(dir, "vault.json"))
+	prefix, _ := os.ReadFile(filepath.Join(dir, "operations.log"))
+	intent, binding := installationFixture(t, v)
+	beforeRefusal, _ := os.ReadFile(filepath.Join(dir, "operations.log"))
+	for _, foreign := range []string{original.SignerID, "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"} {
+		bad := clone(binding)
+		bad.InstallationID = foreign
+		if _, e := v.Installation(installCommand(t, v, intent, bad, "active")); e == nil {
+			t.Fatal("foreign current deployment acquired an installation")
+		}
+		i := update.Installation{Version: 1, Binding: bad, Digest: update.InstallDigest(bad), Phase: "active"}
+		if e := v.ledger.append(v, journalRecord{Kind: "update-install", ID: intent.ID, Installation: &i}); e == nil {
+			t.Fatal("foreign deployment bypassed current-owner append guard")
+		}
+	}
+	afterRefusal, _ := os.ReadFile(filepath.Join(dir, "operations.log"))
+	if !bytes.Equal(beforeRefusal, afterRefusal) {
+		t.Fatal("refused receiver binding changed history")
+	}
+	for _, phase := range []string{"active", "healthy-held", "committed-held", "completed"} {
+		request := installCommand(t, v, intent, binding, phase)
+		if _, err = v.Installation(request); err != nil {
+			v.Close()
+			t.Fatalf("recovered receiver %s: %v", phase, err)
+		}
+		v.Close()
+		v = open()
+		state, e := v.Installation(update.InstallRequest{Action: "status", IntentID: intent.ID})
+		if e != nil || state.Phase != phase || *v.Status().Account != ref || v.ledger.ref != original || !v.Status().Locked || !v.Status().RecoveryRequired {
+			v.Close()
+			t.Fatal("restart lost receiver binding or historical hold", phase, e)
+		}
+		got, _ := os.ReadFile(filepath.Join(dir, "vault.json"))
+		history, _ := os.ReadFile(filepath.Join(dir, "operations.log"))
+		if !bytes.Equal(got, key) || !bytes.HasPrefix(history, prefix) {
+			v.Close()
+			t.Fatal("maintenance rewrote original recovery state")
+		}
+	}
+	if err = v.Unlock(fixturePassword, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err = v.VerifyBackup(document, backupPassword); err != nil {
+		t.Fatal("original independent backup no longer verifies", err)
+	}
+	secondBackup, err := v.BackupHistory(backupPassword)
+	if err != nil {
+		t.Fatal("recovered maintenance history cannot be backed up", err)
+	}
+	v.Lock()
+	v.Close()
+	secondDir := fixtureDir(t)
+	secondID := "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+	openSecond := func() *Vault {
+		w, e := OpenControlledOrdinaryCustody(secondDir, secondID, "devnet")
+		if e != nil {
+			t.Fatal(e)
+		}
+		t.Cleanup(func() { _ = w.Close() })
+		return w
+	}
+	w := openSecond()
+	if err = w.RestoreHistory(secondBackup, backupPassword, fixturePassword, BackupFingerprint(secondBackup)); err != nil {
+		t.Fatal("second independent recovery failed", err)
+	}
+	secondRef := *w.Status().Account
+	if secondRef.SignerID != secondID || !sameWallet(secondRef, original) || w.ledger.ref != original {
+		t.Fatal("repeated recovery rebound genesis")
+	}
+	secondKey, _ := os.ReadFile(filepath.Join(secondDir, "vault.json"))
+	secondPrefix, _ := os.ReadFile(filepath.Join(secondDir, "operations.log"))
+	intent, binding = installationFixtureAtSequence(t, w, 2)
+	bad := clone(binding)
+	bad.InstallationID = ref.SignerID
+	if _, err = w.Installation(installCommand(t, w, intent, bad, "active")); err == nil {
+		t.Fatal("a historical receiver acquired current deployment authority")
+	}
+	for _, phase := range []string{"active", "healthy-held", "committed-held", "completed"} {
+		if _, err = w.Installation(installCommand(t, w, intent, binding, phase)); err != nil {
+			t.Fatal("second receiver maintenance", phase, err)
+		}
+		w.Close()
+		w = openSecond()
+		state, e := w.Installation(update.InstallRequest{Action: "status", IntentID: intent.ID})
+		if e != nil || state.Phase != phase || *w.Status().Account != secondRef || w.ledger.ref != original || !w.Status().Locked || !w.Status().RecoveryRequired {
+			t.Fatal("second receiver restart lost recovery boundary", phase, e)
+		}
+	}
+	secondAfter, _ := os.ReadFile(filepath.Join(secondDir, "vault.json"))
+	secondHistory, _ := os.ReadFile(filepath.Join(secondDir, "operations.log"))
+	if !bytes.Equal(secondKey, secondAfter) || !bytes.HasPrefix(secondHistory, secondPrefix) {
+		t.Fatal("second maintenance rewrote recovered state")
+	}
+	snapshot, err := w.UpdateInventory(update.NewProbe())
+	if err != nil || snapshot.SequenceFloor != 2 || snapshot.InstalledSequence != 2 || snapshot.ActiveIntentID != "" || !snapshot.RecoveryHold {
+		t.Fatal("repeated recovery lost completion floor or hold", snapshot, err)
+	}
+	if err = w.Unlock(fixturePassword, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err = w.VerifyBackup(secondBackup, backupPassword); err != nil {
+		t.Fatal("second independent backup no longer verifies", err)
+	}
+	w.Lock()
+	w.Close()
+}
 
 func TestOrdinaryMaintenanceInventoryAndFinancialRefusal(t *testing.T) {
 	dir := fixtureDir(t)

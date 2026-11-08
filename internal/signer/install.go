@@ -18,7 +18,10 @@ func (l *ledger) applyInstallation(r journalRecord) error {
 	if update.SnapshotDigest("pause-request", *q) != update.SnapshotDigest("pause-request", update.PauseFor(i)) {
 		return errors.New("installation pause differs from original intent")
 	}
-	if p.Binding.InstallationID != l.ref.SignerID || i.State != "staged" || i.Sequence != l.updateFloor || i.Sequence != q.Sequence || i.ManifestSHA256 != q.ManifestSHA256 || i.Lifecycle == nil || i.Lifecycle.Entrypoint < 3 || i.Lifecycle.Entrypoint > 4 || update.SnapshotDigest("artifacts", i.Artifacts) != update.SnapshotDigest("artifacts", []update.Artifact{p.Binding.Index.Binding.Files[0].Artifact, p.Binding.Index.Binding.Files[1].Artifact}) {
+	// Deployment ownership is checked against the current vault before append.
+	// Replay must retain then-valid deployment IDs: independent recovery keeps
+	// this historical genesis reference while changing the receiving signer.
+	if i.State != "staged" || i.Sequence != l.updateFloor || i.Sequence != q.Sequence || i.ManifestSHA256 != q.ManifestSHA256 || i.Lifecycle == nil || i.Lifecycle.Entrypoint < 3 || i.Lifecycle.Entrypoint > 4 || update.SnapshotDigest("artifacts", i.Artifacts) != update.SnapshotDigest("artifacts", []update.Artifact{p.Binding.Index.Binding.Files[0].Artifact, p.Binding.Index.Binding.Files[1].Artifact}) {
 		return errors.New("installation differs from staged intent")
 	}
 	old, ok := l.installations[r.ID]
