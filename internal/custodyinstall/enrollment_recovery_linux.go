@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/fased-ai/fased-app/internal/core"
@@ -67,13 +68,17 @@ func recoveryFiles(r enrollmentCoreRecovery, read readHost) error {
 	if err != nil {
 		return err
 	}
+	intent, err := read(r.Base.Root + "/intent.json")
+	if err != nil || !known(intent, mustJSON(installerIntent(r.Base)), 0644) && !known(intent, mustJSON(installerIntent(r.next())), 0644) {
+		return errors.New("enrollment installer intent changed; preserve state")
+	}
 	signer, err := read(r.Base.Root + "/fased-signer")
 	if err != nil || signer.UID != 0 || !signer.Regular || signer.Mode != 0755 || sum(signer.Data) != r.Base.SignerHash {
 		return errors.New("enrollment signer changed")
 	}
 	receipt, err := read(r.dir() + "/recovery.json")
 	if errors.Is(err, os.ErrNotExist) {
-		if sum(coreFile.Data) != r.Base.CoreHash || !known(inventory, mustJSON(r.Base), 0644) {
+		if sum(coreFile.Data) != r.Base.CoreHash || !known(inventory, mustJSON(r.Base), 0644) || !known(intent, mustJSON(installerIntent(r.Base)), 0644) {
 			return errors.New("no recovery receipt for changed installation")
 		}
 		return nil
@@ -106,6 +111,14 @@ func recoveryFiles(r enrollmentCoreRecovery, read readHost) error {
 	ownerDone, err := recoveryMark(r, "owner-intent-replaced", read)
 	if err != nil {
 		return err
+	}
+	intentDone, err := recoveryMark(r, "installer-intent-replaced", read)
+	if err != nil {
+		return err
+	}
+	intentNew := known(intent, mustJSON(installerIntent(r.next())), 0644)
+	if intentNew && !inventoryDone || intentDone && !intentNew {
+		return errors.New("conflicting enrollment installer intent phase")
 	}
 	if coreDone && !coreNew || manifestNew && !coreDone || inventoryDone && !manifestNew || ownerDone && !inventoryDone {
 		return errors.New("conflicting enrollment recovery phase")
@@ -173,6 +186,12 @@ func recoverEnrollmentCore(ctx context.Context, r enrollmentCoreRecovery, next [
 		return Manifest{}, err
 	}
 	if err := mark("inventory-replaced"); err != nil {
+		return Manifest{}, err
+	}
+	if err := replaceRecord(ctx, r.Base.Root+"/intent.json", r.Base.ID, mustJSON(installerIntent(r.next())), o); err != nil {
+		return Manifest{}, err
+	}
+	if err := mark("installer-intent-replaced"); err != nil {
 		return Manifest{}, err
 	}
 	if err := ownerIntent(); err != nil {
@@ -295,4 +314,89 @@ func checkEnrollmentRecoveryEmpty(ctx context.Context, m Manifest, run runHost) 
 		}
 	}
 	return nil
+}
+
+// Old completed enrollment recoveries could leave only the root installer
+// intent on the prior core. Converge that one record only from exact immutable
+// recovery evidence, the current owner binding and a fully consistent manifest /
+// ready pair. Called under the existing reviewed bootstrap's owner lock.
+func reconcileEnrollmentInstallerIntent(ctx context.Context, m Manifest, o installOps) error {
+	current, err := o.read(m.Root + "/intent.json")
+	if err != nil {
+		return err
+	}
+	if known(current, mustJSON(installerIntent(m)), 0644) {
+		return nil
+	}
+	if m.validate() != nil || m.Location != "remote" || !m.Enrollment || m.NativeOwnerAccess || o.recoveryDirs == nil || o.ownerCurrent == nil {
+		return errors.New("no exact enrollment recovery for installer intent")
+	}
+	if err = o.ownerCurrent(m); err != nil {
+		return err
+	}
+	for _, row := range []struct {
+		path string
+		data []byte
+		hash string
+		mode os.FileMode
+	}{
+		{m.Root + "/install.json", mustJSON(m), "", 0644},
+		{m.Root + "/ready.json", readyRecord(m), "", 0644},
+		{m.Root + "/fased-app", nil, m.CoreHash, 0755},
+		{m.Root + "/fased-signer", nil, m.SignerHash, 0755},
+	} {
+		f, e := o.read(row.path)
+		if e != nil || !f.Regular || f.UID != 0 || f.Mode != row.mode || row.data != nil && !bytes.Equal(f.Data, row.data) || row.hash != "" && sum(f.Data) != row.hash {
+			return errors.New("enrollment reconciliation requires exact current installation")
+		}
+	}
+	names, err := o.recoveryDirs(m)
+	if err != nil {
+		return err
+	}
+	if len(names) > 64 {
+		return errors.New("too many enrollment recovery records")
+	}
+	matches := 0
+	for _, name := range names {
+		id := strings.TrimPrefix(name, "enrollment-core-")
+		if name != "enrollment-core-"+id || !validHex(id, 16) || filepath.Base(name) != name {
+			return errors.New("invalid enrollment recovery directory")
+		}
+		f, e := o.read(m.Root + "/" + name + "/recovery.json")
+		var r enrollmentCoreRecovery
+		if e != nil || strict(f.Data, &r) != nil || !r.valid() || r.ID != id || !known(f, mustJSON(r), 0644) {
+			return errors.New("untrusted enrollment recovery receipt")
+		}
+		if r.next() != m {
+			continue
+		}
+		if !known(current, mustJSON(installerIntent(r.Base)), 0644) {
+			return errors.New("foreign historical installer intent")
+		}
+		for _, row := range []struct {
+			name, hash string
+			mode       os.FileMode
+		}{
+			{"previous-core", r.Base.CoreHash, 0755}, {"next-core", m.CoreHash, 0755},
+			{"previous-manifest", sum(mustJSON(r.Base)), 0644},
+			{"previous-owner-intent.json", sum(mustJSON(recoveryOwnerIntent(r.Base))), 0644},
+		} {
+			f, e := o.read(r.dir() + "/" + row.name)
+			if e != nil || !f.Regular || f.UID != 0 || f.Mode != row.mode || sum(f.Data) != row.hash {
+				return errors.New("historical enrollment recovery evidence changed")
+			}
+		}
+		for _, phase := range []string{"core-replaced", "inventory-replaced", "owner-intent-replaced"} {
+			ok, e := recoveryMark(r, phase, o.read)
+			if e != nil || !ok {
+				return errors.New("incomplete historical enrollment recovery")
+			}
+		}
+		matches++
+	}
+	if matches != 1 {
+		return errors.New("unique completed enrollment recovery required")
+	}
+	return replaceRecord(ctx, m.Root+"/intent.json", m.ID, mustJSON(installerIntent(m)), o)
 }

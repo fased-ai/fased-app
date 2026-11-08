@@ -231,21 +231,34 @@ func runOrdinaryBootstrap(ctx context.Context, t BootstrapTransaction, o install
 		r.AlreadyCurrent = true
 		return r, nil
 	}
+	active := t.Base.Root + "/update-active.json"
+	want := mustJSON(phaseRecord{1, t.Digest(), t.ID})
+	activeExists := false
+	if f, err := o.read(active); err == nil {
+		if !known(f, want, 0644) {
+			return fail(errors.New("another controller owns maintenance"))
+		}
+		activeExists = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fail(err)
+	}
+	if !forward && !cancelling && t.Version == 2 {
+		if e = ordinaryEnrollmentExact(t, o.read); e != nil {
+			return fail(e)
+		}
+		if e = reconcileEnrollmentInstallerIntent(ctx, t.Base, o); e != nil {
+			return fail(e)
+		}
+	}
 	if !forward {
 		if e = ordinaryBaseExact(t, o); e != nil {
 			return fail(e)
 		}
 	}
-	active := t.Base.Root + "/update-active.json"
-	want := mustJSON(phaseRecord{1, t.Digest(), t.ID})
-	if f, e := o.read(active); e == nil {
-		if !known(f, want, 0644) {
-			return fail(errors.New("another controller owns maintenance"))
+	if !activeExists {
+		if e = publish(ctx, active, t.Base.ID, want, 0644, o.read, o.run); e != nil {
+			return fail(e)
 		}
-	} else if !errors.Is(e, os.ErrNotExist) {
-		return fail(e)
-	} else if e = publish(ctx, active, t.Base.ID, want, 0644, o.read, o.run); e != nil {
-		return fail(e)
 	}
 	if _, e = o.run(ctx, nil, "/usr/bin/systemctl", "stop", "--", Unit(t.Base.Owner, "app"), Unit(t.Base.Owner, "signer")); e != nil {
 		return fail(e)
@@ -414,12 +427,21 @@ func runOrdinaryBootstrap(ctx context.Context, t BootstrapTransaction, o install
 	return r, nil
 }
 
-func ordinaryBootstrapRecords(t BootstrapTransaction, o installOps, converged bool) error {
-	f, e := o.read(t.Base.Root + "/enrollment-ready.json")
+func ordinaryEnrollmentExact(t BootstrapTransaction, read readHost) error {
+	f, e := read(t.Base.Root + "/enrollment-ready.json")
 	var c EnrollmentCommit
 	if e != nil || !f.Regular || f.UID != 0 || f.Mode != 0644 || strict(f.Data, &c) != nil || c.Version != 1 || c.ManifestSHA256 != sum(mustJSON(EnrollmentIdentity(t.Base))) || c.InstanceID != t.Core.InstanceID || !validHex(c.Digest, 32) {
 		return errors.New("ordinary enrollment identity changed")
 	}
+	return nil
+}
+
+func ordinaryBootstrapRecords(t BootstrapTransaction, o installOps, converged bool) error {
+	if e := ordinaryEnrollmentExact(t, o.read); e != nil {
+		return e
+	}
+	var f hostFile
+	var e error
 	for _, v := range []struct {
 		name      string
 		old, next []byte
