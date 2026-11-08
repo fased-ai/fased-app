@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -15,6 +16,11 @@ import (
 )
 
 const swapTaskVersion = "onchain-swap-task-v1"
+
+// Recovery changes execution semantics, not owner identity or database layout.
+// Prior readers reject this discriminator before accepting the workspace.
+const swapRecoveryVersion = "onchain-swap-recovery-v2"
+const swapRecoveryFeature = "agents-swap-recovery-v2"
 const swapPrefix = "onchain-task:"
 
 type SwapCommand struct {
@@ -51,15 +57,24 @@ type SwapReview struct {
 	Digest   string              `json:"digest"`
 	Approval string              `json:"approval"`
 }
+type SwapRecovery struct {
+	TaskID    string `json:"taskId"`
+	Status    string `json:"status"`
+	Cancel    bool   `json:"cancel"`
+	Reconcile bool   `json:"reconcile"`
+	Pause     bool   `json:"pause"`
+	Resume    bool   `json:"resume"`
+}
 type OnchainView struct {
-	Version       string      `json:"version"`
-	Available     bool        `json:"available"`
-	LiveExecution bool        `json:"liveExecution"`
-	ProfileID     string      `json:"profileId"`
-	Revision      int64       `json:"revision"`
-	Review        *SwapReview `json:"review,omitempty"`
-	Tasks         []AgentTask `json:"tasks"`
-	Runs          []AgentRun  `json:"runs"`
+	Recovery      []SwapRecovery `json:"recovery,omitempty"`
+	Version       string         `json:"version"`
+	Available     bool           `json:"available"`
+	LiveExecution bool           `json:"liveExecution"`
+	ProfileID     string         `json:"profileId"`
+	Revision      int64          `json:"revision"`
+	Review        *SwapReview    `json:"review,omitempty"`
+	Tasks         []AgentTask    `json:"tasks"`
+	Runs          []AgentRun     `json:"runs"`
 }
 type swapVenue interface {
 	Prepare(context.Context, onchain.Quote) (onchain.Quote, error)
@@ -100,7 +115,7 @@ func swapEvent(ex *SwapExecution, state string, now int64) {
 	ex.Events = append(ex.Events, e)
 	ex.State = state
 }
-func swapProjection(d agentDocument, revision int64, profile string, available bool) OnchainView {
+func (s *Store) swapProjection(d agentDocument, revision int64, profile string, available bool) OnchainView {
 	v := OnchainView{Version: swapTaskVersion, Available: available, ProfileID: profile, Revision: revision, Tasks: []AgentTask{}, Runs: []AgentRun{}}
 	for _, t := range d.Tasks {
 		if t.ProfileID == profile && t.Swap != nil {
@@ -110,6 +125,13 @@ func swapProjection(d agentDocument, revision int64, profile string, available b
 	for _, r := range d.Runs {
 		if r.ProfileID == profile && r.Swap != nil {
 			v.Runs = append(v.Runs, r)
+			recovery := swapRecovery(r.TaskID, *r.Swap, available)
+			for _, task := range v.Tasks {
+				if task.ID == r.TaskID {
+					recovery.Resume = available && r.Swap.State == "paused" && r.Swap.BootID == s.bootID && s.now().Unix() < task.Swap.Proposal.Quote.ExpiresAt
+				}
+			}
+			v.Recovery = append(v.Recovery, recovery)
 		}
 	}
 	return v
@@ -168,7 +190,7 @@ func (s *Store) onchainView(ctx context.Context, profile, id string) (OnchainVie
 	if e != nil {
 		return OnchainView{}, e
 	}
-	v := swapProjection(d, r, profile, s.onchain != nil)
+	v := s.swapProjection(d, r, profile, s.onchain != nil)
 	if id == "" || s.onchain == nil {
 		return v, nil
 	}
@@ -279,7 +301,7 @@ func (s *Store) changeOnchain(ctx context.Context, c AgentCommand) (OnchainView,
 		review := SwapReview{Proposal: proposal, Revision: revision, Approval: "required"}
 		review.Digest = swapReviewDigest(review, s.bootID)
 		s.onchain.quotes[q.ID] = swapEntry{review: review, boot: s.bootID, lease: lease}
-		v := swapProjection(d, revision, c.ProfileID, true)
+		v := s.swapProjection(d, revision, c.ProfileID, true)
 		v.Review = &review
 		return v, nil
 	case "swap-review", "swap-submit":
@@ -333,7 +355,7 @@ func (s *Store) changeOnchain(ctx context.Context, c AgentCommand) (OnchainView,
 		p := &SwapTaskPolicy{Version: swapTaskVersion, Proposal: entry.review.Proposal, CredentialLease: entry.lease}
 		p.Digest = swapPolicyDigest(*p)
 		task := AgentTask{ID: swapPrefix + c.Swap.ID, ProfileID: c.ProfileID, Name: "Swap " + swapSymbol(p.Proposal.Quote.InputMint) + " / " + swapSymbol(p.Proposal.Quote.OutputMint), IntervalSeconds: 60, MaxRuns: 1, Runs: 1, State: "held", Swap: p}
-		run := AgentRun{ID: task.ID + ":1", TaskID: task.ID, ProfileID: c.ProfileID, Strategy: swapTaskVersion, At: now, Outcome: "swap-queued", Swap: &SwapExecution{Version: swapTaskVersion, ProposalDigest: p.Proposal.Digest, BootID: s.bootID}}
+		run := AgentRun{ID: task.ID + ":1", TaskID: task.ID, ProfileID: c.ProfileID, Strategy: swapTaskVersion, At: now, Outcome: "swap-queued", Swap: &SwapExecution{Version: swapRecoveryVersion, ProposalDigest: p.Proposal.Digest, BootID: s.bootID}}
 		swapEvent(run.Swap, "queued", now)
 		d.Tasks = append(d.Tasks, task)
 		d.Runs = append(d.Runs, run)
@@ -353,11 +375,11 @@ func (s *Store) changeOnchain(ctx context.Context, c AgentCommand) (OnchainView,
 		if e != nil {
 			return OnchainView{}, e
 		}
-		if r.Swap.State != "queued" && r.Swap.State != "paused" {
+		if !swapCancelable(*r.Swap) {
 			return OnchainView{}, errors.New("signed orders require reconciliation")
 		}
 		receipt, e := s.swapSigner(ctx, signer.Request{Action: "swap-cancel", PublicInput: signer.PublicInput{OperationID: t.Swap.Proposal.Quote.ID}})
-		if e != nil || receipt.Swap == nil || receipt.Swap.State != "cancelled" {
+		if e != nil || receipt.Swap == nil || receipt.Swap.State != "cancelled" || receipt.Swap.Proposal.Digest != t.Swap.Proposal.Digest || len(receipt.Swap.Signed) != 0 || receipt.Swap.Signature != "" || receipt.Swap.Observation != nil {
 			return OnchainView{}, errors.New("signer cancellation unavailable")
 		}
 		if e = s.writeSwap(ctx, c.ProfileID, c.Swap.ID, func(t *AgentTask, r *AgentRun) error { swapEvent(r.Swap, "cancelled", s.now().Unix()); return nil }); e != nil {
@@ -429,6 +451,8 @@ func (s *Store) writeSwap(ctx context.Context, profile, id string, change func(*
 	if e != nil {
 		return e
 	}
+	// Promote only inside the same transaction as a successful recovery write.
+	d.Runs[ri].Swap.Version = swapRecoveryVersion
 	if e = change(&d.Tasks[ti], &d.Runs[ri]); e != nil {
 		return e
 	}
@@ -436,6 +460,9 @@ func (s *Store) writeSwap(ctx context.Context, profile, id string, change func(*
 		return errors.New("reconciliation history capacity reached")
 	}
 	state := d.Runs[ri].Swap.State
+	if state == "cancelled" {
+		d.Tasks[ti].State = "completed"
+	}
 	d.Runs[ri].Outcome = "swap-" + state
 	if state == "confirmed" || state == "failed" {
 		d.Tasks[ti].State = "completed"
@@ -575,12 +602,15 @@ func (s *Store) reconcileOnchain(ctx context.Context, profile, id string) error 
 	if len(reply.Swap.Signed) == 0 {
 		return errors.New("signed original unavailable; no resubmission permitted")
 	}
-	if e = s.swapCurrentAccount(ctx, q); e != nil {
-		return e
-	}
 	signature, e := onchain.VerifyPacket(q, reply.Swap.Signed)
 	if e != nil {
 		return e
+	}
+	if len(r.Swap.Signed) > 0 && (!bytes.Equal(r.Swap.Signed, reply.Swap.Signed) || r.Swap.Signature != signature) {
+		return errors.New("signer original conflicts with retained order")
+	}
+	if reply.Swap.State == "confirmed" || reply.Swap.State == "failed" {
+		return s.restoreSwapSettlement(ctx, profile, id, t, r, *reply.Swap, signature)
 	}
 	venue, e := s.swapVenue(ctx, q)
 	if e != nil {
@@ -644,13 +674,13 @@ func validateOnchainStorage(d agentDocument) error {
 		}
 		t, ok := tasks[run.TaskID]
 		x := run.Swap
-		if !ok || seen[run.TaskID] || run.ID != run.TaskID+":1" || run.ProfileID != t.ProfileID || run.Strategy != swapTaskVersion || run.Outcome != "swap-"+x.State || x.Version != swapTaskVersion || x.ProposalDigest != t.Swap.Proposal.Digest || len(x.Events) < 1 || len(x.Events) > 16 || run.AIRequestID != "" || run.Paper != nil || run.WEN != nil || run.BotID != "" || run.News != nil || run.Watch != nil || run.Analysis != nil || run.Quantity != 0 || run.PriceCents != 0 || run.CostCents != 0 {
+		if !ok || seen[run.TaskID] || run.ID != run.TaskID+":1" || run.ProfileID != t.ProfileID || run.Strategy != swapTaskVersion || run.Outcome != "swap-"+x.State || (x.Version != swapTaskVersion && x.Version != swapRecoveryVersion) || x.ProposalDigest != t.Swap.Proposal.Digest || len(x.Events) < 1 || len(x.Events) > 16 || run.AIRequestID != "" || run.Paper != nil || run.WEN != nil || run.BotID != "" || run.News != nil || run.Watch != nil || run.Analysis != nil || run.Quantity != 0 || run.PriceCents != 0 || run.CostCents != 0 {
 			return errors.New("swap result binding changed")
 		}
 		previous := ""
 		at := int64(0)
 		for i, event := range x.Events {
-			if !validSwapState(event.State) || (i > 0 && !validSwapTransition(x.Events[i-1].State, event.State)) {
+			if !validSwapState(event.State) || (i > 0 && (!validSwapTransition(x.Events[i-1].State, event.State) || x.Version == swapTaskVersion && recoveryOnlyTransition(x.Events[i-1].State, event.State))) {
 				return errors.New("invalid swap state transition")
 			}
 			hash := event.Digest
@@ -688,7 +718,7 @@ func validateOnchainStorage(d agentDocument) error {
 			}
 		} else if x.Observation != nil {
 			return errors.New("nonterminal settlement evidence")
-		} else if t.State == "completed" {
+		} else if t.State == "completed" && (x.State != "cancelled" || x.Version != swapRecoveryVersion) {
 			return errors.New("unconfirmed swap marked complete")
 		}
 		seen[run.TaskID] = true
@@ -727,8 +757,9 @@ func (s *Store) recoverOnchain(ctx context.Context) error {
 		case "queued", "validating", "signing", "signed", "sending", "submitted":
 			state := "unknown"
 			if r.Swap.State == "queued" || r.Swap.State == "validating" {
-				state = "cancelled"
+				state = "expired"
 			}
+			r.Swap.Version = swapRecoveryVersion
 			swapEvent(r.Swap, state, s.now().Unix())
 			r.Outcome = "swap-" + state
 			changed = true
@@ -808,7 +839,7 @@ func validSwapTransition(a, b string) bool {
 	case "paused":
 		return b == "queued" || b == "cancelled"
 	case "validating":
-		return b == "signing" || b == "simulation-failed" || b == "cancelled"
+		return b == "signing" || b == "simulation-failed" || b == "cancelled" || b == "expired"
 	case "signing":
 		return b == "signed" || b == "unknown" || b == "cancelled"
 	case "signed":
@@ -817,7 +848,9 @@ func validSwapTransition(a, b string) bool {
 		return b == "submitted" || b == "unknown" || b == "not-submitted"
 	case "unknown":
 		return b == "unknown" || b == "confirmed" || b == "failed" || b == "cancelled"
-	case "submitted", "not-submitted", "expired":
+	case "expired", "simulation-failed":
+		return b == "cancelled" || a == "expired" && (b == "unknown" || b == "confirmed" || b == "failed")
+	case "submitted", "not-submitted":
 		return b == "unknown" || b == "confirmed" || b == "failed"
 	}
 	return false
@@ -838,4 +871,55 @@ func (s *Store) configureInstalledSwapFixture(path string, venue func(Account) (
 		return signer.Call(ctx, c, false, r)
 	}}
 	return nil
+}
+
+func swapCancelable(x SwapExecution) bool {
+	return len(x.Signed) == 0 && x.Signature == "" && !x.Attempted && x.Observation == nil && (x.State == "queued" || x.State == "paused" || x.State == "expired" || x.State == "simulation-failed" || x.State == "unknown")
+}
+func swapRecovery(id string, x SwapExecution, available bool) SwapRecovery {
+	r := SwapRecovery{TaskID: id, Status: x.State}
+	terminal := x.State == "confirmed" || x.State == "failed" || x.State == "cancelled"
+	if x.State == "unknown" || !terminal && len(x.Signed) > 0 && (x.State == "expired" || x.State == "not-submitted") {
+		r.Status = "awaiting-receipt"
+	}
+	r.Cancel = available && swapCancelable(x)
+	r.Pause = available && x.State == "queued"
+	r.Reconcile = available && !terminal && x.State != "queued" && x.State != "paused" && x.State != "validating"
+	return r
+}
+
+// A protected signer can already have verified/committed a terminal receipt
+// when the app crashes before committing its own view. Restore that exact proof;
+// never require another credential lease or replace an original to rediscover it.
+func (s *Store) restoreSwapSettlement(ctx context.Context, profile, id string, t AgentTask, r AgentRun, proof signer.SwapReceipt, signature string) error {
+	current, e := s.swapSigner(ctx, signer.Request{Action: "status"})
+	if e != nil || current.Status.Account == nil {
+		return errors.New("protected signer identity unavailable")
+	}
+	a, b := *current.Status.Account, t.Swap.Proposal.Account
+	a.Epoch = ""
+	b.Epoch = ""
+	if a != b || proof.Observation == nil || proof.Observation.State != proof.State || signer.ValidateSwapHistory(proof.Proposal) != nil {
+		return errors.New("protected signer receipt does not match original wallet")
+	}
+	if r.Swap.State != "unknown" && !validSwapTransition(r.Swap.State, "unknown") {
+		return errors.New("stored settlement conflicts with order history")
+	}
+	return s.writeSwap(ctx, profile, id, func(task *AgentTask, run *AgentRun) error {
+		run.Swap.Signed = append([]byte(nil), proof.Signed...)
+		run.Swap.Signature = signature
+		if run.Swap.State != "unknown" {
+			swapEvent(run.Swap, "unknown", s.now().Unix())
+		}
+		swapEvent(run.Swap, proof.State, s.now().Unix())
+		o := *proof.Observation
+		run.Swap.Observation = &o
+		return nil
+	})
+}
+
+// These transitions were not admitted by the v1 execution reader.
+func recoveryOnlyTransition(a, b string) bool {
+	return a == "validating" && b == "expired" ||
+		(a == "expired" || a == "simulation-failed") && b == "cancelled"
 }

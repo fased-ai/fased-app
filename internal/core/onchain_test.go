@@ -246,10 +246,10 @@ func TestOnchainQueuedConsentCannotCrossRestart(t *testing.T) {
 		t.Fatal(e)
 	}
 	v := h.command(t, "swap-view", SwapCommand{})
-	if v.Runs[0].Swap.State != "cancelled" || h.chain.Submissions != 0 {
+	if v.Runs[0].Swap.State != "expired" || h.chain.Submissions != 0 {
 		t.Fatal("queued consent replayed after boot")
 	}
-	saveSwapEvidence(t, "cancelled-on-restart", v)
+	saveSwapEvidence(t, "expired-on-restart", v)
 }
 
 func TestOnchainSchema30MigrationPreservesDocumentAndRejectsErasure(t *testing.T) {
