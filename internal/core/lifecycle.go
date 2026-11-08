@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 
 	"github.com/fased-ai/fased-app/internal/update"
@@ -77,6 +78,22 @@ func (s *Store) snapshotTx(ctx context.Context, tx snapshotReader, probe string)
 	contract := UpdateContract()
 	features := make([]string, 0, len(contract.State[0].Features))
 	for _, feature := range contract.State[0].Features {
+		if feature == swapRecoveryFeature {
+			var document agentDocument
+			if json.Unmarshal([]byte(v.Agents), &document) != nil {
+				return update.CoreSnapshot{}, errors.New("invalid swap recovery snapshot")
+			}
+			required := false
+			for _, run := range document.Runs {
+				if run.Swap != nil && run.Swap.Version == swapRecoveryVersion {
+					required = true
+					break
+				}
+			}
+			if !required {
+				continue
+			}
+		}
 		if (v.Schema < RemoteOwnerStateSchema && feature == remoteOwnerFeature) || (v.Schema == StateSchema && feature == localOwnerFeature) {
 			continue
 		}

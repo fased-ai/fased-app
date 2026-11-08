@@ -76,7 +76,16 @@ export type SwapCommand = {
     maxFeeLamports: string;
   };
 };
+export type SwapRecovery = {
+  taskId: string;
+  status: string;
+  cancel: boolean;
+  reconcile: boolean;
+  pause: boolean;
+  resume: boolean;
+};
 export type OnchainView = {
+  recovery?: SwapRecovery[];
   version: string;
   available: boolean;
   liveExecution: boolean;
@@ -120,6 +129,7 @@ export function swapState(state: string) {
         confirmed: "Confirmed",
         failed: "Failed",
         unknown: "Unknown",
+        "awaiting-receipt": "Awaiting receipt",
         expired: "Expired",
         cancelled: "Cancelled",
         paused: "Paused",
