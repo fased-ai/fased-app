@@ -482,3 +482,20 @@ func TestApplicationReader36RefusesBorrowedAuthority(t *testing.T) {
 		t.Fatal("foreign lease adopted")
 	}
 }
+
+// Historical snapshots must reproduce the immutable reader's feature set,
+// rather than inherit a newly supported format from the current binary.
+func TestApplicationReaderHistoricalSnapshotExcludesRecoveryCapability(t *testing.T) {
+	s := fixtureStore(t)
+	for _, schema := range []int{33, 35, 36} {
+		snapshot, err := applicationReaderSourceSnapshot(t.Context(), s.db, update.NewProbe(), s.bootID, schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, feature := range snapshot.State.Features {
+			if feature == swapRecoveryFeature {
+				t.Fatalf("schema%d inherited recovery-only capability", schema)
+			}
+		}
+	}
+}
