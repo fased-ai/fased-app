@@ -3,6 +3,7 @@
 package custodyinstall
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -15,16 +16,38 @@ import (
 )
 
 type ordinaryBootstrapOps struct {
-	raw    func(context.Context) (string, error)
-	cold   func(context.Context) (update.CoreSnapshot, update.SignerSnapshot, error)
-	commit func(context.Context, update.OrdinaryHandoffAuthority) (update.SignerSnapshot, error)
+	observe func(context.Context) error
+	raw     func(context.Context) (string, error)
+	cold    func(context.Context) (update.CoreSnapshot, update.SignerSnapshot, error)
+	commit  func(context.Context, update.OrdinaryHandoffAuthority) (update.SignerSnapshot, error)
 }
 
 // These callbacks are compiled fixed UID/path operations, never RPC input.
 func ordinaryBootstrapCallbacks(t BootstrapTransaction, s *System) ordinaryBootstrapOps {
+	o := ordinaryBootstrapCallbacksWithRun(t, s.Run)
+	if t.Version == 3 {
+		o.observe = func(ctx context.Context) error {
+			cfg := identityConfig(t.Base)
+			pause := func(ctx context.Context, cmd update.CorePauseCommand) (update.CorePauseReceipt, error) {
+				var out bytes.Buffer
+				e := s.UpdatePause(ctx, t.Target, cmd, &out)
+				var p update.CorePauseReceipt
+				if e == nil {
+					e = update.StrictJSON(out.Bytes(), &p)
+				}
+				return p, e
+			}
+			return observeOrdinaryRepair(ctx, t, pause, func(ctx context.Context, r signer.Request) (signer.Response, error) {
+				return signer.Call(ctx, cfg, true, r)
+			})
+		}
+	}
+	return o
+}
+func ordinaryBootstrapCallbacksWithRun(t BootstrapTransaction, run runHost) ordinaryBootstrapOps {
 	call := func(ctx context.Context, i Identity, name string, args ...string) ([]byte, error) {
 		cmd := []string{"/usr/bin/setpriv", "--reuid", strconv.Itoa(i.UID), "--regid", strconv.Itoa(i.GID), "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--", t.Dir() + "/candidate/" + name}
-		return s.Run(ctx, nil, append(cmd, args...)...)
+		return run(ctx, nil, append(cmd, args...)...)
 	}
 	cold := func(ctx context.Context) (update.CoreSnapshot, update.SignerSnapshot, error) {
 		var c core.FixtureColdMetadata
@@ -33,15 +56,34 @@ func ordinaryBootstrapCallbacks(t BootstrapTransaction, s *System) ordinaryBoots
 		if e != nil {
 			return c.Core, update.SignerSnapshot{}, e
 		}
-		if update.StrictJSON(b, &c) != nil || c.Phase != "idle" && c.Phase != "released" {
+		if update.StrictJSON(b, &c) != nil {
+			return c.Core, update.SignerSnapshot{}, errors.New("invalid cold metadata")
+		}
+		if t.Version == 3 {
+			q := t.Repair.Binding.Index.Binding.Pause
+			if c.Phase != "paused" || c.PauseID != q.PauseID || c.Request == nil || update.SnapshotDigest("repair-pause", c.Request) != update.SnapshotDigest("repair-pause", q.Request) {
+				return c.Core, update.SignerSnapshot{}, errors.New("repair requires exact retained core pause")
+			}
+		} else if c.Phase != "idle" && c.Phase != "released" {
 			return c.Core, update.SignerSnapshot{}, errors.New("cold ordinary metadata has an active pause")
 		}
-		b, e = call(ctx, t.Base.Signer, "fased-signer", "fixture-update-inspect", "--config", t.Base.Root+"/identity.json", "--disposable-fixture")
+		args := []string{"fixture-update-inspect", "--config", t.Base.Root + "/identity.json", "--disposable-fixture"}
+		if t.Version == 3 {
+			args = append(args, "--intent-id", t.ID)
+		}
+		b, e = call(ctx, t.Base.Signer, "fased-signer", args...)
 		if e != nil {
 			return c.Core, update.SignerSnapshot{}, e
 		}
 		if update.StrictJSON(b, &r) != nil || r.Error != "" || r.UpdateInventory == nil || !r.Status.Locked {
 			return c.Core, update.SignerSnapshot{}, errors.New("cold held ordinary signer required")
+		}
+		if t.Version == 3 {
+			i := r.UpdateIntent
+			q := t.Repair.Binding.Index.Binding.Pause.Request
+			if r.Status.Account == nil || r.Status.Account.SignerID != t.Base.ID || r.Status.Account.Network != t.Base.Network || i == nil || i.ID != t.ID || i.State != "staged" || i.Sequence != q.Sequence || i.ManifestSHA256 != q.ManifestSHA256 || update.SnapshotDigest("repair-contracts", i.Contracts) != update.SnapshotDigest("repair-contracts", t.Repair.Binding.Contracts) {
+				return c.Core, update.SignerSnapshot{}, errors.New("exact staged receiving signer required")
+			}
 		}
 		return c.Core, *r.UpdateInventory, nil
 	}
@@ -52,7 +94,7 @@ func ordinaryBootstrapCallbacks(t BootstrapTransaction, s *System) ordinaryBoots
 			files []string
 		}{{t.Base.App, []string{t.Base.Root + "/app-state/core.sqlite"}}, {t.Base.Signer, []string{t.Base.Root + "/signer-state/vault.json", t.Base.Root + "/signer-state/operations.log"}}} {
 			args := []string{"/usr/bin/setpriv", "--reuid", strconv.Itoa(group.i.UID), "--regid", strconv.Itoa(group.i.GID), "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--", "/usr/bin/sha256sum", "--"}
-			b, e := s.Run(ctx, nil, append(args, group.files...)...)
+			b, e := run(ctx, nil, append(args, group.files...)...)
 			if e != nil {
 				return "", e
 			}
@@ -105,7 +147,7 @@ func runOrdinaryBootstrap(ctx context.Context, t BootstrapTransaction, o install
 	if _, e := t.Plan(); e != nil {
 		return fail(e)
 	}
-	if t.Version != 2 || c.cold == nil || c.commit == nil || c.raw == nil {
+	if (t.Version != 2 && t.Version != 3) || c.cold == nil || (t.Version == 2 && c.commit == nil) || (t.Version == 3 && c.observe == nil) || c.raw == nil {
 		return fail(errors.New("ordinary cold handoff required"))
 	}
 	if e := allowedInstallation(InstallTransaction{Base: t.Base, Target: t.Target}, o.read); e != nil {
@@ -183,6 +225,9 @@ func runOrdinaryBootstrap(ctx context.Context, t BootstrapTransaction, o install
 			return fail(e)
 		}
 		r.Phase = "reader-upgraded"
+		if t.Version == 3 {
+			r.Phase = "reader-repaired"
+		}
 		r.AlreadyCurrent = true
 		return r, nil
 	}
@@ -216,57 +261,67 @@ func runOrdinaryBootstrap(ctx context.Context, t BootstrapTransaction, o install
 	if e = ordinaryBootstrapRecords(t, o, false); e != nil {
 		return fail(e)
 	}
-	var a update.OrdinaryHandoffAuthority
-	f, e := o.read(t.Dir() + "/ordinary-signer.json")
-	if e == nil {
-		if update.StrictJSON(f.Data, &a) != nil || !known(f, mustJSON(a), 0644) || a.VerifyTransaction(mustJSON(t)) != nil {
-			return fail(errors.New("foreign ordinary handoff snapshot"))
-		}
-	} else if !errors.Is(e, os.ErrNotExist) {
-		return fail(e)
-	} else {
-		if forward {
-			return fail(errors.New("forward handoff lost original snapshot"))
-		}
-		files, ce := c.raw(ctx)
-		if ce != nil {
-			return fail(ce)
-		}
-		cold, s, ce := c.cold(ctx)
-		if ce != nil {
-			return fail(ce)
-		}
-		if !update.SameCoreMetadata(cold, t.Core) {
-			return fail(errors.New("predecessor core metadata changed"))
-		}
-		a, e = ordinaryAuthority(t, s, files)
-		if e != nil {
-			return fail(e)
-		}
-		if e = publish(ctx, t.Dir()+"/ordinary-signer.json", t.Base.ID, mustJSON(a), 0644, o.read, o.run); e != nil {
+	repair := t.Version == 3
+	if repair {
+		if e = repairColdTrial(ctx, t, o, c, forward); e != nil {
 			return fail(e)
 		}
 	}
+	var a update.OrdinaryHandoffAuthority
+	if !repair {
+		f, e := o.read(t.Dir() + "/ordinary-signer.json")
+		if e == nil {
+			if update.StrictJSON(f.Data, &a) != nil || !known(f, mustJSON(a), 0644) || a.VerifyTransaction(mustJSON(t)) != nil {
+				return fail(errors.New("foreign ordinary handoff snapshot"))
+			}
+		} else if !errors.Is(e, os.ErrNotExist) {
+			return fail(e)
+		} else {
+			if forward {
+				return fail(errors.New("forward handoff lost original snapshot"))
+			}
+			files, ce := c.raw(ctx)
+			if ce != nil {
+				return fail(ce)
+			}
+			cold, s, ce := c.cold(ctx)
+			if ce != nil {
+				return fail(ce)
+			}
+			if !update.SameCoreMetadata(cold, t.Core) {
+				return fail(errors.New("predecessor core metadata changed"))
+			}
+			a, e = ordinaryAuthority(t, s, files)
+			if e != nil {
+				return fail(e)
+			}
+			if e = publish(ctx, t.Dir()+"/ordinary-signer.json", t.Base.ID, mustJSON(a), 0644, o.read, o.run); e != nil {
+				return fail(e)
+			}
+		}
+	}
 	if !forward {
-		files, ce := c.raw(ctx)
-		if ce != nil {
-			return fail(ce)
-		}
-		if files != a.SourceFilesSHA256 {
-			return fail(errors.New("raw source files changed during cold handoff"))
-		}
-		// Repeat both cold reads under stopped roles. No partial publication, WAL
-		// recovery, signer repair or source drift is accepted before the fence.
-		cold, s, ce := c.cold(ctx)
-		if ce != nil {
-			return fail(ce)
-		}
-		filesAfter, re := c.raw(ctx)
-		if re != nil {
-			return fail(re)
-		}
-		if filesAfter != files || !update.SameCoreMetadata(cold, t.Core) || !update.SameOrdinarySnapshot(s, a.Before) {
-			return fail(errors.New("cold handoff source changed; preserve stopped state"))
+		if !repair {
+			files, ce := c.raw(ctx)
+			if ce != nil {
+				return fail(ce)
+			}
+			if files != a.SourceFilesSHA256 {
+				return fail(errors.New("raw source files changed during cold handoff"))
+			}
+			// Repeat both cold reads under stopped roles. No partial publication, WAL
+			// recovery, signer repair or source drift is accepted before the fence.
+			cold, s, ce := c.cold(ctx)
+			if ce != nil {
+				return fail(ce)
+			}
+			filesAfter, re := c.raw(ctx)
+			if re != nil {
+				return fail(re)
+			}
+			if filesAfter != files || !update.SameCoreMetadata(cold, t.Core) || !update.SameOrdinarySnapshot(s, a.Before) {
+				return fail(errors.New("cold handoff source changed; preserve stopped state"))
+			}
 		}
 		if cancelling {
 			if e = mark("cancelled"); e != nil {
@@ -296,15 +351,17 @@ func runOrdinaryBootstrap(ctx context.Context, t BootstrapTransaction, o install
 		}
 	}
 	// After this point failures stay stopped/held. NEVER restart the old reader.
-	s, e := c.commit(ctx, a)
-	if e != nil {
-		return fail(e)
-	}
-	if s.AuthoritySHA256 != a.Before.AuthoritySHA256 || s.SequenceFloor != a.Receipt.Sequence || s.InstalledSequence != 0 || s.ActiveIntentID != "" || !s.RecoveryHold || len(s.States) != 2 || s.States[0].Anchor != a.Before.States[0].Anchor {
-		return fail(errors.New("ordinary handoff signer receipt changed"))
-	}
-	if e = mark("ordinary-reader-reserved"); e != nil {
-		return fail(e)
+	if !repair {
+		s, e := c.commit(ctx, a)
+		if e != nil {
+			return fail(e)
+		}
+		if s.AuthoritySHA256 != a.Before.AuthoritySHA256 || s.SequenceFloor != a.Receipt.Sequence || s.InstalledSequence != 0 || s.ActiveIntentID != "" || !s.RecoveryHold || len(s.States) != 2 || s.States[0].Anchor != a.Before.States[0].Anchor {
+			return fail(errors.New("ordinary handoff signer receipt changed"))
+		}
+		if e = mark("ordinary-reader-reserved"); e != nil {
+			return fail(e)
+		}
 	}
 	for _, v := range []struct{ name, hash, phase string }{{"fased-app", t.Target.CoreHash, "core-replaced"}, {"fased-signer", t.Target.SignerHash, "pair-replaced"}} {
 		f, e := o.read(t.Dir() + "/candidate/" + v.name)
@@ -336,6 +393,11 @@ func runOrdinaryBootstrap(ctx context.Context, t BootstrapTransaction, o install
 	if e = o.health(ctx, t.Target); e != nil {
 		return fail(e)
 	}
+	if repair {
+		if e = c.observe(ctx); e != nil {
+			return fail(e)
+		}
+	}
 	if e = mark("ordinary-healthy"); e != nil {
 		return fail(e)
 	}
@@ -346,6 +408,9 @@ func runOrdinaryBootstrap(ctx context.Context, t BootstrapTransaction, o install
 		return fail(e)
 	}
 	r.Phase = "reader-upgraded"
+	if repair {
+		r.Phase = "reader-repaired"
+	}
 	return r, nil
 }
 

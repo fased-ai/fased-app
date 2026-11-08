@@ -27,3 +27,5 @@ func (*storage) poison()                                     {}
 func openStorageReadonly(string) (*storage, error) { return nil, ErrUnavailable }
 
 func openNetworkStorage(string, bool, string) (*storage, error) { return nil, ErrUnavailable }
+
+func (*storage) readerRepairQuarantined(string) bool { return true }

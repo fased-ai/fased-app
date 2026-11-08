@@ -125,8 +125,8 @@ func prepareBootstrapCommand(id, bundlePath, trustPath, artifacts string, automa
 		return "", errors.New("run the exact signed target core to bootstrap an older helper")
 	}
 	tx := custodyinstall.BootstrapTransaction{Version: 1, ID: id, Base: m, Target: m, Bundle: bundle, Trust: trust, ReviewedAt: now}
-	if m.Version == 3 && bundle.Version == 2 {
-		tx.Version = 2
+	if m.Version == 3 && (bundle.Version == 2 || bundle.Version == 3) {
+		tx.Version = bundle.Version
 	}
 	for _, c := range plan.Target.Components {
 		if c.Contract.Component == "core" {
@@ -140,7 +140,17 @@ func prepareBootstrapCommand(id, bundlePath, trustPath, artifacts string, automa
 	// immutable predecessor owns that read; its executable/UID checks stay intact.
 	var coreSnapshot update.CoreSnapshot
 	var snapshot update.SignerSnapshot
-	if m.Version == 3 && bundle.Version == 2 {
+	if tx.Version == 3 {
+		retained, err := custodyinstall.LoadController(os.Getuid(), id)
+		if err != nil {
+			return "", err
+		}
+		if retained.Base != m {
+			return "", errors.New("repair requires exact retained predecessor transaction")
+		}
+		tx.Repair = &retained
+		coreSnapshot, snapshot = retained.Binding.Index.Binding.Pause.Core, retained.Binding.Index.Binding.Signer
+	} else if m.Version == 3 && bundle.Version == 2 {
 		// Neither old Local inventory nor Remote custody inventory may borrow a
 		// saved session or the distinct ordinary VPS app's OS identity. Stage
 		// only the signed new core and authenticate its exact custody role.
@@ -198,11 +208,20 @@ func finishBootstrapReview(tx custodyinstall.BootstrapTransaction, automation bo
 	if tx.Version == 2 {
 		fmt.Fprintln(review, "Ordinary custody: a read-only cold trial precedes a durable forward-only reader floor. After commitment, interruption resumes this exact pair; old readers cannot be restored. Keys stay locked and all recovery holds remain.")
 	}
+	if tx.Version == 3 {
+		fmt.Fprintln(review, "Repair only the signed wallet readers. Keep the existing staged intent, sequence, locked keys and paused core. After the forward fence, recover this exact repair; the original staged installation cannot resume or roll back to incompatible readers.")
+	}
 	pretty, _ := json.MarshalIndent(tx, "", "  ")
 	want := "BOOTSTRAP " + tx.Digest()
+	if tx.Version == 3 {
+		want = "REPAIR " + tx.Digest()
+	}
 	description := "Reserve a predecessor-readable maintenance sequence; install only the signed reader pair. On failed health, restore compatible readers and abort only the maintenance intent."
 	if tx.Version == 2 {
 		description = "Stop both roles for an unchanged-state cold trial, then durably commit a forward-only reader floor. After commitment, resume only this signed target pair; failed health never restores old readers. Keys stay locked and recovery holds remain."
+	}
+	if tx.Version == 3 {
+		description = "Repair only the authenticated readers; preserve the existing staged intent and non-rewinding floor. No abort, reservation or installed-sequence commit. The original staged installation remains quarantined; resume this same repair after interruption."
 	}
 	fmt.Fprintf(review, "DISPOSABLE READER BOOTSTRAP ONLY\nPreserve all financial state. %s No installed release or financial authority.\n%s\nType %s, or anything else to cancel: ", description, pretty, want)
 	if in == nil || (!automation && !term.IsTerminal(int(in.Fd()))) {
@@ -246,7 +265,7 @@ func ownerBootstrapCommand(args []string, in *os.File, out, errOut io.Writer) er
 	}
 	system := &custodyinstall.System{In: in, Out: errOut}
 	ctx := context.Background()
-	if *rollback && tx.Version != 2 {
+	if *rollback && tx.Version != 2 && tx.Version != 3 {
 		return errors.New("explicit cancellation is ordinary predecessor only")
 	}
 	callbacks := maintenanceCallbacks(tx, system, cfg, tx.Dir(), tx.Plan, tx.AdmissionCurrent)

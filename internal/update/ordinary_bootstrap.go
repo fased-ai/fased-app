@@ -212,3 +212,40 @@ func (a OrdinaryHandoffAuthority) VerifyTransaction(raw []byte) error {
 	_, e = JoinSnapshots(t.Core, before, p.Target.Target)
 	return e
 }
+
+// Repair changes readers only. Unlike v2 it neither adds maintenance features
+// nor reserves a floor: the existing staged intent and all journal bytes stay.
+func verifyOrdinaryRepair(b BootstrapBundle, trust []byte, now int64) (BootstrapPlan, error) {
+	var p BootstrapPlan
+	t, e := ParseTrust(trust, now)
+	if e != nil {
+		return p, e
+	}
+	p.Maintenance, p.MaintenanceSHA256, e = Authenticate(b.Maintenance, t, now)
+	if e != nil {
+		return p, e
+	}
+	p.Target, p.TargetSHA256, e = Authenticate(b.Target, t, now)
+	if e != nil {
+		return p, e
+	}
+	var a, z Envelope
+	if StrictJSON(b.Maintenance, &a) != nil || StrictJSON(b.Target, &z) != nil || a.KeyID != z.KeyID || p.Maintenance.BootstrapFrom != "" || p.Target.BootstrapFrom != p.MaintenanceSHA256 || p.Target.Sequence != p.Maintenance.Sequence || p.Target.IssuedAt != p.Maintenance.IssuedAt || p.Target.ExpiresAt != p.Maintenance.ExpiresAt || p.Target.Target != (Target{"linux", "amd64"}) || p.Maintenance.Target != p.Target.Target || !ordinaryComponents(p.Maintenance.Components) || !ordinaryComponents(p.Target.Components) {
+		return p, errors.New("exact signed ordinary repair pair required")
+	}
+	for _, old := range p.Maintenance.Components {
+		found := false
+		for _, next := range p.Target.Components {
+			if next.Contract.Component == old.Contract.Component {
+				found = next.Artifact.File == old.Artifact.File && next.Artifact.File == fixedArtifact(old.Contract.Component) && SnapshotDigest("contract", old.Contract) == SnapshotDigest("contract", next.Contract)
+				if old.Contract.Component == "signer" && old.Artifact.SHA256 == next.Artifact.SHA256 {
+					found = false
+				}
+			}
+		}
+		if !found {
+			return p, errors.New("reader repair cannot change contracts or retain the defective signer")
+		}
+	}
+	return p, nil
+}

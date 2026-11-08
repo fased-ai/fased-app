@@ -19,6 +19,7 @@ import (
 )
 
 type BootstrapTransaction struct {
+	Repair     *InstallTransaction    `json:"repair,omitempty"`
 	Version    int                    `json:"version"`
 	ID         string                 `json:"id"`
 	Base       Manifest               `json:"base"`
@@ -42,6 +43,10 @@ func (t BootstrapTransaction) Plan() (update.BootstrapPlan, error) {
 		if update.SnapshotDigest("empty-signer", t.Signer) != update.SnapshotDigest("empty-signer", update.SignerSnapshot{}) || t.Core.Version != 1 || !update.IDOK(t.Core.ProbeID) || !update.IDOK(t.Core.BootID) || t.Core.State.Name != "core-db" {
 			return p, errors.New("ordinary handoff requires old core snapshot and cold-only signer capture")
 		}
+	} else if t.Version == 3 {
+		if e := t.repairPlan(p); e != nil {
+			return p, e
+		}
 	} else if _, e := update.JoinSnapshots(t.Core, t.Signer, p.Maintenance.Target); e != nil {
 		return p, e
 	}
@@ -55,11 +60,11 @@ func (t BootstrapTransaction) pairPlan() (update.BootstrapPlan, error) {
 	if e != nil {
 		return p, e
 	}
-	ordinary := t.Version == 2 && t.Bundle.Version == 2 && t.Base.Version == 3
+	ordinary := (t.Version == 2 || t.Version == 3) && t.Bundle.Version == t.Version && t.Base.Version == 3
 	b := t.Target
 	b.CoreHash = t.Base.CoreHash
 	b.SignerHash = t.Base.SignerHash
-	if (!ordinary && (t.Version != 1 || t.Base.Version != 1 || t.Bundle.Version != 1)) || !update.IDOK(t.ID) || t.Base.validate() != nil || t.Target.validate() != nil || b != t.Base || t.Signer.ActiveIntentID != "" || t.Signer.InstalledSequence != 0 || p.Target.Sequence <= t.Signer.SequenceFloor {
+	if (!ordinary && (t.Version != 1 || t.Base.Version != 1 || t.Bundle.Version != 1)) || !update.IDOK(t.ID) || t.Base.validate() != nil || t.Target.validate() != nil || b != t.Base || (t.Version != 3 && (t.Repair != nil || t.Signer.ActiveIntentID != "" || t.Signer.InstalledSequence != 0 || p.Target.Sequence <= t.Signer.SequenceFloor)) {
 		return p, errors.New("unsupported bootstrap identity or financial floor")
 	}
 	for _, c := range p.Maintenance.Components {
@@ -294,7 +299,7 @@ func PrepareBootstrap(ctx context.Context, t BootstrapTransaction, dir string, s
 			if e = publish(ctx, t.Dir()+"/"+group.name+"/"+c.Artifact.File, t.Base.ID, data, 0755, readRoot, s.Run); e != nil {
 				return e
 			}
-			contract, e := probeReader(ctx, t.Dir()+"/"+group.name+"/"+c.Artifact.File, c.Contract.Component == "core", t.Base, s, t.Version == 2 && group.name == "candidate")
+			contract, e := probeReader(ctx, t.Dir()+"/"+group.name+"/"+c.Artifact.File, c.Contract.Component == "core", t.Base, s, t.Version == 3 || t.Version == 2 && group.name == "candidate")
 			if e != nil {
 				return e
 			}
@@ -380,7 +385,7 @@ func RunBootstrap(ctx context.Context, t BootstrapTransaction, s *System, c Boot
 		if write {
 			return ownerCompletionRecord(InstallTransaction{Base: t.Base, Target: t.Target}, true)
 		}
-		if t.Version == 2 {
+		if t.Version == 2 || t.Version == 3 {
 			return ownerCompletionRecord(InstallTransaction{Base: t.Base, Target: t.Target}, false)
 		}
 		dir, e := ownerJournal()
@@ -415,7 +420,7 @@ func RunBootstrap(ctx context.Context, t BootstrapTransaction, s *System, c Boot
 		}
 		return nil
 	}
-	if t.Version == 2 {
+	if t.Version == 2 || t.Version == 3 {
 		return runOrdinaryBootstrap(ctx, t, o, ordinaryBootstrapCallbacks(t, s), c.CancelOrdinary)
 	}
 	return runBootstrap(ctx, t, c, o)

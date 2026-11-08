@@ -48,6 +48,9 @@ func ControllerRunner(uid int, id string) (string, error) {
 	if e != nil {
 		return "", e
 	}
+	if e = refuseRepairedPredecessor(t, readRoot); e != nil {
+		return "", e
+	}
 	f, e := readRoot(t.dir() + "/runner")
 	if e != nil {
 		return "", e
