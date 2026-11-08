@@ -55,6 +55,9 @@ func runTransaction(ctx context.Context, t InstallTransaction, rollback bool, o 
 	if !t.valid() {
 		return nil, errors.New("invalid fixed-path installation transaction")
 	}
+	if e := refuseRepairedPredecessor(t, o.read); e != nil {
+		return nil, e
+	}
 	d := t.dir()
 	digest := update.InstallDigest(t.Binding)
 	if e := o.topology(t.Base); e != nil {

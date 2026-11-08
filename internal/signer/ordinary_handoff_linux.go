@@ -138,6 +138,17 @@ func ordinaryHandoffRPCAllowed(c Config, action string, vault ...*Vault) bool {
 	if e != nil || update.StrictJSON(b, &m) != nil || !update.IDOK(m.Phase) {
 		return false
 	}
+	// The new repair conductor may only observe protected state while the
+	// repair owns the root fence. Socket/OS owner authentication still applies;
+	// this grants no prepare, abort, install or financial operation.
+	if action == "fixture-update-inventory" || action == "fixture-update-status" {
+		path := root + "/bootstraps/" + m.Phase + "/transaction.json"
+		if trustedPath(path) == nil {
+			if raw, e := os.ReadFile(path); e == nil && ordinaryRepairObservationAllowed(c, action, m.Phase, m.Digest, raw) {
+				return true
+			}
+		}
+	}
 	// Only an actual current signer installation can classify a normal update.
 	// Missing bootstrap metadata never grants authority; a retained cancelled
 	// bootstrap directory also cannot block a separately approved normal hold.
@@ -198,4 +209,42 @@ func ordinaryHandoffRPCAllowed(c Config, action string, vault ...*Vault) bool {
 	}
 	nextMap["coreHash"], nextMap["signerHash"] = oldMap["coreHash"], oldMap["signerHash"]
 	return update.SnapshotDigest("ordinary-controller-topology", oldMap) == update.SnapshotDigest("ordinary-controller-topology", nextMap)
+}
+
+func ordinaryRepairObservationAllowed(c Config, action, id, digest string, raw []byte) bool {
+	if c.Version != 3 || action != "fixture-update-inventory" && action != "fixture-update-status" {
+		return false
+	}
+	var t struct {
+		Version    int                    `json:"version"`
+		ID         string                 `json:"id"`
+		Base       json.RawMessage        `json:"base"`
+		Target     json.RawMessage        `json:"target"`
+		Bundle     update.BootstrapBundle `json:"bundle"`
+		Trust      []byte                 `json:"trust"`
+		ReviewedAt int64                  `json:"reviewedAt"`
+		Core       json.RawMessage        `json:"core"`
+		Signer     json.RawMessage        `json:"signer"`
+		Repair     json.RawMessage        `json:"repair"`
+	}
+	if update.StrictJSON(raw, &t) != nil || t.Version != 3 || t.Bundle.Version != 3 || t.ID != id || !update.IDOK(id) || update.SnapshotDigest("reader-bootstrap:v1", json.RawMessage(raw)) != digest {
+		return false
+	}
+	if _, e := update.VerifyBootstrap(t.Bundle, t.Trust, t.ReviewedAt); e != nil {
+		return false
+	}
+	var b struct {
+		Version int    `json:"version"`
+		ID      string `json:"id"`
+		Root    string `json:"root"`
+		Owner   int    `json:"owner"`
+		Network string `json:"network"`
+		App     struct {
+			UID int `json:"uid"`
+		} `json:"app"`
+		Signer struct {
+			UID int `json:"uid"`
+		} `json:"signer"`
+	}
+	return json.Unmarshal(t.Base, &b) == nil && b.Version == 3 && b.ID == c.SignerID && b.Root == filepath.Dir(c.StateDir) && b.Owner == c.OwnerUID && b.Network == c.Network && b.App.UID == c.AppUID && b.Signer.UID == c.SignerUID
 }

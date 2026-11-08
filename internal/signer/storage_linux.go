@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 
 	"golang.org/x/sys/unix"
 )
@@ -231,3 +232,10 @@ func (s *storage) close() error {
 
 func (s *storage) failedState() bool { return s.failed }
 func (s *storage) poison()           { s.failed = true }
+
+// This is a deny-only durable fence. Malformed/unreadable markers fail closed;
+// they grant no signing or recovery authority and can never clear a reservation.
+func (s *storage) readerRepairQuarantined(id string) bool {
+	_, e := os.Lstat(filepath.Join(filepath.Dir(s.path), "bootstraps", id, "forward-only.json"))
+	return !errors.Is(e, os.ErrNotExist)
+}

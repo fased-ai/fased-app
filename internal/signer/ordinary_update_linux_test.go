@@ -4,9 +4,12 @@ package signer
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -518,5 +521,150 @@ func TestOrdinaryRPCMaintenanceUsesActualSignerHold(t *testing.T) {
 	write(filepath.Join(dir, "update-active.json"), marker)
 	if ordinaryHandoffRPCAllowed(c, "fixture-install-controller", v) {
 		t.Fatal("root metadata replaced authoritative signer receipt")
+	}
+}
+
+// Model the immutable predecessor calling the corrected signer directly, without
+// passing through any corrected CLI/router. A repair fence is a denial, not a
+// new grant, and must survive signer reopen while leaving the staged slot intact.
+func TestRecoveredRepairRejectsLegacyRunnerAndPreservesStagedIntent(t *testing.T) {
+	source := ordinaryVault(t, fixtureDir(t))
+	if e := source.Create(fixturePassword); e != nil {
+		t.Fatal(e)
+	}
+	if e := source.Unlock(fixturePassword, time.Minute); e != nil {
+		t.Fatal(e)
+	}
+	backup, e := source.BackupHistory(backupPassword)
+	if e != nil {
+		t.Fatal(e)
+	}
+	original := *source.Status().Account
+	source.Close()
+	dir := fixtureDir(t)
+	id := "edededededededededededededededed"
+	open := func() *Vault {
+		v, e := OpenControlledOrdinaryCustody(dir, id, "devnet")
+		if e != nil {
+			t.Fatal(e)
+		}
+		return v
+	}
+	v := open()
+	defer func() { v.Close() }()
+	if e = v.RestoreHistory(backup, backupPassword, fixturePassword, BackupFingerprint(backup)); e != nil {
+		t.Fatal(e)
+	}
+	if v.record.Ref.SignerID == original.SignerID || v.ledger.ref != original {
+		t.Fatal("not a real independent history recovery")
+	}
+	intent, binding := installationFixtureAtSequence(t, v, 2)
+	command := installCommand(t, v, intent, binding, "active")
+	key, _ := os.ReadFile(filepath.Join(dir, "vault.json"))
+	journal, _ := os.ReadFile(filepath.Join(dir, "operations.log"))
+	fenceDir := filepath.Join(filepath.Dir(dir), "bootstraps", intent.ID)
+	if e = os.MkdirAll(fenceDir, 0700); e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(fenceDir) })
+	// Missing/foreign/unreadable content never grants anything. Any durable fence
+	// for this intent closes legacy install admission, including malformed input.
+	if e = os.WriteFile(filepath.Join(fenceDir, "forward-only.json"), []byte("root-bound fence"), 0644); e != nil {
+		t.Fatal(e)
+	}
+	for n := 0; n < 2; n++ {
+		if _, e = v.Installation(command); e == nil || !strings.Contains(e.Error(), "quarantines") {
+			t.Fatal("legacy runner bypassed quarantine", e)
+		}
+		response := execute(v, Request{Action: "fixture-install-controller", Install: &command}, true)
+		if response.Error == "" || !strings.Contains(response.Error, "quarantines") {
+			t.Fatal("legacy RPC adapter bypassed quarantine", response.Error)
+		}
+		if _, e = v.Installation(update.InstallRequest{Action: "status", IntentID: intent.ID}); e == nil {
+			t.Fatal("repair fabricated installation hold")
+		}
+		snap, e := v.UpdateInventory(update.NewProbe())
+		if e != nil || snap.SequenceFloor != 2 || snap.ActiveIntentID != intent.ID || !snap.RecoveryHold || !v.Status().Locked {
+			t.Fatal("repair reset staged state", snap, e)
+		}
+		got, _ := os.ReadFile(filepath.Join(dir, "operations.log"))
+		gotKey, _ := os.ReadFile(filepath.Join(dir, "vault.json"))
+		if !bytes.Equal(got, journal) || !bytes.Equal(gotKey, key) {
+			t.Fatal("repair fence mutated key or history")
+		}
+		v.Close()
+		v = open()
+	}
+	if _, e = v.AbortUpdate(intent.ID); e != nil {
+		t.Fatal("separate exact owner abort no longer available", e)
+	}
+	snap, e := v.UpdateInventory(update.NewProbe())
+	if e != nil || snap.SequenceFloor != 2 || snap.ActiveIntentID != "" || !snap.RecoveryHold {
+		t.Fatal("abort rewound floor/holds", snap, e)
+	}
+	// Even after abort, replaying the quarantined old installation stays refused.
+	if _, e = v.Installation(command); e == nil {
+		t.Fatal("abort revived obsolete installation")
+	}
+	next, nextBinding := installationFixtureAtSequence(t, v, 3)
+	if next.ID == intent.ID {
+		t.Fatal("new review reused quarantined identity")
+	}
+	if _, e = v.Installation(installCommand(t, v, next, nextBinding, "active")); e != nil {
+		t.Fatal("quarantine blocked a separately reviewed new transaction", e)
+	}
+}
+
+func TestOrdinaryRepairObservationNeverAuthorizesMutation(t *testing.T) {
+	v := ordinaryVault(t, fixtureDir(t))
+	if e := v.Create(fixturePassword); e != nil {
+		t.Fatal(e)
+	}
+	defer v.Close()
+	intent, binding := installationFixture(t, v)
+	old := update.Manifest{Version: 1, Product: "fased-app", Channel: "development", Sequence: intent.Sequence, IssuedAt: time.Now().Unix() - 5, ExpiresAt: time.Now().Unix() + 300, Target: update.Target{OS: "linux", Arch: "amd64"}}
+	next := old
+	for _, c := range intent.Contracts {
+		file := "fased-app"
+		if c.Component == "signer" {
+			file = "fased-signer"
+		}
+		old.Components = append(old.Components, update.Component{Version: "0.0.0-fixture", Contract: c, Artifact: update.Artifact{File: file, Size: 1, SHA256: metadataFixtureHash([]byte("old-" + file))}})
+		next.Components = append(next.Components, update.Component{Version: "0.0.0-fixture", Contract: c, Artifact: update.Artifact{File: file, Size: 1, SHA256: metadataFixtureHash([]byte("repair-" + file))}})
+	}
+	prior, _ := json.Marshal(old)
+	next.BootstrapFrom = metadataFixtureHash(prior)
+	pub, key, e := ed25519.GenerateKey(rand.Reader)
+	if e != nil {
+		t.Fatal(e)
+	}
+	sign := func(m update.Manifest) []byte {
+		b, _ := json.Marshal(m)
+		r, _ := json.Marshal(update.Envelope{Version: 1, KeyID: update.KeyID(pub), Payload: b, Signature: ed25519.Sign(key, append([]byte(update.SignatureDomain), b...))})
+		return r
+	}
+	trust, _ := json.Marshal(update.Trust{Version: 1, Purpose: update.Purpose, Keys: []update.TrustKey{{ID: update.KeyID(pub), PublicKey: pub, NotBefore: old.IssuedAt - 10, NotAfter: old.ExpiresAt + 10}}})
+	cfg := Config{Version: 3, StateDir: v.store.path, SignerID: v.signerID, OwnerUID: 1000, AppUID: 1001, SignerUID: 1002, Network: "devnet"}
+	base := map[string]any{"version": 3, "id": cfg.SignerID, "root": filepath.Dir(cfg.StateDir), "owner": cfg.OwnerUID, "app": map[string]int{"uid": cfg.AppUID}, "signer": map[string]int{"uid": cfg.SignerUID}, "network": cfg.Network}
+	tx := map[string]any{"version": 3, "id": intent.ID, "base": base, "target": base, "bundle": update.BootstrapBundle{Version: 3, Maintenance: sign(old), Target: sign(next)}, "trust": trust, "reviewedAt": time.Now().Unix(), "core": intent.Core, "signer": intent.Signer, "repair": map[string]any{"binding": binding}}
+	raw, _ := json.Marshal(tx)
+	digest := update.SnapshotDigest("reader-bootstrap:v1", json.RawMessage(raw))
+	for _, action := range []string{"fixture-update-inventory", "fixture-update-status", "fixture-install-controller", "fixture-update-abort", "fixture-update-prepare", "unlock", "swap-sign"} {
+		got := ordinaryRepairObservationAllowed(cfg, action, intent.ID, digest, raw)
+		want := action == "fixture-update-inventory" || action == "fixture-update-status"
+		if got != want {
+			t.Fatal("repair read-only action policy", action, got)
+		}
+	}
+	foreign := cfg
+	foreign.AppUID++
+	for _, test := range []struct {
+		c          Config
+		id, digest string
+		raw        []byte
+	}{{foreign, intent.ID, digest, raw}, {cfg, randomID(), digest, raw}, {cfg, intent.ID, strings.Repeat("a", 64), raw}, {cfg, intent.ID, digest, []byte("malformed")}} {
+		if ordinaryRepairObservationAllowed(test.c, "fixture-update-inventory", test.id, test.digest, test.raw) {
+			t.Fatal("foreign repair observation allowed")
+		}
 	}
 }

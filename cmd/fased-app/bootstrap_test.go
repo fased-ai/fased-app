@@ -79,3 +79,25 @@ func TestBootstrapPredecessorInventoryRequiresPairedReadOnlyEvidence(t *testing.
 		}
 	}
 }
+
+func TestReaderRepairRequiresSeparateOwnerReview(t *testing.T) {
+	tx := custodyinstall.BootstrapTransaction{Version: 3, ID: strings.Repeat("a", 32)}
+	for _, prefix := range []string{"REPAIR ", "BOOTSTRAP ", "INSTALL "} {
+		r, w, e := os.Pipe()
+		if e != nil {
+			t.Fatal(e)
+		}
+		_, _ = io.WriteString(w, prefix+tx.Digest()+"\n")
+		_ = w.Close()
+		called := false
+		var text bytes.Buffer
+		e = finishBootstrapReview(tx, true, r, &text, func() error { called = true; return nil })
+		_ = r.Close()
+		if (e == nil) != (prefix == "REPAIR ") || called != (prefix == "REPAIR ") {
+			t.Fatal("repair reused a different owner approval", e)
+		}
+		if !strings.Contains(text.String(), "preserve the existing staged intent") || !strings.Contains(text.String(), "remains quarantined") {
+			t.Fatal("repair hid original-intent consequence")
+		}
+	}
+}

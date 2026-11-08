@@ -60,6 +60,13 @@ func (l *ledger) applyInstallation(r journalRecord) error {
 }
 
 func (v *Vault) Installation(r update.InstallRequest) (*update.Installation, error) {
+	// A legacy runner can bypass new CLI routing. A durable cold-repair fence is
+	// a denial only, never signer authority: do not let it reinstall the obsolete
+	// staged pair. Status and a separately reviewed owner abort remain available.
+	if v.ordinary && r.Action != "status" && update.IDOK(r.IntentID) && v.store.readerRepairQuarantined(r.IntentID) {
+		return nil, errors.New("reader repair quarantines this staged installation; preserve intent and floor")
+	}
+
 	if r.Action == "status" || r.Action == "completed" {
 		v.mu.Lock()
 		if v.closed || v.store.failedState() || v.ledger == nil {
