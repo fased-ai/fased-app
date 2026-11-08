@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
 type Status = {
+  canVerify?: boolean;
+  canCheck?: boolean;
   backupVerified?: boolean;
   ref: string;
   saved: boolean;
@@ -56,7 +58,13 @@ export function RPCCredential({
     };
   }, [core.instanceId, accountId, revision]);
   async function change(action: string) {
-    if (busy || !status) return;
+    if (
+      busy ||
+      !status ||
+      (action === "verify" && !status.canVerify) ||
+      (action === "check" && !status.canCheck)
+    )
+      return;
     const epoch = ++generation.current;
     setBusy(true);
     setError("");
@@ -132,20 +140,24 @@ export function RPCCredential({
           </button>
           {status?.saved && (
             <>
-              <button
-                type="button"
-                disabled={busy || !password || status.stale}
-                onClick={() => void change("verify")}
-              >
-                {t("Verify key")}
-              </button>
-              <button
-                type="button"
-                disabled={busy || !password || status.stale || !configured}
-                onClick={() => void change("check")}
-              >
-                {t("Check connection")}
-              </button>
+              {status.canVerify && (
+                <button
+                  type="button"
+                  disabled={busy || !password || status.stale}
+                  onClick={() => void change("verify")}
+                >
+                  {t("Verify key")}
+                </button>
+              )}
+              {status.canCheck && (
+                <button
+                  type="button"
+                  disabled={busy || !password || status.stale || !configured}
+                  onClick={() => void change("check")}
+                >
+                  {t("Check connection")}
+                </button>
+              )}
               <button
                 type="button"
                 disabled={busy || !password}

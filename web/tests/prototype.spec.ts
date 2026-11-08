@@ -304,3 +304,93 @@ test("shared WEN Activity distinguishes browser demo notices", async ({
     fullPage: true,
   });
 });
+
+for (const capability of [
+  { name: "held", canVerify: false, canCheck: false },
+  { name: "local verification", canVerify: true, canCheck: false },
+  { name: "compiled check", canVerify: true, canCheck: true },
+  { name: "older core" },
+]) {
+  test(`RPC credential capabilities ${capability.name}`, async ({ page }) => {
+    const actions: string[] = [];
+    await page.route("**/api/v1/**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("accounts/rpc-credential")) {
+        const body = route.request().postDataJSON();
+        actions.push(body.action);
+        await route.fulfill({
+          json: {
+            ref: "fixture-ref",
+            saved: true,
+            stale: false,
+            locked: true,
+            testOnly: true,
+            liveRPC: false,
+            ...capability,
+          },
+        });
+      } else
+        await route.fulfill({
+          status: 503,
+          json: { error: "fixture unavailable" },
+        });
+    });
+    await page.goto("/");
+    await page.evaluate(async () => {
+      const entry = await (await fetch("/src/main.tsx")).text();
+      const reactURL = entry.match(/from "([^"]*\/react\.js[^"]*)"/)?.[1];
+      const domURL = entry.match(
+        /from "([^"]*\/react-dom_client\.js[^"]*)"/,
+      )?.[1];
+      if (!reactURL || !domURL) throw Error("Vite entry imports unavailable");
+      const React = (await import(reactURL)).default;
+      const { createRoot } = (await import(domURL)).default;
+      const { CoreProvider } = await import("/src/core.tsx");
+      const { UIProvider } = await import("/src/ui-preferences.tsx");
+      const { RPCCredential } = await import("/src/pages/RPCCredential.tsx");
+      const host = document.createElement("div");
+      host.id = "rpc-capability-harness";
+      document.body.append(host);
+      createRoot(host).render(
+        React.createElement(
+          UIProvider,
+          null,
+          React.createElement(
+            CoreProvider,
+            null,
+            React.createElement(RPCCredential, {
+              accountId: "fixture-account",
+              revision: 1,
+              configured: true,
+            }),
+          ),
+        ),
+      );
+    });
+    const form = page.locator("#rpc-capability-harness");
+    await form
+      .locator("summary")
+      .filter({ hasText: /^API key$/ })
+      .click();
+    await expect.poll(() => actions.includes("status")).toBe(true);
+    await expect(form.getByText("Saved", { exact: true })).toBeVisible();
+    await form
+      .getByLabel("Vault password", { exact: true })
+      .fill("disposable vault password");
+    await expect(
+      form.getByRole("button", { name: "Verify key", exact: true }),
+    ).toHaveCount(capability.canVerify ? 1 : 0);
+    await expect(
+      form.getByRole("button", { name: "Check connection", exact: true }),
+    ).toHaveCount(capability.canCheck ? 1 : 0);
+    if (capability.canVerify) {
+      await form
+        .getByRole("button", { name: "Verify key", exact: true })
+        .click();
+      await expect(form.getByRole("status")).toHaveText("Key verified");
+    }
+    expect(actions.filter((action) => action !== "status")).toEqual(
+      capability.canVerify ? ["verify"] : [],
+    );
+  });
+}
