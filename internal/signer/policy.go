@@ -460,6 +460,11 @@ func (l *ledger) apply(r journalRecord) error {
 }
 
 func (l *ledger) append(v *Vault, r journalRecord) error {
+	// Admission of a new installation belongs to the current receiver, whereas
+	// replay validates immutable historical transactions without rebinding them.
+	if r.Kind == "update-install" && (r.Installation == nil || v.record == nil || r.Installation.Binding.InstallationID != v.record.Ref.SignerID) {
+		return errors.New("installation belongs to another signer identity")
+	}
 	if l.ref.Version == 3 && r.Admission == nil {
 		r.Admission = clone(l.ordinaryAdmission)
 	}

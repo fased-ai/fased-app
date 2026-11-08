@@ -20,8 +20,12 @@ import (
 )
 
 func installationFixture(t *testing.T, v *Vault) (update.Intent, update.InstallBinding) {
+	return installationFixtureAtSequence(t, v, 1)
+}
+
+func installationFixtureAtSequence(t *testing.T, v *Vault, sequence uint64) (update.Intent, update.InstallBinding) {
 	t.Helper()
-	r := intentFixture(t, v, 1)
+	r := intentFixture(t, v, sequence)
 	var env update.Envelope
 	var m update.Manifest
 	json.Unmarshal(r.Manifest, &env)
