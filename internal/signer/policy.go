@@ -88,25 +88,26 @@ type PublicInput struct {
 }
 
 type ledger struct {
-	ordinaryAdmission *CustodyAdmission
-	ordinaryHandoff   *update.OrdinaryHandoffReceipt
-	receiptRPC        *receiptRPCEnvelope
-	managedFresh      bool
-	swaps             map[string]SwapReceipt
-	main, mock        *journal
-	ref               AccountRef
-	missingHistory    bool
-	policy            *FixturePolicy
-	grants            map[string]FixtureGrant
-	ops               map[string]FixtureOperation
-	receipts          map[string]journalRecord
-	lastTime          int64
-	approvals         map[string]ApprovalReceipt
-	updates           map[string]update.Intent
-	installedSequence uint64
-	updateFloor       uint64
-	activeUpdate      string
-	installations     map[string]update.Installation
+	ordinaryTradeFresh bool
+	ordinaryAdmission  *CustodyAdmission
+	ordinaryHandoff    *update.OrdinaryHandoffReceipt
+	receiptRPC         *receiptRPCEnvelope
+	managedFresh       bool
+	swaps              map[string]SwapReceipt
+	main, mock         *journal
+	ref                AccountRef
+	missingHistory     bool
+	policy             *FixturePolicy
+	grants             map[string]FixtureGrant
+	ops                map[string]FixtureOperation
+	receipts           map[string]journalRecord
+	lastTime           int64
+	approvals          map[string]ApprovalReceipt
+	updates            map[string]update.Intent
+	installedSequence  uint64
+	updateFloor        uint64
+	activeUpdate       string
+	installations      map[string]update.Installation
 }
 
 func newLedger() *ledger {
@@ -217,6 +218,16 @@ func (l *ledger) apply(r journalRecord) error {
 			expected.Admission = l.ordinaryAdmission
 		}
 		switch r.Kind {
+		case "ordinary-trade-key-created":
+			if l.ref.Version != 3 || !ordinaryTradeAdmission(l.ordinaryAdmission) {
+				return ErrUnavailable
+			}
+			expected.Account = r.Account
+		case "ordinary-trade-approve", "ordinary-trade-sign", "ordinary-trade-settled", "ordinary-trade-cancel":
+			if l.ref.Version != 3 || !ordinaryTradeAdmission(l.ordinaryAdmission) {
+				return ErrUnavailable
+			}
+			expected.Swap, expected.ID, expected.Original, expected.SwapObservation = r.Swap, r.ID, r.Original, r.SwapObservation
 		case "ordinary-reader-handoff":
 			if l.ref.Version != 3 {
 				return ErrUnavailable
@@ -266,9 +277,18 @@ func (l *ledger) apply(r journalRecord) error {
 		return errors.New("exclusive update intent blocks financial mutation")
 	}
 	switch r.Kind {
+	case "ordinary-trade-key-created":
+		if l.ordinaryTradeFresh || l.ref.Version != 3 || !ordinaryTradeAdmission(l.ordinaryAdmission) || r.Account == nil || *r.Account != l.ref || len(l.swaps) != 0 || l.updateFloor != 0 || l.ordinaryHandoff != nil || len(l.updates) != 0 {
+			return ErrUnavailable
+		}
+		l.ordinaryTradeFresh = true
+	case "ordinary-trade-approve", "ordinary-trade-sign", "ordinary-trade-settled", "ordinary-trade-cancel":
+		if err := l.ordinaryTradeRecord(r); err != nil {
+			return err
+		}
 	case "ordinary-reader-handoff":
 		rh := r.OrdinaryHandoff
-		if l.ref.Version != 3 || rh == nil || !update.ValidOrdinaryHandoff(*rh) || l.updateFloor != 0 || l.installedSequence != 0 || l.activeUpdate != "" || l.ordinaryHandoff != nil || len(l.updates) != 0 || len(l.installations) != 0 {
+		if l.ref.Version != 3 || rh == nil || !update.ValidOrdinaryHandoff(*rh) || l.updateFloor != 0 || l.installedSequence != 0 || l.activeUpdate != "" || l.ordinaryHandoff != nil || len(l.updates) != 0 || len(l.installations) != 0 || len(l.swaps) != 0 || l.ordinaryTradeFresh {
 			return errors.New("ordinary genesis-only handoff required")
 		}
 		l.ordinaryHandoff = clone(rh)
@@ -286,6 +306,11 @@ func (l *ledger) apply(r journalRecord) error {
 			return e
 		}
 	case "update-prepare":
+		if l.ref.Version == 3 {
+			if n, u := l.swapPending(r.At); n != 0 || u != 0 {
+				return ErrHeld
+			}
+		}
 		i := r.Update
 		if i == nil || update.ValidateIntent(*i) != nil || i.CreatedAt != r.At || i.Sequence <= l.updateFloor || l.ordinaryHandoff != nil && i.ID == l.ordinaryHandoff.ID || len(l.updates) >= 256 || l.updates[i.ID].ID != "" {
 			return errors.New("invalid durable update intent")

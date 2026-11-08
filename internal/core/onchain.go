@@ -21,6 +21,7 @@ const swapTaskVersion = "onchain-swap-task-v1"
 // Prior readers reject this discriminator before accepting the workspace.
 const swapRecoveryVersion = "onchain-swap-recovery-v2"
 const swapRecoveryFeature = "agents-swap-recovery-v2"
+const ordinaryTradeFeature = "agents-ordinary-trade-fixture-v1"
 const swapPrefix = "onchain-task:"
 
 type SwapCommand struct {
@@ -271,6 +272,10 @@ func (s *Store) changeOnchain(ctx context.Context, c AgentCommand) (OnchainView,
 		if ref.Version == 2 {
 			if !status.Status.SwapReady || !managedNetworkAccount(a) || a.Signer == nil || *a.Signer != ref || a.Network != ref.Network {
 				return OnchainView{}, errors.New("protected swap history unavailable")
+			}
+		} else if ref.Version == 3 {
+			if !ordinaryNetworkAccount(a) || a.Signer == nil || *a.Signer != ref || !status.Status.SwapReady || !s.controlledOrdinaryAccount(ctx, a) || s.onchain.credentialLease {
+				return OnchainView{}, errors.New("ordinary typed trade admission required")
 			}
 		} else if ref.Version != 1 || status.Status.RecoveryRequired {
 			return OnchainView{}, errors.New("wallet recovery required")
@@ -864,7 +869,8 @@ func (s *Store) configureInstalledSwapFixture(path string, venue func(Account) (
 	if e != nil {
 		return e
 	}
-	if c.Version != 2 || c.Network != s.custodyNetwork || os.Getuid() != c.AppUID || os.Geteuid() != c.AppUID || venue == nil {
+	ordinaryFixture := c.Version == 3 && c.Mode == signer.OrdinaryCustodyMode && c.Profile == signer.OwnerCustodyProfile && c.Provenance == signer.ControlledCustodyProfile
+	if (c.Version != 2 && !ordinaryFixture) || c.Network != s.custodyNetwork || os.Getuid() != c.AppUID || os.Geteuid() != c.AppUID || venue == nil {
 		return errors.New("installed wallet identity required")
 	}
 	s.onchain = &onchainRuntime{venue: venue, quotes: map[string]swapEntry{}, signer: func(ctx context.Context, r signer.Request) (signer.Response, error) {

@@ -80,6 +80,10 @@ func execute(v *Vault, r Request, owner bool) Response {
 	}
 	if v.ordinary {
 		switch r.Action {
+		case "swap-approve", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel":
+			if !v.ordinaryTradeEnabled {
+				return Response{Error: ErrUnavailable.Error()}
+			}
 		case "status", "create", "import-ordinary-seed", "unlock", "lock", "backup", "backup-history", "verify-backup", "restore", "fixture-update-inventory", "fixture-update-status", "fixture-update-prepare", "fixture-update-abort", "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish", "fixture-update-preflight", "fixture-install-controller":
 		default:
 			return Response{Error: ErrUnavailable.Error()}

@@ -24,6 +24,8 @@ type SwapReceipt struct {
 	Observation *onchain.Observation `json:"observation,omitempty"`
 }
 
+const OrdinarySwapVersion = "ordinary-controlled-swap-v1"
+
 const ManagedSwapVersion = "managed-onchain-swap-fixture-v1"
 const ManagedCredentialSwapVersion = "managed-credential-swap-fixture-v1"
 
@@ -32,6 +34,9 @@ func NewSwapProposal(ref AccountRef, q onchain.Quote) SwapProposal {
 	p := SwapProposal{Version: onchain.Version, Account: ref, Quote: q, FixtureOnly: true}
 	if ref.Version == 2 {
 		p.Version = ManagedSwapVersion
+	}
+	if ref.Version == 3 {
+		p.Version = OrdinarySwapVersion
 	}
 	p.Digest = SwapProposalDigest(p)
 	return p
@@ -60,6 +65,7 @@ func ValidateSwapHistory(p SwapProposal) error { return validateSwapProposal(p, 
 
 func (l *ledger) applySwap(r journalRecord) error {
 	expected := journalRecord{Version: r.Version, Sequence: r.Sequence, Previous: r.Previous, Hash: r.Hash, At: r.At, Kind: r.Kind, ID: r.ID}
+
 	switch r.Kind {
 	case "onchain-approve":
 		expected.Swap = r.Swap
@@ -150,6 +156,9 @@ func (l *ledger) swapPending(now int64) (pending, unknown int) {
 }
 
 func validSwapRef(r AccountRef, network, version string) bool {
+	if r.Version == 3 {
+		return ValidOrdinaryAccountRef(r) && r.Network == network && version == OrdinarySwapVersion
+	}
 	if r.Version == 1 {
 		return validRef(r) && version == onchain.Version
 	}
