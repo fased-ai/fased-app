@@ -12,7 +12,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/signer"
 )
 
-// The existing reader-session client primes only the enrolled Local app's own
+// The existing reader-session client primes only the enrolled custody app's own
 // private CLI session. It never receives a browser token, wallet key or password.
 type nativeUpdateSessionBinding struct {
 	Version      int      `json:"version"`
@@ -27,9 +27,15 @@ func nativeUpdateSessionProfile(m Manifest) bool {
 	return m.validate() == nil && m.Version == 3 && m.Enrollment && m.NativeOwnerAccess && m.Location == "local"
 }
 
+// The compatibility binding covers either enrolled custody profile. Installed
+// Local helper admission retains its separate native-only predicate below.
+func custodySourceSessionProfile(m Manifest) bool {
+	return nativeUpdateSessionProfile(m) || (m.validate() == nil && m.Version == 3 && m.Enrollment && m.Location == "remote" && !m.NativeOwnerAccess && m.PublicOrigin != "")
+}
+
 func (s *System) PrepareNativeUpdateSession(ctx context.Context, m Manifest, image string) error {
-	if !nativeUpdateSessionProfile(m) || m.Owner != os.Getuid() || os.Geteuid() != m.Owner {
-		return errors.New("existing Local custody OS owner required")
+	if !custodySourceSessionProfile(m) || m.Owner != os.Getuid() || os.Geteuid() != m.Owner {
+		return errors.New("existing custody OS owner required")
 	}
 	lock, err := OwnerLock()
 	if err != nil {
@@ -48,11 +54,13 @@ func (s *System) PrepareNativeUpdateSession(ctx context.Context, m Manifest, ima
 	if image == m.Root+"/fased-app" {
 		return nil
 	}
-	if err = verifyNativePolicy(ctx, m, s); err != nil {
-		return err
+	if m.Location == "local" {
+		if err = verifyNativePolicy(ctx, m, s); err != nil {
+			return err
+		}
 	}
 	if err = Runtime(m); err != nil {
-		return errors.New("open the existing Local instance before maintenance")
+		return errors.New("open the existing custody instance before maintenance")
 	}
 
 	body, err := source(image)
@@ -69,8 +77,8 @@ type nativeUpdateSessionOps struct {
 }
 
 func stageNativeUpdateSession(ctx context.Context, m Manifest, body []byte, o nativeUpdateSessionOps) error {
-	if !nativeUpdateSessionProfile(m) || len(body) == 0 || len(body) > 64<<20 {
-		return errors.New("bounded verified Local reader required")
+	if !custodySourceSessionProfile(m) || len(body) == 0 || len(body) > 64<<20 {
+		return errors.New("bounded verified custody reader required")
 	}
 	b := nativeUpdateSessionBinding{1, m, sum(body)}
 	dir := b.dir()
@@ -90,7 +98,7 @@ func stageNativeUpdateSession(ctx context.Context, m Manifest, body []byte, o na
 		return err
 	}
 	if string(result) != "Ready\n" {
-		return errors.New("Local reader did not confirm session readiness")
+		return errors.New("custody reader did not confirm session readiness")
 	}
 	return nil
 }
@@ -106,7 +114,7 @@ func NativeUpdateSessionIdentity(owner int, image, record string) (Manifest, str
 	}
 	var b nativeUpdateSessionBinding
 	if strict(f.Data, &b) != nil || !known(f, mustJSON(b), 0644) || validateNativeUpdateSession(m, b, os.Getuid(), os.Geteuid(), os.Getgid(), image, record) != nil {
-		return Manifest{}, "", errors.New("exact Local reader-session binding required")
+		return Manifest{}, "", errors.New("exact custody reader-session binding required")
 	}
 	instance, err := nativeUpdateSessionInstance(m, m.Root+"/app-state")
 	if err != nil {
@@ -114,13 +122,13 @@ func NativeUpdateSessionIdentity(owner int, image, record string) (Manifest, str
 	}
 	f, err = readRoot(image)
 	if err != nil || f.Mode != 0755 || sum(f.Data) != b.ImageSHA256 {
-		return Manifest{}, "", errors.New("Local reader-session image changed")
+		return Manifest{}, "", errors.New("custody reader-session image changed")
 	}
 	return m, instance, nil
 }
 func validateNativeUpdateSession(m Manifest, b nativeUpdateSessionBinding, uid, euid, gid int, image, record string) error {
-	if !nativeUpdateSessionProfile(m) || b.Version != 1 || b.Installation != m || !validHex(b.ImageSHA256, 32) || uid != m.App.UID || euid != uid || gid != m.App.GID || image != filepath.Join(b.dir(), "helper") || record != filepath.Join(b.dir(), "binding.json") {
-		return errors.New("Local app identity and immutable reader binding required")
+	if !custodySourceSessionProfile(m) || b.Version != 1 || b.Installation != m || !validHex(b.ImageSHA256, 32) || uid != m.App.UID || euid != uid || gid != m.App.GID || image != filepath.Join(b.dir(), "helper") || record != filepath.Join(b.dir(), "binding.json") {
+		return errors.New("custody app identity and immutable reader binding required")
 	}
 	return nil
 }

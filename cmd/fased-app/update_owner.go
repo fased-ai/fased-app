@@ -289,7 +289,7 @@ func custodyUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) er
 	if e = custodyinstall.Verify(m); e != nil {
 		return e
 	}
-	if m.NativeOwnerAccess && m.Location == "local" {
+	if (m.NativeOwnerAccess && m.Location == "local") || (m.Version == 3 && m.Enrollment && m.Location == "remote" && args[0] != "status" && args[0] != "preferences") {
 		image, e := os.Executable()
 		if e != nil {
 			return e
