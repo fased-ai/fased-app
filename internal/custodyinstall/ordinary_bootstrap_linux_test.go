@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-func ordinaryBootstrapModel(t *testing.T) (BootstrapTransaction, string, installOps, ordinaryBootstrapOps) {
+func ordinaryBootstrapModel(t *testing.T, remote ...bool) (BootstrapTransaction, string, installOps, ordinaryBootstrapOps) {
 	x, dir := modelTransaction(t)
 	b := x.Base
 	b.Version = 3
@@ -30,6 +30,11 @@ func ordinaryBootstrapModel(t *testing.T) (BootstrapTransaction, string, install
 	b.Enrollment = true
 	b.Location = "local"
 	b.NativeOwnerAccess = true
+	if len(remote) > 0 && remote[0] {
+		b.Location = "remote"
+		b.NativeOwnerAccess = false
+		b.PublicOrigin = "https://owner.example.ts.net"
+	}
 	next := b
 	next.CoreHash = x.Target.CoreHash
 	next.SignerHash = x.Target.SignerHash

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/core"
@@ -419,6 +420,22 @@ func RunBootstrap(ctx context.Context, t BootstrapTransaction, s *System, c Boot
 			return errors.New("ordinary owner record is not the exact installed generation")
 		}
 		return nil
+	}
+	o.recoveryDirs = func(m Manifest) ([]string, error) {
+		entries, err := os.ReadDir(m.Root)
+		if err != nil {
+			return nil, err
+		}
+		var names []string
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), "enrollment-core-") {
+				if !entry.IsDir() {
+					return nil, errors.New("untrusted enrollment recovery directory")
+				}
+				names = append(names, entry.Name())
+			}
+		}
+		return names, nil
 	}
 	if t.Version == 2 || t.Version == 3 {
 		return runOrdinaryBootstrap(ctx, t, o, ordinaryBootstrapCallbacks(t, s), c.CancelOrdinary)

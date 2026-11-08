@@ -45,6 +45,9 @@ func recoveryModel(t *testing.T) (enrollmentCoreRecovery, string, installOps, fu
 			t.Fatal(e)
 		}
 	}
+	if err := os.WriteFile(dir+"/intent.json", mustJSON(installerIntent(m)), 0644); err != nil {
+		t.Fatal(err)
+	}
 	x := InstallTransaction{Base: m, Target: r.next()}
 	o := modelOps(t, x, dir)
 	if e := publish(t.Context(), r.dir()+"/previous-owner-intent.json", r.ID, mustJSON(recoveryOwnerIntent(m)), 0644, o.read, o.run); e != nil {
@@ -112,7 +115,7 @@ func TestEnrollmentCoreRecoveryEveryOSInterruption(t *testing.T) {
 }
 
 func TestEnrollmentCoreRecoveryRefusesForeignAndHeldState(t *testing.T) {
-	for _, mode := range []string{"core", "signer", "inventory", "update-active.json", "enrollment-ready.json", "ready.json", "receipt", "phase", "post-import-profile", "local", "changed-signer"} {
+	for _, mode := range []string{"core", "signer", "inventory", "update-active.json", "enrollment-ready.json", "ready.json", "receipt", "phase", "post-import-profile", "local", "changed-signer", "installer-intent", "premature-installer-intent"} {
 		t.Run(mode, func(t *testing.T) {
 			r, dir, o, owner := recoveryModel(t)
 			if mode == "receipt" || mode == "phase" {
@@ -127,6 +130,12 @@ func TestEnrollmentCoreRecoveryRefusesForeignAndHeldState(t *testing.T) {
 				path = r.dir() + "/recovery.json"
 			case "phase":
 				path = r.dir() + "/inventory-replaced.json"
+			case "installer-intent":
+				path = r.Base.Root + "/intent.json"
+			case "premature-installer-intent":
+				if e := os.WriteFile(dir+"/intent.json", mustJSON(installerIntent(r.next())), 0644); e != nil {
+					t.Fatal(e)
+				}
 			case "post-import-profile":
 				r.Base.Enrollment = false
 			case "local":
@@ -137,7 +146,7 @@ func TestEnrollmentCoreRecoveryRefusesForeignAndHeldState(t *testing.T) {
 			default:
 				path = r.Base.Root + "/" + mode
 			}
-			if mode != "post-import-profile" && mode != "local" && mode != "changed-signer" {
+			if mode != "post-import-profile" && mode != "local" && mode != "changed-signer" && mode != "premature-installer-intent" {
 				p := dir + strings.TrimPrefix(path, r.Base.Root)
 				if e := os.WriteFile(p, []byte("foreign-preserved"), 0644); e != nil {
 					t.Fatal(e)

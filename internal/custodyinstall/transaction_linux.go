@@ -33,6 +33,7 @@ func (t InstallTransaction) valid() bool {
 }
 
 type installOps struct {
+	recoveryDirs func(Manifest) ([]string, error)
 	read         readHost
 	run          runHost
 	topology     func(Manifest) error
