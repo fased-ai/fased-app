@@ -32,12 +32,13 @@ func clientTransportError(err error) error {
 }
 
 type Client struct {
-	Endpoint   Endpoint
-	HTTP       *http.Client
-	Token      string
-	CSRF       string
-	localOwner bool
-	remote     bool
+	Endpoint        Endpoint
+	HTTP            *http.Client
+	Token           string
+	CSRF            string
+	localOwner      bool
+	remote          bool
+	custodyAccounts bool
 }
 type SavedSession struct {
 	InstanceID string `json:"instanceId"`
@@ -82,6 +83,9 @@ func NewClient(ctx context.Context, dir string) (*Client, error) {
 }
 func (c *Client) Close() { c.HTTP.CloseIdleConnections() }
 func (c *Client) Do(ctx context.Context, method, route string, input, output any) error {
+	if c.custodyAccounts && !custodyAccountsRoute(method, route) {
+		return errors.New("custody account access cannot authorize this operation")
+	}
 	var body io.Reader
 	if input != nil {
 		data, err := json.Marshal(input)
@@ -103,6 +107,9 @@ func (c *Client) Do(ctx context.Context, method, route string, input, output any
 	}
 	if c.remote {
 		req.Header.Set("X-Fased-Instance", c.Endpoint.InstanceID)
+	}
+	if c.custodyAccounts {
+		req.Header.Set(custodyAccountsHeader, c.Endpoint.InstanceID)
 	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)

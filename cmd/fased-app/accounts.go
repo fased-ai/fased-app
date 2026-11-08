@@ -56,7 +56,7 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 		// the native window; protected AppUID state is never opened by the CLI.
 		e = c.NativeLocalOwner(ctx)
 	} else {
-		e = c.LoadSession(ctx, *dir)
+		e = loadAccountsSession(ctx, c, *dir)
 	}
 	if e != nil {
 		return e
