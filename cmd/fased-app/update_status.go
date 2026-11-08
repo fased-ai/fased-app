@@ -31,7 +31,7 @@ func updateStatusCommand(args []string, out, errOut io.Writer) error {
 		return e
 	}
 	defer c.Close()
-	if e = c.LoadSession(ctx, *dir); e != nil {
+	if e = loadUpdateSession(ctx, c, *dir); e != nil {
 		return e
 	}
 	var v core.UpdateStatus
