@@ -145,10 +145,7 @@ func conductWindow(ctx context.Context, c signer.Config, root string, request si
 		if err != nil || !bytes.Equal(backup, request.Backup) {
 			return errors.New("local backup acknowledgement differs from the original")
 		}
-		if _, err = call(ctx, signer.Request{Action: "unlock", Password: bytes.Clone(request.Unlock), UnlockSeconds: 60}); err != nil {
-			return err
-		}
-		if _, err = call(ctx, signer.Request{Action: "verify-backup", Document: bytes.Clone(request.Backup), Password: bytes.Clone(request.BackupPassword)}); err != nil {
+		if err = verifyOwnerBackup(ctx, request.Backup, request.BackupPassword, request.Unlock, call); err != nil {
 			return err
 		}
 	}

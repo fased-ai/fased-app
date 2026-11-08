@@ -102,7 +102,11 @@ func flowCall(v *signer.Vault) ownerCall {
 				e = v.Restore(r.Document, r.Password, r.NewPassword)
 			}
 		case "verify-backup":
-			e = v.VerifyBackup(r.Document, r.Password)
+			if len(r.VaultPassword) > 0 {
+				e = v.VerifyBackupLocked(r.Document, r.Password, r.VaultPassword, r.SnapshotSHA256)
+			} else {
+				e = v.VerifyBackup(r.Document, r.Password)
+			}
 		default:
 			e = signer.ErrUnavailable
 		}

@@ -38,6 +38,7 @@ func (c Config) Validate() error {
 // Request is a closed set of owner and fixture operations. No real sign/submit.
 // Passwords are bytes so callers can clear their own buffers after use.
 type Request struct {
+	VaultPassword  []byte                   `json:"vaultPassword,omitempty"`
 	SnapshotSHA256 string                   `json:"snapshotSha256,omitempty"`
 	RPCOrigin      string                   `json:"rpcOrigin,omitempty"`
 	RPCKey         []byte                   `json:"rpcKey,omitempty"`
@@ -71,6 +72,7 @@ type Response struct {
 
 func execute(v *Vault, r Request, owner bool) Response {
 	defer wipe(r.RPCKey)
+	defer wipe(r.VaultPassword)
 	defer wipe(r.Password)
 	defer wipe(r.NewPassword)
 	if r.Action == "import-fixture-seed" || r.Action == "import-managed-seed" || r.Action == "import-ordinary-seed" {
@@ -83,7 +85,10 @@ func execute(v *Vault, r Request, owner bool) Response {
 			return Response{Error: ErrUnavailable.Error()}
 		}
 	}
-	if r.SnapshotSHA256 != "" && (r.Action != "restore" || !IsHistoryBackup(r.Document)) {
+	if len(r.VaultPassword) > 0 && r.Action != "verify-backup" {
+		return Response{Error: "vault credential requires locked backup verification"}
+	}
+	if r.SnapshotSHA256 != "" && !(r.Action == "verify-backup" && len(r.VaultPassword) > 0) && (r.Action != "restore" || !IsHistoryBackup(r.Document)) {
 		return Response{Error: "snapshot fingerprint requires history recovery"}
 	}
 	var document []byte
@@ -246,7 +251,11 @@ func execute(v *Vault, r Request, owner bool) Response {
 	case "backup-history":
 		document, err = v.BackupHistory(r.Password)
 	case "verify-backup":
-		err = v.VerifyBackup(r.Document, r.Password)
+		if len(r.VaultPassword) > 0 {
+			err = v.VerifyBackupLocked(r.Document, r.Password, r.VaultPassword, r.SnapshotSHA256)
+		} else {
+			err = v.VerifyBackup(r.Document, r.Password)
+		}
 	case "restore":
 		if IsHistoryBackup(r.Document) {
 			err = v.RestoreHistory(r.Document, r.Password, r.NewPassword, r.SnapshotSHA256)

@@ -471,6 +471,31 @@ func (v *Vault) VerifyBackup(document, password []byte) error {
 	if !v.unlocked() {
 		return ErrLocked
 	}
+	return v.verifyKeyBackupWithSeed(document, password, v.seed)
+}
+
+// Owner credential authentication for comparison only. Never installs an unlock
+// seed, lifetime or timer; exclusive-update Unlock remains prohibited.
+func (v *Vault) VerifyBackupLocked(document, backupPassword, vaultPassword []byte, pin string) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.closed || v.store.failedState() || v.record == nil || len(v.seed) != 0 {
+		return ErrLocked
+	}
+	if len(vaultPassword) == 0 || pin != BackupFingerprint(document) {
+		return ErrCredential
+	}
+	current, err := unseal(*v.record, vaultPassword, "vault")
+	defer clear(current)
+	if err != nil {
+		return ErrCredential
+	}
+	if IsHistoryBackup(document) {
+		return v.verifyHistoryBackupWithSeed(document, backupPassword, current)
+	}
+	return v.verifyKeyBackupWithSeed(document, backupPassword, current)
+}
+func (v *Vault) verifyKeyBackupWithSeed(document, password, current []byte) error {
 	var e envelope
 	if err := decode(document, &e); err != nil {
 		return err
@@ -480,7 +505,7 @@ func (v *Vault) VerifyBackup(document, password []byte) error {
 		return err
 	}
 	defer wipe(seed)
-	if !sameWallet(e.Ref, v.record.Ref) || !bytes.Equal(seed, v.seed) || (e.Admission == nil) != (v.record.Admission == nil) || e.Admission != nil && *e.Admission != *v.record.Admission {
+	if !sameWallet(e.Ref, v.record.Ref) || !bytes.Equal(seed, current) || (e.Admission == nil) != (v.record.Admission == nil) || e.Admission != nil && *e.Admission != *v.record.Admission {
 		return errors.New("backup belongs to another fixture wallet")
 	}
 	return nil
