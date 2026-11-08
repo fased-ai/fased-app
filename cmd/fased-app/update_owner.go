@@ -101,24 +101,45 @@ func mustJSON(v any) []byte {
 	return b
 }
 
-func ownerUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) error {
+type ownerUpdateOptions struct {
+	Action, Config, ID, Manifest, Trust, Artifacts string
+	Disposable, Prepare, Approval                  bool
+}
+
+func parseOwnerUpdateOptions(args []string, errOut io.Writer) (ownerUpdateOptions, error) {
+	var o ownerUpdateOptions
 	f := flag.NewFlagSet("owner-updates", flag.ContinueOnError)
 	f.SetOutput(errOut)
-	action := f.String("action", "inventory", "inventory, prepare, stage, preflight, backup, install, install-status, complete, rollback or abort; disposable custody only")
-	config := f.String("config", "", "root-owned managed fixture configuration")
-	fixture := f.Bool("disposable-fixture", false, "test-only custody")
-	prepare := f.Bool("prepare-host", false, "authorize fixed OS identity switch for private core read")
-	approvalStdin := f.Bool("approval-stdin", false, "disposable fixture automation only")
-	id := f.String("intent-id", "", "immutable 32-hex intent identity")
-	mp := f.String("manifest", "", "signed development manifest")
-	tp := f.String("trust-file", "", "explicit development public trust")
-	dir := f.String("artifact-dir", "", "complete local test binaries")
+	f.StringVar(&o.Action, "action", "inventory", "owner update action")
+	f.StringVar(&o.Config, "config", "", "root-owned managed identity")
+	f.BoolVar(&o.Disposable, "disposable-fixture", false, "test-only custody")
+	f.BoolVar(&o.Prepare, "prepare-host", false, "fixed OS identity switch")
+	f.BoolVar(&o.Approval, "approval-stdin", false, "disposable fixture automation")
+	f.StringVar(&o.ID, "intent-id", "", "immutable update identity")
+	f.StringVar(&o.Manifest, "manifest", "", "signed development manifest")
+	f.StringVar(&o.Trust, "trust-file", "", "public development trust")
+	f.StringVar(&o.Artifacts, "artifact-dir", "", "matching binaries")
 	if e := f.Parse(args); e != nil {
-		return e
+		return o, e
 	}
-	if f.NArg() != 0 || !*fixture || !*prepare {
-		return errors.New("explicit disposable fixture and OS helper consent required")
+	if f.NArg() != 0 || !o.Disposable || !o.Prepare {
+		return o, errors.New("explicit disposable fixture and OS helper consent required")
 	}
+	switch o.Action {
+	case "inventory", "prepare", "stage", "preflight", "backup", "abort", "install", "install-status", "rollback", "complete":
+	default:
+		return o, errors.New("unsupported owner update action")
+	}
+	return o, nil
+}
+
+func ownerUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) error {
+	options, err := parseOwnerUpdateOptions(args, errOut)
+	if err != nil {
+		return err
+	}
+	action, config, approvalStdin, id, mp, tp, dir := &options.Action, &options.Config, &options.Approval, &options.ID, &options.Manifest, &options.Trust, &options.Artifacts
+
 	if *action == "install" || *action == "install-status" || *action == "rollback" || *action == "complete" {
 		return ownerInstallation(*action, *id, *config, *dir, *approvalStdin, in, out, errOut)
 	}
@@ -251,17 +272,15 @@ func ownerUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) erro
 
 // Delegate to the immutable owner binary, retaining its terminal.
 func custodyUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) error {
-	if len(args) > 0 && args[0] == "preferences" {
-		return custodyCommand(append([]string{"update-preferences"}, args[1:]...), in, out, errOut)
-	}
-	if len(args) > 0 && args[0] == "status" {
-		return custodyCommand(append([]string{"update-status"}, args[1:]...), in, out, errOut)
-	}
 	if runtime.GOOS != "linux" || os.Getuid() <= 0 || len(args) == 0 {
 		return errors.New("managed disposable Linux owner required")
 	}
 	if args[0] == "install" || args[0] == "install-status" || args[0] == "rollback" || args[0] == "complete" {
 		return delegateInstallation(args, in, out, errOut)
+	}
+	command, e := custodyUpdateChildArgs(args, os.Getuid(), errOut)
+	if e != nil {
+		return e
 	}
 	m, e := custodyinstall.Load(os.Getuid())
 	if e != nil {
@@ -270,10 +289,49 @@ func custodyUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) er
 	if e = custodyinstall.Verify(m); e != nil {
 		return e
 	}
-	command := append([]string{"owner-updates", "--action", args[0], "--config", filepath.Join(m.Root, "identity.json")}, args[1:]...)
+	if m.NativeOwnerAccess && m.Location == "local" {
+		image, e := os.Executable()
+		if e != nil {
+			return e
+		}
+		system := &custodyinstall.System{In: in, Out: errOut}
+		if e = system.PrepareNativeUpdateSession(context.Background(), m, image); e != nil {
+			return e
+		}
+	}
 	child := exec.Command(filepath.Join(m.Root, "fased-app"), command...)
 	child.Stdin = in
 	child.Stdout = out
 	child.Stderr = errOut
 	return child.Run()
+}
+func custodyUpdateChildArgs(args []string, owner int, errOut io.Writer) ([]string, error) {
+	if len(args) == 0 || owner <= 0 {
+		return nil, errors.New("one custody update action required")
+	}
+	if args[0] == "status" || args[0] == "preferences" {
+		f := flag.NewFlagSet("custody updates "+args[0], flag.ContinueOnError)
+		f.SetOutput(errOut)
+		disposable, prepare, request := f.Bool("disposable-fixture", false, "disposable custody"), f.Bool("prepare-host", false, "OS helper consent"), f.Bool("request-stdin", false, "typed update preferences")
+		if err := f.Parse(args[1:]); err != nil {
+			return nil, err
+		}
+		if f.NArg() != 0 || !*disposable || !*prepare || (args[0] == "status" && *request) {
+			return nil, errors.New("explicit disposable fixture and OS helper consent required")
+		}
+		action := "update-status"
+		if args[0] == "preferences" {
+			action = "update-preferences"
+		}
+		return append([]string{"custody", action}, args[1:]...), nil
+	}
+	command := append([]string{"owner-updates", "--action", args[0], "--config", filepath.Join(custodyinstall.Root(owner), "identity.json")}, args[1:]...)
+	o, err := parseOwnerUpdateOptions(command[1:], errOut)
+	if err != nil {
+		return nil, err
+	}
+	if o.Action != args[0] || o.Config != filepath.Join(custodyinstall.Root(owner), "identity.json") {
+		return nil, errors.New("fixed custody update action/config required")
+	}
+	return command, nil
 }

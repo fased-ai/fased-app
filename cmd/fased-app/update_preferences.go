@@ -47,7 +47,7 @@ func updatePreferencesCommand(args []string, in *os.File, out, errOut io.Writer)
 		return e
 	}
 	defer c.Close()
-	if e = c.LoadSession(ctx, *dir); e != nil {
+	if e = loadUpdateSession(ctx, c, *dir); e != nil {
 		return e
 	}
 	var v core.UpdatePreferencesView

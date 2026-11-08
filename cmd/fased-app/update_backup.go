@@ -56,7 +56,7 @@ func updateMetadataCommand(args []string, in *os.File, out, errOut io.Writer, re
 		return e
 	}
 	defer c.Close()
-	if e = c.LoadSession(ctx, *dir); e != nil {
+	if e = loadUpdateSession(ctx, c, *dir); e != nil {
 		return e
 	}
 	var index update.RecoveryIndex

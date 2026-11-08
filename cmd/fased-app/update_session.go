@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/vpsinstall"
 )
 
@@ -14,6 +15,9 @@ import (
 // access into an update session. Browser/Tailscale and ordinary operator callers
 // cannot read the app socket or pass the helper's config/image/UID checks.
 func loadUpdateSession(ctx context.Context, c *core.Client, dir string) error {
+	return loadUpdateSessionWithLocal(ctx, c, dir, custodyinstall.InstalledNativeUpdateSessionIdentity)
+}
+func loadUpdateSessionWithLocal(ctx context.Context, c *core.Client, dir string, validateLocal func(int, string, string) (custodyinstall.Manifest, string, error)) error {
 	err := c.LoadSession(ctx, dir)
 	if !errors.Is(err, core.ErrUnauthorized) {
 		return err
@@ -21,6 +25,17 @@ func loadUpdateSession(ctx context.Context, c *core.Client, dir string) error {
 	var health core.Health
 	if e := c.Do(ctx, http.MethodGet, "/api/v1/health", nil, &health); e != nil {
 		return e
+	}
+	if health.Connection != nil && health.Connection.Location == "local" && health.Connection.OwnerUID > 0 {
+		image, e := os.Executable()
+		if e != nil {
+			return e
+		}
+		m, instance, e := validateLocal(health.Connection.OwnerUID, image, dir)
+		if e != nil {
+			return e
+		}
+		return prepareLocalReaderSession(ctx, c, m, instance)
 	}
 	if health.Connection == nil || health.Connection.Location != "remote" || health.Connection.OwnerUID <= 0 {
 		return err
