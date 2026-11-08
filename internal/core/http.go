@@ -100,6 +100,10 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.static(w, r)
 }
 func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get(custodyAccountsHeader) != "" && !h.custodyAccountsRequest(r) {
+		writeError(w, 403, "protected custody account access required")
+		return
+	}
 	if expected := r.Header.Get("X-Fased-Instance"); expected != "" && expected != h.store.instanceID {
 		writeError(w, 409, "Remote instance changed")
 		return
@@ -576,6 +580,9 @@ func (h *HTTPHandler) mutation(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 func (h *HTTPHandler) csrf(w http.ResponseWriter, r *http.Request, token string) bool {
+	if h.custodyAccountsRequest(r) {
+		return true
+	}
 	expected := csrfToken(token)
 	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-CSRF-Token")), []byte(expected)) != 1 {
 		writeError(w, 403, "CSRF token required")

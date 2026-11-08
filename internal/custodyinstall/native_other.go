@@ -25,3 +25,7 @@ func NativeUpdateSessionIdentity(int, string, string) (Manifest, string, error) 
 func InstalledNativeUpdateSessionIdentity(int, string, string) (Manifest, string, error) {
 	return Manifest{}, "", errors.New("protected Local maintenance requires Linux")
 }
+
+func InstalledRemoteAccountsIdentity(int, string, string) (Manifest, string, error) {
+	return Manifest{}, "", errors.New("protected Remote custody accounts require Linux")
+}
