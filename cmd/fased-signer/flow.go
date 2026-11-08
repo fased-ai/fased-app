@@ -111,32 +111,35 @@ func conductFlow(ctx context.Context, action, path string, ask askPassword, out 
 			return err
 		}
 	}
-	unlocked, err := call(ctx, signer.Request{Action: "unlock", Password: unlock, UnlockSeconds: 60})
-	if err != nil {
-		return err
-	}
-	if action == "setup" && readErr != nil {
-		backupAction := "backup-history"
-		// Protocol1 is the legacy deterministic engineering fixture. Preserve its
-		// existing key-backup/reconciliation contract; network custody gets history.
-		if unlocked.Status.Account != nil && unlocked.Status.Account.Version == 1 {
-			backupAction = "backup"
-		}
-		response, err := call(ctx, signer.Request{Action: backupAction, Password: backupPassword})
+	if action != "recover" {
+		unlocked, err := call(ctx, signer.Request{Action: "unlock", Password: unlock, UnlockSeconds: 60})
 		if err != nil {
 			return err
 		}
-		defer clear(response.Document)
-		if err = writeOwnerFile(path, response.Document); err != nil {
-			return err
+		if action == "setup" && readErr != nil {
+			backupAction := "backup-history"
+			// Protocol1 is the legacy deterministic engineering fixture. Preserve its
+			// existing key-backup/reconciliation contract; network custody gets history.
+			if unlocked.Status.Account != nil && unlocked.Status.Account.Version == 1 {
+				backupAction = "backup"
+			}
+			response, err := call(ctx, signer.Request{Action: backupAction, Password: backupPassword})
+			if err != nil {
+				return err
+			}
+			defer clear(response.Document)
+			if err = writeOwnerFile(path, response.Document); err != nil {
+				return err
+			}
+			backup, err = readPrivateBoundedFile(path, signer.MaxRecoveryBackup)
+			if err != nil {
+				return err
+			}
+			defer clear(backup)
 		}
-		backup, err = readPrivateBoundedFile(path, signer.MaxRecoveryBackup)
-		if err != nil {
-			return err
-		}
-		defer clear(backup)
+
 	}
-	if _, err = call(ctx, signer.Request{Action: "verify-backup", Document: backup, Password: backupPassword}); err != nil {
+	if err = verifyOwnerBackup(ctx, backup, backupPassword, unlock, call); err != nil {
 		return err
 	}
 	locked, err := call(ctx, signer.Request{Action: "lock"})
@@ -181,4 +184,14 @@ func conductImportAction(ctx context.Context, seedPath, backupPath string, ask a
 		}
 		return response, err
 	})
+}
+
+// Reopened bytes and both credentials travel only over the owner channel. The
+// signer authenticates transiently; no unlock request can escape this helper.
+func verifyOwnerBackup(ctx context.Context, backup, password, vaultPassword []byte, call ownerCall) error {
+	if _, err := call(ctx, signer.Request{Action: "lock"}); err != nil {
+		return err
+	}
+	_, err := call(ctx, signer.Request{Action: "verify-backup", Document: backup, Password: password, VaultPassword: vaultPassword, SnapshotSHA256: signer.BackupFingerprint(backup)})
+	return err
 }

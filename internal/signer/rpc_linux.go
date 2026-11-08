@@ -400,6 +400,12 @@ func (s *Server) accept(listener *net.UnixListener, c Config, uid int, owner boo
 				return
 			}
 			var request wireRequest
+			defer func() {
+				wipe(request.Request.VaultPassword)
+				wipe(request.Request.Password)
+				wipe(request.Request.NewPassword)
+				wipe(request.Request.Document)
+			}()
 			limit := 64 * 1024
 			if owner {
 				limit = MaxOwnerInput
@@ -407,9 +413,6 @@ func (s *Server) accept(listener *net.UnixListener, c Config, uid int, owner boo
 			if readWireBounded(conn, &request, limit) != nil {
 				return
 			}
-			defer wipe(request.Request.Password)
-			defer wipe(request.Request.NewPassword)
-			defer wipe(request.Request.Document)
 			if request.Version != c.Version || request.SignerID != c.SignerID || request.Challenge != nonce {
 				return
 			}

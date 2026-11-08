@@ -60,6 +60,9 @@ func (v *Vault) verifyHistoryBackup(document, password []byte) error {
 	if v.closed || v.store.failedState() || v.record == nil || !v.unlocked() {
 		return ErrLocked
 	}
+	return v.verifyHistoryBackupWithSeed(document, password, v.seed)
+}
+func (v *Vault) verifyHistoryBackupWithSeed(document, password, current []byte) error {
 	d, err := unsealPortable(document, password, BackupFingerprint(document))
 	defer clearPortable(&d)
 	if err != nil {
@@ -74,7 +77,7 @@ func (v *Vault) verifyHistoryBackup(document, password []byte) error {
 	}
 	seed, err := unseal(e, password, "vault")
 	defer clear(seed)
-	if err != nil || !bytes.Equal(seed, v.seed) {
+	if err != nil || !bytes.Equal(seed, current) {
 		return ErrCredential
 	}
 	// On a restored wallet the retained history must be the archive's exact
