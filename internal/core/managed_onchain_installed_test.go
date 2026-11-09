@@ -31,22 +31,22 @@ func (o installedSwapOracle) Reconcile(_ context.Context, q onchain.Quote, packe
 	return onchain.Observation{State: "confirmed", Input: q.Amount, Output: q.Output, Slot: q.ObservedSlot + 1}, nil
 }
 
-// Invoked only by the existing disposable Ubuntu installer harness. The OS
-// changes credentials before this test executable starts; project code is never root.
+// Invoked by the existing disposable Ubuntu harness or its retained controlled
+// ordinary receiver. The OS changes credentials first; project code is never root.
 func TestOnchainInstalledAdapterDriver(t *testing.T) {
 	root := os.Getenv("FASED_INSTALLED_ONCHAIN_ROOT")
 	if root == "" {
 		t.Skip("explicit disposable Ubuntu UID harness only")
 	}
-	if os.Getuid() <= 0 || os.Getenv("GITHUB_ACTIONS") != "true" {
-		t.Fatal("disposable CI only")
+	if os.Getuid() <= 0 || os.Getuid() != os.Geteuid() {
+		t.Fatal("unprivileged disposable identity required")
 	}
 	c, e := signer.LoadConfig(filepath.Join(root, "identity.json"))
 	if e != nil {
 		t.Fatal(e)
 	}
-	if c.Version != 2 {
-		t.Fatal("network-bound installed fixture required")
+	if e = installedSwapDriverConfig(c, os.Getenv("GITHUB_ACTIONS") == "true"); e != nil {
+		t.Fatal(e)
 	}
 	enc := json.NewEncoder(os.Stdout)
 	if os.Getenv("FASED_INSTALLED_ONCHAIN_ROLE") == "signer" {
@@ -89,6 +89,10 @@ func TestOnchainInstalledAdapterDriver(t *testing.T) {
 		t.Fatal("installed signer unavailable", e)
 	}
 	ref := *response.Status.Account
+	account, e := installedSwapAccount(c, response.Status, randomTokenHex())
+	if e != nil {
+		t.Fatal(e)
+	}
 	records, e := s.accountsRecord(t.Context())
 	if e != nil {
 		t.Fatal(e)
@@ -96,13 +100,16 @@ func TestOnchainInstalledAdapterDriver(t *testing.T) {
 	id := ""
 	for _, a := range records.Accounts {
 		if a.Signer != nil && *a.Signer == ref {
+			if a.Version != account.Version || a.Mode != account.Mode || a.PublicKey != account.PublicKey || a.Network != account.Network {
+				t.Fatal("existing account contract mismatch; preserve original")
+			}
 			id = a.ID
 			break
 		}
 	}
 	if id == "" {
-		id = randomTokenHex()
-		records.Accounts = append(records.Accounts, Account{Version: 3, ID: id, Name: "Wallet", Mode: "fixture-managed", Network: ref.Network, PublicKey: ref.PublicKey, Signer: &ref})
+		id = account.ID
+		records.Accounts = append(records.Accounts, account)
 		if _, e = s.UpdateAccounts(t.Context(), records); e != nil {
 			t.Fatal(e)
 		}
@@ -147,7 +154,32 @@ func TestOnchainInstalledAdapterDriver(t *testing.T) {
 	if e = s.advanceOnchain(t.Context()); e != nil || chain.Submissions != 1 {
 		t.Fatal("duplicate submission", e)
 	}
-	enc.Encode(map[string]any{"event": "result", "uid": os.Getuid(), "submissions": chain.Submissions, "run": run, "liveExecution": false})
+	if e = s.Close(); e != nil {
+		t.Fatal(e)
+	}
+	reopened, e := OpenStore(filepath.Join(root, "app-state"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer reopened.Close()
+	if e = reopened.configureSigner(filepath.Join(root, "identity.json")); e != nil {
+		t.Fatal(e)
+	}
+	if e = reopened.configureInstalledSwapFixture(filepath.Join(root, "identity.json"), func(Account) (swapVenue, error) { return onchaintest.Client(chain), nil }); e != nil {
+		t.Fatal(e)
+	}
+	if e = reopened.advanceOnchain(t.Context()); e != nil {
+		t.Fatal(e)
+	}
+	recovered, e := reopened.onchainView(t.Context(), "trading-analyst", "")
+	if e != nil || len(recovered.Runs) == 0 {
+		t.Fatal("reopened result unavailable", e)
+	}
+	last := recovered.Runs[len(recovered.Runs)-1]
+	if last.ID != run.ID || last.Swap.State != "confirmed" || last.Swap.ProposalDigest != r.Proposal.Digest || chain.Submissions != 1 {
+		t.Fatal("reopened result changed or replayed")
+	}
+	enc.Encode(map[string]any{"event": "result", "uid": os.Getuid(), "submissions": chain.Submissions, "run": run, "liveExecution": false, "coreReopened": true})
 }
 
 func installedSwapRPCEndpoint(network string) string {
@@ -163,4 +195,46 @@ func TestInstalledSwapRPCSelectionUsesAdmittedProviders(t *testing.T) {
 			providerAccount(t, s, installedSwapRPCEndpoint(network), network)
 		})
 	}
+}
+
+// This is the installed driver's account boundary, not a new custody adapter.
+func installedSwapAccount(c signer.Config, status signer.Status, id string) (Account, error) {
+	if err := c.Validate(); err != nil {
+		return Account{}, err
+	}
+	ordinary := c.Version == 3 && c.Mode == signer.OrdinaryCustodyMode && c.Profile == signer.OwnerCustodyProfile && c.Provenance == signer.ControlledCustodyProfile
+	if (c.Version != 2 && !ordinary) || status.Account == nil || !status.SwapReady || !status.FixtureOnly || status.WalletSigner || status.FinancialExecution || status.UpdateHeld {
+		return Account{}, errors.New("controlled installed trade capability required")
+	}
+	ref := *status.Account
+	if ref.SignerID != c.SignerID || ref.Network != c.Network {
+		return Account{}, errors.New("installed account identity mismatch")
+	}
+	version, mode := 3, "fixture-managed"
+	if ordinary {
+		public := status.PublicView()
+		if !signer.ValidOrdinaryAccountRef(ref) || !ordinaryStatus(&public) || status.Custody.Profile != c.Profile || status.Custody.Provenance != c.Provenance || status.Custody.Origin != "generated" || !status.AdmissionHeld || !status.RecoveryRequired {
+			return Account{}, errors.New("fresh controlled ordinary account required")
+		}
+		version, mode = 4, "managed"
+	} else if !signer.ValidManagedAccountRef(ref) {
+		return Account{}, errors.New("managed fixture account required")
+	}
+	return Account{Version: version, ID: id, Name: "Wallet", Mode: mode, Network: ref.Network, PublicKey: ref.PublicKey, Signer: &ref}, nil
+}
+
+// A retained ordinary receiver proves fixture admission with its immutable
+// config, not a fabricated GitHub environment. LoadConfig and exact role UID
+// checks precede all state access; signer startup retains executable checks.
+func installedSwapDriverConfig(c signer.Config, ci bool) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if c.Version == 2 && ci {
+		return nil
+	}
+	if c.Version == 3 && c.Mode == signer.OrdinaryCustodyMode && c.Profile == signer.OwnerCustodyProfile && c.Provenance == signer.ControlledCustodyProfile {
+		return nil
+	}
+	return errors.New("controlled installed receiver required")
 }

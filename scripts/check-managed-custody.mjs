@@ -323,6 +323,7 @@ async function installedSwapJourney() {
       result.uid === manifest.app.uid &&
         result.submissions === 1 &&
         result.run.swap.state === "confirmed" &&
+        result.coreReopened === true &&
         result.liveExecution === false,
     );
     check("network:swapAppCleanExit", (await app.done) === 0);
