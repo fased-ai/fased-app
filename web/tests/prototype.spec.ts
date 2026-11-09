@@ -400,10 +400,15 @@ test("Onchain retains wallets across an agent read failure and clears recovered 
 }) => {
   let failAgents = true;
   let accountReads = 0;
+  let releaseAccounts: () => void = () => {};
+  const firstAccounts = new Promise<void>((resolve) => {
+    releaseAccounts = resolve;
+  });
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/accounts")) {
       accountReads++;
+      if (accountReads === 1) await firstAccounts;
       return route.fulfill({
         json: {
           record: {
@@ -461,12 +466,21 @@ test("Onchain retains wallets across an agent read failure and clears recovered 
     );
   });
   const form = page.locator("#onchain-read-harness");
+  const initialSelect = await form
+    .getByLabel("Wallet", { exact: true })
+    .elementHandle();
+  expect(initialSelect).not.toBeNull();
+  releaseAccounts();
   await expect(form.getByRole("alert")).toHaveText("Native read unavailable");
   await expect(
     form
       .getByLabel("Wallet", { exact: true })
       .locator("option", { hasText: "Local approval" }),
   ).toHaveCount(1);
+  // Native option catalogues must initialize with the new asynchronous choices.
+  expect(await initialSelect!.evaluate((element) => element.isConnected)).toBe(
+    false,
+  );
   failAgents = false;
   await form
     .getByRole("button", { name: "Refresh Onchain", exact: true })
@@ -478,5 +492,17 @@ test("Onchain retains wallets across an agent read failure and clears recovered 
   await expect(form.getByLabel("Wallet", { exact: true })).toHaveValue(
     "ordinary-wallet",
   );
-  expect(accountReads).toBeGreaterThan(0);
+  const selectedControl = await form
+    .getByLabel("Wallet", { exact: true })
+    .elementHandle();
+  await form.getByLabel("Wallet", { exact: true }).focus();
+  const reads = accountReads;
+  await expect.poll(() => accountReads).toBeGreaterThan(reads);
+  expect(
+    await selectedControl!.evaluate((element) => element.isConnected),
+  ).toBe(true);
+  await expect(form.getByLabel("Wallet", { exact: true })).toBeFocused();
+  await expect(form.getByLabel("Wallet", { exact: true })).toHaveValue(
+    "ordinary-wallet",
+  );
 });
