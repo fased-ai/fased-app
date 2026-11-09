@@ -447,11 +447,16 @@ export function installedTradeAdapters(p) {
 const nativeProbe = String.raw`
 import json,sys,time,subprocess,pyatspi,os,hashlib
 p=json.load(sys.stdin)
-def walk(n,d=0):
+def walk(n,d=0,seen=None):
  if d>28:return
+ if seen is None:seen=set()
+ if n in seen:return
+ if len(seen)>=2048:raise RuntimeError('native tree budget exceeded')
+ seen.add(n)
  yield n
  try:
-  for c in n:yield from walk(c,d+1)
+  for c in n:yield from walk(c,d+1,seen)
+ except RuntimeError:raise
  except Exception:pass
 def match():
  roots=[n for n in walk(pyatspi.Registry.getDesktop(0)) if n.getRoleName()=='frame' and n.name==p['frame']]
@@ -504,11 +509,30 @@ elif p['action']=='set':
   time.sleep(.05)
  subprocess.run(['xdotool','key','Tab'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 elif p['action']=='select':
- sel=n.querySelection();found=False
- for i in range(n.childCount):
-  if n[i].name==p['value']:
-   found=sel.selectChild(i) and sel.getSelectedChild(0).name==p['value'];break
- if not found:raise RuntimeError('native selection unavailable')
+ found=False;opened=False;end=time.monotonic()+2
+ while not found:
+  for menu in walk(n):
+   try:sel=menu.querySelection()
+   except NotImplementedError:continue
+   for i in range(menu.childCount):
+    if menu[i].name!=p['value']:continue
+    try:current=sel.getSelectedChild(0)
+    except Exception:current=None
+    if current is None or current.name!=p['value']:
+     if not sel.selectChild(i):raise RuntimeError('native selection unavailable')
+     current=sel.getSelectedChild(0)
+     if current.name!=p['value']:raise RuntimeError('native selection unavailable')
+     action=current.queryAction()
+     if action.nActions<1 or not action.doAction(0):raise RuntimeError('native selection unavailable')
+    found=True;break
+   if found:break
+  if found:break
+  if not opened:
+   action=n.queryAction()
+   if action.nActions<1 or not action.doAction(0):raise RuntimeError('native selection unavailable')
+   opened=True
+  if time.monotonic()>=end:raise RuntimeError('native selection unavailable')
+  time.sleep(.05)
 elif p['action']=='fact':
  parent=n.parent;idx=n.getIndexInParent()+1
  if idx>=parent.childCount or not any(x.name==p['value'] for x in walk(parent[idx])):raise RuntimeError('review fact changed')
