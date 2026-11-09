@@ -14,7 +14,10 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/desktop"
 )
+
+var agentsPublicClient = desktop.NewPublicClient
 
 func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	flags := flag.NewFlagSet("agents", flag.ContinueOnError)
@@ -98,12 +101,17 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	c, e := core.NewClient(ctx, *dir)
+	c, enrolled, e := agentsPublicClient(ctx, *dir)
 	if e != nil {
 		return e
 	}
 	defer c.Close()
-	if e = c.LoadSession(ctx, *dir); e != nil {
+	if enrolled {
+		e = c.NativeLocalOwner(ctx)
+	} else {
+		e = c.LoadSession(ctx, *dir)
+	}
+	if e != nil {
 		return e
 	}
 	if *history {

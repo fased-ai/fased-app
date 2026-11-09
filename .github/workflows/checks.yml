@@ -41,7 +41,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - run: node --test scripts/ci-routing.test.mjs scripts/ci-core-coverage.test.mjs
+      - run: node --test scripts/ci-routing.test.mjs scripts/ci-core-coverage.test.mjs scripts/fixture-installed-trade-journey.test.mjs
       - name: Verify installer and release acceptance contracts
         run: |
           node --test --test-isolation=none scripts/prepare-ubuntu-release.test.mjs scripts/release-acceptance.test.mjs
