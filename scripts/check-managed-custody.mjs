@@ -24,6 +24,17 @@ import {
 import { resolve } from "node:path";
 import net from "node:net";
 
+// Explicit retained installed acceptance: pre-enrolled destination only. The
+// default CI fixture and all its historical evidence keep their original scope.
+if (process.env.FASED_INSTALLED_NATIVE_TRADE_PLAN) {
+  const { runInstalledNativeTradePlan } =
+    await import("./fixture-installed-trade-journey.mjs");
+  const code = await runInstalledNativeTradePlan(
+    process.env.FASED_INSTALLED_NATIVE_TRADE_PLAN,
+  );
+  process.exit(code);
+}
+
 assert.equal(process.env.GITHUB_ACTIONS, "true");
 assert.equal(process.platform, "linux");
 assert.match(await readFile("/etc/os-release", "utf8"), /VERSION_ID="24\.04"/);
