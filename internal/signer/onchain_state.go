@@ -17,11 +17,12 @@ type SwapProposal struct {
 	Digest      string             `json:"digest"`
 }
 type SwapReceipt struct {
-	Proposal    SwapProposal         `json:"proposal"`
-	State       string               `json:"state"`
-	Signed      []byte               `json:"signed,omitempty"`
-	Signature   string               `json:"signature,omitempty"`
-	Observation *onchain.Observation `json:"observation,omitempty"`
+	ApprovalAvailable *bool                `json:"approvalAvailable,omitempty"`
+	Proposal          SwapProposal         `json:"proposal"`
+	State             string               `json:"state"`
+	Signed            []byte               `json:"signed,omitempty"`
+	Signature         string               `json:"signature,omitempty"`
+	Observation       *onchain.Observation `json:"observation,omitempty"`
 }
 
 const OrdinarySwapVersion = "ordinary-controlled-swap-v1"

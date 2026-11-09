@@ -11,6 +11,8 @@ import type {
   SwapRecovery,
 } from "../onchain";
 import {
+  onchainAccounts,
+  tradeOwnerLink,
   atomic,
   units,
   symbol,
@@ -109,6 +111,7 @@ export function OnchainSwap() {
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [loaded, setLoaded] = useState("");
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [ownerSource, setOwnerSource] = useState<"local" | "remote">();
   const [view, setView] = useState<OnchainView>();
   const [review, setReview] = useState<SwapReview>();
   const [busy, setBusy] = useState(false);
@@ -136,16 +139,30 @@ export function OnchainSwap() {
       ]);
       if (stamp !== generation.current) return;
       setView(v.onchain);
-      setAccounts(
-        a.record.accounts.filter(
-          (x) =>
-            [2, 3].includes(x.version) &&
-            ["mainnet-beta", "devnet"].includes(x.network),
-        ),
-      );
+      setAccounts(onchainAccounts(a.record.accounts));
+      setOwnerSource(a.setup?.source);
     } catch (e) {
       if (stamp === generation.current)
         setError(e instanceof Error ? e.message : t("Unavailable"));
+    }
+  }
+  async function approve() {
+    if (!review || busy || expired || !ownerSource) return;
+    const native = ["wails", "wails.localhost"].includes(location.hostname);
+    const link = tradeOwnerLink(
+      review.proposal,
+      ownerSource === "remote" ? location.origin : "",
+    );
+    if (!link) {
+      setError(t("Unavailable"));
+      return;
+    }
+    try {
+      if (native)
+        await core.request("installation/wallet-owner", "POST", { link });
+      else location.href = link;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("Unavailable"));
     }
   }
   async function command(action: string, swap: SwapCommand) {
@@ -183,6 +200,7 @@ export function OnchainSwap() {
     setReview(undefined);
     setSelected("");
     setView(undefined);
+    setOwnerSource(undefined);
     setError("");
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey) ?? "null");
@@ -562,34 +580,50 @@ export function OnchainSwap() {
                     )}
                   </dd>
                 </dl>
-                <details>
-                  <summary>{t("Owner approval")}</summary>
-                  <div className="row-actions">
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={download}
-                    >
-                      <Download size={14} />
-                      {t("Download approval")}
-                    </button>
-                    {agents.view?.aiFixtureAvailable && (
+                {review.proposal.version === "ordinary-controlled-swap-v1" ? (
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={
+                      busy ||
+                      expired ||
+                      !ownerSource ||
+                      review.approval === "approved"
+                    }
+                    onClick={() => void approve()}
+                  >
+                    {t("Approve")}
+                  </button>
+                ) : (
+                  <details>
+                    <summary>{t("Owner approval")}</summary>
+                    <div className="row-actions">
                       <button
                         type="button"
-                        className="icon-btn"
-                        title={t("Copy command")}
-                        aria-label={t("Copy command")}
-                        onClick={() =>
-                          void navigator.clipboard.writeText(
-                            `fased-app custody approve-swap --proposal-file swap-${review.proposal.quote.id}.json --disposable-fixture`,
-                          )
-                        }
+                        className="secondary"
+                        onClick={download}
                       >
-                        <Copy size={14} />
+                        <Download size={14} />
+                        {t("Download approval")}
                       </button>
-                    )}
-                  </div>
-                </details>
+                      {agents.view?.aiFixtureAvailable && (
+                        <button
+                          type="button"
+                          className="icon-btn"
+                          title={t("Copy command")}
+                          aria-label={t("Copy command")}
+                          onClick={() =>
+                            void navigator.clipboard.writeText(
+                              `fased-app custody approve-swap --proposal-file swap-${review.proposal.quote.id}.json --disposable-fixture`,
+                            )
+                          }
+                        >
+                          <Copy size={14} />
+                        </button>
+                      )}
+                    </div>
+                  </details>
+                )}
                 <div className="row-actions">
                   <button
                     className="text-button"

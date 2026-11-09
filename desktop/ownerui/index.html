@@ -44,6 +44,7 @@
           aria-label="Server setup command"
         /><button id="copy-setup" class="secondary">Copy</button>
       </section>
+      <section id="trade-review" hidden><dl id="trade-facts"></dl></section>
       <form id="wallet" hidden>
         <label id="seed-field" hidden
           >Private seed<input
@@ -98,18 +99,22 @@
       </form>
       <p id="error" role="alert" aria-live="polite"></p>
       <section id="result" hidden>
-        <h2>Wallet saved</h2>
-        <label>Address<output id="address" aria-label="Address"></output></label
-        ><label
-          >Encrypted backup<output
-            id="backup-file"
-            aria-label="Encrypted backup"
-          ></output></label
-        ><label
-          >Checksum<output id="fingerprint" aria-label="Checksum"></output
-        ></label>
-        <p>Recovery stays locked.</p>
-        <p>Return to Wallets to attach this account.</p>
+        <h2 id="result-title">Wallet saved</h2>
+        <div id="wallet-result">
+          <label
+            >Address<output id="address" aria-label="Address"></output></label
+          ><label
+            >Encrypted backup<output
+              id="backup-file"
+              aria-label="Encrypted backup"
+            ></output></label
+          ><label
+            >Checksum<output id="fingerprint" aria-label="Checksum"></output
+          ></label>
+          <p>Recovery stays locked.</p>
+          <p>Return to Wallets to attach this account.</p>
+        </div>
+        <p id="trade-result" hidden>Return to Onchain to view this order.</p>
       </section>
       <footer><button id="close" class="secondary">Close</button></footer>
     </main>

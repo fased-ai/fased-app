@@ -100,6 +100,10 @@ func (v *Vault) SwapReceipt(id string) (*SwapReceipt, error) {
 		return nil, errors.New("swap approval required")
 	}
 	r = clone(r)
+	if v.ordinary && r.State == "approved" {
+		available := v.unlocked() && v.ordinaryTradeEligible() && v.ordinaryTradeGrants[id] == r.Proposal.Digest
+		r.ApprovalAvailable = &available
+	}
 	return &r, nil
 }
 func (v *Vault) SignSwap(id string) (*SwapReceipt, error) {

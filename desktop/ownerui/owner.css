@@ -136,3 +136,18 @@ label[hidden] {
     color: #ab244c;
   }
 }
+
+#trade-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px 16px;
+  margin: 20px 0;
+}
+#trade-facts dt {
+  color: #aaa4ba;
+}
+#trade-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}

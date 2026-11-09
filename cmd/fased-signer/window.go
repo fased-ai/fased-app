@@ -58,6 +58,9 @@ func conductWindow(ctx context.Context, c signer.Config, root string, request si
 	if request.Validate() != nil || request.SignerID != c.SignerID || request.Intent.Network != c.Network {
 		return errors.New("protected wallet identity mismatch")
 	}
+	if request.Intent.Version == 2 {
+		return conductTradeWindow(ctx, c, request, out, call)
+	}
 	// Validate every existing ancestor before creating a private child. Never
 	// repair a foreign directory or follow a link supplied by another identity.
 	if err := createOwnerDirectory(root); err != nil {

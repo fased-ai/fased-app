@@ -15,9 +15,17 @@ type OwnerIntent struct {
 	OperationID string `json:"operationId"`
 	Action      string `json:"action"`
 	Network     string `json:"network"`
+	Proposal    string `json:"proposal,omitempty"`
 }
 
 func (i OwnerIntent) Validate() error {
+	if i.Version == 2 {
+		_, err := i.TradeProposal()
+		return err
+	}
+	if i.Proposal != "" {
+		return errors.New("unexpected trade proposal")
+	}
 	id, err := base64.RawURLEncoding.DecodeString(i.InstanceID)
 	if i.Version != 1 || err != nil || len(id) != 32 || base64.RawURLEncoding.EncodeToString(id) != i.InstanceID || !validID(i.OperationID) || !managedNetwork(i.Network) || (i.Action != "setup" && i.Action != "import" && i.Action != "recover") {
 		return errors.New("invalid wallet owner operation")
@@ -30,6 +38,7 @@ func (i OwnerIntent) Validate() error {
 // be sent to the core, stored as a request, or written to diagnostics.
 type OwnerInput struct {
 	Intent         OwnerIntent `json:"intent"`
+	Confirmation   string      `json:"confirmation,omitempty"`
 	SignerID       string      `json:"signerId"`
 	Phase          string      `json:"phase"`
 	Unlock         []byte      `json:"unlock"`
@@ -49,6 +58,12 @@ func (i *OwnerInput) Clear() {
 }
 
 func (i OwnerInput) Validate() error {
+	if i.Intent.Version == 2 {
+		return i.validateTradeInput()
+	}
+	if i.Confirmation != "" {
+		return errors.New("unexpected trade confirmation")
+	}
 	if i.Intent.Validate() != nil || !validID(i.SignerID) || len(i.Unlock) < 16 || len(i.Unlock) > 1024 || len(i.BackupPassword) < 16 || len(i.BackupPassword) > 1024 {
 		return errors.New("wallet passwords must be between 16 and 1024 bytes")
 	}
@@ -78,6 +93,8 @@ func BackupFingerprint(document []byte) string {
 }
 
 type OwnerResult struct {
+	Swap           *SwapReceipt `json:"swap,omitempty"`
+	ReadOnly       bool         `json:"readOnly,omitempty"`
 	Intent         OwnerIntent  `json:"intent"`
 	SignerID       string       `json:"signerId"`
 	Status         PublicStatus `json:"status"`
