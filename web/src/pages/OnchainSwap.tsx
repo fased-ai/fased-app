@@ -479,6 +479,13 @@ export function OnchainSwap() {
                 <label>
                   {t("Wallet")}
                   <select
+                    // Reinitialize native accessibility options when choices
+                    // change; unchanged polls must preserve focus/selection.
+                    key={JSON.stringify(
+                      accounts
+                        .map((a) => [a.id, a.name] as const)
+                        .sort(([a], [b]) => a.localeCompare(b)),
+                    )}
                     aria-label={t("Wallet")}
                     value={draft.wallet}
                     onChange={(e) => edit({ wallet: e.target.value })}
