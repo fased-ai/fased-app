@@ -3,6 +3,7 @@ package ownerclient
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"net/url"
@@ -40,7 +41,7 @@ func Link(instance, network, action, origin string) (string, error) {
 func ParseLink(value string) (signer.OwnerIntent, string, error) {
 	var intent signer.OwnerIntent
 	u, err := url.Parse(value)
-	if err != nil || len(value) > 4096 || u.Scheme != "fased" || u.Host != "wallet-owner" || u.Path != "" || u.User != nil || u.Fragment != "" || u.Opaque != "" {
+	if err != nil || len(value) > 16*1024 || u.Scheme != "fased" || u.Host != "wallet-owner" || u.Path != "" || u.User != nil || u.Fragment != "" || u.Opaque != "" {
 		return intent, "", errors.New("invalid wallet link")
 	}
 	q, err := url.ParseQuery(u.RawQuery)
@@ -48,9 +49,29 @@ func ParseLink(value string) (signer.OwnerIntent, string, error) {
 		return intent, "", errors.New("invalid wallet link")
 	}
 	for key, values := range q {
-		if len(values) != 1 || (key != "instance" && key != "network" && key != "action" && key != "origin") {
+		if len(values) != 1 || (key != "instance" && key != "network" && key != "action" && key != "origin" && key != "proposal") {
 			return intent, "", errors.New("invalid wallet link field")
 		}
+	}
+	if q.Get("action") == "approve-swap" {
+		i := signer.OwnerIntent{Version: 2, InstanceID: q.Get("instance"), Network: q.Get("network"), Action: "approve-swap", Proposal: q.Get("proposal")}
+		raw, e := base64.RawURLEncoding.DecodeString(i.Proposal)
+		if e != nil {
+			return intent, "", e
+		}
+		var p signer.SwapProposal
+		if e = decode(raw, &p); e != nil {
+			return intent, "", e
+		}
+		i.OperationID = p.Quote.ID
+		canonical, e := TradeLink(p, q.Get("origin"))
+		if e != nil || canonical != value || i.Validate() != nil {
+			return intent, "", errors.New("noncanonical trade link")
+		}
+		return i, q.Get("origin"), nil
+	}
+	if q.Has("proposal") || len(value) > 4096 {
+		return intent, "", errors.New("unexpected trade link field")
 	}
 	canonical, err := Link(q.Get("instance"), q.Get("network"), q.Get("action"), q.Get("origin"))
 	if err != nil || canonical != value {
@@ -66,6 +87,7 @@ type draft struct {
 	Intent     signer.OwnerIntent `json:"intent"`
 	Origin     string             `json:"origin"`
 	Dispatched bool               `json:"dispatched"`
+	Completed  bool               `json:"completed,omitempty"`
 }
 
 func Resume(root, link string) (signer.OwnerIntent, string, error) {
@@ -81,17 +103,17 @@ func Resume(root, link string) (signer.OwnerIntent, string, error) {
 		return intent, origin, err
 	}
 	defer lock.Close()
-	path := filepath.Join(root, intent.InstanceID+".operation.json")
+	path := draftPath(root, intent)
 	b, err := core.ReadPrivateFile(path)
 	if err == nil {
 		var saved draft
 		if decode(b, &saved) != nil || saved.Intent.Validate() != nil || saved.Intent.InstanceID != intent.InstanceID {
 			return intent, origin, errors.New("invalid saved owner operation")
 		}
-		if saved.Intent.Action == intent.Action && saved.Intent.Network == intent.Network && saved.Origin == origin {
+		if saved.Intent.Action == intent.Action && saved.Intent.Network == intent.Network && saved.Origin == origin && saved.Intent.Proposal == intent.Proposal {
 			return saved.Intent, origin, nil
 		}
-		if saved.Dispatched {
+		if saved.Dispatched && !saved.Completed {
 			return intent, origin, errors.New("resume the saved wallet operation for this instance")
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -101,7 +123,9 @@ func Resume(root, link string) (signer.OwnerIntent, string, error) {
 	if _, err = rand.Read(id[:]); err != nil {
 		return intent, origin, err
 	}
-	intent.OperationID = hex.EncodeToString(id[:])
+	if intent.Version == 1 {
+		intent.OperationID = hex.EncodeToString(id[:])
+	}
 	err = writeState(path, draft{Intent: intent, Origin: origin})
 	return intent, origin, err
 }
@@ -117,7 +141,7 @@ func MarkDispatched(root string, intent signer.OwnerIntent) error {
 		return err
 	}
 	defer lock.Close()
-	path := filepath.Join(root, intent.InstanceID+".operation.json")
+	path := draftPath(root, intent)
 	b, err := core.ReadPrivateFile(path)
 	if err != nil {
 		return err
@@ -243,4 +267,57 @@ func writeState(path string, value any) error {
 		return err
 	}
 	return errors.Join(dir.Sync(), dir.Close())
+}
+
+func TradeLink(p signer.SwapProposal, origin string) (string, error) {
+	i, err := signer.NewTradeOwnerIntent(p)
+	if err != nil {
+		return "", err
+	}
+	base, err := Link(i.InstanceID, i.Network, "setup", origin)
+	if err != nil {
+		return "", err
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		return "", err
+	}
+	q := u.Query()
+	q.Set("action", i.Action)
+	q.Set("proposal", i.Proposal)
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+func draftPath(root string, i signer.OwnerIntent) string {
+	suffix := ".operation.json"
+	if i.Version == 2 {
+		suffix = ".trade-operation.json"
+	}
+	return filepath.Join(root, i.InstanceID+suffix)
+}
+
+// Approval completion is not submission; signer/core journals retain that truth.
+func FinishTrade(root string, i signer.OwnerIntent) error {
+	if err := protectRoot(root); err != nil {
+		return err
+	}
+	if i.Version != 2 || i.Validate() != nil {
+		return errors.New("invalid trade completion")
+	}
+	lock, err := core.LockInstance(filepath.Join(root, "owner-client.lock"))
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	p := draftPath(root, i)
+	raw, err := core.ReadPrivateFile(p)
+	if err != nil {
+		return err
+	}
+	var saved draft
+	if decode(raw, &saved) != nil || saved.Intent != i {
+		return errors.New("trade draft changed")
+	}
+	saved.Completed = true
+	return writeState(p, saved)
 }

@@ -1,3 +1,4 @@
+import { walletOwnerLink, type Account } from "./accounts";
 import type { AgentTask, AgentRun } from "./agents";
 export const WRAPPED_SOL = "So11111111111111111111111111111111111111112";
 export const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -138,4 +139,40 @@ export function swapState(state: string) {
       } as Record<string, string>
     )[state] ?? "Unknown"
   );
+}
+
+export function onchainAccounts(accounts: Account[]) {
+  return accounts.filter(
+    (a) =>
+      [2, 3, 4].includes(a.version) &&
+      ["mainnet-beta", "devnet"].includes(a.network),
+  );
+}
+
+// Public exact intent only; credentials are collected by the isolated owner window.
+export function tradeOwnerLink(p: SwapProposal, origin = ""): string {
+  const a = p.account as { version?: number };
+  if (p.version !== "ordinary-controlled-swap-v1" || a?.version !== 3)
+    return "";
+  const base = walletOwnerLink(
+    p.quote.instanceId,
+    p.quote.network,
+    "setup",
+    origin,
+  );
+  if (!base) return "";
+  const encoded = btoa(
+    Array.from(new TextEncoder().encode(JSON.stringify(p)), (b) =>
+      String.fromCharCode(b),
+    ).join(""),
+  )
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+  if (encoded.length > 12 * 1024) return "";
+  const u = new URL(base);
+  u.searchParams.set("action", "approve-swap");
+  u.searchParams.set("proposal", encoded);
+  u.searchParams.sort();
+  return u.toString();
 }

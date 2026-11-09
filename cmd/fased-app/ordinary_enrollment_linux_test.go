@@ -12,6 +12,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/enrollment"
+	"github.com/fased-ai/fased-app/internal/onchaintest"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/walletfixture"
 )
@@ -33,6 +34,11 @@ func configureOrdinaryEnrollmentFixture() {
 		}
 		transport, closeFixture := walletfixture.New()
 		if err := server.ConfigureControlledWalletReads(transport); err != nil {
+			closeFixture()
+			return nil, err
+		}
+		chain := &onchaintest.Chain{WrongNetwork: cfg.Network == "devnet"}
+		if err := server.ConfigureControlledInstalledSwaps(path, func(core.Account) (core.ControlledSwapVenue, error) { return onchaintest.Client(chain), nil }); err != nil {
 			closeFixture()
 			return nil, err
 		}

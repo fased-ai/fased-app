@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/fased-ai/fased-app/internal/onchain"
 	"github.com/fased-ai/fased-app/internal/signer"
 )
 
@@ -53,7 +54,7 @@ func ordinaryFixtureCommand(args []string) error {
 		if c.Version == 3 {
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
-			server, err := signer.ServeControlledOwnerCustody(ctx, c)
+			server, err := signer.ServeControlledSwapFixture(ctx, c, installedOrdinaryReceipt{c.Network})
 			if err != nil {
 				return err
 			}
@@ -64,4 +65,17 @@ func ordinaryFixtureCommand(args []string) error {
 		}
 	}
 	return run(args, os.Stdin, os.Stdout, os.Stderr)
+}
+
+// Fixed inert independent packet receipt; never part of a product executable.
+type installedOrdinaryReceipt struct{ network string }
+
+func (o installedOrdinaryReceipt) Reconcile(_ context.Context, q onchain.Quote, packet []byte) (onchain.Observation, error) {
+	if q.Network != o.network || q.Blockhash != onchain.ControlledBlockhash {
+		return onchain.Observation{}, signer.ErrUnavailable
+	}
+	if _, err := onchain.VerifyPacket(q, packet); err != nil {
+		return onchain.Observation{}, err
+	}
+	return onchain.Observation{State: "confirmed", Input: q.Amount, Output: q.Output, Slot: q.ObservedSlot + 1}, nil
 }

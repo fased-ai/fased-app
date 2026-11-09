@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -33,6 +34,8 @@ type WalletOwner struct {
 	setupCommand  string
 	client        *ownerclient.Client
 	busy          bool
+	tradeFinished bool
+	tradeRecorded bool
 	enroll        func(context.Context, signer.OwnerIntent, string, string, ownerclient.Package) (*ownerclient.Enrollment, error)
 	packageSource func() (ownerclient.Package, error)
 	terminal      func(context.Context, string, []string) error
@@ -75,6 +78,14 @@ func (w *WalletOwner) Info() map[string]string {
 	if address, user, err := ownerclient.SavedTarget(w.root, w.intent.InstanceID); err == nil {
 		info["address"], info["user"] = address, user
 	}
+	if w.intent.Version == 2 {
+		p, _ := w.intent.TradeProposal()
+		raw, _ := json.Marshal(p)
+		info["proposal"] = string(raw)
+		if w.tradeRecorded {
+			info["recorded"] = "true"
+		}
+	}
 	return info
 }
 
@@ -93,10 +104,20 @@ func (w *WalletOwner) Connect(selectedOrigin, user string) (bool, error) {
 	w.client = nil
 	c, err := w.connectOwner(ctx, selectedOrigin, user)
 	if errors.Is(err, ownerclient.ErrEnrollmentRequired) {
+		if w.intent.Version == 2 {
+			return false, errors.New("finish Wallets setup before reviewing this swap")
+		}
 		return false, nil
 	}
 	if err == nil {
 		err = ownerclient.RememberTarget(w.root, selectedOrigin, user, c.Peer)
+	}
+	if err == nil && w.intent.Version == 2 {
+		var inspected signer.OwnerResult
+		inspected, err = c.Exchange(ctx, signer.OwnerInput{Intent: w.intent, SignerID: c.Peer.SignerID, Phase: "inspect"})
+		if err == nil {
+			w.tradeRecorded = inspected.Swap != nil
+		}
 	}
 	if err == nil {
 		w.client = c
@@ -111,9 +132,24 @@ func (w *WalletOwner) connectOwner(ctx context.Context, origin, user string) (*o
 	return ownerclient.Open(ctx, w.intent, origin, user)
 }
 
-func (w *WalletOwner) Cancel() { w.cancel() }
+func (w *WalletOwner) Cancel() {
+	w.mu.Lock()
+	c, intent, done, busy := w.client, w.intent, w.tradeFinished, w.busy
+	w.mu.Unlock()
+	w.cancel()
+	if c != nil && intent.Version == 2 && !done && !busy {
+		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		if _, err := c.Exchange(ctx, signer.OwnerInput{Intent: intent, SignerID: c.Peer.SignerID, Phase: "cancel"}); err == nil {
+			_ = ownerclient.FinishTrade(w.root, intent)
+		}
+	}
+}
 
 func (w *WalletOwner) Enable(selectedOrigin, user string) error {
+	if w.intent.Version == 2 {
+		return errors.New("finish Wallets setup before reviewing this swap")
+	}
 	w.mu.Lock()
 	if w.busy {
 		w.mu.Unlock()
@@ -182,6 +218,7 @@ type walletResult struct {
 	BackupFile   string `json:"backupFile"`
 	Fingerprint  string `json:"fingerprint"`
 	RecoveryHeld bool   `json:"recoveryHeld"`
+	Trade        string `json:"trade,omitempty"`
 }
 
 func (w *WalletOwner) Run(unlock, password, seed, recovery, fingerprint string) (walletResult, error) {
@@ -194,6 +231,9 @@ func (w *WalletOwner) Run(unlock, password, seed, recovery, fingerprint string) 
 	c := w.client
 	w.mu.Unlock()
 	defer func() { w.mu.Lock(); w.busy = false; w.mu.Unlock() }()
+	if w.intent.Version == 2 {
+		return w.approveTrade(c, unlock)
+	}
 	input := signer.OwnerInput{Intent: w.intent, SignerID: c.Peer.SignerID, Phase: "prepare", Unlock: []byte(unlock), BackupPassword: []byte(password)}
 	defer input.Clear()
 	if input.Intent.Action == "import" {
@@ -238,5 +278,54 @@ func (w *WalletOwner) Run(unlock, password, seed, recovery, fingerprint string) 
 	if !verified.BackupVerified || verified.Status.PublicIdentity == nil {
 		return walletResult{}, errors.New("backup verification is incomplete")
 	}
-	return walletResult{verified.Status.PublicIdentity.Address, path, verified.Fingerprint, verified.Status.RecoveryRequired}, nil
+	return walletResult{Address: verified.Status.PublicIdentity.Address, BackupFile: path, Fingerprint: verified.Fingerprint, RecoveryHeld: verified.Status.RecoveryRequired}, nil
+}
+
+func (w *WalletOwner) approveTrade(c *ownerclient.Client, unlock string) (walletResult, error) {
+	p, err := w.intent.TradeProposal()
+	if err != nil {
+		return walletResult{}, err
+	}
+	in := signer.OwnerInput{Intent: w.intent, SignerID: c.Peer.SignerID, Phase: "inspect"}
+	ctx, cancel := context.WithTimeout(w.ctx, time.Minute)
+	defer cancel()
+	inspected, err := c.Exchange(ctx, in)
+	if err != nil {
+		return walletResult{}, err
+	}
+	result := inspected
+	if inspected.Swap == nil {
+		in.Phase, in.Unlock, in.Confirmation = "approve", []byte(unlock), p.Digest
+		defer in.Clear()
+		if err = in.Validate(); err != nil {
+			return walletResult{}, err
+		}
+		if err = ownerclient.MarkDispatched(w.root, w.intent); err != nil {
+			return walletResult{}, err
+		}
+		result, err = c.Exchange(ctx, in)
+		if err != nil {
+			return walletResult{}, err
+		}
+	}
+	if err = ownerclient.FinishTrade(w.root, w.intent); err != nil {
+		return walletResult{}, err
+	}
+	w.mu.Lock()
+	w.tradeFinished = true
+	w.mu.Unlock()
+	state := "Not approved"
+	if result.Swap != nil {
+		state = result.Swap.State
+		if state == "approved" {
+			state = "Approval unavailable"
+			if result.Swap.ApprovalAvailable != nil && *result.Swap.ApprovalAvailable {
+				state = "Approved"
+			}
+		}
+	}
+	if !result.ReadOnly {
+		state = "Approved"
+	}
+	return walletResult{Trade: state}, nil
 }

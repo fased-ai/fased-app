@@ -69,6 +69,12 @@ func open(ctx context.Context, intent signer.OwnerIntent, origin, user, pins str
 		}
 		return nil, err
 	}
+	if intent.Version == 2 {
+		p, err := intent.TradeProposal()
+		if err != nil || p.Account.SignerID != c.Peer.SignerID {
+			return nil, errors.New("trade belongs to another enrolled signer")
+		}
+	}
 	return c, nil
 }
 
@@ -154,7 +160,10 @@ func (c *Client) Exchange(ctx context.Context, input signer.OwnerInput) (signer.
 	if err != nil {
 		return result, errors.New("wallet owner operation interrupted; resume this operation")
 	}
-	if decode(response, &result) != nil || result.Intent != c.Intent || result.SignerID != c.Peer.SignerID || result.Status.Account == nil || result.Status.Account.SignerID != c.Peer.SignerID || result.Status.Account.Network != c.Intent.Network || !result.Status.Locked || !result.Status.RecoveryRequired || result.Status.WalletSigner || result.Status.FinancialExecution || len(result.Backup) == 0 || result.Fingerprint != signer.BackupFingerprint(result.Backup) || result.BackupVerified != (input.Phase == "verify") {
+	if input.Intent.Version == 2 {
+		return c.validateTradeResponse(response, input)
+	}
+	if decode(response, &result) != nil || result.Swap != nil || result.ReadOnly || result.Intent != c.Intent || result.SignerID != c.Peer.SignerID || result.Status.Account == nil || result.Status.Account.SignerID != c.Peer.SignerID || result.Status.Account.Network != c.Intent.Network || !result.Status.Locked || !result.Status.RecoveryRequired || result.Status.WalletSigner || result.Status.FinancialExecution || len(result.Backup) == 0 || result.Fingerprint != signer.BackupFingerprint(result.Backup) || result.BackupVerified != (input.Phase == "verify") {
 		return signer.OwnerResult{}, errors.New("wallet owner returned an invalid completion")
 	}
 	if !signer.ValidManagedAccountRef(*result.Status.Account) && !signer.ValidOrdinaryAccountRef(*result.Status.Account) {

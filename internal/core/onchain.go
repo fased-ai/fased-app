@@ -77,12 +77,14 @@ type OnchainView struct {
 	Tasks         []AgentTask    `json:"tasks"`
 	Runs          []AgentRun     `json:"runs"`
 }
-type swapVenue interface {
+type ControlledSwapVenue interface {
 	Prepare(context.Context, onchain.Quote) (onchain.Quote, error)
 	Simulate(context.Context, onchain.Quote) (onchain.Simulation, error)
 	Send(context.Context, onchain.Quote, []byte) (bool, error)
 	Reconcile(context.Context, onchain.Quote, []byte) (onchain.Observation, error)
 }
+type swapVenue = ControlledSwapVenue
+
 type swapEntry struct {
 	lease  string
 	review SwapReview
@@ -202,7 +204,7 @@ func (s *Store) onchainView(ctx context.Context, profile, id string) (OnchainVie
 	review := entry.review
 	review.Approval = "required"
 	reply, e := s.swapSigner(ctx, signer.Request{Action: "swap-receipt", PublicInput: signer.PublicInput{OperationID: id}})
-	if e == nil && reply.Swap != nil && reply.Swap.Proposal.Digest == review.Proposal.Digest && reply.Swap.State == "approved" {
+	if e == nil && reply.Swap != nil && reply.Swap.Proposal.Digest == review.Proposal.Digest && ownerSwapApproved(reply.Swap) {
 		review.Approval = "approved"
 	}
 	v.Review = &review
@@ -334,7 +336,7 @@ func (s *Store) changeOnchain(ctx context.Context, c AgentCommand) (OnchainView,
 			return s.onchainView(ctx, c.ProfileID, c.Swap.ID)
 		}
 		receipt, e := s.swapSigner(ctx, signer.Request{Action: "swap-receipt", PublicInput: signer.PublicInput{OperationID: c.Swap.ID}})
-		if e != nil || receipt.Swap == nil || receipt.Swap.State != "approved" || receipt.Swap.Proposal.Digest != entry.review.Proposal.Digest {
+		if e != nil || receipt.Swap == nil || !ownerSwapApproved(receipt.Swap) || receipt.Swap.Proposal.Digest != entry.review.Proposal.Digest {
 			return OnchainView{}, errors.New("protected owner approval required")
 		}
 		tx, e := s.db.BeginTx(ctx, nil)
@@ -928,4 +930,14 @@ func (s *Store) restoreSwapSettlement(ctx context.Context, profile, id string, t
 func recoveryOnlyTransition(a, b string) bool {
 	return a == "validating" && b == "expired" ||
 		(a == "expired" || a == "simulation-failed") && b == "cancelled"
+}
+
+func ownerSwapApproved(r *signer.SwapReceipt) bool {
+	if r == nil || r.State != "approved" {
+		return false
+	}
+	if r.Proposal.Version == signer.OrdinarySwapVersion {
+		return r.ApprovalAvailable != nil && *r.ApprovalAvailable
+	}
+	return r.ApprovalAvailable == nil || *r.ApprovalAvailable
 }
