@@ -1,15 +1,6 @@
-// CI-only disposable installation proof. Never run this on an owner's host.
+// Disposable installation proof: hosted CI or an explicitly approved retained VM.
 // Root executes trusted OS tools; all Fased executables run under non-root UIDs.
 import assert from "node:assert/strict";
-import { fixturePortableRecovery } from "./fixture-portable-recovery.mjs";
-import { fixtureAccountJourney } from "./fixture-account-journey.mjs";
-import { fixtureInspectionJourney } from "./fixture-inspection-journey.mjs";
-import { fixtureBootstrapJourney } from "./fixture-bootstrap-journey.mjs";
-import { fixtureUpdateIntentJourney } from "./fixture-update-intent-journey.mjs";
-import {
-  fixturePolicyJourney,
-  fixtureRecoveryJourney,
-} from "./fixture-policy-journey.mjs";
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
 import { watch } from "node:fs";
@@ -36,6 +27,24 @@ if (process.env.FASED_INSTALLED_NATIVE_TRADE_PLAN) {
 }
 
 assert.equal(process.env.GITHUB_ACTIONS, "true");
+// These dependencies belong only to the hosted CI journey. The installed native
+// producer must reach its own guards without a browser/dependency installation.
+const [
+  { fixturePortableRecovery },
+  { fixtureAccountJourney },
+  { fixtureInspectionJourney },
+  { fixtureBootstrapJourney },
+  { fixtureUpdateIntentJourney },
+  { fixturePolicyJourney, fixtureRecoveryJourney },
+] = await Promise.all([
+  import("./fixture-portable-recovery.mjs"),
+  import("./fixture-account-journey.mjs"),
+  import("./fixture-inspection-journey.mjs"),
+  import("./fixture-bootstrap-journey.mjs"),
+  import("./fixture-update-intent-journey.mjs"),
+  import("./fixture-policy-journey.mjs"),
+]);
+
 assert.equal(process.platform, "linux");
 assert.match(await readFile("/etc/os-release", "utf8"), /VERSION_ID="24\.04"/);
 const uid = process.getuid();

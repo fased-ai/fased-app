@@ -502,3 +502,154 @@ test("a displayed review fact mismatch stops before private input and submit", a
   assert.ok(!f.events.includes("click:Submit"));
   assert.equal(f.saved.at(-1).result, "FAIL");
 });
+
+test(
+  "installed entrypoint does not load CI-only browser dependencies",
+  { skip: process.platform !== "linux" || process.getuid?.() === 0 },
+  async () => {
+    const { mkdtemp, copyFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { spawnSync } = await import("node:child_process");
+    const dir = await mkdtemp(join(tmpdir(), "fased-native-entry-"));
+    try {
+      for (const file of [
+        "check-managed-custody.mjs",
+        "fixture-installed-trade-journey.mjs",
+      ])
+        await copyFile(new URL(file, import.meta.url), join(dir, file));
+      const missing = join(dir, "missing-private-plan.json");
+      const result = spawnSync(
+        process.execPath,
+        [join(dir, "check-managed-custody.mjs")],
+        {
+          env: {
+            ...process.env,
+            FASED_DISPOSABLE_VM_ACCEPTANCE: "1",
+            FASED_INSTALLED_NATIVE_TRADE_PLAN: missing,
+          },
+          encoding: "utf8",
+          timeout: 10000,
+        },
+      );
+      assert.equal(result.error, undefined);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /ENOENT/);
+      assert.ok(result.stderr.includes(missing));
+      assert.doesNotMatch(result.stderr, /ERR_MODULE_NOT_FOUND|playwright/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+test("native traversal refuses cyclic and oversized accessibility graphs", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const source = await readFile(
+    new URL("fixture-installed-trade-journey.mjs", import.meta.url),
+    "utf8",
+  );
+  const body = source.slice(
+    source.indexOf("def walk(n,"),
+    source.indexOf("def match():"),
+  );
+  const checks = `
+class Node:
+ def __init__(self): self.children=[]
+ def __iter__(self):
+  global visits
+  visits+=1
+  if visits>20:raise RuntimeError('cycle not bounded')
+  return iter(self.children)
+a=Node();b=Node();a.children=[a,b];b.children=[a]
+visits=0
+assert len(list(walk(a)))==2 and visits==2
+root=Node();root.children=[Node() for _ in range(2100)]
+# Permit this finite wide graph; only the production walk may reject its budget.
+Node.__iter__=lambda self:iter(self.children)
+try:list(walk(root))
+except RuntimeError as e:assert str(e)=='native tree budget exceeded'
+else:raise AssertionError('missing node budget')
+`;
+  const result = spawnSync("/usr/bin/python3", ["-c", body + checks], {
+    encoding: "utf8",
+    timeout: 5000,
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test("native wallet selection uses the supported child menu, opens only when needed and refuses foreign options", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const source = await readFile(
+    new URL("fixture-installed-trade-journey.mjs", import.meta.url),
+    "utf8",
+  );
+  const walk = source.slice(
+    source.indexOf("def walk(n,"),
+    source.indexOf("def match():"),
+  );
+  const select = source
+    .slice(
+      source.indexOf("elif p['action']=='select':"),
+      source.indexOf("elif p['action']=='fact':"),
+    )
+    .replace(/^elif /, "if ");
+  const harness = `
+import time
+class Action:
+ nActions=1
+ def __init__(self,callback):self.callback=callback
+ def doAction(self,i):self.callback();return True
+class Item:
+ def __init__(self,name,menu):self.name=name;self.menu=menu
+ def __iter__(self):return iter([])
+ def querySelection(self):raise NotImplementedError
+ def queryAction(self):return Action(lambda:setattr(self.menu,'committed',self.name))
+class Menu:
+ def __init__(self):self.items=[Item('Select wallet',self)];self.index=0;self.committed=None
+ @property
+ def childCount(self):return len(self.items)
+ def __iter__(self):return iter(self.items)
+ def __getitem__(self,i):return self.items[i]
+ def querySelection(self):return self
+ def selectChild(self,i):self.index=i;return True
+ def getSelectedChild(self,i):return self.items[self.index]
+class Combo:
+ def __init__(self):self.menu=Menu();self.opens=0
+ def __iter__(self):return iter([self.menu])
+ def querySelection(self):raise NotImplementedError
+ def queryAction(self):return Action(self.open)
+ def open(self):self.opens+=1;self.menu.items.append(Item('Local approval',self.menu))
+n=Combo();p={'action':'select','value':'Local approval'}
+`;
+  const script =
+    walk +
+    harness +
+    select +
+    `
+assert n.opens==1 and n.menu.committed=='Local approval'
+`;
+  const result = spawnSync("/usr/bin/python3", ["-c", script], {
+    encoding: "utf8",
+    timeout: 5000,
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, result.stderr);
+  const wrong = spawnSync(
+    "/usr/bin/python3",
+    [
+      "-c",
+      walk +
+        harness.replace(
+          "'value':'Local approval'",
+          "'value':'Foreign wallet'",
+        ) +
+        select,
+    ],
+    { encoding: "utf8", timeout: 5000 },
+  );
+  assert.equal(wrong.error, undefined);
+  assert.notEqual(wrong.status, 0);
+  assert.match(wrong.stderr, /native selection unavailable/);
+});

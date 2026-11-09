@@ -397,12 +397,8 @@ func Verify(m Manifest) error {
 		return e
 	}
 	for _, pair := range []struct{ name, hash string }{{"fased-app", m.CoreHash}, {"fased-signer", m.SignerHash}} {
-		f, e := readRoot(m.Root + "/" + pair.name)
-		if e != nil {
+		if e := verifyRootExecutable(m.Root+"/"+pair.name, pair.hash); e != nil {
 			return e
-		}
-		if sum(f.Data) != pair.hash || f.Mode != 0755 {
-			return errors.New("installed executable changed")
 		}
 	}
 	return nil
