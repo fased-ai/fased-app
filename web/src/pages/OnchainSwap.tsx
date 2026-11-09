@@ -116,6 +116,9 @@ export function OnchainSwap() {
   const [review, setReview] = useState<SwapReview>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [readError, setReadError] = useState("");
+  const reading = useRef<number | null>(null);
+  const readSequence = useRef(0);
   const [selected, setSelected] = useState("");
   const generation = useRef(0);
   const writing = useRef(false);
@@ -130,20 +133,36 @@ export function OnchainSwap() {
   const result = active?.runs.find((x) => x.taskId === order?.id)?.swap;
   async function read() {
     const stamp = generation.current;
+    if (writing.current || reading.current === stamp) return;
+    reading.current = stamp;
+    const sequence = ++readSequence.current;
+    const current = () =>
+      stamp === generation.current && sequence === readSequence.current;
+    let failure = "";
     try {
-      const [v, a] = await Promise.all([
-        core.request<AgentView>(
+      // Accounts are usable independently of the agent/result read. In
+      // particular, a transient native agent failure must not hide wallets.
+      try {
+        const a = await core.request<AccountsView>("accounts");
+        if (!current()) return;
+        setAccounts(onchainAccounts(a.record.accounts));
+        setOwnerSource(a.setup?.source);
+      } catch (e) {
+        failure = e instanceof Error ? e.message : t("Unavailable");
+      }
+      if (!current()) return;
+      try {
+        const v = await core.request<AgentView>(
           `agents?profile=${encodeURIComponent(profile)}`,
-        ),
-        core.request<AccountsView>("accounts"),
-      ]);
-      if (stamp !== generation.current) return;
-      setView(v.onchain);
-      setAccounts(onchainAccounts(a.record.accounts));
-      setOwnerSource(a.setup?.source);
-    } catch (e) {
-      if (stamp === generation.current)
-        setError(e instanceof Error ? e.message : t("Unavailable"));
+        );
+        if (!current()) return;
+        setView(v.onchain);
+      } catch (e) {
+        failure ||= e instanceof Error ? e.message : t("Unavailable");
+      }
+      if (current()) setReadError(failure);
+    } finally {
+      if (reading.current === stamp) reading.current = null;
     }
   }
   async function approve() {
@@ -169,6 +188,7 @@ export function OnchainSwap() {
     if (writing.current) return;
     const stamp = generation.current;
     writing.current = true;
+    readSequence.current++;
     setBusy(true);
     setError("");
     try {
@@ -200,6 +220,8 @@ export function OnchainSwap() {
     setReview(undefined);
     setSelected("");
     setView(undefined);
+    setAccounts([]);
+    setReadError("");
     setOwnerSource(undefined);
     setError("");
     try {
@@ -267,7 +289,7 @@ export function OnchainSwap() {
           </button>
         </div>
       </div>
-      {error && <p role="alert">{error}</p>}
+      {(error || readError) && <p role="alert">{error || readError}</p>}
       <section
         className="panel task-board onchain-workspace"
         aria-label={t("Onchain swaps")}

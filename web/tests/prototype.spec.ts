@@ -394,3 +394,89 @@ for (const capability of [
     );
   });
 }
+
+test("Onchain retains wallets across an agent read failure and clears recovered read errors", async ({
+  page,
+}) => {
+  let failAgents = true;
+  let accountReads = 0;
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/accounts")) {
+      accountReads++;
+      return route.fulfill({
+        json: {
+          record: {
+            accounts: [
+              {
+                id: "ordinary-wallet",
+                name: "Local approval",
+                version: 4,
+                network: "devnet",
+              },
+            ],
+          },
+          setup: { source: "local" },
+        },
+      });
+    }
+    if (path.endsWith("/agents") && !failAgents)
+      return route.fulfill({ json: { onchain: { tasks: [], runs: [] } } });
+    return route.fulfill({
+      status: 503,
+      json: { error: "Native read unavailable" },
+    });
+  });
+  await page.goto("/");
+  await page.evaluate(async () => {
+    const entry = await (await fetch("/src/main.tsx")).text();
+    const reactURL = entry.match(/from "([^"]*\/react\.js[^"]*)"/)?.[1];
+    const domURL = entry.match(
+      /from "([^"]*\/react-dom_client\.js[^"]*)"/,
+    )?.[1];
+    if (!reactURL || !domURL) throw Error("Vite imports unavailable");
+    const React = (await import(reactURL)).default;
+    const { createRoot } = (await import(domURL)).default;
+    const { CoreProvider } = await import("/src/core.tsx");
+    const { UIProvider } = await import("/src/ui-preferences.tsx");
+    const { WorkspaceProvider } = await import("/src/workspace.tsx");
+    const { OnchainSwap } = await import("/src/pages/OnchainSwap.tsx");
+    const host = document.createElement("div");
+    host.id = "onchain-read-harness";
+    document.body.append(host);
+    createRoot(host).render(
+      React.createElement(
+        UIProvider,
+        null,
+        React.createElement(
+          CoreProvider,
+          null,
+          React.createElement(
+            WorkspaceProvider,
+            null,
+            React.createElement(OnchainSwap),
+          ),
+        ),
+      ),
+    );
+  });
+  const form = page.locator("#onchain-read-harness");
+  await expect(form.getByRole("alert")).toHaveText("Native read unavailable");
+  await expect(
+    form
+      .getByLabel("Wallet", { exact: true })
+      .locator("option", { hasText: "Local approval" }),
+  ).toHaveCount(1);
+  failAgents = false;
+  await form
+    .getByRole("button", { name: "Refresh Onchain", exact: true })
+    .click();
+  await expect(form.getByRole("alert")).toHaveCount(0);
+  await form
+    .getByLabel("Wallet", { exact: true })
+    .selectOption("ordinary-wallet");
+  await expect(form.getByLabel("Wallet", { exact: true })).toHaveValue(
+    "ordinary-wallet",
+  );
+  expect(accountReads).toBeGreaterThan(0);
+});
