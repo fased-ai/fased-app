@@ -330,3 +330,48 @@ test("ordinary admission checks run once in parallel without consuming the manag
   assert.match(scenarios, /timeout-minutes: 10/);
   assert.match(signer, /timeout-minutes: 5/);
 });
+
+test("full browser UI coverage runs once in the Ubuntu UI job, with leaf coverage retained", async () => {
+  const workflow = await readFile(
+    new URL("../.github/workflows/checks.yml", import.meta.url),
+    "utf8",
+  );
+  const core = workflow.slice(
+    workflow.indexOf("  core:\n"),
+    workflow.indexOf("  core-scenarios:\n"),
+  );
+  const desktop = workflow.slice(
+    workflow.indexOf("  desktop:\n"),
+    workflow.indexOf("  signer:\n"),
+  );
+  assert.match(
+    core,
+    /- run: npm run test:ui\n        if: needs\.classify\.outputs\.desktop != 'true'/,
+  );
+  assert.match(
+    desktop,
+    /- name: Browser UI journey\n        if: runner\.os == 'Linux' && needs\.classify\.outputs\.scope == 'full'\n        run: npm run test:ui/,
+  );
+  assert.equal(workflow.match(/run: npm run test:ui(?:\n|$)/g)?.length, 2);
+  assert.ok(
+    desktop.indexOf("- name: Prepare joined UI browser") <
+      desktop.indexOf("- name: Browser UI journey"),
+  );
+  for (const paths of [
+    ["internal/core/onchain.go"],
+    ["web/src/core.tsx"],
+    ["internal/core/rpc_check.go"],
+    ["web/src/core.tsx", "internal/core/rpc_check.go"],
+  ]) {
+    const plan = classify(paths);
+    const coreOwner = plan.core && !plan.desktop;
+    const desktopOwner = plan.desktop && plan.scope === "full";
+    assert.equal(Number(coreOwner) + Number(desktopOwner), 1, paths.join(", "));
+  }
+  assert.match(core, /timeout-minutes: 20/);
+  assert.match(desktop, /timeout-minutes: 15/);
+  assert.ok(
+    desktop.includes("            .evidence/browser/\n"),
+    "retain browser failure artifacts with the owning job",
+  );
+});

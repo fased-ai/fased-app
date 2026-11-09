@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -78,14 +79,14 @@ func (s *Store) snapshotTx(ctx context.Context, tx snapshotReader, probe string)
 	contract := UpdateContract()
 	features := make([]string, 0, len(contract.State[0].Features))
 	for _, feature := range contract.State[0].Features {
-		if feature == swapRecoveryFeature {
+		if feature == swapRecoveryFeature || feature == ordinaryTradeFeature {
 			var document agentDocument
 			if json.Unmarshal([]byte(v.Agents), &document) != nil {
 				return update.CoreSnapshot{}, errors.New("invalid swap recovery snapshot")
 			}
 			required := false
 			for _, run := range document.Runs {
-				if run.Swap != nil && run.Swap.Version == swapRecoveryVersion {
+				if run.Swap != nil && (feature == swapRecoveryFeature && run.Swap.Version == swapRecoveryVersion || feature == ordinaryTradeFeature && ordinarySwapRun(document, run.TaskID)) {
 					required = true
 					break
 				}
@@ -101,4 +102,13 @@ func (s *Store) snapshotTx(ctx context.Context, tx snapshotReader, probe string)
 	}
 	state := update.State{Name: "core-db", Version: v.Schema, Features: features, Anchor: update.SnapshotDigest("core-db", v)}
 	return update.CoreSnapshot{Version: 1, ProbeID: probe, BootID: s.bootID, InstanceID: v.Instance, State: state}, nil
+}
+
+func ordinarySwapRun(document agentDocument, id string) bool {
+	for _, task := range document.Tasks {
+		if task.ID == id && task.Swap != nil && task.Swap.Proposal.Version == signer.OrdinarySwapVersion {
+			return true
+		}
+	}
+	return false
 }

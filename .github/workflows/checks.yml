@@ -137,7 +137,9 @@ jobs:
         run: GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o .evidence/bin/macos ./cmd/fased-app
       # Same runner libraries and headless browser as the managed signer UI proof.
       - run: npx playwright install --only-shell chromium
+        if: needs.classify.outputs.desktop != 'true'
       - run: npm run test:ui
+        if: needs.classify.outputs.desktop != 'true'
       - if: needs.classify.outputs.scope == 'ui'
         env:
           FASED_WALLET_BROWSER_BINARY: .evidence/bin/wallet-core.test
@@ -312,6 +314,9 @@ jobs:
       - name: Prepare joined UI browser
         if: runner.os == 'Linux' && needs.classify.outputs.scope == 'full'
         run: npx playwright install --only-shell chromium
+      - name: Browser UI journey
+        if: runner.os == 'Linux' && needs.classify.outputs.scope == 'full'
+        run: npm run test:ui
       - name: Joined UI and CLI journey
         if: runner.os == 'Linux' && needs.classify.outputs.scope == 'full'
         env:
@@ -344,6 +349,7 @@ jobs:
             .evidence/*.json
             .evidence/*.png
             .evidence/*.log
+            .evidence/browser/
             .evidence/core-browser/
           retention-days: 7
   signer:

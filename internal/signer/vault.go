@@ -74,24 +74,26 @@ type Status struct {
 }
 
 type Vault struct {
-	admissionContext  CustodyAdmission
-	ordinary          bool
-	receiptRPCFactory func(onchain.CredentialAccess) (SwapObserver, error)
-	receiptRPCLease   *receiptRPCLease
-	swapObserver      SwapObserver
-	mu                sync.Mutex
-	store             *storage
-	signerID          string
-	network           string
-	managedRef        *AccountRef
-	record            *envelope
-	ledger            *ledger
-	seed              []byte
-	until             time.Time
-	timer             *time.Timer
-	now               func() time.Time
-	closed            bool
-	bootID            string
+	admissionContext     CustodyAdmission
+	ordinaryTradeGrants  map[string]string
+	ordinaryTradeEnabled bool
+	ordinary             bool
+	receiptRPCFactory    func(onchain.CredentialAccess) (SwapObserver, error)
+	receiptRPCLease      *receiptRPCLease
+	swapObserver         SwapObserver
+	mu                   sync.Mutex
+	store                *storage
+	signerID             string
+	network              string
+	managedRef           *AccountRef
+	record               *envelope
+	ledger               *ledger
+	seed                 []byte
+	until                time.Time
+	timer                *time.Timer
+	now                  func() time.Time
+	closed               bool
+	bootID               string
 }
 
 func validPassword(p []byte) bool { return utf8.Valid(p) && utf8.RuneCount(p) >= 12 && len(p) <= 1024 }
@@ -286,6 +288,7 @@ func (v *Vault) Close() error {
 	return v.store.close()
 }
 func (v *Vault) lock() {
+	v.ordinaryTradeGrants = nil
 	v.lockReceiptRPC()
 	if v.timer != nil {
 		v.timer.Stop()
@@ -307,7 +310,7 @@ func (v *Vault) Status() Status {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	locked := !v.unlocked()
-	s := Status{ReceiptRPC: v.receiptRPCStatus(), SwapReady: v.managedSwapEligible(), FixtureOnly: true, Locked: locked, UnlockUntil: v.until, UpdateHeld: v.store.failedState() || v.ledger != nil && v.ledger.activeUpdate != ""}
+	s := Status{ReceiptRPC: v.receiptRPCStatus(), SwapReady: v.managedSwapEligible() || v.ordinaryTradeEligible(), FixtureOnly: true, Locked: locked, UnlockUntil: v.until, UpdateHeld: v.store.failedState() || v.ledger != nil && v.ledger.activeUpdate != ""}
 	if v.ordinary {
 		hint := v.admissionContext
 		s.Custody = &hint
@@ -397,7 +400,16 @@ func (v *Vault) createSeed(seed, password []byte, recovery bool) error {
 	if err != nil {
 		return err
 	}
-	return v.save(e)
+	if err = v.save(e); err != nil {
+		return err
+	}
+	if v.ordinary && v.ordinaryTradeEnabled && !imported {
+		if err = v.ledger.append(v, journalRecord{Kind: "ordinary-trade-key-created", Account: &ref}); err != nil {
+			v.store.poison()
+			return err
+		}
+	}
+	return nil
 }
 
 func (v *Vault) Unlock(password []byte, lifetime time.Duration) error {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"github.com/fased-ai/fased-app/internal/update"
 	"os"
+	"strings"
 )
 
 func (v *Vault) ordinaryUpdateSnapshot(probe string) (update.SignerSnapshot, error) {
@@ -30,9 +31,16 @@ func (v *Vault) ordinaryUpdateSnapshot(probe string) (update.SignerSnapshot, err
 		return update.SignerSnapshot{}, ErrUnavailable
 	}
 	features := []string{"ordinary-key-genesis-v1"}
-	if len(records) > 1 {
-		features = append(features, "ordinary-maintenance-v1", "install-completion-v1")
+	for _, record := range records[1:] {
+		if record.Kind == "ordinary-reader-handoff" || strings.HasPrefix(record.Kind, "update-") {
+			features = append(features, "ordinary-maintenance-v1", "install-completion-v1")
+			break
+		}
 	}
+	if v.ledger.ordinaryTradeFresh || len(v.ledger.swaps) > 0 {
+		features = append(features, ordinaryTradeFeature)
+	}
+	pending, unknown := v.ledger.swapPending(v.now().Unix())
 	vaultFeatures := []string{"ordinary-custody-admission-v1", "key-only-recovery-hold-v1"}
 	if disk.RecoveredHistorySHA256 != "" {
 		vaultFeatures = append(vaultFeatures, historyRecoveryFeature)
@@ -48,7 +56,7 @@ func (v *Vault) ordinaryUpdateSnapshot(probe string) (update.SignerSnapshot, err
 	return update.SignerSnapshot{Version: 3, ProbeID: probe, BootID: v.bootID, AuthoritySHA256: update.SnapshotDigest("ordinary-authority", struct {
 		Refs      []AccountRef
 		Admission CustodyAdmission
-	}{[]AccountRef{v.record.Ref, *ref}, *admission}), RecoveryHold: true, SequenceFloor: v.ledger.updateFloor, InstalledSequence: v.ledger.installedSequence, ActiveIntentID: v.ledger.activeUpdate, States: []update.State{
+	}{[]AccountRef{v.record.Ref, *ref}, *admission}), RecoveryHold: true, Pending: pending, Unknown: unknown, SequenceFloor: v.ledger.updateFloor, InstalledSequence: v.ledger.installedSequence, ActiveIntentID: v.ledger.activeUpdate, States: []update.State{
 		{Name: "vault", Version: 4, Features: vaultFeatures, Anchor: update.SnapshotDigest("vault-bytes", b)},
 		{Name: "operations", Version: 1, Features: features, Anchor: update.SnapshotDigest("ordinary-history-head", struct {
 			Sequence int

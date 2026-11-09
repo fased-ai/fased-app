@@ -54,12 +54,18 @@ func TestOrdinaryEnrollmentOwnerBoundary(t *testing.T) {
 			t.Fatal(action, flag, err)
 		}
 	}
-	for _, action := range []string{"approve", "approve-swap", "receipt-rpc-save", "update-preferences"} {
+	for _, action := range []string{"approve", "receipt-rpc-save", "update-preferences"} {
 		if _, err := custodyOwnerFlag(m, action); err == nil {
 			t.Fatal("unsupported authority exposed", action)
 		}
 	}
+	if flag, err := custodyOwnerFlag(m, "approve-swap"); err != nil || flag != "--disposable-fixture" {
+		t.Fatal("controlled exact trade approval unavailable", flag, err)
+	}
 	m.Provenance = signer.OwnerKeyProvenance
+	if _, err := custodyOwnerFlag(m, "approve-swap"); err == nil {
+		t.Fatal("real trade approval enabled")
+	}
 	if _, err := custodyOwnerFlag(m, "import"); !errors.Is(err, signer.ErrUnavailable) {
 		t.Fatal("real key admission enabled")
 	}

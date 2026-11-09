@@ -196,7 +196,13 @@ func Serve(ctx context.Context, c Config) (*Server, error) { return serveMode(ct
 // ServeControlledSwapFixture preserves installed identity and kernel peer checks.
 // Only compiled fixture callers supply this dependency; ordinary Serve is closed.
 func ServeControlledSwapFixture(ctx context.Context, c Config, observer SwapObserver) (*Server, error) {
-	if c.Version != 2 || observer == nil {
+	if observer == nil {
+		return nil, ErrUnavailable
+	}
+	if c.Version == 3 && c.Profile == OwnerCustodyProfile && c.Provenance == ControlledCustodyProfile {
+		return serveCustodyConfigured(ctx, c, false, observer, nil, true)
+	}
+	if c.Version != 2 {
 		return nil, ErrUnavailable
 	}
 	return serveConfigured(ctx, c, false, observer)
@@ -229,7 +235,7 @@ func ServeControlledOwnerCustody(ctx context.Context, c Config) (*Server, error)
 	return serveCustodyConfigured(ctx, c, false, nil, nil, true)
 }
 func serveCustodyConfigured(ctx context.Context, c Config, guarded bool, observer SwapObserver, factory func(onchain.CredentialAccess) (SwapObserver, error), controlledOrdinary bool) (*Server, error) {
-	if c.Version == 3 && !controlledOrdinary && (!OrdinaryOwnerAdmissionEnabled() || c.Profile != OwnerCustodyProfile || c.Provenance != OwnerKeyProvenance) || controlledOrdinary && (c.Version != 3 || c.Mode != OrdinaryCustodyMode || observer != nil || factory != nil) {
+	if c.Version == 3 && !controlledOrdinary && (!OrdinaryOwnerAdmissionEnabled() || c.Profile != OwnerCustodyProfile || c.Provenance != OwnerKeyProvenance) || controlledOrdinary && (c.Version != 3 || c.Mode != OrdinaryCustodyMode || factory != nil) {
 		return nil, ErrUnavailable
 	}
 	if _, e := os.Lstat(filepath.Dir(c.StateDir) + "/fixture-inspection-v1/forward.json"); !os.IsNotExist(e) && !guarded {
@@ -273,7 +279,12 @@ func serveCustodyConfigured(ctx context.Context, c Config, guarded bool, observe
 		v.swapObserver = closedReceiptObserver{}
 	}
 	if observer != nil {
-		if err = v.ConfigureSwapObserver(observer); err != nil {
+		if c.Version == 3 {
+			err = v.ConfigureControlledOrdinarySwapObserver(observer)
+		} else {
+			err = v.ConfigureSwapObserver(observer)
+		}
+		if err != nil {
 			v.Close()
 			return nil, err
 		}

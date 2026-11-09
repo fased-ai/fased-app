@@ -58,5 +58,6 @@ func ordinaryComponents(cs []Component) bool {
 	return OrdinaryContracts(contracts)
 }
 func validOrdinarySignerShape(s SignerSnapshot) bool {
-	return s.Version == 3 && len(s.States) == 2 && s.States[0].Name == "vault" && s.States[0].Version == 4 && s.States[1].Name == "operations" && s.States[1].Version == 1 && s.RecoveryHold && s.Spent == 0 && s.Held == 0 && s.Pending == 0 && s.Unknown == 0 && s.InstalledSequence <= s.SequenceFloor && slices.Contains(s.States[0].Features, "ordinary-custody-admission-v1") && slices.Contains(s.States[0].Features, "key-only-recovery-hold-v1") && slices.Contains(s.States[1].Features, "ordinary-key-genesis-v1")
+	tradeCounts := len(s.States) == 2 && slices.Contains(s.States[1].Features, "ordinary-typed-trade-fixture-v1") && s.Pending >= 0 && s.Pending <= 64 && s.Unknown >= 0 && s.Unknown <= s.Pending
+	return s.Version == 3 && len(s.States) == 2 && s.States[0].Name == "vault" && s.States[0].Version == 4 && s.States[1].Name == "operations" && s.States[1].Version == 1 && s.RecoveryHold && s.Spent == 0 && s.Held == 0 && (s.Pending == 0 && s.Unknown == 0 || tradeCounts) && s.InstalledSequence <= s.SequenceFloor && slices.Contains(s.States[0].Features, "ordinary-custody-admission-v1") && slices.Contains(s.States[0].Features, "key-only-recovery-hold-v1") && slices.Contains(s.States[1].Features, "ordinary-key-genesis-v1")
 }

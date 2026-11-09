@@ -9,7 +9,7 @@ import (
 )
 
 func TestOrdinaryBootstrapSignedFiniteReaderDelta(t *testing.T) {
-	for _, bad := range []string{"", "omit-maintenance-reader", "omit-completion-reader", "peer", "schema", "provenance", "financial-feature", "wrong-source", "unsigned", "normal-slot"} {
+	for _, bad := range []string{"", "new-reader-support", "omit-maintenance-reader", "omit-completion-reader", "peer", "schema", "provenance", "financial-feature", "unknown-reader-feature", "wrong-source", "unsigned", "normal-slot"} {
 		t.Run(bad, func(t *testing.T) {
 			base, _, trust, key := fixture(t)
 			base.Components = nil
@@ -39,6 +39,17 @@ func TestOrdinaryBootstrapSignedFiniteReaderDelta(t *testing.T) {
 				next.Components[0].Contract.State[0].Versions.Max++
 			case "provenance":
 				next.Components[1].Contract.State[0].Features = append(next.Components[1].Contract.State[0].Features, "other-owner-provenance")
+			case "new-reader-support":
+				base.Components[0].Contract.State = append([]update.StateSupport(nil), base.Components[0].Contract.State...)
+				fs := []string{}
+				for _, feature := range base.Components[0].Contract.State[0].Features {
+					if feature != "agents-ordinary-trade-fixture-v1" {
+						fs = append(fs, feature)
+					}
+				}
+				base.Components[0].Contract.State[0].Features = fs
+			case "unknown-reader-feature":
+				next.Components[1].Contract.State[1].Features = append(next.Components[1].Contract.State[1].Features, "unreviewed-trade-reader")
 			case "financial-feature":
 				next.Components[1].Contract.Features = append(next.Components[1].Contract.Features, "trade-authority")
 			}
@@ -54,7 +65,7 @@ func TestOrdinaryBootstrapSignedFiniteReaderDelta(t *testing.T) {
 				b.Version = 1
 			}
 			p, e := update.VerifyBootstrap(b, j(trust), now)
-			if bad != "" {
+			if bad != "" && bad != "new-reader-support" {
 				if e == nil {
 					t.Fatal("unsafe handoff accepted", bad)
 				}

@@ -201,3 +201,23 @@ test("projected guarded CLI refuses ordinary maintenance instead of advertising 
     );
   }
 });
+
+test("composed readonly Onchain adapter refuses ordinary config without backporting authority", async () => {
+  const { projectReadOnlyOnchainAdapter } =
+    await import("./fixture-core-storage.mjs");
+  const source = readFileSync(
+    new URL("../internal/core/onchain.go", import.meta.url),
+    "utf8",
+  );
+  const projected = projectReadOnlyOnchainAdapter(source);
+  assert.ok(!projected.includes("ordinaryFixture"));
+  assert.doesNotMatch(projected, /\bc\.Profile\b/);
+  assert.doesNotMatch(projected, /\bc\.Provenance\b/);
+  assert.ok(
+    projected.includes("if c.Version != 2 || c.Network != s.custodyNetwork"),
+  );
+  assert.throws(
+    () => projectReadOnlyOnchainAdapter(projected),
+    /exact ordinary fixture declaration/,
+  );
+});

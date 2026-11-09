@@ -46,6 +46,30 @@ func verifyOrdinaryBootstrap(b BootstrapBundle, trust []byte, now int64) (Bootst
 		}
 		for i := range c.State {
 			c.State[i].Features = withoutFeature(withoutFeature(c.State[i].Features, "ordinary-maintenance-v1"), "install-completion-v1")
+			// Reader support does not activate the controlled observer or grant
+			// signing. Only these reviewed format extensions may differ.
+			feature := ""
+			if c.Component == "signer" && c.State[i].Name == "operations" {
+				feature = "ordinary-typed-trade-fixture-v1"
+			}
+			if c.Component == "core" && c.State[i].Name == "core-db" {
+				feature = "agents-ordinary-trade-fixture-v1"
+			}
+			if feature != "" {
+				present := false
+				for _, state := range old.Contract.State {
+					if state.Name == c.State[i].Name {
+						for _, f := range state.Features {
+							if f == feature {
+								present = true
+							}
+						}
+					}
+				}
+				if !present {
+					c.State[i].Features = withoutFeature(c.State[i].Features, feature)
+				}
+			}
 		}
 		if SnapshotDigest("contract", c) != SnapshotDigest("contract", old.Contract) {
 			return p, errors.New("ordinary reader handoff cannot change schema/protocol/provenance or financial capabilities")

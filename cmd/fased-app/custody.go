@@ -240,6 +240,9 @@ func custodyOwnerFlag(m custodyinstall.Manifest, action string) (string, error) 
 	if m.Mode != signer.OrdinaryCustodyMode || m.Profile != signer.OwnerCustodyProfile {
 		return "", signer.ErrUnavailable
 	}
+	if action == "approve-swap" && m.Provenance == signer.ControlledCustodyProfile {
+		return "--disposable-fixture", nil
+	}
 	switch action {
 	case "status", "remove", "accounts", "login", "claim-code", "reset-app-password", "setup", "import", "recover", "update-status":
 	default:

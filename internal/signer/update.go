@@ -39,6 +39,6 @@ func OrdinaryUpdateContract() update.Contract {
 	c := OrdinaryCustodyReadContract()
 	c.Features = append(c.Features, update.OrdinaryMaintenanceFeature)
 	c.RequiresPeer = []string{update.OrdinaryMaintenanceFeature}
-	c.State[1].Features = append(c.State[1].Features, "ordinary-maintenance-v1", "install-completion-v1")
+	c.State[1].Features = append(c.State[1].Features, "ordinary-maintenance-v1", "install-completion-v1", ordinaryTradeFeature)
 	return c
 }

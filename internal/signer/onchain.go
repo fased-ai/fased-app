@@ -37,6 +37,9 @@ func (v *Vault) ApproveSwap(p SwapProposal) (*SwapReceipt, error) {
 	if e := v.swapReady(true); e != nil {
 		return nil, e
 	}
+	if v.ordinary && p.Version != OrdinarySwapVersion {
+		return nil, ErrUnavailable
+	}
 	if e := v.validReceiptRPCBinding(p); e != nil {
 		return nil, e
 	}
@@ -57,8 +60,14 @@ func (v *Vault) ApproveSwap(p SwapProposal) (*SwapReceipt, error) {
 	if _, ok := v.ledger.swaps[p.Quote.ID]; ok {
 		return nil, errors.New("swap approval identity already used")
 	}
-	if e := v.ledger.append(v, journalRecord{Kind: "onchain-approve", Swap: &p, ID: p.Quote.ID}); e != nil {
+	if e := v.ledger.append(v, journalRecord{Kind: v.swapRecordKind("onchain-approve"), Swap: &p, ID: p.Quote.ID}); e != nil {
 		return nil, e
+	}
+	if v.ordinary {
+		if v.ordinaryTradeGrants == nil {
+			v.ordinaryTradeGrants = make(map[string]string)
+		}
+		v.ordinaryTradeGrants[p.Quote.ID] = p.Digest
 	}
 	deadline := time.Unix(p.Quote.ExpiresAt, 0)
 	if p.ReceiptRPC != nil {
@@ -113,8 +122,8 @@ func (v *Vault) SignSwap(id string) (*SwapReceipt, error) {
 		out := clone(r)
 		return &out, nil
 	}
-	if r.State != "approved" {
-		return nil, errors.New("swap approval cancelled")
+	if r.State != "approved" || v.ordinary && v.ordinaryTradeGrants[id] != r.Proposal.Digest {
+		return nil, errors.New("swap approval cancelled or requires fresh owner consent")
 	}
 	if e := validateSwapProposal(r.Proposal, v.now().Unix()); e != nil {
 		return nil, e
@@ -135,7 +144,7 @@ func (v *Vault) SignSwap(id string) (*SwapReceipt, error) {
 			return nil, errors.New("transaction already signed under another order; obtain a fresh blockhash")
 		}
 	}
-	if e = v.ledger.append(v, journalRecord{Kind: "onchain-sign", ID: id, Original: packet}); e != nil {
+	if e = v.ledger.append(v, journalRecord{Kind: v.swapRecordKind("onchain-sign"), ID: id, Original: packet}); e != nil {
 		return nil, e
 	}
 	out := clone(v.ledger.swaps[id])
@@ -146,6 +155,9 @@ func (v *Vault) ReconcileSwap(ctx context.Context, id string) (*SwapReceipt, err
 	defer v.mu.Unlock()
 	if v.closed || v.record == nil || v.swapObserver == nil || v.ledger == nil || v.store.failedState() || v.ledger.activeUpdate != "" {
 		return nil, ErrUnavailable
+	}
+	if v.ordinary && (!v.ordinaryTradeEnabled || v.record.Ref != v.ledger.ref || v.record.RecoveredHistorySHA256 != "") {
+		return nil, ErrHeld
 	}
 	r, ok := v.ledger.swaps[id]
 	if !ok || !sameWallet(r.Proposal.Account, v.record.Ref) || len(r.Signed) == 0 {
@@ -169,7 +181,7 @@ func (v *Vault) ReconcileSwap(ctx context.Context, id string) (*SwapReceipt, err
 		return nil, e
 	}
 	if observation.State == "confirmed" || observation.State == "failed" {
-		if e = v.ledger.append(v, journalRecord{Kind: "onchain-settled", ID: id, SwapObservation: &observation}); e != nil {
+		if e = v.ledger.append(v, journalRecord{Kind: v.swapRecordKind("onchain-settled"), ID: id, SwapObservation: &observation}); e != nil {
 			return nil, e
 		}
 	}
@@ -190,6 +202,9 @@ func (v *Vault) CancelSwap(id string) (*SwapReceipt, error) {
 	if v.closed || v.ledger == nil || v.swapObserver == nil || v.store.failedState() || v.ledger.activeUpdate != "" {
 		return nil, ErrUnavailable
 	}
+	if v.ordinary && (!v.ordinaryTradeEnabled || v.record == nil || v.record.Ref != v.ledger.ref || v.record.RecoveredHistorySHA256 != "") {
+		return nil, ErrHeld
+	}
 	s, ok := v.ledger.swaps[id]
 	if !ok {
 		return nil, errors.New("swap approval missing")
@@ -201,7 +216,7 @@ func (v *Vault) CancelSwap(id string) (*SwapReceipt, error) {
 	if s.State != "approved" {
 		return nil, errors.New("signed orders require reconciliation")
 	}
-	if e := v.ledger.append(v, journalRecord{Kind: "onchain-cancel", ID: id}); e != nil {
+	if e := v.ledger.append(v, journalRecord{Kind: v.swapRecordKind("onchain-cancel"), ID: id}); e != nil {
 		return nil, e
 	}
 	out := clone(v.ledger.swaps[id])
@@ -217,7 +232,7 @@ func (v *Vault) swapReady(unlock bool) error {
 	if v.network == "" {
 		return v.fixtureReady(unlock)
 	}
-	if !v.managedSwapEligible() {
+	if !v.managedSwapEligible() && !v.ordinaryTradeEligible() {
 		return ErrUnavailable
 	}
 	if unlock && !v.unlocked() {

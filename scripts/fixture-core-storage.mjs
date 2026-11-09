@@ -161,7 +161,11 @@ export async function currentStorageFixture(archivedRoot) {
   ]) {
     // Exact current sources are composed without copying their routers or
     // constructors. rpcAdmission remains its false zero value.
-    const bytes = await readFile("internal/core/" + file);
+    let bytes = await readFile("internal/core/" + file);
+    if (file === "onchain.go")
+      bytes = Buffer.from(
+        projectReadOnlyOnchainAdapter(bytes.toString("utf8")),
+      );
     await writeFile(path.join(archivedRoot, "internal/core", file), bytes);
     storage[file] = sha(bytes);
   }
@@ -612,4 +616,22 @@ export async function projectPasswordOnlyContract(root) {
   }
   await writeFile(file, projected);
   return createHash("sha256").update(projected).digest("hex");
+}
+
+// Composed predecessor readers keep the old v2-only attachment and never gain
+// ordinary owner/profile configuration or a controlled signing constructor.
+export function projectReadOnlyOnchainAdapter(source) {
+  const declaration = /\tordinaryFixture := c\.Version == 3[^\n]*\n/;
+  assert.equal(
+    (source.match(new RegExp(declaration.source, "g")) ?? []).length,
+    1,
+    "exact ordinary fixture declaration required",
+  );
+  const guard = "(c.Version != 2 && !ordinaryFixture)";
+  assert.equal(
+    source.split(guard).length,
+    2,
+    "exact ordinary fixture guard required",
+  );
+  return source.replace(declaration, "").replace(guard, "c.Version != 2");
 }

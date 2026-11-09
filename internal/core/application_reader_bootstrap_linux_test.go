@@ -493,7 +493,7 @@ func TestApplicationReaderHistoricalSnapshotExcludesRecoveryCapability(t *testin
 			t.Fatal(err)
 		}
 		for _, feature := range snapshot.State.Features {
-			if feature == swapRecoveryFeature {
+			if feature == swapRecoveryFeature || feature == ordinaryTradeFeature {
 				t.Fatalf("schema%d inherited recovery-only capability", schema)
 			}
 		}
