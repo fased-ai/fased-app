@@ -176,6 +176,15 @@ export function verifyInstalledTradeReceiver(p, observed) {
   assert.equal(account.name, p.accountName);
   assert.deepEqual(account.signer, st.account);
   assert.equal(account.network, m.network);
+  assert.ok(
+    account.rpc?.version === 2 &&
+      account.rpc.network === account.network &&
+      (account.rpc.endpoint ===
+        `https://${account.network === "devnet" ? "devnet" : "mainnet"}.helius-rpc.com` ||
+        account.rpc.endpoint ===
+          `https://solana-${account.network === "devnet" ? "devnet" : "mainnet"}.g.alchemy.com`),
+    "configure a same-network RPC before native trade acceptance",
+  );
   assert.ok(["devnet", "mainnet-beta"].includes(m.network));
   assert.equal(st.account.signerId, m.id);
   assert.notEqual(m.app.uid, m.signer.uid);
@@ -445,7 +454,7 @@ export function installedTradeAdapters(p) {
 // Accessible real controls, scoped to one frame. No WebKit/CDP hook, injected
 // page script, fake popup or signer binding is used. Secrets travel only on stdin.
 const nativeProbe = String.raw`
-import json,sys,time,subprocess,pyatspi,os,hashlib
+import json,sys,time,subprocess,pyatspi,os,hashlib,sqlite3
 p=json.load(sys.stdin)
 def walk(n,d=0,seen=None):
  if d>28:return
@@ -458,10 +467,17 @@ def walk(n,d=0,seen=None):
   for c in n:yield from walk(c,d+1,seen)
  except RuntimeError:raise
  except Exception:pass
+def observed(n):
+ if n.name:return n.name
+ if n.getRoleName() not in ['description term','description value','table cell','paragraph','text','static','label','heading']:return ''
+ try:
+  value=n.queryText().getText(0,-1)
+  return value if len(value)<=1024 else ''
+ except NotImplementedError:return ''
 def match():
  roots=[n for n in walk(pyatspi.Registry.getDesktop(0)) if n.getRoleName()=='frame' and n.name==p['frame']]
  if len(roots)!=1:return []
- return [n for n in walk(roots[0]) if n.name==p['name'] and (not p.get('role') or n.getRoleName()==p['role'])]
+ return [n for n in walk(roots[0]) if observed(n)==p['name'] and (not p.get('role') or n.getRoleName()==p['role'])]
 end=time.monotonic()+p.get('wait',8)
 while True:
  ns=match()
@@ -508,6 +524,34 @@ elif p['action']=='set':
   if time.monotonic()>=end:raise RuntimeError('incomplete native input')
   time.sleep(.05)
  subprocess.run(['xdotool','key','Tab'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+elif p['action']=='select-agent' or p['action']=='select' and p['name']=='Wallet':
+ agent=p['action']=='select-agent'
+ if agent and (p['name']!='Agent' or p['value']!='Trading Analyst'):raise RuntimeError('unexpected agent target')
+ if not agent and (len(p.get('accountId',''))!=32 or any(c not in '0123456789abcdef' for c in p['accountId'])):raise RuntimeError('unexpected wallet target')
+ options=[]
+ for menu in walk(n):
+  try:menu.querySelection()
+  except NotImplementedError:continue
+  if menu.childCount and all(menu[i].getRoleName()=='menu item' for i in range(menu.childCount)):
+   options=[menu[i].name for i in range(menu.childCount)];break
+ if not options or len(options)>30 or options.count(p['value'])!=1:raise RuntimeError('ambiguous native choices')
+ i=options.index(p['value']);x,y,w,h=n.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+ if w<=0 or h<=0:raise RuntimeError('control not visible')
+ subprocess.run(['xdotool','mousemove',str(x+w//2),str(y+h//2),'click','1'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+ subprocess.run(['xdotool','key','--clearmodifiers','Home']+['Down']*i+['Return'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+ storage=os.path.expanduser('~/.local/share/fased-desktop/localstorage/wails_wails_0.localstorage')
+ st=os.lstat(storage)
+ if st.st_uid!=p['clientUid'] or not os.path.isfile(storage) or os.path.islink(storage):raise RuntimeError('foreign native preferences')
+ end=time.monotonic()+5
+ while True:
+  c=sqlite3.connect('file:'+storage+'?mode=ro',uri=True)
+  try:row=c.execute('SELECT value FROM ItemTable WHERE key=?',(('fased.agent-profile.v1:'+p['instance']) if agent else ('fased.swap-draft.v1:'+p['instance']+':trading-analyst'),)).fetchone()
+  finally:c.close()
+  value=row[0].decode('utf-16-le') if row and isinstance(row[0],bytes) else row[0] if row else None
+  if not agent and value is not None:value=json.loads(value).get('wallet')
+  if value==('trading-analyst' if agent else p['accountId']):break
+  if time.monotonic()>=end:raise RuntimeError('native choice did not commit')
+  time.sleep(.05)
 elif p['action']=='select':
  found=False;opened=False;end=time.monotonic()+2
  while not found:
@@ -535,7 +579,7 @@ elif p['action']=='select':
   time.sleep(.05)
 elif p['action']=='fact':
  parent=n.parent;idx=n.getIndexInParent()+1
- if idx>=parent.childCount or not any(x.name==p['value'] for x in walk(parent[idx])):raise RuntimeError('review fact changed')
+ if idx>=parent.childCount or not any(observed(x)==p['value'] for x in walk(parent[idx])):raise RuntimeError('review fact changed')
 elif p['action']!='present':raise RuntimeError('unknown native action')
 print('{"observed":true}')
 `;
@@ -604,10 +648,102 @@ function taskResult(v, id) {
   );
 }
 
-export async function installedNativeTradeJourney(p, io, previous, save) {
+export async function installedNativeTradeJourney(
+  p,
+  io,
+  previous,
+  save,
+  options = {},
+) {
   validateInstalledTradePlan(p);
   const account = verifyInstalledTradeReceiver(p, await io.preflight());
-  const record = previous ?? {
+  assert.ok(
+    Object.keys(options).every((k) =>
+      ["resumePreReview", "resolvedDraftSha256"].includes(k),
+    ),
+  );
+  const resumePreReview = options.resumePreReview !== undefined;
+  const reviewedRefusal =
+    resumePreReview &&
+    options.resolvedDraftSha256 !== undefined &&
+    previous?.stage === "reviewed";
+  if (resumePreReview) {
+    assert.ok(previous && previous.result === "FAIL");
+    assert.equal(
+      previous.failure,
+      reviewedRefusal
+        ? "stopped at reviewed; inspect original before resuming"
+        : "stopped at pre-review; inspect original before resuming",
+    );
+    assert.equal(
+      options.resumePreReview,
+      hash(JSON.stringify(previous)),
+      "original failed receipt changed",
+    );
+    for (const key of [
+      "stage",
+      "intent",
+      "proposal",
+      "taskId",
+      "runId",
+      "signature",
+      "signed",
+    ])
+      assert.ok(
+        reviewedRefusal && ["stage", "intent", "proposal"].includes(key)
+          ? previous[key] != null
+          : previous[key] == null,
+        "uncertain or repeated pre-review continuation refused",
+      );
+  }
+  if (options.resolvedDraftSha256 !== undefined) {
+    assert.match(options.resolvedDraftSha256, hex);
+    assert.ok(resumePreReview && previous.preReviewFailure?.receipt);
+    let prior = previous,
+      depth = 0;
+    while (prior) {
+      assert.ok(++depth <= 8, "bounded unsent recovery history exceeded");
+      assert.equal(prior.planHash, hash(JSON.stringify(p)));
+      assert.equal(prior.result, "FAIL", "ancestor must remain failed");
+      assert.equal(
+        prior.failure,
+        depth === 1 && reviewedRefusal
+          ? "stopped at reviewed; inspect original before resuming"
+          : "stopped at pre-review; inspect original before resuming",
+      );
+      if (prior.preReviewFailure) {
+        assert.match(prior.preReviewFailure.sha256, hex);
+        assert.equal(
+          prior.preReviewFailure.sha256,
+          hash(JSON.stringify(prior.preReviewFailure.receipt)),
+          "ancestor digest changed",
+        );
+      }
+      for (const key of [
+        "stage",
+        "intent",
+        "proposal",
+        "taskId",
+        "runId",
+        "signature",
+        "signed",
+      ])
+        assert.ok(
+          depth === 1 &&
+            reviewedRefusal &&
+            ["stage", "intent", "proposal"].includes(key)
+            ? prior[key] != null
+            : prior[key] == null,
+          "original uncertain outcome must reconcile",
+        );
+      prior = prior.preReviewFailure?.receipt;
+    }
+  } else if (resumePreReview)
+    assert.ok(
+      previous.preReviewFailure == null,
+      "repeated pre-review continuation refused",
+    );
+  const record = (resumePreReview ? structuredClone(previous) : previous) ?? {
     version: 1,
     planHash: hash(JSON.stringify(p)),
     source: p.source,
@@ -632,7 +768,7 @@ export async function installedNativeTradeJourney(p, io, previous, save) {
   for (const n of [runtime.app, runtime.signer])
     assert.match(n, /^[1-9][0-9]*$/);
   assert.ok(runtime.boot);
-  if (previous) {
+  if (previous && !resumePreReview) {
     assert.ok(
       record.result === "NEEDS_RESTART" ||
         (record.result === "FAIL" && record.stage === "submitted"),
@@ -715,17 +851,74 @@ export async function installedNativeTradeJourney(p, io, previous, save) {
     await save(record);
     return record;
   }
-  assert.equal(
-    await io.draft(),
-    null,
-    "existing owner draft requires explicit recovery; do not replace it",
-  );
+  const existingDraft = await io.draft();
+  if (options.resolvedDraftSha256 !== undefined) {
+    assert.ok(existingDraft);
+    assert.equal(
+      hash(JSON.stringify(existingDraft)),
+      options.resolvedDraftSha256,
+    );
+    assert.equal(existingDraft.completed, true);
+    assert.equal(existingDraft.dispatched, false);
+    assert.equal(existingDraft.origin, p.origin);
+    const oldQuote = JSON.parse(
+      Buffer.from(existingDraft.intent.proposal, "base64url").toString(),
+    );
+    assert.equal(existingDraft.intent.instanceId, p.instance);
+    assert.equal(existingDraft.intent.network, account.network);
+    assert.equal(oldQuote.quote.accountId, p.accountId);
+    assert.deepEqual(oldQuote.account, account.signer);
+    if (reviewedRefusal) {
+      assert.deepEqual(existingDraft.intent, previous.intent);
+      assert.deepEqual(oldQuote, previous.proposal);
+      assert.equal(oldQuote.quote.profileId, profile);
+    } else assert.notEqual(oldQuote.quote.profileId, profile);
+    assert.ok(oldQuote.quote.expiresAt * 1000 <= Date.now());
+    const original = await io.inspect(
+      existingDraft.intent,
+      account.signer.signerId,
+    );
+    assert.equal(original.readOnly, true);
+    assert.equal(original.status.locked, true);
+    assert.equal(
+      original.swap ?? null,
+      null,
+      "original signer approval must be absent",
+    );
+    record.resolvedUnsentDraft = {
+      sha256: options.resolvedDraftSha256,
+      operationId: existingDraft.intent.operationId,
+    };
+  } else
+    assert.equal(
+      existingDraft,
+      null,
+      "existing owner draft requires explicit recovery; do not replace it",
+    );
   assert.equal(current.onchain.available, true);
   assert.equal(
     current.onchain.tasks.length,
     0,
     "positive namespace is dedicated and empty",
   );
+  assert.equal(
+    current.onchain.runs.length,
+    0,
+    "no existing run may be replaced",
+  );
+  if (resumePreReview) {
+    record.preReviewFailure = {
+      sha256: options.resumePreReview,
+      receipt: structuredClone(previous),
+    };
+    record.result = "OPEN";
+    delete record.failure;
+    if (reviewedRefusal) {
+      delete record.stage;
+      delete record.intent;
+      delete record.proposal;
+    }
+  }
   record.before = runtime;
   await save(record);
   const gui = (action, name, role, value, frame = p.mainFrame) => {
@@ -754,18 +947,26 @@ export async function installedNativeTradeJourney(p, io, previous, save) {
       data: p.data,
       origin: p.origin,
       instance: p.instance,
+      accountId: p.accountId,
       publicIntent,
     });
   };
   try {
+    await gui("click", "Fased", "link");
+    await gui("select-agent", "Agent", "combo box", "Trading Analyst");
     await gui("click", "Onchain");
+    // Async choices recreate the native control; observe its option first.
+    await gui("present", p.accountName, "menu item");
     await gui("select", "Wallet", "combo box", p.accountName);
     await gui("set", "Amount", "entry", "12.5");
     await gui("click", "Quote", "push button");
     await gui("click", "Approve", "push button");
     const draft = await until(
       () => io.draft(),
-      (d) => d !== null,
+      (d) =>
+        d !== null &&
+        (!record.resolvedUnsentDraft ||
+          d.intent.operationId !== record.resolvedUnsentDraft.operationId),
     );
     const proposal = proposalFromDraft(draft, p);
     assert.deepEqual(proposal.account, account.signer);
@@ -775,6 +976,7 @@ export async function installedNativeTradeJourney(p, io, previous, save) {
     record.stage = "reviewed";
     await save(record);
     const ownerFrame = "Fased Wallet";
+    await gui("click", "Connect wallet", "push button", undefined, ownerFrame);
     await gui("present", proposal.digest, undefined, undefined, ownerFrame);
     await gui(
       "present",
@@ -797,7 +999,6 @@ export async function installedNativeTradeJourney(p, io, previous, save) {
       ["Expires", new Date(proposal.quote.expiresAt * 1000).toLocaleString()],
     ])
       await gui("fact", name, undefined, value, ownerFrame);
-    await gui("click", "Connect wallet", "push button", undefined, ownerFrame);
     const secret = await io.unlock();
     await gui("set", "Wallet password", "password text", secret, ownerFrame);
     await gui("click", "Approve", "push button", undefined, ownerFrame);
@@ -910,7 +1111,31 @@ export async function runInstalledNativeTradePlan(file) {
   } catch (e) {
     if (e.code !== "ENOENT") throw e;
   }
+  const resumePreReview =
+    process.env.FASED_INSTALLED_NATIVE_TRADE_RESUME_PRE_REVIEW;
+  if (resumePreReview !== undefined) {
+    assert.match(resumePreReview, hex);
+    assert.ok(previous);
+    assert.equal(resumePreReview, hash(JSON.stringify(previous)));
+  }
+  const resolvedDraftSha256 =
+    process.env.FASED_INSTALLED_NATIVE_TRADE_RESOLVED_DRAFT;
+  if (resolvedDraftSha256 !== undefined) assert.match(resolvedDraftSha256, hex);
+  let preservedFailure = false;
   const save = async (r) => {
+    if (resumePreReview && !preservedFailure) {
+      const original = await readFile(p.receipt);
+      assert.equal(hash(JSON.stringify(JSON.parse(original))), resumePreReview);
+      await writeFile(
+        p.receipt + "." + resumePreReview + ".pre-review-failure.json",
+        original,
+        {
+          mode: 0o600,
+          flag: "wx",
+        },
+      );
+      preservedFailure = true;
+    }
     r.package = {
       core: p.coreSha256,
       signer: p.signerSha256,
@@ -927,6 +1152,12 @@ export async function runInstalledNativeTradePlan(file) {
     installedTradeAdapters(p),
     previous,
     save,
+    resumePreReview
+      ? {
+          resumePreReview,
+          ...(resolvedDraftSha256 ? { resolvedDraftSha256 } : {}),
+        }
+      : {},
   );
   console.log(
     r.result +

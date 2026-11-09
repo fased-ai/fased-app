@@ -112,6 +112,11 @@ function receiver() {
             version: 4,
             mode: "managed",
             network: "devnet",
+            rpc: {
+              version: 2,
+              endpoint: "https://devnet.helius-rpc.com",
+              network: "devnet",
+            },
             signer: ref,
           },
         ],
@@ -307,6 +312,363 @@ test("wrong receiver refuses without UI, secret read or receipt mutation", async
   );
   assert.deepEqual(f.events, []);
   assert.deepEqual(f.saved, []);
+});
+test("missing or mismatched RPC refuses before native actions or private inputs", async () => {
+  for (const rpc of [
+    undefined,
+    null,
+    { version: 2, network: "mainnet-beta" },
+    { version: 2, network: "devnet", endpoint: "https://foreign.invalid" },
+  ]) {
+    const f = fixture();
+    f.r.accounts.record.accounts[0].rpc = rpc;
+    await assert.rejects(
+      installedNativeTradeJourney(f.p, f.io, undefined, f.save),
+      /configure a same-network RPC before native trade acceptance/,
+    );
+    assert.deepEqual(f.events, []);
+    assert.deepEqual(f.saved, []);
+  }
+});
+test("explicit digest-bound pre-review recovery retains failure and refuses uncertain work", async () => {
+  const f = fixture();
+  const native = f.io.native;
+  f.io.native = async () => {
+    throw Error("pre-review control absent");
+  };
+  await assert.rejects(
+    installedNativeTradeJourney(f.p, f.io, undefined, f.save),
+  );
+  const previous = structuredClone(f.saved.at(-1));
+  f.io.native = native;
+  f.events.length = 0;
+  await assert.rejects(
+    installedNativeTradeJourney(f.p, f.io, previous, f.save),
+  );
+  const digest = sha(JSON.stringify(previous));
+  const result = await installedNativeTradeJourney(
+    f.p,
+    f.io,
+    previous,
+    f.save,
+    { resumePreReview: digest },
+  );
+  assert.equal(result.result, "NEEDS_RESTART");
+  assert.deepEqual(result.preReviewFailure.receipt, previous);
+  assert.equal(result.preReviewFailure.sha256, digest);
+  assert.equal(f.events.filter((x) => x === "click:Submit").length, 1);
+  for (const field of [
+    "intent",
+    "proposal",
+    "stage",
+    "taskId",
+    "runId",
+    "signature",
+    "signed",
+    "preReviewFailure",
+  ]) {
+    const bad = structuredClone(previous);
+    bad[field] = "uncertain";
+    const g = fixture();
+    await assert.rejects(
+      installedNativeTradeJourney(g.p, g.io, bad, g.save, {
+        resumePreReview: sha(JSON.stringify(bad)),
+      }),
+    );
+    assert.deepEqual(g.events, []);
+    assert.deepEqual(g.saved, []);
+  }
+  const g = fixture();
+  g.io.draft = async () => ({ dispatched: true });
+  await assert.rejects(
+    installedNativeTradeJourney(g.p, g.io, previous, g.save, {
+      resumePreReview: digest,
+    }),
+  );
+  assert.deepEqual(g.events, []);
+  assert.deepEqual(g.saved, []);
+});
+test("resolved original mismatched review needs exact proof and no signer approval", async () => {
+  const f = fixture(),
+    native = f.io.native;
+  f.io.native = async () => {
+    throw Error("control");
+  };
+  await assert.rejects(
+    installedNativeTradeJourney(f.p, f.io, undefined, f.save),
+  );
+  const previous = structuredClone(f.saved.at(-1));
+  previous.preReviewFailure = {
+    receipt: structuredClone(previous),
+    sha256: sha(JSON.stringify(previous)),
+  };
+  const q = structuredClone(f.q);
+  q.quote.profileId = "wen-operator";
+  q.quote.id = "9".repeat(32);
+  q.quote.expiresAt = 1;
+  const old = {
+    intent: {
+      ...f.intent,
+      operationId: q.quote.id,
+      proposal: Buffer.from(JSON.stringify(q)).toString("base64url"),
+    },
+    origin: "",
+    dispatched: false,
+    completed: true,
+  };
+  const options = {
+    resumePreReview: sha(JSON.stringify(previous)),
+    resolvedDraftSha256: sha(JSON.stringify(old)),
+  };
+  f.events.length = 0;
+  f.io.native = native;
+  f.io.draft = async () => old;
+  const inspect = f.io.inspect;
+  f.io.inspect = async (i, ...args) =>
+    i.proposal === old.intent.proposal
+      ? { readOnly: true, status: { locked: true }, swap: null }
+      : inspect(i, ...args);
+  const originalNative = f.io.native;
+  f.io.native = async (step) => {
+    if (step.name === "Approve" && step.frame === "Fased App") {
+      let reads = 0;
+      f.io.draft = async () =>
+        ++reads < 3 ? old : { intent: f.intent, origin: "", dispatched: false };
+    }
+    return originalNative(step);
+  };
+  const result = await installedNativeTradeJourney(
+    f.p,
+    f.io,
+    previous,
+    f.save,
+    options,
+  );
+  assert.equal(result.result, "NEEDS_RESTART");
+  assert.equal(result.resolvedUnsentDraft.sha256, options.resolvedDraftSha256);
+  assert.equal(f.events.filter((x) => x === "click:Submit").length, 1);
+  for (const change of [
+    (x) => (x.dispatched = true),
+    (x) => (x.completed = false),
+    (x) => (x.intent = { ...x.intent, network: "foreign" }),
+  ]) {
+    const bad = structuredClone(old);
+    change(bad);
+    const g = fixture();
+    g.io.draft = async () => bad;
+    g.io.inspect = async () => ({
+      readOnly: true,
+      status: { locked: true },
+      swap: { state: "approved" },
+    });
+    await assert.rejects(
+      installedNativeTradeJourney(g.p, g.io, previous, g.save, {
+        ...options,
+        resolvedDraftSha256: sha(JSON.stringify(bad)),
+      }),
+    );
+    assert.deepEqual(g.events, []);
+    assert.deepEqual(g.saved, []);
+  }
+});
+test("resolved recovery refuses uncertain ancestor or excessive history", async () => {
+  const f = fixture();
+  const native = f.io.native;
+  f.io.native = async () => {
+    throw Error("pre-review");
+  };
+  await assert.rejects(
+    installedNativeTradeJourney(f.p, f.io, undefined, f.save),
+  );
+  const prior = structuredClone(f.saved.at(-1));
+  prior.preReviewFailure = { receipt: structuredClone(prior) };
+  prior.preReviewFailure.receipt.intent = { operationId: "uncertain" };
+  prior.preReviewFailure.sha256 = sha(
+    JSON.stringify(prior.preReviewFailure.receipt),
+  );
+  f.events.length = 0;
+  f.saved.length = 0;
+  f.io.native = native;
+  await assert.rejects(
+    installedNativeTradeJourney(f.p, f.io, prior, f.save, {
+      resumePreReview: sha(JSON.stringify(prior)),
+      resolvedDraftSha256: "a".repeat(64),
+    }),
+    /uncertain/,
+  );
+  assert.deepEqual(f.events, []);
+  assert.deepEqual(f.saved, []);
+});
+test("resolved recovery rejects altered ancestor digest or result", async () => {
+  const f = fixture();
+  f.io.native = async () => {
+    throw Error("pre-review");
+  };
+  await assert.rejects(
+    installedNativeTradeJourney(f.p, f.io, undefined, f.save),
+  );
+  const original = structuredClone(f.saved.at(-1));
+  for (const corrupt of ["digest", "result"]) {
+    const previous = structuredClone(original);
+    previous.preReviewFailure = {
+      sha256: sha(JSON.stringify(original)),
+      receipt: structuredClone(original),
+    };
+    if (corrupt === "digest") previous.preReviewFailure.sha256 = "f".repeat(64);
+    else {
+      previous.preReviewFailure.receipt.result = "OPEN";
+      previous.preReviewFailure.sha256 = sha(
+        JSON.stringify(previous.preReviewFailure.receipt),
+      );
+    }
+    const g = fixture();
+    await assert.rejects(
+      installedNativeTradeJourney(g.p, g.io, previous, g.save, {
+        resumePreReview: sha(JSON.stringify(previous)),
+        resolvedDraftSha256: "a".repeat(64),
+      }),
+    );
+    assert.deepEqual(g.events, []);
+    assert.deepEqual(g.saved, []);
+  }
+});
+test("expired reviewed refusal only renews after exact unsigned completed draft inspection", async () => {
+  const f = fixture(),
+    native = f.io.native;
+  f.io.native = async (step) => {
+    if (step.name === f.q.digest) throw Error("facts unavailable");
+    return native(step);
+  };
+  await assert.rejects(
+    installedNativeTradeJourney(f.p, f.io, undefined, f.save),
+  );
+  const previous = structuredClone(f.saved.at(-1));
+  assert.equal(previous.stage, "reviewed");
+  const prior = structuredClone(previous);
+  delete prior.stage;
+  delete prior.intent;
+  delete prior.proposal;
+  prior.failure = "stopped at pre-review; inspect original before resuming";
+  previous.preReviewFailure = {
+    sha256: sha(JSON.stringify(prior)),
+    receipt: prior,
+  };
+  const q = structuredClone(previous.proposal);
+  q.quote.id = "8".repeat(32);
+  q.quote.createdAt = 0;
+  q.quote.expiresAt = 1;
+  previous.proposal = q;
+  previous.intent = {
+    ...previous.intent,
+    operationId: q.quote.id,
+    proposal: Buffer.from(JSON.stringify(q)).toString("base64url"),
+  };
+  const old = {
+    intent: previous.intent,
+    origin: "",
+    completed: true,
+    dispatched: false,
+  };
+  f.events.length = 0;
+  f.io.draft = async () => old;
+  const inspect = f.io.inspect;
+  f.io.inspect = async (i, ...a) =>
+    i.operationId === old.intent.operationId
+      ? { readOnly: true, status: { locked: true }, swap: null }
+      : inspect(i, ...a);
+  f.io.native = async (step) => {
+    if (step.name === "Approve" && step.frame === "Fased App")
+      f.io.draft = async () => ({
+        intent: f.intent,
+        origin: "",
+        dispatched: false,
+      });
+    return native(step);
+  };
+  const result = await installedNativeTradeJourney(
+    f.p,
+    f.io,
+    previous,
+    f.save,
+    {
+      resumePreReview: sha(JSON.stringify(previous)),
+      resolvedDraftSha256: sha(JSON.stringify(old)),
+    },
+  );
+  assert.equal(result.result, "NEEDS_RESTART");
+  assert.equal(f.events.filter((x) => x === "click:Submit").length, 1);
+  assert.deepEqual(result.preReviewFailure.receipt, previous);
+});
+test("native public review text is observed without reading editable fields", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const source = await readFile(
+    new URL("fixture-installed-trade-journey.mjs", import.meta.url),
+    "utf8",
+  );
+  const code = source.slice(
+    source.indexOf("def observed(n):"),
+    source.indexOf("def match():"),
+  );
+  const r = spawnSync(
+    "/usr/bin/python3",
+    [
+      "-c",
+      code +
+        `
+class N:
+ name=''
+ def __init__(self,role):self.role=role
+ def getRoleName(self):return self.role
+ def queryText(self):
+  if self.role=='password text':raise RuntimeError('private field read')
+  return self
+ def getText(self,a,b):return 'exact digest'
+assert observed(N('description value'))=='exact digest'
+assert observed(N('table cell'))=='exact digest'
+assert observed(N('password text'))==''
+assert observed(N('entry'))==''
+`,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(r.status, 0, r.stderr);
+});
+test("owner connection precedes visible facts and secret input", async () => {
+  const f = fixture();
+  let connected = false;
+  const native = f.io.native;
+  f.io.native = async (step) => {
+    if (step.frame === "Fased Wallet" && step.name === "Connect wallet")
+      connected = true;
+    if (
+      step.frame === "Fased Wallet" &&
+      (step.action === "fact" || step.name === f.q.digest)
+    )
+      assert.ok(connected, "owner facts are hidden before connection");
+    return native(step);
+  };
+  assert.equal(
+    (await installedNativeTradeJourney(f.p, f.io, undefined, f.save)).result,
+    "NEEDS_RESTART",
+  );
+  assert.ok(
+    f.events.indexOf("click:Connect wallet") <
+      f.events.indexOf("private-input"),
+  );
+});
+test("native agent commitment precedes Onchain and Quote", async () => {
+  // Recovery may reopen on Onchain; the Agent control exists on Dashboard.
+
+  const f = fixture();
+  const r = await installedNativeTradeJourney(f.p, f.io, undefined, f.save);
+  assert.equal(r.result, "NEEDS_RESTART");
+  assert.ok(f.events.indexOf("click:Fased") >= 0);
+  assert.ok(
+    f.events.indexOf("click:Fased") < f.events.indexOf("select-agent:Agent"),
+  );
+  assert.ok(
+    f.events.indexOf("select-agent:Agent") < f.events.indexOf("click:Onchain"),
+  );
 });
 test("existing ambiguous owner draft cannot be replaced or approved", async () => {
   const f = fixture();
@@ -652,4 +1014,53 @@ assert n.opens==1 and n.menu.committed=='Local approval'
   assert.equal(wrong.error, undefined);
   assert.notEqual(wrong.status, 0);
   assert.match(wrong.stderr, /native selection unavailable/);
+});
+
+test("installed native journey observes the asynchronous wallet option before selection", async () => {
+  const f = fixture();
+  let choiceObserved = false;
+  const native = f.io.native;
+  f.io.native = async (step) => {
+    if (
+      step.action === "present" &&
+      step.name === f.p.accountName &&
+      step.role === "menu item"
+    )
+      choiceObserved = true;
+    if (step.action === "select" && step.name === "Wallet")
+      assert.ok(
+        choiceObserved,
+        "wallet option must exist before selecting the remounted control",
+      );
+    return native(step);
+  };
+  const result = await installedNativeTradeJourney(
+    f.p,
+    f.io,
+    undefined,
+    f.save,
+  );
+  assert.equal(result.result, "NEEDS_RESTART");
+  assert.ok(
+    f.events.indexOf("present:" + f.p.accountName) <
+      f.events.indexOf("select:Wallet"),
+  );
+});
+
+test("missing native wallet option stops before quote and private input", async () => {
+  const f = fixture();
+  const native = f.io.native;
+  f.io.native = async (step) => {
+    if (step.action === "present" && step.name === f.p.accountName)
+      throw Error("native wallet option unavailable");
+    return native(step);
+  };
+  await assert.rejects(
+    installedNativeTradeJourney(f.p, f.io, undefined, f.save),
+    /native wallet option unavailable/,
+  );
+  assert.equal(f.saved.at(-1).result, "FAIL");
+  assert.ok(
+    !f.events.some((event) => /Quote|Approve|Submit|private-input/.test(event)),
+  );
 });
