@@ -163,7 +163,7 @@ func (h *HTTPHandler) agentsAPI(w http.ResponseWriter, r *http.Request, token st
 		v.AIFixtureAvailable = h.agentFixture
 		v.SessionFixtureAvailable = h.store.sessionFixture
 		v.AIExecutionAvailable = h.store.aiExecutionAvailable(h.agentFixture)
-		writeJSON(w, 200, v)
+		writeAgentOwnerView(w, r, v)
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -179,6 +179,12 @@ func (h *HTTPHandler) agentsAPI(w http.ResponseWriter, r *http.Request, token st
 	}
 	var c AgentCommand
 	if !decodeJSON(w, r, &c) {
+		return
+	}
+	// Keep the admitted request scoped even if owner enrollment changes while
+	// the body is being read; never turn a scoped request into a general one.
+	if r.Header.Get(custodyOnchainHeader) != "" && !custodyOnchainAction(c.Action) {
+		writeError(w, 403, "custody Onchain access cannot authorize this action")
 		return
 	}
 	if c.Action == "wen-research-chat" {
@@ -199,5 +205,5 @@ func (h *HTTPHandler) agentsAPI(w http.ResponseWriter, r *http.Request, token st
 	v.AIFixtureAvailable = h.agentFixture
 	v.SessionFixtureAvailable = h.store.sessionFixture
 	v.AIExecutionAvailable = h.store.aiExecutionAvailable(h.agentFixture)
-	writeJSON(w, 200, v)
+	writeAgentOwnerView(w, r, v)
 }

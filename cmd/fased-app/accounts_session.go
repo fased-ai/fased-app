@@ -19,12 +19,22 @@ func loadAccountsSessionWithIdentity(ctx context.Context, c *core.Client, dir st
 	if !errors.Is(err, core.ErrUnauthorized) {
 		return err
 	}
+	return loadVerifiedRemoteCustody(ctx, c, dir, identity, (*core.Client).CustodyAccounts)
+}
+
+var onchainCustodyIdentity = custodyinstall.InstalledRemoteAccountsIdentity
+
+func loadOnchainSession(ctx context.Context, c *core.Client, dir string) error {
+	return loadVerifiedRemoteCustody(ctx, c, dir, onchainCustodyIdentity, (*core.Client).CustodyOnchain)
+}
+
+func loadVerifiedRemoteCustody(ctx context.Context, c *core.Client, dir string, identity func(int, string, string) (custodyinstall.Manifest, string, error), admit func(*core.Client, context.Context) error) error {
 	var health core.Health
 	if e := c.Do(ctx, http.MethodGet, "/api/v1/health", nil, &health); e != nil {
 		return e
 	}
 	if health.Connection == nil || health.Connection.Location != "remote" || health.Connection.OwnerKind != "custody" || health.Connection.OwnerUID <= 0 {
-		return err
+		return errors.New("verified Remote custody installation required")
 	}
 	image, e := os.Executable()
 	if e != nil {
@@ -35,7 +45,7 @@ func loadAccountsSessionWithIdentity(ctx context.Context, c *core.Client, dir st
 		return e
 	}
 	if m.Owner != health.Connection.OwnerUID || m.Root+"/app-state" != dir || instance != c.Endpoint.InstanceID || health.InstanceID != instance {
-		return errors.New("custody account access belongs to another installation")
+		return errors.New("custody access belongs to another installation")
 	}
-	return c.CustodyAccounts(ctx)
+	return admit(c, ctx)
 }

@@ -35,6 +35,9 @@ func (*System) AccountsHelper(context.Context, Manifest, bool, bool, bool, io.Wr
 	return unsupported
 }
 func (*System) AccountsReadHelper(context.Context, Manifest, io.Writer) error { return unsupported }
+func (*System) AgentsHelper(context.Context, Manifest, string, bool, io.Writer) error {
+	return unsupported
+}
 
 func (*System) UpdateInventory(context.Context, Manifest, string, io.Writer) error {
 	return unsupported

@@ -43,7 +43,7 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 		return bootstrapCommand(args[1:], in, out, errOut)
 	}
 	if len(args) == 0 {
-		return errors.New("usage: fased-app custody enroll|install|status|claim-code|reset-app-password|setup|import|recover|approve|approve-swap|receipt-rpc-save|receipt-rpc-unlock|updates|accounts|login|remove --disposable-fixture [options]")
+		return errors.New("usage: fased-app custody enroll|install|status|claim-code|reset-app-password|setup|import|recover|approve|approve-swap|receipt-rpc-save|receipt-rpc-unlock|updates|accounts|agents|login|remove --disposable-fixture [options]")
 	}
 	if runtime.GOOS != "linux" || os.Getuid() <= 0 || os.Getuid() != os.Geteuid() {
 		return errors.New("custody fixture requires an ordinary Linux owner; real wallets remain disabled")
@@ -62,6 +62,7 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 	proposalFile := f.String("proposal-file", "", "owner-selected public proposal JSON")
 	approvalStdin := f.Bool("approval-stdin", false, "fixture CI only: approval challenge through stdin")
 	requestStdin := f.Bool("request-stdin", false, "public account record JSON from stdin")
+	agentProfile := f.String("profile", "", "agent profile for scoped Onchain reading")
 	readStdin := f.Bool("read-stdin", false, "read-only wallet observation JSON through the installed app identity")
 	passwordStdin := f.Bool("password-stdin", false, "scripted fixture passwords through private stdin only")
 	if e := f.Parse(args[1:]); e != nil {
@@ -75,6 +76,9 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 	}
 	if *readStdin && (args[0] != "accounts" || *requestStdin || *passwordStdin) {
 		return errors.New("wallet read input requires accounts only; no update or login input")
+	}
+	if *agentProfile != "" && args[0] != "agents" {
+		return errors.New("profile is available only for agents")
 	}
 	if *network != "" && args[0] != "install" {
 		return errors.New("network is selected only during installation")
@@ -144,6 +148,11 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 			return system.AccountsReadHelper(ctx, m, out)
 		}
 		return system.AccountsHelper(ctx, m, args[0] == "login", *requestStdin, *passwordStdin, out)
+	case "agents":
+		if m.Location != "remote" || !*prepare || *readStdin || *passwordStdin || (*requestStdin && *agentProfile != "") {
+			return errors.New("Remote Onchain access requires --prepare-host and one read or command")
+		}
+		return system.AgentsHelper(ctx, m, *agentProfile, *requestStdin, out)
 	case "update-status":
 		if !*prepare || *requestStdin || *passwordStdin {
 			return errors.New("read-only managed status requires --prepare-host for the OS identity switch; no input is accepted")
@@ -244,7 +253,7 @@ func custodyOwnerFlag(m custodyinstall.Manifest, action string) (string, error) 
 		return "--disposable-fixture", nil
 	}
 	switch action {
-	case "status", "remove", "accounts", "login", "claim-code", "reset-app-password", "setup", "import", "recover", "update-status":
+	case "status", "remove", "accounts", "agents", "login", "claim-code", "reset-app-password", "setup", "import", "recover", "update-status":
 	default:
 		return "", signer.ErrUnavailable
 	}

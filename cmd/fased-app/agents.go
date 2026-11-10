@@ -46,6 +46,7 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	historyTask := flags.String("history-task", "", "inspect/export one archived task with --history")
 	before := flags.Int64("before", 0, "read the next --history page before this archive row")
 	change := flags.Bool("request-stdin", false, "read one revision-checked agent command; ChatGPT plan limits use zero monetary fields and finite request/time/token bounds; never credentials")
+	custodyOnchain := flags.Bool("custody-onchain", false, "use the installed Remote owner Onchain scope")
 	if e = flags.Parse(args); e != nil {
 		return e
 	}
@@ -106,7 +107,12 @@ func agentsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 		return e
 	}
 	defer c.Close()
-	if enrolled {
+	if *custodyOnchain && enrolled {
+		return errors.New("Remote Onchain authority requires the installed Remote app identity")
+	}
+	if *custodyOnchain {
+		e = loadOnchainSession(ctx, c, *dir)
+	} else if enrolled {
 		e = c.NativeLocalOwner(ctx)
 	} else {
 		e = c.LoadSession(ctx, *dir)

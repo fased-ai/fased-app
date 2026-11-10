@@ -24,7 +24,11 @@ func custodyAccountsRoute(method, path string) bool {
 }
 
 func (h *HTTPHandler) custodyAccountsRequest(r *http.Request) bool {
-	if r.Context().Value(privateIPCKey{}) != true || r.Header.Get(custodyAccountsHeader) != h.store.instanceID || !custodyAccountsRoute(r.Method, r.URL.Path) || h.instanceLocation != "remote" || h.instanceOwnerUID <= 0 || h.instanceOwnerKind != "custody" || !h.store.custodyOwnerSupported || h.store.custodyNetwork == "" {
+	return custodyAccountsRoute(r.Method, r.URL.Path) && h.custodyOwnerRequest(r, custodyAccountsHeader)
+}
+
+func (h *HTTPHandler) custodyOwnerRequest(r *http.Request, header string) bool {
+	if r.Context().Value(privateIPCKey{}) != true || r.Header.Get(header) != h.store.instanceID || h.instanceLocation != "remote" || h.instanceOwnerUID <= 0 || h.instanceOwnerKind != "custody" || !h.store.custodyOwnerSupported || h.store.custodyNetwork == "" {
 		return false
 	}
 	owner, err := h.store.remoteOwner(r.Context())

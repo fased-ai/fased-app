@@ -219,6 +219,29 @@ func (s *System) AccountsHelper(ctx context.Context, m Manifest, login, request,
 func (s *System) AccountsReadHelper(ctx context.Context, m Manifest, out io.Writer) error {
 	return s.appClient(ctx, m, "accounts", []string{"--read-stdin"}, out)
 }
+
+// AgentsHelper forwards only the installed app's existing agent command.
+// The core independently limits this Remote owner path to Onchain actions.
+func (s *System) AgentsHelper(ctx context.Context, m Manifest, profile string, request bool, out io.Writer) error {
+	flags, err := agentsHelperFlags(m, profile, request)
+	if err != nil {
+		return err
+	}
+	return s.appClient(ctx, m, "agents", flags, out)
+}
+
+func agentsHelperFlags(m Manifest, profile string, request bool) ([]string, error) {
+	if m.Location != "remote" || (profile != "" && request) {
+		return nil, errors.New("Remote Onchain access requires one read or command")
+	}
+	flags := []string{"--custody-onchain"}
+	if request {
+		flags = append(flags, "--request-stdin")
+	} else if profile != "" {
+		flags = append(flags, "--profile", profile)
+	}
+	return flags, nil
+}
 func (s *System) appClient(ctx context.Context, m Manifest, action string, flags []string, out io.Writer) error {
 	return s.appClientInput(ctx, m, action, flags, s.In, out)
 }
@@ -238,7 +261,7 @@ func (s *System) UpdatePreferences(ctx context.Context, m Manifest, request bool
 // project child receives the payload reader; exec may drain readers even when
 // an authorization utility does not read its stdin.
 func (s *System) appClientInput(ctx context.Context, m Manifest, action string, flags []string, input io.Reader, out io.Writer) error {
-	if action != "claim-code" && action != "recover" && action != "accounts" && action != "login" && action != "update-inventory" && action != "update-pause" && action != "update-backup" && action != "update-recovery" && action != "update-status" && action != "update-preferences" {
+	if action != "claim-code" && action != "recover" && action != "accounts" && action != "agents" && action != "login" && action != "update-inventory" && action != "update-pause" && action != "update-backup" && action != "update-recovery" && action != "update-status" && action != "update-preferences" {
 		return errors.New("unsupported app helper action")
 	}
 	if e := Verify(m); e != nil {
@@ -253,13 +276,18 @@ func (s *System) appClientInput(ctx context.Context, m Manifest, action string, 
 	if _, e := s.Run(ctx, nil, "/usr/bin/setpriv", "--version"); e != nil {
 		return e
 	}
+	c := appClientCommand(ctx, m, action, flags, input, out, s.Out)
+	return c.Run()
+}
+
+func appClientCommand(ctx context.Context, m Manifest, action string, flags []string, input io.Reader, out, errOut io.Writer) *exec.Cmd {
 	args := append([]string{"-n", "--"}, appArgs(m, action)...)
 	args = append(args, flags...)
 	c := exec.CommandContext(ctx, "/usr/bin/sudo", args...)
 	c.Stdin = input
 	c.Stdout = out
-	c.Stderr = s.Out
-	return c.Run()
+	c.Stderr = errOut
+	return c
 }
 
 func (s *System) UpdateRecovery(ctx context.Context, m Manifest, r update.RecoveryCheck, out io.Writer) error {
