@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"time"
 
@@ -27,7 +26,7 @@ import (
 // owned endpoint is removed conditionally; foreign Serve policy is never reset.
 func (m Manager) BeforeInstall(ctx context.Context, dir string, p Plan, out io.Writer) (result tailnet.Identity, resultErr error) {
 	var empty tailnet.Identity
-	if p.Mode != "tailscale" || !dnsName.MatchString(strings.TrimPrefix(p.Origin, "https://")) || p.Origin != "https://"+strings.TrimPrefix(p.Origin, "https://") {
+	if _, _, err := routeParts(p); err != nil {
 		return empty, errors.New("Remote requires Tailscale before installation")
 	}
 	if err := m.finishPreflight(ctx, dir, p.Origin); err != nil {
@@ -37,8 +36,9 @@ func (m Manager) BeforeInstall(ctx context.Context, dir string, p Plan, out io.W
 	if err != nil {
 		return empty, err
 	}
-	if len(cfg) != 0 {
-		return empty, errors.New("an existing private endpoint must be recovered or updated in place; it cannot be replaced by fresh setup")
+	state, err := routeState(cfg, p)
+	if err != nil || state != "absent" {
+		return empty, errors.New("this private endpoint is already owned; refusing to replace it")
 	}
 	probeDir, err := os.MkdirTemp("/tmp", "fased-private-")
 	if err != nil {
@@ -60,7 +60,10 @@ func (m Manager) BeforeInstall(ctx context.Context, dir string, p Plan, out io.W
 	defer server.Close()
 	probe := p
 	probe.Target = tailnet.Target(probeDir)
-	owned := expected(probe)
+	owned, err := routeChange(cfg, probe, true)
+	if err != nil {
+		return empty, err
+	}
 	// Persist ownership before attempting the conditional mutation. A timeout can
 	// mean that the daemon committed it; recovery must reconcile, never guess.
 	receipt := preflightReceipt{Version: 1, Plan: probe}
@@ -178,15 +181,22 @@ func (m Manager) finishPreflight(ctx context.Context, dir, origin string) error 
 	if err != nil {
 		return err
 	}
-	if len(cfg) != 0 {
-		if !reflect.DeepEqual(cfg, expected(r.Plan)) {
-			return errors.New("private setup route changed; preserve the receipt and inspect before deployment")
+	state, err := routeState(cfg, r.Plan)
+	if err != nil {
+		return errors.New("private setup route changed; preserve the receipt and inspect before deployment")
+	}
+	if state == "owned" {
+		next, e := routeChange(cfg, r.Plan, false)
+		if e != nil {
+			return e
 		}
-		if err = m.SetConfig(ctx, []byte("{}"), etag); err != nil {
+		data, _ := json.Marshal(next)
+		if err = m.SetConfig(ctx, data, etag); err != nil {
 			return err
 		}
 		cfg, _, err = m.config(ctx)
-		if err != nil || len(cfg) != 0 {
+		state, e = routeState(cfg, r.Plan)
+		if err != nil || e != nil || state != "absent" {
 			return errors.New("private setup cleanup not confirmed; no deployment allowed")
 		}
 	}

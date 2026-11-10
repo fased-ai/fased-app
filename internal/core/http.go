@@ -35,6 +35,7 @@ type HTTPHandler struct {
 	instanceOwnerKind string
 	assets            fs.FS
 	authSlots         chan struct{}
+	privateProof      privateAccessProofCache
 	limiter           struct {
 		sync.Mutex
 		start    time.Time
@@ -97,6 +98,10 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.api(w, r)
 		return
 	}
+	if r.URL.Path == "/.fased-private-access" {
+		h.privateAccessProofPage(w, r)
+		return
+	}
 	h.static(w, r)
 }
 func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
@@ -113,6 +118,12 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
+	case "/api/v1/private-access/control":
+		h.privateAccessProofControl(w, r)
+		return
+	case "/api/v1/private-access/confirm":
+		h.privateAccessProofConfirm(w, r)
+		return
 	case "/api/v1/auth/devices":
 		h.remoteDevicesAPI(w, r)
 		return

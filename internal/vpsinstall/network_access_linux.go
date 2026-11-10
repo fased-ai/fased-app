@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/connection"
+	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
 	"github.com/fased-ai/fased-app/internal/tailnet"
 	"golang.org/x/sys/unix"
@@ -27,6 +29,10 @@ import (
 // SSH/Tailscale authenticate the administrator; sudo authorizes OS changes.
 // There are no environment switches that substitute a fixture for this proof.
 func networkProof(ctx context.Context, m Manifest) (networkAccess, error) {
+	return networkProofWithSystem(ctx, m, nil)
+}
+
+func networkProofWithSystem(ctx context.Context, m Manifest, system *custodyinstall.System) (networkAccess, error) {
 	var empty networkAccess
 	if m.PublicOrigin == "" {
 		return empty, errors.New("prepare Tailscale HTTPS and owner sign-in before network lockdown; SSH-only access is preserved")
@@ -67,14 +73,43 @@ func networkProof(ctx context.Context, m Manifest) (networkAccess, error) {
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("private instance redirects are refused")
 	}}
-	identity, err := checkPrivateApplication(ctx, m, client)
+	var identity string
+	if system != nil {
+		// The SSH session already identifies this as the serving Tailscale node.
+		// Local health binds its instance; Verify below still requires the real
+		// SSH peer's independent, device-bound HTTPS confirmation.
+		identity, err = checkPrivateLocalApplication(ctx, m, client)
+	} else {
+		identity, err = checkPrivateApplication(ctx, m, client)
+	}
 	if err != nil {
 		return empty, err
 	}
 	// Reuse the private access inventory guard; HTTPS alone does not exclude Funnel.
 	access := privateaccess.System()
 	access.Client = client
-	if err = access.Verify(ctx, privateaccess.Plan{Mode: "tailscale", Origin: m.PublicOrigin, Target: tailnet.Target(m.Data)}, identity); err != nil {
+	target := tailnet.Target(m.Data)
+	if f, e := committedEnrollment(liveOps(nil), m); e == nil {
+		target = tailnet.Target(f.Target.Root + "/app-state")
+		if system != nil {
+			access.Proof = func(ctx context.Context, request core.PrivateAccessProofRequest) (core.PrivateAccessProof, error) {
+				return system.PrivateAccessProof(ctx, f.Target, request)
+			}
+		}
+	} else if system != nil {
+		access.Proof = func(ctx context.Context, request core.PrivateAccessProofRequest) (core.PrivateAccessProof, error) {
+			return PrivateAccessProof(ctx, m, system, request)
+		}
+	}
+	if system != nil {
+		peer, e := tailnet.WhoIs(ctx, p.PeerIP)
+		if e != nil {
+			return empty, e
+		}
+		access.ExpectedPeer = &peer
+		access.ProofOut = system.Out
+	}
+	if err = access.Verify(ctx, privateaccess.Plan{Mode: "tailscale", Origin: m.PublicOrigin, Target: target}, identity); err != nil {
 		return empty, err
 	}
 	return p, nil
@@ -144,7 +179,8 @@ func checkNetworkSession(value string, sid int, addrs []net.Addr, data []byte, o
 			TailscaleIPs []string
 		}
 	}
-	if len(data) > 1024*1024 || json.Unmarshal(data, &status) != nil || status.BackendState != "Running" || !status.Self.Online || "https://"+strings.TrimSuffix(status.Self.DNSName, ".") != origin {
+	originHost, _, originErr := tailnet.Origin(origin)
+	if len(data) > 1024*1024 || json.Unmarshal(data, &status) != nil || status.BackendState != "Running" || !status.Self.Online || originErr != nil || strings.TrimSuffix(status.Self.DNSName, ".") != originHost {
 		return empty, errors.New("the connected Tailscale device must match the installed private HTTPS address")
 	}
 	dns := strings.TrimSuffix(status.Self.DNSName, ".")
@@ -183,6 +219,34 @@ func checkPrivateApplication(ctx context.Context, m Manifest, client *http.Clien
 	}
 	return checkPrivateApplicationBound(ctx, m, client, expected)
 }
+
+func checkPrivateLocalApplication(ctx context.Context, m Manifest, client *http.Client) (string, error) {
+	expected := ""
+	if m.Data != "" && m.OwnerUID > 0 {
+		o := liveOps(nil)
+		if checkDirectory(o, m.Data, m.AppUID, m.AppGID, 0700) != nil {
+			f, e := committedEnrollment(o, m)
+			if e != nil {
+				return "", errors.New("completed same-instance enrollment is required")
+			}
+			expected = f.Source.ExpectedInstanceID
+		}
+	}
+	r, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+m.Listen+"/api/v1/health", nil)
+	if err != nil {
+		return "", err
+	}
+	response, err := client.Do(r)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	h, err := connection.ReadHealth(response, expected)
+	if err != nil || h.Connection == nil || h.Connection.Location != "remote" || h.Connection.OwnerUID != m.OwnerUID || !h.Connection.RemoteReady {
+		return "", errors.New("finish private owner/device setup before lockdown")
+	}
+	return h.InstanceID, nil
+}
 func checkPrivateApplicationBound(ctx context.Context, m Manifest, client *http.Client, expectedInstance string) (string, error) {
 	health := func(origin, expected string) (string, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin+"/api/v1/health", nil)
@@ -191,7 +255,7 @@ func checkPrivateApplicationBound(ctx context.Context, m Manifest, client *http.
 		}
 		response, err := client.Do(req)
 		if err != nil {
-			return "", errors.New("private Fased health/TLS could not be verified; retain SSH and console access")
+			return "", fmt.Errorf("private Fased health/TLS could not be verified; retain SSH and console access: %w", err)
 		}
 		defer response.Body.Close()
 		h, err := connection.ReadHealth(response, expected)

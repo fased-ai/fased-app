@@ -17,6 +17,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -139,20 +140,8 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 		return nil, errors.New("unknown custody OS tool")
 	}
 	for _, p := range []string{"/usr/bin/sudo", args[0]} {
-		resolved, e := filepath.EvalSymlinks(p)
-		if e != nil {
+		if e := trustedUtility(p); e != nil {
 			return nil, e
-		}
-		if e = trustedParents(filepath.Dir(resolved)); e != nil {
-			return nil, e
-		}
-		i, e := os.Stat(resolved)
-		if e != nil {
-			return nil, e
-		}
-		st, ok := i.Sys().(*syscall.Stat_t)
-		if !ok || st.Uid != 0 || !i.Mode().IsRegular() || i.Mode().Perm()&0022 != 0 {
-			return nil, errors.New("OS utilities must be root-owned and immutable")
 		}
 	}
 	if !s.authorized && !s.NonInteractive {
@@ -174,6 +163,25 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 	c.Stdin = bytes.NewReader(input)
 	c.Stderr = s.Out
 	return c.Output()
+}
+
+func trustedUtility(path string) error {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return err
+	}
+	if err = trustedParents(filepath.Dir(resolved)); err != nil {
+		return err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || st.Uid != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 {
+		return errors.New("OS utilities must be root-owned and immutable")
+	}
+	return nil
 }
 
 func providerCredentialEncryption(input []byte, args []string) bool {
@@ -250,6 +258,31 @@ func (s *System) UpdateStatus(ctx context.Context, m Manifest, out io.Writer) er
 	return s.appClientInput(ctx, m, "update-status", nil, nil, out)
 }
 
+// PrivateAccessProof runs the fixed status reader under the installed app UID.
+// The token reaches only its private IPC; no owner session or signer is used.
+func (s *System) PrivateAccessProof(ctx context.Context, m Manifest, request core.PrivateAccessProofRequest) (core.PrivateAccessProof, error) {
+	var proof core.PrivateAccessProof
+	if s == nil || m.Location != "remote" || m.Owner != os.Getuid() {
+		return proof, errors.New("Remote installation owner required")
+	}
+	if err := request.Validate(); err != nil {
+		return proof, err
+	}
+	input, err := json.Marshal(request)
+	if err != nil {
+		return proof, err
+	}
+	var output bytes.Buffer
+	if err = s.appClientInput(ctx, m, "status", []string{"--private-proof-stdin"}, bytes.NewReader(input), &output); err != nil {
+		return proof, err
+	}
+	data := output.Bytes()
+	if len(data) > 4096 || update.StrictJSON(data, &proof) != nil {
+		return proof, errors.New("invalid private access proof response")
+	}
+	return proof, nil
+}
+
 func (s *System) UpdatePreferences(ctx context.Context, m Manifest, request bool, out io.Writer) error {
 	if request {
 		return s.appClient(ctx, m, "update-preferences", []string{"--request-stdin"}, out)
@@ -261,23 +294,38 @@ func (s *System) UpdatePreferences(ctx context.Context, m Manifest, request bool
 // project child receives the payload reader; exec may drain readers even when
 // an authorization utility does not read its stdin.
 func (s *System) appClientInput(ctx context.Context, m Manifest, action string, flags []string, input io.Reader, out io.Writer) error {
-	if action != "claim-code" && action != "recover" && action != "accounts" && action != "agents" && action != "login" && action != "update-inventory" && action != "update-pause" && action != "update-backup" && action != "update-recovery" && action != "update-status" && action != "update-preferences" {
+	if action != "claim-code" && action != "recover" && action != "accounts" && action != "agents" && action != "login" && action != "status" && action != "update-inventory" && action != "update-pause" && action != "update-backup" && action != "update-recovery" && action != "update-status" && action != "update-preferences" {
 		return errors.New("unsupported app helper action")
 	}
 	if e := Verify(m); e != nil {
 		return e
 	}
-	if m.Owner != os.Getuid() {
+	if m.Owner != os.Getuid() || os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
 		return errors.New("installation owner required")
 	}
 	if e := loadedUnit(m, "app"); e != nil {
 		return e
 	}
-	if _, e := s.Run(ctx, nil, "/usr/bin/setpriv", "--version"); e != nil {
-		return e
+	// This exact Remote proof command has its own fixed, password-free grant.
+	// Running sudo -v first would demand unrelated administrator credentials
+	// even when the owner is already authorized for this one command.
+	if !privateProofStatus(action, flags) {
+		if _, e := s.Run(ctx, nil, "/usr/bin/setpriv", "--version"); e != nil {
+			return e
+		}
+	} else {
+		for _, tool := range []string{"/usr/bin/sudo", "/usr/bin/setpriv"} {
+			if e := trustedUtility(tool); e != nil {
+				return e
+			}
+		}
 	}
 	c := appClientCommand(ctx, m, action, flags, input, out, s.Out)
 	return c.Run()
+}
+
+func privateProofStatus(action string, flags []string) bool {
+	return action == "status" && len(flags) == 1 && flags[0] == "--private-proof-stdin"
 }
 
 func appClientCommand(ctx context.Context, m Manifest, action string, flags []string, input io.Reader, out, errOut io.Writer) *exec.Cmd {

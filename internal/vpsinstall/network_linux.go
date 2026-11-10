@@ -30,7 +30,7 @@ func controller(s *custodyinstall.System) (networkController, error) {
 	if s.Authorization == "" {
 		s.Authorization = "Authorize explicit Remote network lockdown: an owned nftables input table and SSH key-only policy, protected by a five-minute rollback. Private UI and independent console recovery must already work. Foreign host policies are preserved."
 	}
-	return networkController{ops: liveOps(s), now: time.Now, proof: networkProof}, nil
+	return networkController{ops: liveOps(s), now: time.Now, proof: func(ctx context.Context, m Manifest) (networkAccess, error) { return networkProofWithSystem(ctx, m, s) }}, nil
 }
 func BeginNetwork(ctx context.Context, m Manifest, s *custodyinstall.System, a NetworkApproval) (NetworkStatus, error) {
 	n, e := controller(s)

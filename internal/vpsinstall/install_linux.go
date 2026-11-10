@@ -1111,6 +1111,7 @@ func status(ctx context.Context, o hostOps, m Manifest) (ServiceStatus, error) {
 	}
 	r.Active = true
 	r.InstanceID = h.InstanceID
+	r.RemoteReady = h.Connection != nil && h.Connection.RemoteReady
 	r.URL = "http://" + m.Listen
 	if m.PublicOrigin != "" {
 		r.URL = m.PublicOrigin

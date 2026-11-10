@@ -124,7 +124,7 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 	}
 	switch args[0] {
 	case "/usr/bin/curl":
-		if !privateaccess.AllowedServeCommand(input, args) {
+		if !privateaccess.AllowedOwnedServeCommand(ctx, input, args) {
 			return nil, errors.New("only the fixed conditional private Serve setup request is allowed")
 		}
 	case "/usr/bin/apt-get", "/usr/bin/cat", "/usr/bin/install", "/usr/bin/ln", "/usr/bin/rm", "/usr/bin/sync", "/usr/sbin/apparmor_parser":

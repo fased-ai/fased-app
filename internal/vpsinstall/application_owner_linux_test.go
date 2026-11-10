@@ -58,6 +58,26 @@ func TestApplicationOwnerCallFixedDroppedHelper(t *testing.T) {
 	}
 }
 
+func TestApplicationOwnerPrivateDeviceProofUsesExistingHelper(t *testing.T) {
+	_, o, m, command := ownerCallFixture(t)
+	command.Action = "private-access"
+	command.PrivateProof = &core.PrivateAccessProofRequest{Action: "begin", Token: strings.Repeat("A", 43)}
+	result, err := applicationOwnerCall(t.Context(), m, command, o, func(_ context.Context, input []byte, args []string) ([]byte, error) {
+		if !bytes.Equal(input, encoded(command)) || !reflect.DeepEqual(args, applicationOwnerHelperArgs(m, m.Core)) {
+			t.Fatal("changed private owner boundary")
+		}
+		return encoded(core.ApplicationOwnerView{PrivateProof: &core.PrivateAccessProof{State: "pending", InstanceID: "fixture-instance"}}), nil
+	})
+	if err != nil || result.PrivateProof == nil || result.PrivateProof.State != "pending" {
+		t.Fatal(result, err)
+	}
+	command.PrivateProof.Action = "unrelated"
+	called := false
+	if _, err = applicationOwnerCall(t.Context(), m, command, o, func(context.Context, []byte, []string) ([]byte, error) { called = true; return nil, nil }); err == nil || called {
+		t.Fatal("invalid proof crossed owner boundary")
+	}
+}
+
 func TestApplicationOwnerCallRefusesBeforeElevation(t *testing.T) {
 	for _, name := range []string{"owner", "root", "manifest", "binary", "extra-file", "unit", "env", "action", "lease", "outcome", "oversized", "offline-lease", "offline-outcome"} {
 		t.Run(name, func(t *testing.T) {

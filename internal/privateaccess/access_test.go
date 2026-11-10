@@ -11,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 type roundTrip func(*http.Request) (*http.Response, error)
@@ -146,6 +148,65 @@ func TestVerifyPrivateRouteReadOnlyAndNoFunnel(t *testing.T) {
 				t.Fatal("unexpected retries")
 			}
 		})
+	}
+}
+
+// A node cannot use its own HTTPS response as evidence that another device
+// reached Serve. The separate external path keeps bounded startup retries.
+func TestSelfHTTPSRefusalAndStartupRetry(t *testing.T) {
+	p := Plan{Mode: "tailscale", Origin: "https://node.owner.ts.net", Target: "http://127.0.0.1:7331"}
+	cfg, _ := json.Marshal(expected(p))
+	probes := 0
+	m := Manager{
+		GetConfig: func(context.Context) ([]byte, string, error) { return cfg, "etag", nil },
+		Run: func(context.Context, ...string) ([]byte, error) {
+			return []byte(`{"BackendState":"Running","Self":{"Online":true,"ID":"server","DNSName":"node.owner.ts.net."}}`), nil
+		},
+		Client: &http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) {
+			probes++
+			return nil, syscall.ECONNREFUSED
+		})},
+	}
+	err := m.waitForPreparingEndpoint(t.Context(), p, "fixture-instance")
+	if !errors.Is(err, errEndpointSelf) || probes != 0 {
+		t.Fatalf("self probe = %v, requests = %d", err, probes)
+	}
+	m.Run = func(context.Context, ...string) ([]byte, error) {
+		return []byte(`{"BackendState":"Running","Self":{"Online":true,"DNSName":"node.owner.ts.net."}}`), nil
+	}
+	if err = m.verifyEndpoint(t.Context(), p, "fixture-instance"); err == nil || probes != 0 {
+		t.Fatal("missing serving-device identity accepted", err)
+	}
+	m.Run = func(context.Context, ...string) ([]byte, error) {
+		return []byte(`{"BackendState":"NeedsLogin","Self":{"Online":false,"DNSName":"node.owner.ts.net."}}`), nil
+	}
+	if err := m.verifyEndpoint(t.Context(), p, "fixture-instance"); err == nil {
+		t.Fatal("offline device accepted")
+	}
+	canceled, stop := context.WithCancel(t.Context())
+	m.Run = func(context.Context, ...string) ([]byte, error) {
+		stop()
+		return nil, context.Canceled
+	}
+	if err := m.verifyEndpoint(canceled, p, "fixture-instance"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("lost cancellation during status lookup: %v", err)
+	}
+	m.Run = func(context.Context, ...string) ([]byte, error) {
+		return []byte(`{"BackendState":"Running","Self":{"Online":true,"DNSName":"another.owner.ts.net."}}`), nil
+	}
+	probes = 0
+	m.Client = &http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) {
+		probes++
+		if probes == 1 {
+			return nil, syscall.ECONNREFUSED
+		}
+		body := `{"status":"ok","apiVersion":"1","instanceId":"fixture-instance","connection":{"location":"remote","transport":"private-https"}}`
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if err := m.waitForPreparingEndpoint(ctx, p, "fixture-instance"); err != nil || probes != 2 {
+		t.Fatalf("transient startup = %v, requests = %d", err, probes)
 	}
 }
 func TestConditionalRouteRecoveryAndForeignConfiguration(t *testing.T) {

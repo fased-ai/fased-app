@@ -122,7 +122,16 @@ export function validateInstalledTradePlan(p) {
     assert.equal(address.protocol, "https:");
     assert.match(address.hostname, /^[a-z0-9-]+\.[a-z0-9-]+\.ts\.net$/);
     assert.equal(p.origin, address.origin);
-    assert.equal(address.username + address.password + address.port, "");
+    assert.equal(address.username + address.password, "");
+    if (address.port) {
+      const port = Number(address.port);
+      assert.ok(
+        Number.isInteger(port) &&
+          port >= 1024 &&
+          port <= 65535 &&
+          String(port) === address.port,
+      );
+    }
     assert.equal(address.pathname, "/");
     assert.equal(address.search + address.hash, "");
     assert.match(p.remoteUser, /^[a-z_][a-z0-9_-]{0,31}$/);

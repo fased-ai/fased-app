@@ -5,9 +5,22 @@ import {
   runReaderStage,
   projectReadOnlySignerJournal,
   projectReadOnlyUpdateCommand,
+  projectLegacyApplicationOwner,
 } from "./fixture-core-storage.mjs";
 
 const reader = { schema: 36, ref: "ad910705246844c333eae8b41b742cb818a58069" };
+
+test("predecessor owner projection excludes the new device proof protocol", () => {
+  const source = readFileSync(
+    new URL("../internal/core/application_owner.go", import.meta.url),
+    "utf8",
+  );
+  const projected = projectLegacyApplicationOwner(source);
+  assert.ok(!projected.includes("PrivateAccessProof"));
+  assert.ok(!projected.includes("c.PrivateProof"));
+  assert.ok(projected.includes("ApplicationOwnerCommand"));
+  assert.throws(() => projectLegacyApplicationOwner(projected));
+});
 
 test("reader child commands have a fixed budget and attributable stages", (t) => {
   const logs = [];

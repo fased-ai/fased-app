@@ -233,6 +233,16 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		if err != nil {
 			return err
 		}
+		if *managedRemote && plan.Mode == "tailscale" {
+			dir, e := remoteAccessDirectory()
+			if e != nil {
+				return e
+			}
+			plan, e = privateaccess.System().SelectIsolated(ctx, dir, plan)
+			if e != nil {
+				return e
+			}
+		}
 		plan = installationSSHPlan(plan, os.Getenv("SSH_CONNECTION"))
 		*access = plan.Mode
 		if *access == "tailscale" {

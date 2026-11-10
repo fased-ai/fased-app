@@ -10,6 +10,7 @@ import (
 
 type ApplicationOwnerCommand struct {
 	ReaderBootstrap *ApplicationReaderBootstrapRequest `json:"readerBootstrap,omitempty"`
+	PrivateProof    *PrivateAccessProofRequest         `json:"privateProof,omitempty"`
 	Action          string                             `json:"action"`
 	ID              string                             `json:"id"`
 	Lease           string                             `json:"lease,omitempty"`
@@ -17,6 +18,7 @@ type ApplicationOwnerCommand struct {
 }
 type ApplicationOwnerView struct {
 	ReaderBootstrap *ApplicationReaderBootstrapRequest `json:"readerBootstrap,omitempty"`
+	PrivateProof    *PrivateAccessProof                `json:"privateProof,omitempty"`
 	RunningSHA256   string                             `json:"runningSha256"`
 	BootID          string                             `json:"bootId"`
 	View            ApplicationUpdateView              `json:"view"`
@@ -40,7 +42,7 @@ func (h *HTTPHandler) applicationOwnerAPI(w http.ResponseWriter, r *http.Request
 	defer r.Body.Close()
 	b, e := io.ReadAll(r.Body)
 	var c ApplicationOwnerCommand
-	if e != nil || update.StrictJSON(b, &c) != nil || !update.IDOK(c.ID) || c.ReaderBootstrap != nil {
+	if e != nil || update.StrictJSON(b, &c) != nil || !update.IDOK(c.ID) || c.ReaderBootstrap != nil || c.PrivateProof != nil {
 		writeError(w, 400, "one exact update operation required")
 		return
 	}

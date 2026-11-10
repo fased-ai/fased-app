@@ -29,7 +29,11 @@ func ApplicationOwnerCall(ctx context.Context, m Manifest, command core.Applicat
 		return core.ApplicationOwnerView{}, errors.New("ordinary Remote owner terminal authorization required")
 	}
 	if s.Authorization == "" {
-		s.Authorization = "Authorize this Remote update metadata request through the dedicated app account. Fased remains unprivileged; no automatic-update authority is granted."
+		if command.Action == "private-access" {
+			s.Authorization = "Authorize private device verification through the dedicated app account. Fased remains unprivileged."
+		} else {
+			s.Authorization = "Authorize this Remote update metadata request through the dedicated app account. Fased remains unprivileged; no automatic-update authority is granted."
+		}
 	}
 	o := liveOps(s)
 	return applicationOwnerCall(ctx, m, command, o, func(ctx context.Context, input []byte, args []string) ([]byte, error) {
@@ -65,6 +69,10 @@ func applicationOwnerCall(ctx context.Context, m Manifest, command core.Applicat
 		return result, errors.New("one exact Remote owner operation required")
 	}
 	switch command.Action {
+	case "private-access":
+		if command.PrivateProof == nil || command.PrivateProof.Validate() != nil || command.Lease != "" || command.Receipt != nil || command.ReaderBootstrap != nil {
+			return result, errors.New("one private device proof required")
+		}
 	case "reader-prepare", "reader-bootstrap", "reader-resume":
 		if command.Receipt != nil {
 			return result, errors.New("reader handoff cannot supply an outcome")
@@ -87,6 +95,9 @@ func applicationOwnerCall(ctx context.Context, m Manifest, command core.Applicat
 		}
 	default:
 		return result, errors.New("unsupported Remote owner operation")
+	}
+	if command.Action != "private-access" && command.PrivateProof != nil {
+		return result, errors.New("private proof cannot change owner maintenance")
 	}
 	reader := command.Action == "reader-prepare" || command.Action == "reader-bootstrap" || command.Action == "reader-resume"
 	if !reader && command.ReaderBootstrap != nil {
@@ -128,7 +139,16 @@ func applicationOwnerCall(ctx context.Context, m Manifest, command core.Applicat
 	if e != nil {
 		return result, e
 	}
-	if update.StrictJSONBounded(response, &result, applicationOwnerResponseLimit) != nil || result.View.Version != 1 || result.View.InstanceID == "" || result.View.Operation.ID != command.ID {
+	if update.StrictJSONBounded(response, &result, applicationOwnerResponseLimit) != nil {
+		return core.ApplicationOwnerView{}, errors.New("invalid Remote owner response")
+	}
+	if command.Action == "private-access" {
+		if result.PrivateProof == nil || result.PrivateProof.InstanceID == "" {
+			return core.ApplicationOwnerView{}, errors.New("invalid private device proof")
+		}
+		return result, nil
+	}
+	if result.PrivateProof != nil || result.View.Version != 1 || result.View.InstanceID == "" || result.View.Operation.ID != command.ID {
 		return core.ApplicationOwnerView{}, errors.New("Remote owner response is invalid or belongs to another operation")
 	}
 	return result, nil

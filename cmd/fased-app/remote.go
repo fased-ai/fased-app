@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"github.com/fased-ai/fased-app/internal/hostprep"
 	"io"
+	neturl "net/url"
 	"os"
 	osuser "os/user"
 	"path/filepath"
@@ -89,7 +90,10 @@ func remoteAccessDirectory() (string, error) {
 	return dir, nil
 }
 
-func enableRemoteAccess(ctx context.Context, m vpsinstall.Manifest, system *custodyinstall.System) (string, error) {
+func enableRemoteAccess(ctx context.Context, m vpsinstall.Manifest, system *custodyinstall.System, initial ...tailnet.Identity) (string, error) {
+	if len(initial) > 1 {
+		return "", errors.New("one initial Tailscale device required")
+	}
 	status, err := vpsinstall.Status(ctx, m, system)
 	if err != nil {
 		return "", err
@@ -105,14 +109,23 @@ func enableRemoteAccess(ctx context.Context, m vpsinstall.Manifest, system *cust
 	if err != nil {
 		return "", err
 	}
-	if plan.Origin != m.PublicOrigin {
-		return "", errors.New("Tailscale identity changed; installed Remote origin was preserved")
+	plan, err = privateaccess.BindOrigin(plan, m.PublicOrigin)
+	if err != nil {
+		return "", err
 	}
 	plan.Target = tailnet.Target(m.Data)
 	dir, err := remoteAccessDirectory()
 	if err != nil {
 		return "", err
 	}
+	manager.ProofOut = system.Out
+	if len(initial) == 1 {
+		manager.ExpectedPeer = &initial[0]
+	}
+	manager.Proof = func(ctx context.Context, request core.PrivateAccessProofRequest) (core.PrivateAccessProof, error) {
+		return vpsinstall.PrivateAccessProof(ctx, m, system, request)
+	}
+	manager.InitialPeer = func() (tailnet.Identity, bool, error) { return loadRemoteSetupOwner(dir, m, status.InstanceID) }
 	if err = manager.Enable(ctx, dir, plan, status.InstanceID); err != nil {
 		return "", err
 	}
@@ -170,7 +183,7 @@ func managedRemoteInstall(ctx context.Context, corePath, hash, listen string, pl
 	}
 	url := ""
 	if start {
-		url, err = enableRemoteAccess(ctx, m, system)
+		url, err = enableRemoteAccess(ctx, m, system, owner)
 		if err != nil {
 			return remoteAccessPending(m, err)
 		}
@@ -201,7 +214,11 @@ func managedRemoteInstall(ctx context.Context, corePath, hash, listen string, pl
 		if err != nil {
 			return err
 		}
-		host := strings.TrimPrefix(plan.Origin, "https://")
+		address, e := neturl.Parse(plan.Origin)
+		if e != nil {
+			return e
+		}
+		host := address.Hostname()
 		first := installationCommand("ssh", "-t", "-o", "ControlMaster=no", "-o", "ControlPath=none", user.Username+"@"+host, installationCommand(m.Core, "vps", "harden"))
 		second := installationCommand("ssh", "-t", "-o", "ControlMaster=no", "-o", "ControlPath=none", user.Username+"@"+host, installationCommand(m.Core, "vps", "finish"))
 		fmt.Fprintln(errOut, "After opening Fased, finish private recovery from your computer:")
@@ -222,11 +239,27 @@ func remoteOwnerLink(ctx context.Context, m vpsinstall.Manifest, system *custody
 	if origin == "" {
 		origin = "http://" + m.Listen
 	}
-	address, claimed, e := connection.ClaimedOwnerURL(ctx, origin, status.InstanceID)
-	if e != nil {
+	address, claimed := "", status.RemoteReady && m.PublicOrigin != ""
+	if claimed {
+		address, e = connection.OwnerSetupURL(origin, status.InstanceID, "")
+	} else {
+		probe := origin
+		if m.PublicOrigin != "" {
+			probe = "http://" + m.Listen
+		}
+		address, claimed, e = connection.ClaimedOwnerURL(ctx, probe, status.InstanceID)
+		if e == nil && claimed && m.PublicOrigin != "" {
+			address, e = connection.OwnerSetupURL(origin, status.InstanceID, "")
+		}
+	}
+	if e != nil && m.PublicOrigin == "" {
 		return e
 	}
+	probeErr := e
 	if claimed {
+		if e != nil {
+			return e
+		}
 		fmt.Fprintln(&link, address)
 	} else {
 		dir, e := remoteAccessDirectory()
@@ -236,6 +269,9 @@ func remoteOwnerLink(ctx context.Context, m vpsinstall.Manifest, system *custody
 		owner, found, e := loadRemoteSetupOwner(dir, m, status.InstanceID)
 		if e != nil {
 			return e
+		}
+		if probeErr != nil && !found {
+			return errors.New("initial private owner handoff is unavailable; preserve the installation")
 		}
 		if found {
 			e = vpsinstall.SetupLink(ctx, m, system, &link, owner)
@@ -257,6 +293,12 @@ func remoteOwnerLink(ctx context.Context, m vpsinstall.Manifest, system *custody
 	plan, e := privateaccess.System().Plan(ctx, mode, m.Listen)
 	if e != nil {
 		return e
+	}
+	if mode == "tailscale" {
+		plan, e = privateaccess.BindOrigin(plan, m.PublicOrigin)
+		if e != nil {
+			return e
+		}
 	}
 	remoteHandoff(out, m, installationSSHPlan(plan, os.Getenv("SSH_CONNECTION")), true, strings.TrimSpace(link.String()))
 	return nil
@@ -379,7 +421,9 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 	}
 	if enrolled {
 		if *configure {
-			return errors.New("custody is enrolled; preserve current access and keys until its dedicated access migration is supported")
+			if e = system.PreparePrivateAccessProof(ctx, target); e != nil {
+				return e
+			}
 		}
 		switch action {
 		case "status", "start", "stop", "claim-code", "recover", "access", "remove":
@@ -508,6 +552,10 @@ func enableEnrolledRemoteAccess(ctx context.Context, source vpsinstall.Manifest,
 	if e != nil {
 		return "", e
 	}
+	plan, e = privateaccess.BindOrigin(plan, target.PublicOrigin)
+	if e != nil {
+		return "", e
+	}
 	plan, e = enrolledPrivateAccessPlan(plan, target)
 	if e != nil {
 		return "", e
@@ -516,6 +564,11 @@ func enableEnrolledRemoteAccess(ctx context.Context, source vpsinstall.Manifest,
 	if e != nil {
 		return "", e
 	}
+	manager.ProofOut = system.Out
+	manager.Proof = func(ctx context.Context, request core.PrivateAccessProofRequest) (core.PrivateAccessProof, error) {
+		return system.PrivateAccessProof(ctx, target, request)
+	}
+	manager.InitialPeer = func() (tailnet.Identity, bool, error) { return loadRemoteSetupOwner(dir, source, commit.InstanceID) }
 	if e = manager.Enable(ctx, dir, plan, commit.InstanceID); e != nil {
 		return "", e
 	}
@@ -561,6 +614,16 @@ func configureRemoteAccess(ctx context.Context, m vpsinstall.Manifest, system *c
 	if e != nil {
 		return e
 	}
+	if plan.Mode == "tailscale" {
+		if m.PublicOrigin != "" {
+			plan, e = privateaccess.BindOrigin(plan, m.PublicOrigin)
+		} else {
+			plan, e = remotePrivateAccess(system).SelectIsolated(ctx, dir, plan)
+		}
+		if e != nil {
+			return e
+		}
+	}
 	original, e := vpsinstall.Status(ctx, m, system)
 	if e != nil {
 		return e
@@ -574,8 +637,20 @@ func configureRemoteAccess(ctx context.Context, m vpsinstall.Manifest, system *c
 		if e != nil {
 			return e
 		}
+		chosen, e = privateaccess.BindOrigin(chosen, target.PublicOrigin)
+		if e != nil {
+			return e
+		}
 		if chosen.Origin != target.PublicOrigin {
 			return errors.New("private origin differs from this Tailscale device")
+		}
+		chosen.Target = tailnet.Target(target.Data)
+		manager.ProofOut = system.Out
+		manager.Proof = func(ctx context.Context, request core.PrivateAccessProofRequest) (core.PrivateAccessProof, error) {
+			return vpsinstall.PrivateAccessProof(ctx, target, system, request)
+		}
+		manager.InitialPeer = func() (tailnet.Identity, bool, error) {
+			return loadRemoteSetupOwner(dir, target, original.InstanceID)
 		}
 		return manager.Enable(ctx, dir, chosen, original.InstanceID)
 	}

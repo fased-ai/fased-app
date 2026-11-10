@@ -3,6 +3,7 @@
 package vpsinstall
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -55,6 +56,9 @@ func TestNetworkPrivateSession(t *testing.T) {
 			t.Fatal(got, err)
 		}
 	}
+	if _, err := checkNetworkSession("100.90.0.1 40000 100.90.0.2 22", 123, []net.Addr{ipv4}, status, "https://vps.owner.ts.net:8443"); err != nil {
+		t.Fatal("isolated HTTPS port changed SSH peer identity", err)
+	}
 	first, _ := checkNetworkSession("100.90.0.1 40000 100.90.0.2 22", 123, []net.Addr{ipv4}, status, "https://vps.owner.ts.net")
 	sameConnection, _ := checkNetworkSession("100.90.0.1 40000 100.90.0.2 22", 456, []net.Addr{ipv4}, status, "https://vps.owner.ts.net")
 	newConnection, _ := checkNetworkSession("100.90.0.1 40001 100.90.0.2 22", 123, []net.Addr{ipv4}, status, "https://vps.owner.ts.net")
@@ -87,6 +91,34 @@ func TestNetworkPrivateSession(t *testing.T) {
 		if _, err := checkNetworkSession("100.90.0.1 40000 100.90.0.2 22", c.sid, c.addrs, status, c.origin); err == nil {
 			t.Fatal("unbound session/interface/origin accepted", c)
 		}
+	}
+}
+
+func TestNetworkLocalReadinessNeverSubstitutesForOwnerBinding(t *testing.T) {
+	m := Manifest{OwnerUID: 1000, Listen: "127.0.0.1:17445", PublicOrigin: "https://vps.owner.ts.net:8443"}
+	for _, scenario := range []string{"ready", "unclaimed", "wrong owner", "wrong profile"} {
+		t.Run(scenario, func(t *testing.T) {
+			client := &http.Client{Transport: networkRoundTrip(func(r *http.Request) (*http.Response, error) {
+				if r.URL.String() != "http://"+m.Listen+"/api/v1/health" {
+					t.Fatal("unexpected readiness request", r.URL)
+				}
+				h := core.Health{Status: "ok", APIVersion: core.APIVersion, InstanceID: strings.Repeat("a", 43), Connection: &core.ConnectionInfo{RemoteReady: true, Location: "remote", Transport: "loopback", OwnerUID: m.OwnerUID}}
+				switch scenario {
+				case "unclaimed":
+					h.Connection.RemoteReady = false
+				case "wrong owner":
+					h.Connection.OwnerUID++
+				case "wrong profile":
+					h.Connection.Location = "local"
+				}
+				data, _ := json.Marshal(h)
+				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(bytes.NewReader(data))}, nil
+			})}
+			_, err := checkPrivateLocalApplication(t.Context(), m, client)
+			if (err == nil) != (scenario == "ready") {
+				t.Fatal(scenario, err)
+			}
+		})
 	}
 }
 

@@ -5,6 +5,7 @@ package vpsinstall
 import (
 	"context"
 	"errors"
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/tailnet"
 	"io"
@@ -26,6 +27,10 @@ func Status(context.Context, Manifest, *custodyinstall.System) (ServiceStatus, e
 	return ServiceStatus{}, unsupported
 }
 func CheckApplication(string, string, string, string, string, ...bool) error { return unsupported }
+
+func PrivateAccessProof(context.Context, Manifest, *custodyinstall.System, core.PrivateAccessProofRequest) (core.PrivateAccessProof, error) {
+	return core.PrivateAccessProof{}, unsupported
+}
 
 func SetupLink(context.Context, Manifest, *custodyinstall.System, io.Writer, ...tailnet.Identity) error {
 	return unsupported

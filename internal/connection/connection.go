@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 	"io"
 	"mime"
 	"net"
@@ -57,8 +58,10 @@ type Result struct {
 
 func Probe(ctx context.Context, value, expected string) (Result, error) {
 	result, err := Inspect(ctx, value, expected)
-	if err == nil && result.Location == "remote" && (!strings.HasPrefix(result.URL, "https://") || !strings.HasSuffix(result.URL, ".ts.net")) {
-		return Result{}, errors.New("Remote requires its Tailscale HTTPS address")
+	if err == nil && result.Location == "remote" {
+		if _, _, e := tailnet.Origin(result.URL); e != nil {
+			return Result{}, errors.New("Remote requires its Tailscale HTTPS address")
+		}
 	}
 	return result, err
 }

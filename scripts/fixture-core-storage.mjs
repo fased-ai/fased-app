@@ -65,6 +65,20 @@ export function projectReadOnlyUpdateCommand(source) {
   return source.replace(choice, "").replace(branch, "");
 }
 
+// The composed predecessor predates device-proof IPC. Keep its original owner
+// protocol and avoid copying the new endpoint or its runtime dependencies.
+export function projectLegacyApplicationOwner(source) {
+  const request =
+    /^\s*PrivateProof[ \t]+\*PrivateAccessProofRequest[ \t]+`json:"privateProof,omitempty"`\r?\n/gm;
+  const result =
+    /^\s*PrivateProof[ \t]+\*PrivateAccessProof[ \t]+`json:"privateProof,omitempty"`\r?\n/gm;
+  const guard = " || c.PrivateProof != nil";
+  assert.equal([...source.matchAll(request)].length, 1);
+  assert.equal([...source.matchAll(result)].length, 1);
+  assert.equal(source.split(guard).length, 2);
+  return source.replace(request, "").replace(result, "").replace(guard, "");
+}
+
 export async function currentStorageFixture(archivedRoot) {
   assert.ok(process.getuid() > 0);
   const storage = {};
@@ -165,6 +179,10 @@ export async function currentStorageFixture(archivedRoot) {
     if (file === "onchain.go")
       bytes = Buffer.from(
         projectReadOnlyOnchainAdapter(bytes.toString("utf8")),
+      );
+    if (file === "application_owner.go")
+      bytes = Buffer.from(
+        projectLegacyApplicationOwner(bytes.toString("utf8")),
       );
     await writeFile(path.join(archivedRoot, "internal/core", file), bytes);
     storage[file] = sha(bytes);
