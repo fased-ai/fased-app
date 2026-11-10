@@ -2,8 +2,17 @@
 // privilege grant, token import, signer shortcut or replacement runtime lives here.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { readFile, lstat, writeFile, rename } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { constants } from "node:fs";
+import {
+  readFile,
+  lstat,
+  writeFile,
+  rename,
+  link,
+  unlink,
+  open,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 
@@ -44,11 +53,7 @@ export function validateInstalledTradePlan(p) {
   );
   assert.equal(p.version, 1);
   assert.match(p.source, /^[a-f0-9]{40}$/);
-  assert.equal(
-    p.profile,
-    "local",
-    "Remote Onchain CLI owner route is not admitted; Local first",
-  );
+  assert.ok(["local", "remote"].includes(p.profile), "unsupported profile");
   for (const n of [p.ownerUid, p.clientUid])
     assert.ok(Number.isSafeInteger(n) && n > 0);
   if (p.profile === "local") assert.equal(p.ownerUid, p.clientUid);
@@ -109,8 +114,20 @@ export function validateInstalledTradePlan(p) {
     "original owner is never the positive destination",
   );
   assert.match(p.preserve.manifestSha256, hex);
-  assert.equal(p.origin, "");
-  assert.equal(p.remoteUser, "");
+  if (p.profile === "local") {
+    assert.equal(p.origin, "");
+    assert.equal(p.remoteUser, "");
+  } else {
+    const address = new URL(p.origin);
+    assert.equal(address.protocol, "https:");
+    assert.match(address.hostname, /^[a-z0-9-]+\.[a-z0-9-]+\.ts\.net$/);
+    assert.equal(p.origin, address.origin);
+    assert.equal(address.username + address.password + address.port, "");
+    assert.equal(address.pathname, "/");
+    assert.equal(address.search + address.hash, "");
+    assert.match(p.remoteUser, /^[a-z_][a-z0-9_-]{0,31}$/);
+    assert.notEqual(p.remoteUser, "root");
+  }
 
   return {
     root: `/var/lib/fased-app-custody-${p.ownerUid}`,
@@ -118,7 +135,11 @@ export function validateInstalledTradePlan(p) {
   };
 }
 
-export function verifyInstalledTradeReceiver(p, observed) {
+export function verifyInstalledTradeReceiver(
+  p,
+  observed,
+  { allowUnlocked = false } = {},
+) {
   const { root } = validateInstalledTradePlan(p),
     m = observed.manifest;
   assert.equal(observed.uid, p.ownerUid, "wrong OS operator");
@@ -168,7 +189,8 @@ export function verifyInstalledTradeReceiver(p, observed) {
   assert.equal(st.walletSigner, false);
   assert.equal(st.financialExecution, false);
   assert.equal(st.updateHeld, false);
-  assert.equal(st.locked, true, "preflight starts locked");
+  if (allowUnlocked) assert.equal(typeof st.locked, "boolean");
+  else assert.equal(st.locked, true, "preflight starts locked");
   const account = accounts.record.accounts.find((a) => a.id === p.accountId);
   assert.ok(account);
   assert.equal(account.version, 4);
@@ -240,10 +262,332 @@ async function privateOwnedFile(path, uid) {
   return readFile(path);
 }
 
-// Commands cannot be supplied by a browser or plan. Local uses the existing
-// enrolled owner route; this producer grants no OS or Remote authority.
+// Remote commands remain a fixed, typed list. SSH uses the same strict pinned
+// host/key-only policy as the existing native owner client; no shell text,
+// copied session or password is accepted from the plan or browser.
+export function remoteInstalledCommand(p, file, args) {
+  const { root, preservedRoot } = validateInstalledTradePlan(p);
+  assert.equal(p.profile, "remote");
+  const fixed = [
+    [root + "/fased-app", ["custody", "status", "--disposable-fixture"]],
+    [
+      root + "/fased-app",
+      ["custody", "accounts", "--disposable-fixture", "--prepare-host"],
+    ],
+    [
+      root + "/fased-app",
+      [
+        "custody",
+        "agents",
+        "--disposable-fixture",
+        "--prepare-host",
+        "--profile",
+        profile,
+      ],
+    ],
+    [
+      root + "/fased-app",
+      [
+        "custody",
+        "agents",
+        "--disposable-fixture",
+        "--prepare-host",
+        "--request-stdin",
+      ],
+    ],
+    [
+      root + "/fased-signer",
+      [
+        "owner",
+        "--config",
+        root + "/identity.json",
+        "--disposable-fixture",
+        "--action",
+        "lock",
+      ],
+    ],
+    ["/usr/bin/id", ["-u"]],
+    ...[
+      root + "/install.json",
+      root + "/enrollment-ready.json",
+      preservedRoot + "/install.json",
+      "/proc/sys/kernel/random/boot_id",
+    ].map((path) => ["/usr/bin/cat", [path]]),
+    ...[root + "/fased-app", root + "/fased-signer"].map((path) => [
+      "/usr/bin/sha256sum",
+      [path],
+    ]),
+    ...["app", "signer"].map((role) => [
+      "/usr/bin/systemctl",
+      [
+        "show",
+        "--property=MainPID",
+        "--value",
+        `fased-custody-${p.ownerUid}-${role}.service`,
+      ],
+    ]),
+  ];
+  for (const network of ["devnet", "mainnet-beta"]) {
+    const base = [
+      "custody",
+      "window",
+      "--expected-instance",
+      p.instance,
+      "--network",
+      network,
+      "--disposable-fixture",
+    ];
+    fixed.push(
+      [root + "/fased-app", base],
+      [root + "/fased-app", [...base, "--inspect"]],
+    );
+  }
+  assert.ok(
+    fixed.some(
+      ([candidate, values]) =>
+        candidate === file && JSON.stringify(values) === JSON.stringify(args),
+    ),
+    "unexpected Remote owner command",
+  );
+  const host = new URL(p.origin).hostname;
+  return {
+    file: "/usr/bin/ssh",
+    args: [
+      "-F",
+      "/dev/null",
+      "-T",
+      "-a",
+      "-oBatchMode=yes",
+      "-oStrictHostKeyChecking=yes",
+      "-oUserKnownHostsFile=" + join(homedir(), ".ssh", "known_hosts"),
+      "-oGlobalKnownHostsFile=/dev/null",
+      "-oPasswordAuthentication=no",
+      "-oKbdInteractiveAuthentication=no",
+      "-oClearAllForwardings=yes",
+      "-oPermitLocalCommand=no",
+      "-oProxyCommand=none",
+      "-oControlMaster=no",
+      "-oControlPath=none",
+      "-oConnectTimeout=10",
+      "-oConnectionAttempts=1",
+      "-l",
+      p.remoteUser,
+      "--",
+      host,
+      file,
+      ...args,
+    ],
+  };
+}
+
+export function allowedOwnerLink(p, value) {
+  const u = new URL(value);
+  const q = u.searchParams;
+  return (
+    u.protocol === "fased:" &&
+    u.hostname === "wallet-owner" &&
+    !u.username &&
+    !u.password &&
+    !u.port &&
+    !u.pathname &&
+    !u.hash &&
+    [...q.keys()].sort().join(",") ===
+      "action,instance,network,origin,proposal" &&
+    q.get("action") === "approve-swap" &&
+    q.get("instance") === p.instance &&
+    q.get("origin") === p.origin &&
+    ["devnet", "mainnet-beta"].includes(q.get("network")) &&
+    /^[A-Za-z0-9_-]{1,16384}$/.test(q.get("proposal") ?? "")
+  );
+}
+
+async function openRemoteTradeBrowser(p) {
+  const { chromium } = await import("@playwright/test");
+  const browser = await chromium.launch({
+    headless: false,
+    ...(process.env.FASED_TEST_BROWSER
+      ? { executablePath: process.env.FASED_TEST_BROWSER }
+      : {}),
+  });
+  try {
+    // A fresh browser obtains its own normal Tailscale/device session. No
+    // storage state, CLI token or owner session is imported into this context.
+    const context = await browser.newContext({ locale: "en-US" });
+    const blocked = [];
+    await context.route("**/*", async (route) => {
+      const url = route.request().url();
+      let permitted = false;
+      try {
+        permitted =
+          new URL(url).origin === p.origin || allowedOwnerLink(p, url);
+      } catch {
+        /* refuse */
+      }
+      if (!permitted) {
+        blocked.push(true);
+        return route.abort();
+      }
+      return route.continue();
+    });
+    const page = await context.newPage();
+    await page.goto(p.origin + "/?instance=" + encodeURIComponent(p.instance));
+    await until(
+      async () => {
+        try {
+          return await remoteBrowserRequest(page, "auth/state");
+        } catch {
+          return null;
+        }
+      },
+      (v) =>
+        v?.authenticated === true &&
+        v.remoteAccess === true &&
+        v.remoteEnrolled === true,
+      30000,
+    );
+    assert.deepEqual(blocked, [], "unexpected external browser request");
+    return {
+      page,
+      assertPrivate: () =>
+        assert.deepEqual(blocked, [], "unexpected external browser request"),
+      close: () => browser.close(),
+    };
+  } catch (error) {
+    await browser.close();
+    throw error;
+  }
+}
+
+// Read held capability flags through the authenticated browser's existing
+// same-origin API, not through the narrower tokenless CLI projection.
+async function remoteBrowserRequest(page, route) {
+  assert.ok(
+    ["health", "auth/state", "agents?profile=trading-analyst"].includes(route),
+  );
+  return page.evaluate(
+    async ({ route }) => {
+      const token = sessionStorage.getItem("fased.core.session.v1");
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const response = await fetch("/api/v1/" + route, {
+        headers,
+        credentials: "same-origin",
+      });
+      if (!response.ok)
+        throw new Error(`Remote read failed: HTTP ${response.status}`);
+      return response.json();
+    },
+    { route },
+  );
+}
+
+export async function remoteHeldStatus(p, page) {
+  validateInstalledTradePlan(p);
+  assert.equal(p.profile, "remote");
+  const health = await remoteBrowserRequest(page, "health");
+  const auth = await remoteBrowserRequest(page, "auth/state");
+  const view = await remoteBrowserRequest(
+    page,
+    "agents?profile=" + encodeURIComponent(profile),
+  );
+  assert.equal(health.status, "ok");
+  assert.equal(health.instanceId, p.instance);
+  assert.equal(health.connection?.location, "remote");
+  assert.equal(health.connection?.transport, "private-https");
+  for (const key of ["aiConnections", "financialExecution", "walletSigner"])
+    assert.equal(health.capabilities?.[key], false);
+  assert.equal(auth.authenticated, true);
+  assert.equal(auth.remoteAccess, true);
+  assert.equal(auth.remoteEnrolled, true);
+  return {
+    instanceId: health.instanceId,
+    profileId: view.profileId,
+    revision: view.revision,
+    financialExecution: view.financialExecution,
+    providerCallsEnabled: view.providerCallsEnabled,
+  };
+}
+
+// Main Remote controls are in the actual browser. The wallet owner window
+// continues through nativeControl and retains its binary/intent verification.
+export async function remoteBrowserControl(p, page, step) {
+  const current = new URL(page.url());
+  assert.equal(current.origin, p.origin);
+  assert.equal(current.searchParams.get("instance"), p.instance);
+  assert.equal(step.frame, p.mainFrame);
+  if (step.action === "click") {
+    const role = step.role === "push button" ? "button" : step.role;
+    assert.ok(["button", "link"].includes(role));
+    let target = page;
+    if (step.name === "Chat")
+      target = page.getByRole("navigation", {
+        name: "Main navigation",
+        exact: true,
+      });
+    if (step.name === "Onchain")
+      target = page.getByRole("navigation", {
+        name: "More pages",
+        exact: true,
+      });
+    await target.getByRole(role, { name: step.name, exact: true }).click();
+  } else if (step.action === "set") {
+    assert.equal(step.name, "Amount");
+    const field = page.getByLabel(step.name, { exact: true });
+    await field.fill(step.value);
+    assert.equal(await field.inputValue(), step.value);
+  } else if (step.action === "select-agent" || step.action === "select") {
+    const agent = step.action === "select-agent";
+    assert.equal(step.name, agent ? "Agent" : "Wallet");
+    const value = agent ? profile : p.accountId;
+    const field = page.getByRole("combobox", { name: step.name, exact: true });
+    const option = field.getByRole("option", {
+      name: step.value,
+      exact: true,
+      includeHidden: true,
+    });
+    assert.equal(await option.count(), 1, "ambiguous browser choice");
+    await field.selectOption(value);
+    await until(
+      async () => {
+        if ((await field.inputValue()) !== value) return false;
+        return page.evaluate(
+          ({ agent, instance }) => {
+            const key = agent
+              ? `fased.agent-profile.v1:${instance}`
+              : `fased.swap-draft.v1:${instance}:trading-analyst`;
+            const raw = localStorage.getItem(key);
+            return agent ? raw : raw && JSON.parse(raw).wallet;
+          },
+          { agent, instance: p.instance },
+        );
+      },
+      (selected) => selected === value,
+      5000,
+    );
+  } else if (step.action === "present") {
+    const locator =
+      step.role === "menu item"
+        ? page.getByRole("option", {
+            name: step.name,
+            exact: true,
+            includeHidden: true,
+          })
+        : page.getByText(step.name, { exact: true });
+    await until(
+      async () =>
+        (await locator.count()) === 1 &&
+        (step.role === "menu item" || (await locator.isVisible())),
+      Boolean,
+    );
+  } else {
+    throw new Error("unsupported Remote browser control");
+  }
+}
+
+// Commands cannot be supplied by a browser or plan. Both profiles use the
+// existing installed owner routes and grant no additional OS authority.
 export function installedTradeAdapters(p) {
   const { root, preservedRoot } = validateInstalledTradePlan(p);
+  let remoteBrowser;
   const exec = (file, args, input) =>
     execFileSync(file, args, {
       input,
@@ -252,7 +596,11 @@ export function installedTradeAdapters(p) {
       maxBuffer: 2 * 1024 * 1024,
       stdio: ["pipe", "pipe", "pipe"],
     });
-  const installed = (file, args, input) => exec(file, args, input);
+  const installed = (file, args, input) => {
+    if (p.profile === "local") return exec(file, args, input);
+    const remote = remoteInstalledCommand(p, file, args);
+    return exec(remote.file, remote.args, input);
+  };
 
   const cli = (args, body) =>
     JSON.parse(
@@ -262,10 +610,21 @@ export function installedTradeAdapters(p) {
         body === undefined ? undefined : JSON.stringify(body),
       ),
     );
+  const accountArgs =
+    p.profile === "remote"
+      ? ["custody", "accounts", "--disposable-fixture", "--prepare-host"]
+      : ["accounts", "--data-dir", p.data];
+  const agentArgs =
+    p.profile === "remote"
+      ? ["custody", "agents", "--disposable-fixture", "--prepare-host"]
+      : ["agents", "--data-dir", p.data];
   const read = (path) => installed("/usr/bin/cat", [path]);
   let originalBefore;
   return {
-    kind: "installed-native",
+    kind:
+      p.profile === "remote"
+        ? "installed-remote-browser-native-owner"
+        : "installed-native",
     async preflight() {
       assert.equal(process.getuid(), p.clientUid);
       assert.ok(
@@ -334,12 +693,18 @@ export function installedTradeAdapters(p) {
         preservedManifestSha256: hash(preserved),
         coreSha256: coreHash,
         signerSha256: signerHash,
-        accounts: cli(["accounts", "--data-dir", p.data]),
+        accounts: cli(accountArgs),
       };
     },
-    read: () => cli(["agents", "--data-dir", p.data, "--profile", profile]),
-    change: (body) =>
-      cli(["agents", "--data-dir", p.data, "--request-stdin"], body),
+    read: () => cli([...agentArgs, "--profile", profile]),
+    change: (body) => cli([...agentArgs, "--request-stdin"], body),
+    async heldStatus() {
+      assert.equal(p.profile, "remote");
+      remoteBrowser ??= await openRemoteTradeBrowser(p);
+      const result = await remoteHeldStatus(p, remoteBrowser.page);
+      remoteBrowser.assertPrivate();
+      return result;
+    },
     async draft() {
       const path = join(
         homedir(),
@@ -402,7 +767,23 @@ export function installedTradeAdapters(p) {
           backupPassword: null,
         },
       ),
-    native: (step) => nativeControl(step),
+    async native(step) {
+      if (p.profile === "remote" && step.frame === p.mainFrame) {
+        await remoteBrowserControl(p, remoteBrowser.page, step);
+        remoteBrowser.assertPrivate();
+        return;
+      }
+      return nativeControl(step);
+    },
+    async close() {
+      if (remoteBrowser) {
+        try {
+          remoteBrowser.assertPrivate();
+        } finally {
+          await remoteBrowser.close();
+        }
+      }
+    },
     async runtime() {
       return {
         app: installed("/usr/bin/systemctl", [
@@ -608,16 +989,19 @@ async function until(fn, test, ms = 10000) {
   throw new Error("installed observation deadline exceeded");
 }
 function proposalFromDraft(d, p) {
-  assert.equal(d.intent.version, 2);
-  assert.equal(d.intent.instanceId, p.instance);
-  assert.equal(d.intent.action, "approve-swap");
   assert.equal(d.origin, p.origin);
   assert.equal(
     d.dispatched,
     false,
     "existing dispatch must recover, never reapprove",
   );
-  const q = JSON.parse(Buffer.from(d.intent.proposal, "base64url").toString());
+  return proposalFromIntent(d.intent, p, false);
+}
+function proposalFromIntent(intent, p, allowExpired) {
+  assert.equal(intent.version, 2);
+  assert.equal(intent.instanceId, p.instance);
+  assert.equal(intent.action, "approve-swap");
+  const q = JSON.parse(Buffer.from(intent.proposal, "base64url").toString());
   assert.equal(q.version, "ordinary-controlled-swap-v1");
   assert.equal(q.fixtureOnly, true);
   assert.match(q.digest, hex);
@@ -637,8 +1021,9 @@ function proposalFromDraft(d, p) {
   assert.equal(q.quote.instanceId, p.instance);
   assert.equal(q.quote.accountId, p.accountId);
   assert.equal(q.quote.profileId, profile);
-  assert.equal(d.intent.operationId, q.quote.id);
-  assert.ok(q.quote.expiresAt * 1000 > Date.now());
+  assert.match(q.quote.id, /^[a-f0-9]{32}$/);
+  assert.equal(intent.operationId, q.quote.id);
+  if (!allowExpired) assert.ok(q.quote.expiresAt * 1000 > Date.now());
   return q;
 }
 function taskResult(v, id) {
@@ -656,25 +1041,78 @@ export async function installedNativeTradeJourney(
   options = {},
 ) {
   validateInstalledTradePlan(p);
-  const account = verifyInstalledTradeReceiver(p, await io.preflight());
   assert.ok(
     Object.keys(options).every((k) =>
       ["resumePreReview", "resolvedDraftSha256"].includes(k),
     ),
   );
   const resumePreReview = options.resumePreReview !== undefined;
+  const boundReceipt =
+    previous &&
+    previous.version === 1 &&
+    previous.planHash === hash(JSON.stringify(p)) &&
+    previous.source === p.source &&
+    previous.profile === p.profile &&
+    previous.instance === p.instance &&
+    previous.class === io.kind &&
+    previous.manifestSha256 === p.manifestSha256 &&
+    previous.enrollmentSha256 === p.enrollmentSha256;
+  const openPreReview =
+    boundReceipt &&
+    previous.result === "OPEN" &&
+    [
+      "stage",
+      "intent",
+      "proposal",
+      "taskId",
+      "runId",
+      "signature",
+      "signed",
+      "failure",
+    ].every((k) => previous[k] == null) &&
+    Number.isSafeInteger(previous.startedAt) &&
+    previous.startedAt > 0 &&
+    previous.before?.boot &&
+    [previous.before.app, previous.before.signer].every((n) =>
+      /^[1-9][0-9]*$/.test(n),
+    );
+  const interrupted =
+    !resumePreReview &&
+    boundReceipt &&
+    ["OPEN", "FAIL", "RECOVERY_REQUIRED"].includes(previous.result) &&
+    ["reviewed", "approved", "submitted"].includes(previous.stage);
+  const observed = await io.preflight();
+  const account = verifyInstalledTradeReceiver(p, observed, {
+    allowUnlocked: !!interrupted,
+  });
+  if (interrupted) {
+    const originalProposal = proposalFromIntent(previous.intent, p, true);
+    assert.deepEqual(originalProposal, previous.proposal);
+    assert.deepEqual(originalProposal.account, account.signer);
+    assert.equal(originalProposal.quote.network, account.network);
+    if (!observed.accounts.fixture.status.locked) {
+      await io.lock();
+      const locked = await io.inspect(previous.intent, account.signer.signerId);
+      assert.equal(locked.readOnly, true);
+      assert.equal(locked.status.locked, true);
+      assert.equal(locked.status.recoveryRequired, true);
+      if (locked.swap)
+        assert.equal(locked.swap.proposal.digest, previous.proposal.digest);
+    }
+  }
   const reviewedRefusal =
     resumePreReview &&
     options.resolvedDraftSha256 !== undefined &&
     previous?.stage === "reviewed";
   if (resumePreReview) {
-    assert.ok(previous && previous.result === "FAIL");
-    assert.equal(
-      previous.failure,
-      reviewedRefusal
-        ? "stopped at reviewed; inspect original before resuming"
-        : "stopped at pre-review; inspect original before resuming",
-    );
+    assert.ok(previous && (previous.result === "FAIL" || openPreReview));
+    if (!openPreReview)
+      assert.equal(
+        previous.failure,
+        reviewedRefusal
+          ? "stopped at reviewed; inspect original before resuming"
+          : "stopped at pre-review; inspect original before resuming",
+      );
     assert.equal(
       options.resumePreReview,
       hash(JSON.stringify(previous)),
@@ -698,19 +1136,67 @@ export async function installedNativeTradeJourney(
   }
   if (options.resolvedDraftSha256 !== undefined) {
     assert.match(options.resolvedDraftSha256, hex);
-    assert.ok(resumePreReview && previous.preReviewFailure?.receipt);
+    assert.ok(resumePreReview);
+  }
+  if (resumePreReview) {
     let prior = previous,
+      child,
       depth = 0;
     while (prior) {
       assert.ok(++depth <= 8, "bounded unsent recovery history exceeded");
       assert.equal(prior.planHash, hash(JSON.stringify(p)));
-      assert.equal(prior.result, "FAIL", "ancestor must remain failed");
-      assert.equal(
-        prior.failure,
-        depth === 1 && reviewedRefusal
-          ? "stopped at reviewed; inspect original before resuming"
-          : "stopped at pre-review; inspect original before resuming",
-      );
+      const reviewedAncestor = prior.stage === "reviewed";
+      if (prior.result === "OPEN") {
+        assert.equal(
+          prior.stage,
+          undefined,
+          "open ancestor has uncertain work",
+        );
+        assert.equal(prior.failure, undefined);
+        assert.equal(prior.instance, p.instance);
+        assert.equal(prior.source, p.source);
+        assert.equal(prior.profile, p.profile);
+        assert.equal(prior.class, io.kind);
+        assert.equal(prior.manifestSha256, p.manifestSha256);
+        assert.equal(prior.enrollmentSha256, p.enrollmentSha256);
+      } else {
+        assert.equal(prior.result, "FAIL", "ancestor must remain failed");
+        assert.equal(
+          prior.failure,
+          reviewedAncestor
+            ? "stopped at reviewed; inspect original before resuming"
+            : "stopped at pre-review; inspect original before resuming",
+        );
+      }
+      if (reviewedAncestor) {
+        assert.equal(prior.result, "FAIL");
+        if (depth === 1) assert.ok(reviewedRefusal);
+        else {
+          assert.match(child?.resolvedUnsentDraft?.sha256 ?? "", hex);
+          assert.equal(
+            child.resolvedUnsentDraft.operationId,
+            prior.intent?.operationId,
+          );
+          assert.deepEqual(
+            proposalFromIntent(prior.intent, p, true),
+            prior.proposal,
+          );
+          assert.deepEqual(prior.proposal.account, account.signer);
+          assert.equal(prior.proposal.quote.network, account.network);
+          assert.ok(prior.proposal.quote.expiresAt * 1000 <= Date.now());
+          const original = await io.inspect(
+            prior.intent,
+            account.signer.signerId,
+          );
+          assert.equal(original.readOnly, true);
+          assert.equal(original.status.locked, true);
+          assert.equal(
+            original.swap ?? null,
+            null,
+            "ancestor signer approval must be absent",
+          );
+        }
+      }
       if (prior.preReviewFailure) {
         assert.match(prior.preReviewFailure.sha256, hex);
         assert.equal(
@@ -729,21 +1215,16 @@ export async function installedNativeTradeJourney(
         "signed",
       ])
         assert.ok(
-          depth === 1 &&
-            reviewedRefusal &&
-            ["stage", "intent", "proposal"].includes(key)
+          reviewedAncestor && ["stage", "intent", "proposal"].includes(key)
             ? prior[key] != null
             : prior[key] == null,
           "original uncertain outcome must reconcile",
         );
+      child = prior;
       prior = prior.preReviewFailure?.receipt;
     }
-  } else if (resumePreReview)
-    assert.ok(
-      previous.preReviewFailure == null,
-      "repeated pre-review continuation refused",
-    );
-  const record = (resumePreReview ? structuredClone(previous) : previous) ?? {
+  }
+  const record = (previous ? structuredClone(previous) : undefined) ?? {
     version: 1,
     planHash: hash(JSON.stringify(p)),
     source: p.source,
@@ -762,31 +1243,79 @@ export async function installedNativeTradeJourney(
   assert.equal(record.planHash, hash(JSON.stringify(p)));
   assert.equal(record.class, io.kind);
   const current = await io.read();
-  assert.equal(current.financialExecution, false);
-  assert.equal(current.providerCallsEnabled, false);
+  const held = p.profile === "remote" ? await io.heldStatus() : current;
+  if (p.profile === "remote") {
+    assert.equal(held.instanceId, p.instance);
+    assert.equal(held.profileId, profile);
+    assert.equal(held.revision, current.revision);
+  }
+  assert.equal(held.financialExecution, false);
+  assert.equal(held.providerCallsEnabled, false);
   const runtime = await io.runtime();
   for (const n of [runtime.app, runtime.signer])
     assert.match(n, /^[1-9][0-9]*$/);
   assert.ok(runtime.boot);
+  if (openPreReview && !resumePreReview) {
+    const originalDraft = await io.draft();
+    return {
+      ...record,
+      result: "RECOVERY_REQUIRED",
+      failure: "inspect the original pre-review state before resuming",
+      ...(originalDraft
+        ? { draftSha256: hash(JSON.stringify(originalDraft)) }
+        : {}),
+    };
+  }
   if (previous && !resumePreReview) {
     assert.ok(
-      record.result === "NEEDS_RESTART" ||
-        (record.result === "FAIL" && record.stage === "submitted"),
+      record.result === "NEEDS_RESTART" || interrupted,
       "only an original dispatched result can recover; never start another quote",
     );
     assert.ok(record.proposal && record.intent);
-    assert.deepEqual(record.proposal.account, account.signer);
-    assert.ok(
-      runtime.boot !== record.before.boot ||
-        (runtime.app !== record.before.app &&
-          runtime.signer !== record.before.signer),
-      "actual app and signer restart required",
+    assert.deepEqual(
+      proposalFromIntent(record.intent, p, true),
+      record.proposal,
     );
+    assert.deepEqual(record.proposal.account, account.signer);
+    assert.equal(record.proposal.quote.network, account.network);
+    const expectedTaskId = "onchain-task:" + record.proposal.quote.id;
+    if (record.taskId) assert.equal(record.taskId, expectedTaskId);
+    assert.ok(record.before && record.before.boot);
+    for (const n of [record.before.app, record.before.signer])
+      assert.match(n, /^[1-9][0-9]*$/);
+    const restarted =
+      runtime.boot !== record.before.boot ||
+      (runtime.app !== record.before.app &&
+        runtime.signer !== record.before.signer);
+    if (record.result === "NEEDS_RESTART")
+      assert.ok(restarted, "actual app and signer restart required");
     let finalView = current;
     let found = taskResult(current, record.proposal.quote.id);
-    assert.ok(found?.run, "original result missing");
+    assert.ok(
+      current.onchain.tasks.filter(
+        (t) => t.swap?.proposal.quote.id === record.proposal.quote.id,
+      ).length <= 1,
+      "duplicate original task",
+    );
+    if (!found?.run) {
+      const original = await io.inspect(record.intent, account.signer.signerId);
+      assert.equal(original.readOnly, true);
+      assert.equal(original.status.locked, true);
+      assert.equal(original.status.recoveryRequired, true);
+      if (original.swap)
+        assert.equal(original.swap.proposal.digest, record.proposal.digest);
+      // The original may still be approved, queued or uncertain. Preserve the
+      // receipt and hold; never issue another UI Submit to fill the gap.
+      return {
+        ...record,
+        result: "RECOVERY_REQUIRED",
+        failure:
+          "original result unavailable; inspect or reconcile without resubmission",
+      };
+    }
     assert.equal(found.task.swap.proposal.digest, record.proposal.digest);
-    assert.equal(found.task.id, record.taskId);
+    assert.equal(found.task.id, expectedTaskId);
+    record.taskId = expectedTaskId;
     assert.equal(
       current.onchain.runs.filter((r) => r.taskId === found.task.id).length,
       1,
@@ -805,6 +1334,12 @@ export async function installedNativeTradeJourney(
       finalView = v;
       found = taskResult(v, record.proposal.quote.id);
     }
+    if (found?.run?.swap?.state !== "confirmed")
+      return {
+        ...record,
+        result: "RECOVERY_REQUIRED",
+        failure: "original result remains unresolved; do not resubmit",
+      };
     assert.equal(found.task.id, record.taskId);
     assert.equal(found.run.id, record.taskId + ":1");
     assert.equal(
@@ -833,6 +1368,14 @@ export async function installedNativeTradeJourney(
     if (record.signature) {
       assert.equal(found.run.swap.signature, record.signature);
       assert.equal(found.run.swap.signed, record.signed);
+    }
+    if (!restarted) {
+      record.runId = found.run.id;
+      record.signature = found.run.swap.signature;
+      record.signed = found.run.swap.signed;
+      record.result = "NEEDS_RESTART";
+      await save(record);
+      return record;
     }
     assert.equal(
       current.onchain.tasks.filter(
@@ -872,6 +1415,11 @@ export async function installedNativeTradeJourney(
       assert.deepEqual(existingDraft.intent, previous.intent);
       assert.deepEqual(oldQuote, previous.proposal);
       assert.equal(oldQuote.quote.profileId, profile);
+    } else if (oldQuote.quote.profileId === profile) {
+      assert.deepEqual(
+        proposalFromIntent(existingDraft.intent, p, true),
+        oldQuote,
+      );
     } else assert.notEqual(oldQuote.quote.profileId, profile);
     assert.ok(oldQuote.quote.expiresAt * 1000 <= Date.now());
     const original = await io.inspect(
@@ -953,8 +1501,10 @@ export async function installedNativeTradeJourney(
   };
   try {
     await gui("click", "Fased", "link");
+    if (p.profile === "remote") await gui("click", "Chat", "link");
     await gui("select-agent", "Agent", "combo box", "Trading Analyst");
-    await gui("click", "Onchain");
+    if (p.profile === "remote") await gui("click", "More", "push button");
+    await gui("click", "Onchain", p.profile === "remote" ? "link" : undefined);
     // Async choices recreate the native control; observe its option first.
     await gui("present", p.accountName, "menu item");
     await gui("select", "Wallet", "combo box", p.accountName);
@@ -976,6 +1526,10 @@ export async function installedNativeTradeJourney(
     record.stage = "reviewed";
     await save(record);
     const ownerFrame = "Fased Wallet";
+    if (p.profile === "remote") {
+      await gui("set", "Private address", "entry", p.origin, ownerFrame);
+      await gui("set", "OS account", "entry", p.remoteUser, ownerFrame);
+    }
     await gui("click", "Connect wallet", "push button", undefined, ownerFrame);
     await gui("present", proposal.digest, undefined, undefined, ownerFrame);
     await gui(
@@ -1068,6 +1622,99 @@ export async function installedNativeTradeJourney(
     throw error;
   }
 }
+// Interrupted writes cannot reserve a fixed .next name forever. Never remove
+// old staging files: they may be the only surviving evidence of an attempt.
+async function writeReceiptAtomically(
+  target,
+  content,
+  preserveExisting = false,
+) {
+  const temp = target + ".stage-" + randomBytes(16).toString("hex");
+  let created = false;
+  try {
+    await writeFile(temp, content, { mode: 0o600, flag: "wx" });
+    created = true;
+    if (preserveExisting) {
+      try {
+        await link(temp, target);
+      } catch (error) {
+        if (error.code !== "EEXIST") throw error;
+        const existing = await privateOwnedFile(target, process.getuid());
+        assert.ok(
+          existing.equals(Buffer.from(content)),
+          "original receipt ancestry changed",
+        );
+      }
+    } else await rename(temp, target);
+  } finally {
+    if (created) {
+      try {
+        await unlink(temp);
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+  }
+}
+
+export function createInstalledTradeReceiptWriter(p, resumePreReview) {
+  let preservedFailure = false;
+  return async (r) => {
+    if (resumePreReview && !preservedFailure) {
+      const original = await privateOwnedFile(p.receipt, process.getuid());
+      assert.equal(hash(JSON.stringify(JSON.parse(original))), resumePreReview);
+      await writeReceiptAtomically(
+        p.receipt + "." + resumePreReview + ".pre-review-failure.json",
+        original,
+        true,
+      );
+      preservedFailure = true;
+    }
+    r.package = {
+      core: p.coreSha256,
+      signer: p.signerSha256,
+      native: p.native.sha256,
+    };
+    await writeReceiptAtomically(p.receipt, JSON.stringify(r, null, 2) + "\n");
+  };
+}
+
+// The existing private evidence directory is the lock target. The kernel drops
+// the lock when its last descriptor closes, including after process death.
+export async function withInstalledTradeLock(directory, run) {
+  const expected = await lstat(directory);
+  assert.ok(
+    expected.isDirectory() &&
+      !expected.isSymbolicLink() &&
+      expected.uid === process.getuid() &&
+      (expected.mode & 0o777) === 0o700,
+    "private acceptance directory required",
+  );
+  const fd = await open(
+    directory,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
+  try {
+    const actual = await fd.stat();
+    assert.equal(actual.dev, expected.dev);
+    assert.equal(actual.ino, expected.ino);
+    try {
+      execFileSync("/usr/bin/flock", ["--exclusive", "--nonblock", "3"], {
+        stdio: ["ignore", "ignore", "pipe", fd.fd],
+        timeout: 5000,
+      });
+    } catch (error) {
+      throw new Error(
+        "another acceptance runner is running or the OS lock is unavailable",
+        { cause: error },
+      );
+    }
+    return await run();
+  } finally {
+    await fd.close();
+  }
+}
+
 export async function runInstalledNativeTradePlan(file) {
   assert.equal(process.env.FASED_DISPOSABLE_VM_ACCEPTANCE, "1");
   assert.ok(process.getuid() > 0);
@@ -1093,77 +1740,61 @@ export async function runInstalledNativeTradePlan(file) {
       dir.uid === process.getuid() &&
       (dir.mode & 0o777) === 0o700,
   );
-  try {
-    const r = await lstat(p.receipt);
-    assert.ok(
-      r.isFile() &&
-        !r.isSymbolicLink() &&
-        r.uid === process.getuid() &&
-        (r.mode & 0o777) === 0o600,
-    );
-  } catch (e) {
-    if (e.code !== "ENOENT") throw e;
-  }
-
-  let previous;
-  try {
-    previous = JSON.parse(await readFile(p.receipt, "utf8"));
-  } catch (e) {
-    if (e.code !== "ENOENT") throw e;
-  }
-  const resumePreReview =
-    process.env.FASED_INSTALLED_NATIVE_TRADE_RESUME_PRE_REVIEW;
-  if (resumePreReview !== undefined) {
-    assert.match(resumePreReview, hex);
-    assert.ok(previous);
-    assert.equal(resumePreReview, hash(JSON.stringify(previous)));
-  }
-  const resolvedDraftSha256 =
-    process.env.FASED_INSTALLED_NATIVE_TRADE_RESOLVED_DRAFT;
-  if (resolvedDraftSha256 !== undefined) assert.match(resolvedDraftSha256, hex);
-  let preservedFailure = false;
-  const save = async (r) => {
-    if (resumePreReview && !preservedFailure) {
-      const original = await readFile(p.receipt);
-      assert.equal(hash(JSON.stringify(JSON.parse(original))), resumePreReview);
-      await writeFile(
-        p.receipt + "." + resumePreReview + ".pre-review-failure.json",
-        original,
-        {
-          mode: 0o600,
-          flag: "wx",
-        },
+  return withInstalledTradeLock(dirname(file), async () => {
+    try {
+      const r = await lstat(p.receipt);
+      assert.ok(
+        r.isFile() &&
+          !r.isSymbolicLink() &&
+          r.uid === process.getuid() &&
+          (r.mode & 0o777) === 0o600,
       );
-      preservedFailure = true;
+    } catch (e) {
+      if (e.code !== "ENOENT") throw e;
     }
-    r.package = {
-      core: p.coreSha256,
-      signer: p.signerSha256,
-      native: p.native.sha256,
-    };
-    await writeFile(p.receipt + ".next", JSON.stringify(r, null, 2) + "\n", {
-      mode: 0o600,
-      flag: "wx",
-    });
-    await rename(p.receipt + ".next", p.receipt);
-  };
-  const r = await installedNativeTradeJourney(
-    p,
-    installedTradeAdapters(p),
-    previous,
-    save,
-    resumePreReview
-      ? {
-          resumePreReview,
-          ...(resolvedDraftSha256 ? { resolvedDraftSha256 } : {}),
-        }
-      : {},
-  );
-  console.log(
-    r.result +
-      ": installed native Onchain " +
-      p.profile +
-      "; no rebuild or publication",
-  );
-  return r.result === "PASS" ? 0 : 3;
+
+    let previous;
+    try {
+      previous = JSON.parse(await readFile(p.receipt, "utf8"));
+    } catch (e) {
+      if (e.code !== "ENOENT") throw e;
+    }
+    const resumePreReview =
+      process.env.FASED_INSTALLED_NATIVE_TRADE_RESUME_PRE_REVIEW;
+    if (resumePreReview !== undefined) {
+      assert.match(resumePreReview, hex);
+      assert.ok(previous);
+      assert.equal(resumePreReview, hash(JSON.stringify(previous)));
+    }
+    const resolvedDraftSha256 =
+      process.env.FASED_INSTALLED_NATIVE_TRADE_RESOLVED_DRAFT;
+    if (resolvedDraftSha256 !== undefined)
+      assert.match(resolvedDraftSha256, hex);
+    const save = createInstalledTradeReceiptWriter(p, resumePreReview);
+    const adapters = installedTradeAdapters(p);
+    let r;
+    try {
+      r = await installedNativeTradeJourney(
+        p,
+        adapters,
+        previous,
+        save,
+        resumePreReview
+          ? {
+              resumePreReview,
+              ...(resolvedDraftSha256 ? { resolvedDraftSha256 } : {}),
+            }
+          : {},
+      );
+    } finally {
+      await adapters.close();
+    }
+    console.log(
+      r.result +
+        ": installed Onchain " +
+        p.profile +
+        "; no rebuild or publication",
+    );
+    return r.result === "PASS" ? 0 : 3;
+  });
 }
