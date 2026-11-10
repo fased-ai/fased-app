@@ -417,7 +417,7 @@ func publish(ctx context.Context, target, id string, data []byte, mode os.FileMo
 			if e != nil {
 				return e
 			}
-		} else if mode == 0644 && scopedSignerReceipt(target, os.Getuid()) {
+		} else if mode == 0644 && (scopedSignerReceipt(target, os.Getuid()) || scopedUpdateMetadata(target, id, os.Getuid(), data)) {
 			var verifier approvedExecutableVerifier
 			if len(verifiers) == 1 {
 				verifier = verifiers[0]
@@ -475,6 +475,23 @@ func scopedSignerReceipt(target string, owner int) bool {
 		return false
 	}
 	return regexp.MustCompile(`^` + regexp.QuoteMeta(Root(owner)) + `/updates/[a-f0-9]{32}/held[.]json$`).MatchString(target)
+}
+
+func scopedUpdateMetadata(target, id string, owner int, data []byte) bool {
+	if owner <= 0 || filepath.Clean(target) != target || !regexp.MustCompile(`^[a-f0-9]{32}$`).MatchString(id) {
+		return false
+	}
+	root := Root(owner)
+	if target == root+"/update-active.json" {
+		return true
+	}
+	quoted := regexp.QuoteMeta(root)
+	record := `^` + quoted + `/(updates|bootstraps)/[a-f0-9]{32}/[a-z][a-z0-9.-]*[.]json$`
+	if regexp.MustCompile(record).MatchString(target) {
+		return true
+	}
+	replacement := `^` + quoted + `/[.]replace-` + id + `-(install|intent|ready)[.]json-` + sum(data) + `$`
+	return regexp.MustCompile(replacement).MatchString(target)
 }
 
 // scopedUpdateExecutable admits only this owner's fixed transaction images and

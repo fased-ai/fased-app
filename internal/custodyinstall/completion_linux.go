@@ -126,7 +126,7 @@ func runCompletion(ctx context.Context, t InstallTransaction, o installOps) (*up
 		return nil, e
 	}
 	mark := func(phase string) error {
-		if e := publish(ctx, t.dir()+"/"+phase+".json", t.Base.ID, mustJSON(phaseRecord{1, digest, phase}), 0644, o.read, o.run); e != nil {
+		if e := publish(ctx, t.dir()+"/"+phase+".json", t.Base.ID, mustJSON(phaseRecord{1, digest, phase}), 0644, o.read, o.run, o.verify); e != nil {
 			return e
 		}
 		if o.checkpoint != nil {

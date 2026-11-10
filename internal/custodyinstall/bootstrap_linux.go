@@ -309,7 +309,7 @@ func PrepareBootstrap(ctx context.Context, t BootstrapTransaction, dir string, s
 			}
 		}
 	}
-	return publish(ctx, t.Dir()+"/transaction.json", t.Base.ID, mustJSON(t), 0644, readRoot, s.Run)
+	return publish(ctx, t.Dir()+"/transaction.json", t.Base.ID, mustJSON(t), 0644, readRoot, s.Run, verifyApprovedExecutable)
 }
 func probeReader(ctx context.Context, path string, isCore bool, m Manifest, s *System, ordinaryTarget ...bool) (update.Contract, error) {
 	return probeReaderWithRun(ctx, path, isCore, m, s.Run, ordinaryTarget...)
@@ -456,7 +456,7 @@ func runBootstrap(ctx context.Context, t BootstrapTransaction, c BootstrapCallba
 		return fail(e)
 	}
 	mark := func(phase string) error {
-		if e := publish(ctx, t.Dir()+"/"+phase+".json", t.Base.ID, mustJSON(phaseRecord{1, t.Digest(), phase}), 0644, o.read, o.run); e != nil {
+		if e := publish(ctx, t.Dir()+"/"+phase+".json", t.Base.ID, mustJSON(phaseRecord{1, t.Digest(), phase}), 0644, o.read, o.run, o.verify); e != nil {
 			return e
 		}
 		if o.checkpoint != nil {
@@ -484,7 +484,7 @@ func runBootstrap(ctx context.Context, t BootstrapTransaction, c BootstrapCallba
 		if e != nil {
 			return fail(e)
 		}
-		if e = publish(ctx, t.Dir()+"/recovery.json", t.Base.ID, mustJSON(index), 0644, o.read, o.run); e != nil {
+		if e = publish(ctx, t.Dir()+"/recovery.json", t.Base.ID, mustJSON(index), 0644, o.read, o.run, o.verify); e != nil {
 			return fail(e)
 		}
 	} else if e != nil {
@@ -524,7 +524,7 @@ func runBootstrap(ctx context.Context, t BootstrapTransaction, c BootstrapCallba
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return fail(e)
 	} else if !done && !rolledBack {
-		if e = publish(ctx, active, t.Base.ID, want, 0644, o.read, o.run); e != nil {
+		if e = publish(ctx, active, t.Base.ID, want, 0644, o.read, o.run, o.verify); e != nil {
 			return fail(e)
 		}
 	}

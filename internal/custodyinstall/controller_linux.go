@@ -153,7 +153,7 @@ func PrepareController(ctx context.Context, m Manifest, index update.RecoveryInd
 	if e := probeRollbackCompatibility(ctx, t, s); e != nil {
 		return zero, e
 	}
-	if e := publish(ctx, t.dir()+"/transaction.json", m.ID, mustJSON(t), 0644, readRoot, s.Run); e != nil {
+	if e := publish(ctx, t.dir()+"/transaction.json", m.ID, mustJSON(t), 0644, readRoot, s.Run, verifyApprovedExecutable); e != nil {
 		return zero, e
 	}
 	return t, nil
