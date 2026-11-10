@@ -117,7 +117,7 @@ func runTransaction(ctx context.Context, t InstallTransaction, rollback bool, o 
 			return nil, errors.New("signer did not acquire the exact durable installation hold")
 		}
 		held = *p
-		if e = publish(ctx, d+"/held.json", t.Base.ID, mustJSON(held), 0644, o.read, o.run); e != nil {
+		if e = publish(ctx, d+"/held.json", t.Base.ID, mustJSON(held), 0644, o.read, o.run, o.verify); e != nil {
 			return nil, e
 		}
 		if o.checkpoint != nil {

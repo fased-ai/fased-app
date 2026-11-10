@@ -417,6 +417,19 @@ func publish(ctx context.Context, target, id string, data []byte, mode os.FileMo
 			if e != nil {
 				return e
 			}
+		} else if mode == 0644 && scopedSignerReceipt(target, os.Getuid()) {
+			var verifier approvedExecutableVerifier
+			if len(verifiers) == 1 {
+				verifier = verifiers[0]
+			}
+			source, err := approvedExecutable(read, os.Getuid(), data, verifier)
+			if err != nil {
+				return err
+			}
+			if source != "" {
+				args[len(args)-2] = source
+				input = nil
+			}
 		} else if mode == 0755 && ((name == "fased-app" || name == "fased-signer") && filepath.Dir(target) == fmt.Sprintf("/var/lib/.fased-custody-%d-%s.pending", os.Getuid(), id) || scopedUpdateExecutable(target, id, os.Getuid(), data)) {
 			var verifier approvedExecutableVerifier
 			if len(verifiers) == 1 {
@@ -455,6 +468,13 @@ func publish(ctx context.Context, target, id string, data []byte, mode os.FileMo
 		return e
 	}
 	return nil
+}
+
+func scopedSignerReceipt(target string, owner int) bool {
+	if owner <= 0 || filepath.Clean(target) != target {
+		return false
+	}
+	return regexp.MustCompile(`^` + regexp.QuoteMeta(Root(owner)) + `/updates/[a-f0-9]{32}/held[.]json$`).MatchString(target)
 }
 
 // scopedUpdateExecutable admits only this owner's fixed transaction images and

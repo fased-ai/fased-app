@@ -4,11 +4,14 @@ package custodyinstall
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 // The immutable predecessor may reuse an OS-prepared exact file without
@@ -77,5 +80,39 @@ func TestPredecessorPrestagedSignerReplacementAndRollback(t *testing.T) {
 	}
 	if writes != 0 {
 		t.Fatal("prestage required an unbound write")
+	}
+}
+
+func TestPredecessorPrestagedReceiptRequiresLiveSignerHold(t *testing.T) {
+	for _, live := range []bool{false, true} {
+		t.Run(fmt.Sprintf("live=%t", live), func(t *testing.T) {
+			tx, dir := modelTransaction(t)
+			ops := modelOps(t, tx, dir)
+			var held *update.Installation
+			if live {
+				var err error
+				held, err = ops.hold(t.Context(), "active", tx.Binding)
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				held = &update.Installation{Version: 1, Binding: tx.Binding, Digest: update.InstallDigest(tx.Binding), Phase: "active"}
+			}
+			receipt := filepath.Join(dir, "updates", tx.Binding.Index.Binding.Pause.Request.IntentID, "held.json")
+			if err := os.WriteFile(receipt, mustJSON(held), 0644); err != nil {
+				t.Fatal(err)
+			}
+			result, err := runTransaction(t.Context(), tx, false, ops)
+			if !live {
+				if err == nil || result != nil {
+					t.Fatal("pre-staged receipt substituted for the live signer hold")
+				}
+				if _, e := os.Stat(filepath.Join(dir, "updates", tx.Binding.Index.Binding.Pause.Request.IntentID, "stopped.json")); !errors.Is(e, os.ErrNotExist) {
+					t.Fatal("unverified hold reached service stop", e)
+				}
+			} else if err != nil || result == nil || result.Phase != "healthy-held" {
+				t.Fatal("genuine hold could not resume", err)
+			}
+		})
 	}
 }
