@@ -335,7 +335,7 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 			if name == "fased-app" || name == "fased-signer" {
 				mode = 0755
 			}
-			if e = publish(ctx, stage+"/"+name, j.ID, files[name], mode, readRoot, s.Run); e != nil {
+			if e = publish(ctx, stage+"/"+name, j.ID, files[name], mode, readRoot, s.Run, verifyApprovedExecutable); e != nil {
 				return m, e
 			}
 		}

@@ -446,7 +446,33 @@ func publish(ctx context.Context, o hostOps, target, id string, b []byte, mode o
 		return se
 	}
 	if !ready {
-		if _, e = o.run(ctx, b, "/usr/bin/install", "-m", strconv.FormatUint(uint64(mode), 8), "-o", "root", "-g", "root", "--", "/dev/stdin", stage); e != nil {
+		args := []string{"/usr/bin/install", "-m", strconv.FormatUint(uint64(mode), 8), "-o", "root", "-g", "root", "--", "/dev/stdin", stage}
+		input := b
+		if filepath.Base(target) == unitName(o.uid) && mode == 0644 {
+			args, e = custodyinstall.BoundUnitWriteArgs(o.uid, stage, b)
+			if e != nil {
+				return e
+			}
+		} else if mode == 0755 && target == fmt.Sprintf("/var/lib/.fased-app-vps-%d-%s.pending/fased-app", o.uid, id) {
+			source := custodyinstall.ApprovedExecutablePath(o.uid, b)
+			approved, size, digest, err := rootFileDigest(o, source)
+			if err == nil {
+				if approved.Mode.Perm() != 0444 || size != int64(len(b)) || digest != filepath.Base(source) {
+					return errors.New("approved executable source changed; preserving it")
+				}
+				args[len(args)-2] = source
+				input = nil
+			} else if errors.Is(err, os.ErrNotExist) {
+				if _, dirErr := o.read(filepath.Dir(source)); dirErr == nil {
+					return errors.New("approved executable is missing; preserving scoped setup")
+				} else if !errors.Is(dirErr, os.ErrNotExist) {
+					return dirErr
+				}
+			} else {
+				return err
+			}
+		}
+		if _, e = o.run(ctx, input, args...); e != nil {
 			return e
 		}
 		st, e = rootFile(o, stage)

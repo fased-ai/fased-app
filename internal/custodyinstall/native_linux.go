@@ -93,8 +93,25 @@ func installNativePolicy(ctx context.Context, m Manifest, s *System) error {
 		return errors.New("native owner policy validation failed")
 	}
 	pending := path + "-" + m.ID + ".pending"
-	if _, err = s.Run(ctx, nil, "/usr/bin/install", "--owner=0", "--group=0", "--mode=0440", "--", f.Name(), pending); err != nil {
+	policy := nativePolicy(m)
+	args, err := BoundPolicyWriteArgs(m.Owner, pending, policy)
+	if err != nil {
 		return err
+	}
+	if _, err = s.Run(ctx, policy, args...); err != nil {
+		return err
+	}
+	info, err := os.Lstat(pending)
+	if err != nil {
+		return err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || st.Uid != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0440 {
+		return errors.New("native policy staging identity changed; preserving it")
+	}
+	bound, err := s.Run(ctx, nil, "/usr/bin/cat", "--", pending)
+	if err != nil || string(bound) != string(policy) {
+		return errors.New("native policy staging content changed; preserving it")
 	}
 	if _, err = s.Run(ctx, nil, "/usr/bin/ln", "--no-target-directory", "--", pending, path); err != nil {
 		return err

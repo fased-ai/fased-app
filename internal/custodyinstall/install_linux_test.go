@@ -6,8 +6,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -63,7 +65,29 @@ func (h *memoryHost) run(_ context.Context, input []byte, args ...string) ([]byt
 	h.calls++
 	switch args[0] {
 	case "/usr/bin/install":
-		h.files[args[len(args)-1]] = hostFile{Data: bytes.Clone(input), UID: 0, Mode: 0644, Regular: true}
+		mode := os.FileMode(0644)
+		if len(args) > 2 && args[2] == "755" {
+			mode = 0755
+		}
+		data := input
+		if src := args[len(args)-2]; src != "/dev/stdin" {
+			f, ok := h.files[src]
+			if !ok {
+				return nil, os.ErrNotExist
+			}
+			data = f.Data
+		}
+		h.files[args[len(args)-1]] = hostFile{Data: bytes.Clone(data), UID: 0, Mode: mode, Regular: true}
+	case "/usr/bin/systemd-run":
+		if !AllowedBoundUnitWrite(os.Getuid(), input, args) && !AllowedBoundPolicyWrite(os.Getuid(), input, args) {
+			return nil, errors.New("unbound service staging request")
+		}
+		stage := strings.TrimPrefix(args[7], "--property=StandardOutput=truncate:")
+		mode := os.FileMode(0644)
+		if args[6] == "--property=UMask=0227" {
+			mode = 0440
+		}
+		h.files[stage] = hostFile{Data: bytes.Clone(input), UID: 0, Mode: mode, Regular: true}
 	case "/usr/bin/ln":
 		target := args[len(args)-1]
 		if _, ok := h.files[target]; ok {
@@ -80,6 +104,60 @@ func (h *memoryHost) run(_ context.Context, input []byte, args ...string) ([]byt
 		return nil, errors.New("disposable interruption after OS side effect")
 	}
 	return nil, nil
+}
+
+func TestScopedExecutablePublicationUsesApprovedImmutableSource(t *testing.T) {
+	owner := os.Getuid()
+	id := strings.Repeat("a", 32)
+	target := fmt.Sprintf("/var/lib/.fased-custody-%d-%s.pending/fased-signer", owner, id)
+	data := []byte("disposable fixture signer image")
+	source := ApprovedExecutablePath(owner, data)
+	h := &memoryHost{files: map[string]hostFile{source: {Data: bytes.Clone(data), UID: 0, Mode: 0444, Regular: true}}}
+	used := false
+	run := func(ctx context.Context, input []byte, args ...string) ([]byte, error) {
+		if args[0] == "/usr/bin/install" {
+			used = args[len(args)-2] == source && len(input) == 0
+		}
+		return h.run(ctx, input, args...)
+	}
+	if err := publish(context.Background(), target, id, data, 0755, h.read, run); err != nil || !used || !known(h.files[target], data, 0755) {
+		t.Fatal("approved signer source was not bound", err)
+	}
+	h = &memoryHost{files: map[string]hostFile{source: {Data: bytes.Clone(data), UID: 0, Mode: 0444, Regular: true}}}
+	streamed := false
+	verify := func(path, digest string, size int64) error {
+		streamed = path == source && digest == filepath.Base(source) && size == int64(len(data))
+		return nil
+	}
+	read := func(path string) (hostFile, error) {
+		if path == source {
+			return hostFile{}, errors.New("whole-image read was attempted")
+		}
+		return h.read(path)
+	}
+	if err := publish(context.Background(), target, id, data, 0755, read, h.run, verify); err != nil || !streamed {
+		t.Fatal("approved signer did not use streaming verification", err)
+	}
+	h = &memoryHost{files: map[string]hostFile{source: {Data: []byte("different"), UID: 0, Mode: 0444, Regular: true}}}
+	if err := publish(context.Background(), target, id, data, 0755, h.read, h.run); err == nil || h.calls != 0 {
+		t.Fatal("changed approved signer source was accepted")
+	}
+}
+
+func TestBoundServicePublicationRecoversEachInterruptedStep(t *testing.T) {
+	target := fmt.Sprintf("/etc/systemd/system/%s", Unit(os.Getuid(), "app"))
+	id := strings.Repeat("a", 32)
+	data := []byte("[Service]\nUser=991\nNoNewPrivileges=yes\n")
+	for fail := 1; fail <= 6; fail++ {
+		h := &memoryHost{files: map[string]hostFile{}, failAfter: fail}
+		if err := publish(context.Background(), target, id, data, 0644, h.read, h.run); err == nil {
+			t.Fatalf("interruption %d did not fail", fail)
+		}
+		h.failAfter = 0
+		if err := publish(context.Background(), target, id, data, 0644, h.read, h.run); err != nil || !known(h.files[target], data, 0644) || len(h.files) != 1 {
+			t.Fatalf("interruption %d did not recover the exact service: %v", fail, err)
+		}
+	}
 }
 func TestExclusivePublicationRetryPreservesBytes(t *testing.T) {
 	for fail := 1; fail <= 6; fail++ {

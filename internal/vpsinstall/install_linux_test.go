@@ -64,6 +64,43 @@ func fixtureHost() (*memoryHost, hostOps, Options) {
 	}
 	return h, o, Options{Core: "/verified/fased-app", CoreSHA256: hash(binary), Listen: "127.0.0.1:7331", PrepareHost: true}
 }
+
+func TestScopedRemoteCoreUsesApprovedImmutableSource(t *testing.T) {
+	h, o, _ := fixtureHost()
+	id := strings.Repeat("a", 32)
+	stage := "/var/lib/.fased-app-vps-1000-" + id + ".pending"
+	target := stage + "/fased-app"
+	data := []byte("controlled core image")
+	source := custodyinstall.ApprovedExecutablePath(o.uid, data)
+	for _, dir := range []string{stage, filepath.Dir(source)} {
+		h.files[dir] = hostFile{UID: 0, GID: 0, Mode: os.ModeDir | 0755, Directory: true}
+	}
+	h.files[source] = hostFile{UID: 0, GID: 0, Mode: 0444, Regular: true, Data: bytes.Clone(data)}
+	if err := publish(t.Context(), o, target, id, data, 0755); err != nil {
+		t.Fatal(err)
+	}
+	used := false
+	for _, call := range h.calls {
+		if call[0] == "/usr/bin/install" && len(call) > 2 && call[len(call)-2] == source {
+			used = true
+		}
+	}
+	if !used || !bytes.Equal(h.files[target].Data, data) {
+		t.Fatal("approved Remote core was not used")
+	}
+	h, o, _ = fixtureHost()
+	for _, dir := range []string{stage, filepath.Dir(source)} {
+		h.files[dir] = hostFile{UID: 0, GID: 0, Mode: os.ModeDir | 0755, Directory: true}
+	}
+	h.files[source] = hostFile{UID: 0, GID: 0, Mode: 0444, Regular: true, Data: []byte("different")}
+	if err := publish(t.Context(), o, target, id, data, 0755); err == nil || len(h.calls) != 0 {
+		t.Fatal("changed approved Remote core was not refused")
+	}
+	delete(h.files, source)
+	if err := publish(t.Context(), o, target, id, data, 0755); err == nil || len(h.calls) != 0 {
+		t.Fatal("missing scoped Remote core fell back to mutable input")
+	}
+}
 func contains(a []string, v string) bool {
 	for _, s := range a {
 		if s == v {
@@ -165,11 +202,25 @@ func (h *memoryHost) run(_ context.Context, b []byte, a ...string) (out []byte, 
 		gid, _ := strconv.Atoi(arg("-g"))
 		mode, _ := strconv.ParseUint(arg("-m"), 8, 32)
 		dir := contains(a, "-d")
-		f := hostFile{UID: uid, GID: gid, Mode: os.FileMode(mode), Regular: !dir, Directory: dir, Data: bytes.Clone(b)}
+		input := b
+		if !dir && len(a) >= 2 && a[len(a)-2] != "/dev/stdin" && a[len(a)-2] != "/dev/null" {
+			source, ok := h.files[a[len(a)-2]]
+			if !ok {
+				return nil, os.ErrNotExist
+			}
+			input = source.Data
+		}
+		f := hostFile{UID: uid, GID: gid, Mode: os.FileMode(mode), Regular: !dir, Directory: dir, Data: bytes.Clone(input)}
 		if dir {
 			f.Mode |= os.ModeDir
 		}
 		h.files[a[len(a)-1]] = f
+	case "/usr/bin/systemd-run":
+		if !custodyinstall.AllowedBoundUnitWrite(1000, b, a) {
+			return nil, errors.New("unbound service staging request")
+		}
+		stage := strings.TrimPrefix(a[7], "--property=StandardOutput=truncate:")
+		h.files[stage] = hostFile{UID: 0, GID: 0, Mode: 0644, Regular: true, Data: bytes.Clone(b)}
 	case "/usr/bin/sync":
 	case "/usr/bin/ln":
 		target := a[len(a)-1]

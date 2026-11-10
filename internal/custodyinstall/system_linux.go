@@ -92,6 +92,10 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 	}
 	switch args[0] {
 	case "/usr/bin/install", "/usr/bin/mkdir", "/usr/bin/ln", "/usr/bin/mv", "/usr/bin/sync", "/usr/bin/rm", "/usr/bin/cat", "/usr/bin/systemctl", "/usr/bin/setpriv", "/usr/sbin/useradd":
+	case "/usr/bin/systemd-run":
+		if !AllowedBoundUnitWrite(os.Getuid(), input, args) && !AllowedBoundPolicyWrite(os.Getuid(), input, args) {
+			return nil, errors.New("only the exact owned service or policy staging write is allowed")
+		}
 	case "/usr/bin/systemd-creds":
 		if !providerCredentialEncryption(input, args) {
 			return nil, errors.New("only fixed provider service-key encryption is allowed")
@@ -379,7 +383,10 @@ func appArgs(m Manifest, action string) []string {
 
 // Only fixed root staging files are replaceable. Publication is an exclusive
 // link in the destination filesystem; foreign targets are never overwritten.
-func publish(ctx context.Context, target, id string, data []byte, mode os.FileMode, read readHost, run runHost) error {
+func publish(ctx context.Context, target, id string, data []byte, mode os.FileMode, read readHost, run runHost, verifiers ...approvedExecutableVerifier) error {
+	if len(verifiers) > 1 {
+		return errors.New("one approved executable verifier required")
+	}
 	stage := filepath.Join(filepath.Dir(target), "."+filepath.Base(target)+"-"+id+".pending")
 	current, e := read(target)
 	if e == nil && !known(current, data, mode) {
@@ -397,7 +404,34 @@ func publish(ctx context.Context, target, id string, data []byte, mode os.FileMo
 		return se
 	}
 	if !ready {
-		if _, e = run(ctx, data, "/usr/bin/install", "-m", strconv.FormatUint(uint64(mode), 8), "-o", "root", "-g", "root", "--", "/dev/stdin", stage); e != nil {
+		args := []string{"/usr/bin/install", "-m", strconv.FormatUint(uint64(mode), 8), "-o", "root", "-g", "root", "--", "/dev/stdin", stage}
+		input := data
+		name := filepath.Base(target)
+		if mode == 0644 && (name == "fased-app.service" || name == "fased-signer.service" || name == Unit(os.Getuid(), "app") || name == Unit(os.Getuid(), "signer")) {
+			args, e = BoundUnitWriteArgs(os.Getuid(), stage, data)
+			if e != nil {
+				return e
+			}
+		} else if mode == 0440 && target == remoteProofPolicyPath(Manifest{Owner: os.Getuid()}) {
+			args, e = BoundPolicyWriteArgs(os.Getuid(), stage, data)
+			if e != nil {
+				return e
+			}
+		} else if mode == 0755 && (name == "fased-app" || name == "fased-signer") && filepath.Dir(target) == fmt.Sprintf("/var/lib/.fased-custody-%d-%s.pending", os.Getuid(), id) {
+			var verifier approvedExecutableVerifier
+			if len(verifiers) == 1 {
+				verifier = verifiers[0]
+			}
+			source, err := approvedExecutable(read, os.Getuid(), data, verifier)
+			if err != nil {
+				return err
+			}
+			if source != "" {
+				args[len(args)-2] = source
+				input = nil
+			}
+		}
+		if _, e = run(ctx, input, args...); e != nil {
 			return e
 		}
 		if st, e = read(stage); e != nil || !known(st, data, mode) {
