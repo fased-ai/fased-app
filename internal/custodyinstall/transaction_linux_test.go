@@ -5,6 +5,7 @@ package custodyinstall
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"os"
@@ -83,6 +84,9 @@ func modelOps(t *testing.T, x InstallTransaction, dir string) installOps {
 		return dir + strings.TrimPrefix(p, x.Base.Root)
 	}
 	read := func(p string) (hostFile, error) {
+		if strings.HasPrefix(p, fmt.Sprintf("/var/lib/fased-app-approved-%d/", x.Base.Owner)) {
+			return hostFile{}, os.ErrNotExist
+		}
 		target := translate(p)
 		st, e := os.Lstat(target)
 		if e != nil {

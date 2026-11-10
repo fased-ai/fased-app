@@ -35,6 +35,7 @@ func (t InstallTransaction) valid() bool {
 type installOps struct {
 	recoveryDirs func(Manifest) ([]string, error)
 	read         readHost
+	verify       approvedExecutableVerifier
 	run          runHost
 	topology     func(Manifest) error
 	health       func(context.Context, Manifest) error
@@ -346,7 +347,7 @@ func replaceRecord(ctx context.Context, path, id string, data []byte, o installO
 		return nil
 	}
 	stage := filepath.Dir(path) + "/.replace-" + id + "-" + filepath.Base(path) + "-" + sum(data)
-	if e = publish(ctx, stage, id, data, mode, o.read, o.run); e != nil {
+	if e = publish(ctx, stage, id, data, mode, o.read, o.run, o.verify); e != nil {
 		return e
 	}
 	if _, e = o.run(ctx, nil, "/usr/bin/mv", "--no-target-directory", "--", stage, path); e != nil {

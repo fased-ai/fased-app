@@ -382,7 +382,7 @@ func RunBootstrap(ctx context.Context, t BootstrapTransaction, s *System, c Boot
 			return BootstrapReceipt{}, e
 		}
 	}
-	o := installOps{read: readRoot, run: s.Run, health: func(ctx context.Context, m Manifest) error { return waitReady(ctx, m, s) }, ownerRecord: func(write bool) error {
+	o := installOps{read: readRoot, run: s.Run, verify: verifyApprovedExecutable, health: func(ctx context.Context, m Manifest) error { return waitReady(ctx, m, s) }, ownerRecord: func(write bool) error {
 		if write {
 			return ownerCompletionRecord(InstallTransaction{Base: t.Base, Target: t.Target}, true)
 		}

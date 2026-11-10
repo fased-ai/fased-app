@@ -208,7 +208,7 @@ func CompleteController(ctx context.Context, t InstallTransaction, s *System, c 
 	if _, e := ControllerRunner(t.Base.Owner, t.Binding.Index.Binding.Pause.Request.IntentID); e != nil {
 		return nil, e
 	}
-	return runCompletion(ctx, t, installOps{read: readRoot, run: s.Run, topology: func(m Manifest) error {
+	return runCompletion(ctx, t, installOps{read: readRoot, run: s.Run, verify: verifyApprovedExecutable, topology: func(m Manifest) error {
 		if e := Verify(m); e != nil {
 			return e
 		}

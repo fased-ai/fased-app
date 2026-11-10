@@ -106,6 +106,50 @@ func (h *memoryHost) run(_ context.Context, input []byte, args ...string) ([]byt
 	return nil, nil
 }
 
+func TestScopedUpdateExecutablesUseApprovedImmutableSource(t *testing.T) {
+	owner := os.Getuid()
+	id := strings.Repeat("a", 32)
+	intent := strings.Repeat("b", 32)
+	data := []byte("disposable approved signer")
+	source := ApprovedExecutablePath(owner, data)
+	root := Root(owner)
+	for _, target := range []string{
+		root + "/updates/" + intent + "/next-signer",
+		root + "/.replace-" + id + "-fased-signer-" + sum(data),
+	} {
+		h := &memoryHost{files: map[string]hostFile{source: {Data: bytes.Clone(data), UID: 0, Mode: 0444, Regular: true}}}
+		used := false
+		run := func(ctx context.Context, input []byte, args ...string) ([]byte, error) {
+			if args[0] == "/usr/bin/install" {
+				used = len(input) == 0 && args[len(args)-2] == source
+			}
+			return h.run(ctx, input, args...)
+		}
+		if err := publish(t.Context(), target, id, data, 0755, h.read, run); err != nil || !used || !known(h.files[target], data, 0755) {
+			t.Fatalf("unbound update executable %s: %v", target, err)
+		}
+		h = &memoryHost{files: map[string]hostFile{}}
+		refuse := func(path, digest string, size int64) error {
+			if path != source || digest != filepath.Base(source) || size != int64(len(data)) {
+				t.Fatal("wrong executable identity passed to verifier")
+			}
+			return errors.New("approved image changed")
+		}
+		if err := publish(t.Context(), target, id, data, 0755, h.read, h.run, refuse); err == nil || h.calls != 0 {
+			t.Fatal("changed approved image reached a privileged operation")
+		}
+	}
+	for _, target := range []string{
+		root + "/updates/" + intent + "/unrelated",
+		root + "/.replace-" + id + "-fased-signer-" + strings.Repeat("0", 64),
+		Root(owner+1) + "/updates/" + intent + "/next-signer",
+	} {
+		if scopedUpdateExecutable(target, id, owner, data) {
+			t.Fatalf("foreign update destination accepted: %s", target)
+		}
+	}
+}
+
 func TestScopedExecutablePublicationUsesApprovedImmutableSource(t *testing.T) {
 	owner := os.Getuid()
 	id := strings.Repeat("a", 32)

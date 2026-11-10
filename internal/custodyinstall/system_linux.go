@@ -417,7 +417,7 @@ func publish(ctx context.Context, target, id string, data []byte, mode os.FileMo
 			if e != nil {
 				return e
 			}
-		} else if mode == 0755 && (name == "fased-app" || name == "fased-signer") && filepath.Dir(target) == fmt.Sprintf("/var/lib/.fased-custody-%d-%s.pending", os.Getuid(), id) {
+		} else if mode == 0755 && ((name == "fased-app" || name == "fased-signer") && filepath.Dir(target) == fmt.Sprintf("/var/lib/.fased-custody-%d-%s.pending", os.Getuid(), id) || scopedUpdateExecutable(target, id, os.Getuid(), data)) {
 			var verifier approvedExecutableVerifier
 			if len(verifiers) == 1 {
 				verifier = verifiers[0]
@@ -455,4 +455,19 @@ func publish(ctx context.Context, target, id string, data []byte, mode os.FileMo
 		return e
 	}
 	return nil
+}
+
+// scopedUpdateExecutable admits only this owner's fixed transaction images and
+// digest-bound replacement names; unrelated root paths never use this source.
+func scopedUpdateExecutable(target, id string, owner int, data []byte) bool {
+	if owner <= 0 || !regexp.MustCompile(`^[a-f0-9]{32}$`).MatchString(id) {
+		return false
+	}
+	root := regexp.QuoteMeta(Root(owner))
+	transaction := `^` + root + `/updates/[a-f0-9]{32}/(runner|previous-signer|next-core|next-signer)$`
+	if regexp.MustCompile(transaction).MatchString(target) {
+		return true
+	}
+	replacement := `^` + root + `/\.replace-` + id + `-(fased-app|fased-signer)-` + sum(data) + `$`
+	return regexp.MustCompile(replacement).MatchString(target)
 }

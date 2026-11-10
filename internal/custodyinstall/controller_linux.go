@@ -146,7 +146,7 @@ func PrepareController(ctx context.Context, m Manifest, index update.RecoveryInd
 		files[name] = b
 	}
 	for _, name := range []string{"runner", "previous-signer", "next-core", "next-signer"} {
-		if e := publish(ctx, t.dir()+"/"+name, m.ID, files[name], 0755, readRoot, s.Run); e != nil {
+		if e := publish(ctx, t.dir()+"/"+name, m.ID, files[name], 0755, readRoot, s.Run, verifyApprovedExecutable); e != nil {
 			return zero, e
 		}
 	}
@@ -266,7 +266,7 @@ func ExecuteController(ctx context.Context, t InstallTransaction, rollback bool,
 	if e != nil {
 		return nil, e
 	}
-	o := installOps{read: readRoot, run: s.Run, state: func(ctx context.Context) (*update.Installation, error) {
+	o := installOps{read: readRoot, run: s.Run, verify: verifyApprovedExecutable, state: func(ctx context.Context) (*update.Installation, error) {
 		return currentInstallation(ctx, t, s, c.State)
 	}, topology: func(m Manifest) error {
 		if e := verifyTopology(m); e != nil {
