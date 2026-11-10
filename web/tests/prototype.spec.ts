@@ -2,6 +2,129 @@ import { expect, test } from "@playwright/test";
 import { initialState, reducer, STORAGE_KEY } from "../src/state";
 
 test.use({ colorScheme: "dark" });
+test("native local owner reuses verified connection without an extra health read", async ({
+  page,
+}) => {
+  let signedIn = false;
+  const reads: string[] = [];
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    reads.push(path);
+    if (path === "/api/v1/health") {
+      await route.fulfill({
+        json: {
+          status: "ok",
+          apiVersion: "1",
+          version: "fixture",
+          instanceId: "fixture-instance-12345678",
+          connection: {
+            location: "local",
+            transport: "loopback",
+            ownerUid: 1800,
+            ownerKind: "custody",
+          },
+        },
+      });
+    } else if (path === "/api/v1/auth/state") {
+      await route.fulfill({
+        json: {
+          claimed: true,
+          authenticated: signedIn,
+          localAccess: true,
+          csrfToken: "fixture-csrf",
+        },
+      });
+    } else if (path === "/api/v1/installation/local-owner") {
+      expect(route.request().postDataJSON()).toEqual({});
+      signedIn = true;
+      await route.fulfill({
+        json: {
+          authenticated: true,
+          sessionToken: "fixture-token",
+          csrfToken: "fixture-csrf",
+          sessionMode: "bearer",
+        },
+      });
+    } else if (path === "/api/v1/setup") {
+      await route.fulfill({
+        json: { revision: 1, settings: initialState.setup },
+      });
+    } else {
+      await route.fulfill({
+        status: 404,
+        json: { error: "fixture unavailable" },
+      });
+    }
+  });
+  await page.goto("http://wails.localhost:5173/");
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  // StrictMode runs the initial inspection twice; sign-in does not add one.
+  expect(reads.filter((path) => path === "/api/v1/health")).toHaveLength(3);
+  expect(
+    reads.filter((path) => path === "/api/v1/installation/local-owner"),
+  ).toHaveLength(1);
+});
+test("native local owner refuses an instance change during sign-in", async ({
+  page,
+}) => {
+  let signedIn = false;
+  let setupReads = 0;
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/v1/health") {
+      await route.fulfill({
+        json: {
+          status: "ok",
+          apiVersion: "1",
+          version: "fixture",
+          instanceId: signedIn
+            ? "different-instance-123456"
+            : "fixture-instance-12345678",
+          connection: {
+            location: "local",
+            transport: "loopback",
+            ownerUid: 1800,
+            ownerKind: "custody",
+          },
+        },
+      });
+    } else if (path === "/api/v1/auth/state") {
+      await route.fulfill({
+        json: { claimed: true, authenticated: false, localAccess: true },
+      });
+    } else if (path === "/api/v1/installation/local-owner") {
+      signedIn = true;
+      await route.fulfill({
+        json: {
+          authenticated: true,
+          sessionToken: "fixture-token",
+          csrfToken: "fixture-csrf",
+          sessionMode: "bearer",
+        },
+      });
+    } else if (path === "/api/v1/setup") {
+      setupReads++;
+      await route.fulfill({
+        json: { revision: 1, settings: initialState.setup },
+      });
+    } else {
+      await route.fulfill({
+        status: 404,
+        json: { error: "fixture unavailable" },
+      });
+    }
+  });
+  await page.goto("http://wails.localhost:5173/");
+  await expect(
+    page.getByText("Reopen Fased to connect.").first(),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toHaveCount(0);
+  expect(setupReads).toBe(0);
+});
 test("setup resumes after reload and never creates signing authority", async ({
   page,
   isMobile,
