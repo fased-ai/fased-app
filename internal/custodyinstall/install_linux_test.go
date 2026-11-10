@@ -115,6 +115,8 @@ func TestScopedUpdateExecutablesUseApprovedImmutableSource(t *testing.T) {
 	root := Root(owner)
 	for _, target := range []string{
 		root + "/updates/" + intent + "/next-signer",
+		root + "/bootstraps/" + intent + "/candidate/fased-signer",
+		root + "/bootstraps/" + intent + "/previous/fased-app",
 		root + "/.replace-" + id + "-fased-signer-" + sum(data),
 	} {
 		h := &memoryHost{files: map[string]hostFile{source: {Data: bytes.Clone(data), UID: 0, Mode: 0444, Regular: true}}}

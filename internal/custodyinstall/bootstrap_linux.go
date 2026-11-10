@@ -120,15 +120,16 @@ func (s *System) BootstrapInventory(ctx context.Context, t BootstrapTransaction,
 		return errors.New("open the existing custody instance before bootstrap review")
 	}
 	return stageBootstrapInventory(ctx, t, artifacts, probe, out, bootstrapInventoryOps{
-		read: readRoot, run: s.Run,
+		read: readRoot, run: s.Run, verify: verifyApprovedExecutable,
 		mkdir: func(ctx context.Context, path string) error { return directory(ctx, path, 0, 0, 0755, s) },
 	})
 }
 
 type bootstrapInventoryOps struct {
-	read  readHost
-	run   runHost
-	mkdir func(context.Context, string) error
+	read   readHost
+	run    runHost
+	verify approvedExecutableVerifier
+	mkdir  func(context.Context, string) error
 }
 
 func stageBootstrapInventory(ctx context.Context, t BootstrapTransaction, artifacts, probe string, out io.Writer, ops bootstrapInventoryOps) error {
@@ -157,7 +158,7 @@ func stageBootstrapInventory(ctx context.Context, t BootstrapTransaction, artifa
 			return errors.New("custody inventory core differs from signed target")
 		}
 		path := t.Dir() + "/candidate/fased-app"
-		if e = publish(ctx, path, m.ID, b, 0755, ops.read, ops.run); e != nil {
+		if e = publish(ctx, path, m.ID, b, 0755, ops.read, ops.run, ops.verify); e != nil {
 			return e
 		}
 		contract, e := probeReaderWithRun(ctx, path, true, m, ops.run, true)
@@ -297,7 +298,7 @@ func PrepareBootstrap(ctx context.Context, t BootstrapTransaction, dir string, s
 			if int64(len(data)) != c.Artifact.Size || sum(data) != c.Artifact.SHA256 {
 				return errors.New("bootstrap artifact differs from signed bytes")
 			}
-			if e = publish(ctx, t.Dir()+"/"+group.name+"/"+c.Artifact.File, t.Base.ID, data, 0755, readRoot, s.Run); e != nil {
+			if e = publish(ctx, t.Dir()+"/"+group.name+"/"+c.Artifact.File, t.Base.ID, data, 0755, readRoot, s.Run, verifyApprovedExecutable); e != nil {
 				return e
 			}
 			contract, e := probeReader(ctx, t.Dir()+"/"+group.name+"/"+c.Artifact.File, c.Contract.Component == "core", t.Base, s, t.Version == 3 || t.Version == 2 && group.name == "candidate")

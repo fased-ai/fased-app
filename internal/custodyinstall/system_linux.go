@@ -502,7 +502,8 @@ func scopedUpdateExecutable(target, id string, owner int, data []byte) bool {
 	}
 	root := regexp.QuoteMeta(Root(owner))
 	transaction := `^` + root + `/updates/[a-f0-9]{32}/(runner|previous-signer|next-core|next-signer)$`
-	if regexp.MustCompile(transaction).MatchString(target) {
+	bootstrap := `^` + root + `/bootstraps/[a-f0-9]{32}/(previous|candidate)/fased-(app|signer)$`
+	if regexp.MustCompile(transaction).MatchString(target) || regexp.MustCompile(bootstrap).MatchString(target) {
 		return true
 	}
 	replacement := `^` + root + `/\.replace-` + id + `-(fased-app|fased-signer)-` + sum(data) + `$`
