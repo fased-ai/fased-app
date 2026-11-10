@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/fased-ai/fased-app/internal/custodyinstall"
 )
 
 func credentialFixture(t *testing.T) (*memoryHost, hostOps, Manifest, *int) {
@@ -81,6 +83,19 @@ func TestProtectedProviderCredentialInstallRetryRemove(t *testing.T) {
 	if *count != 1 || !bytes.Equal(original, h.files[path].Data) {
 		t.Fatal("repair changed OS identity")
 	}
+}
+
+func TestProviderCredentialOverrideUsesBoundPrivilegedWrite(t *testing.T) {
+	h, o, m, _ := credentialFixture(t)
+	if err := prepareTaskCredentialDropIn(t.Context(), o, m); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range h.calls {
+		if custodyinstall.AllowedBoundUnitWrite(o.uid, taskCredentialDropIn(m), args) {
+			return
+		}
+	}
+	t.Fatal("provider credential override did not use a content-bound privileged write")
 }
 
 func TestProtectedProviderCredentialOrdinaryReader(t *testing.T) {

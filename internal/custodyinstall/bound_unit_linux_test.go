@@ -44,6 +44,10 @@ func TestBoundUnitWriteBindsBytesAndOwnedDestination(t *testing.T) {
 			t.Fatal("foreign destination accepted", p)
 		}
 	}
+	dropIn := "/etc/systemd/system/fased-vps-1900.service.d/.30-fased-provider-credentials.conf-" + id + ".pending"
+	if args, err := BoundUnitWriteArgs(1900, dropIn, body); err != nil || !AllowedBoundUnitWrite(1900, body, args) || AllowedBoundUnitWrite(1900, append(bytes.Clone(body), 'x'), args) {
+		t.Fatal("owned credential override must bind its exact bytes", err)
+	}
 	vps := "/var/lib/.fased-app-vps-1900-" + id + ".pending/.fased-vps-1900.service-" + id + ".pending"
 	if args, err := BoundUnitWriteArgs(1900, vps, body); err != nil || !AllowedBoundUnitWrite(1900, body, args) {
 		t.Fatal("owned Remote installer stage refused", err)

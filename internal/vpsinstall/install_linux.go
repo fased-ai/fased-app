@@ -448,7 +448,7 @@ func publish(ctx context.Context, o hostOps, target, id string, b []byte, mode o
 	if !ready {
 		args := []string{"/usr/bin/install", "-m", strconv.FormatUint(uint64(mode), 8), "-o", "root", "-g", "root", "--", "/dev/stdin", stage}
 		input := b
-		if filepath.Base(target) == unitName(o.uid) && mode == 0644 {
+		if mode == 0644 && (filepath.Base(target) == unitName(o.uid) || target == "/etc/systemd/system/"+unitName(o.uid)+".d/30-fased-provider-credentials.conf") {
 			args, e = custodyinstall.BoundUnitWriteArgs(o.uid, stage, b)
 			if e != nil {
 				return e

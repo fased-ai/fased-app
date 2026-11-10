@@ -25,6 +25,7 @@ func BoundUnitWriteArgs(owner int, stage string, data []byte) ([]string, error) 
 		`^/etc/systemd/system/\.fased-custody-` + u + `-(app|signer)\.service-([a-f0-9]{32})\.pending$`,
 		`^/var/lib/\.fased-app-vps-` + u + `-([a-f0-9]{32})\.pending/\.fased-vps-` + u + `\.service-([a-f0-9]{32})\.pending$`,
 		`^/var/lib/\.fased-custody-` + u + `-([a-f0-9]{32})\.pending/\.fased-(app|signer)\.service-([a-f0-9]{32})\.pending$`,
+		`^/etc/systemd/system/fased-vps-` + u + `\.service\.d/\.30-fased-provider-credentials\.conf-([a-f0-9]{32})\.pending$`,
 	}
 	matched := false
 	for i, pattern := range patterns {
