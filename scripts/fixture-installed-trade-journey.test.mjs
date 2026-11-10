@@ -1,12 +1,29 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import {
+  readFile,
+  writeFile,
+  mkdtemp,
+  rm,
+  symlink,
+  unlink,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   validateInstalledTradePlan,
   verifyInstalledTradeReceiver,
   installedNativeTradeJourney,
   verifyPreservedOriginal,
+  remoteInstalledCommand,
+  remoteHeldStatus,
+  remoteBrowserControl,
+  allowedOwnerLink,
+  createInstalledTradeReceiptWriter,
+  withInstalledTradeLock,
 } from "./fixture-installed-trade-journey.mjs";
 const sha = (x) => createHash("sha256").update(x).digest("hex");
 const h = "a".repeat(64),
@@ -201,7 +218,7 @@ function fixture() {
     native: async (step) => {
       events.push(step.action + ":" + step.name);
       if (step.name === "Approve" && step.frame === "Fased App")
-        draft = { intent, origin: "", dispatched: false };
+        draft = { intent, origin: p.origin, dispatched: false };
       if (step.name === "Submit") submitted = true;
     },
     lock: async () => {
@@ -241,6 +258,720 @@ function fixture() {
     },
   };
 }
+function remoteFixture() {
+  const f = fixture();
+  Object.assign(f.p, {
+    profile: "remote",
+    clientUid: 1000,
+    origin: "https://fixture.tail123.ts.net",
+    remoteUser: "fixture-owner",
+  });
+  Object.assign(f.r.manifest, {
+    location: "remote",
+    publicOrigin: f.p.origin,
+    nativeOwnerAccess: false,
+  });
+  f.r.accounts.setup.source = "remote";
+  const read = f.io.read;
+  f.io.read = async () => {
+    const value = await read();
+    delete value.financialExecution;
+    delete value.providerCallsEnabled;
+    return value;
+  };
+  f.io.heldStatus = async () => ({
+    instanceId: f.p.instance,
+    profileId: "trading-analyst",
+    revision: 1,
+    financialExecution: false,
+    providerCallsEnabled: false,
+  });
+  return f;
+}
+
+test("whole-journey lock rejects a concurrent runner before private input or Submit", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "fased-runner-lock-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const first = remoteFixture(),
+    second = remoteFixture();
+  let enter, proceed;
+  const entered = new Promise((resolve) => (enter = resolve));
+  const gate = new Promise((resolve) => (proceed = resolve));
+  const running = withInstalledTradeLock(dir, async () => {
+    enter();
+    await gate;
+    return installedNativeTradeJourney(
+      first.p,
+      first.io,
+      undefined,
+      first.save,
+    );
+  });
+  await entered;
+  try {
+    await assert.rejects(
+      withInstalledTradeLock(dir, () =>
+        installedNativeTradeJourney(
+          second.p,
+          second.io,
+          undefined,
+          second.save,
+        ),
+      ),
+      /another.*running/i,
+    );
+    assert.deepEqual(second.events, []);
+    assert.deepEqual(second.saved, []);
+  } finally {
+    proceed();
+  }
+  assert.equal((await running).result, "NEEDS_RESTART");
+  assert.equal(first.events.filter((x) => x === "click:Submit").length, 1);
+  assert.equal(
+    await withInstalledTradeLock(dir, async () => "reacquired"),
+    "reacquired",
+  );
+});
+
+test("whole-journey OS lock is released when its holder dies", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "fased-runner-lock-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const module = new URL(
+    "./fixture-installed-trade-journey.mjs",
+    import.meta.url,
+  ).href;
+  const script = `import { withInstalledTradeLock } from ${JSON.stringify(module)}; await withInstalledTradeLock(process.argv[1], async () => { console.log("READY"); await new Promise(() => setInterval(() => {}, 1000)); });`;
+  const child = spawn(
+    process.execPath,
+    ["--input-type=module", "-e", script, dir],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  t.after(() => {
+    if (child.exitCode === null && child.signalCode === null)
+      child.kill("SIGKILL");
+  });
+  const [ready] = await Promise.race([
+    once(child.stdout, "data"),
+    once(child, "exit").then(([code]) => {
+      throw new Error(`lock holder exited before readiness: ${code}`);
+    }),
+    new Promise((_, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("lock holder did not become ready")),
+        5000,
+      );
+      timer.unref();
+    }),
+  ]);
+  assert.match(String(ready), /READY/);
+  await assert.rejects(
+    withInstalledTradeLock(dir, async () => {}),
+    /another.*running/i,
+  );
+  const exited = once(child, "exit");
+  child.kill("SIGKILL");
+  await exited;
+  assert.equal(
+    await withInstalledTradeLock(dir, async () => "recovered"),
+    "recovered",
+  );
+});
+
+test("real receipt writer resumes past interrupted staging and preserves the exact original", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "fased-receipt-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const f = remoteFixture();
+  f.p.receipt = join(dir, "receipt.json");
+  const previous = {
+    version: 1,
+    planHash: sha(JSON.stringify(f.p)),
+    source: f.p.source,
+    profile: "remote",
+    instance: f.p.instance,
+    manifestSha256: f.p.manifestSha256,
+    enrollmentSha256: f.p.enrollmentSha256,
+    class: f.io.kind,
+    result: "OPEN",
+    startedAt: Date.now() - 1000,
+    before: { app: "100", signer: "101", boot: "same" },
+  };
+  const original = JSON.stringify(previous, null, 2) + "\n";
+  const digest = sha(JSON.stringify(previous));
+  const sidecar = f.p.receipt + "." + digest + ".pre-review-failure.json";
+  await writeFile(f.p.receipt, original, { mode: 0o600 });
+  await writeFile(f.p.receipt + ".next", "interrupted original staging", {
+    mode: 0o600,
+  });
+  await writeFile(sidecar, original, { mode: 0o600 });
+  const result = await installedNativeTradeJourney(
+    f.p,
+    f.io,
+    previous,
+    createInstalledTradeReceiptWriter(f.p, digest),
+    { resumePreReview: digest },
+  );
+  assert.equal(result.result, "NEEDS_RESTART");
+  assert.equal(
+    JSON.parse(await readFile(f.p.receipt, "utf8")).result,
+    "NEEDS_RESTART",
+  );
+  assert.equal(await readFile(sidecar, "utf8"), original);
+  assert.equal(
+    await readFile(f.p.receipt + ".next", "utf8"),
+    "interrupted original staging",
+  );
+  assert.equal(f.events.filter((x) => x === "click:Submit").length, 1);
+});
+
+test("real receipt writer refuses replaced or symlinked ancestry", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "fased-receipt-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const f = remoteFixture();
+  f.p.receipt = join(dir, "receipt.json");
+  const previous = { result: "OPEN", instance: f.p.instance };
+  const original = JSON.stringify(previous, null, 2) + "\n";
+  const digest = sha(JSON.stringify(previous));
+  const sidecar = f.p.receipt + "." + digest + ".pre-review-failure.json";
+  await writeFile(f.p.receipt, original, { mode: 0o600 });
+  await writeFile(sidecar, "not the original", { mode: 0o600 });
+  await assert.rejects(
+    createInstalledTradeReceiptWriter(f.p, digest)({ result: "OPEN" }),
+  );
+  assert.equal(await readFile(f.p.receipt, "utf8"), original);
+  await unlink(sidecar);
+  await symlink(f.p.receipt, sidecar);
+  await assert.rejects(
+    createInstalledTradeReceiptWriter(f.p, digest)({ result: "OPEN" }),
+  );
+  assert.equal(await readFile(f.p.receipt, "utf8"), original);
+});
+
+test("Remote journey uses scoped CLI, browser status and native owner before one submission", async () => {
+  const f = remoteFixture();
+  const result = await installedNativeTradeJourney(
+    f.p,
+    f.io,
+    undefined,
+    f.save,
+  );
+  assert.equal(result.result, "NEEDS_RESTART");
+  assert.equal(f.events.filter((x) => x === "click:Submit").length, 1);
+  assert.ok(
+    f.events.indexOf("set:OS account") <
+      f.events.indexOf("click:Connect wallet"),
+  );
+
+  assert.ok(
+    f.events.indexOf("present:" + f.q.digest) <
+      f.events.indexOf("private-input"),
+  );
+  f.io.runtime = async () => ({ app: "200", signer: "201", boot: "same" });
+  f.events.length = 0;
+  const after = await installedNativeTradeJourney(f.p, f.io, result, f.save);
+  assert.equal(after.result, "PASS");
+  assert.ok(
+    !f.events.some((x) => /Quote|Approve|Submit|private-input/.test(x)),
+  );
+});
+
+test("Remote browser permits only a bound native owner intent", () => {
+  const f = remoteFixture();
+  const q = new URLSearchParams({
+    action: "approve-swap",
+    instance: f.p.instance,
+    network: "devnet",
+    origin: f.p.origin,
+    proposal: "abc_DEF-123",
+  });
+  const link = "fased://wallet-owner?" + q.toString();
+  assert.equal(allowedOwnerLink(f.p, link), true);
+  for (const [key, value] of [
+    ["instance", "foreign"],
+    ["origin", "https://other.tail123.ts.net"],
+    ["network", "foreign"],
+    ["proposal", "bad.secret"],
+    ["action", "setup"],
+  ]) {
+    const bad = new URLSearchParams(q);
+    bad.set(key, value);
+    assert.equal(
+      allowedOwnerLink(f.p, "fased://wallet-owner?" + bad.toString()),
+      false,
+    );
+  }
+  const duplicate = new URLSearchParams(q);
+  duplicate.append("instance", f.p.instance);
+  assert.equal(
+    allowedOwnerLink(f.p, "fased://wallet-owner?" + duplicate.toString()),
+    false,
+  );
+});
+
+test("Remote held-feature status must be authenticated, matching and disabled before UI or secret", async () => {
+  for (const field of [
+    "instanceId",
+    "profileId",
+    "revision",
+    "financialExecution",
+    "providerCallsEnabled",
+  ]) {
+    const f = remoteFixture();
+    const held = await f.io.heldStatus();
+    held[field] =
+      field === "revision" ? 2 : field.endsWith("Id") ? "foreign" : true;
+    f.io.heldStatus = async () => held;
+    await assert.rejects(
+      installedNativeTradeJourney(f.p, f.io, undefined, f.save),
+    );
+    assert.ok(
+      !f.events.some((x) => /Quote|Approve|Submit|private-input/.test(x)),
+    );
+  }
+});
+
+test("interrupted Remote submission inspects the original and never submits again", async () => {
+  const f = remoteFixture();
+  f.setSubmitted();
+  const previous = {
+    version: 1,
+    planHash: sha(JSON.stringify(f.p)),
+    source: f.p.source,
+    profile: "remote",
+    instance: f.p.instance,
+    manifestSha256: f.p.manifestSha256,
+    enrollmentSha256: f.p.enrollmentSha256,
+    class: f.io.kind,
+    result: "OPEN",
+    stage: "submitted",
+    proposal: f.q,
+    intent: f.intent,
+    before: { app: "100", signer: "101", boot: "same" },
+    taskId: "onchain-task:" + f.q.quote.id,
+    startedAt: Date.now() - 1000,
+  };
+  const pending = await installedNativeTradeJourney(
+    f.p,
+    f.io,
+    previous,
+    f.save,
+  );
+  assert.equal(pending.result, "NEEDS_RESTART");
+  assert.ok(
+    !f.events.some((x) => /Quote|Approve|Submit|private-input/.test(x)),
+  );
+  f.io.runtime = async () => ({ app: "200", signer: "201", boot: "same" });
+  const after = await installedNativeTradeJourney(f.p, f.io, pending, f.save);
+  assert.equal(after.result, "PASS");
+  assert.ok(
+    !f.events.some((x) => /Quote|Approve|Submit|private-input/.test(x)),
+  );
+});
+
+test("hard interruption before review holds its original receipt and permits only explicit empty recovery", async () => {
+  const f = remoteFixture();
+  const previous = {
+    version: 1,
+    planHash: sha(JSON.stringify(f.p)),
+    source: f.p.source,
+    profile: "remote",
+    instance: f.p.instance,
+    manifestSha256: f.p.manifestSha256,
+    enrollmentSha256: f.p.enrollmentSha256,
+    class: f.io.kind,
+    result: "OPEN",
+    startedAt: Date.now() - 1000,
+    before: { app: "100", signer: "101", boot: "same" },
+  };
+  const held = await installedNativeTradeJourney(f.p, f.io, previous, f.save);
+  assert.equal(held.result, "RECOVERY_REQUIRED");
+  assert.deepEqual(f.saved, []);
+  assert.deepEqual(f.events, []);
+  const result = await installedNativeTradeJourney(
+    f.p,
+    f.io,
+    previous,
+    f.save,
+    {
+      resumePreReview: sha(JSON.stringify(previous)),
+    },
+  );
+  assert.equal(result.result, "NEEDS_RESTART");
+  assert.deepEqual(result.preReviewFailure.receipt, previous);
+  assert.equal(f.events.filter((x) => x === "click:Submit").length, 1);
+});
+
+test("hard interruption immediately after resumed pre-review save can recover its exact ancestry", async () => {
+  const f = remoteFixture();
+  const native = f.io.native;
+  f.io.native = async () => {
+    throw new Error("first pre-review interruption");
+  };
+  await assert.rejects(
+    installedNativeTradeJourney(f.p, f.io, undefined, f.save),
+  );
+  const original = structuredClone(f.saved.at(-1));
+  f.io.native = native;
+  f.events.length = 0;
+  let interrupted;
+  await assert.rejects(
+    installedNativeTradeJourney(
+      f.p,
+      f.io,
+      original,
+      async (receipt) => {
+        interrupted = structuredClone(receipt);
+        throw new Error("simulated process loss after receipt save");
+      },
+      { resumePreReview: sha(JSON.stringify(original)) },
+    ),
+  );
+  assert.equal(interrupted.result, "OPEN");
+  assert.equal(interrupted.stage, undefined);
+  assert.deepEqual(interrupted.preReviewFailure.receipt, original);
+  assert.deepEqual(f.events, []);
+  const held = await installedNativeTradeJourney(
+    f.p,
+    f.io,
+    interrupted,
+    f.save,
+  );
+  assert.equal(held.result, "RECOVERY_REQUIRED");
+  const result = await installedNativeTradeJourney(
+    f.p,
+    f.io,
+    interrupted,
+    f.save,
+    {
+      resumePreReview: sha(JSON.stringify(interrupted)),
+    },
+  );
+  assert.equal(result.result, "NEEDS_RESTART");
+  assert.deepEqual(result.preReviewFailure.receipt, interrupted);
+  assert.equal(f.events.filter((x) => x === "click:Submit").length, 1);
+});
+
+test("repeated interruption rechecks a resolved reviewed ancestor before resuming", async () => {
+  for (const approved of [true, false]) {
+    const f = remoteFixture(),
+      native = f.io.native;
+    f.io.native = async (step) => {
+      if (step.name === f.q.digest) throw new Error("review interrupted");
+      return native(step);
+    };
+    await assert.rejects(
+      installedNativeTradeJourney(f.p, f.io, undefined, f.save),
+    );
+    const original = structuredClone(f.saved.at(-1));
+    assert.equal(original.stage, "reviewed");
+    original.proposal.quote.id = "9".repeat(32);
+    original.proposal.quote.createdAt = 0;
+    original.proposal.quote.expiresAt = 1;
+    original.intent.operationId = original.proposal.quote.id;
+    original.intent.proposal = Buffer.from(
+      JSON.stringify(original.proposal),
+    ).toString("base64url");
+    const interrupted = structuredClone(original);
+    delete interrupted.stage;
+    delete interrupted.intent;
+    delete interrupted.proposal;
+    delete interrupted.failure;
+    interrupted.result = "OPEN";
+    interrupted.preReviewFailure = {
+      sha256: sha(JSON.stringify(original)),
+      receipt: original,
+    };
+    interrupted.resolvedUnsentDraft = {
+      sha256: "a".repeat(64),
+      operationId: original.intent.operationId,
+    };
+    let launched = false;
+    f.io.draft = async () =>
+      launched
+        ? { intent: f.intent, origin: f.p.origin, dispatched: false }
+        : null;
+    f.io.native = async (step) => {
+      if (step.name === "Approve" && step.frame === f.p.mainFrame)
+        launched = true;
+      return native(step);
+    };
+    const inspect = f.io.inspect;
+    f.io.inspect = async (intent, ...args) =>
+      intent.proposal === original.intent.proposal
+        ? {
+            readOnly: true,
+            status: { locked: true },
+            swap: approved ? { state: "approved" } : null,
+          }
+        : inspect(intent, ...args);
+    f.events.length = 0;
+    const run = () =>
+      installedNativeTradeJourney(f.p, f.io, interrupted, f.save, {
+        resumePreReview: sha(JSON.stringify(interrupted)),
+      });
+    if (approved) {
+      await assert.rejects(run(), /ancestor signer approval must be absent/);
+      assert.deepEqual(f.events, []);
+    } else {
+      const result = await run();
+      assert.equal(result.result, "NEEDS_RESTART");
+      assert.deepEqual(result.preReviewFailure.receipt, interrupted);
+      assert.equal(f.events.filter((x) => x === "click:Submit").length, 1);
+    }
+  }
+});
+
+test("hard interruption with a draft requires exact expired unsigned original before retry", async () => {
+  const f = remoteFixture();
+  const previous = {
+    version: 1,
+    planHash: sha(JSON.stringify(f.p)),
+    source: f.p.source,
+    profile: "remote",
+    instance: f.p.instance,
+    manifestSha256: f.p.manifestSha256,
+    enrollmentSha256: f.p.enrollmentSha256,
+    class: f.io.kind,
+    result: "OPEN",
+    startedAt: Date.now() - 1000,
+    before: { app: "100", signer: "101", boot: "same" },
+  };
+  const oldQ = structuredClone(f.q);
+  oldQ.quote.id = "9".repeat(32);
+  oldQ.quote.createdAt = 0;
+  oldQ.quote.expiresAt = 1;
+  const old = {
+    intent: {
+      ...f.intent,
+      operationId: oldQ.quote.id,
+      proposal: Buffer.from(JSON.stringify(oldQ)).toString("base64url"),
+    },
+    origin: f.p.origin,
+    dispatched: false,
+    completed: true,
+  };
+  f.io.draft = async () => old;
+  f.io.inspect = async () => ({
+    readOnly: true,
+    status: { locked: true },
+    swap: null,
+  });
+  const held = await installedNativeTradeJourney(f.p, f.io, previous, f.save);
+  assert.equal(held.result, "RECOVERY_REQUIRED");
+  assert.equal(held.draftSha256, sha(JSON.stringify(old)));
+  await assert.rejects(
+    installedNativeTradeJourney(f.p, f.io, previous, f.save, {
+      resumePreReview: sha(JSON.stringify(previous)),
+    }),
+  );
+  assert.deepEqual(f.events, []);
+  const native = f.io.native;
+  let launched = false;
+  f.io.draft = async () =>
+    launched
+      ? { intent: f.intent, origin: f.p.origin, dispatched: false }
+      : old;
+  f.io.native = async (step) => {
+    if (step.name === "Approve" && step.frame === f.p.mainFrame)
+      launched = true;
+    return native(step);
+  };
+  const inspect = f.io.inspect;
+  f.io.inspect = async (intent) =>
+    intent.proposal === old.intent.proposal
+      ? inspect(intent)
+      : {
+          readOnly: true,
+          status: { locked: true, recoveryRequired: true },
+          swap: {
+            state: "confirmed",
+            proposal: f.q,
+            signature: "one-original",
+            signed: "signed-original",
+          },
+        };
+  const result = await installedNativeTradeJourney(
+    f.p,
+    f.io,
+    previous,
+    f.save,
+    {
+      resumePreReview: sha(JSON.stringify(previous)),
+      resolvedDraftSha256: sha(JSON.stringify(old)),
+    },
+  );
+  assert.equal(result.result, "NEEDS_RESTART");
+  assert.deepEqual(result.preReviewFailure.receipt, previous);
+  assert.equal(f.events.filter((x) => x === "click:Submit").length, 1);
+});
+
+test("hard-interruption recovery refuses foreign, active, approved or duplicate work", async () => {
+  for (const failure of [
+    "receipt",
+    "draft-digest",
+    "foreign-quote",
+    "unfinished",
+    "dispatched",
+    "unexpired",
+    "approved",
+    "existing-task",
+    "unlocked",
+  ]) {
+    const f = remoteFixture();
+    const previous = {
+      version: 1,
+      planHash: sha(JSON.stringify(f.p)),
+      source: f.p.source,
+      profile: "remote",
+      instance: f.p.instance,
+      manifestSha256: f.p.manifestSha256,
+      enrollmentSha256: f.p.enrollmentSha256,
+      class: f.io.kind,
+      result: "OPEN",
+      startedAt: Date.now() - 1000,
+      before: { app: "100", signer: "101", boot: "same" },
+    };
+    const q = structuredClone(f.q);
+    q.quote.id = "9".repeat(32);
+    q.quote.createdAt = 0;
+    q.quote.expiresAt = 1;
+    if (failure === "foreign-quote") q.quote.instanceId = "foreign";
+    if (failure === "unexpired") {
+      q.quote.createdAt = Math.floor(Date.now() / 1000);
+      q.quote.expiresAt = q.quote.createdAt + 30;
+    }
+    const old = {
+      intent: {
+        ...f.intent,
+        operationId: q.quote.id,
+        proposal: Buffer.from(JSON.stringify(q)).toString("base64url"),
+      },
+      origin: f.p.origin,
+      dispatched: failure === "dispatched",
+      completed: failure !== "unfinished",
+    };
+    f.io.draft = async () => old;
+    f.io.inspect = async () => ({
+      readOnly: true,
+      status: { locked: true },
+      swap: failure === "approved" ? { state: "approved" } : null,
+    });
+    if (failure === "receipt") previous.instance = "foreign";
+    if (failure === "unlocked") f.r.accounts.fixture.status.locked = false;
+    if (failure === "existing-task") {
+      const read = f.io.read;
+      f.io.read = async () => {
+        const value = await read();
+        value.onchain.tasks.push({ id: "existing" });
+        return value;
+      };
+    }
+    await assert.rejects(
+      installedNativeTradeJourney(f.p, f.io, previous, f.save, {
+        resumePreReview: sha(JSON.stringify(previous)),
+        resolvedDraftSha256:
+          failure === "draft-digest"
+            ? "f".repeat(64)
+            : sha(JSON.stringify(old)),
+      }),
+      failure,
+    );
+    assert.deepEqual(f.events, [], failure);
+    assert.deepEqual(f.saved, [], failure);
+  }
+});
+
+test("interrupted original approval or uncertain submission is retained when no result exists", async () => {
+  for (const stage of ["reviewed", "approved", "submitted"]) {
+    const f = remoteFixture();
+    f.io.inspect = async () => ({
+      readOnly: true,
+      status: { locked: true, recoveryRequired: true },
+      swap: { state: "approved", proposal: f.q },
+    });
+    const previous = {
+      version: 1,
+      planHash: sha(JSON.stringify(f.p)),
+      source: f.p.source,
+      profile: "remote",
+      instance: f.p.instance,
+      manifestSha256: f.p.manifestSha256,
+      enrollmentSha256: f.p.enrollmentSha256,
+      class: f.io.kind,
+      result: "OPEN",
+      stage,
+      proposal: f.q,
+      intent: f.intent,
+      before: { app: "100", signer: "101", boot: "same" },
+      ...(stage === "submitted"
+        ? { taskId: "onchain-task:" + f.q.quote.id }
+        : {}),
+    };
+    const original = structuredClone(previous);
+    const result = await installedNativeTradeJourney(
+      f.p,
+      f.io,
+      previous,
+      f.save,
+    );
+    assert.equal(result.result, "RECOVERY_REQUIRED");
+    assert.deepEqual(previous, original);
+    assert.deepEqual(f.saved, []);
+    assert.ok(
+      !f.events.some((x) => /Quote|Approve|Submit|private-input/.test(x)),
+    );
+  }
+});
+
+test("interrupted matching signer is locked before inspection; foreign receipt cannot lock it", async () => {
+  for (const foreign of [false, true]) {
+    const f = remoteFixture();
+    f.r.accounts.fixture.status.locked = false;
+    let locked = false;
+    f.io.lock = async () => {
+      locked = true;
+      f.events.push("lock");
+    };
+    f.io.inspect = async () => ({
+      readOnly: true,
+      status: { locked, recoveryRequired: true },
+      swap: { state: "approved", proposal: f.q },
+    });
+    const previous = {
+      version: 1,
+      planHash: foreign ? "f".repeat(64) : sha(JSON.stringify(f.p)),
+      source: f.p.source,
+      profile: "remote",
+      instance: f.p.instance,
+      manifestSha256: f.p.manifestSha256,
+      enrollmentSha256: f.p.enrollmentSha256,
+      class: f.io.kind,
+      result: "OPEN",
+      stage: "approved",
+      proposal: f.q,
+      intent: f.intent,
+      before: { app: "100", signer: "101", boot: "same" },
+    };
+    if (foreign) {
+      await assert.rejects(
+        installedNativeTradeJourney(f.p, f.io, previous, f.save),
+      );
+      assert.equal(locked, false);
+    } else {
+      const result = await installedNativeTradeJourney(
+        f.p,
+        f.io,
+        previous,
+        f.save,
+      );
+      assert.equal(result.result, "RECOVERY_REQUIRED");
+      assert.equal(locked, true);
+      assert.deepEqual(f.saved, []);
+    }
+    assert.ok(
+      !f.events.some((x) => /Quote|Approve|Submit|private-input/.test(x)),
+    );
+  }
+});
 test("frozen plan and genuine receiver reject originals, drift and authority before timers", () => {
   const p = plan();
   validateInstalledTradePlan(p);
@@ -272,9 +1003,239 @@ test("frozen plan and genuine receiver reject originals, drift and authority bef
     change(bad);
     assert.throws(() => verifyInstalledTradeReceiver(p, bad));
   }
-  assert.throws(
-    () => validateInstalledTradePlan({ ...plan(), profile: "remote" }),
-    /Remote Onchain CLI owner route/,
+  assert.throws(() =>
+    validateInstalledTradePlan({ ...plan(), profile: "remote" }),
+  );
+});
+
+test("Remote plan and installed command pin owner, host, instance and fixed operations", () => {
+  const f = remoteFixture();
+  const { root } = validateInstalledTradePlan(f.p);
+  for (const [file, command] of [
+    [
+      root + "/fased-app",
+      ["custody", "accounts", "--disposable-fixture", "--prepare-host"],
+    ],
+    [
+      root + "/fased-app",
+      [
+        "custody",
+        "agents",
+        "--disposable-fixture",
+        "--prepare-host",
+        "--profile",
+        "trading-analyst",
+      ],
+    ],
+    [
+      root + "/fased-app",
+      [
+        "custody",
+        "window",
+        "--expected-instance",
+        f.p.instance,
+        "--network",
+        "devnet",
+        "--disposable-fixture",
+        "--inspect",
+      ],
+    ],
+    [
+      root + "/fased-signer",
+      [
+        "owner",
+        "--config",
+        root + "/identity.json",
+        "--disposable-fixture",
+        "--action",
+        "lock",
+      ],
+    ],
+    [
+      "/usr/bin/systemctl",
+      [
+        "show",
+        "--property=MainPID",
+        "--value",
+        "fased-custody-1800-app.service",
+      ],
+    ],
+    ["/usr/bin/cat", [root + "/install.json"]],
+    ["/usr/bin/sha256sum", [root + "/fased-app"]],
+  ])
+    assert.equal(
+      remoteInstalledCommand(f.p, file, command).file,
+      "/usr/bin/ssh",
+    );
+  verifyInstalledTradeReceiver(f.p, f.r);
+  for (const change of [
+    (p) => (p.origin = "http://fixture.tail123.ts.net"),
+    (p) => (p.origin = "https://fixture.tail123.ts.net:22"),
+    (p) => (p.origin = "https://fixture.tail123.ts.net/path"),
+    (p) => (p.origin = "https://fixture.tail123.ts.net.evil.example"),
+    (p) => (p.remoteUser = "root"),
+    (p) => (p.remoteUser = "owner;touch"),
+  ]) {
+    const bad = structuredClone(f.p);
+    change(bad);
+    assert.throws(() => validateInstalledTradePlan(bad));
+  }
+  const args = [
+    "custody",
+    "agents",
+    "--disposable-fixture",
+    "--prepare-host",
+    "--request-stdin",
+  ];
+  const cmd = remoteInstalledCommand(f.p, root + "/fased-app", args);
+  assert.equal(cmd.file, "/usr/bin/ssh");
+  for (const flag of [
+    "-oBatchMode=yes",
+    "-oStrictHostKeyChecking=yes",
+    "-oPasswordAuthentication=no",
+    "-oProxyCommand=none",
+    "-oClearAllForwardings=yes",
+  ])
+    assert.ok(cmd.args.includes(flag));
+  assert.deepEqual(
+    cmd.args.slice(-args.length - 4),
+    [
+      "-l",
+      f.p.remoteUser,
+      "--",
+      "fixture.tail123.ts.net",
+      root + "/fased-app",
+      ...args,
+    ].slice(1),
+  );
+  assert.throws(() =>
+    remoteInstalledCommand(f.p, root + "/fased-app", [
+      "agents",
+      "--request-stdin",
+    ]),
+  );
+  assert.throws(() =>
+    remoteInstalledCommand(f.p, "/usr/bin/sh", ["-c", "true"]),
+  );
+  assert.throws(() =>
+    remoteInstalledCommand(f.p, "/usr/bin/cat", ["/etc/shadow"]),
+  );
+});
+
+test("Remote held status is read from the authenticated matching private browser", async () => {
+  const f = remoteFixture();
+  const routes = {
+    health: {
+      status: "ok",
+      instanceId: f.p.instance,
+      connection: { location: "remote", transport: "private-https" },
+      capabilities: {
+        aiConnections: false,
+        financialExecution: false,
+        walletSigner: false,
+      },
+    },
+    "auth/state": {
+      authenticated: true,
+      remoteAccess: true,
+      remoteEnrolled: true,
+    },
+    "agents?profile=trading-analyst": {
+      profileId: "trading-analyst",
+      revision: 1,
+      financialExecution: false,
+      providerCallsEnabled: false,
+    },
+  };
+  const page = {
+    evaluate: async (_fn, { route }) => structuredClone(routes[route]),
+  };
+  assert.deepEqual(await remoteHeldStatus(f.p, page), {
+    instanceId: f.p.instance,
+    profileId: "trading-analyst",
+    revision: 1,
+    financialExecution: false,
+    providerCallsEnabled: false,
+  });
+  for (const change of [
+    (r) => (r.health.instanceId = "foreign"),
+    (r) => (r.health.connection.transport = "loopback"),
+    (r) => (r.health.capabilities.walletSigner = true),
+    (r) => (r["auth/state"].authenticated = false),
+    (r) => (r["auth/state"].remoteEnrolled = false),
+  ]) {
+    const bad = structuredClone(routes);
+    change(bad);
+    const other = {
+      evaluate: async (_fn, { route }) => structuredClone(bad[route]),
+    };
+    await assert.rejects(remoteHeldStatus(f.p, other));
+  }
+});
+
+test("Remote browser adapter uses real control methods and refuses foreign pages", async () => {
+  const f = remoteFixture(),
+    actions = [];
+  let selected = "";
+  const field = {
+    count: async () => 1,
+    click: async () => actions.push("click"),
+    fill: async (v) => {
+      selected = v;
+    },
+    inputValue: async () => selected,
+    selectOption: async (v) => {
+      selected = v;
+    },
+    getByRole: () => ({ count: async () => 1 }),
+    isVisible: async () => true,
+  };
+  const page = {
+    url: () => f.p.origin + "/?instance=" + f.p.instance,
+    getByRole: (role) =>
+      role === "navigation" ? { getByRole: () => field } : field,
+    getByLabel: () => field,
+    getByText: () => field,
+    evaluate: async (_fn, { agent }) =>
+      agent ? "trading-analyst" : f.p.accountId,
+  };
+  await remoteBrowserControl(f.p, page, {
+    frame: f.p.mainFrame,
+    action: "click",
+    role: "link",
+    name: "Fased",
+  });
+  await remoteBrowserControl(f.p, page, {
+    frame: f.p.mainFrame,
+    action: "click",
+    role: "link",
+    name: "Chat",
+  });
+  await remoteBrowserControl(f.p, page, {
+    frame: f.p.mainFrame,
+    action: "select-agent",
+    name: "Agent",
+    value: "Trading Analyst",
+  });
+  await remoteBrowserControl(f.p, page, {
+    frame: f.p.mainFrame,
+    action: "select",
+    name: "Wallet",
+    value: f.p.accountName,
+  });
+  await remoteBrowserControl(f.p, page, {
+    frame: f.p.mainFrame,
+    action: "set",
+    name: "Amount",
+    value: "12.5",
+  });
+  assert.deepEqual(actions, ["click", "click"]);
+  await assert.rejects(
+    remoteBrowserControl(
+      f.p,
+      { ...page, url: () => "https://foreign.example/" },
+      { frame: f.p.mainFrame, action: "click", role: "link", name: "Fased" },
+    ),
   );
 });
 test("real-control producer uses UI submission and installed CLI read; PASS requires restart", async () => {
