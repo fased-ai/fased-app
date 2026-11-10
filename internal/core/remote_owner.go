@@ -162,7 +162,7 @@ func (s *Store) remoteSession(ctx context.Context, id tailnet.Identity, code, ex
 	return token, nil
 }
 func (h *HTTPHandler) ownerSession(r *http.Request, token string) bool {
-	if h.custodyAccountsRequest(r) {
+	if h.custodyAccountsRequest(r) || h.custodyOnchainRequest(r) {
 		return true
 	}
 	if !h.store.Session(r.Context(), token) {

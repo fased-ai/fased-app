@@ -7,6 +7,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/onchain"
 	"github.com/fased-ai/fased-app/internal/onchaintest"
 	"github.com/fased-ai/fased-app/internal/signer"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,11 +19,32 @@ import (
 )
 
 func TestOrdinaryOnchainHTTPApprovalLockResultRecovery(t *testing.T) {
+	testOrdinaryOnchainHTTPApprovalLockResultRecovery(t, false)
+}
+
+func TestRemoteCustodyOnchainHTTPApprovalLockResultRecovery(t *testing.T) {
+	testOrdinaryOnchainHTTPApprovalLockResultRecovery(t, true)
+}
+
+func testOrdinaryOnchainHTTPApprovalLockResultRecovery(t *testing.T, remote bool) {
 	if runtime.GOOS != "linux" {
 		t.Skip("ordinary custody is Linux-only")
 	}
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
+	if remote {
+		id := tailnet.Identity{UserID: 1, NodeID: "owner-device", Login: "owner"}
+		remoteToken, err := s.remoteSession(t.Context(), id, "", token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = s.Logout(t.Context(), remoteToken); err != nil {
+			t.Fatal(err)
+		}
+		if err = s.Logout(t.Context(), token); err != nil {
+			t.Fatal(err)
+		}
+	}
 	dir := filepath.Join(t.TempDir(), "signer")
 	if e := os.Mkdir(dir, 0700); e != nil {
 		t.Fatal(e)
@@ -68,6 +90,12 @@ func TestOrdinaryOnchainHTTPApprovalLockResultRecovery(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	configureHandler := func() {
+		if remote {
+			handler.instanceLocation, handler.instanceOwnerUID, handler.instanceOwnerKind = "remote", 1000, "custody"
+		}
+	}
+	configureHandler()
 	request := func(action string, c SwapCommand, want int) AgentView {
 		t.Helper()
 		current, e := h.store.Agents(t.Context(), h.profile, "")
@@ -78,10 +106,18 @@ func TestOrdinaryOnchainHTTPApprovalLockResultRecovery(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/v1/agents", bytes.NewReader(body))
 		req.Header.Set("Origin", "http://127.0.0.1:7331")
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("X-CSRF-Token", csrfToken(token))
+		if remote {
+			req.Header.Set(custodyOnchainHeader, h.store.instanceID)
+		} else {
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("X-CSRF-Token", csrfToken(token))
+		}
 		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
+		if remote {
+			privateIPCHandler(handler).ServeHTTP(w, req)
+		} else {
+			handler.ServeHTTP(w, req)
+		}
 		if w.Code != want {
 			t.Fatalf("%s: got %d, want %d", action, w.Code, want)
 		}
@@ -149,6 +185,7 @@ func TestOrdinaryOnchainHTTPApprovalLockResultRecovery(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	configureHandler()
 	chain.Unknown = false
 	settled := request("swap-reconcile", SwapCommand{ID: queued.Onchain.Tasks[0].ID}, 200)
 	if settled.Onchain.Runs[0].Swap.State != "confirmed" || chain.Submissions != 1 || !v.Status().RecoveryRequired {

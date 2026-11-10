@@ -39,6 +39,7 @@ type Client struct {
 	localOwner      bool
 	remote          bool
 	custodyAccounts bool
+	custodyOnchain  bool
 }
 type SavedSession struct {
 	InstanceID string `json:"instanceId"`
@@ -86,6 +87,12 @@ func (c *Client) Do(ctx context.Context, method, route string, input, output any
 	if c.custodyAccounts && !custodyAccountsRoute(method, route) {
 		return errors.New("custody account access cannot authorize this operation")
 	}
+	if c.custodyOnchain {
+		u, err := url.ParseRequestURI(route)
+		if err != nil || !custodyOnchainRoute(method, u) {
+			return errors.New("custody Onchain access cannot authorize this operation")
+		}
+	}
 	var body io.Reader
 	if input != nil {
 		data, err := json.Marshal(input)
@@ -110,6 +117,9 @@ func (c *Client) Do(ctx context.Context, method, route string, input, output any
 	}
 	if c.custodyAccounts {
 		req.Header.Set(custodyAccountsHeader, c.Endpoint.InstanceID)
+	}
+	if c.custodyOnchain {
+		req.Header.Set(custodyOnchainHeader, c.Endpoint.InstanceID)
 	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
