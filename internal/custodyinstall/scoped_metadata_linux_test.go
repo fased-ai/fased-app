@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 func TestScopedUpdateMetadataUsesApprovedSource(t *testing.T) {
@@ -115,5 +117,70 @@ func TestScopedOrdinaryRepairInterruptionPreservesHistory(t *testing.T) {
 	after, err = os.ReadFile(dir + "/financial-history")
 	if err != nil || !bytes.Equal(after, history) || !tx.Signer.RecoveryHold {
 		t.Fatal("history or hold changed", err)
+	}
+}
+
+func TestScopedPairedUpdateRefusedRollbackRetainsHold(t *testing.T) {
+	tx, dir := modelTransaction(t)
+	o := modelOps(t, tx, dir)
+	history, err := os.ReadFile(dir + "/financial-history")
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := map[string][]byte{}
+	add := func(b []byte) { allowed[sum(b)] = bytes.Clone(b) }
+	digest := update.InstallDigest(tx.Binding)
+	for _, phase := range []string{"stopped", "core-replaced", "pair-replaced", "inventory-replaced", "started", "healthy-held", "rollback", "rollback-stopped", "rollback-core-replaced", "rollback-pair-replaced", "rollback-inventory-replaced", "rollback-started", "rolled-back-held"} {
+		add(mustJSON(phaseRecord{1, digest, phase}))
+	}
+	add(mustJSON(phaseRecord{1, digest, tx.Binding.Index.Binding.Pause.Request.IntentID}))
+	add(mustJSON(update.Installation{Version: 1, Binding: tx.Binding, Digest: digest, Phase: "active"}))
+	for _, b := range [][]byte{[]byte("old-core"), []byte("old-signer"), []byte("next-core"), []byte("next-signer"), mustJSON(tx.Base), mustJSON(tx.Target)} {
+		add(b)
+	}
+	denied := sum(mustJSON(phaseRecord{1, digest, "rollback"}))
+	o.verify = func(path, d string, size int64) error {
+		b, ok := allowed[d]
+		if !ok || d == denied || path != ApprovedExecutablePath(os.Getuid(), b) || size != int64(len(b)) {
+			return errors.New("approved input unavailable")
+		}
+		return nil
+	}
+	originalRun := o.run
+	o.run = func(ctx context.Context, input []byte, args ...string) ([]byte, error) {
+		if args[0] == "/usr/bin/install" && len(args) > 2 && strings.HasPrefix(args[len(args)-2], "/var/lib/fased-app-approved-") {
+			if len(input) != 0 {
+				t.Fatal("scoped input supplied through stdin")
+			}
+			b, ok := allowed[filepath.Base(args[len(args)-2])]
+			if !ok {
+				return nil, errors.New("unknown approved input")
+			}
+			input = bytes.Clone(b)
+		}
+		return originalRun(ctx, input, args...)
+	}
+	originalHealth := o.health
+	o.health = func(ctx context.Context, m Manifest) error {
+		if m.CoreHash == tx.Target.CoreHash {
+			return errors.New("simulated target health failure")
+		}
+		return originalHealth(ctx, m)
+	}
+	if _, err = runTransaction(t.Context(), tx, false, o); err == nil {
+		t.Fatal("missing approved rollback record accepted")
+	}
+	state, err := o.state(t.Context())
+	if err != nil || state.Phase != "active" || state.Digest != digest {
+		t.Fatal("signer hold changed after refusal", err)
+	}
+	denied = ""
+	result, err := runTransaction(t.Context(), tx, false, o)
+	if err != nil || result == nil || result.Phase != "rolled-back-held" || result.FinancialExecution || result.InstalledSequenceCommitted {
+		t.Fatal("rollback did not recover same held transaction", result, err)
+	}
+	after, err := os.ReadFile(dir + "/financial-history")
+	if err != nil || !bytes.Equal(after, history) {
+		t.Fatal("financial history changed", err)
 	}
 }
