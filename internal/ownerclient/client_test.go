@@ -22,12 +22,15 @@ func TestRemoteOwnerTargetVerifiedBeforePrivateInput(t *testing.T) {
 	i := intent()
 	peer := Peer{Version: 1, InstanceID: i.InstanceID, SignerID: strings.Repeat("b", 32), Network: i.Network, OwnerUID: 1007}
 	var calls int
-	client, err := open(t.Context(), i, "https://owner.example.ts.net", "alice", "/private/known_hosts", 1000, func(_ context.Context, path string, args []string, input []byte) ([]byte, error) {
+	client, err := open(t.Context(), i, "https://owner.example.ts.net:8443", "alice", "/private/known_hosts", 1000, func(_ context.Context, path string, args []string, input []byte) ([]byte, error) {
 		calls++
 		if path != "/usr/bin/ssh" || len(input) != 0 {
 			t.Fatal("preflight sent private input")
 		}
 		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "owner.example.ts.net:8443") || !strings.Contains(joined, "owner.example.ts.net") {
+			t.Fatal("HTTPS port leaked into SSH target", joined)
+		}
 		for _, flag := range []string{"-F /dev/null", "-T -a", "BatchMode=yes", "StrictHostKeyChecking=yes", "PasswordAuthentication=no", "KbdInteractiveAuthentication=no", "ClearAllForwardings=yes", "ProxyCommand=none", "ControlPath=none"} {
 			if !strings.Contains(joined, flag) {
 				t.Fatal("missing SSH boundary", flag)
@@ -60,6 +63,22 @@ func TestRemoteOwnerTargetVerifiedBeforePrivateInput(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("unknown host key admitted")
+	}
+}
+
+func TestPrivateWalletLinkRetainsIsolatedHTTPSPort(t *testing.T) {
+	i := intent()
+	origin := "https://owner.example.ts.net:8443"
+	link, err := Link(i.InstanceID, i.Network, i.Action, origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, got, err := ParseLink(link)
+	if err != nil || got != origin {
+		t.Fatal(got, err)
+	}
+	if _, err = Link(i.InstanceID, i.Network, i.Action, "https://owner.example.ts.net:22"); err == nil {
+		t.Fatal("privileged port accepted")
 	}
 }
 

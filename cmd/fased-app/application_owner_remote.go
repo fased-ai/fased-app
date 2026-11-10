@@ -54,6 +54,24 @@ func applicationOwnerClient(args []string, in *os.File, out, errOut io.Writer) e
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	if command.Action == "private-access" {
+		if image != m.Core || command.PrivateProof == nil || command.PrivateProof.Validate() != nil || command.ReaderBootstrap != nil || command.Lease != "" || command.Receipt != nil {
+			return errors.New("one private device proof required")
+		}
+		client, err := core.NewClient(ctx, m.Data)
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+		var proof core.PrivateAccessProof
+		if err = client.Do(ctx, "POST", "/api/v1/private-access/control", *command.PrivateProof, &proof); err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(core.ApplicationOwnerView{PrivateProof: &proof})
+	}
+	if command.PrivateProof != nil {
+		return errors.New("private proof cannot alter owner maintenance")
+	}
 	if result, handled, err := readerApplicationOwnerHelper(ctx, m, image, command); handled {
 		if err != nil {
 			return err

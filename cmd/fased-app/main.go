@@ -185,6 +185,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	remoteConfig := flags.String("remote-config", "", "immutable managed Remote installation identity")
 	custodyConfig := flags.String("custody-config", "", "root-owned managed fixture identity; never enables real wallets")
 	passwordStdin := flags.Bool("password-stdin", false, "read password from stdin instead of a terminal")
+	privateProofStdin := flags.Bool("private-proof-stdin", false, "verify a private Tailscale connection through owner IPC")
 	aiFixture := flags.Bool("ai-fixture", false, "development-only in-process provider fixtures; test credentials only, no live API")
 	sessionFixture := flags.Bool("session-fixture", false, "development-only bounded shadow session fixtures; no model, market or wallet")
 	interactive := flags.Bool("interactive", false, "walk through setup in the terminal")
@@ -196,6 +197,9 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	}
 	if *instanceLocation != "local" && *instanceLocation != "remote" {
 		return errors.New("instance location must be local or remote")
+	}
+	if *privateProofStdin && args[0] != "status" {
+		return errors.New("private access proof requires status")
 	}
 	installedProviderFixture := *aiFixture && *requireSandbox && *installationRoot != "" && *custodyConfig == "" && *researchOrigin == "" &&
 		(*instanceLocation == "local" && *remoteConfig == "" && *publicOrigin == "" || *instanceLocation == "remote" && *remoteConfig != "" && *publicOrigin != "")
@@ -314,6 +318,26 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	defer client.Close()
 	switch args[0] {
 	case "status":
+		if *privateProofStdin {
+			if in == nil {
+				return errors.New("private access proof input required")
+			}
+			data, readErr := io.ReadAll(io.LimitReader(in, 1025))
+			if readErr != nil || len(data) > 1024 {
+				return errors.New("bounded private access proof required")
+			}
+			var request core.PrivateAccessProofRequest
+			decoder := json.NewDecoder(strings.NewReader(string(data)))
+			decoder.DisallowUnknownFields()
+			if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || request.Validate() != nil {
+				return errors.New("one private access proof request required")
+			}
+			var proof core.PrivateAccessProof
+			if err = client.Do(ctx, http.MethodPost, "/api/v1/private-access/control", request, &proof); err != nil {
+				return err
+			}
+			return json.NewEncoder(out).Encode(proof)
+		}
 		var health core.Health
 		if err = client.Do(ctx, http.MethodGet, "/api/v1/health", nil, &health); err != nil {
 			return err

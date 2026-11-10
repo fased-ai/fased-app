@@ -24,6 +24,16 @@ it("opens only a public native wallet intent", () => {
     `fased://wallet-owner?action=setup&instance=${instance}&network=devnet&origin=https%3A%2F%2Fmy-server.ts.net`,
   );
   expect(
+    walletOwnerLink(
+      instance,
+      "devnet",
+      "setup",
+      "https://my-server.ts.net:8443",
+    ),
+  ).toBe(
+    `fased://wallet-owner?action=setup&instance=${instance}&network=devnet&origin=https%3A%2F%2Fmy-server.ts.net%3A8443`,
+  );
+  expect(
     walletOwnerLink(instance, "devnet", "import", "https://public.example"),
   ).toBe("");
   expect(

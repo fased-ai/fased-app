@@ -1011,6 +1011,14 @@ test("frozen plan and genuine receiver reject originals, drift and authority bef
 test("Remote plan and installed command pin owner, host, instance and fixed operations", () => {
   const f = remoteFixture();
   const { root } = validateInstalledTradePlan(f.p);
+  const isolated = structuredClone(f.p);
+  isolated.origin = "https://fixture.tail123.ts.net:8443";
+  validateInstalledTradePlan(isolated);
+  assert.ok(
+    remoteInstalledCommand(isolated, "/usr/bin/cat", [
+      root + "/install.json",
+    ]).args.includes("fixture.tail123.ts.net"),
+  );
   for (const [file, command] of [
     [
       root + "/fased-app",

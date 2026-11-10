@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 	"io"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -38,7 +38,7 @@ func connectCommand(args []string, out, errOut io.Writer) error {
 		return e
 	}
 	if result.Location == "remote" {
-		if !strings.HasPrefix(result.URL, "https://") || !strings.HasSuffix(result.URL, ".ts.net") {
+		if _, _, err := tailnet.Origin(result.URL); err != nil {
 			return errors.New("Remote requires its Tailscale HTTPS address")
 		}
 		dir := *dataDir

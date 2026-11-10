@@ -3,7 +3,10 @@
 package privateaccess
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +16,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -22,14 +24,19 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 )
 
 type Runner func(context.Context, ...string) ([]byte, error)
 type Manager struct {
-	Run       Runner
-	GetConfig func(context.Context) ([]byte, string, error)
-	SetConfig func(context.Context, []byte, string) error
-	Client    *http.Client
+	Run          Runner
+	GetConfig    func(context.Context) ([]byte, string, error)
+	SetConfig    func(context.Context, []byte, string) error
+	Client       *http.Client
+	Proof        func(context.Context, core.PrivateAccessProofRequest) (core.PrivateAccessProof, error)
+	ProofOut     io.Writer
+	ExpectedPeer *tailnet.Identity
+	InitialPeer  func() (tailnet.Identity, bool, error)
 }
 type Plan struct {
 	Mode         string   `json:"mode"`
@@ -128,7 +135,9 @@ func (m Manager) config(ctx context.Context) (map[string]any, string, error) {
 		return nil, "", errors.New("Tailscale did not provide conditional-write identity; no mutation is permitted")
 	}
 	var c map[string]any
-	if json.Unmarshal(data, &c) != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if decoder.Decode(&c) != nil || c == nil || decoder.Decode(new(any)) != io.EOF {
 		return nil, "", errors.New("invalid Serve configuration; refusing mutation")
 	}
 	// Some versions encode an unused optional section as null or an empty map.
@@ -142,8 +151,8 @@ func (m Manager) config(ctx context.Context) (map[string]any, string, error) {
 	return c, etag, nil
 }
 func expected(p Plan) map[string]any {
-	host := strings.TrimPrefix(p.Origin, "https://") + ":443"
-	return map[string]any{"TCP": map[string]any{"443": map[string]any{"HTTPS": true}}, "Web": map[string]any{host: map[string]any{"Handlers": map[string]any{"/": map[string]any{"Proxy": p.Target}}}}}
+	host, port, _ := tailnet.Origin(p.Origin)
+	return map[string]any{"TCP": map[string]any{port: map[string]any{"HTTPS": true}}, "Web": map[string]any{net.JoinHostPort(host, port): map[string]any{"Handlers": map[string]any{"/": map[string]any{"Proxy": p.Target}}}}}
 }
 func load(root string) (receipt, error) {
 	var r receipt
@@ -151,8 +160,11 @@ func load(root string) (receipt, error) {
 	if err != nil {
 		return r, err
 	}
-	if json.Unmarshal(data, &r) != nil || r.Schema != 1 || r.Plan.Mode != "tailscale" || (r.Phase != "preparing" && r.Phase != "ready" && r.Phase != "switching") || !dnsName.MatchString(strings.TrimPrefix(r.Plan.Origin, "https://")) {
+	if json.Unmarshal(data, &r) != nil || r.Schema != 1 || r.Plan.Mode != "tailscale" || (r.Phase != "preparing" && r.Phase != "ready" && r.Phase != "switching") {
 		return r, errors.New("unknown private-access receipt; preserve it for recovery")
+	}
+	if _, _, err := tailnet.Origin(r.Plan.Origin); err != nil {
+		return r, errors.New("unknown private-access origin; preserve it")
 	}
 	if r.Phase == "switching" {
 		if r.Next == nil || r.Next.Mode != "tailscale" || r.Next.Origin != r.Plan.Origin || !validTarget(r.Next.Target) || !strings.HasPrefix(r.Next.Target, "unix:") {
@@ -170,7 +182,7 @@ func (m Manager) Enable(ctx context.Context, root string, p Plan, instanceID str
 	if p.Mode != "tailscale" {
 		return nil
 	}
-	if !dnsName.MatchString(strings.TrimPrefix(p.Origin, "https://")) || !validTarget(p.Target) {
+	if _, _, err := routeParts(p); err != nil {
 		return errors.New("invalid private origin")
 	}
 	if err := core.EnsurePrivateDirectory(root); err != nil {
@@ -187,8 +199,9 @@ func (m Manager) Enable(ctx context.Context, root string, p Plan, instanceID str
 	}
 	r, err := load(root)
 	if errors.Is(err, os.ErrNotExist) {
-		if len(cfg) != 0 {
-			return errors.New("existing Serve/Funnel configuration belongs to the owner; refusing to replace or adopt it")
+		state, e := routeState(cfg, p)
+		if e != nil || state != "absent" {
+			return errors.New("existing private route belongs to the owner; refusing to replace or adopt it")
 		}
 		r = receipt{Schema: 1, Phase: "preparing", Plan: p}
 		if err = core.WritePrivateJSON(filepath.Join(root, "private-access.json"), r); err != nil {
@@ -201,8 +214,16 @@ func (m Manager) Enable(ctx context.Context, root string, p Plan, instanceID str
 	} else if r.Plan.Origin != p.Origin || r.Plan.Target != p.Target {
 		return errors.New("private-access identity changed; recover the existing route first")
 	}
-	if len(cfg) == 0 {
-		next, _ := json.Marshal(expected(p))
+	state, err := routeState(cfg, p)
+	if err != nil {
+		return err
+	}
+	if state == "absent" {
+		changed, e := routeChange(cfg, p, true)
+		if e != nil {
+			return e
+		}
+		next, _ := json.Marshal(changed)
 		if err = m.SetConfig(ctx, next, etag); err != nil {
 			return err
 		}
@@ -211,30 +232,55 @@ func (m Manager) Enable(ctx context.Context, root string, p Plan, instanceID str
 			return err
 		}
 	}
-	if !reflect.DeepEqual(cfg, expected(p)) {
+	if state, err = routeState(cfg, p); err != nil || state != "owned" {
 		return errors.New("Serve/Funnel configuration differs; no reset or overwrite was attempted")
 	}
 	if r.Phase == "preparing" {
 		err = m.waitForPreparingEndpoint(ctx, p, instanceID)
 	} else {
-		err = m.verifyEndpoint(ctx, p, instanceID)
+		err = m.Verify(ctx, p, instanceID)
 	}
 	if err != nil {
 		return err
-	}
-	// The owner may have changed Serve while the first certificate was issued.
-	cfg, _, err = m.config(ctx)
-	if err != nil {
-		return err
-	}
-	if !reflect.DeepEqual(cfg, expected(p)) {
-		return errors.New("Serve/Funnel configuration changed; private readiness was not recorded")
 	}
 	r.Phase = "ready"
 	return core.WritePrivateJSON(filepath.Join(root, "private-access.json"), r)
 }
 
 var errEndpointStarting = errors.New("private HTTPS is starting; retain SSH/console access")
+var errEndpointSelf = errors.New("verify private HTTPS from another approved Tailscale device; retain SSH/console access")
+
+// Status identifies a self-address; it never proves that another device can
+// reach Serve. Those checks must use an approved external device proof.
+func (m Manager) ownTailscaleOrigin(ctx context.Context, origin string) (bool, string, error) {
+	if m.Run == nil {
+		return false, "", nil
+	}
+	data, err := m.Run(ctx, "status", "--json")
+	if err != nil || len(data) > 1024*1024 {
+		return false, "", errors.New("cannot verify the local Tailscale device; preserve private access")
+	}
+	var status struct {
+		BackendState string
+		Self         struct {
+			ID      string
+			DNSName string
+			Online  bool
+		}
+	}
+	if json.Unmarshal(data, &status) != nil || status.BackendState != "Running" || !status.Self.Online {
+		return false, "", errors.New("the local Tailscale device is not ready; preserve private access")
+	}
+	name := strings.TrimSuffix(status.Self.DNSName, ".")
+	host, _, err := tailnet.Origin(origin)
+	if err != nil || !dnsName.MatchString(name) {
+		return false, "", errors.New("invalid Tailscale device identity")
+	}
+	if host == name && (status.Self.ID == "" || len(status.Self.ID) > 128) {
+		return false, "", errors.New("the serving Tailscale device identity is unavailable")
+	}
+	return host == name, status.Self.ID, nil
+}
 
 // A new Serve endpoint can take time to obtain its first certificate. Keep each
 // probe bounded, retry only transport startup, and never rewrite the route.
@@ -262,20 +308,45 @@ func (m Manager) waitForPreparingEndpoint(ctx context.Context, p Plan, instanceI
 // Verify checks the existing private route without changing Serve or owner state.
 // The exact inventory excludes Funnel and unrelated/foreign endpoints.
 func (m Manager) Verify(ctx context.Context, p Plan, instanceID string) error {
-	if p.Mode != "tailscale" || !strings.HasPrefix(p.Origin, "https://") || !dnsName.MatchString(strings.TrimPrefix(p.Origin, "https://")) {
+	if _, _, err := routeParts(p); err != nil {
 		return errors.New("private Tailscale HTTPS route required")
 	}
 	cfg, _, err := m.config(ctx)
 	if err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(cfg, expected(p)) {
+	if state, err := routeState(cfg, p); err != nil || state != "owned" {
 		return errors.New("Serve/Funnel configuration changed; preserve access and inspect it before lockdown")
 	}
-	return m.verifyEndpoint(ctx, p, instanceID)
+	if err := m.verifyEndpoint(ctx, p, instanceID); err != nil {
+		return err
+	}
+	// The proof takes place on another device, so recheck the owned route and
+	// Funnel boundary before using it for readiness or network lockdown.
+	cfg, _, err = m.config(ctx)
+	if err != nil {
+		return err
+	}
+	if state, err := routeState(cfg, p); err != nil || state != "owned" {
+		return errors.New("Serve/Funnel configuration changed during private verification")
+	}
+	return nil
 }
 
 func (m Manager) verifyEndpoint(ctx context.Context, p Plan, instanceID string) error {
+	self, selfID, err := m.ownTailscaleOrigin(ctx, p.Origin)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	}
+	if self {
+		if m.Proof == nil || m.ProofOut == nil {
+			return errEndpointSelf
+		}
+		return m.verifyFromDevice(ctx, p, instanceID, selfID)
+	}
 	client := &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("private access redirected") }}
 	if m.Client != nil {
 		client = m.Client
@@ -301,6 +372,66 @@ func (m Manager) verifyEndpoint(ctx context.Context, p Plan, instanceID string) 
 	}
 	return nil
 }
+
+// verifyFromDevice asks the existing private ingress to observe a one-use
+// challenge. The status reader is bound to app-owner IPC, and the core binds
+// confirmation to the Tailscale device that actually reached this instance.
+func (m Manager) verifyFromDevice(ctx context.Context, p Plan, instanceID, selfID string) error {
+	var random [32]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return err
+	}
+	token := base64.RawURLEncoding.EncodeToString(random[:])
+	request := core.PrivateAccessProofRequest{Action: "begin", Token: token}
+	proof, err := m.Proof(ctx, request)
+	if err != nil || proof.State != "pending" || proof.InstanceID != instanceID {
+		return errors.New("private access proof could not be started for this instance")
+	}
+	if _, err = fmt.Fprintf(m.ProofOut, "Open this private Fased link on your approved Tailscale device:\n%s/.fased-private-access#%s\n", p.Origin, token); err != nil {
+		return err
+	}
+	request.Action = "wait"
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		proof, err = m.Proof(ctx, request)
+		if err != nil {
+			return fmt.Errorf("private device confirmation did not complete: %w", err)
+		}
+		if proof.InstanceID != instanceID {
+			return errors.New("private confirmation reached a different instance")
+		}
+		if proof.State == "pending" {
+			// The normal IPC wait blocks for up to six seconds. A fast pending
+			// response must not create an unbounded helper-launch loop.
+			timer := time.NewTimer(250 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+			continue
+		}
+		if proof.State != "verified" || proof.UserID <= 0 || proof.NodeID == "" || proof.NodeID == selfID {
+			return errors.New("invalid private device confirmation")
+		}
+		if m.ExpectedPeer != nil && (proof.UserID != m.ExpectedPeer.UserID || proof.NodeID != m.ExpectedPeer.NodeID) {
+			return errors.New("private confirmation came from a different device")
+		}
+		if !proof.OwnerBound {
+			if m.InitialPeer == nil {
+				return errors.New("initial Remote device handoff is required before verification")
+			}
+			initial, found, e := m.InitialPeer()
+			if e != nil || !found || proof.UserID != initial.UserID || proof.NodeID != initial.NodeID {
+				return errors.New("private confirmation differs from the initial device handoff")
+			}
+		}
+		return nil
+	}
+}
 func (m Manager) Remove(ctx context.Context, root string) error {
 	r, err := load(root)
 	if errors.Is(err, os.ErrNotExist) {
@@ -318,15 +449,22 @@ func (m Manager) Remove(ctx context.Context, root string) error {
 	if err != nil {
 		return err
 	}
-	if len(cfg) != 0 {
-		if !reflect.DeepEqual(cfg, expected(r.Plan)) {
-			return errors.New("private route changed or has other owner routes; refusing removal")
+	state, err := routeState(cfg, r.Plan)
+	if err != nil {
+		return errors.New("private route changed; refusing removal")
+	}
+	if state == "owned" {
+		next, e := routeChange(cfg, r.Plan, false)
+		if e != nil {
+			return e
 		}
-		if err = m.SetConfig(ctx, []byte("{}"), etag); err != nil {
+		data, _ := json.Marshal(next)
+		if err = m.SetConfig(ctx, data, etag); err != nil {
 			return err
 		}
 		cfg, _, err = m.config(ctx)
-		if err != nil || len(cfg) != 0 {
+		state, e = routeState(cfg, r.Plan)
+		if err != nil || e != nil || state != "absent" {
 			return errors.New("route removal is not confirmed; retry after inspection")
 		}
 	}
@@ -340,8 +478,9 @@ func (m Manager) switchIngress(ctx context.Context, root string, r receipt, next
 	if r.Next != nil && (r.Next.Mode != next.Mode || r.Next.Origin != next.Origin || r.Next.Target != next.Target) {
 		return errors.New("another private ingress transition owns this receipt")
 	}
-	oldConfig, newConfig := expected(r.Plan), expected(next)
-	if !reflect.DeepEqual(cfg, oldConfig) && !reflect.DeepEqual(cfg, newConfig) {
+	oldState, _ := routeState(cfg, r.Plan)
+	newState, _ := routeState(cfg, next)
+	if oldState != "owned" && newState != "owned" {
 		return errors.New("private route changed; preserve its transition receipt")
 	}
 	if r.Phase != "switching" {
@@ -351,8 +490,16 @@ func (m Manager) switchIngress(ctx context.Context, root string, r receipt, next
 			return err
 		}
 	}
-	if reflect.DeepEqual(cfg, oldConfig) {
-		data, _ := json.Marshal(newConfig)
+	if oldState == "owned" {
+		removed, err := routeChange(cfg, r.Plan, false)
+		if err != nil {
+			return err
+		}
+		changed, err := routeChange(removed, next, true)
+		if err != nil {
+			return err
+		}
+		data, _ := json.Marshal(changed)
 		if err := m.SetConfig(ctx, data, etag); err != nil {
 			return err
 		}
@@ -364,7 +511,7 @@ func (m Manager) switchIngress(ctx context.Context, root string, r receipt, next
 	if err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(current, newConfig) {
+	if state, err := routeState(current, next); err != nil || state != "owned" {
 		return errors.New("private route changed before transition completion")
 	}
 	return core.WritePrivateJSON(filepath.Join(root, "private-access.json"), receipt{Schema: 1, Phase: "ready", Plan: next})

@@ -9,11 +9,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/signer"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 )
 
 // Link carries public intent only. It never selects an executable, SSH account,
@@ -29,8 +29,7 @@ func Link(instance, network, action, origin string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		u, err := url.Parse(canonical)
-		if err != nil || u.Scheme != "https" || !strings.HasSuffix(u.Hostname(), ".ts.net") || u.Port() != "" {
+		if _, _, err = tailnet.Origin(canonical); err != nil {
 			return "", errors.New("wallet link requires the private Tailscale origin")
 		}
 		q.Set("origin", canonical)

@@ -87,7 +87,12 @@ func (m Manager) WithServeAuthorization(authorize func(context.Context, []byte, 
 			return err
 		}
 		if _, e := serveCommand(data, etag); e != nil {
-			return e
+			if m.GetConfig == nil {
+				return e
+			}
+			if _, e = serveRawCommand(data, etag); e != nil {
+				return e
+			}
 		}
 		// Only a definite permission refusal (403 or the recognized Unix401)
 		// proves this attempt did not commit. A timeout, conflict or other
@@ -160,6 +165,24 @@ func serveCommand(data []byte, etag string) ([]string, error) {
 			return nil, errors.New("only the owned private Unix Serve endpoint may be authorized")
 		}
 	}
+	return serveRawCommand(data, etag)
+}
+
+// The OS runner must additionally compare this body against the daemon's
+// current ETag and the caller's recorded route before admitting a write.
+func serveRawCommand(data []byte, etag string) ([]string, error) {
+	if !serveETag.MatchString(etag) || len(data) > 16*1024 {
+		return nil, errors.New("invalid private Serve conditional request")
+	}
+	var cfg map[string]any
+	d := json.NewDecoder(bytes.NewReader(data))
+	d.UseNumber()
+	if d.Decode(&cfg) != nil || cfg == nil || d.Decode(new(any)) != io.EOF {
+		return nil, errors.New("invalid private Serve configuration")
+	}
+	if _, _, err := inventory(cfg); err != nil {
+		return nil, err
+	}
 	args := append([]string(nil), serveCurlPrefix...)
 	return append(args, "If-Match: "+etag, "--data-binary", "@-", "--write-out", "%{http_code}", "http://local-tailscaled.sock/localapi/v0/serve-config"), nil
 }
@@ -179,7 +202,7 @@ func AllowedServeCommand(input []byte, args []string) bool {
 }
 
 func SetServeWithOS(ctx context.Context, data []byte, etag string, run func(context.Context, []byte, ...string) ([]byte, error)) error {
-	args, err := serveCommand(data, etag)
+	args, err := serveRawCommand(data, etag)
 	if err != nil {
 		return err
 	}

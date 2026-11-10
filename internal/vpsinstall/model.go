@@ -48,12 +48,13 @@ type Manifest struct {
 }
 
 type ServiceStatus struct {
-	Installed  bool   `json:"installed"`
-	Active     bool   `json:"active"`
-	Unit       string `json:"unit"`
-	State      string `json:"state"`
-	InstanceID string `json:"instanceId,omitempty"`
-	URL        string `json:"url,omitempty"`
+	Installed   bool   `json:"installed"`
+	Active      bool   `json:"active"`
+	Unit        string `json:"unit"`
+	State       string `json:"state"`
+	InstanceID  string `json:"instanceId,omitempty"`
+	URL         string `json:"url,omitempty"`
+	RemoteReady bool   `json:"-"`
 }
 
 func Root(owner int) string        { return fmt.Sprintf("/var/lib/fased-app-vps-%d", owner) }

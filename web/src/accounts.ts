@@ -1,3 +1,5 @@
+import { instanceOrigin } from "./connection";
+
 export type AccountRef = {
   version: number;
   signerId: string;
@@ -108,19 +110,7 @@ export function walletOwnerLink(
   const q = new URLSearchParams({ action, instance, network });
   if (origin) {
     try {
-      const u = new URL(origin);
-      if (
-        u.protocol !== "https:" ||
-        !u.hostname.endsWith(".ts.net") ||
-        u.port ||
-        u.username ||
-        u.password ||
-        u.search ||
-        u.hash ||
-        u.pathname !== "/"
-      )
-        return "";
-      q.set("origin", u.origin);
+      q.set("origin", instanceOrigin(origin));
     } catch {
       return "";
     }

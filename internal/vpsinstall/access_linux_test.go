@@ -147,9 +147,12 @@ func activeAccessFixture(t *testing.T) (*memoryHost, hostOps, Manifest) {
 func TestRemoteAccessChangePreservesIdentityAndRollsBack(t *testing.T) {
 	h, o, m := activeAccessFixture(t)
 	data := append([]byte(nil), h.files[m.Core].Data...)
-	next, e := changeAccess(t.Context(), o, m, "https://node.owner.ts.net", func(context.Context, Manifest) error { return nil })
+	next, e := changeAccess(t.Context(), o, m, "https://node.owner.ts.net:8443", func(context.Context, Manifest) error { return nil })
 	if e != nil {
 		t.Fatal(e)
+	}
+	if next.PublicOrigin != "https://node.owner.ts.net:8443" {
+		t.Fatal("private access lost its isolated port")
 	}
 	same := next
 	same.PublicOrigin = m.PublicOrigin

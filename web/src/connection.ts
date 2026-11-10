@@ -14,11 +14,14 @@ export function instanceOrigin(value: string): string {
     throw new Error("Enter an HTTPS instance address.");
   }
   const host = url.hostname.toLowerCase();
+  const explicitPort = input.match(/:(\d+)\/?$/)?.[1] ?? "";
   if (
     url.protocol !== "https:" ||
-    !host.endsWith(".ts.net") ||
-    url.port ||
-    /:\d+\/?$/.test(input)
+    !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.ts\.net$/.test(
+      host,
+    ) ||
+    (explicitPort !== "" && explicitPort !== url.port) ||
+    (url.port !== "" && Number(url.port) < 1024)
   )
     throw new Error("Remote requires its Tailscale HTTPS address.");
   if (
@@ -32,7 +35,7 @@ export function instanceOrigin(value: string): string {
       "Use an instance origin without credentials, path, query or fragment.",
     );
   if (
-    (url.port && (Number(url.port) < 1 || Number(url.port) > 65535)) ||
+    (url.port && (Number(url.port) < 1024 || Number(url.port) > 65535)) ||
     /:\/?$/.test(input)
   )
     throw new Error("Invalid instance port.");

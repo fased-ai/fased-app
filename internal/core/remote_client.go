@@ -4,16 +4,16 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/url"
-	"strings"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/tailnet"
 )
 
 // NewRemoteClient is deliberately separate from NewClient's OS-owner socket.
 // It grants no local/maintenance IPC authority and follows no redirects/proxy.
 func NewRemoteClient(ctx context.Context, origin, instanceID string) (*Client, error) {
-	parsed, err := url.Parse(origin)
-	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.Port() != "" || !strings.HasSuffix(parsed.Hostname(), ".ts.net") || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.ForceQuery || parsed.String() != origin || len(instanceID) < 16 || len(instanceID) > 128 {
+	_, _, err := tailnet.Origin(origin)
+	if err != nil || len(instanceID) < 16 || len(instanceID) > 128 {
 		return nil, errors.New("choose the verified Tailscale instance with fased connect")
 	}
 	transport := &http.Transport{Proxy: nil, TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 10 * time.Second, DisableCompression: true}

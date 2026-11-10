@@ -41,3 +41,15 @@ func TestRemoteAgentsHelperFixedCommand(t *testing.T) {
 		t.Fatal("Local installation admitted")
 	}
 }
+
+func TestRemotePrivateProofUsesFixedAppUIDStatus(t *testing.T) {
+	tx, _, _, _ := ordinaryBootstrapModel(t, true)
+	m := tx.Base
+	input := bytes.NewBufferString(`{"action":"begin","token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}`)
+	cmd := appClientCommand(t.Context(), m, "status", []string{"--private-proof-stdin"}, input, io.Discard, io.Discard)
+	want := append([]string{"/usr/bin/sudo", "-n", "--"}, appArgs(m, "status")...)
+	want = append(want, "--private-proof-stdin")
+	if !reflect.DeepEqual(cmd.Args, want) || cmd.Stdin != input {
+		t.Fatal("private proof changed app-UID boundary", cmd.Args)
+	}
+}

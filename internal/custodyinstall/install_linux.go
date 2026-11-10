@@ -359,6 +359,11 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 	if e = installNativePolicy(ctx, m, s); e != nil {
 		return m, e
 	}
+	if m.Enrollment && m.Location == "remote" && m.PublicOrigin != "" {
+		if e = installRemoteProofPolicy(ctx, m, s); e != nil {
+			return m, e
+		}
+	}
 	if o.StageOnly {
 		return m, nil
 	}

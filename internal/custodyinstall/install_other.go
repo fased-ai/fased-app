@@ -5,6 +5,7 @@ package custodyinstall
 import (
 	"context"
 	"errors"
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/update"
 	"io"
 )
@@ -25,6 +26,10 @@ func Remove(context.Context, Manifest, *System) error                           
 func Control(context.Context, Manifest, string, string, *System) error           { return unsupported }
 func (*System) AppHelper(context.Context, Manifest, bool, bool, io.Writer) error { return unsupported }
 func (*System) UpdateStatus(context.Context, Manifest, io.Writer) error          { return unsupported }
+func (*System) PrivateAccessProof(context.Context, Manifest, core.PrivateAccessProofRequest) (core.PrivateAccessProof, error) {
+	return core.PrivateAccessProof{}, unsupported
+}
+func (*System) PreparePrivateAccessProof(context.Context, Manifest) error { return unsupported }
 func (*System) UpdatePreferences(context.Context, Manifest, bool, io.Writer) error {
 	return unsupported
 }

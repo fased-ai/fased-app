@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +17,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/signer"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 )
 
 type Peer struct {
@@ -85,11 +85,11 @@ func locate(ctx context.Context, intent signer.OwnerIntent, origin, user, pins s
 	c := &Client{Intent: intent, knownHosts: pins, run: execute}
 	if origin != "" {
 		canonical, err := connection.Origin(origin)
-		u, parseErr := url.Parse(canonical)
-		if err != nil || parseErr != nil || u.Scheme != "https" || !strings.HasSuffix(u.Hostname(), ".ts.net") || u.Port() != "" || !sshUser.MatchString(user) {
+		host, _, parseErr := tailnet.Origin(canonical)
+		if err != nil || parseErr != nil || !sshUser.MatchString(user) {
 			return nil, errors.New("choose the private Tailscale instance and its non-root OS owner")
 		}
-		c.host, c.user = u.Hostname(), user
+		c.host, c.user = host, user
 		b, err := c.invoke(ctx, "/usr/bin/id", []string{"-u"}, nil)
 		if err != nil {
 			return nil, errors.New("private owner connection requires an existing verified SSH host key and key-only access")
