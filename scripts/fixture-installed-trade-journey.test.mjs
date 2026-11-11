@@ -7,7 +7,9 @@ import {
   readFile,
   writeFile,
   mkdtemp,
+  readdir,
   rm,
+  stat,
   symlink,
   unlink,
 } from "node:fs/promises";
@@ -340,10 +342,10 @@ test("whole-journey OS lock is released when its holder dies", async (t) => {
     "./fixture-installed-trade-journey.mjs",
     import.meta.url,
   ).href;
-  const script = `import { withInstalledTradeLock } from ${JSON.stringify(module)}; await withInstalledTradeLock(process.argv[1], async () => { console.log("READY"); await new Promise(() => setInterval(() => {}, 1000)); });`;
+  const script = `import { withInstalledTradeLock } from ${JSON.stringify(module)}; await withInstalledTradeLock(process.argv[1], async () => { console.log("READY"); await new Promise(() => setInterval(() => global.gc(), 10)); });`;
   const child = spawn(
     process.execPath,
-    ["--input-type=module", "-e", script, dir],
+    ["--expose-gc", "--input-type=module", "-e", script, dir],
     { stdio: ["ignore", "pipe", "pipe"] },
   );
   t.after(() => {
@@ -364,8 +366,40 @@ test("whole-journey OS lock is released when its holder dies", async (t) => {
     }),
   ]);
   assert.match(String(ready), /READY/);
+  // Force collection while the holder is alive; an orphaned async chain must
+  // not cause Node's FileHandle finalizer to drop the OS lock.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(child.exitCode, null, "lock holder exited before contention");
+  const directory = await stat(dir);
+  const snapshot = async (pid) => {
+    const descriptors = [];
+    let entries;
+    try {
+      entries = await readdir(`/proc/${pid}/fd`);
+    } catch (error) {
+      if (error.code === "ENOENT") return { pid, exited: true };
+      throw error;
+    }
+    for (const fd of entries) {
+      try {
+        const file = await stat(`/proc/${pid}/fd/${fd}`);
+        if (file.dev === directory.dev && file.ino === directory.ino) {
+          const info = await readFile(`/proc/${pid}/fdinfo/${fd}`, "utf8");
+          descriptors.push({ fd, locks: info.match(/^lock:.*$/gm) ?? [] });
+        }
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+    return { pid, descriptors };
+  };
+  t.diagnostic(`lock holder: ${JSON.stringify(await snapshot(child.pid))}`);
   await assert.rejects(
-    withInstalledTradeLock(dir, async () => {}),
+    withInstalledTradeLock(dir, async () => {
+      t.diagnostic(
+        `unexpected overlap: ${JSON.stringify({ holder: await snapshot(child.pid), contender: await snapshot(process.pid) })}`,
+      );
+    }),
     /another.*running/i,
   );
   const exited = once(child, "exit");

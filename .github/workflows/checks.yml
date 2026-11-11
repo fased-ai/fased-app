@@ -532,6 +532,10 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: true
+      - name: Prepare signed Ubuntu sources for installed enrollment
+        run: |
+          node scripts/ci-ubuntu-mirror.mjs
+          sudo install -m 0644 .evidence/ubuntu.sources /etc/apt/sources.list.d/ubuntu.sources
       - run: npm ci
       - run: npm run build && npm run build:core
       - run: go build -o .evidence/bin/fased-signer ./cmd/fased-signer

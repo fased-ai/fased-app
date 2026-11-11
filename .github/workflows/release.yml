@@ -161,6 +161,9 @@ jobs:
           cache: true
       - name: Prepare the existing disposable Ubuntu acceptance runner
         run: |
+          node --test scripts/ci-ubuntu-mirror.test.mjs
+          node scripts/ci-ubuntu-mirror.mjs
+          sudo install -m 0644 .evidence/ubuntu.sources /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends qemu-system-x86 qemu-utils xorriso
           # Same owner-only policy as inspection-acceptance.yml; an ad-hoc
@@ -173,6 +176,17 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
           mkdir -p .evidence/ubuntu-release-predecessor
+          # If Canonical's image host is unavailable, use only the identical
+          # pinned image from a public mirror; a digest mismatch fails closed.
+          if [[ ! -e .evidence/p4-fault-reboot/ubuntu.img ]] && ! curl -fsSI --connect-timeout 5 --max-time 10 https://cloud-images.ubuntu.com/minimal/releases/noble/release-20261017/ubuntu-24.04-minimal-cloudimg-amd64.img >/dev/null; then
+            mkdir -p .evidence/p4-fault-reboot
+            fased_vm_image="$(mktemp .evidence/p4-fault-reboot/.ubuntu-image.XXXXXX)"
+            trap 'rm -f -- "$fased_vm_image"' EXIT
+            curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 300 --max-filesize 260000000 https://linux3.yz.yamagata-u.ac.jp/pub/linux/ubuntu-cloud-images/minimal/releases/noble/release-20261017/ubuntu-24.04-minimal-cloudimg-amd64.img --output "$fased_vm_image"
+            printf '%s  %s\n' 'b3296484e362ba2e713489a5de6225c719d9500962bde25d15f2f21e512c7658' "$fased_vm_image" | sha256sum --check --status
+            mv -- "$fased_vm_image" .evidence/p4-fault-reboot/ubuntu.img
+            trap - EXIT
+          fi
       - name: Acquire the actual immutable public Local predecessor
         env:
           GH_TOKEN: ${{ github.token }}
@@ -181,6 +195,7 @@ jobs:
       - name: Run the actual released-predecessor Local journey only
         env:
           FASED_DISPOSABLE_VM_ACCEPTANCE: "1"
+          FASED_CI_SIGNED_UBUNTU_MIRROR: "kernel"
         run: python3 scripts/check-inspection-vm.py --staged-package-only --released-local-only --installed-agent --candidate .evidence/ubuntu-release --predecessor .evidence/ubuntu-release-predecessor --legacy-predecessor .evidence/ubuntu-release-predecessor
       - name: Remove only the owned CI KVM rule
         if: always()

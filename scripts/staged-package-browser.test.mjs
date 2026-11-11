@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   browserAddress,
   installedAccount,
+  installedConversationAccount,
   installedNavigate,
   stopInstalledReply,
   installedTaskSchedule,
@@ -725,7 +726,11 @@ test("installed-agent producer binds observed stages and refuses missing or subs
     rebooted: true,
     revoked: true,
     checks: Object.fromEntries(
-      stagedAcceptanceContract.installedAgent.map((k) => [k, "PASS"]),
+      [
+        ...stagedAcceptanceContract.installedAgent,
+        "namedConversation",
+        "notificationResult",
+      ].map((k) => [k, "PASS"]),
     ),
   };
   const input = {
@@ -748,6 +753,18 @@ test("installed-agent producer binds observed stages and refuses missing or subs
   assert.equal(receipt.instanceIdentitySha256, hash(observed.instanceId));
   assert.equal(receipt.evidenceSha256, hash(input.observedRaw));
   assert.throws(() => installedAgentReceipt({ ...input, observedRaw: "{}" }));
+  for (const key of ["namedConversation", "notificationResult"]) {
+    const checks = { ...observed.checks };
+    delete checks[key];
+    const incomplete = { ...observed, checks };
+    assert.throws(() =>
+      installedAgentReceipt({
+        ...input,
+        observed: incomplete,
+        observedRaw: JSON.stringify(incomplete),
+      }),
+    );
+  }
   for (const change of [
     { result: "FAIL" },
     { serviceRestart: undefined },
@@ -849,7 +866,11 @@ test("receipt CLI writes the same typed receipt consumed by the gate without ope
     rebooted: true,
     revoked: true,
     checks: Object.fromEntries(
-      stagedAcceptanceContract.installedAgent.map((k) => [k, "PASS"]),
+      [
+        ...stagedAcceptanceContract.installedAgent,
+        "namedConversation",
+        "notificationResult",
+      ].map((k) => [k, "PASS"]),
     ),
   };
   const observedRaw = JSON.stringify(observed, null, 2) + "\n";
@@ -903,6 +924,32 @@ test("installed account reads use existing collection API and preserve account i
     ),
     /exact unique/,
   );
+});
+
+test("conversation fixture admission refuses ambiguous or locked existing accounts", async () => {
+  const account = {
+    name: "Installed conversation account",
+    ref: "other",
+    provider: "openai",
+    locked: false,
+    testOnly: true,
+    liveCallsEnabled: false,
+  };
+  for (const connections of [
+    [account, account],
+    [{ ...account, locked: true }],
+    [{ ...account, testOnly: false }],
+  ]) {
+    let writes = 0;
+    const request = async (_route, method) => {
+      if (method === "POST") writes++;
+      return { connections };
+    };
+    await assert.rejects(
+      installedConversationAccount(request, "fixture-only", "default"),
+    );
+    assert.equal(writes, 0);
+  }
 });
 
 test("installed navigation keeps one UI profile context across internal pages", async () => {
