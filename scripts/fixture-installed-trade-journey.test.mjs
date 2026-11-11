@@ -342,10 +342,10 @@ test("whole-journey OS lock is released when its holder dies", async (t) => {
     "./fixture-installed-trade-journey.mjs",
     import.meta.url,
   ).href;
-  const script = `import { withInstalledTradeLock } from ${JSON.stringify(module)}; await withInstalledTradeLock(process.argv[1], async () => { console.log("READY"); await new Promise(() => setInterval(() => {}, 1000)); });`;
+  const script = `import { withInstalledTradeLock } from ${JSON.stringify(module)}; await withInstalledTradeLock(process.argv[1], async () => { console.log("READY"); await new Promise(() => setInterval(() => global.gc(), 10)); });`;
   const child = spawn(
     process.execPath,
-    ["--input-type=module", "-e", script, dir],
+    ["--expose-gc", "--input-type=module", "-e", script, dir],
     { stdio: ["ignore", "pipe", "pipe"] },
   );
   t.after(() => {
@@ -366,6 +366,10 @@ test("whole-journey OS lock is released when its holder dies", async (t) => {
     }),
   ]);
   assert.match(String(ready), /READY/);
+  // Force collection while the holder is alive; an orphaned async chain must
+  // not cause Node's FileHandle finalizer to drop the OS lock.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(child.exitCode, null, "lock holder exited before contention");
   const directory = await stat(dir);
   const snapshot = async (pid) => {
     const descriptors = [];
