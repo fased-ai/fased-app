@@ -108,6 +108,8 @@ export function AgentTasks({
     agents,
     focusedTask,
     setFocusedTask,
+    focusedRun,
+    setFocusedRun,
     taskComposerDrafts,
     setTaskComposerDrafts,
   } = useWorkspace();
@@ -176,6 +178,18 @@ export function AgentTasks({
       setSelected(focusedTask);
     setFocusedTask("");
   }, [focusedTask, tasks, setFocusedTask, setPanel]);
+  useEffect(() => {
+    if (!focusedRun) return;
+    if (
+      focusedRun.instanceId === instanceId &&
+      focusedRun.profileId === v.profileId &&
+      v.runs.some(
+        (run) => run.id === focusedRun.id && run.profileId === v.profileId,
+      )
+    )
+      showRun(focusedRun.id);
+    setFocusedRun(null);
+  }, [focusedRun, instanceId, v.profileId, v.runs, setFocusedRun]);
   const selectedRun = v.runs.filter((r) => r.taskId === selected).at(-1);
   useEffect(() => {
     if (!createdFrom) return;

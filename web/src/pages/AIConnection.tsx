@@ -96,7 +96,7 @@ export function useAIConnection() {
     } catch {
       if (epoch === generation.current) {
         setView(null);
-        setError("Connection unavailable. Try again; preserve the vault.");
+        setError("Connection unavailable");
       }
       return null;
     }
@@ -242,6 +242,7 @@ export function AIConnectionSettings({
         : root;
   const [key, setKey] = useState("");
   const [endpoint, setEndpoint] = useState(defaultLocalEndpoint);
+  const [serverPreset, setServerPreset] = useState(defaultLocalEndpoint);
   const [workspace, setWorkspace] = useState("");
   useEffect(() => {
     setWorkspace(view?.workspace || "");
@@ -262,7 +263,9 @@ export function AIConnectionSettings({
         ? view.locked
           ? ""
           : view.endpoint || ""
-        : defaultLocalEndpoint,
+        : isLocal
+          ? serverPreset
+          : defaultLocalEndpoint,
     );
   }, [
     core.instanceId,
@@ -271,6 +274,7 @@ export function AIConnectionSettings({
     view?.ref,
     view?.locked,
     view?.endpoint,
+    serverPreset,
   ]);
   const catalogProvider = root?.catalog?.providers.find(
     (p) => p.id === provider,
@@ -387,6 +391,8 @@ export function AIConnectionSettings({
     setNewProvider(id);
     setGoogleProject("");
     setNewMethod(id === "local" ? "local" : "api-key");
+    setServerPreset(defaultLocalEndpoint);
+    setEndpoint(defaultLocalEndpoint);
     setName("");
     setKey("");
     setPassphrase("");
@@ -443,7 +449,7 @@ export function AIConnectionSettings({
               className="agent-record-body"
               role={error ? "alert" : "status"}
             >
-              {error || uiText("Loading…")}
+              {error ? uiText(error) : uiText("Loading…")}
               {error && (
                 <button className="text-button" onClick={() => void refresh()}>
                   {uiText("Reload")}
@@ -463,6 +469,35 @@ export function AIConnectionSettings({
                 <span>{uiText(p.name)}</span>
                 <Plus size={14} />
               </button>
+              {p.id === "local" &&
+                p.servers
+                  ?.filter(
+                    (s) =>
+                      !search ||
+                      p.name.toLowerCase().includes(search.toLowerCase()) ||
+                      s.name.toLowerCase().includes(search.toLowerCase()),
+                  )
+                  .map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      className="provider-account"
+                      aria-label={`${uiText("Connect")} ${s.name}`}
+                      aria-pressed={
+                        selected === "new" && isLocal && server?.id === s.id
+                      }
+                      disabled={busy || !!signIn}
+                      onClick={() => {
+                        if (selected !== "new" || !isLocal)
+                          chooseProvider("local");
+                        else setKey("");
+                        setServerPreset(s.endpoint);
+                        setEndpoint(s.endpoint);
+                      }}
+                    >
+                      <span>{s.name}</span>
+                    </button>
+                  ))}
               {root?.connections
                 ?.filter(
                   (a) =>
@@ -532,6 +567,7 @@ export function AIConnectionSettings({
                 setNewMethod(newProvider === "local" ? "local" : "api-key");
                 setCallback("");
                 setKey("");
+                setServerPreset(defaultLocalEndpoint);
                 setEndpoint(defaultLocalEndpoint);
                 setPassphrase("");
               }}
@@ -600,28 +636,6 @@ export function AIConnectionSettings({
                 </button>
               </div>
             )}
-            {isLocal && !view?.ref && (
-              <div
-                className="provider-methods provider-servers"
-                aria-label={uiText("Server")}
-              >
-                {servers.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    className="secondary"
-                    aria-pressed={server?.id === s.id}
-                    onClick={() => {
-                      setEndpoint(s.endpoint);
-                      setKey("");
-                    }}
-                    disabled={busy}
-                  >
-                    {s.name}
-                  </button>
-                ))}
-              </div>
-            )}
             <p className="connection-status" role="status">
               {view?.ref
                 ? `${uiText(view.planPaused ? "Paused" : view.locked ? (view.taskAccess ? "Chat locked" : "Locked") : "Unlocked")} · ${providerName}`
@@ -636,7 +650,7 @@ export function AIConnectionSettings({
                 {uiText(pausedFailure?.summary || "Provider unavailable")}
               </p>
             )}
-            {error && <p role="alert">{error}</p>}
+            {error && <p role="alert">{uiText(error)}</p>}
             {root && selected && selected !== "new" && !view && (
               <p role="alert">{uiText("Previous connection unavailable")}</p>
             )}
