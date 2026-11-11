@@ -161,6 +161,9 @@ jobs:
           cache: true
       - name: Prepare the existing disposable Ubuntu acceptance runner
         run: |
+          node --test scripts/ci-ubuntu-mirror.test.mjs
+          node scripts/ci-ubuntu-mirror.mjs
+          sudo install -m 0644 .evidence/ubuntu.sources /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends qemu-system-x86 qemu-utils xorriso
           # Same owner-only policy as inspection-acceptance.yml; an ad-hoc

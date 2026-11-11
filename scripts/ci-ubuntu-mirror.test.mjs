@@ -44,6 +44,25 @@ test("VM prerequisites use the same trusted archive without extending the job", 
     /sudo (?:node|npm|bash)|allow-unauthenticated|trusted=yes/,
   );
 });
+test("release acceptance prepares its runner through the trusted Ubuntu archive", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/release.yml", import.meta.url),
+    "utf8",
+  );
+  const setup = workflow
+    .split(
+      "- name: Prepare the existing disposable Ubuntu acceptance runner",
+    )[1]
+    .split("- name: Acquire the actual immutable public Local predecessor")[0];
+  assert.match(
+    setup,
+    /node scripts\/ci-ubuntu-mirror.mjs\n\s+sudo install -m 0644 .evidence\/ubuntu.sources \/etc\/apt\/sources.list.d\/ubuntu.sources\n\s+sudo apt-get update/,
+  );
+  assert.doesNotMatch(
+    setup,
+    /sudo (?:node|npm|bash)|allow-unauthenticated|trusted=yes/,
+  );
+});
 test("the official runner mirror-list source bypasses Azure without changing trust", () => {
   const mirrorList = source.replace(
     "http://azure.archive.ubuntu.com/ubuntu/",

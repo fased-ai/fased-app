@@ -47,6 +47,8 @@ export function installedAgentReceipt({
     assert.equal(observed[key], true, `observed ${key} required`);
   for (const key of ["testCodeOverlay", "realProviderCalls"])
     assert.equal(observed[key], false);
+  for (const key of ["namedConversation", "notificationResult"])
+    assert.equal(observed.checks?.[key], "PASS", `observed ${key} required`);
   assert.equal(observed.result, "PASS");
   assert.ok(
     typeof observed.instanceId === "string" && observed.instanceId.length > 16,
@@ -247,6 +249,36 @@ export async function installedAccount(request, ref) {
   const matches = view.connections?.filter((c) => c.ref === ref) ?? [];
   assert.equal(matches.length, 1, "exact unique installed account required");
   return matches[0];
+}
+
+export async function installedConversationAccount(
+  request,
+  passphrase,
+  defaultRef,
+) {
+  const name = "Installed conversation account";
+  const prior =
+    (await request("ai/connection")).connections?.filter(
+      (c) => c.name === name,
+    ) ?? [];
+  assert.ok(prior.length <= 1, "ambiguous conversation fixture account");
+  const account =
+    prior[0] ??
+    (await request("ai/connection", "POST", {
+      action: "add",
+      provider: "openai",
+      credentialMode: "test",
+      name,
+      key: "fased-test-installed-conversation-key",
+      passphrase,
+    }));
+  assert.equal(account.provider, "openai");
+  assert.ok(typeof account.ref === "string" && account.ref.length > 0);
+  assert.notEqual(account.ref, defaultRef);
+  assert.equal(account.locked, false);
+  assert.equal(account.testOnly, true);
+  assert.equal(account.liveCallsEnabled, false);
+  return account;
 }
 
 export async function browserRequest(page, route, method = "GET", body) {
@@ -628,6 +660,84 @@ export async function stopInstalledReply(page, latest) {
   }
 }
 
+export async function prepareNamedConversation(
+  page,
+  { name, draft, ref, model },
+) {
+  const form = page.locator(".chat-message-form");
+  await form.getByLabel("Message", { exact: true }).fill(draft);
+  await form.getByLabel("Reply model", { exact: true }).click();
+  await form.getByLabel("Provider", { exact: true }).selectOption(ref);
+  await form.getByLabel("Model", { exact: true }).selectOption(model);
+  const conversations = page.getByRole("button", {
+    name: "Conversations",
+    exact: true,
+  });
+  if (
+    (await conversations.isVisible()) &&
+    (await conversations.getAttribute("aria-expanded")) !== "true"
+  )
+    await conversations.click();
+  await page
+    .getByLabel("Search conversations", { exact: true })
+    .fill("unmatched search");
+  await page
+    .locator(".rail-heading")
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page.getByLabel("Conversation name", { exact: true }).fill(name);
+}
+
+export async function finishNamedConversation(
+  page,
+  expect,
+  { name, draft, ref, model },
+) {
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+  await expect(page.getByLabel("Message", { exact: true })).toHaveValue(draft);
+  const menu = page.locator(".chat-composer-toolbar .reply-model-menu");
+  if ((await menu.getAttribute("open")) === null)
+    await menu.locator("summary").click();
+  await expect(menu.getByLabel("Provider", { exact: true })).toHaveValue(ref);
+  await expect(menu.getByLabel("Model", { exact: true })).toHaveValue(model);
+}
+
+export async function openExactNoticeResult(
+  page,
+  expect,
+  { index, runId, otherRunId, noticeText, isMobile = false },
+) {
+  if (isMobile) {
+    const more = page.getByRole("button", { name: "More", exact: true });
+    if ((await more.getAttribute("aria-expanded")) !== "true")
+      await more.click();
+  }
+  await page.getByRole("button", { name: /^Notifications,/ }).click();
+  const inbox = page.getByRole("dialog", {
+    name: "Notification inbox",
+    exact: true,
+  });
+  let notices = inbox.locator(".notice-list article");
+  if (noticeText) notices = notices.filter({ hasText: noticeText });
+  await notices
+    .nth(index)
+    .getByRole("button", { name: "Result", exact: true })
+    .click();
+  const results = page.getByRole("region", {
+    name: "Run results",
+    exact: true,
+  });
+  await expect(
+    results.getByRole("article", { name: "Run " + runId, exact: true }),
+  ).toBeVisible();
+  await expect(
+    results.getByRole("article", { name: "Run " + otherRunId, exact: true }),
+  ).toHaveCount(0);
+}
+
 export async function runInstalledAgentPhase(
   config,
   { page, request, expect },
@@ -733,27 +843,39 @@ export async function runInstalledAgentPhase(
     );
     assert.equal(assigned.model, model);
     state.checks.agentModel = "PASS";
-    let v = await change({
-      action: "session-create",
-      name: "Installed journey",
-    });
-    const session = v.sessions.at(-1);
-    assert.equal(session.name, "Installed journey");
-    state.sessionId = session.id;
+    const alternate = await installedConversationAccount(
+      request,
+      passphrase,
+      c.ref,
+    );
+    const alternateModel = alternate.admissionPolicy?.model;
+    assert.ok(alternateModel);
     await installedNavigate(page, "#agents/chat");
+    // The fixture account was added through the authenticated API, so refresh
+    // the UI's account catalog before selecting it in the composer.
+    await page.reload();
     await page
       .getByLabel("Agent", { exact: true })
       .selectOption(state.profileId);
-    const conversations = page.getByRole("button", {
-      name: "Conversations",
-      exact: true,
-    });
-    if (
-      (await conversations.isVisible()) &&
-      (await conversations.getAttribute("aria-expanded")) !== "true"
-    )
-      await conversations.click();
-    await page.getByRole("button", { name: "Installed journey" }).click();
+    assert.equal(
+      (await view()).sessions.length,
+      0,
+      "fixture Chat must start empty",
+    );
+    const draft = "Compare only these synthetic inputs: A=1 and B=2.";
+    const named = {
+      name: "Installed journey",
+      draft,
+      ref: alternate.ref,
+      model: alternateModel,
+    };
+    await prepareNamedConversation(page, named);
+    await finishNamedConversation(page, expect, named);
+    let v = await view();
+    const session = v.sessions.find((s) => s.name === "Installed journey");
+    assert.ok(session);
+    state.sessionId = session.id;
+    state.checks.namedConversation = "PASS";
     const send = async (text, allow = false) => {
       await page.getByLabel("Message", { exact: true }).fill(text);
       await page.getByRole("button", { name: "Send", exact: true }).click();
@@ -768,7 +890,7 @@ export async function runInstalledAgentPhase(
           .click();
       }
     };
-    await send("Compare only these synthetic inputs: A=1 and B=2.", true);
+    await send(draft, true);
     await expect
       .poll(
         async () =>
@@ -778,6 +900,11 @@ export async function runInstalledAgentPhase(
         { timeout: 30000 },
       )
       .toBe("completed");
+    const firstReply = (await view()).aiRequests.find(
+      (q) => q.sessionId === session.id,
+    );
+    assert.equal(firstReply.connectionRef, alternate.ref);
+    assert.equal(firstReply.model, alternateModel);
     await expect(
       page.getByRole("button", { name: "Stop", exact: true }),
     ).toHaveCount(0);
@@ -1058,6 +1185,40 @@ export async function runInstalledAgentPhase(
       assert.ok(!other.tasks.some((t) => t.id === state.taskId));
       state.checks.memoryOptional = "PASS";
       state.checks.profileIsolation = "PASS";
+      // Two deterministic reminder runs make an older-result navigation
+      // distinguishable from the latest result without another AI request.
+      const reminderName = "Installed notification check";
+      const created = await change({
+        action: "task-create",
+        name: reminderName,
+        text: "Review synthetic limits",
+        intervalSeconds: 3600,
+        maxRuns: 2,
+      });
+      const reminder = created.tasks.find((t) => t.name === reminderName);
+      assert.ok(reminder && !reminder.ai && !reminder.botId);
+      const first = await change({ action: "task-run", id: reminder.id });
+      const oldRun = first.runs.find((r) => r.taskId === reminder.id);
+      assert.ok(oldRun);
+      const second = await change({ action: "task-run", id: reminder.id });
+      const newRun = second.runs.find(
+        (r) => r.taskId === reminder.id && r.id !== oldRun.id,
+      );
+      assert.ok(newRun);
+      const notices = second.notices.filter(
+        (n) => n.runId === oldRun.id || n.runId === newRun.id,
+      );
+      assert.equal(notices.length, 2);
+      const index = notices.findIndex((n) => n.runId === oldRun.id);
+      assert.ok(index >= 0);
+      await page.reload();
+      await openExactNoticeResult(page, expect, {
+        index,
+        runId: oldRun.id,
+        otherRunId: newRun.id,
+        noticeText: reminderName,
+      });
+      state.checks.notificationResult = "PASS";
       state.checks.taskResult = "PASS";
       state.serviceRestarted = true;
       state.requestCount = (await view()).aiRequests.length;
