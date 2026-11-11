@@ -12209,6 +12209,7 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     .click();
   await expect.poll(async () => (await read()).runs.length).toBe(1);
   expect((await read()).runs[0].outcome).toBe("reminded");
+  const reminderRunId = (await read()).runs[0].id;
   await page.getByRole("button", { name: "Discuss", exact: true }).click();
   await expect(page.locator(".local-messages")).toContainText(
     "Inspect the saved SOL risk limits",
@@ -12316,8 +12317,13 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     .click();
   await expect(inbox).toBeHidden();
   await expect(
-    page.getByRole("complementary", { name: "Task details", exact: true }),
-  ).toContainText("Daily SOL review");
+    page
+      .getByRole("region", { name: "Run results", exact: true })
+      .getByRole("article", {
+        name: `Run ${reminderRunId}`,
+        exact: true,
+      }),
+  ).toBeVisible();
   await page.evaluate(() => {
     location.hash = "activity";
   });
@@ -12328,8 +12334,13 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     .click();
   await expect(page).toHaveURL(/#agents\/tasks$/);
   await expect(
-    page.getByRole("complementary", { name: "Task details", exact: true }),
-  ).toContainText("Daily SOL review");
+    page
+      .getByRole("region", { name: "Run results", exact: true })
+      .getByRole("article", {
+        name: `Run ${reminderRunId}`,
+        exact: true,
+      }),
+  ).toBeVisible();
   await (
     await openSetup()
   )
@@ -13850,7 +13861,9 @@ test("local provider connects in UI and shares configured agent Chat without API
     .first()
     .click();
   const editor = page.getByRole("region", { name: "Providers", exact: true });
-  await editor.locator('[data-provider="local"] > button').click();
+  await editor
+    .locator('[data-provider="local"] > .provider-brand-button')
+    .click();
   await expect(editor.getByLabel("Endpoint", { exact: true })).toHaveValue(
     "http://127.0.0.1:11434/v1",
   );
