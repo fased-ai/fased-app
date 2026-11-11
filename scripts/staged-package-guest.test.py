@@ -959,5 +959,15 @@ class CIUbuntuMirrorTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             apply(original.replace(' packages:', ' apt: {}\n packages:'),'kernel','true',True)
 
+    def test_mirror_mode_is_limited_to_the_requested_disposable_ci_journeys(self):
+        source=pathlib.Path(__file__).with_name('check-inspection-vm.py').read_text()
+        assignment=next(n for n in ast.walk(ast.parse(source)) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='eligible' for t in n.targets))
+        code=compile(ast.Module(body=[assignment],type_ignores=[]),'<ci-mirror-scope>','exec')
+        defaults=dict(released_local_only=False,installed_agent=False,full=False,maintenance_only=False,installed_finalizer_update_only=False)
+        for changes,want in [({},False),({'released_local_only':True},False),({'released_local_only':True,'installed_agent':True},True),({'full':True},True),({'maintenance_only':True},True),({'installed_finalizer_update_only':True},True)]:
+            scope={'a':SimpleNamespace(**(defaults|changes))}
+            exec(code,scope)
+            self.assertEqual(scope['eligible'],want)
+
 if __name__ == '__main__':
     unittest.main()

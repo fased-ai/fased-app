@@ -165,11 +165,32 @@ test("inspection VM uses the same digest-pinned image fallback", () => {
   );
   const pin = driver.match(/^IMAGE_SHA='([a-f0-9]{64})'$/m)?.[1];
   assert.ok(pin);
-  const fallback = workflow.split("- name: Restore pinned VM image if needed")[1];
+  const fallback = workflow.split(
+    "- name: Restore pinned VM image if needed",
+  )[1];
   assert.ok(fallback, "inspection VM image fallback required");
   assert.ok(fallback.includes(pin));
   assert.match(fallback, /sha256sum --check/);
   assert.match(fallback, /--proto '=https' --proto-redir '=https'/);
   assert.match(fallback, /--max-filesize 260000000/);
   assert.ok(fallback.indexOf("sha256sum --check") < fallback.indexOf("mv --"));
+});
+
+test("disposable inspection guests use the signed CI mirror", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/inspection-acceptance.yml", import.meta.url),
+    "utf8",
+  );
+  for (const name of [
+    "Actual interruption, kernel reboot and protected recovery",
+    "Remote maintenance kernel authority",
+    "Finalized metadata installed update, reboot recovery and authenticated no-op",
+  ]) {
+    const step = workflow
+      .split(`- name: ${name}`)[1]
+      ?.split("\n      - name:")[0];
+    assert.ok(step, `missing ${name}`);
+    assert.match(step, /FASED_DISPOSABLE_VM_ACCEPTANCE: "1"/);
+    assert.match(step, /FASED_CI_SIGNED_UBUNTU_MIRROR: "kernel"/);
+  }
 });

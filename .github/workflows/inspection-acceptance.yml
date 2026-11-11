@@ -145,14 +145,17 @@ jobs:
       - name: Actual interruption, kernel reboot and protected recovery
         env:
           FASED_DISPOSABLE_VM_ACCEPTANCE: "1"
+          FASED_CI_SIGNED_UBUNTU_MIRROR: "kernel"
         run: python3 scripts/check-inspection-vm.py --full
       - name: Remote maintenance kernel authority
         env:
           FASED_DISPOSABLE_VM_ACCEPTANCE: "1"
+          FASED_CI_SIGNED_UBUNTU_MIRROR: "kernel"
         run: python3 scripts/check-inspection-vm.py --maintenance-only
       - name: Finalized metadata installed update, reboot recovery and authenticated no-op
         env:
           FASED_DISPOSABLE_VM_ACCEPTANCE: "1"
+          FASED_CI_SIGNED_UBUNTU_MIRROR: "kernel"
         run: python3 scripts/check-inspection-vm.py --installed-finalizer-update-only
       - name: Remove only the owned CI KVM rule
         if: always()

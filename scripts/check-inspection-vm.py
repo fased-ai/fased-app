@@ -9,7 +9,7 @@ P=pathlib.Path
 def ci_signed_mirror_cloud_config(data, mode, github_actions, eligible):
  if not mode:return data
  if mode!='kernel' or github_actions!='true' or not eligible or data.count(' packages:')!=1 or '\n apt:' in data:
-  raise ValueError('signed Ubuntu mirror is restricted to the disposable Local CI fixture')
+  raise ValueError('signed Ubuntu mirror is restricted to disposable CI fixtures')
  return data.replace(' packages:', ''' apt:
    preserve_sources_list: false
    sources_list: |
@@ -174,7 +174,6 @@ if not a.resume:
    - [systemctl, daemon-reload]
    - [systemctl, restart, serial-getty@ttyS0.service]
  packages:''')
-  data=ci_signed_mirror_cloud_config(data,os.environ.get('FASED_CI_SIGNED_UBUNTU_MIRROR',''),os.environ.get('GITHUB_ACTIONS',''),a.released_local_only and a.installed_agent and not a.resume)
   (work/'user-data').write_text(data)
  if a.maintenance_only:
   # One fixed root OS switcher for the controlling ubuntu fixture. It drops to
@@ -190,6 +189,10 @@ if not a.resume:
   for action in ['TestApplicationUpdateInstalledRemoteOwnerUbuntuVM','TestApplicationUpdateInstalledRemoteOwnerVerifyUbuntuVM']:
    fixed+='       ubuntu ALL=(root) NOPASSWD: /usr/sbin/runuser ^-u fased-probe -- /usr/bin/env --ignore-environment --chdir=/home/fased-probe HOME=/home/fased-probe XDG_CONFIG_HOME=/home/fased-probe/.config PATH=/usr/bin:/bin FASED_DISPOSABLE_VM=1 FASED_UPDATE_OWNER=1 /var/lib/fased-update-fixture/fased-app-tests -test[.]run='+action+' -test[.]v$\n'
   (work/'user-data').write_text(data.replace(' packages:',fixed+' packages:').replace('nftables]', 'nftables, polkitd]'))
+ data=(work/'user-data').read_text()
+ eligible=(a.released_local_only and a.installed_agent) or a.full or a.maintenance_only or a.installed_finalizer_update_only
+ data=ci_signed_mirror_cloud_config(data,os.environ.get('FASED_CI_SIGNED_UBUNTU_MIRROR',''),os.environ.get('GITHUB_ACTIONS',''),eligible)
+ (work/'user-data').write_text(data)
  run(['xorriso','-as','mkisofs','-quiet','-r','-J','-V','cidata','-o',str(work/'seed.iso'),str(work/'user-data'),str(work/'meta-data')])
  run(['qemu-img','create','-q','-f','qcow2','-F','qcow2','-b',str(image),str(work/'disk.qcow2')])
  run(['qemu-img','resize',str(work/'disk.qcow2'),'12G'])
