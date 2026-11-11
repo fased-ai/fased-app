@@ -153,3 +153,23 @@ test("release image fallback keeps the existing VM image digest", () => {
   assert.match(workflow, /--max-filesize 260000000/);
   assert.match(workflow, /FASED_CI_SIGNED_UBUNTU_MIRROR: "kernel"/);
 });
+
+test("inspection VM uses the same digest-pinned image fallback", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/inspection-acceptance.yml", import.meta.url),
+    "utf8",
+  );
+  const driver = readFileSync(
+    new URL("./check-inspection-vm.py", import.meta.url),
+    "utf8",
+  );
+  const pin = driver.match(/^IMAGE_SHA='([a-f0-9]{64})'$/m)?.[1];
+  assert.ok(pin);
+  const fallback = workflow.split("- name: Restore pinned VM image if needed")[1];
+  assert.ok(fallback, "inspection VM image fallback required");
+  assert.ok(fallback.includes(pin));
+  assert.match(fallback, /sha256sum --check/);
+  assert.match(fallback, /--proto '=https' --proto-redir '=https'/);
+  assert.match(fallback, /--max-filesize 260000000/);
+  assert.ok(fallback.indexOf("sha256sum --check") < fallback.indexOf("mv --"));
+});
