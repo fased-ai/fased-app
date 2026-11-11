@@ -939,5 +939,25 @@ class ProviderBundleProducerTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,"bounded original"):
                 guest.verified_provider_bundle({"directory":str(root),"packet":{"bundleSha256":"0"*64}},root/"owned")
 
+class CIUbuntuMirrorTest(unittest.TestCase):
+    def test_signed_mirror_is_local_ci_fixture_only(self):
+        source=pathlib.Path(__file__).with_name('check-inspection-vm.py').read_text()
+        func=next(n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef) and n.name=='ci_signed_mirror_cloud_config')
+        scope={}
+        exec(compile(ast.Module(body=[func],type_ignores=[]),'<ci-mirror>','exec'),scope)
+        apply=scope['ci_signed_mirror_cloud_config']
+        original='#cloud-config\n write_files: []\n packages: [sudo]\n'
+        self.assertEqual(apply(original,'','false',False),original)
+        updated=apply(original,'kernel','true',True)
+        self.assertIn(' $RELEASE-security\n',updated)
+        self.assertIn(' Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n',updated)
+        self.assertEqual(updated.count('https://mirrors.edge.kernel.org/ubuntu/'),1)
+        self.assertIn(' packages: [sudo]',updated)
+        for mode,ci,eligible in [('other','true',True),('kernel','false',True),('kernel','true',False)]:
+            with self.subTest(mode=mode,ci=ci,eligible=eligible),self.assertRaises(ValueError):
+                apply(original,mode,ci,eligible)
+        with self.assertRaises(ValueError):
+            apply(original.replace(' packages:', ' apt: {}\n packages:'),'kernel','true',True)
+
 if __name__ == '__main__':
     unittest.main()
