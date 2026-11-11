@@ -4,6 +4,7 @@ import { useUI } from "../ui-preferences";
 type Status = {
   canVerify?: boolean;
   canCheck?: boolean;
+  backup?: { accountId: string; instanceId: string };
   backupVerified?: boolean;
   ref: string;
   saved: boolean;
@@ -83,7 +84,26 @@ export function RPCCredential({
       if (epoch === generation.current) {
         if (action === "check" && (!v.check?.fixtureOnly || v.check.liveRPC))
           throw new Error("Unexpected RPC capability");
-        setStatus(v);
+        if (action === "backup") {
+          if (
+            !v.backupVerified ||
+            v.backup?.accountId !== accountId ||
+            v.backup.instanceId !== core.instanceId
+          )
+            throw new Error("Unexpected RPC backup");
+          const url = URL.createObjectURL(
+            new Blob([JSON.stringify(v.backup)], { type: "application/json" }),
+          );
+          try {
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = "fased-rpc-backup.json";
+            link.click();
+          } finally {
+            setTimeout(() => URL.revokeObjectURL(url), 0);
+          }
+          setStatus({ ...v, backup: undefined, backupVerified: false });
+        } else setStatus(v);
         setVerified(action === "verify");
         if (action === "restore") setBackup(undefined);
       }
@@ -170,6 +190,16 @@ export function RPCCredential({
         </div>
         <details>
           <summary>{t("Recovery")}</summary>
+          <button
+            type="button"
+            disabled={busy || !status?.saved || status.stale || !password}
+            onClick={() => void change("backup")}
+          >
+            {t("Download backup")}
+          </button>
+          <p className="account-note">
+            {t("Requires this instance and wallet settings.")}
+          </p>
           <label>
             {t("Backup file")}
             <input
