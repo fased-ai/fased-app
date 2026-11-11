@@ -5361,9 +5361,45 @@ test("public account records share UI/CLI state without wallet authority", async
   expect(connection.locked).toBe(true);
   expect(JSON.stringify(connection)).not.toContain("disposable-browser");
 
+  await page.getByText("Recovery", { exact: true }).click();
+  const downloadBackup = page.getByRole("button", {
+    name: "Download backup",
+    exact: true,
+  });
+  let backupDownloads = 0;
+  page.on("download", () => backupDownloads++);
+  await expect(downloadBackup).toBeVisible({ timeout: 3000 });
+  await expect(
+    page.getByText("Requires this instance and wallet settings.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page
+    .getByLabel("Vault password", { exact: true })
+    .fill("wrong disposable vault password");
+  await downloadBackup.click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Credential operation failed",
+  );
+  expect(backupDownloads).toBe(0);
+  await page
+    .getByLabel("Vault password", { exact: true })
+    .fill("Disposable browser vault password 123");
+  const downloadPromise = page.waitForEvent("download");
+  await downloadBackup.click();
+  const download = await downloadPromise;
+  expect(backupDownloads).toBe(1);
+  expect(download.suggestedFilename()).toBe("fased-rpc-backup.json");
   const backupPath = join(dir, "rpc-backup.json");
+  await download.saveAs(backupPath);
+  const browserBackup = JSON.parse(await readFile(backupPath, "utf8"));
+  expect(browserBackup.accountId).toBe(state.record.accounts[0].id);
+  expect(JSON.stringify(browserBackup)).not.toContain("disposable-browser");
+  expect(JSON.stringify(browserBackup)).not.toContain("vault password");
+
+  const cliBackupPath = join(dir, "rpc-cli-backup.json");
   const backupStatus = await privateCLI(
-    ["accounts", "--rpc-credential-stdin", "--rpc-backup-out", backupPath],
+    ["accounts", "--rpc-credential-stdin", "--rpc-backup-out", cliBackupPath],
     {
       accountId: state.record.accounts[0].id,
       revision: state.record.revision,
@@ -5373,10 +5409,9 @@ test("public account records share UI/CLI state without wallet authority", async
     },
   );
   expect(backupStatus.backup).toBeUndefined();
-  expect(await readFile(backupPath, "utf8")).not.toContain(
-    "disposable-browser",
+  expect(JSON.parse(await readFile(cliBackupPath, "utf8"))).toEqual(
+    browserBackup,
   );
-  await page.getByText("Recovery", { exact: true }).click();
   await page
     .getByLabel("Backup file", { exact: true })
     .setInputFiles(backupPath);
@@ -5392,6 +5427,9 @@ test("public account records share UI/CLI state without wallet authority", async
   await page
     .getByLabel("Vault password", { exact: true })
     .fill("Disposable browser vault password 123");
+  await expect(
+    page.getByRole("button", { name: "Restore", exact: true }),
+  ).toBeDisabled();
   await page.getByRole("button", { name: "Remove key", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Remove key", exact: true }),

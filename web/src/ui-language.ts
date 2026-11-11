@@ -78,6 +78,18 @@ const rows = {
     "이 설치의 복구 명령을 사용하세요.",
   ],
   Restore: ["Восстановить", "Restaurar", "恢复", "복원"],
+  "Download backup": [
+    "Скачать копию",
+    "Descargar copia",
+    "下载备份",
+    "백업 다운로드",
+  ],
+  "Requires this instance and wallet settings.": [
+    "Требуются этот экземпляр и настройки кошелька.",
+    "Requiere esta instancia y la configuración de la cartera.",
+    "需要此实例及钱包设置。",
+    "이 인스턴스와 지갑 설정이 필요합니다.",
+  ],
   "Backup file": [
     "Файл резервной копии",
     "Archivo de copia",
