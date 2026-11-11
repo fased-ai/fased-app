@@ -13174,7 +13174,34 @@ test("new conversation keeps its selected account and model through first Send",
       return false;
     return request.postDataJSON()?.action === "chat-review";
   });
-  await form.getByRole("button", { name: "Send", exact: true }).click();
+  let releaseCreation = () => {};
+  let markCreationHeld = () => {};
+  const creationHeld = new Promise<void>((resolve) => {
+    markCreationHeld = resolve;
+  });
+  const resumeCreation = new Promise<void>((resolve) => {
+    releaseCreation = resolve;
+  });
+  let held = false;
+  await page.route("**/api/v1/agents", async (route) => {
+    if (
+      !held &&
+      route.request().method() === "POST" &&
+      route.request().postDataJSON()?.action === "session-create"
+    ) {
+      held = true;
+      markCreationHeld();
+      await resumeCreation;
+    }
+    await route.continue();
+  });
+  try {
+    await form.getByRole("button", { name: "Send", exact: true }).click();
+    await creationHeld;
+    await form.getByLabel("Provider", { exact: true }).selectOption(second.ref);
+  } finally {
+    releaseCreation();
+  }
   expect((await submitted).postDataJSON()).toMatchObject({
     connectionRef: first.ref,
     model: firstModel,
@@ -13272,6 +13299,163 @@ test("new conversation keeps its selected account and model through first Send",
   await replyMenu.locator("summary").click();
   await expect(replyMenu.getByLabel("Provider", { exact: true })).toHaveValue(
     second.ref,
+  );
+});
+
+test("naming an empty conversation keeps its draft and selected account", async ({
+  page,
+}) => {
+  await stop();
+  await start(true);
+  await page.goto(url + "/#agents/chat");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await openOwnerSetup(page, claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const passphrase = "disposable-named-chat-vault";
+  const chosen = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "save",
+    name: "Chosen account",
+    key: "fased-test-named-chat-key",
+    passphrase,
+  });
+  const fallback = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "add",
+    provider: "openai",
+    name: "Default account",
+    key: "fased-test-named-chat-default",
+    passphrase,
+  });
+  expect(chosen.ref).not.toBe(fallback.ref);
+  const selectedModel = chosen.catalog.models.find(
+    (m: any) => m.selectable && m.recommended,
+  ).id;
+  const defaultModel = fallback.catalog.models.find(
+    (m: any) => m.selectable && m.recommended,
+  ).id;
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  const creation = page.getByRole("dialog", { name: "New agent", exact: true });
+  await creation
+    .getByLabel("Name", { exact: true })
+    .fill("Named conversation agent");
+  await creation
+    .getByLabel("Account", { exact: true })
+    .selectOption(fallback.ref);
+  await creation
+    .getByLabel("Model", { exact: true })
+    .selectOption(defaultModel);
+  await creation
+    .getByRole("button", { name: "Create agent", exact: true })
+    .click();
+  await expect(creation).toBeHidden();
+  const form = page.locator(".chat-message-form");
+  await form.getByLabel("Message", { exact: true }).fill("Keep this draft");
+  await form.getByLabel("Reply model", { exact: true }).click();
+  await form.getByLabel("Provider", { exact: true }).selectOption(chosen.ref);
+  await form.getByLabel("Model", { exact: true }).selectOption(selectedModel);
+  await openConversationList(page);
+  await page
+    .getByLabel("Search conversations", { exact: true })
+    .fill("unmatched search");
+  await page
+    .locator(".rail-heading")
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Named draft");
+  let rejected = false;
+  const refuseOnce = async (route: Route) => {
+    if (
+      !rejected &&
+      route.request().method() === "POST" &&
+      route.request().postDataJSON()?.action === "session-create"
+    ) {
+      rejected = true;
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "Fixture refused creation" }),
+      });
+    } else await route.continue();
+  };
+  await page.route("**/api/v1/agents", refuseOnce);
+  const refused = page.waitForResponse(
+    (response) =>
+      response.status() === 409 &&
+      response.request().method() === "POST" &&
+      response.request().postDataJSON()?.action === "session-create",
+  );
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await refused;
+  await expect(
+    page.getByRole("button", { name: "Create conversation", exact: true }),
+  ).toBeEnabled();
+  await expect(form.getByLabel("Message", { exact: true })).toHaveValue(
+    "Keep this draft",
+  );
+  await page.unroute("**/api/v1/agents", refuseOnce);
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Named draft", exact: true }),
+  ).toBeVisible();
+  await expect(form.getByLabel("Message", { exact: true })).toHaveValue(
+    "Keep this draft",
+  );
+  const replyMenu = page.locator(".chat-composer-toolbar .reply-model-menu");
+  await replyMenu.locator("summary").click();
+  await expect(replyMenu.getByLabel("Provider", { exact: true })).toHaveValue(
+    chosen.ref,
+  );
+  await expect(replyMenu.getByLabel("Model", { exact: true })).toHaveValue(
+    selectedModel,
+  );
+  await openConversationList(page);
+  await page
+    .locator(".rail-heading")
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Another conversation");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Another conversation", exact: true }),
+  ).toBeVisible();
+  await expect(form.getByLabel("Message", { exact: true })).toHaveValue("");
+  if ((await replyMenu.getAttribute("open")) === null)
+    await replyMenu.locator("summary").click();
+  await expect(replyMenu.getByLabel("Provider", { exact: true })).toHaveValue(
+    fallback.ref,
+  );
+  await openConversationList(page);
+  await page
+    .locator(".agent-session-list")
+    .getByRole("button", { name: "Named draft", exact: true })
+    .click();
+  await expect(form.getByLabel("Message", { exact: true })).toHaveValue(
+    "Keep this draft",
+  );
+  if ((await replyMenu.getAttribute("open")) === null)
+    await replyMenu.locator("summary").click();
+  await expect(replyMenu.getByLabel("Provider", { exact: true })).toHaveValue(
+    chosen.ref,
   );
 });
 
