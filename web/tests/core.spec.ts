@@ -12209,6 +12209,7 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     .click();
   await expect.poll(async () => (await read()).runs.length).toBe(1);
   expect((await read()).runs[0].outcome).toBe("reminded");
+  const reminderRunId = (await read()).runs[0].id;
   await page.getByRole("button", { name: "Discuss", exact: true }).click();
   await expect(page.locator(".local-messages")).toContainText(
     "Inspect the saved SOL risk limits",
@@ -12316,8 +12317,13 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     .click();
   await expect(inbox).toBeHidden();
   await expect(
-    page.getByRole("complementary", { name: "Task details", exact: true }),
-  ).toContainText("Daily SOL review");
+    page
+      .getByRole("region", { name: "Run results", exact: true })
+      .getByRole("article", {
+        name: `Run ${reminderRunId}`,
+        exact: true,
+      }),
+  ).toBeVisible();
   await page.evaluate(() => {
     location.hash = "activity";
   });
@@ -12328,8 +12334,13 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     .click();
   await expect(page).toHaveURL(/#agents\/tasks$/);
   await expect(
-    page.getByRole("complementary", { name: "Task details", exact: true }),
-  ).toContainText("Daily SOL review");
+    page
+      .getByRole("region", { name: "Run results", exact: true })
+      .getByRole("article", {
+        name: `Run ${reminderRunId}`,
+        exact: true,
+      }),
+  ).toBeVisible();
   await (
     await openSetup()
   )
@@ -12976,6 +12987,478 @@ for (const location of ["local", "remote"]) {
   });
 }
 
+test("activity and notifications open the exact task run", async ({
+  page,
+  isMobile,
+}) => {
+  await page.goto(url + "/#agents/chat");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await openOwnerSetup(page, claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const profileId = "trading-analyst";
+  await page.getByLabel("Agent", { exact: true }).selectOption(profileId);
+  const read = () => privateCLI(["agents", "--profile", profileId]);
+  const command = async (input: Record<string, unknown>) =>
+    privateCLI(["agents", "--request-stdin"], {
+      profileId,
+      revision: (await read()).revision,
+      ...input,
+    });
+  const task = (
+    await command({
+      action: "task-create",
+      name: "Two-run reminder",
+      text: "Review the saved risk limits",
+      intervalSeconds: 3600,
+      maxRuns: 2,
+    })
+  ).tasks.at(-1);
+  await command({ action: "task-run", id: task.id });
+  await command({ action: "task-run", id: task.id });
+  const saved = await read();
+  expect(saved.runs).toHaveLength(2);
+  expect(saved.notices).toHaveLength(2);
+  expect(saved.notices[0].runId).toBe(saved.runs[0].id);
+  expect(saved.notices[1].runId).toBe(saved.runs[1].id);
+  await page.goto(url + "/#activity");
+  const activity = page.getByRole("list", { name: "Activity events" });
+  await expect(activity.locator("li")).toHaveCount(2);
+  await activity
+    .locator("li")
+    .first()
+    .getByRole("button", { name: "Result", exact: true })
+    .click();
+  const results = page.getByRole("region", {
+    name: "Run results",
+    exact: true,
+  });
+  await expect(results).toBeVisible();
+  await expect(
+    results.getByRole("article", {
+      name: `Run ${saved.runs[0].id}`,
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    results.getByRole("article", {
+      name: `Run ${saved.runs[1].id}`,
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  if (isMobile)
+    await page.getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("button", { name: /^Notifications,/ }).click();
+  const inbox = page.getByRole("dialog", {
+    name: "Notification inbox",
+    exact: true,
+  });
+  await inbox
+    .locator(".notice-list article")
+    .nth(1)
+    .getByRole("button", { name: "Result", exact: true })
+    .click();
+  await expect(
+    results.getByRole("article", {
+      name: `Run ${saved.runs[1].id}`,
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    results.getByRole("article", {
+      name: `Run ${saved.runs[0].id}`,
+      exact: true,
+    }),
+  ).toHaveCount(0);
+});
+
+test("new conversation keeps its selected account and model through first Send", async ({
+  page,
+  isMobile,
+}) => {
+  await stop();
+  await start(true);
+  await page.goto(url + "/#agents/chat");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await openOwnerSetup(page, claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const passphrase = "disposable-new-chat-vault";
+  const first = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "save",
+    name: "First account",
+    key: "fased-test-new-chat-first-key",
+    passphrase,
+  });
+  const second = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "add",
+    provider: "openai",
+    name: "Default account",
+    key: "fased-test-new-chat-second-key",
+    passphrase,
+  });
+  expect(first.ref).not.toBe(second.ref);
+  const firstModel = first.catalog.models.find(
+    (m: { selectable: boolean; recommended: boolean }) =>
+      m.selectable && m.recommended,
+  ).id;
+  const defaultModel = second.catalog.models.find(
+    (m: { selectable: boolean; recommended: boolean }) =>
+      m.selectable && m.recommended,
+  ).id;
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  const creation = page.getByRole("dialog", { name: "New agent", exact: true });
+  await creation.getByLabel("Name", { exact: true }).fill("Selection agent");
+  await creation
+    .getByLabel("Account", { exact: true })
+    .selectOption(second.ref);
+  await creation
+    .getByLabel("Model", { exact: true })
+    .selectOption(defaultModel);
+  await creation
+    .getByRole("button", { name: "Create agent", exact: true })
+    .click();
+  await expect(creation).not.toBeVisible();
+  const view = await privateCLI(["agents"]);
+  const profile = view.profiles.find((p: any) => p.name === "Selection agent");
+  expect(profile.connectionRef).toBe(second.ref);
+  const form = page.locator(".chat-message-form");
+  await form.getByLabel("Message", { exact: true }).fill("Review this draft");
+  await form.getByLabel("Reply model", { exact: true }).click();
+  await form.getByLabel("Provider", { exact: true }).selectOption(first.ref);
+  await form.getByLabel("Model", { exact: true }).selectOption(firstModel);
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption("trading-analyst");
+  await page.getByLabel("Agent", { exact: true }).selectOption(profile.id);
+  await expect(form.getByLabel("Message", { exact: true })).toHaveValue(
+    "Review this draft",
+  );
+  await form.getByLabel("Reply model", { exact: true }).click();
+  await expect(form.getByLabel("Provider", { exact: true })).toHaveValue(
+    first.ref,
+  );
+  await expect(form.getByLabel("Model", { exact: true })).toHaveValue(
+    firstModel,
+  );
+  await page.screenshot({
+    path: test
+      .info()
+      .outputPath(`new-chat-model-${isMobile ? "mobile" : "desktop"}.png`),
+  });
+  const submitted = page.waitForRequest((request) => {
+    if (
+      request.method() !== "POST" ||
+      !request.url().endsWith("/api/v1/agents")
+    )
+      return false;
+    return request.postDataJSON()?.action === "chat-review";
+  });
+  let releaseCreation = () => {};
+  let markCreationHeld = () => {};
+  const creationHeld = new Promise<void>((resolve) => {
+    markCreationHeld = resolve;
+  });
+  const resumeCreation = new Promise<void>((resolve) => {
+    releaseCreation = resolve;
+  });
+  let held = false;
+  await page.route("**/api/v1/agents", async (route) => {
+    if (
+      !held &&
+      route.request().method() === "POST" &&
+      route.request().postDataJSON()?.action === "session-create"
+    ) {
+      held = true;
+      markCreationHeld();
+      await resumeCreation;
+    }
+    await route.continue();
+  });
+  try {
+    await form.getByRole("button", { name: "Send", exact: true }).click();
+    await creationHeld;
+    await form.getByLabel("Provider", { exact: true }).selectOption(second.ref);
+  } finally {
+    releaseCreation();
+  }
+  expect((await submitted).postDataJSON()).toMatchObject({
+    connectionRef: first.ref,
+    model: firstModel,
+    useAgentDefaults: false,
+  });
+  await page
+    .getByRole("dialog", { name: "Allow replies", exact: true })
+    .getByRole("button", { name: "Allow and send", exact: true })
+    .click();
+  await expect
+    .poll(
+      async () =>
+        (await privateCLI(["agents", "--profile", profile.id])).aiRequests.at(
+          -1,
+        )?.state,
+    )
+    .toBe("completed");
+  const after = await privateCLI(["agents", "--profile", profile.id]);
+  expect(after.aiRequests.at(-1)).toMatchObject({
+    connectionRef: first.ref,
+    model: firstModel,
+    profileId: profile.id,
+  });
+  expect(
+    after.profiles.find((p: any) => p.id === profile.id).connectionRef,
+  ).toBe(second.ref);
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption("trading-analyst");
+  await page.getByLabel("Agent", { exact: true }).selectOption(profile.id);
+  const replyMenu = page.locator(".chat-composer-toolbar .reply-model-menu");
+  await replyMenu.locator("summary").click();
+  await expect(replyMenu.getByLabel("Provider", { exact: true })).toHaveValue(
+    first.ref,
+  );
+  await expect(replyMenu.getByLabel("Model", { exact: true })).toHaveValue(
+    firstModel,
+  );
+  await openConversationList(page);
+  await page
+    .locator(".rail-heading")
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Second conversation");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Second conversation", exact: true }),
+  ).toBeVisible();
+  if ((await replyMenu.getAttribute("open")) === null)
+    await replyMenu.locator("summary").click();
+  await expect(replyMenu.getByLabel("Provider", { exact: true })).toHaveValue(
+    second.ref,
+  );
+  await openConversationList(page);
+  await page
+    .locator(".agent-session-list")
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  if ((await replyMenu.getAttribute("open")) === null)
+    await replyMenu.locator("summary").click();
+  await expect(replyMenu.getByLabel("Provider", { exact: true })).toHaveValue(
+    first.ref,
+  );
+  await openConversationList(page);
+  await page
+    .locator(".agent-session-list")
+    .getByRole("button", { name: "Second conversation", exact: true })
+    .click();
+  if ((await replyMenu.getAttribute("open")) === null)
+    await replyMenu.locator("summary").click();
+  await expect(replyMenu.getByLabel("Provider", { exact: true })).toHaveValue(
+    second.ref,
+  );
+  await openConversationList(page);
+  await page
+    .locator(".agent-session-list")
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  if ((await replyMenu.getAttribute("open")) === null)
+    await replyMenu.locator("summary").click();
+  await replyMenu
+    .getByRole("button", { name: "Use agent default", exact: true })
+    .click();
+  await expect(replyMenu.getByLabel("Provider", { exact: true })).toHaveValue(
+    second.ref,
+  );
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption("trading-analyst");
+  await page.getByLabel("Agent", { exact: true }).selectOption(profile.id);
+  await replyMenu.locator("summary").click();
+  await expect(replyMenu.getByLabel("Provider", { exact: true })).toHaveValue(
+    second.ref,
+  );
+});
+
+test("naming an empty conversation keeps its draft and selected account", async ({
+  page,
+}) => {
+  await stop();
+  await start(true);
+  await page.goto(url + "/#agents/chat");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await openOwnerSetup(page, claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const passphrase = "disposable-named-chat-vault";
+  const chosen = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "save",
+    name: "Chosen account",
+    key: "fased-test-named-chat-key",
+    passphrase,
+  });
+  const fallback = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "add",
+    provider: "openai",
+    name: "Default account",
+    key: "fased-test-named-chat-default",
+    passphrase,
+  });
+  expect(chosen.ref).not.toBe(fallback.ref);
+  const selectedModel = chosen.catalog.models.find(
+    (m: any) => m.selectable && m.recommended,
+  ).id;
+  const defaultModel = fallback.catalog.models.find(
+    (m: any) => m.selectable && m.recommended,
+  ).id;
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  const creation = page.getByRole("dialog", { name: "New agent", exact: true });
+  await creation
+    .getByLabel("Name", { exact: true })
+    .fill("Named conversation agent");
+  await creation
+    .getByLabel("Account", { exact: true })
+    .selectOption(fallback.ref);
+  await creation
+    .getByLabel("Model", { exact: true })
+    .selectOption(defaultModel);
+  await creation
+    .getByRole("button", { name: "Create agent", exact: true })
+    .click();
+  await expect(creation).toBeHidden();
+  const form = page.locator(".chat-message-form");
+  await form.getByLabel("Message", { exact: true }).fill("Keep this draft");
+  await form.getByLabel("Reply model", { exact: true }).click();
+  await form.getByLabel("Provider", { exact: true }).selectOption(chosen.ref);
+  await form.getByLabel("Model", { exact: true }).selectOption(selectedModel);
+  await openConversationList(page);
+  await page
+    .getByLabel("Search conversations", { exact: true })
+    .fill("unmatched search");
+  await page
+    .locator(".rail-heading")
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Named draft");
+  let rejected = false;
+  const refuseOnce = async (route: Route) => {
+    if (
+      !rejected &&
+      route.request().method() === "POST" &&
+      route.request().postDataJSON()?.action === "session-create"
+    ) {
+      rejected = true;
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "Fixture refused creation" }),
+      });
+    } else await route.continue();
+  };
+  await page.route("**/api/v1/agents", refuseOnce);
+  const refused = page.waitForResponse(
+    (response) =>
+      response.status() === 409 &&
+      response.request().method() === "POST" &&
+      response.request().postDataJSON()?.action === "session-create",
+  );
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await refused;
+  await expect(
+    page.getByRole("button", { name: "Create conversation", exact: true }),
+  ).toBeEnabled();
+  await expect(form.getByLabel("Message", { exact: true })).toHaveValue(
+    "Keep this draft",
+  );
+  await page.unroute("**/api/v1/agents", refuseOnce);
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Named draft", exact: true }),
+  ).toBeVisible();
+  await expect(form.getByLabel("Message", { exact: true })).toHaveValue(
+    "Keep this draft",
+  );
+  const replyMenu = page.locator(".chat-composer-toolbar .reply-model-menu");
+  await replyMenu.locator("summary").click();
+  await expect(replyMenu.getByLabel("Provider", { exact: true })).toHaveValue(
+    chosen.ref,
+  );
+  await expect(replyMenu.getByLabel("Model", { exact: true })).toHaveValue(
+    selectedModel,
+  );
+  await openConversationList(page);
+  await page
+    .locator(".rail-heading")
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Another conversation");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Another conversation", exact: true }),
+  ).toBeVisible();
+  await expect(form.getByLabel("Message", { exact: true })).toHaveValue("");
+  if ((await replyMenu.getAttribute("open")) === null)
+    await replyMenu.locator("summary").click();
+  await expect(replyMenu.getByLabel("Provider", { exact: true })).toHaveValue(
+    fallback.ref,
+  );
+  await openConversationList(page);
+  await page
+    .locator(".agent-session-list")
+    .getByRole("button", { name: "Named draft", exact: true })
+    .click();
+  await expect(form.getByLabel("Message", { exact: true })).toHaveValue(
+    "Keep this draft",
+  );
+  if ((await replyMenu.getAttribute("open")) === null)
+    await replyMenu.locator("summary").click();
+  await expect(replyMenu.getByLabel("Provider", { exact: true })).toHaveValue(
+    chosen.ref,
+  );
+});
+
 test("configured agent joins account Chat task result and memory without partial setup", async ({
   page,
   isMobile,
@@ -13562,7 +14045,9 @@ test("local provider connects in UI and shares configured agent Chat without API
     .first()
     .click();
   const editor = page.getByRole("region", { name: "Providers", exact: true });
-  await editor.locator('[data-provider="local"] > button').click();
+  await editor
+    .locator('[data-provider="local"] > .provider-brand-button')
+    .click();
   await expect(editor.getByLabel("Endpoint", { exact: true })).toHaveValue(
     "http://127.0.0.1:11434/v1",
   );
@@ -13710,6 +14195,13 @@ test("Providers page preserves agent drafts and shares account models without ge
   await creation
     .getByLabel("Name", { exact: true })
     .fill("Research account draft");
+  let providerUnavailable = true;
+  const providerReads = "**/api/v1/ai/connection";
+  await page.route(providerReads, async (route) => {
+    if (providerUnavailable && route.request().method() === "GET")
+      await route.fulfill({ status: 503, json: { error: "unavailable" } });
+    else await route.continue();
+  });
   await creation
     .getByRole("button", { name: "Connect provider", exact: true })
     .click();
@@ -13728,6 +14220,17 @@ test("Providers page preserves agent drafts and shares account models without ge
       exact: true,
     }),
   ).toBeVisible();
+  const connectionError = providers.locator(".providers-list [role=alert]");
+  await expect(connectionError).toContainText("Connection unavailable");
+  await expect(connectionError).not.toContainText("preserve the vault");
+  providerUnavailable = false;
+  await connectionError
+    .getByRole("button", { name: "Reload", exact: true })
+    .click();
+  await expect(
+    providers.locator('[data-provider="anthropic"] > button'),
+  ).toBeVisible();
+  await page.unroute(providerReads);
   await expect(providers.locator(".provider-editor")).toHaveCSS(
     "background-color",
     "rgb(34, 32, 45)",
@@ -14200,6 +14703,42 @@ test("Named local servers share setup models and agent Chat without retargeting 
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
   const editor = page.getByRole("region", { name: "Providers", exact: true });
+  await editor
+    .getByLabel("Search providers", { exact: true })
+    .fill("LM Studio");
+  await editor
+    .getByRole("button", { name: "Connect LM Studio", exact: true })
+    .click();
+  await expect(editor.getByLabel("Endpoint", { exact: true })).toHaveValue(
+    "http://127.0.0.1:1234/v1",
+  );
+  await editor
+    .getByLabel("Endpoint", { exact: true })
+    .fill("http://127.0.0.1:9999/v1");
+  await editor
+    .getByRole("button", { name: "Connect LM Studio", exact: true })
+    .click();
+  await expect(editor.getByLabel("Endpoint", { exact: true })).toHaveValue(
+    "http://127.0.0.1:1234/v1",
+  );
+  expect((await privateCLI(["agents"])).aiRequests).toHaveLength(0);
+  await editor.getByLabel("Search providers", { exact: true }).clear();
+  await editor.getByLabel("Name", { exact: true }).fill("Local server draft");
+  await editor
+    .getByLabel("Vault passphrase", { exact: true })
+    .fill("disposable-local-preset-vault");
+  await editor
+    .getByRole("button", { name: "Connect vLLM", exact: true })
+    .click();
+  await expect(editor.getByLabel("Name", { exact: true })).toHaveValue(
+    "Local server draft",
+  );
+  await expect(
+    editor.getByLabel("Vault passphrase", { exact: true }),
+  ).toHaveValue("disposable-local-preset-vault");
+  await expect(editor.getByLabel("Endpoint", { exact: true })).toHaveValue(
+    "http://127.0.0.1:8000/v1",
+  );
   const accounts: any[] = [];
   for (const [name, port] of [
     ["Ollama", 11434],
@@ -14209,9 +14748,11 @@ test("Named local servers share setup models and agent Chat without retargeting 
     await editor
       .locator('[data-provider="local"] > .provider-brand-button')
       .click();
-    await editor.getByRole("button", { name, exact: true }).click();
+    await editor
+      .getByRole("button", { name: `Connect ${name}`, exact: true })
+      .click();
     await expect(
-      editor.getByRole("button", { name, exact: true }),
+      editor.getByRole("button", { name: `Connect ${name}`, exact: true }),
     ).toHaveAttribute("aria-pressed", "true");
     await expect(editor.getByLabel("Endpoint", { exact: true })).toHaveValue(
       `http://127.0.0.1:${port}/v1`,

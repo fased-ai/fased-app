@@ -35,7 +35,7 @@ import type {
   AgentEvidenceView,
 } from "../agents";
 import { isUnmeteredPolicy } from "../agents";
-import { useWorkspace } from "../workspace";
+import { useWorkspace, type ChatModelDraft } from "../workspace";
 
 export function AgentAIReview({
   view,
@@ -44,6 +44,8 @@ export function AgentAIReview({
   researchSelection,
   onClearResearch,
   composer,
+  initialSelection,
+  onSelectionChange,
 }: {
   view: AgentView;
   sessionId: string;
@@ -51,6 +53,8 @@ export function AgentAIReview({
   researchSelection?: ResearchSelection;
   onClearResearch?: () => void;
   composer?: ChatComposer;
+  initialSelection?: ChatModelDraft;
+  onSelectionChange?: (selection?: ChatModelDraft) => void;
 }) {
   return (
     <AgentAIForm
@@ -61,6 +65,8 @@ export function AgentAIReview({
       researchSelection={researchSelection}
       onClearResearch={onClearResearch}
       composer={composer}
+      initialSelection={initialSelection}
+      onSelectionChange={onSelectionChange}
     />
   );
 }
@@ -71,6 +77,8 @@ function AgentAIForm({
   researchSelection,
   onClearResearch,
   composer,
+  initialSelection,
+  onSelectionChange,
 }: {
   view: AgentView;
   sessionId: string;
@@ -78,6 +86,8 @@ function AgentAIForm({
   researchSelection?: ResearchSelection;
   onClearResearch?: () => void;
   composer?: ChatComposer;
+  initialSelection?: ChatModelDraft;
+  onSelectionChange?: (selection?: ChatModelDraft) => void;
 }) {
   const { setProvidersOpen } = useWorkspace();
   const { t: uiText } = useUI();
@@ -129,9 +139,11 @@ function AgentAIForm({
         }
       : null,
   );
-  const [overridden, setOverridden] = useState(false);
-  const [connectionRef, setConnectionRef] = useState("");
-  const [model, setModel] = useState("");
+  const [overridden, setOverridden] = useState(initialSelection !== undefined);
+  const [connectionRef, setConnectionRef] = useState(
+    initialSelection?.connectionRef ?? "",
+  );
+  const [model, setModel] = useState(initialSelection?.model ?? "");
   const [input, setInput] = useState(24000);
   const [output, setOutput] = useState(1024);
   const [deadline, setDeadline] = useState(3);
@@ -308,8 +320,16 @@ function AgentAIForm({
   useEffect(() => {
     if (!composer?.submitOnMount || submittedMount.current || agents.busy)
       return;
-    if (agent.provider !== "none" && !accounts && !accountError) return;
-    if (connectionRef !== inherited.connectionRef || model !== inherited.model)
+    if (
+      (agent.provider !== "none" || connectionRef) &&
+      !accounts &&
+      !accountError
+    )
+      return;
+    if (
+      !overridden &&
+      (connectionRef !== inherited.connectionRef || model !== inherited.model)
+    )
       return;
     if (
       selectedPolicy &&
@@ -337,6 +357,7 @@ function AgentAIForm({
     selectedPolicy,
     limitsIdentity,
     agent.provider,
+    overridden,
     connectionRef,
     model,
     inherited.connectionRef,
@@ -970,14 +991,19 @@ function AgentAIForm({
                     setOverridden(true);
                     setConnectionRef(ref);
                     const a = accounts?.connections?.find((a) => a.ref === ref);
-                    setModel(
-                      ref
-                        ? a?.catalog?.models.find(
-                            (m) => m.selectable && m.recommended,
-                          )?.id || ""
-                        : "",
-                    );
-                    if (!ref) setModel("");
+                    const selectedModel = ref
+                      ? a?.catalog?.models.find(
+                          (m) =>
+                            m.connectionRef === ref &&
+                            m.selectable &&
+                            m.recommended,
+                        )?.id || ""
+                      : "";
+                    setModel(selectedModel);
+                    onSelectionChange?.({
+                      connectionRef: ref,
+                      model: selectedModel,
+                    });
                   }}
                 />
                 <AIModelPicker
@@ -985,13 +1011,17 @@ function AgentAIForm({
                   onChange={(next) => {
                     setOverridden(true);
                     setModel(next);
+                    onSelectionChange?.({ connectionRef, model: next });
                   }}
                   connectionRef={connectionRef}
                 />
                 <button
                   type="button"
                   className="text-button"
-                  onClick={() => setOverridden(false)}
+                  onClick={() => {
+                    setOverridden(false);
+                    onSelectionChange?.();
+                  }}
                 >
                   {tr("Use agent default")}
                 </button>
