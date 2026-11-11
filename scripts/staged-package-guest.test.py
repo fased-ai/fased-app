@@ -320,6 +320,21 @@ class VMLifecycleTest(unittest.TestCase):
     def test_actual_guest_runner_accepts_a_bounded_timeout(self):
         self.assertEqual(guest.run(['/usr/bin/true'], timeout=5).returncode, 0)
 
+    def test_delivery_nft_failure_reports_redacted_stderr(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work=pathlib.Path(directory)
+            (work/'tls.crt').write_text('fixture certificate')
+            addresses=[{'addr_info':[{'local':guest.ADDRESS}]}]
+            def os_tool(tool,*args):
+                if tool=='/usr/sbin/nft' and args[0]=='-f':
+                    raise subprocess.CalledProcessError(1,[tool,*args],stderr=('x'*5000+'Operation not permitted '+guest.PASSWORD+' https://login.tailscale.com/a/secret').encode())
+            with patch.object(guest.P,'read_text',return_value='127.0.0.1 localhost\n'), patch.object(guest,'run',return_value=SimpleNamespace(stdout=json.dumps(addresses).encode())), patch.object(guest,'os_tool',side_effect=os_tool), patch.object(guest.subprocess,'run',return_value=SimpleNamespace(returncode=1)):
+                with self.assertRaisesRegex(RuntimeError,'nft.*Operation not permitted') as caught:
+                    guest.network(work)
+            self.assertNotIn(guest.PASSWORD,str(caught.exception))
+            self.assertNotIn('login.tailscale.com/a/secret',str(caught.exception))
+            self.assertLess(len(str(caught.exception)),2100)
+
     def test_tailnet_preparation_allows_only_fixed_additional_os_commands(self):
         with patch.object(guest, 'run') as invoked:
             for command in [('/usr/bin/apt-get','update','-qq'),('/usr/bin/apt-get','install','-y','tailscale'),
