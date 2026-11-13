@@ -282,6 +282,43 @@ def matching_held_update(j, state, trust):
             binding.get('targetSigner') == trust['targetSignerSha256'])
 
 
+def require_stopped_signer(status, signer_uid):
+    uid_lines = [line for line in status.splitlines() if line.startswith('Uid:')]
+    if len(status) > 65536 or len(uid_lines) != 1 or uid_lines[0].split()[1:] != [str(signer_uid)] * 4:
+        raise RuntimeError('fixture signer process identity differs')
+    states = [line.split() for line in status.splitlines() if line.startswith('State:')]
+    if len(states) != 1 or len(states[0]) < 2 or states[0][1] != 'T':
+        raise BlockingIOError('fixture signer has not stopped after its durable marker')
+
+
+def parked_signer(j, trust):
+    identity = json.loads((ROOT / 'identity.json').read_text())
+    signer_uid = identity['signerUid']
+    marker_path = ROOT / 'signer-ipc' / ('fixture-cut-' + j['operationId'] + '.json')
+    info = marker_path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != signer_uid or stat.S_IMODE(info.st_mode) != 0o644 or info.st_size > 4096:
+        raise RuntimeError('foreign fixture cut marker')
+    if info.st_nlink != 1:
+        raise BlockingIOError('fixture cut marker is still being published')
+    lines = marker_path.read_bytes().splitlines()
+    if len(lines) != 2 or lines[1] != b'READY':
+        raise BlockingIOError('fixture cut marker is not durable and ready')
+    marker = json.loads(lines[0])
+    boot = P('/proc/sys/kernel/random/boot_id').read_text().strip()
+    if (marker.get('version') != 1 or marker.get('operationId') != j['operationId'] or
+            marker.get('installationDigest') != j['installation']['digest'] or marker.get('bootId') != boot or
+            marker.get('targetCore') != trust['targetSha256'] or marker.get('targetSigner') != trust['targetSignerSha256'] or
+            not isinstance(marker.get('pid'), int) or marker['pid'] <= 1):
+        raise RuntimeError('fixture cut marker does not match the held operation')
+    proc = P('/proc') / str(marker['pid'])
+    status = (proc / 'status').read_text()
+    require_stopped_signer(status, signer_uid)
+    argv = (proc / 'cmdline').read_bytes().split(b'\0')
+    if b'custody-maintenance-status' not in argv or j['operationId'].encode() not in argv:
+        raise RuntimeError('fixture signer is not waiting on the held operation')
+    return marker
+
+
 def watch():
     state = json.loads((WORK / 'state.json').read_text())
     trust = json.loads((TRUST / 'fixture.json').read_text())
@@ -293,8 +330,10 @@ def watch():
             j = json.loads(data)
             installation = j.get('installation') or {}
             if matching_held_update(j, state, trust):
+                marker = parked_signer(j, trust)
                 print(json.dumps({'result': 'HOLD_OBSERVED', 'operationId': j['operationId'], 'phase': j['phase'],
                                   'installationPhase': installation['phase'], 'installationDigest': installation['digest'],
+                                  'signerPid': marker['pid'], 'bootId': marker['bootId'],
                                   'journalSha256': hashlib.sha256(data).hexdigest()}), flush=True)
                 return
         except (OSError, ValueError, KeyError):

@@ -13,6 +13,7 @@ import os
 import pathlib
 import re
 import selectors
+import signal
 import shlex
 import shutil
 import socket
@@ -331,8 +332,18 @@ def main():
                 notice = time.monotonic() + 30
         if not cut or cut.get('result') != 'HOLD_OBSERVED' or cut.get('operationId') != accepted['operationId']:
             raise RuntimeError('no durable update hold observed; no retry sent')
-        # The journal was observed held before this signal. It may have advanced
-        # while the message travelled; this alone is not interruption proof.
+        if cut.get('bootId') != result['beforeBoot'] or not isinstance(cut.get('signerPid'), int) or cut['signerPid'] <= 1:
+            raise RuntimeError('controlled signer cut identity differs')
+        # The test signer withholds the real held-status response until power
+        # loss. Freeze the whole VM before killing it so no guest can advance.
+        vm.send_signal(signal.SIGSTOP)
+        stopped_deadline = time.monotonic() + 5
+        while time.monotonic() < stopped_deadline:
+            if '\nState:\tT' in (P('/proc') / str(vm.pid) / 'status').read_text():
+                break
+            time.sleep(0.02)
+        else:
+            raise RuntimeError('disposable VM did not freeze at the controlled cut')
         vm.kill()
         vm.wait(timeout=20)
         result['cut'] = cut
@@ -366,9 +377,9 @@ def main():
         if proof.get('result') != 'PASS' or proof.get('operationId') != cut['operationId']:
             raise RuntimeError('Local recovery proof incomplete')
         result['proof'] = proof
-        result['result'] = 'SUPPORTING'
-        result['interruptionAtPowerLoss'] = 'UNVERIFIED'
-        raise RuntimeError('update/reboot observed; held state at power loss is not independently proven')
+        result['interruptionAtPowerLoss'] = 'controlled signer status gate; no external process interference'
+        result['result'] = 'PASS'
+        print('Local controlled fixture update and reboot recovery passed.', flush=True)
     except BaseException as e:
         result['error'] = str(e)
         raise

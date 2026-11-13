@@ -64,6 +64,9 @@ func ordinaryFixtureCommand(args []string) error {
 			return nil
 		}
 	}
+	if err := pauseControlledHeldStatus(args); err != nil {
+		return err
+	}
 	return run(args, os.Stdin, os.Stdout, os.Stderr)
 }
 

@@ -67,6 +67,13 @@ class FixtureBoundaries(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'entry limit'):
                 host.safe_files([base])
 
+    def test_cut_requires_stopped_exact_signer(self):
+        guest.require_stopped_signer('State:\tT (stopped)\nUid:\t1102\t1102\t1102\t1102\n', 1102)
+        with self.assertRaises(BlockingIOError):
+            guest.require_stopped_signer('State:\tS (sleeping)\nUid:\t1102\t1102\t1102\t1102\n', 1102)
+        with self.assertRaisesRegex(RuntimeError, 'identity differs'):
+            guest.require_stopped_signer('State:\tT (stopped)\nUid:\t1100\t1100\t1100\t1100\n', 1102)
+
 
 if __name__ == '__main__':
     unittest.main()
