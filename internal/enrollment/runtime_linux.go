@@ -134,7 +134,25 @@ func (w *limitedOutput) Write(b []byte) (int, error) {
 	return w.Buffer.Write(b)
 }
 
-func (h *runtimeHost) export(ctx context.Context, m custodyinstall.Manifest, s sourceRecord) (*imageLease, error) {
+// A privileged caller may compare only with the digest of a stage already
+// verified by the unprivileged app UID. Ordinary callers validate directly.
+func validateExportedFrame(image core.EnrollmentImage, instance, verifiedStageDigest string, privileged bool) error {
+	if image.InstanceID != instance {
+		return errState
+	}
+	if privileged {
+		if len(verifiedStageDigest) != 64 || core.EnrollmentImageDigest(image) != verifiedStageDigest {
+			return errState
+		}
+		return nil
+	}
+	if verifiedStageDigest != "" || core.ValidateEnrollmentImage(image) != nil {
+		return errState
+	}
+	return nil
+}
+
+func (h *runtimeHost) export(ctx context.Context, m custodyinstall.Manifest, s sourceRecord, verifiedStageDigest string) (*imageLease, error) {
 	if err := h.unchangedParent(); err != nil {
 		return nil, err
 	}
@@ -155,7 +173,7 @@ func (h *runtimeHost) export(ctx context.Context, m custodyinstall.Manifest, s s
 		_ = close()
 		return nil, fmt.Errorf("enrollment source helper frame: %w", errState)
 	}
-	if core.ValidateEnrollmentImage(image) != nil || image.InstanceID != s.ExpectedInstanceID {
+	if validateExportedFrame(image, s.ExpectedInstanceID, verifiedStageDigest, os.Getuid() == 0 && os.Geteuid() == 0) != nil {
 		_ = close()
 		return nil, fmt.Errorf("enrollment source payload validation: %w", errState)
 	}
@@ -556,7 +574,9 @@ func runInstalled(ctx context.Context, s Source, o Options, system *custodyinsta
 			}
 			return custodyinstall.Verify(m)
 		},
-		emptySigner: system.EnrollmentSignerEmpty, export: h.export, importImage: h.importImage,
+		emptySigner: system.EnrollmentSignerEmpty, export: func(ctx context.Context, m custodyinstall.Manifest, s sourceRecord) (*imageLease, error) {
+			return h.export(ctx, m, s, "")
+		}, importImage: h.importImage,
 		fence: h.fence, protectedFence: func(ctx context.Context, j journal) error { return h.protectedCutover(ctx, j, "fence") }, publish: h.publish,
 		verifyTarget: func(ctx context.Context, j journal) error {
 			if err := h.checkFence(ctx, j); err != nil {

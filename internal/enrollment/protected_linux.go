@@ -270,7 +270,9 @@ func RunProtectedCutover(ctx context.Context, owner int, id, step string, source
 					return err
 				}
 			}
-			lease, err := h.export(ctx, m, j.Source)
+			// The staged image above was verified as the isolated app UID. Bind
+			// the source frame to its exact digest without opening SQLite as root.
+			lease, err := h.export(ctx, m, j.Source, j.Digest)
 			if err != nil {
 				return err
 			}

@@ -64,6 +64,19 @@ def matching_source(helper, build, inputs):
             source == build.get('declaredSourceCommit') == inputs.get('declaredSourceCommit'))
 
 
+def fixture_failure_detail(stderr):
+    labels = ('protected enrollment source validation refused', 'protected enrollment source frame refused',
+              'enrollment source lease was lost', 'original verified enrollment package unavailable',
+              'original verified core unavailable', 'original verified signer unavailable')
+    allowed = '|'.join(re.escape(label) for label in labels)
+    pattern = re.compile(r'fixture: (fixture command failed: (?:fased-app|fased-signer|fased) exit [0-9]{1,3}(?:; (?:' + allowed + r'))?)')
+    for line in reversed(stderr[-8192:].decode(errors='replace').splitlines()):
+        match = pattern.fullmatch(line)
+        if match:
+            return match.group(1)
+    return ''
+
+
 def preflight(directory, helper_pin):
     if os.getuid() <= 0 or os.getuid() != os.geteuid() or os.environ.get('FASED_DISPOSABLE_VM_ACCEPTANCE') != '1':
         raise RuntimeError('ordinary owner and explicit disposable VM flag required')
@@ -382,6 +395,11 @@ def main():
         print('Local controlled fixture update and reboot recovery passed.', flush=True)
     except BaseException as e:
         result['error'] = str(e)
+        if isinstance(e, subprocess.CalledProcessError) and e.stderr:
+            detail = fixture_failure_detail(e.stderr)
+            if detail:
+                result['error'] = detail[:700]
+                print('Disposable fixture: ' + result['error'], file=sys.stderr, flush=True)
         raise
     finally:
         for child in (browser, watcher, tunnel):

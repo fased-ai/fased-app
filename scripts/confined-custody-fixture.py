@@ -75,14 +75,26 @@ def save(name, value):
         os.close(fd)
 
 
+def safe_fixture_error(text):
+    known = (
+        ('enrollment source payload validation:', 'protected enrollment source validation refused'),
+        ('enrollment source helper frame:', 'protected enrollment source frame refused'),
+        ('source lock helper exited; preserve both copies', 'enrollment source lease was lost'),
+        ('original verified enrollment package is unavailable', 'original verified enrollment package unavailable'),
+        ('original verified core is unavailable; preserve operation', 'original verified core unavailable'),
+        ('original verified signer is unavailable; preserve operation', 'original verified signer unavailable'),
+    )
+    return next((label for message, label in known if message in text), '')
+
+
 def run(args, data=None, timeout=180):
     env = {'HOME': str(HOME), 'USER': 'fased-local', 'LOGNAME': 'fased-local',
            'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8',
            'XDG_RUNTIME_DIR': '/run/user/1100', 'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/1100/bus'}
     p = subprocess.run([str(a) for a in args], input=data, text=True, capture_output=True, timeout=timeout, env=env)
     if p.returncode:
-        # Do not print command output: it may contain a one-use code or fixture password.
-        raise RuntimeError('fixture command failed: ' + pathlib.Path(str(args[0])).name + ' exit ' + str(p.returncode))
+        detail = safe_fixture_error(p.stderr)
+        raise RuntimeError('fixture command failed: ' + pathlib.Path(str(args[0])).name + ' exit ' + str(p.returncode) + ('; ' + detail if detail else ''))
     return p.stdout
 
 

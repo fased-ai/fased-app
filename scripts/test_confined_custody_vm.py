@@ -74,6 +74,16 @@ class FixtureBoundaries(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'identity differs'):
             guest.require_stopped_signer('State:\tT (stopped)\nUid:\t1100\t1100\t1100\t1100\n', 1102)
 
+    def test_failure_detail_excludes_fixture_credentials(self):
+        output = guest.safe_fixture_error('fased-install: token=private-value ' + guest.PASSWORD + '\nfased-app: source image refused')
+        self.assertNotIn('private-value', output)
+        self.assertNotIn(guest.PASSWORD, output)
+        self.assertEqual('', output)
+        self.assertEqual('protected enrollment source validation refused', guest.safe_fixture_error('fased-install: enrollment source payload validation: state refused'))
+        good = b'fixture: fixture command failed: fased-app exit 1; protected enrollment source validation refused\n'
+        self.assertEqual('fixture command failed: fased-app exit 1; protected enrollment source validation refused', host.fixture_failure_detail(good))
+        self.assertEqual('', host.fixture_failure_detail(b'fixture: fixture command failed: fased-app exit 1; token=private\n'))
+
 
 if __name__ == '__main__':
     unittest.main()
