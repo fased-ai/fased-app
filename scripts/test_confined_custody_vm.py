@@ -138,6 +138,16 @@ class FixtureBoundaries(unittest.TestCase):
         self.assertEqual('fixture API /api/v1/auth/claim HTTP 409', host.fixture_failure_detail(b'fixture: fixture API /api/v1/auth/claim HTTP 409\n'))
         self.assertEqual('', host.fixture_failure_detail(b'fixture: fixture API /api/v1/auth/claim HTTP 409 token=private\n'))
 
+    def test_failure_stderr_is_private_bounded_and_never_replaced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            name = host.save_failure_stderr(work, b'x' * 40000)
+            record = work / name
+            self.assertEqual(0o600, record.stat().st_mode & 0o777)
+            self.assertEqual(b'x' * 32768, record.read_bytes())
+            self.assertIsNone(host.save_failure_stderr(work, b'different'))
+            self.assertEqual(b'x' * 32768, record.read_bytes())
+
     def test_resume_requires_original_receipt_and_pinned_identities(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -171,6 +181,10 @@ class FixtureBoundaries(unittest.TestCase):
             result = base / 'local-result.json'
             result.write_text(json.dumps(receipt))
             with patch.object(host, 'IMAGE', image), patch.object(host, 'command', side_effect=output):
+                self.assertEqual((34163, 50943, 'd' * 32), host.resume_inputs(work, result, 'a' * 64, 'b' * 64))
+                receipt['appPort'] = 50943
+                receipt['error'] = 'fixture API /api/v1/auth/claim HTTP 409'
+                result.write_text(json.dumps(receipt))
                 self.assertEqual((34163, 50943, 'd' * 32), host.resume_inputs(work, result, 'a' * 64, 'b' * 64))
                 chain[0]['full-backing-filename'] = '/unexpected/image'
                 with self.assertRaisesRegex(RuntimeError, 'backing chain differs'):
@@ -209,6 +223,46 @@ class FixtureBoundaries(unittest.TestCase):
                 (work / 'state.json').write_text('{}')
                 with self.assertRaisesRegex(RuntimeError, 'pre-enrollment fixture required'):
                     guest.resume_claimed(50943)
+
+    def test_resume_unclaimed_reuses_original_pre_enrollment_fixture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            home, work, trust = base / 'home', base / 'work', base / 'trust'
+            work.mkdir()
+            trust.mkdir()
+            (work / 'selection').write_text('base\n')
+            binary = home / '.local/share/fased-app/fased-app'
+            binary.parent.mkdir(parents=True)
+            binary.write_text('original core')
+            (trust / 'fixture.json').write_text(json.dumps({'sourceSha256': guest.digest(binary)}))
+            (binary.parent / 'install.json').write_text(json.dumps({'phase': 'ready', 'location': 'local',
+                'listen': '127.0.0.1:50943', 'data': str(home / '.config/fased-app')}))
+            with patch.multiple(guest, HOME=home, WORK=work, TRUST=trust, ROOT=base / 'custody'), \
+                 patch.object(guest, 'api', return_value={'claimed': False}), \
+                 patch.object(guest, 'complete_setup', return_value='continued') as complete:
+                self.assertEqual('continued', guest.resume_claimed(50943))
+                complete.assert_called_once_with(50943, None)
+
+    def test_source_claim_uses_existing_private_proof_without_rotating_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            proof = home / '.config/fased-app/claim-code.json'
+            proof.parent.mkdir(parents=True)
+            proof.write_text(json.dumps({'code': 'a' * 43, 'expiresAt': '2099-01-01T00:00:00Z'}))
+            proof.chmod(0o600)
+            empty = {'revision': 1, 'profileId': 'fixture', 'tasks': []}
+            created = {'revision': 2, 'profileId': 'fixture', 'tasks': [{'id': 'task-1'}]}
+            with patch.object(guest, 'HOME', home), patch.object(guest, 'OWNER', os.getuid()), \
+                 patch.object(guest, 'run', side_effect=AssertionError('claim proof must not rotate')), \
+                 patch.object(guest, 'api', side_effect=[{'sessionToken': 'fixture'}, empty, created, {}]) as api:
+                self.assertEqual('task-1', guest.seed_source('http://127.0.0.1:50943', Path('/fixture')))
+                self.assertEqual('a' * 43, api.call_args_list[0].args[3]['code'])
+                self.assertEqual('a' * 43, json.loads(proof.read_text())['code'])
+            proof.unlink()
+            os.mkfifo(proof, 0o600)
+            with patch.object(guest, 'HOME', home), patch.object(guest, 'OWNER', os.getuid()):
+                with self.assertRaisesRegex(RuntimeError, 'private fixture claim required'):
+                    guest.seed_source('http://127.0.0.1:50943', Path('/fixture'))
 
     def test_local_fixture_enrollment_requests_owner_transport(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -80,6 +80,20 @@ def fixture_failure_detail(stderr):
     return ''
 
 
+def save_failure_stderr(work, stderr):
+    """Retain bounded fixture diagnostics privately without replacing evidence."""
+    name = 'acceptance-failure.stderr'
+    try:
+        fd = os.open(work / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'wb') as f:
+            f.write(stderr[-32768:])
+            f.flush()
+            os.fsync(f.fileno())
+        return name
+    except OSError:
+        return None
+
+
 def resume_inputs(work, previous_result, receipt_pin, helper_hash):
     info = work.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
@@ -95,9 +109,13 @@ def resume_inputs(work, previous_result, receipt_pin, helper_hash):
     if len(hosts) != 1 or len(host_public) != 2:
         raise RuntimeError('original host identity required')
     host = re.fullmatch(r'\[127\.0\.0\.1\]:([0-9]{4,5}) (\S+) (\S+)', hosts[0])
-    if not host or [host.group(2), host.group(3)] != host_public or not setup:
+    app_port = previous.get('appPort')
+    if app_port is None and setup:
+        app_port = int(setup.group(1))
+    if (not host or [host.group(2), host.group(3)] != host_public or
+            isinstance(app_port, bool) or not isinstance(app_port, int)):
         raise RuntimeError('original fixture listener or host identity differs')
-    ssh_port, app_port = int(host.group(1)), int(setup.group(1))
+    ssh_port = int(host.group(1))
     if not (1024 <= ssh_port <= 65535 and 1024 <= app_port <= 65535) or ssh_port == app_port:
         raise RuntimeError('original fixture ports are invalid')
     for name, limit in (('disk.qcow2', 16 << 30), ('seed.iso', 256 << 20), ('owner-key', 8192), ('owner-key.pub', 8192)):
@@ -223,7 +241,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('--fixture-dir', type=P, required=True)
     p.add_argument('--helper-receipt-sha256', required=True)
-    p.add_argument('--resume-claimed', action='store_true', help='resume the original claimed pre-enrollment fixture')
+    p.add_argument('--resume-claimed', action='store_true', help='resume the original pre-enrollment fixture')
     a = p.parse_args()
     directory, helper_hash = preflight(a.fixture_dir, a.helper_receipt_sha256)
     archive_files = safe_files((directory / 'repo-base', directory / 'repo-target'))
@@ -294,6 +312,7 @@ def main():
             command(['qemu-img', 'resize', disk, '12G'])
         else:
             iso, disk = work / 'seed.iso', work / 'disk.qcow2'
+        result['appPort'] = app_port
         if a.resume_claimed:
             serial = os.fdopen(os.open(work / 'serial-resume.log', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), 'wb')
             stderr = os.fdopen(os.open(work / 'qemu-resume.stderr', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), 'wb')
@@ -497,6 +516,9 @@ def main():
     except BaseException as e:
         result['error'] = str(e)
         if isinstance(e, subprocess.CalledProcessError) and e.stderr:
+            private_failure = save_failure_stderr(work, e.stderr)
+            if private_failure:
+                result['privateFailureStderr'] = private_failure
             detail = fixture_failure_detail(e.stderr)
             if detail:
                 result['error'] = detail[:700]

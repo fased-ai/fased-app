@@ -156,9 +156,18 @@ def login(origin):
 
 def seed_source(origin, binary, session=None):
     if session is None:
-        code = run([binary, 'claim-code']).strip()
-        if not code:
-            raise RuntimeError('fixture claim unavailable')
+        # Reuse the setup proof already issued by this core. The claim API
+        # verifies its hash and expiry; never rotate it during a fixture retry.
+        fd = os.open(HOME / '.config/fased-app/claim-code.json',
+                     os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as f:
+            info = os.fstat(f.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != OWNER or
+                    stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1 or info.st_size > 4096):
+                raise RuntimeError('original private fixture claim required')
+            code = json.load(f).get('code')
+        if not isinstance(code, str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}', code):
+            raise RuntimeError('original fixture claim unavailable')
         session = api(origin, '/api/v1/auth/claim', 'POST', {'code': code, 'password': PASSWORD})
     view = api(origin, '/api/v1/agents', session=session)
     if any(t.get('name') == 'Disposable preserved task' for t in view['tasks']):
@@ -282,9 +291,10 @@ def resume_claimed(port):
     if digest(binary) != trust['sourceSha256'] or manifest.get('phase') != 'ready' or manifest.get('location') != 'local' or manifest.get('listen') != '127.0.0.1:' + str(port) or manifest.get('data') != str(HOME / '.config/fased-app'):
         raise RuntimeError('original installed fixture differs')
     origin = 'http://127.0.0.1:' + str(port)
-    if api(origin, '/api/v1/auth/state').get('claimed') is not True:
-        raise RuntimeError('original fixture owner is not claimed')
-    return complete_setup(port, login(origin))
+    claimed = api(origin, '/api/v1/auth/state').get('claimed')
+    if claimed is not True and claimed is not False:
+        raise RuntimeError('original fixture owner state is unknown')
+    return complete_setup(port, login(origin) if claimed else None)
 
 
 def complete_setup(port, session=None):
