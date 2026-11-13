@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 )
 
@@ -93,6 +94,56 @@ func TestProtectedEnrollmentJournalRequiresOriginalLockForMutation(t *testing.T)
 	}
 	if _, err = openOwnerEnrollmentJournal(a, false); err == nil {
 		t.Fatal("nonprivate owner journal accepted")
+	}
+}
+
+func TestProtectedRemoteEnrollmentReadsMatchingPendingWrites(t *testing.T) {
+	if os.Getuid() <= 0 || os.Getgid() <= 0 {
+		t.Skip("ordinary owner required")
+	}
+	home := t.TempDir()
+	dir := filepath.Join(home, ".config", "fased-app-enrollment")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	owner := os.Getuid()
+	j := journal{Version: 1, ID: strings.Repeat("a", 32), Owner: owner, Phase: "prepared", Network: "devnet",
+		Mode: "ordinary-custody:v1", Profile: "owner-authorized:v1", Provenance: "controlled-disposable:v1",
+		CoreHash: strings.Repeat("b", 64), SignerHash: strings.Repeat("c", 64),
+		Source: sourceRecord{Profile: "remote", Data: filepath.Join(home, "source"), Listen: "127.0.0.1:7332",
+			PublicOrigin: "https://controlled.owner.ts.net", ExpectedInstanceID: base64.RawURLEncoding.EncodeToString(make([]byte, 32)), UID: owner + 1, GID: os.Getgid()},
+		Node: node{Device: 1, Inode: 2, UID: owner + 1, GID: os.Getgid(), Mode: 0700}}
+	write := func(name string, value journal) {
+		t.Helper()
+		b, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(dir, name), b, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("state.json", j)
+	write(".pending-123", j)
+	next := j
+	next.Target = custodyinstall.Manifest{Version: 3, ID: j.ID, Owner: owner, Enrollment: true, Location: "remote",
+		Listen: j.Source.Listen, PublicOrigin: j.Source.PublicOrigin, Network: j.Network, Mode: j.Mode, Profile: j.Profile,
+		Provenance: j.Provenance, CoreHash: j.CoreHash, SignerHash: j.SignerHash,
+		App: custodyinstall.Identity{UID: owner + 2}, Signer: custodyinstall.Identity{UID: owner + 3}}
+	write(".pending-456", next)
+	lock, err := core.LockInstance(filepath.Join(dir, "controller.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := maintenance.Authority{Owner: owner, Group: os.Getgid(), Home: home, Profile: "remote"}
+	if got, err := openOwnerEnrollmentJournal(a, true); err != nil || got != j {
+		t.Fatal("protected Remote reader rejected the held original", err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openOwnerEnrollmentJournal(a, true); err == nil {
+		t.Fatal("protected Remote mutation accepted without the original lock")
 	}
 }
 

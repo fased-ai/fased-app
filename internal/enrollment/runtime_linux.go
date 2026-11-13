@@ -194,9 +194,10 @@ func verifyRetainedPrepared(dirFD int, names []string, current journal, owner in
 			witness = true
 			continue
 		}
-		// Only the Local native enrollment with its original witness supports
-		// replaying an additional complete, uncommitted transition.
-		if current.Phase == "source-lock-lost" || current.Source.Profile != "local" || !current.NativeOwnerAccess || current.Mode != signer.OrdinaryCustodyMode ||
+		// Only the original ordinary-custody topology can replay an additional
+		// complete, uncommitted transition. Remote has no Local native owner.
+		ownerTopology := current.Source.Profile == "local" && current.NativeOwnerAccess || current.Source.Profile == "remote" && !current.NativeOwnerAccess
+		if current.Phase == "source-lock-lost" || !ownerTopology || current.Mode != signer.OrdinaryCustodyMode ||
 			current.CoreRecovery != nil || pending.CoreRecovery != nil || !compatiblePendingWrite(current, pending) {
 			return retained, errState
 		}

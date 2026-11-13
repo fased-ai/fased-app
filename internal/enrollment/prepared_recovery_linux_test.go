@@ -179,6 +179,119 @@ func TestPreparedRecoveryPreservesTwoSameOperationWrites(t *testing.T) {
 	}
 }
 
+func TestPreparedRecoveryPreservesTwoRemoteWrites(t *testing.T) {
+	h, s, o, original, witness := preparedRecoveryFixture(t)
+	s.Profile = "remote"
+	s.PublicOrigin = "https://controlled.owner.ts.net"
+	o.NativeOwnerAccess = false
+	original.Source = record(s)
+	original.NativeOwnerAccess = false
+	raw, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(witness, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeOwnerJournal(h.state, original); err != nil {
+		t.Fatal(err)
+	}
+	next := original
+	next.Target = custodyinstall.Manifest{Version: 3, ID: original.ID, Owner: original.Owner, Enrollment: true,
+		Location: "remote", Listen: s.Listen, PublicOrigin: s.PublicOrigin, Network: original.Network,
+		Mode: original.Mode, Profile: original.Profile, Provenance: original.Provenance,
+		CoreHash: original.CoreHash, SignerHash: original.SignerHash,
+		App: custodyinstall.Identity{UID: original.Owner + 1}, Signer: custodyinstall.Identity{UID: original.Owner + 2}}
+	second := filepath.Join(filepath.Dir(h.state), ".pending-456")
+	secondRaw, err := json.Marshal(next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, secondRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := recoverPreparedOwnerJournal(t.Context(), h, s, o, original.CoreHash, original.SignerHash, func() error { return nil }); err != nil {
+		t.Fatal("matching Remote writes could not resume the committed operation", err)
+	}
+	if err := checkPendingReplay(h.state, original, &next.Target, ""); err != nil {
+		t.Fatal("matching Remote replay target was rejected", err)
+	}
+	changed := next.Target
+	changed.PublicOrigin = "https://foreign.owner.ts.net"
+	if err := checkPendingReplay(h.state, original, &changed, ""); err == nil {
+		t.Fatal("foreign Remote target was accepted")
+	}
+	stop := errors.New("observed Remote target")
+	op := operations{owner: original.Owner, load: func() (journal, error) { return readOwnerJournal(h.state) },
+		save: func(j journal) error { return writeOwnerJournal(h.state, j) },
+		checkPending: func(j journal, target *custodyinstall.Manifest, digest string) error {
+			return checkPendingReplay(h.state, j, target, digest)
+		},
+		prepare: func(_ context.Context, got journal, _ Options) (custodyinstall.Manifest, error) {
+			if got != original {
+				t.Fatal("Remote controller selected a different operation")
+			}
+			return next.Target, nil
+		}, target: func(m custodyinstall.Manifest) error {
+			if m != next.Target {
+				return errState
+			}
+			return nil
+		}, emptySigner: func(context.Context, custodyinstall.Manifest) error { return stop }}
+	if _, err := run(t.Context(), s, o, original.CoreHash, original.SignerHash, op); !errors.Is(err, stop) {
+		t.Fatal("Remote controller did not replay the same prepared target", err)
+	}
+	if got, err := readOwnerJournal(h.state); err != nil || got != next {
+		t.Fatal("Remote controller did not preserve the committed operation", err)
+	}
+	if after, err := os.ReadFile(second); err != nil || string(after) != string(secondRaw) {
+		t.Fatal("Remote pending write changed", err)
+	}
+	foreign := next
+	foreign.Source.PublicOrigin = "https://foreign.owner.ts.net"
+	foreign.Target.PublicOrigin = foreign.Source.PublicOrigin
+	foreignRaw, err := json.Marshal(foreign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, foreignRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readOwnerJournal(h.state); err == nil {
+		t.Fatal("foreign Remote source was accepted")
+	}
+	suspended := next
+	suspended.Phase = "suspended"
+	if err := writeOwnerJournal(h.state, suspended); err != nil {
+		t.Fatal(err)
+	}
+	importing := suspended
+	importing.Phase = "importing"
+	importing.Digest = strings.Repeat("d", 64)
+	importRaw, err := json.Marshal(importing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, importRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkPendingReplay(h.state, suspended, nil, importing.Digest); err != nil {
+		t.Fatal("matching Remote export digest was rejected", err)
+	}
+	if err := checkPendingReplay(h.state, suspended, nil, strings.Repeat("e", 64)); err == nil {
+		t.Fatal("changed Remote export digest was accepted")
+	}
+	lost := suspended
+	lost.Phase = "source-lock-lost"
+	lost.Digest = importing.Digest
+	if err := writeOwnerJournal(h.state, lost); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readOwnerJournal(h.state); err == nil {
+		t.Fatal("Remote recovery continued after source lease loss")
+	}
+}
+
 func TestPreparedRecoveryRefusesChangedReplayTarget(t *testing.T) {
 	h, s, o, original, _ := preparedRecoveryFixture(t)
 	if err := writeOwnerJournal(h.state, original); err != nil {
