@@ -7,8 +7,11 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestMaintenancePolicyGrantsOnlyProtectedEntry(t *testing.T) {
@@ -90,5 +93,29 @@ func TestMaintenanceRegisterRefusesOrdinaryProcessBeforeMutation(t *testing.T) {
 	}
 	if _, err := ValidateProcess(os.Getuid()); err == nil {
 		t.Fatal("ordinary process entered privileged request handler")
+	}
+}
+
+func TestMaintenanceDirectoryCreationIgnoresRestrictiveUmask(t *testing.T) {
+	if os.Getenv("FASED_TEST_MAINTENANCE_UMASK") != "1" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestMaintenanceDirectoryCreationIgnoresRestrictiveUmask$")
+		cmd.Env = append(os.Environ(), "FASED_TEST_MAINTENANCE_UMASK=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("isolated umask: %v: %s", err, out)
+		}
+		return
+	}
+	parent := t.TempDir()
+	old := unix.Umask(0027)
+	defer unix.Umask(old)
+	path := filepath.Join(parent, "operation")
+	if err := createMaintenanceDirectory(path); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0755 {
+		t.Fatalf("created mode: %v %v", info, err)
+	}
+	if err := createMaintenanceDirectory(path); err == nil {
+		t.Fatal("existing directory was silently adopted")
 	}
 }

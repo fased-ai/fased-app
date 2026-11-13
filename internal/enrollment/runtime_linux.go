@@ -446,6 +446,21 @@ func (h *runtimeHost) protectedCutover(ctx context.Context, j journal, step stri
 	if err := h.unchangedParent(); err != nil {
 		return err
 	}
+	if step == "fence" {
+		q := maintenance.CustodyEnrollmentRequest{OperationID: j.ID, Step: "reserve"}
+		if _, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "custody-enrollment-cutover", Enrollment: &q}, h.system.Out); err != nil {
+			return err
+		}
+		// Local's parent belongs to the owner. Create this directory without
+		// privilege; the helper binds its inode before taking ownership.
+		if j.Source.Profile == "local" {
+			if n, err := realNode(h.pinned(h.base)); err == nil && n == j.Node {
+				if err = unix.Mkdirat(int(h.parent.Fd()), ".enrollment-"+j.ID, 0700); err != nil && !errors.Is(err, unix.EEXIST) {
+					return err
+				}
+			}
+		}
+	}
 	q := maintenance.CustodyEnrollmentRequest{OperationID: j.ID, Step: step}
 	_, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "custody-enrollment-cutover", Enrollment: &q}, h.system.Out)
 	return err
@@ -509,7 +524,7 @@ func runInstalled(ctx context.Context, s Source, o Options, system *custodyinsta
 		targetExists: func() bool { _, e := os.Lstat(custodyinstall.Root(os.Getuid())); return !errors.Is(e, os.ErrNotExist) },
 		prepare: func(ctx context.Context, j journal, o Options) (custodyinstall.Manifest, error) {
 			if o.Mode == signer.OrdinaryCustodyMode {
-				q := maintenance.CustodyEnrollmentRequest{OperationID: j.ID, Network: o.Network, Listen: j.Source.Listen, PublicOrigin: j.Source.PublicOrigin, NativeOwnerAccess: o.NativeOwnerAccess, CoreSHA256: j.CoreHash, SignerSHA256: j.SignerHash}
+				q := maintenance.CustodyEnrollmentRequest{OperationID: j.ID, Network: o.Network, Listen: j.Source.Listen, PublicOrigin: j.Source.PublicOrigin, NativeOwnerAccess: o.NativeOwnerAccess, CoreSHA256: j.CoreHash, SignerSHA256: j.SignerHash, Sequence: j.Source.ApplicationSequence, ReleaseSHA256: j.Source.ApplicationReleaseSHA256}
 				b, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "custody-enrollment-prepare", Enrollment: &q}, system.Out)
 				if err != nil {
 					return custodyinstall.Manifest{}, err

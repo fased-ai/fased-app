@@ -46,6 +46,11 @@ func ownerSetupLink(ctx context.Context, dir, origin string, out io.Writer) erro
 		_, e = fmt.Fprintln(out, strings.Replace(address, "#setup=", "#local=", 1))
 		return e
 	}
+	setupLock, err := core.LockOwnerSetup(dir)
+	if err != nil {
+		return err
+	}
+	defer setupLock.Close()
 	store, err := core.OpenStore(dir)
 	if err != nil {
 		return err
@@ -92,6 +97,11 @@ func remoteOwnerSetupLink(args []string, in *os.File, out io.Writer) error {
 	if e != nil {
 		return e
 	}
+	setupLock, e := core.LockOwnerSetup(m.Data)
+	if e != nil {
+		return e
+	}
+	defer setupLock.Close()
 	store, e := core.OpenStore(m.Data)
 	if e != nil {
 		return e

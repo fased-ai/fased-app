@@ -125,7 +125,7 @@ func enrollmentSource(ctx context.Context, mode, expected string, paths localins
 		if profile == "" {
 			profile = "local"
 		}
-		source = enrollment.Source{Profile: profile, Data: m.Data, UID: os.Getuid(), GID: os.Getgid(), Listen: m.Listen, PublicOrigin: m.PublicOrigin, ExpectedInstanceID: expected, Running: status.Active, Autostart: status.Autostart}
+		source = enrollment.Source{Profile: profile, Data: m.Data, UID: os.Getuid(), GID: os.Getgid(), Listen: m.Listen, PublicOrigin: m.PublicOrigin, ExpectedInstanceID: expected, Running: status.Active, Autostart: status.Autostart, ApplicationSequence: m.ApplicationSequence, ApplicationReleaseSHA256: m.ApplicationReleaseSHA256}
 		source.Validate = func(context.Context) error { return localinstall.ValidateEnrollment(m) }
 		source.Suspend = func(c context.Context) error { return localinstall.SuspendEnrollment(c, m) }
 		source.Restore = func(c context.Context, running, autostart bool) error {
@@ -152,7 +152,7 @@ func enrollmentSource(ctx context.Context, mode, expected string, paths localins
 		lease.Close()
 		return source, nil, e
 	}
-	source = enrollment.Source{Profile: "remote", Data: m.Data, UID: m.AppUID, GID: m.AppGID, Listen: m.Listen, PublicOrigin: m.PublicOrigin, ExpectedInstanceID: expected, Running: status.Active, Autostart: autostart}
+	source = enrollment.Source{Profile: "remote", Data: m.Data, UID: m.AppUID, GID: m.AppGID, Listen: m.Listen, PublicOrigin: m.PublicOrigin, ExpectedInstanceID: expected, Running: status.Active, Autostart: autostart, ApplicationSequence: m.ApplicationSequence, ApplicationReleaseSHA256: m.ApplicationReleaseSHA256}
 	source.Validate = func(c context.Context) error { return vpsinstall.ValidateEnrollment(c, m, system) }
 	source.Suspend = func(c context.Context) error { return vpsinstall.SuspendEnrollment(c, m, system) }
 	source.Restore = func(c context.Context, running, autostart bool) error {

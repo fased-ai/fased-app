@@ -171,10 +171,17 @@ func sudoPolicy(a Authority) []byte {
 }
 
 func ensureDirectory(path string) error {
-	created := false
-	if err := os.Mkdir(path, 0755); err == nil {
-		created = true
-	} else if !errors.Is(err, os.ErrExist) {
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		// GNU mkdir -m creates this exact mode in its own process, so the
+		// helper's inherited umask cannot leave an intermediate 0750 directory
+		// if the request is interrupted. The utility and all arguments are fixed.
+		if e := createMaintenanceDirectory(path); e != nil {
+			// Another protected request may have created the same directory.
+			if _, inspectErr := os.Lstat(path); inspectErr != nil {
+				return e
+			}
+		}
+	} else if err != nil {
 		return err
 	}
 	i, err := os.Lstat(path)
@@ -185,15 +192,8 @@ func ensureDirectory(path string) error {
 	if !ok || st.Uid != 0 || st.Gid != 0 || !i.IsDir() || i.Mode()&os.ModeSymlink != 0 || i.Mode().Perm()&0022 != 0 {
 		return errors.New("foreign maintenance directory; preserving it")
 	}
-	if !created && i.Mode().Perm() != 0755 {
+	if i.Mode().Perm() != 0755 {
 		return errors.New("maintenance directory mode differs; preserving it")
-	}
-	// The bootstrap umask can remove read/search bits from our newly created
-	// directory. Fixed root-owned metadata is public, so publish the fixed mode.
-	if created {
-		if err := os.Chmod(path, 0755); err != nil {
-			return err
-		}
 	}
 	if err := syncDirectory(path); err != nil {
 		return err
@@ -201,6 +201,20 @@ func ensureDirectory(path string) error {
 	// Resuming after mkdir is indistinguishable from creation. Persist both
 	// the directory and its parent before publishing authority inside it.
 	return syncDirectory(filepath.Dir(path))
+}
+
+func createMaintenanceDirectory(path string) error {
+	tool, err := openProtected("/usr/bin/mkdir", 16<<20, 0755)
+	if err != nil {
+		return err
+	}
+	if err = tool.Close(); err != nil {
+		return err
+	}
+	cmd := exec.Command("/usr/bin/mkdir", "--mode=0755", "--", path)
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
+	cmd.Dir = "/"
+	return cmd.Run()
 }
 
 func publishFixed(path string, data []byte, mode os.FileMode) error {

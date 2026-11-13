@@ -18,6 +18,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/bootstrap"
 	"github.com/fased-ai/fased-app/internal/bundle"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/enrollment"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
 	"github.com/fased-ai/fased-app/internal/signer"
@@ -218,9 +219,47 @@ func maintenanceCustodyCommand(action string, args []string, out io.Writer) erro
 	return custodyinstall.RunProtectedUpdate(ctx, owner, id, action == "maintenance-recover")
 }
 
+// custodyAcquisition is written only after the existing bootstrap verifier has
+// authenticated both exact binaries. Its root-protected receipt lets a retry
+// reuse the same bytes instead of following a newer release.
+type custodyAcquisition struct {
+	Version          int                                  `json:"version"`
+	Request          maintenance.CustodyEnrollmentRequest `json:"request"`
+	Identity         bootstrap.MaintenanceIdentity        `json:"identity"`
+	Sequence         uint64                               `json:"sequence"`
+	ReleaseSHA256    string                               `json:"releaseSha256"`
+	ProvenanceSHA256 string                               `json:"provenanceSha256,omitempty"`
+	DevelopmentOnly  bool                                 `json:"developmentOnly"`
+	SignerBytes      int64                                `json:"signerBytes"`
+}
+
+func protectedAcquisition(path string, q maintenance.CustodyEnrollmentRequest, development bool) (custodyAcquisition, error) {
+	var r custodyAcquisition
+	f, err := update.OpenProtected(path, 32<<10, 0644)
+	if err != nil {
+		return r, err
+	}
+	b, err := io.ReadAll(io.LimitReader(f, (32<<10)+1))
+	err = errors.Join(err, f.Close())
+	if err != nil || update.StrictJSON(b, &r) != nil || r.Version != 1 || r.Request != q || r.Identity.Core.SHA256 != q.CoreSHA256 || r.Identity.Core.Bytes <= 0 || r.Identity.Core.Bytes > 64<<20 || r.SignerBytes <= 0 || r.SignerBytes > 64<<20 || r.Sequence == 0 || q.Sequence != 0 && r.Sequence != q.Sequence || len(r.ReleaseSHA256) != 64 || (!r.DevelopmentOnly && len(r.ProvenanceSHA256) != 64) || r.DevelopmentOnly != development {
+		return custodyAcquisition{}, errors.New("original verified acquisition differs; preserve it")
+	}
+	return r, nil
+}
+
+func openEnrollmentCore(path string, size int64, open func(string, int64, os.FileMode) (*os.File, error)) (*os.File, error) {
+	f, err := open(path, size, 0700)
+	if err == nil {
+		return f, nil
+	}
+	// A previous attempt may have synced the executable mode before its
+	// protected acquisition receipt was published.
+	return open(path, size, 0755)
+}
+
 // Initialize only from the protected helper's independently verified release;
 // the IPC request cannot choose bytes, paths, an owner or a release floor.
-func maintenanceCustodyPrepare(ctx context.Context, a maintenance.Authority, q maintenance.CustodyEnrollmentRequest) (custodyinstall.Manifest, error) {
+func maintenanceCustodyPrepare(ctx context.Context, a maintenance.Authority, q maintenance.CustodyEnrollmentRequest) (_ custodyinstall.Manifest, resultErr error) {
 	var empty custodyinstall.Manifest
 	if a.Profile == "local" {
 		if q.PublicOrigin != "" {
@@ -228,7 +267,7 @@ func maintenanceCustodyPrepare(ctx context.Context, a maintenance.Authority, q m
 		}
 	} else if a.Profile == "remote" {
 		m, err := vpsinstall.LoadProtected(a.Owner)
-		if err != nil || q.NativeOwnerAccess || q.Listen != m.Listen || q.PublicOrigin != m.PublicOrigin {
+		if err != nil || q.NativeOwnerAccess || q.Listen != m.Listen || q.PublicOrigin != m.PublicOrigin || q.Sequence != m.ApplicationSequence || q.ReleaseSHA256 != m.ApplicationReleaseSHA256 {
 			return empty, errors.New("Remote custody must retain its existing private instance")
 		}
 		if err = privateaccess.ValidateProtectedRemoteSetup(ctx, a.Owner, a.Home, m.Listen, m.PublicOrigin); err != nil {
@@ -246,80 +285,154 @@ func maintenanceCustodyPrepare(ctx context.Context, a maintenance.Authority, q m
 	if err != nil {
 		return empty, err
 	}
-	p, err := bootstrap.PrepareMaintenance(ctx, a.Owner, o)
-	if err != nil {
+	if err = enrollment.ValidateProtectedPrepare(a, q, o.Development); err != nil {
 		return empty, err
 	}
-	// Rejected requests also discard downloaded payloads at Close; otherwise
-	// each hash mismatch retains another root-owned executable bundle.
-	p.RetainAcquisitionEvidence()
-	defer p.Close()
-	report := p.Report()
-	if report.Sequence == 0 || !report.ProvenanceVerified && !report.DevelopmentOnly {
-		return empty, errors.New("authenticated enrollment release required")
-	}
-	id, err := p.MaintenanceIdentity()
-	if err != nil || id.Core.SHA256 != q.CoreSHA256 {
-		return empty, errors.New("verified core differs from the source")
-	}
-	engine, _ := bundle.Names()
-	corePath := filepath.Join(report.BundleDirectory, engine)
-	f, err := update.OpenProtected(corePath, id.Core.Bytes, 0700)
-	if err != nil {
-		return empty, err
-	}
-	err = errors.Join(f.Chmod(0755), f.Sync(), f.Close())
-	if err != nil {
-		return empty, err
-	}
-	signerStage := filepath.Join(report.BundleDirectory, "enrollment-signer")
-	if err = maintenance.EnsureProtectedDirectory(signerStage); err != nil {
-		return empty, err
-	}
-	if err = maintenanceAcquireSigner(ctx, p, a, signerStage, id); err != nil {
-		return empty, err
-	}
-	signerHash, signerSize, err := maintenance.ProtectedDigest(signerStage+"/fased-signer", 0755, 64<<20)
-	if err != nil || signerHash != q.SignerSHA256 {
-		return empty, errors.New("verified signer differs from the source")
-	}
+	// A fixed protected path bounds retained acquisitions to this operation.
+	o.Directory = filepath.Join(filepath.Dir(o.Directory), "custody-"+q.OperationID)
 	dir := update.MaintenanceDirectory(a.Owner, q.OperationID)
+	provenance := signer.OwnerKeyProvenance
+	if o.Development {
+		provenance = signer.ControlledCustodyProfile
+	}
+	options := custodyinstall.Options{NativeOwnerAccess: q.NativeOwnerAccess, Core: dir + "/fased-app", Signer: dir + "/fased-signer", Network: q.Network, Listen: q.Listen, Location: a.Profile, PublicOrigin: q.PublicOrigin, Mode: signer.OrdinaryCustodyMode, Profile: signer.OwnerCustodyProfile, Provenance: provenance, PrepareHost: true, Disposable: true, StageOnly: true}
+	if err = custodyinstall.ReserveProtectedEnrollment(a.Owner, q.OperationID, q.CoreSHA256, q.SignerSHA256, options, o.Development); err != nil {
+		return empty, err
+	}
 	if err = maintenance.EnsureProtectedDirectory(filepath.Dir(dir)); err != nil {
 		return empty, err
 	}
 	if err = maintenance.EnsureProtectedDirectory(dir); err != nil {
 		return empty, err
 	}
-	if err = maintenance.CopyProtected(corePath, dir+"/fased-app", 0755, id.Core.SHA256, id.Core.Bytes, ""); err != nil {
+	reservation, _ := json.Marshal(q)
+	reservationPath := dir + "/enrollment-acquisition-reservation.json"
+	if f, e := update.OpenProtected(reservationPath, 32<<10, 0644); e == nil {
+		old, readErr := io.ReadAll(io.LimitReader(f, (32<<10)+1))
+		readErr = errors.Join(readErr, f.Close())
+		if readErr != nil || string(old) != string(reservation) {
+			return empty, errors.New("acquisition reservation differs; preserve it")
+		}
+	} else if errors.Is(e, os.ErrNotExist) {
+		if _, e = os.Lstat(o.Directory); !errors.Is(e, os.ErrNotExist) {
+			return empty, errors.New("unclassified acquisition exists; preserve it")
+		}
+		if err = maintenance.PublishEnrollmentRecord(a.Owner, q.OperationID, "enrollment-acquisition-reservation.json", reservation); err != nil {
+			return empty, err
+		}
+	} else {
+		return empty, e
+	}
+
+	receiptPath := dir + "/enrollment-acquisition.json"
+	acq, err := protectedAcquisition(receiptPath, q, o.Development)
+	if errors.Is(err, os.ErrNotExist) {
+		var p *bootstrap.Prepared
+		var e error
+		if _, e = os.Lstat(o.Directory); errors.Is(e, os.ErrNotExist) {
+			p, e = bootstrap.PrepareMaintenance(ctx, a.Owner, o)
+		} else if e == nil {
+			if _, markerErr := os.Lstat(filepath.Join(o.Directory, "bootstrap.json")); errors.Is(markerErr, os.ErrNotExist) {
+				if e = bootstrap.DiscardIncompleteMaintenance(a.Owner, o); e == nil {
+					p, e = bootstrap.PrepareMaintenance(ctx, a.Owner, o)
+				}
+			} else if markerErr != nil {
+				e = markerErr
+			} else {
+				p, e = bootstrap.ResumeMaintenance(ctx, a.Owner, o)
+			}
+		}
+		if e != nil {
+			return empty, e
+		}
+		defer func() { resultErr = errors.Join(resultErr, p.Close()) }()
+		report := p.Report()
+		if report.Sequence == 0 || !report.ProvenanceVerified && !report.DevelopmentOnly {
+			return empty, errors.New("authenticated enrollment release required")
+		}
+		if q.Sequence != 0 && !p.MatchesMaintenanceRelease(q.Sequence, q.ReleaseSHA256) {
+			return empty, errors.Join(errors.New("original installed release is not available from this channel"), p.DiscardMaintenance())
+		}
+		id, e := p.MaintenanceIdentity()
+		if e != nil || id.Core.SHA256 != q.CoreSHA256 {
+			if e == nil {
+				e = p.DiscardMaintenance()
+			}
+			return empty, errors.Join(errors.New("verified core differs from the source"), e)
+		}
+		engine, _ := bundle.Names()
+		corePath := filepath.Join(report.BundleDirectory, engine)
+		f, e := openEnrollmentCore(corePath, id.Core.Bytes, update.OpenProtected)
+		if e != nil {
+			return empty, e
+		}
+		e = errors.Join(f.Chmod(0755), f.Sync(), f.Close())
+		if e != nil {
+			return empty, e
+		}
+		// Keep the signer beside the pinned bundle. Adding a directory inside
+		// the bundle would make the verifier reject it as an unknown entry.
+		signerStage := filepath.Join(o.Directory, "enrollment-signer")
+		if e = maintenance.EnsureProtectedDirectory(signerStage); e != nil {
+			return empty, e
+		}
+		if hash, _, e := maintenance.ProtectedDigest(signerStage+"/fased-signer", 0755, 64<<20); e == nil {
+			if hash != q.SignerSHA256 {
+				return empty, errors.Join(errors.New("verified release signer differs from the owner operation"), p.DiscardMaintenance())
+			}
+		} else if errors.Is(e, os.ErrNotExist) {
+			if e = maintenanceAcquireSigner(ctx, p, a, signerStage, id, true); e != nil {
+				return empty, e
+			}
+		} else {
+			return empty, e
+		}
+		signerHash, signerSize, e := maintenance.ProtectedDigest(signerStage+"/fased-signer", 0755, 64<<20)
+		if e != nil || signerHash != q.SignerSHA256 {
+			if e == nil {
+				e = p.DiscardMaintenance()
+			}
+			return empty, errors.Join(errors.New("verified signer differs from the source"), e)
+		}
+		acq = custodyAcquisition{Version: 1, Request: q, Identity: id, Sequence: report.Sequence, ReleaseSHA256: report.DescriptorSHA256, ProvenanceSHA256: report.ProvenanceSHA256, DevelopmentOnly: report.DevelopmentOnly, SignerBytes: signerSize}
+		raw, _ := json.Marshal(acq)
+		if e = maintenance.PublishEnrollmentRecord(a.Owner, q.OperationID, "enrollment-acquisition.json", raw); e != nil {
+			return empty, e
+		}
+	} else if err != nil {
 		return empty, err
 	}
-	if err = maintenance.CopyProtected(signerStage+"/fased-signer", dir+"/fased-signer", 0755, signerHash, signerSize, ""); err != nil {
+	engine, _ := bundle.Names()
+	corePath := filepath.Join(o.Directory, "bundle", engine)
+	signerPath := filepath.Join(o.Directory, "enrollment-signer", "fased-signer")
+	if digest, size, e := maintenance.ProtectedDigest(corePath, 0755, 64<<20); e != nil || digest != q.CoreSHA256 || size != acq.Identity.Core.Bytes {
+		return empty, errors.New("original verified core is unavailable; preserve operation")
+	}
+	if digest, size, e := maintenance.ProtectedDigest(signerPath, 0755, 64<<20); e != nil || digest != q.SignerSHA256 || size != acq.SignerBytes {
+		return empty, errors.New("original verified signer is unavailable; preserve operation")
+	}
+	if err = maintenance.CopyEnrollmentAsset(a.Owner, q.OperationID, "fased-app", q.CoreSHA256, acq.Identity.Core.Bytes); err != nil {
 		return empty, err
 	}
-	provenance := signer.OwnerKeyProvenance
-	if report.DevelopmentOnly {
-		provenance = signer.ControlledCustodyProfile
+	if err = maintenance.CopyEnrollmentAsset(a.Owner, q.OperationID, "fased-signer", q.SignerSHA256, acq.SignerBytes); err != nil {
+		return empty, err
 	}
-	options := custodyinstall.Options{NativeOwnerAccess: q.NativeOwnerAccess, Core: dir + "/fased-app", Signer: dir + "/fased-signer", Network: q.Network, Listen: q.Listen, Location: a.Profile, PublicOrigin: q.PublicOrigin, Mode: signer.OrdinaryCustodyMode, Profile: signer.OwnerCustodyProfile, Provenance: provenance, PrepareHost: true, Disposable: true, StageOnly: true}
-	m, err := custodyinstall.InstallProtected(ctx, a.Owner, q.OperationID, options, report.DevelopmentOnly, io.Discard)
+	m, err := custodyinstall.InstallProtected(ctx, a.Owner, q.OperationID, options, acq.DevelopmentOnly, io.Discard)
 	if err != nil {
 		return m, err
 	}
-	components, err := custodyinstall.DescribeProtectedPair(ctx, a.Owner, q.OperationID, id.Version)
+	components, err := custodyinstall.DescribeProtectedPair(ctx, a.Owner, q.OperationID, acq.Identity.Version)
 	if err != nil {
 		return m, err
 	}
-	pack := update.MaintenancePackage{Version: id.Version, Source: id.Source, Sequence: report.Sequence, ReleaseSHA256: report.DescriptorSHA256, ProvenanceSHA256: report.ProvenanceSHA256, DevelopmentOnly: report.DevelopmentOnly, Components: components}
+	pack := update.MaintenancePackage{Version: acq.Identity.Version, Source: acq.Identity.Source, Sequence: acq.Sequence, ReleaseSHA256: acq.ReleaseSHA256, ProvenanceSHA256: acq.ProvenanceSHA256, DevelopmentOnly: acq.DevelopmentOnly, Components: components}
 	base, _ := json.Marshal(m)
 	initial := update.MaintenanceRecord{Version: 1, Owner: a.Owner, OperationID: m.ID, Phase: "idle", Start: "base", Base: base, Target: base, Package: &pack}
 	if _, err = custodyinstall.ValidateInitialMaintenanceRecord(initial); err != nil {
 		return m, err
 	}
-	raw, err := json.Marshal(pack)
-	if err != nil {
-		return m, err
-	}
-	if err = maintenance.PublishProtected(dir+"/enrollment-package.json", raw, 0644); err != nil {
+	raw, _ := json.Marshal(pack)
+	if err = maintenance.PublishEnrollmentRecord(a.Owner, q.OperationID, "enrollment-package.json", raw); err != nil {
 		return m, err
 	}
 	return m, nil
@@ -443,7 +556,7 @@ func maintenanceCustodyAcquire(ctx context.Context, a maintenance.Authority, q m
 	if err = maintenance.CopyProtected(corePath, dir+"/fased-app", 0755, id.Core.SHA256, id.Core.Bytes, ""); err != nil {
 		return err
 	}
-	if err = maintenanceAcquireSigner(ctx, p, a, dir, id); err != nil {
+	if err = maintenanceAcquireSigner(ctx, p, a, dir, id, false); err != nil {
 		return err
 	}
 	components, err := custodyinstall.DescribeProtectedPair(ctx, a.Owner, q.OperationID, id.Version)
@@ -458,7 +571,7 @@ func maintenanceCustodyAcquire(ctx context.Context, a maintenance.Authority, q m
 	return nil
 }
 
-func maintenanceAcquireSigner(ctx context.Context, p *bootstrap.Prepared, a maintenance.Authority, dir string, id bootstrap.MaintenanceIdentity) error {
+func maintenanceAcquireSigner(ctx context.Context, p *bootstrap.Prepared, a maintenance.Authority, dir string, id bootstrap.MaintenanceIdentity, enrollment bool) error {
 	if id.InstallerSHA256 == a.ImageSHA256 || p.Report().DevelopmentOnly {
 		payload := walletPayload()
 		if payload == nil || payload.Version != id.Version || payload.Source != id.Source {
@@ -468,6 +581,9 @@ func maintenanceAcquireSigner(ctx context.Context, p *bootstrap.Prepared, a main
 			return err
 		}
 		// These bytes are compiled into the already authenticated helper image.
+		if enrollment {
+			return maintenance.PublishProtectedSigner(dir+"/fased-signer", payload.Data)
+		}
 		return maintenance.PublishProtected(dir+"/fased-signer", payload.Data, 0755)
 	}
 	path, artifact, err := p.AcquireMaintenanceInstaller(ctx)
@@ -478,7 +594,12 @@ func maintenanceAcquireSigner(ctx context.Context, p *bootstrap.Prepared, a main
 		return err
 	}
 	image := maintenance.ImagePath(artifact.SHA256)
-	if err = maintenance.CopyProtected(path, image, 0555, artifact.SHA256, artifact.Size, ""); err != nil {
+	if enrollment {
+		err = maintenance.CopyProtectedBounded(path, image, 0555, artifact.SHA256, artifact.Size)
+	} else {
+		err = maintenance.CopyProtected(path, image, 0555, artifact.SHA256, artifact.Size, "")
+	}
+	if err != nil {
 		return err
 	}
 	// The authenticated successor is executable input, never a root program.
@@ -493,7 +614,33 @@ func maintenanceAcquireSigner(ctx context.Context, p *bootstrap.Prepared, a main
 	if err = c.Start(); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".signer-")
+	var tmp *os.File
+	if enrollment {
+		// The reserved acquisition is root-private and contains no wallet
+		// secrets. Retire only its fixed, incomplete extraction before retry;
+		// random crash leftovers otherwise accumulate without a bound.
+		pending := filepath.Join(dir, ".signer-extraction.pending")
+		if i, statErr := os.Lstat(pending); statErr == nil {
+			st, ok := i.Sys().(*syscall.Stat_t)
+			if !ok || st.Uid != 0 || st.Gid != 0 || st.Nlink != 1 || !i.Mode().IsRegular() || (i.Mode().Perm() != 0755 && i.Mode().Perm()&^0600 != 0) || i.Size() < 0 || i.Size() > 64<<20 {
+				c.Process.Kill()
+				c.Wait()
+				return errors.New("foreign signer extraction; preserve it")
+			}
+			if err = os.Remove(pending); err != nil {
+				c.Process.Kill()
+				c.Wait()
+				return err
+			}
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			c.Process.Kill()
+			c.Wait()
+			return statErr
+		}
+		tmp, err = os.OpenFile(pending, os.O_RDWR|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0600)
+	} else {
+		tmp, err = os.CreateTemp(dir, ".signer-")
+	}
 	if err != nil {
 		c.Process.Kill()
 		c.Wait()
@@ -507,6 +654,9 @@ func maintenanceAcquireSigner(ctx context.Context, p *bootstrap.Prepared, a main
 	err = errors.Join(readErr, c.Wait(), tmp.Chmod(0755), tmp.Sync(), tmp.Close())
 	if err != nil {
 		return err
+	}
+	if enrollment {
+		return maintenance.CopyProtectedBounded(tmp.Name(), dir+"/fased-signer", 0755, identity.SHA256, identity.Bytes)
 	}
 	return maintenance.CopyProtected(tmp.Name(), dir+"/fased-signer", 0755, identity.SHA256, identity.Bytes, "")
 }

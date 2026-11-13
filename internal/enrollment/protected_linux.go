@@ -14,6 +14,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/maintenance"
+	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 	"golang.org/x/sys/unix"
 )
@@ -22,6 +23,8 @@ import (
 // never from a maintenance request. Local identity comes from its authority.
 type ProtectedSource struct {
 	Data, Listen, PublicOrigin string
+	ApplicationSequence        uint64
+	ApplicationReleaseSHA256   string
 	UID, GID                   int
 }
 
@@ -82,7 +85,18 @@ func openOwnerEnrollmentJournal(a maintenance.Authority, requireLock bool) (jour
 		return j, errState
 	}
 	b, err := io.ReadAll(io.LimitReader(f, 16385))
-	if err != nil || len(b) > 16384 || update.StrictJSON(b, &j) != nil || !j.valid(a.Owner) {
+	if err != nil || len(b) > 16384 || update.StrictJSON(b, &j) != nil {
+		return journal{}, errState
+	}
+	valid := j.valid(a.Owner)
+	if !valid && !requireLock && j.Phase == "source-lock-lost" {
+		// Read-only Remote status/network recovery may inspect a held lease;
+		// mutating controller and activation entries continue to reject it.
+		checked := j
+		checked.Phase = "fencing"
+		valid = checked.valid(a.Owner)
+	}
+	if !valid {
 		return journal{}, errState
 	}
 	return j, nil
@@ -102,6 +116,31 @@ func ProtectedOwnerJournal(owner int) ([]byte, error) {
 	return json.Marshal(j)
 }
 
+// ValidateProtectedPrepare ties acquisition to the original controller and
+// its held operation before any release is downloaded or privileged files are
+// created. It does not grant authority to change that operation.
+func ValidateProtectedPrepare(a maintenance.Authority, q maintenance.CustodyEnrollmentRequest, controlled bool) error {
+	j, err := openOwnerEnrollmentJournal(a, true)
+	if err != nil {
+		return err
+	}
+	return validateProtectedPrepareJournal(a, j, q, controlled)
+}
+
+func validateProtectedPrepareJournal(a maintenance.Authority, j journal, q maintenance.CustodyEnrollmentRequest, controlled bool) error {
+	provenance := signer.OwnerKeyProvenance
+	if controlled {
+		provenance = signer.ControlledCustodyProfile
+	}
+	if j.Owner != a.Owner || j.Source.Profile != a.Profile || j.Phase != "prepared" || j.Target.ID != "" ||
+		j.Mode != signer.OrdinaryCustodyMode || j.Profile != signer.OwnerCustodyProfile || j.Provenance != provenance || q.OperationID != j.ID || q.Network != j.Network || q.Listen != j.Source.Listen ||
+		q.PublicOrigin != j.Source.PublicOrigin || q.NativeOwnerAccess != j.NativeOwnerAccess || q.CoreSHA256 != j.CoreHash || q.SignerSHA256 != j.SignerHash ||
+		q.Sequence != j.Source.ApplicationSequence || q.ReleaseSHA256 != j.Source.ApplicationReleaseSHA256 || !controlled && q.Sequence == 0 {
+		return errors.New("enrollment acquisition differs from the held owner operation")
+	}
+	return nil
+}
+
 // ProtectedRemoteIntent derives recovery intent from the held original
 // controller journal and the separately protected Remote manifest.
 func ProtectedRemoteIntent(owner int, source ProtectedSource, action string) (bool, bool, error) {
@@ -116,14 +155,24 @@ func ProtectedRemoteIntent(owner int, source ProtectedSource, action string) (bo
 	return remoteEnrollmentIntent(j, source, action)
 }
 
+func protectedSourceReleaseMatches(j sourceRecord, source ProtectedSource) bool {
+	return j.ApplicationSequence == 0 && j.ApplicationReleaseSHA256 == "" || j.ApplicationSequence == source.ApplicationSequence && j.ApplicationReleaseSHA256 == source.ApplicationReleaseSHA256
+}
+
 func remoteEnrollmentIntent(j journal, source ProtectedSource, action string) (bool, bool, error) {
-	if j.Source.Profile != "remote" || j.Source.Data != source.Data || j.Source.Listen != source.Listen || j.Source.PublicOrigin != source.PublicOrigin || j.Source.UID != source.UID || j.Source.GID != source.GID {
+	if j.Source.Profile != "remote" || j.Source.Data != source.Data || j.Source.Listen != source.Listen || j.Source.PublicOrigin != source.PublicOrigin || j.Source.UID != source.UID || j.Source.GID != source.GID || !protectedSourceReleaseMatches(j.Source, source) {
 		return false, false, errState
 	}
 	if action == "suspend" && j.Phase != "suspending" && j.Phase != "suspended" || action == "restore" && j.Phase != "suspending" && j.Phase != "suspended" || action != "suspend" && action != "restore" {
 		return false, false, errState
 	}
 	return j.Source.Running, j.Source.Autostart, nil
+}
+
+func protectedReservationMatches(j journal, raw []byte) bool {
+	want := maintenance.CustodyEnrollmentRequest{OperationID: j.ID, Network: j.Network, Listen: j.Source.Listen, PublicOrigin: j.Source.PublicOrigin, NativeOwnerAccess: j.NativeOwnerAccess, CoreSHA256: j.CoreHash, SignerSHA256: j.SignerHash, Sequence: j.Source.ApplicationSequence, ReleaseSHA256: j.Source.ApplicationReleaseSHA256}
+	b, err := json.Marshal(want)
+	return err == nil && bytes.Equal(bytes.TrimSpace(raw), b)
 }
 
 func withProtectedRuntime(owner int, id string, source ProtectedSource, run func(journal, *runtimeHost, custodyinstall.Manifest) error) error {
@@ -139,12 +188,21 @@ func withProtectedRuntime(owner int, id string, source ProtectedSource, run func
 	if err != nil || custodyinstall.Verify(m) != nil || j.ID != id || m.ID != id || j.Target != m || j.Source.Profile != a.Profile {
 		return errors.New("protected enrollment identity differs; preserving it")
 	}
+	reservation, err := update.OpenProtected(update.MaintenanceDirectory(owner, id)+"/enrollment-acquisition-reservation.json", 32<<10, 0644)
+	if err != nil {
+		return errors.New("original protected enrollment reservation unavailable; preserve it")
+	}
+	raw, err := io.ReadAll(io.LimitReader(reservation, (32<<10)+1))
+	err = errors.Join(err, reservation.Close())
+	if err != nil || !protectedReservationMatches(j, raw) {
+		return errors.New("original protected enrollment reservation differs; preserve it")
+	}
 	if a.Profile == "local" {
 		if j.Source.UID != a.Owner || j.Source.GID != a.Group || j.Source.PublicOrigin != "" {
 			return errState
 		}
 	} else if a.Profile == "remote" {
-		if j.Source.Data != source.Data || j.Source.Listen != source.Listen || j.Source.PublicOrigin != source.PublicOrigin || j.Source.UID != source.UID || j.Source.GID != source.GID {
+		if j.Source.Data != source.Data || j.Source.Listen != source.Listen || j.Source.PublicOrigin != source.PublicOrigin || j.Source.UID != source.UID || j.Source.GID != source.GID || !protectedSourceReleaseMatches(j.Source, source) {
 			return errState
 		}
 	} else {
@@ -178,7 +236,17 @@ func withProtectedRuntime(owner int, id string, source ProtectedSource, run func
 // registered helper and its caller's existing owner/controller lock.
 func RunProtectedCutover(ctx context.Context, owner int, id, step string, source ProtectedSource) error {
 	return withProtectedRuntime(owner, id, source, func(j journal, h *runtimeHost, m custodyinstall.Manifest) error {
+		authority, err := openProtectedFenceAuthority(owner, j, m)
+		if err != nil {
+			return err
+		}
+		defer authority.dir.Close()
 		switch step {
+		case "reserve":
+			if j.Phase != "fencing" {
+				return errState
+			}
+			return authority.reserve(h, j)
 		case "fence":
 			if j.Phase != "fencing" {
 				return errState
@@ -198,7 +266,7 @@ func RunProtectedCutover(ctx context.Context, owner int, id, step string, source
 				if _, e := update.ReadMaintenanceRecord(owner); !errors.Is(e, os.ErrNotExist) {
 					return errors.New("existing maintenance state must be preserved")
 				}
-				if err = restoreProtectedFence(h, j, 0, 0); err != nil {
+				if err = restoreProtectedFence(h, j, 0, 0, authority); err != nil {
 					return err
 				}
 			}
@@ -213,7 +281,7 @@ func RunProtectedCutover(ctx context.Context, owner int, id, step string, source
 			if err = lease.check(); err != nil {
 				return err
 			}
-			if err = protectedFence(h, j, 0, 0); err != nil {
+			if err = protectedFence(h, j, 0, 0, authority); err != nil {
 				return err
 			}
 			if err = lease.check(); err != nil {
@@ -224,12 +292,18 @@ func RunProtectedCutover(ctx context.Context, owner int, id, step string, source
 			if rank(j.Phase) < rank("fencing") {
 				return errState
 			}
+			if err := authority.verifyAt(h, j, h.base); err != nil {
+				return err
+			}
 			return h.checkFence(ctx, j)
 		case "publish":
 			if j.Phase != "publishing" {
 				return errState
 			}
 			if err := custodyinstall.CheckProtectedEnrollmentSigner(owner, id); err != nil {
+				return err
+			}
+			if err := authority.verifyAt(h, j, h.base); err != nil {
 				return err
 			}
 			return h.publish(ctx, j)
@@ -241,7 +315,7 @@ func RunProtectedCutover(ctx context.Context, owner int, id, step string, source
 			if err != nil || c.InstanceID != j.Source.ExpectedInstanceID || c.Digest != j.Digest {
 				return errState
 			}
-			return finishProtectedFence(h, j, 0, 0)
+			return finishProtectedFence(h, j, 0, 0, authority)
 		default:
 			return errState
 		}
@@ -253,7 +327,7 @@ func RunProtectedCutover(ctx context.Context, owner int, id, step string, source
 // original inode and holds its instance lock while moving it back. The caller
 // must reacquire the ordinary exporter and compare the complete digest before
 // trying the fence again.
-func restoreProtectedFence(h *runtimeHost, j journal, managerUID, managerGID int) error {
+func restoreProtectedFence(h *runtimeHost, j journal, managerUID, managerGID int, authority *protectedFenceAuthority) error {
 	if err := h.unchangedParent(); err != nil {
 		return err
 	}
@@ -270,6 +344,9 @@ func restoreProtectedFence(h *runtimeHost, j journal, managerUID, managerGID int
 		return errors.New("interrupted source fence differs; preserve it")
 	}
 	defer fenceDir.Close()
+	if err = authority.verify(h, j, int(fenceDir.Fd())); err != nil {
+		return err
+	}
 	if err = verifyEnrollmentFenceRecord(int(fenceDir.Fd()), j, managerUID, managerGID); err != nil {
 		return err
 	}

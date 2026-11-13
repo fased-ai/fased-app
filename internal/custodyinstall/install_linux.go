@@ -190,6 +190,62 @@ func InstallProtected(ctx context.Context, owner int, id string, o Options, cont
 	return install(ctx, o, &System{Out: out, protectedOwner: owner, protectedID: id, protectedPurpose: "prepare"}, controlled)
 }
 
+// ReserveProtectedEnrollment binds the one active owner operation before the
+// helper retains any acquired pair. This is a reservation, not verification or
+// authority to run either binary; InstallProtected still performs those checks.
+func ReserveProtectedEnrollment(owner int, id, coreHash, signerHash string, o Options, controlled bool) error {
+	if _, err := maintenance.ValidateProcess(owner); err != nil {
+		return err
+	}
+	dir := update.MaintenanceDirectory(owner, id)
+	if !update.IDOK(id) || o.Core != dir+"/fased-app" || o.Signer != dir+"/fased-signer" || !o.StageOnly || !o.Disposable || !o.PrepareHost || o.Mode != signer.OrdinaryCustodyMode || o.Profile != signer.OwnerCustodyProfile ||
+		controlled && o.Provenance != signer.ControlledCustodyProfile || !controlled && o.Provenance != signer.OwnerKeyProvenance {
+		return errors.New("fixed protected enrollment reservation required")
+	}
+	j := journal{Version: 3, ID: id, Owner: owner, CoreHash: coreHash, SignerHash: signerHash, Listen: o.Listen, Network: o.Network, Enrollment: true, Location: o.Location, PublicOrigin: o.PublicOrigin, NativeOwnerAccess: o.NativeOwnerAccess, Mode: o.Mode, Profile: o.Profile, Provenance: o.Provenance}
+	if err := j.validate(owner); err != nil {
+		return err
+	}
+	s := &System{protectedOwner: owner, protectedID: id, protectedPurpose: "prepare"}
+	jdir, err := s.installJournal()
+	if err != nil {
+		return err
+	}
+	// The private installer directory may have just been created. Its parent
+	// must be durable before later protected assets rely on the reservation.
+	parent, err := os.Open(filepath.Dir(jdir))
+	if err != nil {
+		return err
+	}
+	if err = errors.Join(parent.Sync(), parent.Close()); err != nil {
+		return err
+	}
+	lock, err := core.LockInstance(jdir + "/install.lock")
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	b, err := core.ReadPrivateFile(jdir + "/intent.json")
+	if err == nil {
+		var old journal
+		if strict(b, &old) != nil || old.validate(owner) != nil || old != j {
+			return errors.New("another enrollment operation is reserved; preserve it")
+		}
+		d, e := os.Open(jdir)
+		if e != nil {
+			return e
+		}
+		return errors.Join(d.Sync(), d.Close())
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if _, err = os.Lstat(Root(owner)); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return errors.New("unclassified installation root exists; preserve it")
+	}
+	return maintenance.PublishCustodyEnrollmentIntent(owner, mustJSON(j))
+}
+
 func (s *System) installJournal() (string, error) {
 	if s.protectedOwner == 0 {
 		return ownerJournal()

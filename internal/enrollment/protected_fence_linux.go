@@ -15,7 +15,7 @@ import (
 // protectedFence publishes only into directories held by descriptor. A Local
 // owner can rename entries in the source parent; no privileged write follows a
 // re-opened child pathname through that parent.
-func protectedFence(h *runtimeHost, j journal, managerUID, managerGID int) error {
+func protectedFence(h *runtimeHost, j journal, managerUID, managerGID int, authority *protectedFenceAuthority) error {
 	if err := h.unchangedParent(); err != nil {
 		return err
 	}
@@ -24,8 +24,15 @@ func protectedFence(h *runtimeHost, j journal, managerUID, managerGID int) error
 		return errors.New("original source changed before fencing")
 	}
 	pending := ".enrollment-" + j.ID
-	if err := unix.Mkdirat(parent, pending, 0755); err != nil && !errors.Is(err, unix.EEXIST) {
+	if _, err := authority.requireReservation(h, j); err != nil {
 		return err
+	}
+	// Remote's source parent is protected. Local creates its pending directory
+	// as the ordinary owner after reservation and before this helper call.
+	if j.Source.Profile != "local" {
+		if err := unix.Mkdirat(parent, pending, 0700); err != nil && !errors.Is(err, unix.EEXIST) {
+			return err
+		}
 	}
 	fd, err := unix.Openat(parent, pending, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -34,12 +41,24 @@ func protectedFence(h *runtimeHost, j journal, managerUID, managerGID int) error
 	dir := os.NewFile(uintptr(fd), "pending-enrollment-fence")
 	defer dir.Close()
 	var pendingStat unix.Stat_t
-	if unix.Fstat(fd, &pendingStat) != nil || int(pendingStat.Uid) != managerUID || int(pendingStat.Gid) != managerGID {
+	if unix.Fstat(fd, &pendingStat) != nil || !sameEnrollmentEntry(parent, pending, fd) {
 		return errState
 	}
-	mode := pendingStat.Mode & 07777
-	if mode != 0700 && mode != 0755 {
-		return errors.New("foreign source fence; preserve it")
+	if err = authority.bind(h, j, fd); err != nil {
+		return err
+	}
+	if (int(pendingStat.Uid) != managerUID || int(pendingStat.Gid) != managerGID) && (int(pendingStat.Uid) != j.Node.UID || int(pendingStat.Gid) != j.Node.GID) {
+		return errors.New("fence ownership differs; preserve it")
+	}
+	if int(pendingStat.Uid) != managerUID || int(pendingStat.Gid) != managerGID {
+		if err = unix.Fchown(fd, managerUID, managerGID); err != nil {
+			return err
+		}
+	}
+	// The inode has now been recorded in root-protected operation metadata.
+	// Normalize only this held inode, independent of the caller's umask.
+	if err = unix.Fchmod(fd, 0700); err != nil {
+		return err
 	}
 	if err = errors.Join(unix.Fsync(fd), unix.Fsync(parent)); err != nil {
 		return err
@@ -88,13 +107,11 @@ func protectedFence(h *runtimeHost, j journal, managerUID, managerGID int) error
 	}
 	// Only widen the directory after it contains this operation's binding and
 	// exact archived inode. A substituted unrelated root directory is untouched.
-	if mode == 0700 {
-		if err = unix.Fchmod(fd, 0755); err != nil {
-			return err
-		}
-		if err = unix.Fsync(fd); err != nil {
-			return err
-		}
+	if err = unix.Fchmod(fd, 0755); err != nil {
+		return err
+	}
+	if err = unix.Fsync(fd); err != nil {
+		return err
 	}
 	if err = unix.Renameat2(parent, pending, parent, h.base, unix.RENAME_NOREPLACE); err != nil {
 		return err
@@ -128,7 +145,7 @@ func validateProtectedFenceEntries(dir int, id string, allowReady bool) error {
 	return nil
 }
 
-func finishProtectedFence(h *runtimeHost, j journal, managerUID, managerGID int) error {
+func finishProtectedFence(h *runtimeHost, j journal, managerUID, managerGID int, authority *protectedFenceAuthority) error {
 	if err := h.unchangedParent(); err != nil {
 		return err
 	}
@@ -138,6 +155,9 @@ func finishProtectedFence(h *runtimeHost, j journal, managerUID, managerGID int)
 		return err
 	}
 	defer dir.Close()
+	if err = authority.verify(h, j, int(dir.Fd())); err != nil {
+		return err
+	}
 	if err = validateProtectedFenceEntries(int(dir.Fd()), j.ID, true); err != nil {
 		return err
 	}
@@ -168,14 +188,14 @@ func finishProtectedFence(h *runtimeHost, j journal, managerUID, managerGID int)
 	return nil
 }
 
-// publishEnrollmentRecordAt permits only the two existing fence records. It
+// publishEnrollmentRecordAt permits only fixed enrollment records. It
 // does not replace a foreign target or follow links, including after a crash.
 func publishEnrollmentRecordAt(dir int, name, id string, data []byte, managerUID, managerGID int) error {
-	if (name != "enrollment.json" && name != "ready.json") || !hexID(id, 16) || len(data) == 0 || len(data) > 16384 {
+	if (name != "enrollment.json" && name != "ready.json" && name != "fence-reservation.json" && name != "fence-inode.json") || !hexID(id, 16) || len(data) == 0 || len(data) > 16384 {
 		return errState
 	}
 	stage := "." + name + "-" + id + ".pending"
-	read := func(name string) ([]byte, unix.Stat_t, error) {
+	read := func(name string, partial bool) ([]byte, unix.Stat_t, error) {
 		var st unix.Stat_t
 		fd, err := unix.Openat(dir, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 		if err != nil {
@@ -183,17 +203,17 @@ func publishEnrollmentRecordAt(dir int, name, id string, data []byte, managerUID
 		}
 		f := os.NewFile(uintptr(fd), "enrollment-record")
 		defer f.Close()
-		if unix.Fstat(fd, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || int(st.Uid) != managerUID || int(st.Gid) != managerGID || st.Mode&07777 != 0644 || st.Nlink < 1 || st.Nlink > 2 || st.Size < 0 || st.Size > 16384 {
+		if unix.Fstat(fd, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || int(st.Uid) != managerUID || int(st.Gid) != managerGID || (!partial && st.Mode&07777 != 0644) || (partial && st.Mode&07777&^0644 != 0) || st.Nlink < 1 || st.Nlink > 2 || st.Size < 0 || st.Size > 16384 {
 			return nil, st, errState
 		}
 		b, err := io.ReadAll(io.LimitReader(f, 16385))
 		return b, st, err
 	}
-	current, _, currentErr := read(name)
+	current, _, currentErr := read(name, false)
 	if currentErr == nil && !bytes.Equal(current, data) || currentErr != nil && !errors.Is(currentErr, unix.ENOENT) {
 		return errors.New("foreign enrollment record; preserve it")
 	}
-	staged, st, stageErr := read(stage)
+	staged, st, stageErr := read(stage, true)
 	if stageErr == nil {
 		if !bytes.HasPrefix(data, staged) || st.Nlink > 1 && currentErr != nil {
 			return errors.New("foreign enrollment staging record; preserve it")

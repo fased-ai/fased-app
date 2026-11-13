@@ -103,7 +103,7 @@ func RunProtected(ctx context.Context, owner int, action string, peer *tailnet.I
 			if action == "remote-enrollment-restore" {
 				step = "restore"
 			}
-			running, autostart, err := enrollment.ProtectedRemoteIntent(owner, enrollment.ProtectedSource{Data: m.Data, Listen: m.Listen, PublicOrigin: m.PublicOrigin, UID: m.AppUID, GID: m.AppGID}, step)
+			running, autostart, err := enrollment.ProtectedRemoteIntent(owner, enrollment.ProtectedSource{Data: m.Data, Listen: m.Listen, PublicOrigin: m.PublicOrigin, UID: m.AppUID, GID: m.AppGID, ApplicationSequence: m.ApplicationSequence, ApplicationReleaseSHA256: m.ApplicationReleaseSHA256}, step)
 			if err != nil {
 				return err
 			}

@@ -57,6 +57,40 @@ func TestProtectedEnrollmentJournalRequiresOriginalLockForMutation(t *testing.T)
 	}
 }
 
+func TestProtectedEnrollmentHeldJournalIsReadOnly(t *testing.T) {
+	if os.Getuid() <= 0 || os.Getgid() <= 0 {
+		t.Skip("ordinary owner required")
+	}
+	_, _, _, _, j := suspendedRecoveryFixture(t)
+	j.Phase = "source-lock-lost"
+	j.Digest = strings.Repeat("d", 64)
+	home := t.TempDir()
+	dir := filepath.Join(home, ".config", "fased-app-enrollment")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := core.LockInstance(filepath.Join(dir, "controller.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	a := maintenance.Authority{Owner: os.Getuid(), Group: os.Getgid(), Home: home}
+	got, err := openOwnerEnrollmentJournal(a, false)
+	if err != nil || got.Phase != j.Phase || got.ID != j.ID {
+		t.Fatal("held state not available for read-only inspection", err)
+	}
+	if _, err := openOwnerEnrollmentJournal(a, true); err == nil {
+		t.Fatal("held state allowed a mutation")
+	}
+}
+
 func TestProtectedRemoteEnrollmentUsesSavedIntentOnly(t *testing.T) {
 	source := ProtectedSource{Data: "/var/lib/fased-app-vps-1000/data", Listen: "127.0.0.1:7332", PublicOrigin: "https://example.ts.net", UID: 1234, GID: 1234}
 	j := journal{Phase: "suspending", Source: sourceRecord{Profile: "remote", Data: source.Data, Listen: source.Listen, PublicOrigin: source.PublicOrigin, UID: source.UID, GID: source.GID, Running: true, Autostart: false}}
@@ -64,6 +98,16 @@ func TestProtectedRemoteEnrollmentUsesSavedIntentOnly(t *testing.T) {
 	if err != nil || !running || autostart {
 		t.Fatalf("saved intent changed: %v", err)
 	}
+	source.ApplicationSequence, source.ApplicationReleaseSHA256 = 7, strings.Repeat("d", 64)
+	j.Source.ApplicationSequence, j.Source.ApplicationReleaseSHA256 = 7, strings.Repeat("d", 64)
+	if _, _, err = remoteEnrollmentIntent(j, source, "restore"); err != nil {
+		t.Fatal("matching protected release identity rejected", err)
+	}
+	source.ApplicationReleaseSHA256 = strings.Repeat("e", 64)
+	if _, _, err = remoteEnrollmentIntent(j, source, "restore"); err == nil {
+		t.Fatal("foreign protected release identity accepted")
+	}
+	source.ApplicationReleaseSHA256 = j.Source.ApplicationReleaseSHA256
 	for _, phase := range []string{"prepared", "importing", "fencing", "complete"} {
 		j.Phase = phase
 		if _, _, err = remoteEnrollmentIntent(j, source, "restore"); err == nil {

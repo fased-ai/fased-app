@@ -148,15 +148,17 @@ func ValidateEnrollment(ctx context.Context, m Manifest, s *custodyinstall.Syste
 }
 
 type enrollmentSourceBinding struct {
-	Profile            string `json:"profile"`
-	Data               string `json:"data"`
-	Listen             string `json:"listen"`
-	PublicOrigin       string `json:"publicOrigin,omitempty"`
-	ExpectedInstanceID string `json:"expectedInstanceId"`
-	UID                int    `json:"uid"`
-	GID                int    `json:"gid"`
-	Running            bool   `json:"running"`
-	Autostart          bool   `json:"autostart"`
+	Profile                  string `json:"profile"`
+	Data                     string `json:"data"`
+	Listen                   string `json:"listen"`
+	PublicOrigin             string `json:"publicOrigin,omitempty"`
+	ExpectedInstanceID       string `json:"expectedInstanceId"`
+	UID                      int    `json:"uid"`
+	GID                      int    `json:"gid"`
+	Running                  bool   `json:"running"`
+	Autostart                bool   `json:"autostart"`
+	ApplicationSequence      uint64 `json:"applicationSequence,omitempty"`
+	ApplicationReleaseSHA256 string `json:"applicationReleaseSha256,omitempty"`
 }
 type enrollmentNodeBinding struct {
 	Device uint64 `json:"device"`
@@ -173,13 +175,6 @@ type enrollmentFenceBinding struct {
 	Node    enrollmentNodeBinding   `json:"node"`
 	Digest  string                  `json:"digest"`
 	Target  custodyinstall.Manifest `json:"target"`
-}
-type enrollmentJournalBinding struct {
-	enrollmentFenceBinding
-	Phase      string `json:"phase"`
-	CoreHash   string `json:"coreHash"`
-	SignerHash string `json:"signerHash"`
-	Network    string `json:"network"`
 }
 
 func bindEnrollmentOps(o *hostOps) {
@@ -216,7 +211,10 @@ func enrollmentInstanceID(id string) bool {
 
 func boundEnrollment(f enrollmentFenceBinding, m Manifest) bool {
 	s, t := f.Source, f.Target
-	return f.Version == 1 && canonicalHex(f.ID, 16) && f.Owner == m.OwnerUID && canonicalHex(f.Digest, 32) && s.Profile == "remote" && s.Data == m.Data && s.Listen == m.Listen && s.PublicOrigin == m.PublicOrigin && s.UID == m.AppUID && s.GID == m.AppGID && enrollmentInstanceID(s.ExpectedInstanceID) && f.Node.Inode > 0 && f.Node.UID == m.AppUID && f.Node.GID == m.AppGID && f.Node.Mode == 0700 && t.Enrollment && t.Owner == m.OwnerUID && t.Location == "remote" && t.Listen == m.Listen && t.PublicOrigin == m.PublicOrigin && t.App.UID != m.AppUID && t.Signer.UID != m.AppUID
+	// Zero fields are the already-shipped marker form. A marker carrying a
+	// release identity must match the original protected Remote manifest.
+	releaseMatches := s.ApplicationSequence == 0 && s.ApplicationReleaseSHA256 == "" || s.ApplicationSequence == m.ApplicationSequence && s.ApplicationSequence != 0 && s.ApplicationReleaseSHA256 == m.ApplicationReleaseSHA256 && canonicalHex(s.ApplicationReleaseSHA256, 32)
+	return releaseMatches && f.Version == 1 && canonicalHex(f.ID, 16) && f.Owner == m.OwnerUID && canonicalHex(f.Digest, 32) && s.Profile == "remote" && s.Data == m.Data && s.Listen == m.Listen && s.PublicOrigin == m.PublicOrigin && s.UID == m.AppUID && s.GID == m.AppGID && enrollmentInstanceID(s.ExpectedInstanceID) && f.Node.Inode > 0 && f.Node.UID == m.AppUID && f.Node.GID == m.AppGID && f.Node.Mode == 0700 && t.Enrollment && t.Owner == m.OwnerUID && t.Location == "remote" && t.Listen == m.Listen && t.PublicOrigin == m.PublicOrigin && t.App.UID != m.AppUID && t.Signer.UID != m.AppUID
 }
 
 func committedEnrollment(o hostOps, m Manifest) (enrollmentFenceBinding, error) {
@@ -239,24 +237,28 @@ func committedEnrollment(o hostOps, m Manifest) (enrollmentFenceBinding, error) 
 }
 
 func pendingEnrollment(o hostOps, m Manifest) (enrollmentFenceBinding, string, error) {
-	var j enrollmentJournalBinding
+	var f enrollmentFenceBinding
 	if o.enrollmentJournal == nil || o.custodyTarget == nil {
-		return j.enrollmentFenceBinding, "", errors.New("no pending enrollment binding")
+		return f, "", errors.New("no pending enrollment binding")
 	}
 	b, err := o.enrollmentJournal()
-	if err != nil || len(b) > 16384 || update.StrictJSON(b, &j) != nil || !boundEnrollment(j.enrollmentFenceBinding, m) || j.CoreHash != j.Target.CoreHash || j.SignerHash != j.Target.SignerHash || j.Network != j.Target.Network {
+	if err != nil {
+		return f, "", errors.New("pending enrollment journal unavailable")
+	}
+	projection, phase, err := enrollment.RemoteJournalFence(b, m.OwnerUID)
+	if err != nil || update.StrictJSON(projection, &f) != nil || !boundEnrollment(f, m) {
 		return enrollmentFenceBinding{}, "", errors.New("pending enrollment journal differs from this Remote installation")
 	}
-	switch j.Phase {
+	switch phase {
 	case "fencing", "fenced", "publishing", "committed", "activation-requested", "complete", "source-lock-lost":
 	default:
 		return enrollmentFenceBinding{}, "", errors.New("enrollment has not begun source fencing")
 	}
 	target, err := o.custodyTarget(m.OwnerUID)
-	if err != nil || custodyinstall.EnrollmentIdentity(target) != custodyinstall.EnrollmentIdentity(j.Target) {
+	if err != nil || custodyinstall.EnrollmentIdentity(target) != custodyinstall.EnrollmentIdentity(f.Target) {
 		return enrollmentFenceBinding{}, "", errors.New("pending enrollment target changed")
 	}
-	sibling := ".enrollment-" + j.ID
+	sibling := ".enrollment-" + f.ID
 	_, se := o.read(m.Root + "/" + sibling)
 	data, de := o.read(m.Data)
 	if de == nil && data.Directory && data.UID == 0 && data.GID == 0 && data.Mode.Perm() == 0755 && data.Mode&os.ModeSymlink == 0 {
@@ -266,12 +268,12 @@ func pendingEnrollment(o hostOps, m Manifest) (enrollmentFenceBinding, string, e
 		if _, re := o.read(m.Data + "/ready.json"); !errors.Is(re, os.ErrNotExist) {
 			return enrollmentFenceBinding{}, "", errors.New("completed enrollment must pass its public target binding")
 		}
-		if err = verifyEnrollmentFence(o, m.Data, j.enrollmentFenceBinding, true); err != nil {
+		if err = verifyEnrollmentFence(o, m.Data, f, true); err != nil {
 			return enrollmentFenceBinding{}, "", err
 		}
-		return j.enrollmentFenceBinding, "", nil
+		return f, "", nil
 	}
-	if j.Phase != "fencing" || se != nil {
+	if phase != "fencing" || se != nil {
 		return enrollmentFenceBinding{}, "", errors.New("source fence is absent or foreign")
 	}
 	if de != nil && !errors.Is(de, os.ErrNotExist) {
@@ -280,15 +282,17 @@ func pendingEnrollment(o hostOps, m Manifest) (enrollmentFenceBinding, string, e
 	if de == nil && (checkDirectory(o, m.Data, m.AppUID, m.AppGID, 0700) != nil) {
 		return enrollmentFenceBinding{}, "", errors.New("source data ownership changed")
 	}
-	if err = verifyEnrollmentFence(o, m.Root+"/"+sibling, j.enrollmentFenceBinding, false); err != nil {
+	if err = verifyEnrollmentFence(o, m.Root+"/"+sibling, f, false); err != nil {
 		return enrollmentFenceBinding{}, "", err
 	}
-	return j.enrollmentFenceBinding, sibling, nil
+	return f, sibling, nil
 }
 
 func verifyEnrollmentFence(o hostOps, path string, f enrollmentFenceBinding, published bool) error {
 	if err := checkDirectory(o, path, 0, 0, 0755); err != nil {
-		return err
+		if published || checkDirectory(o, path, 0, 0, 0700) != nil {
+			return err
+		}
 	}
 	names, err := o.list(path)
 	if err != nil || len(names) > 5 {
@@ -305,7 +309,7 @@ func verifyEnrollmentFence(o hostOps, path string, f enrollmentFenceBinding, pub
 			original = true
 		case "enrollment.json", ".enrollment.json-" + f.ID + ".pending":
 			b, e := rootFile(o, path+"/"+name)
-			if e != nil || b.Mode.Perm() != 0644 || !bytes.HasPrefix(expected, b.Data) || name == "enrollment.json" && !bytes.Equal(expected, b.Data) {
+			if e != nil || name == "enrollment.json" && b.Mode.Perm() != 0644 || name != "enrollment.json" && b.Mode.Perm()&^0644 != 0 || !bytes.HasPrefix(expected, b.Data) || name == "enrollment.json" && !bytes.Equal(expected, b.Data) {
 				return errors.New("source fence binding changed")
 			}
 			marker = marker || name == "enrollment.json"

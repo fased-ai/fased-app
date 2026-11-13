@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -44,5 +46,41 @@ func TestMaintenanceInputDeadlineIncludesCallerWithholdingEOF(t *testing.T) {
 	defer cancel()
 	if _, err := readMaintenanceInput(ctx, r); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("unclosed caller pipe did not respect request deadline: %v", err)
+	}
+}
+
+func TestEnrollmentCoreAcceptsOnlyVerifiedBeforeOrAfterMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fased-app")
+	if err := os.WriteFile(path, []byte("fixture"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	opener := func(path string, size int64, mode os.FileMode) (*os.File, error) {
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		info, err := f.Stat()
+		if err != nil || info.Mode().Perm() != mode || info.Size() != size {
+			f.Close()
+			return nil, errors.New("protected mode differs")
+		}
+		return f, nil
+	}
+	for _, mode := range []os.FileMode{0700, 0755} {
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+		f, err := openEnrollmentCore(path, 7, opener)
+		if err != nil {
+			t.Fatalf("mode %o: %v", mode, err)
+		}
+		f.Close()
+	}
+	if err := os.Chmod(path, 0777); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := openEnrollmentCore(path, 7, opener); err == nil {
+		f.Close()
+		t.Fatal("foreign mode accepted")
 	}
 }

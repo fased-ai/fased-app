@@ -10,6 +10,8 @@ import (
 
 type Source struct {
 	Profile, Data, Listen, PublicOrigin, ExpectedInstanceID string
+	ApplicationSequence                                     uint64
+	ApplicationReleaseSHA256                                string
 	UID, GID                                                int
 	Running, Autostart                                      bool
 	Validate, Suspend                                       func(context.Context) error
@@ -26,19 +28,21 @@ type Options struct {
 }
 
 type sourceRecord struct {
-	Profile            string `json:"profile"`
-	Data               string `json:"data"`
-	Listen             string `json:"listen"`
-	PublicOrigin       string `json:"publicOrigin,omitempty"`
-	ExpectedInstanceID string `json:"expectedInstanceId"`
-	UID                int    `json:"uid"`
-	GID                int    `json:"gid"`
-	Running            bool   `json:"running"`
-	Autostart          bool   `json:"autostart"`
+	Profile                  string `json:"profile"`
+	Data                     string `json:"data"`
+	Listen                   string `json:"listen"`
+	PublicOrigin             string `json:"publicOrigin,omitempty"`
+	ExpectedInstanceID       string `json:"expectedInstanceId"`
+	UID                      int    `json:"uid"`
+	GID                      int    `json:"gid"`
+	Running                  bool   `json:"running"`
+	Autostart                bool   `json:"autostart"`
+	ApplicationSequence      uint64 `json:"applicationSequence,omitempty"`
+	ApplicationReleaseSHA256 string `json:"applicationReleaseSha256,omitempty"`
 }
 
 func record(s Source) sourceRecord {
-	return sourceRecord{s.Profile, s.Data, s.Listen, s.PublicOrigin, s.ExpectedInstanceID, s.UID, s.GID, s.Running, s.Autostart}
+	return sourceRecord{Profile: s.Profile, Data: s.Data, Listen: s.Listen, PublicOrigin: s.PublicOrigin, ExpectedInstanceID: s.ExpectedInstanceID, UID: s.UID, GID: s.GID, Running: s.Running, Autostart: s.Autostart, ApplicationSequence: s.ApplicationSequence, ApplicationReleaseSHA256: s.ApplicationReleaseSHA256}
 }
 
 type node struct {

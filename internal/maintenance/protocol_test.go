@@ -93,6 +93,10 @@ func TestCustodyEnrollmentPrepareDoesNotAdmitOSAuthority(t *testing.T) {
 
 func TestEnrollmentCutoverAllowsOnlyFixedSteps(t *testing.T) {
 	id := strings.Repeat("a", 32)
+	reserve := `{"version":1,"action":"custody-enrollment-cutover","enrollment":{"operationId":"` + id + `","step":"reserve"}}`
+	if _, err := DecodeRequest([]byte(reserve)); err != nil {
+		t.Fatal(err)
+	}
 	for _, action := range []string{"custody-enrollment-cutover", "custody-enrollment-activation"} {
 		step := "fence"
 		if action == "custody-enrollment-activation" {

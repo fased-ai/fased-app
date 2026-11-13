@@ -55,6 +55,8 @@ type CustodyEnrollmentRequest struct {
 	NativeOwnerAccess bool   `json:"nativeOwnerAccess,omitempty"`
 	CoreSHA256        string `json:"coreSha256"`
 	SignerSHA256      string `json:"signerSha256"`
+	Sequence          uint64 `json:"sequence,string,omitempty"`
+	ReleaseSHA256     string `json:"releaseSha256,omitempty"`
 }
 
 type CustodyUpdateRequest struct {
@@ -95,14 +97,14 @@ func DecodeRequest(data []byte) (Request, error) {
 	case "custody-enrollment-activation":
 		q := r.Enrollment
 		if r.Serve != nil || r.Remote != nil || r.Peer != nil || r.Custody != nil || r.Image != nil || q == nil || !update.IDOK(q.OperationID) ||
-			(q.Step != "activate" && q.Step != "restart") || q.Network != "" || q.Listen != "" || q.PublicOrigin != "" || q.NativeOwnerAccess || q.CoreSHA256 != "" || q.SignerSHA256 != "" {
+			(q.Step != "activate" && q.Step != "restart") || q.Network != "" || q.Listen != "" || q.PublicOrigin != "" || q.NativeOwnerAccess || q.CoreSHA256 != "" || q.SignerSHA256 != "" || q.Sequence != 0 || q.ReleaseSHA256 != "" {
 			return r, errors.New("one fixed enrollment activation required")
 		}
 	case "custody-enrollment-cutover":
 		q := r.Enrollment
 		if r.Serve != nil || r.Remote != nil || r.Peer != nil || r.Custody != nil || r.Image != nil || q == nil || !update.IDOK(q.OperationID) ||
-			(q.Step != "fence" && q.Step != "check" && q.Step != "publish" && q.Step != "finish") ||
-			q.Network != "" || q.Listen != "" || q.PublicOrigin != "" || q.NativeOwnerAccess || q.CoreSHA256 != "" || q.SignerSHA256 != "" {
+			(q.Step != "reserve" && q.Step != "fence" && q.Step != "check" && q.Step != "publish" && q.Step != "finish") ||
+			q.Network != "" || q.Listen != "" || q.PublicOrigin != "" || q.NativeOwnerAccess || q.CoreSHA256 != "" || q.SignerSHA256 != "" || q.Sequence != 0 || q.ReleaseSHA256 != "" {
 			return r, errors.New("one fixed enrollment cutover step required")
 		}
 	case "custody-enrollment-image":
@@ -129,14 +131,14 @@ func DecodeRequest(data []byte) (Request, error) {
 	case "custody-enrollment-empty", "custody-enrollment-stage":
 		q := r.Enrollment
 		if r.Serve != nil || r.Remote != nil || r.Peer != nil || r.Custody != nil || r.Image != nil || q == nil || !update.IDOK(q.OperationID) ||
-			q.Step != "" || q.Network != "" || q.Listen != "" || q.PublicOrigin != "" || q.NativeOwnerAccess || q.CoreSHA256 != "" || q.SignerSHA256 != "" {
+			q.Step != "" || q.Network != "" || q.Listen != "" || q.PublicOrigin != "" || q.NativeOwnerAccess || q.CoreSHA256 != "" || q.SignerSHA256 != "" || q.Sequence != 0 || q.ReleaseSHA256 != "" {
 			return r, errors.New("one fixed custody enrollment required")
 		}
 	case "custody-enrollment-prepare":
 		q := r.Enrollment
 		if r.Serve != nil || r.Remote != nil || r.Peer != nil || r.Custody != nil || r.Image != nil || q == nil || !update.IDOK(q.OperationID) ||
 			q.Step != "" || (q.Network != "devnet" && q.Network != "mainnet-beta") || len(q.Listen) > 64 || len(q.PublicOrigin) > 256 ||
-			!canonicalSHA256(q.CoreSHA256) || !canonicalSHA256(q.SignerSHA256) {
+			!canonicalSHA256(q.CoreSHA256) || !canonicalSHA256(q.SignerSHA256) || (q.Sequence == 0) != (q.ReleaseSHA256 == "") || q.ReleaseSHA256 != "" && !canonicalSHA256(q.ReleaseSHA256) {
 			return r, errors.New("fixed custody enrollment choices required")
 		}
 	case "custody-initialize":

@@ -119,6 +119,17 @@ func TestNativeTransportDoesNotSupplyAuthority(t *testing.T) {
 	if err = core.WritePrivateJSON(filepath.Join(dir, "claim-code.json"), core.ClaimCode{Code: "expired", ExpiresAt: time.Now().Add(-time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
+	setupLock, err := core.LockOwnerSetup(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if busy := request("GET", "/api/v1/installation/claim-code", "", "", "", ""); busy.Code != 409 {
+		setupLock.Close()
+		t.Fatal("native claim fallback wrote during enrollment")
+	}
+	if err = setupLock.Close(); err != nil {
+		t.Fatal(err)
+	}
 	renewed := request("GET", "/api/v1/installation/claim-code", "", "", "", "")
 	var setup core.ClaimCode
 	if renewed.Code != 200 || json.Unmarshal(renewed.Body.Bytes(), &setup) != nil || len(setup.Code) != 43 || !setup.ExpiresAt.After(time.Now()) {

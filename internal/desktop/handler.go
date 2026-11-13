@@ -185,13 +185,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		data, e := core.ReadPrivateFile(filepath.Join(h.dir, "claim-code.json"))
 		var code core.ClaimCode
 		if e != nil || len(data) > 4096 || json.Unmarshal(data, &code) != nil || time.Now().After(code.ExpiresAt) {
+			setupLock, lockErr := core.LockOwnerSetup(h.dir)
+			if lockErr != nil {
+				fail(w, 409, "Reopen Fased to finish setup.")
+				return
+			}
 			store, openErr := core.OpenStore(h.dir)
 			if openErr != nil {
+				setupLock.Close()
 				fail(w, 409, "Reopen Fased to finish setup.")
 				return
 			}
 			code, e = store.IssueClaimCode(r.Context())
 			store.Close()
+			setupLock.Close()
 			if e != nil {
 				fail(w, 409, "Reopen Fased to finish setup.")
 				return

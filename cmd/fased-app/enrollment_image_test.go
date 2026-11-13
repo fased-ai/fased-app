@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -228,5 +229,87 @@ func TestEnrollmentImageEarlyExportFailureClosesFrame(t *testing.T) {
 	}
 	if err := <-done; err == nil {
 		t.Fatal("invalid source accepted")
+	}
+}
+
+func TestEnrollmentPrivateImageChannelRejectsReplacedSourceLock(t *testing.T) {
+	if os.Getuid() <= 0 {
+		t.Skip("ordinary fixture owner required")
+	}
+	dir := privateEnrollmentDir(t)
+	s, err := core.OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := s.UpdateSnapshot(t.Context(), update.NewProbe())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	input, ack := io.Pipe()
+	output, private := io.Pipe()
+	defer input.Close()
+	defer ack.Close()
+	defer output.Close()
+	done := make(chan error, 1)
+	go func() {
+		defer private.Close()
+		done <- enrollmentExportFixture(t.Context(), []string{"export", "--data-dir", dir, "--expected-instance", snap.InstanceID, "--disposable-fixture"}, input, private)
+	}()
+	var image core.EnrollmentImage
+	if err = json.NewDecoder(output).Decode(&image); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(dir, "instance.lock")
+	if err = os.Rename(lockPath, lockPath+".preserved"); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(lockPath, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	digest := core.EnrollmentImageDigest(image)
+	if _, err = fmt.Fprintln(ack, "CHECK "+digest); err != nil {
+		t.Fatal(err)
+	}
+	line, _ := bufio.NewReader(output).ReadString('\n')
+	if line != "" {
+		_, _ = fmt.Fprintln(ack, "RELEASE "+digest)
+	}
+	if result := <-done; result == nil || line != "" {
+		t.Fatalf("changed lock acknowledged: %q %v", line, result)
+	}
+	if _, err = os.Stat(lockPath + ".preserved"); err != nil {
+		t.Fatal("original lock was not preserved", err)
+	}
+}
+
+func TestClaimCodeCannotWriteDuringEnrollmentExport(t *testing.T) {
+	if os.Getuid() <= 0 {
+		t.Skip("ordinary fixture owner required")
+	}
+	dir := privateEnrollmentDir(t)
+	store, err := core.OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, lease, err := core.ExportEnrollmentImage(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, diagnostics bytes.Buffer
+	if err = run([]string{"claim-code", "--data-dir", dir}, nil, &out, &diagnostics); err == nil || out.Len() != 0 {
+		lease.Close()
+		t.Fatal("claim-code wrote during enrollment")
+	}
+	if err = lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = run([]string{"claim-code", "--data-dir", dir}, nil, &out, &diagnostics); err != nil || strings.TrimSpace(out.String()) == "" {
+		t.Fatal("claim-code did not resume", err)
 	}
 }

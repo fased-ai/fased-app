@@ -439,6 +439,15 @@ func privateDir(dir string) error {
 // EnsurePrivateDirectory is shared by the owner-run installer and the core.
 func EnsurePrivateDirectory(dir string) error { return privateDir(dir) }
 
+// LockOwnerSetup serializes direct owner setup/recovery writers with an
+// enrollment snapshot without taking the running server's instance lock.
+func LockOwnerSetup(dir string) (*InstanceLock, error) {
+	if err := privateDir(dir); err != nil {
+		return nil, err
+	}
+	return LockInstance(filepath.Join(dir, "core.sqlite"))
+}
+
 func ReadPrivateFile(path string) ([]byte, error) { return readPrivateFile(path) }
 func privateFile(path string) error {
 	info, err := os.Lstat(path)

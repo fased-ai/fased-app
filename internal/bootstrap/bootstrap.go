@@ -131,8 +131,41 @@ func writeNew(root *os.Root, name string, b []byte) error {
 	if err != nil {
 		return err
 	}
-	_, err = f.Write(b)
+	// This inode was created exclusively in the held private directory.
+	// Normalize its owner-only mode without inheriting a restrictive umask.
+	if err = f.Chmod(0600); err == nil {
+		_, err = f.Write(b)
+	}
 	return errors.Join(err, f.Sync(), f.Close())
+}
+
+// A completion marker is visible only after its complete contents are synced.
+// The exclusive hard link never replaces a foreign target.
+func writeBootstrapCompletion(root *os.Root, b []byte) error {
+	const stage = ".bootstrap.json.pending"
+	if err := writeNew(root, stage, b); err != nil {
+		return err
+	}
+	d, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	// Persist the previously written metadata and seed before the marker can
+	// claim that the acquisition is complete.
+	if err = d.Sync(); err != nil {
+		return err
+	}
+	if err = root.Link(stage, "bootstrap.json"); err != nil {
+		return err
+	}
+	if err = d.Sync(); err != nil {
+		return err
+	}
+	if err = root.Remove(stage); err != nil {
+		return err
+	}
+	return d.Sync()
 }
 
 func fetch(ctx context.Context, client *http.Client, url string, limit int64) ([]byte, error) {
@@ -375,7 +408,7 @@ func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepa
 	if err != nil {
 		return prepared, err
 	}
-	if err = writeNew(root, "bootstrap.json", b); err != nil {
+	if err = writeBootstrapCompletion(root, b); err != nil {
 		return prepared, err
 	}
 	return prepared, nil

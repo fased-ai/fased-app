@@ -259,7 +259,7 @@ func protectedEnrollmentSource(a maintenance.Authority) (enrollment.ProtectedSou
 	if err != nil {
 		return enrollment.ProtectedSource{}, err
 	}
-	return enrollment.ProtectedSource{Data: m.Data, Listen: m.Listen, PublicOrigin: m.PublicOrigin, UID: m.AppUID, GID: m.AppGID}, nil
+	return enrollment.ProtectedSource{Data: m.Data, Listen: m.Listen, PublicOrigin: m.PublicOrigin, UID: m.AppUID, GID: m.AppGID, ApplicationSequence: m.ApplicationSequence, ApplicationReleaseSHA256: m.ApplicationReleaseSHA256}, nil
 }
 
 // Regular requests retain their bounded EOF framing. Only a fixed enrollment

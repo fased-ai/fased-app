@@ -298,6 +298,11 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	case "setup-link":
 		return ownerSetupLink(ctx, *dir, *publicOrigin, out)
 	case "claim-code":
+		setupLock, err := core.LockOwnerSetup(*dir)
+		if err != nil {
+			return err
+		}
+		defer setupLock.Close()
 		store, err := core.OpenStore(*dir)
 		if err != nil {
 			return err
