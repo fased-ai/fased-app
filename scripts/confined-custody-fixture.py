@@ -5,6 +5,7 @@ This is disposable-fixture code, not an installer or a production entrypoint.
 The host runner owns the VM lifecycle and performs the actual interruption.
 """
 import argparse
+import fcntl
 import hashlib
 import http.server
 import json
@@ -97,11 +98,16 @@ def safe_fixture_error(text):
     return next((label for message, label in known if message in text), '')
 
 
-def run(args, data=None, timeout=180):
+def run(args, data=None, timeout=180, expect_failure=False):
     env = {'HOME': str(HOME), 'USER': 'fased-local', 'LOGNAME': 'fased-local',
            'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8',
            'XDG_RUNTIME_DIR': '/run/user/1100', 'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/1100/bus'}
     p = subprocess.run([str(a) for a in args], input=data, text=True, capture_output=True, timeout=timeout, env=env)
+    if expect_failure:
+        if p.returncode == 0:
+            raise RuntimeError('intentional fixture interruption unexpectedly completed')
+        save('intentional-enrollment-failure.json', {'exit': p.returncode, 'stderr': p.stderr[-8192:]})
+        return p.stdout
     if p.returncode:
         if len(args) >= 3 and list(args[1:3]) == ['custody', 'enroll']:
             # Fixture-only diagnostics stay in the existing private workspace;
@@ -286,11 +292,98 @@ def complete_setup(port, session=None):
     origin = 'http://127.0.0.1:' + str(port)
     original = health(origin)
     task_id = seed_source(origin, binary, session)
-    result = json.loads(run([binary, 'custody', 'enroll', '--source', 'local', '--expected-instance', original['instanceId'],
-                             '--network', 'devnet', '--signer-binary', WORK / 'fased-signer', '--prepare-host',
-                             '--disposable-fixture', '--ordinary-custody', '--native-owner'], timeout=600))
+    enrollment = [binary, 'custody', 'enroll', '--source', 'local', '--expected-instance', original['instanceId'],
+                  '--network', 'devnet', '--signer-binary', WORK / 'fased-signer', '--prepare-host',
+                  '--disposable-fixture', '--ordinary-custody', '--native-owner']
+    # In this disposable guest only, hold acquisition after the real
+    # controller records its prepared operation. Then use the protected helper
+    # to obtain the exact target for a simulated interrupted journal write.
+    selection = WORK / 'selection'
+    fd = os.open(selection, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
+    with os.fdopen(fd, 'r+', encoding='utf-8') as f:
+        identity = os.fstat(f.fileno())
+        if (not stat.S_ISREG(identity.st_mode) or identity.st_uid != OWNER or identity.st_nlink != 1 or
+                identity.st_size > 16 or f.read() != 'base\n'):
+            raise RuntimeError('original base fixture required before interruption')
+        f.seek(0)
+        f.truncate()
+        f.write('interrupted\n')
+        f.flush()
+        os.fsync(f.fileno())
+        try:
+            run(enrollment, timeout=180, expect_failure=True)
+        finally:
+            f.seek(0)
+            f.truncate()
+            f.write('base\n')
+            f.flush()
+            os.fsync(f.fileno())
+        current = selection.lstat()
+        if current.st_dev != identity.st_dev or current.st_ino != identity.st_ino or not stat.S_ISREG(current.st_mode):
+            raise RuntimeError('fixture repository selection changed')
+    directory = HOME / '.config/fased-app-enrollment'
+    journal = directory / 'state.json'
+    dir_info, journal_info = directory.lstat(), journal.lstat()
+    if (not stat.S_ISDIR(dir_info.st_mode) or dir_info.st_uid != OWNER or stat.S_IMODE(dir_info.st_mode) != 0o700 or
+            not stat.S_ISREG(journal_info.st_mode) or journal_info.st_uid != OWNER or
+            stat.S_IMODE(journal_info.st_mode) != 0o600 or journal_info.st_nlink != 1 or not 0 < journal_info.st_size <= 16384):
+        raise RuntimeError('private original enrollment journal required')
+    raw = journal.read_bytes()
+    prepared = json.loads(raw)
+    if (prepared.get('phase') != 'prepared' or prepared.get('source', {}).get('expectedInstanceId') != original['instanceId'] or
+            prepared.get('coreHash') != digest(binary) or prepared.get('signerHash') != digest(WORK / 'fased-signer') or
+            prepared.get('target', {}).get('id') or not re.fullmatch(r'[a-f0-9]{32}', prepared.get('id', '')) or
+            list(directory.glob('.pending-*'))):
+        raise RuntimeError('original prepared enrollment identity differs')
+    source = prepared['source']
+    request = {'version': 1, 'action': 'custody-enrollment-prepare', 'enrollment': {
+        'operationId': prepared['id'], 'network': prepared['network'], 'listen': source['listen'],
+        'nativeOwnerAccess': True, 'coreSha256': prepared['coreHash'], 'signerSha256': prepared['signerHash'],
+        'sequence': str(source['applicationSequence']), 'releaseSha256': source['applicationReleaseSha256']}}
+    helper = P((WORK / 'helper-path').read_text().strip())
+    helper_info = helper.lstat()
+    if (not re.fullmatch(r'/var/lib/fased-maintenance/images/[a-f0-9]{64}/fased-install', str(helper)) or
+            not stat.S_ISREG(helper_info.st_mode) or helper_info.st_uid != 0 or
+            stat.S_IMODE(helper_info.st_mode) != 0o555 or helper_info.st_nlink != 1 or digest(helper) != helper.parent.name):
+        raise RuntimeError('protected fixture helper differs')
+    lock = os.open(directory / 'controller.lock', os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        response = json.loads(run(['/usr/bin/sudo', '-n', '--', helper, 'maintenance-request', '--owner', str(OWNER)],
+                                  json.dumps(request, separators=(',', ':')), timeout=600))
+        target = response.get('payload', {})
+        if (response.get('version') != 1 or response.get('action') != request['action'] or response.get('complete') is not True or
+                target.get('id') != prepared['id'] or target.get('coreHash') != prepared['coreHash'] or
+                target.get('signerHash') != prepared['signerHash'] or journal.read_bytes() != raw):
+            raise RuntimeError('protected prepared target differs')
+        interrupted = dict(prepared)
+        interrupted['target'] = target
+        writes = {'.pending-fixture-witness': raw,
+                  '.pending-fixture-interrupted': (json.dumps(interrupted, separators=(',', ':')) + '\n').encode()}
+        for name, contents in writes.items():
+            fd = os.open(directory / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, 'wb') as f:
+                f.write(contents)
+                f.flush()
+                os.fsync(f.fileno())
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        if journal.read_bytes() != raw:
+            raise RuntimeError('prepared fixture journal changed during interruption')
+    finally:
+        os.close(lock)
+    result = json.loads(run(enrollment, timeout=600))
     if result['instanceId'] != original['instanceId'] or result['walletSigner'] or result['financialExecution']:
         raise RuntimeError('enrolled fixture identity differs')
+    completed = json.loads(journal.read_text())
+    if completed.get('id') != prepared['id'] or completed.get('phase') != 'complete':
+        raise RuntimeError('original enrollment operation did not complete')
+    for name, contents in writes.items():
+        if (directory / name).read_bytes() != contents:
+            raise RuntimeError('prepared fixture witness changed')
     require_launcher(HOME / '.local/bin/fased', ROOT / 'fased-app')
     health(origin)
     backup = WORK / 'wallet-backup.json'
@@ -320,7 +413,9 @@ def complete_setup(port, session=None):
                         'signerAccount': status['account'], 'recoveryRequired': status['recoveryRequired'],
                         'admissionHeld': status['admissionHeld'], 'walletBackupSha256': digest(backup), 'port': port,
                         'initialOperation': journal['operationId'], 'accountsRecordSha256': record_hash})
-    print(json.dumps({'result': 'READY', 'fixtureOnly': True, 'instanceId': original['instanceId'], 'port': port}))
+    print(json.dumps({'result': 'READY', 'fixtureOnly': True, 'instanceId': original['instanceId'], 'port': port,
+                      'enrollmentRecovery': {'operationId': prepared['id'], 'simulated': True, 'pendingRecords': 2,
+                                             'protectedTargetMatched': True}}))
 
 
 def wallet_read_parity(origin, session, account_id, revision, credential_ref):

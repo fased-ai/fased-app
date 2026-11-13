@@ -50,6 +50,18 @@ class FixtureBoundaries(unittest.TestCase):
             self.assertEqual(0o600, record.stat().st_mode & 0o777)
             self.assertEqual('private fixture diagnostic', json.loads(record.read_text())['stderr'])
 
+    def test_expected_interruption_never_counts_as_success(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(guest, 'WORK', Path(tmp)):
+            failed = SimpleNamespace(returncode=1, stdout='', stderr='private fixture diagnostic')
+            with patch.object(guest.subprocess, 'run', return_value=failed):
+                self.assertEqual('', guest.run(['/tmp/fased-app', 'custody', 'enroll'], expect_failure=True))
+            self.assertFalse((Path(tmp) / 'enrollment-failure.json').exists())
+            self.assertEqual('private fixture diagnostic', json.loads((Path(tmp) / 'intentional-enrollment-failure.json').read_text())['stderr'])
+            completed = SimpleNamespace(returncode=0, stdout='{}', stderr='')
+            with patch.object(guest.subprocess, 'run', return_value=completed):
+                with self.assertRaisesRegex(RuntimeError, 'unexpectedly completed'):
+                    guest.run(['/tmp/fased-app', 'custody', 'enroll'], expect_failure=True)
+
     def test_installed_launcher_must_point_at_target(self):
         with tempfile.TemporaryDirectory() as tmp:
             command = Path(tmp) / 'fased'
@@ -199,14 +211,34 @@ class FixtureBoundaries(unittest.TestCase):
                     guest.resume_claimed(50943)
 
     def test_local_fixture_enrollment_requests_owner_transport(self):
-        with patch.object(guest, 'health', return_value={'instanceId': 'original'}), \
-             patch.object(guest, 'seed_source', return_value='task'), \
-             patch.object(guest, 'run', side_effect=RuntimeError('stop at enrollment')) as run:
-            with self.assertRaisesRegex(RuntimeError, 'stop at enrollment'):
-                guest.complete_setup(50943, {'sessionToken': 'fixture'})
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            (work / 'selection').write_text('base\n')
+            with patch.multiple(guest, WORK=work, OWNER=os.getuid()), \
+                 patch.object(guest, 'health', return_value={'instanceId': 'original'}), \
+                 patch.object(guest, 'seed_source', return_value='task'), \
+                 patch.object(guest, 'run', side_effect=RuntimeError('stop at enrollment')) as run:
+                with self.assertRaisesRegex(RuntimeError, 'stop at enrollment'):
+                    guest.complete_setup(50943, {'sessionToken': 'fixture'})
+            self.assertEqual('base\n', (work / 'selection').read_text())
         argv = run.call_args.args[0]
         self.assertIn('--native-owner', argv)
         self.assertEqual('local', argv[argv.index('--source') + 1])
+
+    def test_fixture_refuses_symlinked_repository_selection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            target = work / 'preserve'
+            target.write_text('base\n')
+            (work / 'selection').symlink_to(target)
+            with patch.multiple(guest, WORK=work, OWNER=os.getuid()), \
+                 patch.object(guest, 'health', return_value={'instanceId': 'original'}), \
+                 patch.object(guest, 'seed_source', return_value='task'), \
+                 patch.object(guest, 'run') as run:
+                with self.assertRaises(OSError):
+                    guest.complete_setup(50943, {'sessionToken': 'fixture'})
+            run.assert_not_called()
+            self.assertEqual('base\n', target.read_text())
 
     def test_fixture_wallet_read_uses_normal_owner_cli(self):
         result = {'accountId': 'original', 'revision': 7, 'fixtureOnly': True, 'liveRPC': False,

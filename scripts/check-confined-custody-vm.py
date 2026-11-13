@@ -7,6 +7,7 @@ reviewed, hash-verified installed maintenance helper.
 """
 import argparse
 import hashlib
+import io
 import json
 import mmap
 import os
@@ -230,12 +231,16 @@ def main():
     result_path = directory / ('local-resume-result.json' if a.resume_claimed else 'local-result.json')
     if result_path.exists():
         raise RuntimeError('existing acceptance result must be preserved')
+    consumer_names = ('check-confined-custody-vm.py', 'confined-custody-fixture.py', 'confined-custody-browser.mjs',
+                      'staged-package-guest.py', 'staged-acceptance-contract.json')
+    consumers = {name: owned_file(REPO / 'scripts' / name, 128 << 10).read_bytes() for name in consumer_names}
     if a.resume_claimed:
         ssh_port, app_port, original_machine = resume_inputs(work, directory / 'local-result.json', a.helper_receipt_sha256, helper_hash)
     else:
         work.mkdir(mode=0o700)  # Exclusive: never replace an unknown disk.
     result = {'result': 'FAIL', 'fixtureOnly': True, 'sourceReceiptSha256': a.helper_receipt_sha256,
-              'helperSha256': helper_hash, 'mining': False, 'liveFeatures': False, 'automaticUpdates': False}
+              'helperSha256': helper_hash, 'mining': False, 'liveFeatures': False, 'automaticUpdates': False,
+              'consumerSha256': {name: hashlib.sha256(data).hexdigest() for name, data in consumers.items()}}
     vm = tunnel = watcher = browser = None
     serial = stderr = None
     try:
@@ -342,11 +347,12 @@ def main():
                 for name in ('ca.pem', 'key.pem', 'fased-signer'):
                     archive.add(owned_file(directory / name, 64 << 20), arcname=name, recursive=False)
                 for name in ('confined-custody-fixture.py', 'staged-package-guest.py', 'staged-acceptance-contract.json'):
-                    archive.add(REPO / 'scripts' / name, arcname=name, recursive=False)
+                    info = tarfile.TarInfo(name)
+                    info.mode, info.size = 0o600, len(consumers[name])
+                    archive.addfile(info, io.BytesIO(consumers[name]))
                 info = tarfile.TarInfo('helper-path')
                 contents = (protected + '\n').encode()
                 info.mode, info.size = 0o600, len(contents)
-                import io
                 archive.addfile(info, io.BytesIO(contents))
             remote(['/usr/bin/mkdir', '-m', '0700', 'custody-fixture'])
             with tarpath.open('rb') as f:
@@ -358,7 +364,7 @@ def main():
             if machine != original_machine:
                 raise RuntimeError('running VM does not match original filesystem witness')
             guest_script = 'custody-fixture/confined-custody-fixture-resume.py'
-            script = (REPO / 'scripts/confined-custody-fixture.py').read_bytes()
+            script = consumers['confined-custody-fixture.py']
             if len(script) > 128 << 10:
                 raise RuntimeError('fixture resume consumer is too large')
             transfer = ("import os,stat,sys; data=sys.stdin.buffer.read(131073); assert len(data)<=131072; "
@@ -373,6 +379,10 @@ def main():
             actual_helper = remote(['/usr/bin/sha256sum', protected], timeout=15).stdout.decode().split()[0]
             if actual_helper != helper_hash:
                 raise RuntimeError('original protected helper differs')
+        for name in ('staged-package-guest.py', 'staged-acceptance-contract.json'):
+            actual = remote(['/usr/bin/sha256sum', 'custody-fixture/' + name], timeout=15).stdout.decode().split()[0]
+            if actual != result['consumerSha256'][name]:
+                raise RuntimeError('fixture setup consumer differs: ' + name)
         server_output = '>/dev/null' if a.resume_claimed else '>>custody-fixture/https.log'
         command(ssh + ['nohup /usr/bin/python3 ' + shlex.quote(guest_script) + ' server ' + server_output + ' 2>&1 </dev/null &'])
         remote(['/usr/bin/python3', guest_script, 'probe'], timeout=30)
@@ -380,6 +390,11 @@ def main():
         ready_data = json.loads(remote(['/usr/bin/python3', guest_script, 'resume-claimed' if a.resume_claimed else 'setup', '--port', app_port], timeout=900).stdout)
         if ready_data.get('result') != 'READY' or ready_data.get('fixtureOnly') is not True:
             raise RuntimeError('Local enrollment did not reach its real entry')
+        recovered = ready_data.get('enrollmentRecovery', {})
+        if (recovered.get('simulated') is not True or recovered.get('pendingRecords') != 2 or
+                recovered.get('protectedTargetMatched') is not True or not re.fullmatch(r'[a-f0-9]{32}', recovered.get('operationId', ''))):
+            raise RuntimeError('same-operation prepared recovery was not observed')
+        result['enrollmentRecovery'] = recovered
         result['instanceId'] = ready_data['instanceId']
         result['beforeBoot'] = remote(['/usr/bin/cat', '/proc/sys/kernel/random/boot_id']).stdout.decode().strip()
         remote(['/usr/bin/python3', guest_script, 'target'])
@@ -401,7 +416,13 @@ def main():
         else:
             raise RuntimeError('fixture tunnel did not become ready')
         watcher = subprocess.Popen(ssh + ['/usr/bin/python3 ' + shlex.quote(guest_script) + ' watch'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        browser = subprocess.Popen(['node', str(REPO / 'scripts/confined-custody-browser.mjs'), str(app_port), result['instanceId']],
+        browser_script = work / 'browser-consumer.mjs'
+        fd = os.open(browser_script, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'wb') as f:
+            f.write(consumers['confined-custody-browser.mjs'])
+            f.flush()
+            os.fsync(f.fileno())
+        browser = subprocess.Popen(['node', str(browser_script), str(app_port), result['instanceId']],
                                    cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         browser_out, _ = browser.communicate(timeout=180)
         accepted = json.loads(browser_out) if browser.returncode == 0 else {}
