@@ -26,6 +26,7 @@ HOME = P('/home/fased-local')
 WORK = HOME / 'custody-fixture'
 TRUST = P('/var/lib/fased-update-fixture')
 ROOT = P('/var/lib/fased-app-custody-1100')
+REMOTE = P('/var/lib/fased-app-vps-1100')
 PASSWORD = 'Disposable custody owner 7WQfE2tV'
 WALLET_PASSWORD = 'Disposable custody wallet 6YDkP9nH'
 RPC_PASSWORD = 'Disposable custody RPC 5CJmX8sB'
@@ -229,7 +230,8 @@ def probe():
 
 
 def target():
-    if (WORK / 'selection').read_text() != 'base\n' or not (WORK / 'state.json').is_file():
+    states = [path for path in (WORK / 'state.json', WORK / 'remote-state.json') if path.is_file()]
+    if (WORK / 'selection').read_text() != 'base\n' or len(states) != 1:
         raise RuntimeError('original enrolled fixture required before target selection')
     pending = WORK / 'selection.pending'
     fd = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -295,6 +297,112 @@ def resume_claimed(port):
     if claimed is not True and claimed is not False:
         raise RuntimeError('original fixture owner state is unknown')
     return complete_setup(port, login(origin) if claimed else None)
+
+
+def remote_enroll(instance):
+    """Resume one simulated first-write interruption on the real Remote entry."""
+    if not re.fullmatch(r'[A-Za-z0-9_-]{43}', instance):
+        raise RuntimeError('exact Remote instance required')
+    binary = REMOTE / 'fased-app'
+    trust = json.loads((TRUST / 'fixture.json').read_text())
+    manifest = json.loads((REMOTE / 'install.json').read_text())
+    status = json.loads(run([binary, 'vps', 'status']))
+    if (digest(binary) != trust['sourceSha256'] or manifest.get('location', 'remote') != 'remote' or
+            not status.get('active') or status.get('instanceId') != instance or
+            not re.fullmatch(r'https://[a-z0-9-]+\.[a-z0-9-]+\.ts\.net', status.get('url', ''))):
+        raise RuntimeError('original active Remote source differs')
+    if (WORK / 'remote-state.json').exists() or os.path.lexists(ROOT):
+        raise RuntimeError('existing Remote enrollment must be preserved')
+    enrollment = [binary, 'custody', 'enroll', '--source', 'remote', '--expected-instance', instance,
+                  '--network', 'devnet', '--signer-binary', WORK / 'fased-signer', '--prepare-host',
+                  '--disposable-fixture', '--ordinary-custody']
+    selection = WORK / 'selection'
+    if not os.path.lexists(selection):
+        with selection.open('x') as f:
+            f.write('base\n')
+            f.flush()
+            os.fsync(f.fileno())
+    fd = os.open(selection, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
+    with os.fdopen(fd, 'r+', encoding='utf-8') as f:
+        identity = os.fstat(f.fileno())
+        if not stat.S_ISREG(identity.st_mode) or identity.st_uid != OWNER or identity.st_nlink != 1 or f.read() != 'base\n':
+            raise RuntimeError('original base fixture required before interruption')
+        f.seek(0); f.truncate(); f.write('interrupted\n'); f.flush(); os.fsync(f.fileno())
+        try:
+            run(enrollment, timeout=180, expect_failure=True)
+        finally:
+            f.seek(0); f.truncate(); f.write('base\n'); f.flush(); os.fsync(f.fileno())
+        if not os.path.samestat(identity, selection.lstat()):
+            raise RuntimeError('fixture repository selection changed')
+    directory = HOME / '.config/fased-app-enrollment'
+    journal, pending = directory / 'state.json', directory / '.pending-fixture-first-write'
+    directory_info, journal_info = directory.lstat(), journal.lstat()
+    if (not stat.S_ISDIR(directory_info.st_mode) or directory_info.st_uid != OWNER or
+            stat.S_IMODE(directory_info.st_mode) != 0o700 or not stat.S_ISREG(journal_info.st_mode) or
+            journal_info.st_uid != OWNER or stat.S_IMODE(journal_info.st_mode) != 0o600 or
+            journal_info.st_nlink != 1 or not 0 < journal_info.st_size <= 16384):
+        raise RuntimeError('private original Remote enrollment journal required')
+    raw = journal.read_bytes()
+    prepared = json.loads(raw)
+    if (prepared.get('phase') != 'prepared' or prepared.get('source', {}).get('expectedInstanceId') != instance or
+            prepared.get('source', {}).get('profile') != 'remote' or prepared.get('coreHash') != digest(binary) or
+            prepared.get('signerHash') != digest(WORK / 'fased-signer') or prepared.get('target', {}).get('id') or
+            not re.fullmatch(r'[a-f0-9]{32}', prepared.get('id', '')) or list(directory.glob('.pending-*'))):
+        raise RuntimeError('original prepared Remote enrollment differs')
+    lock = os.open(directory / 'controller.lock', os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if (os.path.lexists(pending) or not os.path.samestat(directory_info, directory.lstat()) or
+                not os.path.samestat(journal_info, journal.lstat()) or journal.read_bytes() != raw or
+                {p.name for p in directory.iterdir()} != {'controller.lock', 'state.json'}):
+            raise RuntimeError('original prepared Remote enrollment changed')
+        # Simulate an interrupted first publication without deleting its bytes.
+        os.rename(journal, pending)
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    finally:
+        os.close(lock)
+    result = json.loads(run(enrollment, timeout=600))
+    completed = json.loads(journal.read_text())
+    if (result.get('instanceId') != instance or result.get('walletSigner') or result.get('financialExecution') or
+            completed.get('id') != prepared['id'] or completed.get('phase') != 'complete' or pending.read_bytes() != raw):
+        raise RuntimeError('original Remote enrollment did not recover')
+    backup = WORK / 'wallet-backup.json'
+    wallet = json.loads(run([ROOT / 'fased-app', 'custody', 'setup', '--disposable-fixture', '--password-stdin', '--backup-file', backup],
+                            (WALLET_PASSWORD + '\n') * 4, timeout=180))
+    signer = json.loads(run([ROOT / 'fased-signer', 'owner', '--config', ROOT / 'identity.json', '--disposable-fixture']))
+    if not wallet['backupVerified'] or not signer['locked'] or not signer['recoveryRequired'] or signer['walletSigner']:
+        raise RuntimeError('locked Remote fixture wallet and backup required')
+    maintenance = json.loads((P('/var/lib/fased-maintenance/owners/1100') / 'custody.json').read_text())
+    if maintenance['phase'] != 'idle' or maintenance['package']['sequence'] != '8':
+        raise RuntimeError('original Remote maintenance journal required')
+    save('remote-state.json', {'instanceId': instance, 'initialOperation': maintenance['operationId'],
+         'signerAccount': signer['account'], 'recoveryRequired': signer['recoveryRequired'],
+         'admissionHeld': signer['admissionHeld'], 'walletBackupSha256': digest(backup)})
+    print(json.dumps({'result': 'READY', 'fixtureOnly': True, 'instanceId': instance,
+                      'signerAccount': signer['account'], 'enrollmentRecovery': {'simulated': True,
+                      'pendingOnly': True, 'operationId': prepared['id']}}))
+
+
+def remote_verify(operation):
+    state = json.loads((WORK / 'remote-state.json').read_text())
+    trust = json.loads((TRUST / 'fixture.json').read_text())
+    signer = json.loads(run([ROOT / 'fased-signer', 'owner', '--config', ROOT / 'identity.json', '--disposable-fixture']))
+    if (not signer['locked'] or signer['account'] != state['signerAccount'] or
+            signer['recoveryRequired'] != state['recoveryRequired'] or signer['admissionHeld'] != state['admissionHeld'] or
+            digest(WORK / 'wallet-backup.json') != state['walletBackupSha256']):
+        raise RuntimeError('original Remote wallet, lock or backup changed')
+    journal = json.loads((P('/var/lib/fased-maintenance/owners/1100') / 'custody.json').read_text())
+    if (journal['operationId'] != operation or journal['phase'] != 'completed' or journal.get('start') != 'target' or
+            journal['package']['sequence'] != '9' or digest(ROOT / 'fased-app') != trust['targetSha256'] or
+            digest(ROOT / 'fased-signer') != trust['targetSignerSha256']):
+        raise RuntimeError('original Remote paired update is not complete')
+    print(json.dumps({'result': 'PASS', 'fixtureOnly': True, 'instanceId': state['instanceId'],
+                      'operationId': operation, 'lockedWallet': True, 'backupPreserved': True,
+                      'targetCoreSignerMatched': True}))
 
 
 def complete_setup(port, session=None):
@@ -490,7 +598,10 @@ def parked_signer(j, trust):
 
 
 def watch():
-    state = json.loads((WORK / 'state.json').read_text())
+    states = [path for path in (WORK / 'state.json', WORK / 'remote-state.json') if path.is_file()]
+    if len(states) != 1:
+        raise RuntimeError('one original enrolled fixture required')
+    state = json.loads(states[0].read_text())
     trust = json.loads((TRUST / 'fixture.json').read_text())
     path = P('/var/lib/fased-maintenance/owners/1100/custody.json')
     deadline = time.monotonic() + 300
@@ -554,9 +665,10 @@ def verify(operation):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('mode', choices=['server', 'probe', 'setup', 'resume-claimed', 'target', 'watch', 'inspect', 'verify'])
+    p.add_argument('mode', choices=['server', 'probe', 'setup', 'resume-claimed', 'remote-enroll', 'remote-verify', 'target', 'watch', 'inspect', 'verify'])
     p.add_argument('--port', type=int)
     p.add_argument('--operation')
+    p.add_argument('--instance')
     a = p.parse_args()
     guard()
     if a.mode == 'server':
@@ -576,10 +688,15 @@ def main():
         target()
     elif a.mode == 'inspect':
         inspect()
+    elif a.mode == 'remote-enroll':
+        remote_enroll(a.instance or '')
     else:
         if not a.operation or not re.fullmatch(r'[a-f0-9]{32}', a.operation):
             raise RuntimeError('original cut operation required')
-        verify(a.operation)
+        if a.mode == 'remote-verify':
+            remote_verify(a.operation)
+        else:
+            verify(a.operation)
 
 
 if __name__ == '__main__':

@@ -8,6 +8,7 @@ reviewed, hash-verified installed maintenance helper.
 import argparse
 import hashlib
 import io
+import importlib.util
 import json
 import mmap
 import os
@@ -22,9 +23,11 @@ import stat
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 
 P = pathlib.Path
 REPO = P(__file__).resolve().parent.parent
@@ -63,6 +66,20 @@ def matching_source(helper, build, inputs):
     source = helper.get('declaredSourceCommit')
     return (isinstance(source, str) and re.fullmatch(r'[a-f0-9]{40}', source) is not None and
             source == build.get('declaredSourceCommit') == inputs.get('declaredSourceCommit'))
+
+
+def require_local_receipt(directory, path, receipt_pin, helper_hash, consumers):
+    if path not in (directory / 'local-result.json', directory / 'local-resume-result.json'):
+        raise RuntimeError('the same fixture Local receipt is required before Remote')
+    local = json.loads(owned_file(path, 65536).read_text())
+    if (local.get('result') != 'PASS' or local.get('fixtureOnly') is not True or
+            local.get('sourceReceiptSha256') != receipt_pin or local.get('helperSha256') != helper_hash or
+            local.get('proof', {}).get('result') != 'PASS' or
+            any(local.get(flag) is not False for flag in ('mining', 'liveFeatures', 'automaticUpdates'))):
+        raise RuntimeError('compatible completed Local custody acceptance required')
+    if local.get('consumerSha256') != consumers:
+        raise RuntimeError('Remote consumer differs from the accepted Local fixture')
+    return local
 
 
 def fixture_failure_detail(stderr):
@@ -242,16 +259,27 @@ def main():
     p.add_argument('--fixture-dir', type=P, required=True)
     p.add_argument('--helper-receipt-sha256', required=True)
     p.add_argument('--resume-claimed', action='store_true', help='resume the original pre-enrollment fixture')
+    p.add_argument('--remote', action='store_true', help='run the affected Remote journey after this fixture passed Local')
+    p.add_argument('--local-receipt', type=P, help='same-fixture Local PASS receipt for Remote')
     a = p.parse_args()
     directory, helper_hash = preflight(a.fixture_dir, a.helper_receipt_sha256)
+    if a.remote:
+        if a.resume_claimed:
+            raise RuntimeError('the same fixture Local receipt is required before Remote')
+    elif a.local_receipt:
+        raise RuntimeError('Local receipt is only valid for the Remote leg')
     archive_files = safe_files((directory / 'repo-base', directory / 'repo-target'))
-    work = directory / 'vm-owned'
-    result_path = directory / ('local-resume-result.json' if a.resume_claimed else 'local-result.json')
-    if result_path.exists():
+    work = directory / ('vm-remote' if a.remote else 'vm-owned')
+    result_path = directory / ('remote-result.json' if a.remote else 'local-resume-result.json' if a.resume_claimed else 'local-result.json')
+    if os.path.lexists(result_path):
         raise RuntimeError('existing acceptance result must be preserved')
     consumer_names = ('check-confined-custody-vm.py', 'confined-custody-fixture.py', 'confined-custody-browser.mjs',
-                      'staged-package-guest.py', 'staged-acceptance-contract.json')
+                      'staged-package-guest.py', 'staged-package-browser.mjs', 'release-acceptance.mjs',
+                      'staged-acceptance-contract.json')
     consumers = {name: owned_file(REPO / 'scripts' / name, 128 << 10).read_bytes() for name in consumer_names}
+    if a.remote:
+        require_local_receipt(directory, a.local_receipt, a.helper_receipt_sha256, helper_hash,
+                              {name: hashlib.sha256(data).hexdigest() for name, data in consumers.items()})
     if a.resume_claimed:
         ssh_port, app_port, original_machine = resume_inputs(work, directory / 'local-result.json', a.helper_receipt_sha256, helper_hash)
     else:
@@ -259,6 +287,8 @@ def main():
     result = {'result': 'FAIL', 'fixtureOnly': True, 'sourceReceiptSha256': a.helper_receipt_sha256,
               'helperSha256': helper_hash, 'mining': False, 'liveFeatures': False, 'automaticUpdates': False,
               'consumerSha256': {name: hashlib.sha256(data).hexdigest() for name, data in consumers.items()}}
+    if a.remote:
+        result['localAcceptanceSha256'] = sha(a.local_receipt)
     vm = tunnel = watcher = browser = None
     serial = stderr = None
     try:
@@ -276,7 +306,7 @@ def main():
             private_lines = '\n'.join('       ' + line for line in hostkey.read_text().splitlines())
             unit = ('[Unit]\nDescription=Fased disposable fixture bootstrap\nAfter=network-online.target\n'
                     '[Service]\nType=oneshot\nExecStartPre=/usr/bin/sha256sum -c /var/lib/fased-update-fixture/helper.sha256\n'
-                    'ExecStart=' + protected + ' maintenance-register --owner 1100 --profile local\n'
+                    'ExecStart=' + protected + ' maintenance-register --owner 1100 --profile ' + ('remote' if a.remote else 'local') + '\n'
                     'ExecStart=' + protected + ' maintenance-bootstrap --owner 1100\nRemainAfterExit=yes\n')
             user_data = ("#cloud-config\nssh_pwauth: false\ndisable_root: true\nusers:\n"
                          "  - name: fased-local\n    uid: 1100\n    shell: /bin/bash\n    lock_passwd: true\n"
@@ -405,21 +435,205 @@ def main():
         server_output = '>/dev/null' if a.resume_claimed else '>>custody-fixture/https.log'
         command(ssh + ['nohup /usr/bin/python3 ' + shlex.quote(guest_script) + ' server ' + server_output + ' 2>&1 </dev/null &'])
         remote(['/usr/bin/python3', guest_script, 'probe'], timeout=30)
-        print('Installing and enrolling the disposable Local fixture…', flush=True)
-        ready_data = json.loads(remote(['/usr/bin/python3', guest_script, 'resume-claimed' if a.resume_claimed else 'setup', '--port', app_port], timeout=900).stdout)
+        browser_script = work / 'browser-consumer.mjs'
+        if a.resume_claimed and os.path.lexists(browser_script):
+            if sha(owned_file(browser_script, 128 << 10)) != result['consumerSha256']['confined-custody-browser.mjs']:
+                raise RuntimeError('original fixture browser consumer differs')
+        else:
+            fd = os.open(browser_script, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, 'wb') as f:
+                f.write(consumers['confined-custody-browser.mjs'])
+                f.flush()
+                os.fsync(f.fileno())
+        if a.remote:
+            for name in ('staged-package-guest.py', 'staged-package-browser.mjs', 'release-acceptance.mjs', 'staged-acceptance-contract.json'):
+                fd = os.open(work / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(fd, 'wb') as f:
+                    f.write(consumers[name])
+                    f.flush()
+                    os.fsync(f.fileno())
+
+        def checked_consumer(path, name):
+            if sha(owned_file(path, 128 << 10)) != result['consumerSha256'][name]:
+                raise RuntimeError('fixture consumer changed: ' + name)
+            return path
+
+        def remote_browser(name, data, timeout=180):
+            config = work / (name + '-browser.json')
+            fd = os.open(config, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, 'w') as f:
+                json.dump({'fixtureOnly': True, **data}, f, separators=(',', ':'))
+                f.flush()
+                os.fsync(f.fileno())
+            reply = command(['node', checked_consumer(browser_script, 'confined-custody-browser.mjs'), '--remote', config], timeout=timeout)
+            return json.loads(reply.stdout)
+
+        if a.remote:
+            spec = importlib.util.spec_from_file_location('staged_custody', checked_consumer(work / 'staged-package-guest.py', 'staged-package-guest.py'))
+            staged = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(staged)
+            host_tail = json.loads(command(['tailscale', 'status', '--json'], timeout=15).stdout)
+            suffix = host_tail.get('MagicDNSSuffix', '')
+            staged.private_tailnet_origin(host_tail, suffix)
+            observed, stop_poll = {}, threading.Event()
+
+            def tail_status():
+                try:
+                    return json.loads(remote(['/usr/bin/tailscale', 'status', '--json'], timeout=15).stdout)
+                except subprocess.CalledProcessError as e:
+                    return json.loads(e.stdout)
+
+            def enrollment_ready():
+                tail = tail_status()
+                if tail.get('BackendState') != 'Running':
+                    return False
+                origin = staged.private_tailnet_origin(tail, suffix)
+                if observed.get('origin', origin) != origin:
+                    raise RuntimeError('Remote Tailscale node changed')
+                self_node = tail.get('Self', {})
+                if not self_node.get('ID') or not self_node.get('DNSName'):
+                    raise RuntimeError('Remote Tailscale node identity unavailable')
+                result['retainedTailscaleNode'] = {'id': self_node['ID'], 'dnsName': self_node['DNSName'],
+                                                  'cleanup': 'retain until the Remote evidence and recovery are reviewed'}
+                observed['origin'] = origin
+                return True
+
+            def poll_enrollment():
+                while not stop_poll.wait(2):
+                    try:
+                        tail = tail_status()
+                        link = tail.get('AuthURL', '')
+                        if link and link != observed.get('enrollment'):
+                            if not re.fullmatch(r'https://login\.tailscale\.com/a/[A-Za-z0-9]+', link):
+                                return
+                            request = work / 'tailscale-enrollment.json'
+                            staged.write_private(request, {'url': link, 'fixtureOnly': True})
+                            observed['enrollment'] = link
+                            print('Tailscale device approval is ready in ' + str(request), flush=True)
+                        if tail.get('BackendState') == 'Running':
+                            enrollment_ready()
+                            return
+                    except (OSError, ValueError, subprocess.SubprocessError):
+                        continue
+
+            def observe_install(text):
+                for link in re.findall(r'https://[a-z0-9.-]+\.ts\.net/[^\s]*', text):
+                    parsed = urllib.parse.urlsplit(link)
+                    if parsed.path == '/.fased-private-access' and re.fullmatch(r'[A-Za-z0-9_-]{43}', parsed.fragment) and not parsed.query:
+                        if observed.get('installProof') == link:
+                            continue
+                        if observed.get('installProof') or not observed.get('browserApproved') or parsed.scheme + '://' + parsed.netloc != observed.get('origin'):
+                            raise RuntimeError('unexpected installed private device proof')
+                        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                        with opener.open(observed['origin'] + '/api/v1/health', timeout=15) as response:
+                            health = json.load(response)
+                        if health.get('status') != 'ok' or not re.fullmatch(r'[A-Za-z0-9_-]{43}', health.get('instanceId', '')):
+                            raise RuntimeError('installed Remote instance is unavailable')
+                        observed['installProof'] = link
+                        proof = remote_browser('install-access-proof', {'action': 'proof', 'origin': observed['origin'],
+                                               'instance': health['instanceId'], 'url': link})
+                        if proof.get('result') != 'PASS':
+                            raise RuntimeError('installed private device proof failed')
+                    elif re.fullmatch(r'[A-Za-z0-9_-]{43}', parsed.fragment) and not parsed.query:
+                        if observed.get('preflight') == link:
+                            continue
+                        if observed.get('preflight') or not enrollment_ready() or parsed.scheme + '://' + parsed.netloc != observed['origin'] or parsed.path != '/':
+                            raise RuntimeError('unexpected private predeployment proof')
+                        observed['preflight'] = link
+                        config = work / 'private-preflight.json'
+                        staged.write_private(config, {'fixtureOnly': True, 'action': 'private-preflight', 'url': link,
+                                             'expectedOrigin': observed['origin'], 'diagnosticFile': str(work / 'private-preflight-error.json')})
+                        staged.wait_private_https(observed['origin'])
+                        checked_consumer(work / 'release-acceptance.mjs', 'release-acceptance.mjs')
+                        checked_consumer(work / 'staged-acceptance-contract.json', 'staged-acceptance-contract.json')
+                        reply = command(['node', checked_consumer(work / 'staged-package-browser.mjs', 'staged-package-browser.mjs'), config], timeout=360)
+                        if json.loads(reply.stdout) != {'result': 'PASS', 'action': 'private-preflight', 'privateBrowserApproved': True}:
+                            raise RuntimeError('private browser setup was not confirmed')
+                        observed['browserApproved'] = True
+                    elif parsed.query and parsed.fragment.startswith('setup='):
+                        if not observed.get('browserApproved') or parsed.scheme + '://' + parsed.netloc != observed.get('origin'):
+                            raise RuntimeError('private owner handoff appeared before browser verification')
+                        observed['setup'] = link
+
+            retry = staged.RemoteEnrollmentRetry(enrollment_ready, handoff_pending=lambda: bool(observed.get('enrollment')))
+            answers = {'Connect Tailscale for private Remote access? [Y/n]: ': 'y',
+                       'Use a dedicated app account with no login or sudo? [Y/n]: ': 'y',
+                       'Keep Fased running after logout and reboot? [Y/n]: ': 'y',
+                       'Set up Tailscale packages, service, browser sign-in and access for this OS user? [y/N]: ': 'y',
+                       'Use the SSH public key from this bootstrap connection for private recovery? [Y/n]:': 'y',
+                       'Authorize required Ubuntu preparation with sudo? [y/N]: ': 'y',
+                       'Authorize Ubuntu preparation, isolated service and bounded update maintenance with sudo? [y/N]: ': 'y'}
+            trust = json.loads((directory / 'fixture.json').read_text())
+            install = [protected, '--development', '--seed-file', '/var/lib/fased-update-fixture/seed.json',
+                       '--seed-sha256', trust['seedSha256'], '--tls-ca-file', '/var/lib/fased-update-fixture/ca.pem',
+                       '--output', '/home/fased-local/custody-fixture/verified-install', '--install', '--profile', 'remote',
+                       '--listen', '127.0.0.1:' + str(app_port)]
+            print('Installing the disposable Remote fixture through Tailscale…', flush=True)
+            poller = threading.Thread(target=poll_enrollment, daemon=True)
+            poller.start()
+            try:
+                code, _ = staged.terminal(ssh[:-1] + ['-tt', ssh[-1], shlex.join(install)], answers, timeout=1200,
+                                          password_free=True, observer=observe_install, prompt_retry=retry,
+                                          transcript=work / 'remote-install.log')
+            finally:
+                stop_poll.set()
+                poller.join(timeout=20)
+            if code or not observed.get('setup') or not observed.get('browserApproved') or not enrollment_ready():
+                raise RuntimeError('Remote private installation did not finish')
+            address = urllib.parse.urlsplit(observed['setup'])
+            identity = urllib.parse.parse_qs(address.query).get('instance', [])
+            if len(identity) != 1 or not re.fullmatch(r'[A-Za-z0-9_-]{43}', identity[0]):
+                raise RuntimeError('exact Remote owner handoff required')
+            instance = identity[0]
+            origin = observed['origin']
+            claim = remote_browser('claim', {'action': 'claim', 'origin': origin, 'instance': instance, 'url': observed['setup']})
+            if claim.get('result') != 'PASS' or not claim.get('taskId'):
+                raise RuntimeError('Remote device enrollment and preserved task required')
+            ready_data = json.loads(remote(['/usr/bin/python3', guest_script, 'remote-enroll', '--instance', instance], timeout=900).stdout)
+            if ready_data.get('result') != 'READY' or ready_data.get('instanceId') != instance:
+                raise RuntimeError('Remote custody enrollment did not finish')
+
+            def observe_access(text):
+                for link in re.findall(r'https://[a-z0-9.-]+\.ts\.net/\.fased-private-access#[A-Za-z0-9_-]{43}', text):
+                    if link == observed.get('proof'):
+                        continue
+                    if observed.get('proof') or not link.startswith(origin + '/'):
+                        raise RuntimeError('unexpected Remote access proof')
+                    observed['proof'] = link
+                    proof = remote_browser('access-proof', {'action': 'proof', 'origin': origin, 'instance': instance, 'url': link})
+                    if proof.get('result') != 'PASS':
+                        raise RuntimeError('Remote device proof failed')
+
+            access = [str(P('/var/lib/fased-app-vps-1100/fased-app')), 'vps', 'access']
+            code, _ = staged.terminal(ssh[:-1] + ['-tt', ssh[-1], shlex.join(access)], {}, timeout=360,
+                                      password_free=True, observer=observe_access, transcript=work / 'remote-access.log')
+            if code:
+                raise RuntimeError('original Remote private route did not reconnect')
+            wallet = remote_browser('wallet', {'action': 'wallet', 'origin': origin, 'instance': instance,
+                                              'signerAccount': ready_data['signerAccount']})
+            if wallet.get('result') != 'PASS':
+                raise RuntimeError('Remote wallet/RPC fixture setup failed')
+            result['privateTransport'] = 'direct Tailscale HTTPS with normal TLS'
+            result['taskId'] = claim['taskId']
+        else:
+            print('Installing and enrolling the disposable Local fixture…', flush=True)
+            ready_data = json.loads(remote(['/usr/bin/python3', guest_script, 'resume-claimed' if a.resume_claimed else 'setup', '--port', app_port], timeout=900).stdout)
         if ready_data.get('result') != 'READY' or ready_data.get('fixtureOnly') is not True:
             raise RuntimeError('Local enrollment did not reach its real entry')
         recovered = ready_data.get('enrollmentRecovery', {})
-        if (recovered.get('simulated') is not True or recovered.get('pendingRecords') != 2 or
-                recovered.get('protectedTargetMatched') is not True or not re.fullmatch(r'[a-f0-9]{32}', recovered.get('operationId', ''))):
+        if (recovered.get('simulated') is not True or
+                (not a.remote and (recovered.get('pendingRecords') != 2 or recovered.get('protectedTargetMatched') is not True)) or
+                (a.remote and recovered.get('pendingOnly') is not True) or
+                not re.fullmatch(r'[a-f0-9]{32}', recovered.get('operationId', ''))):
             raise RuntimeError('same-operation prepared recovery was not observed')
         result['enrollmentRecovery'] = recovered
         result['instanceId'] = ready_data['instanceId']
         result['beforeBoot'] = remote(['/usr/bin/cat', '/proc/sys/kernel/random/boot_id']).stdout.decode().strip()
         remote(['/usr/bin/python3', guest_script, 'target'])
-        tunnel = subprocess.Popen(ssh[:-1] + ['-o', 'ExitOnForwardFailure=yes', '-N', '-L', f'127.0.0.1:{app_port}:127.0.0.1:{app_port}', ssh[-1]], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        if not a.remote:
+            tunnel = subprocess.Popen(ssh[:-1] + ['-o', 'ExitOnForwardFailure=yes', '-N', '-L', f'127.0.0.1:{app_port}:127.0.0.1:{app_port}', ssh[-1]], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         tunnel_deadline = time.monotonic() + 20
-        while time.monotonic() < tunnel_deadline:
+        while not a.remote and time.monotonic() < tunnel_deadline:
             if tunnel.poll() is not None:
                 raise RuntimeError('fixture tunnel could not bind its private listener')
             try:
@@ -433,18 +647,16 @@ def main():
                     raise
                 time.sleep(0.2)
         else:
-            raise RuntimeError('fixture tunnel did not become ready')
+            if not a.remote:
+                raise RuntimeError('fixture tunnel did not become ready')
         watcher = subprocess.Popen(ssh + ['/usr/bin/python3 ' + shlex.quote(guest_script) + ' watch'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        browser_script = work / 'browser-consumer.mjs'
-        fd = os.open(browser_script, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, 'wb') as f:
-            f.write(consumers['confined-custody-browser.mjs'])
-            f.flush()
-            os.fsync(f.fileno())
-        browser = subprocess.Popen(['node', str(browser_script), str(app_port), result['instanceId']],
-                                   cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        browser_out, _ = browser.communicate(timeout=180)
-        accepted = json.loads(browser_out) if browser.returncode == 0 else {}
+        if a.remote:
+            accepted = remote_browser('apply', {'action': 'apply', 'origin': origin, 'instance': instance})
+        else:
+            browser = subprocess.Popen(['node', str(browser_script), str(app_port), result['instanceId']],
+                                       cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            browser_out, _ = browser.communicate(timeout=180)
+            accepted = json.loads(browser_out) if browser.returncode == 0 else {}
         if accepted.get('result') != 'APPLY_SENT' or not re.fullmatch(r'[a-f0-9]{32}', accepted.get('operationId', '')):
             raise RuntimeError('browser did not confirm the original Update request')
         browser = None
@@ -480,7 +692,7 @@ def main():
         vm.kill()
         vm.wait(timeout=20)
         result['cut'] = cut
-        if tunnel.poll() is None:
+        if tunnel is not None and tunnel.poll() is None:
             tunnel.terminate()
             tunnel.wait(timeout=10)
         tunnel = None
@@ -506,13 +718,41 @@ def main():
             time.sleep(1)
         else:
             raise RuntimeError('original update remains held; no retry sent')
-        proof = json.loads(remote(['/usr/bin/python3', guest_script, 'verify', '--operation', cut['operationId']], timeout=300).stdout)
+        if a.remote:
+            proof = json.loads(remote(['/usr/bin/python3', guest_script, 'remote-verify', '--operation', cut['operationId']], timeout=300).stdout)
+            browser_proof = remote_browser('verify', {'action': 'verify', 'origin': origin, 'instance': instance,
+                                           'taskId': claim['taskId'], 'accountId': wallet['accountId'],
+                                           'revision': wallet['revision'], 'credentialRef': wallet['credentialRef']})
+            client_data = work / 'client-data'
+            client_data.mkdir(mode=0o700)
+            client = directory / 'fased-app-tests'
+            command([client, 'connect', '--data-dir', client_data, '--url', origin, '--instance-id', instance, '--print'], timeout=30)
+            cli_accounts = json.loads(command([client, 'accounts', '--remote', '--data-dir', client_data], timeout=30).stdout)
+            read_input = json.dumps({'accountId': wallet['accountId'], 'revision': wallet['revision'],
+                                     'ref': wallet['credentialRef'], 'passphrase': 'Disposable custody RPC 5CJmX8sB'}).encode()
+            cli_read = json.loads(command([client, 'accounts', '--remote', '--data-dir', client_data, '--read-stdin'],
+                                          input=read_input, timeout=30).stdout)
+            if (browser_proof.get('result') != 'PASS' or browser_proof.get('accounts') != wallet['accounts'] or
+                    cli_accounts.get('record') != browser_proof.get('accounts') or
+                    cli_read.get('fixtureOnly') is not True or cli_read.get('liveRPC') is not False):
+                raise RuntimeError('Remote UI/CLI account preservation differs')
+            for name in ('accountId', 'revision', 'binding', 'credentialRef', 'address', 'network', 'lamports', 'tokens', 'activity'):
+                if name not in cli_read or cli_read[name] != browser_proof.get('walletRead', {}).get(name):
+                    raise RuntimeError('Remote UI/CLI wallet read differs: ' + name)
+            current = command([client, 'update', '--remote', '--data-dir', client_data], input=b'', timeout=180)
+            if b'Already current' not in current.stdout:
+                raise RuntimeError('Remote connected CLI did not report Already current')
+            proof.update(taskPreserved=True, accountPreserved=True, rpcPreserved=True,
+                         browserAPICliWalletRead=True, cliAlreadyCurrent=True,
+                         cliIdentity='controlled test client on approved Tailscale device')
+        else:
+            proof = json.loads(remote(['/usr/bin/python3', guest_script, 'verify', '--operation', cut['operationId']], timeout=300).stdout)
         if proof.get('result') != 'PASS' or proof.get('operationId') != cut['operationId']:
-            raise RuntimeError('Local recovery proof incomplete')
+            raise RuntimeError('custody recovery proof incomplete')
         result['proof'] = proof
         result['interruptionAtPowerLoss'] = 'controlled signer status gate; no external process interference'
         result['result'] = 'PASS'
-        print('Local controlled fixture update and reboot recovery passed.', flush=True)
+        print(('Remote' if a.remote else 'Local') + ' controlled fixture update and reboot recovery passed.', flush=True)
     except BaseException as e:
         result['error'] = str(e)
         if isinstance(e, subprocess.CalledProcessError) and e.stderr:

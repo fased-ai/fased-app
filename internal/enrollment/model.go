@@ -15,6 +15,7 @@ type Source struct {
 	UID, GID                                                int
 	Running, Autostart                                      bool
 	Validate, Suspend                                       func(context.Context) error
+	VerifyPrepared                                          func(context.Context) error
 	Restore                                                 func(context.Context, bool, bool) error
 }
 

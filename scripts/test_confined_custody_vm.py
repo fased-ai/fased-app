@@ -22,6 +22,25 @@ guest = load('confined_guest', 'confined-custody-fixture.py')
 
 
 class FixtureBoundaries(unittest.TestCase):
+    def test_remote_requires_same_fixture_and_local_consumer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            receipt = directory / 'local-result.json'
+            value = {'result': 'PASS', 'fixtureOnly': True, 'sourceReceiptSha256': 'a' * 64,
+                     'helperSha256': 'b' * 64, 'consumerSha256': {'consumer': 'c' * 64},
+                     'proof': {'result': 'PASS'}, 'mining': False, 'liveFeatures': False,
+                     'automaticUpdates': False}
+            receipt.write_text(json.dumps(value))
+            self.assertEqual(value, host.require_local_receipt(directory, receipt, 'a' * 64, 'b' * 64, {'consumer': 'c' * 64}))
+            with self.assertRaisesRegex(RuntimeError, 'consumer differs'):
+                host.require_local_receipt(directory, receipt, 'a' * 64, 'b' * 64, {'consumer': 'd' * 64})
+            with self.assertRaisesRegex(RuntimeError, 'same fixture'):
+                host.require_local_receipt(directory, directory / 'foreign.json', 'a' * 64, 'b' * 64, {'consumer': 'c' * 64})
+            value['proof']['result'] = 'FAIL'
+            receipt.write_text(json.dumps(value))
+            with self.assertRaisesRegex(RuntimeError, 'completed Local'):
+                host.require_local_receipt(directory, receipt, 'a' * 64, 'b' * 64, {'consumer': 'c' * 64})
+
     def test_pending_enrollment_is_not_replaced_on_resume(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

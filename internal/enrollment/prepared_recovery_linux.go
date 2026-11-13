@@ -106,8 +106,9 @@ func recoverPreparedOwnerJournal(ctx context.Context, h *runtimeHost, s Source, 
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, 16385))
 	var j journal
+	ownerTopology := s.Profile == "local" && o.NativeOwnerAccess || s.Profile == "remote" && !o.NativeOwnerAccess
 	if err != nil || len(raw) > 16384 || update.StrictJSON(raw, &j) != nil || !j.valid(os.Getuid()) || j.Phase != "prepared" || j.Digest != "" || j.CoreRecovery != nil || j.Target != (custodyinstall.Manifest{}) ||
-		s.Profile != "local" || !o.NativeOwnerAccess || o.Mode != signer.OrdinaryCustodyMode || !o.Disposable || !o.PrepareHost || o.RecoverSuspended ||
+		!ownerTopology || o.Mode != signer.OrdinaryCustodyMode || !o.Disposable || !o.PrepareHost || o.RecoverSuspended ||
 		j.NativeOwnerAccess != o.NativeOwnerAccess || j.Mode != o.Mode || j.Profile != o.Profile || j.Provenance != o.Provenance || j.Network != o.Network || j.CoreHash != coreHash || j.SignerHash != signerHash ||
 		!sourceMatches(s, j.Source) || j.Source.ApplicationSequence != s.ApplicationSequence || j.Source.ApplicationReleaseSHA256 != s.ApplicationReleaseSHA256 || s.Validate == nil {
 		return errState
@@ -171,12 +172,25 @@ func recoverPreparedOwnerJournal(ctx context.Context, h *runtimeHost, s Source, 
 
 func verifyFreshPreparedAuthority(ctx context.Context, s Source) error {
 	a, err := maintenance.ReadAuthority(os.Getuid())
-	if err != nil || a.Profile != "local" || a.Owner != os.Getuid() || a.Group != os.Getgid() || s.Profile != "local" {
+	if err != nil || a.Profile != s.Profile || (a.Profile != "local" && a.Profile != "remote") || a.Owner != os.Getuid() || a.Group != os.Getgid() {
 		return errState
 	}
 	config, err := os.UserConfigDir()
 	if err != nil || config != filepath.Join(a.Home, ".config") || maintenance.ValidateOwnerIdentity(a) != nil || maintenance.VerifyImage(a) != nil {
 		return errState
+	}
+	if a.Profile == "remote" {
+		if s.VerifyPrepared == nil {
+			return errState
+		}
+		if err := s.VerifyPrepared(ctx); err != nil {
+			return err
+		}
+		b, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "remote-enrollment-prepared-status"}, nil)
+		if err != nil {
+			return err
+		}
+		return verifyRemotePreparedStatus(b, s, a.Owner)
 	}
 	entries, err := os.ReadDir(maintenance.OwnerRoot(a.Owner))
 	if err != nil || len(entries) != 1 || entries[0].Name() != "authority.json" {
@@ -191,6 +205,27 @@ func verifyFreshPreparedAuthority(ctx context.Context, s Source) error {
 	}
 	defer client.Close()
 	if client.Endpoint.InstanceID != s.ExpectedInstanceID || client.Endpoint.URL != "http://"+s.Listen {
+		return errState
+	}
+	return nil
+}
+
+// The protected helper validates the Remote manifest, service UID and private
+// IPC before returning this status. Never infer the source identity from its URL.
+func verifyRemotePreparedStatus(raw []byte, s Source, owner int) error {
+	var response maintenance.Response
+	var status struct {
+		Installed  bool   `json:"installed"`
+		Active     bool   `json:"active"`
+		Unit       string `json:"unit"`
+		State      string `json:"state"`
+		InstanceID string `json:"instanceId"`
+		URL        string `json:"url"`
+	}
+	if owner <= 0 || s.Profile != "remote" || !strings.HasPrefix(s.PublicOrigin, "https://") || !instanceID(s.ExpectedInstanceID) ||
+		update.StrictJSON(raw, &response) != nil || response.Version != 1 || response.Action != "remote-enrollment-prepared-status" || !response.Complete ||
+		update.StrictJSON(response.Payload, &status) != nil || !status.Installed || !status.Active || status.State != "active" ||
+		status.Unit != fmt.Sprintf("fased-vps-%d.service", owner) || status.InstanceID != s.ExpectedInstanceID || status.URL != s.PublicOrigin {
 		return errState
 	}
 	return nil

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/signer"
 )
 
@@ -117,6 +119,89 @@ func TestPreparedRecoveryAcceptsOwnerReadOnlyPending(t *testing.T) {
 	}
 	if _, err := readOwnerJournal(h.state); err != nil {
 		t.Fatal("recovered operation was not readable", err)
+	}
+}
+
+func TestPreparedRemoteRecoveryPublishesOnlyVerifiedOriginal(t *testing.T) {
+	for _, trusted := range []bool{false, true} {
+		t.Run(map[bool]string{false: "refuse-unverified", true: "resume-original"}[trusted], func(t *testing.T) {
+			h, s, o, original, pending := preparedRecoveryFixture(t)
+			s.Profile = "remote"
+			s.PublicOrigin = "https://controlled.owner.ts.net"
+			o.NativeOwnerAccess = false
+			original.Source = record(s)
+			original.NativeOwnerAccess = false
+			raw, err := json.Marshal(original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(pending, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			called := 0
+			verify := func() error {
+				called++
+				if !trusted {
+					return errors.New("original Remote instance not verified")
+				}
+				return nil
+			}
+			err = recoverPreparedOwnerJournal(t.Context(), h, s, o, original.CoreHash, original.SignerHash, verify)
+			if trusted {
+				if err != nil || called != 1 {
+					t.Fatal("verified Remote operation was not recovered", err, called)
+				}
+				if got, err := readOwnerJournal(h.state); err != nil || got != original {
+					t.Fatal("Remote operation identity changed", err)
+				}
+			} else if err == nil || called != 1 {
+				t.Fatal("unverified Remote operation was accepted", err, called)
+			} else if _, err := os.Lstat(h.state); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("unverified Remote state was published", err)
+			}
+			if after, err := os.ReadFile(pending); err != nil || string(after) != string(raw) {
+				t.Fatal("original Remote pending record changed", err)
+			}
+		})
+	}
+}
+
+func TestRemotePreparedStatusRequiresOriginalInstance(t *testing.T) {
+	s := Source{Profile: "remote", PublicOrigin: "https://controlled.owner.ts.net", ExpectedInstanceID: base64.RawURLEncoding.EncodeToString(make([]byte, 32))}
+	owner := os.Getuid()
+	status := map[string]any{"installed": true, "active": true, "unit": fmt.Sprintf("fased-vps-%d.service", owner), "state": "active", "instanceId": s.ExpectedInstanceID, "url": s.PublicOrigin}
+	encode := func(action string, complete bool) []byte {
+		t.Helper()
+		payload, err := json.Marshal(status)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := json.Marshal(maintenance.Response{Version: 1, Action: action, Complete: complete, Payload: payload})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	if err := verifyRemotePreparedStatus(encode("remote-enrollment-prepared-status", true), s, owner); err != nil {
+		t.Fatal("original protected Remote instance rejected", err)
+	}
+	for _, key := range []string{"active", "instanceId", "url", "unit", "state"} {
+		original := status[key]
+		if key == "active" {
+			status[key] = false
+		} else {
+			status[key] = "foreign"
+		}
+		if err := verifyRemotePreparedStatus(encode("remote-enrollment-prepared-status", true), s, owner); err == nil {
+			t.Fatalf("changed %s accepted", key)
+		}
+		status[key] = original
+	}
+	if err := verifyRemotePreparedStatus(encode("remote-status", true), s, owner); err == nil {
+		t.Fatal("foreign protected action accepted")
+	}
+	if err := verifyRemotePreparedStatus(encode("remote-enrollment-prepared-status", false), s, owner); err == nil {
+		t.Fatal("incomplete protected response accepted")
 	}
 }
 

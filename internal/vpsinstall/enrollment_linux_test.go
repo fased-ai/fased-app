@@ -11,14 +11,141 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/signer"
 )
+
+func TestRemotePreparedInventoryPreservesUnknownCustodyWork(t *testing.T) {
+	h, o, _ := fixtureHost()
+	root := maintenance.OwnerRoot(o.uid)
+	for _, path := range []string{root + "/remote", root + "/tailscale", root + "/fased-app", root + "/fased-app/install", root + "/fased-app/install/verified-" + strings.Repeat("a", 32)} {
+		h.files[path] = hostFile{UID: 0, GID: 0, Mode: os.ModeDir | 0700, Directory: true}
+	}
+	h.files[root] = hostFile{UID: 0, GID: 0, Mode: os.ModeDir | 0755, Directory: true}
+	h.files[root+"/authority.json"] = hostFile{UID: 0, GID: 0, Mode: 0644, Regular: true}
+	h.files[root+"/operation.lock"] = hostFile{UID: 0, GID: 0, Mode: 0600, Regular: true}
+	if err := verifyFreshRemoteEnrollmentInventory(o, o.uid); err != nil {
+		t.Fatal("clean protected Remote source and Tailscale preparation were refused", err)
+	}
+	tailscale := root + "/tailscale"
+	originalTailscale := h.files[tailscale]
+	foreignTailscale := originalTailscale
+	foreignTailscale.UID = o.uid
+	h.files[tailscale] = foreignTailscale
+	if err := verifyFreshRemoteEnrollmentInventory(o, o.uid); err == nil {
+		t.Fatal("foreign Tailscale preparation was accepted")
+	}
+	h.files[tailscale] = originalTailscale
+	for _, name := range []string{"custody-" + strings.Repeat("b", 32), "unknown"} {
+		path := filepath.Join(root, "fased-app", "install", name)
+		h.files[path] = hostFile{UID: 0, GID: 0, Mode: os.ModeDir | 0700, Directory: true}
+		if err := verifyFreshRemoteEnrollmentInventory(o, o.uid); err == nil {
+			t.Fatalf("unclassified acquisition %s was accepted", name)
+		}
+		delete(h.files, path)
+	}
+	verified := filepath.Join(root, "fased-app", "install", "verified-"+strings.Repeat("a", 32))
+	original := h.files[verified]
+	changed := original
+	changed.Mode = os.ModeDir | 0500
+	h.files[verified] = changed
+	if err := verifyFreshRemoteEnrollmentInventory(o, o.uid); err != nil {
+		t.Fatal("owner-restricted acquisition directory was refused", err)
+	}
+	changed = original
+	changed.Mode |= os.ModeSetgid
+	h.files[verified] = changed
+	if err := verifyFreshRemoteEnrollmentInventory(o, o.uid); err == nil {
+		t.Fatal("modified protected directory mode was accepted")
+	}
+	h.files[verified] = original
+	h.files[custodyinstall.Root(o.uid)] = hostFile{UID: 0, GID: 0, Mode: os.ModeDir | 0755, Directory: true}
+	if err := verifyFreshRemoteEnrollmentInventory(o, o.uid); err == nil {
+		t.Fatal("existing custody target was accepted")
+	}
+}
+
+func TestRemotePreparedJournalsPreserveInterruptedOperations(t *testing.T) {
+	f := remoteApplicationFixture(t)
+	m, err := f.apply(t, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := "/fixture-owner-journal"
+	f.h.files[dir] = hostFile{UID: f.o.uid, GID: f.o.gid, Mode: os.ModeDir | 0700, Directory: true}
+	instance := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	if err := verifyFreshRemoteJournals(f.o, m, dir, instance, f.o.uid); err != nil {
+		t.Fatal("terminal original update refused", err)
+	}
+	pending := filepath.Join(dir, ".pending-unclassified")
+	f.h.files[pending] = hostFile{UID: f.o.uid, GID: f.o.gid, Mode: 0600, Regular: true}
+	if err := verifyFreshRemoteJournals(f.o, m, dir, instance, f.o.uid); err == nil {
+		t.Fatal("unclassified pending journal accepted")
+	}
+	delete(f.h.files, pending)
+	j, err := readApplicationJournal(f.o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := j
+	j.Status.Phase = "recovery"
+	if err := f.o.writeJournal(applicationJournalName, j); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyFreshRemoteJournals(f.o, m, dir, instance, f.o.uid); err == nil {
+		t.Fatal("unfinished Remote update accepted")
+	}
+	if err := f.o.writeJournal(applicationJournalName, original); err != nil {
+		t.Fatal(err)
+	}
+	request := applicationMaintenanceRequest{Version: 1, ID: original.Status.ID, InstallationID: m.ID,
+		PreviousManifestSHA256: original.Status.PreviousManifestSHA256, Finished: "completed"}
+	if err := f.o.writeJournal("application-maintenance.json", request); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyFreshRemoteJournals(f.o, m, dir, instance, f.o.uid); err != nil {
+		t.Fatal("matching completed maintenance refused", err)
+	}
+	request.Finished = "unknown"
+	if err := f.o.writeJournal("application-maintenance.json", request); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyFreshRemoteJournals(f.o, m, dir, instance, f.o.uid); err == nil {
+		t.Fatal("unknown maintenance outcome accepted")
+	}
+	delete(f.h.journals, "application-maintenance.json")
+	next := m
+	next.PublicOrigin = "https://changed.owner.ts.net"
+	access := accessJournal{Version: 1, ID: strings.Repeat("f", 32), Phase: "committed", InstanceID: instance, Previous: m, Next: next}
+	if err := f.o.writeJournal(accessJournalName, access); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyFreshRemoteJournals(f.o, next, dir, instance, f.o.uid); err != nil {
+		t.Fatal("later committed access change refused", err)
+	}
+	deferred := applicationMaintenanceRequest{Version: 1, ID: strings.Repeat("e", 32), InstallationID: m.ID,
+		PreviousManifestSHA256: ManifestSHA256(m), Finished: "deferred"}
+	if err := f.o.writeJournal("application-maintenance.json", deferred); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyFreshRemoteJournals(f.o, next, dir, instance, f.o.uid); err != nil {
+		t.Fatal("deferred maintenance before access change was refused", err)
+	}
+	access.InstanceID = base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32))
+	if err := f.o.writeJournal(accessJournalName, access); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyFreshRemoteJournals(f.o, next, dir, instance, f.o.uid); err == nil {
+		t.Fatal("foreign access instance accepted")
+	}
+}
 
 type enrollmentJournalBinding struct {
 	enrollmentFenceBinding

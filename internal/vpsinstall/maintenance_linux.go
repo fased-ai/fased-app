@@ -98,6 +98,19 @@ func RunProtected(ctx context.Context, owner int, action string, peer *tailnet.I
 			v, err := enrollmentStatus(ctx, o, m)
 			payload = v
 			return err
+		case "remote-enrollment-prepared-status":
+			if err := verifyFreshRemoteEnrollmentInventory(o, owner); err != nil {
+				return err
+			}
+			if err := enrollmentNetworkSettled(ctx, o, m); err != nil {
+				return err
+			}
+			v, err := status(ctx, o, m)
+			if err == nil {
+				err = verifyFreshRemoteJournals(o, m, filepath.Join(maintenance.OwnerRoot(owner), "remote"), v.InstanceID, 0)
+			}
+			payload = v
+			return err
 		case "remote-enrollment-suspend", "remote-enrollment-restore":
 			step := "suspend"
 			if action == "remote-enrollment-restore" {

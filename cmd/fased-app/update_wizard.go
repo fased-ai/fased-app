@@ -7,11 +7,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -159,16 +157,8 @@ func ordinaryUpdateCommand(args []string, in *os.File, out, errOut io.Writer) er
 		return errors.New("unexpected update arguments")
 	}
 	if *remote {
-		data, err := core.ReadPrivateFile(filepath.Join(*dir, "remote-connection.json"))
-		if err != nil {
-			return errors.New("choose your Remote instance with fased connect --url https://your-instance.ts.net")
-		}
-		var profile connection.Result
-		if json.Unmarshal(data, &profile) != nil || profile.Location != "remote" || profile.Transport != "private-https" {
-			return errors.New("invalid Remote profile; preserve it and reconnect")
-		}
 		ctx := context.Background()
-		client, err := core.NewRemoteClient(ctx, profile.URL, profile.InstanceID)
+		client, err := connectedRemoteClient(ctx, *dir)
 		if err != nil {
 			return err
 		}

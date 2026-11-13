@@ -192,6 +192,7 @@ func enrollmentSource(ctx context.Context, mode, expected string, paths localins
 	}
 	source = enrollment.Source{Profile: "remote", Data: m.Data, UID: m.AppUID, GID: m.AppGID, Listen: m.Listen, PublicOrigin: m.PublicOrigin, ExpectedInstanceID: expected, Running: status.Active, Autostart: autostart, ApplicationSequence: m.ApplicationSequence, ApplicationReleaseSHA256: m.ApplicationReleaseSHA256}
 	source.Validate = func(c context.Context) error { return vpsinstall.ValidateEnrollment(c, m, system) }
+	source.VerifyPrepared = func(context.Context) error { return vpsinstall.VerifyPreparedEnrollmentOwner(m, expected) }
 	source.Suspend = func(c context.Context) error { return vpsinstall.SuspendEnrollment(c, m, system) }
 	source.Restore = func(c context.Context, running, autostart bool) error {
 		return vpsinstall.RestoreEnrollment(c, m, running, autostart, system)

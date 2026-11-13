@@ -116,7 +116,7 @@ func TestEnrollmentCutoverAllowsOnlyFixedSteps(t *testing.T) {
 			}
 		}
 	}
-	for _, action := range []string{"remote-enrollment-validate", "remote-enrollment-status", "remote-enrollment-suspend", "remote-enrollment-restore"} {
+	for _, action := range []string{"remote-enrollment-validate", "remote-enrollment-status", "remote-enrollment-prepared-status", "remote-enrollment-suspend", "remote-enrollment-restore"} {
 		good := `{"version":1,"action":"` + action + `"}`
 		if _, err := DecodeRequest([]byte(good)); err != nil {
 			t.Fatal(err)
