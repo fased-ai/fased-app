@@ -37,7 +37,8 @@ func maintenanceSandbox(m Manifest) bool {
 	return CheckSandbox(m.Root, m.Data) == nil
 }
 func maintenanceOwnerMap(uid int, text string) bool {
-	return uid > 0 && strings.Join(strings.Fields(text), " ") == strconv.Itoa(uid)+" 0 1"
+	value := strings.Join(strings.Fields(text), " ")
+	return uid > 0 && (value == strconv.Itoa(uid)+" 0 1" || value == strconv.Itoa(uid)+" "+strconv.Itoa(uid)+" 1")
 }
 func maintenanceBus(ctx context.Context, m Manifest, args ...string) ([]byte, error) {
 	if len(args) != 3 || args[0] != "show" || args[2] != maintenanceProperties {
@@ -136,10 +137,10 @@ func maintenanceBusCall(ctx context.Context, conn *dbus.Conn, m Manifest, unit, 
 		return nil, errors.New("invalid maintenance overrides")
 	}
 
-	if len(drops) != 0 {
+	if !allowedUserMaintenanceDropIns(m, strings.Join(drops, " ")) {
 		return nil, errors.New("maintenance overrides refused")
 	}
-	fmt.Fprintln(&out, "DropInPaths=")
+	fmt.Fprintf(&out, "DropInPaths=%s\n", strings.Join(drops, " "))
 	result, ok := service["Result"].Value().(string)
 	if !ok || strings.ContainsAny(result, "\r\n\x00") {
 		return nil, errors.New("invalid maintenance result")

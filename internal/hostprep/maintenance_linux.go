@@ -30,25 +30,10 @@ func PrepareProtected(ctx context.Context, owner int, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	packages := append(p.Packages(a.Profile == "local"), "polkitd")
-	if a.Profile == "remote" {
-		packages = append(packages, "nftables", "openssh-server")
-	}
-	var missing []string
-	for _, name := range packages {
-		b, err := protectedOS(ctx, nil, out, "/usr/bin/dpkg-query", "-W", "-f=${Status}", name)
-		if err != nil || string(b) != "install ok installed" {
-			missing = append(missing, name)
-		}
-	}
-	if len(missing) != 0 {
-		if _, err = protectedOS(ctx, nil, out, "/usr/bin/apt-get", "update"); err != nil {
-			return err
-		}
-		args := append([]string{"/usr/bin/apt-get", "install", "--yes", "--no-remove", "--no-install-recommends"}, missing...)
-		if _, err = protectedOS(ctx, nil, out, args...); err != nil {
-			return err
-		}
+	if err = prepareProtectedPackages(p, a.Profile, func(args ...string) ([]byte, error) {
+		return protectedOS(ctx, nil, out, args...)
+	}); err != nil {
+		return err
 	}
 	if p.RestrictedNamespaces {
 		policy := apparmor.Policy()
@@ -133,6 +118,42 @@ func PrepareProtected(ctx context.Context, owner int, out io.Writer) error {
 	})
 }
 
+func prepareProtectedPackages(p hostplatform.Platform, profile string, run func(...string) ([]byte, error)) error {
+	if profile != "local" && profile != "remote" {
+		return errors.New("unknown host preparation profile")
+	}
+	if profile == "remote" && !p.Remote {
+		return errors.New("Remote preparation requires a reviewed Remote OS profile")
+	}
+	manager, err := p.PackageManager()
+	if err != nil {
+		return err
+	}
+	packages := append(p.Packages(profile == "local"), manager.PolicyKit)
+	if profile == "remote" {
+		packages = append(packages, "nftables", "openssh-server")
+	}
+	var missing []string
+	for _, name := range packages {
+		query := append(append([]string(nil), manager.Query...), name)
+		b, err := run(query...)
+		if err != nil || manager.InstalledOutput != "" && string(b) != manager.InstalledOutput {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	if len(manager.Refresh) != 0 {
+		if _, err = run(manager.Refresh...); err != nil {
+			return err
+		}
+	}
+	args := append(append([]string(nil), manager.Install...), missing...)
+	_, err = run(args...)
+	return err
+}
+
 // Only trusted semantic Go code above supplies these arguments. It is not a
 // caller-accessible command interface and never executes an application image.
 func protectedOS(ctx context.Context, input []byte, out io.Writer, args ...string) ([]byte, error) {
@@ -147,7 +168,7 @@ func protectedOS(ctx context.Context, input []byte, out io.Writer, args ...strin
 	c.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/nonexistent", "LANG=C", "DEBIAN_FRONTEND=noninteractive"}
 	c.Stdin = bytes.NewReader(input)
 	c.Stderr = out
-	if args[0] == "/usr/bin/apt-get" || len(args) == 2 && args[0] == "/usr/bin/tailscale" && args[1] == "up" {
+	if args[0] == "/usr/bin/apt-get" || args[0] == "/usr/bin/dnf" || len(args) == 2 && args[0] == "/usr/bin/tailscale" && args[1] == "up" {
 		c.Stdout = out
 		return nil, c.Run()
 	}

@@ -191,6 +191,10 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 			return nil, err
 		}
 	case "/usr/bin/apt-get", "/usr/bin/cat", "/usr/bin/install", "/usr/bin/ln", "/usr/bin/rm", "/usr/bin/sync", "/usr/sbin/apparmor_parser":
+	case "/usr/bin/dnf":
+		if strings.Join(args[1:], " ") != "install --assumeyes --setopt=install_weak_deps=False gtk3 webkit2gtk4.1 xdg-utils" {
+			return nil, errors.New("only the declared Fedora desktop prerequisites may be installed")
+		}
 	case "/usr/bin/systemctl":
 		if strings.Join(args[1:], " ") != "enable --now tailscaled.service" {
 			return nil, errors.New("only guided Tailscale service preparation is allowed")
@@ -215,7 +219,7 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 	if !s.authorized {
 		prompt := s.Authorization
 		if prompt == "" {
-			prompt = "Authorize Ubuntu prerequisites: OS packages and the reviewed restrictive Bubblewrap profile. Existing policies are preserved; global AppArmor restrictions stay enabled. Fased remains unprivileged."
+			prompt = "Authorize required OS packages and reviewed sandbox preparation. Existing security policies are preserved; Fased remains unprivileged."
 		}
 		fmt.Fprintln(s.Out, prompt)
 		args := []string{"-v"}
@@ -236,7 +240,7 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 	c := s.sudo(ctx, append([]string{"-n", "--"}, args...)...)
 	c.Stdin = bytes.NewReader(input)
 	c.Stderr = s.Out
-	if args[0] == "/usr/bin/apt-get" || args[0] == "/usr/bin/tailscale" && len(args) > 1 && args[1] == "login" {
+	if args[0] == "/usr/bin/apt-get" || args[0] == "/usr/bin/dnf" || args[0] == "/usr/bin/tailscale" && len(args) > 1 && args[1] == "login" {
 		c.Stdout = s.Out
 		return nil, c.Run()
 	}

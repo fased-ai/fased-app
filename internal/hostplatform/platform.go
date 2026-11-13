@@ -18,12 +18,20 @@ import (
 var catalog []byte
 
 type Platform struct {
-	ID                   string `json:"id"`
-	Version              string `json:"version"`
-	Codename             string `json:"codename"`
-	GTK                  string `json:"gtk"`
-	Remote               bool   `json:"remote"`
-	RestrictedNamespaces bool   `json:"restrictedNamespaces"`
+	ID                   string   `json:"id"`
+	Version              string   `json:"version"`
+	Codename             string   `json:"codename"`
+	GTK                  string   `json:"gtk"`
+	Architectures        []string `json:"architectures,omitempty"`
+	Remote               bool     `json:"remote"`
+	RestrictedNamespaces bool     `json:"restrictedNamespaces"`
+}
+
+// PackageManager contains only fixed distribution-owned package operations.
+// Callers add package names from this package's reviewed platform mapping.
+type PackageManager struct {
+	Query, Refresh, Install, MaintenanceInstall []string
+	InstalledOutput, PolicyKit                  string
 }
 
 func releaseValues(text string) (map[string]string, error) {
@@ -68,6 +76,15 @@ func Lookup(release, arch string) (Platform, error) {
 			if code := values["VERSION_CODENAME"]; code != "" && code != p.Codename {
 				return Platform{}, errors.New("OS version/codename mismatch")
 			}
+			if len(p.Architectures) != 0 {
+				allowed := false
+				for _, supported := range p.Architectures {
+					allowed = allowed || supported == arch
+				}
+				if !allowed {
+					return Platform{}, errors.New("no reviewed package for this OS and CPU architecture")
+				}
+			}
 			return p, nil
 		}
 	}
@@ -101,9 +118,33 @@ func (p Platform) Packages(desktop bool) []string {
 		packages = append(packages, "bubblewrap", "apparmor")
 	}
 	if desktop {
-		packages = append(packages, p.GTK, "libwebkit2gtk-4.1-0", "xdg-utils")
+		webkit := "libwebkit2gtk-4.1-0"
+		if p.ID == "fedora" {
+			webkit = "webkit2gtk4.1"
+		}
+		packages = append(packages, p.GTK, webkit, "xdg-utils")
 	}
 	return packages
+}
+
+func (p Platform) PackageManager() (PackageManager, error) {
+	switch p.ID {
+	case "ubuntu":
+		return PackageManager{
+			Query: []string{"/usr/bin/dpkg-query", "-W", "-f=${Status}"}, InstalledOutput: "install ok installed",
+			Refresh:            []string{"/usr/bin/apt-get", "update"},
+			Install:            []string{"/usr/bin/apt-get", "install", "--yes", "--no-remove", "--no-install-recommends"},
+			MaintenanceInstall: []string{"/usr/bin/apt-get", "install", "--yes", "--no-install-recommends"}, PolicyKit: "polkitd",
+		}, nil
+	case "fedora":
+		return PackageManager{
+			Query:              []string{"/usr/bin/rpm", "-q", "--quiet", "--"},
+			Install:            []string{"/usr/bin/dnf", "install", "--assumeyes", "--setopt=install_weak_deps=False"},
+			MaintenanceInstall: []string{"/usr/bin/dnf", "install", "--assumeyes", "--setopt=install_weak_deps=False"}, PolicyKit: "polkit",
+		}, nil
+	default:
+		return PackageManager{}, errors.New("unsupported OS package manager")
+	}
 }
 func (p Platform) TailscaleSource(key string) string {
 	return "deb [signed-by=" + key + "] https://pkgs.tailscale.com/stable/" + p.ID + " " + p.Codename + " main\n"

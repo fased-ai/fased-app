@@ -304,6 +304,10 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 		if strings.Join(args[1:], " ") != "install --yes --no-install-recommends polkitd" {
 			return nil, errors.New("only the declared maintenance OS prerequisite may be installed")
 		}
+	case "/usr/bin/dnf":
+		if strings.Join(args[1:], " ") != "install --assumeyes --setopt=install_weak_deps=False polkit" {
+			return nil, errors.New("only the declared Fedora maintenance prerequisite may be installed")
+		}
 	case "/usr/sbin/nft":
 		allowed := len(args) == 2 && args[1] == "--version" || len(args) == 3 && args[1] == "list" && args[2] == "tables" || len(args) == 6 && (args[1] == "--stateless" || args[1] == "--json") && args[2] == "list" && args[3] == "table" && args[4] == "inet" && networkNftTable.MatchString(args[5]) || len(args) == 3 && args[1] == "--file" && networkNftInput.MatchString(args[2]) || len(args) == 4 && args[1] == "--check" && args[2] == "--file" && networkNftInput.MatchString(args[3])
 		if !allowed {
@@ -359,7 +363,7 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 		c.Stdout = s.Out
 		c.Stderr = s.Out
 		if e := c.Run(); e != nil {
-			return nil, errors.New("OS authorization cancelled or unavailable; installation remains disabled")
+			return nil, errors.New("OS authorization cancelled or unavailable; requested setup was not performed")
 		}
 		s.authorized = true
 	}

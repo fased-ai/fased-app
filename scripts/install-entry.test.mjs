@@ -64,6 +64,35 @@ test("unstamped source cannot modify a host", () => {
   assert.match(r.stderr.toString(), /No trusted installer release/);
 });
 
+test("Fedora Local entry accepts only the mapped release and CPU before setup", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fased-os-entry-"));
+  try {
+    const osRelease = join(dir, "os-release");
+    const detached = `import os,subprocess,sys
+r=subprocess.run(['bash','-c',sys.argv[1],'entry','--local'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,preexec_fn=os.setsid,timeout=4)
+sys.stdout.buffer.write(r.stdout);sys.stderr.buffer.write(r.stderr);sys.exit(r.returncode)
+`;
+    for (const [version, cpu, expected] of [
+      ["45", "x86_64", /Run this command in an interactive terminal/],
+      ["45", "aarch64", /No reviewed package for this OS and CPU/],
+      ["46", "x86_64", /This OS version has no reviewed mapping/],
+    ]) {
+      writeFileSync(osRelease, `ID=fedora\nVERSION_ID=${version}\n`);
+      const script = renderEntry(template, config)
+        .replaceAll("/etc/os-release", osRelease)
+        .replace("case $(/usr/bin/uname -m)", `case ${cpu}`);
+      const result = spawnSync("python3", ["-c", detached, script], {
+        timeout: 6000,
+      });
+      assert.ifError(result.error);
+      assert.equal(result.status, 1, result.stderr.toString());
+      assert.match(result.stderr.toString(), expected);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 function entryTerminalCode() {
   const terminal = template
     .split("else die 'Invalid installer binding.'; fi\n")[1]
@@ -283,6 +312,8 @@ test("one release selects authenticated amd64 and arm64 tuples with update/local
   for (const value of [
     "linux-amd64)",
     "linux-arm64)",
+    "fedora:45)",
+    "fedora:45:linux-amd64)",
     "ubuntu:22.04)",
     "ubuntu:24.04)",
     "ubuntu:26.04)",
@@ -293,6 +324,7 @@ test("one release selects authenticated amd64 and arm64 tuples with update/local
   ]) {
     assert.ok(script.includes(value), value);
   }
+  assert.ok(!script.includes("fedora:45:linux-arm64)"));
   assert.equal(spawnSync("bash", ["-n"], { input: script }).status, 0);
   assert.throws(() =>
     renderEntry(template, { version: "1.0.0", targets: [config, config] }),

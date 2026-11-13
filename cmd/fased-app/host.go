@@ -277,7 +277,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			return err
 		}
 		if *interactive && !*prepareHost && (needsHostPreparation(*desktop) || *managedRemote) {
-			prompt := "Authorize required Ubuntu preparation with sudo? [y/N]: "
+			prompt := "Authorize required OS preparation with sudo? [y/N]: "
 			if *managedRemote {
 				prompt = "Authorize Ubuntu preparation, isolated service and bounded update maintenance with sudo? [y/N]: "
 			}

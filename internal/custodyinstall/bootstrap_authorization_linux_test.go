@@ -65,3 +65,31 @@ func TestTrustedUtilityRefusesOwnerControlledExecutable(t *testing.T) {
 		t.Fatal("owner-controlled executable accepted as an OS tool")
 	}
 }
+
+func TestFedoraMaintenancePackageIsBounded(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("authorization runs as an ordinary user")
+	}
+	var calls int
+	s := &System{Out: io.Discard, toolCheck: func(string) error { return nil }}
+	s.sudoCommand = func(ctx context.Context, args ...string) *exec.Cmd {
+		calls++
+		return exec.CommandContext(ctx, "/usr/bin/true")
+	}
+	valid := []string{"/usr/bin/dnf", "install", "--assumeyes", "--setopt=install_weak_deps=False", "polkit"}
+	if _, err := s.Run(t.Context(), nil, valid...); err != nil {
+		t.Fatal(err)
+	}
+	before := calls
+	for _, args := range [][]string{
+		{"/usr/bin/dnf", "install", "--assumeyes", "--nogpgcheck", "polkit"},
+		{"/usr/bin/dnf", "install", "--assumeyes", "--setopt=install_weak_deps=False", "unrelated-package"},
+	} {
+		if _, err := s.Run(t.Context(), nil, args...); err == nil {
+			t.Fatal("unscoped DNF request was accepted", args)
+		}
+	}
+	if calls != before {
+		t.Fatal("rejected DNF request reached sudo")
+	}
+}

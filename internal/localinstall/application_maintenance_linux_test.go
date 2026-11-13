@@ -5,6 +5,7 @@ package localinstall
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -177,6 +178,54 @@ func TestApplicationMaintenanceRefusesForeignTemplateImageAndCache(t *testing.T)
 				t.Fatal("foreign state reached launch")
 			}
 		})
+	}
+}
+
+func TestFedoraMaintenanceRecognizesOnlyDistributionDropIn(t *testing.T) {
+	release, err := os.ReadFile("/etc/os-release")
+	if err != nil || !strings.Contains(string(release), "ID=fedora\n") || !strings.Contains(string(release), "VERSION_ID=45\n") {
+		t.Skip("this check requires the actual Fedora 45 host")
+	}
+	path := "/usr/lib/systemd/user/service.d/10-timeout-abort.conf"
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		t.Skip("Fedora's systemd user drop-in is absent")
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inspectedFedoraDropIn(path, strings.Repeat("0", 64), false); err == nil {
+		t.Fatal("changed distribution drop-in content was accepted")
+	}
+	a, f := maintenanceFixture(t)
+	f.drop = path
+	if err := InstallApplicationMaintenance(t.Context(), a.old, f.run); err != nil {
+		t.Fatal("distribution drop-in refused", err)
+	}
+	proofPath := maintenanceExecutable(a.old) + ".json"
+	original, err := os.ReadFile(proofPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proof maintenanceImage
+	if err = json.Unmarshal(original, &proof); err != nil || proof.FedoraUserDropIn == nil {
+		t.Fatal("missing owner-verified drop-in identity", err)
+	}
+	proof.FedoraUserDropIn.Inode++
+	changed, err := json.Marshal(proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(proofPath, changed, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = LaunchApplicationMaintenance(t.Context(), a.old, a.candidate.ID, f.run); err == nil || f.count("start") != 0 {
+		t.Fatal("changed drop-in identity accepted", err)
+	}
+	if err = os.WriteFile(proofPath, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	f.drop += " /home/owner/override.conf"
+	if _, err := LaunchApplicationMaintenance(t.Context(), a.old, a.candidate.ID, f.run); err == nil || f.count("start") != 0 {
+		t.Fatal("additional override accepted", err)
 	}
 }
 func TestApplicationMaintenanceCleanupRequiresActualExactOutcome(t *testing.T) {
@@ -423,7 +472,7 @@ func TestMaintenanceOwnerMapRefusesAmbiguousRootViews(t *testing.T) {
 		uid  int
 		text string
 		ok   bool
-	}{{1100, "1100 0 1\n", true}, {1100, "1100 1100 1", false}, {1100, "1100 0 2", false}, {1100, "0 0 1\n1100 0 1", false}, {0, "0 0 1", false}, {1100, "1101 0 1", false}} {
+	}{{1100, "1100 0 1\n", true}, {1100, "1100 1100 1", true}, {1100, "1100 1101 1", false}, {1100, "1100 0 2", false}, {1100, "0 0 1\n1100 0 1", false}, {0, "0 0 1", false}, {1100, "1101 0 1", false}} {
 		if got := maintenanceOwnerMap(tc.uid, tc.text); got != tc.ok {
 			t.Fatal(tc, got)
 		}

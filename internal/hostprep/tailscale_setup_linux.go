@@ -85,6 +85,9 @@ func PrepareTailscale(ctx context.Context, in *bufio.Reader, out io.Writer) erro
 	if e != nil {
 		return e
 	}
+	if !platform.Remote {
+		return errors.New("Remote Tailscale setup requires a reviewed Remote OS profile")
+	}
 	u, e := user.Current()
 	if e != nil {
 		return e

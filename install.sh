@@ -14,6 +14,25 @@ development_only='@DEVELOPMENT_ONLY@'
 root_file() { [[ -f $1 && ! -L $1 && $(/usr/bin/stat -c '%u:%g:%a:%h' "$1") == "0:0:$2:1" ]]; }
 operator_record() { [[ $1 =~ ^(pending:[a-f0-9]{32}|ready:[1-9][0-9]*:[1-9][0-9]*:(external|[a-f0-9]{32}))$ ]]; }
 die() { printf 'Fased: %s\n' "$*" >&2; exit 1; }
+package_installed() {
+  case "$ID" in
+    ubuntu) [[ $(/usr/bin/dpkg-query -W -f='${Status}' "$1" 2>/dev/null || true) == 'install ok installed' ]] ;;
+    fedora) /usr/bin/rpm -q --quiet -- "$1" ;;
+    *) return 1 ;;
+  esac
+}
+install_packages() {
+  local -a elevate=()
+  if [[ $(/usr/bin/id -u) != 0 ]]; then elevate=(/usr/bin/sudo --); fi
+  case "$ID" in
+    ubuntu)
+      "${elevate[@]}" /usr/bin/apt-get update
+      "${elevate[@]}" /usr/bin/apt-get install -y --no-remove --no-install-recommends "$@" ;;
+    fedora)
+      "${elevate[@]}" /usr/bin/dnf install --assumeyes --setopt=install_weak_deps=False "$@" ;;
+    *) die 'Unsupported OS package manager.' ;;
+  esac
+}
 profile='' operator='' action=install listen='127.0.0.1:7331'
 wallet_instance='' wallet_network=''
 while (($#)); do
@@ -55,6 +74,7 @@ while IFS='=' read -r key value; do
 done < /etc/os-release
 @PLATFORM_BINDINGS@
 case $(/usr/bin/uname -m) in x86_64|amd64) target=linux-amd64 ;; aarch64|arm64) target=linux-arm64 ;; *) die 'No verified package for this CPU.' ;; esac
+@PLATFORM_TARGET_BINDINGS@
 @TARGET_BINDINGS@
 if [[ $development_only == 0 ]]; then
   [[ $installer_url == "https://github.com/fased-ai/fased-app/releases/download/v${entry_version}/fased-install-${target}" && -z $fixture_ca_base64 ]] || die 'Untrusted installer source.'
@@ -187,12 +207,11 @@ if [[ $(/usr/bin/id -u) != 0 ]]; then
   packages=(ca-certificates curl)
   if [[ $profile == remote ]]; then packages+=(nftables openssh-server); fi
   for package in "${packages[@]}"; do
-    [[ $(/usr/bin/dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true) == 'install ok installed' ]] || missing+=("$package")
+    package_installed "$package" || missing+=("$package")
   done
   if ((${#missing[@]})); then
     printf 'Preparing required download tools with administrator approval…\n' >&2
-    /usr/bin/sudo -- /usr/bin/apt-get update
-    /usr/bin/sudo -- /usr/bin/apt-get install -y --no-remove --no-install-recommends "${missing[@]}"
+    install_packages "${missing[@]}"
   fi
 
   owner_install
@@ -201,16 +220,16 @@ fi
 
 # Root prepares only the verified, protected maintenance entry. The wizard,
 # core, native client and signer run after dropping to their ordinary identities.
-printf 'Preparing Ubuntu for Fased…\n' >&2
+if [[ $ID == fedora ]]; then printf 'Preparing Fedora for Fased…\n' >&2
+else printf 'Preparing Ubuntu for Fased…\n' >&2; fi
 missing=()
 packages=(ca-certificates curl sudo util-linux)
 if [[ $profile == remote ]]; then packages+=(nftables openssh-server); fi
 for package in "${packages[@]}"; do
-  [[ $(/usr/bin/dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true) == 'install ok installed' ]] || missing+=("$package")
+  package_installed "$package" || missing+=("$package")
 done
 if ((${#missing[@]})); then
-  /usr/bin/apt-get update
-  /usr/bin/apt-get install -y --no-remove --no-install-recommends "${missing[@]}"
+  install_packages "${missing[@]}"
 fi
 explicit_operator=$operator
 operator=${operator:-${SUDO_USER:-fased-operator}}

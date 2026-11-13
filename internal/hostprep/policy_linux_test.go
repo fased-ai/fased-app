@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,7 +12,84 @@ import (
 	"testing"
 
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/hostplatform"
 )
+
+func TestProtectedPreparationUsesOnlyMissingDistributionPackages(t *testing.T) {
+	fedora, err := hostplatform.Lookup("ID=fedora\nVERSION_ID=45\n", "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	missing := true
+	run := func(args ...string) ([]byte, error) {
+		calls = append(calls, strings.Join(args, " "))
+		if args[0] == "/usr/bin/rpm" && args[len(args)-1] == "gtk3" && missing {
+			return nil, errors.New("not installed")
+		}
+		return nil, nil
+	}
+	if err = prepareProtectedPackages(fedora, "local", run); err != nil {
+		t.Fatal(err)
+	}
+	if got := calls[len(calls)-1]; got != "/usr/bin/dnf install --assumeyes --setopt=install_weak_deps=False gtk3" {
+		t.Fatal("wrong Fedora install", calls)
+	}
+	missing, calls = false, nil
+	if err = prepareProtectedPackages(fedora, "local", run); err != nil || len(calls) != 4 {
+		t.Fatal("installed Fedora packages should only be queried", calls, err)
+	}
+	calls = nil
+	if err = prepareProtectedPackages(fedora, "remote", run); err == nil || len(calls) != 0 {
+		t.Fatal("unverified Fedora Remote reached package operations", calls, err)
+	}
+	ubuntu, err := hostplatform.Lookup("ID=ubuntu\nVERSION_ID=24.04\n", "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls = nil
+	ubuntuRun := func(args ...string) ([]byte, error) {
+		calls = append(calls, strings.Join(args, " "))
+		if args[0] == "/usr/bin/dpkg-query" {
+			if args[len(args)-1] == "polkitd" {
+				return nil, errors.New("not installed")
+			}
+			return []byte("install ok installed"), nil
+		}
+		return nil, nil
+	}
+	if err = prepareProtectedPackages(ubuntu, "local", ubuntuRun); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(calls); n < 2 || calls[n-2] != "/usr/bin/apt-get update" || calls[n-1] != "/usr/bin/apt-get install --yes --no-remove --no-install-recommends polkitd" {
+		t.Fatal("wrong Ubuntu preparation", calls)
+	}
+}
+
+func TestFedoraDesktopPreparationRejectsUnscopedDNF(t *testing.T) {
+	var calls [][]string
+	s := &System{Out: io.Discard, toolCheck: func(string) error { return nil }}
+	s.sudoCommand = func(ctx context.Context, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string(nil), args...))
+		return exec.CommandContext(ctx, "/usr/bin/true")
+	}
+	valid := []string{"/usr/bin/dnf", "install", "--assumeyes", "--setopt=install_weak_deps=False", "gtk3", "webkit2gtk4.1", "xdg-utils"}
+	if _, err := s.Run(t.Context(), nil, valid...); err != nil {
+		t.Fatal(err)
+	}
+	before := len(calls)
+	for _, args := range [][]string{
+		{"/usr/bin/dnf", "install", "--assumeyes", "--nogpgcheck", "gtk3"},
+		{"/usr/bin/dnf", "install", "--assumeyes", "--setopt=install_weak_deps=False", "unrelated-package"},
+	} {
+		if _, err := s.Run(t.Context(), nil, args...); err == nil {
+			t.Fatal("unscoped DNF request was accepted", args)
+		}
+	}
+	if len(calls) != before {
+		t.Fatal("rejected DNF request reached sudo")
+	}
+}
 
 func TestIncompleteIntentDoesNotAuthorizePublication(t *testing.T) {
 	root, _ := filepath.Abs("../../.evidence/hostprep-fixtures")

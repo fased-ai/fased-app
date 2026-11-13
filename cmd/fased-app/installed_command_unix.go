@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -169,12 +170,25 @@ func installCommand(corePath, root, data string, remote bool, out io.Writer) err
 	if e != nil {
 		return e
 	}
-	path, e := installCommandAt(home, corePath, root, data, remote)
-	if e != nil {
-		return e
+	for _, name := range []string{"fased", "fased-app"} {
+		path := filepath.Join(home, ".local", "bin", name)
+		found, lookupErr := exec.LookPath(name)
+		if lookupErr == nil {
+			found, lookupErr = filepath.Abs(found)
+			if lookupErr != nil || filepath.Clean(found) != path {
+				continue
+			}
+		} else if !errors.Is(lookupErr, exec.ErrNotFound) {
+			continue
+		}
+		installed, err := installCommandAtWithPredecessor(home, corePath, root, data, remote, "", path)
+		if err != nil {
+			continue
+		}
+		fmt.Fprintln(out, "Command:", installed, "— open, status, update")
+		return nil
 	}
-	fmt.Fprintln(out, "Command:", path, "— open, status, update")
-	return nil
+	return errors.New("existing commands preserved; choose an unused command path before installing")
 }
 
 func removeCommand(corePath, root, data string, remote bool) error {

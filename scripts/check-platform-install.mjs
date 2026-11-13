@@ -10,15 +10,28 @@ import {
   stat,
   open,
   readlink,
+  lstat,
+  unlink,
 } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { resolve, join } from "node:path";
+import { homedir } from "node:os";
 import { createServer } from "node:net";
 import { checkUbuntuPreparation } from "./ubuntu-preparation.mjs";
 const startedAt = Date.now();
-const root = resolve(".evidence/platform-install");
+const root = resolve(
+  process.env.FASED_PLATFORM_TEST_ROOT || ".evidence/platform-install",
+);
 const state = join(root, "state"),
   app = join(root, "app");
+if (
+  process.platform === "linux" &&
+  Buffer.byteLength(join(state, "core.sock")) >= 108
+)
+  throw new Error(
+    "Local test path exceeds the Linux socket limit; choose a shorter empty path",
+  );
+// Never reuse or remove an existing owner directory during a host check.
 await mkdir(root, { mode: 0o700 });
 await writeFile(
   join(root, "fixture.json"),
@@ -26,7 +39,8 @@ await writeFile(
   { mode: 0o600 },
 );
 let binary = resolve(
-  `.evidence/bin/fased-app${process.platform === "win32" ? ".exe" : ""}`,
+  process.env.FASED_PLATFORM_TEST_BINARY ||
+    `.evidence/bin/fased-app${process.platform === "win32" ? ".exe" : ""}`,
 );
 let bundleDir;
 const archive = process.env.FASED_PACKAGE_ARCHIVE;
@@ -34,7 +48,12 @@ const flags = ["--prefix", app, "--data-dir", state];
 const cli = (args, input) =>
   execFileSync(binary, args, { input, encoding: "utf8", timeout: 40000 });
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
-const report = { platform: process.platform, result: "FAIL", checks: {} };
+const report = {
+  platform: process.platform,
+  scope: "isolated engineering service; no packaged update or custody",
+  result: "FAIL",
+  checks: {},
+};
 let installed = false;
 const freshFetch = (url, options = {}) =>
   fetch(url, {
@@ -112,6 +131,24 @@ try {
     await checkUbuntuPreparation(binary, args, state, report);
   const result = JSON.parse(cli(args));
   installed = true;
+  report.checks.updateMaintenance =
+    result.maintenance === "ready" ? "PASS" : `OPEN: ${result.maintenance}`;
+  if (process.platform === "linux" && result.maintenance !== "ready") {
+    try {
+      report.maintenanceProperties = execFileSync(
+        "/usr/bin/systemctl",
+        [
+          "--user",
+          "show",
+          "fased-app-maintenance-system@00000000000000000000000000000000.service",
+          "--property=LoadState,FragmentPath,DropInPaths",
+        ],
+        { encoding: "utf8", timeout: 5000 },
+      );
+    } catch (error) {
+      report.maintenancePropertiesError = String(error);
+    }
+  }
   const url = result.url;
   if (process.platform === "linux") {
     const group = execFileSync(
@@ -386,9 +423,38 @@ try {
       report.cleanupError = String(error);
     }
   }
+  if (!report.cleanupError && process.platform === "linux") {
+    const link = join(
+      homedir(),
+      ".config/systemd/user/fased-app-maintenance-system@.service",
+    );
+    const expected = join(
+      root,
+      ".app-updates/fased-app-maintenance-system@.service",
+    );
+    try {
+      const before = await lstat(link);
+      if (
+        before.isSymbolicLink() &&
+        before.uid === process.getuid() &&
+        (await readlink(link)) === expected
+      ) {
+        const after = await lstat(link);
+        if (before.dev !== after.dev || before.ino !== after.ino)
+          throw new Error("test maintenance link changed");
+        await unlink(link);
+        execFileSync("/usr/bin/systemctl", ["--user", "daemon-reload"], {
+          timeout: 5000,
+        });
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") report.cleanupError = String(error);
+    }
+  }
   await writeFile(
-    ".evidence/platform-install-result.json",
+    root + "-result.json",
     JSON.stringify(report, null, 2) + "\n",
+    { mode: 0o600, flag: "wx" },
   );
   if (!report.cleanupError) await rm(root, { recursive: true });
 }
