@@ -43,6 +43,22 @@ func newApplicationUpdatesClient(ctx context.Context, dir string) (*core.Client,
 	return c, false, pathErr
 }
 
+func ordinaryUpdateRecoveryData(dir string) bool {
+	if runtime.GOOS != "linux" {
+		return true
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return false
+	}
+	_, err = enrollment.EnrolledTarget(real, os.Getuid())
+	return errors.Is(err, os.ErrNotExist)
+}
+
 func applicationUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	action := "status"
 	if len(args) > 0 {

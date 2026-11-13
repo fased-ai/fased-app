@@ -21,7 +21,7 @@ import (
 // The real CLI and core API are exercised; only the already-reviewed native
 // owner transport is substituted. This is not installed OS-identity proof.
 func TestApplicationUpdatesUsesEnrolledOwnerTransport(t *testing.T) {
-	for _, mode := range []string{"status", "check", "apply", "auth-refused", "identity-refused"} {
+	for _, mode := range []string{"status", "check", "apply", "recover", "recover-foreign-prefix", "auth-refused", "identity-refused"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			original := []byte("preserve original session")
@@ -45,6 +45,9 @@ func TestApplicationUpdatesUsesEnrolledOwnerTransport(t *testing.T) {
 					}
 					view := core.ApplicationUpdateView{InstanceID: "instance", Revision: 7, PolicyRevision: 2, ControllerAvailable: true,
 						Operation: core.ApplicationUpdateOperation{Phase: "available", Release: &core.ApplicationRelease{Version: "fixture", ManifestSHA256: strings.Repeat("a", 64)}}}
+					if mode == "recover" {
+						view.Operation.Phase = "recovery"
+					}
 					if r.Method == http.MethodPost {
 						writes++
 						var command core.ApplicationUpdateCommand
@@ -79,6 +82,9 @@ func TestApplicationUpdatesUsesEnrolledOwnerTransport(t *testing.T) {
 			if mode == "auth-refused" || mode == "identity-refused" {
 				action = "status"
 			}
+			if mode == "recover-foreign-prefix" {
+				action = "recover"
+			}
 			var input *os.File
 			if mode == "apply" {
 				p := filepath.Join(dir, "approval")
@@ -93,8 +99,12 @@ func TestApplicationUpdatesUsesEnrolledOwnerTransport(t *testing.T) {
 				defer input.Close()
 			}
 			var out bytes.Buffer
-			err := ordinaryUpdateCommand([]string{action, "--data-dir", dir}, input, &out, io.Discard)
-			good := mode == "status" || mode == "check" || mode == "apply"
+			args := []string{action, "--data-dir", dir}
+			if mode == "recover-foreign-prefix" {
+				args = append(args, "--prefix", filepath.Join(dir, "foreign"))
+			}
+			err := ordinaryUpdateCommand(args, input, &out, io.Discard)
+			good := mode == "status" || mode == "check" || mode == "apply" || mode == "recover"
 			if (err == nil) != good || good && (auth != 1 || reads != 1) || !good && (reads != 0 || writes != 0) {
 				t.Fatalf("%s: err=%v auth=%d reads=%d writes=%d", mode, err, auth, reads, writes)
 			}
@@ -106,6 +116,44 @@ func TestApplicationUpdatesUsesEnrolledOwnerTransport(t *testing.T) {
 				t.Fatal("saved session changed", err)
 			}
 		})
+	}
+}
+
+func TestUpdateRecoveryDoesNotFallbackAcrossAmbiguousFence(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux custody enrollment only")
+	}
+	dir := filepath.Join(t.TempDir(), "root-owned")
+	if err := os.Symlink("/etc", dir); err != nil {
+		t.Fatal(err)
+	}
+	prior := applicationUpdatesPublicClient
+	defer func() { applicationUpdatesPublicClient = prior }()
+	applicationUpdatesPublicClient = func(context.Context, string) (*core.Client, bool, error) {
+		return nil, false, core.ErrCoreUnavailable
+	}
+	err := ordinaryUpdateCommand([]string{"recover", "--data-dir", dir}, nil, io.Discard, io.Discard)
+	if !errors.Is(err, core.ErrCoreUnavailable) {
+		t.Fatal("ambiguous root-owned fence fell back to ordinary recovery", err)
+	}
+}
+
+func TestUpdateRecoveryKeepsOrdinaryOfflineEntry(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux custody enrollment only")
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	prior := applicationUpdatesPublicClient
+	defer func() { applicationUpdatesPublicClient = prior }()
+	applicationUpdatesPublicClient = func(context.Context, string) (*core.Client, bool, error) {
+		return nil, false, core.ErrCoreUnavailable
+	}
+	err := ordinaryUpdateCommand([]string{"recover", "--data-dir", dir, "--prefix", filepath.Join(dir, "missing-original")}, nil, io.Discard, io.Discard)
+	if err == nil || errors.Is(err, core.ErrCoreUnavailable) {
+		t.Fatal("ordinary offline recovery entry was not reached", err)
 	}
 }
 

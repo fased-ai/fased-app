@@ -182,6 +182,26 @@ func ordinaryUpdateCommand(args []string, in *os.File, out, errOut io.Writer) er
 		return call(action, out)
 	}
 	if action == "recover" {
+		// Enrolled Local custody uses the same authenticated core recovery
+		// operation as Settings. Never fall back to predecessor recovery when
+		// the enrollment is unavailable or ambiguous.
+		ctx := context.Background()
+		client, enrolled, err := applicationUpdatesPublicClient(ctx, *dir)
+		if err == nil {
+			if enrolled {
+				defer client.Close()
+				if *prefix != "" {
+					return errors.New("enrolled recovery uses its original installation; omit --prefix")
+				}
+				if err = client.NativeLocalOwner(ctx); err != nil {
+					return err
+				}
+				return applicationUpdatesWithClient(ctx, client, "recover", in, out, errOut)
+			}
+			client.Close()
+		} else if !errors.Is(err, core.ErrCoreUnavailable) || !ordinaryUpdateRecoveryData(*dir) {
+			return err
+		}
 		return recoverInstalledLocalUpdate(*prefix, *dir, in, out, errOut)
 	}
 	if action == "wizard" {
