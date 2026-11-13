@@ -62,29 +62,14 @@ func VerifyImage(a Authority) error {
 }
 
 func Call(ctx context.Context, r Request, diagnostics io.Writer) ([]byte, error) {
-	if os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
-		return nil, errors.New("maintenance requires the ordinary installation owner")
+	if r.Action == "custody-enrollment-image" {
+		return nil, errors.New("enrollment image requires its bounded stream")
 	}
-	a, err := ReadAuthority(os.Getuid())
+	c, b, err := requestCommand(ctx, r, diagnostics)
 	if err != nil {
 		return nil, err
 	}
-	config, err := os.UserConfigDir()
-	if err != nil || config != filepath.Join(a.Home, ".config") {
-		return nil, errors.New("maintenance setup is bound to this owner's standard configuration directory")
-	}
-	if err = VerifyImage(a); err != nil {
-		return nil, err
-	}
-	b, err := jsonRequest(r)
-	if err != nil {
-		return nil, err
-	}
-	c := exec.CommandContext(ctx, "/usr/bin/sudo", "-n", "--", ImagePath(a.ImageSHA256), "maintenance-request", "--owner", strconv.Itoa(a.Owner))
-	c.Dir = "/"
-	c.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=" + a.Home, "LANG=C"}
 	c.Stdin = bytes.NewReader(b)
-	c.Stderr = diagnostics
 	var result boundedResponse
 	c.Stdout = &result
 	if err := c.Run(); err != nil {
@@ -95,6 +80,47 @@ func Call(ctx context.Context, r Request, diagnostics io.Writer) ([]byte, error)
 		return nil, errors.New("maintenance result is unconfirmed; preserve the operation")
 	}
 	return result.data, nil
+}
+
+// EnrollmentStreamCommand selects the same protected helper entry, but its
+// fixed image operation carries the existing private image/lock stream.
+func EnrollmentStreamCommand(ctx context.Context, r Request, diagnostics io.Writer) (*exec.Cmd, []byte, error) {
+	if r.Action != "custody-enrollment-image" {
+		return nil, nil, errors.New("fixed enrollment image operation required")
+	}
+	c, b, err := requestCommand(ctx, r, diagnostics)
+	if err != nil {
+		return nil, nil, err
+	}
+	frame := append([]byte(EnrollmentStreamPrefix), b...)
+	frame = append(frame, '\n')
+	return c, frame, nil
+}
+
+func requestCommand(ctx context.Context, r Request, diagnostics io.Writer) (*exec.Cmd, []byte, error) {
+	if os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
+		return nil, nil, errors.New("maintenance requires the ordinary installation owner")
+	}
+	a, err := ReadAuthority(os.Getuid())
+	if err != nil {
+		return nil, nil, err
+	}
+	config, err := os.UserConfigDir()
+	if err != nil || config != filepath.Join(a.Home, ".config") {
+		return nil, nil, errors.New("maintenance setup is bound to this owner's standard configuration directory")
+	}
+	if err = VerifyImage(a); err != nil {
+		return nil, nil, err
+	}
+	b, err := jsonRequest(r)
+	if err != nil {
+		return nil, nil, err
+	}
+	c := exec.CommandContext(ctx, "/usr/bin/sudo", "-n", "--", ImagePath(a.ImageSHA256), "maintenance-request", "--owner", strconv.Itoa(a.Owner))
+	c.Dir = "/"
+	c.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=" + a.Home, "LANG=C"}
+	c.Stderr = diagnostics
+	return c, b, nil
 }
 
 type boundedResponse struct{ data []byte }

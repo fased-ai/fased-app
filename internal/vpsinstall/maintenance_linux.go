@@ -14,6 +14,7 @@ import (
 	"strconv"
 
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/enrollment"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/tailnet"
 	"github.com/fased-ai/fased-app/internal/update"
@@ -35,6 +36,20 @@ func InstallProtected(ctx context.Context, owner int, opt Options, out io.Writer
 		return Manifest{}, err
 	}
 	return install(ctx, opt, o)
+}
+
+// LoadProtected reads the same root-bound Remote manifest under the registered
+// helper identity; it grants no lifecycle or application authority.
+func LoadProtected(owner int) (Manifest, error) {
+	a, err := maintenance.ValidateProcess(owner)
+	if err != nil || a.Profile != "remote" {
+		return Manifest{}, errors.New("protected Remote authority required")
+	}
+	o, err := protectedRemoteOps(a, io.Discard, nil)
+	if err != nil {
+		return Manifest{}, err
+	}
+	return load(o, owner)
 }
 
 func RunProtected(ctx context.Context, owner int, action string, peer *tailnet.Identity, out io.Writer) (json.RawMessage, error) {
@@ -68,6 +83,49 @@ func RunProtected(ctx context.Context, owner int, action string, peer *tailnet.I
 			v, err := status(ctx, o, m)
 			payload = protectedRemoteStatus{Status: v, RemoteReady: v.RemoteReady}
 			return err
+		case "remote-enrollment-validate":
+			if err := verifyEnrollmentFiles(o, m, true); err != nil {
+				return err
+			}
+			if err := verifyAccount(ctx, o, m); err != nil {
+				return err
+			}
+			if err := loaded(ctx, o, m); err != nil {
+				return err
+			}
+			return enrollmentNetworkSettled(ctx, o, m)
+		case "remote-enrollment-status":
+			v, err := enrollmentStatus(ctx, o, m)
+			payload = v
+			return err
+		case "remote-enrollment-suspend", "remote-enrollment-restore":
+			step := "suspend"
+			if action == "remote-enrollment-restore" {
+				step = "restore"
+			}
+			running, autostart, err := enrollment.ProtectedRemoteIntent(owner, enrollment.ProtectedSource{Data: m.Data, Listen: m.Listen, PublicOrigin: m.PublicOrigin, UID: m.AppUID, GID: m.AppGID}, step)
+			if err != nil {
+				return err
+			}
+			if err = verify(ctx, o, m); err != nil {
+				return err
+			}
+			if err = loaded(ctx, o, m); err != nil {
+				return err
+			}
+			if step == "suspend" {
+				_, err = o.run(ctx, nil, "/usr/bin/systemctl", "disable", "--now", "--", m.Unit)
+				return err
+			}
+			verb := "disable"
+			if autostart {
+				verb = "enable"
+			}
+			if _, err = o.run(ctx, nil, "/usr/bin/systemctl", verb, "--", m.Unit); err != nil || !running {
+				return err
+			}
+			_, err = o.run(ctx, nil, "/usr/bin/systemctl", "start", "--", m.Unit)
+			return err
 		case "remote-setup-link":
 			var b bytes.Buffer
 			if err := setupLink(ctx, o, m, &b); err != nil {
@@ -91,6 +149,7 @@ func RunProtected(ctx context.Context, owner int, action string, peer *tailnet.I
 func protectedRemoteOps(a maintenance.Authority, out io.Writer, peer *tailnet.Identity) (hostOps, error) {
 	o := liveOps(nil)
 	o.uid, o.euid, o.gid = a.Owner, a.Owner, a.Group
+	o.enrollmentJournal = func() ([]byte, error) { return enrollment.ProtectedOwnerJournal(a.Owner) }
 	dir := filepath.Join(maintenance.OwnerRoot(a.Owner), "remote")
 	if err := core.EnsurePrivateDirectory(dir); err != nil {
 		return o, err
@@ -127,6 +186,10 @@ func runProtectedRemoteOS(ctx context.Context, o hostOps, in []byte, out io.Writ
 	}
 	switch args[0] {
 	case "/usr/bin/install", "/usr/bin/mv", "/usr/bin/ln", "/usr/bin/rm", "/usr/bin/sync", "/usr/bin/systemctl", "/usr/bin/systemd-creds", "/usr/sbin/useradd":
+	case "/usr/bin/passwd":
+		if !fixedRemotePasswordProbe(o.uid, args) {
+			return nil, errors.New("only the owned Remote account status is available")
+		}
 	case "/usr/bin/setpriv":
 		// Every application child drops to a real non-root identity and loses
 		// groups/capabilities before executing its root-protected image.
@@ -153,6 +216,10 @@ func runProtectedRemoteOS(ctx context.Context, o hostOps, in []byte, out io.Writ
 	c.Stdout = &b
 	err := c.Run()
 	return b.b, err
+}
+
+func fixedRemotePasswordProbe(owner int, args []string) bool {
+	return owner > 0 && len(args) == 3 && args[0] == "/usr/bin/passwd" && args[1] == "-S" && args[2] == accountName(owner)
 }
 
 type protectedRemoteOutput struct{ b []byte }

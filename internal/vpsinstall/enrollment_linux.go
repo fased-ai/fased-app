@@ -15,6 +15,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/enrollment"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -25,6 +26,22 @@ func EnrollmentLease(ctx context.Context, m Manifest, s *custodyinstall.System) 
 		return nil, errors.New("owner OS authorization required")
 	}
 	o := liveOps(s)
+	if _, err := maintenance.ReadAuthority(m.OwnerUID); err == nil {
+		if err = ownedBy(o, m); err != nil {
+			return nil, err
+		}
+		l, err := o.lock()
+		if err != nil {
+			return nil, err
+		}
+		if _, err = protectedEnrollmentCall(ctx, m, "remote-enrollment-validate"); err != nil {
+			_ = l.Close()
+			return nil, err
+		}
+		return l, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
 	return enrollmentLease(ctx, o, m)
 }
 
@@ -32,7 +49,35 @@ func EnrollmentStatus(ctx context.Context, m Manifest, s *custodyinstall.System)
 	if s == nil {
 		return ServiceStatus{}, errors.New("owner OS authorization required")
 	}
+	if _, err := maintenance.ReadAuthority(m.OwnerUID); err == nil {
+		return protectedEnrollmentCall(ctx, m, "remote-enrollment-status")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return ServiceStatus{}, err
+	}
 	return enrollmentStatus(ctx, liveOps(s), m)
+}
+
+func protectedEnrollmentCall(ctx context.Context, m Manifest, action string) (ServiceStatus, error) {
+	var status ServiceStatus
+	if m.OwnerUID != os.Getuid() || os.Getuid() != os.Geteuid() {
+		return status, errors.New("Remote installation owner required")
+	}
+	actual, err := Load(m.OwnerUID)
+	if err != nil || actual != m {
+		return status, errors.New("Remote enrollment source changed; preserving it")
+	}
+	b, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: action}, nil)
+	if err != nil {
+		return status, err
+	}
+	var response maintenance.Response
+	if update.StrictJSON(b, &response) != nil || response.Version != 1 || response.Action != action || !response.Complete {
+		return status, errors.New("protected Remote enrollment response invalid")
+	}
+	if action == "remote-enrollment-status" && update.StrictJSON(response.Payload, &status) != nil {
+		return status, errors.New("protected Remote enrollment status invalid")
+	}
+	return status, nil
 }
 func enrollmentStatus(ctx context.Context, o hostOps, m Manifest) (ServiceStatus, error) {
 	if err := verifyFiles(o, m); err == nil {
@@ -85,6 +130,12 @@ func enrollmentLease(ctx context.Context, o hostOps, m Manifest) (io.Closer, err
 func ValidateEnrollment(ctx context.Context, m Manifest, s *custodyinstall.System) error {
 	if s == nil {
 		return errors.New("owner OS authorization required")
+	}
+	if _, err := maintenance.ReadAuthority(m.OwnerUID); err == nil {
+		_, err = protectedEnrollmentCall(ctx, m, "remote-enrollment-validate")
+		return err
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	o := liveOps(s)
 	if e := verify(ctx, o, m); e != nil {
@@ -330,6 +381,15 @@ func EnrollmentAutostart(m Manifest) (bool, error) {
 	return e == nil, e
 }
 func SuspendEnrollment(ctx context.Context, m Manifest, s *custodyinstall.System) error {
+	if s == nil {
+		return errors.New("owner OS authorization required")
+	}
+	if _, err := maintenance.ReadAuthority(m.OwnerUID); err == nil {
+		_, err = protectedEnrollmentCall(ctx, m, "remote-enrollment-suspend")
+		return err
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	if e := ValidateEnrollment(ctx, m, s); e != nil {
 		return e
 	}
@@ -337,6 +397,16 @@ func SuspendEnrollment(ctx context.Context, m Manifest, s *custodyinstall.System
 	return e
 }
 func RestoreEnrollment(ctx context.Context, m Manifest, running, autostart bool, s *custodyinstall.System) error {
+	if s == nil {
+		return errors.New("owner OS authorization required")
+	}
+	if _, err := maintenance.ReadAuthority(m.OwnerUID); err == nil {
+		// The helper independently reads the original journal's saved intent.
+		_, err = protectedEnrollmentCall(ctx, m, "remote-enrollment-restore")
+		return err
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	if e := ValidateEnrollment(ctx, m, s); e != nil {
 		return e
 	}

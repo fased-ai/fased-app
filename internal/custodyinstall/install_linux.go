@@ -23,6 +23,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/signer"
+	"github.com/fased-ai/fased-app/internal/update"
 	"golang.org/x/sys/unix"
 )
 
@@ -169,8 +170,93 @@ func InstallControlledOwnerCustody(ctx context.Context, o Options, s *System) (M
 	}
 	return install(ctx, o, s, true)
 }
+
+// InstallProtected prepares only the helper's independently authenticated pair.
+// No caller-selected executable path or OS identity reaches this entry.
+func InstallProtected(ctx context.Context, owner int, id string, o Options, controlled bool, out io.Writer) (Manifest, error) {
+	if _, err := maintenance.ValidateProcess(owner); err != nil {
+		return Manifest{}, err
+	}
+	dir := update.MaintenanceDirectory(owner, id)
+	if !update.IDOK(id) || o.Core != dir+"/fased-app" || o.Signer != dir+"/fased-signer" || !o.StageOnly || !o.Disposable || !o.PrepareHost || o.Mode != signer.OrdinaryCustodyMode || o.Profile != signer.OwnerCustodyProfile ||
+		controlled && o.Provenance != signer.ControlledCustodyProfile || !controlled && o.Provenance != signer.OwnerKeyProvenance {
+		return Manifest{}, errors.New("authenticated confined enrollment preparation required")
+	}
+	for _, path := range []string{o.Core, o.Signer} {
+		if _, _, err := maintenance.ProtectedDigest(path, 0755, 64<<20); err != nil {
+			return Manifest{}, err
+		}
+	}
+	return install(ctx, o, &System{Out: out, protectedOwner: owner, protectedID: id, protectedPurpose: "prepare"}, controlled)
+}
+
+func (s *System) installJournal() (string, error) {
+	if s.protectedOwner == 0 {
+		return ownerJournal()
+	}
+	dir := filepath.Join(maintenance.OwnerRoot(s.protectedOwner), "custody-installer")
+	if err := core.EnsurePrivateDirectory(dir); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+func (s *System) installPublish(ctx context.Context, target, id string, data []byte, mode os.FileMode, verifiers ...approvedExecutableVerifier) error {
+	if s.protectedOwner > 0 {
+		return maintenance.PublishProtected(target, data, mode)
+	}
+	return publish(ctx, target, id, data, mode, readRoot, s.Run, verifiers...)
+}
+
+func (s *System) probeInstallSigner(ctx context.Context, path, probe string) ([]byte, error) {
+	if s.protectedOwner == 0 {
+		return probeSigner(ctx, path, probe)
+	}
+	a, err := maintenance.ReadAuthority(s.protectedOwner)
+	if err != nil || trustedUtility("/usr/bin/setpriv") != nil {
+		return nil, errors.New("protected non-root signer probe required")
+	}
+	args := []string{"--reuid", strconv.Itoa(a.Owner), "--regid", strconv.Itoa(a.Group), "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--", path, probe}
+	c := exec.CommandContext(ctx, "/usr/bin/setpriv", args...)
+	c.Dir = "/"
+	c.Env = []string{"PATH=/usr/bin:/bin", "HOME=/nonexistent", "LANG=C"}
+	return c.Output()
+}
+
+// RecordConfinedEnrollmentIntent is written only by the ordinary owner after
+// the helper returns its verified target; it never adopts a different intent.
+func RecordConfinedEnrollmentIntent(m Manifest) error {
+	if m.Owner != os.Getuid() || os.Geteuid() != os.Getuid() || !m.Enrollment || Verify(m) != nil {
+		return errors.New("verified ordinary enrollment owner required")
+	}
+	dir, err := ownerJournal()
+	if err != nil {
+		return err
+	}
+	lock, err := core.LockInstance(dir + "/install.lock")
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	want := journal{NativeOwnerAccess: m.NativeOwnerAccess, Mode: m.Mode, Profile: m.Profile, Provenance: m.Provenance, Version: m.Version, Network: m.Network, Owner: m.Owner, CoreHash: m.CoreHash, SignerHash: m.SignerHash, Listen: m.Listen, Enrollment: m.Enrollment, Location: m.Location, PublicOrigin: m.PublicOrigin, ID: m.ID}
+	path := dir + "/intent.json"
+	if b, err := core.ReadPrivateFile(path); err == nil {
+		var old journal
+		if strict(b, &old) != nil || old != want {
+			return errors.New("existing enrollment intent differs; preserving it")
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return core.WritePrivateJSON(path, want)
+}
+
 func install(ctx context.Context, o Options, s *System, controlled bool) (Manifest, error) {
 	var m Manifest
+	if s == nil {
+		return m, errors.New("installation system required")
+	}
 	if o.NativeOwnerAccess && (o.Mode != signer.OrdinaryCustodyMode || !o.StageOnly || o.Location != "local") {
 		return m, errors.New("native access requires Local ordinary enrollment")
 	}
@@ -183,7 +269,11 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 	if !o.Disposable || !o.PrepareHost {
 		return m, errors.New("explicit --disposable-fixture and --prepare-host consent are required before OS mutation")
 	}
-	if os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
+	uid := os.Getuid()
+	if s != nil && s.protectedOwner > 0 {
+		uid = s.protectedOwner
+	}
+	if uid <= 0 || s.protectedOwner == 0 && os.Geteuid() != os.Getuid() {
 		return m, errors.New("ordinary owner required")
 	}
 	osRelease, e := os.ReadFile("/etc/os-release")
@@ -225,7 +315,7 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 	if versionNumber == 3 {
 		probe = "ordinary-custody-version"
 	}
-	version, e := probeSigner(ctx, o.Signer, probe)
+	version, e := s.probeInstallSigner(ctx, o.Signer, probe)
 	if e != nil {
 		return m, errors.New("signer fixture version probe failed")
 	}
@@ -240,7 +330,7 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 	if strict(version, &protocol) != nil || protocol.Protocol != versionNumber || protocol.OwnerFlow != 1 || protocol.Mode != mode || protocol.Profile != o.Profile || protocol.Provenance != o.Provenance || protocol.WalletSigner {
 		return m, errors.New("incompatible fixture signer")
 	}
-	jdir, e := ownerJournal()
+	jdir, e := s.installJournal()
 	if e != nil {
 		return m, e
 	}
@@ -249,7 +339,6 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 		return m, e
 	}
 	defer lock.Close()
-	uid := os.Getuid()
 	j := journal{Version: versionNumber, Network: o.Network, Owner: uid, CoreHash: sum(coreBytes), SignerHash: sum(signerBytes), Listen: o.Listen, Enrollment: o.StageOnly, Location: o.Location, PublicOrigin: o.PublicOrigin}
 	if versionNumber == 3 {
 		j.Mode = mode
@@ -290,11 +379,18 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 		m = existing
 	}
 	if j.ID == "" {
-		id := make([]byte, 16)
-		if _, e = rand.Read(id); e != nil {
-			return m, e
+		if s.protectedOwner > 0 {
+			j.ID = s.protectedID
+		} else {
+			id := make([]byte, 16)
+			if _, e = rand.Read(id); e != nil {
+				return m, e
+			}
+			j.ID = hex.EncodeToString(id)
 		}
-		j.ID = hex.EncodeToString(id)
+	}
+	if s.protectedOwner > 0 && j.ID != s.protectedID {
+		return m, errors.New("existing enrollment operation differs; preserving it")
 	}
 	if !haveIntent {
 		if e = core.WritePrivateJSON(jdir+"/intent.json", j); e != nil {
@@ -312,7 +408,7 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 			return m, e
 		}
 		intent, _ := json.Marshal(j)
-		if e = publish(ctx, stage+"/intent.json", j.ID, intent, 0644, readRoot, s.Run); e != nil {
+		if e = s.installPublish(ctx, stage+"/intent.json", j.ID, intent, 0644); e != nil {
 			return m, e
 		}
 		app, e := account(ctx, accountName(uid, "app"), j.ID, "app", s)
@@ -358,7 +454,7 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 			if name == "fased-app" || name == "fased-signer" {
 				mode = 0755
 			}
-			if e = publish(ctx, stage+"/"+name, j.ID, files[name], mode, readRoot, s.Run, verifyApprovedExecutable); e != nil {
+			if e = s.installPublish(ctx, stage+"/"+name, j.ID, files[name], mode, verifyApprovedExecutable); e != nil {
 				return m, e
 			}
 		}
@@ -392,7 +488,7 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 	}
 	for _, role := range []string{"signer", "app"} {
 		name := "fased-" + role + ".service"
-		if e = publish(ctx, "/etc/systemd/system/"+Unit(uid, role), j.ID, definitions(m)[name], 0644, readRoot, s.Run); e != nil {
+		if e = s.installPublish(ctx, "/etc/systemd/system/"+Unit(uid, role), j.ID, definitions(m)[name], 0644); e != nil {
 			return m, e
 		}
 	}
@@ -413,7 +509,7 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 		return m, e
 	}
 	ready, _ := json.Marshal(map[string]any{"schema": 1, "manifest": sum(mustJSON(m)), "fixtureOnly": true})
-	if e = publish(ctx, root+"/ready.json", j.ID, ready, 0644, readRoot, s.Run); e != nil {
+	if e = s.installPublish(ctx, root+"/ready.json", j.ID, ready, 0644); e != nil {
 		return m, e
 	}
 	return m, nil

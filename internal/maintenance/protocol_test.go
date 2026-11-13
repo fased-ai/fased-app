@@ -1,6 +1,7 @@
 package maintenance
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 )
@@ -21,6 +22,24 @@ func TestMaintenanceRequestsNeverAdmitCommandOrPathOverrides(t *testing.T) {
 	} {
 		if _, err := DecodeRequest([]byte(data)); err == nil {
 			t.Fatal("unbounded maintenance request admitted")
+		}
+	}
+}
+
+func TestEnrollmentImageRequestCannotSelectUIDOrPath(t *testing.T) {
+	instance := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	good := `{"version":1,"action":"custody-enrollment-image","image":{"operationId":"` + strings.Repeat("a", 32) + `","action":"import","slot":"stage","instanceId":"` + instance + `","digest":"` + strings.Repeat("b", 64) + `"}}`
+	if _, err := DecodeRequest([]byte(good)); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{
+		strings.Replace(good, `"slot":"stage"`, `"slot":"stage","path":"/etc/shadow"`, 1),
+		strings.Replace(good, `"slot":"stage"`, `"slot":"stage","uid":0`, 1),
+		strings.Replace(good, `"slot":"stage"`, `"slot":"app"`, 1),
+		strings.Replace(good, `"action":"import"`, `"action":"execute"`, 1),
+	} {
+		if _, err := DecodeRequest([]byte(bad)); err == nil {
+			t.Fatal("unbounded image request admitted")
 		}
 	}
 }
@@ -49,6 +68,57 @@ func TestMaintenanceCustodyInitializationHasNoCallerPaths(t *testing.T) {
 	} {
 		if _, err := DecodeRequest([]byte(bad)); err == nil {
 			t.Fatal("caller-controlled initialization input admitted")
+		}
+	}
+}
+
+func TestCustodyEnrollmentPrepareDoesNotAdmitOSAuthority(t *testing.T) {
+	good := `{"version":1,"action":"custody-enrollment-prepare","enrollment":{"operationId":"` + strings.Repeat("a", 32) + `","network":"devnet","listen":"127.0.0.1:7332","coreSha256":"` + strings.Repeat("b", 64) + `","signerSha256":"` + strings.Repeat("c", 64) + `"}}`
+	if _, err := DecodeRequest([]byte(good)); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{
+		strings.Replace(good, `"network":"devnet"`, `"network":"devnet","path":"/tmp/binary"`, 1),
+		strings.Replace(good, `"network":"devnet"`, `"network":"devnet","uid":0`, 1),
+		strings.Replace(good, `"version":1`, `"version":1,"command":["/bin/sh"]`, 1),
+		strings.Replace(good, `"network":"devnet"`, `"network":"testnet"`, 1),
+		strings.Replace(good, strings.Repeat("b", 64), strings.Repeat("g", 64), 1),
+		strings.Replace(good, `"action":"custody-enrollment-prepare"`, `"action":"custody-initialize"`, 1),
+	} {
+		if _, err := DecodeRequest([]byte(bad)); err == nil {
+			t.Fatal("unbounded enrollment request admitted")
+		}
+	}
+}
+
+func TestEnrollmentCutoverAllowsOnlyFixedSteps(t *testing.T) {
+	id := strings.Repeat("a", 32)
+	for _, action := range []string{"custody-enrollment-cutover", "custody-enrollment-activation"} {
+		step := "fence"
+		if action == "custody-enrollment-activation" {
+			step = "activate"
+		}
+		good := `{"version":1,"action":"` + action + `","enrollment":{"operationId":"` + id + `","step":"` + step + `"}}`
+		if _, err := DecodeRequest([]byte(good)); err != nil {
+			t.Fatal(err)
+		}
+		for _, bad := range []string{
+			strings.Replace(good, `"step":"`+step+`"`, `"step":"execute"`, 1),
+			strings.Replace(good, `"step":"`+step+`"`, `"step":"`+step+`","path":"/etc/shadow"`, 1),
+			strings.Replace(good, `"step":"`+step+`"`, `"step":"`+step+`","uid":0`, 1),
+		} {
+			if _, err := DecodeRequest([]byte(bad)); err == nil {
+				t.Fatal("unbounded enrollment step admitted")
+			}
+		}
+	}
+	for _, action := range []string{"remote-enrollment-validate", "remote-enrollment-status", "remote-enrollment-suspend", "remote-enrollment-restore"} {
+		good := `{"version":1,"action":"` + action + `"}`
+		if _, err := DecodeRequest([]byte(good)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := DecodeRequest([]byte(strings.Replace(good, `"version":1`, `"version":1,"command":["/bin/sh"]`, 1))); err == nil {
+			t.Fatal("arbitrary Remote command admitted")
 		}
 	}
 }

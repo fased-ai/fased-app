@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/bootstrap"
 	"github.com/fased-ai/fased-app/internal/bundle"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/enrollment"
 	"github.com/fased-ai/fased-app/internal/vpsinstall"
 	"io"
 	"os"
@@ -131,13 +133,28 @@ func maintenanceRequestCommand(args []string, in io.Reader, out io.Writer) error
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	data, err := readMaintenanceInput(ctx, in)
+	data, stream, err := readMaintenanceFrame(ctx, in)
 	if err != nil {
 		return err
 	}
 	r, err := maintenance.DecodeRequest(data)
 	if err != nil {
 		return err
+	}
+	if stream != nil {
+		if r.Action != "custody-enrollment-image" {
+			return errors.New("only enrollment images use the private stream")
+		}
+		a, err = maintenance.ValidateProcess(owner)
+		if err != nil {
+			return err
+		}
+		streamCtx, stop := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer stop()
+		return maintenanceCustodyEnrollmentImage(streamCtx, a, *r.Image, stream, out)
+	}
+	if r.Action == "custody-enrollment-image" {
+		return errors.New("enrollment image stream required")
 	}
 	// The directory is protected by ValidateProcess. One OS lock serializes
 	// mutation across callers; no owner-supplied command or pathname is run.
@@ -152,13 +169,62 @@ func maintenanceRequestCommand(args []string, in io.Reader, out io.Writer) error
 	if err != nil {
 		return err
 	}
-	if a.Profile != "remote" && r.Action != "custody-update" && r.Action != "custody-initialize" {
+	if a.Profile != "remote" && r.Action != "custody-update" && r.Action != "custody-initialize" && r.Action != "custody-enrollment-prepare" && r.Action != "custody-enrollment-empty" && r.Action != "custody-enrollment-stage" && r.Action != "custody-enrollment-cutover" && r.Action != "custody-enrollment-activation" {
 		return errors.New("Remote setup authority required")
 	}
 	workCtx, stop := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer stop()
 	var payload json.RawMessage
 	switch r.Action {
+	case "custody-enrollment-activation":
+		var source enrollment.ProtectedSource
+		source, err = protectedEnrollmentSource(a)
+		if err == nil {
+			err = enrollment.WithProtectedActivation(workCtx, a.Owner, r.Enrollment.OperationID, r.Enrollment.Step, source, func(v enrollment.ProtectedActivation) error {
+				journal, e := update.ReadMaintenanceRecord(a.Owner)
+				initialize := errors.Is(e, os.ErrNotExist) || e == nil && journal.Phase == "idle"
+				if e != nil && !errors.Is(e, os.ErrNotExist) {
+					return e
+				}
+				if !initialize {
+					var target custodyinstall.Manifest
+					if journal.Phase != "completed" || journal.Start != "target" || journal.Installation == nil || journal.Installation.Phase != "completed" || !update.ValidInstallation(*journal.Installation) || update.StrictJSON(journal.Target, &target) != nil || target != v.Target {
+						return errors.New("existing custody update must be recovered before activation")
+					}
+				}
+				for _, name := range []string{"update-active.json", "update-start-blocked.json"} {
+					if _, e = os.Lstat(v.Target.Root + "/" + name); !errors.Is(e, os.ErrNotExist) {
+						return errors.New("existing custody update fence must be preserved")
+					}
+				}
+				m, e := custodyinstall.PrepareProtectedEnrollmentActivation(workCtx, a.Owner, v.Target.ID, v.InstanceID, v.Digest)
+				if e != nil {
+					return e
+				}
+				if initialize {
+					if e = maintenanceCustodyInitialize(workCtx, a); e != nil {
+						return e
+					}
+				}
+				return custodyinstall.StartProtectedEnrollmentServices(workCtx, a.Owner, m, v.InstanceID, v.Running, v.Autostart)
+			})
+		}
+	case "custody-enrollment-cutover":
+		var source enrollment.ProtectedSource
+		source, err = protectedEnrollmentSource(a)
+		if err == nil {
+			err = enrollment.RunProtectedCutover(workCtx, a.Owner, r.Enrollment.OperationID, r.Enrollment.Step, source)
+		}
+	case "custody-enrollment-empty":
+		err = custodyinstall.CheckProtectedEnrollmentSigner(a.Owner, r.Enrollment.OperationID)
+	case "custody-enrollment-stage":
+		err = custodyinstall.PrepareProtectedEnrollmentStage(a.Owner, r.Enrollment.OperationID)
+	case "custody-enrollment-prepare":
+		var m custodyinstall.Manifest
+		m, err = maintenanceCustodyPrepare(workCtx, a, *r.Enrollment)
+		if err == nil {
+			payload, err = json.Marshal(m)
+		}
 	case "custody-initialize":
 		err = maintenanceCustodyInitialize(workCtx, a)
 	case "custody-update":
@@ -180,6 +246,56 @@ func maintenanceRequestCommand(args []string, in io.Reader, out io.Writer) error
 		return err
 	}
 	return json.NewEncoder(out).Encode(maintenance.Response{Version: 1, Action: r.Action, Complete: true, Payload: payload})
+}
+
+func protectedEnrollmentSource(a maintenance.Authority) (enrollment.ProtectedSource, error) {
+	if a.Profile == "local" {
+		return enrollment.ProtectedSource{}, nil
+	}
+	if a.Profile != "remote" {
+		return enrollment.ProtectedSource{}, errors.New("fixed enrollment profile required")
+	}
+	m, err := vpsinstall.LoadProtected(a.Owner)
+	if err != nil {
+		return enrollment.ProtectedSource{}, err
+	}
+	return enrollment.ProtectedSource{Data: m.Data, Listen: m.Listen, PublicOrigin: m.PublicOrigin, UID: m.AppUID, GID: m.AppGID}, nil
+}
+
+// Regular requests retain their bounded EOF framing. Only a fixed enrollment
+// stream has a bounded header followed by the existing private image/lock pipe.
+func readMaintenanceFrame(ctx context.Context, in io.Reader) ([]byte, io.Reader, error) {
+	type result struct {
+		data []byte
+		rest io.Reader
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		reader := bufio.NewReaderSize(in, (32<<10)+1)
+		prefix, e := reader.Peek(len(maintenance.EnrollmentStreamPrefix))
+		if e == nil && string(prefix) == maintenance.EnrollmentStreamPrefix {
+			_, _ = reader.Discard(len(maintenance.EnrollmentStreamPrefix))
+			line, err := reader.ReadSlice('\n')
+			if err != nil || len(line) > 32<<10 {
+				ch <- result{err: errors.New("invalid enrollment stream header")}
+				return
+			}
+			ch <- result{data: append([]byte(nil), line...), rest: reader}
+			return
+		}
+		b, err := io.ReadAll(io.LimitReader(reader, (32<<10)+1))
+		ch <- result{data: b, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	case r := <-ch:
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		return r.data, r.rest, r.err
+	}
 }
 
 // Only build composition can supply a controlled transport. Runtime requests

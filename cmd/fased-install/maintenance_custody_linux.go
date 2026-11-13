@@ -19,8 +19,10 @@ import (
 	"github.com/fased-ai/fased-app/internal/bundle"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/maintenance"
+	"github.com/fased-ai/fased-app/internal/privateaccess"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
+	"github.com/fased-ai/fased-app/internal/vpsinstall"
 )
 
 func maintenanceOwnerArgument(args []string) (int, error) {
@@ -218,6 +220,111 @@ func maintenanceCustodyCommand(action string, args []string, out io.Writer) erro
 
 // Initialize only from the protected helper's independently verified release;
 // the IPC request cannot choose bytes, paths, an owner or a release floor.
+func maintenanceCustodyPrepare(ctx context.Context, a maintenance.Authority, q maintenance.CustodyEnrollmentRequest) (custodyinstall.Manifest, error) {
+	var empty custodyinstall.Manifest
+	if a.Profile == "local" {
+		if q.PublicOrigin != "" {
+			return empty, errors.New("Local custody cannot select a public origin")
+		}
+	} else if a.Profile == "remote" {
+		m, err := vpsinstall.LoadProtected(a.Owner)
+		if err != nil || q.NativeOwnerAccess || q.Listen != m.Listen || q.PublicOrigin != m.PublicOrigin {
+			return empty, errors.New("Remote custody must retain its existing private instance")
+		}
+		if err = privateaccess.ValidateProtectedRemoteSetup(ctx, a.Owner, a.Home, m.Listen, m.PublicOrigin); err != nil {
+			return empty, err
+		}
+	} else {
+		return empty, errors.New("installation profile required")
+	}
+	if _, err := update.ReadMaintenanceRecord(a.Owner); err == nil {
+		return empty, errors.New("existing custody maintenance must be preserved")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return empty, err
+	}
+	o, err := maintenanceOptions(a)
+	if err != nil {
+		return empty, err
+	}
+	p, err := bootstrap.PrepareMaintenance(ctx, a.Owner, o)
+	if err != nil {
+		return empty, err
+	}
+	// Rejected requests also discard downloaded payloads at Close; otherwise
+	// each hash mismatch retains another root-owned executable bundle.
+	p.RetainAcquisitionEvidence()
+	defer p.Close()
+	report := p.Report()
+	if report.Sequence == 0 || !report.ProvenanceVerified && !report.DevelopmentOnly {
+		return empty, errors.New("authenticated enrollment release required")
+	}
+	id, err := p.MaintenanceIdentity()
+	if err != nil || id.Core.SHA256 != q.CoreSHA256 {
+		return empty, errors.New("verified core differs from the source")
+	}
+	engine, _ := bundle.Names()
+	corePath := filepath.Join(report.BundleDirectory, engine)
+	f, err := update.OpenProtected(corePath, id.Core.Bytes, 0700)
+	if err != nil {
+		return empty, err
+	}
+	err = errors.Join(f.Chmod(0755), f.Sync(), f.Close())
+	if err != nil {
+		return empty, err
+	}
+	signerStage := filepath.Join(report.BundleDirectory, "enrollment-signer")
+	if err = maintenance.EnsureProtectedDirectory(signerStage); err != nil {
+		return empty, err
+	}
+	if err = maintenanceAcquireSigner(ctx, p, a, signerStage, id); err != nil {
+		return empty, err
+	}
+	signerHash, signerSize, err := maintenance.ProtectedDigest(signerStage+"/fased-signer", 0755, 64<<20)
+	if err != nil || signerHash != q.SignerSHA256 {
+		return empty, errors.New("verified signer differs from the source")
+	}
+	dir := update.MaintenanceDirectory(a.Owner, q.OperationID)
+	if err = maintenance.EnsureProtectedDirectory(filepath.Dir(dir)); err != nil {
+		return empty, err
+	}
+	if err = maintenance.EnsureProtectedDirectory(dir); err != nil {
+		return empty, err
+	}
+	if err = maintenance.CopyProtected(corePath, dir+"/fased-app", 0755, id.Core.SHA256, id.Core.Bytes, ""); err != nil {
+		return empty, err
+	}
+	if err = maintenance.CopyProtected(signerStage+"/fased-signer", dir+"/fased-signer", 0755, signerHash, signerSize, ""); err != nil {
+		return empty, err
+	}
+	provenance := signer.OwnerKeyProvenance
+	if report.DevelopmentOnly {
+		provenance = signer.ControlledCustodyProfile
+	}
+	options := custodyinstall.Options{NativeOwnerAccess: q.NativeOwnerAccess, Core: dir + "/fased-app", Signer: dir + "/fased-signer", Network: q.Network, Listen: q.Listen, Location: a.Profile, PublicOrigin: q.PublicOrigin, Mode: signer.OrdinaryCustodyMode, Profile: signer.OwnerCustodyProfile, Provenance: provenance, PrepareHost: true, Disposable: true, StageOnly: true}
+	m, err := custodyinstall.InstallProtected(ctx, a.Owner, q.OperationID, options, report.DevelopmentOnly, io.Discard)
+	if err != nil {
+		return m, err
+	}
+	components, err := custodyinstall.DescribeProtectedPair(ctx, a.Owner, q.OperationID, id.Version)
+	if err != nil {
+		return m, err
+	}
+	pack := update.MaintenancePackage{Version: id.Version, Source: id.Source, Sequence: report.Sequence, ReleaseSHA256: report.DescriptorSHA256, ProvenanceSHA256: report.ProvenanceSHA256, DevelopmentOnly: report.DevelopmentOnly, Components: components}
+	base, _ := json.Marshal(m)
+	initial := update.MaintenanceRecord{Version: 1, Owner: a.Owner, OperationID: m.ID, Phase: "idle", Start: "base", Base: base, Target: base, Package: &pack}
+	if _, err = custodyinstall.ValidateInitialMaintenanceRecord(initial); err != nil {
+		return m, err
+	}
+	raw, err := json.Marshal(pack)
+	if err != nil {
+		return m, err
+	}
+	if err = maintenance.PublishProtected(dir+"/enrollment-package.json", raw, 0644); err != nil {
+		return m, err
+	}
+	return m, nil
+}
+
 func maintenanceCustodyInitialize(ctx context.Context, a maintenance.Authority) error {
 	if r, err := update.ReadMaintenanceRecord(a.Owner); err == nil {
 		if _, err = custodyinstall.ValidateInitialMaintenanceRecord(r); err != nil {
@@ -234,55 +341,26 @@ func maintenanceCustodyInitialize(ctx context.Context, a maintenance.Authority) 
 	if _, err = custodyinstall.ReadEnrollmentCommit(m); err != nil {
 		return err
 	}
-	o, err := maintenanceOptions(a)
-	if err != nil {
-		return err
-	}
-	p, err := bootstrap.PrepareMaintenance(ctx, a.Owner, o)
-	if err != nil {
-		return err
-	}
-	defer p.Close()
-	report := p.Report()
-	if report.Sequence == 0 || !report.ProvenanceVerified && !report.DevelopmentOnly {
-		return errors.New("authenticated installed release required")
-	}
-	id, err := p.MaintenanceIdentity()
-	if err != nil || id.Core.SHA256 != m.CoreHash {
-		return errors.New("authenticated release differs from the installed core")
-	}
 	dir := update.MaintenanceDirectory(a.Owner, m.ID)
-	if err = maintenance.EnsureProtectedDirectory(filepath.Dir(dir)); err != nil {
-		return err
-	}
-	if err = maintenance.EnsureProtectedDirectory(dir); err != nil {
-		return err
-	}
-	engine, _ := bundle.Names()
-	corePath := filepath.Join(report.BundleDirectory, engine)
-	f, err := update.OpenProtected(corePath, id.Core.Bytes, 0700)
+	f, err := update.OpenProtected(dir+"/enrollment-package.json", 256<<10, 0644)
 	if err != nil {
 		return err
 	}
-	err = errors.Join(f.Chmod(0755), f.Sync(), f.Close())
-	if err != nil {
-		return err
+	raw, err := io.ReadAll(io.LimitReader(f, (256<<10)+1))
+	err = errors.Join(err, f.Close())
+	var pack update.MaintenancePackage
+	if err != nil || update.StrictJSON(raw, &pack) != nil || pack.Validate() != nil {
+		return errors.New("original verified enrollment package is unavailable")
 	}
-	if err = maintenance.CopyProtected(corePath, dir+"/fased-app", 0755, id.Core.SHA256, id.Core.Bytes, ""); err != nil {
-		return err
+	for _, c := range pack.Components {
+		hash, size, e := maintenance.ProtectedDigest(dir+"/"+c.Artifact.File, 0755, 64<<20)
+		if e != nil || hash != c.Artifact.SHA256 || size != c.Artifact.Size {
+			return errors.New("original verified enrollment bytes changed")
+		}
 	}
-	if err = maintenanceAcquireSigner(ctx, p, a, dir, id); err != nil {
-		return err
-	}
-	components, err := custodyinstall.DescribeProtectedPair(ctx, a.Owner, m.ID, id.Version)
-	if err != nil {
-		return err
-	}
-	pack := update.MaintenancePackage{Version: id.Version, Source: id.Source, Sequence: report.Sequence, ReleaseSHA256: report.DescriptorSHA256, ProvenanceSHA256: report.ProvenanceSHA256, DevelopmentOnly: report.DevelopmentOnly, Components: components}
 	if err = custodyinstall.InitializeProtectedJournal(ctx, a.Owner, pack); err != nil {
 		return err
 	}
-	p.RetainAcquisitionEvidence()
 	return nil
 }
 

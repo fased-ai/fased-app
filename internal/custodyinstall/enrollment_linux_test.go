@@ -6,7 +6,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"os"
 	"strings"
 	"testing"
 )
@@ -55,6 +57,15 @@ func TestEnrollmentRecordRejectsUnpinnedPaths(t *testing.T) {
 		if err := s.EnrollmentRecord(context.Background(), path, strings.Repeat("a", 32), []byte(`{}`)); err == nil {
 			t.Fatal("unpinned root record accepted")
 		}
+	}
+}
+
+func TestEnrollmentRecordAcceptsPinnedFilename(t *testing.T) {
+	s := System{Out: io.Discard}
+	path := fmt.Sprintf("/proc/%d/fd/0/source/enrollment.json", os.Getpid())
+	err := s.EnrollmentRecord(context.Background(), path, strings.Repeat("a", 32), []byte(`{}`))
+	if err == nil || strings.Contains(err.Error(), "fixed pinned enrollment record required") {
+		t.Fatalf("valid pinned filename was rejected before filesystem checks: %v", err)
 	}
 }
 

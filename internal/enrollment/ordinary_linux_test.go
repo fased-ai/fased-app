@@ -3,10 +3,13 @@
 package enrollment
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"testing"
 
+	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/signer"
 )
 
@@ -33,6 +36,47 @@ func TestOrdinaryEnrollmentContextRecovery(t *testing.T) {
 				t.Fatal("mismatch rewrote the retained journal")
 			}
 		})
+	}
+}
+
+func TestProtectedEnrollmentHandsSourceLeaseToTheHelper(t *testing.T) {
+	image := fixtureImage(t)
+	for _, releaseFails := range []bool{false, true} {
+		h, source, options, op := fixture(t, image, "local")
+		ordinaryContext(h, &options)
+		export, fence := op.export, op.fence
+		op.export = func(ctx context.Context, m custodyinstall.Manifest, s sourceRecord) (*imageLease, error) {
+			lease, err := export(ctx, m, s)
+			if err == nil {
+				lease.release = func() error {
+					if releaseFails {
+						return errors.New("disposable lease failure")
+					}
+					h.held = false
+					return nil
+				}
+			}
+			return lease, err
+		}
+		called := false
+		op.protectedFence = func(ctx context.Context, j journal) error {
+			called = true
+			if h.held {
+				t.Fatal("owner retained the source lease during the protected reacquisition")
+			}
+			h.held = true // The protected helper owns its own source lease.
+			err := fence(ctx, j)
+			h.held = false
+			return err
+		}
+		_, err := run(t.Context(), source, options, h.m.CoreHash, h.m.SignerHash, op)
+		if releaseFails {
+			if err == nil || called || h.fenced {
+				t.Fatal("fence ran after the source lease could not be handed off")
+			}
+		} else if err != nil || !called || !h.ready || h.held {
+			t.Fatalf("protected lease handoff did not finish: %v", err)
+		}
 	}
 }
 

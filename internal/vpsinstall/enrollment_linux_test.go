@@ -49,6 +49,21 @@ func attachEnrollmentFixture(h *memoryHost, o *hostOps, m Manifest, form string)
 	return j, target
 }
 
+func TestProtectedRemoteAccountStatusIsFixedAndReadOnly(t *testing.T) {
+	if !fixedRemotePasswordProbe(1000, []string{"/usr/bin/passwd", "-S", accountName(1000)}) {
+		t.Fatal("the owned Remote password-status check was refused")
+	}
+	for _, args := range [][]string{
+		{"/usr/bin/passwd", "-S", "root"},
+		{"/usr/bin/passwd", "-u", accountName(1000)},
+		{"/usr/bin/passwd", "-S", accountName(1000), "extra"},
+	} {
+		if fixedRemotePasswordProbe(1000, args) {
+			t.Fatal("foreign or mutating passwd request accepted")
+		}
+	}
+}
+
 func TestRemoteEnrollmentLeaseResumesOnlyBoundFences(t *testing.T) {
 	for _, form := range []string{"complete", "published", "sibling", "empty-sibling", "archived"} {
 		t.Run(form, func(t *testing.T) {

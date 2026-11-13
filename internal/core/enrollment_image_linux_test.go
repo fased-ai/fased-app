@@ -189,6 +189,48 @@ func TestEnrollmentImagePreservesSameInstance(t *testing.T) {
 	}
 }
 
+func TestEnrollmentImageReacquisitionDetectsSourceChanges(t *testing.T) {
+	s := fixtureStore(t)
+	claimFixture(t, s)
+	dir := s.dir
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	first, lock, err := ExportEnrollmentImage(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, lock, err := ExportEnrollmentImage(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if EnrollmentImageDigest(first) != EnrollmentImageDigest(second) {
+		t.Fatal("unchanged source could not be safely reacquired")
+	}
+	s, err = OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentApply(t, s, AgentCommand{Action: "session-create", Name: "changed while unlocked"})
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	changed, lock, err := ExportEnrollmentImage(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if EnrollmentImageDigest(first) == EnrollmentImageDigest(changed) {
+		t.Fatal("source change was not reflected in the reacquired image")
+	}
+}
+
 func TestEnrollmentImageApplicationUpdateQuiescentRowPreserved(t *testing.T) {
 	for _, raw := range []string{`{"phase":"idle", "id":""}`, `{"id":"ed4e62f092e9658589ca0fcf8f538beb","phase":"current","checkedAt":1793995915,"finishedAt":1793995915}`} {
 		t.Run(raw, func(t *testing.T) {

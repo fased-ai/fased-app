@@ -19,6 +19,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 	"golang.org/x/sys/unix"
@@ -280,6 +281,9 @@ func (h *runtimeHost) archiveNode(ctx context.Context, path string) (node, error
 }
 
 func (h *runtimeHost) checkFence(ctx context.Context, j journal) error {
+	if j.Target.Version == 3 && os.Getuid() != 0 {
+		return h.protectedCutover(ctx, j, "check")
+	}
 	if err := h.unchangedParent(); err != nil {
 		return err
 	}
@@ -303,6 +307,9 @@ func (h *runtimeHost) checkFence(ctx context.Context, j journal) error {
 }
 
 func (h *runtimeHost) fence(ctx context.Context, j journal) error {
+	if j.Target.Version == 3 && os.Getuid() != 0 {
+		return h.protectedCutover(ctx, j, "fence")
+	}
 	if err := h.unchangedParent(); err != nil {
 		return err
 	}
@@ -363,8 +370,14 @@ func (h *runtimeHost) importImage(ctx context.Context, j journal, image core.Enr
 	stage := stagePath(j)
 	n, err := realNode(stage)
 	if errors.Is(err, os.ErrNotExist) {
-		if _, err = h.system.Run(ctx, nil, "/usr/bin/install", "-d", "-m", "0700", "-o", strconv.Itoa(j.Target.App.UID), "-g", strconv.Itoa(j.Target.App.GID), "--", stage); err != nil {
-			return err
+		if j.Target.Version == 3 {
+			if err = h.system.PrepareEnrollmentStage(ctx, j.Target, j.ID); err != nil {
+				return err
+			}
+		} else {
+			if _, err = h.system.Run(ctx, nil, "/usr/bin/install", "-d", "-m", "0700", "-o", strconv.Itoa(j.Target.App.UID), "-g", strconv.Itoa(j.Target.App.GID), "--", stage); err != nil {
+				return err
+			}
 		}
 		n, err = realNode(stage)
 	}
@@ -375,6 +388,9 @@ func (h *runtimeHost) importImage(ctx context.Context, j journal, image core.Enr
 }
 
 func (h *runtimeHost) publish(ctx context.Context, j journal) error {
+	if j.Target.Version == 3 && os.Getuid() != 0 {
+		return h.protectedCutover(ctx, j, "publish")
+	}
 	if err := h.checkFence(ctx, j); err != nil {
 		return err
 	}
@@ -413,6 +429,9 @@ func (h *runtimeHost) publish(ctx context.Context, j journal) error {
 }
 
 func (h *runtimeHost) finish(ctx context.Context, j journal) error {
+	if j.Target.Version == 3 && os.Getuid() != 0 {
+		return h.protectedCutover(ctx, j, "finish")
+	}
 	if err := h.checkFence(ctx, j); err != nil {
 		return err
 	}
@@ -421,6 +440,15 @@ func (h *runtimeHost) finish(ctx context.Context, j journal) error {
 		return errState
 	}
 	return h.system.EnrollmentRecord(ctx, h.pinned(h.base)+"/ready.json", j.ID, jsonBytes(map[string]any{"version": 1, "binding": hash(jsonBytes(fenceFor(j)))}))
+}
+
+func (h *runtimeHost) protectedCutover(ctx context.Context, j journal, step string) error {
+	if err := h.unchangedParent(); err != nil {
+		return err
+	}
+	q := maintenance.CustodyEnrollmentRequest{OperationID: j.ID, Step: step}
+	_, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "custody-enrollment-cutover", Enrollment: &q}, h.system.Out)
+	return err
 }
 
 func Run(ctx context.Context, s Source, o Options, system *custodyinstall.System) (custodyinstall.Manifest, error) {
@@ -480,6 +508,26 @@ func runInstalled(ctx context.Context, s Source, o Options, system *custodyinsta
 		save: func(j journal) error { return core.WritePrivateJSON(h.state, j) }, node: realNode,
 		targetExists: func() bool { _, e := os.Lstat(custodyinstall.Root(os.Getuid())); return !errors.Is(e, os.ErrNotExist) },
 		prepare: func(ctx context.Context, j journal, o Options) (custodyinstall.Manifest, error) {
+			if o.Mode == signer.OrdinaryCustodyMode {
+				q := maintenance.CustodyEnrollmentRequest{OperationID: j.ID, Network: o.Network, Listen: j.Source.Listen, PublicOrigin: j.Source.PublicOrigin, NativeOwnerAccess: o.NativeOwnerAccess, CoreSHA256: j.CoreHash, SignerSHA256: j.SignerHash}
+				b, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "custody-enrollment-prepare", Enrollment: &q}, system.Out)
+				if err != nil {
+					return custodyinstall.Manifest{}, err
+				}
+				var reply maintenance.Response
+				var target custodyinstall.Manifest
+				if update.StrictJSON(b, &reply) != nil || update.StrictJSON(reply.Payload, &target) != nil ||
+					target.ID != j.ID || target.Owner != os.Getuid() || target.CoreHash != j.CoreHash || target.SignerHash != j.SignerHash ||
+					target.Mode != o.Mode || target.Profile != o.Profile || target.Provenance != o.Provenance || target.Network != o.Network ||
+					target.Location != j.Source.Profile || target.Listen != j.Source.Listen || target.PublicOrigin != j.Source.PublicOrigin ||
+					target.NativeOwnerAccess != o.NativeOwnerAccess || custodyinstall.Verify(target) != nil {
+					return custodyinstall.Manifest{}, errors.New("protected enrollment target differs from the source")
+				}
+				if err = custodyinstall.RecordConfinedEnrollmentIntent(target); err != nil {
+					return custodyinstall.Manifest{}, err
+				}
+				return target, nil
+			}
 			options := custodyinstall.Options{NativeOwnerAccess: o.NativeOwnerAccess, Mode: o.Mode, Profile: o.Profile, Provenance: o.Provenance, Core: o.Core, Signer: o.Signer, Network: o.Network, Listen: j.Source.Listen, Location: j.Source.Profile, PublicOrigin: j.Source.PublicOrigin, PrepareHost: true, Disposable: true, StageOnly: true}
 			if controlled {
 				return custodyinstall.InstallControlledOwnerCustody(ctx, options, system)
@@ -494,7 +542,7 @@ func runInstalled(ctx context.Context, s Source, o Options, system *custodyinsta
 			return custodyinstall.Verify(m)
 		},
 		emptySigner: system.EnrollmentSignerEmpty, export: h.export, importImage: h.importImage,
-		fence: h.fence, publish: h.publish,
+		fence: h.fence, protectedFence: func(ctx context.Context, j journal) error { return h.protectedCutover(ctx, j, "fence") }, publish: h.publish,
 		verifyTarget: func(ctx context.Context, j journal) error {
 			if err := h.checkFence(ctx, j); err != nil {
 				return err
@@ -505,6 +553,9 @@ func runInstalled(ctx context.Context, s Source, o Options, system *custodyinsta
 			if err := h.checkFence(ctx, j); err != nil {
 				return err
 			}
+			if j.Target.Version == 3 {
+				return h.protectedActivation(ctx, j, "activate")
+			}
 			return custodyinstall.ActivateEnrollment(ctx, j.Target, j.Source.ExpectedInstanceID, j.Digest, j.Source.Running, j.Source.Autostart, system)
 		}, restart: func(ctx context.Context, j journal) error {
 			if err := h.checkFence(ctx, j); err != nil {
@@ -514,12 +565,24 @@ func runInstalled(ctx context.Context, s Source, o Options, system *custodyinsta
 			if err != nil || commit.InstanceID != j.Source.ExpectedInstanceID || commit.Digest != j.Digest {
 				return errState
 			}
+			if j.Target.Version == 3 {
+				return h.protectedActivation(ctx, j, "restart")
+			}
 			// The explicit native resume starts existing roles; it neither reimports
 			// the original image nor enables/disables login/reboot autostart.
 			return custodyinstall.ActivateEnrollment(ctx, j.Target, j.Source.ExpectedInstanceID, j.Digest, true, false, system)
 		}, finish: h.finish,
 	}
 	return run(ctx, s, o, coreHash, signerHash, op)
+}
+
+func (h *runtimeHost) protectedActivation(ctx context.Context, j journal, step string) error {
+	if err := h.unchangedParent(); err != nil {
+		return err
+	}
+	q := maintenance.CustodyEnrollmentRequest{OperationID: j.ID, Step: step}
+	_, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "custody-enrollment-activation", Enrollment: &q}, h.system.Out)
+	return err
 }
 
 // EnrolledTarget reads only root-owned public fence/commit bindings. It grants

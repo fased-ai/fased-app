@@ -98,6 +98,7 @@ type operations struct {
 	export          func(context.Context, custodyinstall.Manifest, sourceRecord) (*imageLease, error)
 	importImage     func(context.Context, journal, core.EnrollmentImage) error
 	fence           func(context.Context, journal) error
+	protectedFence  func(context.Context, journal) error // Reacquires and holds the original source lease in the privileged boundary.
 	publish         func(context.Context, journal) error
 	verifyTarget    func(context.Context, journal) error
 	activate        func(context.Context, journal) error
@@ -283,7 +284,19 @@ func run(ctx context.Context, s Source, o Options, coreHash, signerHash string, 
 				return j.Target, err
 			}
 		}
-		if err = op.fence(ctx, j); err != nil {
+		if j.Target.Version == 3 && op.protectedFence != nil {
+			// The fixed helper must own its source lease. Release the owner's
+			// exporter first; the helper re-exports and refuses a changed digest.
+			if lease != nil {
+				if err = lease.release(); err != nil {
+					return j.Target, err
+				}
+				lease = nil
+			}
+			if err = op.protectedFence(ctx, j); err != nil {
+				return j.Target, err
+			}
+		} else if err = op.fence(ctx, j); err != nil {
 			return j.Target, err
 		}
 		if lease != nil {

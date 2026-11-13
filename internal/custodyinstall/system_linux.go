@@ -27,11 +27,16 @@ type System struct {
 	Authorization string // Optional fixed caller-owned ceremony; empty retains custody wording.
 	// Trusted owner-maintenance composition only. This never creates an OS grant:
 	// sudo -n must independently admit the exact command under installed policy.
-	NonInteractive bool
-	authorized     bool
-	installFault   func(string) error                         // Tests only; never configuration/IPC.
-	sudoCommand    func(context.Context, ...string) *exec.Cmd // Tests only.
-	toolCheck      func(string) error                         // Tests only.
+	NonInteractive                         bool
+	protectedOwner                         int // Set only by the verified helper's fixed enrollment operation.
+	protectedID                            string
+	protectedPurpose                       string
+	protectedSourceUID, protectedSourceGID int
+	protectedSource, protectedInstance     string
+	authorized                             bool
+	installFault                           func(string) error                         // Tests only; never configuration/IPC.
+	sudoCommand                            func(context.Context, ...string) *exec.Cmd // Tests only.
+	toolCheck                              func(string) error                         // Tests only.
 }
 
 func (s *System) sudo(ctx context.Context, args ...string) *exec.Cmd {
@@ -172,6 +177,39 @@ func refuseUnserializedScopedMutation(owner int, args []string, scope func(int) 
 }
 
 func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte, error) {
+	if s != nil && s.protectedOwner > 0 {
+		if os.Getuid() != 0 || os.Geteuid() != 0 {
+			return nil, errors.New("protected installer process required")
+		}
+		if len(args) == 0 {
+			return nil, errors.New("fixed protected installation operation required")
+		}
+		allowed := false
+		switch s.protectedPurpose {
+		case "prepare":
+			switch args[0] {
+			case "/usr/bin/install", "/usr/bin/mv", "/usr/bin/sync", "/usr/sbin/useradd":
+				allowed = true
+			}
+		case "cutover":
+			switch args[0] {
+			case "/usr/bin/install", "/usr/bin/mv", "/usr/bin/sync", "/usr/bin/mkdir", "/usr/bin/ln", "/usr/bin/rm", "/usr/bin/stat":
+				allowed = true
+			}
+		}
+		if !allowed {
+			return nil, errors.New("operation unavailable during protected enrollment preparation")
+		}
+		if err := trustedUtility(args[0]); err != nil {
+			return nil, err
+		}
+		c := exec.CommandContext(ctx, args[0], args[1:]...)
+		c.Dir = "/"
+		c.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/nonexistent", "LANG=C"}
+		c.Stdin = bytes.NewReader(input)
+		c.Stderr = s.Out
+		return c.Output()
+	}
 	if os.Geteuid() == 0 || os.Getuid() == 0 {
 		return nil, errors.New("Fased must run as an ordinary owner; only trusted OS utilities are elevated")
 	}
