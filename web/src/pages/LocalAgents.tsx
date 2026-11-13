@@ -5,11 +5,19 @@ import { useUI } from "../ui-preferences";
 import { useCore } from "../core";
 import { NewsInputs } from "./NewsInputs";
 import { modelForProviderChange } from "../agent-defaults";
-import { AIModelPicker, useAIConnection } from "./AIConnection";
+import {
+  AIModelPicker,
+  ConnectionPicker,
+  useAIConnection,
+} from "./AIConnection";
 import { useRef, useState, type FormEvent } from "react";
 import { BookOpen, Plus, Settings2, History, Plug, ArrowUp } from "../icons";
 import { SectionHead, Dialog } from "../components/shared";
-import { useWorkspace, type AgentSettingsDraft } from "../workspace";
+import {
+  useWorkspace,
+  type AgentSettingsDraft,
+  type ChatModelDraft,
+} from "../workspace";
 import { providerNames, type Provider } from "../state";
 import type {
   AgentMemory,
@@ -136,6 +144,8 @@ function LocalAgentEditor({
     setProvidersOpen,
     agentSettingsDrafts,
     setAgentSettingsDrafts,
+    chatModelDrafts,
+    setChatModelDrafts,
   } = useWorkspace();
   const t = uiText;
   const core = useCore();
@@ -158,6 +168,7 @@ function LocalAgentEditor({
   const [firstSend, setFirstSend] = useState<{
     sessionId: string;
     text: string;
+    selection?: ChatModelDraft;
   } | null>(null);
   const [search, setSearch] = useState("");
   const { chatDrafts: messageDrafts, setChatDrafts: setMessageDrafts } =
@@ -171,6 +182,23 @@ function LocalAgentEditor({
   const [memoryExpiryEdited, setMemoryExpiryEdited] = useState(false);
   const memoryExpiryOriginal = useRef(0);
   const profileDraftKey = `${core.instanceId}:${v.profileId}`;
+  const newChatKey = `${profileDraftKey}:new`;
+  const newSelection = chatModelDrafts.get(newChatKey);
+  const replyConnection =
+    newSelection?.connectionRef ??
+    (profile.provider === "none"
+      ? ""
+      : profile.connectionRef || connection?.ref || "");
+  const replyModel = newSelection?.model ?? profile.model;
+  function setChatSelection(sessionId: string, selection?: ChatModelDraft) {
+    const key = `${profileDraftKey}:${sessionId}`;
+    setChatModelDrafts((drafts) => {
+      const next = new Map(drafts);
+      if (selection) next.set(key, selection);
+      else next.delete(key);
+      return next;
+    });
+  }
   const initialValues = {
     name: profile.name,
     persona: profile.persona,
@@ -479,6 +507,17 @@ function LocalAgentEditor({
                   <AgentAIReview
                     view={v}
                     sessionId={activeSession.id}
+                    initialSelection={
+                      chatModelDrafts.get(
+                        `${profileDraftKey}:${activeSession.id}`,
+                      ) ??
+                      (firstSend?.sessionId === activeSession.id
+                        ? firstSend.selection
+                        : undefined)
+                    }
+                    onSelectionChange={(selection) =>
+                      setChatSelection(activeSession.id, selection)
+                    }
                     composer={{
                       value: message,
                       submitOnMount:
@@ -568,7 +607,22 @@ function LocalAgentEditor({
                         if (!thread) return;
                         updateMessage(thread.id, submitted);
                         updateMessage("new", "");
-                        setFirstSend({ sessionId: thread.id, text: submitted });
+                        setFirstSend({
+                          sessionId: thread.id,
+                          text: submitted,
+                          selection: newSelection,
+                        });
+                        if (newSelection)
+                          setChatModelDrafts((drafts) => {
+                            const next = new Map(drafts);
+                            next.set(
+                              `${profileDraftKey}:${thread.id}`,
+                              newSelection,
+                            );
+                            if (drafts.get(newChatKey) === newSelection)
+                              next.delete(newChatKey);
+                            return next;
+                          });
                         setSearch("");
                         setSession(thread.id);
                         setRailOpen(false);
@@ -603,17 +657,49 @@ function LocalAgentEditor({
                     <details className="reply-model-menu">
                       <summary
                         aria-label={t("Reply model")}
-                        title={previewModel(profile.model, t) || t("Provider")}
+                        title={previewModel(replyModel, t) || t("Provider")}
                       >
-                        {previewModel(profile.model, t) || t("Provider")}
+                        {previewModel(replyModel, t) || t("Provider")}
                       </summary>
-                      <button
-                        type="button"
-                        className="text-button"
-                        onClick={() => navigate("agents/settings")}
-                      >
-                        {t("Agents")}
-                      </button>
+                      <div className="reply-model-panel">
+                        <ConnectionPicker
+                          value={replyConnection}
+                          onChange={(ref) => {
+                            const account =
+                              connection?.connections?.find(
+                                (a) => a.ref === ref,
+                              ) ??
+                              (connection?.ref === ref ? connection : null);
+                            const recommended = account?.catalog?.models.find(
+                              (item) =>
+                                item.connectionRef === ref &&
+                                item.selectable &&
+                                item.recommended,
+                            );
+                            setChatSelection("new", {
+                              connectionRef: ref,
+                              model: ref ? (recommended?.id ?? "") : "",
+                            });
+                          }}
+                        />
+                        <AIModelPicker
+                          value={replyModel}
+                          connectionRef={replyConnection}
+                          onChange={(next) =>
+                            setChatSelection("new", {
+                              connectionRef: replyConnection,
+                              model: next,
+                            })
+                          }
+                        />
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => setChatSelection("new")}
+                        >
+                          {t("Use agent default")}
+                        </button>
+                      </div>
                     </details>
                     <button
                       type="button"

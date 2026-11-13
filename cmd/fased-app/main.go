@@ -40,6 +40,9 @@ func main() {
 	}
 }
 func run(args []string, in *os.File, out, errOut io.Writer) error {
+	if len(args) > 0 && (args[0] == "custody-maintenance" || args[0] == "custody-maintenance-inventory" || args[0] == "custody-maintenance-verify") {
+		return metadataMaintenanceCommand(args, in, out)
+	}
 	if len(args) > 0 && args[0] == "native-client" {
 		return nativeAppClient(args[1:], in, out)
 	}
@@ -87,7 +90,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	if len(args) > 1 && args[0] == "custody" && args[1] == "fixture-inspection" {
 		return inspectionFixtureCommand(args[2:], in, out, errOut)
 	}
-	if len(args) > 0 && (args[0] == "owner-fixture-inspection" || args[0] == "fixture-reader-guard" || args[0] == "fixture-inspection-empty" || args[0] == "fixture-inspection-init" || args[0] == "fixture-inspection-cold" || args[0] == "fixture-inspection-compatibility") {
+	if len(args) > 0 && (args[0] == "owner-fixture-inspection" || args[0] == "fixture-reader-guard" || args[0] == "fixture-inspection-empty" || args[0] == "fixture-inspection-init" || args[0] == "fixture-inspection-cold" || args[0] == "fixture-update-pause-guard" || args[0] == "fixture-inspection-compatibility") {
 		return inspectionFixtureCommand(args, in, out, errOut)
 	}
 	if len(args) > 1 && args[0] == "updates" && args[1] == "preferences" {
@@ -489,13 +492,17 @@ func serveInstalledRuntimeWithProviderFixture(installationRoot, dir, listen, pub
 		err = server.ConfigureWENResearch(researchOrigin)
 	}
 	if err == nil {
-		var check func(context.Context) (*core.ApplicationRelease, error)
-		check, err = installedChannelCheck(source, installationRoot, dir, ownerUID)
-		if err == nil && check != nil {
-			if source == "remote" {
-				err = bindCompiledRemoteMaintenance(server.Store, ownerUID, check)
-			} else if source == "local" && installationRoot != "" {
-				err = bindCompiledLocalMaintenance(server.Store, installationRoot, dir, check)
+		if len(custodyConfig) == 1 && custodyConfig[0] != "" {
+			err = bindCompiledCustodyMaintenance(server.Store, ownerUID, dir)
+		} else {
+			var check func(context.Context) (*core.ApplicationRelease, error)
+			check, err = installedChannelCheck(source, installationRoot, dir, ownerUID)
+			if err == nil && check != nil {
+				if source == "remote" {
+					err = bindCompiledRemoteMaintenance(server.Store, ownerUID, check)
+				} else if source == "local" && installationRoot != "" {
+					err = bindCompiledLocalMaintenance(server.Store, installationRoot, dir, check)
+				}
 			}
 		}
 	}

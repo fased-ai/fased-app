@@ -74,7 +74,7 @@ type coreBackup func(context.Context, update.Preflight) (update.RecoveryIndex, e
 func conductBackup(ctx context.Context, id string, control coreControl, backup coreBackup, call updateRPC, out io.Writer) error {
 	preflight := func() (update.Preflight, error) {
 		var b bytes.Buffer
-		e := conductPreflight(ctx, id, control, call, &b)
+		e := conductPreflight(ctx, id, control, call, false, &b)
 		var p update.Preflight
 		if e == nil {
 			e = update.StrictJSON(b.Bytes(), &p)

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
@@ -68,6 +69,9 @@ func enrollmentCommand(args []string, in io.Reader, out, errOut io.Writer) error
 	binary, e := os.Executable()
 	if e != nil {
 		return e
+	}
+	if strings.HasPrefix(binary, "/memfd:") {
+		binary = "/proc/self/exe"
 	}
 	key, e := filepath.Abs(*signerBinary)
 	if e != nil {

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -94,14 +95,16 @@ func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader
 			return err
 		}
 	}
+	var walletSigner *os.File
 	if options.WalletInstance != "" || options.WalletNetwork != "" {
 		if !options.Start || options.Profile != "remote" || options.Prefix != "" || options.DataDirectory != "" || options.upgrade != nil {
 			return errors.New("Wallets setup is a separate existing-Remote operation")
 		}
-		args, err = p.walletEnrollmentArguments(options.WalletInstance, options.WalletNetwork, options.WalletSigner)
+		args, walletSigner, err = p.walletEnrollmentArguments(options.WalletInstance, options.WalletNetwork, options.WalletSigner)
 		if err != nil {
 			return err
 		}
+		defer walletSigner.Close()
 	}
 	if !options.Start {
 		args = append(args, "--start=false")
@@ -132,13 +135,30 @@ func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader
 	if err != nil || !os.SameFile(actual, current) || current.Size() != p.engine.Bytes {
 		return errors.New("verified installer path changed before execution")
 	}
+	executable := f
+	if options.upgrade != nil || walletSigner != nil {
+		executable, err = sealVerifiedExecutable(f, p.engine.Bytes, p.engine.SHA256)
+		if err != nil {
+			return err
+		}
+		defer executable.Close()
+	}
 	command := exec.CommandContext(ctx, "/proc/self/fd/3", args...)
 	command.Args[0] = filepath.Join(p.report.BundleDirectory, engine)
-	command.ExtraFiles = []*os.File{f}
+	command.ExtraFiles = []*os.File{executable}
+	if walletSigner != nil {
+		command.ExtraFiles = append(command.ExtraFiles, walletSigner)
+	}
 	command.Stdin, command.Stdout, command.Stderr = in, out, errOut
 	if options.Profile != "" {
 		command.Stdout = io.Discard
 	}
 	p.invoked, p.report.InstallerInvoked = true, true
-	return command.Run()
+	if err = command.Run(); err != nil {
+		return err
+	}
+	if walletSigner != nil && out != nil {
+		fmt.Fprintln(out, "Wallets setup complete.")
+	}
+	return nil
 }

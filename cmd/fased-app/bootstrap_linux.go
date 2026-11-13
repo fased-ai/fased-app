@@ -468,7 +468,7 @@ func maintenanceCallbacks(tx custodyinstall.BootstrapTransaction, system *custod
 			return nil
 		}
 		var b bytes.Buffer
-		if e = conductPreflight(ctx, t.ID, control, call, &b); e != nil {
+		if e = conductPreflight(ctx, t.ID, control, call, true, &b); e != nil {
 			return e
 		}
 		var p update.Preflight

@@ -33,6 +33,7 @@ func (t InstallTransaction) valid() bool {
 }
 
 type installOps struct {
+	atomic       func(context.Context, string) error
 	recoveryDirs func(Manifest) ([]string, error)
 	read         readHost
 	verify       approvedExecutableVerifier

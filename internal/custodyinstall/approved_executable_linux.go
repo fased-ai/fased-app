@@ -59,7 +59,7 @@ func verifyApprovedExecutable(path, expected string, size int64) error {
 	}
 	valid := func(info os.FileInfo) bool {
 		st, ok := info.Sys().(*syscall.Stat_t)
-		return ok && st.Uid == 0 && st.Gid == 0 && info.Mode().IsRegular() && info.Mode().Perm() == 0444 && info.Size() == size && size >= 0 && size <= maxInstalledExecutableSize
+		return ok && st.Uid == 0 && st.Gid == 0 && info.Mode().IsRegular() && info.Mode() == 0444 && info.Size() == size && size >= 0 && size <= maxInstalledExecutableSize
 	}
 	if !valid(before) {
 		return errors.New("foreign approved executable source; preserving it")

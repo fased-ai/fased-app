@@ -12,7 +12,17 @@ import (
 // InspectInstallation is a closed cold-recovery probe. It runs only as the
 // configured signer UID, takes the real vault lock and never unlocks or signs.
 func InspectInstallation(c Config, id string) (*update.Installation, error) {
-	v, e := inspectVault(c)
+	return inspectInstallation(c, id, false)
+}
+
+// InspectInstallationReadOnly refuses pending publication rather than repairing
+// it; a privileged replacement check must never change signer recovery state.
+func InspectInstallationReadOnly(c Config, id string) (*update.Installation, error) {
+	return inspectInstallation(c, id, true)
+}
+
+func inspectInstallation(c Config, id string, readOnly bool) (*update.Installation, error) {
+	v, e := inspectVaultMode(c, readOnly)
 	if e != nil {
 		return nil, e
 	}

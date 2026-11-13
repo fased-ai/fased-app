@@ -22,6 +22,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/localinstall"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
 )
 
@@ -113,6 +114,51 @@ type System struct {
 	Out           io.Writer
 	Authorization string
 	authorized    bool
+	sudoCommand   func(context.Context, ...string) *exec.Cmd // Tests only.
+	toolCheck     func(string) error                         // Tests only.
+}
+
+func (s *System) sudo(ctx context.Context, args ...string) *exec.Cmd {
+	if s.sudoCommand != nil {
+		return s.sudoCommand(ctx, args...)
+	}
+	return exec.CommandContext(ctx, "/usr/bin/sudo", args...)
+}
+
+func (s *System) trustedTool(path string) error {
+	if s.toolCheck != nil {
+		return s.toolCheck(path)
+	}
+	return trustedHostTool(path)
+}
+
+func trustedHostTool(path string) error {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return err
+	}
+	for parent := filepath.Dir(resolved); ; parent = filepath.Dir(parent) {
+		info, err := os.Lstat(parent)
+		if err != nil {
+			return err
+		}
+		owner, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || owner.Uid != 0 || !info.IsDir() || info.Mode().Perm()&0022 != 0 {
+			return errors.New("OS preparation tool parents must be root-owned and immutable")
+		}
+		if parent == "/" {
+			break
+		}
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return err
+	}
+	owner, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || owner.Uid != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 {
+		return errors.New("OS preparation requires root-owned trusted tools")
+	}
+	return nil
 }
 
 func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte, error) {
@@ -127,6 +173,23 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 		if !privateaccess.AllowedOwnedServeCommand(ctx, input, args) {
 			return nil, errors.New("only the fixed conditional private Serve setup request is allowed")
 		}
+		if _, err := maintenance.ReadAuthority(os.Getuid()); err == nil {
+			var etag string
+			for _, arg := range args {
+				if strings.HasPrefix(arg, "If-Match: ") {
+					etag = strings.TrimPrefix(arg, "If-Match: ")
+				}
+			}
+			_, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "serve", Serve: &maintenance.ServeRequest{Configuration: append([]byte(nil), input...), ETag: etag}}, s.Out)
+			if err != nil {
+				return nil, err
+			}
+			// Preserve this adapter's existing HTTP-status result contract. The
+			// protected helper emitted completion only after the real API POST.
+			return []byte("200"), nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
 	case "/usr/bin/apt-get", "/usr/bin/cat", "/usr/bin/install", "/usr/bin/ln", "/usr/bin/rm", "/usr/bin/sync", "/usr/sbin/apparmor_parser":
 	case "/usr/bin/systemctl":
 		if strings.Join(args[1:], " ") != "enable --now tailscaled.service" {
@@ -140,31 +203,13 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 	default:
 		return nil, errors.New("unknown OS preparation tool")
 	}
-	for _, p := range []string{"/usr/bin/sudo", args[0]} {
-		resolved, e := filepath.EvalSymlinks(p)
-		if e != nil {
-			return nil, e
-		}
-		for parent := filepath.Dir(resolved); ; parent = filepath.Dir(parent) {
-			i, err := os.Lstat(parent)
-			if err != nil {
-				return nil, err
-			}
-			owner, ok := i.Sys().(*syscall.Stat_t)
-			if !ok || owner.Uid != 0 || !i.IsDir() || i.Mode().Perm()&0022 != 0 {
-				return nil, errors.New("OS preparation tool parents must be root-owned and immutable")
-			}
-			if parent == "/" {
-				break
-			}
-		}
-		i, e := os.Stat(resolved)
-		if e != nil {
-			return nil, e
-		}
-		owner, ok := i.Sys().(*syscall.Stat_t)
-		if !ok || owner.Uid != 0 || !i.Mode().IsRegular() || i.Mode().Perm()&0022 != 0 {
-			return nil, errors.New("OS preparation requires root-owned trusted tools")
+	tools := []string{"/usr/bin/sudo", args[0]}
+	if !s.authorized && os.Getenv("FASED_INSTALL_ROOT_ENTRY") == "1" {
+		tools = append(tools, "/usr/bin/true")
+	}
+	for _, path := range tools {
+		if err := s.trustedTool(path); err != nil {
+			return nil, err
 		}
 	}
 	if !s.authorized {
@@ -173,7 +218,13 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 			prompt = "Authorize Ubuntu prerequisites: OS packages and the reviewed restrictive Bubblewrap profile. Existing policies are preserved; global AppArmor restrictions stay enabled. Fased remains unprivileged."
 		}
 		fmt.Fprintln(s.Out, prompt)
-		c := exec.CommandContext(ctx, "/usr/bin/sudo", "-v")
+		args := []string{"-v"}
+		if os.Getenv("FASED_INSTALL_ROOT_ENTRY") == "1" {
+			// This flag selects a noninteractive probe, not authority. Every
+			// subsequent operation still needs its own sudo -n permission.
+			args = []string{"-n", "--", "/usr/bin/true"}
+		}
+		c := s.sudo(ctx, args...)
 		c.Stdin = s.In
 		c.Stdout = s.Out
 		c.Stderr = s.Out
@@ -182,7 +233,7 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 		}
 		s.authorized = true
 	}
-	c := exec.CommandContext(ctx, "/usr/bin/sudo", append([]string{"-n", "--"}, args...)...)
+	c := s.sudo(ctx, append([]string{"-n", "--"}, args...)...)
 	c.Stdin = bytes.NewReader(input)
 	c.Stderr = s.Out
 	if args[0] == "/usr/bin/apt-get" || args[0] == "/usr/bin/tailscale" && len(args) > 1 && args[1] == "login" {

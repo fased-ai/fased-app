@@ -55,7 +55,7 @@ func updatePauseCommand(args []string, in *os.File, out, errOut io.Writer) error
 
 type coreControl func(context.Context, update.CorePauseCommand) (update.CorePauseReceipt, error)
 
-func conductPreflight(ctx context.Context, id string, control coreControl, call updateRPC, out io.Writer) error {
+func conductPreflight(ctx context.Context, id string, control coreControl, call updateRPC, existingPauseOnly bool, out io.Writer) error {
 	if !update.IDOK(id) {
 		return errors.New("exact intent ID required")
 	}
@@ -77,7 +77,13 @@ func conductPreflight(ctx context.Context, id string, control coreControl, call 
 	}
 	s := *r.UpdateInventory
 	want := update.PauseFor(i)
-	paused, e := control(ctx, update.CorePauseCommand{Action: "pause", ProbeID: p, Request: &want})
+	command := update.CorePauseCommand{Action: "pause", ProbeID: p, Request: &want}
+	if existingPauseOnly {
+		// Recovery verifies the original pause and backup. It must not create
+		// a replacement pause if the original is absent or already released.
+		command = update.CorePauseCommand{Action: "status", ProbeID: p}
+	}
+	paused, e := control(ctx, command)
 	if e != nil {
 		return e
 	}

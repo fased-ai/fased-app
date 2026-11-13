@@ -147,7 +147,7 @@ func openApplicationMetadataDirectory(directory string) (*os.File, error) {
 		return nil, e
 	}
 	d := os.NewFile(uintptr(fd), directory)
-	db, e := unix.Openat(fd, "core.sqlite", unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	db, e := unix.Openat(fd, "core.sqlite", unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if e != nil {
 		d.Close()
 		return nil, e

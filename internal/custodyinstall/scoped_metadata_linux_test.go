@@ -123,6 +123,32 @@ func TestScopedOrdinaryRepairInterruptionPreservesHistory(t *testing.T) {
 func TestScopedPairedUpdateRefusedRollbackRetainsHold(t *testing.T) {
 	tx, dir := modelTransaction(t)
 	o := modelOps(t, tx, dir)
+	approval := migrationRunnerApproval{Version: 1, Owner: tx.Base.Owner, InstallationID: tx.Base.ID, IntentID: tx.Binding.Index.Binding.Pause.Request.IntentID, BindingDigest: update.InstallDigest(tx.Binding), PreviousCore: tx.Base.CoreHash, TargetCore: tx.Target.CoreHash, TargetSigner: tx.Target.SignerHash, RunnerSHA256: strings.Repeat("c", 64), GuardSHA256: strings.Repeat("d", 64)}
+	marker := hostFile{UID: 0, Mode: 0644, Regular: true, Data: mustJSON(approval)}
+	runner, err := selectMigrationRunner(tx, func(p string) (hostFile, error) {
+		if p == tx.dir()+"/migration-runner.json" {
+			return marker, nil
+		}
+		return hostFile{}, os.ErrNotExist
+	}, func(int) (bool, error) { return true, nil }, func(p, digest string) (int64, error) {
+		if p != tx.dir()+"/migration-runner" || digest != approval.RunnerSHA256 {
+			return 0, errors.New("wrong migration reader")
+		}
+		return 123, nil
+	}, func(p, digest string, size int64) error {
+		if digest != approval.RunnerSHA256 || size != 123 {
+			return errors.New("wrong migration approval")
+		}
+		return nil
+	}, func(path string, got InstallTransaction) error {
+		if path != tx.dir()+"/migration-runner" || update.InstallDigest(got.Binding) != update.InstallDigest(tx.Binding) {
+			return errors.New("wrong migration contract probe")
+		}
+		return nil
+	})
+	if err != nil || runner != tx.dir()+"/migration-runner" {
+		t.Fatal("independent migration runner was not selected", err)
+	}
 	history, err := os.ReadFile(dir + "/financial-history")
 	if err != nil {
 		t.Fatal(err)

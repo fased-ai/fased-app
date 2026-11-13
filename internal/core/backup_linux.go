@@ -234,6 +234,86 @@ func (s *Store) VerifyRecovery(ctx context.Context, r update.RecoveryCheck) (upd
 	return stored, nil
 }
 
+// VerifyFixtureColdRecovery verifies the original app-owned backup while the
+// installed app is stopped behind the independently enforced OS fence. It
+// never creates, restores, migrates or repairs either database.
+func VerifyFixtureColdRecovery(ctx context.Context, dir string, index update.RecoveryIndex) error {
+	if !update.ValidRecoveryIndex(index, index.Binding) || index.Binding.Pause.Request == nil {
+		return errors.New("original recovery index required")
+	}
+	ownerDir, err := openApplicationMetadataDirectory(dir)
+	if err != nil {
+		return err
+	}
+	defer ownerDir.Close()
+	var directory unix.Stat_t
+	if unix.Fstat(int(ownerDir.Fd()), &directory) != nil || int(directory.Uid) != os.Geteuid() || directory.Mode&0077 != 0 {
+		return errors.New("private original metadata directory required")
+	}
+	// Linux flock can take an exclusive lock on a read-only descriptor. Cold
+	// verification must not need write access to the stopped app's state.
+	lock, err := unix.Openat(int(ownerDir.Fd()), "instance.lock", unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return errors.New("existing original instance lock required")
+	}
+	defer unix.Close(lock)
+	var lockInfo unix.Stat_t
+	if unix.Fstat(lock, &lockInfo) != nil || lockInfo.Mode&unix.S_IFMT != unix.S_IFREG || int(lockInfo.Uid) != os.Geteuid() || lockInfo.Mode&0077 != 0 || lockInfo.Nlink != 1 {
+		return errors.New("private original instance lock required")
+	}
+	if err = unix.Flock(lock, unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return errors.New("original engine still owns its instance lock")
+		}
+		return fmt.Errorf("original instance lock unavailable: %w", err)
+	}
+	defer unix.Flock(lock, unix.LOCK_UN)
+	cold, err := InspectFixtureColdMetadata(ctx, dir, update.NewProbe())
+	if err != nil {
+		return err
+	}
+	bound := index.Binding.Pause
+	if cold.Phase != "paused" || cold.PauseID != bound.PauseID || cold.Request == nil || update.SnapshotDigest("pause-request", *cold.Request) != update.SnapshotDigest("pause-request", *bound.Request) || !update.SameCoreMetadata(cold.Core, bound.Core) {
+		return errors.New("cold core differs from original paused recovery state")
+	}
+	d, err := recoveryDirectoryMode(dir, bound.Request.IntentID, false)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(d)
+	raw, err := recoveryRead(d, "recovery.json", 16384)
+	var stored update.RecoveryIndex
+	if err != nil || update.StrictJSON(raw, &stored) != nil || update.SnapshotDigest("index", stored) != update.SnapshotDigest("index", index) {
+		return errors.New("original recovery index changed; preserving it")
+	}
+	snapshot, err := recoveryFile(d, stored.Snapshot.File, false)
+	if err != nil {
+		return err
+	}
+	defer snapshot.Close()
+	var before unix.Stat_t
+	if unix.Fstat(int(snapshot.Fd()), &before) != nil {
+		return errors.New("original recovery snapshot cannot be inspected")
+	}
+	// verifyMetadata checks the actual SQLite bytes, integrity and paused
+	// metadata using a held read-only descriptor; it does not use s.db.
+	p := update.Preflight{Pause: bound}
+	p.Pause.Core = cold.Core
+	s := &Store{bootID: cold.Core.BootID}
+	if err = s.verifyMetadata(ctx, d, stored.Snapshot, p); err != nil {
+		return err
+	}
+	var after, current, currentLock unix.Stat_t
+	if unix.Fstat(int(snapshot.Fd()), &after) != nil || unix.Fstatat(d, stored.Snapshot.File, &current, unix.AT_SYMLINK_NOFOLLOW) != nil || before.Dev != after.Dev || before.Ino != after.Ino || before.Ctim != after.Ctim || before.Size != after.Size || after.Dev != current.Dev || after.Ino != current.Ino || after.Ctim != current.Ctim || after.Size != current.Size || current.Nlink != 1 || unix.Fstatat(int(ownerDir.Fd()), "instance.lock", &currentLock, unix.AT_SYMLINK_NOFOLLOW) != nil || lockInfo.Dev != currentLock.Dev || lockInfo.Ino != currentLock.Ino || lockInfo.Ctim != currentLock.Ctim || currentLock.Nlink != 1 {
+		return errors.New("original snapshot or instance lock changed; preserving state")
+	}
+	again, err := InspectFixtureColdMetadata(ctx, dir, update.NewProbe())
+	if err != nil || again.Phase != cold.Phase || again.PauseID != cold.PauseID || again.Request == nil || update.SnapshotDigest("pause-request", *again.Request) != update.SnapshotDigest("pause-request", *cold.Request) || !update.SameCoreMetadata(again.Core, cold.Core) {
+		return errors.New("cold core changed during recovery verification")
+	}
+	return nil
+}
+
 func recoveryFile(d int, name string, create bool) (*os.File, error) {
 	flags := unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK
 	if create {

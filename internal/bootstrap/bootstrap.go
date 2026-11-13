@@ -17,18 +17,20 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/bundle"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/releaseops"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
 type Options struct {
-	Development   bool
-	Seed          []byte
-	SeedSHA256    string
-	Directory     string                                                             // Absent child of a real private current-user directory.
-	TLSCA         []byte                                                             // Explicit development fixture CA, never disabled TLS.
-	now           func() time.Time                                                   // Test-only clock; no CLI or production override.
-	githubFixture func(releaseops.GitHubPolicy) (*releaseops.GitHubTransport, error) // Go-only controlled fixture, never CLI/JSON.
+	protectedOwner int // Only the validated installed root-helper constructor.
+	Development    bool
+	Seed           []byte
+	SeedSHA256     string
+	Directory      string                                                             // Absent child of a real private current-user directory.
+	TLSCA          []byte                                                             // Explicit development fixture CA, never disabled TLS.
+	now            func() time.Time                                                   // Test-only clock; no CLI or production override.
+	githubFixture  func(releaseops.GitHubPolicy) (*releaseops.GitHubTransport, error) // Go-only controlled fixture, never CLI/JSON.
 }
 
 type Report struct {
@@ -158,6 +160,20 @@ func privateDirectory(path string) (os.FileInfo, error) {
 // state nor installs/executes anything. Old update/rehearsal seeds are refused.
 func Prepare(ctx context.Context, o Options) (*Prepared, error) { return prepare(ctx, o, false) }
 
+// PrepareMaintenance authenticates public release bytes for the installed OS
+// helper. It permits no execution, owner path or caller-selected trust source.
+func PrepareMaintenance(ctx context.Context, owner int, o Options) (*Prepared, error) {
+	if _, err := maintenance.ValidateProcess(owner); err != nil {
+		return nil, err
+	}
+	parent := filepath.Join(maintenance.OwnerRoot(owner), "fased-app", "install")
+	if filepath.Dir(o.Directory) != parent {
+		return nil, errors.New("maintenance acquisition must use its protected private directory")
+	}
+	o.protectedOwner = owner
+	return prepare(ctx, o, false)
+}
+
 // Inspect authenticates only metadata/provenance. It creates no output, downloads
 // no archive and supplies no executable/installation authority.
 func Inspect(ctx context.Context, o Options) (Descriptor, string, error) {
@@ -168,7 +184,7 @@ func Inspect(ctx context.Context, o Options) (Descriptor, string, error) {
 	return p.descriptor, p.report.DescriptorSHA256, nil
 }
 func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepared, err error) {
-	if runtime.GOOS != "linux" || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") || os.Geteuid() == 0 {
+	if runtime.GOOS != "linux" || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") || os.Geteuid() == 0 && o.protectedOwner <= 0 {
 		return nil, errors.New("ordinary-user supported Linux first-install bootstrap required")
 	}
 	o.Seed, o.TLSCA = append([]byte(nil), o.Seed...), append([]byte(nil), o.TLSCA...)

@@ -214,6 +214,25 @@ func (c *Client) LoadSession(ctx context.Context, dir string) error {
 	}
 	return err
 }
+
+// RefreshCSRF obtains the token for the current authenticated session through
+// the core's normal private endpoint. It never creates or copies a session.
+func (c *Client) RefreshCSRF(ctx context.Context) error {
+	c.CSRF = ""
+	var auth struct {
+		Authenticated bool   `json:"authenticated"`
+		CSRFToken     string `json:"csrfToken"`
+	}
+	if err := c.Do(ctx, http.MethodGet, "/api/v1/auth/state", nil, &auth); err != nil {
+		return err
+	}
+	if !auth.Authenticated || auth.CSRFToken == "" {
+		return ErrUnauthorized
+	}
+	c.CSRF = auth.CSRFToken
+	return nil
+}
+
 func (c *Client) loadSavedSession(ctx context.Context, dir string) error {
 	file := filepath.Join(dir, "cli-session.json")
 	data, err := readPrivateFile(file)

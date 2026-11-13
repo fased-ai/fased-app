@@ -79,6 +79,13 @@ func attestedFixture(t *testing.T, variant string) (*firstFixture, Options, map[
 	release := ProductionRelease{SourceTree: strings.Repeat("b", 40), TagObject: strings.Repeat("c", 40), PackageLockSHA256: strings.Repeat("d", 64), GoSumSHA256: strings.Repeat("e", 64), WorkflowCommit: strings.Repeat("a", 40), RunID: "23", RunAttempt: "1"}
 	archive := update.Artifact{File: archiveTarget, Size: int64(len(f.archive)), SHA256: digest(f.archive)}
 	installer, entry := []byte("inert disposable installer"), []byte("inert disposable entry")
+	if variant == "running-installer" {
+		var err error
+		installer, err = os.ReadFile("/proc/self/exe")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	release.InstallerSHA256 = digest(installer)
 	expected := releaseprovenance.Expected{InstallerSHA256: digest(installer), ArchiveName: archive.File, ArchiveSHA256: archive.SHA256, SourceCommit: release.WorkflowCommit, WorkflowCommit: release.WorkflowCommit, Tag: "v1.2.3", RunID: "23", RunAttempt: "1"}
 	tagObject := release.TagObject

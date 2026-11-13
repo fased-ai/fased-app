@@ -208,7 +208,7 @@ func CompleteController(ctx context.Context, t InstallTransaction, s *System, c 
 	if _, e := ControllerRunner(t.Base.Owner, t.Binding.Index.Binding.Pause.Request.IntentID); e != nil {
 		return nil, e
 	}
-	return runCompletion(ctx, t, installOps{read: readRoot, run: s.Run, verify: verifyApprovedExecutable, topology: func(m Manifest) error {
+	o := installOps{read: readRoot, run: s.Run, verify: verifyApprovedExecutable, topology: func(m Manifest) error {
 		if e := Verify(m); e != nil {
 			return e
 		}
@@ -228,7 +228,20 @@ func CompleteController(ctx context.Context, t InstallTransaction, s *System, c 
 			return s.installFault(phase)
 		}
 		return nil
-	}})
+	}}
+	scoped, err := scopedMigrationEnabled(t.Base.Owner)
+	if err != nil {
+		return nil, err
+	}
+	if scoped {
+		plan, err := admitAtomicPair(ctx, t, s)
+		if err != nil {
+			return nil, err
+		}
+		o.atomic = func(ctx context.Context, action string) error { return runAtomicWorker(ctx, t, s, plan, action) }
+		return runAtomicCompletion(ctx, t, o)
+	}
+	return runCompletion(ctx, t, o)
 }
 
 // CompletionState lets the immutable owner review/retry the same installation

@@ -49,10 +49,16 @@ func (s *System) PrepareNativeUpdateSession(ctx context.Context, m Manifest, ima
 	if _, err = ReadEnrollmentCommit(m); err != nil {
 		return err
 	}
+	if err = s.UseScopedMaintenance(m.Owner); err != nil {
+		return err
+	}
 	// Corrected installed clients refresh through their own exact AppUID helper.
 	// Only an older immutable client needs the current source-session bridge.
 	if image == m.Root+"/fased-app" {
 		return nil
+	}
+	if err = requireUnfencedUpdateSession(m, readRoot); err != nil {
+		return err
 	}
 	if m.Location == "local" {
 		if err = verifyNativePolicy(ctx, m, s); err != nil {
@@ -62,12 +68,44 @@ func (s *System) PrepareNativeUpdateSession(ctx context.Context, m Manifest, ima
 	if err = Runtime(m); err != nil {
 		return errors.New("open the existing custody instance before maintenance")
 	}
+	pin, err := readReusableMaintenanceAuthority(m, readRoot)
+	if err != nil {
+		return err
+	}
+	if pin != nil {
+		if image != reusableMaintenancePath(m, "runner") || verifyReusableMaintenanceAuthority(m, pin, pin.RunnerSHA256, pin.GuardSHA256, verifiedMigrationRunnerSize) != nil {
+			return errors.New("exact pinned custody reader required")
+		}
+		result, runErr := s.Run(ctx, nil, pinnedNativeUpdateSessionArgs(m)...)
+		if runErr != nil {
+			return runErr
+		}
+		if string(result) != "Ready\n" {
+			return errors.New("pinned custody reader did not confirm session readiness")
+		}
+		return nil
+	}
 
 	body, err := source(image)
 	if err != nil {
 		return err
 	}
 	return stageNativeUpdateSession(ctx, m, body, nativeUpdateSessionOps{read: readRoot, run: s.Run, mkdir: func(ctx context.Context, path string) error { return directory(ctx, path, 0, 0, 0755, s) }})
+}
+
+func requireUnfencedUpdateSession(m Manifest, read readHost) error {
+	if read == nil {
+		return errors.New("update fence cannot be inspected")
+	}
+	_, err := read(m.Root + "/update-start-blocked.json")
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return errors.New("update recovery owns the installation; preserve the session")
+}
+
+func pinnedNativeUpdateSessionArgs(m Manifest) []string {
+	return []string{"/usr/bin/setpriv", "--reuid", strconv.Itoa(m.App.UID), "--regid", strconv.Itoa(m.App.GID), "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--", reusableMaintenancePath(m, "runner"), "reader-session-client", "--custody-owner", strconv.Itoa(m.Owner), "--binding", reusableMaintenancePath(m, "authority.json")}
 }
 
 type nativeUpdateSessionOps struct {
@@ -108,6 +146,14 @@ func NativeUpdateSessionIdentity(owner int, image, record string) (Manifest, str
 	if err != nil {
 		return Manifest{}, "", err
 	}
+	if image == reusableMaintenancePath(m, "runner") || record == reusableMaintenancePath(m, "authority.json") {
+		pin, pinErr := readReusableMaintenanceAuthority(m, readRoot)
+		if pinErr != nil || validatePinnedNativeUpdateSession(m, pin, os.Getuid(), os.Geteuid(), os.Getgid(), image, record) != nil || verifyReusableMaintenanceAuthority(m, pin, pin.RunnerSHA256, pin.GuardSHA256, verifiedMigrationRunnerSize) != nil {
+			return Manifest{}, "", errors.New("exact pinned custody reader and application identity required")
+		}
+		instance, instanceErr := nativeUpdateSessionInstance(m, m.Root+"/app-state")
+		return m, instance, instanceErr
+	}
 	f, err := readRoot(record)
 	if err != nil {
 		return Manifest{}, "", err
@@ -125,6 +171,13 @@ func NativeUpdateSessionIdentity(owner int, image, record string) (Manifest, str
 		return Manifest{}, "", errors.New("custody reader-session image changed")
 	}
 	return m, instance, nil
+}
+
+func validatePinnedNativeUpdateSession(m Manifest, pin *reusableMaintenanceAuthority, uid, euid, gid int, image, record string) error {
+	if !custodySourceSessionProfile(m) || pin == nil || pin.Owner != m.Owner || pin.InstallationID != m.ID || uid != m.App.UID || euid != uid || gid != m.App.GID || image != reusableMaintenancePath(m, "runner") || record != reusableMaintenancePath(m, "authority.json") {
+		return errors.New("pinned custody reader and application identity required")
+	}
+	return nil
 }
 func validateNativeUpdateSession(m Manifest, b nativeUpdateSessionBinding, uid, euid, gid int, image, record string) error {
 	if !custodySourceSessionProfile(m) || b.Version != 1 || b.Installation != m || !validHex(b.ImageSHA256, 32) || uid != m.App.UID || euid != uid || gid != m.App.GID || image != filepath.Join(b.dir(), "helper") || record != filepath.Join(b.dir(), "binding.json") {

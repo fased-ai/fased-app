@@ -44,6 +44,33 @@ func retailInstallerOptions(binding *firstInstallBinding, cache string) (bootstr
 	return bootstrap.Options{Seed: append([]byte(nil), binding.Seed...), SeedSHA256: binding.SHA256, Directory: filepath.Join(parent, "verified-"+update.NewProbe())}, nil
 }
 func run(args []string, in io.Reader, out, errOut io.Writer) error {
+	if len(args) > 0 {
+		switch args[0] {
+		case "maintenance-successor":
+			return maintenanceSuccessorCommand(args[1:])
+		case "maintenance-transition-status":
+			return maintenanceTransitionStatusCommand(args[1:], out)
+		case "maintenance-worker", "maintenance-recover", "maintenance-gate", "maintenance-owner-record":
+			return maintenanceCustodyCommand(args[0], args[1:], out)
+		case "maintenance-peer", "maintenance-app":
+			return maintenancePeerCommand(args[1:], in, out, args[0] == "maintenance-app")
+		}
+	}
+	if len(args) > 0 && args[0] == "maintenance-register" {
+		return maintenanceRegisterCommand(args[1:], out)
+	}
+	if len(args) > 0 && args[0] == "maintenance-bootstrap" {
+		return maintenanceBootstrapCommand(args[1:], errOut)
+	}
+	if len(args) > 0 && args[0] == "maintenance-request" {
+		return maintenanceRequestCommand(args[1:], in, out)
+	}
+	if len(args) == 1 && args[0] == "--emit-embedded-signer" {
+		if os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
+			return errors.New("embedded signer extraction requires an unprivileged process")
+		}
+		return bootstrap.WriteWalletPayload(out, walletPayload())
+	}
 	f := flag.NewFlagSet("fased-install", flag.ContinueOnError)
 	f.SetOutput(errOut)
 	development := f.Bool("development", false, "explicit disposable-trust development bootstrap")

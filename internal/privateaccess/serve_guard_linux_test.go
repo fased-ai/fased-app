@@ -5,6 +5,7 @@ package privateaccess
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,65 @@ func TestOwnedServeTargetRejectsOtherInstallations(t *testing.T) {
 	owner.Target = "unix:/var/lib/fased-app-vps-1300/app-state/core.sock"
 	if ownedServeTarget(owner, 1300) {
 		t.Fatal("private IPC admitted as ingress")
+	}
+}
+
+func TestMaintenanceServeBoundaryChecksBeforeActualConditionalWrite(t *testing.T) {
+	foreign := Plan{Mode: "tailscale", Origin: "https://node.owner.ts.net", Target: "unix:/var/lib/fased-app-custody-1000/app-state/tailscale.sock"}
+	own := Plan{Mode: "tailscale", Origin: "https://node.owner.ts.net:8443", Target: "unix:/var/lib/fased-app-vps-1300/app-state/tailscale.sock"}
+	before := expected(foreign)
+	after, err := routeChange(before, own, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, _ := json.Marshal(before)
+	data, _ := json.Marshal(after)
+	tag := strings.Repeat("a", 64)
+	for _, kind := range []string{"complete", "stale", "foreign", "wrong-owner", "unrecorded", "cancelled", "write-conflict"} {
+		t.Run(kind, func(t *testing.T) {
+			input := append([]byte(nil), data...)
+			owner, plans, liveTag := 1300, []Plan{own}, tag
+			switch kind {
+			case "stale":
+				liveTag = strings.Repeat("b", 64)
+			case "foreign":
+				changed, _ := routeChange(after, foreign, false)
+				input, _ = json.Marshal(changed)
+			case "wrong-owner":
+				owner = 1000
+			case "unrecorded":
+				plans = nil
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if kind == "cancelled" {
+				cancel()
+			}
+			writes := 0
+			err := applyOwnedServe(ctx, owner, plans, input, tag,
+				func(context.Context) ([]byte, string, error) { return current, liveTag, nil },
+				func(_ context.Context, body []byte, conditional string) error {
+					writes++
+					if string(body) != string(data) || conditional != tag {
+						t.Fatal("validated request changed at privileged write")
+					}
+					if kind == "write-conflict" {
+						return errors.New("conditional conflict")
+					}
+					return nil
+				})
+			if kind == "complete" {
+				if err != nil || writes != 1 {
+					t.Fatalf("owned write failed: %v, writes=%d", err, writes)
+				}
+			} else if kind == "write-conflict" {
+				if err == nil || writes != 1 {
+					t.Fatal("unconfirmed write was retried or marked complete")
+				}
+			} else if err == nil || writes != 0 {
+				t.Fatalf("refused request reached mutation: %v, writes=%d", err, writes)
+			}
+		})
 	}
 }
 

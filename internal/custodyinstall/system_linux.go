@@ -29,8 +29,25 @@ type System struct {
 	// sudo -n must independently admit the exact command under installed policy.
 	NonInteractive bool
 	authorized     bool
-	installFault   func(string) error // Tests only; never configuration/IPC.
+	installFault   func(string) error                         // Tests only; never configuration/IPC.
+	sudoCommand    func(context.Context, ...string) *exec.Cmd // Tests only.
+	toolCheck      func(string) error                         // Tests only.
 }
+
+func (s *System) sudo(ctx context.Context, args ...string) *exec.Cmd {
+	if s.sudoCommand != nil {
+		return s.sudoCommand(ctx, args...)
+	}
+	return exec.CommandContext(ctx, "/usr/bin/sudo", args...)
+}
+
+func (s *System) trustedTool(path string) error {
+	if s.toolCheck != nil {
+		return s.toolCheck(path)
+	}
+	return trustedUtility(path)
+}
+
 type hostFile struct {
 	Data    []byte
 	UID     int
@@ -39,6 +56,47 @@ type hostFile struct {
 }
 type readHost func(string) (hostFile, error)
 type runHost func(context.Context, []byte, ...string) ([]byte, error)
+
+func refuseDirectReusablePendingRemoval(owner int, args []string) error {
+	if owner <= 0 || len(args) == 0 || args[0] != "/usr/bin/rm" {
+		return nil
+	}
+	u := strconv.Itoa(owner)
+	patterns := []string{
+		`^` + regexp.QuoteMeta(Root(owner)+"/maintenance/") + `[.][^/]+-[a-f0-9]{32}[.]pending([.]source)?$`,
+		`^/etc/systemd/system/[.]fased-custody-` + u + `-(atomic-(launcher|provision|fence|compat(-(runner|next-core|previous-signer|next-signer))?|setup)|stage-(image|meta|unit)@)[.]service-[a-f0-9]{32}[.]pending$`,
+		`^/etc/systemd/system/fased-custody-` + u + `-(app|signer)[.]service[.]d/[.]20-fased-update-guard[.]conf-[a-f0-9]{32}[.]pending$`,
+		`^/etc/sudoers[.]d/[.]fased-custody-` + u + `-reusable-[a-f0-9]{32}[.]pending$`,
+	}
+	for _, arg := range args[1:] {
+		for _, pattern := range patterns {
+			if regexp.MustCompile(pattern).MatchString(filepath.Clean(arg)) {
+				return errors.New("reusable staging cleanup requires a guarded serialized operation; preserving it")
+			}
+		}
+	}
+	return nil
+}
+
+// UseScopedMaintenance never grants privilege: it avoids a generic sudo -v
+// password prompt and lets sudo -n check each installed exact-command rule.
+func (s *System) UseScopedMaintenance(owner int) error {
+	if s == nil || owner <= 0 || owner != os.Getuid() || os.Geteuid() != owner {
+		return errors.New("ordinary installation owner required")
+	}
+	return s.configureScopedMaintenance(owner, scopedMigrationEnabled)
+}
+
+func (s *System) configureScopedMaintenance(owner int, scope func(int) (bool, error)) error {
+	enabled, err := scope(owner)
+	if err != nil {
+		return errors.New("cannot verify scoped maintenance authority")
+	}
+	if enabled {
+		s.NonInteractive = true
+	}
+	return nil
+}
 
 func trustedParents(path string) error {
 	for p := path; ; p = filepath.Dir(p) {
@@ -68,7 +126,7 @@ func readRoot(path string) (hostFile, error) {
 		return hostFile{}, errors.New("unknown file identity")
 	}
 	f := hostFile{UID: int(st.Uid), Mode: i.Mode().Perm(), Regular: i.Mode().IsRegular()}
-	if !f.Regular || f.UID != 0 || f.Mode&0022 != 0 || i.Size() > 64*1024*1024 {
+	if !f.Regular || f.UID != 0 || f.Mode&0022 != 0 || i.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 || i.Size() > 64*1024*1024 {
 		return f, errors.New("foreign or unsafe root file; preserving it")
 	}
 	f.Data, e = os.ReadFile(path)
@@ -83,6 +141,36 @@ var networkOutcomeInput = regexp.MustCompile(`^/var/lib/fased-app-vps-network-[1
 var networkSSHContext = regexp.MustCompile(`^user=[a-z_][a-z0-9_-]*\$?,addr=[0-9a-fA-F:.]+,laddr=[0-9a-fA-F:.]+,lport=22$`)
 var networkNftTable = regexp.MustCompile(`^fased_vps_[1-9][0-9]*_[0-9a-f]{12}_[0-9a-f]{32}$`)
 
+func refuseUnserializedScopedMutation(owner int, args []string, scope func(int) (bool, error)) error {
+	if owner <= 0 || len(args) < 2 {
+		return nil
+	}
+	switch args[0] {
+	case "/usr/bin/mv", "/usr/bin/install", "/usr/bin/ln", "/usr/bin/rm":
+	default:
+		return nil
+	}
+	root := Root(owner)
+	protected := false
+	for _, arg := range args[1:] {
+		switch filepath.Clean(arg) {
+		case root + "/fased-app", root + "/fased-signer", root + "/install.json", root + "/intent.json", root + "/ready.json":
+			protected = true
+		}
+	}
+	if !protected {
+		return nil
+	}
+	enabled, err := scope(owner)
+	if err != nil {
+		return fmt.Errorf("cannot verify scoped replacement boundary: %w", err)
+	}
+	if enabled {
+		return errors.New("scoped live replacement requires the root-managed transaction boundary")
+	}
+	return nil
+}
+
 func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte, error) {
 	if os.Geteuid() == 0 || os.Getuid() == 0 {
 		return nil, errors.New("Fased must run as an ordinary owner; only trusted OS utilities are elevated")
@@ -90,11 +178,69 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 	if len(args) == 0 {
 		return nil, errors.New("missing OS operation")
 	}
+	if err := refuseDirectReusablePendingRemoval(os.Getuid(), args); err != nil {
+		return nil, err
+	}
+	if args[0] == "/usr/bin/rm" || args[0] == "/usr/bin/mv" || args[0] == "/usr/bin/install" || args[0] == "/usr/bin/ln" {
+		guard := Root(os.Getuid()) + "/update-start-blocked.json"
+		for _, arg := range args[1:] {
+			if filepath.Clean(arg) == guard {
+				return nil, errors.New("restart guard changes require the root-managed transaction boundary")
+			}
+		}
+	}
+	if err := refuseUnserializedScopedMutation(os.Getuid(), args, scopedMigrationEnabled); err != nil {
+		return nil, err
+	}
 	switch args[0] {
-	case "/usr/bin/install", "/usr/bin/mkdir", "/usr/bin/ln", "/usr/bin/mv", "/usr/bin/sync", "/usr/bin/rm", "/usr/bin/cat", "/usr/bin/systemctl", "/usr/bin/setpriv", "/usr/sbin/useradd":
+	case "/usr/bin/mv", "/usr/bin/install", "/usr/bin/mkdir", "/usr/bin/ln", "/usr/bin/sync", "/usr/bin/rm", "/usr/bin/cat", "/usr/bin/systemctl", "/usr/bin/setpriv", "/usr/sbin/useradd":
 	case "/usr/bin/systemd-run":
-		if !AllowedBoundUnitWrite(os.Getuid(), input, args) && !AllowedBoundPolicyWrite(os.Getuid(), input, args) {
+		atomicUnit := AllowedBoundAtomicUnitWrite(os.Getuid(), input, args)
+		approvedInput := AllowedBoundApprovedInputWrite(os.Getuid(), input, args)
+		reusableMetadata := AllowedBoundReusableMetadataWrite(os.Getuid(), input, args)
+		reusablePolicy := AllowedBoundReusablePolicyWrite(os.Getuid(), input, args)
+		reusableInbox := len(input) == 0 && allowedBoundReusableInboxCreate(os.Getuid(), args)
+		reusableImage := len(input) == 0 && allowedBoundReusableImageCopy(os.Getuid(), args)
+		reusableImageLink := len(input) == 0 && allowedBoundReusableImageLink(os.Getuid(), args)
+		reusableImageCleanup := len(input) == 0 && allowedBoundReusableImageCleanup(os.Getuid(), args)
+		reusableLink := allowedBoundReusableSetupLink(os.Getuid(), input, args)
+		reusableCleanup := allowedBoundReusableSetupCleanup(os.Getuid(), input, args)
+		if !AllowedBoundUnitWrite(os.Getuid(), input, args) && !AllowedBoundPolicyWrite(os.Getuid(), input, args) && !atomicUnit && !approvedInput && !reusableMetadata && !reusablePolicy && !reusableInbox && !reusableImage && !reusableLink && !reusableImageLink && !reusableCleanup && !reusableImageCleanup {
 			return nil, errors.New("only the exact owned service or policy staging write is allowed")
+		}
+		if reusableLink || reusableImageLink || reusableCleanup || reusableImageCleanup {
+			for _, utility := range []string{"/usr/bin/find", "/usr/bin/cmp", "/usr/bin/ln"} {
+				if err := trustedUtility(utility); err != nil {
+					return nil, err
+				}
+			}
+		}
+		if reusableCleanup || reusableImageLink || reusableImageCleanup {
+			if err := trustedUtility("/usr/bin/test"); err != nil {
+				return nil, err
+			}
+		}
+		if reusableLink || reusableCleanup || reusableImageLink || reusableImageCleanup {
+			if err := trustedUtility("/usr/bin/sha256sum"); err != nil {
+				return nil, err
+			}
+		}
+		if atomicUnit || approvedInput || reusableMetadata || reusablePolicy {
+			if err := trustedUtility("/usr/bin/cp"); err != nil {
+				return nil, err
+			}
+		}
+		if reusableInbox || reusableImage {
+			if err := trustedUtility("/usr/bin/install"); err != nil {
+				return nil, err
+			}
+		}
+		if reusableImage {
+			for _, utility := range []string{"/usr/bin/ln", "/usr/bin/tee"} {
+				if err := trustedUtility(utility); err != nil {
+					return nil, err
+				}
+			}
 		}
 	case "/usr/bin/systemd-creds":
 		if !providerCredentialEncryption(input, args) {
@@ -102,8 +248,14 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 		}
 	case "/usr/bin/find":
 		maintenance := len(args) == 8 && args[2] == "-maxdepth" && args[3] == "1" && args[4] == "-name" && args[6] == "-printf" && args[7] == "%U:%G:%m:%y" && maintenancePolicyInput(args[1]+"/"+args[5])
+		setupLink := false
+		if len(args) == 10 && args[1] == "/etc/sudoers.d" && args[2] == "-maxdepth" && args[3] == "1" && args[4] == "-name" && args[6] == "-samefile" && args[8] == "-printf" && args[9] == "x" {
+			pattern := `^fased-custody-` + strconv.Itoa(os.Getuid()) + `-setup-([a-f0-9]{32})$`
+			match := regexp.MustCompile(pattern).FindStringSubmatch(args[5])
+			setupLink = len(match) == 2 && args[7] == fmt.Sprintf("/etc/sudoers.d/.fased-custody-%d-setup-%s.source", os.Getuid(), match[1])
+		}
 		empty := len(args) == 9 && (args[1] == Root(os.Getuid())+"/signer-state" || args[1] == Root(os.Getuid())+"/app-state" || args[1] == Root(os.Getuid())+"/signer-ipc") && strings.Join(args[2:], " ") == "-mindepth 1 -maxdepth 1 -printf x -quit"
-		if !maintenance && !empty {
+		if !maintenance && !setupLink && !empty {
 			return nil, errors.New("only fixed empty target-state enrollment probes are allowed")
 		}
 	case "/usr/bin/stat":
@@ -143,8 +295,12 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 	default:
 		return nil, errors.New("unknown custody OS tool")
 	}
-	for _, p := range []string{"/usr/bin/sudo", args[0]} {
-		if e := trustedUtility(p); e != nil {
+	tools := []string{"/usr/bin/sudo", args[0]}
+	if !s.authorized && !s.NonInteractive && os.Getenv("FASED_INSTALL_ROOT_ENTRY") == "1" {
+		tools = append(tools, "/usr/bin/true")
+	}
+	for _, p := range tools {
+		if e := s.trustedTool(p); e != nil {
 			return nil, e
 		}
 	}
@@ -154,7 +310,13 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 			prompt = "Authorize disposable custody installation: dedicated locked OS accounts, root-owned files and system services. Fased itself remains unprivileged. No real wallets are enabled."
 		}
 		fmt.Fprintln(s.Out, prompt)
-		c := exec.CommandContext(ctx, "/usr/bin/sudo", "-v")
+		args := []string{"-v"}
+		if os.Getenv("FASED_INSTALL_ROOT_ENTRY") == "1" {
+			// This flag selects a noninteractive probe, not authority. Every
+			// subsequent operation still needs its own sudo -n permission.
+			args = []string{"-n", "--", "/usr/bin/true"}
+		}
+		c := s.sudo(ctx, args...)
 		c.Stdin = s.In
 		c.Stdout = s.Out
 		c.Stderr = s.Out
@@ -163,7 +325,7 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 		}
 		s.authorized = true
 	}
-	c := exec.CommandContext(ctx, "/usr/bin/sudo", append([]string{"-n", "--"}, args...)...)
+	c := s.sudo(ctx, append([]string{"-n", "--"}, args...)...)
 	c.Stdin = bytes.NewReader(input)
 	c.Stderr = s.Out
 	return c.Output()
@@ -196,6 +358,21 @@ func providerCredentialEncryption(input []byte, args []string) bool {
 // capabilities before any Fased code reads interactive owner input.
 func maintenancePolicyInput(path string) bool {
 	uid := strconv.Itoa(os.Getuid())
+	if regexp.MustCompile(`^/etc/sudoers[.]d/fased-custody-` + uid + `-atomic-[a-f0-9]{32}$`).MatchString(path) {
+		return true
+	}
+	if path == reusableAtomicPolicyPath(os.Getuid()) {
+		return true
+	}
+	if regexp.MustCompile(`^/etc/sudoers[.]d/[.]fased-custody-` + uid + `-reusable-[a-f0-9]{32}[.](pending|selected)$`).MatchString(path) {
+		return true
+	}
+	if regexp.MustCompile(`^/etc/sudoers[.]d/fased-custody-` + uid + `-setup-[a-f0-9]{32}$`).MatchString(path) {
+		return true
+	}
+	if regexp.MustCompile(`^/etc/sudoers[.]d/fased-(native|remote-proof)-` + uid + `$`).MatchString(path) {
+		return true
+	}
 	if regexp.MustCompile(`^/etc/(systemd/system/(\.)?fased-local-(maintenance|recovery)-` + uid + `@\.service|polkit-1/rules\.d/(\.)?60-fased-local-` + uid + `-updates\.rules)(-[a-f0-9]{32}\.pending)?$`).MatchString(path) {
 		return true
 	}
@@ -407,7 +584,7 @@ func publish(ctx context.Context, target, id string, data []byte, mode os.FileMo
 		args := []string{"/usr/bin/install", "-m", strconv.FormatUint(uint64(mode), 8), "-o", "root", "-g", "root", "--", "/dev/stdin", stage}
 		input := data
 		name := filepath.Base(target)
-		if mode == 0644 && (name == "fased-app.service" || name == "fased-signer.service" || name == Unit(os.Getuid(), "app") || name == Unit(os.Getuid(), "signer")) {
+		if mode == 0644 && (name == "fased-app.service" || name == "fased-signer.service" || name == Unit(os.Getuid(), "app") || name == Unit(os.Getuid(), "signer") || name == "20-fased-update-guard.conf") {
 			args, e = BoundUnitWriteArgs(os.Getuid(), stage, data)
 			if e != nil {
 				return e
@@ -490,6 +667,9 @@ func scopedUpdateMetadata(target, id string, owner int, data []byte) bool {
 	if regexp.MustCompile(record).MatchString(target) {
 		return true
 	}
+	if regexp.MustCompile(`^` + quoted + `/updates/[a-f0-9]{32}/(atomic-checksums[.]sha256|atomic-markers[.]txt)$`).MatchString(target) {
+		return true
+	}
 	replacement := `^` + quoted + `/[.]replace-` + id + `-(install|intent|ready)[.]json-` + sum(data) + `$`
 	return regexp.MustCompile(replacement).MatchString(target)
 }
@@ -501,7 +681,7 @@ func scopedUpdateExecutable(target, id string, owner int, data []byte) bool {
 		return false
 	}
 	root := regexp.QuoteMeta(Root(owner))
-	transaction := `^` + root + `/updates/[a-f0-9]{32}/(runner|previous-signer|next-core|next-signer)$`
+	transaction := `^` + root + `/updates/[a-f0-9]{32}/(runner|migration-runner|atomic-guard|previous-signer|next-core|next-signer)$`
 	bootstrap := `^` + root + `/bootstraps/[a-f0-9]{32}/(previous|candidate)/fased-(app|signer)$`
 	if regexp.MustCompile(transaction).MatchString(target) || regexp.MustCompile(bootstrap).MatchString(target) {
 		return true

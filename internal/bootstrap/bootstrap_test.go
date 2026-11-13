@@ -123,6 +123,10 @@ func newFirstFixture(t *testing.T, profile ...string) *firstFixture {
 	f.seed = Seed{Binding: Binding{Version: 1, Purpose: Purpose, DevelopmentOnly: true, Repository: "fased-ai/fased-app", Channel: "development", Target: update.Target{OS: "linux", Arch: "amd64"}}, CreatedAt: f.now.Add(-time.Minute).Unix(), ExpiresAt: f.now.Add(6 * 24 * time.Hour).Unix(), MinimumSequence: 7}
 	m := bundle.Manifest{Schema: 1, Platform: "linux", Arch: "amd64", Version: "fixture", Source: "fixture-source", UnsignedEngineering: true, Files: map[string]bundle.File{}}
 	payload := map[string][]byte{"fased-app": []byte("#!/bin/sh\nprintf 'verified installer\\n' >> \"$FASED_BOOTSTRAP_MARKER\"\nprintf '%s\\n' \"$@\" > \"$FASED_BOOTSTRAP_ARGS\"\n"), "LICENSE": []byte("fixture"), "NOTICE": []byte("fixture"), "INSTALL.txt": []byte("fixture guide")}
+	if len(profile) == 1 && profile[0] == "wallets" {
+		t.Setenv("FASED_BOOTSTRAP_SIGNER", filepath.Join(f.parent, "received-signer"))
+		payload["fased-app"] = []byte("#!/bin/sh\nprintf 'verified installer\\n' >> \"$FASED_BOOTSTRAP_MARKER\"\nprintf '%s\\n' \"$@\" > \"$FASED_BOOTSTRAP_ARGS\"\n/usr/bin/cat /proc/self/fd/4 > \"$FASED_BOOTSTRAP_SIGNER\"\n")
+	}
 	for name := range bundle.PlatformFiles() {
 		payload[name] = []byte("fixture " + name)
 	}

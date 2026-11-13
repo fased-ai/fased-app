@@ -24,6 +24,8 @@ export type AgentSettingsDraft = {
   revision: number;
   baseline: string;
 };
+export type ChatModelDraft = { connectionRef: string; model: string };
+export type FocusedRun = { instanceId: string; profileId: string; id: string };
 export type TaskInputDraft = {
   name: string;
   text: string;
@@ -207,7 +209,11 @@ function useWorkspaceState() {
     refresh: () => setWalletRefresh((revision) => revision + 1),
   };
   const [focusedTask, setFocusedTask] = useState("");
+  const [focusedRun, setFocusedRun] = useState<FocusedRun | null>(null);
   const [chatDrafts, setChatDrafts] = useState(new Map<string, string>());
+  const [chatModelDrafts, setChatModelDrafts] = useState(
+    new Map<string, ChatModelDraft>(),
+  );
   const [agentSettingsDrafts, setAgentSettingsDrafts] = useState(
     new Map<string, AgentSettingsDraft>(),
   );
@@ -336,8 +342,12 @@ function useWorkspaceState() {
     wallets,
     focusedTask,
     setFocusedTask,
+    focusedRun,
+    setFocusedRun,
     chatDrafts,
     setChatDrafts,
+    chatModelDrafts,
+    setChatModelDrafts,
     agentSettingsDrafts,
     setAgentSettingsDrafts,
     taskComposerDrafts,

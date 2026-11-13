@@ -255,6 +255,51 @@ func TestLocalPairedUpdateConsentAndDispatch(t *testing.T) {
 	}
 }
 
+func TestCustodyUpdateRunnerPreservesPredecessorAndUsesPinnedOwnerEntry(t *testing.T) {
+	m := custodyinstall.Manifest{Owner: 1400, Root: "/var/lib/fased-app-custody-1400"}
+	installed := filepath.Join(m.Root, "fased-app")
+	pinned := filepath.Join(m.Root, "maintenance", "runner")
+	choose := func(command string, selected string, selectionErr error) (string, string, error) {
+		return custodyUpdateRunner(m, []string{command}, func(owner int) (string, error) {
+			if owner != m.Owner {
+				t.Fatal("foreign owner selected")
+			}
+			return selected, selectionErr
+		})
+	}
+	if runner, session, err := choose("owner-updates", "", os.ErrNotExist); err != nil || runner != installed || session != "" {
+		t.Fatal("legacy predecessor changed", runner, session, err)
+	}
+	if runner, session, err := choose("owner-updates", pinned, nil); err != nil || runner != pinned || session != pinned {
+		t.Fatal("pinned owner entry not selected", runner, session, err)
+	}
+	if runner, session, err := choose("custody", pinned, nil); err != nil || runner != installed || session != pinned {
+		t.Fatal("installed status entry changed", runner, session, err)
+	}
+	if _, _, err := choose("owner-updates", "/tmp/foreign", nil); err == nil {
+		t.Fatal("foreign runner accepted")
+	}
+	if _, _, err := choose("owner-updates", "", errors.New("damaged pin")); err == nil {
+		t.Fatal("damaged pin fell back to predecessor")
+	}
+}
+
+func TestPinnedInitialInstallRefreshesOnlyTheMatchingCustodySession(t *testing.T) {
+	m := custodyinstall.Manifest{Version: 3, Owner: 1400, Root: "/var/lib/fased-app-custody-1400", Enrollment: true, Location: "local", NativeOwnerAccess: true}
+	pinned := filepath.Join(m.Root, "maintenance", "runner")
+	if !needsPinnedInitialSession(m, pinned) || needsPinnedInitialSession(m, filepath.Join(m.Root, "fased-app")) {
+		t.Fatal("initial Local handoff session selection differs")
+	}
+	m.Location, m.NativeOwnerAccess, m.PublicOrigin = "remote", false, "https://fixture.example.ts.net"
+	if !needsPinnedInitialSession(m, pinned) {
+		t.Fatal("initial Remote handoff session was not selected")
+	}
+	m.Enrollment = false
+	if needsPinnedInitialSession(m, pinned) {
+		t.Fatal("unenrolled instance was selected")
+	}
+}
+
 // Actual server/private IPC and command adapters; only the managed OS/native
 // owner peer/profile are simulated. No installed service, signer or VM exists.
 func TestLocalPairedCommandPaths(t *testing.T)  { testCustodyPairedCommandPaths(t, false) }

@@ -1,5 +1,32 @@
-import { expect, test } from "@playwright/test";
+import { expect, test as base } from "@playwright/test";
 import { initialState, reducer, STORAGE_KEY } from "../src/state";
+
+// The old prototype remains available only when a developer fixture opts in.
+const test = base.extend({
+  page: async ({ page }, use) => {
+    await page.addInitScript(() => {
+      sessionStorage.setItem("fased.test.prototype", "1");
+    });
+    await use(page);
+  },
+});
+
+base(
+  "an unavailable development core offers reconnect instead of prototype data",
+  async ({ page }) => {
+    await page.goto("/#agents/chat");
+    await expect(
+      page.getByRole("heading", {
+        name: "Connection unavailable",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Retry connection", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText("Demo", { exact: true })).toHaveCount(0);
+  },
+);
 
 test.use({ colorScheme: "dark" });
 test("native local owner reuses verified connection without an extra health read", async ({

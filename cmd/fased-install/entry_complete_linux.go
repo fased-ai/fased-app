@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/vpsinstall"
 	"io"
@@ -15,6 +16,10 @@ import (
 )
 
 func completeInstalledEntry(profile string, in io.Reader, out, errOut io.Writer) error {
+	if m, e := custodyinstall.Load(os.Getuid()); e == nil && m.Location == profile {
+		_, e = fmt.Fprintln(out, "Fased updated. Open your existing workspace.")
+		return e
+	}
 	var executable string
 	args := []string{"install-command"}
 	if profile == "remote" {
@@ -44,6 +49,9 @@ func completeInstalledEntry(profile string, in io.Reader, out, errOut io.Writer)
 // authority comes from the verified current bootstrap's fixed dropped-AppUID
 // bridge, before old-reader inventory; never invoke the old password login.
 func signInForEntryUpgrade(ctx context.Context, profile string, in io.Reader, out, errOut io.Writer) error {
+	if m, e := custodyinstall.Load(os.Getuid()); e == nil && m.Location == profile {
+		return nil
+	}
 	if profile == "remote" {
 		return nil
 	}

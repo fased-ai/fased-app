@@ -9,13 +9,47 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func fixtureManifest() Manifest {
 	return Manifest{Version: 1, Mode: "disposable-fixture:v1", ID: strings.Repeat("1", 32), Owner: 1000, Root: Root(1000), Listen: "127.0.0.1:7332", CoreHash: strings.Repeat("2", 64), SignerHash: strings.Repeat("3", 64), App: Identity{accountName(1000, "app"), 998, 998}, Signer: Identity{accountName(1000, "signer"), 997, 997}}
+}
+
+func TestManagedRuntimeSeparatesInactiveFromForeign(t *testing.T) {
+	m := fixtureManifest()
+	fragment := "/etc/systemd/system/" + Unit(m.Owner, "signer")
+	status := []byte(fmt.Sprintf("Uid:\t%d\t%d\t%d\t%d\nNoNewPrivs:\t1\n", m.Signer.UID, m.Signer.UID, m.Signer.UID, m.Signer.UID))
+	for _, tc := range []struct {
+		name, raw       string
+		process         []byte
+		active, wantErr bool
+	}{
+		{"inactive", "ActiveState=inactive\nMainPID=0\nFragmentPath=" + fragment + "\n", nil, false, false},
+		{"failed", "ActiveState=failed\nMainPID=0\nFragmentPath=" + fragment + "\n", nil, false, false},
+		{"active", "ActiveState=active\nMainPID=123\nFragmentPath=" + fragment + "\n", status, true, false},
+		{"foreign process", "ActiveState=active\nMainPID=123\nFragmentPath=" + fragment + "\n", []byte("Uid:\t0\t0\t0\t0\nNoNewPrivs:\t1\n"), false, true},
+		{"foreign unit", "ActiveState=inactive\nMainPID=0\nFragmentPath=/tmp/foreign\n", nil, false, true},
+		{"ambiguous", "ActiveState=inactive\nActiveState=active\nMainPID=0\nFragmentPath=" + fragment + "\n", nil, false, true},
+		{"transition", "ActiveState=activating\nMainPID=0\nFragmentPath=" + fragment + "\n", nil, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			active, err := classifyManagedRuntime(m, "signer", []byte(tc.raw), func(path string) ([]byte, error) {
+				if path != "/proc/123/status" {
+					t.Fatalf("unexpected process path %s", path)
+				}
+				return tc.process, nil
+			})
+			if active != tc.active || (err != nil) != tc.wantErr {
+				t.Fatalf("active=%t err=%v", active, err)
+			}
+		})
+	}
 }
 func TestIdentityAndPrivateListenerContract(t *testing.T) {
 	m := fixtureManifest()
@@ -45,6 +79,94 @@ func TestConsentFailsBeforeHostOrInputAccess(t *testing.T) {
 		if e == nil || !strings.Contains(e.Error(), "consent") {
 			t.Fatal("missing consent reached host work")
 		}
+	}
+}
+
+func TestSealedEnrollmentImagesReachTheCustodyReader(t *testing.T) {
+	const childKey = "FASED_SEALED_ENROLLMENT_CHILD"
+	if mode := os.Getenv(childKey); mode != "" {
+		core, coreErr := source("/proc/self/exe")
+		if mode == "unsealed-core" {
+			if coreErr == nil {
+				t.Fatal("mutable successor accepted")
+			}
+			return
+		}
+		if coreErr != nil || sum(core) != os.Getenv("FASED_SEALED_ENROLLMENT_CORE") {
+			t.Fatalf("successor image changed: %v", coreErr)
+		}
+		signerBytes, signerErr := source("/proc/self/fd/4")
+		if mode == "unsealed-signer" {
+			if signerErr == nil {
+				t.Fatal("mutable signer accepted")
+			}
+			return
+		}
+		if signerErr != nil || string(signerBytes) != "#!/bin/sh\nprintf verified-signer\n" {
+			t.Fatalf("signer image changed: %v", signerErr)
+		}
+		output, err := probeSigner(t.Context(), "/proc/self/fd/4", "ordinary-custody-version")
+		if err != nil || string(output) != "verified-signer" {
+			t.Fatalf("signer probe lost the inherited image: %q %v", output, err)
+		}
+		return
+	}
+
+	self, err := os.Open("/proc/self/exe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer self.Close()
+	coreBytes, err := io.ReadAll(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	makeImage := func(name string, contents []byte, sealed bool) *os.File {
+		t.Helper()
+		fd, err := unix.MemfdCreate(name, unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING|unix.MFD_EXEC)
+		if errors.Is(err, unix.EINVAL) {
+			fd, err = unix.MemfdCreate(name, unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := os.NewFile(uintptr(fd), name)
+		t.Cleanup(func() { f.Close() })
+		if _, err = f.Write(contents); err != nil {
+			t.Fatal(err)
+		}
+		if err = f.Chmod(0500); err != nil {
+			t.Fatal(err)
+		}
+		if sealed {
+			flags := unix.F_SEAL_WRITE | unix.F_SEAL_GROW | unix.F_SEAL_SHRINK | unix.F_SEAL_SEAL
+			if _, err = unix.FcntlInt(f.Fd(), unix.F_ADD_SEALS, flags); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return f
+	}
+	sealedCore := makeImage("fased-test-core", coreBytes, true)
+	unsealedCore := makeImage("fased-test-core-mutable", coreBytes, false)
+	signerBytes := []byte("#!/bin/sh\nprintf verified-signer\n")
+	sealedSigner := makeImage("fased-test-signer", signerBytes, true)
+	unsealedSigner := makeImage("fased-test-signer-mutable", signerBytes, false)
+	for _, test := range []struct {
+		name         string
+		core, signer *os.File
+	}{
+		{"sealed", sealedCore, sealedSigner},
+		{"unsealed-core", unsealedCore, sealedSigner},
+		{"unsealed-signer", sealedCore, unsealedSigner},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			command := exec.CommandContext(t.Context(), "/proc/self/fd/3", "-test.run=^TestSealedEnrollmentImagesReachTheCustodyReader$")
+			command.ExtraFiles = []*os.File{test.core, test.signer}
+			command.Env = append(os.Environ(), childKey+"="+test.name, "FASED_SEALED_ENROLLMENT_CORE="+sum(coreBytes))
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("custody image handoff: %v: %s", err, output)
+			}
+		})
 	}
 }
 
@@ -79,6 +201,44 @@ func (h *memoryHost) run(_ context.Context, input []byte, args ...string) ([]byt
 		}
 		h.files[args[len(args)-1]] = hostFile{Data: bytes.Clone(data), UID: 0, Mode: mode, Regular: true}
 	case "/usr/bin/systemd-run":
+		if allowedBoundReusableSetupCleanup(os.Getuid(), input, args) {
+			pending, target := filepath.Join(args[12], args[16]), args[28]
+			p, pendingOK := h.files[pending]
+			f, targetOK := h.files[target]
+			if pendingOK && targetOK && known(p, input, 0644) && known(f, input, 0644) {
+				delete(h.files, pending)
+			}
+			break
+		}
+		if allowedBoundReusableSetupLink(os.Getuid(), input, args) {
+			source, target := args[11], args[len(args)-2]
+			f, ok := h.files[source]
+			if _, exists := h.files[target]; ok && !exists && known(f, input, 0644) {
+				h.files[target] = f
+			}
+			break
+		}
+		if AllowedBoundReusableMetadataWrite(os.Getuid(), input, args) {
+			target := args[len(args)-1]
+			if _, exists := h.files[target]; !exists {
+				h.files[target] = hostFile{Data: bytes.Clone(input), UID: 0, Mode: 0644, Regular: true}
+			}
+			break
+		}
+		if AllowedBoundApprovedInputWrite(os.Getuid(), input, args) {
+			target := args[len(args)-1]
+			if _, exists := h.files[target]; !exists {
+				h.files[target] = hostFile{Data: bytes.Clone(input), UID: 0, Mode: 0444, Regular: true}
+			}
+			break
+		}
+		if AllowedBoundAtomicUnitWrite(os.Getuid(), input, args) {
+			target := args[len(args)-1]
+			if _, exists := h.files[target]; !exists {
+				h.files[target] = hostFile{Data: bytes.Clone(input), UID: 0, Mode: 0644, Regular: true}
+			}
+			break
+		}
 		if !AllowedBoundUnitWrite(os.Getuid(), input, args) && !AllowedBoundPolicyWrite(os.Getuid(), input, args) {
 			return nil, errors.New("unbound service staging request")
 		}
@@ -97,6 +257,10 @@ func (h *memoryHost) run(_ context.Context, input []byte, args ...string) ([]byt
 	case "/usr/bin/rm":
 		delete(h.files, args[len(args)-1])
 	case "/usr/bin/sync":
+	case "/usr/bin/systemctl":
+		if len(args) != 2 || args[1] != "daemon-reload" {
+			return nil, errors.New("unexpected systemd operation")
+		}
 	default:
 		return nil, errors.New("unexpected elevated tool")
 	}

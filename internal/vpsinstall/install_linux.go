@@ -25,6 +25,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 )
 
 type hostFile struct {
@@ -35,6 +36,7 @@ type hostFile struct {
 	Link               string
 }
 type hostOps struct {
+	protectedPublish    func(string, []byte, os.FileMode) error // In-process registered helper only.
 	uid, euid, gid      int
 	read                func(string) (hostFile, error)
 	content             func(string, func(hostFile, int64, io.Reader) error) error
@@ -429,6 +431,9 @@ func directory(ctx context.Context, o hostOps, path string, uid, gid int, mode o
 
 // Exclusive publication only replaces its exact intent-bound staging filename.
 func publish(ctx context.Context, o hostOps, target, id string, b []byte, mode os.FileMode) error {
+	if o.protectedPublish != nil {
+		return o.protectedPublish(target, b, mode)
+	}
 	stage := filepath.Join(filepath.Dir(target), "."+filepath.Base(target)+"-"+id+".pending")
 	f, e := rootFile(o, target)
 	ready := e == nil
@@ -692,6 +697,36 @@ func record(o hostOps, m Manifest, phase string) error {
 }
 func Install(ctx context.Context, options Options, s *custodyinstall.System) (Manifest, error) {
 	if s == nil {
+		return Manifest{}, errors.New("owner OS authorization required")
+	}
+	if _, err := maintenance.ReadAuthority(os.Getuid()); err == nil {
+		if _, err = maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "remote-install", Remote: &maintenance.RemoteInstallRequest{Listen: options.Listen, Origin: options.PublicOrigin, Sequence: options.ApplicationSequence, ReleaseSHA256: options.ApplicationReleaseSHA256, Start: options.Start}}, s.Out); err != nil {
+			return Manifest{}, err
+		}
+		m, err := Load(os.Getuid())
+		if err != nil {
+			return m, err
+		}
+		if m.Listen != options.Listen || m.PublicOrigin != options.PublicOrigin || m.CoreSHA256 != options.CoreSHA256 || m.ApplicationSequence != options.ApplicationSequence || m.ApplicationReleaseSHA256 != options.ApplicationReleaseSHA256 {
+			return m, errors.New("protected installation differs from verified wizard input")
+		}
+		o := liveOps(nil)
+		if old, err := o.readJournal("intent.json"); err == nil {
+			var prior intent
+			if strict(old, &prior) != nil || prior != intentFor(m) {
+				return m, errors.New("owner installation record differs; preserve it")
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return m, err
+		}
+		if err = o.writeJournal("intent.json", intentFor(m)); err != nil {
+			return m, err
+		}
+		return m, record(o, m, "installed")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return Manifest{}, err
+	}
+	if s == nil {
 		return Manifest{}, errors.New("owner OS authorization is required")
 	}
 	return install(ctx, options, liveOps(s))
@@ -891,6 +926,15 @@ func Start(ctx context.Context, m Manifest, s *custodyinstall.System) error {
 	if s == nil {
 		return errors.New("owner OS authorization required")
 	}
+	if handled, err := protectedRemoteCall(ctx, m, "remote-start", s.Out, nil); handled {
+		if err != nil {
+			return err
+		}
+		return record(liveOps(nil), m, "ready")
+	}
+	if s == nil {
+		return errors.New("owner OS authorization required")
+	}
 	return locked(ctx, liveOps(s), m, func(o hostOps) error { return start(ctx, o, m) })
 }
 func locked(ctx context.Context, o hostOps, m Manifest, f func(hostOps) error) error {
@@ -948,6 +992,12 @@ func start(ctx context.Context, o hostOps, m Manifest) error {
 	}
 }
 func Stop(ctx context.Context, m Manifest, s *custodyinstall.System) error {
+	if s == nil {
+		return errors.New("owner OS authorization required")
+	}
+	if handled, err := protectedRemoteCall(ctx, m, "remote-stop", s.Out, nil); handled {
+		return err
+	}
 	if s == nil {
 		return errors.New("owner OS authorization required")
 	}
@@ -1027,6 +1077,9 @@ func SetupLink(ctx context.Context, m Manifest, s *custodyinstall.System, out io
 	if len(owner) > 1 {
 		return errors.New("one verified Remote owner required")
 	}
+	if handled, err := protectedRemoteCall(ctx, m, "remote-setup-link", s.Out, out, owner...); handled {
+		return err
+	}
 	if len(owner) == 1 {
 		copy := *s
 		data, e := json.Marshal(owner[0])
@@ -1084,6 +1137,21 @@ func claim(ctx context.Context, o hostOps, m Manifest, recover bool, out io.Writ
 	return o.helper(ctx, helperArgs(m, action), out)
 }
 func Status(ctx context.Context, m Manifest, s *custodyinstall.System) (ServiceStatus, error) {
+	if _, err := maintenance.ReadAuthority(os.Getuid()); err == nil {
+		b, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "remote-status"}, nil)
+		var r maintenance.Response
+		var status protectedRemoteStatus
+		if err != nil {
+			return status.Status, err
+		}
+		if json.Unmarshal(b, &r) != nil || strict(r.Payload, &status) != nil {
+			return status.Status, errors.New("protected Remote status invalid")
+		}
+		status.Status.RemoteReady = status.RemoteReady
+		return status.Status, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return ServiceStatus{}, err
+	}
 	if s == nil {
 		return ServiceStatus{}, errors.New("owner OS authorization required")
 	}

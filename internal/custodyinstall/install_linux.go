@@ -21,7 +21,9 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/signer"
+	"golang.org/x/sys/unix"
 )
 
 func strict(b []byte, v any) error {
@@ -39,6 +41,27 @@ func strict(b []byte, v any) error {
 	return nil
 }
 func source(path string) ([]byte, error) {
+	if path == "/proc/self/exe" || path == "/proc/self/fd/4" {
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		info, err := f.Stat()
+		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 64*1024*1024 {
+			return nil, errors.New("sealed fixture executable must be a bounded regular file")
+		}
+		seals, err := unix.FcntlInt(f.Fd(), unix.F_GET_SEALS, 0)
+		required := unix.F_SEAL_WRITE | unix.F_SEAL_GROW | unix.F_SEAL_SHRINK | unix.F_SEAL_SEAL
+		if err != nil || seals&required != required {
+			return nil, errors.New("fixture executable handoff must be sealed")
+		}
+		b, err := io.ReadAll(io.LimitReader(f, info.Size()+1))
+		if err != nil || int64(len(b)) != info.Size() {
+			return nil, errors.New("sealed fixture executable changed while reading")
+		}
+		return b, nil
+	}
 	i, e := os.Lstat(path)
 	if e != nil {
 		return nil, e
@@ -202,7 +225,7 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 	if versionNumber == 3 {
 		probe = "ordinary-custody-version"
 	}
-	version, e := exec.CommandContext(ctx, o.Signer, probe).Output()
+	version, e := probeSigner(ctx, o.Signer, probe)
 	if e != nil {
 		return m, errors.New("signer fixture version probe failed")
 	}
@@ -395,6 +418,22 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 	}
 	return m, nil
 }
+
+func probeSigner(ctx context.Context, path, probe string) ([]byte, error) {
+	command := exec.CommandContext(ctx, path, probe)
+	if path == "/proc/self/fd/4" {
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		command = exec.CommandContext(ctx, "/proc/self/fd/3", probe)
+		command.Args[0] = path
+		command.ExtraFiles = []*os.File{f}
+	}
+	return command.Output()
+}
+
 func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 
 func Verify(m Manifest) error {
@@ -520,39 +559,81 @@ func waitReady(ctx context.Context, m Manifest, system *System) error {
 	}
 }
 func Runtime(m Manifest) error {
+	_, err := inspectManagedRuntime(m, false)
+	return err
+}
+
+// UpdateSessionRuntime distinguishes a verified inactive service from a
+// foreign definition or process. It never starts or changes either service.
+func UpdateSessionRuntime(m Manifest) (bool, error) {
+	return inspectManagedRuntime(m, true)
+}
+
+func inspectManagedRuntime(m Manifest, allowInactive bool) (bool, error) {
+	ready := true
 	for _, role := range []string{"signer", "app"} {
 		if e := loadedUnit(m, role); e != nil {
-			return e
+			return false, e
 		}
 		b, e := exec.Command("/usr/bin/systemctl", "show", Unit(m.Owner, role), "--property=ActiveState,MainPID,FragmentPath").Output()
 		if e != nil {
-			return e
+			return false, e
 		}
-		fields := map[string]string{}
-		for _, l := range strings.Split(string(b), "\n") {
-			p := strings.SplitN(l, "=", 2)
-			if len(p) == 2 {
-				fields[p[0]] = p[1]
-			}
-		}
-		pid, e := strconv.Atoi(fields["MainPID"])
-		if e != nil || pid <= 0 || fields["ActiveState"] != "active" || fields["FragmentPath"] != "/etc/systemd/system/"+Unit(m.Owner, role) {
-			return errors.New("managed service is inactive or belongs to another definition")
-		}
-		i := m.App
-		if role == "signer" {
-			i = m.Signer
-		}
-		status, e := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
+		active, e := classifyManagedRuntime(m, role, b, os.ReadFile)
 		if e != nil {
-			return e
+			return false, e
 		}
-		uidLine := "Uid:\t" + strings.Repeat(strconv.Itoa(i.UID)+"\t", 3) + strconv.Itoa(i.UID)
-		if !bytes.Contains(status, []byte(uidLine+"\n")) || !bytes.Contains(status, []byte("NoNewPrivs:\t1\n")) {
-			return errors.New("managed process UID or NoNewPrivs was not enforced")
+		if !active {
+			if !allowInactive {
+				return false, errors.New("managed service is inactive or belongs to another definition")
+			}
+			ready = false
 		}
 	}
-	return nil
+	return ready, nil
+}
+
+func classifyManagedRuntime(m Manifest, role string, raw []byte, read func(string) ([]byte, error)) (bool, error) {
+	if (role != "app" && role != "signer") || read == nil {
+		return false, errors.New("managed service identity required")
+	}
+	fields := map[string]string{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || key == "" {
+			return false, errors.New("invalid managed service state")
+		}
+		if _, exists := fields[key]; exists {
+			return false, errors.New("ambiguous managed service state")
+		}
+		fields[key] = value
+	}
+	pid, err := strconv.Atoi(fields["MainPID"])
+	if err != nil || fields["FragmentPath"] != "/etc/systemd/system/"+Unit(m.Owner, role) {
+		return false, errors.New("managed service is inactive or belongs to another definition")
+	}
+	if (fields["ActiveState"] == "inactive" || fields["ActiveState"] == "failed") && pid == 0 {
+		return false, nil
+	}
+	if fields["ActiveState"] != "active" || pid <= 0 {
+		return false, errors.New("managed service state is unavailable; preserve recovery")
+	}
+	i := m.App
+	if role == "signer" {
+		i = m.Signer
+	}
+	status, err := read("/proc/" + strconv.Itoa(pid) + "/status")
+	if err != nil {
+		return false, err
+	}
+	uidLine := "Uid:\t" + strings.Repeat(strconv.Itoa(i.UID)+"\t", 3) + strconv.Itoa(i.UID)
+	if !bytes.Contains(status, []byte(uidLine+"\n")) || !bytes.Contains(status, []byte("NoNewPrivs:\t1\n")) {
+		return false, errors.New("managed process UID or NoNewPrivs was not enforced")
+	}
+	return true, nil
 }
 
 func loadedUnit(m Manifest, role string) error {
@@ -566,13 +647,9 @@ func loadedUnitPolicy(m Manifest, role string, wanted []byte, image string) erro
 	if !known(f, wanted, 0644) {
 		return errors.New("installed system unit changed; preserving it")
 	}
-	b, e := exec.Command("/usr/bin/systemctl", "show", Unit(m.Owner, role), "--property=FragmentPath,DropInPaths,User,Group,NoNewPrivileges,ProtectSystem,ExecStart").Output()
+	b, e := exec.Command("/usr/bin/systemctl", "show", Unit(m.Owner, role), "--property=FragmentPath,DropInPaths,User,Group,NoNewPrivileges,ProtectSystem,ExecStart,NeedDaemonReload").Output()
 	if e != nil {
 		return e
-	}
-	i := m.App
-	if role == "signer" {
-		i = m.Signer
 	}
 	fields := map[string]string{}
 	for _, line := range strings.Split(string(b), "\n") {
@@ -581,8 +658,42 @@ func loadedUnitPolicy(m Manifest, role string, wanted []byte, image string) erro
 			fields[p[0]] = p[1]
 		}
 	}
-	if fields["FragmentPath"] != "/etc/systemd/system/"+Unit(m.Owner, role) || fields["DropInPaths"] != "" || fields["User"] != strconv.Itoa(i.UID) || fields["Group"] != strconv.Itoa(i.GID) || fields["NoNewPrivileges"] != "yes" || fields["ProtectSystem"] != "strict" || !strings.Contains(fields["ExecStart"], "path="+image+" ;") {
+	return validateLoadedUnitFields(m, role, image, fields, readRoot, scopedMigrationEnabled)
+}
+
+func validateLoadedUnitFields(m Manifest, role, image string, fields map[string]string, read readHost, scope func(int) (bool, error)) error {
+	if role != "app" && role != "signer" {
+		return errors.New("unknown managed service")
+	}
+	i := m.App
+	if role == "signer" {
+		i = m.Signer
+	}
+	if fields["FragmentPath"] != "/etc/systemd/system/"+Unit(m.Owner, role) || fields["User"] != strconv.Itoa(i.UID) || fields["Group"] != strconv.Itoa(i.GID) || fields["NoNewPrivileges"] != "yes" || fields["ProtectSystem"] != "strict" || fields["NeedDaemonReload"] != "no" || !strings.Contains(fields["ExecStart"], "path="+image+" ;") {
 		return errors.New("unexpected systemd identity/override; refusing project code under a different policy")
+	}
+	if fields["DropInPaths"] != "" {
+		if fields["DropInPaths"] == protectedGuardPath(m.Owner, role) {
+			a, err := maintenance.ReadAuthority(m.Owner)
+			if err != nil {
+				return err
+			}
+			f, err := read(protectedGuardPath(m.Owner, role))
+			if err != nil || !known(f, protectedGuard(a, role), 0644) {
+				return errors.New("protected maintenance start gate changed")
+			}
+			return nil
+		}
+		guard := "/etc/systemd/system/" + Unit(m.Owner, role) + ".d/20-fased-update-guard.conf"
+		enabled, err := scope(m.Owner)
+		if err != nil || !enabled || fields["DropInPaths"] != guard {
+			return errors.New("foreign or unscoped systemd override; preserving it")
+		}
+		f, err := read(guard)
+		want := []byte("[Unit]\nAssertPathExists=!" + m.Root + "/update-start-blocked.json\n")
+		if err != nil || !known(f, want, 0644) {
+			return errors.New("managed restart guard is unavailable or changed")
+		}
 	}
 	return nil
 }

@@ -150,13 +150,6 @@
   }
 }
 
-.wt .provider-servers {
-  flex-wrap: wrap;
-}
-.wt .provider-servers button {
-  min-height: 44px;
-}
-
 .wt .provider-route {
   color: var(--wt-muted);
   font-size: 0.75rem;

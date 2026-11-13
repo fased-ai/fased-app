@@ -155,11 +155,15 @@ func expected(p Plan) map[string]any {
 	return map[string]any{"TCP": map[string]any{port: map[string]any{"HTTPS": true}}, "Web": map[string]any{net.JoinHostPort(host, port): map[string]any{"Handlers": map[string]any{"/": map[string]any{"Proxy": p.Target}}}}}
 }
 func load(root string) (receipt, error) {
-	var r receipt
 	data, err := core.ReadPrivateFile(filepath.Join(root, "private-access.json"))
 	if err != nil {
-		return r, err
+		return receipt{}, err
 	}
+	return parseReceipt(data)
+}
+
+func parseReceipt(data []byte) (receipt, error) {
+	var r receipt
 	if json.Unmarshal(data, &r) != nil || r.Schema != 1 || r.Plan.Mode != "tailscale" || (r.Phase != "preparing" && r.Phase != "ready" && r.Phase != "switching") {
 		return r, errors.New("unknown private-access receipt; preserve it for recovery")
 	}

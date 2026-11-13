@@ -3,6 +3,7 @@
 package signer
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -126,6 +127,15 @@ func ordinaryHandoffRPCAllowed(c Config, action string, vault ...*Vault) bool {
 		return true
 	}
 	root := filepath.Dir(c.StateDir)
+	if r, err := update.ReadMaintenanceRecord(c.OwnerUID); err == nil {
+		if f, e := update.OpenProtected(root+"/update-active.json", 8192, 0644); e == nil {
+			b, e := io.ReadAll(f)
+			f.Close()
+			if e == nil && bytes.Equal(b, update.MaintenanceFence(r.OperationID)) {
+				return true
+			}
+		}
+	}
 	b, e := os.ReadFile(root + "/update-active.json")
 	if errors.Is(e, os.ErrNotExist) {
 		return true

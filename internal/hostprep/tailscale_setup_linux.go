@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
 )
 
@@ -138,6 +139,32 @@ func PrepareTailscale(ctx context.Context, in *bufio.Reader, out io.Writer) erro
 	}
 	dir := filepath.Join(base, "host-preparation", "tailscale")
 	system := &System{In: os.Stdin, Out: out, Authorization: "Authorize Tailscale's official signed Ubuntu package, service and this user's private access. Existing accounts/routes and SSH/firewall policy are preserved. Fased stays unprivileged."}
+	if a, err := maintenance.ReadAuthority(os.Getuid()); err == nil {
+		if a.Profile != "remote" {
+			return errors.New("maintenance setup belongs to a different installation profile")
+		}
+		run := func(ctx context.Context, input []byte, args ...string) ([]byte, error) {
+			if len(input) != 0 {
+				return nil, errors.New("Tailscale package preparation is owned by the maintenance helper")
+			}
+			if strings.Join(args, " ") == "/usr/bin/systemctl enable --now tailscaled.service" {
+				return exec.CommandContext(ctx, "/usr/bin/systemctl", "is-active", "tailscaled.service").Output()
+			}
+			if len(args) < 2 || args[0] != "/usr/bin/tailscale" || !AllowedTailscalePreparation(u.Username, args[1:]) || args[1] == "set" {
+				return nil, errors.New("private setup requires the prepared Tailscale operator")
+			}
+			c := exec.CommandContext(ctx, args[0], args[1:]...)
+			c.Stderr = out
+			if args[1] == "login" {
+				c.Stdout = out
+				return nil, c.Run()
+			}
+			return c.Output()
+		}
+		return prepareTailscale(ctx, dir, os.Getuid(), u.Username, out, readPreparationFile, run, platform)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	return prepareTailscale(ctx, dir, os.Getuid(), u.Username, out, readPreparationFile, system.Run, platform)
 }
 

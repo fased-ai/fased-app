@@ -238,7 +238,16 @@ function useCoreState() {
     }
     refresh().catch((e) => {
       if (!active) return;
-      if (import.meta.env.DEV && e instanceof CoreError && e.status === 0)
+      let fixturePreview = false;
+      if (import.meta.env.DEV) {
+        try {
+          fixturePreview =
+            sessionStorage.getItem("fased.test.prototype") === "1";
+        } catch {
+          // An unavailable browser store is not permission to show sample data.
+        }
+      }
+      if (fixturePreview && e instanceof CoreError && e.status === 0)
         setMode("prototype");
       else {
         setMode("error");

@@ -42,6 +42,53 @@ func (d *updateControllerFixture) Status(context.Context, ApplicationUpdateOpera
 	d.statuses++
 	return d.receipt, nil
 }
+
+type recoverableUpdateFixture struct {
+	*updateControllerFixture
+	recoveries  int
+	recoveredID string
+	recoveryErr error
+}
+
+func (d *recoverableUpdateFixture) Recover(_ context.Context, o ApplicationUpdateOperation) error {
+	d.recoveries++
+	d.recoveredID = o.ID
+	return d.recoveryErr
+}
+
+func TestApplicationUpdateExplicitRecoveryStartsOnlyOriginalOperation(t *testing.T) {
+	s := fixtureStore(t)
+	d := &recoverableUpdateFixture{updateControllerFixture: fixtureUpdateController()}
+	if err := s.BindApplicationUpdateController(d); err != nil {
+		t.Fatal(err)
+	}
+	updateCommandFixture(t, s, "check")
+	updateTickFixture(t, s)
+	updateCommandFixture(t, s, "apply")
+	d.uncertain = true
+	updateTickFixture(t, s)
+	view, err := s.ApplicationUpdates(t.Context())
+	if err != nil || view.Operation.Phase != "recovery" {
+		t.Fatal("uncertain operation was not held", view, err)
+	}
+	id := view.Operation.ID
+	d.recoveryErr = errors.New("fixture protected start refused")
+	_, err = s.CommandApplicationUpdate(t.Context(), ApplicationUpdateCommand{Action: "recover", Revision: view.Revision, PolicyRevision: view.PolicyRevision})
+	if err == nil {
+		t.Fatal("refused recovery reported success")
+	}
+	view, err = s.ApplicationUpdates(t.Context())
+	if err != nil || view.Operation.ID != id || view.Operation.Phase != "recovery" || d.applies != 1 || d.recoveries != 1 || d.recoveredID != id {
+		t.Fatal("refusal did not preserve the original recovery", view, d, err)
+	}
+	d.recoveryErr = nil
+	updateCommandFixture(t, s, "recover")
+	updateTickFixture(t, s)
+	view, err = s.ApplicationUpdates(t.Context())
+	if err != nil || view.Operation.ID != id || view.Operation.Phase != "completed" || d.applies != 1 || d.recoveries != 2 || d.statuses != 1 {
+		t.Fatal("explicit recovery duplicated or lost the original operation", view, d, err)
+	}
+}
 func updateCommandFixture(t *testing.T, s *Store, action string) ApplicationUpdateView {
 	t.Helper()
 	v, e := s.ApplicationUpdates(t.Context())
