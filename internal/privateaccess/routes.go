@@ -33,7 +33,14 @@ func routeParts(p Plan) (string, string, error) {
 // SelectIsolated chooses an unused private HTTPS port before deployment. A
 // retained setup receipt fixes the port on retry; an existing installation is
 // never adopted as a new one.
-func (m Manager) SelectIsolated(ctx context.Context, dir string, p Plan) (Plan, error) {
+func (m Manager) SelectIsolated(ctx context.Context, dir string, p Plan, protectedOrigin ...string) (Plan, error) {
+	if len(protectedOrigin) > 1 {
+		return p, errors.New("one protected private setup origin required")
+	}
+	protected := ""
+	if len(protectedOrigin) == 1 {
+		protected = protectedOrigin[0]
+	}
 	base, _, err := tailnet.Origin(p.Origin)
 	if err != nil || p.Mode != "tailscale" || !validTarget(p.Target) {
 		return p, errors.New("valid private setup required")
@@ -53,9 +60,15 @@ func (m Manager) SelectIsolated(ctx context.Context, dir string, p Plan) (Plan, 
 		if e != nil || host != base {
 			return p, errors.New("private setup device changed; preserve its receipt")
 		}
+		if protected != "" && protected != saved.Plan.Origin {
+			return p, errors.New("private setup origin differs from protected operation")
+		}
 		return BindOrigin(p, saved.Plan.Origin)
 	} else if !os.IsNotExist(e) {
 		return p, e
+	}
+	if protected != "" {
+		return BindOrigin(p, protected)
 	}
 	cfg, _, err := m.config(ctx)
 	if err != nil {

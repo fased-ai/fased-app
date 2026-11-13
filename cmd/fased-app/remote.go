@@ -22,6 +22,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
 	"github.com/fased-ai/fased-app/internal/tailnet"
 	"github.com/fased-ai/fased-app/internal/vpsinstall"
@@ -88,6 +89,28 @@ func remoteAccessDirectory() (string, error) {
 		return "", err
 	}
 	return dir, nil
+}
+
+func protectedPendingRemoteOrigin(ctx context.Context, diagnostics io.Writer) (string, error) {
+	if _, err := maintenance.ReadAuthority(os.Getuid()); errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	} else if err != nil {
+		return "", err
+	}
+	b, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "remote-preflight-origin"}, diagnostics)
+	if err != nil {
+		return "", err
+	}
+	var response maintenance.Response
+	var origin string
+	if json.Unmarshal(b, &response) != nil || json.Unmarshal(response.Payload, &origin) != nil {
+		return "", errors.New("protected private setup origin is unavailable")
+	}
+	return origin, nil
+}
+
+func sameRemoteInstallerInput(m vpsinstall.Manifest, listen, origin string, sequence uint64, release, coreHash string) bool {
+	return m.Listen == listen && m.PublicOrigin == origin && m.ApplicationSequence == sequence && m.ApplicationReleaseSHA256 == release && m.CoreSHA256 == coreHash
 }
 
 func enableRemoteAccess(ctx context.Context, m vpsinstall.Manifest, system *custodyinstall.System, initial ...tailnet.Identity) (string, error) {
@@ -158,18 +181,35 @@ func managedRemoteInstall(ctx context.Context, corePath, hash, listen string, pl
 	if err != nil {
 		return err
 	}
-	gateCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-	owner, err := remotePrivateAccess(system).BeforeInstall(gateCtx, accessDir, plan, errOut)
+	var owner tailnet.Identity
+	_, authorityErr := maintenance.ReadAuthority(os.Getuid())
+	protected := authorityErr == nil
+	if authorityErr != nil && !errors.Is(authorityErr, os.ErrNotExist) {
+		return authorityErr
+	}
+	if !protected {
+		gateCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+		owner, err = remotePrivateAccess(system).BeforeInstall(gateCtx, accessDir, plan, errOut)
+		if err != nil {
+			return err
+		}
+		if err = saveInitialRemoteOwner(accessDir, remoteSetupOwner{Version: 1, Origin: plan.Origin, Listen: listen, EngineSHA256: hash, Owner: owner}); err != nil {
+			return err
+		}
+	}
+	options := vpsinstall.Options{ApplicationSequence: admitted.sequence, ApplicationReleaseSHA256: admitted.release, Core: corePath, CoreSHA256: hash, Listen: listen, PublicOrigin: remotePublicOrigin(plan), PrepareHost: prepare, Start: start}
+	if protected {
+		options.InitialOwner = &owner
+	}
+	m, err := vpsinstall.Install(ctx, options, system)
 	if err != nil {
 		return err
 	}
-	if err = core.WritePrivateJSON(filepath.Join(accessDir, "owner-handoff.json"), remoteSetupOwner{Version: 1, Origin: plan.Origin, Listen: listen, EngineSHA256: hash, Owner: owner}); err != nil {
-		return err
-	}
-	m, err := vpsinstall.Install(ctx, vpsinstall.Options{ApplicationSequence: admitted.sequence, ApplicationReleaseSHA256: admitted.release, Core: corePath, CoreSHA256: hash, Listen: listen, PublicOrigin: remotePublicOrigin(plan), PrepareHost: prepare, Start: start}, system)
-	if err != nil {
-		return err
+	if protected {
+		if err = saveInitialRemoteOwner(accessDir, remoteSetupOwner{Version: 1, Origin: plan.Origin, Listen: listen, EngineSHA256: hash, Owner: owner}); err != nil {
+			return err
+		}
 	}
 	if e := installCommand(m.Core, m.Root, m.Data, true, errOut); e != nil {
 		return e

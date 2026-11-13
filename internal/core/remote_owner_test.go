@@ -115,6 +115,58 @@ func TestRemoteOwnerEnrollmentPreservationAndReplay(t *testing.T) {
 		})
 	}
 }
+
+func TestRemoteClaimRetryCannotReplacePendingDevice(t *testing.T) {
+	s := fixtureStore(t)
+	first := tailnet.Identity{UserID: 7, NodeID: "first", Login: "owner@example.test"}
+	other := first
+	other.NodeID = "other"
+	if _, err := s.IssueRemoteClaim(t.Context(), first); err != nil {
+		t.Fatal(err)
+	}
+	var before string
+	if err := s.db.QueryRow("SELECT claim_hash FROM instance WHERE id=1").Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.IssueRemoteClaim(t.Context(), other); err == nil {
+		t.Fatal("different device replaced pending claimant")
+	}
+	var after string
+	if err := s.db.QueryRow("SELECT claim_hash FROM instance WHERE id=1").Scan(&after); err != nil || before != after {
+		t.Fatal("pending claim changed", err)
+	}
+	if _, err := s.IssueRemoteClaim(t.Context(), first); err != nil {
+		t.Fatal("original device retry refused", err)
+	}
+}
+
+func TestStaleClaimWriterCannotRemoveRemoteBinding(t *testing.T) {
+	first := fixtureStore(t)
+	second, err := OpenStore(first.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	var old string
+	if err = first.db.QueryRow("SELECT COALESCE(claim_hash,'') FROM instance WHERE id=1").Scan(&old); err != nil {
+		t.Fatal(err)
+	}
+	device := tailnet.Identity{UserID: 7, NodeID: "device", Login: "owner@example.test"}
+	if _, err = second.IssueRemoteClaim(t.Context(), device); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := first.compareAndSetUnclaimedCode(t.Context(), old, "stale-unscoped-code", 1)
+	if err != nil || updated {
+		t.Fatal("stale writer replaced protected claim", err)
+	}
+	if _, err = first.IssueClaimCode(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := second.PendingRemoteClaim(t.Context())
+	if err != nil || got.UserID != device.UserID || got.NodeID != device.NodeID {
+		t.Fatal("claim rotation lost device binding", err)
+	}
+}
 func TestRemoteHeadersNeverGrantLocalOrProxyAuthority(t *testing.T) {
 	s, err := OpenStore(filepath.Join(t.TempDir(), "fased"))
 	if err != nil {

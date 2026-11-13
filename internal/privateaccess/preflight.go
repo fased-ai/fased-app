@@ -44,7 +44,15 @@ func (m Manager) BeforeInstall(ctx context.Context, dir string, p Plan, out io.W
 	if err != nil {
 		return empty, err
 	}
-	defer os.Remove(probeDir)
+	created, err := os.Lstat(probeDir)
+	if err != nil {
+		return empty, err
+	}
+	defer func() {
+		if current, err := os.Lstat(probeDir); err == nil && os.SameFile(created, current) {
+			_ = os.Remove(probeDir)
+		}
+	}()
 	listener, err := tailnet.Listen(probeDir)
 	if err != nil {
 		return empty, err
@@ -71,10 +79,23 @@ func (m Manager) BeforeInstall(ctx context.Context, dir string, p Plan, out io.W
 		return empty, err
 	}
 	defer func() {
+		// UnixListener.Close unlinks its original socket path. Close it while the
+		// private directory still exists, before removing that directory below.
+		_ = server.Close()
+		_ = listener.Close()
 		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		resultErr = errors.Join(resultErr, m.finishPreflight(cleanup, dir, p.Origin))
 	}()
+	// The route may survive a power cut. Persist its ownership record before
+	// issuing the conditional Serve mutation so recovery can identify it.
+	directory, err := os.Open(dir)
+	if err != nil {
+		return empty, err
+	}
+	if err = errors.Join(directory.Sync(), directory.Close()); err != nil {
+		return empty, err
+	}
 	data, _ := json.Marshal(owned)
 	if err = m.SetConfig(ctx, data, etag); err != nil {
 		return empty, err
@@ -177,6 +198,13 @@ func (m Manager) finishPreflight(ctx context.Context, dir, origin string) error 
 	if !validTarget(r.Plan.Target) || filepath.Dir(probeDir) != "/tmp" || !strings.HasPrefix(filepath.Base(probeDir), "fased-private-") {
 		return errors.New("foreign private setup path; preserve it")
 	}
+	probe, err := openPreflightDirectory(probeDir)
+	if err != nil {
+		return err
+	}
+	if probe != nil {
+		defer probe.Close()
+	}
 	cfg, etag, err := m.config(ctx)
 	if err != nil {
 		return err
@@ -200,18 +228,10 @@ func (m Manager) finishPreflight(ctx context.Context, dir, origin string) error 
 			return errors.New("private setup cleanup not confirmed; no deployment allowed")
 		}
 	}
-	if info, e := os.Lstat(socket); e == nil {
-		if info.Mode()&os.ModeSocket == 0 {
-			return errors.New("private setup socket changed; preserve it")
+	if probe != nil {
+		if err = removePreflightDirectory(probe, probeDir); err != nil {
+			return err
 		}
-		if e = os.Remove(socket); e != nil {
-			return e
-		}
-	} else if !os.IsNotExist(e) {
-		return e
-	}
-	if err = os.Remove(probeDir); err != nil && !os.IsNotExist(err) {
-		return err
 	}
 	return os.Remove(file)
 }

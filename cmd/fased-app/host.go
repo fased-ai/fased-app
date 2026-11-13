@@ -238,7 +238,26 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			if e != nil {
 				return e
 			}
-			plan, e = privateaccess.System().SelectIsolated(ctx, dir, plan)
+			pending, e := protectedPendingRemoteOrigin(ctx, errOut)
+			if e != nil {
+				return e
+			}
+			resumed := false
+			if pending != "" {
+				existing, loadErr := vpsinstall.Load(os.Getuid())
+				if loadErr == nil {
+					if !sameRemoteInstallerInput(existing, *listen, pending, sequence, release, inventory.Files[localinstall.EngineName()].SHA256) {
+						return errors.New("existing Remote installation differs; preserve it")
+					}
+					plan, e = privateaccess.BindOrigin(plan, pending)
+					resumed = true
+				} else if !errors.Is(loadErr, os.ErrNotExist) {
+					return loadErr
+				}
+			}
+			if !resumed {
+				plan, e = privateaccess.System().SelectIsolated(ctx, dir, plan, pending)
+			}
 			if e != nil {
 				return e
 			}

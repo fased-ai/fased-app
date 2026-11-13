@@ -22,6 +22,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/hostprep"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -239,8 +240,18 @@ func maintenanceRequestCommand(args []string, in io.Reader, out io.Writer) error
 		err = privateaccess.ApplyOwnedServe(workCtx, a.Owner, a.Home, r.Serve.Configuration, r.Serve.ETag)
 	case "tailscale-login":
 		err = hostprep.ProtectedTailscaleLogin(workCtx, a.Owner, os.Stderr)
+	case "remote-preflight-origin":
+		var origin string
+		origin, err = privateaccess.ProtectedPendingOrigin(a.Owner)
+		if err == nil {
+			payload, err = json.Marshal(origin)
+		}
 	case "remote-install":
-		err = maintenanceRemoteInstall(workCtx, a, *r.Remote)
+		var device tailnet.Identity
+		device, err = maintenanceRemoteInstall(workCtx, a, *r.Remote)
+		if err == nil {
+			payload, err = json.Marshal(device)
+		}
 	default:
 		payload, err = vpsinstall.RunProtected(workCtx, a.Owner, r.Action, r.Peer, io.Discard)
 	}
@@ -322,33 +333,75 @@ func maintenanceOptions(a maintenance.Authority) (bootstrap.Options, error) {
 	return o, nil
 }
 
-func maintenanceRemoteInstall(ctx context.Context, a maintenance.Authority, r maintenance.RemoteInstallRequest) error {
-	if err := privateaccess.ValidateProtectedRemoteSetup(ctx, a.Owner, a.Home, r.Listen, r.Origin); err != nil {
-		return err
+func maintenanceRemoteInstall(ctx context.Context, a maintenance.Authority, r maintenance.RemoteInstallRequest) (_ tailnet.Identity, resultErr error) {
+	var empty tailnet.Identity
+	_, approvalErr := privateaccess.ReadProtectedInitialApproval(a.Owner)
+	if err := requireFreshRemoteApproval(a.Owner, a.Home, approvalErr, os.Lstat); err != nil {
+		return empty, err
 	}
 	o, err := maintenanceOptions(a)
 	if err != nil {
-		return err
+		return empty, err
+	}
+	descriptor, descriptorHash, err := bootstrap.InspectMaintenance(ctx, a.Owner, o)
+	if err != nil {
+		return empty, err
+	}
+	if descriptor.Sequence != r.Sequence || descriptorHash != r.ReleaseSHA256 {
+		return empty, errors.New("independently verified maintenance release differs from the wizard")
+	}
+	device, err := privateaccess.ConfirmProtectedRemoteInitial(ctx, a.Owner, r.Origin, r.Listen, descriptor.Sequence, descriptorHash, "", os.Stderr)
+	if err != nil {
+		return empty, err
 	}
 	p, err := bootstrap.PrepareMaintenance(ctx, a.Owner, o)
 	if err != nil {
-		return err
+		return empty, err
 	}
-	defer p.Close()
+	installStarted := false
+	defer func() {
+		if !installStarted {
+			p.RetainAcquisitionEvidence()
+		}
+		resultErr = errors.Join(resultErr, p.Close())
+	}()
 	report := p.Report()
 	if report.Sequence != r.Sequence || report.DescriptorSHA256 != r.ReleaseSHA256 || !report.ProvenanceVerified && !report.DevelopmentOnly {
-		return errors.New("independently verified maintenance release differs from the wizard")
+		return empty, errors.New("independently verified maintenance release differs from the wizard")
 	}
 	engine, _ := bundle.Names()
 	manifest, err := bundle.Verify(report.BundleDirectory)
 	if err != nil {
-		return err
+		return empty, err
 	}
+	if err = privateaccess.BindProtectedInitialCore(a.Owner, r.Origin, r.Listen, report.Sequence, report.DescriptorSHA256, manifest.Files[engine].SHA256); err != nil {
+		return empty, err
+	}
+	installStarted = true
 	_, err = vpsinstall.InstallProtected(ctx, a.Owner, vpsinstall.Options{Core: filepath.Join(report.BundleDirectory, engine), CoreSHA256: manifest.Files[engine].SHA256, Listen: r.Listen, PublicOrigin: r.Origin, ApplicationSequence: report.Sequence, ApplicationReleaseSHA256: report.DescriptorSHA256, PrepareHost: true, Start: r.Start}, io.Discard)
 	if err == nil {
 		p.RetainAcquisitionEvidence()
 	}
-	return err
+	return device, err
+}
+
+func requireFreshRemoteApproval(owner int, home string, approvalErr error, stat func(string) (os.FileInfo, error)) error {
+	if approvalErr == nil {
+		return nil
+	}
+	if !errors.Is(approvalErr, os.ErrNotExist) {
+		return approvalErr
+	}
+	// Never replace a prior pending claimant or adopt an installation that was
+	// created before this protected approval existed.
+	for _, path := range []string{vpsinstall.Root(owner), filepath.Join(maintenance.OwnerRoot(owner), "remote", "intent.json"), filepath.Join(home, ".config", "fased-app", "vps-access", "owner-handoff.json")} {
+		if _, err := stat(path); err == nil {
+			return errors.New("existing Remote setup lacks protected approval; preserve its original owner")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 func readMaintenanceInput(ctx context.Context, in io.Reader) ([]byte, error) {

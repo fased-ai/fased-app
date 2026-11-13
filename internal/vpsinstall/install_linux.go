@@ -700,8 +700,17 @@ func Install(ctx context.Context, options Options, s *custodyinstall.System) (Ma
 		return Manifest{}, errors.New("owner OS authorization required")
 	}
 	if _, err := maintenance.ReadAuthority(os.Getuid()); err == nil {
-		if _, err = maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "remote-install", Remote: &maintenance.RemoteInstallRequest{Listen: options.Listen, Origin: options.PublicOrigin, Sequence: options.ApplicationSequence, ReleaseSHA256: options.ApplicationReleaseSHA256, Start: options.Start}}, s.Out); err != nil {
+		response, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "remote-install", Remote: &maintenance.RemoteInstallRequest{Listen: options.Listen, Origin: options.PublicOrigin, Sequence: options.ApplicationSequence, ReleaseSHA256: options.ApplicationReleaseSHA256, Start: options.Start}}, s.Out)
+		if err != nil {
 			return Manifest{}, err
+		}
+		if options.InitialOwner != nil {
+			var result maintenance.Response
+			var device tailnet.Identity
+			if strict(response, &result) != nil || strict(result.Payload, &device) != nil || device.UserID <= 0 || device.NodeID == "" || device.Login == "" {
+				return Manifest{}, errors.New("protected initial browser identity is unavailable")
+			}
+			*options.InitialOwner = device
 		}
 		m, err := Load(os.Getuid())
 		if err != nil {

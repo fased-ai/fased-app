@@ -207,6 +207,19 @@ func PrepareMaintenance(ctx context.Context, owner int, o Options) (*Prepared, e
 	return prepare(ctx, o, false)
 }
 
+// InspectMaintenance verifies only metadata under the same fixed helper trust
+// as PrepareMaintenance, without downloading an archive or creating output.
+func InspectMaintenance(ctx context.Context, owner int, o Options) (Descriptor, string, error) {
+	if _, err := maintenance.ValidateProcess(owner); err != nil {
+		return Descriptor{}, "", err
+	}
+	if filepath.Dir(o.Directory) != filepath.Join(maintenance.OwnerRoot(owner), "fased-app", "install") {
+		return Descriptor{}, "", errors.New("maintenance acquisition must use its protected private directory")
+	}
+	o.protectedOwner = owner
+	return Inspect(ctx, o)
+}
+
 // Inspect authenticates only metadata/provenance. It creates no output, downloads
 // no archive and supplies no executable/installation authority.
 func Inspect(ctx context.Context, o Options) (Descriptor, string, error) {

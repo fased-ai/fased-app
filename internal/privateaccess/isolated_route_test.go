@@ -140,6 +140,30 @@ func TestSelectIsolatedKeepsExistingAndStablePort(t *testing.T) {
 	}
 }
 
+func TestSelectIsolatedResumesProtectedPreflightPort(t *testing.T) {
+	dir := fixture(t)
+	base := Plan{Mode: "tailscale", Origin: "https://node.owner.ts.net", Target: "http://127.0.0.1:7333"}
+	m := Manager{GetConfig: func(context.Context) ([]byte, string, error) {
+		t.Fatal("retry must retain the protected port before inspecting occupied routes")
+		return nil, "", nil
+	}}
+	got, err := m.SelectIsolated(t.Context(), dir, base, "https://node.owner.ts.net:8443")
+	if err != nil || got.Origin != "https://node.owner.ts.net:8443" {
+		t.Fatal("protected preflight retry changed origin", got, err)
+	}
+	if _, err = m.SelectIsolated(t.Context(), dir, base, "https://other.owner.ts.net:8443"); err == nil {
+		t.Fatal("protected retry accepted another device")
+	}
+	saved := base
+	saved.Target = "unix:/tmp/fased-private-retained/tailscale.sock"
+	if err = core.WritePrivateJSON(filepath.Join(dir, "private-setup.json"), preflightReceipt{Version: 1, Plan: saved}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = m.SelectIsolated(t.Context(), dir, base, "https://node.owner.ts.net:8443"); err == nil {
+		t.Fatal("conflicting owner and protected receipts were ignored")
+	}
+}
+
 func TestIsolatedRouteRefusesCollisionAndFunnel(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("managed Tailscale Unix ingress targets Linux")

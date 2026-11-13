@@ -16,6 +16,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/enrollment"
 	"github.com/fased-ai/fased-app/internal/maintenance"
+	"github.com/fased-ai/fased-app/internal/privateaccess"
 	"github.com/fased-ai/fased-app/internal/tailnet"
 	"github.com/fased-ai/fased-app/internal/update"
 )
@@ -140,6 +141,15 @@ func RunProtected(ctx context.Context, owner int, action string, peer *tailnet.I
 			_, err = o.run(ctx, nil, "/usr/bin/systemctl", "start", "--", m.Unit)
 			return err
 		case "remote-setup-link":
+			approval, approvalErr := privateaccess.ReadProtectedInitialApproval(owner)
+			approved, err := protectedSetupPeer(owner, m, peer, approval, approvalErr)
+			if err != nil {
+				return err
+			}
+			o, err = protectedRemoteOps(a, out, approved)
+			if err != nil {
+				return err
+			}
 			var b bytes.Buffer
 			if err := setupLink(ctx, o, m, &b); err != nil {
 				return err
@@ -157,6 +167,25 @@ func RunProtected(ctx context.Context, owner int, action string, peer *tailnet.I
 		return nil, nil
 	}
 	return json.Marshal(payload)
+}
+
+func protectedSetupPeer(owner int, m Manifest, peer *tailnet.Identity, approval privateaccess.ProtectedInitialApproval, approvalErr error) (*tailnet.Identity, error) {
+	if approvalErr != nil && !errors.Is(approvalErr, os.ErrNotExist) {
+		return nil, approvalErr
+	}
+	if errors.Is(approvalErr, os.ErrNotExist) {
+		// Legacy recovery may reissue only the core's existing pending claimant;
+		// caller-provided identity cannot create or replace that claimant.
+		return nil, nil
+	}
+	matched := approvalErr == nil && approval.Matches(owner, m.PublicOrigin, m.Listen, m.ApplicationSequence, m.ApplicationReleaseSHA256, m.CoreSHA256)
+	if peer != nil && (!matched || *peer != approval.Device) {
+		return nil, errors.New("Remote setup owner differs from protected browser approval")
+	}
+	if matched {
+		return &approval.Device, nil
+	}
+	return nil, nil
 }
 
 func protectedRemoteOps(a maintenance.Authority, out io.Writer, peer *tailnet.Identity) (hostOps, error) {

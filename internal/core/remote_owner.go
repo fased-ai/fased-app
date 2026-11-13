@@ -395,20 +395,29 @@ func (s *Store) IssueRemoteClaim(ctx context.Context, id tailnet.Identity) (Clai
 	}
 	s.authMu.Lock()
 	defer s.authMu.Unlock()
+	var previous string
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(claim_hash,'') FROM instance WHERE id=1 AND password_hash IS NULL").Scan(&previous); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ClaimCode{}, ErrClaimed
+		}
+		return ClaimCode{}, err
+	}
+	if strings.HasPrefix(previous, "remote-v1:") {
+		pending, err := s.PendingRemoteClaim(ctx)
+		if err != nil || pending.UserID != id.UserID || pending.NodeID != id.NodeID {
+			return ClaimCode{}, ErrUnauthorized
+		}
+	}
 	code, err := randomToken()
 	if err != nil {
 		return ClaimCode{}, err
 	}
 	result := ClaimCode{Code: code, ExpiresAt: s.now().Add(ClaimLifetime)}
-	query, err := s.db.ExecContext(ctx, "UPDATE instance SET claim_hash=?,claim_expires=? WHERE id=1 AND password_hash IS NULL", remoteClaimScope(id)+tokenHash(code), result.ExpiresAt.Unix())
+	updated, err := s.compareAndSetUnclaimedCode(ctx, previous, remoteClaimScope(id)+tokenHash(code), result.ExpiresAt.Unix())
 	if err != nil {
 		return ClaimCode{}, err
 	}
-	count, err := query.RowsAffected()
-	if err != nil {
-		return ClaimCode{}, err
-	}
-	if count != 1 {
+	if !updated {
 		return ClaimCode{}, ErrClaimed
 	}
 	if err = WritePrivateJSON(filepath.Join(s.dir, "claim-code.json"), result); err != nil {
