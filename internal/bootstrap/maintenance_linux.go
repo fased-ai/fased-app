@@ -5,6 +5,8 @@ package bootstrap
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"github.com/fased-ai/fased-app/internal/bundle"
 	"github.com/fased-ai/fased-app/internal/maintenance"
@@ -84,6 +86,33 @@ func (p *Prepared) AcquireMaintenanceInstaller(ctx context.Context) (string, upd
 	}
 	if err := p.revalidate(); err != nil {
 		return "", artifact, err
+	}
+	if p.candidate != nil {
+		var packet AttestedPacket
+		if update.StrictJSON(p.metadata[AttestedPacketFile], &packet) != nil {
+			return "", artifact, errors.New("attested candidate installer required")
+		}
+		f, err := p.root.Open("candidate-installer")
+		if err != nil {
+			return "", artifact, err
+		}
+		info, statErr := f.Stat()
+		entry, entryErr := p.root.Lstat("candidate-installer")
+		if statErr != nil || entryErr != nil || !info.Mode().IsRegular() || !os.SameFile(info, entry) || info.Size() != packet.Installer.Size {
+			f.Close()
+			return "", artifact, errors.New("held candidate installer identity changed")
+		}
+		h := sha256.New()
+		n, readErr := io.CopyBuffer(h, io.LimitReader(f, packet.Installer.Size+1), make([]byte, 32<<10))
+		if readErr != nil || n != packet.Installer.Size || hex.EncodeToString(h.Sum(nil)) != packet.Installer.SHA256 {
+			f.Close()
+			return "", artifact, errors.New("held candidate installer differs from its attestation")
+		}
+		err = errors.Join(f.Chmod(0555), f.Sync(), f.Close(), ctx.Err())
+		if err != nil {
+			return "", artifact, err
+		}
+		return filepath.Join(p.options.Directory, "candidate-installer"), packet.Installer, nil
 	}
 	var published releaseops.PublishedRelease
 	if update.StrictJSON(p.metadata["github-release.json"], &published) != nil {

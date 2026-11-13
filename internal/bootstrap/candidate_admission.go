@@ -2,6 +2,8 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -147,6 +149,23 @@ func PrepareAttestedCandidate(ctx context.Context, o Options, directory string, 
 	if n != packet.Archive.Size {
 		return p, errors.New("candidate archive copy incomplete")
 	}
+	installer, err := sourceRoot.Open(packet.Installer.File)
+	if err != nil {
+		return p, err
+	}
+	heldInstaller, err := root.OpenFile("candidate-installer", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		installer.Close()
+		return p, err
+	}
+	h := sha256.New()
+	if err = heldInstaller.Chmod(0600); err == nil {
+		n, err = io.CopyBuffer(io.MultiWriter(heldInstaller, h), io.LimitReader(installer, packet.Installer.Size+1), make([]byte, 32<<10))
+	}
+	err = errors.Join(err, installer.Close(), heldInstaller.Sync(), heldInstaller.Close(), ctx.Err())
+	if err != nil || n != packet.Installer.Size || hex.EncodeToString(h.Sum(nil)) != packet.Installer.SHA256 {
+		return p, errors.New("candidate installer copy differs from the attested pair")
+	}
 	m, err := bundle.ExtractVerifiedArchive(filepath.Join(o.Directory, "download.tar.gz"), filepath.Join(o.Directory, "bundle"), bundle.File{SHA256: packet.Archive.SHA256, Bytes: packet.Archive.Size}, packet.BundleSHA256)
 	if err != nil || m.Version != packet.ProductVersion || m.Source != packet.Source {
 		return p, errors.New("candidate held bundle differs from reviewed source")
@@ -183,7 +202,11 @@ func (p *Prepared) revalidateCandidate(seed Seed, now time.Time) error {
 	if d != p.descriptor {
 		return errors.New("candidate descriptor changed")
 	}
-	_, err := productionProof(seed, d, p.metadata["provenance.sigstore.json"], now)
+	installer, err := bundle.Inspect(filepath.Join(p.options.Directory, "candidate-installer"))
+	if err != nil || installer.SHA256 != packet.Installer.SHA256 || installer.Bytes != packet.Installer.Size {
+		return errors.New("candidate installer changed after verification")
+	}
+	_, err = productionProof(seed, d, p.metadata["provenance.sigstore.json"], now)
 	return err
 }
 

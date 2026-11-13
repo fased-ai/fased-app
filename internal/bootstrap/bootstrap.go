@@ -116,6 +116,9 @@ func (p *Prepared) Close() error {
 		if cleanupErr == nil {
 			cleanupErr = p.root.Remove("download.tar.gz")
 		}
+		if cleanupErr == nil && p.candidate != nil {
+			cleanupErr = p.root.Remove("candidate-installer")
+		}
 	}
 	return errors.Join(cleanupErr, p.root.Close())
 }
