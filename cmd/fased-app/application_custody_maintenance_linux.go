@@ -77,7 +77,50 @@ type custodyWorkerState struct {
 }
 
 func (c *custodyMaintenanceController) Check(ctx context.Context) (*core.ApplicationRelease, error) {
-	return c.check(ctx)
+	readRecord := c.readRecord
+	if readRecord == nil {
+		readRecord = update.ReadMaintenanceRecord
+	}
+	before, err := readRecord(c.owner)
+	if err != nil {
+		return nil, err
+	}
+	previous, err := custodyInstalledPackage(before)
+	if err != nil {
+		return nil, err
+	}
+	release, err := c.check(ctx)
+	if err != nil {
+		return nil, err
+	}
+	r, err := readRecord(c.owner)
+	if err != nil {
+		return nil, err
+	}
+	installed, err := custodyInstalledPackage(r)
+	if err != nil {
+		return nil, err
+	}
+	if previous.Sequence != installed.Sequence || previous.ReleaseSHA256 != installed.ReleaseSHA256 {
+		return nil, errors.New("installed release changed during check; check again")
+	}
+	if release == nil || release.Sequence < installed.Sequence {
+		return nil, nil
+	}
+	if release.Sequence == installed.Sequence {
+		if release.ManifestSHA256 != installed.ReleaseSHA256 {
+			return nil, errors.New("release identity change refused")
+		}
+		return nil, nil
+	}
+	return release, nil
+}
+
+func custodyInstalledPackage(r update.MaintenanceRecord) (*update.MaintenancePackage, error) {
+	if r.Phase != "idle" && r.PreviousPackage == nil && (r.Phase != "completed" || r.Start != "target") {
+		return nil, errors.New("original installed release is unavailable during recovery")
+	}
+	return r.InstalledPackage()
 }
 func (c *custodyMaintenanceController) launch(ctx context.Context, id string) error {
 	if !update.IDOK(id) {
@@ -288,14 +331,13 @@ func bindCompiledCustodyMaintenance(store *core.Store, owner int, dir string) er
 			return err
 		}
 	}
-	installed, err := r.InstalledPackage()
-	if err != nil {
+	if _, err = r.InstalledPackage(); err != nil {
 		return err
 	}
 	check := compiledApplicationUpdateCheck
 	if check == nil && compiledApplicationChannel != nil {
 		factory := func(path string) (bootstrap.Options, error) { return channelOptions(compiledApplicationChannel, path) }
-		check = channelCheck(factory, filepath.Join(dir, "update-channel"), installed.Sequence, installed.ReleaseSHA256)
+		check = custodyChannelCheck(owner, factory, filepath.Join(dir, "update-channel"), false)
 	}
 	if check == nil {
 		return nil
@@ -304,4 +346,23 @@ func bindCompiledCustodyMaintenance(store *core.Store, owner int, dir string) er
 		return store.UpdatePause(ctx, update.CorePauseCommand{Action: "status", ProbeID: update.NewProbe()})
 	}
 	return store.BindApplicationUpdateController(&custodyMaintenanceController{owner: owner, check: check, pauseStatus: pauseStatus}, true)
+}
+
+// The target can start before its protected transaction is marked complete.
+// Read the installed floor at each check, not only when that process starts.
+func custodyChannelCheck(owner int, factory channelOptionsFactory, parent string, developmentOnly bool) func(context.Context) (*core.ApplicationRelease, error) {
+	return func(ctx context.Context) (*core.ApplicationRelease, error) {
+		r, err := update.ReadMaintenanceRecord(owner)
+		if err != nil {
+			return nil, err
+		}
+		installed, err := custodyInstalledPackage(r)
+		if err != nil {
+			return nil, err
+		}
+		if developmentOnly && !installed.DevelopmentOnly {
+			return nil, errors.New("controlled custody release required")
+		}
+		return channelCheck(factory, parent, installed.Sequence, installed.ReleaseSHA256)(ctx)
+	}
 }

@@ -448,7 +448,7 @@ func applicationConnectedRuntime(args []string) (bool, error) {
 		if err != nil || !installed.DevelopmentOnly {
 			return false, errors.New("controlled custody release required")
 		}
-		compiledApplicationUpdateCheck = channelCheck(applicationVMOptions, filepath.Join(m.Root, "app-state", "update-channel"), installed.Sequence, installed.ReleaseSHA256)
+		compiledApplicationUpdateCheck = custodyChannelCheck(m.Owner, applicationVMOptions, filepath.Join(m.Root, "app-state", "update-channel"), true)
 		return false, nil
 	}
 	remote := false

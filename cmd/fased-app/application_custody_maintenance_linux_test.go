@@ -24,6 +24,56 @@ func fixtureCustodyPause(id, manifest string) update.CorePauseReceipt {
 	return update.CorePauseReceipt{Version: 1, State: "paused", PauseID: update.NewProbe(), Request: request, Core: snapshot}
 }
 
+func TestCustodyCheckUsesCompletedProtectedRelease(t *testing.T) {
+	packageFor := func(version string, sequence uint64, release string) *update.MaintenancePackage {
+		return &update.MaintenancePackage{Version: version, Source: strings.Repeat("a", 40), Sequence: sequence,
+			ReleaseSHA256: release, DevelopmentOnly: true, Components: []update.Component{
+				{Version: version, Contract: core.OrdinaryUpdateContract(), Artifact: update.Artifact{File: "fased-app", Size: 1, SHA256: strings.Repeat("b", 64)}},
+				{Version: version, Contract: signer.OrdinaryUpdateContract(), Artifact: update.Artifact{File: "fased-signer", Size: 1, SHA256: strings.Repeat("c", 64)}},
+			}}
+	}
+	base := packageFor("0.1.11", 8, strings.Repeat("1", 64))
+	target := packageFor("0.1.12", 9, strings.Repeat("2", 64))
+	r := update.MaintenanceRecord{Phase: "ready", Start: "target", PreviousPackage: base, Package: target}
+	release := &core.ApplicationRelease{Version: target.Version, Sequence: target.Sequence, ManifestSHA256: target.ReleaseSHA256, EngineSHA256: strings.Repeat("b", 64)}
+	c := custodyMaintenanceController{owner: 1800,
+		check:      func(context.Context) (*core.ApplicationRelease, error) { return release, nil },
+		readRecord: func(int) (update.MaintenanceRecord, error) { return r, nil }}
+	if got, err := c.Check(t.Context()); err != nil || got != release {
+		t.Fatal("unfinished target should not replace the protected installed floor", got, err)
+	}
+	r.Phase = "completed"
+	if got, err := c.Check(t.Context()); err != nil || got != nil {
+		t.Fatal("completed installed release was offered again", got, err)
+	}
+	changed := *release
+	changed.ManifestSHA256 = strings.Repeat("3", 64)
+	release = &changed
+	if _, err := c.Check(t.Context()); err == nil {
+		t.Fatal("different release at the installed sequence was accepted")
+	}
+	changed.Sequence++
+	if got, err := c.Check(t.Context()); err != nil || got != release {
+		t.Fatal("a newer release was not offered", got, err)
+	}
+	r.Phase = "ready"
+	c.check = func(context.Context) (*core.ApplicationRelease, error) {
+		r.Phase = "completed"
+		return nil, nil
+	}
+	if _, err := c.Check(t.Context()); err == nil {
+		t.Fatal("a changing protected floor was reported current")
+	}
+	r.Phase, r.PreviousPackage = "ready", nil
+	c.check = func(context.Context) (*core.ApplicationRelease, error) {
+		t.Fatal("ambiguous predecessor reached the release channel")
+		return nil, nil
+	}
+	if _, err := c.Check(t.Context()); err == nil {
+		t.Fatal("an unfinished legacy record without its previous floor was accepted")
+	}
+}
+
 func TestCustodyUpdateStatusNeverRestartsWorker(t *testing.T) {
 	id := update.NewProbe()
 	release := &core.ApplicationRelease{Sequence: 8, ManifestSHA256: strings.Repeat("a", 64), EngineSHA256: strings.Repeat("b", 64)}
