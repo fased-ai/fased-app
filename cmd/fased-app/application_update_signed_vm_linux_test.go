@@ -400,7 +400,7 @@ func fixtureCustodyServe(args []string, uid int, m custodyinstall.Manifest) (boo
 	if values["--custody-config"] == "" {
 		return false, nil
 	}
-	if m.Owner != 1100 || m.Root != custodyinstall.Root(1100) || m.Location != "local" || m.Mode != signer.OrdinaryCustodyMode || m.Provenance != signer.ControlledCustodyProfile || uid != m.App.UID || uid <= 0 || uid == m.Owner || values["--custody-config"] != m.Root+"/identity.json" || values["--data-dir"] != m.Root+"/app-state" || values["--installation-root"] != m.Root {
+	if m.Owner != 1100 || m.Root != custodyinstall.Root(1100) || (m.Location != "local" && m.Location != "remote") || m.Mode != signer.OrdinaryCustodyMode || m.Provenance != signer.ControlledCustodyProfile || uid != m.App.UID || uid <= 0 || uid == m.Owner || values["--custody-config"] != m.Root+"/identity.json" || values["--data-dir"] != m.Root+"/app-state" || values["--installation-root"] != m.Root {
 		return false, errors.New("fixed controlled custody identity required")
 	}
 	return true, nil
@@ -418,6 +418,15 @@ func TestFixtureCustodyChannelRequiresExactInstalledIdentity(t *testing.T) {
 	if ok, _ := fixtureCustodyServe(append(args, "--custody-config", "/foreign"), m.App.UID, m); ok {
 		t.Fatal("duplicate custody identity accepted")
 	}
+	m.Location = "remote"
+	if ok, err := fixtureCustodyServe(args, m.App.UID, m); err != nil || !ok {
+		t.Fatal("exact disposable Remote custody identity rejected", err)
+	}
+	m.Location = "unknown"
+	if ok, _ := fixtureCustodyServe(args, m.App.UID, m); ok {
+		t.Fatal("unknown custody location accepted")
+	}
+	m.Location = "local"
 	m.Provenance = "owner-input:v1"
 	if ok, _ := fixtureCustodyServe(args, m.App.UID, m); ok {
 		t.Fatal("real custody admitted to fixture channel")
