@@ -510,6 +510,33 @@ test("staging requires actual verifier timestamp enums, exact policy and tag ide
   );
 });
 
+test("an explicit package-only run cannot start VM acceptance", () => {
+  const release = readFileSync(
+    new URL("../.github/workflows/release.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    release,
+    /package_only:\n(?:.*\n)*?\s+default: false\n\s+type: boolean/,
+  );
+  const acceptance = release.slice(
+    release.indexOf("  installed-acceptance:\n"),
+  );
+  const condition = acceptance
+    .split("\n")
+    .find((line) => line.trimStart().startsWith("if:"));
+  assert.match(condition ?? "", /!inputs\.package_only/);
+  const inspection = readFileSync(
+    new URL("../.github/workflows/inspection-acceptance.yml", import.meta.url),
+    "utf8",
+  );
+  const vm = inspection.slice(inspection.indexOf("  inspection-vm:\n"));
+  const vmCondition = vm
+    .split("\n")
+    .find((line) => line.trimStart().startsWith("if:"));
+  assert.match(vmCondition ?? "", /github\.event_name == 'workflow_dispatch'/);
+});
+
 test("staged release has one pinned unpublished Ubuntu build", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/release.yml", import.meta.url),

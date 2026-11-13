@@ -16,6 +16,11 @@ on:
         required: false
         default: ""
         type: string
+      package_only:
+        description: Build the unpublished package without starting VM acceptance
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
 concurrency:
@@ -30,9 +35,14 @@ jobs:
           FASED_INPUT_SOURCE: ${{ inputs.source }}
           FASED_REPLAY_RUN_ID: ${{ inputs.candidate_run }}
           FASED_REPLAY_RUN_ATTEMPT: ${{ inputs.candidate_attempt }}
+          FASED_PACKAGE_ONLY: ${{ inputs.package_only }}
         run: |
           if [[ "$GITHUB_REF" != refs/heads/main || "$FASED_INPUT_SOURCE" != "$GITHUB_SHA" ]]; then
             echo 'Reviewed main source is required.' >&2
+            exit 1
+          fi
+          if [[ "$FASED_PACKAGE_ONLY" == true && ( -n "$FASED_REPLAY_RUN_ID" || -n "$FASED_REPLAY_RUN_ATTEMPT" ) ]]; then
+            echo 'Package-only cannot be combined with acceptance replay.' >&2
             exit 1
           fi
           if [[ -z "$FASED_REPLAY_RUN_ID" && -z "$FASED_REPLAY_RUN_ATTEMPT" ]]; then exit 0; fi
@@ -127,7 +137,7 @@ jobs:
             .evidence/ubuntu-release/fased-release.json
   installed-acceptance:
     needs: [candidate-inputs, ubuntu-amd64]
-    if: always() && needs.candidate-inputs.result == 'success' && github.ref == 'refs/heads/main' && github.sha == inputs.source && github.repository == 'fased-ai/fased-app' && github.repository_id == '1426211857' && github.repository_owner_id == '279582504' && (needs.ubuntu-amd64.result == 'success' || (needs.ubuntu-amd64.result == 'skipped' && inputs.candidate_run != '' && inputs.candidate_attempt != '' && github.run_attempt == 1))
+    if: always() && !inputs.package_only && needs.candidate-inputs.result == 'success' && github.ref == 'refs/heads/main' && github.sha == inputs.source && github.repository == 'fased-ai/fased-app' && github.repository_id == '1426211857' && github.repository_owner_id == '279582504' && (needs.ubuntu-amd64.result == 'success' || (needs.ubuntu-amd64.result == 'skipped' && inputs.candidate_run != '' && inputs.candidate_attempt != '' && github.run_attempt == 1))
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     permissions:

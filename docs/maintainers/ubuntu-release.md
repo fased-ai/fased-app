@@ -4,7 +4,9 @@ Fased uses saved GitHub authentication and automated build attestations. Custome
 
 The selected candidate, installed identities, active checkout, results and exact action authority live in Current (`/home/fc/fasedbot/docs/fased/execution.md`, active checkpoint) in the workspace implementation record. Preserve its original Local PASS within that package's scope. Changes to candidate bytes require matching affected installed evidence; this guide never grants delivery, publication or activation authority.
 
-The protected workflow produces authenticated Local proof. Actual persistent Remote evidence is separately reviewed under the owner-selected GitHub contract below. Current records completed and missing legs; the publisher refuses missing or incomplete evidence.
+The protected workflow can produce authenticated Local proof. Actual persistent Remote evidence is separately reviewed under the owner-selected GitHub contract below. Current records completed and missing legs; the publisher refuses missing or incomplete evidence.
+
+For the owner's no-VM route, `package_only=true` builds and attests the reviewed-main candidate without starting the VM acceptance job. It creates no Local acceptance receipt and does not authorize publication. The current publisher still requires its authenticated CI Local receipt; accepting reviewed real-host evidence instead remains a separate, unimplemented publication-gate change. PRs do not automatically launch the optional VM workflow; running it later requires renewed owner authority.
 
 ## Status and authority
 

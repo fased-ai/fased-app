@@ -82,6 +82,43 @@ func TestConsentFailsBeforeHostOrInputAccess(t *testing.T) {
 	}
 }
 
+func TestCustodyHostPlatform(t *testing.T) {
+	for _, tc := range []struct {
+		name, release, arch, location string
+		wantOK                        bool
+	}{
+		{"Fedora Local", "ID=fedora\nVERSION_ID=45\n", "amd64", "local", true},
+		{"Fedora Remote refused", "ID=fedora\nVERSION_ID=45\n", "amd64", "remote", false},
+		{"Fedora unsupported architecture", "ID=fedora\nVERSION_ID=45\n", "arm64", "local", false},
+		{"Ubuntu Local", "ID=ubuntu\nVERSION_ID=\"24.04\"\n", "amd64", "local", true},
+		{"Ubuntu Remote", "ID=ubuntu\nVERSION_ID=\"24.04\"\n", "amd64", "remote", true},
+		{"Unverified Ubuntu version", "ID=ubuntu\nVERSION_ID=\"26.04\"\n", "amd64", "local", false},
+		{"Ambiguous OS identity", "ID=fedora\nID=ubuntu\nVERSION_ID=\"24.04\"\n", "amd64", "local", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := verifyCustodyPlatform([]byte(tc.release), tc.arch, tc.location)
+			if (err == nil) != tc.wantOK {
+				t.Fatalf("supported=%t, error=%v", tc.wantOK, err)
+			}
+		})
+	}
+}
+
+func TestFedoraCustodyInstallReachesInputValidation(t *testing.T) {
+	release, err := os.ReadFile("/etc/os-release")
+	if err != nil || !bytes.Contains(release, []byte("ID=fedora\n")) {
+		t.Skip("real Fedora host required")
+	}
+	missing := filepath.Join(t.TempDir(), "missing-core")
+	_, err = Install(t.Context(), Options{
+		Disposable: true, PrepareHost: true, Location: "local",
+		Listen: "127.0.0.1:7332", Core: missing,
+	}, &System{Out: io.Discard})
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected the real installer to reach missing input before host mutation, got %v", err)
+	}
+}
+
 func TestSealedEnrollmentImagesReachTheCustodyReader(t *testing.T) {
 	const childKey = "FASED_SEALED_ENROLLMENT_CHILD"
 	if mode := os.Getenv(childKey); mode != "" {

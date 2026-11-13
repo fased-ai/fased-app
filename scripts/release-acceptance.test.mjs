@@ -227,7 +227,8 @@ test("complete admission includes terminal, private access, authentication, rebo
 });
 test("acceptance comes from exact authenticated attempt artifact, not local JSON", async () => {
   let raw = zipped(receipt()),
-    changed = false;
+    changed = false,
+    skipped = false;
   const api = async (method, url) => {
     assert.equal(method, "GET");
     if (url.endsWith("/jobs"))
@@ -236,7 +237,7 @@ test("acceptance comes from exact authenticated attempt artifact, not local JSON
           {
             name: "installed-acceptance",
             status: "completed",
-            conclusion: "success",
+            conclusion: skipped ? "skipped" : "success",
           },
         ],
       };
@@ -270,6 +271,12 @@ test("acceptance comes from exact authenticated attempt artifact, not local JSON
       .runAttempt,
     "2",
   );
+  skipped = true;
+  await assert.rejects(
+    verifyInstalledAcceptance(packet, inventory, api, options),
+    /Installed acceptance job did not complete/,
+  );
+  skipped = false;
   const foreignRemote = receipt();
   foreignRemote.installedAgent.profile = "remote";
   raw = zipped(foreignRemote);
@@ -1486,6 +1493,7 @@ test("workflow input preflight fails partial replay modes before either job", ()
     FASED_INPUT_SOURCE: "a".repeat(40),
     FASED_REPLAY_RUN_ID: "",
     FASED_REPLAY_RUN_ATTEMPT: "",
+    FASED_PACKAGE_ONLY: "false",
   };
   const run = (change) =>
     execFileSync("bash", ["-c", script], {
@@ -1494,11 +1502,17 @@ test("workflow input preflight fails partial replay modes before either job", ()
       timeout: 5000,
     });
   assert.doesNotThrow(() => run({}));
+  assert.doesNotThrow(() => run({ FASED_PACKAGE_ONLY: "true" }));
   assert.doesNotThrow(() =>
     run({ FASED_REPLAY_RUN_ID: "123", FASED_REPLAY_RUN_ATTEMPT: "2" }),
   );
   for (const change of [
     { FASED_REPLAY_RUN_ID: "123" },
+    {
+      FASED_PACKAGE_ONLY: "true",
+      FASED_REPLAY_RUN_ID: "123",
+      FASED_REPLAY_RUN_ATTEMPT: "2",
+    },
     { FASED_REPLAY_RUN_ATTEMPT: "2" },
     { FASED_REPLAY_RUN_ID: "0123", FASED_REPLAY_RUN_ATTEMPT: "2" },
     { FASED_REPLAY_RUN_ID: "123", FASED_REPLAY_RUN_ATTEMPT: "0" },

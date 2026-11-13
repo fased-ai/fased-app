@@ -15,12 +15,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/hostplatform"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
@@ -308,6 +310,14 @@ func RecordConfinedEnrollmentIntent(m Manifest) error {
 	return core.WritePrivateJSON(path, want)
 }
 
+func verifyCustodyPlatform(release []byte, arch, location string) error {
+	p, err := hostplatform.Lookup(string(release), arch)
+	if err == nil && (p.ID == "ubuntu" && p.Version == "24.04" || p.ID == "fedora" && p.Version == "45" && location == "local") {
+		return nil
+	}
+	return errors.New("custody setup supports Ubuntu 24.04 or Fedora 45 amd64 Local")
+}
+
 func install(ctx context.Context, o Options, s *System, controlled bool) (Manifest, error) {
 	var m Manifest
 	if s == nil {
@@ -333,8 +343,11 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 		return m, errors.New("ordinary owner required")
 	}
 	osRelease, e := os.ReadFile("/etc/os-release")
-	if e != nil || !bytes.Contains(osRelease, []byte("ID=ubuntu\n")) || !bytes.Contains(osRelease, []byte("VERSION_ID=\"24.04\"")) {
-		return m, errors.New("managed fixture installation currently requires Ubuntu 24.04")
+	if e != nil {
+		return m, errors.New("custody setup requires readable OS release metadata")
+	}
+	if e = verifyCustodyPlatform(osRelease, runtime.GOARCH, o.Location); e != nil {
+		return m, e
 	}
 	versionNumber := 1
 	if o.Network != "" {
