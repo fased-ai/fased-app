@@ -58,6 +58,13 @@ func openOwnerEnrollmentJournal(a maintenance.Authority, requireLock bool) (jour
 	if unix.Fstat(dirFD, &st) != nil || int(st.Uid) != a.Owner || st.Mode&07777 != 0700 {
 		return j, errState
 	}
+	entries, err := dir.ReadDir(-1)
+	if err != nil {
+		return j, err
+	}
+	if err = rejectPendingOwnerJournal(entries); err != nil {
+		return j, err
+	}
 	lockFD, err := unix.Openat(dirFD, "controller.lock", unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return j, err

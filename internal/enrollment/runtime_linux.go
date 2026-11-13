@@ -94,8 +94,24 @@ func openRuntime(s Source, system *custodyinstall.System) (*runtimeHost, io.Clos
 	return &runtimeHost{system, f, parent, filepath.Base(s.Data), filepath.Join(dir, "state.json")}, lock, nil
 }
 
+func rejectPendingOwnerJournal(entries []os.DirEntry) error {
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".pending-") {
+			return errState
+		}
+	}
+	return nil
+}
+
 func readOwnerJournal(path string) (journal, error) {
 	var j journal
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		return j, err
+	}
+	if err = rejectPendingOwnerJournal(entries); err != nil {
+		return j, err
+	}
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return j, err
@@ -111,6 +127,18 @@ func readOwnerJournal(path string) (journal, error) {
 		return journal{}, errState
 	}
 	return j, nil
+}
+
+// A successful enrollment transition must survive a power loss after rename.
+func writeOwnerJournal(path string, j journal) error {
+	if err := core.WritePrivateJSON(path, j); err != nil {
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	return errors.Join(dir.Sync(), dir.Close())
 }
 
 func (h *runtimeHost) image(ctx context.Context, m custodyinstall.Manifest, action, path, id, digest string, in io.Reader) error {
@@ -538,7 +566,7 @@ func runInstalled(ctx context.Context, s Source, o Options, system *custodyinsta
 			return system.RecoverEnrollmentCore(ctx, j.CoreRecovery.Previous, j.ID, o.Core, next)
 		},
 		owner: os.Getuid(), load: func() (journal, error) { return readOwnerJournal(h.state) },
-		save: func(j journal) error { return core.WritePrivateJSON(h.state, j) }, node: realNode,
+		save: func(j journal) error { return writeOwnerJournal(h.state, j) }, node: realNode,
 		targetExists: func() bool { _, e := os.Lstat(custodyinstall.Root(os.Getuid())); return !errors.Is(e, os.ErrNotExist) },
 		prepare: func(ctx context.Context, j journal, o Options) (custodyinstall.Manifest, error) {
 			if o.Mode == signer.OrdinaryCustodyMode {

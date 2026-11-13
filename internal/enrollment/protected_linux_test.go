@@ -40,6 +40,21 @@ func TestProtectedEnrollmentJournalRequiresOriginalLockForMutation(t *testing.T)
 	if got, err := openOwnerEnrollmentJournal(a, true); err != nil || got.ID != j.ID {
 		t.Fatalf("held original journal rejected: %v", err)
 	}
+	pending := filepath.Join(dir, ".pending-123")
+	if err = os.WriteFile(pending, []byte("original pending write"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, requireLock := range []bool{false, true} {
+		if _, err = openOwnerEnrollmentJournal(a, requireLock); err == nil {
+			t.Fatal("protected reader accepted an ambiguous pending journal")
+		}
+	}
+	if b, err := os.ReadFile(pending); err != nil || string(b) != "original pending write" {
+		t.Fatal("protected reader changed the pending record", err)
+	}
+	if err = os.Remove(pending); err != nil {
+		t.Fatal(err)
+	}
 	if err = lock.Close(); err != nil {
 		t.Fatal(err)
 	}
