@@ -134,11 +134,25 @@ func (m Manager) config(ctx context.Context) (map[string]any, string, error) {
 	if etag == "" {
 		return nil, "", errors.New("Tailscale did not provide conditional-write identity; no mutation is permitted")
 	}
+	c, err := decodeServeInventory(data, true)
+	if err != nil {
+		return nil, "", err
+	}
+	return c, etag, nil
+}
+
+// Tailscale represents an absent current Serve configuration as JSON null.
+// Only reads of the current daemon state may normalize it to an empty object;
+// requested writes must remain explicit objects and retain their ETag.
+func decodeServeInventory(data []byte, allowNull bool) (map[string]any, error) {
 	var c map[string]any
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
-	if decoder.Decode(&c) != nil || c == nil || decoder.Decode(new(any)) != io.EOF {
-		return nil, "", errors.New("invalid Serve configuration; refusing mutation")
+	if decoder.Decode(&c) != nil || decoder.Decode(new(any)) != io.EOF || c == nil && !allowNull {
+		return nil, errors.New("invalid Serve configuration; refusing mutation")
+	}
+	if c == nil {
+		c = make(map[string]any)
 	}
 	// Some versions encode an unused optional section as null or an empty map.
 	for k, v := range c {
@@ -148,7 +162,7 @@ func (m Manager) config(ctx context.Context) (map[string]any, string, error) {
 			delete(c, k)
 		}
 	}
-	return c, etag, nil
+	return c, nil
 }
 func expected(p Plan) map[string]any {
 	host, port, _ := tailnet.Origin(p.Origin)

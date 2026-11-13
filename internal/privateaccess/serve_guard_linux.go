@@ -3,7 +3,6 @@
 package privateaccess
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -186,28 +185,12 @@ func allowedOwnerServeDelta(input []byte, args []string, current []byte, current
 	if err != nil || !slices.Equal(args, expected) || currentTag != tag {
 		return false
 	}
-	decode := func(data []byte) (map[string]any, bool) {
-		var result map[string]any
-		d := json.NewDecoder(bytes.NewReader(data))
-		d.UseNumber()
-		if d.Decode(&result) != nil || result == nil || d.Decode(new(any)) != io.EOF {
-			return nil, false
-		}
-		for k, v := range result {
-			if v == nil {
-				delete(result, k)
-			} else if m, ok := v.(map[string]any); ok && len(m) == 0 {
-				delete(result, k)
-			}
-		}
-		return result, true
-	}
-	before, ok := decode(current)
-	if !ok {
+	before, err := decodeServeInventory(current, true)
+	if err != nil {
 		return false
 	}
-	after, ok := decode(input)
-	if !ok {
+	after, err := decodeServeInventory(input, false)
+	if err != nil {
 		return false
 	}
 	return routeDeltaAllowed(before, after, plans, owns)
