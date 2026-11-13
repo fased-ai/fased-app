@@ -131,12 +131,15 @@ def login(origin):
     return api(origin, '/api/v1/auth/login', 'POST', {'password': PASSWORD})
 
 
-def seed_source(origin, binary):
-    code = run([binary, 'claim-code']).strip()
-    if not code:
-        raise RuntimeError('fixture claim unavailable')
-    session = api(origin, '/api/v1/auth/claim', 'POST', {'code': code, 'password': PASSWORD})
+def seed_source(origin, binary, session=None):
+    if session is None:
+        code = run([binary, 'claim-code']).strip()
+        if not code:
+            raise RuntimeError('fixture claim unavailable')
+        session = api(origin, '/api/v1/auth/claim', 'POST', {'code': code, 'password': PASSWORD})
     view = api(origin, '/api/v1/agents', session=session)
+    if any(t.get('name') == 'Disposable preserved task' for t in view['tasks']):
+        raise RuntimeError('fixture task already exists; preserve it')
     body = {'revision': view['revision'], 'profileId': view['profileId'], 'action': 'task-create',
             'name': 'Disposable preserved task', 'text': 'Fixture reminder', 'intervalSeconds': 3600, 'maxRuns': 2}
     view = api(origin, '/api/v1/agents', 'POST', body, session)
@@ -242,10 +245,30 @@ def setup(port):
                                 timeout=300, password_free=True)
     if status:
         raise RuntimeError('fixture Local installer exited ' + str(status))
+    return complete_setup(port)
+
+
+def resume_claimed(port):
+    if (WORK / 'selection').read_text() != 'base\n' or (WORK / 'state.json').exists() or (WORK / 'wallet-backup.json').exists():
+        raise RuntimeError('original pre-enrollment fixture required')
+    if (HOME / '.config/fased-app-enrollment/state.json').exists() or ROOT.exists():
+        raise RuntimeError('existing enrollment must be preserved')
+    binary = HOME / '.local/share/fased-app/fased-app'
+    trust = json.loads((TRUST / 'fixture.json').read_text())
+    manifest = json.loads((HOME / '.local/share/fased-app/install.json').read_text())
+    if digest(binary) != trust['sourceSha256'] or manifest.get('phase') != 'ready' or manifest.get('location') != 'local' or manifest.get('listen') != '127.0.0.1:' + str(port) or manifest.get('data') != str(HOME / '.config/fased-app'):
+        raise RuntimeError('original installed fixture differs')
+    origin = 'http://127.0.0.1:' + str(port)
+    if api(origin, '/api/v1/auth/state').get('claimed') is not True:
+        raise RuntimeError('original fixture owner is not claimed')
+    return complete_setup(port, login(origin))
+
+
+def complete_setup(port, session=None):
     binary = HOME / '.local/share/fased-app/fased-app'
     origin = 'http://127.0.0.1:' + str(port)
     original = health(origin)
-    task_id = seed_source(origin, binary)
+    task_id = seed_source(origin, binary, session)
     result = json.loads(run([binary, 'custody', 'enroll', '--source', 'local', '--expected-instance', original['instanceId'],
                              '--network', 'devnet', '--signer-binary', WORK / 'fased-signer', '--prepare-host',
                              '--disposable-fixture', '--ordinary-custody'], timeout=600))
@@ -404,7 +427,7 @@ def verify(operation):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('mode', choices=['server', 'probe', 'setup', 'target', 'watch', 'inspect', 'verify'])
+    p.add_argument('mode', choices=['server', 'probe', 'setup', 'resume-claimed', 'target', 'watch', 'inspect', 'verify'])
     p.add_argument('--port', type=int)
     p.add_argument('--operation')
     a = p.parse_args()
@@ -413,10 +436,13 @@ def main():
         server()
     elif a.mode == 'probe':
         probe()
-    elif a.mode == 'setup':
+    elif a.mode in ('setup', 'resume-claimed'):
         if a.port is None or not 1024 <= a.port <= 65535:
             raise RuntimeError('fixed private listener required')
-        setup(a.port)
+        if a.mode == 'setup':
+            setup(a.port)
+        else:
+            resume_claimed(a.port)
     elif a.mode == 'watch':
         watch()
     elif a.mode == 'target':

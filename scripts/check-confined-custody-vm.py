@@ -69,12 +69,58 @@ def fixture_failure_detail(stderr):
               'enrollment source lease was lost', 'original verified enrollment package unavailable',
               'original verified core unavailable', 'original verified signer unavailable')
     allowed = '|'.join(re.escape(label) for label in labels)
-    pattern = re.compile(r'fixture: (fixture command failed: (?:fased-app|fased-signer|fased) exit [0-9]{1,3}(?:; (?:' + allowed + r'))?)')
+    pattern = re.compile(r'fixture: (?:'
+                         r'(fixture command failed: (?:fased-app|fased-signer|fased) exit [0-9]{1,3}(?:; (?:' + allowed + r'))?)|'
+                         r'(fixture API /api/v1/(?:auth/(?:claim|login|state)|agents|accounts(?:/(?:setup|rpc|rpc-credential|read))?) HTTP [1-5][0-9]{2}))')
     for line in reversed(stderr[-8192:].decode(errors='replace').splitlines()):
         match = pattern.fullmatch(line)
         if match:
-            return match.group(1)
+            return match.group(1) or match.group(2)
     return ''
+
+
+def resume_inputs(work, previous_result, receipt_pin, helper_hash):
+    info = work.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        raise RuntimeError('original private VM directory required')
+    previous = json.loads(owned_file(previous_result, 65536).read_text())
+    if (previous.get('result') != 'FAIL' or previous.get('fixtureOnly') is not True or
+            previous.get('sourceReceiptSha256') != receipt_pin or previous.get('helperSha256') != helper_hash or
+            any(previous.get(flag) is not False for flag in ('mining', 'liveFeatures', 'automaticUpdates'))):
+        raise RuntimeError('original failed Local fixture receipt required')
+    setup = re.search(r'confined-custody-fixture\.py setup --port ([0-9]{4,5})(?:\x27|\s)', previous.get('error', ''))
+    hosts = owned_file(work / 'known_hosts', 8192).read_text().splitlines()
+    host_public = owned_file(work / 'host-key.pub', 8192).read_text().split()[:2]
+    if len(hosts) != 1 or len(host_public) != 2:
+        raise RuntimeError('original host identity required')
+    host = re.fullmatch(r'\[127\.0\.0\.1\]:([0-9]{4,5}) (\S+) (\S+)', hosts[0])
+    if not host or [host.group(2), host.group(3)] != host_public or not setup:
+        raise RuntimeError('original fixture listener or host identity differs')
+    ssh_port, app_port = int(host.group(1)), int(setup.group(1))
+    if not (1024 <= ssh_port <= 65535 and 1024 <= app_port <= 65535) or ssh_port == app_port:
+        raise RuntimeError('original fixture ports are invalid')
+    for name, limit in (('disk.qcow2', 16 << 30), ('seed.iso', 256 << 20), ('owner-key', 8192), ('owner-key.pub', 8192)):
+        owned_file(work / name, limit)
+    owner_key = work / 'owner-key'
+    if stat.S_IMODE(owner_key.stat().st_mode) != 0o600:
+        raise RuntimeError('original owner key is not private')
+    derived = command(['ssh-keygen', '-y', '-f', owner_key]).stdout.decode().split()[:2]
+    if derived != (work / 'owner-key.pub').read_text().split()[:2]:
+        raise RuntimeError('original owner key differs')
+    snapshot = owned_file(work / 'offline-inspection/partition.raw', 16 << 30)
+    if stat.S_IMODE(snapshot.stat().st_mode) != 0o600:
+        raise RuntimeError('private original filesystem witness required')
+    original_host = command(['debugfs', '-R', 'cat /etc/ssh/ssh_host_ed25519_key.pub', snapshot]).stdout.decode().split()[:2]
+    machine = command(['debugfs', '-R', 'cat /etc/machine-id', snapshot]).stdout.decode().strip()
+    if original_host != host_public or not re.fullmatch(r'[a-f0-9]{32}', machine):
+        raise RuntimeError('original VM filesystem identity differs')
+    chain = json.loads(command(['qemu-img', 'info', '--output=json', '--backing-chain', work / 'disk.qcow2']).stdout)
+    if (len(chain) != 2 or chain[0].get('format') != 'qcow2' or chain[0].get('virtual-size') != 12 << 30 or
+            chain[0].get('full-backing-filename') != str(IMAGE.resolve()) or chain[0].get('dirty-flag') or
+            chain[1].get('format') != 'qcow2' or P(chain[1].get('filename', '')).resolve() != IMAGE.resolve() or
+            chain[1].get('backing-filename')):
+        raise RuntimeError('original VM backing chain differs')
+    return ssh_port, app_port, machine
 
 
 def preflight(directory, helper_pin):
@@ -176,68 +222,79 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('--fixture-dir', type=P, required=True)
     p.add_argument('--helper-receipt-sha256', required=True)
+    p.add_argument('--resume-claimed', action='store_true', help='resume the original claimed pre-enrollment fixture')
     a = p.parse_args()
     directory, helper_hash = preflight(a.fixture_dir, a.helper_receipt_sha256)
     archive_files = safe_files((directory / 'repo-base', directory / 'repo-target'))
     work = directory / 'vm-owned'
-    result_path = directory / 'local-result.json'
+    result_path = directory / ('local-resume-result.json' if a.resume_claimed else 'local-result.json')
     if result_path.exists():
         raise RuntimeError('existing acceptance result must be preserved')
-    work.mkdir(mode=0o700)  # Exclusive: never replace or resume an unknown disk.
+    if a.resume_claimed:
+        ssh_port, app_port, original_machine = resume_inputs(work, directory / 'local-result.json', a.helper_receipt_sha256, helper_hash)
+    else:
+        work.mkdir(mode=0o700)  # Exclusive: never replace an unknown disk.
     result = {'result': 'FAIL', 'fixtureOnly': True, 'sourceReceiptSha256': a.helper_receipt_sha256,
               'helperSha256': helper_hash, 'mining': False, 'liveFeatures': False, 'automaticUpdates': False}
     vm = tunnel = watcher = browser = None
     serial = stderr = None
     try:
         key, hostkey = work / 'owner-key', work / 'host-key'
-        for path in (key, hostkey):
-            command(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', path])
-        ssh_port, app_port = port(), port()
-        while app_port == ssh_port:
-            app_port = port()
-        public = (work / 'owner-key.pub').read_text().strip()
-        host_public = (work / 'host-key.pub').read_text().split()[:2]
-        (work / 'known_hosts').write_text('[127.0.0.1]:' + str(ssh_port) + ' ' + ' '.join(host_public) + '\n')
-        private_lines = '\n'.join('       ' + line for line in hostkey.read_text().splitlines())
         protected = '/var/lib/fased-maintenance/images/' + helper_hash + '/fased-install'
-        unit = ('[Unit]\nDescription=Fased disposable fixture bootstrap\nAfter=network-online.target\n'
-                '[Service]\nType=oneshot\nExecStartPre=/usr/bin/sha256sum -c /var/lib/fased-update-fixture/helper.sha256\n'
-                'ExecStart=' + protected + ' maintenance-register --owner 1100 --profile local\n'
-                'ExecStart=' + protected + ' maintenance-bootstrap --owner 1100\nRemainAfterExit=yes\n')
-        user_data = ("#cloud-config\nssh_pwauth: false\ndisable_root: true\nusers:\n"
-                     "  - name: fased-local\n    uid: 1100\n    shell: /bin/bash\n    lock_passwd: true\n"
-                     "    ssh_authorized_keys:\n      - " + public + "\n"
-                     "ssh_keys:\n  ed25519_private: |\n" + private_lines + "\n  ed25519_public: " + ' '.join(host_public) + "\n"
-                     "packages: [sudo, python3, bubblewrap, apparmor, apparmor-utils, polkitd, dbus-user-session]\n"
-                     "write_files:\n  - path: /etc/systemd/system/fased-fixture-bootstrap.service\n"
-                     "    owner: root:root\n    permissions: '0644'\n    content: |\n" +
-                     '\n'.join('      ' + line for line in unit.splitlines()) + "\n"
-                     "runcmd:\n"
-                     "  - [mkdir, -p, /mnt/fased-fixture]\n"
-                     "  - [mount, -o, ro, /dev/disk/by-label/cidata, /mnt/fased-fixture]\n"
-                     "  - [install, -d, -m, '0755', /var/lib/fased-update-fixture, /var/lib/fased-maintenance, /var/lib/fased-maintenance/images, /var/lib/fased-maintenance/images/" + helper_hash + "]\n"
-                     "  - [install, -m, '0644', /mnt/fased-fixture/seed.json, /var/lib/fased-update-fixture/seed.json]\n"
-                     "  - [install, -m, '0644', /mnt/fased-fixture/ca.pem, /var/lib/fased-update-fixture/ca.pem]\n"
-                     "  - [install, -m, '0644', /mnt/fased-fixture/fixture.json, /var/lib/fased-update-fixture/fixture.json]\n"
-                     "  - [install, -m, '0644', /mnt/fased-fixture/helper.sha256, /var/lib/fased-update-fixture/helper.sha256]\n"
-                     "  - [install, -m, '0555', /mnt/fased-fixture/fased-install, " + protected + "]\n"
-                     "  - [systemctl, daemon-reload]\n"
-                     "  - [systemctl, start, fased-fixture-bootstrap.service]\n"
-                     "  - [loginctl, enable-linger, '1100']\n"
-                     "  - [umount, /mnt/fased-fixture]\n")
-        (work / 'user-data').write_text(user_data)
-        (work / 'meta-data').write_text('instance-id: fased-confined-disposable\nlocal-hostname: fased-fixture\n')
-        (work / 'helper.sha256').write_text(helper_hash + '  ' + protected + '\n')
-        os.chmod(work / 'user-data', 0o600)
-        iso = work / 'seed.iso'
-        command(['xorriso', '-as', 'mkisofs', '-quiet', '-r', '-J', '-V', 'cidata', '-o', iso,
-                 work / 'user-data', work / 'meta-data', work / 'helper.sha256', directory / 'fased-install',
-                 directory / 'seed.json', directory / 'ca.pem', directory / 'fixture.json'])
-        disk = work / 'disk.qcow2'
-        command(['qemu-img', 'create', '-q', '-f', 'qcow2', '-F', 'qcow2', '-b', IMAGE, disk])
-        command(['qemu-img', 'resize', disk, '12G'])
-        serial = (work / 'serial.log').open('ab')
-        stderr = (work / 'qemu.stderr').open('ab')
+        if not a.resume_claimed:
+            for path in (key, hostkey):
+                command(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', path])
+            ssh_port, app_port = port(), port()
+            while app_port == ssh_port:
+                app_port = port()
+            public = (work / 'owner-key.pub').read_text().strip()
+            host_public = (work / 'host-key.pub').read_text().split()[:2]
+            (work / 'known_hosts').write_text('[127.0.0.1]:' + str(ssh_port) + ' ' + ' '.join(host_public) + '\n')
+            private_lines = '\n'.join('       ' + line for line in hostkey.read_text().splitlines())
+            unit = ('[Unit]\nDescription=Fased disposable fixture bootstrap\nAfter=network-online.target\n'
+                    '[Service]\nType=oneshot\nExecStartPre=/usr/bin/sha256sum -c /var/lib/fased-update-fixture/helper.sha256\n'
+                    'ExecStart=' + protected + ' maintenance-register --owner 1100 --profile local\n'
+                    'ExecStart=' + protected + ' maintenance-bootstrap --owner 1100\nRemainAfterExit=yes\n')
+            user_data = ("#cloud-config\nssh_pwauth: false\ndisable_root: true\nusers:\n"
+                         "  - name: fased-local\n    uid: 1100\n    shell: /bin/bash\n    lock_passwd: true\n"
+                         "    ssh_authorized_keys:\n      - " + public + "\n"
+                         "ssh_keys:\n  ed25519_private: |\n" + private_lines + "\n  ed25519_public: " + ' '.join(host_public) + "\n"
+                         "packages: [sudo, python3, bubblewrap, apparmor, apparmor-utils, polkitd, dbus-user-session]\n"
+                         "write_files:\n  - path: /etc/systemd/system/fased-fixture-bootstrap.service\n"
+                         "    owner: root:root\n    permissions: '0644'\n    content: |\n" +
+                         '\n'.join('      ' + line for line in unit.splitlines()) + "\n"
+                         "runcmd:\n"
+                         "  - [mkdir, -p, /mnt/fased-fixture]\n"
+                         "  - [mount, -o, ro, /dev/disk/by-label/cidata, /mnt/fased-fixture]\n"
+                         "  - [install, -d, -m, '0755', /var/lib/fased-update-fixture, /var/lib/fased-maintenance, /var/lib/fased-maintenance/images, /var/lib/fased-maintenance/images/" + helper_hash + "]\n"
+                         "  - [install, -m, '0644', /mnt/fased-fixture/seed.json, /var/lib/fased-update-fixture/seed.json]\n"
+                         "  - [install, -m, '0644', /mnt/fased-fixture/ca.pem, /var/lib/fased-update-fixture/ca.pem]\n"
+                         "  - [install, -m, '0644', /mnt/fased-fixture/fixture.json, /var/lib/fased-update-fixture/fixture.json]\n"
+                         "  - [install, -m, '0644', /mnt/fased-fixture/helper.sha256, /var/lib/fased-update-fixture/helper.sha256]\n"
+                         "  - [install, -m, '0555', /mnt/fased-fixture/fased-install, " + protected + "]\n"
+                         "  - [systemctl, daemon-reload]\n"
+                         "  - [systemctl, start, fased-fixture-bootstrap.service]\n"
+                         "  - [loginctl, enable-linger, '1100']\n"
+                         "  - [umount, /mnt/fased-fixture]\n")
+            (work / 'user-data').write_text(user_data)
+            (work / 'meta-data').write_text('instance-id: fased-confined-disposable\nlocal-hostname: fased-fixture\n')
+            (work / 'helper.sha256').write_text(helper_hash + '  ' + protected + '\n')
+            os.chmod(work / 'user-data', 0o600)
+            iso = work / 'seed.iso'
+            command(['xorriso', '-as', 'mkisofs', '-quiet', '-r', '-J', '-V', 'cidata', '-o', iso,
+                     work / 'user-data', work / 'meta-data', work / 'helper.sha256', directory / 'fased-install',
+                     directory / 'seed.json', directory / 'ca.pem', directory / 'fixture.json'])
+            disk = work / 'disk.qcow2'
+            command(['qemu-img', 'create', '-q', '-f', 'qcow2', '-F', 'qcow2', '-b', IMAGE, disk])
+            command(['qemu-img', 'resize', disk, '12G'])
+        else:
+            iso, disk = work / 'seed.iso', work / 'disk.qcow2'
+        if a.resume_claimed:
+            serial = os.fdopen(os.open(work / 'serial-resume.log', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), 'wb')
+            stderr = os.fdopen(os.open(work / 'qemu-resume.stderr', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), 'wb')
+        else:
+            serial = (work / 'serial.log').open('ab')
+            stderr = (work / 'qemu.stderr').open('ab')
         qemu = ['qemu-system-x86_64', '-machine', 'q35,accel=kvm', '-cpu', 'host', '-smp', '2', '-m', '2048',
                 '-nographic', '-monitor', 'none', '-drive', f'file={disk},if=virtio,format=qcow2',
                 '-drive', f'file={iso},if=virtio,format=raw,readonly=on', '-netdev',
@@ -275,34 +332,57 @@ def main():
             raise RuntimeError('Ubuntu/helper readiness deadline; preserve this VM')
 
         vm = start()
-        ready(vm, True)
-        tarpath = work / 'guest-inputs.tar'
-        with tarfile.open(tarpath, 'w') as archive:
-            for base, path in archive_files:
-                archive.add(path, arcname=str(P(base.name) / path.relative_to(base)), recursive=False)
-            for name in ('ca.pem', 'key.pem', 'fased-signer'):
-                archive.add(owned_file(directory / name, 64 << 20), arcname=name, recursive=False)
-            for name in ('confined-custody-fixture.py', 'staged-package-guest.py', 'staged-acceptance-contract.json'):
-                archive.add(REPO / 'scripts' / name, arcname=name, recursive=False)
-            info = tarfile.TarInfo('helper-path')
-            contents = (protected + '\n').encode()
-            info.mode, info.size = 0o600, len(contents)
-            import io
-            archive.addfile(info, io.BytesIO(contents))
-        remote(['/usr/bin/mkdir', '-m', '0700', 'custody-fixture'])
-        with tarpath.open('rb') as f:
-            subprocess.run(ssh + ['tar -xf - -C custody-fixture'], stdin=f, stdout=subprocess.PIPE,
-                           stderr=subprocess.PIPE, timeout=180, check=True)
-        remote(['/usr/bin/python3', '-m', 'py_compile', 'custody-fixture/confined-custody-fixture.py'])
-        command(ssh + ['nohup /usr/bin/python3 custody-fixture/confined-custody-fixture.py server >custody-fixture/https.log 2>&1 </dev/null &'])
-        remote(['/usr/bin/python3', 'custody-fixture/confined-custody-fixture.py', 'probe'], timeout=30)
+        ready(vm, not a.resume_claimed)
+        guest_script = 'custody-fixture/confined-custody-fixture.py'
+        if not a.resume_claimed:
+            tarpath = work / 'guest-inputs.tar'
+            with tarfile.open(tarpath, 'w') as archive:
+                for base, path in archive_files:
+                    archive.add(path, arcname=str(P(base.name) / path.relative_to(base)), recursive=False)
+                for name in ('ca.pem', 'key.pem', 'fased-signer'):
+                    archive.add(owned_file(directory / name, 64 << 20), arcname=name, recursive=False)
+                for name in ('confined-custody-fixture.py', 'staged-package-guest.py', 'staged-acceptance-contract.json'):
+                    archive.add(REPO / 'scripts' / name, arcname=name, recursive=False)
+                info = tarfile.TarInfo('helper-path')
+                contents = (protected + '\n').encode()
+                info.mode, info.size = 0o600, len(contents)
+                import io
+                archive.addfile(info, io.BytesIO(contents))
+            remote(['/usr/bin/mkdir', '-m', '0700', 'custody-fixture'])
+            with tarpath.open('rb') as f:
+                subprocess.run(ssh + ['tar -xf - -C custody-fixture'], stdin=f, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, timeout=180, check=True)
+            remote(['/usr/bin/python3', '-m', 'py_compile', 'custody-fixture/confined-custody-fixture.py'])
+        else:
+            machine = remote(['/usr/bin/cat', '/etc/machine-id'], timeout=15).stdout.decode().strip()
+            if machine != original_machine:
+                raise RuntimeError('running VM does not match original filesystem witness')
+            guest_script = 'custody-fixture/confined-custody-fixture-resume.py'
+            script = (REPO / 'scripts/confined-custody-fixture.py').read_bytes()
+            if len(script) > 128 << 10:
+                raise RuntimeError('fixture resume consumer is too large')
+            transfer = ("import os,stat,sys; data=sys.stdin.buffer.read(131073); assert len(data)<=131072; "
+                        "d=os.open('custody-fixture',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW); "
+                        "i=os.fstat(d); assert i.st_uid==os.getuid() and stat.S_IMODE(i.st_mode)==0o700; "
+                        "f=os.open('confined-custody-fixture-resume.py',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=d); "
+                        "s=os.fdopen(f,'wb'); s.write(data); s.flush(); os.fsync(s.fileno()); s.close(); os.close(d)")
+            remote(['/usr/bin/python3', '-c', transfer], stdin=script)
+            actual = remote(['/usr/bin/sha256sum', guest_script]).stdout.decode().split()[0]
+            if actual != hashlib.sha256(script).hexdigest():
+                raise RuntimeError('fixture resume consumer differs after transfer')
+            actual_helper = remote(['/usr/bin/sha256sum', protected], timeout=15).stdout.decode().split()[0]
+            if actual_helper != helper_hash:
+                raise RuntimeError('original protected helper differs')
+        server_output = '>/dev/null' if a.resume_claimed else '>>custody-fixture/https.log'
+        command(ssh + ['nohup /usr/bin/python3 ' + shlex.quote(guest_script) + ' server ' + server_output + ' 2>&1 </dev/null &'])
+        remote(['/usr/bin/python3', guest_script, 'probe'], timeout=30)
         print('Installing and enrolling the disposable Local fixture…', flush=True)
-        ready_data = json.loads(remote(['/usr/bin/python3', 'custody-fixture/confined-custody-fixture.py', 'setup', '--port', app_port], timeout=900).stdout)
+        ready_data = json.loads(remote(['/usr/bin/python3', guest_script, 'resume-claimed' if a.resume_claimed else 'setup', '--port', app_port], timeout=900).stdout)
         if ready_data.get('result') != 'READY' or ready_data.get('fixtureOnly') is not True:
             raise RuntimeError('Local enrollment did not reach its real entry')
         result['instanceId'] = ready_data['instanceId']
         result['beforeBoot'] = remote(['/usr/bin/cat', '/proc/sys/kernel/random/boot_id']).stdout.decode().strip()
-        remote(['/usr/bin/python3', 'custody-fixture/confined-custody-fixture.py', 'target'])
+        remote(['/usr/bin/python3', guest_script, 'target'])
         tunnel = subprocess.Popen(ssh[:-1] + ['-o', 'ExitOnForwardFailure=yes', '-N', '-L', f'127.0.0.1:{app_port}:127.0.0.1:{app_port}', ssh[-1]], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         tunnel_deadline = time.monotonic() + 20
         while time.monotonic() < tunnel_deadline:
@@ -320,7 +400,7 @@ def main():
                 time.sleep(0.2)
         else:
             raise RuntimeError('fixture tunnel did not become ready')
-        watcher = subprocess.Popen(ssh + ['python3 custody-fixture/confined-custody-fixture.py watch'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        watcher = subprocess.Popen(ssh + ['/usr/bin/python3 ' + shlex.quote(guest_script) + ' watch'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         browser = subprocess.Popen(['node', str(REPO / 'scripts/confined-custody-browser.mjs'), str(app_port), result['instanceId']],
                                    cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         browser_out, _ = browser.communicate(timeout=180)
@@ -369,11 +449,11 @@ def main():
         result['afterBoot'] = remote(['/usr/bin/cat', '/proc/sys/kernel/random/boot_id']).stdout.decode().strip()
         if result['beforeBoot'] == result['afterBoot']:
             raise RuntimeError('new Ubuntu boot was not observed')
-        command(ssh + ['nohup /usr/bin/python3 custody-fixture/confined-custody-fixture.py server >custody-fixture/https.log 2>&1 </dev/null &'])
-        remote(['/usr/bin/python3', 'custody-fixture/confined-custody-fixture.py', 'probe'], timeout=30)
+        command(ssh + ['nohup /usr/bin/python3 ' + shlex.quote(guest_script) + ' server ' + server_output + ' 2>&1 </dev/null &'])
+        remote(['/usr/bin/python3', guest_script, 'probe'], timeout=30)
         end, notice = time.monotonic() + 300, 0
         while time.monotonic() < end:
-            observed = json.loads(remote(['/usr/bin/python3', 'custody-fixture/confined-custody-fixture.py', 'inspect'], timeout=15).stdout)
+            observed = json.loads(remote(['/usr/bin/python3', guest_script, 'inspect'], timeout=15).stdout)
             if observed['operationId'] != cut['operationId']:
                 raise RuntimeError('original update identity changed after reboot')
             if observed['phase'] == 'completed':
@@ -386,7 +466,7 @@ def main():
             time.sleep(1)
         else:
             raise RuntimeError('original update remains held; no retry sent')
-        proof = json.loads(remote(['/usr/bin/python3', 'custody-fixture/confined-custody-fixture.py', 'verify', '--operation', cut['operationId']], timeout=300).stdout)
+        proof = json.loads(remote(['/usr/bin/python3', guest_script, 'verify', '--operation', cut['operationId']], timeout=300).stdout)
         if proof.get('result') != 'PASS' or proof.get('operationId') != cut['operationId']:
             raise RuntimeError('Local recovery proof incomplete')
         result['proof'] = proof

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Boundary regressions for the disposable Local acceptance driver."""
 import importlib.util
+import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -83,6 +85,80 @@ class FixtureBoundaries(unittest.TestCase):
         good = b'fixture: fixture command failed: fased-app exit 1; protected enrollment source validation refused\n'
         self.assertEqual('fixture command failed: fased-app exit 1; protected enrollment source validation refused', host.fixture_failure_detail(good))
         self.assertEqual('', host.fixture_failure_detail(b'fixture: fixture command failed: fased-app exit 1; token=private\n'))
+        self.assertEqual('fixture API /api/v1/auth/claim HTTP 409', host.fixture_failure_detail(b'fixture: fixture API /api/v1/auth/claim HTTP 409\n'))
+        self.assertEqual('', host.fixture_failure_detail(b'fixture: fixture API /api/v1/auth/claim HTTP 409 token=private\n'))
+
+    def test_resume_requires_original_receipt_and_pinned_identities(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            work = base / 'vm-owned'
+            work.mkdir(mode=0o700)
+            for name in ('disk.qcow2', 'seed.iso', 'owner-key'):
+                (work / name).write_text('fixture')
+            (work / 'owner-key').chmod(0o600)
+            (work / 'owner-key.pub').write_text('ssh-ed25519 owner-public\n')
+            (work / 'host-key.pub').write_text('ssh-ed25519 host-public\n')
+            (work / 'known_hosts').write_text('[127.0.0.1]:34163 ssh-ed25519 host-public\n')
+            witness_dir = work / 'offline-inspection'
+            witness_dir.mkdir()
+            witness = witness_dir / 'partition.raw'
+            witness.write_text('original snapshot')
+            witness.chmod(0o600)
+            image = base / 'ubuntu.img'
+            chain = [{'format': 'qcow2', 'virtual-size': 12 << 30, 'full-backing-filename': str(image)},
+                     {'format': 'qcow2', 'filename': str(image)}]
+            def output(args):
+                if args[0] == 'ssh-keygen':
+                    return SimpleNamespace(stdout=b'ssh-ed25519 owner-public\n')
+                if args[0] == 'debugfs':
+                    value = 'ssh-ed25519 host-public\n' if 'ssh_host' in args[2] else 'd' * 32 + '\n'
+                    return SimpleNamespace(stdout=value.encode())
+                return SimpleNamespace(stdout=json.dumps(chain).encode())
+            receipt = {'result': 'FAIL', 'fixtureOnly': True, 'sourceReceiptSha256': 'a' * 64,
+                       'helperSha256': 'b' * 64, 'mining': False, 'liveFeatures': False,
+                       'automaticUpdates': False,
+                       'error': "fixture confined-custody-fixture.py setup --port 50943' failed"}
+            result = base / 'local-result.json'
+            result.write_text(json.dumps(receipt))
+            with patch.object(host, 'IMAGE', image), patch.object(host, 'command', side_effect=output):
+                self.assertEqual((34163, 50943, 'd' * 32), host.resume_inputs(work, result, 'a' * 64, 'b' * 64))
+                chain[0]['full-backing-filename'] = '/unexpected/image'
+                with self.assertRaisesRegex(RuntimeError, 'backing chain differs'):
+                    host.resume_inputs(work, result, 'a' * 64, 'b' * 64)
+                chain[0]['full-backing-filename'] = str(image)
+                receipt['helperSha256'] = 'c' * 64
+                result.write_text(json.dumps(receipt))
+                with self.assertRaisesRegex(RuntimeError, 'receipt required'):
+                    host.resume_inputs(work, result, 'a' * 64, 'b' * 64)
+                receipt['helperSha256'] = 'b' * 64
+                result.write_text(json.dumps(receipt))
+                (work / 'known_hosts').write_text('[127.0.0.1]:34163 ssh-ed25519 other-host\n')
+                with self.assertRaisesRegex(RuntimeError, 'host identity differs'):
+                    host.resume_inputs(work, result, 'a' * 64, 'b' * 64)
+
+    def test_resume_claimed_preserves_existing_enrollment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            home, work, trust = base / 'home', base / 'work', base / 'trust'
+            work.mkdir()
+            trust.mkdir()
+            (work / 'selection').write_text('base\n')
+            binary = home / '.local/share/fased-app/fased-app'
+            binary.parent.mkdir(parents=True)
+            binary.write_text('original core')
+            (trust / 'fixture.json').write_text(json.dumps({'sourceSha256': guest.digest(binary)}))
+            manifest = {'phase': 'ready', 'location': 'local', 'listen': '127.0.0.1:50943',
+                        'data': str(home / '.config/fased-app')}
+            (binary.parent / 'install.json').write_text(json.dumps(manifest))
+            with patch.multiple(guest, HOME=home, WORK=work, TRUST=trust, ROOT=base / 'custody'), \
+                 patch.object(guest, 'api', return_value={'claimed': True}), \
+                 patch.object(guest, 'login', return_value={'sessionToken': 'fixture'}), \
+                 patch.object(guest, 'complete_setup', return_value='continued') as complete:
+                self.assertEqual('continued', guest.resume_claimed(50943))
+                complete.assert_called_once_with(50943, {'sessionToken': 'fixture'})
+                (work / 'state.json').write_text('{}')
+                with self.assertRaisesRegex(RuntimeError, 'pre-enrollment fixture required'):
+                    guest.resume_claimed(50943)
 
 
 if __name__ == '__main__':
