@@ -157,7 +157,7 @@ func DecodeRequest(data []byte) (Request, error) {
 		if r.Custody != nil || r.Enrollment != nil || r.Image != nil || r.Peer != nil || r.Serve != nil || r.Remote == nil || r.Remote.Sequence == 0 || len(r.Remote.ReleaseSHA256) != 64 || len(r.Remote.Listen) > 64 || len(r.Remote.Origin) > 256 {
 			return r, errors.New("invalid Remote installation request")
 		}
-	case "remote-start", "remote-stop", "remote-status", "remote-enrollment-validate", "remote-enrollment-status", "remote-enrollment-prepared-status", "remote-enrollment-suspend", "remote-enrollment-restore":
+	case "remote-start", "remote-stop", "remote-status", "remote-enrollment-validate", "remote-enrollment-status", "remote-enrollment-prepared-status", "remote-enrollment-suspend", "remote-enrollment-restore", "tailscale-login":
 		if r.Custody != nil || r.Enrollment != nil || r.Image != nil || r.Peer != nil || r.Serve != nil || r.Remote != nil {
 			return r, errors.New("unexpected Remote lifecycle input")
 		}

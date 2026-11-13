@@ -5,15 +5,12 @@ package hostprep
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/fased-ai/fased-app/internal/core"
@@ -82,6 +79,11 @@ func PrepareProtected(ctx context.Context, owner int, out io.Writer) error {
 	if a.Profile != "remote" {
 		return nil
 	}
+	lock, err := tailscaleMachineLock()
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	// Existing installations keep their daemon enrollment and operator. Setup
 	// of another namespace must never take over an administrator's tailnet.
 	for _, path := range []string{fmt.Sprintf("/var/lib/fased-app-custody-%d/install.json", owner), fmt.Sprintf("/var/lib/fased-app-vps-%d/install.json", owner)} {
@@ -91,10 +93,6 @@ func PrepareProtected(ctx context.Context, owner int, out io.Writer) error {
 			return e
 		}
 	}
-	u, err := user.LookupId(strconv.Itoa(owner))
-	if err != nil {
-		return err
-	}
 	dir := filepath.Join(maintenance.OwnerRoot(owner), "tailscale")
 	if err = core.EnsurePrivateDirectory(dir); err != nil {
 		return err
@@ -103,27 +101,36 @@ func PrepareProtected(ctx context.Context, owner int, out io.Writer) error {
 		return protectedOS(ctx, b, out, args...)
 	}
 	if _, err = readPreparationFile("/usr/bin/tailscale"); errors.Is(err, os.ErrNotExist) {
+		if err = noPriorTailscaleState(os.Lstat); err != nil {
+			return err
+		}
+		if err = noRunningTailscale(); err != nil {
+			return err
+		}
+		if err = recordFreshTailscaleIntent(a); err != nil {
+			return err
+		}
 		if err = prepareTailscalePackage(ctx, dir, owner, readPreparationFile, run, p); err != nil {
 			return err
 		}
 	} else if err != nil {
 		return err
+	} else {
+		// An existing daemon belongs to its administrator. Do not start it,
+		// reconfigure it or grant its operator rights during Fased bootstrap.
+		if _, err = run(ctx, nil, "/usr/bin/systemctl", "is-active", "tailscaled.service"); err != nil {
+			return errors.New("existing Tailscale is not running; preserve it and ask its administrator")
+		}
+		return checkInterruptedFreshTailscale(ctx, a, func(ctx context.Context, args ...string) ([]byte, error) {
+			return run(ctx, nil, args...)
+		})
 	}
 	if _, err = run(ctx, nil, "/usr/bin/systemctl", "enable", "--now", "tailscaled.service"); err != nil {
 		return err
 	}
-	b, err := run(ctx, nil, "/usr/bin/tailscale", "debug", "prefs")
-	if err != nil || len(b) > 64<<10 {
-		return errors.New("Tailscale preferences unavailable; preserve enrollment")
-	}
-	var prefs struct{ OperatorUser string }
-	if json.Unmarshal(b, &prefs) != nil || prefs.OperatorUser != "" && prefs.OperatorUser != u.Username {
-		return errors.New("Tailscale has a different operator; preserve existing access")
-	}
-	if prefs.OperatorUser == "" {
-		_, err = run(ctx, nil, "/usr/bin/tailscale", "set", "--operator="+u.Username)
-	}
-	return err
+	return recordFreshTailscale(ctx, a, func(ctx context.Context, args ...string) ([]byte, error) {
+		return run(ctx, nil, args...)
+	})
 }
 
 // Only trusted semantic Go code above supplies these arguments. It is not a
@@ -140,7 +147,7 @@ func protectedOS(ctx context.Context, input []byte, out io.Writer, args ...strin
 	c.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/nonexistent", "LANG=C", "DEBIAN_FRONTEND=noninteractive"}
 	c.Stdin = bytes.NewReader(input)
 	c.Stderr = out
-	if args[0] == "/usr/bin/apt-get" {
+	if args[0] == "/usr/bin/apt-get" || len(args) == 2 && args[0] == "/usr/bin/tailscale" && args[1] == "up" {
 		c.Stdout = out
 		return nil, c.Run()
 	}

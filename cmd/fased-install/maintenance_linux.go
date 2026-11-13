@@ -237,6 +237,8 @@ func maintenanceRequestCommand(args []string, in io.Reader, out io.Writer) error
 		}
 	case "serve":
 		err = privateaccess.ApplyOwnedServe(workCtx, a.Owner, a.Home, r.Serve.Configuration, r.Serve.ETag)
+	case "tailscale-login":
+		err = hostprep.ProtectedTailscaleLogin(workCtx, a.Owner, os.Stderr)
 	case "remote-install":
 		err = maintenanceRemoteInstall(workCtx, a, *r.Remote)
 	default:

@@ -26,6 +26,21 @@ func TestMaintenanceRequestsNeverAdmitCommandOrPathOverrides(t *testing.T) {
 	}
 }
 
+func TestTailscaleLoginTakesNoCallerInputs(t *testing.T) {
+	if _, err := DecodeRequest([]byte(`{"version":1,"action":"tailscale-login"}`)); err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []string{
+		`{"version":1,"action":"tailscale-login","command":"login"}`,
+		`{"version":1,"action":"tailscale-login","peer":{"userId":1,"nodeId":"foreign","login":"foreign"}}`,
+		`{"version":1,"action":"tailscale-login","remote":{}}`,
+	} {
+		if _, err := DecodeRequest([]byte(input)); err == nil {
+			t.Fatal("caller-selected Tailscale authority was accepted")
+		}
+	}
+}
+
 func TestEnrollmentImageRequestCannotSelectUIDOrPath(t *testing.T) {
 	instance := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
 	good := `{"version":1,"action":"custody-enrollment-image","image":{"operationId":"` + strings.Repeat("a", 32) + `","action":"import","slot":"stage","instanceId":"` + instance + `","digest":"` + strings.Repeat("b", 64) + `"}}`
