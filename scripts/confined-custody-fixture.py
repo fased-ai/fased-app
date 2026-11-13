@@ -21,7 +21,6 @@ import urllib.request
 
 P = pathlib.Path
 OWNER = 1100
-PROTECTED_UID = 0
 HOME = P('/home/fased-local')
 WORK = HOME / 'custody-fixture'
 TRUST = P('/var/lib/fased-update-fixture')
@@ -104,14 +103,13 @@ def run(args, data=None, timeout=180):
            'XDG_RUNTIME_DIR': '/run/user/1100', 'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/1100/bus'}
     p = subprocess.run([str(a) for a in args], input=data, text=True, capture_output=True, timeout=timeout, env=env)
     if p.returncode:
-        # This private, fixture-only diagnostic preserves the original failure
-        # without printing command input or silently discarding stderr.
-        try:
-            save('command-failure.json', {'executable': pathlib.Path(str(args[0])).name,
-                                         'action': str(args[1]) if len(args) > 1 else '',
-                                         'exit': p.returncode, 'stderr': p.stderr[-8192:]})
-        except FileExistsError:
-            pass
+        if len(args) >= 3 and list(args[1:3]) == ['custody', 'enroll']:
+            # Fixture-only diagnostics stay in the existing private workspace;
+            # never print command input or replace a previous failure.
+            try:
+                save('enrollment-failure.json', {'exit': p.returncode, 'stderr': p.stderr[-8192:]})
+            except OSError:
+                pass
         detail = safe_fixture_error(p.stderr)
         raise RuntimeError('fixture command failed: ' + pathlib.Path(str(args[0])).name + ' exit ' + str(p.returncode) + ('; ' + detail if detail else ''))
     return p.stdout
@@ -150,23 +148,15 @@ def login(origin):
     return api(origin, '/api/v1/auth/login', 'POST', {'password': PASSWORD})
 
 
-def seed_source(origin, binary, session=None, reuse=False):
+def seed_source(origin, binary, session=None):
     if session is None:
         code = run([binary, 'claim-code']).strip()
         if not code:
             raise RuntimeError('fixture claim unavailable')
         session = api(origin, '/api/v1/auth/claim', 'POST', {'code': code, 'password': PASSWORD})
     view = api(origin, '/api/v1/agents', session=session)
-    existing = [t for t in view['tasks'] if t.get('name') == 'Disposable preserved task']
-    if existing:
-        if (not reuse or len(existing) != 1 or existing[0].get('text') != 'Fixture reminder' or
-                existing[0].get('state') != 'paused' or existing[0].get('intervalSeconds') != 3600 or
-                existing[0].get('maxRuns') != 2 or existing[0].get('profileId') != view['profileId'] or
-                not existing[0].get('id')):
-            raise RuntimeError('fixture task differs; preserve it')
-        return existing[0]['id']
-    if reuse:
-        raise RuntimeError('original fixture task missing; preserve state')
+    if any(t.get('name') == 'Disposable preserved task' for t in view['tasks']):
+        raise RuntimeError('fixture task already exists; preserve it')
     body = {'revision': view['revision'], 'profileId': view['profileId'], 'action': 'task-create',
             'name': 'Disposable preserved task', 'text': 'Fixture reminder', 'intervalSeconds': 3600, 'maxRuns': 2}
     view = api(origin, '/api/v1/agents', 'POST', body, session)
@@ -275,10 +265,10 @@ def setup(port):
     return complete_setup(port)
 
 
-def resume_claimed(port, helper_hash):
+def resume_claimed(port):
     if (WORK / 'selection').read_text() != 'base\n' or (WORK / 'state.json').exists() or (WORK / 'wallet-backup.json').exists():
         raise RuntimeError('original pre-enrollment fixture required')
-    if ROOT.exists():
+    if os.path.lexists(HOME / '.config/fased-app-enrollment') or os.path.lexists(ROOT):
         raise RuntimeError('existing enrollment must be preserved')
     binary = HOME / '.local/share/fased-app/fased-app'
     trust = json.loads((TRUST / 'fixture.json').read_text())
@@ -288,72 +278,14 @@ def resume_claimed(port, helper_hash):
     origin = 'http://127.0.0.1:' + str(port)
     if api(origin, '/api/v1/auth/state').get('claimed') is not True:
         raise RuntimeError('original fixture owner is not claimed')
-    original = health(origin)
-    pending_enrollment(original['instanceId'], port, trust, helper_hash)
-    return complete_setup(port, login(origin), reuse=True)
+    return complete_setup(port, login(origin))
 
 
-def pending_enrollment(instance, port, trust, helper_hash):
-    # Only the original, uncommitted prepared attempt may be resumed here.
-    # No protected enrollment request, signer or update may already exist.
-    owner = P('/var/lib/fased-maintenance/owners/1100')
-    owner_info = owner.lstat()
-    authority = owner / 'authority.json'
-    authority_info = authority.lstat()
-    if (not stat.S_ISDIR(owner_info.st_mode) or owner_info.st_uid != PROTECTED_UID or
-            stat.S_IMODE(owner_info.st_mode) != 0o755 or not stat.S_ISREG(authority_info.st_mode) or
-            authority_info.st_uid != PROTECTED_UID or stat.S_IMODE(authority_info.st_mode) != 0o644 or
-            authority_info.st_nlink != 1 or set(p.name for p in owner.iterdir()) != {'authority.json'}):
-        raise RuntimeError('protected enrollment activity must be preserved')
-    expected_authority = {'version': 1, 'owner': OWNER, 'group': OWNER, 'home': str(HOME),
-                          'profile': 'local', 'imageSha256': helper_hash}
-    if (re.fullmatch(r'[a-f0-9]{64}', helper_hash or '') is None or
-            authority_info.st_size > 4096 or json.loads(authority.read_text()) != expected_authority):
-        raise RuntimeError('original protected maintenance authority differs')
-    directory = HOME / '.config/fased-app-enrollment'
-    directory_info = directory.lstat()
-    if (not stat.S_ISDIR(directory_info.st_mode) or directory_info.st_uid != OWNER or
-            stat.S_IMODE(directory_info.st_mode) != 0o700):
-        raise RuntimeError('foreign enrollment directory preserved')
-    paths = list(directory.iterdir())
-    records = [p for p in paths if p.name == 'state.json' or re.fullmatch(r'\.pending-[0-9]+', p.name)]
-    if not any(p.name == 'state.json' for p in records):
-        raise RuntimeError('prepared enrollment was not published; preserve pending record')
-    if len(records) > 2 or any(p.name != 'controller.lock' and p not in records for p in paths):
-        raise RuntimeError('original prepared enrollment record required')
-    source_dir = HOME / '.config/fased-app'
-    source = source_dir.lstat()
-    if (not stat.S_ISDIR(source.st_mode) or source.st_uid != OWNER or source.st_gid != OWNER or
-            stat.S_IMODE(source.st_mode) != 0o700):
-        raise RuntimeError('original enrollment source differs')
-    original = None
-    for path in records:
-        info = path.lstat()
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != OWNER or info.st_nlink != 1 or
-                stat.S_IMODE(info.st_mode) != 0o600 or not 0 < info.st_size <= 16384):
-            raise RuntimeError('foreign enrollment record preserved')
-        j = json.loads(path.read_text())
-        s, node, target = j.get('source', {}), j.get('node', {}), j.get('target', {})
-        if (j.get('phase') != 'prepared' or j.get('owner') != OWNER or j.get('network') != 'devnet' or
-                j.get('mode') != 'ordinary-custody:v1' or j.get('profile') != 'owner-authorized:v1' or
-                j.get('nativeOwnerAccess') is not True or j.get('coreHash') != trust['sourceSha256'] or
-                j.get('signerHash') != digest(WORK / 'fased-signer') or target.get('id') or
-                s.get('profile') != 'local' or s.get('data') != str(source_dir) or
-                s.get('listen') != '127.0.0.1:' + str(port) or s.get('expectedInstanceId') != instance or
-                node.get('device') != source.st_dev or node.get('inode') != source.st_ino or
-                node.get('uid') != OWNER or node.get('gid') != OWNER or node.get('mode') != 0o700 or
-                re.fullmatch(r'[a-f0-9]{32}', j.get('id', '')) is None):
-            raise RuntimeError('original prepared enrollment identity differs')
-        if original is not None and j != original:
-            raise RuntimeError('conflicting prepared enrollment records preserved')
-        original = j
-
-
-def complete_setup(port, session=None, reuse=False):
+def complete_setup(port, session=None):
     binary = HOME / '.local/share/fased-app/fased-app'
     origin = 'http://127.0.0.1:' + str(port)
     original = health(origin)
-    task_id = seed_source(origin, binary, session, reuse)
+    task_id = seed_source(origin, binary, session)
     result = json.loads(run([binary, 'custody', 'enroll', '--source', 'local', '--expected-instance', original['instanceId'],
                              '--network', 'devnet', '--signer-binary', WORK / 'fased-signer', '--prepare-host',
                              '--disposable-fixture', '--ordinary-custody', '--native-owner'], timeout=600))
@@ -520,7 +452,6 @@ def main():
     p.add_argument('mode', choices=['server', 'probe', 'setup', 'resume-claimed', 'target', 'watch', 'inspect', 'verify'])
     p.add_argument('--port', type=int)
     p.add_argument('--operation')
-    p.add_argument('--helper-sha256')
     a = p.parse_args()
     guard()
     if a.mode == 'server':
@@ -533,7 +464,7 @@ def main():
         if a.mode == 'setup':
             setup(a.port)
         else:
-            resume_claimed(a.port, a.helper_sha256)
+            resume_claimed(a.port)
     elif a.mode == 'watch':
         watch()
     elif a.mode == 'target':

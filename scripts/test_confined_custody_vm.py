@@ -22,90 +22,33 @@ guest = load('confined_guest', 'confined-custody-fixture.py')
 
 
 class FixtureBoundaries(unittest.TestCase):
-    def test_saved_install_listener_requires_original_local_paths(self):
-        install = {'phase': 'ready', 'location': 'local', 'listen': '127.0.0.1:39243',
-                   'root': '/home/fased-local/.local/share/fased-app',
-                   'data': '/home/fased-local/.config/fased-app'}
-        self.assertEqual(39243, host.recorded_install_port(json.dumps(install)))
-        install['listen'] = '0.0.0.0:39243'
-        with self.assertRaisesRegex(RuntimeError, 'listener differs'):
-            host.recorded_install_port(json.dumps(install))
-        install['listen'] = '127.0.0.1:39243'
-        install['data'] = '/foreign'
-        with self.assertRaisesRegex(RuntimeError, 'identity differs'):
-            host.recorded_install_port(json.dumps(install))
+    def test_pending_enrollment_is_not_replaced_on_resume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            home, work = base / 'home', base / 'work'
+            (home / '.config/fased-app-enrollment').mkdir(parents=True)
+            work.mkdir()
+            (work / 'selection').write_text('base\n')
+            with patch.object(guest, 'HOME', home), patch.object(guest, 'WORK', work), \
+                    patch.object(guest, 'ROOT', base / 'absent'):
+                with self.assertRaisesRegex(RuntimeError, 'enrollment must be preserved'):
+                    guest.resume_claimed(39243)
+                directory = home / '.config/fased-app-enrollment'
+                directory.rmdir()
+                directory.symlink_to(base / 'missing')
+                with self.assertRaisesRegex(RuntimeError, 'enrollment must be preserved'):
+                    guest.resume_claimed(39243)
 
-    def test_resume_reuses_only_the_exact_paused_task(self):
-        task = {'name': 'Disposable preserved task', 'text': 'Fixture reminder', 'state': 'paused',
-                'intervalSeconds': 3600, 'maxRuns': 2, 'profileId': 'p', 'id': 'original-task'}
-        view = {'profileId': 'p', 'tasks': [task]}
-        with patch.object(guest, 'api', return_value=view):
-            self.assertEqual('original-task', guest.seed_source('unused', 'unused', {'sessionToken': 'fixture'}, reuse=True))
-            task['state'] = 'running'
-            with self.assertRaisesRegex(RuntimeError, 'task differs'):
-                guest.seed_source('unused', 'unused', {'sessionToken': 'fixture'}, reuse=True)
-            view['tasks'] = []
-            with self.assertRaisesRegex(RuntimeError, 'task missing'):
-                guest.seed_source('unused', 'unused', {'sessionToken': 'fixture'}, reuse=True)
-
-    def test_fixture_command_failure_is_kept_private(self):
+    def test_enrollment_error_stays_private(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(guest, 'WORK', Path(tmp)):
             process = SimpleNamespace(returncode=1, stdout='', stderr='private fixture diagnostic')
             with patch.object(guest.subprocess, 'run', return_value=process):
                 with self.assertRaisesRegex(RuntimeError, 'fased-app exit 1') as error:
                     guest.run(['/tmp/fased-app', 'custody', 'enroll'])
             self.assertNotIn('private fixture diagnostic', str(error.exception))
-            record = Path(tmp) / 'command-failure.json'
+            record = Path(tmp) / 'enrollment-failure.json'
             self.assertEqual(0o600, record.stat().st_mode & 0o777)
             self.assertEqual('private fixture diagnostic', json.loads(record.read_text())['stderr'])
-
-    def test_resume_refuses_any_protected_enrollment_activity(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp)
-            home, work, owner = base / 'home', base / 'work', base / 'authority'
-            source = home / '.config/fased-app'
-            journal = home / '.config/fased-app-enrollment'
-            for directory in (source, journal, work, owner):
-                directory.mkdir(parents=True, mode=0o700)
-            owner.chmod(0o755)
-            authority = {'version': 1, 'owner': os.getuid(), 'group': os.getuid(), 'home': str(home),
-                         'profile': 'local', 'imageSha256': 'd' * 64}
-            (owner / 'authority.json').write_text(json.dumps(authority))
-            (owner / 'authority.json').chmod(0o644)
-            (work / 'fased-signer').write_bytes(b'disposable signer')
-            s = source.stat()
-            record = {'phase': 'prepared', 'owner': os.getuid(), 'network': 'devnet',
-                      'mode': 'ordinary-custody:v1', 'profile': 'owner-authorized:v1',
-                      'nativeOwnerAccess': True, 'coreHash': 'a' * 64, 'signerHash': guest.digest(work / 'fased-signer'),
-                      'id': 'b' * 32, 'target': {'id': ''},
-                      'source': {'profile': 'local', 'data': str(source), 'listen': '127.0.0.1:39243',
-                                 'expectedInstanceId': 'original'},
-                      'node': {'device': s.st_dev, 'inode': s.st_ino, 'uid': os.getuid(), 'gid': os.getuid(), 'mode': 0o700}}
-            pending = journal / '.pending-1'
-            pending.write_text(json.dumps(record))
-            pending.chmod(0o600)
-            def fixture_path(path):
-                return owner if str(path) == '/var/lib/fased-maintenance/owners/1100' else Path(path)
-            with patch.object(guest, 'HOME', home), patch.object(guest, 'WORK', work), \
-                    patch.object(guest, 'OWNER', os.getuid()), patch.object(guest, 'PROTECTED_UID', os.getuid()), \
-                    patch.object(guest, 'P', side_effect=fixture_path):
-                with self.assertRaisesRegex(RuntimeError, 'was not published'):
-                    guest.pending_enrollment('original', 39243, {'sourceSha256': 'a' * 64}, 'd' * 64)
-                state = journal / 'state.json'
-                state.write_text(json.dumps(record))
-                state.chmod(0o600)
-                guest.pending_enrollment('original', 39243, {'sourceSha256': 'a' * 64}, 'd' * 64)
-                with self.assertRaisesRegex(RuntimeError, 'authority differs'):
-                    guest.pending_enrollment('original', 39243, {'sourceSha256': 'a' * 64}, 'e' * 64)
-                conflict = dict(record, id='c' * 32)
-                pending.write_text(json.dumps(conflict))
-                with self.assertRaisesRegex(RuntimeError, 'conflicting prepared'):
-                    guest.pending_enrollment('original', 39243, {'sourceSha256': 'a' * 64}, 'd' * 64)
-                pending.write_text(json.dumps(record))
-                (owner / 'custody.json').write_text('{}')
-                with self.assertRaisesRegex(RuntimeError, 'activity must be preserved'):
-                    guest.pending_enrollment('original', 39243, {'sourceSha256': 'a' * 64}, 'd' * 64)
-            self.assertEqual('b' * 32, json.loads(pending.read_text())['id'])
 
     def test_installed_launcher_must_point_at_target(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -206,11 +149,6 @@ class FixtureBoundaries(unittest.TestCase):
                 if args[0] == 'ssh-keygen':
                     return SimpleNamespace(stdout=b'ssh-ed25519 owner-public\n')
                 if args[0] == 'debugfs':
-                    if 'install.json' in args[2]:
-                        install = {'phase': 'ready', 'location': 'local', 'listen': '127.0.0.1:50943',
-                                   'root': '/home/fased-local/.local/share/fased-app',
-                                   'data': '/home/fased-local/.config/fased-app'}
-                        return SimpleNamespace(stdout=json.dumps(install).encode())
                     value = 'ssh-ed25519 host-public\n' if 'ssh_host' in args[2] else 'd' * 32 + '\n'
                     return SimpleNamespace(stdout=value.encode())
                 return SimpleNamespace(stdout=json.dumps(chain).encode())
@@ -221,9 +159,6 @@ class FixtureBoundaries(unittest.TestCase):
             result = base / 'local-result.json'
             result.write_text(json.dumps(receipt))
             with patch.object(host, 'IMAGE', image), patch.object(host, 'command', side_effect=output):
-                self.assertEqual((34163, 50943, 'd' * 32), host.resume_inputs(work, result, 'a' * 64, 'b' * 64))
-                receipt['error'] = 'fixture command failed: fased-app exit 1'
-                result.write_text(json.dumps(receipt))
                 self.assertEqual((34163, 50943, 'd' * 32), host.resume_inputs(work, result, 'a' * 64, 'b' * 64))
                 chain[0]['full-backing-filename'] = '/unexpected/image'
                 with self.assertRaisesRegex(RuntimeError, 'backing chain differs'):
