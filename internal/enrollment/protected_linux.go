@@ -3,6 +3,7 @@
 package enrollment
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -188,10 +189,18 @@ func RunProtectedCutover(ctx context.Context, owner int, id, step string, source
 			if err := h.image(ctx, m, "verify", stagePath(j), j.Source.ExpectedInstanceID, j.Digest, nil); err != nil {
 				return err
 			}
-			// The helper takes its own source lease. A missing or already fenced
-			// source must be preserved for interrupted-operation recovery.
+			// If the prior fence was interrupted, restore only the exact archived
+			// original before reacquiring and comparing a new source snapshot.
 			if n, err := realNode(h.pinned(h.base)); err != nil || n != j.Node {
-				return errors.New("original source is unavailable; preserve the interrupted fence for recovery")
+				if _, e := os.Lstat(m.Root + "/enrollment-ready.json"); !errors.Is(e, os.ErrNotExist) {
+					return errors.New("a committed target must not restore the original source")
+				}
+				if _, e := update.ReadMaintenanceRecord(owner); !errors.Is(e, os.ErrNotExist) {
+					return errors.New("existing maintenance state must be preserved")
+				}
+				if err = restoreProtectedFence(h, j, 0, 0); err != nil {
+					return err
+				}
 			}
 			lease, err := h.export(ctx, m, j.Source)
 			if err != nil {
@@ -204,7 +213,7 @@ func RunProtectedCutover(ctx context.Context, owner int, id, step string, source
 			if err = lease.check(); err != nil {
 				return err
 			}
-			if err = h.fence(ctx, j); err != nil {
+			if err = protectedFence(h, j, 0, 0); err != nil {
 				return err
 			}
 			if err = lease.check(); err != nil {
@@ -228,11 +237,127 @@ func RunProtectedCutover(ctx context.Context, owner int, id, step string, source
 			if j.Phase != "activation-requested" && j.Phase != "complete" {
 				return errState
 			}
-			return h.finish(ctx, j)
+			c, err := custodyinstall.ReadEnrollmentCommit(m)
+			if err != nil || c.InstanceID != j.Source.ExpectedInstanceID || c.Digest != j.Digest {
+				return errState
+			}
+			return finishProtectedFence(h, j, 0, 0)
 		default:
 			return errState
 		}
 	})
+}
+
+// restoreProtectedFence is a pre-activation rollback, not a new enrollment.
+// It uses only descriptors beneath the already pinned parent, checks the exact
+// original inode and holds its instance lock while moving it back. The caller
+// must reacquire the ordinary exporter and compare the complete digest before
+// trying the fence again.
+func restoreProtectedFence(h *runtimeHost, j journal, managerUID, managerGID int) error {
+	if err := h.unchangedParent(); err != nil {
+		return err
+	}
+	parent := int(h.parent.Fd())
+	pending := ".enrollment-" + j.ID
+	name := h.base
+	if _, err := os.Lstat(h.pinned(name)); errors.Is(err, os.ErrNotExist) {
+		name = pending
+	} else if err != nil {
+		return err
+	}
+	fenceDir, err := openEnrollmentDirectory(parent, name, managerUID, managerGID, 0)
+	if err != nil {
+		return errors.New("interrupted source fence differs; preserve it")
+	}
+	defer fenceDir.Close()
+	if err = verifyEnrollmentFenceRecord(int(fenceDir.Fd()), j, managerUID, managerGID); err != nil {
+		return err
+	}
+	original, err := openEnrollmentDirectory(int(fenceDir.Fd()), ".original", managerUID, managerGID, 0700)
+	if err != nil {
+		return err
+	}
+	defer original.Close()
+	data, err := openEnrollmentDirectory(int(original.Fd()), "data", j.Node.UID, j.Node.GID, 0700)
+	if err != nil {
+		return errors.New("original source archive unavailable; preserve it")
+	}
+	defer data.Close()
+	var st unix.Stat_t
+	if unix.Fstat(int(data.Fd()), &st) != nil || uint64(st.Dev) != j.Node.Device || st.Ino != j.Node.Inode {
+		return errors.New("original source archive identity differs; preserve it")
+	}
+	lockFD, err := unix.Openat(int(data.Fd()), "instance.lock", unix.O_RDWR|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return err
+	}
+	lock := os.NewFile(uintptr(lockFD), "archived-instance-lock")
+	defer lock.Close()
+	if unix.Fstat(lockFD, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || int(st.Uid) != j.Node.UID || st.Mode&07777 != 0600 || st.Nlink != 1 || st.Size != 0 {
+		return errors.New("original instance lock changed; preserve it")
+	}
+	if err = unix.Flock(lockFD, unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		return errors.New("original instance is still in use; preserve it")
+	}
+	defer unix.Flock(lockFD, unix.LOCK_UN)
+	if !sameEnrollmentEntry(parent, name, int(fenceDir.Fd())) {
+		return errState
+	}
+	if name == h.base {
+		if err = unix.Renameat2(parent, h.base, parent, pending, unix.RENAME_NOREPLACE); err != nil {
+			return err
+		}
+		if !sameEnrollmentEntry(parent, pending, int(fenceDir.Fd())) {
+			return errState
+		}
+		if err = unix.Fsync(parent); err != nil {
+			return err
+		}
+	}
+	if err = unix.Renameat2(int(original.Fd()), "data", parent, h.base, unix.RENAME_NOREPLACE); err != nil {
+		return err
+	}
+	if !sameEnrollmentEntry(parent, h.base, int(data.Fd())) {
+		return errState
+	}
+	return errors.Join(unix.Fsync(int(original.Fd())), unix.Fsync(parent))
+}
+
+func openEnrollmentDirectory(parent int, name string, uid, gid int, mode uint32) (*os.File, error) {
+	fd, err := unix.Openat(parent, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	f := os.NewFile(uintptr(fd), "enrollment-directory")
+	var st unix.Stat_t
+	if unix.Fstat(fd, &st) != nil || int(st.Uid) != uid || int(st.Gid) != gid || (mode == 0 && st.Mode&07777 != 0700 && st.Mode&07777 != 0755) || (mode != 0 && st.Mode&07777 != mode) {
+		f.Close()
+		return nil, errState
+	}
+	return f, nil
+}
+
+func sameEnrollmentEntry(parent int, name string, fd int) bool {
+	var entry, held unix.Stat_t
+	return unix.Fstatat(parent, name, &entry, unix.AT_SYMLINK_NOFOLLOW) == nil && unix.Fstat(fd, &held) == nil && entry.Dev == held.Dev && entry.Ino == held.Ino && entry.Mode&unix.S_IFMT == unix.S_IFDIR
+}
+
+func verifyEnrollmentFenceRecord(dir int, j journal, uid, gid int) error {
+	fd, err := unix.Openat(dir, "enrollment.json", unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return err
+	}
+	f := os.NewFile(uintptr(fd), "original-enrollment-binding")
+	defer f.Close()
+	var st unix.Stat_t
+	if unix.Fstat(fd, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || int(st.Uid) != uid || int(st.Gid) != gid || st.Mode&07777 != 0644 || st.Nlink != 1 || st.Size <= 0 || st.Size > 16384 {
+		return errState
+	}
+	b, err := io.ReadAll(io.LimitReader(f, 16385))
+	if err != nil || !bytes.Equal(bytes.TrimSpace(b), jsonBytes(fenceFor(j))) {
+		return errors.New("interrupted source binding differs; preserve it")
+	}
+	return nil
 }
 
 type ProtectedActivation struct {

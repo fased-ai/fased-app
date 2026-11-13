@@ -3,6 +3,8 @@
 package custodyinstall
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -10,6 +12,49 @@ import (
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 )
+
+func TestInitialServiceRecoveryRefusesRunningProcesses(t *testing.T) {
+	for _, tc := range []struct {
+		name, state, main, control string
+		wantOK, wantReset          bool
+	}{
+		{"inactive", "inactive", "0", "0", true, false},
+		{"failed without processes", "failed", "0", "0", true, true},
+		{"failed with main process", "failed", "123", "0", false, false},
+		{"failed with control process", "failed", "0", "456", false, false},
+		{"active", "active", "123", "0", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state, reset := tc.state, false
+			ctl := func(_ context.Context, args ...string) ([]byte, error) {
+				if len(args) == 3 && args[0] == "stop" {
+					return nil, nil
+				}
+				if len(args) == 3 && args[0] == "reset-failed" {
+					reset, state = true, "inactive"
+					return nil, nil
+				}
+				if len(args) != 5 || args[0] != "show" {
+					return nil, errors.New("unexpected command")
+				}
+				switch args[1] {
+				case "--property=ActiveState":
+					return []byte(state), nil
+				case "--property=MainPID":
+					return []byte(tc.main), nil
+				case "--property=ControlPID":
+					return []byte(tc.control), nil
+				default:
+					return nil, errors.New("unexpected property")
+				}
+			}
+			err := ensureInitiallyStopped(t.Context(), "fixture.service", ctl)
+			if (err == nil) != tc.wantOK || reset != tc.wantReset {
+				t.Fatalf("state %s: reset=%v err=%v", tc.state, reset, err)
+			}
+		})
+	}
+}
 
 func initialMaintenanceFixture() update.MaintenanceRecord {
 	m := fixtureManifest()

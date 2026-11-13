@@ -106,9 +106,8 @@ func InitializeProtectedJournal(ctx context.Context, owner int, p update.Mainten
 		}
 	} else if errors.Is(err, os.ErrNotExist) {
 		for _, role := range []string{"app", "signer"} {
-			state, e := protectedSystemctl(ctx, "show", "--property=ActiveState", "--value", "--", Unit(owner, role))
-			if e != nil || strings.TrimSpace(string(state)) != "inactive" {
-				return errors.New("custody services must be inactive before first journal initialization")
+			if e := ensureInitiallyStopped(ctx, Unit(owner, role), protectedSystemctl); e != nil {
+				return e
 			}
 		}
 		entries, e := os.ReadDir(m.Root + "/signer-state")
@@ -126,8 +125,42 @@ func InitializeProtectedJournal(ctx context.Context, owner int, p update.Mainten
 	} else {
 		return err
 	}
-	if err = installProtectedMaintenanceUnits(ctx, a, m); err != nil {
+	// A previous attempt may have written every file and stopped before
+	// systemd reloaded or enabled the recovery service. Initial setup must
+	// finish those idempotent actions even when the files already match.
+	if err = installProtectedMaintenanceUnitsForInitial(ctx, a, m, true); err != nil {
 		return err
 	}
 	return verifyProtectedLoadedUnits(ctx, a, m)
+}
+
+func ensureInitiallyStopped(ctx context.Context, unit string, systemctl func(context.Context, ...string) ([]byte, error)) error {
+	read := func(property string) (string, error) {
+		b, err := systemctl(ctx, "show", "--property="+property, "--value", "--", unit)
+		return strings.TrimSpace(string(b)), err
+	}
+	state, err := read("ActiveState")
+	if err != nil {
+		return errors.New("custody service state is unavailable; preserve it")
+	}
+	if state == "inactive" {
+		return nil
+	}
+	if state == "failed" {
+		main, mainErr := read("MainPID")
+		control, controlErr := read("ControlPID")
+		if mainErr == nil && controlErr == nil && main == "0" && control == "0" {
+			// Cancel any queued restart before clearing a failed start gate.
+			if _, err = systemctl(ctx, "stop", "--", unit); err == nil {
+				_, err = systemctl(ctx, "reset-failed", "--", unit)
+			}
+			if err == nil {
+				state, err = read("ActiveState")
+				if err == nil && state == "inactive" {
+					return nil
+				}
+			}
+		}
+	}
+	return errors.New("custody services must be inactive before first journal initialization")
 }

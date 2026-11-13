@@ -287,6 +287,10 @@ func protectedMaintenanceFiles(a maintenance.Authority, m Manifest) (map[string]
 }
 
 func installProtectedMaintenanceUnits(ctx context.Context, a maintenance.Authority, m Manifest) error {
+	return installProtectedMaintenanceUnitsForInitial(ctx, a, m, false)
+}
+
+func installProtectedMaintenanceUnitsForInitial(ctx context.Context, a maintenance.Authority, m Manifest, initial bool) error {
 	files, err := protectedMaintenanceFiles(a, m)
 	if err != nil {
 		return err
@@ -307,7 +311,7 @@ func installProtectedMaintenanceUnits(ctx context.Context, a maintenance.Authori
 	}
 	// Routine Update validates the immutable installed setup without trying to
 	// write /etc from its read-only service sandbox.
-	if ready {
+	if ready && !initial {
 		return nil
 	}
 	for _, role := range []string{"app", "signer"} {
