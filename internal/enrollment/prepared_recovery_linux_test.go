@@ -120,6 +120,217 @@ func TestPreparedRecoveryAcceptsOwnerReadOnlyPending(t *testing.T) {
 	}
 }
 
+func TestPreparedRecoveryPreservesTwoSameOperationWrites(t *testing.T) {
+	h, s, o, original, witness := preparedRecoveryFixture(t)
+	if err := writeOwnerJournal(h.state, original); err != nil {
+		t.Fatal(err)
+	}
+	next := original
+	next.Target = custodyinstall.Manifest{Version: 3, ID: original.ID, Owner: original.Owner, Enrollment: true,
+		NativeOwnerAccess: true, Location: "local", Listen: s.Listen, Network: original.Network,
+		Mode: original.Mode, Profile: original.Profile, Provenance: original.Provenance,
+		CoreHash: original.CoreHash, SignerHash: original.SignerHash,
+		App: custodyinstall.Identity{UID: original.Owner + 1}, Signer: custodyinstall.Identity{UID: original.Owner + 2}}
+	second := filepath.Join(filepath.Dir(h.state), ".pending-456")
+	raw, err := json.Marshal(next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(second, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(witness)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = recoverPreparedOwnerJournal(t.Context(), h, s, o, original.CoreHash, original.SignerHash, func() error { return nil }); err != nil {
+		t.Fatal("matching interrupted write was not recoverable", err)
+	}
+	stop := errors.New("observed same target")
+	var prepares int
+	op := operations{owner: original.Owner, load: func() (journal, error) { return readOwnerJournal(h.state) },
+		save: func(j journal) error { return writeOwnerJournal(h.state, j) },
+		checkPending: func(j journal, target *custodyinstall.Manifest, digest string) error {
+			return checkPendingReplay(h.state, j, target, digest)
+		},
+		prepare: func(_ context.Context, got journal, _ Options) (custodyinstall.Manifest, error) {
+			prepares++
+			if got.ID != original.ID {
+				t.Fatal("replacement operation selected")
+			}
+			return next.Target, nil
+		}, target: func(m custodyinstall.Manifest) error {
+			if m != next.Target {
+				return errState
+			}
+			return nil
+		}, emptySigner: func(context.Context, custodyinstall.Manifest) error { return stop }}
+	if _, err = run(t.Context(), s, o, original.CoreHash, original.SignerHash, op); !errors.Is(err, stop) || prepares != 1 {
+		t.Fatal("original controller did not safely replay its target preparation", err, prepares)
+	}
+	if got, err := readOwnerJournal(h.state); err != nil || got != next {
+		t.Fatal("committed original operation could not be read with the retained writes", err)
+	}
+	if after, err := os.ReadFile(witness); err != nil || string(after) != string(before) {
+		t.Fatal("original witness changed", err)
+	}
+	if after, err := os.ReadFile(second); err != nil || string(after) != string(raw) {
+		t.Fatal("interrupted write changed", err)
+	}
+}
+
+func TestPreparedRecoveryRefusesChangedReplayTarget(t *testing.T) {
+	h, s, o, original, _ := preparedRecoveryFixture(t)
+	if err := writeOwnerJournal(h.state, original); err != nil {
+		t.Fatal(err)
+	}
+	next := original
+	next.Target = custodyinstall.Manifest{Version: 3, ID: original.ID, Owner: original.Owner, Enrollment: true,
+		NativeOwnerAccess: true, Location: "local", Listen: s.Listen, Network: original.Network,
+		Mode: original.Mode, Profile: original.Profile, Provenance: original.Provenance,
+		CoreHash: original.CoreHash, SignerHash: original.SignerHash,
+		App: custodyinstall.Identity{UID: original.Owner + 1}, Signer: custodyinstall.Identity{UID: original.Owner + 2}}
+	raw, err := json.Marshal(next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(filepath.Dir(h.state), ".pending-456"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	changed := next.Target
+	changed.App.UID++
+	op := operations{owner: original.Owner, load: func() (journal, error) { return readOwnerJournal(h.state) },
+		save: func(j journal) error { return writeOwnerJournal(h.state, j) },
+		checkPending: func(j journal, target *custodyinstall.Manifest, digest string) error {
+			return checkPendingReplay(h.state, j, target, digest)
+		}, prepare: func(context.Context, journal, Options) (custodyinstall.Manifest, error) { return changed, nil }}
+	if _, err = run(t.Context(), s, o, original.CoreHash, original.SignerHash, op); !errors.Is(err, errState) {
+		t.Fatal("different prepared target was not refused", err)
+	}
+	if got, err := readOwnerJournal(h.state); err != nil || got != original {
+		t.Fatal("committed operation changed on refusal", err)
+	}
+}
+
+func TestPreparedRecoveryRefusesConflictingPendingTargets(t *testing.T) {
+	h, _, _, original, _ := preparedRecoveryFixture(t)
+	if err := writeOwnerJournal(h.state, original); err != nil {
+		t.Fatal(err)
+	}
+	next := original
+	next.Target = custodyinstall.Manifest{Version: 3, ID: original.ID, Owner: original.Owner, Enrollment: true,
+		NativeOwnerAccess: true, Location: "local", Listen: original.Source.Listen, Network: original.Network,
+		Mode: original.Mode, Profile: original.Profile, Provenance: original.Provenance,
+		CoreHash: original.CoreHash, SignerHash: original.SignerHash,
+		App: custodyinstall.Identity{UID: original.Owner + 1}, Signer: custodyinstall.Identity{UID: original.Owner + 2}}
+	for i, uid := range []int{original.Owner + 1, original.Owner + 3} {
+		next.Target.App.UID = uid
+		raw, err := json.Marshal(next)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := filepath.Join(filepath.Dir(h.state), []string{".pending-456", ".pending-789"}[i])
+		if err = os.WriteFile(name, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := readOwnerJournal(h.state); !errors.Is(err, errState) {
+		t.Fatal("conflicting pending targets were accepted", err)
+	}
+}
+
+func TestPreparedRecoveryRefusesChangedReplayDigest(t *testing.T) {
+	h, s, o, original, witness := preparedRecoveryFixture(t)
+	image := fixtureImage(t)
+	s.ExpectedInstanceID = image.InstanceID
+	original.Source.ExpectedInstanceID = image.InstanceID
+	raw, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(witness, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	current := original
+	current.Phase = "suspended"
+	current.Target = custodyinstall.Manifest{Version: 3, ID: original.ID, Owner: original.Owner, Enrollment: true,
+		NativeOwnerAccess: true, Location: "local", Listen: s.Listen, Network: original.Network,
+		Mode: original.Mode, Profile: original.Profile, Provenance: original.Provenance,
+		CoreHash: original.CoreHash, SignerHash: original.SignerHash,
+		App: custodyinstall.Identity{UID: original.Owner + 1}, Signer: custodyinstall.Identity{UID: original.Owner + 2}}
+	if err = writeOwnerJournal(h.state, current); err != nil {
+		t.Fatal(err)
+	}
+	next := current
+	next.Phase, next.Digest = "importing", strings.Repeat("d", 64)
+	if next.Digest == core.EnrollmentImageDigest(image) {
+		t.Fatal("fixture digest did not differ")
+	}
+	raw, err = json.Marshal(next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(filepath.Dir(h.state), ".pending-456"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	imported := false
+	op := operations{owner: original.Owner, load: func() (journal, error) { return readOwnerJournal(h.state) },
+		save: func(j journal) error { return writeOwnerJournal(h.state, j) }, node: realNode,
+		checkPending: func(j journal, target *custodyinstall.Manifest, digest string) error {
+			return checkPendingReplay(h.state, j, target, digest)
+		}, target: func(custodyinstall.Manifest) error { return nil },
+		emptySigner: func(context.Context, custodyinstall.Manifest) error { return nil },
+		export: func(context.Context, custodyinstall.Manifest, sourceRecord) (*imageLease, error) {
+			return &imageLease{image: image, close: func() error { return nil }}, nil
+		}, importImage: func(context.Context, journal, core.EnrollmentImage) error { imported = true; return nil }}
+	if _, err = run(t.Context(), s, o, original.CoreHash, original.SignerHash, op); !errors.Is(err, errState) || imported {
+		t.Fatal("changed source digest reached import", err, imported)
+	}
+	if got, err := readOwnerJournal(h.state); err != nil || got != current {
+		t.Fatal("committed operation changed on refusal", err)
+	}
+}
+
+func TestPreparedRecoveryRefusesUnsafeSecondWrite(t *testing.T) {
+	for _, change := range []string{"foreign-operation", "future-phase", "lost-lock", "partial"} {
+		t.Run(change, func(t *testing.T) {
+			h, s, o, original, witness := preparedRecoveryFixture(t)
+			if err := writeOwnerJournal(h.state, original); err != nil {
+				t.Fatal(err)
+			}
+			candidate := original
+			switch change {
+			case "foreign-operation":
+				candidate.ID = strings.Repeat("d", 32)
+			case "future-phase":
+				candidate.Phase = "fencing"
+			case "lost-lock":
+				candidate.Phase = "source-lock-lost"
+			}
+			raw, err := json.Marshal(candidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if change == "partial" {
+				raw = []byte(`{"phase":`)
+			}
+			second := filepath.Join(filepath.Dir(h.state), ".pending-456")
+			if err = os.WriteFile(second, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err = recoverPreparedOwnerJournal(t.Context(), h, s, o, original.CoreHash, original.SignerHash, func() error { return nil }); err == nil {
+				t.Fatal("unsafe interrupted write accepted")
+			}
+			if after, err := os.ReadFile(second); err != nil || string(after) != string(raw) {
+				t.Fatal("unsafe write was not preserved", err)
+			}
+			if _, err = os.Stat(witness); err != nil {
+				t.Fatal("original witness was not preserved", err)
+			}
+		})
+	}
+}
+
 func TestPreparedRecoveryRefusesConcurrentFileChange(t *testing.T) {
 	for _, replacement := range []bool{false, true} {
 		t.Run(map[bool]string{false: "in-place", true: "replacement"}[replacement], func(t *testing.T) {

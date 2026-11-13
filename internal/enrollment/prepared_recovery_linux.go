@@ -45,19 +45,19 @@ func recoverPreparedOwnerJournal(ctx context.Context, h *runtimeHost, s Source, 
 	if err != nil {
 		return err
 	}
-	pending := ""
+	var pending []string
 	locked, published := false, false
 	for _, entry := range entries {
 		locked = locked || entry.Name() == "controller.lock"
 		published = published || entry.Name() == "state.json"
 		if strings.HasPrefix(entry.Name(), ".pending-") {
-			if pending != "" {
+			if len(pending) == 8 {
 				return errState
 			}
-			pending = entry.Name()
+			pending = append(pending, entry.Name())
 		}
 	}
-	if pending == "" {
+	if len(pending) == 0 {
 		return nil
 	}
 	if !locked || verifyAuthority == nil {
@@ -85,12 +85,15 @@ func recoverPreparedOwnerJournal(ctx context.Context, h *runtimeHost, s Source, 
 		}
 		return dir.Sync()
 	}
+	if len(pending) != 1 {
+		return errState
+	}
 	for _, entry := range entries {
-		if entry.Name() != "controller.lock" && entry.Name() != pending {
+		if entry.Name() != "controller.lock" && entry.Name() != pending[0] {
 			return errState
 		}
 	}
-	fd, err := unix.Openat(dirFD, pending, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	fd, err := unix.Openat(dirFD, pending[0], unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return errState
 	}
@@ -128,7 +131,7 @@ func recoverPreparedOwnerJournal(ctx context.Context, h *runtimeHost, s Source, 
 	if err != nil || !os.SameFile(info, currentDir) || currentDir.Mode()&os.ModeSymlink != 0 {
 		return errState
 	}
-	current, err := os.Lstat(filepath.Join(dirPath, pending))
+	current, err := os.Lstat(filepath.Join(dirPath, pending[0]))
 	if err != nil || !os.SameFile(before, current) || current.Mode()&os.ModeSymlink != 0 {
 		return errState
 	}

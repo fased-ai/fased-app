@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
@@ -94,46 +95,58 @@ func openRuntime(s Source, system *custodyinstall.System) (*runtimeHost, io.Clos
 	return &runtimeHost{system, f, parent, filepath.Base(s.Data), filepath.Join(dir, "state.json")}, lock, nil
 }
 
-func pendingOwnerJournal(entries []os.DirEntry) (string, error) {
-	name := ""
+func pendingOwnerJournals(entries []os.DirEntry) ([]string, error) {
+	var names []string
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), ".pending-") {
-			if name != "" {
-				return "", errState
+			if len(names) == 8 {
+				return nil, errState
 			}
-			name = entry.Name()
+			names = append(names, entry.Name())
 		}
 	}
-	return name, nil
+	return names, nil
 }
 
 func readOwnerJournal(path string) (journal, error) {
+	j, _, err := readOwnerJournalWithPending(path)
+	return j, err
+}
+
+type pendingReplay struct {
+	Target custodyinstall.Manifest
+	Digest string
+}
+
+func readOwnerJournalWithPending(path string) (journal, pendingReplay, error) {
 	var j journal
+	var retained pendingReplay
 	dirFD, err := unix.Open(filepath.Dir(path), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return j, err
+		return j, retained, err
 	}
 	dir := os.NewFile(uintptr(dirFD), "owner-journal")
 	defer dir.Close()
 	entries, err := dir.ReadDir(-1)
 	if err != nil {
-		return j, err
+		return j, retained, err
 	}
-	name, err := pendingOwnerJournal(entries)
+	names, err := pendingOwnerJournals(entries)
 	if err != nil {
-		return j, err
+		return j, retained, err
 	}
 	j, err = readOwnerJournalEntry(dirFD, filepath.Base(path), os.Getuid(), false)
 	if err != nil {
-		if name != "" {
-			return journal{}, errState
+		if len(names) != 0 {
+			return journal{}, retained, errState
 		}
-		return journal{}, err
+		return journal{}, retained, err
 	}
-	if err = verifyRetainedPrepared(dirFD, name, j, os.Getuid()); err != nil {
-		return journal{}, err
+	retained, err = verifyRetainedPrepared(dirFD, names, j, os.Getuid())
+	if err != nil {
+		return journal{}, pendingReplay{}, err
 	}
-	return j, nil
+	return j, retained, nil
 }
 
 func readOwnerJournalEntry(dirFD int, name string, owner int, pending bool) (journal, error) {
@@ -155,23 +168,91 @@ func readOwnerJournalEntry(dirFD int, name string, owner int, pending bool) (jou
 	return j, nil
 }
 
-// The original first prepared write remains as a private recovery witness.
-// Any other pending file, or any changed operation identity, stays held.
-func verifyRetainedPrepared(dirFD int, name string, current journal, owner int) error {
-	if name == "" {
-		return nil
+// The first prepared write remains as a witness. A later complete write can
+// be retained too, but it never replaces the committed controller state.
+func verifyRetainedPrepared(dirFD int, names []string, current journal, owner int) (pendingReplay, error) {
+	var retained pendingReplay
+	if len(names) == 0 {
+		return retained, nil
 	}
-	prepared, err := readOwnerJournalEntry(dirFD, name, owner, true)
 	checked := current
 	if checked.Phase == "source-lock-lost" {
 		checked.Phase = "fencing"
 	}
-	if err != nil || !prepared.valid(owner) || prepared.Phase != "prepared" || prepared.Target != (custodyinstall.Manifest{}) || prepared.Digest != "" || prepared.CoreRecovery != nil || !checked.valid(owner) ||
-		prepared.ID != current.ID || prepared.Owner != current.Owner || prepared.Source != current.Source || prepared.Node != current.Node || prepared.CoreHash != current.CoreHash || prepared.SignerHash != current.SignerHash ||
-		prepared.Network != current.Network || prepared.Mode != current.Mode || prepared.Profile != current.Profile || prepared.Provenance != current.Provenance || prepared.NativeOwnerAccess != current.NativeOwnerAccess {
+	if !checked.valid(owner) {
+		return retained, errState
+	}
+	witness := false
+	for _, name := range names {
+		pending, err := readOwnerJournalEntry(dirFD, name, owner, true)
+		if err != nil || !pending.valid(owner) || pending.ID != current.ID || pending.Owner != current.Owner || pending.Source != current.Source || pending.Node != current.Node ||
+			pending.CoreHash != current.CoreHash || pending.SignerHash != current.SignerHash || pending.Network != current.Network || pending.Mode != current.Mode ||
+			pending.Profile != current.Profile || pending.Provenance != current.Provenance || pending.NativeOwnerAccess != current.NativeOwnerAccess {
+			return retained, errState
+		}
+		if pending.Phase == "prepared" && pending.Target == (custodyinstall.Manifest{}) && pending.Digest == "" && pending.CoreRecovery == nil {
+			witness = true
+			continue
+		}
+		// Only the Local native enrollment with its original witness supports
+		// replaying an additional complete, uncommitted transition.
+		if current.Phase == "source-lock-lost" || current.Source.Profile != "local" || !current.NativeOwnerAccess || current.Mode != signer.OrdinaryCustodyMode ||
+			current.CoreRecovery != nil || pending.CoreRecovery != nil || !compatiblePendingWrite(current, pending) {
+			return retained, errState
+		}
+		if pending.Target.ID != "" {
+			if retained.Target.ID != "" && retained.Target != pending.Target {
+				return retained, errState
+			}
+			retained.Target = pending.Target
+		}
+		if pending.Digest != "" {
+			if retained.Digest != "" && retained.Digest != pending.Digest {
+				return retained, errState
+			}
+			retained.Digest = pending.Digest
+		}
+	}
+	if !witness {
+		return retained, errState
+	}
+	return retained, nil
+}
+
+// Re-read the retained writes after external work and before publishing a
+// phase: a replay may not silently replace a previously observed result.
+func checkPendingReplay(path string, current journal, target *custodyinstall.Manifest, digest string) error {
+	saved, retained, err := readOwnerJournalWithPending(path)
+	if err != nil || !reflect.DeepEqual(saved, current) || target != nil && retained.Target.ID != "" && retained.Target != *target || digest != "" && retained.Digest != "" && retained.Digest != digest {
 		return errState
 	}
 	return nil
+}
+
+func compatiblePendingWrite(current, pending journal) bool {
+	currentRank, pendingRank := rank(current.Phase), rank(pending.Phase)
+	if pendingRank > currentRank+1 || (current.Target.ID != "" && current.Target.ID != current.ID) || (pending.Target.ID != "" && pending.Target.ID != pending.ID) {
+		return false
+	}
+	if current.Target != pending.Target {
+		if current.Target == (custodyinstall.Manifest{}) {
+			if current.Phase != "prepared" || pending.Phase != "prepared" || pending.Target.ID == "" {
+				return false
+			}
+		} else if pending.Target != (custodyinstall.Manifest{}) || pendingRank >= currentRank {
+			return false
+		}
+	}
+	if current.Digest != pending.Digest {
+		if current.Digest == "" {
+			if current.Phase != "suspended" || pending.Phase != "importing" || pending.Digest == "" {
+				return false
+			}
+		} else if pending.Digest != "" || pendingRank >= currentRank {
+			return false
+		}
+	}
+	return true
 }
 
 // A successful enrollment transition must survive a power loss after rename.
@@ -616,6 +697,9 @@ func runInstalled(ctx context.Context, s Source, o Options, system *custodyinsta
 			return system.RecoverEnrollmentCore(ctx, j.CoreRecovery.Previous, j.ID, o.Core, next)
 		},
 		owner: os.Getuid(), load: func() (journal, error) { return readOwnerJournal(h.state) },
+		checkPending: func(j journal, target *custodyinstall.Manifest, digest string) error {
+			return checkPendingReplay(h.state, j, target, digest)
+		},
 		save: func(j journal) error { return writeOwnerJournal(h.state, j) }, node: realNode,
 		targetExists: func() bool { _, e := os.Lstat(custodyinstall.Root(os.Getuid())); return !errors.Is(e, os.ErrNotExist) },
 		prepare: func(ctx context.Context, j journal, o Options) (custodyinstall.Manifest, error) {

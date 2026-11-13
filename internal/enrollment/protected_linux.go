@@ -62,7 +62,7 @@ func openOwnerEnrollmentJournal(a maintenance.Authority, requireLock bool) (jour
 	if err != nil {
 		return j, err
 	}
-	pending, err := pendingOwnerJournal(entries)
+	pending, err := pendingOwnerJournals(entries)
 	if err != nil {
 		return j, err
 	}
@@ -107,7 +107,7 @@ func openOwnerEnrollmentJournal(a maintenance.Authority, requireLock bool) (jour
 	if !valid {
 		return journal{}, errState
 	}
-	if err = verifyRetainedPrepared(dirFD, pending, j, a.Owner); err != nil {
+	if _, err = verifyRetainedPrepared(dirFD, pending, j, a.Owner); err != nil {
 		return journal{}, err
 	}
 	return j, nil

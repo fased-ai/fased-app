@@ -128,6 +128,7 @@ type operations struct {
 	node            func(string) (node, error)
 	targetExists    func() bool
 	prepare         func(context.Context, journal, Options) (custodyinstall.Manifest, error)
+	checkPending    func(journal, *custodyinstall.Manifest, string) error
 	target          func(custodyinstall.Manifest) error
 	emptySigner     func(context.Context, custodyinstall.Manifest) error
 	export          func(context.Context, custodyinstall.Manifest, sourceRecord) (*imageLease, error)
@@ -197,10 +198,17 @@ func run(ctx context.Context, s Source, o Options, coreHash, signerHash string, 
 	}
 	set := func(phase string) error { j.Phase = phase; return op.save(j) }
 	if j.Target.ID == "" {
-		j.Target, err = op.prepare(ctx, j, o)
+		target, e := op.prepare(ctx, j, o)
+		err = e
 		if err != nil {
 			return empty, err
 		}
+		if op.checkPending != nil {
+			if err = op.checkPending(j, &target, ""); err != nil {
+				return empty, err
+			}
+		}
+		j.Target = target
 		if !j.valid(op.owner) || op.target(j.Target) != nil {
 			return empty, errState
 		}
@@ -271,6 +279,11 @@ func run(ctx context.Context, s Source, o Options, coreHash, signerHash string, 
 		digest := core.EnrollmentImageDigest(lease.image)
 		if j.Digest != "" && j.Digest != digest {
 			return j.Target, errors.New("source changed after an interrupted import; preserve both copies")
+		}
+		if op.checkPending != nil {
+			if err = op.checkPending(j, nil, digest); err != nil {
+				return j.Target, err
+			}
 		}
 		j.Digest = digest
 		if rank(j.Phase) < rank("importing") {

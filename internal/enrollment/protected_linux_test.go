@@ -49,6 +49,22 @@ func TestProtectedEnrollmentJournalRequiresOriginalLockForMutation(t *testing.T)
 			t.Fatal("matching original prepared witness rejected", err)
 		}
 	}
+	second := filepath.Join(dir, ".pending-456")
+	if err = os.WriteFile(second, b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := openOwnerEnrollmentJournal(a, true); err != nil || got.ID != j.ID {
+		t.Fatal("matching second prepared write rejected", err)
+	}
+	if err = os.WriteFile(second, []byte("unclassified"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = openOwnerEnrollmentJournal(a, true); err == nil {
+		t.Fatal("protected reader accepted an unclassified second write")
+	}
+	if err = os.Remove(second); err != nil {
+		t.Fatal(err)
+	}
 	if err = os.WriteFile(pending, []byte("original pending write"), 0600); err != nil {
 		t.Fatal(err)
 	}
