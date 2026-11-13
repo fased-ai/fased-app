@@ -142,8 +142,12 @@ func TestUpdateRecoveryKeepsOrdinaryOfflineEntry(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux custody enrollment only")
 	}
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0700); err != nil {
+	base := t.TempDir()
+	dir, root := filepath.Join(base, "data"), filepath.Join(base, "original")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(root, 0700); err != nil {
 		t.Fatal(err)
 	}
 	prior := applicationUpdatesPublicClient
@@ -151,8 +155,8 @@ func TestUpdateRecoveryKeepsOrdinaryOfflineEntry(t *testing.T) {
 	applicationUpdatesPublicClient = func(context.Context, string) (*core.Client, bool, error) {
 		return nil, false, core.ErrCoreUnavailable
 	}
-	err := ordinaryUpdateCommand([]string{"recover", "--data-dir", dir, "--prefix", filepath.Join(dir, "missing-original")}, nil, io.Discard, io.Discard)
-	if err == nil || errors.Is(err, core.ErrCoreUnavailable) {
+	err := ordinaryUpdateCommand([]string{"recover", "--data-dir", dir, "--prefix", root}, nil, io.Discard, io.Discard)
+	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("ordinary offline recovery entry was not reached", err)
 	}
 }
