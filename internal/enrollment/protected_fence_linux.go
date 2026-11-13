@@ -75,7 +75,7 @@ func protectedFence(h *runtimeHost, j journal, managerUID, managerGID int, autho
 	if err = unix.Mkdirat(int(dir.Fd()), ".original", 0700); err != nil && !errors.Is(err, unix.EEXIST) {
 		return err
 	}
-	original, err := openEnrollmentDirectory(int(dir.Fd()), ".original", managerUID, managerGID, 0700)
+	original, err := openProtectedOriginal(int(dir.Fd()), managerUID, managerGID)
 	if err != nil {
 		return errors.New("foreign original archive; preserve it")
 	}
@@ -120,6 +120,27 @@ func protectedFence(h *runtimeHost, j journal, managerUID, managerGID int, autho
 		return errors.New("published source fence differs; preserve the original")
 	}
 	return unix.Fsync(parent)
+}
+
+// The bound pending directory is already owned by the maintenance authority.
+// Normalize only its pinned original archive; no foreign mode or owner is
+// adopted when retrying after an interrupted mkdir under a restrictive umask.
+func openProtectedOriginal(parent, uid, gid int) (*os.File, error) {
+	fd, err := unix.Openat(parent, ".original", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	f := os.NewFile(uintptr(fd), "enrollment-original")
+	var st unix.Stat_t
+	if unix.Fstat(fd, &st) != nil || int(st.Uid) != uid || int(st.Gid) != gid || st.Mode&07777&^0700 != 0 || !sameEnrollmentEntry(parent, ".original", fd) {
+		f.Close()
+		return nil, errState
+	}
+	if err = unix.Fchmod(fd, 0700); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
 }
 
 func validateProtectedFenceEntries(dir int, id string, allowReady bool) error {

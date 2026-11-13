@@ -211,3 +211,26 @@ func TestBootstrapMetadataUsesPrivateModeUnderRestrictiveUmask(t *testing.T) {
 		t.Fatalf("metadata mode: %v %v", info, err)
 	}
 }
+
+func TestPrepareUnderRestrictiveOwnerUmask(t *testing.T) {
+	if os.Getenv("FASED_TEST_PREPARE_UMASK") != "1" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestPrepareUnderRestrictiveOwnerUmask$")
+		cmd.Env = append(os.Environ(), "FASED_TEST_PREPARE_UMASK=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("isolated umask check: %v: %s", err, out)
+		}
+		return
+	}
+	f := newFirstFixture(t)
+	o := f.options()
+	old := unix.Umask(0227)
+	defer unix.Umask(old)
+	p, err := Prepare(t.Context(), o)
+	if err != nil {
+		t.Fatal("verified acquisition refused restrictive owner umask", err)
+	}
+	defer p.Close()
+	if !p.Report().BundleVerified {
+		t.Fatal("acquisition did not verify the bundle")
+	}
+}

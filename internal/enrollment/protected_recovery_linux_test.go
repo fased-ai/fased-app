@@ -394,6 +394,71 @@ func TestProtectedFenceNormalizesCreatedDirectoryWithRestrictiveUmask(t *testing
 	}
 }
 
+func TestProtectedFenceNormalizesOriginalUnderOwnerUmask(t *testing.T) {
+	if os.Getenv("FASED_TEST_FENCE_OWNER_UMASK") != "1" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestProtectedFenceNormalizesOriginalUnderOwnerUmask$")
+		cmd.Env = append(os.Environ(), "FASED_TEST_FENCE_OWNER_UMASK=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("isolated owner umask check: %v: %s", err, out)
+		}
+		return
+	}
+	parent := t.TempDir()
+	source := filepath.Join(parent, "source")
+	if err := os.Mkdir(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "owner-data"), []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	n, err := realNode(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := journal{Version: 1, ID: strings.Repeat("a", 32), Owner: os.Getuid(), Node: n, Digest: strings.Repeat("b", 64)}
+	f, err := os.Open(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	h := &runtimeHost{parent: f, path: parent, base: "source"}
+	a := testFenceAuthority(t, h, j, "")
+	if err = a.reserve(h, j); err != nil {
+		t.Fatal(err)
+	}
+	old := unix.Umask(0227)
+	defer unix.Umask(old)
+	if err = protectedFence(h, j, os.Getuid(), os.Getgid(), a); err != nil {
+		t.Fatal("protected fence refused owner umask", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(source, ".original", "data", "owner-data")); err != nil || string(b) != "original" {
+		t.Fatal("original data was not retained", err)
+	}
+}
+
+func TestProtectedOriginalRefusesForeignMode(t *testing.T) {
+	parent := t.TempDir()
+	path := filepath.Join(parent, ".original")
+	if err := os.Mkdir(path, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if original, err := openProtectedOriginal(int(f.Fd()), os.Getuid(), os.Getgid()); err == nil {
+		original.Close()
+		t.Fatal("foreign archive permissions accepted")
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0755 {
+		t.Fatal("foreign archive permissions changed", err)
+	}
+}
+
 func TestProtectedFenceRejectsReplacedBoundDirectory(t *testing.T) {
 	h, j, _, a := interruptedFenceFixture(t, false)
 	pending := filepath.Join(h.path, ".enrollment-"+j.ID)

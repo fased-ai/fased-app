@@ -361,6 +361,17 @@ func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepa
 	if err != nil {
 		return nil, err
 	}
+	// Normalize only the just-created, pinned directory. A restrictive owner
+	// umask can otherwise remove write permission before acquisition begins.
+	opened, err := root.Stat(".")
+	if err != nil || !os.SameFile(created, opened) {
+		root.Close()
+		return nil, errors.New("bootstrap output identity changed")
+	}
+	if err = root.Chmod(".", 0700); err != nil {
+		root.Close()
+		return nil, err
+	}
 	prepared = &Prepared{options: o, seed: seed, descriptor: descriptor, directoryInfo: created, root: root, metadata: docs, startedAt: start}
 	body, err := source.archive(ctx, descriptor)
 	if err != nil {
@@ -369,6 +380,11 @@ func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepa
 	f, err := root.OpenFile("download.tar.gz", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		body.Close()
+		return prepared, err
+	}
+	if err = f.Chmod(0600); err != nil {
+		body.Close()
+		f.Close()
 		return prepared, err
 	}
 	h := sha256.New()

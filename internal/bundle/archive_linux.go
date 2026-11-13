@@ -73,6 +73,15 @@ func ExtractVerifiedArchive(archivePath, directory string, expected File, manife
 			}
 		}
 	}()
+	current, currentErr := parent.Lstat(name)
+	opened, openedErr := output.Stat(".")
+	if currentErr != nil || openedErr != nil || !os.SameFile(owned, current) || !os.SameFile(owned, opened) || !current.IsDir() || current.Mode().Perm()&0077 != 0 {
+		return manifest, errors.New("archive output identity or privacy changed")
+	}
+	// Only normalize the exclusive directory whose inode is already held.
+	if err = output.Chmod(".", 0700); err != nil {
+		return manifest, err
+	}
 	if err = archiveSameOutput(parent, output, name, owned); err != nil {
 		return manifest, err
 	}
