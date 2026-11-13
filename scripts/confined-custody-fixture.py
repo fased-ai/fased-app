@@ -56,6 +56,16 @@ def digest(path):
     return h.hexdigest()
 
 
+def require_launcher(path, target):
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != OWNER or
+            stat.S_IMODE(info.st_mode) != 0o700 or info.st_nlink != 1 or info.st_size > 8192):
+        raise RuntimeError('installed command identity differs')
+    lines = path.read_text().splitlines()
+    if [line for line in lines if line.startswith('core=')] != ["core='" + str(target) + "'"]:
+        raise RuntimeError('installed command does not use the enrolled executable')
+
+
 def save(name, value):
     target = WORK / name
     pending = WORK / (name + '.pending')
@@ -274,6 +284,7 @@ def complete_setup(port, session=None):
                              '--disposable-fixture', '--ordinary-custody', '--native-owner'], timeout=600))
     if result['instanceId'] != original['instanceId'] or result['walletSigner'] or result['financialExecution']:
         raise RuntimeError('enrolled fixture identity differs')
+    require_launcher(HOME / '.local/bin/fased', ROOT / 'fased-app')
     health(origin)
     backup = WORK / 'wallet-backup.json'
     wallet = json.loads(run([binary, 'custody', 'setup', '--disposable-fixture', '--password-stdin', '--backup-file', backup],
@@ -419,13 +430,14 @@ def verify(operation):
         raise RuntimeError('original protected update is not complete')
     if digest(ROOT / 'fased-app') != trust['targetSha256'] or digest(ROOT / 'fased-signer') != trust['targetSignerSha256']:
         raise RuntimeError('installed core/signer differ from the target fixture')
+    require_launcher(HOME / '.local/bin/fased', ROOT / 'fased-app')
     result = run([HOME / '.local/bin/fased', 'update'], data='', timeout=180)
     if 'Already current' not in result:
         raise RuntimeError('installed CLI did not report Already current')
     print(json.dumps({'result': 'PASS', 'fixtureOnly': True, 'instanceId': state['instanceId'],
                       'operationId': j['operationId'], 'lockedWallet': True, 'backupPreserved': True,
                       'taskPreserved': True, 'accountPreserved': True, 'rpcPreserved': True,
-                      'httpCliWalletRead': True, 'targetCoreSignerMatched': True, 'cliAlreadyCurrent': True}))
+                      'httpCliWalletRead': True, 'targetCoreSignerMatched': True, 'cliUsesTarget': True, 'cliAlreadyCurrent': True}))
 
 
 def main():

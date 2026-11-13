@@ -22,6 +22,16 @@ guest = load('confined_guest', 'confined-custody-fixture.py')
 
 
 class FixtureBoundaries(unittest.TestCase):
+    def test_installed_launcher_must_point_at_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            command = Path(tmp) / 'fased'
+            command.write_text("#!/bin/sh\ncore='/verified/fased-app'\n")
+            command.chmod(0o700)
+            with patch.object(guest, 'OWNER', os.getuid()):
+                guest.require_launcher(command, Path('/verified/fased-app'))
+                with self.assertRaisesRegex(RuntimeError, 'enrolled executable'):
+                    guest.require_launcher(command, Path('/other/fased-app'))
+
     def test_source_identity_cannot_be_absent_or_different(self):
         sha = 'a' * 40
         self.assertFalse(host.matching_source({}, {}, {}))
