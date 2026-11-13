@@ -13,7 +13,38 @@ import (
 	"testing"
 
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/custodyinstall"
 )
+
+func TestNativeEnrollmentRebindsOnlySameInstanceAfterUpdate(t *testing.T) {
+	old := custodyinstall.Manifest{Owner: 1000, ID: "original", NativeOwnerAccess: true, Enrollment: true,
+		Location: "local", Network: "devnet", CoreHash: "old-core", SignerHash: "old-signer",
+		App: custodyinstall.Identity{UID: 1101}, Signer: custodyinstall.Identity{UID: 1102}}
+	commit := custodyinstall.EnrollmentCommit{Version: 1, InstanceID: "original-instance", Digest: "original-digest", ManifestSHA256: "original-topology"}
+	next := old
+	next.CoreHash, next.SignerHash = "new-core", "new-signer"
+	if !sameNativeEnrollment(old, next, commit, commit) {
+		t.Fatal("same enrollment could not reconnect after a verified pair update")
+	}
+	for _, change := range []func(*custodyinstall.Manifest){
+		func(m *custodyinstall.Manifest) { m.ID = "foreign" },
+		func(m *custodyinstall.Manifest) { m.Owner++ },
+		func(m *custodyinstall.Manifest) { m.App.UID++ },
+		func(m *custodyinstall.Manifest) { m.Network = "mainnet-beta" },
+		func(m *custodyinstall.Manifest) { m.NativeOwnerAccess = false },
+	} {
+		foreign := next
+		change(&foreign)
+		if sameNativeEnrollment(old, foreign, commit, commit) {
+			t.Fatal("different native enrollment admitted")
+		}
+	}
+	foreignCommit := commit
+	foreignCommit.InstanceID = "foreign-instance"
+	if sameNativeEnrollment(old, next, commit, foreignCommit) {
+		t.Fatal("different committed instance admitted")
+	}
+}
 
 func TestNativeHealthIsFreshBoundAndPreservesResponse(t *testing.T) {
 	const instance = "fixture-local-instance"

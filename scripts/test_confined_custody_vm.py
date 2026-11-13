@@ -160,6 +160,37 @@ class FixtureBoundaries(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'pre-enrollment fixture required'):
                     guest.resume_claimed(50943)
 
+    def test_local_fixture_enrollment_requests_owner_transport(self):
+        with patch.object(guest, 'health', return_value={'instanceId': 'original'}), \
+             patch.object(guest, 'seed_source', return_value='task'), \
+             patch.object(guest, 'run', side_effect=RuntimeError('stop at enrollment')) as run:
+            with self.assertRaisesRegex(RuntimeError, 'stop at enrollment'):
+                guest.complete_setup(50943, {'sessionToken': 'fixture'})
+        argv = run.call_args.args[0]
+        self.assertIn('--native-owner', argv)
+        self.assertEqual('local', argv[argv.index('--source') + 1])
+
+    def test_fixture_wallet_read_uses_normal_owner_cli(self):
+        result = {'accountId': 'original', 'revision': 7, 'fixtureOnly': True, 'liveRPC': False,
+                  'binding': 'bound', 'credentialRef': 'fixture-ref', 'network': 'devnet',
+                  'address': 'fixture-address', 'lamports': '0', 'tokens': [], 'activity': []}
+        with patch.object(guest, 'api', return_value=result), \
+             patch.object(guest, 'run', return_value=json.dumps(result)) as run:
+            guest.wallet_read_parity('http://127.0.0.1:1234', {}, 'original', 7, 'fixture-ref')
+            argv = run.call_args.args[0]
+            self.assertEqual(guest.HOME / '.local/bin/fased', argv[0])
+            self.assertEqual('accounts', argv[1])
+            self.assertIn('--read-stdin', argv)
+            changed = dict(result, accountId='foreign')
+            run.return_value = json.dumps(changed)
+            with self.assertRaisesRegex(RuntimeError, 'wallet read differs: accountId'):
+                guest.wallet_read_parity('http://127.0.0.1:1234', {}, 'original', 7, 'fixture-ref')
+            changed = dict(result)
+            del changed['activity']
+            run.return_value = json.dumps(changed)
+            with self.assertRaisesRegex(RuntimeError, 'wallet read differs: activity'):
+                guest.wallet_read_parity('http://127.0.0.1:1234', {}, 'original', 7, 'fixture-ref')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -241,6 +241,8 @@ func allowed(method, route string) bool {
 		return method == "POST"
 	case "/api/v1/agents":
 		return method == "GET" || method == "POST"
+	case "/api/v1/updates/application":
+		return method == "GET" || method == "POST"
 	case "/api/v1/ai/connection":
 		return method == "GET" || method == "POST"
 	case "/api/v1/accounts", "/api/v1/updates/preferences":

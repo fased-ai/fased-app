@@ -181,14 +181,20 @@ func ordinaryUpdateCommand(args []string, in *os.File, out, errOut io.Writer) er
 		}
 		return call(action, out)
 	}
-	call := func(action string, dest io.Writer) error {
-		return applicationUpdatesCommand([]string{action, "--data-dir", *dir}, in, dest, errOut)
-	}
 	if action == "recover" {
 		return recoverInstalledLocalUpdate(*prefix, *dir, in, out, errOut)
 	}
 	if action == "wizard" {
+		ctx := context.Background()
+		client, err := openApplicationUpdatesClient(ctx, *dir)
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+		call := func(action string, dest io.Writer) error {
+			return applicationUpdatesWithClient(ctx, client, action, in, dest, errOut)
+		}
 		return updateWizard(call, out, errOut)
 	}
-	return call(action, out)
+	return applicationUpdatesCommand([]string{action, "--data-dir", *dir}, in, out, errOut)
 }

@@ -271,7 +271,7 @@ def complete_setup(port, session=None):
     task_id = seed_source(origin, binary, session)
     result = json.loads(run([binary, 'custody', 'enroll', '--source', 'local', '--expected-instance', original['instanceId'],
                              '--network', 'devnet', '--signer-binary', WORK / 'fased-signer', '--prepare-host',
-                             '--disposable-fixture', '--ordinary-custody'], timeout=600))
+                             '--disposable-fixture', '--ordinary-custody', '--native-owner'], timeout=600))
     if result['instanceId'] != original['instanceId'] or result['walletSigner'] or result['financialExecution']:
         raise RuntimeError('enrolled fixture identity differs')
     health(origin)
@@ -293,7 +293,7 @@ def complete_setup(port, session=None):
     if not credential['saved'] or not credential['locked'] or credential['liveRPC']:
         raise RuntimeError('locked fixture RPC credential required')
     accounts = api(origin, '/api/v1/accounts', session=session)
-    run([binary, 'custody', 'login', '--disposable-fixture', '--prepare-host', '--password-stdin'], PASSWORD + '\n')
+    wallet_read_parity(origin, session, account['id'], accounts['record']['revision'], credential['ref'])
     record_hash = hashlib.sha256(json.dumps(accounts['record'], sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     journal = json.loads((P('/var/lib/fased-maintenance/owners/1100') / 'custody.json').read_text())
     if journal['phase'] != 'idle' or journal['package']['sequence'] != '8':
@@ -303,6 +303,18 @@ def complete_setup(port, session=None):
                         'admissionHeld': status['admissionHeld'], 'walletBackupSha256': digest(backup), 'port': port,
                         'initialOperation': journal['operationId'], 'accountsRecordSha256': record_hash})
     print(json.dumps({'result': 'READY', 'fixtureOnly': True, 'instanceId': original['instanceId'], 'port': port}))
+
+
+def wallet_read_parity(origin, session, account_id, revision, credential_ref):
+    read = {'accountId': account_id, 'revision': revision, 'ref': credential_ref, 'passphrase': RPC_PASSWORD}
+    observed = api(origin, '/api/v1/accounts/read', 'POST', read, session)
+    cli = json.loads(run([HOME / '.local/bin/fased', 'accounts', '--read-stdin'], json.dumps(read)))
+    for key in ('accountId', 'revision', 'binding', 'credentialRef', 'address', 'network', 'lamports', 'tokens', 'activity'):
+        if key not in observed or key not in cli or observed[key] != cli[key]:
+            raise RuntimeError('HTTP/CLI wallet read differs: ' + key)
+    if (observed['accountId'] != account_id or observed['revision'] != revision or observed['credentialRef'] != credential_ref or
+            any(x.get('fixtureOnly') is not True or x.get('liveRPC') is not False for x in (observed, cli))):
+        raise RuntimeError('unexpected live RPC capability')
 
 
 def matching_held_update(j, state, trust):
@@ -398,16 +410,7 @@ def verify(operation):
                      'revision': accounts['record']['revision'], 'action': 'status', 'ref': ''}, session)
     if not credential['saved'] or not credential['locked'] or credential['stale']:
         raise RuntimeError('locked original RPC credential unavailable')
-    read = {'accountId': state['accountId'], 'revision': accounts['record']['revision'], 'ref': credential['ref'], 'passphrase': RPC_PASSWORD}
-    observed = api(origin, '/api/v1/accounts/read', 'POST', read, session)
-    binary = HOME / '.local/share/fased-app/fased-app'
-    run([binary, 'custody', 'login', '--disposable-fixture', '--prepare-host', '--password-stdin'], PASSWORD + '\n')
-    cli = json.loads(run([binary, 'custody', 'accounts', '--disposable-fixture', '--prepare-host', '--read-stdin'], json.dumps(read)))
-    for key in ('accountId', 'revision', 'binding', 'credentialRef', 'address', 'network', 'lamports', 'tokens', 'activity'):
-        if observed.get(key) != cli.get(key):
-            raise RuntimeError('HTTP/CLI wallet read differs: ' + key)
-    if not observed['fixtureOnly'] or observed['liveRPC']:
-        raise RuntimeError('unexpected live RPC capability')
+    wallet_read_parity(origin, session, state['accountId'], accounts['record']['revision'], credential['ref'])
     status = json.loads(run([ROOT / 'fased-signer', 'owner', '--config', ROOT / 'identity.json', '--disposable-fixture']))
     if not status['locked'] or status['account'] != state['signerAccount'] or status['recoveryRequired'] != state['recoveryRequired'] or status['admissionHeld'] != state['admissionHeld'] or digest(WORK / 'wallet-backup.json') != state['walletBackupSha256']:
         raise RuntimeError('wallet identity, lock or original backup changed')

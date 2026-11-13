@@ -77,7 +77,18 @@ func newPublicClient(ctx context.Context, dir string) (*core.Client, bool, json.
 		return nil, false, nil, err
 	}
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&custodyinstall.System{}).NativeChannel(ctx, m)
+		// A paired update may replace the two executable hashes while retaining
+		// the same enrolled instance. Reload only the root-owned manifest and
+		// require the original topology and enrollment commit before redialing.
+		current, err := custodyinstall.Load(m.Owner)
+		if err != nil {
+			return nil, err
+		}
+		currentCommit, err := custodyinstall.ReadEnrollmentCommit(current)
+		if err != nil || !sameNativeEnrollment(m, current, commit, currentCommit) {
+			return nil, errors.New("native owner instance changed")
+		}
+		return (&custodyinstall.System{}).NativeChannel(ctx, current)
 	}}
 	c := &core.Client{Endpoint: core.Endpoint{URL: "http://" + m.Listen, InstanceID: commit.InstanceID}, HTTP: &http.Client{Transport: transport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirects refused") }}}
 	health, err := verifiedNativeHealth(ctx, c, commit.InstanceID, m.Owner)
@@ -86,6 +97,10 @@ func newPublicClient(ctx context.Context, dir string) (*core.Client, bool, json.
 		return nil, false, nil, err
 	}
 	return c, true, health, nil
+}
+
+func sameNativeEnrollment(original, current custodyinstall.Manifest, originalCommit, currentCommit custodyinstall.EnrollmentCommit) bool {
+	return custodyinstall.EnrollmentIdentity(original) == custodyinstall.EnrollmentIdentity(current) && originalCommit == currentCommit
 }
 
 func verifiedNativeHealth(ctx context.Context, c *core.Client, instance string, owner int) (json.RawMessage, error) {
