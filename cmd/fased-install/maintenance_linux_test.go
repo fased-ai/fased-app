@@ -12,8 +12,28 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/bootstrap"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 )
+
+func TestFixtureSuccessorSignerCannotCrossProductionBoundary(t *testing.T) {
+	initial := &bootstrap.WalletPayload{Version: "0.1.11", Source: "source-a"}
+	successor := &bootstrap.WalletPayload{Version: "0.1.12", Source: "source-b"}
+	first := bootstrap.MaintenanceIdentity{Version: initial.Version, Source: initial.Source}
+	next := bootstrap.MaintenanceIdentity{Version: successor.Version, Source: successor.Source}
+	if got := selectEmbeddedSigner(first, false, initial, successor); got != initial {
+		t.Fatal("original installer payload changed")
+	}
+	if got := selectEmbeddedSigner(next, false, initial, successor); got != nil {
+		t.Fatal("fixture signer admitted in production")
+	}
+	if got := selectEmbeddedSigner(next, true, initial, successor); got != successor {
+		t.Fatal("exact controlled successor unavailable")
+	}
+	if got := selectEmbeddedSigner(bootstrap.MaintenanceIdentity{Version: next.Version, Source: "foreign"}, true, initial, successor); got != nil {
+		t.Fatal("foreign successor source accepted")
+	}
+}
 
 func TestMaintenanceEnrollmentFramePreservesPrivateStream(t *testing.T) {
 	head := `{"version":1,"action":"custody-enrollment-image"}` + "\n"

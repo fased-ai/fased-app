@@ -571,10 +571,20 @@ func maintenanceCustodyAcquire(ctx context.Context, a maintenance.Authority, q m
 	return nil
 }
 
+func selectEmbeddedSigner(id bootstrap.MaintenanceIdentity, development bool, primary, successor *bootstrap.WalletPayload) *bootstrap.WalletPayload {
+	if primary != nil && primary.Version == id.Version && primary.Source == id.Source {
+		return primary
+	}
+	if development && successor != nil && successor.Version == id.Version && successor.Source == id.Source {
+		return successor
+	}
+	return nil
+}
+
 func maintenanceAcquireSigner(ctx context.Context, p *bootstrap.Prepared, a maintenance.Authority, dir string, id bootstrap.MaintenanceIdentity, enrollment bool) error {
 	if id.InstallerSHA256 == a.ImageSHA256 || p.Report().DevelopmentOnly {
-		payload := walletPayload()
-		if payload == nil || payload.Version != id.Version || payload.Source != id.Source {
+		payload := selectEmbeddedSigner(id, p.Report().DevelopmentOnly, walletPayload(), fixtureSuccessorWalletPayload())
+		if payload == nil {
 			return errors.New("authenticated installer has no matching signer")
 		}
 		if err := bootstrap.WriteWalletPayload(io.Discard, payload); err != nil {

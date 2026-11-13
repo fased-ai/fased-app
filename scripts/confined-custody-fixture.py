@@ -1,0 +1,386 @@
+#!/usr/bin/env python3
+"""Ordinary-owner guest actions for the confined custody VM acceptance.
+
+This is disposable-fixture code, not an installer or a production entrypoint.
+The host runner owns the VM lifecycle and performs the actual interruption.
+"""
+import argparse
+import hashlib
+import http.server
+import json
+import os
+import pathlib
+import re
+import ssl
+import stat
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+P = pathlib.Path
+OWNER = 1100
+HOME = P('/home/fased-local')
+WORK = HOME / 'custody-fixture'
+TRUST = P('/var/lib/fased-update-fixture')
+ROOT = P('/var/lib/fased-app-custody-1100')
+PASSWORD = 'Disposable custody owner 7WQfE2tV'
+WALLET_PASSWORD = 'Disposable custody wallet 6YDkP9nH'
+RPC_PASSWORD = 'Disposable custody RPC 5CJmX8sB'
+RPC_KEY = 'disposable-rpc-fixture-only'
+
+
+def guard():
+    if os.getuid() != OWNER or os.geteuid() != OWNER or P.home() != HOME:
+        raise RuntimeError('fixed ordinary fixture owner required')
+    product = P('/sys/class/dmi/id/product_name').read_text()
+    if 'QEMU' not in product and 'Standard PC' not in product:
+        raise RuntimeError('disposable QEMU receiver required')
+    for path in (TRUST, TRUST / 'seed.json', TRUST / 'ca.pem', TRUST / 'fixture.json'):
+        s = path.lstat()
+        if s.st_uid != 0 or stat.S_ISLNK(s.st_mode) or s.st_mode & 0o022 or (path != TRUST and (not stat.S_ISREG(s.st_mode) or s.st_nlink != 1)):
+            raise RuntimeError('protected fixture trust required')
+    trust = json.loads((TRUST / 'fixture.json').read_text())
+    if not trust.get('connected') or trust.get('seedSha256') != digest(TRUST / 'seed.json') or trust.get('caSha256') != digest(TRUST / 'ca.pem'):
+        raise RuntimeError('protected fixture trust identity differs')
+    if WORK.is_symlink() or WORK.stat().st_uid != OWNER or stat.S_IMODE(WORK.stat().st_mode) != 0o700:
+        raise RuntimeError('private fixture workspace required')
+
+
+def digest(path):
+    h = hashlib.sha256()
+    with path.open('rb') as f:
+        for block in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(block)
+    return h.hexdigest()
+
+
+def save(name, value):
+    target = WORK / name
+    pending = WORK / (name + '.pending')
+    fd = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w') as f:
+        json.dump(value, f, separators=(',', ':'))
+        f.write('\n')
+        f.flush()
+        os.fsync(f.fileno())
+    os.link(pending, target, follow_symlinks=False)
+    fd = os.open(WORK, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+        pending.unlink()
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def run(args, data=None, timeout=180):
+    env = {'HOME': str(HOME), 'USER': 'fased-local', 'LOGNAME': 'fased-local',
+           'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8',
+           'XDG_RUNTIME_DIR': '/run/user/1100', 'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/1100/bus'}
+    p = subprocess.run([str(a) for a in args], input=data, text=True, capture_output=True, timeout=timeout, env=env)
+    if p.returncode:
+        # Do not print command output: it may contain a one-use code or fixture password.
+        raise RuntimeError('fixture command failed: ' + pathlib.Path(str(args[0])).name + ' exit ' + str(p.returncode))
+    return p.stdout
+
+
+def api(origin, route, method='GET', body=None, session=None):
+    headers = {'Origin': origin}
+    if session:
+        headers['Authorization'] = 'Bearer ' + session['sessionToken']
+    if body is not None:
+        headers['Content-Type'] = 'application/json'
+        if session:
+            headers['X-CSRF-Token'] = session['csrfToken']
+        payload = json.dumps(body, separators=(',', ':')).encode()
+    else:
+        payload = None
+    req = urllib.request.Request(origin + route, data=payload, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        raise RuntimeError('fixture API ' + route + ' HTTP ' + str(e.code)) from e
+
+
+def health(origin, timeout=60):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            return api(origin, '/api/v1/health')
+        except (OSError, RuntimeError):
+            time.sleep(0.2)
+    raise RuntimeError('installed fixture core did not become ready')
+
+
+def login(origin):
+    return api(origin, '/api/v1/auth/login', 'POST', {'password': PASSWORD})
+
+
+def seed_source(origin, binary):
+    code = run([binary, 'claim-code']).strip()
+    if not code:
+        raise RuntimeError('fixture claim unavailable')
+    session = api(origin, '/api/v1/auth/claim', 'POST', {'code': code, 'password': PASSWORD})
+    view = api(origin, '/api/v1/agents', session=session)
+    body = {'revision': view['revision'], 'profileId': view['profileId'], 'action': 'task-create',
+            'name': 'Disposable preserved task', 'text': 'Fixture reminder', 'intervalSeconds': 3600, 'maxRuns': 2}
+    view = api(origin, '/api/v1/agents', 'POST', body, session)
+    task_id = view['tasks'][-1]['id']
+    api(origin, '/api/v1/agents', 'POST', {'revision': view['revision'], 'profileId': view['profileId'],
+                                          'action': 'task-pause', 'id': task_id}, session)
+    return task_id
+
+
+def server():
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            try:
+                selection = (WORK / 'selection').read_text().strip()
+            except FileNotFoundError:
+                selection = 'base'
+            if selection not in ('base', 'target') or not re.fullmatch(r'/[A-Za-z0-9._/-]+', self.path) or '..' in self.path:
+                self.send_error(404)
+                return
+            base = (WORK / ('repo-' + selection)).resolve()
+            path = (base / self.path.lstrip('/')).resolve()
+            if not path.is_relative_to(base) or not path.is_file():
+                self.send_error(404)
+                return
+            b = path.read_bytes()
+            self.send_response(200)
+            self.send_header('Content-Length', str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+
+        def log_message(self, *_):
+            pass
+
+    service = http.server.ThreadingHTTPServer(('127.0.0.1', 17449), Handler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(WORK / 'ca.pem', WORK / 'key.pem')
+    service.socket = context.wrap_socket(service.socket, server_side=True)
+    service.serve_forever()
+
+
+def probe():
+    context = ssl.create_default_context(cafile=str(TRUST / 'ca.pem'))
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            with urllib.request.urlopen('https://127.0.0.1:17449/timestamp.json', context=context, timeout=5) as r:
+                if r.status != 200 or len(r.read(65537)) > 65536:
+                    raise RuntimeError('bounded loopback fixture is not ready')
+            break
+        except urllib.error.URLError as e:
+            if not isinstance(e.reason, (ConnectionRefusedError, TimeoutError)) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.2)
+    print(json.dumps({'result': 'READY', 'fixtureOnly': True}))
+
+
+def target():
+    if (WORK / 'selection').read_text() != 'base\n' or not (WORK / 'state.json').is_file():
+        raise RuntimeError('original enrolled fixture required before target selection')
+    pending = WORK / 'selection.pending'
+    fd = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w') as f:
+        f.write('target\n')
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(pending, WORK / 'selection')
+    fd = os.open(WORK, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    print(json.dumps({'result': 'TARGET_SELECTED', 'fixtureOnly': True}))
+
+
+def inspect():
+    j = json.loads((P('/var/lib/fased-maintenance/owners/1100') / 'custody.json').read_text())
+    print(json.dumps({'operationId': j['operationId'], 'phase': j['phase'], 'start': j.get('start'),
+                      'installationPhase': (j.get('installation') or {}).get('phase')}))
+
+
+def setup(port):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('staged', WORK / 'staged-package-guest.py')
+    staged = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(staged)
+    helper = P((WORK / 'helper-path').read_text().strip())
+    if not re.fullmatch(r'/var/lib/fased-maintenance/images/[a-f0-9]{64}/fased-install', str(helper)):
+        raise RuntimeError('fixed protected helper path required')
+    info = helper.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o555 or info.st_nlink != 1 or digest(helper) != helper.parent.name:
+        raise RuntimeError('protected helper image differs')
+    if (WORK / 'state.json').exists():
+        raise RuntimeError('existing fixture state must be preserved')
+    with (WORK / 'selection').open('x') as f:
+        f.write('base\n')
+    trust = json.loads((TRUST / 'fixture.json').read_text())
+    output = WORK / 'verified-install'
+    args = [str(helper), '--development', '--seed-file', str(TRUST / 'seed.json'), '--seed-sha256', trust['seedSha256'],
+            '--tls-ca-file', str(TRUST / 'ca.pem'), '--output', str(output), '--install', '--profile', 'local',
+            '--listen', '127.0.0.1:' + str(port)]
+    status, _ = staged.terminal(args, {'Start Fased at login? [y/N]: ': 'y',
+                                      'Authorize required Ubuntu preparation with sudo? [y/N]: ': 'n'},
+                                timeout=300, password_free=True)
+    if status:
+        raise RuntimeError('fixture Local installer exited ' + str(status))
+    binary = HOME / '.local/share/fased-app/fased-app'
+    origin = 'http://127.0.0.1:' + str(port)
+    original = health(origin)
+    task_id = seed_source(origin, binary)
+    result = json.loads(run([binary, 'custody', 'enroll', '--source', 'local', '--expected-instance', original['instanceId'],
+                             '--network', 'devnet', '--signer-binary', WORK / 'fased-signer', '--prepare-host',
+                             '--disposable-fixture', '--ordinary-custody'], timeout=600))
+    if result['instanceId'] != original['instanceId'] or result['walletSigner'] or result['financialExecution']:
+        raise RuntimeError('enrolled fixture identity differs')
+    health(origin)
+    backup = WORK / 'wallet-backup.json'
+    wallet = json.loads(run([binary, 'custody', 'setup', '--disposable-fixture', '--password-stdin', '--backup-file', backup],
+                            (WALLET_PASSWORD + '\n') * 4, timeout=180))
+    status = json.loads(run([ROOT / 'fased-signer', 'owner', '--config', ROOT / 'identity.json', '--disposable-fixture']))
+    if not wallet['backupVerified'] or not status['locked'] or not status['recoveryRequired'] or status['walletSigner']:
+        raise RuntimeError('locked fixture wallet and backup required')
+    session = login(origin)
+    view = api(origin, '/api/v1/accounts', session=session)
+    view = api(origin, '/api/v1/accounts/setup', 'PUT', {'revision': view['record']['revision'], 'action': 'attach',
+                'name': 'Disposable wallet', 'network': 'devnet', 'reference': status['account']}, session)
+    account = next(a for a in view['record']['accounts'] if a.get('signer', {}).get('epoch') == status['account']['epoch'])
+    view = api(origin, '/api/v1/accounts/rpc', 'PUT', {'revision': view['record']['revision'], 'accountId': account['id'],
+                'network': 'devnet', 'endpoint': 'https://devnet.helius-rpc.com'}, session)
+    credential = api(origin, '/api/v1/accounts/rpc-credential', 'PUT', {'revision': view['record']['revision'], 'accountId': account['id'],
+                     'action': 'save', 'key': RPC_KEY, 'passphrase': RPC_PASSWORD}, session)
+    if not credential['saved'] or not credential['locked'] or credential['liveRPC']:
+        raise RuntimeError('locked fixture RPC credential required')
+    accounts = api(origin, '/api/v1/accounts', session=session)
+    run([binary, 'custody', 'login', '--disposable-fixture', '--prepare-host', '--password-stdin'], PASSWORD + '\n')
+    record_hash = hashlib.sha256(json.dumps(accounts['record'], sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    journal = json.loads((P('/var/lib/fased-maintenance/owners/1100') / 'custody.json').read_text())
+    if journal['phase'] != 'idle' or journal['package']['sequence'] != '8':
+        raise RuntimeError('authenticated initial maintenance journal required')
+    save('state.json', {'instanceId': original['instanceId'], 'taskId': task_id, 'accountId': account['id'],
+                        'signerAccount': status['account'], 'recoveryRequired': status['recoveryRequired'],
+                        'admissionHeld': status['admissionHeld'], 'walletBackupSha256': digest(backup), 'port': port,
+                        'initialOperation': journal['operationId'], 'accountsRecordSha256': record_hash})
+    print(json.dumps({'result': 'READY', 'fixtureOnly': True, 'instanceId': original['instanceId'], 'port': port}))
+
+
+def matching_held_update(j, state, trust):
+    installation = j.get('installation') or {}
+    binding = installation.get('binding') or {}
+    return (j.get('operationId') != state['initialOperation'] and
+            re.fullmatch(r'[a-f0-9]{32}', j.get('operationId', '')) is not None and
+            installation.get('phase') in ('active', 'healthy-held', 'committed-held') and
+            j.get('phase') not in ('idle', 'completed', 'refused', 'signer-completed') and
+            re.fullmatch(r'[a-f0-9]{64}', installation.get('digest', '')) is not None and
+            binding.get('targetCore') == trust['targetSha256'] and
+            binding.get('targetSigner') == trust['targetSignerSha256'])
+
+
+def watch():
+    state = json.loads((WORK / 'state.json').read_text())
+    trust = json.loads((TRUST / 'fixture.json').read_text())
+    path = P('/var/lib/fased-maintenance/owners/1100/custody.json')
+    deadline = time.monotonic() + 300
+    while time.monotonic() < deadline:
+        try:
+            data = path.read_bytes()
+            j = json.loads(data)
+            installation = j.get('installation') or {}
+            if matching_held_update(j, state, trust):
+                print(json.dumps({'result': 'HOLD_OBSERVED', 'operationId': j['operationId'], 'phase': j['phase'],
+                                  'installationPhase': installation['phase'], 'installationDigest': installation['digest'],
+                                  'journalSha256': hashlib.sha256(data).hexdigest()}), flush=True)
+                return
+        except (OSError, ValueError, KeyError):
+            pass
+        time.sleep(0.02)
+    raise RuntimeError('no durable signer-held update boundary observed; do not retry')
+
+
+def verify(operation):
+    state = json.loads((WORK / 'state.json').read_text())
+    trust = json.loads((TRUST / 'fixture.json').read_text())
+    origin = 'http://127.0.0.1:' + str(state['port'])
+    current = health(origin, 180)
+    if current['instanceId'] != state['instanceId']:
+        raise RuntimeError('instance identity changed after restart')
+    session = login(origin)
+    view = api(origin, '/api/v1/agents', session=session)
+    if not any(t['id'] == state['taskId'] for t in view['tasks']):
+        raise RuntimeError('original task missing after restart')
+    accounts = api(origin, '/api/v1/accounts', session=session)
+    if not any(a['id'] == state['accountId'] for a in accounts['record']['accounts']):
+        raise RuntimeError('original account missing after restart')
+    record_hash = hashlib.sha256(json.dumps(accounts['record'], sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    if record_hash != state['accountsRecordSha256']:
+        raise RuntimeError('original account and RPC configuration changed')
+    credential = api(origin, '/api/v1/accounts/rpc-credential', 'PUT', {'accountId': state['accountId'],
+                     'revision': accounts['record']['revision'], 'action': 'status', 'ref': ''}, session)
+    if not credential['saved'] or not credential['locked'] or credential['stale']:
+        raise RuntimeError('locked original RPC credential unavailable')
+    read = {'accountId': state['accountId'], 'revision': accounts['record']['revision'], 'ref': credential['ref'], 'passphrase': RPC_PASSWORD}
+    observed = api(origin, '/api/v1/accounts/read', 'POST', read, session)
+    binary = HOME / '.local/share/fased-app/fased-app'
+    run([binary, 'custody', 'login', '--disposable-fixture', '--prepare-host', '--password-stdin'], PASSWORD + '\n')
+    cli = json.loads(run([binary, 'custody', 'accounts', '--disposable-fixture', '--prepare-host', '--read-stdin'], json.dumps(read)))
+    for key in ('accountId', 'revision', 'binding', 'credentialRef', 'address', 'network', 'lamports', 'tokens', 'activity'):
+        if observed.get(key) != cli.get(key):
+            raise RuntimeError('HTTP/CLI wallet read differs: ' + key)
+    if not observed['fixtureOnly'] or observed['liveRPC']:
+        raise RuntimeError('unexpected live RPC capability')
+    status = json.loads(run([ROOT / 'fased-signer', 'owner', '--config', ROOT / 'identity.json', '--disposable-fixture']))
+    if not status['locked'] or status['account'] != state['signerAccount'] or status['recoveryRequired'] != state['recoveryRequired'] or status['admissionHeld'] != state['admissionHeld'] or digest(WORK / 'wallet-backup.json') != state['walletBackupSha256']:
+        raise RuntimeError('wallet identity, lock or original backup changed')
+    j = json.loads((P('/var/lib/fased-maintenance/owners/1100') / 'custody.json').read_text())
+    if j['operationId'] != operation or j['phase'] != 'completed' or j.get('start') != 'target' or j['package']['sequence'] != '9':
+        raise RuntimeError('original protected update is not complete')
+    if digest(ROOT / 'fased-app') != trust['targetSha256'] or digest(ROOT / 'fased-signer') != trust['targetSignerSha256']:
+        raise RuntimeError('installed core/signer differ from the target fixture')
+    result = run([HOME / '.local/bin/fased', 'update'], data='', timeout=180)
+    if 'Already current' not in result:
+        raise RuntimeError('installed CLI did not report Already current')
+    print(json.dumps({'result': 'PASS', 'fixtureOnly': True, 'instanceId': state['instanceId'],
+                      'operationId': j['operationId'], 'lockedWallet': True, 'backupPreserved': True,
+                      'taskPreserved': True, 'accountPreserved': True, 'rpcPreserved': True,
+                      'httpCliWalletRead': True, 'targetCoreSignerMatched': True, 'cliAlreadyCurrent': True}))
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument('mode', choices=['server', 'probe', 'setup', 'target', 'watch', 'inspect', 'verify'])
+    p.add_argument('--port', type=int)
+    p.add_argument('--operation')
+    a = p.parse_args()
+    guard()
+    if a.mode == 'server':
+        server()
+    elif a.mode == 'probe':
+        probe()
+    elif a.mode == 'setup':
+        if a.port is None or not 1024 <= a.port <= 65535:
+            raise RuntimeError('fixed private listener required')
+        setup(a.port)
+    elif a.mode == 'watch':
+        watch()
+    elif a.mode == 'target':
+        target()
+    elif a.mode == 'inspect':
+        inspect()
+    else:
+        if not a.operation or not re.fullmatch(r'[a-f0-9]{32}', a.operation):
+            raise RuntimeError('original cut operation required')
+        verify(a.operation)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as e:
+        print('fixture:', str(e), file=sys.stderr)
+        sys.exit(1)
