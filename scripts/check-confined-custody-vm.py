@@ -79,6 +79,21 @@ def fixture_failure_detail(stderr):
     return ''
 
 
+def recorded_install_port(raw):
+    try:
+        install = json.loads(raw)
+    except (ValueError, TypeError):
+        raise RuntimeError('original Local install record is invalid')
+    if (install.get('phase') != 'ready' or install.get('location') != 'local' or
+            install.get('root') != '/home/fased-local/.local/share/fased-app' or
+            install.get('data') != '/home/fased-local/.config/fased-app'):
+        raise RuntimeError('original Local install identity differs')
+    listener = re.fullmatch(r'127\.0\.0\.1:([0-9]{4,5})', install.get('listen', ''))
+    if not listener or not 1024 <= int(listener.group(1)) <= 65535:
+        raise RuntimeError('original Local install listener differs')
+    return int(listener.group(1))
+
+
 def resume_inputs(work, previous_result, receipt_pin, helper_hash):
     info = work.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
@@ -94,11 +109,9 @@ def resume_inputs(work, previous_result, receipt_pin, helper_hash):
     if len(hosts) != 1 or len(host_public) != 2:
         raise RuntimeError('original host identity required')
     host = re.fullmatch(r'\[127\.0\.0\.1\]:([0-9]{4,5}) (\S+) (\S+)', hosts[0])
-    if not host or [host.group(2), host.group(3)] != host_public or not setup:
+    if not host or [host.group(2), host.group(3)] != host_public:
         raise RuntimeError('original fixture listener or host identity differs')
-    ssh_port, app_port = int(host.group(1)), int(setup.group(1))
-    if not (1024 <= ssh_port <= 65535 and 1024 <= app_port <= 65535) or ssh_port == app_port:
-        raise RuntimeError('original fixture ports are invalid')
+    ssh_port = int(host.group(1))
     for name, limit in (('disk.qcow2', 16 << 30), ('seed.iso', 256 << 20), ('owner-key', 8192), ('owner-key.pub', 8192)):
         owned_file(work / name, limit)
     owner_key = work / 'owner-key'
@@ -114,6 +127,15 @@ def resume_inputs(work, previous_result, receipt_pin, helper_hash):
     machine = command(['debugfs', '-R', 'cat /etc/machine-id', snapshot]).stdout.decode().strip()
     if original_host != host_public or not re.fullmatch(r'[a-f0-9]{32}', machine):
         raise RuntimeError('original VM filesystem identity differs')
+    if setup:
+        app_port = int(setup.group(1))
+    elif previous.get('error') == 'fixture command failed: fased-app exit 1':
+        saved = command(['debugfs', '-R', 'cat /home/fased-local/.local/share/fased-app/install.json', snapshot]).stdout
+        app_port = recorded_install_port(saved)
+    else:
+        raise RuntimeError('original fixture listener or failure differs')
+    if not (1024 <= ssh_port <= 65535 and 1024 <= app_port <= 65535) or ssh_port == app_port:
+        raise RuntimeError('original fixture ports are invalid')
     chain = json.loads(command(['qemu-img', 'info', '--output=json', '--backing-chain', work / 'disk.qcow2']).stdout)
     if (len(chain) != 2 or chain[0].get('format') != 'qcow2' or chain[0].get('virtual-size') != 12 << 30 or
             chain[0].get('full-backing-filename') != str(IMAGE.resolve()) or chain[0].get('dirty-flag') or
@@ -377,7 +399,10 @@ def main():
         command(ssh + ['nohup /usr/bin/python3 ' + shlex.quote(guest_script) + ' server ' + server_output + ' 2>&1 </dev/null &'])
         remote(['/usr/bin/python3', guest_script, 'probe'], timeout=30)
         print('Installing and enrolling the disposable Local fixture…', flush=True)
-        ready_data = json.loads(remote(['/usr/bin/python3', guest_script, 'resume-claimed' if a.resume_claimed else 'setup', '--port', app_port], timeout=900).stdout)
+        setup_args = ['/usr/bin/python3', guest_script, 'resume-claimed' if a.resume_claimed else 'setup', '--port', app_port]
+        if a.resume_claimed:
+            setup_args += ['--helper-sha256', helper_hash]
+        ready_data = json.loads(remote(setup_args, timeout=900).stdout)
         if ready_data.get('result') != 'READY' or ready_data.get('fixtureOnly') is not True:
             raise RuntimeError('Local enrollment did not reach its real entry')
         result['instanceId'] = ready_data['instanceId']
