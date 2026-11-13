@@ -94,32 +94,58 @@ func openRuntime(s Source, system *custodyinstall.System) (*runtimeHost, io.Clos
 	return &runtimeHost{system, f, parent, filepath.Base(s.Data), filepath.Join(dir, "state.json")}, lock, nil
 }
 
-func rejectPendingOwnerJournal(entries []os.DirEntry) error {
+func pendingOwnerJournal(entries []os.DirEntry) (string, error) {
+	name := ""
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), ".pending-") {
-			return errState
+			if name != "" {
+				return "", errState
+			}
+			name = entry.Name()
 		}
 	}
-	return nil
+	return name, nil
 }
 
 func readOwnerJournal(path string) (journal, error) {
 	var j journal
-	entries, err := os.ReadDir(filepath.Dir(path))
+	dirFD, err := unix.Open(filepath.Dir(path), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return j, err
 	}
-	if err = rejectPendingOwnerJournal(entries); err != nil {
-		return j, err
-	}
-	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	dir := os.NewFile(uintptr(dirFD), "owner-journal")
+	defer dir.Close()
+	entries, err := dir.ReadDir(-1)
 	if err != nil {
 		return j, err
 	}
-	f := os.NewFile(uintptr(fd), path)
+	name, err := pendingOwnerJournal(entries)
+	if err != nil {
+		return j, err
+	}
+	j, err = readOwnerJournalEntry(dirFD, filepath.Base(path), os.Getuid(), false)
+	if err != nil {
+		if name != "" {
+			return journal{}, errState
+		}
+		return journal{}, err
+	}
+	if err = verifyRetainedPrepared(dirFD, name, j, os.Getuid()); err != nil {
+		return journal{}, err
+	}
+	return j, nil
+}
+
+func readOwnerJournalEntry(dirFD int, name string, owner int, pending bool) (journal, error) {
+	var j journal
+	fd, err := unix.Openat(dirFD, name, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return j, err
+	}
+	f := os.NewFile(uintptr(fd), name)
 	defer f.Close()
 	var st unix.Stat_t
-	if unix.Fstat(fd, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Mode&07777 != 0600 || int(st.Uid) != os.Getuid() || st.Nlink != 1 || st.Size <= 0 || st.Size > 16384 {
+	if unix.Fstat(fd, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || (st.Mode&07777 != 0600 && !(pending && st.Mode&07777 == 0400)) || int(st.Uid) != owner || st.Nlink != 1 || st.Size <= 0 || st.Size > 16384 {
 		return j, errState
 	}
 	b, err := io.ReadAll(io.LimitReader(f, 16385))
@@ -127,6 +153,25 @@ func readOwnerJournal(path string) (journal, error) {
 		return journal{}, errState
 	}
 	return j, nil
+}
+
+// The original first prepared write remains as a private recovery witness.
+// Any other pending file, or any changed operation identity, stays held.
+func verifyRetainedPrepared(dirFD int, name string, current journal, owner int) error {
+	if name == "" {
+		return nil
+	}
+	prepared, err := readOwnerJournalEntry(dirFD, name, owner, true)
+	checked := current
+	if checked.Phase == "source-lock-lost" {
+		checked.Phase = "fencing"
+	}
+	if err != nil || !prepared.valid(owner) || prepared.Phase != "prepared" || prepared.Target != (custodyinstall.Manifest{}) || prepared.Digest != "" || prepared.CoreRecovery != nil || !checked.valid(owner) ||
+		prepared.ID != current.ID || prepared.Owner != current.Owner || prepared.Source != current.Source || prepared.Node != current.Node || prepared.CoreHash != current.CoreHash || prepared.SignerHash != current.SignerHash ||
+		prepared.Network != current.Network || prepared.Mode != current.Mode || prepared.Profile != current.Profile || prepared.Provenance != current.Provenance || prepared.NativeOwnerAccess != current.NativeOwnerAccess {
+		return errState
+	}
+	return nil
 }
 
 // A successful enrollment transition must survive a power loss after rename.
@@ -543,6 +588,11 @@ func runInstalled(ctx context.Context, s Source, o Options, system *custodyinsta
 	}
 	signerHash, err := boundedBinary(o.Signer)
 	if err != nil {
+		return out, err
+	}
+	if err = recoverPreparedOwnerJournal(ctx, h, s, o, coreHash, signerHash, func() error {
+		return verifyFreshPreparedAuthority(ctx, s)
+	}); err != nil {
 		return out, err
 	}
 	op := operations{

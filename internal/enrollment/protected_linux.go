@@ -62,7 +62,8 @@ func openOwnerEnrollmentJournal(a maintenance.Authority, requireLock bool) (jour
 	if err != nil {
 		return j, err
 	}
-	if err = rejectPendingOwnerJournal(entries); err != nil {
+	pending, err := pendingOwnerJournal(entries)
+	if err != nil {
 		return j, err
 	}
 	lockFD, err := unix.Openat(dirFD, "controller.lock", unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
@@ -105,6 +106,9 @@ func openOwnerEnrollmentJournal(a maintenance.Authority, requireLock bool) (jour
 	}
 	if !valid {
 		return journal{}, errState
+	}
+	if err = verifyRetainedPrepared(dirFD, pending, j, a.Owner); err != nil {
+		return journal{}, err
 	}
 	return j, nil
 }

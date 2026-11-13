@@ -497,6 +497,12 @@ func WritePrivateJSON(path string, value any) error {
 		return err
 	}
 	defer os.Remove(f.Name())
+	// The destination is an owner-private file even when the process umask
+	// would otherwise remove the owner's read or write permission.
+	if err = f.Chmod(0600); err != nil {
+		f.Close()
+		return err
+	}
 	info, err = f.Stat()
 	if err == nil {
 		err = protectPath(f.Name(), info)

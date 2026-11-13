@@ -41,6 +41,14 @@ func TestProtectedEnrollmentJournalRequiresOriginalLockForMutation(t *testing.T)
 		t.Fatalf("held original journal rejected: %v", err)
 	}
 	pending := filepath.Join(dir, ".pending-123")
+	if err = os.WriteFile(pending, b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, requireLock := range []bool{false, true} {
+		if got, err := openOwnerEnrollmentJournal(a, requireLock); err != nil || got.ID != j.ID {
+			t.Fatal("matching original prepared witness rejected", err)
+		}
+	}
 	if err = os.WriteFile(pending, []byte("original pending write"), 0600); err != nil {
 		t.Fatal(err)
 	}

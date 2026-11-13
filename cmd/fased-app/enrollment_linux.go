@@ -74,6 +74,14 @@ func enrollmentCommand(args []string, in io.Reader, out, errOut io.Writer) error
 	if strings.HasPrefix(binary, "/memfd:") {
 		binary = "/proc/self/exe"
 	}
+	if *mode == "local" {
+		// Recovery can be run by a newer owner client, but the enrollment must
+		// remain bound to the original verified Local installation's core.
+		binary, e = filepath.Abs(filepath.Join(*prefix, localinstall.EngineName()))
+		if e != nil {
+			return e
+		}
+	}
 	key, e := filepath.Abs(*signerBinary)
 	if e != nil {
 		return e
