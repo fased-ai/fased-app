@@ -14,6 +14,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -53,6 +54,50 @@ func TestCustodyUpdateStatusNeverRestartsWorker(t *testing.T) {
 				t.Fatalf("status=%q starts=%d err=%v", receipt.Phase, starts, err)
 			}
 		})
+	}
+}
+
+func TestCustodyFirstUpdateObservesInitializedJournal(t *testing.T) {
+	owner := 1800
+	m := custodyinstall.Manifest{
+		Version: 3, Mode: signer.OrdinaryCustodyMode, Profile: signer.OwnerCustodyProfile,
+		Provenance: signer.ControlledCustodyProfile, Network: "devnet", Enrollment: true,
+		Location: "local", ID: strings.Repeat("1", 32), Owner: owner,
+		Root: custodyinstall.Root(owner), Listen: "127.0.0.1:7332",
+		CoreHash: strings.Repeat("2", 64), SignerHash: strings.Repeat("3", 64),
+		App:    custodyinstall.Identity{Name: "fased-fx-1800-app", UID: 1801, GID: 1801},
+		Signer: custodyinstall.Identity{Name: "fased-fx-1800-signer", UID: 1802, GID: 1802},
+	}
+	base, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack := &update.MaintenancePackage{
+		Version: "0.1.0", Source: strings.Repeat("a", 40), Sequence: 7,
+		ReleaseSHA256: strings.Repeat("b", 64), DevelopmentOnly: true,
+		Components: []update.Component{
+			{Version: "0.1.0", Contract: core.OrdinaryUpdateContract(), Artifact: update.Artifact{File: "fased-app", Size: 1, SHA256: m.CoreHash}},
+			{Version: "0.1.0", Contract: signer.OrdinaryUpdateContract(), Artifact: update.Artifact{File: "fased-signer", Size: 1, SHA256: m.SignerHash}},
+		},
+	}
+	r := update.MaintenanceRecord{Version: 1, Owner: owner, OperationID: m.ID, Phase: "idle", Start: "base", Base: base, Target: base, Package: pack}
+	op := core.ApplicationUpdateOperation{ID: update.NewProbe(), Release: &core.ApplicationRelease{Sequence: 8, ManifestSHA256: strings.Repeat("c", 64), EngineSHA256: strings.Repeat("d", 64)}}
+	starts := 0
+	c := &custodyMaintenanceController{
+		owner:       owner,
+		readRecord:  func(int) (update.MaintenanceRecord, error) { return r, nil },
+		startWorker: func(context.Context, string) error { starts++; return nil },
+		workerState: func(context.Context, string) (custodyWorkerState, error) {
+			return custodyWorkerState{load: "loaded", active: "activating"}, nil
+		},
+	}
+	got, err := c.Status(t.Context(), op)
+	if err != nil || got.Phase != "applying" || starts != 0 {
+		t.Fatalf("first update status=%q starts=%d err=%v", got.Phase, starts, err)
+	}
+	r.Phase = "prepared"
+	if _, err = c.Status(t.Context(), op); err == nil {
+		t.Fatal("a different pending transaction was treated as idle")
 	}
 }
 

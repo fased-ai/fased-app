@@ -173,6 +173,9 @@ func maintenanceCustodyCommand(action string, args []string, out io.Writer) erro
 			return err
 		}
 		id = r.OperationID
+		if r.Phase == "idle" {
+			return custodyinstall.VerifyInitialProtectedDeployment(owner)
+		}
 		// Initial installation of the start gate does not enter an update.
 		// It is started while the installing process holds the same lock.
 		if r.Phase == "prepared" && r.Start == "base" {
@@ -213,19 +216,103 @@ func maintenanceCustodyCommand(action string, args []string, out io.Writer) erro
 	return custodyinstall.RunProtectedUpdate(ctx, owner, id, action == "maintenance-recover")
 }
 
+// Initialize only from the protected helper's independently verified release;
+// the IPC request cannot choose bytes, paths, an owner or a release floor.
+func maintenanceCustodyInitialize(ctx context.Context, a maintenance.Authority) error {
+	if r, err := update.ReadMaintenanceRecord(a.Owner); err == nil {
+		if _, err = custodyinstall.ValidateInitialMaintenanceRecord(r); err != nil {
+			return errors.New("existing custody operation must be preserved")
+		}
+		return custodyinstall.InitializeProtectedJournal(ctx, a.Owner, *r.Package)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	m, err := custodyinstall.Load(a.Owner)
+	if err != nil || m.Location != a.Profile || !m.Enrollment || m.Version != 3 {
+		return errors.New("committed custody installation required")
+	}
+	if _, err = custodyinstall.ReadEnrollmentCommit(m); err != nil {
+		return err
+	}
+	o, err := maintenanceOptions(a)
+	if err != nil {
+		return err
+	}
+	p, err := bootstrap.PrepareMaintenance(ctx, a.Owner, o)
+	if err != nil {
+		return err
+	}
+	defer p.Close()
+	report := p.Report()
+	if report.Sequence == 0 || !report.ProvenanceVerified && !report.DevelopmentOnly {
+		return errors.New("authenticated installed release required")
+	}
+	id, err := p.MaintenanceIdentity()
+	if err != nil || id.Core.SHA256 != m.CoreHash {
+		return errors.New("authenticated release differs from the installed core")
+	}
+	dir := update.MaintenanceDirectory(a.Owner, m.ID)
+	if err = maintenance.EnsureProtectedDirectory(filepath.Dir(dir)); err != nil {
+		return err
+	}
+	if err = maintenance.EnsureProtectedDirectory(dir); err != nil {
+		return err
+	}
+	engine, _ := bundle.Names()
+	corePath := filepath.Join(report.BundleDirectory, engine)
+	f, err := update.OpenProtected(corePath, id.Core.Bytes, 0700)
+	if err != nil {
+		return err
+	}
+	err = errors.Join(f.Chmod(0755), f.Sync(), f.Close())
+	if err != nil {
+		return err
+	}
+	if err = maintenance.CopyProtected(corePath, dir+"/fased-app", 0755, id.Core.SHA256, id.Core.Bytes, ""); err != nil {
+		return err
+	}
+	if err = maintenanceAcquireSigner(ctx, p, a, dir, id); err != nil {
+		return err
+	}
+	components, err := custodyinstall.DescribeProtectedPair(ctx, a.Owner, m.ID, id.Version)
+	if err != nil {
+		return err
+	}
+	pack := update.MaintenancePackage{Version: id.Version, Source: id.Source, Sequence: report.Sequence, ReleaseSHA256: report.DescriptorSHA256, ProvenanceSHA256: report.ProvenanceSHA256, DevelopmentOnly: report.DevelopmentOnly, Components: components}
+	if err = custodyinstall.InitializeProtectedJournal(ctx, a.Owner, pack); err != nil {
+		return err
+	}
+	p.RetainAcquisitionEvidence()
+	return nil
+}
+
 func maintenanceCustodyAcquire(ctx context.Context, a maintenance.Authority, q maintenance.CustodyUpdateRequest) error {
 	if !update.IDOK(q.OperationID) || q.Sequence == 0 || len(q.ReleaseSHA256) != 64 {
 		return errors.New("one authenticated custody release required")
 	}
 	if r, err := update.ReadMaintenanceRecord(a.Owner); err == nil {
 		if r.OperationID == q.OperationID {
+			if r.Phase == "idle" {
+				return errors.New("installation identity cannot be reused as an update")
+			}
 			if r.Package == nil || r.Package.Sequence != q.Sequence || r.Package.ReleaseSHA256 != q.ReleaseSHA256 || r.Bootstrap != q.Bootstrap {
 				return errors.New("pending custody target cannot change")
 			}
 			return nil
 		}
-		if r.Phase != "completed" && r.Phase != "refused" {
+		if r.Phase != "idle" && r.Phase != "completed" && r.Phase != "refused" {
 			return errors.New("recover the existing custody transaction first")
+		}
+		if r.Phase == "idle" || r.PreviousPackage != nil {
+			if r.Phase == "idle" {
+				if _, err = custodyinstall.ValidateInitialMaintenanceRecord(r); err != nil {
+					return err
+				}
+			}
+			installed, err := r.InstalledPackage()
+			if err != nil || q.Sequence <= installed.Sequence {
+				return errors.New("custody release must advance the authenticated installed release")
+			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err

@@ -188,6 +188,15 @@ func (c *custodyMaintenanceController) Status(ctx context.Context, o core.Applic
 
 func (c *custodyMaintenanceController) custodyRecordStatus(ctx context.Context, r update.MaintenanceRecord, o core.ApplicationUpdateOperation, proof core.ApplicationUpdateReceipt) (core.ApplicationUpdateReceipt, bool, error) {
 	if r.OperationID != o.ID {
+		if r.Phase == "idle" {
+			if _, err := custodyinstall.ValidateInitialMaintenanceRecord(r); err != nil {
+				return proof, true, err
+			}
+			if o.Release.Sequence <= r.Package.Sequence {
+				return proof, true, errors.New("custody update must advance the installed release")
+			}
+			return proof, false, nil
+		}
 		if r.Phase != "completed" {
 			return proof, true, errors.New("another custody transaction owns recovery")
 		}
@@ -274,13 +283,19 @@ func bindCompiledCustodyMaintenance(store *core.Store, owner int, dir string) er
 	if err != nil {
 		return err
 	}
-	if r.Package == nil {
-		return errors.New("protected custody channel is not initialized")
+	if r.Phase == "idle" {
+		if _, err = custodyinstall.ValidateInitialMaintenanceRecord(r); err != nil {
+			return err
+		}
+	}
+	installed, err := r.InstalledPackage()
+	if err != nil {
+		return err
 	}
 	check := compiledApplicationUpdateCheck
 	if check == nil && compiledApplicationChannel != nil {
 		factory := func(path string) (bootstrap.Options, error) { return channelOptions(compiledApplicationChannel, path) }
-		check = channelCheck(factory, filepath.Join(dir, "update-channel"), r.Package.Sequence, r.Package.ReleaseSHA256)
+		check = channelCheck(factory, filepath.Join(dir, "update-channel"), installed.Sequence, installed.ReleaseSHA256)
 	}
 	if check == nil {
 		return nil

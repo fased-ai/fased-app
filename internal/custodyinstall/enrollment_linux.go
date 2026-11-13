@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/maintenance"
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 func enrollmentInstance(s string) bool {
@@ -147,6 +149,17 @@ func ActivateEnrollment(ctx context.Context, m Manifest, instance, digest string
 	for _, role := range []string{"signer", "app"} {
 		if err := loadedUnit(m, role); err != nil {
 			return err
+		}
+	}
+	if m.Version == 3 {
+		journal, err := update.ReadMaintenanceRecord(m.Owner)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if errors.Is(err, os.ErrNotExist) || journal.Phase == "idle" {
+			if _, err = maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "custody-initialize"}, s.Out); err != nil {
+				return errors.Join(errors.New("protected custody update setup is incomplete"), err)
+			}
 		}
 	}
 	if autostart {

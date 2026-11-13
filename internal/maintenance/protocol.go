@@ -32,10 +32,10 @@ type Request struct {
 }
 
 type CustodyUpdateRequest struct {
-	OperationID string `json:"operationId"`
-	Sequence uint64 `json:"sequence,string"`
+	OperationID   string `json:"operationId"`
+	Sequence      uint64 `json:"sequence,string"`
 	ReleaseSHA256 string `json:"releaseSha256"`
-	Bootstrap bool `json:"bootstrap,omitempty"`
+	Bootstrap     bool   `json:"bootstrap,omitempty"`
 }
 
 type RemoteInstallRequest struct {
@@ -54,10 +54,10 @@ type Response struct {
 }
 
 type AppMaintenanceRequest struct {
-	Action string `json:"action"`
-	OperationID string `json:"operationId,omitempty"`
-	ProbeID string `json:"probeId,omitempty"`
-	Pause *update.CorePauseCommand `json:"pause,omitempty"`
+	Action      string                   `json:"action"`
+	OperationID string                   `json:"operationId,omitempty"`
+	ProbeID     string                   `json:"probeId,omitempty"`
+	Pause       *update.CorePauseCommand `json:"pause,omitempty"`
 }
 
 func DecodeRequest(data []byte) (Request, error) {
@@ -66,22 +66,28 @@ func DecodeRequest(data []byte) (Request, error) {
 		return r, errors.New("invalid maintenance request")
 	}
 	switch r.Action {
+	case "custody-initialize":
+		if r.Serve != nil || r.Remote != nil || r.Peer != nil || r.Custody != nil {
+			return r, errors.New("custody initialization takes no caller-supplied inputs")
+		}
 	case "custody-update":
-		if r.Serve!=nil||r.Remote!=nil||r.Peer!=nil||r.Custody==nil||!update.IDOK(r.Custody.OperationID)||r.Custody.Sequence==0||len(r.Custody.ReleaseSHA256)!=64{return r,errors.New("one exact custody update required")}
+		if r.Serve != nil || r.Remote != nil || r.Peer != nil || r.Custody == nil || !update.IDOK(r.Custody.OperationID) || r.Custody.Sequence == 0 || len(r.Custody.ReleaseSHA256) != 64 {
+			return r, errors.New("one exact custody update required")
+		}
 	case "serve":
-		if r.Custody!=nil || r.Peer != nil || r.Remote != nil || r.Serve == nil || len(r.Serve.Configuration) > 16<<10 || len(r.Serve.ETag) != 64 {
+		if r.Custody != nil || r.Peer != nil || r.Remote != nil || r.Serve == nil || len(r.Serve.Configuration) > 16<<10 || len(r.Serve.ETag) != 64 {
 			return r, errors.New("invalid private-access maintenance request")
 		}
 	case "remote-install":
-		if r.Custody!=nil || r.Peer != nil || r.Serve != nil || r.Remote == nil || r.Remote.Sequence == 0 || len(r.Remote.ReleaseSHA256) != 64 || len(r.Remote.Listen) > 64 || len(r.Remote.Origin) > 256 {
+		if r.Custody != nil || r.Peer != nil || r.Serve != nil || r.Remote == nil || r.Remote.Sequence == 0 || len(r.Remote.ReleaseSHA256) != 64 || len(r.Remote.Listen) > 64 || len(r.Remote.Origin) > 256 {
 			return r, errors.New("invalid Remote installation request")
 		}
 	case "remote-start", "remote-stop", "remote-status":
-		if r.Custody!=nil || r.Peer != nil || r.Serve != nil || r.Remote != nil {
+		if r.Custody != nil || r.Peer != nil || r.Serve != nil || r.Remote != nil {
 			return r, errors.New("unexpected Remote lifecycle input")
 		}
 	case "remote-setup-link":
-		if r.Custody!=nil || r.Serve != nil || r.Remote != nil || r.Peer != nil && (r.Peer.UserID <= 0 || r.Peer.NodeID == "" || len(r.Peer.NodeID) > 128 || r.Peer.Login == "" || len(r.Peer.Login) > 256 || len(r.Peer.Name) > 256) {
+		if r.Custody != nil || r.Serve != nil || r.Remote != nil || r.Peer != nil && (r.Peer.UserID <= 0 || r.Peer.NodeID == "" || len(r.Peer.NodeID) > 128 || r.Peer.Login == "" || len(r.Peer.Login) > 256 || len(r.Peer.Name) > 256) {
 			return r, errors.New("invalid Remote setup owner")
 		}
 	default:

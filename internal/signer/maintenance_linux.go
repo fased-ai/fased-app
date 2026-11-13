@@ -3,6 +3,7 @@
 package signer
 
 import (
+	"encoding/json"
 	"errors"
 	"github.com/fased-ai/fased-app/internal/update"
 	"io"
@@ -240,10 +241,43 @@ func protectedMaintenanceRPCAllowed(c Config, q Request, owner bool) bool {
 	if err != nil {
 		return false
 	}
+	return protectedMaintenanceRecordRPCAllowed(c, q, owner, r, func() bool {
+		return protectedMaintenanceFenceAbsent(filepath.Dir(c.StateDir))
+	})
+}
+
+func protectedMaintenanceRecordRPCAllowed(c Config, q Request, owner bool, r update.MaintenanceRecord, fenceAbsent func() bool) bool {
+	if r.Phase == "idle" {
+		if q.Action == "status" || q.Action == "lock" {
+			return true
+		}
+		var identity struct {
+			Version    int    `json:"version"`
+			Owner      int    `json:"owner"`
+			ID         string `json:"id"`
+			Root       string `json:"root"`
+			SignerHash string `json:"signerHash"`
+			Enrollment bool   `json:"enrollment"`
+			Signer     struct {
+				UID int `json:"uid"`
+			} `json:"signer"`
+		}
+		if r.ValidateIdle() != nil || c.Version != 3 || r.Owner != c.OwnerUID || r.OperationID != c.SignerID ||
+			json.Unmarshal(r.Base, &identity) != nil || identity.Version != 3 || !identity.Enrollment || identity.Owner != c.OwnerUID ||
+			identity.ID != c.SignerID || identity.Signer.UID != c.SignerUID || identity.Root != filepath.Dir(c.StateDir) ||
+			identity.Root != "/var/lib/fased-app-custody-"+strconv.Itoa(c.OwnerUID) ||
+			c.Provenance == OwnerKeyProvenance && r.Package.DevelopmentOnly {
+			return false
+		}
+		for _, component := range r.Package.Components {
+			if component.Contract.Component == "signer" && component.Artifact.SHA256 != identity.SignerHash {
+				return false
+			}
+		}
+		return completedMaintenanceRPCAllowed(q, fenceAbsent)
+	}
 	if r.Phase == "completed" {
-		return completedMaintenanceRPCAllowed(q, func() bool {
-			return protectedMaintenanceFenceAbsent(filepath.Dir(c.StateDir))
-		})
+		return completedMaintenanceRPCAllowed(q, fenceAbsent)
 	}
 	if q.Action == "status" || q.Action == "lock" {
 		return true

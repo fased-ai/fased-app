@@ -109,18 +109,43 @@ func StageProtectedPackage(ctx context.Context, owner int, id string, p update.M
 			return errors.New("only the core/signer pair may be installed")
 		}
 	}
+	var previousPackage *update.MaintenancePackage
 	if old, err := update.ReadMaintenanceRecord(owner); err == nil {
 		if old.OperationID == id {
+			if old.Phase == "idle" {
+				return errors.New("installation identity cannot be reused as an update")
+			}
 			if old.Package == nil || update.SnapshotDigest("package", *old.Package) != update.SnapshotDigest("package", p) {
 				return errors.New("pending update target cannot change")
 			}
 			return nil
 		}
-		if old.Phase != "completed" && old.Phase != "refused" {
+		if old.Phase != "idle" && old.Phase != "completed" && old.Phase != "refused" {
 			return errors.New("another exact maintenance operation requires recovery")
 		}
-		if err = maintenance.PublishProtected(update.MaintenanceDirectory(owner, old.OperationID)+"/receipt.json", mustJSON(old), 0644); err != nil {
-			return err
+		if old.Phase == "idle" || old.PreviousPackage != nil {
+			if old.Phase == "idle" {
+				if _, e := ValidateInitialMaintenanceRecord(old); e != nil {
+					return e
+				}
+			}
+			installed, e := old.InstalledPackage()
+			if e != nil || p.Validate() != nil || p.Sequence <= installed.Sequence {
+				return errors.New("custody release must advance the authenticated installed pair")
+			}
+			base, target, e := protectedRecordManifests(old)
+			if e != nil || old.Phase == "idle" && (base != m || target != m) ||
+				old.Phase == "completed" && (old.Start != "target" || target != m || old.Installation == nil || old.Installation.Phase != "completed" || !update.ValidInstallation(*old.Installation)) ||
+				old.Phase == "refused" && (old.Start != "base" || base != m) {
+				return errors.New("installed custody pair differs from the prior journal")
+			}
+			copy := *installed
+			previousPackage = &copy
+		}
+		if old.Phase != "idle" {
+			if err = maintenance.PublishProtected(update.MaintenanceDirectory(owner, old.OperationID)+"/receipt.json", mustJSON(old), 0644); err != nil {
+				return err
+			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -134,7 +159,7 @@ func StageProtectedPackage(ctx context.Context, owner int, id string, p update.M
 			return err
 		}
 	}
-	r := update.MaintenanceRecord{Version: 1, Owner: owner, OperationID: id, Phase: "prepared", Start: "base", Base: mustJSON(m), Target: mustJSON(next), Package: &p, Bootstrap: bootstrap}
+	r := update.MaintenanceRecord{Version: 1, Owner: owner, OperationID: id, Phase: "prepared", Start: "base", Base: mustJSON(m), Target: mustJSON(next), Package: &p, PreviousPackage: previousPackage, Bootstrap: bootstrap}
 	if err = storeProtectedRecord(r); err != nil {
 		return err
 	}
@@ -363,6 +388,11 @@ func VerifyProtectedStart(owner int, role string) error {
 	r, err := update.ReadMaintenanceRecord(owner)
 	if err != nil {
 		return err
+	}
+	if r.Phase == "idle" {
+		if err = VerifyInitialProtectedDeployment(owner); err != nil {
+			return err
+		}
 	}
 	base, target, err := protectedRecordManifests(r)
 	if err != nil {

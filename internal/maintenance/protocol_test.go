@@ -36,3 +36,19 @@ func TestMaintenanceCustodyRequestIsOneTypedOperation(t *testing.T) {
 		}
 	}
 }
+
+func TestMaintenanceCustodyInitializationHasNoCallerPaths(t *testing.T) {
+	good := `{"version":1,"action":"custody-initialize"}`
+	if _, err := DecodeRequest([]byte(good)); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{
+		strings.Replace(good, `"version":1`, `"version":1,"source":"/tmp/core"`, 1),
+		strings.Replace(good, `"version":1`, `"version":1,"owner":0`, 1),
+		strings.Replace(good, `"version":1`, `"version":1,"custody":{"operationId":"`+strings.Repeat("a", 32)+`","sequence":"1","releaseSha256":"`+strings.Repeat("b", 64)+`"}`, 1),
+	} {
+		if _, err := DecodeRequest([]byte(bad)); err == nil {
+			t.Fatal("caller-controlled initialization input admitted")
+		}
+	}
+}

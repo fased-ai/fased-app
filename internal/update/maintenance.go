@@ -1,11 +1,17 @@
 package update
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 )
+
+// JournalBasePackageFeature declares that both installed roles understand the
+// optional preserved-release field while a custody update is recovering.
+const JournalBasePackageFeature = "custody-journal-base-package-v1"
 
 const MaintenanceRoot = "/var/lib/fased-maintenance"
 
@@ -88,19 +94,20 @@ type MaintenanceCommand struct {
 // MaintenanceRecord is the helper's single durable deployment/recovery journal.
 // Component identities and the financial installation hold remain independent.
 type MaintenanceRecord struct {
-	Version      int                  `json:"version"`
-	Owner        int                  `json:"owner"`
-	OperationID  string               `json:"operationId"`
-	Phase        string               `json:"phase"`
-	Start        string               `json:"start"`
-	Base         json.RawMessage      `json:"base"`
-	Target       json.RawMessage      `json:"target,omitempty"`
-	Approval     *MaintenanceApproval `json:"approval,omitempty"`
-	Staged       *Intent              `json:"staged,omitempty"`
-	Recovery     *RecoveryIndex       `json:"recovery,omitempty"`
-	Installation *Installation        `json:"installation,omitempty"`
-	Package      *MaintenancePackage  `json:"package,omitempty"`
-	Bootstrap    bool                 `json:"bootstrap,omitempty"`
+	Version         int                  `json:"version"`
+	Owner           int                  `json:"owner"`
+	OperationID     string               `json:"operationId"`
+	Phase           string               `json:"phase"`
+	Start           string               `json:"start"`
+	Base            json.RawMessage      `json:"base"`
+	Target          json.RawMessage      `json:"target,omitempty"`
+	Approval        *MaintenanceApproval `json:"approval,omitempty"`
+	Staged          *Intent              `json:"staged,omitempty"`
+	Recovery        *RecoveryIndex       `json:"recovery,omitempty"`
+	Installation    *Installation        `json:"installation,omitempty"`
+	Package         *MaintenancePackage  `json:"package,omitempty"`
+	PreviousPackage *MaintenancePackage  `json:"previousPackage,omitempty"`
+	Bootstrap       bool                 `json:"bootstrap,omitempty"`
 }
 
 type MaintenancePackage struct {
@@ -111,6 +118,67 @@ type MaintenancePackage struct {
 	ProvenanceSHA256 string      `json:"provenanceSha256"`
 	DevelopmentOnly  bool        `json:"developmentOnly"`
 	Components       []Component `json:"components"`
+}
+
+// ValidateIdle checks only the shape of a protected initial journal. Its
+// caller must also bind the deployment and authenticate the package.
+func (r MaintenanceRecord) ValidateIdle() error {
+	if r.Version != 1 || r.Owner <= 0 || !IDOK(r.OperationID) || r.Phase != "idle" || r.Start != "base" ||
+		len(r.Base) == 0 || !bytes.Equal(r.Base, r.Target) || r.Package == nil || r.PreviousPackage != nil ||
+		r.Approval != nil || r.Staged != nil || r.Recovery != nil || r.Installation != nil || r.Bootstrap {
+		return errors.New("invalid initial custody maintenance state")
+	}
+	return r.Package.Validate()
+}
+
+// InstalledPackage keeps the authenticated base release through an unfinished
+// transaction or base recovery. Existing journals retain their old behavior.
+func (r MaintenanceRecord) InstalledPackage() (*MaintenancePackage, error) {
+	if r.Package == nil {
+		return nil, errors.New("protected custody release is unavailable")
+	}
+	if r.Phase == "idle" {
+		if err := r.ValidateIdle(); err != nil {
+			return nil, err
+		}
+		return r.Package, nil
+	}
+	if r.PreviousPackage == nil {
+		return r.Package, nil
+	}
+	if r.PreviousPackage.Validate() != nil || r.Package.Validate() != nil || r.Package.Sequence <= r.PreviousPackage.Sequence {
+		return nil, errors.New("invalid protected custody release transition")
+	}
+	if r.Phase == "completed" && r.Start == "target" {
+		return r.Package, nil
+	}
+	return r.PreviousPackage, nil
+}
+
+// Validate requires a complete, internally consistent core/signer package.
+// It does not itself authenticate the release; the protected installer must do
+// that before publishing a maintenance record.
+func (p MaintenancePackage) Validate() error {
+	source, err := hex.DecodeString(p.Source)
+	if err != nil || len(source) != 20 || hex.EncodeToString(source) != p.Source ||
+		!tokenOK(p.Version) || p.Sequence == 0 || !hashOK(p.ReleaseSHA256) ||
+		(!p.DevelopmentOnly && !hashOK(p.ProvenanceSHA256)) ||
+		(p.DevelopmentOnly && p.ProvenanceSHA256 != "" && !hashOK(p.ProvenanceSHA256)) ||
+		validateComponents(p.Components) != nil {
+		return errors.New("invalid protected maintenance package")
+	}
+	contracts := make([]Contract, 0, len(p.Components))
+	for _, c := range p.Components {
+		if c.Version != p.Version || !slices.Contains(c.Contract.Features, JournalBasePackageFeature) || c.Contract.Component == "core" && c.Artifact.File != "fased-app" ||
+			c.Contract.Component == "signer" && c.Artifact.File != "fased-signer" {
+			return errors.New("protected maintenance package components differ")
+		}
+		contracts = append(contracts, c.Contract)
+	}
+	if !OrdinaryContracts(contracts) {
+		return errors.New("ordinary custody package contracts required")
+	}
+	return nil
 }
 
 // Older signers treat this exact non-ID phase as a denial fence. Successors

@@ -152,13 +152,15 @@ func maintenanceRequestCommand(args []string, in io.Reader, out io.Writer) error
 	if err != nil {
 		return err
 	}
-	if a.Profile != "remote" && r.Action != "custody-update" {
+	if a.Profile != "remote" && r.Action != "custody-update" && r.Action != "custody-initialize" {
 		return errors.New("Remote setup authority required")
 	}
 	workCtx, stop := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer stop()
 	var payload json.RawMessage
 	switch r.Action {
+	case "custody-initialize":
+		err = maintenanceCustodyInitialize(workCtx, a)
 	case "custody-update":
 		err = maintenanceCustodyAcquire(workCtx, a, *r.Custody)
 		if err == nil {
