@@ -542,17 +542,21 @@ function protectedCandidateRun(run, packet, inventory) {
   );
 }
 
-async function verifiedProducer(packet, inventory, api) {
-  const run = await api(
-    "GET",
-    `${repo}/actions/runs/${packet.release.runId}/attempts/${packet.release.runAttempt}`,
-  );
+async function verifiedProducer(packet, inventory, api, observed = {}) {
+  const run =
+    observed.run ??
+    (await api(
+      "GET",
+      `${repo}/actions/runs/${packet.release.runId}/attempts/${packet.release.runAttempt}`,
+    ));
   if (!protectedCandidateRun(run, packet, inventory))
     throw Error("Exact protected candidate producer required");
-  const jobs = await api(
-    "GET",
-    `${repo}/actions/runs/${packet.release.runId}/attempts/${packet.release.runAttempt}/jobs`,
-  );
+  const jobs =
+    observed.jobs ??
+    (await api(
+      "GET",
+      `${repo}/actions/runs/${packet.release.runId}/attempts/${packet.release.runAttempt}/jobs`,
+    ));
   const producer = jobs.jobs?.filter((j) => j.name === "ubuntu-amd64");
   if (
     producer?.length !== 1 ||
@@ -721,10 +725,26 @@ async function readCIInstalledAcceptance(
   );
   if (!protectedCandidateRun(run, packet, inventory))
     throw Error("Successful exact protected candidate workflow required");
-  const replay = run.conclusion === "failure";
+  const originalJobs = await api(
+    "GET",
+    `${repo}/actions/runs/${id}/attempts/${attempt}/jobs`,
+  );
+  const originalAcceptance = originalJobs.jobs?.filter(
+    (j) => j.name === "installed-acceptance",
+  );
+  // A package-only run can succeed while its acceptance job is skipped. It
+  // still needs an independently authenticated acceptance of the same bytes.
+  const replay =
+    run.conclusion === "failure" ||
+    (originalAcceptance?.length === 1 &&
+      originalAcceptance[0].status === "completed" &&
+      originalAcceptance[0].conclusion === "skipped");
   let acceptanceRun = run;
   if (replay) {
-    await verifiedProducer(packet, inventory, api);
+    await verifiedProducer(packet, inventory, api, {
+      run,
+      jobs: originalJobs,
+    });
     const name = `ubuntu-amd64-installed-acceptance-replay-${id}-${attempt}`;
     const listed = await api(
       "GET",
@@ -775,10 +795,12 @@ async function readCIInstalledAcceptance(
       throw Error("One retained same-artifact acceptance replay required");
     acceptanceRun = accepted[0];
   }
-  const result = await api(
-    "GET",
-    `${repo}/actions/runs/${acceptanceRun.id}/attempts/${acceptanceRun.run_attempt}/jobs`,
-  );
+  const result = replay
+    ? await api(
+        "GET",
+        `${repo}/actions/runs/${acceptanceRun.id}/attempts/${acceptanceRun.run_attempt}/jobs`,
+      )
+    : originalJobs;
   const jobs = result.jobs?.filter((j) => j.name === "installed-acceptance");
   if (
     jobs?.length !== 1 ||
