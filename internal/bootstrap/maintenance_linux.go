@@ -96,8 +96,18 @@ func (p *Prepared) MaintenanceIdentity() (MaintenanceIdentity, error) {
 func (p *Prepared) AcquireMaintenanceInstaller(ctx context.Context) (string, update.Artifact, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.options.protectedOwner <= 0 {
+		return "", update.Artifact{}, errors.New("protected owner acquisition required")
+	}
+	return p.acquireAttestedInstaller(ctx)
+}
+
+// The caller holds p.mu. Owner-side application updates use the same exact
+// attested installer as protected custody maintenance, never caller-selected
+// payload paths or a second lookup of latest.
+func (p *Prepared) acquireAttestedInstaller(ctx context.Context) (string, update.Artifact, error) {
 	var artifact update.Artifact
-	if p.closed || p.root == nil || p.options.protectedOwner <= 0 || p.seed.Version != 4 {
+	if p.closed || p.root == nil || p.seed.Version != 4 || p.options.protectedOwner == 0 && (os.Getuid() <= 0 || os.Geteuid() != os.Getuid()) {
 		return "", artifact, errors.New("attested exact installer acquisition required")
 	}
 	if err := p.revalidate(); err != nil {

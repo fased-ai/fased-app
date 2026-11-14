@@ -27,7 +27,7 @@ func owned(i os.FileInfo) bool {
 }
 
 type InstallOptions struct {
-	WalletSigner                  *WalletPayload
+	WalletSigner, WalletDesktop   *WalletPayload
 	WalletInstance, WalletNetwork string
 	Prefix, DataDirectory         string
 	Start                         bool
@@ -71,7 +71,7 @@ func (p *Prepared) checkFreshCandidate(options InstallOptions) error {
 
 // Run uses the already-reviewed ordinary installer/wizard. No arbitrary command,
 // update receipt, owner session or financial permission can select the program.
-func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader, out, errOut io.Writer) error {
+func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader, out, errOut io.Writer) (resultErr error) {
 	if options.Profile != "" && options.Profile != "remote" && options.Profile != "local" && options.Profile != "connect" {
 		return errors.New("invalid installation profile")
 	}
@@ -123,6 +123,17 @@ func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader
 		return err
 	}
 	args := []string{"install", "--bundle", p.report.BundleDirectory, "--bundle-sha256", p.report.BundleSHA256, "--interactive", "--verification-output", p.options.Directory, "--bootstrap-sequence", strconv.FormatUint(p.report.Sequence, 10), "--bootstrap-release-sha256", p.report.DescriptorSHA256}
+	nativeBundle := ""
+	if options.WalletDesktop != nil && options.WalletInstance == "" && options.WalletNetwork == "" && options.upgrade == nil && options.Profile != "remote" && options.Profile != "connect" {
+		var nativePin string
+		var cleanup func() error
+		nativeBundle, nativePin, cleanup, err = p.composeNativeBundle(options.WalletDesktop, options.WalletSigner)
+		if err != nil {
+			return err
+		}
+		defer func() { resultErr = errors.Join(resultErr, cleanup()) }()
+		args = append(args, "--native-bundle", nativeBundle, "--native-bundle-sha256", nativePin)
+	}
 	if options.Profile != "" {
 		args = append(args, "--profile", options.Profile)
 	}
@@ -176,7 +187,7 @@ func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader
 		return errors.New("verified installer path changed before execution")
 	}
 	executable := f
-	if options.upgrade != nil || walletSigner != nil || p.candidate != nil {
+	if options.upgrade != nil || walletSigner != nil || p.candidate != nil || nativeBundle != "" {
 		executable, err = sealVerifiedExecutable(f, p.engine.Bytes, p.engine.SHA256)
 		if err != nil {
 			return err

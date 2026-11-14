@@ -40,6 +40,16 @@ func main() {
 	}
 }
 func run(args []string, in *os.File, out, errOut io.Writer) error {
+	if len(args) == 1 && args[0] == "native-release-binding" {
+		if os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
+			return errors.New("native release identity requires an unprivileged process")
+		}
+		b := bootstrap.NativeReleaseBinding{Version: 1, ProductVersion: core.Version, Source: compiledNativeSource, DesktopSHA256: compiledNativeDesktopSHA256, SignerSHA256: compiledNativeSignerSHA256}
+		if !b.Valid(core.Version, compiledNativeSource) {
+			return errors.New("native release identity is unavailable")
+		}
+		return json.NewEncoder(out).Encode(b)
+	}
 	if len(args) > 0 && (args[0] == "custody-maintenance" || args[0] == "custody-maintenance-inventory" || args[0] == "custody-maintenance-verify") {
 		return metadataMaintenanceCommand(args, in, out)
 	}

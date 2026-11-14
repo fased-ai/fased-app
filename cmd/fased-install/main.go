@@ -77,6 +77,12 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		}
 		return bootstrap.WriteWalletPayload(out, walletPayload())
 	}
+	if len(args) == 1 && args[0] == "--emit-embedded-native" {
+		if os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
+			return errors.New("embedded native extraction requires an unprivileged process")
+		}
+		return bootstrap.WriteWalletPayload(out, walletDesktopPayload())
+	}
 	f := flag.NewFlagSet("fased-install", flag.ContinueOnError)
 	f.SetOutput(errOut)
 	development := f.Bool("development", false, "explicit disposable-trust development bootstrap")
@@ -155,7 +161,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		if mixed || !filepath.IsAbs(*installCandidate) || filepath.Clean(*installCandidate) != *installCandidate || len(digest) != 32 || hex.EncodeToString(digest) != *candidatePacket || e != nil || *profile != "local" || compiledFirstInstallBinding == nil {
 			return errors.New("fresh Local candidate requires its exact packet and compiled installer trust")
 		}
-		installOptions := bootstrap.InstallOptions{Prefix: *prefix, DataDirectory: *data, Start: *start, Profile: "local", Listen: *listen}
+		installOptions := bootstrap.InstallOptions{WalletSigner: walletPayload(), WalletDesktop: walletDesktopPayload(), Prefix: *prefix, DataDirectory: *data, Start: *start, Profile: "local", Listen: *listen}
 		paths, e := bootstrap.FreshCandidatePaths(installOptions)
 		if e != nil {
 			return e
@@ -296,7 +302,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	}
 
 	if *install {
-		if err = p.Run(context.Background(), bootstrap.InstallOptions{WalletSigner: walletPayload(), WalletInstance: *walletInstance, WalletNetwork: *walletNetwork, Prefix: *prefix, DataDirectory: *data, Start: *start, Profile: *profile, Listen: *listen}, in, out, errOut); err != nil {
+		if err = p.Run(context.Background(), bootstrap.InstallOptions{WalletSigner: walletPayload(), WalletDesktop: walletDesktopPayload(), WalletInstance: *walletInstance, WalletNetwork: *walletNetwork, Prefix: *prefix, DataDirectory: *data, Start: *start, Profile: *profile, Listen: *listen}, in, out, errOut); err != nil {
 			return err
 		}
 	}

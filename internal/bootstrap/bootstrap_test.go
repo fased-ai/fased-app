@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -72,6 +73,22 @@ func metaFile(v int64, b []byte) *metadata.MetaFiles {
 	return &metadata.MetaFiles{Version: v, Length: int64(len(b)), Hashes: metadata.Hashes{"sha256": h}}
 }
 
+const nativeFixtureDesktop = "disposable native client"
+const nativeFixtureSigner = "disposable signer"
+
+func nativeFixtureCore(t *testing.T) []byte {
+	binding := NativeReleaseBinding{Version: 1, ProductVersion: "1.2.3", Source: strings.Repeat("a", 40), DesktopSHA256: digest([]byte(nativeFixtureDesktop)), SignerSHA256: digest([]byte(nativeFixtureSigner))}
+	return []byte(fmt.Sprintf("#!/bin/sh\n[ \"$1\" = native-release-binding ] || exit 2\nprintf '%%s\\n' '%s'\n", jsonBytes(t, binding)))
+}
+
+func nativeFixtureInstaller(t *testing.T, desktop, signer string) []byte {
+	payload := func(value string) string {
+		identity := WalletPayloadIdentity{Version: 1, ProductVersion: "1.2.3", Source: strings.Repeat("a", 40), SHA256: digest([]byte(value)), Bytes: int64(len(value))}
+		return fmt.Sprintf("printf '%%s\\n%%s' '%s' '%s'", jsonBytes(t, identity), value)
+	}
+	return []byte(fmt.Sprintf("#!/bin/sh\ncase \"$1\" in\n--emit-embedded-native) %s ;;\n--emit-embedded-signer) %s ;;\n*) exit 2 ;;\nesac\n", payload(desktop), payload(signer)))
+}
+
 func newFirstFixture(t *testing.T, profile ...string) *firstFixture {
 	t.Helper()
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
@@ -126,6 +143,13 @@ func newFirstFixture(t *testing.T, profile ...string) *firstFixture {
 	if len(profile) == 1 && profile[0] == "wallets" {
 		t.Setenv("FASED_BOOTSTRAP_SIGNER", filepath.Join(f.parent, "received-signer"))
 		payload["fased-app"] = []byte("#!/bin/sh\nprintf 'verified installer\\n' >> \"$FASED_BOOTSTRAP_MARKER\"\nprintf '%s\\n' \"$@\" > \"$FASED_BOOTSTRAP_ARGS\"\n/usr/bin/cat /proc/self/fd/4 > \"$FASED_BOOTSTRAP_SIGNER\"\n")
+	}
+	if len(profile) == 1 && profile[0] == "native" {
+		t.Setenv("FASED_NATIVE_INVENTORY", filepath.Join(f.parent, "native-inventory"))
+		payload["fased-app"] = []byte("#!/bin/sh\nprintf 'verified installer\\n' >> \"$FASED_BOOTSTRAP_MARKER\"\nprintf '%s\\n' \"$@\" > \"$FASED_BOOTSTRAP_ARGS\"\nwhile [ \"$#\" -gt 0 ]; do if [ \"$1\" = --native-bundle ]; then /usr/bin/cat \"$2/bundle.json\" > \"$FASED_NATIVE_INVENTORY\"; fi; shift; done\n")
+	}
+	if len(profile) == 1 && profile[0] == "native-binding" {
+		payload["fased-app"] = nativeFixtureCore(t)
 	}
 	for name := range bundle.PlatformFiles() {
 		payload[name] = []byte("fixture " + name)

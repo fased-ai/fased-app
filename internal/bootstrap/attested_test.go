@@ -66,9 +66,9 @@ func TestLegacyBootstrapSequenceIsNotAnAttestedProductVersion(t *testing.T) {
 	p.Close()
 }
 
-func attestedFixture(t *testing.T, variant string) (*firstFixture, Options, map[string][]byte) {
+func attestedFixture(t *testing.T, variant string, profile ...string) (*firstFixture, Options, map[string][]byte) {
 	t.Helper()
-	f := newFirstFixture(t)
+	f := newFirstFixture(t, profile...)
 	f.archive, f.descriptor.BundleSHA256 = releaseArchive(t, f.archive, false)
 	policy := releaseops.GitHubPolicy{Version: 1, Repository: "fased-ai/fased-app", RepositoryID: "7", MetadataBranch: "release-metadata", MetadataHost: "raw.githubusercontent.com", APIHost: "api.github.com", CDNHost: "release-assets.githubusercontent.com", CDNPathPrefix: "/github-production-release-asset/7/", APIVersion: releaseops.GitHubAPIVersion}
 	f.seed.Binding = Binding{Version: 4, Purpose: AttestedPurpose, Repository: policy.Repository, Channel: "stable", Target: update.Target{OS: "linux", Arch: "amd64"}}

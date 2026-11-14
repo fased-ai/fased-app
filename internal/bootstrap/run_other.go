@@ -14,7 +14,7 @@ import (
 func owned(os.FileInfo) bool { return false }
 
 type InstallOptions struct {
-	WalletSigner                  *WalletPayload
+	WalletSigner, WalletDesktop   *WalletPayload
 	WalletInstance, WalletNetwork string
 	Prefix, DataDirectory         string
 	Start                         bool

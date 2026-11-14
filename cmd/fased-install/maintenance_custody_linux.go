@@ -504,10 +504,10 @@ type verifiedCustodyAcquisition interface {
 	MaintenanceIdentity() (bootstrap.MaintenanceIdentity, error)
 }
 
-// The cleanup follows both the original owner operation and the independent
-// release verifier. Keeping these checks together prevents a refused request
-// from retiring a previous installation's recovery evidence.
-func finishCustodyAcquisition(q maintenance.CustodyUpdateRequest, v *core.ApplicationOwnerView, now time.Time, p verifiedCustodyAcquisition, retire func() error) (bootstrap.Report, bootstrap.MaintenanceIdentity, error) {
+// Preparation follows both the original owner operation and the independent
+// release verifier. The callback must check the staged pair before retiring
+// any earlier candidate evidence.
+func finishCustodyAcquisition(q maintenance.CustodyUpdateRequest, v *core.ApplicationOwnerView, now time.Time, p verifiedCustodyAcquisition, prepare func(bootstrap.Report, bootstrap.MaintenanceIdentity) error) (bootstrap.Report, bootstrap.MaintenanceIdentity, error) {
 	var report bootstrap.Report
 	var identity bootstrap.MaintenanceIdentity
 	var expected *core.ApplicationRelease
@@ -543,10 +543,32 @@ func finishCustodyAcquisition(q maintenance.CustodyUpdateRequest, v *core.Applic
 	if err != nil {
 		return report, identity, err
 	}
-	if err = retire(); err != nil {
+	if prepare == nil {
+		return report, identity, errors.New("verified custody pair preparation required")
+	}
+	if err = prepare(report, identity); err != nil {
 		return report, identity, err
 	}
 	return report, identity, nil
+}
+
+// The new native-pair format begins with 0.1.12. Classify the authenticated
+// product version itself: a legacy metadata sequence may be unrelated to it.
+func custodyNativeBindingSource(report bootstrap.Report, id bootstrap.MaintenanceIdentity) (string, error) {
+	if report.DevelopmentOnly {
+		return "", nil
+	}
+	required, err := bootstrap.NativePairRequired(id.Version)
+	if err != nil {
+		return "", errors.New("authenticated stable product version required")
+	}
+	if !required {
+		return "", nil
+	}
+	if !report.ProvenanceVerified || id.Source == "" {
+		return "", errors.New("authenticated native release source required")
+	}
+	return id.Source, nil
 }
 
 func maintenanceCustodyAcquire(ctx context.Context, a maintenance.Authority, q maintenance.CustodyUpdateRequest, manualCandidate bool, ownerView *core.ApplicationOwnerView) error {
@@ -615,9 +637,43 @@ func maintenanceCustodyAcquire(ctx context.Context, a maintenance.Authority, q m
 		return err
 	}
 	defer p.Close()
-	report, id, err := finishCustodyAcquisition(q, ownerView, now, p, func() error {
-		// Retire while the initial deployment is still current. Its protected
-		// receipts are archived before its public candidate cache is removed.
+	dir := update.MaintenanceDirectory(a.Owner, q.OperationID)
+	var components []update.Component
+	report, id, err := finishCustodyAcquisition(q, ownerView, now, p, func(report bootstrap.Report, id bootstrap.MaintenanceIdentity) error {
+		if err := maintenance.EnsureProtectedDirectory(filepath.Dir(dir)); err != nil {
+			return err
+		}
+		if err := maintenance.EnsureProtectedDirectory(dir); err != nil {
+			return err
+		}
+		engine, _ := bundle.Names()
+		corePath := filepath.Join(report.BundleDirectory, engine)
+		// Normalize only the held, independently verified acquisition before
+		// publishing its protected deployment copy.
+		f, err := update.OpenProtected(corePath, id.Core.Bytes, 0700)
+		if err != nil {
+			return err
+		}
+		if err = errors.Join(f.Chmod(0755), f.Sync(), f.Close()); err != nil {
+			return err
+		}
+		if err = maintenance.CopyProtected(corePath, dir+"/fased-app", 0755, id.Core.SHA256, id.Core.Bytes, ""); err != nil {
+			return err
+		}
+		if err = maintenanceAcquireSigner(ctx, p, a, dir, id, false); err != nil {
+			return err
+		}
+		source, err := custodyNativeBindingSource(report, id)
+		if err != nil {
+			return err
+		}
+		components, err = custodyinstall.DescribeProtectedPair(ctx, a.Owner, q.OperationID, id.Version, source)
+		if err != nil {
+			return err
+		}
+		// Retire only after the selected pair passed its authenticated binding.
+		// The initial deployment is still current and its receipts are archived
+		// before its public candidate cache is removed.
 		if receipt, err := maintenance.ReadCandidateReceipt(a.Owner); err == nil {
 			if receipt.Scope == "fresh" {
 				return retireFreshCandidate(a, receipt)
@@ -628,36 +684,6 @@ func maintenanceCustodyAcquire(ctx context.Context, a maintenance.Authority, q m
 		}
 		return nil
 	})
-	if err != nil {
-		return err
-	}
-	dir := update.MaintenanceDirectory(a.Owner, q.OperationID)
-	if err = maintenance.EnsureProtectedDirectory(filepath.Dir(dir)); err != nil {
-		return err
-	}
-	if err = maintenance.EnsureProtectedDirectory(dir); err != nil {
-		return err
-	}
-	engine, _ := bundle.Names()
-	corePath := filepath.Join(report.BundleDirectory, engine)
-	// The verified extractor deliberately creates private 0700 executables.
-	// Normalize only this held, root-owned authenticated acquisition before
-	// publishing its independently hashed deployment copy.
-	f, e := update.OpenProtected(corePath, id.Core.Bytes, 0700)
-	if e != nil {
-		return e
-	}
-	e = errors.Join(f.Chmod(0755), f.Sync(), f.Close())
-	if e != nil {
-		return e
-	}
-	if err = maintenance.CopyProtected(corePath, dir+"/fased-app", 0755, id.Core.SHA256, id.Core.Bytes, ""); err != nil {
-		return err
-	}
-	if err = maintenanceAcquireSigner(ctx, p, a, dir, id, false); err != nil {
-		return err
-	}
-	components, err := custodyinstall.DescribeProtectedPair(ctx, a.Owner, q.OperationID, id.Version)
 	if err != nil {
 		return err
 	}

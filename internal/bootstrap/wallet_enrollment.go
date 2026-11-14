@@ -35,6 +35,30 @@ type WalletPayloadIdentity struct {
 	Bytes          int64  `json:"bytes"`
 }
 
+// NativeReleaseBinding is emitted by the already authenticated target core.
+// It does not authenticate an arbitrary core or installer supplied by a caller.
+type NativeReleaseBinding struct {
+	Version        int    `json:"version"`
+	ProductVersion string `json:"productVersion"`
+	Source         string `json:"source"`
+	DesktopSHA256  string `json:"desktopSha256"`
+	SignerSHA256   string `json:"signerSha256"`
+}
+
+func (b NativeReleaseBinding) Valid(version, source string) bool {
+	return b.Version == 1 && b.ProductVersion == version && b.Source == source && sourceHash(source) && hashOK(b.DesktopSHA256) && hashOK(b.SignerSHA256)
+}
+
+// NativePairRequired classifies the authenticated product version rather than
+// a legacy metadata sequence, which need not encode that version.
+func NativePairRequired(version string) (bool, error) {
+	sequence, err := releaseSequence(version)
+	if err != nil {
+		return false, err
+	}
+	return sequence >= 1_000_013, nil // 0.1.12
+}
+
 const MaxWalletPayload = 64 << 20
 
 // WriteWalletPayload is a fixed internal installer operation. It accepts no

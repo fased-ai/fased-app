@@ -26,6 +26,7 @@ type ApplicationUpdate struct {
 	ID, Version, ExpectedManifestSHA256 string
 	Engine, EngineSHA256                string
 	Desktop, DesktopSHA256              string
+	Signer, SignerSHA256                string
 }
 type ApplicationUpdateStatus struct {
 	ReaderBootstrap        bool   `json:"readerBootstrap,omitempty"`
@@ -38,6 +39,7 @@ type ApplicationUpdateStatus struct {
 	TargetManifestSHA256   string `json:"targetManifestSha256"`
 	EngineSHA256           string `json:"engineSha256"`
 	DesktopSHA256          string `json:"desktopSha256,omitempty"`
+	SignerSHA256           string `json:"signerSha256,omitempty"`
 }
 
 // BeforeStop owns authenticated consent, the exact metadata fence/backup and
@@ -73,10 +75,10 @@ func applicationUpdateID(s string) bool {
 	return e == nil && len(b) == 16 && hex.EncodeToString(b) == s
 }
 func (c ApplicationUpdate) validate() error {
-	if c.Sequence == 0 || !validExpectedDigest(c.ReleaseSHA256) || !applicationUpdateID(c.ID) || c.Version == "" || len(c.Version) > 128 || strings.ContainsAny(c.Version, "/\\\x00\r\n\t ") || !validExpectedDigest(c.ExpectedManifestSHA256) || !validExpectedDigest(c.EngineSHA256) || c.Engine == "" || (c.Desktop == "") != (c.DesktopSHA256 == "") || c.Desktop != "" && !validExpectedDigest(c.DesktopSHA256) {
+	if c.Sequence == 0 || !validExpectedDigest(c.ReleaseSHA256) || !applicationUpdateID(c.ID) || c.Version == "" || len(c.Version) > 128 || strings.ContainsAny(c.Version, "/\\\x00\r\n\t ") || !validExpectedDigest(c.ExpectedManifestSHA256) || !validExpectedDigest(c.EngineSHA256) || c.Engine == "" || (c.Desktop == "") != (c.DesktopSHA256 == "") || c.Desktop != "" && !validExpectedDigest(c.DesktopSHA256) || (c.Signer == "") != (c.SignerSHA256 == "") || c.Signer != "" && (c.Desktop == "" || !validExpectedDigest(c.SignerSHA256)) {
 		return errors.New("complete authenticated application update identity required")
 	}
-	for _, p := range []string{c.Engine, c.Desktop} {
+	for _, p := range []string{c.Engine, c.Desktop, c.Signer} {
 		if p != "" && (!filepath.IsAbs(p) || filepath.Clean(p) != p) {
 			return errors.New("authenticated artifact paths must be absolute and clean")
 		}
@@ -91,11 +93,14 @@ func validApplicationJournal(j applicationUpdateJournal, p Paths) bool {
 	if s.Sequence == 0 || !validExpectedDigest(s.ReleaseSHA256) || j.Target.ApplicationSequence != s.Sequence || j.Target.ApplicationReleaseSHA256 != s.ReleaseSHA256 || s.Version != 1 || !applicationUpdateID(s.ID) || s.PreviousManifestSHA256 != ManifestSHA256(j.Previous) || s.TargetManifestSHA256 != ManifestSHA256(j.Target) || s.EngineSHA256 != j.Target.Files[engineName] || s.DesktopSHA256 != j.Target.Files[desktopName] {
 		return false
 	}
+	if s.SignerSHA256 != "" && (!validExpectedDigest(s.SignerSHA256) || s.DesktopSHA256 == "" || j.Previous.Files["fased-signer"] == "" || j.Target.Files["fased-signer"] != s.SignerSHA256) {
+		return false
+	}
 	if j.Previous.Root != p.Root || j.Previous.Data != p.Data || j.Target.Root != p.Root || j.Target.Data != p.Data || j.Previous.Phase != "ready" || j.Target.Phase != "ready" || j.Previous.Autostart != j.Target.Autostart || j.Previous.Listen != j.Target.Listen || j.Previous.PublicOrigin != j.Target.PublicOrigin || j.Previous.Location != j.Target.Location || j.Previous.ProviderFixture != j.Target.ProviderFixture || len(j.Previous.Files) != len(j.Target.Files) {
 		return false
 	}
 	for n, h := range j.Previous.Files {
-		if n != engineName && n != desktopName && j.Target.Files[n] != h {
+		if n != engineName && n != desktopName && (n != "fased-signer" || s.SignerSHA256 == "") && j.Target.Files[n] != h {
 			return false
 		}
 	}
@@ -320,6 +325,9 @@ func replaceApplication(ctx context.Context, paths Paths, c ApplicationUpdate, h
 		if (m.Files[desktopName] != "") != (c.Desktop != "") {
 			return m, errors.New("update cannot add or remove a desktop installation")
 		}
+		if c.Signer != "" && m.Files["fased-signer"] == "" {
+			return m, errors.New("update cannot add a signer to an existing installation")
+		}
 		if h.BeforeStage != nil {
 			if e = h.BeforeStage(ctx); e != nil {
 				return m, e
@@ -337,7 +345,10 @@ func replaceApplication(ctx context.Context, paths Paths, c ApplicationUpdate, h
 		if c.Desktop != "" {
 			next.Files[desktopName] = c.DesktopSHA256
 		}
-		j = applicationUpdateJournal{Previous: m, Target: next, Status: ApplicationUpdateStatus{ReaderBootstrap: c.ReaderBootstrap, Sequence: c.Sequence, ReleaseSHA256: c.ReleaseSHA256, Version: 1, ID: c.ID, Phase: "prepared", PreviousManifestSHA256: ManifestSHA256(m), TargetManifestSHA256: ManifestSHA256(next), EngineSHA256: c.EngineSHA256, DesktopSHA256: c.DesktopSHA256}}
+		if c.Signer != "" {
+			next.Files["fased-signer"] = c.SignerSHA256
+		}
+		j = applicationUpdateJournal{Previous: m, Target: next, Status: ApplicationUpdateStatus{ReaderBootstrap: c.ReaderBootstrap, Sequence: c.Sequence, ReleaseSHA256: c.ReleaseSHA256, Version: 1, ID: c.ID, Phase: "prepared", PreviousManifestSHA256: ManifestSHA256(m), TargetManifestSHA256: ManifestSHA256(next), EngineSHA256: c.EngineSHA256, DesktopSHA256: c.DesktopSHA256, SignerSHA256: c.SignerSHA256}}
 		// Publish the identity first. Interruption can finish staging only these
 		// exact artifacts, never replace the journal with a new candidate.
 		if e = storeApplicationJournal(p, j); e != nil {
@@ -351,7 +362,7 @@ func replaceApplication(ctx context.Context, paths Paths, c ApplicationUpdate, h
 	} else if e != nil {
 		return Manifest{}, e
 	}
-	if j.Status.ReaderBootstrap != c.ReaderBootstrap || j.Status.Sequence != c.Sequence || j.Status.ReleaseSHA256 != c.ReleaseSHA256 || j.Status.ID != c.ID || j.Status.PreviousManifestSHA256 != c.ExpectedManifestSHA256 || j.Target.Version != c.Version || j.Status.EngineSHA256 != c.EngineSHA256 || j.Status.DesktopSHA256 != c.DesktopSHA256 {
+	if j.Status.ReaderBootstrap != c.ReaderBootstrap || j.Status.Sequence != c.Sequence || j.Status.ReleaseSHA256 != c.ReleaseSHA256 || j.Status.ID != c.ID || j.Status.PreviousManifestSHA256 != c.ExpectedManifestSHA256 || j.Target.Version != c.Version || j.Status.EngineSHA256 != c.EngineSHA256 || j.Status.DesktopSHA256 != c.DesktopSHA256 || j.Status.SignerSHA256 != c.SignerSHA256 {
 		return Manifest{}, errors.New("update identity changed; preserve original transaction")
 	}
 	if j.Status.Phase == "healthy-held" || j.Status.Phase == "rolled-back-held" {
@@ -383,7 +394,7 @@ func replaceApplication(ctx context.Context, paths Paths, c ApplicationUpdate, h
 		return Manifest{}, errors.New("installed manifest changed outside the pending update")
 	}
 	for name, want := range j.Previous.Files {
-		if name == engineName || name == desktopName {
+		if name == engineName || name == desktopName || name == "fased-signer" && c.Signer != "" {
 			continue
 		}
 		if got, e := updateFileDigest(filepath.Join(p.Root, name)); e != nil || got != want {
@@ -396,7 +407,7 @@ func replaceApplication(ctx context.Context, paths Paths, c ApplicationUpdate, h
 	}
 	// A prepared journal may be interrupted while copying; existing mismatched
 	// artifacts are refused. No application data is read/copied/restored here.
-	for _, v := range []struct{ name, path, hash string }{{engineName, c.Engine, c.EngineSHA256}, {desktopName, c.Desktop, c.DesktopSHA256}} {
+	for _, v := range []struct{ name, path, hash string }{{engineName, c.Engine, c.EngineSHA256}, {desktopName, c.Desktop, c.DesktopSHA256}, {"fased-signer", c.Signer, c.SignerSHA256}} {
 		if v.path == "" {
 			continue
 		}
@@ -450,7 +461,7 @@ func replaceApplication(ctx context.Context, paths Paths, c ApplicationUpdate, h
 			return Manifest{}, e
 		}
 	}
-	for _, name := range []string{engineName, desktopName} {
+	for _, name := range applicationUpdatedNames(j.Status) {
 		if j.Target.Files[name] == "" {
 			continue
 		}
@@ -509,7 +520,7 @@ func rollBackApplication(ctx context.Context, p Paths, j applicationUpdateJourna
 		return j.Target, e
 	}
 	transaction := filepath.Join(applicationUpdateDirectory(p), j.Status.ID)
-	for _, name := range []string{engineName, desktopName} {
+	for _, name := range applicationUpdatedNames(j.Status) {
 		if j.Previous.Files[name] == "" {
 			continue
 		}
@@ -539,6 +550,14 @@ func rollBackApplication(ctx context.Context, p Paths, j applicationUpdateJourna
 		return j.Previous, e
 	}
 	return completeHeldApplication(ctx, p, j, h)
+}
+
+func applicationUpdatedNames(s ApplicationUpdateStatus) []string {
+	names := []string{engineName, desktopName}
+	if s.SignerSHA256 != "" {
+		names = append(names, "fased-signer")
+	}
+	return names
 }
 
 // Completion is a separate durable phase. A callback may have committed its

@@ -186,11 +186,11 @@ func unheldCorePause(p update.CorePauseReceipt, probe string) bool {
 	return p.State == "released" && update.IDOK(p.PauseID) && p.Request != nil && update.ValidPauseRequest(*p.Request)
 }
 
-func DescribeProtectedPair(ctx context.Context, owner int, id, version string) ([]update.Component, error) {
+func DescribeProtectedPair(ctx context.Context, owner int, id, version string, nativeSource ...string) ([]update.Component, error) {
 	if _, err := maintenance.ValidateProcess(owner); err != nil {
 		return nil, err
 	}
-	if !update.IDOK(id) {
+	if !update.IDOK(id) || len(nativeSource) > 1 {
 		return nil, errors.New("fixed package required")
 	}
 	m, err := Load(owner)
@@ -198,6 +198,23 @@ func DescribeProtectedPair(ctx context.Context, owner int, id, version string) (
 		return nil, err
 	}
 	dir := update.MaintenanceDirectory(owner, id)
+	source := ""
+	if len(nativeSource) == 1 {
+		source = nativeSource[0]
+	}
+	return describeProtectedPair(ctx, m, dir, version, source, readMaintenanceRole, maintenance.ProtectedDigest)
+}
+
+// describeProtectedPair reads only fixed staged images. When the independently
+// authenticated release requires a native pair, the same target core must
+// describe the signer and desktop hashes; an installer's header is not enough.
+func describeProtectedPair(ctx context.Context, m Manifest, dir, version, nativeSource string,
+	read func(context.Context, Manifest, string, string, []string, any) error,
+	digest func(string, os.FileMode, int64) (string, int64, error),
+) ([]update.Component, error) {
+	if read == nil || digest == nil || nativeSource != "" && !validHex(nativeSource, 20) {
+		return nil, errors.New("authenticated native release identity required")
+	}
 	var coreContract struct {
 		Version            int             `json:"version"`
 		Target             update.Target   `json:"target"`
@@ -206,11 +223,11 @@ func DescribeProtectedPair(ctx context.Context, owner int, id, version string) (
 		FinancialExecution bool            `json:"financialExecution"`
 		UpdaterEnabled     bool            `json:"updaterEnabled"`
 	}
-	if err = readMaintenanceRole(ctx, m, "app", dir+"/fased-app", []string{"updates", "ordinary-custody-compatibility"}, &coreContract); err != nil {
+	if err := read(ctx, m, "app", dir+"/fased-app", []string{"updates", "ordinary-custody-compatibility"}, &coreContract); err != nil {
 		return nil, err
 	}
 	var signerContract update.Contract
-	if err = readMaintenanceRole(ctx, m, "signer", dir+"/fased-signer", []string{"ordinary-custody-compatibility"}, &signerContract); err != nil {
+	if err := read(ctx, m, "signer", dir+"/fased-signer", []string{"ordinary-custody-compatibility"}, &signerContract); err != nil {
 		return nil, err
 	}
 	if coreContract.Version != 1 || coreContract.Contract.Component != "core" || signerContract.Component != "signer" {
@@ -222,11 +239,23 @@ func DescribeProtectedPair(ctx context.Context, owner int, id, version string) (
 		if c.Component == "core" {
 			name = "fased-app"
 		}
-		hash, size, err := maintenance.ProtectedDigest(dir+"/"+name, 0755, 64<<20)
+		hash, size, err := digest(dir+"/"+name, 0755, 64<<20)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, update.Component{Version: version, Contract: c, Artifact: update.Artifact{File: name, Size: size, SHA256: hash}})
+	}
+	if nativeSource != "" {
+		var binding struct {
+			Version        int    `json:"version"`
+			ProductVersion string `json:"productVersion"`
+			Source         string `json:"source"`
+			DesktopSHA256  string `json:"desktopSha256"`
+			SignerSHA256   string `json:"signerSha256"`
+		}
+		if err := read(ctx, m, "app", dir+"/fased-app", []string{"native-release-binding"}, &binding); err != nil || binding.Version != 1 || binding.ProductVersion != version || binding.Source != nativeSource || !validHex(binding.DesktopSHA256, 32) || !validHex(binding.SignerSHA256, 32) || binding.SignerSHA256 != out[1].Artifact.SHA256 {
+			return nil, errors.New("protected signer differs from the authenticated native release")
+		}
 	}
 	return out, nil
 }

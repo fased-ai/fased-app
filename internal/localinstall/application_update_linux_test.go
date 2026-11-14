@@ -110,6 +110,87 @@ func TestApplicationUpdatePreservesVerifiedNativeSignerInventory(t *testing.T) {
 		t.Fatal("verified native signer changed", err)
 	}
 }
+
+// The owner-side signer is an executable used for later enrollment, not the
+// separately protected custody vault. It must follow the native client and
+// core through the same app-only update journal and recovery entrypoint.
+func TestNativeApplicationPairRecoversInterruptedUpdate(t *testing.T) {
+	for _, cut := range []string{"replaced-" + engineName, "replaced-" + desktopName, "replaced-fased-signer", "manifest", "health-failure"} {
+		t.Run(cut, func(t *testing.T) {
+			f := applicationFixtureFor(t)
+			for _, name := range []string{desktopName, "fased-signer"} {
+				oldPath := filepath.Join(f.paths.Root, name)
+				if err := os.WriteFile(oldPath, []byte("previous "+name), 0700); err != nil {
+					t.Fatal(err)
+				}
+				hash, err := digest(oldPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.old.Files[name] = hash
+			}
+			if err := core.WritePrivateJSON(filepath.Join(f.paths.Root, "install.json"), f.old); err != nil {
+				t.Fatal(err)
+			}
+			f.candidate.ExpectedManifestSHA256 = ManifestSHA256(f.old)
+			f.candidate.Desktop = filepath.Join(filepath.Dir(f.paths.Root), "next-native")
+			f.candidate.Signer = filepath.Join(filepath.Dir(f.paths.Root), "next-signer")
+			for path, content := range map[string]string{f.candidate.Desktop: "next native", f.candidate.Signer: "next signer"} {
+				if err := os.WriteFile(path, []byte(content), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var err error
+			f.candidate.DesktopSHA256, err = updateFileDigest(f.candidate.Desktop)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.candidate.SignerSHA256, err = updateFileDigest(f.candidate.Signer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cut == "health-failure" {
+				f.badHealth = true
+				if _, err = f.apply(t, nil, false); err == nil {
+					t.Fatal("failed target health was accepted")
+				}
+				m, err := Load(f.paths)
+				if err != nil || ManifestSHA256(m) != ManifestSHA256(f.old) {
+					t.Fatal("previous native package was not restored", err)
+				}
+				for _, name := range []string{engineName, desktopName, "fased-signer"} {
+					got, err := updateFileDigest(filepath.Join(m.Root, name))
+					if err != nil || got != f.old.Files[name] {
+						t.Fatal("rollback did not restore a component", name, err)
+					}
+				}
+				f.preserved(t)
+				return
+			}
+			interrupted := errors.New("interrupted")
+			_, err = f.apply(t, func(point string) error {
+				if point == cut {
+					return interrupted
+				}
+				return nil
+			}, false)
+			if !errors.Is(err, interrupted) {
+				t.Fatal("requested interruption not reached", err)
+			}
+			m, err := resumeRetainedApplication(t.Context(), f.paths, f.candidate.ID, f.callbacks, f.services, false)
+			if err != nil {
+				t.Fatal("original operation could not resume", err)
+			}
+			for name, want := range map[string]string{engineName: f.candidate.EngineSHA256, desktopName: f.candidate.DesktopSHA256, "fased-signer": f.candidate.SignerSHA256} {
+				got, err := updateFileDigest(filepath.Join(m.Root, name))
+				if err != nil || got != want || m.Files[name] != want {
+					t.Fatal("updated native package differs", name, got, err)
+				}
+			}
+			f.preserved(t)
+		})
+	}
+}
 func (f *applicationFixture) apply(t *testing.T, fault func(string) error, rollback bool) (Manifest, error) {
 	t.Helper()
 	return replaceApplication(t.Context(), f.paths, f.candidate, f.callbacks, f.services, fault, rollback)

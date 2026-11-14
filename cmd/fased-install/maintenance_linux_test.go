@@ -132,7 +132,7 @@ func TestCustodyAcquisitionRetiresFreshCandidateOnlyAfterVerifiedApproval(t *tes
 		t.Run(tc.name, func(t *testing.T) {
 			v, p, retired := view, newAcquisition(), false
 			tc.change(&v, p)
-			_, _, err := finishCustodyAcquisition(q, &v, time.Now(), p, func() error { retired = true; return nil })
+			_, _, err := finishCustodyAcquisition(q, &v, time.Now(), p, func(bootstrap.Report, bootstrap.MaintenanceIdentity) error { retired = true; return nil })
 			if err == nil || retired {
 				t.Fatalf("unverified request retired the original candidate: %v", err)
 			}
@@ -142,7 +142,7 @@ func TestCustodyAcquisitionRetiresFreshCandidateOnlyAfterVerifiedApproval(t *tes
 	// still has to prove the actual protected files during acceptance.
 	p := newAcquisition()
 	archive, initialJournal, attempts := "", "initial-installation", 0
-	retire := func() error {
+	retire := func(bootstrap.Report, bootstrap.MaintenanceIdentity) error {
 		attempts++
 		if archive != "" && archive != "original-fresh-operation" || initialJournal != "initial-installation" {
 			t.Fatal("interrupted retirement changed its original identity")
@@ -161,8 +161,35 @@ func TestCustodyAcquisitionRetiresFreshCandidateOnlyAfterVerifiedApproval(t *tes
 	}
 	bootstrapRequest := q
 	bootstrapRequest.Bootstrap = true
-	if _, _, err := finishCustodyAcquisition(bootstrapRequest, nil, time.Now(), newAcquisition(), func() error { return nil }); err != nil {
+	if _, _, err := finishCustodyAcquisition(bootstrapRequest, nil, time.Now(), newAcquisition(), func(bootstrap.Report, bootstrap.MaintenanceIdentity) error { return nil }); err != nil {
 		t.Fatal("verified legacy bootstrap was refused", err)
+	}
+}
+
+func TestCustodyNativeBindingUsesAuthenticatedReleaseFloor(t *testing.T) {
+	source := strings.Repeat("a", 40)
+	for _, tc := range []struct {
+		name     string
+		report   bootstrap.Report
+		identity bootstrap.MaintenanceIdentity
+		want     string
+		wantErr  bool
+	}{
+		{"older headless release", bootstrap.Report{Version: 4, Sequence: 1_000_012, ProvenanceVerified: true}, bootstrap.MaintenanceIdentity{Version: "0.1.11"}, "", false},
+		{"development fixture", bootstrap.Report{Version: 4, Sequence: 1_000_013, DevelopmentOnly: true}, bootstrap.MaintenanceIdentity{}, "", false},
+		{"new authenticated pair", bootstrap.Report{Version: 4, Sequence: 1_000_013, ProvenanceVerified: true}, bootstrap.MaintenanceIdentity{Version: "0.1.12", Source: source}, source, false},
+		{"new target under legacy sequence", bootstrap.Report{Version: 3, Sequence: 7, ProvenanceVerified: true}, bootstrap.MaintenanceIdentity{Version: "0.1.12", Source: source}, source, false},
+		{"later authenticated pair", bootstrap.Report{Version: 4, Sequence: 2_000_001, ProvenanceVerified: true}, bootstrap.MaintenanceIdentity{Version: "0.2.0", Source: source}, source, false},
+		{"missing source", bootstrap.Report{Version: 4, Sequence: 1_000_013, ProvenanceVerified: true}, bootstrap.MaintenanceIdentity{Version: "0.1.12"}, "", true},
+		{"unverified release", bootstrap.Report{Version: 4, Sequence: 1_000_013}, bootstrap.MaintenanceIdentity{Version: "0.1.12", Source: source}, "", true},
+		{"invalid version", bootstrap.Report{Version: 4, ProvenanceVerified: true}, bootstrap.MaintenanceIdentity{Version: "0.1.12-rc", Source: source}, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := custodyNativeBindingSource(tc.report, tc.identity)
+			if (err != nil) != tc.wantErr || got != tc.want {
+				t.Fatal("wrong native binding requirement", got, err)
+			}
+		})
 	}
 }
 

@@ -25,6 +25,11 @@ type LocalApplicationController struct {
 	expectedManifest string
 }
 
+type nativeUpdateArtifacts struct {
+	Desktop, DesktopSHA256 string
+	Signer, SignerSHA256   string
+}
+
 func (p *Prepared) LocalApplicationController(paths localinstall.Paths, h localinstall.ApplicationUpdateCallbacks) (*LocalApplicationController, error) {
 	if h.BeforeStop == nil || h.Health == nil || h.RollbackAllowed == nil || h.Complete == nil {
 		return nil, errors.New("complete protected update callbacks required")
@@ -104,7 +109,7 @@ func (d *LocalApplicationController) Check(ctx context.Context) (*core.Applicati
 	d.expectedManifest = localinstall.ManifestSHA256(m)
 	return &core.ApplicationRelease{EngineSHA256: p.engine.SHA256, Version: p.descriptor.ProductVersion, Sequence: p.report.Sequence, ManifestSHA256: p.report.DescriptorSHA256, Target: p.report.Target}, nil
 }
-func (d *LocalApplicationController) Apply(ctx context.Context, o core.ApplicationUpdateOperation) (core.ApplicationUpdateReceipt, error) {
+func (d *LocalApplicationController) Apply(ctx context.Context, o core.ApplicationUpdateOperation) (receipt core.ApplicationUpdateReceipt, resultErr error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	p := d.prepared
@@ -134,6 +139,17 @@ func (d *LocalApplicationController) Apply(ctx context.Context, o core.Applicati
 			if name == desktop {
 				candidate.Desktop = filepath.Join(p.report.BundleDirectory, desktop)
 				candidate.DesktopSHA256 = f.SHA256
+			}
+		}
+		if candidate.Desktop == "" {
+			native, cleanup, e := p.nativeUpdateFiles(ctx, o.ID)
+			if e != nil {
+				return core.ApplicationUpdateReceipt{}, fmt.Errorf("%w: %v", core.ErrApplicationUpdateNotStarted, e)
+			}
+			defer func() { resultErr = errors.Join(resultErr, cleanup()) }()
+			candidate.Desktop, candidate.DesktopSHA256 = native.Desktop, native.DesktopSHA256
+			if m.Files["fased-signer"] != "" {
+				candidate.Signer, candidate.SignerSHA256 = native.Signer, native.SignerSHA256
 			}
 		}
 	}

@@ -63,6 +63,8 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	bootstrapSequence := f.String("bootstrap-sequence", "", "verified bootstrap release sequence; no version inference")
 	bootstrapRelease := f.String("bootstrap-release-sha256", "", "verified bootstrap descriptor identity")
 	packageSHA256 := f.String("bundle-sha256", "", "independently obtained SHA-256 of exact bundle.json bytes")
+	nativeBundle := f.String("native-bundle", "", "verified installer native companion")
+	nativeBundleSHA256 := f.String("native-bundle-sha256", "", "exact native companion inventory digest")
 	installRuntime := f.Bool("install-runtime", false, "authorize Ubuntu 24.04's OS package manager to install missing desktop runtime libraries")
 	prepareHost := f.Bool("prepare-host", false, "authorize Ubuntu OS prerequisites and the verified restrictive sandbox policy")
 	if err = f.Parse(remaining); err != nil {
@@ -79,6 +81,9 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	}
 	if *packageSHA256 != "" && (command != "install" || *packageDir == "") {
 		return errors.New("--bundle-sha256 requires install --bundle")
+	}
+	if (*nativeBundle == "") != (*nativeBundleSHA256 == "") || *nativeBundle != "" && (command != "install" || *packageDir == "" || *verificationOutput == "" || *bootstrapSequence == "" || *bootstrapRelease == "" || *desktop != "") {
+		return errors.New("native companion requires one verified installer and bundle")
 	}
 	if command != "install" && (*bootstrapSequence != "" || *bootstrapRelease != "") {
 		return errors.New("bootstrap release metadata is an installation option")
@@ -195,6 +200,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		if err != nil {
 			return err
 		}
+		runningEngine := engine
 		var inventory bundle.Manifest
 		if *packageDir != "" {
 			var canonical string
@@ -214,6 +220,16 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		}
 		if *managedRemote && inventory.Desktop {
 			return errors.New("managed Remote requires a verified headless bundle")
+		}
+		if *nativeBundle != "" && !*vps {
+			native, canonical, err := verifiedNativeInstallation(*nativeBundle, *verificationOutput, *nativeBundleSHA256, runningEngine, inventory)
+			if err != nil {
+				return err
+			}
+			inventory = native
+			*packageDir = canonical
+			engine = filepath.Join(canonical, localinstall.EngineName())
+			*desktop = filepath.Join(canonical, localinstall.DesktopName())
 		}
 		if *vps {
 			if *access != "tailscale" {
@@ -486,6 +502,48 @@ func verifiedInstallationBundle(directory, engine, desktop, pin string) (bundle.
 		}
 	}
 	return m, directory, nil
+}
+
+// The native companion is assembled only beside the held verifier output. Its
+// core, source and version must match the original authenticated headless
+// bundle; its own inventory binds the client and signer copied by install.
+func verifiedNativeInstallation(directory, output, pin, engine string, original bundle.Manifest) (bundle.Manifest, string, error) {
+	var empty bundle.Manifest
+	base, err := filepath.Abs(output)
+	if err != nil || pin == "" || directory != filepath.Join(base, "native-bundle") {
+		return empty, "", errors.New("native companion must belong to the verified acquisition")
+	}
+	info, err := os.Lstat(directory)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return empty, "", errors.New("native companion directory changed")
+	}
+	m, canonical, err := verifiedInstallationBundle(directory, engine, "", pin)
+	if err != nil {
+		return empty, "", err
+	}
+	engineName := localinstall.EngineName()
+	formatOK := original.Schema == 2 && !original.UnsignedEngineering && m.Schema == 3 && !m.UnsignedEngineering
+	if !formatOK || original.Desktop || !m.Desktop || m.Files["fased-signer"].SHA256 == "" || m.Source != original.Source || m.Version != original.Version || len(m.Files) != len(original.Files)+2 || m.Files[engineName] != original.Files[engineName] {
+		return empty, "", errors.New("native companion differs from the verified release")
+	}
+	for name, file := range original.Files {
+		if m.Files[name] != file {
+			return empty, "", errors.New("native companion changed the verified release inventory")
+		}
+	}
+	if compiledNativeSource != original.Source || !releaseNativeDigest(compiledNativeDesktopSHA256) || !releaseNativeDigest(compiledNativeSignerSHA256) || m.Files[localinstall.DesktopName()].SHA256 != compiledNativeDesktopSHA256 || m.Files["fased-signer"].SHA256 != compiledNativeSignerSHA256 {
+		return empty, "", errors.New("native companion differs from the authenticated core's release binding")
+	}
+	return m, canonical, nil
+}
+
+// The attested core carries the hashes of its paired installer payloads. An
+// owner-supplied companion inventory or hash is not release authentication.
+var compiledNativeSource, compiledNativeDesktopSHA256, compiledNativeSignerSHA256 string
+
+func releaseNativeDigest(value string) bool {
+	b, err := hex.DecodeString(value)
+	return err == nil && len(b) == 32 && hex.EncodeToString(b) == value
 }
 
 // Keep the terminal handoff on the installed engine and its existing state.
