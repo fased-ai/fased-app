@@ -36,6 +36,10 @@ type custodyMaintenanceController struct {
 	verifyNative  func(custodyinstall.Manifest, *update.MaintenancePackage) error
 }
 
+// An explicitly compiled controlled build may provide its own fixed channel.
+// Ordinary product builds leave this unset.
+var compiledCustodyUpdateCheck func(int, string) (func(context.Context) (*core.ApplicationRelease, error), error)
+
 func (c *custodyMaintenanceController) completionReady(ctx context.Context, r update.MaintenanceRecord, root string) (bool, error) {
 	if c.pauseStatus == nil || r.Installation == nil {
 		return false, errors.New("original core pause status required")
@@ -406,6 +410,12 @@ func bindCompiledCustodyMaintenance(store *core.Store, owner int, dir string) er
 		return err
 	}
 	check := compiledApplicationUpdateCheck
+	if check == nil && compiledCustodyUpdateCheck != nil {
+		check, err = compiledCustodyUpdateCheck(owner, dir)
+		if err != nil {
+			return err
+		}
+	}
 	if check == nil && compiledApplicationChannel != nil {
 		factory := func(path string) (bootstrap.Options, error) { return channelOptions(compiledApplicationChannel, path) }
 		check = custodyChannelCheck(owner, factory, filepath.Join(dir, "update-channel"), false)

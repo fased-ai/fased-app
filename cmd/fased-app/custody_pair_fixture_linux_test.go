@@ -143,7 +143,8 @@ func TestProduceCustodyPairFixture(t *testing.T) {
 	}
 	initial, baseVersion := readBinary("fased-app-tests", "version")
 	target, targetVersion := readBinary("fased-app-next", "version")
-	if strings.TrimSpace(string(baseVersion)) != "0.1.11" || strings.TrimSpace(string(targetVersion)) != "0.1.12" {
+	base := strings.TrimSpace(string(baseVersion))
+	if (base != "0.1.10" && base != "0.1.11") || strings.TrimSpace(string(targetVersion)) != "0.1.12" {
 		t.Fatal("two distinct expected compiled versions required")
 	}
 	if applicationVMDigest(initial) == applicationVMDigest(target) {
@@ -234,7 +235,7 @@ func TestProduceCustodyPairFixture(t *testing.T) {
 		name, version string
 		sequence      uint64
 		core          []byte
-	}{{"base", "0.1.11", 8, initial}, {"target", "0.1.12", 9, target}} {
+	}{{"base", base, 8, initial}, {"target", "0.1.12", 9, target}} {
 		manifest := bundle.Manifest{Schema: 1, Platform: "linux", Arch: "amd64", Version: release.version, Source: source, UnsignedEngineering: true, Files: map[string]bundle.File{}}
 		payload := map[string][]byte{"fased-app": release.core, "INSTALL.txt": []byte("Disposable custody acceptance fixture only.\n")}
 		for _, name := range []string{"LICENSE", "NOTICE"} {

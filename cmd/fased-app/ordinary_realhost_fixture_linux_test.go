@@ -6,17 +6,21 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/fased-ai/fased-app/internal/bootstrap"
 	"github.com/fased-ai/fased-app/internal/enrollment"
 	"github.com/fased-ai/fased-app/internal/hostplatform"
 	"github.com/fased-ai/fased-app/internal/signer"
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 func TestRealHostFixtureRefusesForeignSourceBeforeDiscovery(t *testing.T) {
@@ -74,5 +78,40 @@ func TestRealHostFixtureRefusesAnotherWorkspace(t *testing.T) {
 	foreign.Data, foreign.UID = hostplatform.FixtureSourceData, os.Getuid()+1
 	if _, err = realHostFixtureEnrollment(t.Context(), foreign, enrollment.Options{}, nil); !errors.Is(err, signer.ErrUnavailable) {
 		t.Fatal("foreign Local owner was not refused before enrollment", err)
+	}
+}
+
+func TestRealHostFixtureHasScopedCustodyUpdateChannel(t *testing.T) {
+	if compiledCustodyUpdateCheck == nil {
+		t.Fatal("the real-host controlled build has no custody update channel")
+	}
+	if _, err := compiledCustodyUpdateCheck(os.Getuid()+1, "/tmp/foreign"); !errors.Is(err, signer.ErrUnavailable) {
+		t.Fatal("a foreign owner or workspace was accepted", err)
+	}
+}
+
+func TestRealHostFixtureUpdateTrustIsLoopbackAndBound(t *testing.T) {
+	seed := bootstrap.Seed{Binding: bootstrap.Binding{Version: 1, Purpose: bootstrap.Purpose, DevelopmentOnly: true, Repository: "fased-ai/fased-app", Channel: "development", Target: update.Target{OS: "linux", Arch: runtime.GOARCH}}, Origin: "https://127.0.0.1:17449"}
+	ca := []byte("disposable local CA")
+	makeInputs := func(s bootstrap.Seed) (realHostFixtureTrust, []byte) {
+		b, err := json.Marshal(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sh, ch := sha256.Sum256(b), sha256.Sum256(ca)
+		return realHostFixtureTrust{Connected: true, SeedSHA256: hex.EncodeToString(sh[:]), CASHA256: hex.EncodeToString(ch[:])}, b
+	}
+	trust, raw := makeInputs(seed)
+	dir := filepath.Join(t.TempDir(), "channel")
+	if o, err := realHostFixtureOptions(dir, trust, raw, ca); err != nil || !o.Development || o.Directory != dir {
+		t.Fatal("bound loopback channel was refused", err)
+	}
+	if _, err := realHostFixtureOptions(dir, trust, raw, []byte("changed CA")); !errors.Is(err, signer.ErrUnavailable) {
+		t.Fatal("changed CA was accepted", err)
+	}
+	seed.Origin = "https://example.com"
+	trust, raw = makeInputs(seed)
+	if _, err := realHostFixtureOptions(dir, trust, raw, ca); !errors.Is(err, signer.ErrUnavailable) {
+		t.Fatal("non-loopback fixture channel was accepted", err)
 	}
 }
