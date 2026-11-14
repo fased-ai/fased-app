@@ -55,6 +55,22 @@ type MaintenanceIdentity struct {
 	Core            bundle.File
 }
 
+// PrepareMaintenanceCandidate re-verifies one retained CI candidate inside
+// the installed helper. The caller cannot select an input path or trust root;
+// both the private source and the acquisition parent are fixed to this owner.
+func PrepareMaintenanceCandidate(ctx context.Context, owner int, o Options, admission CandidateAdmission) (*Prepared, error) {
+	if _, err := maintenance.ValidateProcess(owner); err != nil {
+		return nil, err
+	}
+	parent := filepath.Join(maintenance.OwnerRoot(owner), "fased-app", "install")
+	if filepath.Dir(o.Directory) != parent || !hashOK(admission.PacketSHA256) || o.Development || len(o.TLSCA) != 0 {
+		return nil, errors.New("fixed protected candidate acquisition required")
+	}
+	o.protectedOwner = owner
+	directory := filepath.Join(maintenance.OwnerRoot(owner), "candidate", admission.PacketSHA256)
+	return prepareAttestedCandidate(ctx, o, directory, admission)
+}
+
 // MatchesMaintenanceRelease binds enrollment to the source installation's
 // recorded release identity, including its supported legacy serialization.
 func (p *Prepared) MatchesMaintenanceRelease(sequence uint64, identity string) bool {

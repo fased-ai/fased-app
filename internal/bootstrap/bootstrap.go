@@ -119,6 +119,9 @@ func (p *Prepared) Close() error {
 		if cleanupErr == nil && p.candidate != nil {
 			cleanupErr = p.root.Remove("candidate-installer")
 		}
+		if cleanupErr == nil && p.candidate != nil {
+			cleanupErr = p.root.Remove("candidate-entry")
+		}
 	}
 	return errors.Join(cleanupErr, p.root.Close())
 }

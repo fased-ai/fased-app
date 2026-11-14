@@ -41,6 +41,42 @@ func ReadAuthority(owner int) (Authority, error) {
 	return a, nil
 }
 
+// ReadCandidateReceipt reads only root-owned public metadata. In particular,
+// an app-owned file cannot select a candidate for the privileged worker.
+func ReadCandidateReceipt(owner int) (CandidateReceipt, error) {
+	var r CandidateReceipt
+	if owner <= 0 {
+		return r, errors.New("ordinary maintenance owner required")
+	}
+	f, err := openProtected(OwnerRoot(owner)+"/candidate.json", 8192, 0644)
+	if err != nil {
+		return r, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, 8193))
+	if err != nil || len(b) > 8192 || update.StrictJSON(b, &r) != nil || r.Owner != owner || r.Validate() != nil {
+		return CandidateReceipt{}, errors.New("protected candidate receipt is invalid")
+	}
+	return r, nil
+}
+
+func ReadCandidateOperation(owner int) (CandidateOperation, error) {
+	var r CandidateOperation
+	if owner <= 0 {
+		return r, errors.New("ordinary maintenance owner required")
+	}
+	f, err := openProtected(OwnerRoot(owner)+"/candidate-operation.json", 8192, 0644)
+	if err != nil {
+		return r, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, 8193))
+	if err != nil || len(b) > 8192 || update.StrictJSON(b, &r) != nil || r.Owner != owner || r.Validate() != nil {
+		return CandidateOperation{}, errors.New("protected candidate operation is invalid")
+	}
+	return r, nil
+}
+
 func openProtected(path string, max int64, mode os.FileMode) (*os.File, error) {
 	return update.OpenProtected(path, max, mode)
 }
@@ -62,8 +98,8 @@ func VerifyImage(a Authority) error {
 }
 
 func Call(ctx context.Context, r Request, diagnostics io.Writer) ([]byte, error) {
-	if r.Action == "custody-enrollment-image" {
-		return nil, errors.New("enrollment image requires its bounded stream")
+	if r.Action == "custody-enrollment-image" || r.Action == "candidate-stage" {
+		return nil, errors.New("this maintenance operation requires its bounded stream")
 	}
 	c, b, err := requestCommand(ctx, r, diagnostics)
 	if err != nil {
@@ -80,6 +116,21 @@ func Call(ctx context.Context, r Request, diagnostics io.Writer) ([]byte, error)
 		return nil, errors.New("maintenance result is unconfirmed; preserve the operation")
 	}
 	return result.data, nil
+}
+
+// CandidateStreamCommand invokes the same installed fixed helper; candidate
+// inputs are streamed, never named as a privileged filesystem path.
+func CandidateStreamCommand(ctx context.Context, r Request, diagnostics io.Writer) (*exec.Cmd, []byte, error) {
+	if r.Action != "candidate-stage" {
+		return nil, nil, errors.New("fixed candidate operation required")
+	}
+	c, b, err := requestCommand(ctx, r, diagnostics)
+	if err != nil {
+		return nil, nil, err
+	}
+	frame := append([]byte(CandidateStreamPrefix), b...)
+	frame = append(frame, '\n')
+	return c, frame, nil
 }
 
 // EnrollmentStreamCommand selects the same protected helper entry, but its

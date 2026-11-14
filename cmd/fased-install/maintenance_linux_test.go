@@ -9,12 +9,39 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/bootstrap"
 	"github.com/fased-ai/fased-app/internal/maintenance"
+	"github.com/fased-ai/fased-app/internal/update"
 )
+
+func TestCandidateRecoveryKeepsTheOriginalOperationAfterExpiry(t *testing.T) {
+	r := maintenance.CandidateReceipt{Version: 1, Owner: 1400, Scope: "update", PacketSHA256: strings.Repeat("a", 64), InstallerSHA256: strings.Repeat("b", 64), EngineSHA256: strings.Repeat("c", 64), ProductVersion: "0.1.12", Sequence: 12, ReleaseSHA256: strings.Repeat("d", 64), Target: update.Target{OS: "linux", Arch: "amd64"}, BaseSequence: 11, BaseReleaseSHA256: strings.Repeat("e", 64), BaseInstallation: strings.Repeat("1", 32), BaseManifestSHA: strings.Repeat("f", 64), ExpiresAt: 100}
+	op := maintenance.CandidateOperation{Version: 1, Owner: r.Owner, Scope: r.Scope, PacketSHA256: r.PacketSHA256, OperationID: strings.Repeat("2", 32), RequestSHA256: strings.Repeat("3", 64)}
+	if bind, err := candidateBindingRequired(r, op, nil, time.Unix(99, 0)); err != nil || !bind {
+		t.Fatal("valid manual operation did not bind", err)
+	}
+	if _, err := candidateBindingRequired(r, op, nil, time.Unix(100, 0)); err == nil {
+		t.Fatal("new operation began after admission expired")
+	}
+	if bind, err := candidateBindingRequired(r, op, &op, time.Unix(101, 0)); err != nil || bind {
+		t.Fatal("original interrupted operation could not resume", err)
+	}
+	for _, change := range []func(*maintenance.CandidateOperation){
+		func(v *maintenance.CandidateOperation) { v.OperationID = strings.Repeat("4", 32) },
+		func(v *maintenance.CandidateOperation) { v.RequestSHA256 = strings.Repeat("5", 64) },
+		func(v *maintenance.CandidateOperation) { v.PacketSHA256 = strings.Repeat("6", 64) },
+	} {
+		changed := op
+		change(&changed)
+		if _, err := candidateBindingRequired(r, changed, &op, time.Unix(101, 0)); err == nil {
+			t.Fatal("recovery accepted a different operation")
+		}
+	}
+}
 
 func TestFixtureSuccessorSignerCannotCrossProductionBoundary(t *testing.T) {
 	initial := &bootstrap.WalletPayload{Version: "0.1.11", Source: "source-a"}
@@ -46,6 +73,14 @@ func TestMaintenanceEnrollmentFramePreservesPrivateStream(t *testing.T) {
 	rest, err := io.ReadAll(stream)
 	if err != nil || !bytes.Equal(rest, body) {
 		t.Fatal("private stream bytes changed")
+	}
+	candidate := append([]byte(maintenance.CandidateStreamPrefix+head), body...)
+	got, stream, err = readMaintenanceFrame(t.Context(), bytes.NewReader(candidate))
+	if err != nil || string(got) != head || stream == nil {
+		t.Fatal("candidate stream header not recognized", err)
+	}
+	if rest, err = io.ReadAll(stream); err != nil || !bytes.Equal(rest, body) {
+		t.Fatal("candidate stream bytes changed")
 	}
 	normal := []byte(`{"version":1,"action":"remote-status"}`)
 	got, stream, err = readMaintenanceFrame(t.Context(), bytes.NewReader(normal))

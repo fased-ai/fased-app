@@ -35,6 +35,7 @@ install_packages() {
 }
 profile='' operator='' action=install listen='127.0.0.1:7331'
 wallet_instance='' wallet_network=''
+candidate_dir='' candidate_packet=''
 while (($#)); do
   case "$1" in
     --local) profile=local; shift ;;
@@ -47,6 +48,8 @@ while (($#)); do
     --wallet-network) (($# >= 2)) || die 'Missing network.'; wallet_network=$2; shift 2 ;;
     --operator) (($# >= 2)) || die 'Missing operator.'; operator=$2; shift 2 ;;
     --listen) (($# >= 2)) || die 'Missing listener.'; listen=$2; shift 2 ;;
+    --candidate-dir) (($# >= 2)) || die 'Missing candidate directory.'; candidate_dir=$2; shift 2 ;;
+    --candidate-packet-sha256) (($# >= 2)) || die 'Missing candidate identity.'; candidate_packet=$2; shift 2 ;;
     --help|-h) printf 'Usage: install.sh [--local|--remote|--connect] [--open|--start|--stop|--status|--recover|--update|--setup|--wallets] [--wallet-instance ID --wallet-network NETWORK] [--operator USER] [--listen 127.0.0.1:PORT]\n'; exit 0 ;;
     *) die "Unknown option: $1" ;;
   esac
@@ -104,6 +107,9 @@ if [[ $profile == remote ]]; then
 fi
 if [[ $(/usr/bin/id -u) == 0 && $profile != remote && -z ${SUDO_USER:-} && -z $operator ]]; then
   die 'Run Local/Connect from your ordinary computer account. For a VPS, choose Remote.'
+fi
+if [[ -n $candidate_dir || -n $candidate_packet ]]; then
+  [[ $candidate_dir == /* && $candidate_dir != *$'\n'* && $candidate_dir != *$'\r'* && $candidate_packet =~ ^[a-f0-9]{64}$ && $profile == local && $action == install && -z $operator && $(/usr/bin/id -u) != 0 && $development_only == 0 ]] || die 'Candidate acceptance requires one exact Local package and ordinary owner.'
 fi
 
 owner_maintenance_setup() {
@@ -176,6 +182,12 @@ owner_install() {
   [[ $actual == "$seed_sha256" ]] || die 'Installer trust binding differs.'
   curl_args=(-q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --noproxy '*' --connect-timeout 10 --max-time 180 --max-filesize 134217728 -H 'Accept-Encoding: identity')
   verifier_args=(--seed-file "$work/seed.json" --seed-sha256 "$seed_sha256" --output "$work/verified" --install --profile "$profile" --listen "$listen" --receipt-file "$work/verification.json" --entry-action "$action")
+  if [[ -n $candidate_dir ]]; then
+    [[ -d $candidate_dir && ! -L $candidate_dir && $(/usr/bin/stat -c '%u:%a' "$candidate_dir") == "$(/usr/bin/id -u):700" ]] || die 'Candidate directory must be private and owned by you.'
+    canonical_candidate=$(/usr/bin/realpath -e -- "$candidate_dir") || die 'Candidate directory is unavailable.'
+    [[ $canonical_candidate == "$candidate_dir" ]] || die 'Use the original candidate directory, without links.'
+    verifier_args=(--install-candidate "$candidate_dir" --candidate-packet-sha256 "$candidate_packet" --profile local --listen "$listen")
+  fi
   if [[ $action == wallets ]]; then verifier_args+=(--wallet-instance "$wallet_instance" --wallet-network "$wallet_network"); fi
   if [[ $development_only == 1 ]]; then
     printf '%s' "$fixture_ca_base64" | /usr/bin/base64 --decode > "$work/ca.pem"
@@ -184,7 +196,13 @@ owner_install() {
   fi
   printf 'Downloading and verifying Fased…\n' >&2
   installer="$work/fased-install"
-  if [[ -n ${FASED_PROTECTED_INSTALLER:-} ]]; then
+  if [[ -n $candidate_dir ]]; then
+    candidate_installer="$candidate_dir/fased-install-${target}"
+    [[ -f $candidate_installer && ! -L $candidate_installer && -f $candidate_dir/fased-release.json && ! -L $candidate_dir/fased-release.json ]] || die 'Candidate inventory is missing.'
+    read -r actual _ < <(/usr/bin/sha256sum "$candidate_dir/fased-release.json")
+    [[ $actual == "$candidate_packet" ]] || die 'Candidate identity differs.'
+    /usr/bin/install -m 0500 -- "$candidate_installer" "$installer"
+  elif [[ -n ${FASED_PROTECTED_INSTALLER:-} ]]; then
     [[ $FASED_PROTECTED_INSTALLER == "/var/lib/fased-maintenance/images/$installer_sha256/fased-install" && ! -L $FASED_PROTECTED_INSTALLER && $(/usr/bin/stat -c '%u:%g:%a' "$FASED_PROTECTED_INSTALLER") == 0:0:555 ]] || die 'Protected installer identity differs.'
     installer=$FASED_PROTECTED_INSTALLER
   else
@@ -193,6 +211,9 @@ owner_install() {
   fi
   read -r actual _ < <(/usr/bin/sha256sum "$installer")
   [[ $actual == "$installer_sha256" ]] || die 'Installer checksum differs; nothing was executed.'
+  if [[ -n $candidate_dir ]]; then
+    "$installer" --verify-candidate "$candidate_dir" >/dev/null || die 'Candidate verification failed.'
+  fi
   if [[ -z ${FASED_PROTECTED_INSTALLER:-} ]]; then
     owner_maintenance_setup "$installer"
     if [[ -n ${FASED_PROTECTED_INSTALLER:-} ]]; then installer=$FASED_PROTECTED_INSTALLER; fi

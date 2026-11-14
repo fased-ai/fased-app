@@ -35,6 +35,40 @@ type InstallOptions struct {
 	upgrade                       *UpgradeOptions
 }
 
+// VerifyFreshCandidateInstaller refuses before protected staging unless this
+// process is the exact installer authenticated by the candidate's proof.
+func (p *Prepared) VerifyFreshCandidateInstaller(options InstallOptions) error {
+	if p == nil {
+		return errors.New("verified candidate required")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed || p.root == nil || p.candidate == nil || p.candidate.FreshProfile != "local" {
+		return errors.New("fresh Local candidate required")
+	}
+	if err := p.revalidate(); err != nil {
+		return err
+	}
+	return p.checkFreshCandidate(options)
+}
+
+func (p *Prepared) checkFreshCandidate(options InstallOptions) error {
+	if p.candidate.FreshProfile != "local" || options.Profile != "local" || options.upgrade != nil || options.WalletInstance != "" || options.WalletNetwork != "" {
+		return errors.New("candidate installation requires its exact fresh Local admission")
+	}
+	if err := verifyRunningInstaller(p.descriptor.Release.InstallerSHA256); err != nil {
+		return errors.New("running installer differs from the authenticated candidate")
+	}
+	paths, err := requireFreshCandidatePaths(options)
+	if err != nil {
+		return err
+	}
+	if os.Getuid() != p.candidate.FreshOwner || os.Geteuid() != p.candidate.FreshOwner || paths.Root != p.candidate.FreshRoot || paths.Data != p.candidate.FreshData {
+		return errors.New("fresh candidate target differs from its owner admission")
+	}
+	return nil
+}
+
 // Run uses the already-reviewed ordinary installer/wizard. No arbitrary command,
 // update receipt, owner session or financial permission can select the program.
 func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader, out, errOut io.Writer) error {
@@ -60,18 +94,8 @@ func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader
 		return err
 	}
 	if p.candidate != nil {
-		if p.candidate.FreshProfile != "local" || options.Profile != "local" || options.upgrade != nil || options.WalletInstance != "" || options.WalletNetwork != "" {
-			return errors.New("candidate installation requires its exact fresh Local admission")
-		}
-		if err := verifyRunningInstaller(p.descriptor.Release.InstallerSHA256); err != nil {
-			return errors.New("running installer differs from the authenticated candidate")
-		}
-		paths, err := requireFreshCandidatePaths(options)
-		if err != nil {
+		if err := p.checkFreshCandidate(options); err != nil {
 			return err
-		}
-		if os.Getuid() != p.candidate.FreshOwner || os.Geteuid() != p.candidate.FreshOwner || paths.Root != p.candidate.FreshRoot || paths.Data != p.candidate.FreshData {
-			return errors.New("fresh candidate target differs from its owner admission")
 		}
 	}
 	engine, _ := bundle.Names()
@@ -181,6 +205,10 @@ func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader
 
 // A fresh candidate must not adopt a prior installation or owner data. The
 // existing installer also applies its normal path and identity checks.
+func FreshCandidatePaths(options InstallOptions) (localinstall.Paths, error) {
+	return requireFreshCandidatePaths(options)
+}
+
 func requireFreshCandidatePaths(options InstallOptions) (localinstall.Paths, error) {
 	paths, err := localinstall.DefaultPaths()
 	if err != nil {

@@ -209,7 +209,7 @@ func maintenanceCustodyCommand(action string, args []string, out io.Writer) erro
 				return errors.New("current owner-approved application operation required")
 			}
 			q := maintenance.CustodyUpdateRequest{OperationID: id, Sequence: o.Release.Sequence, ReleaseSHA256: o.Release.ManifestSHA256}
-			if err = maintenanceCustodyAcquire(ctx, a, q); err != nil {
+			if err = maintenanceCustodyAcquire(ctx, a, q, !o.Automatic); err != nil {
 				return err
 			}
 		} else if e != nil {
@@ -329,12 +329,19 @@ func maintenanceCustodyPrepare(ctx context.Context, a maintenance.Authority, q m
 	if errors.Is(err, os.ErrNotExist) {
 		var p *bootstrap.Prepared
 		var e error
+		acquire := func() (*bootstrap.Prepared, error) {
+			candidate, selected, e := candidateAcquisition(ctx, a, o, "fresh", q.OperationID, update.SnapshotDigest("candidate-enrollment-request", q), q.Sequence, q.ReleaseSHA256, q.CoreSHA256, true)
+			if selected || e != nil {
+				return candidate, e
+			}
+			return bootstrap.PrepareMaintenance(ctx, a.Owner, o)
+		}
 		if _, e = os.Lstat(o.Directory); errors.Is(e, os.ErrNotExist) {
-			p, e = bootstrap.PrepareMaintenance(ctx, a.Owner, o)
+			p, e = acquire()
 		} else if e == nil {
 			if _, markerErr := os.Lstat(filepath.Join(o.Directory, "bootstrap.json")); errors.Is(markerErr, os.ErrNotExist) {
 				if e = bootstrap.DiscardIncompleteMaintenance(a.Owner, o); e == nil {
-					p, e = bootstrap.PrepareMaintenance(ctx, a.Owner, o)
+					p, e = acquire()
 				}
 			} else if markerErr != nil {
 				e = markerErr
@@ -477,7 +484,7 @@ func maintenanceCustodyInitialize(ctx context.Context, a maintenance.Authority) 
 	return nil
 }
 
-func maintenanceCustodyAcquire(ctx context.Context, a maintenance.Authority, q maintenance.CustodyUpdateRequest) error {
+func maintenanceCustodyAcquire(ctx context.Context, a maintenance.Authority, q maintenance.CustodyUpdateRequest, manualCandidate bool) error {
 	if !update.IDOK(q.OperationID) || q.Sequence == 0 || len(q.ReleaseSHA256) != 64 {
 		return errors.New("one authenticated custody release required")
 	}
@@ -512,7 +519,10 @@ func maintenanceCustodyAcquire(ctx context.Context, a maintenance.Authority, q m
 	if err != nil {
 		return err
 	}
-	p, err := bootstrap.PrepareMaintenance(ctx, a.Owner, o)
+	p, selected, err := candidateAcquisition(ctx, a, o, "update", q.OperationID, update.SnapshotDigest("candidate-update-request", q), q.Sequence, q.ReleaseSHA256, "", manualCandidate && !q.Bootstrap)
+	if err == nil && !selected {
+		p, err = bootstrap.PrepareMaintenance(ctx, a.Owner, o)
+	}
 	if err != nil {
 		return err
 	}

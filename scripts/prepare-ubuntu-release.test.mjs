@@ -7,6 +7,7 @@ import {
   compatibilityConfig,
   candidateInventory,
   expectedProvenance,
+  fedoraPredecessorConfig,
   releaseContext,
   validateConfig,
   verifiedCandidate,
@@ -62,6 +63,42 @@ const env = {
   RUNNER_OS: "Linux",
   RUNNER_ARCH: "X64",
 };
+
+test("Fedora test predecessor is package-only and cannot select a publisher", () => {
+  const c = { ...rawConfig, version: "0.1.12" };
+  const staged = {
+    ...env,
+    GITHUB_EVENT_NAME: "workflow_dispatch",
+    GITHUB_REF: "refs/heads/main",
+    GITHUB_WORKFLOW_REF: `${c.repository}/${c.workflow}@refs/heads/main`,
+    FASED_RELEASE_SOURCE: source.commit,
+    FASED_PACKAGE_ONLY: "true",
+    FASED_FEDORA_PREDECESSOR: "true",
+  };
+  assert.equal(fedoraPredecessorConfig(c, staged, "prepare").version, "0.1.10");
+  assert.equal(c.version, "0.1.12");
+  for (const patch of [
+    { FASED_PACKAGE_ONLY: "false" },
+    { GITHUB_REF: "refs/heads/other" },
+    { GITHUB_REPOSITORY_ID: "7" },
+    { FASED_RELEASE_SOURCE: "b".repeat(40) },
+    { FASED_FEDORA_PREDECESSOR: "unknown" },
+  ]) {
+    assert.throws(() =>
+      fedoraPredecessorConfig(c, { ...staged, ...patch }, "prepare"),
+    );
+  }
+  for (const command of ["publisher", "replay", "signer-sign"]) {
+    assert.throws(() => fedoraPredecessorConfig(c, staged, command));
+  }
+  assert.throws(
+    () => verifiedCandidate(c, { version: "0.1.10" }, {}, {}, {}, {}),
+    /Candidate\/public approval identity changed/,
+  );
+  assert.throws(() =>
+    fedoraPredecessorConfig({ ...c, version: "0.1.13" }, staged, "prepare"),
+  );
+});
 
 test("production trust inputs are explicit; configuration cannot redirect authority", () => {
   assert.deepEqual(validateConfig(unconfigured()), ["seedFile", "seedSha256"]);
@@ -607,6 +644,30 @@ test("staged release has one pinned unpublished Ubuntu build", () => {
   assert.match(
     checks,
     /go list [^\n]+\.\/cmd\/fased-release-candidate > \.evidence\/core-test-packages.txt/,
+  );
+});
+
+test("Fedora predecessor workflow cannot enter VM acceptance or candidate replay", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/release.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    workflow,
+    /fedora_predecessor:\n(?:.*\n)*?\s+default: false\n\s+type: boolean/,
+  );
+  assert.match(
+    workflow,
+    /FASED_FEDORA_PREDECESSOR.*== true[\s\S]*?FASED_PACKAGE_ONLY.*!= true[\s\S]*?FASED_REPLAY_RUN_ID/,
+  );
+  assert.match(workflow, /fedora-test-predecessor.*release-candidate/);
+  const installed = workflow.slice(
+    workflow.indexOf("  installed-acceptance:\n"),
+  );
+  assert.match(
+    installed.split("\n").find((line) => line.trimStart().startsWith("if:")) ??
+      "",
+    /!inputs\.package_only/,
   );
 });
 

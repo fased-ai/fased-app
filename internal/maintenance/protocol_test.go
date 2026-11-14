@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 func TestMaintenanceRequestsNeverAdmitCommandOrPathOverrides(t *testing.T) {
@@ -22,6 +24,46 @@ func TestMaintenanceRequestsNeverAdmitCommandOrPathOverrides(t *testing.T) {
 	} {
 		if _, err := DecodeRequest([]byte(data)); err == nil {
 			t.Fatal("unbounded maintenance request admitted")
+		}
+	}
+}
+
+func TestCandidateReceiptBindsOneInstallationAndCannotExpandScope(t *testing.T) {
+	r := CandidateReceipt{Version: 1, Owner: 1400, Scope: "update", PacketSHA256: strings.Repeat("a", 64), InstallerSHA256: strings.Repeat("b", 64), EngineSHA256: strings.Repeat("c", 64), ProductVersion: "0.1.12", Sequence: 12, ReleaseSHA256: strings.Repeat("d", 64), Target: update.Target{OS: "linux", Arch: "amd64"}, BaseSequence: 11, BaseReleaseSHA256: strings.Repeat("e", 64), BaseInstallation: strings.Repeat("1", 32), BaseManifestSHA: strings.Repeat("f", 64), ExpiresAt: 100}
+	if !r.MatchesBase(1400, 11, r.BaseReleaseSHA256, r.BaseInstallation, r.BaseManifestSHA) {
+		t.Fatal("matching protected installation refused")
+	}
+	for _, change := range []func(*CandidateReceipt){
+		func(v *CandidateReceipt) { v.Owner++ },
+		func(v *CandidateReceipt) { v.Scope = "fresh" },
+		func(v *CandidateReceipt) { v.BaseSequence++ },
+		func(v *CandidateReceipt) { v.BaseReleaseSHA256 = strings.Repeat("a", 64) },
+		func(v *CandidateReceipt) { v.BaseInstallation = strings.Repeat("2", 32) },
+		func(v *CandidateReceipt) { v.BaseManifestSHA = strings.Repeat("b", 64) },
+		func(v *CandidateReceipt) { v.Sequence = v.BaseSequence },
+	} {
+		v := r
+		change(&v)
+		if v.MatchesBase(1400, 11, r.BaseReleaseSHA256, r.BaseInstallation, r.BaseManifestSHA) {
+			t.Fatal("candidate crossed its protected baseline")
+		}
+	}
+}
+
+func TestCandidateRequestContainsOnlyExactPacketAndScope(t *testing.T) {
+	good := `{"version":1,"action":"candidate-stage","candidate":{"packetSha256":"` + strings.Repeat("a", 64) + `","scope":"update"}}`
+	if _, err := DecodeRequest([]byte(good)); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{
+		strings.Replace(good, `"scope":"update"`, `"scope":"update","path":"/tmp/target"`, 1),
+		strings.Replace(good, `"scope":"update"`, `"scope":"automatic"`, 1),
+		strings.Replace(good, strings.Repeat("a", 64), strings.Repeat("g", 64), 1),
+		strings.Replace(good, `"action":"candidate-stage"`, `"action":"custody-initialize"`, 1),
+		strings.Replace(good, `"version":1`, `"version":1,"serve":{}`, 1),
+	} {
+		if _, err := DecodeRequest([]byte(bad)); err == nil {
+			t.Fatal("unbounded candidate request admitted", bad)
 		}
 	}
 }

@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,9 +15,58 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 )
+
+func TestCandidateUsesTheSharedCustodyCheckAndManualWorker(t *testing.T) {
+	packageFor := func(version string, sequence uint64, release string) *update.MaintenancePackage {
+		return &update.MaintenancePackage{Version: version, Source: strings.Repeat("a", 40), Sequence: sequence, ReleaseSHA256: release, DevelopmentOnly: true, Components: []update.Component{
+			{Version: version, Contract: core.OrdinaryUpdateContract(), Artifact: update.Artifact{File: "fased-app", Size: 1, SHA256: strings.Repeat("b", 64)}},
+			{Version: version, Contract: signer.OrdinaryUpdateContract(), Artifact: update.Artifact{File: "fased-signer", Size: 1, SHA256: strings.Repeat("c", 64)}},
+		}}
+	}
+	base := packageFor("0.1.11", 11, strings.Repeat("1", 64))
+	target := packageFor("0.1.12", 12, strings.Repeat("2", 64))
+	manifest := custodyinstall.Manifest{ID: strings.Repeat("3", 32), Owner: 1400}
+	receipt := maintenance.CandidateReceipt{Version: 1, Owner: 1400, Scope: "update", PacketSHA256: strings.Repeat("4", 64), InstallerSHA256: strings.Repeat("5", 64), EngineSHA256: strings.Repeat("b", 64), ProductVersion: target.Version, Sequence: target.Sequence, ReleaseSHA256: target.ReleaseSHA256, Target: update.Target{OS: "linux", Arch: "amd64"}, BaseSequence: base.Sequence, BaseReleaseSHA256: base.ReleaseSHA256, BaseInstallation: manifest.ID, BaseManifestSHA: update.SnapshotDigest("candidate-base-manifest:v1", manifest), ExpiresAt: 100}
+	r := update.MaintenanceRecord{Phase: "ready", Start: "base", PreviousPackage: base, Package: target}
+	clock := time.Unix(99, 0)
+	started := ""
+	c := custodyMaintenanceController{owner: 1400, readRecord: func(int) (update.MaintenanceRecord, error) { return r, nil }, readCandidate: func(int) (maintenance.CandidateReceipt, error) { return receipt, nil }, startWorker: func(_ context.Context, id string) error { started = id; return nil }}
+	c.check = func(context.Context) (*core.ApplicationRelease, error) {
+		installed, err := custodyInstalledPackage(r)
+		if err != nil {
+			return nil, err
+		}
+		return candidateCustodyRelease(receipt, c.owner, *installed, manifest, clock), nil
+	}
+	release, err := c.Check(t.Context())
+	if err != nil || release == nil || release.ManifestSHA256 != target.ReleaseSHA256 {
+		t.Fatal("shared controller did not expose the selected candidate", release, err)
+	}
+	id := update.NewProbe()
+	// An automatic worker must not consume a maintainer-only candidate.
+	active := receipt
+	active.ExpiresAt = time.Now().Add(time.Minute).Unix()
+	c.readCandidate = func(int) (maintenance.CandidateReceipt, error) { return active, nil }
+	if _, err = c.Apply(t.Context(), core.ApplicationUpdateOperation{ID: id, Release: release, Automatic: true}); !errors.Is(err, core.ErrApplicationUpdateNotStarted) || started != "" {
+		t.Fatal("automatic update consumed a manual candidate", started, err)
+	}
+	if _, err = c.Apply(t.Context(), core.ApplicationUpdateOperation{ID: id, Release: release}); err != nil || started != id {
+		t.Fatal("manual update did not use the original worker", started, err)
+	}
+	clock = time.Unix(100, 0)
+	if got, err := c.Check(t.Context()); err != nil || got != nil {
+		t.Fatal("expired admission remained available", got, err)
+	}
+	clock = time.Unix(99, 0)
+	r.Phase, r.Start = "completed", "target"
+	if got, err := c.Check(t.Context()); err != nil || got != nil {
+		t.Fatal("completed candidate was offered again", got, err)
+	}
+}
 
 func fixtureCustodyPause(id, manifest string) update.CorePauseReceipt {
 	snapshot := update.CoreSnapshot{Version: 1, BootID: update.NewProbe(), ProbeID: update.NewProbe(), InstanceID: "fixture-instance", State: update.State{Name: "core-db", Version: 1, Anchor: strings.Repeat("d", 64)}}

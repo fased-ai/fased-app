@@ -3,6 +3,7 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -16,6 +17,62 @@ import (
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/update"
 )
+
+func TestCandidateStreamKeepsTheAttestedPairAndRefusesChangedInput(t *testing.T) {
+	f, options, payloads := attestedFixture(t, "staged")
+	source := filepath.Join(f.parent, "candidate-stream-source")
+	if err := os.Mkdir(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range payloads {
+		if err := os.WriteFile(filepath.Join(source, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := CandidateAdmission{PacketSHA256: digest(payloads[AttestedPacketFile]), OperationID: strings.Repeat("1", 32), BaselineSHA256: strings.Repeat("2", 64), ExpiresAt: f.now.Add(10 * time.Minute).Unix()}
+	o := Options{Seed: options.Seed, SeedSHA256: options.SeedSHA256, Directory: filepath.Join(f.parent, "candidate-stream-held"), now: options.now}
+	p, err := PrepareAttestedCandidate(t.Context(), o, source, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	var stream bytes.Buffer
+	if err = p.WriteCandidate(t.Context(), &stream); err != nil {
+		t.Fatal(err)
+	}
+	privateTemp := func() string {
+		dir := t.TempDir()
+		if err := os.Chmod(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	destination := privateTemp()
+	if err = ReceiveCandidate(t.Context(), bytes.NewReader(stream.Bytes()), destination, a.PacketSHA256); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = VerifyAttestedCandidate(o, destination); err != nil {
+		t.Fatal("streamed candidate lost its independent proof", err)
+	}
+	altered := append([]byte(nil), stream.Bytes()...)
+	index := bytes.Index(altered, payloads[archiveTarget])
+	if index < 0 {
+		t.Fatal("archive was not present in the stream")
+	}
+	altered[index] ^= 1
+	for _, bad := range [][]byte{stream.Bytes()[:len(stream.Bytes())/2], altered} {
+		dir := privateTemp()
+		if err = ReceiveCandidate(t.Context(), bytes.NewReader(bad), dir, a.PacketSHA256); err == nil {
+			t.Fatal("truncated or changed candidate was accepted")
+		}
+	}
+	if err = ReceiveCandidate(t.Context(), bytes.NewReader(stream.Bytes()), privateTemp(), strings.Repeat("f", 64)); err == nil {
+		t.Fatal("different candidate packet was accepted")
+	}
+	if err = ReceiveCandidate(t.Context(), bytes.NewReader(stream.Bytes()), destination, a.PacketSHA256); err == nil {
+		t.Fatal("existing candidate destination was overwritten")
+	}
+}
 
 func TestAttestedFreshCandidateCLIUsesExistingWizard(t *testing.T) {
 	installer := filepath.Join(t.TempDir(), "installer.test")

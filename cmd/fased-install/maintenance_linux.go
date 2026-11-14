@@ -142,10 +142,7 @@ func maintenanceRequestCommand(args []string, in io.Reader, out io.Writer) error
 	if err != nil {
 		return err
 	}
-	if stream != nil {
-		if r.Action != "custody-enrollment-image" {
-			return errors.New("only enrollment images use the private stream")
-		}
+	if stream != nil && r.Action == "custody-enrollment-image" {
 		a, err = maintenance.ValidateProcess(owner)
 		if err != nil {
 			return err
@@ -156,6 +153,9 @@ func maintenanceRequestCommand(args []string, in io.Reader, out io.Writer) error
 	}
 	if r.Action == "custody-enrollment-image" {
 		return errors.New("enrollment image stream required")
+	}
+	if (r.Action == "candidate-stage") != (stream != nil) {
+		return errors.New("candidate staging requires its fixed private stream")
 	}
 	// The directory is protected by ValidateProcess. One OS lock serializes
 	// mutation across callers; no owner-supplied command or pathname is run.
@@ -170,13 +170,25 @@ func maintenanceRequestCommand(args []string, in io.Reader, out io.Writer) error
 	if err != nil {
 		return err
 	}
-	if a.Profile != "remote" && r.Action != "custody-update" && r.Action != "custody-initialize" && r.Action != "custody-enrollment-prepare" && r.Action != "custody-enrollment-empty" && r.Action != "custody-enrollment-stage" && r.Action != "custody-enrollment-cutover" && r.Action != "custody-enrollment-activation" {
+	if a.Profile != "remote" && r.Action != "candidate-stage" && r.Action != "custody-update" && r.Action != "custody-initialize" && r.Action != "custody-enrollment-prepare" && r.Action != "custody-enrollment-empty" && r.Action != "custody-enrollment-stage" && r.Action != "custody-enrollment-cutover" && r.Action != "custody-enrollment-activation" {
 		return errors.New("Remote setup authority required")
 	}
 	workCtx, stop := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer stop()
+	if stream != nil {
+		if closer, ok := in.(io.Closer); ok {
+			stopClose := context.AfterFunc(workCtx, func() { _ = closer.Close() })
+			defer stopClose()
+		}
+	}
 	var payload json.RawMessage
 	switch r.Action {
+	case "candidate-stage":
+		var receipt maintenance.CandidateReceipt
+		receipt, err = maintenanceStageCandidate(workCtx, a, *r.Candidate, stream)
+		if err == nil {
+			payload, err = json.Marshal(receipt)
+		}
 	case "custody-enrollment-activation":
 		var source enrollment.ProtectedSource
 		source, err = protectedEnrollmentSource(a)
@@ -229,7 +241,7 @@ func maintenanceRequestCommand(args []string, in io.Reader, out io.Writer) error
 	case "custody-initialize":
 		err = maintenanceCustodyInitialize(workCtx, a)
 	case "custody-update":
-		err = maintenanceCustodyAcquire(workCtx, a, *r.Custody)
+		err = maintenanceCustodyAcquire(workCtx, a, *r.Custody, false)
 		if err == nil {
 			err = custodyinstall.ReconcileProtectedSetup(workCtx, a.Owner)
 		}
@@ -286,12 +298,15 @@ func readMaintenanceFrame(ctx context.Context, in io.Reader) ([]byte, io.Reader,
 	ch := make(chan result, 1)
 	go func() {
 		reader := bufio.NewReaderSize(in, (32<<10)+1)
-		prefix, e := reader.Peek(len(maintenance.EnrollmentStreamPrefix))
-		if e == nil && string(prefix) == maintenance.EnrollmentStreamPrefix {
-			_, _ = reader.Discard(len(maintenance.EnrollmentStreamPrefix))
+		for _, prefix := range []string{maintenance.EnrollmentStreamPrefix, maintenance.CandidateStreamPrefix} {
+			peeked, e := reader.Peek(len(prefix))
+			if e != nil || string(peeked) != prefix {
+				continue
+			}
+			_, _ = reader.Discard(len(prefix))
 			line, err := reader.ReadSlice('\n')
 			if err != nil || len(line) > 32<<10 {
-				ch <- result{err: errors.New("invalid enrollment stream header")}
+				ch <- result{err: errors.New("invalid maintenance stream header")}
 				return
 			}
 			ch <- result{data: append([]byte(nil), line...), rest: reader}

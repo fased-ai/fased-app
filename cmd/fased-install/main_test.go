@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -50,6 +51,25 @@ func TestFreshCandidateRejectsUntrustedOrMixedModes(t *testing.T) {
 	}
 	if _, err := os.Lstat(directory); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("refusal changed candidate path", err)
+	}
+}
+
+func TestUpdateCandidateRejectsMixedModesBeforeReadingInstallation(t *testing.T) {
+	previous := compiledFirstInstallBinding
+	compiledFirstInstallBinding = &firstInstallBinding{Seed: []byte("not read"), SHA256: strings.Repeat("a", 64)}
+	t.Cleanup(func() { compiledFirstInstallBinding = previous })
+	directory := filepath.Join(t.TempDir(), "candidate")
+	packet := strings.Repeat("a", 64)
+	for _, args := range [][]string{
+		{"--stage-candidate", directory},
+		{"--stage-candidate", directory, "--candidate-packet-sha256", strings.ToUpper(packet)},
+		{"--stage-candidate", directory, "--candidate-packet-sha256", packet, "--profile", "local"},
+		{"--stage-candidate", directory, "--candidate-packet-sha256", packet, "--development"},
+		{"--stage-candidate", directory, "--candidate-packet-sha256", packet, "--upgrade"},
+	} {
+		if err := run(args, nil, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "manual candidate update") {
+			t.Fatal("mixed or unbound candidate update accepted", args, err)
+		}
 	}
 }
 
@@ -113,15 +133,59 @@ func TestAttestedCandidateCLI(t *testing.T) {
 		}
 	}
 	if os.Getenv("FASED_FRESH_CANDIDATE_TEST") == "1" {
+		previousStage := candidateMaintenanceStage
+		staged := false
+		candidateMaintenanceStage = func(ctx context.Context, p *bootstrap.Prepared, packet, scope string, _ io.Writer) error {
+			if p == nil || packet == "" || scope != "fresh" {
+				return errors.New("wrong candidate staging request")
+			}
+			var stream bytes.Buffer
+			if err := p.WriteCandidate(ctx, &stream); err != nil {
+				return err
+			}
+			destination := t.TempDir()
+			if err := os.Chmod(destination, 0700); err != nil {
+				return err
+			}
+			if err := bootstrap.ReceiveCandidate(ctx, &stream, destination, packet); err != nil {
+				return err
+			}
+			if _, err := bootstrap.VerifyAttestedCandidate(bootstrap.Options{Seed: seed, SeedSHA256: hex.EncodeToString(sum[:])}, destination); err != nil {
+				return err
+			}
+			staged = true
+			return nil
+		}
+		defer func() { candidateMaintenanceStage = previousStage }()
 		packet, e := os.ReadFile(filepath.Join(dir, bootstrap.AttestedPacketFile))
 		if e != nil {
 			t.Fatal(e)
 		}
 		digest := sha256.Sum256(packet)
 		parent := filepath.Dir(dir)
-		args := []string{"--install-candidate", dir, "--candidate-packet-sha256", hex.EncodeToString(digest[:]), "--profile", "local", "--prefix", filepath.Join(parent, "fresh-app"), "--data-dir", filepath.Join(parent, "fresh-data"), "--start=false"}
+		app := filepath.Join(parent, "fresh-app")
+		args := []string{"--install-candidate", dir, "--candidate-packet-sha256", hex.EncodeToString(digest[:]), "--profile", "local", "--prefix", app, "--data-dir", filepath.Join(parent, "fresh-data"), "--start=false"}
+		if e = os.Mkdir(app, 0700); e != nil {
+			t.Fatal(e)
+		}
+		sentinel := filepath.Join(app, "preserve")
+		if e = os.WriteFile(sentinel, []byte("original"), 0600); e != nil {
+			t.Fatal(e)
+		}
+		if e = run(args, strings.NewReader(""), io.Discard, io.Discard); e == nil || staged {
+			t.Fatal("existing data reached protected candidate staging", e)
+		}
+		if b, e := os.ReadFile(sentinel); e != nil || string(b) != "original" {
+			t.Fatal("existing data changed", e)
+		}
+		if e = os.Remove(sentinel); e != nil {
+			t.Fatal(e)
+		}
 		if e = run(args, strings.NewReader(""), io.Discard, io.Discard); e != nil {
 			t.Fatal("actual candidate entry did not reach the verified Local wizard", e)
+		}
+		if !staged {
+			t.Fatal("candidate entry did not request protected staging")
 		}
 	}
 }

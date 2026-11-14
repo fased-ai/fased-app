@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/bootstrap"
-	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -35,6 +34,10 @@ type firstInstallBinding struct {
 // Public verifier/root material only; nil keeps publication/activation unapplied.
 // Publisher review supplies this Go binding, never a customer form or API key.
 var compiledFirstInstallBinding *firstInstallBinding
+
+// Tests can substitute a nonprivileged receiver; production keeps the fixed
+// installed maintenance entry and has no runtime override.
+var candidateMaintenanceStage = stageAttestedCandidate
 
 func retailInstallerOptions(binding *firstInstallBinding, cache string) (bootstrap.Options, error) {
 	if binding == nil || len(binding.Seed) == 0 {
@@ -95,12 +98,49 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	entryAction := f.String("entry-action", "", "fixed installed-instance action for the entry launcher")
 	verifyCandidate := f.String("verify-candidate", "", "verify a retained release candidate without installation")
 	installCandidate := f.String("install-candidate", "", "install one independently attested Local candidate")
+	stageCandidate := f.String("stage-candidate", "", "admit one independently attested manual update candidate")
 	candidatePacket := f.String("candidate-packet-sha256", "", "exact reviewed candidate packet digest")
 	if err := f.Parse(args); err != nil {
 		return err
 	}
 	if f.NArg() != 0 {
 		return errors.New("unexpected installer arguments")
+	}
+	if *stageCandidate != "" {
+		mixed := false
+		f.Visit(func(flag *flag.Flag) {
+			if flag.Name != "stage-candidate" && flag.Name != "candidate-packet-sha256" {
+				mixed = true
+			}
+		})
+		digest, e := hex.DecodeString(*candidatePacket)
+		if mixed || !filepath.IsAbs(*stageCandidate) || filepath.Clean(*stageCandidate) != *stageCandidate || len(digest) != 32 || hex.EncodeToString(digest) != *candidatePacket || e != nil || compiledFirstInstallBinding == nil {
+			return errors.New("manual candidate update requires its exact packet and compiled installer trust")
+		}
+		baseline, e := candidateUpdateBaseline()
+		if e != nil {
+			return e
+		}
+		cache, e := os.UserCacheDir()
+		if e != nil {
+			return e
+		}
+		options, e := retailInstallerOptions(compiledFirstInstallBinding, cache)
+		if e != nil {
+			return e
+		}
+		admission := bootstrap.CandidateAdmission{PacketSHA256: *candidatePacket, OperationID: update.NewProbe(), BaselineSHA256: baseline, ExpiresAt: time.Now().Add(15 * time.Minute).Unix()}
+		p, e := bootstrap.PrepareAttestedCandidate(context.Background(), options, *stageCandidate, admission)
+		if e != nil {
+			return e
+		}
+		defer p.Close()
+		if e = candidateMaintenanceStage(context.Background(), p, *candidatePacket, "update", errOut); e != nil {
+			return e
+		}
+		p.RetainAcquisitionEvidence()
+		_, e = fmt.Fprintln(out, "Candidate ready for manual Update.")
+		return e
 	}
 	if *installCandidate != "" || *candidatePacket != "" {
 		mixed := false
@@ -115,6 +155,11 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		if mixed || !filepath.IsAbs(*installCandidate) || filepath.Clean(*installCandidate) != *installCandidate || len(digest) != 32 || hex.EncodeToString(digest) != *candidatePacket || e != nil || *profile != "local" || compiledFirstInstallBinding == nil {
 			return errors.New("fresh Local candidate requires its exact packet and compiled installer trust")
 		}
+		installOptions := bootstrap.InstallOptions{Prefix: *prefix, DataDirectory: *data, Start: *start, Profile: "local", Listen: *listen}
+		paths, e := bootstrap.FreshCandidatePaths(installOptions)
+		if e != nil {
+			return e
+		}
 		cache, e := os.UserCacheDir()
 		if e != nil {
 			return e
@@ -123,23 +168,20 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		if e != nil {
 			return e
 		}
-		paths, e := localinstall.DefaultPaths()
-		if e != nil {
-			return e
-		}
-		if *prefix != "" {
-			paths.Root = *prefix
-		}
-		if *data != "" {
-			paths.Data = *data
-		}
 		admission := bootstrap.CandidateAdmission{PacketSHA256: *candidatePacket, OperationID: update.NewProbe(), FreshProfile: "local", FreshOwner: os.Getuid(), FreshRoot: paths.Root, FreshData: paths.Data, ExpiresAt: time.Now().Add(15 * time.Minute).Unix()}
 		p, e := bootstrap.PrepareAttestedCandidate(context.Background(), options, *installCandidate, admission)
 		if e != nil {
 			return e
 		}
 		defer p.Close()
-		return p.Run(context.Background(), bootstrap.InstallOptions{Prefix: *prefix, DataDirectory: *data, Start: *start, Profile: "local", Listen: *listen}, in, out, errOut)
+		if e = p.VerifyFreshCandidateInstaller(installOptions); e != nil {
+			return e
+		}
+		if e = candidateMaintenanceStage(context.Background(), p, *candidatePacket, "fresh", errOut); e != nil {
+			return e
+		}
+		p.RetainAcquisitionEvidence()
+		return p.Run(context.Background(), installOptions, in, out, errOut)
 	}
 	if *verifyCandidate != "" {
 		mixed := false

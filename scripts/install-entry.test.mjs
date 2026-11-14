@@ -488,3 +488,47 @@ test("Wallets console consent keeps verified acquisition, owner drop and tempora
   assert.ok(!script.includes("NOPASSWD: ALL"));
   assert.ok(!script.includes("--wallet-key"));
 });
+
+test("candidate Local entry verifies the pinned installer before protected setup", () => {
+  const script = renderEntry(template, config);
+  const verify = script.indexOf(
+    '"$installer" --verify-candidate "$candidate_dir"',
+  );
+  const setup = script.indexOf('owner_maintenance_setup "$installer"', verify);
+  assert.ok(verify > 0 && setup > verify);
+  assert.ok(
+    script.includes(
+      '--install-candidate "$candidate_dir" --candidate-packet-sha256 "$candidate_packet"',
+    ),
+  );
+  const first = script.indexOf(
+    "if [[ -n $candidate_dir || -n $candidate_packet ]]",
+  );
+  const last = script.indexOf("\nfi\n\nowner_maintenance_setup()", first);
+  assert.ok(first > 0 && last > first);
+  const check = script.slice(first, last + "\nfi".length);
+  const run = (directory, digest, profile, action) =>
+    spawnSync("bash", [
+      "-c",
+      `
+    candidate_dir=$1 candidate_packet=$2 profile=$3 action=$4 operator='' development_only=0
+    die() { exit 1; }
+    ${check}
+  `,
+      "candidate",
+      directory,
+      digest,
+      profile,
+      action,
+    ]);
+  const digest = "a".repeat(64);
+  assert.equal(run("/tmp/candidate", digest, "local", "install").status, 0);
+  for (const args of [
+    ["relative", digest, "local", "install"],
+    ["/tmp/candidate", digest, "remote", "install"],
+    ["/tmp/candidate", digest, "local", "update"],
+    ["/tmp/candidate", "bad", "local", "install"],
+  ]) {
+    assert.notEqual(run(...args).status, 0);
+  }
+});

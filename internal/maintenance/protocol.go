@@ -32,9 +32,81 @@ type Request struct {
 	Custody    *CustodyUpdateRequest          `json:"custody,omitempty"`
 	Enrollment *CustodyEnrollmentRequest      `json:"enrollment,omitempty"`
 	Image      *CustodyEnrollmentImageRequest `json:"image,omitempty"`
+	Candidate  *CandidateRequest              `json:"candidate,omitempty"`
 }
 
 const EnrollmentStreamPrefix = "FASED-ENROLLMENT-STREAM-1\n"
+const CandidateStreamPrefix = "FASED-CANDIDATE-STREAM-1\n"
+
+// CandidateRequest carries an exact public CI artifact identity, never a
+// caller-selected root path, command, trust root, or network endpoint.
+type CandidateRequest struct {
+	PacketSHA256 string `json:"packetSha256"`
+	Scope        string `json:"scope"`
+}
+
+// CandidateReceipt is public release metadata written only after the fixed
+// helper verifies the exact CI artifact. It grants no signer or trade access.
+type CandidateReceipt struct {
+	Version           int           `json:"version"`
+	Owner             int           `json:"owner"`
+	Scope             string        `json:"scope"`
+	PacketSHA256      string        `json:"packetSha256"`
+	InstallerSHA256   string        `json:"installerSha256"`
+	EngineSHA256      string        `json:"engineSha256"`
+	ProductVersion    string        `json:"productVersion"`
+	Sequence          uint64        `json:"sequence,string"`
+	ReleaseSHA256     string        `json:"releaseSha256"`
+	Target            update.Target `json:"target"`
+	BaseSequence      uint64        `json:"baseSequence,string,omitempty"`
+	BaseReleaseSHA256 string        `json:"baseReleaseSha256,omitempty"`
+	BaseInstallation  string        `json:"baseInstallation,omitempty"`
+	BaseManifestSHA   string        `json:"baseManifestSha256,omitempty"`
+	ExpiresAt         int64         `json:"expiresAt,omitempty"`
+}
+
+// CandidateOperation binds an admitted candidate to the first authorized
+// operation. It remains valid for that same recovery after admission expires.
+type CandidateOperation struct {
+	Version       int    `json:"version"`
+	Owner         int    `json:"owner"`
+	Scope         string `json:"scope"`
+	PacketSHA256  string `json:"packetSha256"`
+	OperationID   string `json:"operationId"`
+	RequestSHA256 string `json:"requestSha256"`
+}
+
+func (o CandidateOperation) Validate() error {
+	if o.Version != 1 || o.Owner <= 0 || (o.Scope != "fresh" && o.Scope != "update") || !canonicalSHA256(o.PacketSHA256) || !update.IDOK(o.OperationID) || !canonicalSHA256(o.RequestSHA256) {
+		return errors.New("invalid protected candidate operation")
+	}
+	return nil
+}
+
+func (r CandidateReceipt) Validate() error {
+	if r.Version != 1 || r.Owner <= 0 || !canonicalSHA256(r.PacketSHA256) || !canonicalSHA256(r.InstallerSHA256) || !canonicalSHA256(r.EngineSHA256) || !canonicalSHA256(r.ReleaseSHA256) || r.ProductVersion == "" || len(r.ProductVersion) > 64 || r.Sequence == 0 || r.Target != (update.Target{OS: "linux", Arch: "amd64"}) {
+		return errors.New("invalid protected candidate identity")
+	}
+	switch r.Scope {
+	case "fresh":
+		if r.BaseSequence != 0 || r.BaseReleaseSHA256 != "" || r.BaseInstallation != "" || r.BaseManifestSHA != "" || r.ExpiresAt != 0 {
+			return errors.New("fresh candidate cannot authorize an update")
+		}
+	case "update":
+		if r.BaseSequence == 0 || !canonicalSHA256(r.BaseReleaseSHA256) || !update.IDOK(r.BaseInstallation) || !canonicalSHA256(r.BaseManifestSHA) || r.Sequence <= r.BaseSequence || r.ExpiresAt <= 0 {
+			return errors.New("candidate update must bind its predecessor")
+		}
+	default:
+		return errors.New("invalid protected candidate scope")
+	}
+	return nil
+}
+
+// MatchesBase is shared by the visible check and the protected worker. An
+// identical released version on another installation is not the same base.
+func (r CandidateReceipt) MatchesBase(owner int, sequence uint64, release, installation, manifest string) bool {
+	return r.Validate() == nil && r.Owner == owner && r.Scope == "update" && r.BaseSequence == sequence && r.BaseReleaseSHA256 == release && r.BaseInstallation == installation && r.BaseManifestSHA == manifest
+}
 
 type CustodyEnrollmentImageRequest struct {
 	OperationID string `json:"operationId"`
@@ -93,7 +165,15 @@ func DecodeRequest(data []byte) (Request, error) {
 	if len(data) > 32<<10 || update.StrictJSON(data, &r) != nil || r.Version != 1 {
 		return r, errors.New("invalid maintenance request")
 	}
+	if r.Candidate != nil && r.Action != "candidate-stage" {
+		return r, errors.New("candidate input is confined to candidate staging")
+	}
 	switch r.Action {
+	case "candidate-stage":
+		q := r.Candidate
+		if q == nil || !canonicalSHA256(q.PacketSHA256) || (q.Scope != "fresh" && q.Scope != "update") || r.Serve != nil || r.Remote != nil || r.Peer != nil || r.Custody != nil || r.Enrollment != nil || r.Image != nil {
+			return r, errors.New("one fixed candidate identity and scope required")
+		}
 	case "custody-enrollment-activation":
 		q := r.Enrollment
 		if r.Serve != nil || r.Remote != nil || r.Peer != nil || r.Custody != nil || r.Image != nil || q == nil || !update.IDOK(q.OperationID) ||

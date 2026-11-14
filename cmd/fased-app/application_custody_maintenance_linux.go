@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"github.com/fased-ai/fased-app/internal/bootstrap"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
@@ -18,18 +19,20 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // UI and CLI keep the ordinary Update records and policy. Custody completion
 // consumes the root-bound signer receipt, never the app-only checkpoint.
 type custodyMaintenanceController struct {
-	owner        int
-	check        func(context.Context) (*core.ApplicationRelease, error)
-	readRecord   func(int) (update.MaintenanceRecord, error)
-	startWorker  func(context.Context, string) error
-	workerState  func(context.Context, string) (custodyWorkerState, error)
-	pauseStatus  func(context.Context) (update.CorePauseReceipt, error)
-	verifyTarget func(custodyinstall.Manifest) error
+	owner         int
+	check         func(context.Context) (*core.ApplicationRelease, error)
+	readRecord    func(int) (update.MaintenanceRecord, error)
+	readCandidate func(int) (maintenance.CandidateReceipt, error)
+	startWorker   func(context.Context, string) error
+	workerState   func(context.Context, string) (custodyWorkerState, error)
+	pauseStatus   func(context.Context) (update.CorePauseReceipt, error)
+	verifyTarget  func(custodyinstall.Manifest) error
 }
 
 func (c *custodyMaintenanceController) completionReady(ctx context.Context, r update.MaintenanceRecord, root string) (bool, error) {
@@ -137,6 +140,19 @@ func (c *custodyMaintenanceController) launch(ctx context.Context, id string) er
 func (c *custodyMaintenanceController) Apply(ctx context.Context, o core.ApplicationUpdateOperation) (core.ApplicationUpdateReceipt, error) {
 	if o.Release == nil {
 		return core.ApplicationUpdateReceipt{}, errors.New("reviewed custody release required")
+	}
+	if o.Automatic {
+		readCandidate := c.readCandidate
+		if readCandidate == nil {
+			readCandidate = maintenance.ReadCandidateReceipt
+		}
+		candidate, err := readCandidate(c.owner)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return core.ApplicationUpdateReceipt{}, fmt.Errorf("%w: candidate status is unavailable", core.ErrApplicationUpdateNotStarted)
+		}
+		if err == nil && candidate.Scope == "update" && candidate.Sequence == o.Release.Sequence && candidate.ReleaseSHA256 == o.Release.ManifestSHA256 && time.Now().Unix() < candidate.ExpiresAt {
+			return core.ApplicationUpdateReceipt{}, fmt.Errorf("%w: candidate requires a manual update", core.ErrApplicationUpdateNotStarted)
+		}
 	}
 	if err := c.launch(ctx, o.ID); err != nil {
 		return core.ApplicationUpdateReceipt{}, err
@@ -363,6 +379,26 @@ func custodyChannelCheck(owner int, factory channelOptionsFactory, parent string
 		if developmentOnly && !installed.DevelopmentOnly {
 			return nil, errors.New("controlled custody release required")
 		}
+		candidate, candidateErr := maintenance.ReadCandidateReceipt(owner)
+		if candidateErr != nil && !errors.Is(candidateErr, os.ErrNotExist) {
+			return nil, candidateErr
+		}
+		if candidateErr == nil && !developmentOnly && candidate.Scope == "update" && candidate.BaseSequence == installed.Sequence && candidate.BaseReleaseSHA256 == installed.ReleaseSHA256 && time.Now().Unix() < candidate.ExpiresAt {
+			manifest, err := custodyinstall.Load(owner)
+			if err != nil {
+				return nil, err
+			}
+			if release := candidateCustodyRelease(candidate, owner, *installed, manifest, time.Now()); release != nil {
+				return release, nil
+			}
+		}
 		return channelCheck(factory, parent, installed.Sequence, installed.ReleaseSHA256)(ctx)
 	}
+}
+
+func candidateCustodyRelease(candidate maintenance.CandidateReceipt, owner int, installed update.MaintenancePackage, manifest custodyinstall.Manifest, now time.Time) *core.ApplicationRelease {
+	if now.Unix() >= candidate.ExpiresAt || !candidate.MatchesBase(owner, installed.Sequence, installed.ReleaseSHA256, manifest.ID, update.SnapshotDigest("candidate-base-manifest:v1", manifest)) {
+		return nil
+	}
+	return &core.ApplicationRelease{EngineSHA256: candidate.EngineSHA256, Version: candidate.ProductVersion, Sequence: candidate.Sequence, ManifestSHA256: candidate.ReleaseSHA256, Target: candidate.Target}
 }
