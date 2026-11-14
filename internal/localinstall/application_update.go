@@ -60,8 +60,9 @@ type applicationUpdateJournal struct {
 	Target   Manifest                `json:"target"`
 }
 type applicationServices struct {
-	stop  func(context.Context, Manifest) error
-	start func(context.Context, Manifest) error
+	preflight func(context.Context, Manifest) error
+	stop      func(context.Context, Manifest) error
+	start     func(context.Context, Manifest) error
 }
 
 const maxApplicationBinary = 512 << 20
@@ -243,7 +244,7 @@ func ReplaceApplication(ctx context.Context, paths Paths, c ApplicationUpdate, h
 	if runtime.GOOS != "linux" {
 		return Manifest{}, errors.New("application updates currently support Ubuntu/Linux Local only")
 	}
-	return replaceApplication(ctx, paths, c, h, applicationServices{stop: stop, start: start}, nil, false)
+	return replaceApplication(ctx, paths, c, h, applicationServices{preflight: updateServicePreflight, stop: stop, start: start}, nil, false)
 }
 func RollbackApplication(ctx context.Context, paths Paths, c ApplicationUpdate, h ApplicationUpdateCallbacks) (Manifest, error) {
 	if runtime.GOOS != "linux" {
@@ -327,6 +328,11 @@ func replaceApplication(ctx context.Context, paths Paths, c ApplicationUpdate, h
 		}
 		if c.Signer != "" && m.Files["fased-signer"] == "" {
 			return m, errors.New("update cannot add a signer to an existing installation")
+		}
+		if !rollback && services.preflight != nil {
+			if err = services.preflight(ctx, m); err != nil {
+				return m, err
+			}
 		}
 		if h.BeforeStage != nil {
 			if e = h.BeforeStage(ctx); e != nil {
@@ -437,6 +443,13 @@ func replaceApplication(ctx context.Context, paths Paths, c ApplicationUpdate, h
 		}
 	} else {
 		return Manifest{}, err
+	}
+	// Staging may take time. Recheck immediately before entering the durable
+	// metadata fence; recovery of an already-applying operation stays unchanged.
+	if !rollback && j.Status.Phase == "prepared" && services.preflight != nil {
+		if e = services.preflight(ctx, j.Previous); e != nil {
+			return j.Previous, e
+		}
 	}
 	if e = h.BeforeStop(ctx, j.Previous, j.Target); e != nil {
 		return Manifest{}, e

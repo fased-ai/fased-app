@@ -74,6 +74,113 @@ func applicationFixtureFor(t *testing.T) *applicationFixture {
 	return f
 }
 
+func TestApplicationUpdateChecksServiceBeforeFencing(t *testing.T) {
+	f := applicationFixtureFor(t)
+	blocked := true
+	f.callbacks.BeforeStage = func(context.Context) error {
+		f.calls = append(f.calls, "stage")
+		return nil
+	}
+	f.services.preflight = func(context.Context, Manifest) error {
+		f.calls = append(f.calls, "preflight")
+		if blocked {
+			return errors.New("service cannot restart")
+		}
+		return nil
+	}
+	if _, err := f.apply(t, nil, false); err == nil || !strings.Contains(err.Error(), "service cannot restart") {
+		t.Fatalf("blocked service admitted: %v", err)
+	}
+	if len(f.calls) != 1 || f.calls[0] != "preflight" {
+		t.Fatalf("update fenced or stopped the service before preflight: %v", f.calls)
+	}
+	if _, err := readApplicationJournal(f.paths); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("blocked update created a transaction: %v", err)
+	}
+	if hash, err := updateFileDigest(filepath.Join(f.paths.Root, engineName)); err != nil || hash != f.old.Files[engineName] {
+		t.Fatalf("blocked update changed the installed executable: %v", err)
+	}
+	f.preserved(t)
+	blocked = false
+	if _, err := f.apply(t, nil, false); err != nil {
+		t.Fatalf("same update did not resume after service repair: %v", err)
+	}
+}
+
+func TestApplicationUpdateRechecksServiceAfterStaging(t *testing.T) {
+	f := applicationFixtureFor(t)
+	checks := 0
+	f.services.preflight = func(context.Context, Manifest) error {
+		checks++
+		if checks == 2 {
+			return errors.New("service changed during staging")
+		}
+		return nil
+	}
+	if _, err := f.apply(t, nil, false); err == nil || !strings.Contains(err.Error(), "service changed during staging") {
+		t.Fatalf("changed service admitted: %v", err)
+	}
+	if len(f.calls) != 0 {
+		t.Fatalf("update fenced or stopped after the service changed: %v", f.calls)
+	}
+	state, err := ApplicationUpdateState(f.paths)
+	if err != nil || state.Phase != "prepared" || state.ID != f.candidate.ID {
+		t.Fatalf("original staged transaction was not retained: %+v %v", state, err)
+	}
+	f.preserved(t)
+	if _, err = f.apply(t, nil, false); err != nil {
+		t.Fatalf("same staged update did not resume: %v", err)
+	}
+}
+
+func TestApplicationUpdateRecoveryDoesNotReenterPreflight(t *testing.T) {
+	f := applicationFixtureFor(t)
+	checks := 0
+	f.services.preflight = func(context.Context, Manifest) error {
+		checks++
+		if checks > 2 {
+			return errors.New("service state became unavailable")
+		}
+		return nil
+	}
+	interrupted := errors.New("interrupted")
+	if _, err := f.apply(t, func(point string) error {
+		if point == "replaced-"+engineName {
+			return interrupted
+		}
+		return nil
+	}, false); !errors.Is(err, interrupted) {
+		t.Fatalf("replacement was not interrupted: %v", err)
+	}
+	if _, err := resumeRetainedApplication(t.Context(), f.paths, f.candidate.ID, f.callbacks, f.services, false); err != nil {
+		t.Fatalf("existing operation could not recover: %v", err)
+	}
+	if checks != 2 {
+		t.Fatalf("recovery repeated admission checks: %d", checks)
+	}
+	f.preserved(t)
+}
+
+func TestUpdateServiceAllowsManualStartupAndRefusesUnsafeState(t *testing.T) {
+	valid := map[string]string{"LoadState": "loaded", "UnitFileState": "disabled", "CanStart": "yes", "RefuseManualStart": "no", "NeedDaemonReload": "no"}
+	if err := validateUpdateService(valid); err != nil {
+		t.Fatalf("ordinary manual-start service refused: %v", err)
+	}
+	for _, tc := range []struct{ key, value string }{
+		{"LoadState", "not-found"}, {"UnitFileState", "masked"}, {"UnitFileState", "masked-runtime"},
+		{"CanStart", "no"}, {"CanStart", ""}, {"RefuseManualStart", "yes"}, {"NeedDaemonReload", "yes"}, {"RefuseManualStart", ""},
+	} {
+		p := map[string]string{}
+		for key, value := range valid {
+			p[key] = value
+		}
+		p[tc.key] = tc.value
+		if err := validateUpdateService(p); err == nil {
+			t.Fatalf("unsafe service accepted: %s=%s", tc.key, tc.value)
+		}
+	}
+}
+
 func TestApplicationUpdatePreservesVerifiedNativeSignerInventory(t *testing.T) {
 	f := applicationFixtureFor(t)
 	for _, name := range []string{desktopName, "fased-signer"} {

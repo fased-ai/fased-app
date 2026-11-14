@@ -106,7 +106,7 @@ func systemctl(ctx context.Context, args ...string) (string, error) {
 	return string(output), nil
 }
 func properties(ctx context.Context, m Manifest) (map[string]string, error) {
-	output, err := systemctl(ctx, "show", unitName, "--property=LoadState,ActiveState,FragmentPath,UnitFileState")
+	output, err := systemctl(ctx, "show", unitName, "--property=LoadState,ActiveState,FragmentPath,UnitFileState,CanStart,RefuseManualStart,NeedDaemonReload")
 	p := map[string]string{}
 	for _, line := range strings.Split(output, "\n") {
 		key, value, ok := strings.Cut(line, "=")
@@ -125,6 +125,23 @@ func properties(ctx context.Context, m Manifest) (map[string]string, error) {
 		return nil, errors.New("another service uses the Fased App name; refusing to modify it")
 	}
 	return p, nil
+}
+
+// Check known restart blockers before fencing metadata. A disabled unit is
+// allowed: the owner may have chosen manual startup.
+func updateServicePreflight(ctx context.Context, m Manifest) error {
+	p, err := properties(ctx, m)
+	if err != nil {
+		return fmt.Errorf("Fased service is not ready to restart; the installation is preserved: %w", err)
+	}
+	return validateUpdateService(p)
+}
+
+func validateUpdateService(p map[string]string) error {
+	if p["LoadState"] != "loaded" || p["CanStart"] != "yes" || p["RefuseManualStart"] != "no" || p["NeedDaemonReload"] != "no" || p["UnitFileState"] == "masked" || p["UnitFileState"] == "masked-runtime" {
+		return errors.New("Fased service is not ready to restart; the installation is preserved")
+	}
+	return nil
 }
 func register(ctx context.Context, m Manifest) error {
 	if err := supported(); err != nil {

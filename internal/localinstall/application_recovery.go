@@ -84,7 +84,7 @@ func ResumeApplication(ctx context.Context, paths Paths, id string, h Applicatio
 	if runtime.GOOS != "linux" {
 		return Manifest{}, errors.New("application recovery supports Linux Local only")
 	}
-	return resumeRetainedApplication(ctx, paths, id, h, applicationServices{stop: stop, start: start}, false)
+	return resumeRetainedApplication(ctx, paths, id, h, applicationServices{preflight: updateServicePreflight, stop: stop, start: start}, false)
 }
 func resumeRetainedApplication(ctx context.Context, paths Paths, id string, h ApplicationUpdateCallbacks, services applicationServices, rollback bool) (Manifest, error) {
 	if !applicationUpdateID(id) {
