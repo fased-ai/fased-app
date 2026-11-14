@@ -68,8 +68,12 @@ func NewWithOptions(p releaseprovenance.Policy, e releaseprovenance.Expected, no
 	if err != nil {
 		return p, nil, err
 	}
+	ref, event := "refs/tags/"+e.Tag, "push"
+	if e.BuildRef != "" {
+		ref, event = e.BuildRef, "workflow_dispatch"
+	}
 	repository := "https://github.com/" + p.Repository
-	workflow := repository + "/" + p.Workflow + "@refs/tags/" + e.Tag
+	workflow := repository + "/" + p.Workflow + "@" + ref
 	identity := options.Identity
 	if identity == "" {
 		identity = workflow
@@ -78,7 +82,7 @@ func NewWithOptions(p releaseprovenance.Policy, e releaseprovenance.Expected, no
 	if err != nil {
 		return p, nil, err
 	}
-	ext := certificate.Extensions{Issuer: releaseprovenance.Issuer, BuildSignerURI: workflow, BuildSignerDigest: e.WorkflowCommit, RunnerEnvironment: "github-hosted", SourceRepositoryURI: repository, SourceRepositoryDigest: e.SourceCommit, SourceRepositoryRef: "refs/tags/" + e.Tag, SourceRepositoryIdentifier: p.RepositoryID, SourceRepositoryOwnerURI: "https://github.com/fased-ai", SourceRepositoryOwnerIdentifier: p.OwnerID, BuildConfigURI: workflow, BuildConfigDigest: e.WorkflowCommit, BuildTrigger: "push", RunInvocationURI: repository + "/actions/runs/" + e.RunID + "/attempts/" + e.RunAttempt, SourceRepositoryVisibilityAtSigning: "public"}
+	ext := certificate.Extensions{Issuer: releaseprovenance.Issuer, BuildSignerURI: workflow, BuildSignerDigest: e.WorkflowCommit, RunnerEnvironment: "github-hosted", SourceRepositoryURI: repository, SourceRepositoryDigest: e.SourceCommit, SourceRepositoryRef: ref, SourceRepositoryIdentifier: p.RepositoryID, SourceRepositoryOwnerURI: "https://github.com/fased-ai", SourceRepositoryOwnerIdentifier: p.OwnerID, BuildConfigURI: workflow, BuildConfigDigest: e.WorkflowCommit, BuildTrigger: event, RunInvocationURI: repository + "/actions/runs/" + e.RunID + "/attempts/" + e.RunAttempt, SourceRepositoryVisibilityAtSigning: "public"}
 	if options.Extensions != nil {
 		ext = *options.Extensions
 	}
@@ -157,7 +161,7 @@ func NewWithOptions(p releaseprovenance.Policy, e releaseprovenance.Expected, no
 		if e.InstallerSHA256 != "" {
 			subjects = append(subjects, map[string]any{"name": "fased-install-linux-amd64", "digest": map[string]string{"sha256": e.InstallerSHA256}})
 		}
-		statement, err = json.Marshal(map[string]any{"_type": "https://in-toto.io/Statement/v1", "subject": subjects, "predicateType": "https://slsa.dev/provenance/v1", "predicate": map[string]any{"buildDefinition": map[string]any{"buildType": "https://actions.github.io/buildtypes/workflow/v1", "externalParameters": map[string]any{"workflow": map[string]string{"ref": "refs/tags/" + e.Tag, "repository": repository, "path": p.Workflow}}, "internalParameters": map[string]any{"github": map[string]string{"event_name": "push", "repository_id": p.RepositoryID, "repository_owner_id": p.OwnerID}}, "resolvedDependencies": []any{map[string]any{"uri": "git+" + repository + "@refs/tags/" + e.Tag, "digest": map[string]string{"gitCommit": e.SourceCommit}}}}, "runDetails": map[string]any{"builder": map[string]string{"id": repository + "/" + p.Workflow + "@refs/tags/" + e.Tag}, "metadata": map[string]string{"invocationId": ext.RunInvocationURI}}}})
+		statement, err = json.Marshal(map[string]any{"_type": "https://in-toto.io/Statement/v1", "subject": subjects, "predicateType": "https://slsa.dev/provenance/v1", "predicate": map[string]any{"buildDefinition": map[string]any{"buildType": "https://actions.github.io/buildtypes/workflow/v1", "externalParameters": map[string]any{"workflow": map[string]string{"ref": ref, "repository": repository, "path": p.Workflow}}, "internalParameters": map[string]any{"github": map[string]string{"event_name": event, "repository_id": p.RepositoryID, "repository_owner_id": p.OwnerID}}, "resolvedDependencies": []any{map[string]any{"uri": "git+" + repository + "@" + ref, "digest": map[string]string{"gitCommit": e.SourceCommit}}}}, "runDetails": map[string]any{"builder": map[string]string{"id": repository + "/" + p.Workflow + "@" + ref}, "metadata": map[string]string{"invocationId": ext.RunInvocationURI}}}})
 		if err != nil {
 			return p, nil, err
 		}

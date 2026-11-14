@@ -106,14 +106,15 @@ export function validateConfig(c) {
 export function releaseContext(c, env, source) {
   validateConfig(c);
   const tag = `v${c.version}`;
+  const staged = env.GITHUB_EVENT_NAME === "workflow_dispatch";
+  const ref = staged ? "refs/heads/main" : `refs/tags/${tag}`;
   if (
-    env.GITHUB_EVENT_NAME !== "push" ||
-    env.GITHUB_REF !== `refs/tags/${tag}` ||
+    (!staged && env.GITHUB_EVENT_NAME !== "push") ||
+    env.GITHUB_REF !== ref ||
     env.GITHUB_REPOSITORY !== c.repository ||
     env.GITHUB_REPOSITORY_ID !== c.repositoryId ||
     env.GITHUB_REPOSITORY_OWNER_ID !== c.ownerId ||
-    env.GITHUB_WORKFLOW_REF !==
-      `${c.repository}/${c.workflow}@refs/tags/${tag}` ||
+    env.GITHUB_WORKFLOW_REF !== `${c.repository}/${c.workflow}@${ref}` ||
     env.RUNNER_OS !== "Linux" ||
     env.RUNNER_ARCH !== "X64" ||
     !commit.test(env.GITHUB_SHA ?? "") ||
@@ -122,13 +123,13 @@ export function releaseContext(c, env, source) {
     source.commit !== env.GITHUB_SHA ||
     source.workflowCommit !== source.commit ||
     !commit.test(source.tree) ||
-    !commit.test(source.tagObject) ||
+    (staged
+      ? source.tagObject !== "" || env.FASED_RELEASE_SOURCE !== source.commit
+      : !commit.test(source.tagObject)) ||
     source.onMain !== true ||
     source.clean !== true
   )
-    throw Error(
-      "Exact clean, main-merged, annotated tag-push context required",
-    );
+    throw Error("Exact clean, main-merged release workflow context required");
   return {
     version: c.version,
     tag,
@@ -138,8 +139,10 @@ export function releaseContext(c, env, source) {
     workflowCommit: source.workflowCommit,
     runId: env.GITHUB_RUN_ID,
     runAttempt: env.GITHUB_RUN_ATTEMPT,
+    ...(staged ? { buildRef: ref } : {}),
   };
 }
+
 function git(...args) {
   return execFileSync("git", args, { encoding: "utf8" }).trim();
 }
@@ -207,7 +210,10 @@ function prepare(c) {
     commit: git("rev-parse", "HEAD"),
     tree: git("rev-parse", "HEAD^{tree}"),
     workflowCommit: git("rev-parse", "HEAD"),
-    tagObject: git("rev-parse", `${process.env.GITHUB_REF}^{tag}`),
+    tagObject:
+      process.env.GITHUB_EVENT_NAME === "workflow_dispatch"
+        ? ""
+        : git("rev-parse", `${process.env.GITHUB_REF}^{tag}`),
     clean: git("status", "--porcelain") === "",
     onMain: false,
   };
@@ -295,6 +301,7 @@ function prepare(c) {
 }
 export function expectedProvenance(input, archive, installer) {
   return {
+    ...(input.buildRef ? { buildRef: input.buildRef } : {}),
     ...(input.releaseAuthority === "github-attestation-v1"
       ? { installerSha256: installer.sha256 }
       : {}),
@@ -384,7 +391,7 @@ export function verifiedCandidate(c, input, objects, decision, proof, policy) {
     decision.BundleSHA256 !== proof.sha256 ||
     decision.PolicySHA256 !== sha(JSON.stringify(canonical)) ||
     decision.Identity !==
-      `https://github.com/${c.repository}/${c.workflow}@refs/tags/${input.tag}` ||
+      `https://github.com/${c.repository}/${c.workflow}@${input.buildRef ?? `refs/tags/${input.tag}`}` ||
     !["Tlog", "TimestampAuthority"].includes(decision.TimestampSource) ||
     !Number.isFinite(Date.parse(decision.VerifiedAt))
   )
@@ -472,7 +479,7 @@ function finish(c) {
   });
   if (c.releaseAuthority === "github-attestation-v1")
     write("fased-release.json", {
-      version: 1,
+      version: input.buildRef ? 2 : 1,
       productVersion: input.version,
       source: input.sourceCommit,
       bundleSha256: objects.manifestSha256,
@@ -480,6 +487,7 @@ function finish(c) {
       installer: objects.installer,
       entry: file("install.sh", 2 * 1024 * 1024).identity,
       release: {
+        ...(input.buildRef ? { buildRef: input.buildRef } : {}),
         installerSha256: objects.installer.sha256,
         sourceTree: input.sourceTree,
         tagObject: input.tagObject,

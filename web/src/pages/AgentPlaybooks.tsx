@@ -14,7 +14,7 @@ const fixtureFeed = "https://news.fased.invalid/headlines.xml";
 const defaults: PlaybookVersion = {
   version: 1,
   name: "Morning digest",
-  text: "Summarize the selected fixture headlines and identify uncertainties.",
+  text: "Summarize the selected test headlines and identify uncertainties.",
   newsSourceId: "",
   newsMaxAgeSeconds: 3600,
   limits: {
@@ -123,7 +123,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
               onClick={() =>
                 void agents.change({
                   action: "news-source-add",
-                  name: "Fixture headlines",
+                  name: uiText("Test headlines"),
                   source: fixtureFeed,
                   newsMaxAgeSeconds: 3600,
                 })

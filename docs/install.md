@@ -1,37 +1,62 @@
 # Installation and private access
 
-These are **engineering package** instructions. No signed public release or
-trusted public download command exists yet. Do not bypass Gatekeeper, SmartScreen
-or signature warnings to make a development build appear production-ready. The compiled app
-needs no Git, Go, npm, database server, RPC, AI or wallet account at runtime.
+Fased includes the compiled engine and web interface. Setup prepares required OS packages and starts the background service. Installation needs no Go compiler, Node, Git, provider or wallet account.
 
-The [disposable Go signer](signer.md#wallets-setup) requires explicit Ubuntu
-engineering enrollment or a standalone managed installation. Ordinary packages do
-not provision wallet keys. Wallets setup uses protected owner Create/Import, public
-account records and encrypted RPC settings; real credentials/dispatch stay disabled.
-Privileged same-instance, physical-host/native custody and later
-permission/reconciliation acceptance gates stay open.
+## Install on Ubuntu
 
-## One-command Local/Remote and Update entry (unpublished)
+Run this command in a Bash terminal on the computer or server where Fased will run.
 
-`install.sh` is a release-stamped entry template, not an active public download. The raw repository template refuses before system mutation. Offline release tooling pins the verifier checksum, canonical GitHub release URL and public bootstrap trust. Controlled tests use a separately rendered, disposable-trust loopback HTTPS fixture; ordinary installation has no URL, CA or verification-bypass switch.
+```bash
+bash <(curl -fsSL https://github.com/fased-ai/fased-app/releases/latest/download/install.sh)
+```
+
+1. Choose **Local** for this computer or **Remote** for the server you reached through SSH.
+2. Follow the terminal wizard. It verifies the package, prepares missing OS requirements and starts the service. A root SSH session prepares an ordinary operator before Fased runs.
+3. For Remote, choose **SSH** or **Tailscale**. Tailscale uses its own OS client and account. Enroll the accessing computer in the same tailnet and complete any required HTTPS permission.
+4. Open the local browser or printed private Remote link. Choose the workspace password, then open the Dashboard.
+
+The wizard handles package paths and first-owner setup. Existing workspaces retain their normal sign-in and recorded identity. Base setup finishes before optional provider or wallet configuration.
+
+Ubuntu24.04/amd64 has retained installed/private-access evidence. Public0.1.5 package acquisition and verification are recorded as delivered. Complete latest-release installation/manual Update acceptance remains open. Additional mapped Ubuntu versions/architectures and native installers retain their own acceptance. The [release guide](maintainers/ubuntu-release.md) describes the staged package gate.
+
+## Open and Update
+
+Use the installed `fased open` command to reopen the workspace. Manual updates use **Settings → Update** or the installed command.
+
+```sh
+fased update
+```
+
+Update reuses the owner session or asks for sign-in within that flow. Completion requires preserved data/authentication, a healthy restart and **Already current** on a repeated check.
+
+For an older installation without a capable updater, reuse the official installer with `--local --update` or `--remote --update` for its recorded profile. The wizard upgrades the same instance through the protected handoff. Afterward, ordinary updates use Settings or `fased update`. Installed handoff acceptance is still open in Current.
+
+Automatic updates use a separate opt-in policy and the same controller. Their controlled engineering evidence is retained. Automatic activation, mining and live features remain disabled.
+
+## Engineering and compatibility reference
+
+The following sections describe acquired engineering bundles, controlled acceptance, OS ownership and retained bootstrap profiles. Their commands require the corresponding package or maintainer environment. The release-stamped GitHub entry above owns customer acquisition. The raw repository `install.sh` template refuses before mutation until release rendering supplies its verified bindings.
+
+Wallets setup uses the separate Go signer and protected create/import flow. Current custody acceptance uses disposable keys. Network/RPC and wallet permissions are configured only for the chosen wallet activity.
+
+### Entry and controlled installation details
 
 On a mapped Ubuntu release/architecture, a root SSH invocation installs the small OS bootstrap prerequisites, records an ordinary operator and drops privileges before verifier or application execution. Temporary OS-administration authorization expires and is removed when setup exits; the locked application identity receives none. This is administration by the existing server administrator, not a sandbox for an untrusted installer. No SSH keys are copied or root login policy changed.
 
-The authenticated verifier opens the terminal wizard automatically: **Local / Remote / Connect / Update**. SSH/Tailscale selection, host preparation, isolated service/autostart and password-only private browser setup use the existing core. Root-entry SSH guidance keeps the existing administrator route. Repeating the same entry reopens the installed workspace without replacing its binary, updating it or resetting data. Fixed `--open`, `--start`, `--stop`, `--status`, `--update`, `--setup` and `--recover` actions reuse installed identity checks; recovery retains the stopped-service requirement. The installed command includes `open`, `status`, `login` and `update`; a root SSH invocation drops to its recorded ordinary owner before running it. Unknown or foreign command files are preserved. Older entries use authenticated reader-compatible upgrading, not fresh installation over existing data. Public activation and production trust remain separate gates.
+The authenticated verifier opens the terminal wizard automatically: **Local / Remote / Connect / Update**. SSH/Tailscale selection, host preparation, isolated service/autostart and password-only private browser setup use the existing core. Root-entry SSH guidance keeps the existing administrator route. Repeating the same entry reopens the installed workspace without replacing its binary, updating it or resetting data. Fixed `--open`, `--start`, `--stop`, `--status`, `--update`, `--setup` and `--recover` actions reuse installed identity checks; recovery retains the stopped-service requirement. The installed command includes `open`, `status`, `login` and `update`; a root SSH invocation drops to its recorded ordinary owner before running it. Unknown or foreign command files are preserved. Older entries use authenticated reader-compatible upgrading, not fresh installation over existing data. Package publication, installed acceptance and automatic-update activation carry separate recorded statuses.
 
 `internal/hostplatform/platforms.json` is shared with entry rendering, OS prerequisites and Tailscale repository selection. It maps Ubuntu22.04 Local and Ubuntu24.04/26.04/26.10 Local+Remote, with amd64/arm64 package selection. Only Ubuntu24.04/amd64 has real-host controlled installed evidence; other host rows remain unaccepted. Ubuntu22.04 Remote is refused because the bounded maintenance authority requires sudo>=1.9.10. Unknown releases cannot inherit a supposedly universal dependency recipe.
 
-**Manual AND automatic updates:** the installed/menu Update path checks the trusted channel, waits for asynchronous verification, applies once and follows durable completion/recovery through restart. Automatic is explicit opt-in under Settings→Updates and uses the same controller plus installed ordinary-owner maintenance actor. Nil compiled release bindings keep ordinary/public updates inactive. Signed fixtures exercise this composition without exposing a runtime endpoint, trust-key or CA override. Same-instance SSH/Tailscale access changes are administrator-controlled transactions; unfinished access/update work fences the other operation. Signer-enrolled access migration remains refused.
+**Manual AND automatic updates:** the installed/menu Update path checks the trusted channel, waits for asynchronous verification, applies once and follows durable completion/recovery through restart. Automatic is explicit opt-in under Settings→Updates and uses the same controller plus installed ordinary-owner maintenance actor. Unbound engineering builds keep public update acquisition inactive; published builds carry their reviewed release bindings. Signed fixtures exercise this composition without exposing a runtime endpoint, trust-key or CA override. Same-instance SSH/Tailscale access changes are administrator-controlled transactions; unfinished access/update work fences the other operation. Signer-enrolled access migration remains refused.
 
-**Installed acceptance boundary:** Ubuntu24.04/amd64 Remote installation, signed automatic fixture update, restored Manual policy, stopped-core original-operation recovery, restart and Already current passed together. Controlled Local manual and automatic updating also passed. Local uses a fixed user-service delegate and a root-managed actor that drops to the ordinary UID/GID before Go execution, with NoNewPrivileges, zero capabilities and writes limited to installation/data/owner control. The core sandbox remains unchanged. Explicit update recovery requires OS-admin authorization; it has no unconditional polkit grant. A real prepared-stage process kill and isolated recovery preserved the same operation, lease and workspace. Other mapped releases/architectures, native/physical installs and public acquisition still require their own acceptance. Never fabricate an outcome or relaunch failed actors indefinitely.
+**Installed acceptance boundary:** Ubuntu24.04/amd64 Remote installation, signed automatic fixture update, restored Manual policy, stopped-core original-operation recovery, restart and Already current passed together. Controlled Local manual and automatic updating also passed. Local uses a fixed user-service delegate and a root-managed actor that drops to the ordinary UID/GID before Go execution, with NoNewPrivileges, zero capabilities and writes limited to installation/data/owner control. The core sandbox remains unchanged. Explicit update recovery requires OS-admin authorization; it has no unconditional polkit grant. A real prepared-stage process kill and isolated recovery preserved the same operation, lease and workspace. Other mapped releases/architectures and native/physical installs retain their own acceptance. Public acquisition evidence and the still-open installed owner upgrade are recorded separately in Current. Never fabricate an outcome or relaunch failed actors indefinitely.
 
-## Ubuntu prerequisites
+### Ubuntu prerequisites
 
 Ubuntu 24.04 LTS, x86-64 is the first Linux/VPS engineering target. Run the app
 as an ordinary OS user. For a manually supplied engineering bundle on a root-only VPS image, use the provider console or its
 OS account guide to create an ordinary administrator with sudo and working SSH
-key access first. The unpublished one-command entry prepares its operator automatically. For Ubuntu, the trusted OS account tools are `adduser` and
+key access first. The official one-command entry prepares its operator automatically. For Ubuntu, the trusted OS account tools are `adduser` and
 `usermod -aG sudo`; test the new administrator's SSH and sudo access before
 leaving the provider/root recovery session. Run the Fased verifier and wizard
 from that ordinary account. Fased does not execute itself as root or silently
@@ -83,12 +108,11 @@ Linux desktop installation also checks GTK3/WebKitGTK 4.1. `--prepare-host`
 installs missing Ubuntu runtime packages. The existing `--install-runtime` flag
 remains package-only and does not authorize policy changes. Other distributions
 use their own OS packages. Windows selects Wails' pinned embedded WebView2
-bootstrapper with owner confirmation; macOS uses OS frameworks. Signed public
-acquisition and actual supported-host acceptance remain separate gates.
+bootstrapper with owner confirmation; macOS uses OS frameworks. Native package signing and additional supported-host acceptance remain separate gates.
 [Ubuntu's AppArmor guide](https://ubuntu.com/server/docs/how-to/security/apparmor/)
 documents profile operation.
 
-## Install an acquired engineering bundle
+### Install an acquired engineering bundle
 
 Extract an acquired package into its own directory. On Linux, from the extracted
 directory, run:
@@ -211,7 +235,7 @@ its password.
 App ownership does not grant wallet authority. Reopening the client reuses the
 same background engine. Preferences resume from the instance's SQLite state.
 
-## Dedicated Ubuntu Remote installation
+### Dedicated Ubuntu Remote installation
 
 The explicit managed Remote option installs the existing Go core under a locked
 application OS account with no interactive login or sudo. The ordinary administrator
@@ -259,7 +283,7 @@ helper, the locked identity and recovery metadata. `--start=false` stages the in
 `vps start` is the later readiness/private-access handoff. SSH forwarding still
 needs the printed tunnel on the owner's computer.
 
-### Secure a dedicated VPS
+#### Secure a dedicated VPS
 
 Installation keeps existing SSH and firewall policy. Lockdown is a separate
 administrator-terminal action, after private sign-in and provider-console recovery
@@ -313,7 +337,7 @@ Removing the app does not silently reopen public SSH or delete retained network
 policy, identities or data. Real tailnet/second-device/VPS acceptance remains
 separate from disposable Ubuntu checks.
 
-## Connect to an existing instance
+### Connect to an existing instance
 
 For an existing instance:
 
@@ -329,7 +353,7 @@ Tailscale setup uses the same readiness check as Connect: the private URL must r
 
 The connection row follows the runtime profile and access transport, with the public instance ID under Instance details. Private HTTPS is displayed as Remote; a server installed as Remote also reports Remote through an SSH loopback connection. The stored deployment preference remains compatible metadata and is inspectable only in Diagnostics. Changing it does not move the runtime or change connection state. Existing owner data and authentication are reused across same-instance restart; connecting elsewhere leaves them on the original instance.
 
-## Private access
+### Private access
 
 Use `fased-app access plan --mode ssh` for an SSH guide. On the owner's computer,
 substitute the normal verified SSH destination in the printed forwarding command.
@@ -361,7 +385,7 @@ The owner must confirm the private UI works from another authorized device
 before considering SSH/firewall tightening. A local TLS fixture or CI runner is
 not proof of a real VPS/tailnet journey. App authentication remains required.
 
-## Recovery and removal
+### Recovery and removal
 
 The installed CLI supports `service status`, `service start`, `service stop` and
 `open`. For custom paths, keep the same `--prefix` and `--data-dir` arguments.
@@ -413,7 +437,7 @@ credentials, replay missed work, or authorize live execution. Public/ordinary
 update activation remains disabled for this engineering build. See
 [updates and recovery](updates.md) for the supported boundaries.
 
-### Background behavior
+#### Background behavior
 
 | Event                        | What continues                                                                                                                              |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -460,15 +484,11 @@ delete. Signing/notarization, trusted public acquisition and real supported-host
 acceptance remain release gates before retail use. Implemented prerequisite
 handling is engineering functionality, not proof of those host journeys.
 
-## Development bootstrap reference
+### Development bootstrap reference
 
-The separate `fased-install` verifier implements development first-install profiles
-and the inactive production-admission profile described below. Build it from the reviewed checkout with `npm run build:installer`
-or `go build -trimpath -o fased-install ./cmd/fased-install`. It runs without Node,
-Git or a Go toolchain. Authenticate this verifier and its public seed independently
-before using them; the downloaded app does not authenticate its own first launch.
-There is no public installer URL, production seed or signing identity configured.
-The following development command is for controlled acceptance, not retail distribution.
+This section retains development and threshold-signed profiles 1–3 for compatibility and controlled acceptance. The published GitHub-attested profile 4 is reached through the official entry above. Build commands and seed/CA options here apply only to the named engineering profile. The release guide owns the default publication contract.
+
+Maintainers build the separate verifier from reviewed source with `npm run build:installer` or `go build -trimpath -o fased-install ./cmd/fased-install`. The resulting executable runs without a customer toolchain. Authenticate its bytes and profile inputs before controlled use.
 
 ```sh
 ./fased-install --development --seed-file /private/seed.json \
@@ -515,13 +535,11 @@ installer checks apply. Ordinary GitHub activation stays disabled; CLI/JSON cann
 select a fixture resolver, dialer or test CA for that profile. Version 1 above
 retains its no-redirect transport. No production seed/endpoint/binding is created.
 
-Production initial-verifier authentication, publisher/provenance bindings and real
-GitHub delivery remain release gates. Disposable TUF keys and controlled HTTPS
-acceptance do not establish a trusted public installer or real Ubuntu/VPS/Tailscale
-acceptance. The production operations contract remains in
-[updates.md](updates.md#production-release-trust-operations-specification).
+Retained profiles 1–3 keep their original threshold, transport and activation restrictions. Their fixtures provide evidence for those profiles. Public profile 4 uses its GitHub-attested release binding. Current installed acceptance and promotion requirements are in the [release guide](maintainers/ubuntu-release.md). [Threshold operations](updates.md#production-release-trust-operations-specification) remain a compatibility reference.
 
-### Production first-install admission (not activated)
+<a id="production-first-install-admission-not-activated"></a>
+
+#### Retained profile 3 first-install admission
 
 A distinct version-3 stable seed/profile now verifies the production release unit
 through the same independent bootstrap. It requires threshold-signed descriptor,

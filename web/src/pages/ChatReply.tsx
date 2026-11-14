@@ -1,3 +1,4 @@
+import { previewModel } from "../ui-language-preview";
 import { useUI } from "../ui-preferences";
 import type { AgentAIRequest, AgentView } from "../agents";
 import {
@@ -104,7 +105,7 @@ export function ChatReply({
         )}
         <p>
           {uiText("Model: ")}
-          {q.model}
+          {previewModel(q.model, uiText)}
           {!planUsage && (
             <>
               {uiText(" · Held ")}

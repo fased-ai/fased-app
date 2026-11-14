@@ -1,3 +1,5 @@
+import { useUI } from "../ui-preferences";
+import { previewIdentity } from "../ui-language-preview";
 import { useEffect, useRef, useState } from "react";
 import { useCore } from "../core";
 import { useWorkspace } from "../workspace";
@@ -83,6 +85,7 @@ const sol = (s: string) => {
 };
 
 export function WENSessionRehearsal() {
+  const { t: uiText } = useUI();
   const core = useCore();
   const { state, agents } = useWorkspace();
   const profile = state.selectedProfile;
@@ -192,7 +195,7 @@ export function WENSessionRehearsal() {
     <section className="panel f4-rehearsal" aria-label="Session rehearsal">
       <div className="panel-heading">
         <h2>Session rehearsal</h2>
-        <Badge>FIXTURE</Badge>
+        <Badge>{uiText("FIXTURE")}</Badge>
       </div>
       {core.mode !== "ready" ? (
         <p>Private core required</p>
@@ -272,7 +275,7 @@ export function WENSessionRehearsal() {
                   >
                     {view.scenarios.map((s) => (
                       <option key={s.id} value={s.id}>
-                        {s.id}
+                        {uiText(previewIdentity(s.id))}
                       </option>
                     ))}
                   </select>
@@ -289,7 +292,9 @@ export function WENSessionRehearsal() {
                     }}
                   >
                     {view.poolOptions.map((p) => (
-                      <option key={p}>{p}</option>
+                      <option key={p} value={p}>
+                        {uiText(previewIdentity(p))}
+                      </option>
                     ))}
                   </select>
                 </label>
@@ -406,7 +411,7 @@ export function WENSessionRehearsal() {
                     <dt>Mode</dt>
                     <dd>{review.input.mode}</dd>
                     <dt>Runner</dt>
-                    <dd>Fased · manual fixture steps</dd>
+                    <dd>{uiText("Fased · manual test steps")}</dd>
                     <dt>Window</dt>
                     <dd>
                       {review.scenario.startsAt} — {review.scenario.expiresAt}
@@ -455,7 +460,7 @@ export function WENSessionRehearsal() {
                     <dl>
                       <dt>Mode / runner</dt>
                       <dd>{s.mode} / Fased manual</dd>
-                      <dt>Fixture clock</dt>
+                      <dt>{uiText("Test clock")}</dt>
                       <dd>{s.clockAt}</dd>
                       <dt>Accepted rounds</dt>
                       <dd data-testid={`accepted-${id}`}>
@@ -515,7 +520,7 @@ export function WENSessionRehearsal() {
                           )
                         }
                       >
-                        Step fixture
+                        {uiText("Step test")}
                       </button>
                       {s.pending && (
                         <button

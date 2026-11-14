@@ -412,7 +412,7 @@ func completeHeldRemoteApplication(ctx context.Context, o hostOps, j application
 		return target, e
 	}
 	var prior intent
-	if strict(b, &prior) != nil || (prior != intentFor(j.Previous) && prior != intentFor(target)) {
+	if strict(b, &prior) != nil || (prior != intentFor(j.Previous) && prior != intentFor(target) && !committedAccessBridgesIntent(o, prior, j.Previous)) {
 		return target, errors.New("owner installer intent changed; preserve held completion")
 	}
 	if prior != intentFor(target) {

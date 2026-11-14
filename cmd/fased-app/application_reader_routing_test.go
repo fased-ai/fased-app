@@ -31,6 +31,22 @@ func TestRemoteApplicationReaderRestartRoutesBeforeHealthyTargetIPC(t *testing.T
 	}
 }
 
+func TestRemotePreparedReaderRecoveryPrecedesIdleSourceIPC(t *testing.T) {
+	for _, phase := range []string{"prepared", "applying", "recovery", "healthy-held"} {
+		t.Run(phase, func(t *testing.T) {
+			status := vpsinstall.ApplicationUpdateStatus{Version: 1, ID: strings.Repeat("a", 32), Phase: phase, ReaderBootstrap: true}
+			calls := 0
+			err := routeRemoteApplicationMaintenance(status, nil, status.ID, func() error {
+				t.Fatal("idle predecessor IPC hid the retained reader transaction")
+				return nil
+			}, func() error { calls++; return nil })
+			if err != nil || calls != 1 {
+				t.Fatal("did not resume the exact retained reader operation", calls, err)
+			}
+		})
+	}
+}
+
 func TestApplicationReaderCompletionPreparesOptionalMaintenance(t *testing.T) {
 	root := t.TempDir()
 	image := filepath.Join(root, "inert-core")

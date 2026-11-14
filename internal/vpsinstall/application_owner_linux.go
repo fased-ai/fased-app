@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"os/exec"
+	"runtime/debug"
 	"strconv"
 
 	"github.com/fased-ai/fased-app/internal/core"
@@ -36,6 +37,11 @@ func ApplicationOwnerCall(ctx context.Context, m Manifest, command core.Applicat
 		if _, e := s.Run(ctx, nil, "/usr/bin/setpriv", "--version"); e != nil {
 			return nil, e
 		}
+		// Staging/publishing may have read whole executable images. They are
+		// dead at this boundary; return those pages before the admitted helper
+		// starts its own verification on a small VPS. Keep the original image,
+		// UID and environment contracts unchanged.
+		debug.FreeOSMemory()
 		c := exec.CommandContext(ctx, "/usr/bin/sudo", append([]string{"-n", "--"}, args...)...)
 		c.Dir = "/"
 		c.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}

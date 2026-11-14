@@ -1,3 +1,4 @@
+import { useUI } from "../ui-preferences";
 import { useState } from "react";
 import { Badge } from "../components/shared";
 import { useWorkspace } from "../workspace";
@@ -10,6 +11,7 @@ const ranges = [
   "E · +0.20% or above",
 ];
 export function WENPaperJourney() {
+  const { t: uiText } = useUI();
   const { core, agents, navigate } = useWorkspace();
   const [name, setName] = useState("Range rehearsal");
   const [budget, setBudget] = useState("0.01");
@@ -21,7 +23,7 @@ export function WENPaperJourney() {
     <section className="panel wen-paper" aria-label="WEN paper journey">
       <div className="panel-heading">
         <h2>WEN paper journey</h2>
-        <Badge>LOCAL FIXTURES ONLY</Badge>
+        <Badge>{uiText("Paper only")}</Badge>
       </div>
       <div className="agent-record-body">
         <p>
@@ -147,7 +149,8 @@ export function WENPaperJourney() {
                         Canonical source: <code>{p.fixtureSource}</code>
                       </p>
                       <p>
-                        Fixture SHA-256: <code>{p.fixtureSha256}</code>
+                        {uiText("Source SHA-256:")}{" "}
+                        <code>{p.fixtureSha256}</code>
                       </p>
                       <p>
                         Review digest: <code>{p.digest}</code>

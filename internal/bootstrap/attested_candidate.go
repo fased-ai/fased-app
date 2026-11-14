@@ -25,7 +25,7 @@ func VerifyAttestedCandidate(o Options, directory string) (Report, error) {
 		return report, err
 	}
 	var packet AttestedPacket
-	if update.StrictJSON(raw, &packet) != nil || packet.Version != 1 || !hashOK(packet.BundleSHA256) || !sourceHash(packet.Release.SourceTree) || !hashOK(packet.Release.PackageLockSHA256) || !hashOK(packet.Release.GoSumSHA256) {
+	if update.StrictJSON(raw, &packet) != nil || !attestedBuildIdentity(packet, packet.Release.TagObject) || !hashOK(packet.BundleSHA256) || !sourceHash(packet.Release.SourceTree) || !hashOK(packet.Release.PackageLockSHA256) || !hashOK(packet.Release.GoSumSHA256) {
 		return report, errors.New("candidate inventory invalid")
 	}
 	if packet.Release.InstallerSHA256 != packet.Installer.SHA256 || !hashOK(packet.Release.InstallerSHA256) {

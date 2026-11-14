@@ -43,7 +43,7 @@ jobs:
           node-version: "24"
       - run: node --test scripts/ci-routing.test.mjs scripts/ci-core-coverage.test.mjs
       - name: Verify dormant release staging boundaries
-        run: node --test --test-isolation=none scripts/prepare-ubuntu-release.test.mjs
+        run: node --test --test-isolation=none scripts/prepare-ubuntu-release.test.mjs scripts/release-acceptance.test.mjs
       - id: route
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}

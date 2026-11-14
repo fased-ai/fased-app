@@ -1,3 +1,4 @@
+import { previewModel } from "../ui-language-preview";
 import { useEffect, useRef, useState } from "react";
 import type { Connection } from "./AIConnection";
 import { useWorkspace } from "../workspace";
@@ -184,7 +185,7 @@ export function TaskAccessSettings({
           }}
         >
           <p>
-            {review.model} ·{" "}
+            {previewModel(review.model, t)} ·{" "}
             {t("{count} replies · {minutes} minutes", {
               count: review.maxRequests,
               minutes: Math.floor((review.expiresAt - review.createdAt) / 60),

@@ -1,6 +1,7 @@
 import { onchainCopy } from "./ui-language-onchain";
 import { priorityCopy } from "./ui-language-priority";
 import { pageCopy } from "./ui-language-pages";
+import { previewCopy, previewEnglish } from "./ui-language-preview";
 export const languages = {
   en: "English",
   ru: "Русский",
@@ -101,6 +102,7 @@ const rows = {
   ...pageCopy,
   ...onchainCopy,
   ...priorityCopy,
+  ...previewCopy,
   "No expiry": ["Без срока", "Sin caducidad", "无有效期限制", "만료 없음"],
   "Weekdays at {time}": [
     "По будням в {time}",
@@ -537,12 +539,16 @@ export function translate(
   const row = Object.hasOwn(rows, normalized)
     ? rows[normalized as Copy]
     : undefined;
-  const result =
-    language === "en" || !row
-      ? key
-      : key.slice(0, key.indexOf(normalized)) +
-        row[({ ru: 0, es: 1, zh: 2, ko: 3 } as const)[language]] +
-        key.slice(key.indexOf(normalized) + normalized.length);
+  const english = Object.hasOwn(previewEnglish, normalized)
+    ? previewEnglish[normalized]
+    : normalized;
+  const result = !row
+    ? key
+    : key.slice(0, key.indexOf(normalized)) +
+      (language === "en"
+        ? english
+        : row[({ ru: 0, es: 1, zh: 2, ko: 3 } as const)[language]]) +
+      key.slice(key.indexOf(normalized) + normalized.length);
   return result.replace(/\{(\w+)\}/g, (match, name: string) =>
     Object.hasOwn(values, name) ? String(values[name]) : match,
   );

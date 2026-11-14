@@ -63,6 +63,120 @@ test("unstamped source cannot modify a host", () => {
   assert.equal(r.status, 1);
   assert.match(r.stderr.toString(), /No trusted installer release/);
 });
+
+function entryTerminalCode() {
+  const terminal = template
+    .split("else die 'Invalid installer binding.'; fi\n")[1]
+    .split("if [[ -z $profile")[0];
+  const die = template.match(/^die\(\).*$/m)[0];
+  return `set -euo pipefail\n${die}\n${terminal}`;
+}
+
+test("entry reports a detached terminal before any installation work", () => {
+  const result = spawnSync("python3", [
+    "-c",
+    `import os,subprocess,sys
+r=subprocess.run(['bash','-c',sys.argv[1]],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,preexec_fn=os.setsid)
+sys.stdout.buffer.write(r.stdout);sys.stderr.buffer.write(r.stderr);sys.exit(r.returncode)
+`,
+    entryTerminalCode(),
+  ]);
+  assert.equal(result.status, 1, result.stderr.toString());
+  assert.match(
+    result.stderr.toString(),
+    /Run this command in an interactive terminal/,
+  );
+  assert.doesNotMatch(result.stderr.toString(), /\/dev\/tty:/);
+});
+
+test("literal process-substitution entry keeps the terminal through sanitized owner handoff", () => {
+  const handoff = template
+    .split("\n")
+    .find((line) =>
+      line.startsWith('/usr/sbin/runuser -u "$operator" -- /usr/bin/env -i '),
+    )
+    .split(" -- ")[1];
+  const code =
+    entryTerminalCode() + `
+operator=fixture owner_home=/tmp action=update entry_version=1.0.0 installer_url='' installer_sha256='' seed_base64='' seed_sha256='' fixture_ca_base64='' development_only=1 listen=127.0.0.1:7331 profile=remote runtime='' ssh_user=root
+owner_install() {
+  [[ $(id -u) != 0 && -t 0 ]]
+  printf 'Owner sign-in: '
+  IFS= read -r answer
+  [[ $answer == synthetic-owner ]]
+  printf 'ENTRY_PTY_PASS:%s\\n' "$profile"
+}
+body="$(declare -f die owner_install); owner_install"
+${handoff}
+`;
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      `import errno,os,pty,select,signal,sys,time
+pid,fd=pty.fork()
+if pid==0:os.execlp('bash','bash','-c','bash <(printf "%s" "$1")','entry',sys.argv[1])
+output=b'';deadline=time.monotonic()+10;status=None
+try:
+ os.write(fd,b'synthetic-owner\\n')
+ while time.monotonic()<deadline:
+  if select.select([fd],[],[],0.1)[0]:
+   try:
+    chunk=os.read(fd,65536)
+    if not chunk:break
+    output+=chunk
+   except OSError as e:
+    if e.errno==errno.EIO:break
+    raise
+  done,child_status=os.waitpid(pid,os.WNOHANG)
+  if done:
+   status=child_status
+   break
+ else:raise TimeoutError('entry terminal handoff timed out')
+finally:
+ os.close(fd)
+ if status is None:
+  done,status=os.waitpid(pid,os.WNOHANG)
+  if not done:os.kill(pid,signal.SIGKILL);_,status=os.waitpid(pid,0)
+sys.stdout.buffer.write(output);sys.exit(os.waitstatus_to_exitcode(status))
+`,
+      code,
+    ],
+    { timeout: 15000 },
+  );
+  assert.equal(
+    result.status,
+    0,
+    result.stderr.toString() + result.stdout.toString(),
+  );
+  assert.match(result.stdout.toString(), /ENTRY_PTY_PASS:remote/);
+});
+
+test("remote management leaves an older installation's command path untouched", () => {
+  const commandGuard = template
+    .split(
+      "# The root-owned command contains only fixed OS identity/drop operations.",
+    )[1]
+    .match(/^if \[\[.*\]\]; then$/m)[0];
+  for (const action of ["open", "start", "stop", "status", "recover", "setup"]) {
+    const result = spawnSync(
+      "bash",
+      ["-c", `${commandGuard}\nprintf 'INSTALL_COMMAND_REQUESTED'\nfi`],
+      { env: { ...process.env, profile: "remote", action } },
+    );
+    assert.equal(result.status, 0, result.stderr.toString());
+    assert.equal(result.stdout.toString(), "", action);
+  }
+  for (const action of ["install", "update"]) {
+    const result = spawnSync(
+      "bash",
+      ["-c", `${commandGuard}\nprintf 'INSTALL_COMMAND_REQUESTED'\nfi`],
+      { env: { ...process.env, profile: "remote", action } },
+    );
+    assert.equal(result.status, 0, result.stderr.toString());
+    assert.equal(result.stdout.toString(), "INSTALL_COMMAND_REQUESTED", action);
+  }
+});
 test("controlled fixture has explicit isolated trust", () => {
   const fixtureSeed = Buffer.from(
     JSON.stringify({

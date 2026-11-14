@@ -29,6 +29,37 @@ func accessJournalValid(j accessJournal) bool {
 	a.PublicOrigin = b.PublicOrigin
 	return j.Version == 1 && update.IDOK(j.ID) && j.InstanceID != "" && j.Previous.validate() == nil && j.Next.validate() == nil && a == b && j.Previous.PublicOrigin != j.Next.PublicOrigin && (j.Phase == "prepared" || j.Phase == "switched" || j.Phase == "rollback" || j.Phase == "committed" || j.Phase == "rolled-back")
 }
+
+// A pre-synchronization installation may retain its exact pre-access owner
+// intent. Only the durable committed chain can explain that predecessor.
+func committedAccessBridgesIntent(o hostOps, prior intent, current Manifest) bool {
+	b, err := o.readJournal(accessJournalName)
+	var j accessJournal
+	return err == nil && len(b) <= 32*1024 && strict(b, &j) == nil && accessJournalValid(j) && j.Phase == "committed" && j.Next == current && prior == intentFor(j.Previous)
+}
+
+func syncAccessOwnerIntent(o hostOps, j accessJournal) error {
+	if !accessJournalValid(j) || j.Phase != "committed" && j.Phase != "rolled-back" {
+		return errors.New("terminal private access transaction required for owner intent")
+	}
+	target := j.Next
+	if j.Phase == "rolled-back" {
+		target = j.Previous
+	}
+	b, err := o.readJournal("intent.json")
+	if err != nil {
+		return err
+	}
+	var prior intent
+	if len(b) > 32*1024 || strict(b, &prior) != nil || prior != intentFor(j.Previous) && prior != intentFor(j.Next) {
+		return errors.New("owner installer intent differs from private access transaction; preserve it")
+	}
+	if prior == intentFor(target) {
+		return nil
+	}
+	return o.writeJournal("intent.json", intentFor(target))
+}
+
 func accessIdle(o hostOps, m Manifest) error {
 	b, e := o.readJournal(accessJournalName)
 	if errors.Is(e, os.ErrNotExist) {
@@ -208,6 +239,9 @@ func rollbackAccess(ctx context.Context, o hostOps, j accessJournal, confirm fun
 	if e := o.writeJournal(accessJournalName, j); e != nil {
 		return e
 	}
+	if e := syncAccessOwnerIntent(o, j); e != nil {
+		return e
+	}
 	if e := record(o, j.Previous, "ready"); e != nil {
 		return e
 	}
@@ -233,6 +267,7 @@ func changeAccess(ctx context.Context, o hostOps, m Manifest, origin string, con
 	} else if e != nil && !errors.Is(e, os.ErrNotExist) {
 		return m, e
 	}
+	var terminalAccess *accessJournal
 	if b, e := o.readJournal(accessJournalName); e == nil {
 		var prior accessJournal
 		if len(b) > 32*1024 || strict(b, &prior) != nil || !accessJournalValid(prior) || prior.Previous.ID != m.ID || prior.Previous.OwnerUID != m.OwnerUID {
@@ -246,6 +281,13 @@ func changeAccess(ctx context.Context, o hostOps, m Manifest, origin string, con
 			}
 			return prior.Previous, errors.New("previous access restored; rerun the same setup")
 		}
+		terminal := prior.Next
+		if prior.Phase == "rolled-back" {
+			terminal = prior.Previous
+		}
+		if terminal == m {
+			terminalAccess = &prior
+		}
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return m, e
 	}
@@ -254,6 +296,22 @@ func changeAccess(ctx context.Context, o hostOps, m Manifest, origin string, con
 	}
 	if e := loaded(ctx, o, m); e != nil {
 		return m, e
+	}
+	if terminalAccess != nil {
+		if e := syncAccessOwnerIntent(o, *terminalAccess); e != nil {
+			return m, e
+		}
+		if e := record(o, m, "ready"); e != nil {
+			return m, e
+		}
+		if e := cleanupAccessStage(ctx, o, *terminalAccess); e != nil {
+			return m, e
+		}
+	}
+	b, e := o.readJournal("intent.json")
+	var owner intent
+	if e != nil || len(b) > 32*1024 || strict(b, &owner) != nil || owner != intentFor(m) {
+		return m, errors.New("owner installer intent changed; preserve private access")
 	}
 	if origin == m.PublicOrigin {
 		if confirm != nil {
@@ -291,6 +349,9 @@ func changeAccess(ctx context.Context, o hostOps, m Manifest, origin string, con
 		defer done()
 		rollbackErr := rollbackAccess(recovery, o, j, confirm)
 		return m, errors.Join(failure, rollbackErr)
+	}
+	if e := syncAccessOwnerIntent(o, j); e != nil {
+		return next, e
 	}
 	if e := record(o, next, "ready"); e != nil {
 		return next, e

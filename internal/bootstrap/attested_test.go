@@ -35,13 +35,18 @@ func attestedFixture(t *testing.T, variant string) (*firstFixture, Options, map[
 	installer, entry := []byte("inert disposable installer"), []byte("inert disposable entry")
 	release.InstallerSHA256 = digest(installer)
 	expected := releaseprovenance.Expected{InstallerSHA256: digest(installer), ArchiveName: archive.File, ArchiveSHA256: archive.SHA256, SourceCommit: release.WorkflowCommit, WorkflowCommit: release.WorkflowCommit, Tag: "v1.2.3", RunID: "23", RunAttempt: "1"}
+	tagObject := release.TagObject
+	packetVersion := 1
+	if variant == "staged" {
+		release.BuildRef, release.TagObject, expected.BuildRef, packetVersion = "refs/heads/main", "", "refs/heads/main", 2
+	}
 	pub, proof, err := fixture.NewWithOptions(releaseprovenance.Policy{Version: releaseprovenance.PolicyVersion, Repository: policy.Repository, RepositoryID: "7", OwnerID: "8", Workflow: releaseprovenance.WorkflowPath}, expected, f.now, fixture.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.seed.Provenance = &pub
 	release.Provenance = update.Artifact{File: provenanceFile, Size: int64(len(proof)), SHA256: digest(proof)}
-	packet := AttestedPacket{Version: 1, ProductVersion: "1.2.3", Source: release.WorkflowCommit, BundleSHA256: f.descriptor.BundleSHA256, Archive: archive, Installer: update.Artifact{File: "fased-install-linux-amd64", Size: int64(len(installer)), SHA256: digest(installer)}, Entry: update.Artifact{File: "install.sh", Size: int64(len(entry)), SHA256: digest(entry)}, Release: release}
+	packet := AttestedPacket{Version: packetVersion, ProductVersion: "1.2.3", Source: release.WorkflowCommit, BundleSHA256: f.descriptor.BundleSHA256, Archive: archive, Installer: update.Artifact{File: "fased-install-linux-amd64", Size: int64(len(installer)), SHA256: digest(installer)}, Entry: update.Artifact{File: "install.sh", Size: int64(len(entry)), SHA256: digest(entry)}, Release: release}
 	payloads := map[string][]byte{archiveTarget: f.archive, provenanceFile: proof, "fased-install-linux-amd64": installer, "install.sh": entry, AttestedPacketFile: jsonBytes(t, packet)}
 	if variant == "bad-installer" {
 		payloads["fased-install-linux-amd64"] = []byte("altered executable")
@@ -87,8 +92,8 @@ func attestedFixture(t *testing.T, variant string) (*firstFixture, Options, map[
 		case "/repos/fased-ai/fased-app/releases/latest":
 			json.NewEncoder(w).Encode(map[string]any{"id": 11, "draft": variant == "draft", "prerelease": false, "immutable": variant != "mutable", "tag_name": "v1.2.3", "assets": assets})
 		case "/repos/fased-ai/fased-app/git/ref/tags/v1.2.3":
-			json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"type": "tag", "sha": release.TagObject}})
-		case "/repos/fased-ai/fased-app/git/tags/" + release.TagObject:
+			json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"type": "tag", "sha": tagObject}})
+		case "/repos/fased-ai/fased-app/git/tags/" + tagObject:
 			json.NewEncoder(w).Encode(map[string]any{"tag": "v1.2.3", "object": map[string]string{"type": "commit", "sha": release.WorkflowCommit}})
 		default:
 			const prefix = "/repos/fased-ai/fased-app/releases/assets/"
@@ -118,6 +123,50 @@ func attestedFixture(t *testing.T, variant string) (*firstFixture, Options, map[
 
 func TestAttestedBootstrapAndCandidate(t *testing.T) {
 	f, o, payloads := attestedFixture(t, "")
+	p, err := Prepare(t.Context(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	r := p.Report()
+	if !r.ProvenanceVerified || !r.BundleVerified || r.Version != 4 || r.Sequence != 1000002000004 || r.InstallerInvoked {
+		t.Fatal(r)
+	}
+	release, err := p.ApplicationRelease()
+	if err != nil || release.Sequence != 1000002000004 {
+		t.Fatal(release, err)
+	}
+	dir := filepath.Join(f.parent, "candidate")
+	if err = os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, raw := range payloads {
+		if err = os.WriteFile(filepath.Join(dir, name), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	verified, err := VerifyAttestedCandidate(o, dir)
+	if err != nil || !verified.ProvenanceVerified || !verified.BundleVerified || verified.MetadataVerified || verified.InstallerInvoked {
+		t.Fatal(verified, err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "first-install-seed.json"), o.Seed, 0600); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.CommandContext(t.Context(), "go", "test", "./cmd/fased-install", "-run", "^TestAttestedCandidateCLI$", "-count=1")
+	command.Dir = filepath.Join("..", "..")
+	command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly -buildvcs=false", "GOPROXY=off", "GOSUMDB=off", "FASED_ATTESTED_CANDIDATE_FIXTURE=" + dir}
+	if output, e := command.CombinedOutput(); e != nil {
+		t.Fatalf("actual candidate CLI: %v %s", e, output)
+	}
+	if err = os.WriteFile(filepath.Join(dir, archiveTarget), []byte("changed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = VerifyAttestedCandidate(o, dir); err == nil {
+		t.Fatal("changed candidate accepted")
+	}
+}
+func TestAttestedStagedBootstrapAndCandidate(t *testing.T) {
+	f, o, payloads := attestedFixture(t, "staged")
 	p, err := Prepare(t.Context(), o)
 	if err != nil {
 		t.Fatal(err)
