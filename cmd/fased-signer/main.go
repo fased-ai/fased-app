@@ -28,7 +28,7 @@ func main() {
 }
 
 func run(args []string, input *os.File, out, errOut io.Writer) error {
-	if len(args) > 0 && (args[0] == "custody-maintenance" || args[0] == "custody-maintenance-inventory" || args[0]=="custody-maintenance-status") {
+	if len(args) > 0 && (args[0] == "custody-maintenance" || args[0] == "custody-maintenance-inventory" || args[0] == "custody-maintenance-status") {
 		return signerMaintenanceCommand(args, input, out)
 	}
 	if len(args) == 2 && args[0] == "fixture-install-guard" && args[1] == "--predecessor-capability" {

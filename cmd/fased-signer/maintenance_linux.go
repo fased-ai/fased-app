@@ -29,7 +29,20 @@ func signerMaintenanceCommand(args []string, in io.Reader, out io.Writer) (resul
 	if c.OwnerUID != *owner {
 		return signer.ErrUnavailable
 	}
-	if args[0]=="custody-maintenance-status"{if !update.IDOK(*id)||*probe!=""{return signer.ErrUnavailable};a,err:=update.ReadMaintenanceApproval(*owner,*id);if err!=nil||a.InstallationID!=c.SignerID{return errors.New("protected installation approval required")};v,err:=signer.InspectInstallationReadOnly(c,*id);if err!=nil{return err};return json.NewEncoder(out).Encode(signer.Response{Installation:v})}
+	if args[0] == "custody-maintenance-status" {
+		if !update.IDOK(*id) || *probe != "" {
+			return signer.ErrUnavailable
+		}
+		a, err := update.ReadMaintenanceApproval(*owner, *id)
+		if err != nil || a.InstallationID != c.SignerID {
+			return errors.New("protected installation approval required")
+		}
+		v, err := signer.InspectInstallationReadOnly(c, *id)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(signer.Response{Installation: v})
+	}
 	if args[0] == "custody-maintenance-inventory" {
 		if *id != "" || !update.IDOK(*probe) {
 			return signer.ErrUnavailable

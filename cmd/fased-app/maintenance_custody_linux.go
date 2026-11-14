@@ -37,7 +37,19 @@ func metadataMaintenanceCommand(args []string, in io.Reader, out io.Writer) (res
 		return err
 	}
 	ctx := context.Background()
-	if args[0]=="custody-maintenance-verify"{if !update.IDOK(*id)||*probe!=""{return errors.New("one exact original recovery required")};r,err:=update.ReadMaintenanceRecord(*owner);if err!=nil||r.OperationID!=*id||r.Recovery==nil{return errors.New("protected original recovery index required")};if err=core.VerifyFixtureColdRecovery(ctx,root+"/app-state",*r.Recovery);err!=nil{return err};return json.NewEncoder(out).Encode(update.MetadataMaintenanceReply{Recovery:r.Recovery})}
+	if args[0] == "custody-maintenance-verify" {
+		if !update.IDOK(*id) || *probe != "" {
+			return errors.New("one exact original recovery required")
+		}
+		r, err := update.ReadMaintenanceRecord(*owner)
+		if err != nil || r.OperationID != *id || r.Recovery == nil {
+			return errors.New("protected original recovery index required")
+		}
+		if err = core.VerifyFixtureColdRecovery(ctx, root+"/app-state", *r.Recovery); err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(update.MetadataMaintenanceReply{Recovery: r.Recovery})
+	}
 	if args[0] == "custody-maintenance-inventory" {
 		if *id != "" || !update.IDOK(*probe) {
 			return errors.New("one metadata probe required")
