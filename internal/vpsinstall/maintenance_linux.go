@@ -8,12 +8,15 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/enrollment"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
@@ -83,6 +86,37 @@ func RunProtected(ctx context.Context, owner int, action string, peer *tailnet.I
 		case "remote-status":
 			v, err := status(ctx, o, m)
 			payload = protectedRemoteStatus{Status: v, RemoteReady: v.RemoteReady}
+			return err
+		case "remote-ingress-ready":
+			v, err := status(ctx, o, m)
+			if err != nil || !v.Active || v.InstanceID == "" {
+				return errors.Join(err, errors.New("original Remote instance is not ready"))
+			}
+			fields, err := unitFields(ctx, o, m)
+			if err != nil {
+				return err
+			}
+			drop, _, err := tailnet.ProtectedSocketDropIn("vps", owner)
+			if err != nil {
+				return err
+			}
+			found := false
+			for _, path := range strings.Fields(fields["DropInPaths"]) {
+				found = found || path == drop
+			}
+			if !found || fields["NeedDaemonReload"] != "no" || !tailnet.ProtectedSocketReady("vps", owner) {
+				return errors.New("protected Remote listener is not active")
+			}
+			path, err := tailnet.ProtectedSocket("vps", owner)
+			if err != nil {
+				return err
+			}
+			err = privateaccess.ProbeProtectedIngress(ctx, m.PublicOrigin, m.OwnerUID, v.InstanceID, func(ctx context.Context) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", path)
+			})
+			if err == nil {
+				payload = v.InstanceID
+			}
 			return err
 		case "remote-enrollment-validate":
 			if err := verifyEnrollmentFiles(o, m, true); err != nil {
@@ -208,6 +242,14 @@ func protectedRemoteOps(a maintenance.Authority, out io.Writer, peer *tailnet.Id
 		args := []string{"/usr/bin/setpriv", "--reuid", strconv.Itoa(a.Owner), "--regid", strconv.Itoa(a.Group), "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--", m.Core, "version", "--json"}
 		return o.run(ctx, nil, args...)
 	}
+	o.ingressContract = func(ctx context.Context, m Manifest) error {
+		args := []string{"/usr/bin/setpriv", "--reuid", strconv.Itoa(m.AppUID), "--regid", strconv.Itoa(m.AppGID), "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--", m.Core, "private-ingress-capability"}
+		output, err := o.run(ctx, nil, args...)
+		if err != nil || !bytes.Equal(output, []byte("fased-protected-ingress-v1\n")) {
+			return errors.New("verified Remote core cannot accept the protected listener")
+		}
+		return nil
+	}
 	o.helper = func(ctx context.Context, args []string, writer io.Writer) error {
 		var input []byte
 		if peer != nil {
@@ -309,4 +351,21 @@ func protectedRemoteCall(ctx context.Context, m Manifest, action string, diagnos
 		_, err = io.WriteString(out, text)
 	}
 	return true, err
+}
+
+// ProtectedIngressReady asks the installed helper to bind socket readiness to
+// the current managed instance. It never changes the existing Serve route.
+func ProtectedIngressReady(ctx context.Context, m Manifest, instance string, s *custodyinstall.System) error {
+	if s == nil || instance == "" {
+		return errors.New("owner maintenance context required")
+	}
+	var output bytes.Buffer
+	handled, err := protectedRemoteCall(ctx, m, "remote-ingress-ready", io.Discard, &output)
+	if !handled && err == nil {
+		return errors.New("installed helper cannot verify the protected listener")
+	}
+	if err == nil && output.String() != instance {
+		return errors.New("protected listener belongs to another instance")
+	}
+	return err
 }

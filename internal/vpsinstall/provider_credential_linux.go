@@ -8,8 +8,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/fased-ai/fased-app/internal/providersecrets"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 )
 
 // The existing installer executes only fixed OS utilities with privilege. The
@@ -84,11 +86,42 @@ func validTaskCredentialDropIn(o hostOps, m Manifest, paths string) bool {
 	if paths == "" {
 		return true
 	} // Older installations remain supported without persistence.
-	if paths != taskCredentialDropInPath(m) {
+	ingress, ingressBody, err := tailnet.ProtectedSocketDropIn("vps", m.OwnerUID)
+	if err != nil {
 		return false
 	}
-	f, e := rootFile(o, paths)
-	return e == nil && known(f, taskCredentialDropIn(m), 0644)
+	seen := map[string]bool{}
+	for _, path := range strings.Fields(paths) {
+		if seen[path] {
+			return false
+		}
+		seen[path] = true
+		var want []byte
+		switch path {
+		case taskCredentialDropInPath(m):
+			want = taskCredentialDropIn(m)
+		case ingress:
+			if m.PublicOrigin == "" {
+				return false
+			}
+			name, socket, e := tailnet.ProtectedSocketUnit("vps", m.OwnerUID)
+			if e != nil {
+				return false
+			}
+			f, e := rootFile(o, "/etc/systemd/system/"+name)
+			if e != nil || !known(f, socket, 0644) {
+				return false
+			}
+			want = ingressBody
+		default:
+			return false
+		}
+		f, e := rootFile(o, path)
+		if e != nil || !known(f, want, 0644) {
+			return false
+		}
+	}
+	return len(seen) > 0
 }
 
 func prepareTaskCredentialDropIn(ctx context.Context, o hostOps, m Manifest) error {

@@ -98,6 +98,19 @@ func TestRemotePreflightOriginTakesNoCallerInputs(t *testing.T) {
 	}
 }
 
+func TestRemoteIngressReadinessTakesNoCallerInputs(t *testing.T) {
+	for _, action := range []string{"remote-ingress-ready", "custody-ingress-ready"} {
+		if _, err := DecodeRequest([]byte(`{"version":1,"action":"` + action + `"}`)); err != nil {
+			t.Fatal(err)
+		}
+		for _, suffix := range []string{`,"path":"/tmp/foreign"}`, `,"remote":{}}`, `,"serve":{}}`} {
+			if _, err := DecodeRequest([]byte(`{"version":1,"action":"` + action + `"` + suffix)); err == nil {
+				t.Fatal("caller-selected ingress accepted")
+			}
+		}
+	}
+}
+
 func TestEnrollmentImageRequestCannotSelectUIDOrPath(t *testing.T) {
 	instance := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
 	good := `{"version":1,"action":"custody-enrollment-image","image":{"operationId":"` + strings.Repeat("a", 32) + `","action":"import","slot":"stage","instanceId":"` + instance + `","digest":"` + strings.Repeat("b", 64) + `"}}`

@@ -273,21 +273,21 @@ func TestConditionalOwnerDeltaNeverChangesForeignRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	owns := func(p Plan) bool { return p.Origin == own.Origin && p.Target == own.Target }
-	if !routeDeltaAllowed(before, after, []Plan{own}, owns) {
+	if !routeDeltaAllowed(before, after, []Plan{own}, owns, owns) {
 		t.Fatal("owned addition refused")
 	}
-	if !routeDeltaAllowed(after, before, []Plan{own}, owns) {
+	if !routeDeltaAllowed(after, before, []Plan{own}, owns, owns) {
 		t.Fatal("owned removal refused")
 	}
 	modified, _ := routeChange(after, foreign, false)
-	if routeDeltaAllowed(before, modified, []Plan{own, foreign}, owns) {
+	if routeDeltaAllowed(before, modified, []Plan{own, foreign}, owns, owns) {
 		t.Fatal("foreign route removed")
 	}
 	modified["AllowFunnel"] = map[string]any{"node.owner.ts.net:8443": true}
-	if routeDeltaAllowed(before, modified, []Plan{own}, owns) {
+	if routeDeltaAllowed(before, modified, []Plan{own}, owns, owns) {
 		t.Fatal("Funnel admitted")
 	}
-	if routeDeltaAllowed(before, after, []Plan{foreign}, owns) {
+	if routeDeltaAllowed(before, after, []Plan{foreign}, owns, owns) {
 		t.Fatal("unowned addition admitted")
 	}
 }

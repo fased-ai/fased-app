@@ -20,6 +20,23 @@ func TestManagedRemoteRequiresBundleBeforeHostAccess(t *testing.T) {
 	}
 }
 
+func TestRemotePlanSwitchesOnlyAfterProtectedInstanceProof(t *testing.T) {
+	m := vpsinstall.Manifest{OwnerUID: 1000, Data: "/var/lib/fased-app-vps-1000/app-state"}
+	plan := privateaccess.Plan{Mode: "tailscale", Origin: "https://owner.example.ts.net"}
+	legacy, err := remoteIngressPlan(plan, m, false)
+	if err != nil || legacy.Target != "unix:/var/lib/fased-app-vps-1000/app-state/tailscale.sock" {
+		t.Fatal("legacy route changed without proof", legacy, err)
+	}
+	protected, err := remoteIngressPlan(plan, m, true)
+	if err != nil || protected.Target != "unix:/run/fased-vps-1000/tailscale.sock" || protected.Origin != plan.Origin {
+		t.Fatal("verified private listener not selected", protected, err)
+	}
+	m.OwnerUID = 0
+	if _, err := remoteIngressPlan(plan, m, true); err == nil {
+		t.Fatal("unbound owner accepted")
+	}
+}
+
 func TestManagedRemoteOwnerDirectoryHandoff(t *testing.T) {
 	uid, err := managedRemoteOwner(vpsinstall.Root(1000))
 	if err != nil || uid != 1000 {

@@ -240,6 +240,12 @@ func maintenanceRequestCommand(args []string, in io.Reader, out io.Writer) error
 		}
 	case "custody-initialize":
 		err = maintenanceCustodyInitialize(workCtx, a)
+	case "custody-ingress-ready":
+		var instance string
+		instance, err = custodyinstall.ProtectedRemoteIngressReady(workCtx, a.Owner)
+		if err == nil {
+			payload, err = json.Marshal(instance)
+		}
 	case "custody-update":
 		err = maintenanceCustodyAcquire(workCtx, a, *r.Custody, false, nil)
 		if err == nil {

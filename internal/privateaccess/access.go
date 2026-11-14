@@ -38,6 +38,9 @@ type Manager struct {
 	ProofOut     io.Writer
 	ExpectedPeer *tailnet.Identity
 	InitialPeer  func() (tailnet.Identity, bool, error)
+	// ValidateIngress is set by managed Remote setup before a route is added
+	// or switched. Existing owned routes remain readable and removable.
+	ValidateIngress func(Plan) error
 }
 type Plan struct {
 	Mode         string   `json:"mode"`
@@ -240,6 +243,11 @@ func (m Manager) Enable(ctx context.Context, root string, p Plan, instanceID str
 		if e != nil || state != "absent" {
 			return errors.New("existing private route belongs to the owner; refusing to replace or adopt it")
 		}
+		if m.ValidateIngress != nil {
+			if e = m.ValidateIngress(p); e != nil {
+				return e
+			}
+		}
 		r = receipt{Schema: 1, Phase: "preparing", Plan: p}
 		if err = storeAccessReceipt(root, r); err != nil {
 			return err
@@ -247,6 +255,11 @@ func (m Manager) Enable(ctx context.Context, root string, p Plan, instanceID str
 	} else if err != nil {
 		return err
 	} else if r.Plan.Origin == p.Origin && r.Plan.Target != p.Target && strings.HasPrefix(p.Target, "unix:") && (r.Phase == "ready" || r.Phase == "switching") {
+		if m.ValidateIngress != nil {
+			if e := m.ValidateIngress(p); e != nil {
+				return e
+			}
+		}
 		return m.switchIngress(ctx, root, r, p, instanceID, cfg, etag)
 	} else if r.Plan.Origin != p.Origin || r.Plan.Target != p.Target {
 		return errors.New("private-access identity changed; recover the existing route first")
@@ -256,6 +269,11 @@ func (m Manager) Enable(ctx context.Context, root string, p Plan, instanceID str
 		return err
 	}
 	if state == "absent" {
+		if m.ValidateIngress != nil {
+			if e := m.ValidateIngress(p); e != nil {
+				return e
+			}
+		}
 		// A prior process may have published the record before a power cut.
 		if err = syncAccessDirectory(root); err != nil {
 			return err

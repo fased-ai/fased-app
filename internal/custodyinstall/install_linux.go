@@ -25,6 +25,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/hostplatform"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/signer"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 	"github.com/fased-ai/fased-app/internal/update"
 	"golang.org/x/sys/unix"
 )
@@ -805,16 +806,20 @@ func loadedUnit(m Manifest, role string) error {
 	return loadedUnitPolicy(m, role, definitions(m)["fased-"+role+".service"], m.Root+"/fased-"+role)
 }
 func loadedUnitPolicy(m Manifest, role string, wanted []byte, image string) error {
+	_, err := loadedUnitPolicyFields(m, role, wanted, image)
+	return err
+}
+func loadedUnitPolicyFields(m Manifest, role string, wanted []byte, image string) (map[string]string, error) {
 	f, e := readRoot("/etc/systemd/system/" + Unit(m.Owner, role))
 	if e != nil {
-		return e
+		return nil, e
 	}
 	if !known(f, wanted, 0644) {
-		return errors.New("installed system unit changed; preserving it")
+		return nil, errors.New("installed system unit changed; preserving it")
 	}
 	b, e := exec.Command("/usr/bin/systemctl", "show", Unit(m.Owner, role), "--property=FragmentPath,DropInPaths,User,Group,NoNewPrivileges,ProtectSystem,ExecStart,NeedDaemonReload").Output()
 	if e != nil {
-		return e
+		return nil, e
 	}
 	fields := map[string]string{}
 	for _, line := range strings.Split(string(b), "\n") {
@@ -823,7 +828,10 @@ func loadedUnitPolicy(m Manifest, role string, wanted []byte, image string) erro
 			fields[p[0]] = p[1]
 		}
 	}
-	return validateLoadedUnitFields(m, role, image, fields, readRoot, scopedMigrationEnabled)
+	if err := validateLoadedUnitFields(m, role, image, fields, readRoot, scopedMigrationEnabled); err != nil {
+		return nil, err
+	}
+	return fields, nil
 }
 
 func validateLoadedUnitFields(m Manifest, role, image string, fields map[string]string, read readHost, scope func(int) (bool, error)) error {
@@ -837,8 +845,32 @@ func validateLoadedUnitFields(m Manifest, role, image string, fields map[string]
 	if fields["FragmentPath"] != "/etc/systemd/system/"+Unit(m.Owner, role) || fields["User"] != strconv.Itoa(i.UID) || fields["Group"] != strconv.Itoa(i.GID) || fields["NoNewPrivileges"] != "yes" || fields["ProtectSystem"] != "strict" || fields["NeedDaemonReload"] != "no" || !strings.Contains(fields["ExecStart"], "path="+image+" ;") {
 		return errors.New("unexpected systemd identity/override; refusing project code under a different policy")
 	}
-	if fields["DropInPaths"] != "" {
-		if fields["DropInPaths"] == protectedGuardPath(m.Owner, role) {
+	dropIns := strings.Fields(fields["DropInPaths"])
+	ingress, ingressBody, err := tailnet.ProtectedSocketDropIn("custody", m.Owner)
+	if err != nil {
+		return err
+	}
+	var remaining []string
+	seenIngress := false
+	for _, path := range dropIns {
+		if path != ingress {
+			remaining = append(remaining, path)
+			continue
+		}
+		if seenIngress || role != "app" || m.Location != "remote" || m.PublicOrigin == "" {
+			return errors.New("unexpected protected private ingress")
+		}
+		seenIngress = true
+		f, err := read(path)
+		unit, body, unitErr := tailnet.ProtectedSocketUnit("custody", m.Owner)
+		u, readErr := read("/etc/systemd/system/" + unit)
+		if err != nil || unitErr != nil || readErr != nil || !known(f, ingressBody, 0644) || !known(u, body, 0644) {
+			return errors.New("protected private ingress changed; preserving it")
+		}
+	}
+	guards := strings.Join(remaining, " ")
+	if guards != "" {
+		if guards == protectedGuardPath(m.Owner, role) {
 			a, err := maintenance.ReadAuthority(m.Owner)
 			if err != nil {
 				return err
@@ -851,7 +883,7 @@ func validateLoadedUnitFields(m Manifest, role, image string, fields map[string]
 		}
 		guard := "/etc/systemd/system/" + Unit(m.Owner, role) + ".d/20-fased-update-guard.conf"
 		enabled, err := scope(m.Owner)
-		if err != nil || !enabled || fields["DropInPaths"] != guard {
+		if err != nil || !enabled || guards != guard {
 			return errors.New("foreign or unscoped systemd override; preserving it")
 		}
 		f, err := read(guard)

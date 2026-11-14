@@ -126,7 +126,7 @@ var serveCurlPrefix = []string{
 	"--request", "POST", "--header", "Content-Type: application/json", "--header",
 }
 var serveETag = regexp.MustCompile(`^[a-f0-9]{64}$`)
-var servePublicSocket = regexp.MustCompile(`^unix:(/var/lib/fased-app-(vps|custody)-[1-9][0-9]*/app-state|/tmp/fased-private-[0-9]{1,10})/tailscale[.]sock$`)
+var servePublicSocket = regexp.MustCompile(`^unix:(/var/lib/fased-app-(vps|custody)-[1-9][0-9]*/app-state|/run/fased-(vps|custody)-[1-9][0-9]*|/tmp/fased-private-[0-9]{1,10})/tailscale[.]sock$`)
 
 // Bound requests are visible to sudo policy and local process inspection.
 // Admit only Fased's credential-free Unix ingress records; preserve and refuse

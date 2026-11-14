@@ -63,6 +63,11 @@ func PrepareProtectedEnrollmentActivation(ctx context.Context, owner int, id, in
 			return Manifest{}, errors.New("existing enrollment commit differs; preserving it")
 		}
 	}
+	if m.Location == "remote" && m.PublicOrigin != "" {
+		if err = prepareProtectedEnrollmentIngress(ctx, m, protectedEnrollmentIngressOps()); err != nil {
+			return Manifest{}, err
+		}
+	}
 	// Install the same fail-closed start guards used by the updater before
 	// exposing either service to the already-existing native start policy.
 	for _, role := range []string{"signer", "app"} {

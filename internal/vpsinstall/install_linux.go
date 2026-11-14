@@ -46,6 +46,7 @@ type hostOps struct {
 	readinessRun        func(context.Context, []byte, ...string) ([]byte, error)
 	command             func(context.Context, ...string) ([]byte, error)
 	applicationContract func(context.Context, Manifest) ([]byte, error) // Fixed unprivileged version metadata, never arbitrary argv.
+	ingressContract     func(context.Context, Manifest) error           // Fixed capability probe under the installed app identity.
 	helper              func(context.Context, []string, io.Writer) error
 	readJournal         func(string) ([]byte, error)
 	writeJournal        func(string, any) error
@@ -644,7 +645,7 @@ func fields(b []byte) map[string]string {
 	return m
 }
 func unitFields(ctx context.Context, o hostOps, m Manifest) (map[string]string, error) {
-	b, e := o.command(ctx, "/usr/bin/systemctl", "show", m.Unit, "--property=LoadState,ActiveState,MainPID,FragmentPath,DropInPaths,User,Group,NoNewPrivileges,ProtectSystem,ProtectHome,PrivateTmp,ReadWritePaths,CapabilityBoundingSet,AmbientCapabilities,ExecStart")
+	b, e := o.command(ctx, "/usr/bin/systemctl", "show", m.Unit, "--property=LoadState,ActiveState,MainPID,FragmentPath,DropInPaths,NeedDaemonReload,User,Group,NoNewPrivileges,ProtectSystem,ProtectHome,PrivateTmp,ReadWritePaths,CapabilityBoundingSet,AmbientCapabilities,ExecStart")
 	return fields(b), e
 }
 func noUnit(ctx context.Context, o hostOps, m Manifest) error {
@@ -668,6 +669,15 @@ func loaded(ctx context.Context, o hostOps, m Manifest) error {
 	p, e := unitFields(ctx, o, m)
 	if e != nil {
 		return e
+	}
+	ingress, _, e := tailnet.ProtectedSocketDropIn("vps", m.OwnerUID)
+	if e != nil {
+		return e
+	}
+	for _, path := range strings.Fields(p["DropInPaths"]) {
+		if path == ingress && p["NeedDaemonReload"] != "no" {
+			return errors.New("protected private ingress requires a reloaded service definition")
+		}
 	}
 	if p["LoadState"] != "loaded" || p["FragmentPath"] != m.UnitPath || !validTaskCredentialDropIn(o, m, p["DropInPaths"]) || p["User"] != strconv.Itoa(m.AppUID) || p["Group"] != strconv.Itoa(m.AppGID) || p["NoNewPrivileges"] != "yes" || p["ProtectSystem"] != "strict" || p["ProtectHome"] != "yes" || p["PrivateTmp"] != "yes" || p["ReadWritePaths"] != m.Data || p["CapabilityBoundingSet"] != "" || p["AmbientCapabilities"] != "" || !strings.Contains(p["ExecStart"], "path="+m.Core+" ;") || !strings.Contains(p["ExecStart"], m.Core+" serve ") || !strings.Contains(p["ExecStart"], "--remote-config "+m.Config) {
 		return errors.New("unexpected loaded Remote service identity or override")
@@ -910,6 +920,11 @@ func install(ctx context.Context, opt Options, o hostOps) (Manifest, error) {
 	}
 	if e = verify(ctx, o, m); e != nil {
 		return m, e
+	}
+	if m.PublicOrigin != "" && o.protectedPublish != nil {
+		if e = prepareProtectedIngress(ctx, o, m); e != nil {
+			return m, e
+		}
 	}
 	if e = prepareTaskCredential(ctx, o, m); e != nil {
 		return m, e

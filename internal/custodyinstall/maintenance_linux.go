@@ -20,6 +20,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/signer"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -269,7 +270,8 @@ func verifyProtectedLoadedUnits(ctx context.Context, a maintenance.Authority, m 
 
 func verifyProtectedLoadedServices(ctx context.Context, a maintenance.Authority, m Manifest) error {
 	for _, role := range []string{"app", "signer"} {
-		if err := loadedUnit(m, role); err != nil {
+		fields, err := loadedUnitPolicyFields(m, role, definitions(m)["fased-"+role+".service"], m.Root+"/fased-"+role)
+		if err != nil {
 			return err
 		}
 		raw, err := atomicUnitServiceProperties(ctx, Unit(m.Owner, role))
@@ -288,6 +290,17 @@ func verifyProtectedLoadedServices(ctx context.Context, a maintenance.Authority,
 			var commands []atomicPairCommand
 			if property == "ExecStartPre" {
 				commands = []atomicPairCommand{{argv: []string{image, "maintenance-gate", "--owner", strconv.Itoa(m.Owner), "--role", role}}}
+				if role == "app" {
+					ingress, _, err := tailnet.ProtectedSocketDropIn("custody", m.Owner)
+					if err != nil {
+						return err
+					}
+					for _, path := range strings.Fields(fields["DropInPaths"]) {
+						if path == ingress {
+							commands = append(commands, atomicPairCommand{argv: []string{m.Root + "/fased-app", "private-ingress-check", "--owner", strconv.Itoa(m.Owner), "--kind", "custody"}})
+						}
+					}
+				}
 			}
 			if property == "ExecStart" {
 				for _, line := range strings.Split(string(definitions(m)["fased-"+role+".service"]), "\n") {

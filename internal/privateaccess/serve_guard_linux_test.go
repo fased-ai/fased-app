@@ -60,7 +60,7 @@ func TestEmptyServeNullAllowsOnlyOwnedConditionalRoute(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			writes := 0
-			err := applyOwnedServe(t.Context(), 1300, tc.plans, tc.input, tag,
+			err := applyOwnedServePolicy(t.Context(), 1300, tc.plans, tc.input, tag,
 				func(context.Context) ([]byte, string, error) { return []byte("null"), tc.liveTag, nil },
 				func(_ context.Context, body []byte, conditional string) error {
 					writes++
@@ -68,7 +68,7 @@ func TestEmptyServeNullAllowsOnlyOwnedConditionalRoute(t *testing.T) {
 						t.Fatal("conditional write changed")
 					}
 					return nil
-				})
+				}, ownedServeTarget, func(p Plan, uid int) bool { return uid == 1300 && p.Target == own.Target })
 			if (err == nil) != tc.pass || writes != map[bool]int{true: 1, false: 0}[tc.pass] {
 				t.Fatal("unexpected conditional admission", err, writes)
 			}
@@ -123,7 +123,7 @@ func TestMaintenanceServeBoundaryChecksBeforeActualConditionalWrite(t *testing.T
 				cancel()
 			}
 			writes := 0
-			err := applyOwnedServe(ctx, owner, plans, input, tag,
+			err := applyOwnedServePolicy(ctx, owner, plans, input, tag,
 				func(context.Context) ([]byte, string, error) { return current, liveTag, nil },
 				func(_ context.Context, body []byte, conditional string) error {
 					writes++
@@ -134,7 +134,7 @@ func TestMaintenanceServeBoundaryChecksBeforeActualConditionalWrite(t *testing.T
 						return errors.New("conditional conflict")
 					}
 					return nil
-				})
+				}, ownedServeTarget, func(p Plan, uid int) bool { return uid == 1300 && p.Target == own.Target })
 			if kind == "complete" {
 				if err != nil || writes != 1 {
 					t.Fatalf("owned write failed: %v, writes=%d", err, writes)
@@ -174,17 +174,17 @@ func TestOwnedServeGuardUsesRecordedRouteAndCurrentDaemonTag(t *testing.T) {
 		t.Fatal(err)
 	}
 	get := func(context.Context) ([]byte, string, error) { return current, tag, nil }
-	if !allowedOwnedServeCommand(t.Context(), requested, args, get, dir, 1300, ownedServeTarget) {
+	if !allowedOwnedServeCommand(t.Context(), requested, args, get, dir, 1300, ownedServeTarget, ownedServeTarget) {
 		t.Fatal("recorded owner route refused")
 	}
 	stale := func(context.Context) ([]byte, string, error) { return current, strings.Repeat("b", 64), nil }
-	if allowedOwnedServeCommand(t.Context(), requested, args, stale, dir, 1300, ownedServeTarget) {
+	if allowedOwnedServeCommand(t.Context(), requested, args, stale, dir, 1300, ownedServeTarget, ownedServeTarget) {
 		t.Fatal("stale daemon configuration admitted")
 	}
 	if err = os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if allowedOwnedServeCommand(t.Context(), requested, args, get, dir, 1300, ownedServeTarget) {
+	if allowedOwnedServeCommand(t.Context(), requested, args, get, dir, 1300, ownedServeTarget, ownedServeTarget) {
 		t.Fatal("route admitted without its owner receipt")
 	}
 }
@@ -205,19 +205,19 @@ func TestOwnedServeOSGuardPinsTagAndPreservesForeignRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	owns := func(p Plan) bool { return ownedServeTarget(p, 1300) }
-	if !allowedOwnerServeDelta(next, args, old, tag, []Plan{own}, owns) {
+	if !allowedOwnerServeDelta(next, args, old, tag, []Plan{own}, owns, owns) {
 		t.Fatal("owned conditional write refused")
 	}
-	if allowedOwnerServeDelta(next, args, old, strings.Repeat("b", 64), []Plan{own}, owns) {
+	if allowedOwnerServeDelta(next, args, old, strings.Repeat("b", 64), []Plan{own}, owns, owns) {
 		t.Fatal("stale tag accepted")
 	}
-	if allowedOwnerServeDelta(next, args, old, tag, nil, owns) {
+	if allowedOwnerServeDelta(next, args, old, tag, nil, owns, owns) {
 		t.Fatal("unrecorded route accepted")
 	}
 	changed, _ := routeChange(after, foreign, false)
 	bad, _ := json.Marshal(changed)
 	badArgs, _ := serveRawCommand(bad, tag)
-	if allowedOwnerServeDelta(bad, badArgs, old, tag, []Plan{own}, owns) {
+	if allowedOwnerServeDelta(bad, badArgs, old, tag, []Plan{own}, owns, owns) {
 		t.Fatal("foreign route removed")
 	}
 }

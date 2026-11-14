@@ -29,6 +29,19 @@ func TestEnrolledPrivateAccessPlanUsesCustodySocket(t *testing.T) {
 	}
 }
 
+func TestEnrolledProtectedIngressRequiresInstanceProof(t *testing.T) {
+	m := custodyinstall.Manifest{Owner: 1000, Root: "/var/lib/fased-app-custody-1000", PublicOrigin: "https://owner.example.ts.net"}
+	plan := privateaccess.Plan{Mode: "tailscale", Origin: m.PublicOrigin}
+	legacy, err := enrolledVerifiedIngressPlan(plan, m, false)
+	if err != nil || legacy.Target != "unix:/var/lib/fased-app-custody-1000/app-state/tailscale.sock" {
+		t.Fatal("unproved route changed", legacy, err)
+	}
+	protected, err := enrolledVerifiedIngressPlan(plan, m, true)
+	if err != nil || protected.Target != "unix:/run/fased-custody-1000/tailscale.sock" {
+		t.Fatal("verified listener not selected", protected, err)
+	}
+}
+
 func TestEnrolledNativeStartUsesExistingOwnerAuthority(t *testing.T) {
 	for _, prepare := range []bool{false, true} {
 		m := custodyinstall.Manifest{Owner: os.Getuid(), Enrollment: true, NativeOwnerAccess: true, Location: "local", Listen: "127.0.0.1:19090"}

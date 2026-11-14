@@ -17,6 +17,7 @@ import (
 	"syscall"
 
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 	"github.com/fased-ai/fased-app/internal/update"
 	"golang.org/x/sys/unix"
 )
@@ -60,10 +61,10 @@ func AllowedOwnedServeCommand(ctx context.Context, input []byte, args []string) 
 	if err != nil {
 		return false
 	}
-	return allowedOwnedServeCommand(ctx, input, args, systemConfig, filepath.Join(dir, "vps-access"), os.Getuid(), ownedServeTarget)
+	return allowedOwnedServeCommand(ctx, input, args, systemConfig, filepath.Join(dir, "vps-access"), os.Getuid(), ownedServeTarget, protectedServeDestination)
 }
 
-func allowedOwnedServeCommand(ctx context.Context, input []byte, args []string, getConfig func(context.Context) ([]byte, string, error), dir string, uid int, owns func(Plan, int) bool) bool {
+func allowedOwnedServeCommand(ctx context.Context, input []byte, args []string, getConfig func(context.Context) ([]byte, string, error), dir string, uid int, owns, mayAdd func(Plan, int) bool) bool {
 	if len(args) != len(serveCurlPrefix)+6 || !strings.HasPrefix(args[len(serveCurlPrefix)], "If-Match: ") {
 		return false
 	}
@@ -80,7 +81,7 @@ func allowedOwnedServeCommand(ctx context.Context, input []byte, args []string, 
 	if err != nil {
 		return false
 	}
-	return uid > 0 && allowedOwnerServeDelta(input, args, current, currentTag, plans, func(p Plan) bool { return owns(p, uid) })
+	return uid > 0 && allowedOwnerServeDelta(input, args, current, currentTag, plans, func(p Plan) bool { return owns(p, uid) }, func(p Plan) bool { return mayAdd(p, uid) })
 }
 
 func ownerServePlans(dir string, read func(string) ([]byte, error)) ([]Plan, error) {
@@ -125,6 +126,10 @@ func ApplyOwnedServe(ctx context.Context, owner int, home string, data []byte, e
 }
 
 func applyOwnedServe(ctx context.Context, owner int, plans []Plan, data []byte, etag string, get func(context.Context) ([]byte, string, error), set func(context.Context, []byte, string) error) error {
+	return applyOwnedServePolicy(ctx, owner, plans, data, etag, get, set, ownedServeTarget, protectedServeDestination)
+}
+
+func applyOwnedServePolicy(ctx context.Context, owner int, plans []Plan, data []byte, etag string, get func(context.Context) ([]byte, string, error), set func(context.Context, []byte, string) error, owns, mayAdd func(Plan, int) bool) error {
 	args, err := serveRawCommand(data, etag)
 	if err != nil || owner <= 0 {
 		return errors.New("invalid owned private Serve request")
@@ -133,7 +138,7 @@ func applyOwnedServe(ctx context.Context, owner int, plans []Plan, data []byte, 
 	if err != nil {
 		return err
 	}
-	if !allowedOwnerServeDelta(data, args, current, tag, plans, func(p Plan) bool { return ownedServeTarget(p, owner) }) {
+	if !allowedOwnerServeDelta(data, args, current, tag, plans, func(p Plan) bool { return owns(p, owner) }, func(p Plan) bool { return mayAdd(p, owner) }) {
 		return errors.New("private Serve authority changed or request modifies an unowned route")
 	}
 	if err := ctx.Err(); err != nil {
@@ -176,7 +181,7 @@ func readOwnerServeFile(path string, owner int) ([]byte, error) {
 	return b, nil
 }
 
-func allowedOwnerServeDelta(input []byte, args []string, current []byte, currentTag string, plans []Plan, owns func(Plan) bool) bool {
+func allowedOwnerServeDelta(input []byte, args []string, current []byte, currentTag string, plans []Plan, owns, mayAdd func(Plan) bool) bool {
 	if len(args) != len(serveCurlPrefix)+6 || !strings.HasPrefix(args[len(serveCurlPrefix)], "If-Match: ") {
 		return false
 	}
@@ -193,7 +198,7 @@ func allowedOwnerServeDelta(input []byte, args []string, current []byte, current
 	if err != nil {
 		return false
 	}
-	return routeDeltaAllowed(before, after, plans, owns)
+	return routeDeltaAllowed(before, after, plans, owns, mayAdd)
 }
 
 func ownedServeTarget(p Plan, uid int) bool {
@@ -201,6 +206,9 @@ func ownedServeTarget(p Plan, uid int) bool {
 		return false
 	}
 	for _, kind := range []string{"vps", "custody"} {
+		if path, err := tailnet.ProtectedSocket(kind, uid); err == nil && p.Target == "unix:"+path {
+			return true
+		}
 		if p.Target == fmt.Sprintf("unix:/var/lib/fased-app-%s-%d/app-state/tailscale.sock", kind, uid) {
 			return true
 		}
@@ -253,4 +261,28 @@ func ownedServeTarget(p Plan, uid int) bool {
 		PublicOrigin string `json:"publicOrigin"`
 	}
 	return json.Unmarshal(data, &m) == nil && m.Version == 1 && m.Phase == "installed" && m.OwnerUID == uid && m.Root == root && p.Target == "http://"+m.Listen && p.Origin == m.PublicOrigin
+}
+
+// Legacy targets may identify a route to remove, but new routes can point
+// only at an active root-owned socket outside every app-writable directory.
+func protectedServeDestination(p Plan, uid int) bool {
+	if _, _, err := routeParts(p); err != nil {
+		return false
+	}
+	for _, kind := range []string{"vps", "custody"} {
+		path, err := tailnet.ProtectedSocket(kind, uid)
+		if err == nil && p.Target == "unix:"+path && tailnet.ProtectedSocketReady(kind, uid) {
+			return true
+		}
+	}
+	return false
+}
+
+// RequireProtectedIngress is used by the ordinary Remote setup path before
+// direct Tailscale writes. The protected OS helper repeats the same check.
+func RequireProtectedIngress(p Plan, owner int) error {
+	if !protectedServeDestination(p, owner) {
+		return errors.New("protected private listener is not ready; preserve the existing route and retry setup")
+	}
+	return nil
 }

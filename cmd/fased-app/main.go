@@ -40,6 +40,9 @@ func main() {
 	}
 }
 func run(args []string, in *os.File, out, errOut io.Writer) error {
+	if len(args) > 0 && (args[0] == "private-ingress-capability" || args[0] == "private-ingress-check") {
+		return privateIngressCommand(args, out)
+	}
 	if len(args) == 1 && args[0] == "native-release-binding" {
 		if os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
 			return errors.New("native release identity requires an unprivileged process")

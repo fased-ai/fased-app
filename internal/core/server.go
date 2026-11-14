@@ -21,6 +21,7 @@ type Server struct {
 	IPC          net.Listener
 	IPCServer    *http.Server
 	Remote       net.Listener
+	RemoteLegacy net.Listener
 	RemoteHTTP   *http.Server
 	Lock         *InstanceLock
 	URL          string
@@ -217,11 +218,14 @@ func (s *Server) startAgentTasks() {
 	}()
 }
 func (s *Server) Serve() error {
-	errorsC := make(chan error, 3)
+	errorsC := make(chan error, 4)
 	go func() { errorsC <- s.HTTP.Serve(s.Listener) }()
 	go func() { errorsC <- s.IPCServer.Serve(s.IPC) }()
 	if s.RemoteHTTP != nil {
 		go func() { errorsC <- s.RemoteHTTP.Serve(s.Remote) }()
+		if s.RemoteLegacy != nil {
+			go func() { errorsC <- s.RemoteHTTP.Serve(s.RemoteLegacy) }()
+		}
 	}
 	err := <-errorsC
 	if errors.Is(err, http.ErrServerClosed) {
@@ -238,6 +242,9 @@ func (s *Server) Close(ctx context.Context) error {
 	if s.RemoteHTTP != nil {
 		err = errors.Join(err, s.RemoteHTTP.Shutdown(ctx))
 		_ = s.RemoteHTTP.Close()
+		if s.RemoteLegacy != nil {
+			_ = s.RemoteLegacy.Close()
+		}
 	}
 	if err != nil {
 		_ = s.HTTP.Close()
@@ -273,9 +280,25 @@ func (s *Server) ConfigureConnection(location string, owner ...int) error {
 		if s.RemoteHTTP != nil {
 			return errors.New("Remote ingress is already configured")
 		}
-		listener, err := tailnet.Listen(s.dir)
+		listener, activated, err := tailnet.ActivatedListener(s.dir, uid)
+		if err == nil && !activated {
+			if tailnet.ProtectedDataSocketReady(s.dir, uid) {
+				return errors.New("protected private listener was not passed by the service manager")
+			}
+			listener, err = tailnet.Listen(s.dir)
+		}
 		if err != nil {
 			return err
+		}
+		if activated {
+			// Keep the original root-peer-only listener alive during the
+			// conditional Serve handoff. It remains available if the route
+			// change fails; no existing route is reset or silently adopted.
+			s.RemoteLegacy, err = tailnet.Listen(s.dir)
+			if err != nil {
+				listener.Close()
+				return err
+			}
 		}
 		s.Remote = listener
 		h.remoteIngress = true

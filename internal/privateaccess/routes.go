@@ -232,14 +232,14 @@ func routeChange(cfg map[string]any, p Plan, add bool) (map[string]any, error) {
 
 // routeDeltaAllowed proves that the complete new inventory differs from the
 // old one only by one receipt-owned route or its recorded in-place handoff.
-func routeDeltaAllowed(before, after map[string]any, plans []Plan, owns func(Plan) bool) bool {
+func routeDeltaAllowed(before, after map[string]any, plans []Plan, owns, mayAdd func(Plan) bool) bool {
 	for _, p := range plans {
 		if !owns(p) {
 			continue
 		}
 		oldState, oldErr := routeState(before, p)
 		newState, newErr := routeState(after, p)
-		if oldErr == nil && newErr == nil && oldState != newState {
+		if oldErr == nil && newErr == nil && oldState != newState && (oldState != "absent" || mayAdd(p)) {
 			next, err := routeChange(before, p, oldState == "absent")
 			if err == nil && reflect.DeepEqual(next, after) {
 				return true
@@ -249,7 +249,7 @@ func routeDeltaAllowed(before, after map[string]any, plans []Plan, owns func(Pla
 			continue
 		}
 		for _, q := range plans {
-			if q.Origin != p.Origin || q.Target == p.Target || !owns(q) {
+			if q.Origin != p.Origin || q.Target == p.Target || !owns(q) || !mayAdd(q) {
 				continue
 			}
 			state, err := routeState(after, q)
