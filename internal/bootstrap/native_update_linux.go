@@ -60,7 +60,7 @@ func (p *Prepared) nativeUpdateFiles(ctx context.Context, operation string) (_ n
 	}
 	err = errors.Join(readErr, command.Wait())
 	var binding NativeReleaseBinding
-	if err != nil || len(raw) > 4096 || update.StrictJSON(raw, &binding) != nil || !binding.Valid(p.descriptor.ProductVersion, p.descriptor.Source) {
+	if err != nil || len(raw) > 4096 || update.StrictJSON(raw, &binding) != nil || !binding.Valid(p.descriptor.ProductVersion, p.descriptor.Source) || binding.Version != 1 {
 		return result, nil, errors.New("target core has no valid paired native release identity")
 	}
 	created := map[string]os.FileInfo{}

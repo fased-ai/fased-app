@@ -46,7 +46,8 @@ type NativeReleaseBinding struct {
 }
 
 func (b NativeReleaseBinding) Valid(version, source string) bool {
-	return b.Version == 1 && b.ProductVersion == version && b.Source == source && sourceHash(source) && hashOK(b.DesktopSHA256) && hashOK(b.SignerSHA256)
+	desktop := b.Version == 1 && hashOK(b.DesktopSHA256) || b.Version == 2 && b.DesktopSHA256 == ""
+	return desktop && b.ProductVersion == version && b.Source == source && sourceHash(source) && hashOK(b.SignerSHA256)
 }
 
 // NativePairRequired classifies the authenticated product version rather than

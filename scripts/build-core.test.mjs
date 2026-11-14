@@ -91,6 +91,21 @@ test("installer embeds a bounded source-bound signer and cleans only its own sta
       );
     }
     const coreArgs = args.filter((value) => value !== "--installer");
+    const headless = spawnSync(process.execPath, coreArgs, {
+      cwd: dir,
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(headless.status, 0, headless.stderr);
+    const headlessCall = await readFile(join(dir, "args"), "utf8");
+    assert.ok(headlessCall.includes("main.compiledNativeSource=" + "a".repeat(40)));
+    assert.ok(
+      headlessCall.includes(
+        "main.compiledNativeSignerSHA256=" +
+          createHash("sha256").update(payload).digest("hex"),
+      ),
+    );
+    assert.ok(!headlessCall.includes("main.compiledNativeDesktopSHA256="));
     const core = spawnSync(
       process.execPath,
       [...coreArgs, "--wallet-desktop=desktop"],

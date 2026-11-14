@@ -21,16 +21,20 @@ func TestProtectedPairChecksNativeReleaseBinding(t *testing.T) {
 	coreHash, signerHash, desktopHash := strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64)
 	for _, tc := range []struct {
 		name, bindingSource, version, bindingSigner, bindingDesktop string
+		bindingVersion                                              int
 		bindingErr                                                  bool
 		wantOK                                                      bool
 	}{
-		{"matching", source, "0.1.12", signerHash, desktopHash, false, true},
-		{"different signer", source, "0.1.12", strings.Repeat("e", 64), desktopHash, false, false},
-		{"invalid desktop", source, "0.1.12", signerHash, "invalid", false, false},
-		{"wrong version", source, "0.1.11", signerHash, desktopHash, false, false},
-		{"wrong source", strings.Repeat("f", 40), "0.1.12", signerHash, desktopHash, false, false},
-		{"binding unavailable", source, "0.1.12", signerHash, desktopHash, true, false},
-		{"legacy target", "", "0.1.11", "", "", true, true},
+		{"matching", source, "0.1.12", signerHash, desktopHash, 1, false, true},
+		{"different signer", source, "0.1.12", strings.Repeat("e", 64), desktopHash, 1, false, false},
+		{"invalid desktop", source, "0.1.12", signerHash, "invalid", 1, false, false},
+		{"wrong version", source, "0.1.11", signerHash, desktopHash, 1, false, false},
+		{"wrong source", strings.Repeat("f", 40), "0.1.12", signerHash, desktopHash, 1, false, false},
+		{"binding unavailable", source, "0.1.12", signerHash, desktopHash, 1, true, false},
+		{"legacy target", "", "0.1.11", "", "", 1, true, true},
+		{"headless signer", source, "0.1.12", signerHash, "", 2, false, true},
+		{"headless mismatched signer", source, "0.1.12", strings.Repeat("e", 64), "", 2, false, false},
+		{"headless claimed desktop", source, "0.1.12", signerHash, desktopHash, 2, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "operation")
@@ -54,7 +58,7 @@ func TestProtectedPairChecksNativeReleaseBinding(t *testing.T) {
 					if role != "app" || image != filepath.Join(dir, "fased-app") || tc.bindingErr {
 						return errors.New("binding unavailable")
 					}
-					value = map[string]any{"version": 1, "productVersion": tc.version, "source": source, "desktopSha256": tc.bindingDesktop, "signerSha256": tc.bindingSigner}
+					value = map[string]any{"version": tc.bindingVersion, "productVersion": tc.version, "source": source, "desktopSha256": tc.bindingDesktop, "signerSha256": tc.bindingSigner}
 				default:
 					return errors.New("unexpected inspection")
 				}
@@ -91,6 +95,7 @@ func TestProtectedLocalPairRequiresMatchingDesktopBytes(t *testing.T) {
 	source := strings.Repeat("a", 40)
 	coreHash, signerHash, desktopHash := strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64)
 	dir := filepath.Join(t.TempDir(), "operation")
+	bindingVersion, bindingDesktop := 1, desktopHash
 	read := func(_ context.Context, _ Manifest, _, _ string, args []string, out any) error {
 		var value any
 		switch strings.Join(args, " ") {
@@ -99,7 +104,7 @@ func TestProtectedLocalPairRequiresMatchingDesktopBytes(t *testing.T) {
 		case "ordinary-custody-compatibility":
 			value = map[string]any{"component": "signer", "features": []string{update.NativeDesktopJournalFeature}}
 		case "native-release-binding":
-			value = map[string]any{"version": 1, "productVersion": "0.1.12", "source": source, "desktopSha256": desktopHash, "signerSha256": signerHash}
+			value = map[string]any{"version": bindingVersion, "productVersion": "0.1.12", "source": source, "desktopSha256": bindingDesktop, "signerSha256": signerHash}
 		default:
 			return errors.New("unexpected inspection")
 		}
@@ -108,13 +113,19 @@ func TestProtectedLocalPairRequiresMatchingDesktopBytes(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name, desktop string
+		version       int
 		wantOK        bool
 	}{
-		{"matching", desktopHash, true},
-		{"wrong desktop", strings.Repeat("e", 64), false},
-		{"missing desktop", "", false},
+		{"matching", desktopHash, 1, true},
+		{"wrong desktop", strings.Repeat("e", 64), 1, false},
+		{"missing desktop", "", 1, false},
+		{"headless cannot replace desktop", desktopHash, 2, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			bindingVersion, bindingDesktop = tc.version, desktopHash
+			if tc.version == 2 {
+				bindingDesktop = ""
+			}
 			digest := func(path string, _ os.FileMode, _ int64) (string, int64, error) {
 				switch filepath.Base(path) {
 				case "fased-app":

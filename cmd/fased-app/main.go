@@ -47,7 +47,11 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 		if os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
 			return errors.New("native release identity requires an unprivileged process")
 		}
-		b := bootstrap.NativeReleaseBinding{Version: 1, ProductVersion: core.Version, Source: compiledNativeSource, DesktopSHA256: compiledNativeDesktopSHA256, SignerSHA256: compiledNativeSignerSHA256}
+		version := 1
+		if compiledNativeDesktopSHA256 == "" {
+			version = 2
+		}
+		b := bootstrap.NativeReleaseBinding{Version: version, ProductVersion: core.Version, Source: compiledNativeSource, DesktopSHA256: compiledNativeDesktopSHA256, SignerSHA256: compiledNativeSignerSHA256}
 		if !b.Valid(core.Version, compiledNativeSource) {
 			return errors.New("native release identity is unavailable")
 		}

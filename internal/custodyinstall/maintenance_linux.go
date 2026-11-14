@@ -307,7 +307,11 @@ func describeProtectedPair(ctx context.Context, m Manifest, dir, version, native
 			DesktopSHA256  string `json:"desktopSha256"`
 			SignerSHA256   string `json:"signerSha256"`
 		}
-		if err := read(ctx, m, "app", dir+"/fased-app", []string{"native-release-binding"}, &binding); err != nil || binding.Version != 1 || binding.ProductVersion != version || binding.Source != nativeSource || !validHex(binding.DesktopSHA256, 32) || !validHex(binding.SignerSHA256, 32) || binding.SignerSHA256 != out[1].Artifact.SHA256 {
+		if err := read(ctx, m, "app", dir+"/fased-app", []string{"native-release-binding"}, &binding); err != nil {
+			return nil, errors.New("protected signer differs from the authenticated native release")
+		}
+		desktopOK := binding.Version == 1 && validHex(binding.DesktopSHA256, 32) || binding.Version == 2 && binding.DesktopSHA256 == "" && !m.NativeOwnerAccess
+		if !desktopOK || binding.ProductVersion != version || binding.Source != nativeSource || !validHex(binding.SignerSHA256, 32) || binding.SignerSHA256 != out[1].Artifact.SHA256 {
 			return nil, errors.New("protected signer differs from the authenticated native release")
 		}
 		if m.NativeOwnerAccess {

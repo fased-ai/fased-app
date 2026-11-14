@@ -16,11 +16,30 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fased-ai/fased-app/internal/bootstrap"
 	"github.com/fased-ai/fased-app/internal/bundle"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
 )
+
+func TestHeadlessReleaseBindingFromCoreEntry(t *testing.T) {
+	oldSource, oldDesktop, oldSigner := compiledNativeSource, compiledNativeDesktopSHA256, compiledNativeSignerSHA256
+	defer func() {
+		compiledNativeSource, compiledNativeDesktopSHA256, compiledNativeSignerSHA256 = oldSource, oldDesktop, oldSigner
+	}()
+	compiledNativeSource = strings.Repeat("a", 40)
+	compiledNativeDesktopSHA256 = ""
+	compiledNativeSignerSHA256 = strings.Repeat("b", 64)
+	var out bytes.Buffer
+	if err := run([]string{"native-release-binding"}, nil, &out, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var binding bootstrap.NativeReleaseBinding
+	if err := json.Unmarshal(out.Bytes(), &binding); err != nil || binding.Version != 2 || !binding.Valid(core.Version, compiledNativeSource) {
+		t.Fatalf("headless binding = %+v, err = %v", binding, err)
+	}
+}
 
 func installationBundleFixture(t *testing.T, desktop bool) (string, bundle.Manifest, string) {
 	t.Helper()

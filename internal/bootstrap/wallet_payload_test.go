@@ -8,6 +8,30 @@ import (
 	"testing"
 )
 
+func TestNativeReleaseBindingAcceptsBoundHeadlessSigner(t *testing.T) {
+	source := strings.Repeat("a", 40)
+	signer := strings.Repeat("b", 64)
+	desktop := strings.Repeat("c", 64)
+	for _, tc := range []struct {
+		name    string
+		binding NativeReleaseBinding
+		valid   bool
+	}{
+		{"headless", NativeReleaseBinding{Version: 2, ProductVersion: "0.1.12", Source: source, SignerSHA256: signer}, true},
+		{"desktop", NativeReleaseBinding{Version: 1, ProductVersion: "0.1.12", Source: source, SignerSHA256: signer, DesktopSHA256: desktop}, true},
+		{"legacy needs desktop", NativeReleaseBinding{Version: 1, ProductVersion: "0.1.12", Source: source, SignerSHA256: signer}, false},
+		{"headless cannot claim desktop", NativeReleaseBinding{Version: 2, ProductVersion: "0.1.12", Source: source, SignerSHA256: signer, DesktopSHA256: desktop}, false},
+		{"missing signer", NativeReleaseBinding{Version: 2, ProductVersion: "0.1.12", Source: source}, false},
+		{"wrong source", NativeReleaseBinding{Version: 2, ProductVersion: "0.1.12", Source: strings.Repeat("d", 40), SignerSHA256: signer}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.binding.Valid("0.1.12", source); got != tc.valid {
+				t.Fatalf("valid = %v, want %v", got, tc.valid)
+			}
+		})
+	}
+}
+
 func TestEmbeddedSignerStreamBindsExactVersionSourceAndBytes(t *testing.T) {
 	p := &WalletPayload{Data: []byte("disposable signer executable"), Version: "0.1.11", Source: strings.Repeat("a", 40)}
 	p.SHA256 = digest(p.Data)

@@ -31,11 +31,10 @@ if (
   (signer || desktop || source) &&
   (!signer ||
     !version ||
-    !/^[a-f0-9]{40}$/.test(source ?? "") ||
-    (!installer && !desktop))
+    !/^[a-f0-9]{40}$/.test(source ?? ""))
 )
   throw Error(
-    "Wallet release binding needs a version, signer, exact source and (for the core) native client",
+    "Wallet release binding needs a version, signer and exact source",
   );
 const target = installer ? "fased-install" : "fased-app";
 const staged = "cmd/fased-install/wallet-signer.bin";
