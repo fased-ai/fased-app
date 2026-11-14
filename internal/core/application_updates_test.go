@@ -50,6 +50,81 @@ type recoverableUpdateFixture struct {
 	recoveryErr error
 }
 
+type invalidOutcomeUpdateController struct {
+	*updateControllerFixture
+	reportFromStatus bool
+	terminalPhase    string
+	engineSHA256     string
+}
+
+func (d *invalidOutcomeUpdateController) Apply(ctx context.Context, o ApplicationUpdateOperation) (ApplicationUpdateReceipt, error) {
+	r, err := d.updateControllerFixture.Apply(ctx, o)
+	if d.reportFromStatus {
+		r.Phase = "applying"
+		return r, err
+	}
+	r.Phase = d.terminalPhase
+	r.EngineSHA256 = d.engineSHA256
+	return r, err
+}
+
+func (d *invalidOutcomeUpdateController) Status(ctx context.Context, o ApplicationUpdateOperation) (ApplicationUpdateReceipt, error) {
+	r, err := d.updateControllerFixture.Status(ctx, o)
+	r.Phase = d.terminalPhase
+	r.EngineSHA256 = d.engineSHA256
+	return r, err
+}
+
+func TestApplicationUpdateInvalidInstalledEngineRequiresRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name, phase, engine string
+		reportFromStatus    bool
+	}{
+		{"apply wrong target", "completed", strings.Repeat("d", 64), false},
+		{"status wrong target", "completed", strings.Repeat("d", 64), true},
+		{"rollback missing engine", "rolled-back", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := fixtureStore(t)
+			d := &invalidOutcomeUpdateController{updateControllerFixture: fixtureUpdateController(), reportFromStatus: tc.reportFromStatus, terminalPhase: tc.phase, engineSHA256: tc.engine}
+			if err := s.BindApplicationUpdateController(d); err != nil {
+				t.Fatal(err)
+			}
+			updateCommandFixture(t, s, "check")
+			updateTickFixture(t, s)
+			queued := updateCommandFixture(t, s, "apply")
+			updateTickFixture(t, s)
+			if tc.reportFromStatus {
+				updateTickFixture(t, s)
+			}
+			view, err := s.ApplicationUpdates(t.Context())
+			if err != nil || view.Operation.ID != queued.Operation.ID || view.Operation.Phase != "recovery" {
+				t.Fatalf("wrong installed engine must retain the original operation for recovery: %+v, %v", view.Operation, err)
+			}
+			if _, err = s.CommandApplicationUpdate(t.Context(), ApplicationUpdateCommand{Action: "check", Revision: view.Revision, PolicyRevision: view.PolicyRevision}); err == nil {
+				t.Fatal("a held operation must prevent another release check")
+			}
+			updateTickFixture(t, s)
+			if d.applies != 1 {
+				t.Fatal("a mismatched outcome must not trigger another apply")
+			}
+			reopened, err := OpenStore(s.dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			if err = reopened.BindApplicationUpdateController(d); err != nil {
+				t.Fatal(err)
+			}
+			updateTickFixture(t, reopened)
+			afterRestart, err := reopened.ApplicationUpdates(t.Context())
+			if err != nil || afterRestart.Operation.ID != queued.Operation.ID || afterRestart.Operation.Phase != "recovery" || d.applies != 1 {
+				t.Fatalf("restart must retain the original held operation: %+v, %v", afterRestart.Operation, err)
+			}
+		})
+	}
+}
+
 func (d *recoverableUpdateFixture) Recover(_ context.Context, o ApplicationUpdateOperation) error {
 	d.recoveries++
 	d.recoveredID = o.ID

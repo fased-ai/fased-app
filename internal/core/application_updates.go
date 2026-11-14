@@ -442,7 +442,8 @@ func (s *Store) finishApplicationUpdate(ctx context.Context, o ApplicationUpdate
 		o.Failure = "Release is no longer eligible. Check for updates again."
 		return s.publishApplicationUpdate(ctx, o, revision)
 	}
-	if err != nil || r.ID != o.ID || o.Release == nil || r.Sequence != o.Release.Sequence || r.ManifestSHA256 != o.Release.ManifestSHA256 || !oneOf(r.Phase, "applying", "completed", "rolled-back", "recovery") {
+	if err != nil || r.ID != o.ID || o.Release == nil || r.Sequence != o.Release.Sequence || r.ManifestSHA256 != o.Release.ManifestSHA256 || !oneOf(r.Phase, "applying", "completed", "rolled-back", "recovery") ||
+		(r.Phase == "completed" && r.EngineSHA256 != o.Release.EngineSHA256) || (r.Phase == "rolled-back" && !hexValue(r.EngineSHA256, 32)) {
 		o.Phase = "recovery"
 		o.Failure = "Update outcome is uncertain. Inspect recovery before retrying."
 	} else if r.Phase == "applying" {
