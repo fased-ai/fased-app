@@ -78,6 +78,10 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: true
+      - name: Install Linux sandbox prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
       - run: node scripts/source-evidence.mjs
       - name: Verify dependency-installed update observer
         run: node --test --test-isolation=none --test-name-pattern='^the actual poller stops on a terminal update failure$' scripts/staged-package-browser.test.mjs

@@ -39,7 +39,8 @@ func modelTransaction(t *testing.T) (InstallTransaction, string) {
 			t.Error(e)
 		}
 	})
-	m := Manifest{Version: 1, Mode: "disposable-fixture:v1", ID: strings.Repeat("a", 32), Owner: 1000, Root: Root(1000), Listen: "127.0.0.1:17331", CoreHash: sum([]byte("old-core")), SignerHash: sum([]byte("old-signer")), App: Identity{Name: accountName(1000, "app"), UID: 1001, GID: 1001}, Signer: Identity{Name: accountName(1000, "signer"), UID: 1002, GID: 1002}}
+	owner := os.Getuid()
+	m := Manifest{Version: 1, Mode: "disposable-fixture:v1", ID: strings.Repeat("a", 32), Owner: owner, Root: Root(owner), Listen: "127.0.0.1:17331", CoreHash: sum([]byte("old-core")), SignerHash: sum([]byte("old-signer")), App: Identity{Name: accountName(owner, "app"), UID: owner + 1, GID: owner + 1}, Signer: Identity{Name: accountName(owner, "signer"), UID: owner + 2, GID: owner + 2}}
 	id := strings.Repeat("b", 32)
 	pause := update.CorePauseRequest{Version: 1, IntentID: id, Sequence: 1, ManifestSHA256: sum([]byte("manifest"))}
 	index := update.RecoveryIndex{Version: 1, Phase: "metadata-backed-up", Binding: update.RecoveryBinding{Version: 1, Pause: update.CorePauseReceipt{Version: 1, State: "paused", PauseID: strings.Repeat("c", 32), Request: &pause}}, Snapshot: update.MetadataSnapshot{File: "metadata.sqlite", Size: 16, SHA256: sum([]byte("metadata"))}}
