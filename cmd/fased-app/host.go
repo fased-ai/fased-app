@@ -203,6 +203,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 				return err
 			}
 			*packageDir = canonical
+			engine = filepath.Join(canonical, localinstall.EngineName())
 			if inventory.Desktop {
 				*desktop = filepath.Join(canonical, localinstall.DesktopName())
 			}
@@ -467,12 +468,13 @@ func verifiedInstallationBundle(directory, engine, desktop, pin string) (bundle.
 		return empty, "", errors.New("bundle version differs from the running core")
 	}
 	actual, err := filepath.EvalSymlinks(engine)
-	if err != nil {
-		return empty, "", err
+	if err == nil {
+		actual, err = filepath.Abs(actual)
 	}
-	actual, err = filepath.Abs(actual)
 	if err != nil || actual != filepath.Join(directory, localinstall.EngineName()) {
-		return empty, "", errors.New("run the core from the selected verified package")
+		if !sealedInstallationEngine(engine, m.Files[localinstall.EngineName()]) {
+			return empty, "", errors.New("run the core from the selected verified package")
+		}
 	}
 	if desktop != "" {
 		actual, err = filepath.EvalSymlinks(desktop)

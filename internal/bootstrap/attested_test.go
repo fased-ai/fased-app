@@ -79,9 +79,16 @@ func attestedFixture(t *testing.T, variant string) (*firstFixture, Options, map[
 	release := ProductionRelease{SourceTree: strings.Repeat("b", 40), TagObject: strings.Repeat("c", 40), PackageLockSHA256: strings.Repeat("d", 64), GoSumSHA256: strings.Repeat("e", 64), WorkflowCommit: strings.Repeat("a", 40), RunID: "23", RunAttempt: "1"}
 	archive := update.Artifact{File: archiveTarget, Size: int64(len(f.archive)), SHA256: digest(f.archive)}
 	installer, entry := []byte("inert disposable installer"), []byte("inert disposable entry")
-	if variant == "running-installer" {
+	if variant == "running-installer" || variant == "staged-running-installer" {
 		var err error
 		installer, err = os.ReadFile("/proc/self/exe")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if variant == "staged-installer-file" {
+		var err error
+		installer, err = os.ReadFile(os.Getenv("FASED_TEST_CANDIDATE_INSTALLER"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -90,7 +97,7 @@ func attestedFixture(t *testing.T, variant string) (*firstFixture, Options, map[
 	expected := releaseprovenance.Expected{InstallerSHA256: digest(installer), ArchiveName: archive.File, ArchiveSHA256: archive.SHA256, SourceCommit: release.WorkflowCommit, WorkflowCommit: release.WorkflowCommit, Tag: "v1.2.3", RunID: "23", RunAttempt: "1"}
 	tagObject := release.TagObject
 	packetVersion := 1
-	if variant == "staged" {
+	if variant == "staged" || variant == "staged-running-installer" || variant == "staged-installer-file" {
 		release.BuildRef, release.TagObject, expected.BuildRef, packetVersion = "refs/heads/main", "", "refs/heads/main", 2
 	}
 	pub, proof, err := fixture.NewWithOptions(releaseprovenance.Policy{Version: releaseprovenance.PolicyVersion, Repository: policy.Repository, RepositoryID: "7", OwnerID: "8", Workflow: releaseprovenance.WorkflowPath}, expected, f.now, fixture.Options{})
@@ -252,6 +259,7 @@ func TestAttestedStagedBootstrapAndCandidate(t *testing.T) {
 	command := exec.CommandContext(t.Context(), "go", "test", "./cmd/fased-install", "-run", "^TestAttestedCandidateCLI$", "-count=1")
 	command.Dir = filepath.Join("..", "..")
 	command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly -buildvcs=false", "GOPROXY=off", "GOSUMDB=off", "FASED_ATTESTED_CANDIDATE_FIXTURE=" + dir}
+	command.Env = append(command.Env, "FASED_FRESH_CANDIDATE_MISMATCH=1")
 	if output, e := command.CombinedOutput(); e != nil {
 		t.Fatalf("actual candidate CLI: %v %s", e, output)
 	}

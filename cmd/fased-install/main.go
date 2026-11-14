@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -12,8 +13,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/fased-ai/fased-app/internal/bootstrap"
+	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -91,11 +94,52 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	walletNetwork := f.String("wallet-network", "", "network for optional protected Wallets enrollment")
 	entryAction := f.String("entry-action", "", "fixed installed-instance action for the entry launcher")
 	verifyCandidate := f.String("verify-candidate", "", "verify a retained release candidate without installation")
+	installCandidate := f.String("install-candidate", "", "install one independently attested Local candidate")
+	candidatePacket := f.String("candidate-packet-sha256", "", "exact reviewed candidate packet digest")
 	if err := f.Parse(args); err != nil {
 		return err
 	}
 	if f.NArg() != 0 {
 		return errors.New("unexpected installer arguments")
+	}
+	if *installCandidate != "" || *candidatePacket != "" {
+		mixed := false
+		f.Visit(func(flag *flag.Flag) {
+			switch flag.Name {
+			case "install-candidate", "candidate-packet-sha256", "profile", "prefix", "data-dir", "start", "listen":
+			default:
+				mixed = true
+			}
+		})
+		digest, e := hex.DecodeString(*candidatePacket)
+		if mixed || !filepath.IsAbs(*installCandidate) || filepath.Clean(*installCandidate) != *installCandidate || len(digest) != 32 || hex.EncodeToString(digest) != *candidatePacket || e != nil || *profile != "local" || compiledFirstInstallBinding == nil {
+			return errors.New("fresh Local candidate requires its exact packet and compiled installer trust")
+		}
+		cache, e := os.UserCacheDir()
+		if e != nil {
+			return e
+		}
+		options, e := retailInstallerOptions(compiledFirstInstallBinding, cache)
+		if e != nil {
+			return e
+		}
+		paths, e := localinstall.DefaultPaths()
+		if e != nil {
+			return e
+		}
+		if *prefix != "" {
+			paths.Root = *prefix
+		}
+		if *data != "" {
+			paths.Data = *data
+		}
+		admission := bootstrap.CandidateAdmission{PacketSHA256: *candidatePacket, OperationID: update.NewProbe(), FreshProfile: "local", FreshOwner: os.Getuid(), FreshRoot: paths.Root, FreshData: paths.Data, ExpiresAt: time.Now().Add(15 * time.Minute).Unix()}
+		p, e := bootstrap.PrepareAttestedCandidate(context.Background(), options, *installCandidate, admission)
+		if e != nil {
+			return e
+		}
+		defer p.Close()
+		return p.Run(context.Background(), bootstrap.InstallOptions{Prefix: *prefix, DataDirectory: *data, Start: *start, Profile: "local", Listen: *listen}, in, out, errOut)
 	}
 	if *verifyCandidate != "" {
 		mixed := false

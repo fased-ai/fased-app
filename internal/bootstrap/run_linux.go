@@ -18,6 +18,7 @@ import (
 	"syscall"
 
 	"github.com/fased-ai/fased-app/internal/bundle"
+	"github.com/fased-ai/fased-app/internal/localinstall"
 )
 
 func owned(i os.FileInfo) bool {
@@ -52,11 +53,26 @@ func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.root == nil || p.closed || p.invoked || p.candidate != nil || !p.report.BundleVerified || os.Geteuid() == 0 {
+	if p.root == nil || p.closed || p.invoked || !p.report.BundleVerified || os.Geteuid() == 0 {
 		return errors.New("fresh verified first-install bootstrap and explicit owner invocation required")
 	}
 	if err := p.revalidate(); err != nil {
 		return err
+	}
+	if p.candidate != nil {
+		if p.candidate.FreshProfile != "local" || options.Profile != "local" || options.upgrade != nil || options.WalletInstance != "" || options.WalletNetwork != "" {
+			return errors.New("candidate installation requires its exact fresh Local admission")
+		}
+		if err := verifyRunningInstaller(p.descriptor.Release.InstallerSHA256); err != nil {
+			return errors.New("running installer differs from the authenticated candidate")
+		}
+		paths, err := requireFreshCandidatePaths(options)
+		if err != nil {
+			return err
+		}
+		if os.Getuid() != p.candidate.FreshOwner || os.Geteuid() != p.candidate.FreshOwner || paths.Root != p.candidate.FreshRoot || paths.Data != p.candidate.FreshData {
+			return errors.New("fresh candidate target differs from its owner admission")
+		}
 	}
 	engine, _ := bundle.Names()
 	fd, err := syscall.Open(filepath.Join(p.report.BundleDirectory, engine), syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
@@ -136,7 +152,7 @@ func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader
 		return errors.New("verified installer path changed before execution")
 	}
 	executable := f
-	if options.upgrade != nil || walletSigner != nil {
+	if options.upgrade != nil || walletSigner != nil || p.candidate != nil {
 		executable, err = sealVerifiedExecutable(f, p.engine.Bytes, p.engine.SHA256)
 		if err != nil {
 			return err
@@ -161,4 +177,51 @@ func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader
 		fmt.Fprintln(out, "Wallets setup complete.")
 	}
 	return nil
+}
+
+// A fresh candidate must not adopt a prior installation or owner data. The
+// existing installer also applies its normal path and identity checks.
+func requireFreshCandidatePaths(options InstallOptions) (localinstall.Paths, error) {
+	paths, err := localinstall.DefaultPaths()
+	if err != nil {
+		return paths, err
+	}
+	if options.Prefix != "" {
+		paths.Root = options.Prefix
+	}
+	if options.DataDirectory != "" {
+		paths.Data = options.DataDirectory
+	}
+	for _, path := range []string{paths.Root, paths.Data} {
+		if !filepath.IsAbs(path) || filepath.Clean(path) != path || path == "/" {
+			return paths, errors.New("fresh candidate requires clean installation and data paths")
+		}
+		for parent := filepath.Dir(path); parent != "/"; parent = filepath.Dir(parent) {
+			info, e := os.Lstat(parent)
+			if errors.Is(e, os.ErrNotExist) {
+				continue
+			}
+			if e != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return paths, errors.New("fresh candidate target has a linked or invalid parent")
+			}
+		}
+		info, e := os.Lstat(path)
+		if errors.Is(e, os.ErrNotExist) {
+			continue
+		}
+		if e != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !owned(info) || info.Mode().Perm()&0077 != 0 {
+			return paths, errors.New("fresh candidate target is not an owned private directory")
+		}
+		entries, e := os.ReadDir(path)
+		if e != nil || len(entries) != 0 {
+			return paths, errors.New("fresh candidate target contains existing data; preserve it")
+		}
+	}
+	for _, pair := range [][2]string{{paths.Root, paths.Data}, {paths.Data, paths.Root}} {
+		rel, e := filepath.Rel(pair[0], pair[1])
+		if e != nil || rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return paths, errors.New("fresh candidate installation and data must be separate")
+		}
+	}
+	return paths, nil
 }

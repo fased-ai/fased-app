@@ -71,6 +71,15 @@ func sealVerifiedExecutable(source io.ReadSeeker, size int64, expected string) (
 // or an artifact/source/credential override. The target independently admits its
 // release through its reviewed compiled binding, which remains nil ordinarily.
 func (p *Prepared) RunUpgrade(ctx context.Context, o UpgradeOptions, in io.Reader, out, errOut io.Writer) error {
+	if p == nil {
+		return errors.New("verified upgrade required")
+	}
+	p.mu.Lock()
+	candidate := p.candidate != nil
+	p.mu.Unlock()
+	if candidate {
+		return errors.New("candidate admission cannot authorize a bootstrap upgrade")
+	}
 	if m, err := custodyinstall.Load(os.Getuid()); err == nil {
 		if o.Prefix != "" || o.DataDirectory != "" || o.Remote != (m.Location == "remote") {
 			return errors.New("custody upgrade must retain the exact installed profile and paths")
