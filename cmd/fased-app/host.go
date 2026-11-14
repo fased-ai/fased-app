@@ -131,6 +131,9 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 				if _, nativeErr := custodyinstall.ProtectedNativeRelease(target); nativeErr != nil {
 					return errors.New("install the protected Local native client to open Wallets")
 				}
+				if err = checkDesktopRuntime(filepath.Join(target.Root, localinstall.DesktopName())); err != nil {
+					return err
+				}
 				ops.open = func(_, _ string) error {
 					process := exec.Command(filepath.Join(target.Root, localinstall.DesktopName()), "--wallet-owner", ownerLink)
 					if err := process.Start(); err != nil {
@@ -309,7 +312,11 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		if err = localinstall.Validate(paths, localinstall.Options{Listen: *listen, PublicOrigin: *origin}); err != nil {
 			return err
 		}
-		if *interactive && !*prepareHost && (needsHostPreparation(*desktop) || *managedRemote) {
+		runtimeDesktop := ""
+		if *installRuntime {
+			runtimeDesktop = *desktop
+		}
+		if *interactive && !*prepareHost && (needsHostPreparation(runtimeDesktop) || *managedRemote) {
 			prompt := "Authorize required OS preparation with sudo? [y/N]: "
 			if *managedRemote {
 				prompt = "Authorize Ubuntu preparation, isolated service and bounded update maintenance with sudo? [y/N]: "
@@ -321,7 +328,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		if *managedRemote {
 			return managedRemoteInstall(ctx, engine, inventory.Files[localinstall.EngineName()].SHA256, *listen, plan, *prepareHost, *start, out, errOut, wizard, installationAdmission{sequence: sequence, release: release, prepareUpdates: *interactive && *prepareHost})
 		}
-		if err = desktopRuntime(ctx, *desktop, *packageDir, *data, *installRuntime, *prepareHost, os.Stdin, errOut); err != nil {
+		if err = desktopRuntime(ctx, runtimeDesktop, *packageDir, *data, *installRuntime, *prepareHost, os.Stdin, errOut); err != nil {
 			return err
 		}
 		signerPath := ""
@@ -429,6 +436,9 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			m, err := localinstall.Load(paths)
 			if err != nil || m.Files[localinstall.DesktopName()] == "" {
 				return errors.New("install the Fased native client to open protected wallets")
+			}
+			if err = checkDesktopRuntime(filepath.Join(m.Root, localinstall.DesktopName())); err != nil {
+				return err
 			}
 			process := exec.Command(filepath.Join(m.Root, localinstall.DesktopName()), "--wallet-owner", ownerLink)
 			if err = process.Start(); err != nil {

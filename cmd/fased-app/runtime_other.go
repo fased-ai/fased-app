@@ -12,4 +12,5 @@ import (
 func desktopRuntime(context.Context, string, string, string, bool, bool, io.Reader, io.Writer) error {
 	return nil
 }
+func checkDesktopRuntime(string) error { return nil }
 func needsHostPreparation(string) bool { return false }
