@@ -411,6 +411,11 @@ func candidateAcquisition(ctx context.Context, a maintenance.Authority, o bootst
 	if err != nil {
 		return nil, true, err
 	}
+	if previous != nil && previous.Scope == "update" && previous.OperationID != operation {
+		if err = verifyEarlierCandidate(a.Owner, *previous, receipt); err != nil {
+			return nil, true, err
+		}
+	}
 	selected, err := candidateSelectsRelease(receipt, scope, sequence, releaseSHA, coreSHA, time.Now(), func() error {
 		return boundErr
 	})
@@ -464,6 +469,76 @@ func candidateAcquisition(ctx context.Context, a maintenance.Authority, o bootst
 	admission := bootstrap.CandidateAdmission{PacketSHA256: receipt.PacketSHA256, OperationID: operation, BaselineSHA256: baseline, ExpiresAt: time.Now().Add(15 * time.Minute).Unix()}
 	p, err := bootstrap.PrepareMaintenanceCandidate(ctx, a.Owner, o, admission)
 	return p, true, err
+}
+
+// A candidate binding is written before its custody journal. A different
+// operation may proceed only after the bound update has a terminal protected
+// journal, either current or archived by the normal staging controller.
+func verifyEarlierCandidate(owner int, bound maintenance.CandidateOperation, receipt maintenance.CandidateReceipt) error {
+	return verifyEarlierCandidateWith(owner, bound, receipt,
+		func() (update.MaintenanceRecord, error) { return update.ReadMaintenanceRecord(owner) },
+		func() (update.MaintenanceRecord, error) {
+			var prior update.MaintenanceRecord
+			f, err := update.OpenProtected(filepath.Join(update.MaintenanceDirectory(owner, bound.OperationID), "receipt.json"), 256<<10, 0644)
+			if err != nil {
+				return prior, err
+			}
+			b, err := io.ReadAll(io.LimitReader(f, (256<<10)+1))
+			err = errors.Join(err, f.Close())
+			if err != nil || len(b) > 256<<10 || update.StrictJSON(b, &prior) != nil {
+				return update.MaintenanceRecord{}, errors.New("invalid protected candidate history")
+			}
+			return prior, nil
+		})
+}
+
+func verifyEarlierCandidateWith(owner int, bound maintenance.CandidateOperation, receipt maintenance.CandidateReceipt, readCurrent, readArchived func() (update.MaintenanceRecord, error)) error {
+	current, err := readCurrent()
+	if err != nil {
+		return err
+	}
+	prior := current
+	if current.OperationID != bound.OperationID {
+		prior, err = readArchived()
+		if err != nil {
+			return errors.New("original candidate update must finish before another update")
+		}
+	}
+	if !earlierCandidateSettled(owner, bound, receipt, prior) {
+		return errors.New("original candidate update must finish before another update")
+	}
+	return nil
+}
+
+func earlierCandidateSettled(owner int, bound maintenance.CandidateOperation, receipt maintenance.CandidateReceipt, r update.MaintenanceRecord) bool {
+	if bound.Validate() != nil || receipt.Validate() != nil || bound.Owner != owner || receipt.Owner != owner || bound.Scope != "update" || receipt.Scope != bound.Scope || bound.PacketSHA256 != receipt.PacketSHA256 || r.Version != 1 || r.Owner != owner || r.OperationID != bound.OperationID || r.Package == nil || r.Package.Validate() != nil || r.Package.Sequence != receipt.Sequence || r.Package.ReleaseSHA256 != receipt.ReleaseSHA256 || r.Package.Version != receipt.ProductVersion {
+		return false
+	}
+	if r.Phase == "completed" {
+		if r.Start != "target" || r.Approval == nil || r.Approval.Validate() != nil || r.Approval.Owner != owner || r.Approval.OperationID != bound.OperationID || r.Approval.ReleaseSHA256 != receipt.ReleaseSHA256 || r.Approval.ProductVersion != receipt.ProductVersion || r.Approval.Source != r.Package.Source || r.Approval.Plan.Sequence != receipt.Sequence || update.SnapshotDigest("candidate-components", r.Approval.Plan.Components) != update.SnapshotDigest("candidate-components", r.Package.Components) || r.Installation == nil || r.Installation.Phase != "completed" || !update.ValidInstallation(*r.Installation) || r.Installation.Binding.InstallationID != r.Approval.InstallationID || r.Installation.Binding.PreviousCore != r.Approval.PreviousCore || r.Installation.Binding.PreviousSigner != r.Approval.PreviousSigner || r.Installation.Binding.PreviousManifest != r.Approval.PreviousManifest {
+			return false
+		}
+		pause := r.Installation.Binding.Index.Binding.Pause
+		if pause.Version != 1 || pause.State != "paused" || pause.Request == nil || !update.ValidPauseRequest(*pause.Request) || pause.Request.IntentID != bound.OperationID || pause.Request.Sequence != receipt.Sequence || pause.Request.ManifestSHA256 != r.Approval.Digest() {
+			return false
+		}
+	} else if r.Phase != "refused" || r.Start != "base" {
+		return false
+	}
+	// StageProtectedPackage performs the live signer and fence checks again;
+	// this record alone never grants permission to replace files.
+	var coreHash, signerHash string
+	for _, component := range r.Package.Components {
+		if component.Contract.Component == "core" {
+			coreHash = component.Artifact.SHA256
+		} else if component.Contract.Component == "signer" {
+			signerHash = component.Artifact.SHA256
+		}
+	}
+	if coreHash != receipt.EngineSHA256 {
+		return false
+	}
+	return r.Phase != "completed" || r.Installation.Binding.TargetCore == coreHash && r.Installation.Binding.TargetSigner == signerHash
 }
 
 // A bound operation must not silently fall back to another release when its

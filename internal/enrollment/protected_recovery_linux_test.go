@@ -491,6 +491,18 @@ func TestProtectedPrepareRejectsRequestsOutsideHeldOperation(t *testing.T) {
 	if validateProtectedPrepareJournal(a, j, q, true) == nil {
 		t.Fatal("different signer provenance reserved")
 	}
+	if controlled, err := protectedPrepareProvenance(a, j, q); err != nil || controlled {
+		t.Fatal("original owner provenance changed", controlled, err)
+	}
+	disposable := j
+	disposable.Provenance = signer.ControlledCustodyProfile
+	if controlled, err := protectedPrepareProvenance(a, disposable, q); err != nil || !controlled {
+		t.Fatal("held disposable provenance was not retained", controlled, err)
+	}
+	disposable.Provenance = "unknown"
+	if _, err := protectedPrepareProvenance(a, disposable, q); err == nil {
+		t.Fatal("unknown provenance accepted")
+	}
 	for _, mutate := range []func(*maintenance.CustodyEnrollmentRequest){
 		func(q *maintenance.CustodyEnrollmentRequest) { q.OperationID = strings.Repeat("d", 32) },
 		func(q *maintenance.CustodyEnrollmentRequest) { q.Listen = "not-a-listener" },

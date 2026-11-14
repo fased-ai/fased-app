@@ -129,13 +129,25 @@ func ProtectedOwnerJournal(owner int) ([]byte, error) {
 
 // ValidateProtectedPrepare ties acquisition to the original controller and
 // its held operation before any release is downloaded or privileged files are
-// created. It does not grant authority to change that operation.
-func ValidateProtectedPrepare(a maintenance.Authority, q maintenance.CustodyEnrollmentRequest, controlled bool) error {
+// created. The held journal determines key provenance; release-signing trust
+// does not turn a disposable key into an owner key, or vice versa.
+func ValidateProtectedPrepare(a maintenance.Authority, q maintenance.CustodyEnrollmentRequest) (bool, error) {
 	j, err := openOwnerEnrollmentJournal(a, true)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return validateProtectedPrepareJournal(a, j, q, controlled)
+	return protectedPrepareProvenance(a, j, q)
+}
+
+func protectedPrepareProvenance(a maintenance.Authority, j journal, q maintenance.CustodyEnrollmentRequest) (bool, error) {
+	controlled := j.Provenance == signer.ControlledCustodyProfile
+	if j.Provenance != signer.OwnerKeyProvenance && !controlled {
+		return false, errors.New("original enrollment provenance required")
+	}
+	if err := validateProtectedPrepareJournal(a, j, q, controlled); err != nil {
+		return false, err
+	}
+	return controlled, nil
 }
 
 func validateProtectedPrepareJournal(a maintenance.Authority, j journal, q maintenance.CustodyEnrollmentRequest, controlled bool) error {

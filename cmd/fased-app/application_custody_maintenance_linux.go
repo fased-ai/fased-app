@@ -256,6 +256,15 @@ func (c *custodyMaintenanceController) custodyRecordStatus(ctx context.Context, 
 			}
 			return proof, false, nil
 		}
+		if r.Phase == "refused" && r.Start == "base" {
+			installed, err := custodyInstalledPackage(r)
+			if err != nil || o.Release.Sequence <= installed.Sequence {
+				return proof, true, errors.New("custody update must advance the preserved base")
+			}
+			// This only observes the new worker. The protected worker still
+			// checks the old signer, core pause and fences before staging.
+			return proof, false, nil
+		}
 		if r.Phase != "completed" {
 			return proof, true, errors.New("another custody transaction owns recovery")
 		}

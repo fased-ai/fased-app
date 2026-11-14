@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/bootstrap"
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/maintenance"
+	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -40,6 +42,127 @@ func TestCandidateRecoveryKeepsTheOriginalOperationAfterExpiry(t *testing.T) {
 		if _, err := candidateBindingRequired(r, changed, &op, time.Unix(101, 0)); err == nil {
 			t.Fatal("recovery accepted a different operation")
 		}
+	}
+}
+
+func TestCustodyWorkerKeepsCompleteOwnerRelease(t *testing.T) {
+	id := strings.Repeat("1", 32)
+	release := core.ApplicationRelease{EngineSHA256: strings.Repeat("a", 64), Version: "0.1.12", Sequence: 12, ManifestSHA256: strings.Repeat("b", 64), Target: update.Target{OS: "linux", Arch: "amd64"}}
+	policy := core.UpdatePolicy{Mode: "manual"}
+	view := core.ApplicationOwnerView{View: core.ApplicationUpdateView{Policy: policy, Operation: core.ApplicationUpdateOperation{ID: id, Phase: "applying", Release: &release, PolicySHA256: update.SnapshotDigest("application-update-policy", policy)}}}
+	q, got, manual, err := approvedCustodyOperation(view, id, time.Now())
+	if err != nil || !manual || got == nil || *got != release || q.OperationID != id || q.Sequence != release.Sequence || q.ReleaseSHA256 != release.ManifestSHA256 {
+		t.Fatalf("owner operation lost its release identity: request=%+v release=%+v err=%v", q, got, err)
+	}
+	// The returned identity is a copy, so later state changes cannot retarget
+	// the independently verified acquisition.
+	release.EngineSHA256 = strings.Repeat("c", 64)
+	if got.EngineSHA256 == release.EngineSHA256 {
+		t.Fatal("approved engine changed after inspection")
+	}
+	for name, change := range map[string]func(*core.ApplicationOwnerView){
+		"different operation": func(v *core.ApplicationOwnerView) { v.View.Operation.ID = strings.Repeat("2", 32) },
+		"not applying":        func(v *core.ApplicationOwnerView) { v.View.Operation.Phase = "available" },
+		"no release":          func(v *core.ApplicationOwnerView) { v.View.Operation.Release = nil },
+		"changed policy":      func(v *core.ApplicationOwnerView) { v.View.Policy.Notify = true },
+		"automatic held":      func(v *core.ApplicationOwnerView) { v.View.Operation.Automatic = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := view
+			change(&changed)
+			if _, _, _, err := approvedCustodyOperation(changed, id, time.Now()); err == nil {
+				t.Fatal("unapproved owner operation was accepted")
+			}
+		})
+	}
+}
+
+type custodyAcquisitionFixture struct {
+	release core.ApplicationRelease
+	report  bootstrap.Report
+	bindErr error
+	seen    []string
+}
+
+func (f *custodyAcquisitionFixture) ApplicationRelease() (*core.ApplicationRelease, error) {
+	f.seen = append(f.seen, "release")
+	r := f.release
+	return &r, nil
+}
+func (f *custodyAcquisitionFixture) BindApplicationRelease(r core.ApplicationRelease) error {
+	f.seen = append(f.seen, "bind")
+	if f.bindErr != nil || r != f.release {
+		return errors.New("verified release differs")
+	}
+	return nil
+}
+func (f *custodyAcquisitionFixture) Report() bootstrap.Report {
+	f.seen = append(f.seen, "report")
+	return f.report
+}
+func (f *custodyAcquisitionFixture) MaintenanceIdentity() (bootstrap.MaintenanceIdentity, error) {
+	f.seen = append(f.seen, "identity")
+	return bootstrap.MaintenanceIdentity{Version: f.release.Version}, nil
+}
+
+func TestCustodyAcquisitionRetiresFreshCandidateOnlyAfterVerifiedApproval(t *testing.T) {
+	id := update.NewProbe()
+	release := core.ApplicationRelease{EngineSHA256: strings.Repeat("a", 64), Version: "0.1.12", Sequence: 12, ManifestSHA256: strings.Repeat("b", 64), Target: update.Target{OS: "linux", Arch: "amd64"}}
+	policy := core.UpdatePolicy{Mode: "manual"}
+	view := core.ApplicationOwnerView{View: core.ApplicationUpdateView{Policy: policy, Operation: core.ApplicationUpdateOperation{ID: id, Phase: "applying", Release: &release, PolicySHA256: update.SnapshotDigest("application-update-policy", policy)}}}
+	q := maintenance.CustodyUpdateRequest{OperationID: id, Sequence: release.Sequence, ReleaseSHA256: release.ManifestSHA256}
+	newAcquisition := func() *custodyAcquisitionFixture {
+		return &custodyAcquisitionFixture{release: release, report: bootstrap.Report{Sequence: release.Sequence, DescriptorSHA256: release.ManifestSHA256, ProvenanceVerified: true}}
+	}
+	for _, tc := range []struct {
+		name   string
+		change func(*core.ApplicationOwnerView, *custodyAcquisitionFixture)
+	}{
+		{"owner operation differs", func(v *core.ApplicationOwnerView, _ *custodyAcquisitionFixture) {
+			v.View.Operation.ID = update.NewProbe()
+		}},
+		{"release binding fails", func(_ *core.ApplicationOwnerView, p *custodyAcquisitionFixture) {
+			p.bindErr = errors.New("bad release")
+		}},
+		{"verified report differs", func(_ *core.ApplicationOwnerView, p *custodyAcquisitionFixture) {
+			p.report.DescriptorSHA256 = strings.Repeat("c", 64)
+		}},
+		{"provenance absent", func(_ *core.ApplicationOwnerView, p *custodyAcquisitionFixture) { p.report.ProvenanceVerified = false }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v, p, retired := view, newAcquisition(), false
+			tc.change(&v, p)
+			_, _, err := finishCustodyAcquisition(q, &v, time.Now(), p, func() error { retired = true; return nil })
+			if err == nil || retired {
+				t.Fatalf("unverified request retired the original candidate: %v", err)
+			}
+		})
+	}
+	// This models an interrupted archive-first cleanup. The installed helper
+	// still has to prove the actual protected files during acceptance.
+	p := newAcquisition()
+	archive, initialJournal, attempts := "", "initial-installation", 0
+	retire := func() error {
+		attempts++
+		if archive != "" && archive != "original-fresh-operation" || initialJournal != "initial-installation" {
+			t.Fatal("interrupted retirement changed its original identity")
+		}
+		archive = "original-fresh-operation"
+		if attempts == 1 {
+			return errors.New("interrupted after archive")
+		}
+		return nil
+	}
+	if _, _, err := finishCustodyAcquisition(q, &view, time.Now(), p, retire); err == nil {
+		t.Fatal("interrupted cleanup appeared complete")
+	}
+	if _, _, err := finishCustodyAcquisition(q, &view, time.Now(), newAcquisition(), retire); err != nil || archive != "original-fresh-operation" || attempts != 2 {
+		t.Fatal("original cleanup could not resume", err)
+	}
+	bootstrapRequest := q
+	bootstrapRequest.Bootstrap = true
+	if _, _, err := finishCustodyAcquisition(bootstrapRequest, nil, time.Now(), newAcquisition(), func() error { return nil }); err != nil {
+		t.Fatal("verified legacy bootstrap was refused", err)
 	}
 }
 
@@ -195,5 +318,49 @@ func TestBoundCandidateRefusesRetargetingBeforeFallback(t *testing.T) {
 	}
 	if err := checkCandidateOriginal(&r, &op, "update", strings.Repeat("7", 32), op.RequestSHA256, 13, strings.Repeat("8", 64), ""); err != nil {
 		t.Fatal("another operation's existing admission path was changed", err)
+	}
+}
+
+func TestEarlierCandidateMustSettleBeforeAnotherUpdate(t *testing.T) {
+	hash := func(s string) string { return strings.Repeat(s, 64) }
+	id := strings.Repeat("1", 32)
+	receipt := maintenance.CandidateReceipt{Version: 1, Owner: 1400, Scope: "update", PacketSHA256: hash("a"), InstallerSHA256: hash("b"), EngineSHA256: hash("c"), ProductVersion: "0.1.12", Sequence: 12, ReleaseSHA256: hash("d"), Target: update.Target{OS: "linux", Arch: "amd64"}, BaseSequence: 11, BaseReleaseSHA256: hash("e"), BaseInstallation: strings.Repeat("2", 32), BaseManifestSHA: hash("f"), ExpiresAt: 100}
+	bound := maintenance.CandidateOperation{Version: 1, Owner: receipt.Owner, Scope: receipt.Scope, PacketSHA256: receipt.PacketSHA256, OperationID: id, RequestSHA256: hash("3")}
+	app := update.Artifact{File: "fased-app", Size: 1, SHA256: receipt.EngineSHA256}
+	key := update.Artifact{File: "fased-signer", Size: 1, SHA256: hash("4")}
+	appContract, signerContract := core.OrdinaryUpdateContract(), signer.OrdinaryUpdateContract()
+	pack := &update.MaintenancePackage{Version: receipt.ProductVersion, Source: strings.Repeat("5", 40), Sequence: receipt.Sequence, ReleaseSHA256: receipt.ReleaseSHA256, DevelopmentOnly: true, Components: []update.Component{{Version: receipt.ProductVersion, Artifact: app, Contract: appContract}, {Version: receipt.ProductVersion, Artifact: key, Contract: signerContract}}}
+	snapshot := update.CoreSnapshot{Version: 1, ProbeID: strings.Repeat("6", 32), BootID: strings.Repeat("7", 32), InstanceID: "fixture-instance", State: update.State{Name: "core-db", Version: 1, Anchor: hash("8")}}
+	approval := &update.MaintenanceApproval{Version: 1, Owner: receipt.Owner, InstallationID: strings.Repeat("b", 32), OperationID: id, HelperSHA256: hash("9"), Source: pack.Source, ProductVersion: pack.Version, ReleaseSHA256: pack.ReleaseSHA256, DevelopmentOnly: true, PreviousCore: hash("b"), PreviousSigner: hash("c"), PreviousManifest: hash("d"), Core: snapshot, Plan: update.Manifest{Version: 1, Product: "fased-app-maintenance", Channel: "protected-installer", Sequence: receipt.Sequence, IssuedAt: 1, ExpiresAt: 2, Target: receipt.Target, Components: pack.Components}}
+	pause := &update.CorePauseRequest{Version: 1, IntentID: id, Sequence: receipt.Sequence, ManifestSHA256: approval.Digest(), Expected: snapshot}
+	recovery := update.RecoveryBinding{Version: 1, Pause: update.CorePauseReceipt{Version: 1, State: "paused", PauseID: strings.Repeat("9", 32), Request: pause}, Files: []update.StageFile{{Artifact: app, Bytes: app.Size}, {Artifact: key, Bytes: key.Size}}}
+	index := update.RecoveryIndex{Version: 1, Phase: "metadata-backed-up", Binding: recovery, BindingSHA256: update.RecoveryDigest(recovery), Snapshot: update.MetadataSnapshot{File: "metadata.sqlite", Size: 1, SHA256: hash("a")}}
+	binding := update.InstallBinding{Version: 1, Contracts: []update.Contract{appContract, signerContract}, Index: index, InstallationID: approval.InstallationID, PreviousCore: approval.PreviousCore, PreviousSigner: approval.PreviousSigner, PreviousManifest: approval.PreviousManifest, TargetCore: app.SHA256, TargetSigner: key.SHA256}
+	installation := &update.Installation{Version: 1, Binding: binding, Digest: update.InstallDigest(binding), Phase: "completed", InstalledSequenceCommitted: true}
+	complete := update.MaintenanceRecord{Version: 1, Owner: receipt.Owner, OperationID: id, Phase: "completed", Start: "target", Package: pack, Approval: approval, Installation: installation}
+	previous := complete
+	previous.OperationID, previous.Phase, previous.Start = strings.Repeat("0", 32), "idle", "base"
+	read := func(r update.MaintenanceRecord, err error) func() (update.MaintenanceRecord, error) {
+		return func() (update.MaintenanceRecord, error) { return r, err }
+	}
+	for _, tc := range []struct {
+		name              string
+		current, archived update.MaintenanceRecord
+		archiveErr        error
+		want              bool
+	}{
+		{"binding written before journal", previous, update.MaintenanceRecord{}, os.ErrNotExist, false},
+		{"original still prepared", func() update.MaintenanceRecord { r := complete; r.Phase = "prepared"; return r }(), update.MaintenanceRecord{}, nil, false},
+		{"same original completed", complete, update.MaintenanceRecord{}, nil, true},
+		{"completed original archived", previous, complete, nil, true},
+		{"foreign archive", previous, func() update.MaintenanceRecord { r := complete; r.Owner++; return r }(), nil, false},
+		{"refused original is checked by live staging", func() update.MaintenanceRecord { r := complete; r.Phase, r.Start = "refused", "base"; return r }(), update.MaintenanceRecord{}, nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := verifyEarlierCandidateWith(receipt.Owner, bound, receipt, read(tc.current, nil), read(tc.archived, tc.archiveErr))
+			if (err == nil) != tc.want {
+				t.Fatalf("admission = %v, want allowed %t", err, tc.want)
+			}
+		})
 	}
 }

@@ -56,6 +56,32 @@ func TestInitialServiceRecoveryRefusesRunningProcesses(t *testing.T) {
 	}
 }
 
+func TestRefusedUpdateRequiresFreshUnheldCore(t *testing.T) {
+	probe := strings.Repeat("1", 32)
+	snapshot := update.CoreSnapshot{Version: 1, ProbeID: probe, BootID: strings.Repeat("2", 32), InstanceID: "fixture-instance", State: update.State{Name: "core-db", Version: 1, Anchor: strings.Repeat("a", 64)}}
+	request := &update.CorePauseRequest{Version: 1, IntentID: strings.Repeat("3", 32), Sequence: 2, ManifestSHA256: strings.Repeat("b", 64), Expected: snapshot}
+	idle := update.CorePauseReceipt{Version: 1, State: "idle", Core: snapshot}
+	released := update.CorePauseReceipt{Version: 1, State: "released", PauseID: strings.Repeat("4", 32), Request: request, Core: snapshot}
+	for _, tc := range []struct {
+		name string
+		p    update.CorePauseReceipt
+		want bool
+	}{
+		{"idle", idle, true},
+		{"released", released, true},
+		{"still paused", func() update.CorePauseReceipt { p := released; p.State = "paused"; return p }(), false},
+		{"stale probe", func() update.CorePauseReceipt { p := idle; p.Core.ProbeID = strings.Repeat("5", 32); return p }(), false},
+		{"invalid boot", func() update.CorePauseReceipt { p := idle; p.Core.BootID = ""; return p }(), false},
+		{"damaged release", func() update.CorePauseReceipt { p := released; p.Request = nil; return p }(), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := unheldCorePause(tc.p, probe); got != tc.want {
+				t.Fatalf("unheld=%t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
 func initialMaintenanceFixture() update.MaintenanceRecord {
 	m := fixtureManifest()
 	m.Version, m.Mode, m.Profile = 3, signer.OrdinaryCustodyMode, signer.OwnerCustodyProfile

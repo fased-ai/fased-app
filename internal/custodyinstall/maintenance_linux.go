@@ -123,6 +123,13 @@ func StageProtectedPackage(ctx context.Context, owner int, id string, p update.M
 		if old.Phase != "idle" && old.Phase != "completed" && old.Phase != "refused" {
 			return errors.New("another exact maintenance operation requires recovery")
 		}
+		if old.Phase == "refused" {
+			probe := update.NewProbe()
+			var pause update.CorePauseReceipt
+			if err = protectedAppPeer(ctx, a, m, maintenance.AppMaintenanceRequest{Action: "pause", OperationID: old.OperationID, Pause: &update.CorePauseCommand{Action: "status", ProbeID: probe}}, &pause); err != nil || !unheldCorePause(pause, probe) {
+				return errors.New("original core pause requires recovery before another update")
+			}
+		}
 		if old.Phase == "idle" || old.PreviousPackage != nil {
 			if old.Phase == "idle" {
 				if _, e := ValidateInitialMaintenanceRecord(old); e != nil {
@@ -167,6 +174,16 @@ func StageProtectedPackage(ctx context.Context, owner int, id string, p update.M
 		return err
 	}
 	return verifyProtectedLoadedUnits(ctx, a, m)
+}
+
+func unheldCorePause(p update.CorePauseReceipt, probe string) bool {
+	if p.Version != 1 || p.Core.Version != 1 || p.Core.ProbeID != probe || !update.IDOK(probe) || !update.IDOK(p.Core.BootID) {
+		return false
+	}
+	if p.State == "idle" {
+		return p.PauseID == "" && p.Request == nil
+	}
+	return p.State == "released" && update.IDOK(p.PauseID) && p.Request != nil && update.ValidPauseRequest(*p.Request)
 }
 
 func DescribeProtectedPair(ctx context.Context, owner int, id, version string) ([]update.Component, error) {

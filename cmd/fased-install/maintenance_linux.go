@@ -241,7 +241,7 @@ func maintenanceRequestCommand(args []string, in io.Reader, out io.Writer) error
 	case "custody-initialize":
 		err = maintenanceCustodyInitialize(workCtx, a)
 	case "custody-update":
-		err = maintenanceCustodyAcquire(workCtx, a, *r.Custody, false)
+		err = maintenanceCustodyAcquire(workCtx, a, *r.Custody, false, nil)
 		if err == nil {
 			err = custodyinstall.ReconcileProtectedSetup(workCtx, a.Owner)
 		}

@@ -343,6 +343,48 @@ func TestCustodyUpdateStatusObservesQueuedSuccessorWithoutStartingIt(t *testing.
 	}
 }
 
+func TestCustodyUpdateObservesWorkerAfterRefusedPredecessor(t *testing.T) {
+	packageFor := func(version string, sequence uint64, release string) *update.MaintenancePackage {
+		return &update.MaintenancePackage{Version: version, Source: strings.Repeat("a", 40), Sequence: sequence, ReleaseSHA256: release, DevelopmentOnly: true, Components: []update.Component{
+			{Version: version, Contract: core.OrdinaryUpdateContract(), Artifact: update.Artifact{File: "fased-app", Size: 1, SHA256: strings.Repeat("b", 64)}},
+			{Version: version, Contract: signer.OrdinaryUpdateContract(), Artifact: update.Artifact{File: "fased-signer", Size: 1, SHA256: strings.Repeat("c", 64)}},
+		}}
+	}
+	base := packageFor("0.1.10", 10, strings.Repeat("1", 64))
+	target := packageFor("0.1.11", 11, strings.Repeat("2", 64))
+	r := update.MaintenanceRecord{OperationID: update.NewProbe(), Phase: "refused", Start: "base", PreviousPackage: base, Package: target}
+	id := update.NewProbe()
+	op := core.ApplicationUpdateOperation{ID: id, Phase: "applying", Release: &core.ApplicationRelease{Sequence: 12, ManifestSHA256: strings.Repeat("3", 64), EngineSHA256: strings.Repeat("4", 64)}}
+	state := custodyWorkerState{load: "loaded", active: "activating"}
+	starts := 0
+	c := &custodyMaintenanceController{owner: 1800,
+		readRecord:  func(int) (update.MaintenanceRecord, error) { return r, nil },
+		workerState: func(context.Context, string) (custodyWorkerState, error) { return state, nil },
+		startWorker: func(_ context.Context, got string) error {
+			if got != id {
+				t.Fatal("started a different operation")
+			}
+			starts++
+			return nil
+		},
+	}
+	if receipt, err := c.Status(t.Context(), op); err != nil || receipt.Phase != "applying" || starts != 0 {
+		t.Fatalf("queued worker reported %q, starts=%d: %v", receipt.Phase, starts, err)
+	}
+	state.active = "failed"
+	if err := c.Recover(t.Context(), op); err != nil || starts != 1 {
+		t.Fatalf("same worker could not be recovered, starts=%d: %v", starts, err)
+	}
+	r.Phase = "prepared"
+	if _, err := c.Status(t.Context(), op); err == nil {
+		t.Fatal("another pending operation was treated as a refused predecessor")
+	}
+	r.Phase, r.Start = "refused", "target"
+	if _, err := c.Status(t.Context(), op); err == nil {
+		t.Fatal("refused target was treated as a preserved base")
+	}
+}
+
 func TestCustodyExplicitRecoveryStartsOnlyStoppedOriginalWorker(t *testing.T) {
 	id := update.NewProbe()
 	release := &core.ApplicationRelease{Sequence: 8, ManifestSHA256: strings.Repeat("a", 64), EngineSHA256: strings.Repeat("b", 64)}

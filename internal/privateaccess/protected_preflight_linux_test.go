@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -61,23 +62,29 @@ func TestProtectedInitialApprovalBindsBrowserAndOriginalRelease(t *testing.T) {
 
 func TestProtectedPendingOriginRejectsConflicts(t *testing.T) {
 	want := "https://node.owner.ts.net:8443"
+	dir := "/var/lib/fased-maintenance/owners/1300/remote"
 	receipt := preflightReceipt{Version: 1, Plan: Plan{Mode: "tailscale", Origin: want, Target: "unix:/tmp/fased-private-123/tailscale.sock"}}
 	b, err := json.Marshal(receipt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, prior := range []string{"", want} {
-		got, err := protectedPendingOrigin(prior, b)
+		got, err := protectedPendingOrigin(prior, b, dir)
 		if err != nil || got != want {
 			t.Fatal("original protected port was lost", got, err)
 		}
 	}
-	if _, err := protectedPendingOrigin("https://node.owner.ts.net", b); err == nil {
+	if _, err := protectedPendingOrigin("https://node.owner.ts.net", b, dir); err == nil {
 		t.Fatal("conflicting protected approvals admitted")
+	}
+	receipt.Plan.Target = "unix:" + filepath.Join(dir, "fased-private-123", "tailscale.sock")
+	b, _ = json.Marshal(receipt)
+	if got, err := protectedPendingOrigin("", b, dir); err != nil || got != want {
+		t.Fatal("protected socket retry lost its port", got, err)
 	}
 	receipt.Plan.Target = "unix:/var/lib/foreign/tailscale.sock"
 	b, _ = json.Marshal(receipt)
-	if _, err := protectedPendingOrigin("", b); err == nil {
+	if _, err := protectedPendingOrigin("", b, dir); err == nil {
 		t.Fatal("foreign socket admitted")
 	}
 }

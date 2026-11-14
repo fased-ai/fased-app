@@ -17,6 +17,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/bootstrap"
 	"github.com/fased-ai/fased-app/internal/bundle"
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/enrollment"
 	"github.com/fased-ai/fased-app/internal/maintenance"
@@ -204,12 +205,11 @@ func maintenanceCustodyCommand(action string, args []string, out io.Writer) erro
 			if e != nil {
 				return e
 			}
-			o := v.View.Operation
-			if o.ID != id || o.Phase != "applying" || o.Release == nil || o.PolicySHA256 != update.SnapshotDigest("application-update-policy", v.View.Policy) || o.Automatic && (v.View.Policy.Mode != "automatic" || v.View.Policy.Window != nil && !v.View.Policy.Window.Contains(time.Now())) {
-				return errors.New("current owner-approved application operation required")
+			q, _, manual, e := approvedCustodyOperation(v, id, time.Now())
+			if e != nil {
+				return e
 			}
-			q := maintenance.CustodyUpdateRequest{OperationID: id, Sequence: o.Release.Sequence, ReleaseSHA256: o.Release.ManifestSHA256}
-			if err = maintenanceCustodyAcquire(ctx, a, q, !o.Automatic); err != nil {
+			if err = maintenanceCustodyAcquire(ctx, a, q, manual, &v); err != nil {
 				return err
 			}
 		} else if e != nil {
@@ -285,18 +285,19 @@ func maintenanceCustodyPrepare(ctx context.Context, a maintenance.Authority, q m
 	if err != nil {
 		return empty, err
 	}
-	if err = enrollment.ValidateProtectedPrepare(a, q, o.Development); err != nil {
+	controlled, err := enrollment.ValidateProtectedPrepare(a, q)
+	if err != nil {
 		return empty, err
 	}
 	// A fixed protected path bounds retained acquisitions to this operation.
 	o.Directory = filepath.Join(filepath.Dir(o.Directory), "custody-"+q.OperationID)
 	dir := update.MaintenanceDirectory(a.Owner, q.OperationID)
 	provenance := signer.OwnerKeyProvenance
-	if o.Development {
+	if controlled {
 		provenance = signer.ControlledCustodyProfile
 	}
 	options := custodyinstall.Options{NativeOwnerAccess: q.NativeOwnerAccess, Core: dir + "/fased-app", Signer: dir + "/fased-signer", Network: q.Network, Listen: q.Listen, Location: a.Profile, PublicOrigin: q.PublicOrigin, Mode: signer.OrdinaryCustodyMode, Profile: signer.OwnerCustodyProfile, Provenance: provenance, PrepareHost: true, Disposable: true, StageOnly: true}
-	if err = custodyinstall.ReserveProtectedEnrollment(a.Owner, q.OperationID, q.CoreSHA256, q.SignerSHA256, options, o.Development); err != nil {
+	if err = custodyinstall.ReserveProtectedEnrollment(a.Owner, q.OperationID, q.CoreSHA256, q.SignerSHA256, options, controlled); err != nil {
 		return empty, err
 	}
 	if err = maintenance.EnsureProtectedDirectory(filepath.Dir(dir)); err != nil {
@@ -424,7 +425,7 @@ func maintenanceCustodyPrepare(ctx context.Context, a maintenance.Authority, q m
 	if err = maintenance.CopyEnrollmentAsset(a.Owner, q.OperationID, "fased-signer", q.SignerSHA256, acq.SignerBytes); err != nil {
 		return empty, err
 	}
-	m, err := custodyinstall.InstallProtected(ctx, a.Owner, q.OperationID, options, acq.DevelopmentOnly, io.Discard)
+	m, err := custodyinstall.InstallProtected(ctx, a.Owner, q.OperationID, options, controlled, io.Discard)
 	if err != nil {
 		return m, err
 	}
@@ -484,7 +485,71 @@ func maintenanceCustodyInitialize(ctx context.Context, a maintenance.Authority) 
 	return nil
 }
 
-func maintenanceCustodyAcquire(ctx context.Context, a maintenance.Authority, q maintenance.CustodyUpdateRequest, manualCandidate bool) error {
+// approvedCustodyOperation retains the complete identity selected by the
+// owner. The protected acquisition must not substitute another engine,
+// version, or target that happens to have the same projected request.
+func approvedCustodyOperation(v core.ApplicationOwnerView, id string, now time.Time) (maintenance.CustodyUpdateRequest, *core.ApplicationRelease, bool, error) {
+	o := v.View.Operation
+	if o.ID != id || o.Phase != "applying" || o.Release == nil || o.PolicySHA256 != update.SnapshotDigest("application-update-policy", v.View.Policy) || o.Automatic && (v.View.Policy.Mode != "automatic" || v.View.Policy.Window != nil && !v.View.Policy.Window.Contains(now)) {
+		return maintenance.CustodyUpdateRequest{}, nil, false, errors.New("current owner-approved application operation required")
+	}
+	r := *o.Release
+	return maintenance.CustodyUpdateRequest{OperationID: id, Sequence: r.Sequence, ReleaseSHA256: r.ManifestSHA256}, &r, !o.Automatic, nil
+}
+
+type verifiedCustodyAcquisition interface {
+	ApplicationRelease() (*core.ApplicationRelease, error)
+	BindApplicationRelease(core.ApplicationRelease) error
+	Report() bootstrap.Report
+	MaintenanceIdentity() (bootstrap.MaintenanceIdentity, error)
+}
+
+// The cleanup follows both the original owner operation and the independent
+// release verifier. Keeping these checks together prevents a refused request
+// from retiring a previous installation's recovery evidence.
+func finishCustodyAcquisition(q maintenance.CustodyUpdateRequest, v *core.ApplicationOwnerView, now time.Time, p verifiedCustodyAcquisition, retire func() error) (bootstrap.Report, bootstrap.MaintenanceIdentity, error) {
+	var report bootstrap.Report
+	var identity bootstrap.MaintenanceIdentity
+	var expected *core.ApplicationRelease
+	if !q.Bootstrap {
+		if v == nil {
+			return report, identity, errors.New("current owner operation required")
+		}
+		approved, release, _, err := approvedCustodyOperation(*v, q.OperationID, now)
+		if err != nil || approved != q {
+			return report, identity, errors.New("custody request differs from the current owner operation")
+		}
+		expected = release
+	} else if v != nil {
+		return report, identity, errors.New("bootstrap cannot replace an owner operation")
+	}
+	release, err := p.ApplicationRelease()
+	if err != nil || release == nil {
+		return report, identity, errors.Join(err, errors.New("verified custody release required"))
+	}
+	if expected != nil {
+		release = expected
+	} else {
+		release.ManifestSHA256 = q.ReleaseSHA256
+	}
+	if err = p.BindApplicationRelease(*release); err != nil {
+		return report, identity, err
+	}
+	report = p.Report()
+	if report.Sequence != q.Sequence || report.DescriptorSHA256 != q.ReleaseSHA256 || !report.ProvenanceVerified && !report.DevelopmentOnly {
+		return report, identity, errors.New("independently verified custody target differs")
+	}
+	identity, err = p.MaintenanceIdentity()
+	if err != nil {
+		return report, identity, err
+	}
+	if err = retire(); err != nil {
+		return report, identity, err
+	}
+	return report, identity, nil
+}
+
+func maintenanceCustodyAcquire(ctx context.Context, a maintenance.Authority, q maintenance.CustodyUpdateRequest, manualCandidate bool, ownerView *core.ApplicationOwnerView) error {
 	if !update.IDOK(q.OperationID) || q.Sequence == 0 || len(q.ReleaseSHA256) != 64 {
 		return errors.New("one authenticated custody release required")
 	}
@@ -515,11 +580,34 @@ func maintenanceCustodyAcquire(ctx context.Context, a maintenance.Authority, q m
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	// The direct helper entry is also used to resume an already journalled
+	// update and for the explicit legacy bootstrap above. A new non-bootstrap
+	// operation must originate in the same protected core record as the worker.
+	if !q.Bootstrap && ownerView == nil {
+		v, err := custodyinstall.ReadProtectedApplicationOperation(ctx, a.Owner, q.OperationID)
+		if err != nil {
+			return err
+		}
+		ownerView = &v
+	}
+	now := time.Now()
+	var expected *core.ApplicationRelease
+	if !q.Bootstrap {
+		approved, release, manual, err := approvedCustodyOperation(*ownerView, q.OperationID, now)
+		if err != nil || approved != q {
+			return errors.New("custody request differs from the current owner operation")
+		}
+		expected, manualCandidate = release, manual
+	}
 	o, err := maintenanceOptions(a)
 	if err != nil {
 		return err
 	}
-	p, selected, err := candidateAcquisition(ctx, a, o, "update", q.OperationID, update.SnapshotDigest("candidate-update-request", q), q.Sequence, q.ReleaseSHA256, "", manualCandidate && !q.Bootstrap)
+	coreSHA := ""
+	if expected != nil {
+		coreSHA = expected.EngineSHA256
+	}
+	p, selected, err := candidateAcquisition(ctx, a, o, "update", q.OperationID, update.SnapshotDigest("candidate-update-request", q), q.Sequence, q.ReleaseSHA256, coreSHA, manualCandidate && !q.Bootstrap)
 	if err == nil && !selected {
 		p, err = bootstrap.PrepareMaintenance(ctx, a.Owner, o)
 	}
@@ -527,19 +615,19 @@ func maintenanceCustodyAcquire(ctx context.Context, a maintenance.Authority, q m
 		return err
 	}
 	defer p.Close()
-	release, err := p.ApplicationRelease()
-	if err != nil {
-		return err
-	}
-	release.ManifestSHA256 = q.ReleaseSHA256
-	if err = p.BindApplicationRelease(*release); err != nil {
-		return err
-	}
-	report := p.Report()
-	if report.Sequence != q.Sequence || report.DescriptorSHA256 != q.ReleaseSHA256 || !report.ProvenanceVerified && !report.DevelopmentOnly {
-		return errors.New("independently verified custody target differs")
-	}
-	id, err := p.MaintenanceIdentity()
+	report, id, err := finishCustodyAcquisition(q, ownerView, now, p, func() error {
+		// Retire while the initial deployment is still current. Its protected
+		// receipts are archived before its public candidate cache is removed.
+		if receipt, err := maintenance.ReadCandidateReceipt(a.Owner); err == nil {
+			if receipt.Scope == "fresh" {
+				return retireFreshCandidate(a, receipt)
+			}
+			return nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}

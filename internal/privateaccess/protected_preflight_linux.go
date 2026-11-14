@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/tailnet"
@@ -91,12 +90,12 @@ func ProtectedPendingOrigin(owner int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return protectedPendingOrigin(origin, b)
+	return protectedPendingOrigin(origin, b, filepath.Dir(path))
 }
 
-func protectedPendingOrigin(origin string, b []byte) (string, error) {
+func protectedPendingOrigin(origin string, b []byte, dir string) (string, error) {
 	var receipt preflightReceipt
-	if update.StrictJSON(b, &receipt) != nil || receipt.Version != 1 || receipt.Plan.Mode != "tailscale" || !validTarget(receipt.Plan.Target) || !strings.HasPrefix(receipt.Plan.Target, "unix:/tmp/fased-private-") {
+	if update.StrictJSON(b, &receipt) != nil || receipt.Version != 1 || receipt.Plan.Mode != "tailscale" || !preflightSocketTarget(receipt.Plan.Target, dir) {
 		return "", errors.New("invalid protected private setup; preserve it")
 	}
 	if _, _, err := tailnet.Origin(receipt.Plan.Origin); err != nil || origin != "" && origin != receipt.Plan.Origin {
@@ -134,7 +133,9 @@ func ConfirmProtectedRemoteInitial(ctx context.Context, owner int, origin, liste
 			}
 			return errors.Join(f.Sync(), f.Close())
 		},
-		func(ctx context.Context, p Plan) (tailnet.Identity, error) { return m.BeforeInstall(ctx, dir, p, out) })
+		func(ctx context.Context, p Plan) (tailnet.Identity, error) {
+			return m.beforeInstall(ctx, dir, p, out, dir)
+		})
 }
 
 func confirmProtectedRemoteInitial(ctx context.Context, m Manager, owner int, origin, listen string, sequence uint64, release, coreHash string, load func() (ProtectedInitialApproval, error), save func(ProtectedInitialApproval) error, before func(context.Context, Plan) (tailnet.Identity, error)) (tailnet.Identity, error) {

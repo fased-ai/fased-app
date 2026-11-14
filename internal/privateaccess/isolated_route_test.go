@@ -109,6 +109,80 @@ func TestIsolatedPreflightCancellationPreservesOriginalRoute(t *testing.T) {
 	}
 }
 
+func TestProtectedPreflightUsesPersistentParentAndRecovers(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("managed Tailscale Unix ingress targets Linux")
+	}
+	// Keep the temporary root short enough for the kernel's Unix path limit.
+	root, err := os.MkdirTemp("/tmp", "fased-pf-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(root)
+	p := Plan{Mode: "tailscale", Origin: "https://node.owner.ts.net:8443", Target: "http://127.0.0.1:7333"}
+	current := []byte(`{}`)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	writes := 0
+	m := Manager{GetConfig: func(context.Context) ([]byte, string, error) { return current, "etag", nil }, SetConfig: func(_ context.Context, b []byte, _ string) error {
+		writes++
+		if writes == 1 {
+			var saved preflightReceipt
+			body, err := core.ReadPrivateFile(filepath.Join(root, "private-setup.json"))
+			if err != nil || json.Unmarshal(body, &saved) != nil || filepath.Dir(filepath.Dir(strings.TrimPrefix(saved.Plan.Target, "unix:"))) != root {
+				t.Fatal("protected preflight did not retain its socket under the protected parent", saved, err)
+			}
+			cancel()
+		}
+		current = append([]byte(nil), b...)
+		return nil
+	}}
+	_, setupErr := m.beforeInstall(ctx, root, p, io.Discard, root)
+	if setupErr == nil {
+		t.Fatal("unconfirmed private setup was accepted")
+	}
+	if string(current) != "{}" || writes != 2 {
+		t.Fatal("protected preflight route was not reconciled", string(current), writes, setupErr)
+	}
+	if _, err := os.Stat(filepath.Join(root, "private-setup.json")); !os.IsNotExist(err) {
+		t.Fatal("reconciled setup receipt retained", err)
+	}
+}
+
+func TestPreflightRemovesSavedRouteBeforeRefusingSubstitutedDirectory(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("managed Tailscale Unix ingress targets Linux")
+	}
+	root := fixture(t)
+	foreign := t.TempDir()
+	marker := filepath.Join(foreign, "tailscale.sock")
+	if err := os.WriteFile(marker, []byte("preserve"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	probe := filepath.Join(root, "fased-private-replaced")
+	if err := os.Symlink(foreign, probe); err != nil {
+		t.Fatal(err)
+	}
+	p := Plan{Mode: "tailscale", Origin: "https://node.owner.ts.net:8443", Target: "unix:" + filepath.Join(probe, "tailscale.sock")}
+	if err := core.WritePrivateJSON(filepath.Join(root, "private-setup.json"), preflightReceipt{Version: 1, Plan: p}); err != nil {
+		t.Fatal(err)
+	}
+	current, _ := json.Marshal(expected(p))
+	m := Manager{GetConfig: func(context.Context) ([]byte, string, error) { return current, "etag", nil }, SetConfig: func(_ context.Context, b []byte, _ string) error { current = append([]byte(nil), b...); return nil }}
+	if err := m.finishPreflight(t.Context(), root, p.Origin); err == nil || string(current) != "{}" {
+		t.Fatal("substituted socket was not detached and held", string(current), err)
+	}
+	if b, err := os.ReadFile(marker); err != nil || string(b) != "preserve" {
+		t.Fatal("foreign file changed", err)
+	}
+	if err := os.Remove(probe); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.finishPreflight(t.Context(), root, p.Origin); err != nil {
+		t.Fatal("safe cleanup could not resume", err)
+	}
+}
+
 func TestSelectIsolatedKeepsExistingAndStablePort(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("managed Tailscale Unix ingress targets Linux")
