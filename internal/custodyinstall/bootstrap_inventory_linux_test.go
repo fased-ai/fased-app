@@ -275,6 +275,14 @@ func TestBootstrapInventoryBindsApprovedReader(t *testing.T) {
 	for _, approved := range []bool{false, true} {
 		t.Run(strconv.FormatBool(approved), func(t *testing.T) {
 			tx, dir, _, _ := ordinaryBootstrapModel(t)
+			// Privileged staging binds its path to the invoking owner. The
+			// shared model uses UID 1000, which is not every CI runner's UID.
+			for _, m := range []*Manifest{&tx.Base, &tx.Target} {
+				m.Owner = os.Getuid()
+				m.Root = Root(m.Owner)
+				m.App = Identity{Name: accountName(m.Owner, "app"), UID: m.Owner + 10, GID: m.Owner + 10}
+				m.Signer = Identity{Name: accountName(m.Owner, "signer"), UID: m.Owner + 11, GID: m.Owner + 11}
+			}
 			if err := os.RemoveAll(dir + "/bootstraps"); err != nil {
 				t.Fatal(err)
 			}
