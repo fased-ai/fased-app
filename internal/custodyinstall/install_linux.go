@@ -312,11 +312,18 @@ func RecordConfinedEnrollmentIntent(m Manifest) error {
 }
 
 func verifyCustodyPlatform(release []byte, arch, location string) error {
-	p, err := hostplatform.Lookup(string(release), arch)
-	if err == nil && (p.ID == "ubuntu" && p.Version == "24.04" || p.ID == "fedora" && p.Version == "45" && location == "local") {
+	if location == "remote" {
+		p, err := hostplatform.LookupRemote(string(release), arch)
+		if err != nil || p.ID != "ubuntu" || p.Version != "24.04" {
+			return errors.New("Remote custody currently requires the Ubuntu 24.04 profile")
+		}
 		return nil
 	}
-	return errors.New("custody setup supports Ubuntu 24.04 or Fedora 45 amd64 Local")
+	if location != "" && location != "local" {
+		return errors.New("choose the original Local or Remote profile")
+	}
+	_, err := hostplatform.Lookup(string(release), arch)
+	return err
 }
 
 func install(ctx context.Context, o Options, s *System, controlled bool) (Manifest, error) {

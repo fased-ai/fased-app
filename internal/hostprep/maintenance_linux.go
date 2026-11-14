@@ -129,7 +129,13 @@ func prepareProtectedPackages(p hostplatform.Platform, profile string, run func(
 	if err != nil {
 		return err
 	}
-	packages := append(p.Packages(profile == "local"), manager.PolicyKit)
+	// The main UI opens in a browser. GTK/WebKit are optional Wallets-window
+	// prerequisites and must not be installed by ordinary Local setup.
+	packages := p.Packages(false)
+	if profile == "local" {
+		packages = append(packages, "xdg-utils")
+	}
+	packages = append(packages, manager.PolicyKit)
 	if profile == "remote" {
 		packages = append(packages, "nftables", "openssh-server")
 	}

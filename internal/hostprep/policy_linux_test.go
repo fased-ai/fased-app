@@ -24,7 +24,7 @@ func TestProtectedPreparationUsesOnlyMissingDistributionPackages(t *testing.T) {
 	missing := true
 	run := func(args ...string) ([]byte, error) {
 		calls = append(calls, strings.Join(args, " "))
-		if args[0] == "/usr/bin/rpm" && args[len(args)-1] == "gtk3" && missing {
+		if args[0] == "/usr/bin/rpm" && args[len(args)-1] == "polkit" && missing {
 			return nil, errors.New("not installed")
 		}
 		return nil, nil
@@ -32,11 +32,16 @@ func TestProtectedPreparationUsesOnlyMissingDistributionPackages(t *testing.T) {
 	if err = prepareProtectedPackages(fedora, "local", run); err != nil {
 		t.Fatal(err)
 	}
-	if got := calls[len(calls)-1]; got != "/usr/bin/dnf install --assumeyes --setopt=install_weak_deps=False gtk3" {
+	for _, call := range calls {
+		if strings.Contains(call, "gtk") || strings.Contains(call, "webkit") {
+			t.Fatalf("ordinary browser setup requested optional Wallets libraries: %s", call)
+		}
+	}
+	if got := calls[len(calls)-1]; got != "/usr/bin/dnf install --assumeyes --setopt=install_weak_deps=False polkit" {
 		t.Fatal("wrong Fedora install", calls)
 	}
 	missing, calls = false, nil
-	if err = prepareProtectedPackages(fedora, "local", run); err != nil || len(calls) != 4 {
+	if err = prepareProtectedPackages(fedora, "local", run); err != nil || len(calls) != 2 {
 		t.Fatal("installed Fedora packages should only be queried", calls, err)
 	}
 	calls = nil

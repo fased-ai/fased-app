@@ -64,23 +64,76 @@ test("unstamped source cannot modify a host", () => {
   assert.match(r.stderr.toString(), /No trusted installer release/);
 });
 
-test("Fedora Local entry accepts only the mapped release and CPU before setup", () => {
+test("Local entry detects apt/dnf families before setup and refuses ambiguous hosts", () => {
   const dir = mkdtempSync(join(tmpdir(), "fased-os-entry-"));
   try {
     const osRelease = join(dir, "os-release");
+    for (const tool of ["apt-get", "dpkg-query", "dnf", "rpm"]) {
+      writeFileSync(join(dir, tool), "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    }
     const detached = `import os,subprocess,sys
 r=subprocess.run(['bash','-c',sys.argv[1],'entry','--local'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,preexec_fn=os.setsid,timeout=4)
 sys.stdout.buffer.write(r.stdout);sys.stderr.buffer.write(r.stderr);sys.exit(r.returncode)
 `;
-    for (const [version, cpu, expected] of [
-      ["45", "x86_64", /Run this command in an interactive terminal/],
-      ["45", "aarch64", /No reviewed package for this OS and CPU/],
-      ["46", "x86_64", /This OS version has no reviewed mapping/],
+    for (const [release, cpu, expected] of [
+      [
+        "ID=fedora\nVERSION_ID=45\n",
+        "x86_64",
+        /Run this command in an interactive terminal/,
+      ],
+      [
+        "ID=fedora\nVERSION_ID=45\n",
+        "aarch64",
+        /No reviewed package for this OS and CPU/,
+      ],
+      [
+        "ID=fedora\nVERSION_ID=46\n",
+        "x86_64",
+        /Run this command in an interactive terminal/,
+      ],
+      [
+        "ID=debian\nVERSION_ID=12\n",
+        "x86_64",
+        /Run this command in an interactive terminal/,
+      ],
+      [
+        'ID=linuxmint\nID_LIKE="ubuntu debian"\nVERSION_ID=22\n',
+        "x86_64",
+        /Run this command in an interactive terminal/,
+      ],
+      [
+        'ID=rocky\nID_LIKE="rhel fedora"\nVERSION_ID=9.5\n',
+        "x86_64",
+        /Run this command in an interactive terminal/,
+      ],
+      [
+        'ID=custom\nID_LIKE="debian fedora"\nVERSION_ID=1\n',
+        "x86_64",
+        /Conflicting Linux package families/,
+      ],
+      [
+        'ID=custom\nID_LIKE="debian;id"\nVERSION_ID=1\n',
+        "x86_64",
+        /Invalid OS family metadata/,
+      ],
+      [
+        "ID=unknown\nVERSION_ID=1\n",
+        "x86_64",
+        /No supported Linux package manager family/,
+      ],
+      [
+        "ID=debian\nID_LIKE=debian\nID_LIKE=debian\nVERSION_ID=12\n",
+        "x86_64",
+        /Invalid OS family metadata/,
+      ],
     ]) {
-      writeFileSync(osRelease, `ID=fedora\nVERSION_ID=${version}\n`);
-      const script = renderEntry(template, config)
+      writeFileSync(osRelease, release);
+      let script = renderEntry(template, config)
         .replaceAll("/etc/os-release", osRelease)
         .replace("case $(/usr/bin/uname -m)", `case ${cpu}`);
+      for (const tool of ["apt-get", "dpkg-query", "dnf", "rpm"]) {
+        script = script.replaceAll(`/usr/bin/${tool}`, join(dir, tool));
+      }
       const result = spawnSync("python3", ["-c", detached, script], {
         timeout: 6000,
       });
@@ -312,9 +365,8 @@ test("one release selects authenticated amd64 and arm64 tuples with update/local
   for (const value of [
     "linux-amd64)",
     "linux-arm64)",
-    "fedora:45)",
-    "fedora:45:linux-amd64)",
-    "ubuntu:22.04)",
+    "ubuntu|debian) next_family=apt",
+    "fedora|rhel|centos|rocky|almalinux) next_family=dnf",
     "ubuntu:24.04)",
     "ubuntu:26.04)",
     "ubuntu:26.10)",
@@ -324,7 +376,11 @@ test("one release selects authenticated amd64 and arm64 tuples with update/local
   ]) {
     assert.ok(script.includes(value), value);
   }
-  assert.ok(!script.includes("fedora:45:linux-arm64)"));
+  assert.ok(
+    script.includes(
+      'fedora:45:linux-arm64) die "No reviewed package for this OS and CPU."',
+    ),
+  );
   assert.equal(spawnSync("bash", ["-n"], { input: script }).status, 0);
   assert.throws(() =>
     renderEntry(template, { version: "1.0.0", targets: [config, config] }),

@@ -253,7 +253,7 @@ func TestDefinitionRejectsExposureAndEscapesPaths(t *testing.T) {
 }
 
 func TestUbuntuSandboxSelection(t *testing.T) {
-	for _, release := range []string{"ID=ubuntu\nVERSION_ID=24.04\n", "ID=\"ubuntu\"\nVERSION_ID=\"24.04\"\n"} {
+	for _, release := range []string{"ID=ubuntu\nVERSION_ID=24.04\n", "ID=\"ubuntu\"\nVERSION_ID=\"24.04\"\n", "ID=linuxmint\nID_LIKE=\"ubuntu debian\"\nVERSION_ID=22\n"} {
 		if !ubuntu2404(release) {
 			t.Fatal("Ubuntu 24.04 did not select its profiled helper")
 		}

@@ -92,7 +92,11 @@ func TestCustodyHostPlatform(t *testing.T) {
 		{"Fedora unsupported architecture", "ID=fedora\nVERSION_ID=45\n", "arm64", "local", false},
 		{"Ubuntu Local", "ID=ubuntu\nVERSION_ID=\"24.04\"\n", "amd64", "local", true},
 		{"Ubuntu Remote", "ID=ubuntu\nVERSION_ID=\"24.04\"\n", "amd64", "remote", true},
-		{"Unverified Ubuntu version", "ID=ubuntu\nVERSION_ID=\"26.04\"\n", "amd64", "local", false},
+		{"Ubuntu Local family", "ID=ubuntu\nVERSION_ID=\"26.04\"\n", "amd64", "local", true},
+		{"Unverified Ubuntu Remote", "ID=ubuntu\nVERSION_ID=\"26.04\"\n", "amd64", "remote", false},
+		{"Debian Local family", "ID=debian\nVERSION_ID=12\n", "amd64", "local", true},
+		{"RHEL Local family", "ID=rocky\nID_LIKE=\"rhel fedora\"\nVERSION_ID=9.5\n", "amd64", "local", true},
+		{"RHEL Remote remains guarded", "ID=rocky\nID_LIKE=\"rhel fedora\"\nVERSION_ID=9.5\n", "amd64", "remote", false},
 		{"Ambiguous OS identity", "ID=fedora\nID=ubuntu\nVERSION_ID=\"24.04\"\n", "amd64", "local", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

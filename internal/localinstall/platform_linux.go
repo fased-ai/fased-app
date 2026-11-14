@@ -38,8 +38,9 @@ func definition(p Paths, o Options) ([]byte, error) {
 // to skip its filesystem sandbox. Use the distribution's profiled helper;
 // never relax AppArmor globally or start an unsandboxed fallback.
 func RequiresBubblewrap() bool {
-	b, err := os.ReadFile("/etc/os-release")
-	return err == nil && ubuntu2404(string(b))
+	p, err := hostplatform.Current()
+	// A failed platform/capability probe must not select the weaker sandbox.
+	return err != nil || p.RestrictedNamespaces
 }
 func ubuntu2404(release string) bool { return hostplatform.RestrictedUbuntu(release) }
 func CheckHostRuntime() error {

@@ -15,20 +15,20 @@ root_file() { [[ -f $1 && ! -L $1 && $(/usr/bin/stat -c '%u:%g:%a:%h' "$1") == "
 operator_record() { [[ $1 =~ ^(pending:[a-f0-9]{32}|ready:[1-9][0-9]*:[1-9][0-9]*:(external|[a-f0-9]{32}))$ ]]; }
 die() { printf 'Fased: %s\n' "$*" >&2; exit 1; }
 package_installed() {
-  case "$ID" in
-    ubuntu) [[ $(/usr/bin/dpkg-query -W -f='${Status}' "$1" 2>/dev/null || true) == 'install ok installed' ]] ;;
-    fedora) /usr/bin/rpm -q --quiet -- "$1" ;;
+  case "$package_family" in
+    apt) [[ $(/usr/bin/dpkg-query -W -f='${Status}' "$1" 2>/dev/null || true) == 'install ok installed' ]] ;;
+    dnf) /usr/bin/rpm -q --quiet -- "$1" ;;
     *) return 1 ;;
   esac
 }
 install_packages() {
   local -a elevate=()
   if [[ $(/usr/bin/id -u) != 0 ]]; then elevate=(/usr/bin/sudo --); fi
-  case "$ID" in
-    ubuntu)
+  case "$package_family" in
+    apt)
       "${elevate[@]}" /usr/bin/apt-get update
       "${elevate[@]}" /usr/bin/apt-get install -y --no-remove --no-install-recommends "$@" ;;
-    fedora)
+    dnf)
       "${elevate[@]}" /usr/bin/dnf install --assumeyes --setopt=install_weak_deps=False "$@" ;;
     *) die 'Unsupported OS package manager.' ;;
   esac
@@ -66,15 +66,31 @@ port=${BASH_REMATCH[1]}
 [[ $port == "$((10#$port))" ]] && ((10#$port >= 1024 && 10#$port <= 65535)) || die 'Invalid listener port.'
 [[ -r /etc/os-release ]] || die 'OS release metadata is missing.'
 # Read only fixed data fields; never evaluate os-release as shell code.
-ID='' VERSION_ID=''
+ID='' ID_LIKE='' VERSION_ID='' seen_id_like=0
 while IFS='=' read -r key value; do
-  case "$key" in ID|VERSION_ID)
+  case "$key" in ID|ID_LIKE|VERSION_ID)
     value=${value%\"}; value=${value#\"}; value=${value%\'}; value=${value#\'}
-    [[ $value =~ ^[a-z0-9.]+$ ]] || die 'Invalid OS release metadata.'
-    if [[ $key == ID ]]; then [[ -z $ID ]] || die 'Ambiguous OS identity.'; ID=$value
-    else [[ -z $VERSION_ID ]] || die 'Ambiguous OS version.'; VERSION_ID=$value; fi ;;
+    if [[ $key == ID_LIKE ]]; then
+      [[ $seen_id_like == 0 && $value =~ ^[a-z0-9._\ -]*$ ]] || die 'Invalid OS family metadata.'
+      ID_LIKE=$value; seen_id_like=1
+    else
+      [[ $value =~ ^[a-z0-9._-]+$ ]] || die 'Invalid OS release metadata.'
+      if [[ $key == ID ]]; then [[ -z $ID ]] || die 'Ambiguous OS identity.'; ID=$value
+      else [[ -z $VERSION_ID ]] || die 'Ambiguous OS version.'; VERSION_ID=$value; fi
+    fi ;;
   esac
 done < /etc/os-release
+[[ -n $ID && -n $VERSION_ID ]] || die 'OS identity and version are required.'
+package_family=''
+for family_id in "$ID" $ID_LIKE; do
+  next_family=''
+  case "$family_id" in
+    ubuntu|debian) next_family=apt ;;
+    fedora|rhel|centos|rocky|almalinux) next_family=dnf ;;
+  esac
+  [[ -z $next_family || -z $package_family || $next_family == "$package_family" ]] || die 'Conflicting Linux package families.'
+  if [[ -n $next_family ]]; then package_family=$next_family; fi
+done
 @PLATFORM_BINDINGS@
 case $(/usr/bin/uname -m) in x86_64|amd64) target=linux-amd64 ;; aarch64|arm64) target=linux-arm64 ;; *) die 'No verified package for this CPU.' ;; esac
 @PLATFORM_TARGET_BINDINGS@
@@ -241,8 +257,7 @@ fi
 
 # Root prepares only the verified, protected maintenance entry. The wizard,
 # core, native client and signer run after dropping to their ordinary identities.
-if [[ $ID == fedora ]]; then printf 'Preparing Fedora for Fased…\n' >&2
-else printf 'Preparing Ubuntu for Fased…\n' >&2; fi
+printf 'Preparing Linux for Fased…\n' >&2
 missing=()
 packages=(ca-certificates curl sudo util-linux)
 if [[ $profile == remote ]]; then packages+=(nftables openssh-server); fi
