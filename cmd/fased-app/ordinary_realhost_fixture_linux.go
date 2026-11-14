@@ -106,6 +106,9 @@ func init() {
 	compiledOrdinarySourceAllowed = func(root, data string) bool {
 		return hostplatform.FixtureSourceLocationAllowed(os.Getuid(), root, data)
 	}
+	compiledNativeFixtureAllowed = func(root, data string) bool {
+		return os.Getuid() > 0 && os.Getuid() == os.Geteuid() && hostplatform.FixtureSourceLocationAllowed(os.Getuid(), root, data)
+	}
 	compiledInstalledWalletRead = func(server *core.Server, path string) (func(), error) {
 		if path == "" {
 			return nil, nil

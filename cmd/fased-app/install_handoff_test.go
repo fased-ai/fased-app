@@ -112,7 +112,7 @@ func TestNativeCompanionMustMatchTheOriginalBundle(t *testing.T) {
 	}
 	pin := saveInstallationBundle(t, dir, native)
 	engine := filepath.Join(dir, localinstall.EngineName())
-	if _, _, err = verifiedNativeInstallation(dir, output, pin, engine, original); err == nil {
+	if _, _, err = verifiedNativeInstallation(dir, output, pin, engine, original, localinstall.Paths{}); err == nil {
 		t.Fatal("unsigned engineering companion bypassed the attested release binding")
 	}
 	changed := original
@@ -121,13 +121,13 @@ func TestNativeCompanionMustMatchTheOriginalBundle(t *testing.T) {
 		changed.Files[name] = value
 	}
 	changed.Files["LICENSE"] = bundle.File{SHA256: strings.Repeat("a", 64), Bytes: 1}
-	if _, _, err = verifiedNativeInstallation(dir, output, pin, engine, changed); err == nil {
+	if _, _, err = verifiedNativeInstallation(dir, output, pin, engine, changed, localinstall.Paths{}); err == nil {
 		t.Fatal("companion changed a verified original file")
 	}
-	if _, _, err = verifiedNativeInstallation(dir, t.TempDir(), pin, engine, original); err == nil {
+	if _, _, err = verifiedNativeInstallation(dir, t.TempDir(), pin, engine, original, localinstall.Paths{}); err == nil {
 		t.Fatal("companion outside the acquisition directory accepted")
 	}
-	if _, _, err = verifiedNativeInstallation(dir, output, strings.Repeat("0", 64), engine, original); err == nil {
+	if _, _, err = verifiedNativeInstallation(dir, output, strings.Repeat("0", 64), engine, original, localinstall.Paths{}); err == nil {
 		t.Fatal("unmatched native inventory accepted")
 	}
 }
@@ -160,7 +160,7 @@ func TestAttestedNativeCompanionRejectsSelfAuthoredPair(t *testing.T) {
 		}
 	}
 	pin := saveInstallationBundle(t, dir, native)
-	if _, _, err := verifiedNativeInstallation(dir, output, pin, filepath.Join(dir, localinstall.EngineName()), original); err == nil {
+	if _, _, err := verifiedNativeInstallation(dir, output, pin, filepath.Join(dir, localinstall.EngineName()), original, localinstall.Paths{}); err == nil {
 		t.Fatal("self-authored native pair was presented as an attested release")
 	}
 	previousSource, previousDesktop, previousSigner := compiledNativeSource, compiledNativeDesktopSHA256, compiledNativeSignerSHA256
@@ -170,7 +170,7 @@ func TestAttestedNativeCompanionRejectsSelfAuthoredPair(t *testing.T) {
 	compiledNativeSource = original.Source
 	compiledNativeDesktopSHA256 = native.Files[localinstall.DesktopName()].SHA256
 	compiledNativeSignerSHA256 = native.Files["fased-signer"].SHA256
-	if _, _, err := verifiedNativeInstallation(dir, output, pin, filepath.Join(dir, localinstall.EngineName()), original); err != nil {
+	if _, _, err := verifiedNativeInstallation(dir, output, pin, filepath.Join(dir, localinstall.EngineName()), original, localinstall.Paths{}); err != nil {
 		t.Fatal("the pair bound to the running core was refused", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "fased-signer"), []byte("substituted signer"), 0700); err != nil {
@@ -182,7 +182,7 @@ func TestAttestedNativeCompanionRejectsSelfAuthoredPair(t *testing.T) {
 		t.Fatal(err)
 	}
 	pin = saveInstallationBundle(t, dir, native)
-	if _, _, err := verifiedNativeInstallation(dir, output, pin, filepath.Join(dir, localinstall.EngineName()), original); err == nil {
+	if _, _, err := verifiedNativeInstallation(dir, output, pin, filepath.Join(dir, localinstall.EngineName()), original, localinstall.Paths{}); err == nil {
 		t.Fatal("substitution survived the independently bound signer digest")
 	}
 }
