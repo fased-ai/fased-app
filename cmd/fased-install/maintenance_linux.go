@@ -335,6 +335,7 @@ func readMaintenanceFrame(ctx context.Context, in io.Reader) ([]byte, io.Reader,
 // Only build composition can supply a controlled transport. Runtime requests
 // cannot select trust, a download host, a package path or a fixture mode.
 var compiledMaintenanceOptions func(string) (bootstrap.Options, error)
+var compiledFixtureSourceAllowed func(int, string) bool
 
 func maintenanceOptions(a maintenance.Authority) (bootstrap.Options, error) {
 	if compiledMaintenanceOptions != nil {

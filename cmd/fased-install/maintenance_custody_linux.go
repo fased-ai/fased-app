@@ -281,11 +281,14 @@ func maintenanceCustodyPrepare(ctx context.Context, a maintenance.Authority, q m
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return empty, err
 	}
-	o, err := maintenanceOptions(a)
+	controlled, sourceData, err := enrollment.ValidateProtectedPrepare(a, q)
 	if err != nil {
 		return empty, err
 	}
-	controlled, err := enrollment.ValidateProtectedPrepare(a, q)
+	if err = checkCompiledFixturePrepare(a.Owner, controlled, sourceData); err != nil {
+		return empty, err
+	}
+	o, err := maintenanceOptions(a)
 	if err != nil {
 		return empty, err
 	}
@@ -475,6 +478,15 @@ func maintenanceCustodyPrepare(ctx context.Context, a maintenance.Authority, q m
 	return m, nil
 }
 
+// Normal builds have no fixture selector. A real-host fixture must not admit
+// an owner-key enrollment or a source outside its compiled workspace.
+func checkCompiledFixturePrepare(owner int, controlled bool, source string) error {
+	if compiledFixtureSourceAllowed != nil && (!controlled || !compiledFixtureSourceAllowed(owner, source)) {
+		return errors.New("the exact controlled fixture workspace is required")
+	}
+	return nil
+}
+
 func maintenanceCustodyInitialize(ctx context.Context, a maintenance.Authority) error {
 	if r, err := update.ReadMaintenanceRecord(a.Owner); err == nil {
 		if _, err = custodyinstall.ValidateInitialMaintenanceRecord(r); err != nil {
@@ -635,6 +647,9 @@ func maintenanceCustodyAcquire(ctx context.Context, a maintenance.Authority, q m
 	if err != nil || installed.Location != a.Profile || !installed.Enrollment {
 		return errors.New("the original custody installation is required")
 	}
+	if compiledFixtureSourceAllowed != nil && installed.Provenance != signer.ControlledCustodyProfile {
+		return errors.New("the real-host fixture cannot update owner-key custody")
+	}
 	// The direct helper entry is also used to resume an already journalled
 	// update and for the explicit legacy bootstrap above. A new non-bootstrap
 	// operation must originate in the same protected core record as the worker.
@@ -746,7 +761,7 @@ func maintenanceCustodyAcquire(ctx context.Context, a maintenance.Authority, q m
 	return nil
 }
 
-func selectEmbeddedSigner(id bootstrap.MaintenanceIdentity, development bool, primary, successor *bootstrap.WalletPayload) *bootstrap.WalletPayload {
+func selectEmbeddedPayload(id bootstrap.MaintenanceIdentity, development bool, primary, successor *bootstrap.WalletPayload) *bootstrap.WalletPayload {
 	if primary != nil && primary.Version == id.Version && primary.Source == id.Source {
 		return primary
 	}
@@ -758,7 +773,7 @@ func selectEmbeddedSigner(id bootstrap.MaintenanceIdentity, development bool, pr
 
 func maintenanceAcquireSigner(ctx context.Context, p *bootstrap.Prepared, a maintenance.Authority, dir string, id bootstrap.MaintenanceIdentity, enrollment bool) error {
 	if id.InstallerSHA256 == a.ImageSHA256 || p.Report().DevelopmentOnly {
-		payload := selectEmbeddedSigner(id, p.Report().DevelopmentOnly, walletPayload(), fixtureSuccessorWalletPayload())
+		payload := selectEmbeddedPayload(id, p.Report().DevelopmentOnly, walletPayload(), fixtureSuccessorWalletPayload())
 		if payload == nil {
 			return errors.New("authenticated installer has no matching signer")
 		}
@@ -775,12 +790,17 @@ func maintenanceAcquireSigner(ctx context.Context, p *bootstrap.Prepared, a main
 }
 
 func maintenanceAcquireDesktop(ctx context.Context, p *bootstrap.Prepared, a maintenance.Authority, dir string, id bootstrap.MaintenanceIdentity, enrollment bool) error {
-	payload := walletDesktopPayload()
-	if (id.InstallerSHA256 == a.ImageSHA256 || p.Report().DevelopmentOnly) && payload != nil && payload.Version == id.Version && payload.Source == id.Source {
-		if err := bootstrap.WriteWalletPayload(io.Discard, payload); err != nil {
-			return err
+	if id.InstallerSHA256 == a.ImageSHA256 || p.Report().DevelopmentOnly {
+		payload := selectEmbeddedPayload(id, p.Report().DevelopmentOnly, walletDesktopPayload(), fixtureSuccessorDesktopPayload())
+		if payload != nil {
+			if err := bootstrap.WriteWalletPayload(io.Discard, payload); err != nil {
+				return err
+			}
+			return maintenance.PublishProtected(dir+"/fased-desktop", payload.Data, 0755)
 		}
-		return maintenance.PublishProtected(dir+"/fased-desktop", payload.Data, 0755)
+		if p.Report().DevelopmentOnly {
+			return errors.New("the exact controlled target Wallets window is unavailable")
+		}
 	}
 	return maintenanceExtractPayload(ctx, p, a, dir, id, "desktop", enrollment)
 }

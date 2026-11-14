@@ -20,6 +20,10 @@ import (
 	"golang.org/x/term"
 )
 
+// Only a separately tagged disposable build may bind these functions.
+var compiledFixtureHost func(int) bool
+var compiledFixtureServe func(context.Context, signer.Config) (*signer.Server, error)
+
 func main() {
 	if err := run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "fased-signer:", err)
@@ -28,6 +32,9 @@ func main() {
 }
 
 func run(args []string, input *os.File, out, errOut io.Writer) error {
+	if compiledFixtureHost != nil && !compiledFixtureHost(0) {
+		return signer.ErrUnavailable
+	}
 	if len(args) > 0 && (args[0] == "custody-maintenance" || args[0] == "custody-maintenance-inventory" || args[0] == "custody-maintenance-status") {
 		return signerMaintenanceCommand(args, input, out)
 	}
@@ -71,7 +78,11 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		return json.NewEncoder(out).Encode(signer.UpdateContract())
 	}
 	if len(args) == 1 && args[0] == "ordinary-custody-version" {
-		return json.NewEncoder(out).Encode(map[string]any{"protocol": 3, "ownerFlow": 1, "mode": signer.OrdinaryCustodyMode, "profile": signer.OwnerCustodyProfile, "provenance": signer.OwnerKeyProvenance, "walletSigner": false})
+		provenance := signer.OwnerKeyProvenance
+		if compiledFixtureHost != nil {
+			provenance = signer.ControlledCustodyProfile
+		}
+		return json.NewEncoder(out).Encode(map[string]any{"protocol": 3, "ownerFlow": 1, "mode": signer.OrdinaryCustodyMode, "profile": signer.OwnerCustodyProfile, "provenance": provenance, "walletSigner": false})
 	}
 	if len(args) == 1 && args[0] == "custody-version" {
 		return json.NewEncoder(out).Encode(map[string]any{"protocol": 2, "ownerFlow": 1, "mode": signer.ManagedFixtureMode, "walletSigner": false})
@@ -124,6 +135,9 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	c, err := signer.LoadConfig(*configPath)
 	if err != nil {
 		return err
+	}
+	if compiledFixtureHost != nil && c.Version == 3 && !compiledFixtureHost(c.OwnerUID) {
+		return signer.ErrUnavailable
 	}
 	if args[0] == "fixture-install-start-guard" {
 		if !*fixture || *ordinary || *passwordStdin || *requestStdin || *approvalStdin || *documentPath != "" || *seedPath != "" || *rpcOrigin != "" || *windowInstance != "" || *guardComponent != "" || *guardSource != "" || *guardStage != "" || *configPath != fmt.Sprintf("/var/lib/fased-app-custody-%d/identity.json", c.OwnerUID) {
@@ -197,7 +211,11 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if args[0] == "serve" {
-		server, err := signer.Serve(ctx, c)
+		serve := signer.Serve
+		if *fixture && c.Version == 3 && compiledFixtureServe != nil {
+			serve = compiledFixtureServe
+		}
+		server, err := serve(ctx, c)
 		if err != nil {
 			return err
 		}

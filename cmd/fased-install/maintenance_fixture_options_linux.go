@@ -37,9 +37,15 @@ func fixtureProtectedInput(path, expected string) ([]byte, error) {
 
 func init() {
 	compiledMaintenanceOptions = func(parent string) (bootstrap.Options, error) {
-		product, err := os.ReadFile("/sys/class/dmi/id/product_name")
-		if err != nil || !(strings.Contains(string(product), "QEMU") || strings.Contains(string(product), "Standard PC")) {
-			return bootstrap.Options{}, errors.New("disposable QEMU fixture required")
+		if fixtureRealHostRequired() {
+			if !fixtureRealHostAllowed(parent) {
+				return bootstrap.Options{}, errors.New("the exact authorized disposable fixture host is required")
+			}
+		} else {
+			product, err := os.ReadFile("/sys/class/dmi/id/product_name")
+			if err != nil || !(strings.Contains(string(product), "QEMU") || strings.Contains(string(product), "Standard PC")) {
+				return bootstrap.Options{}, errors.New("disposable QEMU fixture required")
+			}
 		}
 		seed, err := fixtureProtectedInput("/var/lib/fased-update-fixture/seed.json", fixtureSeedSHA256)
 		if err != nil {

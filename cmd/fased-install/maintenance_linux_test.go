@@ -219,21 +219,46 @@ func TestExpiredUnboundCandidateDoesNotShadowPublicRelease(t *testing.T) {
 	}
 }
 
-func TestFixtureSuccessorSignerCannotCrossProductionBoundary(t *testing.T) {
+func TestCompiledFixturePrepareRejectsOwnerKeysAndForeignSource(t *testing.T) {
+	original := compiledFixtureSourceAllowed
+	t.Cleanup(func() { compiledFixtureSourceAllowed = original })
+	compiledFixtureSourceAllowed = nil
+	if err := checkCompiledFixturePrepare(1000, false, "/owner-data"); err != nil {
+		t.Fatal("normal build changed owner enrollment", err)
+	}
+	compiledFixtureSourceAllowed = func(owner int, source string) bool { return owner == 1000 && source == "/fixed-fixture-data" }
+	for _, tc := range []struct {
+		owner      int
+		controlled bool
+		source     string
+		want       bool
+	}{
+		{1000, true, "/fixed-fixture-data", true},
+		{1000, false, "/fixed-fixture-data", false},
+		{1000, true, "/other-data", false},
+		{1001, true, "/fixed-fixture-data", false},
+	} {
+		if got := checkCompiledFixturePrepare(tc.owner, tc.controlled, tc.source) == nil; got != tc.want {
+			t.Fatalf("owner=%d controlled=%t admitted=%t", tc.owner, tc.controlled, got)
+		}
+	}
+}
+
+func TestFixtureSuccessorPayloadCannotCrossProductionBoundary(t *testing.T) {
 	initial := &bootstrap.WalletPayload{Version: "0.1.11", Source: "source-a"}
 	successor := &bootstrap.WalletPayload{Version: "0.1.12", Source: "source-b"}
 	first := bootstrap.MaintenanceIdentity{Version: initial.Version, Source: initial.Source}
 	next := bootstrap.MaintenanceIdentity{Version: successor.Version, Source: successor.Source}
-	if got := selectEmbeddedSigner(first, false, initial, successor); got != initial {
+	if got := selectEmbeddedPayload(first, false, initial, successor); got != initial {
 		t.Fatal("original installer payload changed")
 	}
-	if got := selectEmbeddedSigner(next, false, initial, successor); got != nil {
-		t.Fatal("fixture signer admitted in production")
+	if got := selectEmbeddedPayload(next, false, initial, successor); got != nil {
+		t.Fatal("fixture payload admitted in production")
 	}
-	if got := selectEmbeddedSigner(next, true, initial, successor); got != successor {
+	if got := selectEmbeddedPayload(next, true, initial, successor); got != successor {
 		t.Fatal("exact controlled successor unavailable")
 	}
-	if got := selectEmbeddedSigner(bootstrap.MaintenanceIdentity{Version: next.Version, Source: "foreign"}, true, initial, successor); got != nil {
+	if got := selectEmbeddedPayload(bootstrap.MaintenanceIdentity{Version: next.Version, Source: "foreign"}, true, initial, successor); got != nil {
 		t.Fatal("foreign successor source accepted")
 	}
 }

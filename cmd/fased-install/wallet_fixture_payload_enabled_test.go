@@ -18,7 +18,7 @@ func TestCompiledFixtureSuccessorRemainsBound(t *testing.T) {
 		t.Fatal("fixture signer bytes differ from their compiled identity", err)
 	}
 	id := bootstrap.MaintenanceIdentity{Version: p.Version, Source: p.Source}
-	if selectEmbeddedSigner(id, false, walletPayload(), p) != nil || selectEmbeddedSigner(id, true, walletPayload(), p) != p {
+	if selectEmbeddedPayload(id, false, walletPayload(), p) != nil || selectEmbeddedPayload(id, true, walletPayload(), p) != p {
 		t.Fatal("fixture successor crossed its development boundary")
 	}
 }

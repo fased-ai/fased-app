@@ -23,6 +23,7 @@ import (
 )
 
 var compiledOrdinaryEnrollment func(context.Context, enrollment.Source, enrollment.Options, *custodyinstall.System) (custodyinstall.Manifest, error)
+var compiledOrdinarySourceAllowed func(string, string) bool
 
 func ordinaryEnrollmentSupported() bool {
 	return compiledOrdinaryEnrollment != nil || signer.OrdinaryOwnerAdmissionEnabled()
@@ -62,7 +63,11 @@ func enrollmentCommand(args []string, in io.Reader, out, errOut io.Writer) error
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	system := &custodyinstall.System{In: in, Out: errOut}
-	source, lease, e := enrollmentSource(ctx, *mode, *expected, localinstall.Paths{Root: *prefix, Data: *data}, system)
+	var sourceAllowed func(string, string) bool
+	if *ordinary {
+		sourceAllowed = compiledOrdinarySourceAllowed
+	}
+	source, lease, e := enrollmentSource(ctx, *mode, *expected, localinstall.Paths{Root: *prefix, Data: *data}, system, sourceAllowed)
 	if e != nil {
 		return e
 	}
@@ -143,9 +148,12 @@ func enrollmentCommand(args []string, in io.Reader, out, errOut io.Writer) error
 	}{*expected, origin, true, false, false})
 }
 
-func enrollmentSource(ctx context.Context, mode, expected string, paths localinstall.Paths, system *custodyinstall.System) (enrollment.Source, io.Closer, error) {
+func enrollmentSource(ctx context.Context, mode, expected string, paths localinstall.Paths, system *custodyinstall.System, sourceAllowed func(string, string) bool) (enrollment.Source, io.Closer, error) {
 	var source enrollment.Source
 	if mode == "local" {
+		if sourceAllowed != nil && !sourceAllowed(paths.Root, paths.Data) {
+			return source, nil, signer.ErrUnavailable
+		}
 		// Discovery never creates a missing source installation or instance.
 		if _, e := os.Lstat(filepath.Join(paths.Root, "install.json")); e != nil {
 			return source, nil, e
@@ -174,6 +182,9 @@ func enrollmentSource(ctx context.Context, mode, expected string, paths localins
 	m, e := vpsinstall.Load(os.Getuid())
 	if e != nil {
 		return source, nil, e
+	}
+	if sourceAllowed != nil && !sourceAllowed(m.Root, m.Data) {
+		return source, nil, signer.ErrUnavailable
 	}
 	lease, e := vpsinstall.EnrollmentLease(ctx, m, system)
 	if e != nil {

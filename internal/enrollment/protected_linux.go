@@ -131,12 +131,16 @@ func ProtectedOwnerJournal(owner int) ([]byte, error) {
 // its held operation before any release is downloaded or privileged files are
 // created. The held journal determines key provenance; release-signing trust
 // does not turn a disposable key into an owner key, or vice versa.
-func ValidateProtectedPrepare(a maintenance.Authority, q maintenance.CustodyEnrollmentRequest) (bool, error) {
+func ValidateProtectedPrepare(a maintenance.Authority, q maintenance.CustodyEnrollmentRequest) (bool, string, error) {
 	j, err := openOwnerEnrollmentJournal(a, true)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
-	return protectedPrepareProvenance(a, j, q)
+	controlled, err := protectedPrepareProvenance(a, j, q)
+	if err != nil {
+		return false, "", err
+	}
+	return controlled, j.Source.Data, nil
 }
 
 func protectedPrepareProvenance(a maintenance.Authority, j journal, q maintenance.CustodyEnrollmentRequest) (bool, error) {
