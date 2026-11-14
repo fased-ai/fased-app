@@ -1,9 +1,56 @@
 package hostplatform
 
 import (
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestFedora45LocalMapping(t *testing.T) {
+	release := "ID=fedora\nVERSION_ID=45\n"
+	p, err := Lookup(release, "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Remote || p.RestrictedNamespaces {
+		t.Fatal("Fedora must use the existing Local systemd sandbox and not be admitted as Remote", p)
+	}
+	if got, want := p.Packages(true), []string{"gtk3", "webkit2gtk4.1", "xdg-utils"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Fedora runtime packages = %v, want %v", got, want)
+	}
+	manager, err := p.PackageManager()
+	if err != nil || manager.PolicyKit != "polkit" || !reflect.DeepEqual(manager.Query, []string{"/usr/bin/rpm", "-q", "--quiet", "--"}) || !reflect.DeepEqual(manager.Install, []string{"/usr/bin/dnf", "install", "--assumeyes", "--setopt=install_weak_deps=False"}) || len(manager.Refresh) != 0 {
+		t.Fatalf("wrong Fedora package preparation: %+v (%v)", manager, err)
+	}
+	if _, err = LookupRemote(release, "amd64"); err == nil {
+		t.Fatal("unverified Fedora Remote was admitted")
+	}
+	if _, err = Lookup(release, "arm64"); err == nil {
+		t.Fatal("unverified Fedora architecture was admitted")
+	}
+	if _, err = Lookup("ID=fedora\nVERSION_ID=46\n", "amd64"); err == nil {
+		t.Fatal("unknown Fedora release was admitted")
+	}
+}
+
+func TestCurrentFedora45Host(t *testing.T) {
+	b, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := releaseValues(string(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v["ID"] != "fedora" || v["VERSION_ID"] != "45" {
+		t.Skip("this check requires the actual Fedora 45 host")
+	}
+	p, err := Current()
+	if err != nil || p.ID != "fedora" || p.Version != "45" {
+		t.Fatalf("actual Fedora host rejected: platform=%+v err=%v", p, err)
+	}
+}
 
 func TestReleaseAndArchitectureMapping(t *testing.T) {
 	for _, arch := range []string{"amd64", "arm64"} {

@@ -76,3 +76,12 @@ func InspectFixtureColdMetadata(ctx context.Context, dir, probe string) (Fixture
 	_, e := inspectFixtureMetadata(ctx, dir, probe, &out)
 	return out, e
 }
+
+// ValidateFixturePauseGuard checks the existing cold metadata receipt without
+// opening a writable Store or treating the caller's intent as core authority.
+func ValidateFixturePauseGuard(v FixtureColdMetadata, phase, id, pauseID, requestDigest, instanceDigest string) error {
+	if (phase != "paused" && phase != "released") || !update.IDOK(id) || !update.IDOK(pauseID) || v.Phase != phase || v.PauseID != pauseID || v.Request == nil || v.Request.IntentID != id || !update.ValidPauseRequest(*v.Request) || update.SnapshotDigest("pause-request", *v.Request) != requestDigest || update.SnapshotDigest("atomic-instance:v1", v.Core.InstanceID) != instanceDigest {
+		return errors.New("exact core pause or release state required")
+	}
+	return nil
+}

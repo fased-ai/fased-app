@@ -14,8 +14,28 @@ development_only='@DEVELOPMENT_ONLY@'
 root_file() { [[ -f $1 && ! -L $1 && $(/usr/bin/stat -c '%u:%g:%a:%h' "$1") == "0:0:$2:1" ]]; }
 operator_record() { [[ $1 =~ ^(pending:[a-f0-9]{32}|ready:[1-9][0-9]*:[1-9][0-9]*:(external|[a-f0-9]{32}))$ ]]; }
 die() { printf 'Fased: %s\n' "$*" >&2; exit 1; }
+package_installed() {
+  case "$ID" in
+    ubuntu) [[ $(/usr/bin/dpkg-query -W -f='${Status}' "$1" 2>/dev/null || true) == 'install ok installed' ]] ;;
+    fedora) /usr/bin/rpm -q --quiet -- "$1" ;;
+    *) return 1 ;;
+  esac
+}
+install_packages() {
+  local -a elevate=()
+  if [[ $(/usr/bin/id -u) != 0 ]]; then elevate=(/usr/bin/sudo --); fi
+  case "$ID" in
+    ubuntu)
+      "${elevate[@]}" /usr/bin/apt-get update
+      "${elevate[@]}" /usr/bin/apt-get install -y --no-remove --no-install-recommends "$@" ;;
+    fedora)
+      "${elevate[@]}" /usr/bin/dnf install --assumeyes --setopt=install_weak_deps=False "$@" ;;
+    *) die 'Unsupported OS package manager.' ;;
+  esac
+}
 profile='' operator='' action=install listen='127.0.0.1:7331'
 wallet_instance='' wallet_network=''
+candidate_dir='' candidate_packet=''
 while (($#)); do
   case "$1" in
     --local) profile=local; shift ;;
@@ -28,6 +48,8 @@ while (($#)); do
     --wallet-network) (($# >= 2)) || die 'Missing network.'; wallet_network=$2; shift 2 ;;
     --operator) (($# >= 2)) || die 'Missing operator.'; operator=$2; shift 2 ;;
     --listen) (($# >= 2)) || die 'Missing listener.'; listen=$2; shift 2 ;;
+    --candidate-dir) (($# >= 2)) || die 'Missing candidate directory.'; candidate_dir=$2; shift 2 ;;
+    --candidate-packet-sha256) (($# >= 2)) || die 'Missing candidate identity.'; candidate_packet=$2; shift 2 ;;
     --help|-h) printf 'Usage: install.sh [--local|--remote|--connect] [--open|--start|--stop|--status|--recover|--update|--setup|--wallets] [--wallet-instance ID --wallet-network NETWORK] [--operator USER] [--listen 127.0.0.1:PORT]\n'; exit 0 ;;
     *) die "Unknown option: $1" ;;
   esac
@@ -55,6 +77,7 @@ while IFS='=' read -r key value; do
 done < /etc/os-release
 @PLATFORM_BINDINGS@
 case $(/usr/bin/uname -m) in x86_64|amd64) target=linux-amd64 ;; aarch64|arm64) target=linux-arm64 ;; *) die 'No verified package for this CPU.' ;; esac
+@PLATFORM_TARGET_BINDINGS@
 @TARGET_BINDINGS@
 if [[ $development_only == 0 ]]; then
   [[ $installer_url == "https://github.com/fased-ai/fased-app/releases/download/v${entry_version}/fased-install-${target}" && -z $fixture_ca_base64 ]] || die 'Untrusted installer source.'
@@ -85,6 +108,49 @@ fi
 if [[ $(/usr/bin/id -u) == 0 && $profile != remote && -z ${SUDO_USER:-} && -z $operator ]]; then
   die 'Run Local/Connect from your ordinary computer account. For a VPS, choose Remote.'
 fi
+if [[ -n $candidate_dir || -n $candidate_packet ]]; then
+  [[ $candidate_dir == /* && $candidate_dir != *$'\n'* && $candidate_dir != *$'\r'* && $candidate_packet =~ ^[a-f0-9]{64}$ && $profile == local && $action == install && -z $operator && $(/usr/bin/id -u) != 0 && $development_only == 0 ]] || die 'Candidate acceptance requires one exact Local package and ordinary owner.'
+fi
+
+owner_maintenance_setup() {
+  [[ $profile != connect ]] || return 0
+  local acquired=$1 protected="/var/lib/fased-maintenance/images/$installer_sha256/fased-install" stage current recovered=0
+  # Administrator consent is for this one authenticated setup. No OS-tool
+  # command is added to sudoers; subsequent maintenance uses one fixed helper.
+  for current in /var/lib/fased-maintenance /var/lib/fased-maintenance/images "/var/lib/fased-maintenance/images/$installer_sha256"; do
+    if [[ ! -e $current && ! -L $current ]]; then
+      /usr/bin/sudo -- /usr/bin/install -d -m 0755 -o root -g root -- "$current"
+    fi
+    [[ -d $current && ! -L $current && $(/usr/bin/stat -c '%u:%g:%a' "$current") == 0:0:755 ]] || die 'Foreign maintenance directory; preserving it.'
+  done
+  if [[ ! -e $protected && ! -L $protected ]]; then
+    stage=$(/usr/bin/sudo -- /usr/bin/mktemp -d /var/lib/fased-maintenance/.bootstrap.XXXXXXXX)
+    [[ $stage =~ ^/var/lib/fased-maintenance/\.bootstrap\.[a-zA-Z0-9]+$ ]] || die 'Invalid protected staging directory.'
+    /usr/bin/sudo -- /usr/bin/install -m 0555 -o root -g root -- "$acquired" "$stage/fased-install"
+    # Hash the protected copy before any project executable receives root.
+    read -r actual _ < <(/usr/bin/sudo -- /usr/bin/sha256sum -- "$stage/fased-install")
+    [[ $actual == "$installer_sha256" ]] || die 'Protected installer checksum differs; nothing was executed.'
+    /usr/bin/sudo -- /usr/bin/mv -T --no-clobber -- "$stage/fased-install" "$protected"
+    /usr/bin/sudo -- /usr/bin/rmdir -- "$stage"
+  fi
+  root_file "$protected" 555 || die 'Foreign protected installer; preserving it.'
+  read -r actual _ < <(/usr/bin/sha256sum -- "$protected")
+  [[ $actual == "$installer_sha256" ]] || die 'Protected installer checksum differs.'
+  /usr/bin/sudo -- /usr/bin/sync -f -- "$protected"
+  current=$(/usr/bin/sudo -- "$protected" maintenance-register --owner "$(/usr/bin/id -u)" --profile "$profile")
+  if [[ $action == update && $current != "$protected" ]]; then
+    # The protected helper selects only this owner's existing held operation.
+    current=$(/usr/bin/sudo -- "$protected" maintenance-register --owner "$(/usr/bin/id -u)" --profile "$profile" --resume)
+    [[ $current != "$protected" ]] || recovered=1
+  fi
+  [[ $current =~ ^/var/lib/fased-maintenance/images/[a-f0-9]{64}/fased-install$ ]] || die 'Invalid registered maintenance entry.'
+  /usr/bin/sudo -- "$current" maintenance-bootstrap --owner "$(/usr/bin/id -u)"
+  if [[ $recovered == 1 ]]; then
+    printf 'Update files were checked; app recovery and future updates are not yet verified.\n' >&2
+    exit 1
+  fi
+  FASED_PROTECTED_INSTALLER=$protected
+}
 
 owner_install() {
   [[ $(/usr/bin/id -u) != 0 ]] || die 'Refusing to run the verifier as root.'
@@ -116,6 +182,12 @@ owner_install() {
   [[ $actual == "$seed_sha256" ]] || die 'Installer trust binding differs.'
   curl_args=(-q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --noproxy '*' --connect-timeout 10 --max-time 180 --max-filesize 134217728 -H 'Accept-Encoding: identity')
   verifier_args=(--seed-file "$work/seed.json" --seed-sha256 "$seed_sha256" --output "$work/verified" --install --profile "$profile" --listen "$listen" --receipt-file "$work/verification.json" --entry-action "$action")
+  if [[ -n $candidate_dir ]]; then
+    [[ -d $candidate_dir && ! -L $candidate_dir && $(/usr/bin/stat -c '%u:%a' "$candidate_dir") == "$(/usr/bin/id -u):700" ]] || die 'Candidate directory must be private and owned by you.'
+    canonical_candidate=$(/usr/bin/realpath -e -- "$candidate_dir") || die 'Candidate directory is unavailable.'
+    [[ $canonical_candidate == "$candidate_dir" ]] || die 'Use the original candidate directory, without links.'
+    verifier_args=(--install-candidate "$candidate_dir" --candidate-packet-sha256 "$candidate_packet" --profile local --listen "$listen")
+  fi
   if [[ $action == wallets ]]; then verifier_args+=(--wallet-instance "$wallet_instance" --wallet-network "$wallet_network"); fi
   if [[ $development_only == 1 ]]; then
     printf '%s' "$fixture_ca_base64" | /usr/bin/base64 --decode > "$work/ca.pem"
@@ -123,11 +195,30 @@ owner_install() {
     verifier_args+=(--development --tls-ca-file "$work/ca.pem")
   fi
   printf 'Downloading and verifying Fased…\n' >&2
-  /usr/bin/curl "${curl_args[@]}" --output "$work/fased-install" "$installer_url"
-  read -r actual _ < <(/usr/bin/sha256sum "$work/fased-install")
+  installer="$work/fased-install"
+  if [[ -n $candidate_dir ]]; then
+    candidate_installer="$candidate_dir/fased-install-${target}"
+    [[ -f $candidate_installer && ! -L $candidate_installer && -f $candidate_dir/fased-release.json && ! -L $candidate_dir/fased-release.json ]] || die 'Candidate inventory is missing.'
+    read -r actual _ < <(/usr/bin/sha256sum "$candidate_dir/fased-release.json")
+    [[ $actual == "$candidate_packet" ]] || die 'Candidate identity differs.'
+    /usr/bin/install -m 0500 -- "$candidate_installer" "$installer"
+  elif [[ -n ${FASED_PROTECTED_INSTALLER:-} ]]; then
+    [[ $FASED_PROTECTED_INSTALLER == "/var/lib/fased-maintenance/images/$installer_sha256/fased-install" && ! -L $FASED_PROTECTED_INSTALLER && $(/usr/bin/stat -c '%u:%g:%a' "$FASED_PROTECTED_INSTALLER") == 0:0:555 ]] || die 'Protected installer identity differs.'
+    installer=$FASED_PROTECTED_INSTALLER
+  else
+    /usr/bin/curl "${curl_args[@]}" --output "$installer" "$installer_url"
+    /usr/bin/chmod 0500 "$installer"
+  fi
+  read -r actual _ < <(/usr/bin/sha256sum "$installer")
   [[ $actual == "$installer_sha256" ]] || die 'Installer checksum differs; nothing was executed.'
-  /usr/bin/chmod 0500 "$work/fased-install"
-  "$work/fased-install" "${verifier_args[@]}" <&3
+  if [[ -n $candidate_dir ]]; then
+    "$installer" --verify-candidate "$candidate_dir" >/dev/null || die 'Candidate verification failed.'
+  fi
+  if [[ -z ${FASED_PROTECTED_INSTALLER:-} ]]; then
+    owner_maintenance_setup "$installer"
+    if [[ -n ${FASED_PROTECTED_INSTALLER:-} ]]; then installer=$FASED_PROTECTED_INSTALLER; fi
+  fi
+  "$installer" "${verifier_args[@]}" <&3
 }
 
 if [[ $(/usr/bin/id -u) != 0 ]]; then
@@ -137,29 +228,29 @@ if [[ $(/usr/bin/id -u) != 0 ]]; then
   packages=(ca-certificates curl)
   if [[ $profile == remote ]]; then packages+=(nftables openssh-server); fi
   for package in "${packages[@]}"; do
-    [[ $(/usr/bin/dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true) == 'install ok installed' ]] || missing+=("$package")
+    package_installed "$package" || missing+=("$package")
   done
   if ((${#missing[@]})); then
     printf 'Preparing required download tools with administrator approval…\n' >&2
-    /usr/bin/sudo -- /usr/bin/apt-get update
-    /usr/bin/sudo -- /usr/bin/apt-get install -y --no-remove --no-install-recommends "${missing[@]}"
+    install_packages "${missing[@]}"
   fi
 
   owner_install
   exit
 fi
 
-# Only fixed Ubuntu utilities run here. Never execute downloaded/project Go as root.
-printf 'Preparing Ubuntu for Fased…\n' >&2
+# Root prepares only the verified, protected maintenance entry. The wizard,
+# core, native client and signer run after dropping to their ordinary identities.
+if [[ $ID == fedora ]]; then printf 'Preparing Fedora for Fased…\n' >&2
+else printf 'Preparing Ubuntu for Fased…\n' >&2; fi
 missing=()
 packages=(ca-certificates curl sudo util-linux)
 if [[ $profile == remote ]]; then packages+=(nftables openssh-server); fi
 for package in "${packages[@]}"; do
-  [[ $(/usr/bin/dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true) == 'install ok installed' ]] || missing+=("$package")
+  package_installed "$package" || missing+=("$package")
 done
 if ((${#missing[@]})); then
-  /usr/bin/apt-get update
-  /usr/bin/apt-get install -y --no-remove --no-install-recommends "${missing[@]}"
+  install_packages "${missing[@]}"
 fi
 explicit_operator=$operator
 operator=${operator:-${SUDO_USER:-fased-operator}}
@@ -231,35 +322,50 @@ if [[ -e $policy || -L $policy ]]; then
 fi
 stage=$(/usr/bin/mktemp -d "$state/stage.XXXXXXXX")
 bootstrap_cleanup() {
-  if [[ -f $policy ]] && /usr/bin/cmp -s "$policy" "$stage/authorization"; then /usr/bin/rm -- "$policy"; fi
   /usr/bin/rm -rf -- "$stage"
 }
 trap bootstrap_cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
-expires=$(/usr/bin/date -u -d '+45 minutes' '+%Y%m%d%H%M%SZ')
-printf '# Fased temporary bootstrap OS administration; no app runtime rights.\nDefaults:%s verifypw=never\n' "$operator" > "$stage/authorization"
-for command in /usr/bin/true /usr/bin/apt-get /usr/bin/cat /usr/bin/cmp /usr/bin/find /usr/bin/flock /usr/bin/getent /usr/bin/id /usr/bin/install /usr/bin/ln /usr/bin/mkdir /usr/bin/mv /usr/bin/passwd /usr/bin/pkcheck /usr/bin/rm /usr/bin/setpriv /usr/bin/stat /usr/bin/sync /usr/bin/systemctl /usr/bin/tailscale /usr/sbin/apparmor_parser /usr/sbin/useradd /usr/sbin/nft /usr/sbin/sshd; do
-  printf '%s ALL=(root) NOTAFTER=%s NOPASSWD: %s\n' "$operator" "$expires" "$command" >> "$stage/authorization"
+# The owner receives one exact helper command, never general root utilities.
+# The release-stamped SHA-256 selects a protected immutable executable before
+# any project code is elevated. Existing foreign files and policies are refused.
+helper_root=/var/lib/fased-maintenance
+for directory in "$helper_root" "$helper_root/images" "$helper_root/images/$installer_sha256"; do
+  if [[ ! -e $directory && ! -L $directory ]]; then /usr/bin/install -d -m 0755 -o root -g root "$directory"; fi
+  [[ -d $directory && ! -L $directory && $(/usr/bin/stat -c '%u:%g:%a' "$directory") == 0:0:755 ]] || die 'Foreign maintenance directory; preserving it.'
 done
-# Only Remote setup may authorize this exact local daemon write. No general
-# elevated curl is granted; this expires and is removed with bootstrap authority.
-if [[ $profile == remote ]]; then
-  # Initial installation only. Existing access setup and routine Update get
-  # no credential preparation authority or general systemd-creds access.
-  if [[ $action == install || $action == wallets ]]; then
-    provider_credential_command='/usr/bin/systemd-creds encrypt --with-key=host --name=fased-provider-task-key - -'
-    printf '%s ALL=(root) NOTAFTER=%s NOPASSWD: %s\n' "$operator" "$expires" "$provider_credential_command" >> "$stage/authorization"
+protected_installer="$helper_root/images/$installer_sha256/fased-install"
+if [[ ! -e $protected_installer && ! -L $protected_installer ]]; then
+  root_curl=(-q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --noproxy '*' --connect-timeout 10 --max-time 180 --max-filesize 134217728 -H 'Accept-Encoding: identity')
+  if [[ $development_only == 1 ]]; then
+    printf '%s' "$fixture_ca_base64" | /usr/bin/base64 --decode > "$stage/ca.pem"
+    root_curl+=(--cacert "$stage/ca.pem")
   fi
-  serve_command='/usr/bin/curl ^--disable --silent --show-error --fail --max-time 15 --connect-timeout 5 --max-filesize 1048576 --noproxy [*] --proto =http --unix-socket /var/run/tailscale/tailscaled[.]sock --request POST --header Content-Type\: application/json --header If-Match\: [a-f0-9]{64} --data-binary @- --write-out %[{]http_code[}] http\://local-tailscaled[.]sock/localapi/v0/serve-config$'
-  printf '%s ALL=(root) NOTAFTER=%s NOPASSWD: %s\n' "$operator" "$expires" "$serve_command" >> "$stage/authorization"
+  /usr/bin/curl "${root_curl[@]}" --output "$stage/fased-install" "$installer_url"
+  read -r actual _ < <(/usr/bin/sha256sum "$stage/fased-install")
+  [[ $actual == "$installer_sha256" ]] || die 'Installer checksum differs; nothing was elevated.'
+  /usr/bin/install -m 0555 -o root -g root "$stage/fased-install" "$stage/protected-installer"
+  /usr/bin/sync -f "$stage/protected-installer"
+  /usr/bin/mv -T --no-clobber -- "$stage/protected-installer" "$protected_installer"
+  /usr/bin/sync -f "$protected_installer"
+  /usr/bin/sync -f "${protected_installer%/*}"
 fi
-/usr/bin/chmod 0440 "$stage/authorization"
-/usr/sbin/visudo -c -f "$stage/authorization" >/dev/null
-read -r policy_sha _ < <(/usr/bin/sha256sum "$stage/authorization")
-printf '%s\n' "$policy_sha" > "$stage/policy.sha256"
-/usr/bin/mv -T -- "$stage/policy.sha256" "$policy_receipt"
-/usr/bin/ln "$stage/authorization" "$policy"
+[[ -f $protected_installer && ! -L $protected_installer && $(/usr/bin/stat -c '%u:%g:%a:%h' "$protected_installer") == 0:0:555:1 ]] || die 'Foreign protected maintenance image.'
+read -r actual _ < <(/usr/bin/sha256sum "$protected_installer")
+[[ $actual == "$installer_sha256" ]] || die 'Protected maintenance checksum differs.'
+maintenance_image=$("$protected_installer" maintenance-register --owner "$owner_uid" --profile "$profile")
+recovered=0
+if [[ $action == update && $maintenance_image != "$protected_installer" ]]; then
+  maintenance_image=$("$protected_installer" maintenance-register --owner "$owner_uid" --profile "$profile" --resume)
+  [[ $maintenance_image != "$protected_installer" ]] || recovered=1
+fi
+[[ $maintenance_image =~ ^/var/lib/fased-maintenance/images/[a-f0-9]{64}/fased-install$ ]] || die 'Invalid registered maintenance entry.'
+"$maintenance_image" maintenance-bootstrap --owner "$owner_uid"
+if [[ $recovered == 1 ]]; then
+  printf 'Update files were checked; app recovery and future updates are not yet verified.\n' >&2
+  exit 1
+fi
 # Keep the bootstrap lock through the ordinary installer; sanitize root's environment.
 if [[ $profile == local ]]; then
   runtime="/run/user/$owner_uid"
@@ -273,7 +379,7 @@ if [[ $profile == remote && $action == install && $ssh_user == root && -f /root/
   if [[ ${#recovery_candidates[@]} == 1 ]]; then recovery_key=${recovery_candidates[0]}; fi
 fi
 body="$(declare -f die owner_install); owner_install"
-/usr/sbin/runuser -u "$operator" -- /usr/bin/env -i HOME="$owner_home" USER="$operator" LOGNAME="$operator" PATH=/usr/sbin:/usr/bin:/sbin:/bin SSH_CONNECTION="${SSH_CONNECTION:-}" FASED_INSTALL_SSH_USER="$ssh_user" FASED_INSTALL_ROOT_ENTRY=1 FASED_BOOTSTRAP_RECOVERY_KEY="$recovery_key" action="$action" wallet_instance="${wallet_instance:-}" wallet_network="${wallet_network:-}" entry_version="$entry_version" installer_url="$installer_url" installer_sha256="$installer_sha256" seed_base64="$seed_base64" seed_sha256="$seed_sha256" fixture_ca_base64="$fixture_ca_base64" development_only="$development_only" listen="$listen" profile="$profile" XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="${runtime:+unix:path=$runtime/bus}" /bin/bash -c "$body" <&3
+/usr/sbin/runuser -u "$operator" -- /usr/bin/env -i HOME="$owner_home" USER="$operator" LOGNAME="$operator" PATH=/usr/sbin:/usr/bin:/sbin:/bin SSH_CONNECTION="${SSH_CONNECTION:-}" FASED_INSTALL_SSH_USER="$ssh_user" FASED_PROTECTED_INSTALLER="$protected_installer" FASED_BOOTSTRAP_RECOVERY_KEY="$recovery_key" action="$action" wallet_instance="${wallet_instance:-}" wallet_network="${wallet_network:-}" entry_version="$entry_version" installer_url="$installer_url" installer_sha256="$installer_sha256" seed_base64="$seed_base64" seed_sha256="$seed_sha256" fixture_ca_base64="$fixture_ca_base64" development_only="$development_only" listen="$listen" profile="$profile" XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="${runtime:+unix:path=$runtime/bus}" /bin/bash -c "$body" <&3
 
 # The root-owned command contains only fixed OS identity/drop operations. All
 # Fased/user-owned code starts AFTER runuser; updates still use the installed

@@ -51,6 +51,35 @@ func TestSuspendedRemoteRecoveryContinuesSameController(t *testing.T) {
 	}
 }
 
+func TestSuspendedRemoteRecoveryPreservesLegacySourceBinding(t *testing.T) {
+	h, s, o, op, before := suspendedRecoveryFixture(t)
+	// The protected manifest can identify a release that predates the fields
+	// in the saved journal. Never rewrite the original source binding.
+	s.ApplicationSequence = 7
+	s.ApplicationReleaseSHA256 = strings.Repeat("d", 64)
+	next := strings.Repeat("e", 64)
+	if _, err := run(t.Context(), s, o, next, before.SignerHash, op); err != nil {
+		t.Fatal("legacy suspended operation was refused", err)
+	}
+	if h.j.Source != before.Source || h.j.ID != before.ID || h.starts != 1 {
+		t.Fatal("legacy source identity or execution count changed")
+	}
+}
+
+func TestSuspendedRemoteRecoveryRejectsChangedReleaseBinding(t *testing.T) {
+	h, s, o, op, before := suspendedRecoveryFixture(t)
+	h.j.Source.ApplicationSequence = 7
+	h.j.Source.ApplicationReleaseSHA256 = strings.Repeat("d", 64)
+	s.ApplicationSequence = 7
+	s.ApplicationReleaseSHA256 = strings.Repeat("f", 64)
+	if _, err := run(t.Context(), s, o, strings.Repeat("e", 64), before.SignerHash, op); err == nil {
+		t.Fatal("changed release identity accepted")
+	}
+	if h.j.Phase != "suspended" || h.j.CoreHash != before.CoreHash || h.activated || h.fenced {
+		t.Fatal("refused operation changed the suspended target")
+	}
+}
+
 func suspendedRecoveryFixture(t *testing.T) (*fixtureHost, Source, Options, operations, journal) {
 	t.Helper()
 	h, s, o, op := fixture(t, fixtureImage(t), "remote")

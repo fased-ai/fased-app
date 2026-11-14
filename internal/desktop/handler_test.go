@@ -100,6 +100,9 @@ func TestNativeTransportDoesNotSupplyAuthority(t *testing.T) {
 	if got := request("GET", "/api/v1/setup", "", "", "", ""); got.Code != 401 {
 		t.Fatal("native window silently inherited a session")
 	}
+	if got := request("GET", "/api/v1/updates/application", "", "", "", ""); got.Code != 401 {
+		t.Fatal("native update status silently inherited a session")
+	}
 	for _, tc := range []struct {
 		method, path, origin string
 		status               int
@@ -117,6 +120,17 @@ func TestNativeTransportDoesNotSupplyAuthority(t *testing.T) {
 	// The native OS-owner bridge renews expired setup proof internally. Network
 	// clients have no equivalent endpoint and never receive this proof.
 	if err = core.WritePrivateJSON(filepath.Join(dir, "claim-code.json"), core.ClaimCode{Code: "expired", ExpiresAt: time.Now().Add(-time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	setupLock, err := core.LockOwnerSetup(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if busy := request("GET", "/api/v1/installation/claim-code", "", "", "", ""); busy.Code != 409 {
+		setupLock.Close()
+		t.Fatal("native claim fallback wrote during enrollment")
+	}
+	if err = setupLock.Close(); err != nil {
 		t.Fatal(err)
 	}
 	renewed := request("GET", "/api/v1/installation/claim-code", "", "", "", "")
@@ -153,10 +167,16 @@ func TestNativeTransportDoesNotSupplyAuthority(t *testing.T) {
 		t.Fatal("authenticated native request failed")
 	}
 
-	for _, path := range []string{"/api/v1/ai/connection", "/api/v1/agents?profile=news-researcher", "/api/v1/agents?profile=trading-analyst&memory-search=retained", "/api/v1/accounts", "/api/v1/updates/status"} {
+	for _, path := range []string{"/api/v1/ai/connection", "/api/v1/agents?profile=news-researcher", "/api/v1/agents?profile=trading-analyst&memory-search=retained", "/api/v1/accounts", "/api/v1/updates/status", "/api/v1/updates/application"} {
 		if got := request("GET", path, "", "", session.Token, ""); got.Code != 200 {
 			t.Fatalf("native flow %s: %d %s", path, got.Code, got.Body)
 		}
+	}
+	if got := request("POST", "/api/v1/updates/application", `{"action":"check"}`, "http://wails.localhost", session.Token, ""); got.Code != 403 {
+		t.Fatal("native update CSRF bypass", got.Code)
+	}
+	if got := request("POST", "/api/v1/updates/application/owner", `{}`, "http://wails.localhost", session.Token, session.CSRF); got.Code != 404 {
+		t.Fatal("native update owner endpoint exposed", got.Code)
 	}
 	if got := request("POST", "/api/v1/ai/connection", `{"action":"lock"}`, "http://wails.localhost", session.Token, session.CSRF); got.Code != 200 {
 		t.Fatalf("provider control: %d %s", got.Code, got.Body)

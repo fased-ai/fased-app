@@ -2,8 +2,59 @@ package signer
 
 import (
 	"errors"
+
 	"github.com/fased-ai/fased-app/internal/update"
 )
+
+// ErrNoInstallationHold is an authenticated signer's explicit absence of an
+// installation receipt. Transport failures must not be treated as this state.
+var ErrNoInstallationHold = errors.New("no installation hold")
+
+// ValidateInstallationReplacement checks signer-owned authority only. The
+// caller must hold a separate OS boundary that prevents signer state changes
+// between this check and the privileged replacement.
+func ValidateInstallationReplacement(i *update.Installation, intent, digest, direction, component, source string) error {
+	if i == nil || !update.ValidInstallation(*i) || i.Binding.Index.Binding.Pause.Request == nil || i.Binding.Index.Binding.Pause.Request.IntentID != intent || i.Digest != digest || (i.InstalledSequenceCommitted && direction != "completion" && direction != "cleanup-complete") {
+		return errors.New("exact uncommitted signer installation required")
+	}
+	var want string
+	switch direction {
+	case "forward":
+		if i.Phase != "active" {
+			return errors.New("forward replacement requires the active hold")
+		}
+		if component == "core" {
+			want = i.Binding.TargetCore
+		} else if component == "signer" {
+			want = i.Binding.TargetSigner
+		}
+	case "rollback":
+		if i.Phase != "active" && i.Phase != "healthy-held" {
+			return errors.New("rollback replacement requires an uncommitted hold")
+		}
+		if component == "core" {
+			want = i.Binding.PreviousCore
+		} else if component == "signer" {
+			want = i.Binding.PreviousSigner
+		}
+	case "completion":
+		if i.Phase != "committed-held" || !i.InstalledSequenceCommitted || component != "core" {
+			return errors.New("completion requires the committed signer hold")
+		}
+		want = i.Binding.TargetCore
+	case "cleanup-rollback", "cleanup-complete":
+		if (direction == "cleanup-rollback" && i.Phase != "rolled-back-held") || (direction == "cleanup-complete" && i.Phase != "completed") || component != "installation" {
+			return errors.New("cleanup requires a final signer-held result")
+		}
+		want = i.Digest
+	default:
+		return errors.New("unsupported installation direction")
+	}
+	if want == "" || source != want {
+		return errors.New("replacement component or source differs from the signer hold")
+	}
+	return nil
+}
 
 func (l *ledger) applyInstallation(r journalRecord) error {
 	p := r.Installation
@@ -141,7 +192,7 @@ func (v *Vault) Installation(r update.InstallRequest) (*update.Installation, err
 func (v *Vault) installationStatus(id string) (*update.Installation, error) {
 	i, ok := v.ledger.installations[id]
 	if !ok {
-		return nil, errors.New("no installation hold")
+		return nil, ErrNoInstallationHold
 	}
 	s, e := v.updateSnapshot(update.NewProbe())
 	if e != nil {

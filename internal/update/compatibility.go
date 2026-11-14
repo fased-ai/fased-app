@@ -214,6 +214,19 @@ func validateComponentsFor(cs []Component, lifecycle func(*LifecycleContract) bo
 }
 
 func Compatible(m Manifest, sha string, inv Inventory) (Plan, error) {
+	if !inv.FixtureOnly {
+		return Plan{}, errors.New("disposable inventory required")
+	}
+	return compatible(m, sha, inv)
+}
+
+// CompatibleMaintenance reuses structural/state checks after the signer has
+// authenticated a protected installer approval. It is not signature admission.
+func CompatibleMaintenance(m Manifest, sha string, inv Inventory) (Plan, error) {
+	return compatible(m, sha, inv)
+}
+
+func compatible(m Manifest, sha string, inv Inventory) (Plan, error) {
 	p := Plan{}
 	if m.BootstrapFrom != "" {
 		return p, errors.New("bootstrap bundle requires protected reader handoff")
@@ -221,7 +234,7 @@ func Compatible(m Manifest, sha string, inv Inventory) (Plan, error) {
 	if err := validateComponents(m.Components); err != nil {
 		return p, err
 	}
-	if inv.Version != 1 || !inv.FixtureOnly || !targetOK(inv.Target) || inv.Target != m.Target || !hashOK(sha) || m.Sequence == 0 || m.Sequence <= inv.SequenceFloor {
+	if inv.Version != 1 || !targetOK(inv.Target) || inv.Target != m.Target || !hashOK(sha) || m.Sequence == 0 || m.Sequence <= inv.SequenceFloor {
 		return p, errors.New("fixture inventory target or sequence floor mismatch")
 	}
 	owners, required := stateOwner, requiredStateFeatures

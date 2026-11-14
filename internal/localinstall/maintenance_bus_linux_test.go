@@ -5,6 +5,7 @@ package localinstall
 import (
 	"bufio"
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,58 @@ import (
 
 	"github.com/godbus/dbus/v5"
 )
+
+func TestFedoraMaintenanceInRealUserSandbox(t *testing.T) {
+	parent := os.Getenv("FASED_FEDORA_SANDBOX_PARENT")
+	if parent == "" {
+		t.Skip("explicit real Fedora user-service check only")
+	}
+	if os.Getuid() <= 0 || os.Getuid() != os.Geteuid() {
+		t.Fatal("ordinary Fedora user required")
+	}
+	if os.Getenv("FASED_FEDORA_SANDBOX_CHILD") == "1" {
+		dir := os.Getenv("FASED_FEDORA_SANDBOX_DIR")
+		m := Manifest{Root: filepath.Join(dir, "app"), Data: filepath.Join(dir, "state")}
+		if !maintenanceSandbox(m) {
+			t.Fatal("actual user-service sandbox was not recognized")
+		}
+		if !allowedUserMaintenanceDropIns(m, fedoraUserDropIn) {
+			t.Fatal("owner-verified Fedora drop-in was refused in the user namespace")
+		}
+		if allowedUserMaintenanceDropIns(m, fedoraUserDropIn+" /home/owner/override.conf") {
+			t.Fatal("foreign override was admitted")
+		}
+		return
+	}
+	dir, err := os.MkdirTemp(parent, "sandbox-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	m := Manifest{Root: filepath.Join(dir, "app"), Data: filepath.Join(dir, "state"), Files: map[string]string{engineName: bytesDigest([]byte("test image"))}}
+	for _, path := range []string{m.Root, m.Data, applicationUpdateDirectory(Paths{Root: m.Root, Data: m.Data})} {
+		if err = os.Mkdir(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, body := range map[string][]byte{engineName: []byte("test image"), definitionName: []byte("test service")} {
+		if err = os.WriteFile(filepath.Join(m.Root, name), body, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = installMaintenanceImage(m); err != nil {
+		t.Fatal(err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--user", "--quiet", "--wait", "--pipe", "--collect", "-p", "PrivateUsers=yes", "-p", "PrivateTmp=yes", "-p", "ProtectSystem=strict", "-p", "ProtectHome=read-only", "-p", "ReadOnlyPaths=" + m.Root, "-p", "ReadWritePaths=" + m.Data, "-p", "NoNewPrivileges=yes", "-p", "RestrictSUIDSGID=yes", "-p", "LockPersonality=yes", "-p", "ProtectControlGroups=yes", "-p", "ProtectKernelTunables=yes", "--setenv=FASED_FEDORA_SANDBOX_PARENT=" + parent, "--setenv=FASED_FEDORA_SANDBOX_CHILD=1", "--setenv=FASED_FEDORA_SANDBOX_DIR=" + dir, exe, "-test.run=^TestFedoraMaintenanceInRealUserSandbox$", "-test.v"}
+	output, err := exec.CommandContext(t.Context(), "/usr/bin/systemd-run", args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("real Fedora user-service sandbox failed: %v\n%s", err, output)
+	}
+}
 
 type maintenanceTestManager struct{ starts chan string }
 
@@ -25,15 +78,16 @@ func (m *maintenanceTestManager) StartUnit(unit, mode string) (dbus.ObjectPath, 
 }
 
 type maintenanceTestProperties struct {
-	m  Manifest
-	id string
+	m     Manifest
+	id    string
+	drops []string
 }
 
 func (p *maintenanceTestProperties) GetAll(iface string) (map[string]dbus.Variant, *dbus.Error) {
 	if iface == "org.freedesktop.systemd1.Service" {
 		return map[string]dbus.Variant{"Result": dbus.MakeVariant("success"), "ExecStart": dbus.MakeVariant([]maintenanceExec{{Path: maintenanceExecutable(p.m), Args: []string{maintenanceExecutable(p.m), "maintenance-delegate", "--operation", p.id, "--prefix", p.m.Root, "--data-dir", p.m.Data}}})}, nil
 	}
-	return map[string]dbus.Variant{"LoadState": dbus.MakeVariant("loaded"), "FragmentPath": dbus.MakeVariant(maintenanceTemplatePath(p.m)), "DropInPaths": dbus.MakeVariant([]string{}), "ActiveState": dbus.MakeVariant("inactive"), "SubState": dbus.MakeVariant("dead"), "UnitFileState": dbus.MakeVariant("disabled")}, nil
+	return map[string]dbus.Variant{"LoadState": dbus.MakeVariant("loaded"), "FragmentPath": dbus.MakeVariant(maintenanceTemplatePath(p.m)), "DropInPaths": dbus.MakeVariant(p.drops), "ActiveState": dbus.MakeVariant("inactive"), "SubState": dbus.MakeVariant("dead"), "UnitFileState": dbus.MakeVariant("disabled")}, nil
 }
 func TestSandboxMaintenanceBusReadsExactCommandAndStartsOnlyOwnUnit(t *testing.T) {
 	if _, e := exec.LookPath("dbus-daemon"); e != nil {
@@ -68,7 +122,8 @@ func TestSandboxMaintenanceBusReadsExactCommandAndStartsOnlyOwnUnit(t *testing.T
 		t.Fatal(e)
 	}
 	id := strings.Repeat("0", 32)
-	if e = server.Export(&maintenanceTestProperties{a.old, id}, "/org/freedesktop/systemd1/unit/fixture", "org.freedesktop.DBus.Properties"); e != nil {
+	properties := &maintenanceTestProperties{m: a.old, id: id, drops: []string{}}
+	if e = server.Export(properties, "/org/freedesktop/systemd1/unit/fixture", "org.freedesktop.DBus.Properties"); e != nil {
 		t.Fatal(e)
 	}
 	if _, e = server.RequestName("org.freedesktop.systemd1", dbus.NameFlagDoNotQueue); e != nil {
@@ -90,6 +145,22 @@ func TestSandboxMaintenanceBusReadsExactCommandAndStartsOnlyOwnUnit(t *testing.T
 	}
 	if e = checkMaintenanceTemplate(a.old, p); e != nil {
 		t.Fatal(e, string(b))
+	}
+	image, e := readMaintenanceImage(a.old)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if image.FedoraUserDropIn != nil {
+		properties.drops = []string{fedoraUserDropIn}
+		b, e = maintenanceBusCall(ctx, client, a.old, unit, "show")
+		if e != nil || !strings.Contains(string(b), "DropInPaths="+fedoraUserDropIn+"\n") {
+			t.Fatal("verified Fedora drop-in was not preserved through D-Bus", e, string(b))
+		}
+		properties.drops = append(properties.drops, "/home/owner/override.conf")
+		if _, e = maintenanceBusCall(ctx, client, a.old, unit, "show"); e == nil {
+			t.Fatal("foreign D-Bus drop-in was accepted")
+		}
+		properties.drops = []string{}
 	}
 	if _, e = maintenanceBusCall(ctx, client, a.old, "ssh.service", "start"); e == nil {
 		t.Fatal("foreign service accepted")

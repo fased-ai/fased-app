@@ -14,6 +14,8 @@ import (
 	"github.com/fased-ai/fased-app/internal/desktop"
 )
 
+var accountsRemoteClient = connectedRemoteClient
+
 func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	flags := flag.NewFlagSet("accounts", flag.ContinueOnError)
 	flags.SetOutput(errOut)
@@ -22,6 +24,7 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 		return e
 	}
 	dir := flags.String("data-dir", base, "private instance directory")
+	remote := flags.Bool("remote", false, "use the connected Tailscale instance")
 	venueSecret := flags.Bool("venue-credential-stdin", false, "manage encrypted Jupiter/RPC connection lease from private JSON input")
 	backupOut := flags.String("rpc-backup-out", "", "new private encrypted RPC backup file")
 	rpcSecret := flags.Bool("rpc-credential-stdin", false, "manage disposable RPC credentials from private JSON input")
@@ -36,6 +39,9 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	if flags.NArg() != 0 {
 		return errors.New("unexpected account arguments")
 	}
+	if *remote && (*venueSecret || *backupOut != "" || *rpcSecret || *rpcConfig || *rpcCheck || *update || *setup) {
+		return errors.New("connected Remote accounts currently support listing and read-only wallet observations")
+	}
 	if *walletRead && (*venueSecret || *rpcSecret || *rpcConfig || *rpcCheck || *update || *setup || *backupOut != "") {
 		return errors.New("choose one account operation")
 	}
@@ -46,21 +52,28 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 		return errors.New("choose one account operation")
 	}
 	ctx := context.Background()
-	c, enrolled, e := desktop.NewPublicClient(ctx, *dir)
+	var c *core.Client
+	if *remote {
+		c, e = accountsRemoteClient(ctx, *dir)
+	} else {
+		var enrolled bool
+		c, enrolled, e = desktop.NewPublicClient(ctx, *dir)
+		if e == nil {
+			if enrolled {
+				// The exact OS-owner helper authenticates the native public path.
+				e = c.NativeLocalOwner(ctx)
+			} else {
+				e = loadAccountsSession(ctx, c, *dir)
+			}
+		}
+	}
 	if e != nil {
+		if c != nil {
+			c.Close()
+		}
 		return e
 	}
 	defer c.Close()
-	if enrolled {
-		// The exact OS-owner helper authenticates the same public core path as
-		// the native window; protected AppUID state is never opened by the CLI.
-		e = c.NativeLocalOwner(ctx)
-	} else {
-		e = loadAccountsSession(ctx, c, *dir)
-	}
-	if e != nil {
-		return e
-	}
 	if *walletRead {
 		var input core.WalletReadCommand
 		b, err := io.ReadAll(io.LimitReader(in, 4097))

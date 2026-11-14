@@ -17,18 +17,20 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/bundle"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/releaseops"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
 type Options struct {
-	Development   bool
-	Seed          []byte
-	SeedSHA256    string
-	Directory     string                                                             // Absent child of a real private current-user directory.
-	TLSCA         []byte                                                             // Explicit development fixture CA, never disabled TLS.
-	now           func() time.Time                                                   // Test-only clock; no CLI or production override.
-	githubFixture func(releaseops.GitHubPolicy) (*releaseops.GitHubTransport, error) // Go-only controlled fixture, never CLI/JSON.
+	protectedOwner int // Only the validated installed root-helper constructor.
+	Development    bool
+	Seed           []byte
+	SeedSHA256     string
+	Directory      string                                                             // Absent child of a real private current-user directory.
+	TLSCA          []byte                                                             // Explicit development fixture CA, never disabled TLS.
+	now            func() time.Time                                                   // Test-only clock; no CLI or production override.
+	githubFixture  func(releaseops.GitHubPolicy) (*releaseops.GitHubTransport, error) // Go-only controlled fixture, never CLI/JSON.
 }
 
 type Report struct {
@@ -114,6 +116,12 @@ func (p *Prepared) Close() error {
 		if cleanupErr == nil {
 			cleanupErr = p.root.Remove("download.tar.gz")
 		}
+		if cleanupErr == nil && p.candidate != nil {
+			cleanupErr = p.root.Remove("candidate-installer")
+		}
+		if cleanupErr == nil && p.candidate != nil {
+			cleanupErr = p.root.Remove("candidate-entry")
+		}
 	}
 	return errors.Join(cleanupErr, p.root.Close())
 }
@@ -129,8 +137,41 @@ func writeNew(root *os.Root, name string, b []byte) error {
 	if err != nil {
 		return err
 	}
-	_, err = f.Write(b)
+	// This inode was created exclusively in the held private directory.
+	// Normalize its owner-only mode without inheriting a restrictive umask.
+	if err = f.Chmod(0600); err == nil {
+		_, err = f.Write(b)
+	}
 	return errors.Join(err, f.Sync(), f.Close())
+}
+
+// A completion marker is visible only after its complete contents are synced.
+// The exclusive hard link never replaces a foreign target.
+func writeBootstrapCompletion(root *os.Root, b []byte) error {
+	const stage = ".bootstrap.json.pending"
+	if err := writeNew(root, stage, b); err != nil {
+		return err
+	}
+	d, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	// Persist the previously written metadata and seed before the marker can
+	// claim that the acquisition is complete.
+	if err = d.Sync(); err != nil {
+		return err
+	}
+	if err = root.Link(stage, "bootstrap.json"); err != nil {
+		return err
+	}
+	if err = d.Sync(); err != nil {
+		return err
+	}
+	if err = root.Remove(stage); err != nil {
+		return err
+	}
+	return d.Sync()
 }
 
 func fetch(ctx context.Context, client *http.Client, url string, limit int64) ([]byte, error) {
@@ -158,6 +199,33 @@ func privateDirectory(path string) (os.FileInfo, error) {
 // state nor installs/executes anything. Old update/rehearsal seeds are refused.
 func Prepare(ctx context.Context, o Options) (*Prepared, error) { return prepare(ctx, o, false) }
 
+// PrepareMaintenance authenticates public release bytes for the installed OS
+// helper. It permits no execution, owner path or caller-selected trust source.
+func PrepareMaintenance(ctx context.Context, owner int, o Options) (*Prepared, error) {
+	if _, err := maintenance.ValidateProcess(owner); err != nil {
+		return nil, err
+	}
+	parent := filepath.Join(maintenance.OwnerRoot(owner), "fased-app", "install")
+	if filepath.Dir(o.Directory) != parent {
+		return nil, errors.New("maintenance acquisition must use its protected private directory")
+	}
+	o.protectedOwner = owner
+	return prepare(ctx, o, false)
+}
+
+// InspectMaintenance verifies only metadata under the same fixed helper trust
+// as PrepareMaintenance, without downloading an archive or creating output.
+func InspectMaintenance(ctx context.Context, owner int, o Options) (Descriptor, string, error) {
+	if _, err := maintenance.ValidateProcess(owner); err != nil {
+		return Descriptor{}, "", err
+	}
+	if filepath.Dir(o.Directory) != filepath.Join(maintenance.OwnerRoot(owner), "fased-app", "install") {
+		return Descriptor{}, "", errors.New("maintenance acquisition must use its protected private directory")
+	}
+	o.protectedOwner = owner
+	return Inspect(ctx, o)
+}
+
 // Inspect authenticates only metadata/provenance. It creates no output, downloads
 // no archive and supplies no executable/installation authority.
 func Inspect(ctx context.Context, o Options) (Descriptor, string, error) {
@@ -168,7 +236,7 @@ func Inspect(ctx context.Context, o Options) (Descriptor, string, error) {
 	return p.descriptor, p.report.DescriptorSHA256, nil
 }
 func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepared, err error) {
-	if runtime.GOOS != "linux" || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") || os.Geteuid() == 0 {
+	if runtime.GOOS != "linux" || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") || os.Geteuid() == 0 && o.protectedOwner <= 0 {
 		return nil, errors.New("ordinary-user supported Linux first-install bootstrap required")
 	}
 	o.Seed, o.TLSCA = append([]byte(nil), o.Seed...), append([]byte(nil), o.TLSCA...)
@@ -312,6 +380,17 @@ func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepa
 	if err != nil {
 		return nil, err
 	}
+	// Normalize only the just-created, pinned directory. A restrictive owner
+	// umask can otherwise remove write permission before acquisition begins.
+	opened, err := root.Stat(".")
+	if err != nil || !os.SameFile(created, opened) {
+		root.Close()
+		return nil, errors.New("bootstrap output identity changed")
+	}
+	if err = root.Chmod(".", 0700); err != nil {
+		root.Close()
+		return nil, err
+	}
 	prepared = &Prepared{options: o, seed: seed, descriptor: descriptor, directoryInfo: created, root: root, metadata: docs, startedAt: start}
 	body, err := source.archive(ctx, descriptor)
 	if err != nil {
@@ -320,6 +399,11 @@ func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepa
 	f, err := root.OpenFile("download.tar.gz", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		body.Close()
+		return prepared, err
+	}
+	if err = f.Chmod(0600); err != nil {
+		body.Close()
+		f.Close()
 		return prepared, err
 	}
 	h := sha256.New()
@@ -359,7 +443,7 @@ func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepa
 	if err != nil {
 		return prepared, err
 	}
-	if err = writeNew(root, "bootstrap.json", b); err != nil {
+	if err = writeBootstrapCompletion(root, b); err != nil {
 		return prepared, err
 	}
 	return prepared, nil

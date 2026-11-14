@@ -107,12 +107,28 @@ export function renderEntry(template, config) {
     'case "$ID:$VERSION_ID" in\n' +
     platforms
       .map((p) => {
-        if (!/^[a-z]+$/.test(p.id) || !/^[0-9]+\.[0-9]+$/.test(p.version))
+        if (!/^[a-z]+$/.test(p.id) || !/^[0-9]+(?:\.[0-9]+)?$/.test(p.version))
           throw Error("Invalid platform mapping");
         return `${p.id}:${p.version}) ;;`;
       })
       .join("\n") +
     '\n*) die "This OS version has no reviewed mapping. Update the installer for newly supported versions." ;;\nesac';
+  values.PLATFORM_TARGET_BINDINGS =
+    'case "$ID:$VERSION_ID:$target" in\n' +
+    platforms
+      .flatMap((p) => {
+        const arches = p.architectures ?? ["amd64", "arm64"];
+        if (
+          !Array.isArray(arches) ||
+          arches.length === 0 ||
+          new Set(arches).size !== arches.length ||
+          arches.some((arch) => !["amd64", "arm64"].includes(arch))
+        )
+          throw Error("Invalid platform architecture mapping");
+        return arches.map((arch) => `${p.id}:${p.version}:linux-${arch}) ;;`);
+      })
+      .join("\n") +
+    '\n*) die "No reviewed package for this OS and CPU." ;;\nesac';
   values.REMOTE_PLATFORMS =
     'case "$ID:$VERSION_ID" in\n' +
     platforms

@@ -26,6 +26,12 @@ type ApplicationUpdateController interface {
 	Apply(context.Context, ApplicationUpdateOperation) (ApplicationUpdateReceipt, error)
 	Status(context.Context, ApplicationUpdateOperation) (ApplicationUpdateReceipt, error)
 }
+
+// An optional controller may resume the same protected operation after the
+// owner explicitly asks for recovery. Status must remain observation only.
+type ApplicationUpdateRecoveryController interface {
+	Recover(context.Context, ApplicationUpdateOperation) error
+}
 type ApplicationRelease struct {
 	EngineSHA256   string        `json:"engineSha256"`
 	Version        string        `json:"version"`
@@ -271,6 +277,24 @@ func (s *Store) CommandApplicationUpdate(ctx context.Context, c ApplicationUpdat
 	}
 	if e = tx.Commit(); e != nil {
 		return ApplicationUpdateView{}, e
+	}
+	if c.Action == "recover" {
+		if recovery, ok := s.appUpdates.controller.(ApplicationUpdateRecoveryController); ok {
+			recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			e = recovery.Recover(recoveryCtx, o)
+			cancel()
+			if e != nil {
+				// The durable applying record precedes the start. If the start
+				// is refused or uncertain, retain the same recovery operation.
+				recordCtx, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				recordErr := s.finishApplicationUpdate(recordCtx, o, r+1, ApplicationUpdateReceipt{}, e)
+				done()
+				if recordErr != nil {
+					return ApplicationUpdateView{}, errors.Join(errors.New("protected recovery could not be recorded"), recordErr)
+				}
+				return ApplicationUpdateView{}, errors.New("protected recovery could not start; the existing update was preserved")
+			}
+		}
 	}
 	return s.ApplicationUpdates(ctx)
 }

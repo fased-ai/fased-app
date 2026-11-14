@@ -120,15 +120,16 @@ func (s *System) BootstrapInventory(ctx context.Context, t BootstrapTransaction,
 		return errors.New("open the existing custody instance before bootstrap review")
 	}
 	return stageBootstrapInventory(ctx, t, artifacts, probe, out, bootstrapInventoryOps{
-		read: readRoot, run: s.Run,
+		read: readRoot, run: s.Run, verify: verifyApprovedExecutable,
 		mkdir: func(ctx context.Context, path string) error { return directory(ctx, path, 0, 0, 0755, s) },
 	})
 }
 
 type bootstrapInventoryOps struct {
-	read  readHost
-	run   runHost
-	mkdir func(context.Context, string) error
+	read   readHost
+	run    runHost
+	verify approvedExecutableVerifier
+	mkdir  func(context.Context, string) error
 }
 
 func stageBootstrapInventory(ctx context.Context, t BootstrapTransaction, artifacts, probe string, out io.Writer, ops bootstrapInventoryOps) error {
@@ -157,7 +158,7 @@ func stageBootstrapInventory(ctx context.Context, t BootstrapTransaction, artifa
 			return errors.New("custody inventory core differs from signed target")
 		}
 		path := t.Dir() + "/candidate/fased-app"
-		if e = publish(ctx, path, m.ID, b, 0755, ops.read, ops.run); e != nil {
+		if e = publish(ctx, path, m.ID, b, 0755, ops.read, ops.run, ops.verify); e != nil {
 			return e
 		}
 		contract, e := probeReaderWithRun(ctx, path, true, m, ops.run, true)
@@ -297,7 +298,7 @@ func PrepareBootstrap(ctx context.Context, t BootstrapTransaction, dir string, s
 			if int64(len(data)) != c.Artifact.Size || sum(data) != c.Artifact.SHA256 {
 				return errors.New("bootstrap artifact differs from signed bytes")
 			}
-			if e = publish(ctx, t.Dir()+"/"+group.name+"/"+c.Artifact.File, t.Base.ID, data, 0755, readRoot, s.Run); e != nil {
+			if e = publish(ctx, t.Dir()+"/"+group.name+"/"+c.Artifact.File, t.Base.ID, data, 0755, readRoot, s.Run, verifyApprovedExecutable); e != nil {
 				return e
 			}
 			contract, e := probeReader(ctx, t.Dir()+"/"+group.name+"/"+c.Artifact.File, c.Contract.Component == "core", t.Base, s, t.Version == 3 || t.Version == 2 && group.name == "candidate")
@@ -309,7 +310,7 @@ func PrepareBootstrap(ctx context.Context, t BootstrapTransaction, dir string, s
 			}
 		}
 	}
-	return publish(ctx, t.Dir()+"/transaction.json", t.Base.ID, mustJSON(t), 0644, readRoot, s.Run)
+	return publish(ctx, t.Dir()+"/transaction.json", t.Base.ID, mustJSON(t), 0644, readRoot, s.Run, verifyApprovedExecutable)
 }
 func probeReader(ctx context.Context, path string, isCore bool, m Manifest, s *System, ordinaryTarget ...bool) (update.Contract, error) {
 	return probeReaderWithRun(ctx, path, isCore, m, s.Run, ordinaryTarget...)
@@ -382,7 +383,7 @@ func RunBootstrap(ctx context.Context, t BootstrapTransaction, s *System, c Boot
 			return BootstrapReceipt{}, e
 		}
 	}
-	o := installOps{read: readRoot, run: s.Run, health: func(ctx context.Context, m Manifest) error { return waitReady(ctx, m, s) }, ownerRecord: func(write bool) error {
+	o := installOps{read: readRoot, run: s.Run, verify: verifyApprovedExecutable, health: func(ctx context.Context, m Manifest) error { return waitReady(ctx, m, s) }, ownerRecord: func(write bool) error {
 		if write {
 			return ownerCompletionRecord(InstallTransaction{Base: t.Base, Target: t.Target}, true)
 		}
@@ -456,7 +457,7 @@ func runBootstrap(ctx context.Context, t BootstrapTransaction, c BootstrapCallba
 		return fail(e)
 	}
 	mark := func(phase string) error {
-		if e := publish(ctx, t.Dir()+"/"+phase+".json", t.Base.ID, mustJSON(phaseRecord{1, t.Digest(), phase}), 0644, o.read, o.run); e != nil {
+		if e := publish(ctx, t.Dir()+"/"+phase+".json", t.Base.ID, mustJSON(phaseRecord{1, t.Digest(), phase}), 0644, o.read, o.run, o.verify); e != nil {
 			return e
 		}
 		if o.checkpoint != nil {
@@ -484,7 +485,7 @@ func runBootstrap(ctx context.Context, t BootstrapTransaction, c BootstrapCallba
 		if e != nil {
 			return fail(e)
 		}
-		if e = publish(ctx, t.Dir()+"/recovery.json", t.Base.ID, mustJSON(index), 0644, o.read, o.run); e != nil {
+		if e = publish(ctx, t.Dir()+"/recovery.json", t.Base.ID, mustJSON(index), 0644, o.read, o.run, o.verify); e != nil {
 			return fail(e)
 		}
 	} else if e != nil {
@@ -524,7 +525,7 @@ func runBootstrap(ctx context.Context, t BootstrapTransaction, c BootstrapCallba
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return fail(e)
 	} else if !done && !rolledBack {
-		if e = publish(ctx, active, t.Base.ID, want, 0644, o.read, o.run); e != nil {
+		if e = publish(ctx, active, t.Base.ID, want, 0644, o.read, o.run, o.verify); e != nil {
 			return fail(e)
 		}
 	}

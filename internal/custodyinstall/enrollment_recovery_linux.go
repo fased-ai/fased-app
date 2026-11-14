@@ -278,7 +278,7 @@ func (s *System) RecoverEnrollmentCore(ctx context.Context, m Manifest, id, path
 		}
 		return core.WritePrivateJSON(intentDir+"/intent.json", newIntent)
 	}
-	return recoverEnrollmentCore(ctx, r, next, installOps{read: readRoot, run: s.Run, topology: verifyTopology}, ownerWrite)
+	return recoverEnrollmentCore(ctx, r, next, installOps{read: readRoot, run: s.Run, verify: verifyApprovedExecutable, topology: verifyTopology}, ownerWrite)
 }
 
 func recoveryOwnerIntent(m Manifest) journal {

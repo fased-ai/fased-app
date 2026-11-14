@@ -270,3 +270,62 @@ func TestRemoteBootstrapInventoryOSBindings(t *testing.T) {
 		})
 	}
 }
+
+func TestBootstrapInventoryBindsApprovedReader(t *testing.T) {
+	for _, approved := range []bool{false, true} {
+		t.Run(strconv.FormatBool(approved), func(t *testing.T) {
+			tx, dir, _, _ := ordinaryBootstrapModel(t)
+			// Privileged staging binds its path to the invoking owner. The
+			// shared model uses UID 1000, which is not every CI runner's UID.
+			for _, m := range []*Manifest{&tx.Base, &tx.Target} {
+				m.Owner = os.Getuid()
+				m.Root = Root(m.Owner)
+				m.App = Identity{Name: accountName(m.Owner, "app"), UID: m.Owner + 10, GID: m.Owner + 10}
+				m.Signer = Identity{Name: accountName(m.Owner, "signer"), UID: m.Owner + 11, GID: m.Owner + 11}
+			}
+			if err := os.RemoveAll(dir + "/bootstraps"); err != nil {
+				t.Fatal(err)
+			}
+			artifacts := t.TempDir()
+			image := []byte("next-core")
+			if err := os.WriteFile(filepath.Join(artifacts, "fased-app"), image, 0700); err != nil {
+				t.Fatal(err)
+			}
+			model := modelOps(t, InstallTransaction{Base: tx.Base, Target: tx.Target}, dir)
+			source := ApprovedExecutablePath(os.Getuid(), image)
+			bound := false
+			probes := 0
+			verify := func(path, digest string, size int64) error {
+				if !approved || path != source || digest != filepath.Base(source) || size != int64(len(image)) {
+					return errors.New("approved reader unavailable")
+				}
+				return nil
+			}
+			run := func(ctx context.Context, b []byte, args ...string) ([]byte, error) {
+				if args[0] == "/usr/bin/install" && args[len(args)-2] == source {
+					bound = len(b) == 0
+					b = bytes.Clone(image)
+				}
+				if args[0] != "/usr/bin/setpriv" {
+					return model.run(ctx, b, args...)
+				}
+				probes++
+				if probes == 1 {
+					return mustJSON(map[string]any{"version": 1, "target": update.Target{OS: "linux", Arch: "amd64"}, "contract": core.OrdinaryUpdateContract(), "walletSigner": false, "financialExecution": false, "updaterEnabled": false}), nil
+				}
+				return []byte(`{"inventory":"only"}`), nil
+			}
+			var out bytes.Buffer
+			err := stageBootstrapInventory(t.Context(), tx, artifacts, strings.Repeat("d", 32), &out, bootstrapInventoryOps{read: model.read, run: run, verify: verify, mkdir: func(_ context.Context, path string) error {
+				return os.MkdirAll(dir+strings.TrimPrefix(path, tx.Base.Root), 0700)
+			}})
+			if approved {
+				if err != nil || !bound || probes != 2 {
+					t.Fatal("approved reader was not used through inventory", err)
+				}
+			} else if err == nil || bound || probes != 0 {
+				t.Fatal("unapproved reader reached privileged staging or probe", err)
+			}
+		})
+	}
+}

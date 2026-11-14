@@ -15,6 +15,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/fased-ai/fased-app/internal/update"
 )
@@ -46,6 +47,99 @@ func rebindProof(p update.Preflight) update.Preflight {
 	p.BindingSHA256 = ""
 	p.BindingSHA256 = update.SnapshotDigest("preflight:v1", p)
 	return p
+}
+
+func TestColdRecoveryChecksOriginalBackup(t *testing.T) {
+	s := fixtureStore(t)
+	p := pausedBackup(t, s)
+	index, err := s.BackupMetadata(t.Context(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := s.dir
+	lock, err := LockInstance(filepath.Join(dir, "instance.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Recovery only needs to acquire the existing lock; it must not require
+	// write access to the stopped application's private state.
+	if err = os.Chmod(filepath.Join(dir, "instance.lock"), 0400); err != nil {
+		t.Fatal(err)
+	}
+	if err = VerifyFixtureColdRecovery(t.Context(), dir, index); err == nil || err.Error() != "original engine still owns its instance lock" {
+		t.Fatal("active original instance lock was ignored")
+	}
+	if err = lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = VerifyFixtureColdRecovery(t.Context(), dir, index); err != nil {
+		t.Fatal("original stopped-service recovery with a read-only lock refused", err)
+	}
+	if err = os.Chmod(filepath.Join(dir, "instance.lock"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	lock, err = LockInstance(filepath.Join(dir, "instance.lock"))
+	if err != nil {
+		t.Fatal("recovery retained the instance lock", err)
+	}
+	if err = lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	foreign := index
+	foreign.Snapshot.SHA256 = update.SnapshotDigest("foreign-snapshot", 1)
+	if VerifyFixtureColdRecovery(t.Context(), dir, foreign) == nil {
+		t.Fatal("foreign recovery index accepted")
+	}
+	path := filepath.Join(dir, "lifecycle", p.IntentID, "metadata.sqlite")
+	original, err := os.ReadFile(path)
+	if err != nil || len(original) == 0 {
+		t.Fatal("saved snapshot missing", err)
+	}
+	changed := append([]byte(nil), original...)
+	changed[len(changed)-1] ^= 1
+	if err = os.WriteFile(path, changed, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if VerifyFixtureColdRecovery(t.Context(), dir, index) == nil {
+		t.Fatal("changed stopped-service backup accepted")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(got, changed) {
+		t.Fatal("failed recovery changed the saved backup", err)
+	}
+}
+
+func TestMetadataDirectoryRefusesFIFOWithoutBlocking(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "core.sqlite")
+	if err := syscall.Mkfifo(path, 0600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		f, err := openApplicationMetadataDirectory(dir)
+		if f != nil {
+			f.Close()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("FIFO accepted as the core database")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("foreign FIFO blocked recovery")
+	}
+	if st, err := os.Lstat(path); err != nil || st.Mode()&os.ModeNamedPipe == 0 {
+		t.Fatal("foreign FIFO was not preserved", err)
+	}
 }
 
 func TestMetadataBackupConsistentPrivateAndNoRestore(t *testing.T) {

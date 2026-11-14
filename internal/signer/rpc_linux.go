@@ -158,6 +158,8 @@ func VerifyExecutable() error {
 	return trustedPath(path)
 }
 
+func VerifyExecutablePath(path string) error { return trustedPath(path) }
+
 func CheckOwner(c Config) error {
 	if err := c.Validate(); err != nil {
 		return err
@@ -428,7 +430,7 @@ func (s *Server) accept(listener *net.UnixListener, c Config, uid int, owner boo
 				return
 			}
 			response := Response{Error: "ordinary custody maintenance in progress"}
-			if ordinaryHandoffRPCAllowed(c, request.Request.Action, s.vault) {
+			if protectedMaintenanceRPCAllowed(c, request.Request, owner) && ordinaryHandoffRPCAllowed(c, request.Request.Action, s.vault) {
 				response = execute(s.vault, request.Request, owner)
 			}
 			defer wipe(response.Document)
@@ -510,7 +512,16 @@ func call(ctx context.Context, c Config, owner bool, request Request) (Response,
 		return response, err
 	}
 	if response.Error != "" {
-		return response, errors.New(response.Error)
+		return response, signerResponseError(owner, request, response)
 	}
 	return response, nil
+}
+
+// Classify only the authenticated status response, including responses from
+// older signers that use the same wire error. All other errors remain failures.
+func signerResponseError(owner bool, request Request, response Response) error {
+	if owner && request.Action == "fixture-install-controller" && request.Install != nil && request.Install.Action == "status" && response.Installation == nil && response.Error == ErrNoInstallationHold.Error() {
+		return ErrNoInstallationHold
+	}
+	return errors.New(response.Error)
 }

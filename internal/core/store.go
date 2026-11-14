@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -439,6 +440,22 @@ func privateDir(dir string) error {
 // EnsurePrivateDirectory is shared by the owner-run installer and the core.
 func EnsurePrivateDirectory(dir string) error { return privateDir(dir) }
 
+// LockOwnerSetup serializes direct owner setup/recovery writers with an
+// enrollment snapshot without taking the running server's instance lock.
+func LockOwnerSetup(dir string) (*InstanceLock, error) {
+	if err := privateDir(dir); err != nil {
+		return nil, err
+	}
+	// Linux enrollment also locks core.sqlite while it takes a snapshot. On
+	// macOS serializes owner setup on a separate private file so SQLite's own
+	// database locks do not interfere with the owner-setup lock.
+	name := "core.sqlite"
+	if runtime.GOOS == "darwin" {
+		name = "owner-setup.lock"
+	}
+	return LockInstance(filepath.Join(dir, name))
+}
+
 func ReadPrivateFile(path string) ([]byte, error) { return readPrivateFile(path) }
 func privateFile(path string) error {
 	info, err := os.Lstat(path)
@@ -488,6 +505,12 @@ func WritePrivateJSON(path string, value any) error {
 		return err
 	}
 	defer os.Remove(f.Name())
+	// The destination is an owner-private file even when the process umask
+	// would otherwise remove the owner's read or write permission.
+	if err = f.Chmod(0600); err != nil {
+		f.Close()
+		return err
+	}
 	info, err = f.Stat()
 	if err == nil {
 		err = protectPath(f.Name(), info)

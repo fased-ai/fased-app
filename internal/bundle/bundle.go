@@ -118,12 +118,22 @@ func VerifyPinned(dir, manifestSHA256 string) (Manifest, error) {
 	}
 	engineering := m.Schema == 1 && m.UnsignedEngineering
 	release := m.Schema == 2 && !m.UnsignedEngineering && !m.Desktop && m.Platform == "linux" && (m.Arch == "amd64" || m.Arch == "arm64")
-	if (!engineering && !release) || m.Platform != runtime.GOOS || m.Arch != runtime.GOARCH || m.Version == "" {
+	native := m.Schema == 3 && !m.UnsignedEngineering && m.Desktop && m.Platform == "linux" && (m.Arch == "amd64" || m.Arch == "arm64")
+	if (!engineering && !release && !native) || m.Platform != runtime.GOOS || m.Arch != runtime.GOARCH || m.Version == "" {
 		return m, errors.New("unsupported bundle identity or release mode")
 	}
-	if release {
+	if release || native {
 		if _, present := m.Files["INSTALL.txt"]; !present {
 			return m, errors.New("release bundle requires the guide in its verified inventory")
+		}
+	}
+	if native {
+		source, err := hex.DecodeString(m.Source)
+		if err != nil || len(source) != 20 || hex.EncodeToString(source) != m.Source {
+			return m, errors.New("native bundle requires the exact source revision")
+		}
+		if _, present := m.Files["fased-signer"]; !present {
+			return m, errors.New("native bundle requires its matching signer")
 		}
 	}
 	engine, desktop := Names()

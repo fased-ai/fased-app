@@ -34,7 +34,17 @@ func (*System) UpdatePreferences(context.Context, Manifest, bool, io.Writer) err
 	return unsupported
 }
 
-func OwnerLock() (io.Closer, error) { return nil, unsupported }
+func OwnerLock() (io.Closer, error)                            { return nil, unsupported }
+func PinnedMaintenanceRunner(int) (string, error)              { return "", unsupported }
+func ReusableMaintenanceSetupAvailable(Manifest) (bool, error) { return false, unsupported }
+func VerifyReusableSetupLauncher(Manifest) error               { return unsupported }
+func ReviewReusableMaintenanceSetup(Manifest, string, string) ([]byte, error) {
+	return nil, unsupported
+}
+func PrepareReusableMaintenance(context.Context, Manifest, string, string, *System) error {
+	return unsupported
+}
+func (*System) UseScopedMaintenance(int) error { return unsupported }
 
 func (*System) AccountsHelper(context.Context, Manifest, bool, bool, bool, io.Writer) error {
 	return unsupported

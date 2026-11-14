@@ -33,8 +33,10 @@ func (t InstallTransaction) valid() bool {
 }
 
 type installOps struct {
+	atomic       func(context.Context, string) error
 	recoveryDirs func(Manifest) ([]string, error)
 	read         readHost
+	verify       approvedExecutableVerifier
 	run          runHost
 	topology     func(Manifest) error
 	health       func(context.Context, Manifest) error
@@ -71,7 +73,7 @@ func runTransaction(ctx context.Context, t InstallTransaction, rollback bool, o 
 	}
 	mark := func(name string) error {
 		b := mustJSON(phaseRecord{1, digest, name})
-		if e := publish(ctx, d+"/"+name+".json", t.Base.ID, b, 0644, o.read, o.run); e != nil {
+		if e := publish(ctx, d+"/"+name+".json", t.Base.ID, b, 0644, o.read, o.run, o.verify); e != nil {
 			return e
 		}
 		if o.checkpoint != nil {
@@ -116,7 +118,7 @@ func runTransaction(ctx context.Context, t InstallTransaction, rollback bool, o 
 			return nil, errors.New("signer did not acquire the exact durable installation hold")
 		}
 		held = *p
-		if e = publish(ctx, d+"/held.json", t.Base.ID, mustJSON(held), 0644, o.read, o.run); e != nil {
+		if e = publish(ctx, d+"/held.json", t.Base.ID, mustJSON(held), 0644, o.read, o.run, o.verify); e != nil {
 			return nil, e
 		}
 		if o.checkpoint != nil {
@@ -142,7 +144,7 @@ func runTransaction(ctx context.Context, t InstallTransaction, rollback bool, o 
 		return nil, errors.New("rollback completion lacks its durable host decision")
 	}
 	active := t.Base.Root + "/update-active.json"
-	if e = publish(ctx, active, t.Base.ID, mustJSON(phaseRecord{1, digest, t.Binding.Index.Binding.Pause.Request.IntentID}), 0644, o.read, o.run); e != nil {
+	if e = publish(ctx, active, t.Base.ID, mustJSON(phaseRecord{1, digest, t.Binding.Index.Binding.Pause.Request.IntentID}), 0644, o.read, o.run, o.verify); e != nil {
 		return nil, e
 	}
 	if rollback && !decision {
@@ -346,7 +348,7 @@ func replaceRecord(ctx context.Context, path, id string, data []byte, o installO
 		return nil
 	}
 	stage := filepath.Dir(path) + "/.replace-" + id + "-" + filepath.Base(path) + "-" + sum(data)
-	if e = publish(ctx, stage, id, data, mode, o.read, o.run); e != nil {
+	if e = publish(ctx, stage, id, data, mode, o.read, o.run, o.verify); e != nil {
 		return e
 	}
 	if _, e = o.run(ctx, nil, "/usr/bin/mv", "--no-target-directory", "--", stage, path); e != nil {

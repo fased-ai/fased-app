@@ -52,6 +52,9 @@ func installRemoteProofPolicy(ctx context.Context, m Manifest, s *System) error 
 	if err != nil {
 		return err
 	}
+	if s.protectedOwner > 0 {
+		return installProtectedSudoPolicy(ctx, remoteProofPolicyPath(m), policy)
+	}
 	dir, err := ownerJournal()
 	if err != nil {
 		return err

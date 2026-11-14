@@ -18,6 +18,14 @@ type CorePauseReceipt struct {
 	Request *CorePauseRequest `json:"request,omitempty"`
 	Core    CoreSnapshot      `json:"core"`
 }
+
+// SameReleasedPause binds cleanup to the original update's released pause.
+// Callers must separately verify the signer installation receipt that contains
+// the bound pause.
+func SameReleasedPause(id string, bound, actual CorePauseReceipt) bool {
+	return IDOK(id) && bound.Version == 1 && actual.Version == 1 && bound.State == "paused" && bound.Request != nil && ValidPauseRequest(*bound.Request) && IDOK(bound.PauseID) && actual.State == "released" && actual.Request != nil && bound.PauseID == actual.PauseID && bound.Request.IntentID == id && actual.Request.IntentID == id && actual.Core.Version == 1 && IDOK(actual.Core.BootID) && IDOK(actual.Core.ProbeID) && actual.Core.InstanceID == bound.Request.Expected.InstanceID && SnapshotDigest("pause-request", *bound.Request) == SnapshotDigest("pause-request", *actual.Request)
+}
+
 type CorePauseCommand struct {
 	Action    string            `json:"action"`
 	ProbeID   string            `json:"probeId"`

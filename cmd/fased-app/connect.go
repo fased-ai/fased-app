@@ -59,3 +59,16 @@ func connectCommand(args []string, out, errOut io.Writer) error {
 	}
 	return nil
 }
+
+// Reuse the same device-bound connection for Remote UI-equivalent CLI paths.
+func connectedRemoteClient(ctx context.Context, dir string) (*core.Client, error) {
+	data, err := core.ReadPrivateFile(filepath.Join(dir, "remote-connection.json"))
+	if err != nil {
+		return nil, errors.New("choose your Remote instance with fased connect --url https://your-instance.ts.net")
+	}
+	var profile connection.Result
+	if json.Unmarshal(data, &profile) != nil || profile.Location != "remote" || profile.Transport != "private-https" {
+		return nil, errors.New("invalid Remote profile; preserve it and reconnect")
+	}
+	return core.NewRemoteClient(ctx, profile.URL, profile.InstanceID)
+}

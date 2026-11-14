@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -49,6 +50,24 @@ type receipt struct {
 	Phase  string `json:"phase"`
 	Next   *Plan  `json:"next,omitempty"`
 	Plan   Plan   `json:"plan"`
+}
+
+// A route change must not outlive the record needed to reconcile it after a
+// crash. WritePrivateJSON syncs the file; the containing directory must also
+// be synced after its rename (and after a completed removal).
+func syncAccessDirectory(root string) error {
+	dir, err := os.Open(root)
+	if err != nil {
+		return err
+	}
+	return errors.Join(dir.Sync(), dir.Close())
+}
+
+func storeAccessReceipt(root string, r receipt) error {
+	if err := core.WritePrivateJSON(filepath.Join(root, "private-access.json"), r); err != nil {
+		return err
+	}
+	return syncAccessDirectory(root)
 }
 
 func System() Manager {
@@ -134,11 +153,25 @@ func (m Manager) config(ctx context.Context) (map[string]any, string, error) {
 	if etag == "" {
 		return nil, "", errors.New("Tailscale did not provide conditional-write identity; no mutation is permitted")
 	}
+	c, err := decodeServeInventory(data, true)
+	if err != nil {
+		return nil, "", err
+	}
+	return c, etag, nil
+}
+
+// Tailscale represents an absent current Serve configuration as JSON null.
+// Only reads of the current daemon state may normalize it to an empty object;
+// requested writes must remain explicit objects and retain their ETag.
+func decodeServeInventory(data []byte, allowNull bool) (map[string]any, error) {
 	var c map[string]any
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
-	if decoder.Decode(&c) != nil || c == nil || decoder.Decode(new(any)) != io.EOF {
-		return nil, "", errors.New("invalid Serve configuration; refusing mutation")
+	if decoder.Decode(&c) != nil || decoder.Decode(new(any)) != io.EOF || c == nil && !allowNull {
+		return nil, errors.New("invalid Serve configuration; refusing mutation")
+	}
+	if c == nil {
+		c = make(map[string]any)
 	}
 	// Some versions encode an unused optional section as null or an empty map.
 	for k, v := range c {
@@ -148,18 +181,22 @@ func (m Manager) config(ctx context.Context) (map[string]any, string, error) {
 			delete(c, k)
 		}
 	}
-	return c, etag, nil
+	return c, nil
 }
 func expected(p Plan) map[string]any {
 	host, port, _ := tailnet.Origin(p.Origin)
 	return map[string]any{"TCP": map[string]any{port: map[string]any{"HTTPS": true}}, "Web": map[string]any{net.JoinHostPort(host, port): map[string]any{"Handlers": map[string]any{"/": map[string]any{"Proxy": p.Target}}}}}
 }
 func load(root string) (receipt, error) {
-	var r receipt
 	data, err := core.ReadPrivateFile(filepath.Join(root, "private-access.json"))
 	if err != nil {
-		return r, err
+		return receipt{}, err
 	}
+	return parseReceipt(data)
+}
+
+func parseReceipt(data []byte) (receipt, error) {
+	var r receipt
 	if json.Unmarshal(data, &r) != nil || r.Schema != 1 || r.Plan.Mode != "tailscale" || (r.Phase != "preparing" && r.Phase != "ready" && r.Phase != "switching") {
 		return r, errors.New("unknown private-access receipt; preserve it for recovery")
 	}
@@ -204,7 +241,7 @@ func (m Manager) Enable(ctx context.Context, root string, p Plan, instanceID str
 			return errors.New("existing private route belongs to the owner; refusing to replace or adopt it")
 		}
 		r = receipt{Schema: 1, Phase: "preparing", Plan: p}
-		if err = core.WritePrivateJSON(filepath.Join(root, "private-access.json"), r); err != nil {
+		if err = storeAccessReceipt(root, r); err != nil {
 			return err
 		}
 	} else if err != nil {
@@ -219,6 +256,10 @@ func (m Manager) Enable(ctx context.Context, root string, p Plan, instanceID str
 		return err
 	}
 	if state == "absent" {
+		// A prior process may have published the record before a power cut.
+		if err = syncAccessDirectory(root); err != nil {
+			return err
+		}
 		changed, e := routeChange(cfg, p, true)
 		if e != nil {
 			return e
@@ -244,7 +285,7 @@ func (m Manager) Enable(ctx context.Context, root string, p Plan, instanceID str
 		return err
 	}
 	r.Phase = "ready"
-	return core.WritePrivateJSON(filepath.Join(root, "private-access.json"), r)
+	return storeAccessReceipt(root, r)
 }
 
 var errEndpointStarting = errors.New("private HTTPS is starting; retain SSH/console access")
@@ -433,18 +474,31 @@ func (m Manager) verifyFromDevice(ctx context.Context, p Plan, instanceID, selfI
 	}
 }
 func (m Manager) Remove(ctx context.Context, root string) error {
-	r, err := load(root)
+	lock, err := core.LockInstance(filepath.Join(root, "access.lock"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	lock, err := core.LockInstance(filepath.Join(root, "access.lock"))
+	defer lock.Close()
+	r, err := load(root)
+	if errors.Is(err, os.ErrNotExist) {
+		// Managed Tailscale Serve is Linux-only. Windows directory handles
+		// cannot be synced, and no managed route receipt exists to recover.
+		if runtime.GOOS == "windows" {
+			return nil
+		}
+		// A preceding removal may have unlinked the receipt but failed to
+		// sync the directory. Retrying must finish that durability barrier.
+		return syncAccessDirectory(root)
+	}
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
+	if r.Phase == "switching" {
+		return errors.New("private ingress transition is unfinished; resume the recorded route before removal")
+	}
 	cfg, etag, err := m.config(ctx)
 	if err != nil {
 		return err
@@ -468,7 +522,10 @@ func (m Manager) Remove(ctx context.Context, root string) error {
 			return errors.New("route removal is not confirmed; retry after inspection")
 		}
 	}
-	return os.Remove(filepath.Join(root, "private-access.json"))
+	if err = os.Remove(filepath.Join(root, "private-access.json")); err != nil {
+		return err
+	}
+	return syncAccessDirectory(root)
 }
 
 // switchIngress resumes the exact owned transition to protected Unix ingress. A lost response
@@ -486,9 +543,15 @@ func (m Manager) switchIngress(ctx context.Context, root string, r receipt, next
 	if r.Phase != "switching" {
 		r.Phase = "switching"
 		r.Next = &next
-		if err := core.WritePrivateJSON(filepath.Join(root, "private-access.json"), r); err != nil {
+		if err := storeAccessReceipt(root, r); err != nil {
 			return err
 		}
+	}
+	// The retained switching receipt might have been written by a predecessor
+	// that did not sync the directory. Protect both the pending write and the
+	// lost-response path, where the next route already appears in Serve.
+	if err := syncAccessDirectory(root); err != nil {
+		return err
 	}
 	if oldState == "owned" {
 		removed, err := routeChange(cfg, r.Plan, false)
@@ -514,5 +577,5 @@ func (m Manager) switchIngress(ctx context.Context, root string, r receipt, next
 	if state, err := routeState(current, next); err != nil || state != "owned" {
 		return errors.New("private route changed before transition completion")
 	}
-	return core.WritePrivateJSON(filepath.Join(root, "private-access.json"), receipt{Schema: 1, Phase: "ready", Plan: next})
+	return storeAccessReceipt(root, receipt{Schema: 1, Phase: "ready", Plan: next})
 }

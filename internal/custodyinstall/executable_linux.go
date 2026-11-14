@@ -16,7 +16,7 @@ const maxInstalledExecutableSize int64 = 64 * 1024 * 1024
 
 func executableInfo(i os.FileInfo) error {
 	st, ok := i.Sys().(*syscall.Stat_t)
-	if !ok || st.Uid != 0 || !i.Mode().IsRegular() || i.Mode().Perm() != 0755 || i.Size() < 0 || i.Size() > maxInstalledExecutableSize {
+	if !ok || st.Uid != 0 || st.Gid != 0 || !i.Mode().IsRegular() || i.Mode() != 0755 || i.Size() < 0 || i.Size() > maxInstalledExecutableSize {
 		return errors.New("foreign or unsafe installed executable; preserving it")
 	}
 	return nil

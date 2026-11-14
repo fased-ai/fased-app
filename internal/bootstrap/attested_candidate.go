@@ -16,6 +16,13 @@ func VerifyAttestedCandidate(o Options, directory string) (Report, error) {
 	if os.Geteuid() == 0 || !filepath.IsAbs(directory) {
 		return report, errors.New("ordinary-owner absolute candidate directory required")
 	}
+	return verifyAttestedCandidate(o, directory)
+}
+
+// verifyAttestedCandidate is also used by the fixed installed maintenance
+// helper after its caller and protected input directory have been validated.
+func verifyAttestedCandidate(o Options, directory string) (Report, error) {
+	var report Report
 	seed, err := parseSeed(o.Seed, o.SeedSHA256, o.clock())
 	if err != nil || seed.Version != 4 {
 		return report, errors.New("compiled attested release trust required")

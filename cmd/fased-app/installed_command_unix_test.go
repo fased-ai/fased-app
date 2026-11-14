@@ -11,6 +11,31 @@ import (
 	"testing"
 )
 
+func TestInstallCommandPreservesExistingFasedOnPath(t *testing.T) {
+	home := t.TempDir()
+	oldBin := t.TempDir()
+	old := filepath.Join(oldBin, "fased")
+	contents := []byte("#!/bin/sh\nexit 0\n")
+	if err := os.WriteFile(old, contents, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", filepath.Join(home, ".local", "bin")+string(os.PathListSeparator)+oldBin)
+	var out bytes.Buffer
+	if err := installCommand("/verified/fased-app", "/installed/fased-app", "/private/fased-app", false, &out); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local", "bin", "fased")); !os.IsNotExist(err) {
+		t.Fatal("new command would shadow the existing Fased command", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local", "bin", "fased-app")); err != nil {
+		t.Fatal("distinct Fased App command is missing", err)
+	}
+	if got, err := os.ReadFile(old); err != nil || !bytes.Equal(got, contents) {
+		t.Fatal("existing Fased command changed", err)
+	}
+}
+
 func TestInstalledCommandUpgradesOnlyKnownV1AndRoutesRemoteClient(t *testing.T) {
 	for _, remote := range []bool{false, true} {
 		t.Run(fmt.Sprint(remote), func(t *testing.T) {

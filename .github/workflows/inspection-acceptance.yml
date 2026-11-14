@@ -63,7 +63,9 @@ jobs:
           fi
   inspection-vm:
     needs: classify
-    if: needs.classify.outputs.vm == 'true'
+    # Real-host acceptance is required; starting a Fased test VM needs a
+    # separately authorized manual dispatch and is never automatic on a PR.
+    if: github.event_name == 'workflow_dispatch' && needs.classify.outputs.vm == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:

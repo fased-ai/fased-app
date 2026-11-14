@@ -168,6 +168,30 @@ func TestRootMaintenanceRejectsChangedManagerIdentityProtectionOrArguments(t *te
 		}
 	}
 }
+
+func TestFedoraSystemMaintenanceRecognizesOnlyDistributionDropIn(t *testing.T) {
+	release, err := os.ReadFile("/etc/os-release")
+	if err != nil || !strings.Contains(string(release), "ID=fedora\n") || !strings.Contains(string(release), "VERSION_ID=45\n") {
+		t.Skip("this check requires the actual Fedora 45 host")
+	}
+	path := "/usr/lib/systemd/system/service.d/10-timeout-abort.conf"
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		t.Skip("Fedora's systemd system drop-in is absent")
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	m := Manifest{Root: "/home/owner/app", Data: "/home/owner/data"}
+	id := strings.Repeat("a", 32)
+	p, s := rootRuntimeFixture(m, id, "")
+	p["DropInPaths"] = dbus.MakeVariant([]string{path})
+	if err := validateRootMaintenanceRuntime(m, id, "", p, s); err != nil {
+		t.Fatal("distribution drop-in refused", err)
+	}
+	p["DropInPaths"] = dbus.MakeVariant([]string{path, "/home/owner/override.conf"})
+	if err := validateRootMaintenanceRuntime(m, id, "", p, s); err == nil {
+		t.Fatal("additional system override accepted")
+	}
+}
 func TestRootMaintenancePublicationRefusesForeignAndRetriesExactStaging(t *testing.T) {
 	path := rootMaintenancePath(os.Getuid())
 	body := []byte("controlled fixture")

@@ -50,6 +50,42 @@ export function compatibilityConfig(c) {
     throw Error("Reviewed target above the compatibility fixture required");
   return { ...c, version: "0.1.4" };
 }
+
+// The owner's Fedora has no released predecessor. This source-identical,
+// non-publishable baseline is available only to the protected package-only
+// workflow and is never accepted as the configured 0.1.12 release.
+export function fedoraPredecessorConfig(c, env, command) {
+  if (
+    env.FASED_FEDORA_PREDECESSOR === undefined ||
+    env.FASED_FEDORA_PREDECESSOR === "false"
+  )
+    return c;
+  if (
+    !c ||
+    env.FASED_FEDORA_PREDECESSOR !== "true" ||
+    env.FASED_PACKAGE_ONLY !== "true" ||
+    env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
+    env.GITHUB_REF !== "refs/heads/main" ||
+    env.GITHUB_REPOSITORY !== c.repository ||
+    env.GITHUB_REPOSITORY_ID !== c.repositoryId ||
+    env.GITHUB_REPOSITORY_OWNER_ID !== c.ownerId ||
+    env.GITHUB_WORKFLOW_REF !==
+      `${c.repository}/${c.workflow}@refs/heads/main` ||
+    !commit.test(env.GITHUB_SHA ?? "") ||
+    env.FASED_RELEASE_SOURCE !== env.GITHUB_SHA ||
+    !number.test(env.GITHUB_RUN_ID ?? "") ||
+    !number.test(env.GITHUB_RUN_ATTEMPT ?? "") ||
+    env.RUNNER_OS !== "Linux" ||
+    env.RUNNER_ARCH !== "X64" ||
+    !["prepare", "inventory", "finish"].includes(command) ||
+    c.version !== "0.1.12" ||
+    validateConfig(c).length
+  )
+    throw Error(
+      "Fedora predecessor requires the reviewed package-only workflow",
+    );
+  return { ...c, version: "0.1.10" };
+}
 const sha = (b) => createHash("sha256").update(b).digest("hex");
 const hash = /^[a-f0-9]{64}$/;
 const commit = /^[a-f0-9]{40}$/;
@@ -992,6 +1028,7 @@ if (
       evidence = ".evidence/ubuntu-release-compatibility";
       c = compatibilityConfig(c);
     }
+    c = fedoraPredecessorConfig(c, process.env, command);
     const missing = validateConfig(c);
     switch (command) {
       case "replay": {

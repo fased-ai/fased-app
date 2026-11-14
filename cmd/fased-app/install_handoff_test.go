@@ -90,6 +90,103 @@ func TestInstallationBundleBindsCoreDesktopAndVersion(t *testing.T) {
 	}
 }
 
+func TestNativeCompanionMustMatchTheOriginalBundle(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("native companion is supported on Linux")
+	}
+	_, original, _ := installationBundleFixture(t, false)
+	staged, native, _ := installationBundleFixture(t, true)
+	output := t.TempDir()
+	dir := filepath.Join(output, "native-bundle")
+	if err := os.Rename(staged, dir); err != nil {
+		t.Fatal(err)
+	}
+	signer := filepath.Join(dir, "fased-signer")
+	if err := os.WriteFile(signer, []byte("disposable signer"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	native.Files["fased-signer"], err = bundle.Inspect(signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := saveInstallationBundle(t, dir, native)
+	engine := filepath.Join(dir, localinstall.EngineName())
+	if _, _, err = verifiedNativeInstallation(dir, output, pin, engine, original); err == nil {
+		t.Fatal("unsigned engineering companion bypassed the attested release binding")
+	}
+	changed := original
+	changed.Files = make(map[string]bundle.File, len(original.Files))
+	for name, value := range original.Files {
+		changed.Files[name] = value
+	}
+	changed.Files["LICENSE"] = bundle.File{SHA256: strings.Repeat("a", 64), Bytes: 1}
+	if _, _, err = verifiedNativeInstallation(dir, output, pin, engine, changed); err == nil {
+		t.Fatal("companion changed a verified original file")
+	}
+	if _, _, err = verifiedNativeInstallation(dir, t.TempDir(), pin, engine, original); err == nil {
+		t.Fatal("companion outside the acquisition directory accepted")
+	}
+	if _, _, err = verifiedNativeInstallation(dir, output, strings.Repeat("0", 64), engine, original); err == nil {
+		t.Fatal("unmatched native inventory accepted")
+	}
+}
+
+func TestAttestedNativeCompanionRejectsSelfAuthoredPair(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("native companion is supported on Linux")
+	}
+	_, original, _ := installationBundleFixture(t, false)
+	staged, native, _ := installationBundleFixture(t, true)
+	output := t.TempDir()
+	dir := filepath.Join(output, "native-bundle")
+	if err := os.Rename(staged, dir); err != nil {
+		t.Fatal(err)
+	}
+	original.Schema, original.UnsignedEngineering, original.Source = 2, false, strings.Repeat("a", 40)
+	native.Schema, native.UnsignedEngineering, native.Source = 3, false, original.Source
+	for _, name := range []string{"INSTALL.txt", "fased-signer"} {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("self-authored "+name), 0700); err != nil {
+			t.Fatal(err)
+		}
+		var err error
+		native.Files[name], err = bundle.Inspect(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if name == "INSTALL.txt" {
+			original.Files[name] = native.Files[name]
+		}
+	}
+	pin := saveInstallationBundle(t, dir, native)
+	if _, _, err := verifiedNativeInstallation(dir, output, pin, filepath.Join(dir, localinstall.EngineName()), original); err == nil {
+		t.Fatal("self-authored native pair was presented as an attested release")
+	}
+	previousSource, previousDesktop, previousSigner := compiledNativeSource, compiledNativeDesktopSHA256, compiledNativeSignerSHA256
+	defer func() {
+		compiledNativeSource, compiledNativeDesktopSHA256, compiledNativeSignerSHA256 = previousSource, previousDesktop, previousSigner
+	}()
+	compiledNativeSource = original.Source
+	compiledNativeDesktopSHA256 = native.Files[localinstall.DesktopName()].SHA256
+	compiledNativeSignerSHA256 = native.Files["fased-signer"].SHA256
+	if _, _, err := verifiedNativeInstallation(dir, output, pin, filepath.Join(dir, localinstall.EngineName()), original); err != nil {
+		t.Fatal("the pair bound to the running core was refused", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "fased-signer"), []byte("substituted signer"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	native.Files["fased-signer"], err = bundle.Inspect(filepath.Join(dir, "fased-signer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin = saveInstallationBundle(t, dir, native)
+	if _, _, err := verifiedNativeInstallation(dir, output, pin, filepath.Join(dir, localinstall.EngineName()), original); err == nil {
+		t.Fatal("substitution survived the independently bound signer digest")
+	}
+}
+
 func TestInstallRejectsBundleBeforePrivateAccessAndMutation(t *testing.T) {
 	dir, _, _ := installationBundleFixture(t, false)
 	parent := t.TempDir()

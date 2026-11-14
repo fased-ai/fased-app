@@ -13,6 +13,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/bundle"
 	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/desktop"
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/wailsapp/wails/v2"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -63,19 +64,25 @@ func main() {
 	}
 	var firstPackage string
 	if paths, err := localinstall.DefaultPaths(); err == nil && paths.Data == *state {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		if _, loadErr := localinstall.Load(paths); errors.Is(loadErr, os.ErrNotExist) {
-			self, e := os.Executable()
-			if e == nil {
-				packageDir := filepath.Dir(self)
-				if m, e := bundle.Verify(packageDir); e == nil && m.Desktop {
-					firstPackage = packageDir
-				}
-			}
-		} else {
-			_ = localinstall.Start(ctx, paths)
+		allowSource, fenceErr := desktop.OriginalLocalStartAllowed(paths.Data, os.Getuid())
+		if fenceErr != nil {
+			fmt.Fprintln(os.Stderr, "Local installation needs attention:", fenceErr)
 		}
-		cancel()
+		if allowSource {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			if _, loadErr := localinstall.Load(paths); errors.Is(loadErr, os.ErrNotExist) {
+				self, e := os.Executable()
+				if e == nil {
+					packageDir := filepath.Dir(self)
+					if m, e := bundle.Verify(packageDir); e == nil && m.Desktop {
+						firstPackage = packageDir
+					}
+				}
+			} else {
+				_ = localinstall.Start(ctx, paths)
+			}
+			cancel()
+		}
 	}
 	// This window owns no engine process. Closing it never stops the OS service.
 	options := window.Options(*state)

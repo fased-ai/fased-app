@@ -5,6 +5,7 @@ package bootstrap
 import (
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +14,41 @@ import (
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/update"
 )
+
+func TestUpgradeExecutableRemainsVerifiedAfterSourceMutation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "successor")
+	marker := filepath.Join(dir, "executed")
+	original := []byte("#!/bin/sh\nprintf verified > \"$1\"\n")
+	if err := os.WriteFile(path, original, 0700); err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	sealed, err := sealVerifiedExecutable(source, int64(len(original)), digest(original))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sealed.Close()
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf changed > \"$1\"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sealed.WriteAt([]byte("x"), 0); err == nil {
+		t.Fatal("verified successor remained writable")
+	}
+	command := exec.Command("/proc/self/fd/3", marker)
+	command.ExtraFiles = []*os.File{sealed}
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute sealed successor: %v: %s", err, output)
+	}
+	got, err := os.ReadFile(marker)
+	if err != nil || string(got) != "verified" {
+		t.Fatalf("executed changed successor: %q, %v", got, err)
+	}
+}
 
 func upgradeEntryFixture(t *testing.T, f *firstFixture) UpgradeOptions {
 	t.Helper()

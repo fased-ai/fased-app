@@ -11,17 +11,156 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/maintenance"
+	"github.com/fased-ai/fased-app/internal/signer"
 )
+
+func TestRemotePreparedInventoryPreservesUnknownCustodyWork(t *testing.T) {
+	h, o, _ := fixtureHost()
+	root := maintenance.OwnerRoot(o.uid)
+	for _, path := range []string{root + "/remote", root + "/tailscale", root + "/fased-app", root + "/fased-app/install", root + "/fased-app/install/verified-" + strings.Repeat("a", 32)} {
+		h.files[path] = hostFile{UID: 0, GID: 0, Mode: os.ModeDir | 0700, Directory: true}
+	}
+	h.files[root] = hostFile{UID: 0, GID: 0, Mode: os.ModeDir | 0755, Directory: true}
+	h.files[root+"/authority.json"] = hostFile{UID: 0, GID: 0, Mode: 0644, Regular: true}
+	h.files[root+"/operation.lock"] = hostFile{UID: 0, GID: 0, Mode: 0600, Regular: true}
+	if err := verifyFreshRemoteEnrollmentInventory(o, o.uid); err != nil {
+		t.Fatal("clean protected Remote source and Tailscale preparation were refused", err)
+	}
+	tailscale := root + "/tailscale"
+	originalTailscale := h.files[tailscale]
+	foreignTailscale := originalTailscale
+	foreignTailscale.UID = o.uid
+	h.files[tailscale] = foreignTailscale
+	if err := verifyFreshRemoteEnrollmentInventory(o, o.uid); err == nil {
+		t.Fatal("foreign Tailscale preparation was accepted")
+	}
+	h.files[tailscale] = originalTailscale
+	for _, name := range []string{"custody-" + strings.Repeat("b", 32), "unknown"} {
+		path := filepath.Join(root, "fased-app", "install", name)
+		h.files[path] = hostFile{UID: 0, GID: 0, Mode: os.ModeDir | 0700, Directory: true}
+		if err := verifyFreshRemoteEnrollmentInventory(o, o.uid); err == nil {
+			t.Fatalf("unclassified acquisition %s was accepted", name)
+		}
+		delete(h.files, path)
+	}
+	verified := filepath.Join(root, "fased-app", "install", "verified-"+strings.Repeat("a", 32))
+	original := h.files[verified]
+	changed := original
+	changed.Mode = os.ModeDir | 0500
+	h.files[verified] = changed
+	if err := verifyFreshRemoteEnrollmentInventory(o, o.uid); err != nil {
+		t.Fatal("owner-restricted acquisition directory was refused", err)
+	}
+	changed = original
+	changed.Mode |= os.ModeSetgid
+	h.files[verified] = changed
+	if err := verifyFreshRemoteEnrollmentInventory(o, o.uid); err == nil {
+		t.Fatal("modified protected directory mode was accepted")
+	}
+	h.files[verified] = original
+	h.files[custodyinstall.Root(o.uid)] = hostFile{UID: 0, GID: 0, Mode: os.ModeDir | 0755, Directory: true}
+	if err := verifyFreshRemoteEnrollmentInventory(o, o.uid); err == nil {
+		t.Fatal("existing custody target was accepted")
+	}
+}
+
+func TestRemotePreparedJournalsPreserveInterruptedOperations(t *testing.T) {
+	f := remoteApplicationFixture(t)
+	m, err := f.apply(t, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := "/fixture-owner-journal"
+	f.h.files[dir] = hostFile{UID: f.o.uid, GID: f.o.gid, Mode: os.ModeDir | 0700, Directory: true}
+	instance := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	if err := verifyFreshRemoteJournals(f.o, m, dir, instance, f.o.uid); err != nil {
+		t.Fatal("terminal original update refused", err)
+	}
+	pending := filepath.Join(dir, ".pending-unclassified")
+	f.h.files[pending] = hostFile{UID: f.o.uid, GID: f.o.gid, Mode: 0600, Regular: true}
+	if err := verifyFreshRemoteJournals(f.o, m, dir, instance, f.o.uid); err == nil {
+		t.Fatal("unclassified pending journal accepted")
+	}
+	delete(f.h.files, pending)
+	j, err := readApplicationJournal(f.o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := j
+	j.Status.Phase = "recovery"
+	if err := f.o.writeJournal(applicationJournalName, j); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyFreshRemoteJournals(f.o, m, dir, instance, f.o.uid); err == nil {
+		t.Fatal("unfinished Remote update accepted")
+	}
+	if err := f.o.writeJournal(applicationJournalName, original); err != nil {
+		t.Fatal(err)
+	}
+	request := applicationMaintenanceRequest{Version: 1, ID: original.Status.ID, InstallationID: m.ID,
+		PreviousManifestSHA256: original.Status.PreviousManifestSHA256, Finished: "completed"}
+	if err := f.o.writeJournal("application-maintenance.json", request); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyFreshRemoteJournals(f.o, m, dir, instance, f.o.uid); err != nil {
+		t.Fatal("matching completed maintenance refused", err)
+	}
+	request.Finished = "unknown"
+	if err := f.o.writeJournal("application-maintenance.json", request); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyFreshRemoteJournals(f.o, m, dir, instance, f.o.uid); err == nil {
+		t.Fatal("unknown maintenance outcome accepted")
+	}
+	delete(f.h.journals, "application-maintenance.json")
+	next := m
+	next.PublicOrigin = "https://changed.owner.ts.net"
+	access := accessJournal{Version: 1, ID: strings.Repeat("f", 32), Phase: "committed", InstanceID: instance, Previous: m, Next: next}
+	if err := f.o.writeJournal(accessJournalName, access); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyFreshRemoteJournals(f.o, next, dir, instance, f.o.uid); err != nil {
+		t.Fatal("later committed access change refused", err)
+	}
+	deferred := applicationMaintenanceRequest{Version: 1, ID: strings.Repeat("e", 32), InstallationID: m.ID,
+		PreviousManifestSHA256: ManifestSHA256(m), Finished: "deferred"}
+	if err := f.o.writeJournal("application-maintenance.json", deferred); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyFreshRemoteJournals(f.o, next, dir, instance, f.o.uid); err != nil {
+		t.Fatal("deferred maintenance before access change was refused", err)
+	}
+	access.InstanceID = base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32))
+	if err := f.o.writeJournal(accessJournalName, access); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyFreshRemoteJournals(f.o, next, dir, instance, f.o.uid); err == nil {
+		t.Fatal("foreign access instance accepted")
+	}
+}
+
+type enrollmentJournalBinding struct {
+	enrollmentFenceBinding
+	Phase      string `json:"phase"`
+	CoreHash   string `json:"coreHash"`
+	SignerHash string `json:"signerHash"`
+	Network    string `json:"network"`
+	Mode       string `json:"mode,omitempty"`
+	Profile    string `json:"profile,omitempty"`
+	Provenance string `json:"provenance,omitempty"`
+}
 
 func attachEnrollmentFixture(h *memoryHost, o *hostOps, m Manifest, form string) (enrollmentJournalBinding, *custodyinstall.Manifest) {
 	target := &custodyinstall.Manifest{Version: 2, Mode: "disposable-custody:v2", Network: "devnet", Enrollment: true, Location: "remote", Owner: m.OwnerUID, ID: strings.Repeat("a", 32), Root: custodyinstall.Root(m.OwnerUID), Listen: m.Listen, PublicOrigin: m.PublicOrigin, CoreHash: strings.Repeat("b", 64), SignerHash: strings.Repeat("c", 64), App: custodyinstall.Identity{Name: "fixture-app", UID: 995, GID: 995}, Signer: custodyinstall.Identity{Name: "fixture-signer", UID: 996, GID: 996}}
-	f := enrollmentFenceBinding{Version: 1, ID: strings.Repeat("d", 32), Owner: m.OwnerUID, Source: enrollmentSourceBinding{Profile: "remote", Data: m.Data, Listen: m.Listen, PublicOrigin: m.PublicOrigin, ExpectedInstanceID: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)), UID: m.AppUID, GID: m.AppGID, Running: true, Autostart: true}, Node: enrollmentNodeBinding{Device: 1, Inode: 2, UID: m.AppUID, GID: m.AppGID, Mode: 0700}, Digest: strings.Repeat("e", 64), Target: *target}
+	f := enrollmentFenceBinding{Version: 1, ID: strings.Repeat("d", 32), Owner: m.OwnerUID, Source: enrollmentSourceBinding{Profile: "remote", Data: m.Data, Listen: m.Listen, PublicOrigin: m.PublicOrigin, ExpectedInstanceID: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)), UID: m.AppUID, GID: m.AppGID, Running: true, Autostart: true, ApplicationSequence: m.ApplicationSequence, ApplicationReleaseSHA256: m.ApplicationReleaseSHA256}, Node: enrollmentNodeBinding{Device: 1, Inode: 2, UID: m.AppUID, GID: m.AppGID, Mode: 0700}, Digest: strings.Repeat("e", 64), Target: *target}
 	j := enrollmentJournalBinding{enrollmentFenceBinding: f, Phase: "fencing", CoreHash: target.CoreHash, SignerHash: target.SignerHash, Network: target.Network}
 	o.enrollmentJournal = func() ([]byte, error) { return encoded(j), nil }
 	o.custodyTarget = func(int) (custodyinstall.Manifest, error) { return *target, nil }
@@ -47,6 +186,21 @@ func attachEnrollmentFixture(h *memoryHost, o *hostOps, m Manifest, form string)
 		delete(h.files, m.Data)
 	}
 	return j, target
+}
+
+func TestProtectedRemoteAccountStatusIsFixedAndReadOnly(t *testing.T) {
+	if !fixedRemotePasswordProbe(1000, []string{"/usr/bin/passwd", "-S", accountName(1000)}) {
+		t.Fatal("the owned Remote password-status check was refused")
+	}
+	for _, args := range [][]string{
+		{"/usr/bin/passwd", "-S", "root"},
+		{"/usr/bin/passwd", "-u", accountName(1000)},
+		{"/usr/bin/passwd", "-S", accountName(1000), "extra"},
+	} {
+		if fixedRemotePasswordProbe(1000, args) {
+			t.Fatal("foreign or mutating passwd request accepted")
+		}
+	}
 }
 
 func TestRemoteEnrollmentLeaseResumesOnlyBoundFences(t *testing.T) {
@@ -274,5 +428,63 @@ func TestRemoteEnrollmentLostLockKeepsOnlyNetworkRecovery(t *testing.T) {
 	status, err := enrollmentStatus(t.Context(), o, m)
 	if err != nil || status.Active || status.URL != "" || status.InstanceID != "" {
 		t.Fatal("held source claimed a running app", status, err)
+	}
+}
+
+func TestRemoteEnrollmentStatusReadsOrdinaryJournalAndOriginalRelease(t *testing.T) {
+	for _, form := range []string{"published", "sibling", "complete"} {
+		t.Run(form, func(t *testing.T) {
+			h, o, m := installFixture(t)
+			m.ApplicationSequence, m.ApplicationReleaseSHA256 = 7, strings.Repeat("f", 64)
+			for path, data := range map[string][]byte{m.Config: encoded(m), m.Root + "/intent.json": encoded(intentFor(m))} {
+				f := h.files[path]
+				f.Data = data
+				h.files[path] = f
+			}
+			j, target := attachEnrollmentFixture(h, &o, m, form)
+			target.Version, target.Mode, target.Profile, target.Provenance = 3, signer.OrdinaryCustodyMode, signer.OwnerCustodyProfile, signer.ControlledCustodyProfile
+			j.Target = *target
+			j.Mode, j.Profile, j.Provenance = target.Mode, target.Profile, target.Provenance
+			o.enrollmentJournal = func() ([]byte, error) { return encoded(j), nil }
+			path := m.Data
+			if form == "sibling" {
+				path = m.Root + "/.enrollment-" + j.ID
+			}
+			f := h.files[path+"/enrollment.json"]
+			f.Data = encoded(j.enrollmentFenceBinding)
+			h.files[path+"/enrollment.json"] = f
+			st, err := enrollmentStatus(t.Context(), o, m)
+			if err != nil {
+				t.Fatal("ordinary release-bound status refused", err)
+			}
+			if form == "complete" && st.State != "enrolled" || form != "complete" && st.State != "enrollment-pending" {
+				t.Fatal("unexpected status", st.State)
+			}
+			lease, err := enrollmentLease(t.Context(), o, m)
+			if err != nil {
+				t.Fatal("ordinary release-bound recovery refused", err)
+			}
+			lease.Close()
+			if form != "complete" {
+				j.Source.ApplicationReleaseSHA256 = strings.Repeat("1", 64)
+				if _, _, err = pendingEnrollment(o, m); err == nil {
+					t.Fatal("different source release accepted")
+				}
+			}
+		})
+	}
+}
+
+func TestRemoteEnrollmentAcceptsReservedRestrictedSibling(t *testing.T) {
+	h, o, m := installFixture(t)
+	j, _ := attachEnrollmentFixture(h, &o, m, "empty-sibling")
+	path := m.Root + "/.enrollment-" + j.ID
+	f := h.files[path]
+	f.Mode = os.ModeDir | 0700
+	h.files[path] = f
+	binding := encoded(j.enrollmentFenceBinding)
+	h.files[path+"/.enrollment.json-"+j.ID+".pending"] = hostFile{UID: 0, GID: 0, Mode: 0640, Regular: true, Data: binding[:8]}
+	if _, _, err := pendingEnrollment(o, m); err != nil {
+		t.Fatal("restricted interrupted fence could not be inspected", err)
 	}
 }

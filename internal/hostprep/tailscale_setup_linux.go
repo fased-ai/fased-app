@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
 )
 
@@ -84,6 +85,9 @@ func PrepareTailscale(ctx context.Context, in *bufio.Reader, out io.Writer) erro
 	if e != nil {
 		return e
 	}
+	if !platform.Remote {
+		return errors.New("Remote Tailscale setup requires a reviewed Remote OS profile")
+	}
 	u, e := user.Current()
 	if e != nil {
 		return e
@@ -91,8 +95,8 @@ func PrepareTailscale(ctx context.Context, in *bufio.Reader, out io.Writer) erro
 	if !AllowedTailscalePreparation(u.Username, []string{"status", "--json"}) {
 		return errors.New("unsupported OS administrator identity")
 	}
-	// An already enrolled, online device with this operator needs no package,
-	// sudo ceremony, login, or preference mutation.
+	authority, authorityErr := maintenance.ReadAuthority(os.Getuid())
+	// An already enrolled, online device needs no login or preference change.
 	if _, err := readPreparationFile("/usr/bin/tailscale"); err == nil {
 		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
@@ -100,12 +104,7 @@ func PrepareTailscale(ctx context.Context, in *bufio.Reader, out io.Writer) erro
 			return exec.CommandContext(ctx, "/usr/bin/tailscale", args...).Output()
 		}
 		if _, err := (privateaccess.Manager{Run: probe}).Plan(probeCtx, "tailscale", "127.0.0.1:7331"); err == nil {
-			if b, err := probe(probeCtx, "debug", "prefs"); err == nil && len(b) <= 64*1024 {
-				var p struct{ OperatorUser string }
-				if json.Unmarshal(b, &p) == nil && p.OperatorUser == u.Username {
-					return nil
-				}
-			}
+			return nil
 		}
 	}
 	// A parent symlink/writable directory may not redirect privileged publication.
@@ -138,7 +137,48 @@ func PrepareTailscale(ctx context.Context, in *bufio.Reader, out io.Writer) erro
 	}
 	dir := filepath.Join(base, "host-preparation", "tailscale")
 	system := &System{In: os.Stdin, Out: out, Authorization: "Authorize Tailscale's official signed Ubuntu package, service and this user's private access. Existing accounts/routes and SSH/firewall policy are preserved. Fased stays unprivileged."}
-	return prepareTailscale(ctx, dir, os.Getuid(), u.Username, out, readPreparationFile, system.Run, platform)
+	if authorityErr == nil {
+		if authority.Profile != "remote" {
+			return errors.New("maintenance setup belongs to a different installation profile")
+		}
+		run := func(ctx context.Context, input []byte, args ...string) ([]byte, error) {
+			if len(input) != 0 {
+				return nil, errors.New("Tailscale package preparation is owned by the maintenance helper")
+			}
+			if strings.Join(args, " ") == "/usr/bin/systemctl enable --now tailscaled.service" {
+				return exec.CommandContext(ctx, "/usr/bin/systemctl", "is-active", "tailscaled.service").Output()
+			}
+			if len(args) < 2 || args[0] != "/usr/bin/tailscale" || !AllowedTailscalePreparation(u.Username, args[1:]) {
+				return nil, errors.New("private setup requires the prepared Tailscale operator")
+			}
+			if args[1] == "login" {
+				_, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "tailscale-login"}, out)
+				return nil, err
+			}
+			if args[1] == "set" {
+				return nil, errors.New("confined setup does not grant Tailscale operator rights")
+			}
+			c := exec.CommandContext(ctx, args[0], args[1:]...)
+			c.Stderr = out
+			return c.Output()
+		}
+		return prepareTailscale(ctx, dir, os.Getuid(), u.Username, out, readPreparationFile, run, platform)
+	} else if !errors.Is(authorityErr, os.ErrNotExist) {
+		return authorityErr
+	}
+	if _, err := readPreparationFile("/usr/bin/tailscale"); err != nil {
+		return errors.New("use the Fased installer to prepare Tailscale; existing host settings are preserved")
+	}
+	run := func(ctx context.Context, input []byte, args ...string) ([]byte, error) {
+		if len(args) > 1 && args[0] == "/usr/bin/tailscale" && (args[1] == "login" || args[1] == "set") {
+			return nil, errors.New("connect the existing Tailscale device through its administrator, then retry")
+		}
+		if len(args) > 1 && args[0] == "/usr/bin/tailscale" {
+			return exec.CommandContext(ctx, args[0], args[1:]...).Output()
+		}
+		return system.Run(ctx, input, args...)
+	}
+	return prepareTailscale(ctx, dir, os.Getuid(), u.Username, out, readPreparationFile, run, platform)
 }
 
 func prepareTailscale(ctx context.Context, dir string, uid int, username string, out io.Writer, read preparationRead, run preparationRun, platforms ...hostplatform.Platform) error {
@@ -152,15 +192,19 @@ func prepareTailscale(ctx context.Context, dir string, uid int, username string,
 	if hex.EncodeToString(h[:]) != tailscaleAPTKeySHA256 {
 		return errors.New("bundled Tailscale signing key differs from the reviewed digest")
 	}
+	installed := false
 	if _, e := read("/usr/bin/tailscale"); errors.Is(e, os.ErrNotExist) {
 		if e = prepareTailscalePackage(ctx, dir, uid, read, run, platforms...); e != nil {
 			return e
 		}
+		installed = true
 	} else if e != nil {
 		return e
 	}
-	if _, e := run(ctx, nil, "/usr/bin/systemctl", "enable", "--now", "tailscaled.service"); e != nil {
-		return errors.New("Tailscale service preparation failed; preserve SSH, repair and retry")
+	if installed {
+		if _, e := run(ctx, nil, "/usr/bin/systemctl", "enable", "--now", "tailscaled.service"); e != nil {
+			return errors.New("Tailscale service preparation failed; preserve SSH, repair and retry")
+		}
 	}
 	prefs, e := run(ctx, nil, "/usr/bin/tailscale", "debug", "prefs")
 	if e != nil || len(prefs) > 64*1024 {
@@ -170,9 +214,6 @@ func prepareTailscale(ctx context.Context, dir string, uid int, username string,
 	if json.Unmarshal(prefs, &p) != nil {
 		return errors.New("invalid Tailscale preferences; preserve existing settings")
 	}
-	if p.OperatorUser != "" && p.OperatorUser != username {
-		return errors.New("Tailscale already has a different operator; ask its administrator before retrying Remote setup")
-	}
 	status, e := run(ctx, nil, "/usr/bin/tailscale", "status", "--json")
 	if e != nil || len(status) > 1024*1024 {
 		return errors.New("Tailscale status unavailable; preserve SSH and retry")
@@ -180,6 +221,9 @@ func prepareTailscale(ctx context.Context, dir string, uid int, username string,
 	var state struct{ BackendState string }
 	if json.Unmarshal(status, &state) != nil {
 		return errors.New("invalid Tailscale status")
+	}
+	if state.BackendState != "Running" && p.OperatorUser != "" && p.OperatorUser != username {
+		return errors.New("Tailscale already has a different operator; ask its administrator before retrying Remote setup")
 	}
 	switch state.BackendState {
 	case "Running": // Do not log in again or replace an existing account.
@@ -190,11 +234,6 @@ func prepareTailscale(ctx context.Context, dir string, uid int, username string,
 		}
 	default:
 		return errors.New("Tailscale needs owner attention (for example device approval or a deliberately stopped connection); preserve its settings, then retry Remote setup")
-	}
-	if p.OperatorUser == "" {
-		if _, e = run(ctx, nil, "/usr/bin/tailscale", "set", "--operator="+username); e != nil {
-			return errors.New("Tailscale operator permission was not granted; ask its administrator before retrying Remote setup")
-		}
 	}
 	fmt.Fprintln(out, "On the computer you will use, install Tailscale from https://tailscale.com/download and sign in to the same tailnet. Enable tailnet HTTPS and allow only your intended devices. Fased will verify private HTTPS; keep SSH/console recovery.")
 	return nil
@@ -306,7 +345,15 @@ func prepareTailscalePackage(ctx context.Context, dir string, uid int, read prep
 	if _, e = run(ctx, nil, "/usr/bin/apt-get", "-o", "Acquire::AllowInsecureRepositories=false", "-o", "Acquire::AllowDowngradeToInsecureRepositories=false", "-o", "APT::Get::AllowUnauthenticated=false", "-o", "APT::Update::Error-Mode=any", "update"); e != nil {
 		return errors.New("signed OS and Tailscale package index refresh failed; retry preserves preparation")
 	}
-	if _, e = run(ctx, nil, "/usr/bin/apt-get", "-o", "APT::Get::AllowUnauthenticated=false", "install", "-y", "--no-remove", "--no-install-recommends", "tailscale"); e != nil {
+	policy, e := run(ctx, nil, "/usr/bin/apt-cache", "policy", "tailscale")
+	if e != nil {
+		return errors.New("Tailscale package candidate unavailable; preserve preparation")
+	}
+	version, e := tailscaleAptCandidate(policy)
+	if e != nil {
+		return e
+	}
+	if _, e = run(ctx, nil, "/usr/bin/apt-get", "-o", "APT::Get::AllowUnauthenticated=false", "install", "-y", "--no-remove", "--no-install-recommends", "tailscale="+version); e != nil {
 		return errors.New("Tailscale package installation failed; repair and retry, no source or account reset")
 	}
 	return nil

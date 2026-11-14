@@ -68,6 +68,101 @@ func installationFixtureAtSequence(t *testing.T, v *Vault, sequence uint64) (upd
 	return *i, b
 }
 func metadataFixtureHash(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
+
+func TestReplacementGuardUsesSignerOwnedHold(t *testing.T) {
+	dir := fixtureDir(t)
+	v, _, _ := configuredFixture(t, dir)
+	defer v.Close()
+	i, binding := installationFixture(t, v)
+	held, err := v.Installation(installCommand(t, v, i, binding, "active"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := held.Digest
+	if err = ValidateInstallationReplacement(held, i.ID, digest, "forward", "core", binding.TargetCore); err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range []struct{ id, digest, direction, component, source string }{
+		{update.NewProbe(), digest, "forward", "core", binding.TargetCore},
+		{i.ID, update.SnapshotDigest("foreign", 1), "forward", "core", binding.TargetCore},
+		{i.ID, digest, "forward", "core", binding.PreviousCore},
+		{i.ID, digest, "rollback", "signer", binding.TargetSigner},
+		{i.ID, digest, "forward", "other", binding.TargetCore},
+	} {
+		if ValidateInstallationReplacement(held, request.id, request.digest, request.direction, request.component, request.source) == nil {
+			t.Fatal("foreign replacement accepted", request.direction, request.component)
+		}
+	}
+	healthy, err := v.Installation(installCommand(t, v, i, binding, "healthy-held"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ValidateInstallationReplacement(healthy, i.ID, digest, "forward", "core", binding.TargetCore) == nil {
+		t.Fatal("forward replacement accepted after health")
+	}
+	if err = ValidateInstallationReplacement(healthy, i.ID, digest, "rollback", "signer", binding.PreviousSigner); err != nil {
+		t.Fatal(err)
+	}
+	committed := *healthy
+	committed.Phase, committed.InstalledSequenceCommitted = "committed-held", true
+	if ValidateInstallationReplacement(&committed, i.ID, digest, "rollback", "signer", binding.PreviousSigner) == nil {
+		t.Fatal("committed installation permitted rollback")
+	}
+}
+
+func TestReplacementGuardColdReaderPreservesPendingPublication(t *testing.T) {
+	dir := fixtureDir(t)
+	v, _, _ := configuredFixture(t, dir)
+	i, binding := installationFixture(t, v)
+	held, err := v.Installation(installCommand(t, v, i, binding, "active"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = v.Close(); err != nil {
+		t.Fatal(err)
+	}
+	vaultPath, journalPath := filepath.Join(dir, "vault.json"), filepath.Join(dir, "operations.log")
+	beforeVault, err := os.ReadFile(vaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeJournal, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readOnly, err := openVault(dir, binding.InstallationID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, err := readOnly.Installation(update.InstallRequest{Action: "status", IntentID: i.ID})
+	if err != nil || ValidateInstallationReplacement(actual, i.ID, held.Digest, "forward", "core", binding.TargetCore) != nil {
+		t.Fatal("read-only held state unavailable", err)
+	}
+	if err = readOnly.Close(); err != nil {
+		t.Fatal(err)
+	}
+	afterVault, err := os.ReadFile(vaultPath)
+	if err != nil || !bytes.Equal(beforeVault, afterVault) {
+		t.Fatal("cold check changed vault", err)
+	}
+	afterJournal, err := os.ReadFile(journalPath)
+	if err != nil || !bytes.Equal(beforeJournal, afterJournal) {
+		t.Fatal("cold check changed signer journal", err)
+	}
+	pendingPath := filepath.Join(dir, "vault.pending")
+	pending := []byte("preserve interrupted publication")
+	if err = os.WriteFile(pendingPath, pending, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if unexpected, err := openVault(dir, binding.InstallationID, true); err == nil {
+		unexpected.Close()
+		t.Fatal("cold check accepted a pending publication")
+	}
+	afterPending, err := os.ReadFile(pendingPath)
+	if err != nil || !bytes.Equal(pending, afterPending) {
+		t.Fatal("cold check changed pending publication", err)
+	}
+}
 func installationPreflight(t *testing.T, v *Vault, i update.Intent) update.Preflight {
 	t.Helper()
 	p := update.NewProbe()

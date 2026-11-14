@@ -3,6 +3,7 @@
 package custodyinstall
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -14,6 +15,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/maintenance"
 )
 
 func nativeArgs(m Manifest) []string {
@@ -57,6 +60,9 @@ func installNativePolicy(ctx context.Context, m Manifest, s *System) error {
 	if !m.NativeOwnerAccess {
 		return nil
 	}
+	if s.protectedOwner > 0 {
+		return installProtectedSudoPolicy(ctx, nativePolicyPath(m), nativePolicy(m))
+	}
 	path := nativePolicyPath(m)
 	if info, err := os.Lstat(path); err == nil {
 		st, ok := info.Sys().(*syscall.Stat_t)
@@ -93,8 +99,25 @@ func installNativePolicy(ctx context.Context, m Manifest, s *System) error {
 		return errors.New("native owner policy validation failed")
 	}
 	pending := path + "-" + m.ID + ".pending"
-	if _, err = s.Run(ctx, nil, "/usr/bin/install", "--owner=0", "--group=0", "--mode=0440", "--", f.Name(), pending); err != nil {
+	policy := nativePolicy(m)
+	args, err := BoundPolicyWriteArgs(m.Owner, pending, policy)
+	if err != nil {
 		return err
+	}
+	if _, err = s.Run(ctx, policy, args...); err != nil {
+		return err
+	}
+	info, err := os.Lstat(pending)
+	if err != nil {
+		return err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || st.Uid != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0440 {
+		return errors.New("native policy staging identity changed; preserving it")
+	}
+	bound, err := s.Run(ctx, nil, "/usr/bin/cat", "--", pending)
+	if err != nil || string(bound) != string(policy) {
+		return errors.New("native policy staging content changed; preserving it")
 	}
 	if _, err = s.Run(ctx, nil, "/usr/bin/ln", "--no-target-directory", "--", pending, path); err != nil {
 		return err
@@ -104,6 +127,20 @@ func installNativePolicy(ctx context.Context, m Manifest, s *System) error {
 	}
 	_, err = s.Run(ctx, nil, "/usr/bin/sync", "-f", path)
 	return err
+}
+
+// Only fixed policy bytes generated from the verified manifest reach here.
+func installProtectedSudoPolicy(ctx context.Context, path string, policy []byte) error {
+	if os.Getuid() != 0 || os.Geteuid() != 0 || trustedUtility("/usr/sbin/visudo") != nil {
+		return errors.New("protected policy publication required")
+	}
+	c := exec.CommandContext(ctx, "/usr/sbin/visudo", "-c", "-f", "-")
+	c.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C"}
+	c.Stdin = bytes.NewReader(policy)
+	if err := c.Run(); err != nil {
+		return errors.New("fixed enrollment policy is invalid")
+	}
+	return maintenance.PublishProtected(path, policy, 0440)
 }
 
 // Inventory may verify existing OS consent but cannot create/repair it before

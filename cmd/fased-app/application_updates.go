@@ -8,11 +8,56 @@ import (
 	"flag"
 	"fmt"
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/desktop"
+	"github.com/fased-ai/fased-app/internal/enrollment"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 )
+
+var applicationUpdatesPublicClient = newApplicationUpdatesClient
+
+// Preserve the existing ordinary-client behavior for an owner directory under
+// a symlinked parent. An enrolled or ambiguous root-owned fence must still fail
+// closed and can never fall back to the predecessor's IPC.
+func newApplicationUpdatesClient(ctx context.Context, dir string) (*core.Client, bool, error) {
+	c, enrolled, err := desktop.NewPublicClient(ctx, dir)
+	if err == nil || runtime.GOOS != "linux" {
+		return c, enrolled, err
+	}
+	abs, pathErr := filepath.Abs(dir)
+	if pathErr != nil {
+		return nil, false, err
+	}
+	real, pathErr := filepath.EvalSymlinks(abs)
+	if pathErr != nil || real == abs {
+		return nil, false, err
+	}
+	if _, fenceErr := enrollment.EnrolledTarget(real, os.Getuid()); !errors.Is(fenceErr, os.ErrNotExist) {
+		return nil, false, err
+	}
+	c, pathErr = core.NewClient(ctx, dir)
+	return c, false, pathErr
+}
+
+func ordinaryUpdateRecoveryData(dir string) bool {
+	if runtime.GOOS != "linux" {
+		return true
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return false
+	}
+	_, err = enrollment.EnrolledTarget(real, os.Getuid())
+	return errors.Is(err, os.ErrNotExist)
+}
 
 func applicationUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	action := "status"
@@ -37,15 +82,29 @@ func applicationUpdatesCommand(args []string, in *os.File, out, errOut io.Writer
 		return errors.New("unexpected update arguments")
 	}
 	ctx := context.Background()
-	c, e := core.NewClient(ctx, *dir)
+	c, e := openApplicationUpdatesClient(ctx, *dir)
 	if e != nil {
 		return e
 	}
 	defer c.Close()
-	if e = loadUpdateSession(ctx, c, *dir); e != nil {
-		return e
-	}
 	return applicationUpdatesWithClient(ctx, c, action, in, out, errOut)
+}
+
+func openApplicationUpdatesClient(ctx context.Context, dir string) (*core.Client, error) {
+	c, enrolled, e := applicationUpdatesPublicClient(ctx, dir)
+	if e != nil {
+		return nil, e
+	}
+	if enrolled {
+		e = c.NativeLocalOwner(ctx)
+	} else {
+		e = loadUpdateSession(ctx, c, dir)
+	}
+	if e != nil {
+		c.Close()
+		return nil, e
+	}
+	return c, nil
 }
 
 func applicationUpdatesWithClient(ctx context.Context, c *core.Client, action string, in *os.File, out, errOut io.Writer) error {
@@ -53,6 +112,9 @@ func applicationUpdatesWithClient(ctx context.Context, c *core.Client, action st
 	var v core.ApplicationUpdateView
 	if e = c.Do(ctx, http.MethodGet, "/api/v1/updates/application", nil, &v); e != nil {
 		return e
+	}
+	if c.Endpoint.InstanceID == "" || v.InstanceID != c.Endpoint.InstanceID {
+		return errors.New("update instance changed; preserve the original operation")
 	}
 	if action == "status" {
 		return json.NewEncoder(out).Encode(v)
@@ -75,8 +137,12 @@ func applicationUpdatesWithClient(ctx context.Context, c *core.Client, action st
 		}
 		command.ManifestSHA256 = v.Operation.Release.ManifestSHA256
 	}
-	if e = c.Do(ctx, http.MethodPost, "/api/v1/updates/application", command, &v); e != nil {
+	var result core.ApplicationUpdateView
+	if e = c.Do(ctx, http.MethodPost, "/api/v1/updates/application", command, &result); e != nil {
 		return e
 	}
-	return json.NewEncoder(out).Encode(v)
+	if result.InstanceID != c.Endpoint.InstanceID {
+		return errors.New("update instance changed; inspect the original operation before retrying")
+	}
+	return json.NewEncoder(out).Encode(result)
 }

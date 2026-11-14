@@ -86,7 +86,7 @@ func repairColdTrial(ctx context.Context, t BootstrapTransaction, o installOps, 
 		if forward {
 			return errors.New("repair fence lost its original source receipt")
 		}
-		return publish(ctx, path, t.Base.ID, mustJSON(record), 0644, o.read, o.run)
+		return publish(ctx, path, t.Base.ID, mustJSON(record), 0644, o.read, o.run, o.verify)
 	}
 	if e != nil {
 		return e

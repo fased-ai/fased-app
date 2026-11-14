@@ -109,6 +109,12 @@ func (v *Vault) PrepareUpdate(r update.IntentRequest) (*update.Intent, error) {
 	if e != nil {
 		return nil, e
 	}
+	return v.prepareAuthenticatedUpdate(r, m, digest, false)
+}
+
+// The caller holds v.mu and has authenticated either the development signature
+// or the installed helper's protected production approval, never a caller hash.
+func (v *Vault) prepareAuthenticatedUpdate(r update.IntentRequest, m update.Manifest, digest string, maintenance bool) (*update.Intent, error) {
 	l := v.ledger
 	if old, ok := l.updates[r.ID]; ok {
 		if old.ManifestSHA256 != digest || old.Sequence != m.Sequence || update.SnapshotDigest("core", old.Core) != update.SnapshotDigest("core", r.Core) || update.SnapshotDigest("signer", old.Signer) != update.SnapshotDigest("signer", r.Signer) {
@@ -135,7 +141,11 @@ func (v *Vault) PrepareUpdate(r update.IntentRequest) (*update.Intent, error) {
 	if e != nil {
 		return nil, e
 	}
-	if _, e = update.Compatible(m, digest, inv); e != nil {
+	check := update.Compatible
+	if maintenance {
+		check = update.CompatibleMaintenance
+	}
+	if _, e = check(m, digest, inv); e != nil {
 		return nil, e
 	}
 	i := update.Intent{Version: 1, ID: r.ID, Sequence: m.Sequence, ManifestSHA256: digest, Core: r.Core, Signer: s, CreatedAt: v.now().Unix(), ManifestExpiresAt: m.ExpiresAt, State: "prepared"}

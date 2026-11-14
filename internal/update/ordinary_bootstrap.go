@@ -3,6 +3,7 @@ package update
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
 )
 
@@ -40,6 +41,11 @@ func verifyOrdinaryBootstrap(b BootstrapBundle, trust []byte, now int64) (Bootst
 		c := next.Contract
 		c.State = append([]StateSupport(nil), c.State...)
 		c.Features = withoutFeature(c.Features, OrdinaryMaintenanceFeature)
+		// This advertises a journal format understood by the successor; it
+		// does not change predecessor authority or financial capabilities.
+		if !slices.Contains(old.Contract.Features, JournalBasePackageFeature) {
+			c.Features = withoutFeature(c.Features, JournalBasePackageFeature)
+		}
 		c.RequiresPeer = old.Contract.RequiresPeer
 		if c.Component == "core" {
 			c.PeerProtocol = old.Contract.PeerProtocol

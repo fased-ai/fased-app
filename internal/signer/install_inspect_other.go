@@ -11,6 +11,10 @@ func InspectInstallation(Config, string) (*update.Installation, error) {
 	return nil, errors.New("Linux disposable cold installation inspection only")
 }
 
+func InspectInstallationReadOnly(Config, string) (*update.Installation, error) {
+	return nil, errors.New("Linux disposable cold installation inspection only")
+}
+
 func InspectUpdate(c Config, id string) (Response, error) {
 	return Response{}, errors.New("cold update inspection requires Linux")
 }

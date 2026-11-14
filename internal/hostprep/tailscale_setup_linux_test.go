@@ -64,6 +64,11 @@ func (f *preparationFixture) run(ctx context.Context, b []byte, args ...string) 
 		if strings.Contains(call, " install ") {
 			f.files["/usr/bin/tailscale"] = preparationFile{root: true, regular: true, mode: 0755}
 		}
+	case "/usr/bin/apt-cache":
+		if strings.Join(args, " ") != "/usr/bin/apt-cache policy tailscale" {
+			return nil, errors.New("unexpected package query")
+		}
+		return []byte("tailscale:\n  Candidate: 1.104.7\n"), nil
 	case "/usr/bin/tailscale":
 		switch args[1] {
 		case "debug":
@@ -97,7 +102,7 @@ func TestGuidedTailscaleFreshInstallUsesPinnedSignedPackages(t *testing.T) {
 		}
 	}
 	calls := strings.Join(f.calls, "\n")
-	for _, want := range []string{"APT::Get::AllowUnauthenticated=false", "Acquire::AllowInsecureRepositories=false", "--no-remove", "login --timeout=120s", "set --operator=owner"} {
+	for _, want := range []string{"APT::Get::AllowUnauthenticated=false", "Acquire::AllowInsecureRepositories=false", "--no-remove", "login --timeout=120s"} {
 		if !strings.Contains(calls, want) {
 			t.Fatal("missing bounded preparation", want, calls)
 		}
@@ -107,7 +112,7 @@ func TestGuidedTailscaleFreshInstallUsesPinnedSignedPackages(t *testing.T) {
 			t.Fatal("unexpected authority", bad, calls)
 		}
 	}
-	if f.operator != "owner" || !strings.Contains(out.String(), "computer's browser") || !strings.Contains(out.String(), "same tailnet") {
+	if f.operator != "" || !strings.Contains(out.String(), "computer's browser") || !strings.Contains(out.String(), "same tailnet") {
 		t.Fatal("lost login/device handoff", out.String())
 	}
 	for p := range f.files {
@@ -118,6 +123,34 @@ func TestGuidedTailscaleFreshInstallUsesPinnedSignedPackages(t *testing.T) {
 	b, e := os.ReadFile(filepath.Join(dir, "preparation.json"))
 	if e != nil || strings.Contains(string(b), "auth") {
 		t.Fatal("missing or secret-bearing recovery receipt", e)
+	}
+}
+
+func TestConfinedTailscaleSetupDoesNotGrantOperator(t *testing.T) {
+	f := setupFixture()
+	if err := prepareTailscale(t.Context(), preparationDirectory(t), 1000, "owner", &bytes.Buffer{}, f.read, f.run); err != nil {
+		t.Fatal(err)
+	}
+	if f.operator != "" || strings.Contains(strings.Join(f.calls, "\n"), "tailscale set ") {
+		t.Fatal("confined setup granted Tailscale operator authority", f.calls)
+	}
+}
+
+func TestGuidedTailscaleRejectsUnverifiedPackageBeforeInstall(t *testing.T) {
+	f := setupFixture()
+	run := func(ctx context.Context, body []byte, args ...string) ([]byte, error) {
+		if args[0] == "/usr/bin/apt-cache" {
+			return []byte("tailscale:\n  Candidate: 1.105.0\n"), nil
+		}
+		return f.run(ctx, body, args...)
+	}
+	if err := prepareTailscale(t.Context(), preparationDirectory(t), 1000, "owner", &bytes.Buffer{}, f.read, run); err == nil {
+		t.Fatal("unverified package accepted")
+	}
+	for _, call := range f.calls {
+		if strings.Contains(call, "/usr/bin/apt-get") && strings.Contains(call, " install ") {
+			t.Fatal("unverified package was installed")
+		}
 	}
 }
 
@@ -147,7 +180,7 @@ func TestGuidedTailscaleFreshMinimalUbuntuRefreshesDependencyIndexes(t *testing.
 	if err := prepareTailscale(t.Context(), preparationDirectory(t), 1000, "owner", &bytes.Buffer{}, f.read, runner); err != nil {
 		t.Fatal(err)
 	}
-	if !distroReady || f.operator != "owner" {
+	if !distroReady || f.operator != "" {
 		t.Fatal("fresh prerequisite setup did not finish")
 	}
 }
@@ -157,7 +190,7 @@ func TestGuidedTailscalePreservesExistingAccountAndOperator(t *testing.T) {
 		name, state, operator string
 		wantErr               bool
 	}{
-		{"owned running", "Running", "owner", false}, {"foreign operator", "Running", "someone-else", true}, {"owner stopped", "Stopped", "owner", true}, {"approval required", "NeedsMachineAuth", "owner", true}, {"unknown status", "future-state", "owner", true},
+		{"owned running", "Running", "owner", false}, {"foreign operator", "Running", "someone-else", false}, {"owner stopped", "Stopped", "owner", true}, {"approval required", "NeedsMachineAuth", "owner", true}, {"unknown status", "future-state", "owner", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := setupFixture()

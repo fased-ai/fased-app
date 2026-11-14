@@ -7,11 +7,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -159,16 +157,8 @@ func ordinaryUpdateCommand(args []string, in *os.File, out, errOut io.Writer) er
 		return errors.New("unexpected update arguments")
 	}
 	if *remote {
-		data, err := core.ReadPrivateFile(filepath.Join(*dir, "remote-connection.json"))
-		if err != nil {
-			return errors.New("choose your Remote instance with fased connect --url https://your-instance.ts.net")
-		}
-		var profile connection.Result
-		if json.Unmarshal(data, &profile) != nil || profile.Location != "remote" || profile.Transport != "private-https" {
-			return errors.New("invalid Remote profile; preserve it and reconnect")
-		}
 		ctx := context.Background()
-		client, err := core.NewRemoteClient(ctx, profile.URL, profile.InstanceID)
+		client, err := connectedRemoteClient(ctx, *dir)
 		if err != nil {
 			return err
 		}
@@ -181,14 +171,40 @@ func ordinaryUpdateCommand(args []string, in *os.File, out, errOut io.Writer) er
 		}
 		return call(action, out)
 	}
-	call := func(action string, dest io.Writer) error {
-		return applicationUpdatesCommand([]string{action, "--data-dir", *dir}, in, dest, errOut)
-	}
 	if action == "recover" {
+		// Enrolled Local custody uses the same authenticated core recovery
+		// operation as Settings. Never fall back to predecessor recovery when
+		// the enrollment is unavailable or ambiguous.
+		ctx := context.Background()
+		client, enrolled, err := applicationUpdatesPublicClient(ctx, *dir)
+		if err == nil {
+			if enrolled {
+				defer client.Close()
+				if *prefix != "" {
+					return errors.New("enrolled recovery uses its original installation; omit --prefix")
+				}
+				if err = client.NativeLocalOwner(ctx); err != nil {
+					return err
+				}
+				return applicationUpdatesWithClient(ctx, client, "recover", in, out, errOut)
+			}
+			client.Close()
+		} else if !errors.Is(err, core.ErrCoreUnavailable) || !ordinaryUpdateRecoveryData(*dir) {
+			return err
+		}
 		return recoverInstalledLocalUpdate(*prefix, *dir, in, out, errOut)
 	}
 	if action == "wizard" {
+		ctx := context.Background()
+		client, err := openApplicationUpdatesClient(ctx, *dir)
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+		call := func(action string, dest io.Writer) error {
+			return applicationUpdatesWithClient(ctx, client, action, in, dest, errOut)
+		}
 		return updateWizard(call, out, errOut)
 	}
-	return call(action, out)
+	return applicationUpdatesCommand([]string{action, "--data-dir", *dir}, in, out, errOut)
 }

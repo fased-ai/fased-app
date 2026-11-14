@@ -11,6 +11,7 @@ const one = (prefix) => {
 };
 const version = one("--version="),
   signer = one("--wallet-signer="),
+  desktop = one("--wallet-desktop="),
   source = one("--source=");
 if (
   args.some(
@@ -18,6 +19,7 @@ if (
       a !== "--installer" &&
       !a.startsWith("--version=") &&
       !a.startsWith("--wallet-signer=") &&
+      !a.startsWith("--wallet-desktop=") &&
       !a.startsWith("--source="),
   ) ||
   args.filter((a) => a === "--installer").length > 1
@@ -26,15 +28,19 @@ if (
 if (version && !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/.test(version))
   throw Error("Invalid release version");
 if (
-  (signer || source) &&
-  (!installer || !signer || !version || !/^[a-f0-9]{40}$/.test(source ?? ""))
+  (signer || desktop || source) &&
+  (!signer ||
+    !version ||
+    !/^[a-f0-9]{40}$/.test(source ?? "") ||
+    (!installer && !desktop))
 )
   throw Error(
-    "Wallet payload needs installer, version, signer and exact source",
+    "Wallet release binding needs a version, signer, exact source and (for the core) native client",
   );
 const target = installer ? "fased-install" : "fased-app";
 const staged = "cmd/fased-install/wallet-signer.bin";
-let owned = false;
+const stagedDesktop = "cmd/fased-install/wallet-desktop.bin";
+const owned = [];
 await mkdir(".evidence/bin", { recursive: true });
 try {
   const flags = version
@@ -44,23 +50,48 @@ try {
     const bytes = await readFile(signer);
     if (!bytes.length || bytes.length > 64 * 1024 * 1024)
       throw Error("Bounded compiled wallet signer required");
-    await copyFile(signer, staged, constants.COPYFILE_EXCL);
-    owned = true;
-    const copied = await readFile(staged);
     const hash = createHash("sha256").update(bytes).digest("hex");
-    if (createHash("sha256").update(copied).digest("hex") !== hash)
-      throw Error("Signer changed during embedding");
-    flags.push(
-      `-X main.compiledWalletSource=${source}`,
-      `-X main.compiledWalletSHA256=${hash}`,
-    );
+    if (installer) {
+      await copyFile(signer, staged, constants.COPYFILE_EXCL);
+      owned.push(staged);
+      const copied = await readFile(staged);
+      if (createHash("sha256").update(copied).digest("hex") !== hash)
+        throw Error("Signer changed during embedding");
+      flags.push(
+        `-X main.compiledWalletSource=${source}`,
+        `-X main.compiledWalletSHA256=${hash}`,
+      );
+    } else {
+      flags.push(
+        `-X main.compiledNativeSource=${source}`,
+        `-X main.compiledNativeSignerSHA256=${hash}`,
+      );
+    }
+  }
+  if (desktop) {
+    const bytes = await readFile(desktop);
+    if (!bytes.length || bytes.length > 64 * 1024 * 1024)
+      throw Error("Bounded compiled native client required");
+    const hash = createHash("sha256").update(bytes).digest("hex");
+    if (installer) {
+      await copyFile(desktop, stagedDesktop, constants.COPYFILE_EXCL);
+      owned.push(stagedDesktop);
+      const copied = await readFile(stagedDesktop);
+      if (createHash("sha256").update(copied).digest("hex") !== hash)
+        throw Error("Native client changed during embedding");
+      flags.push(`-X main.compiledDesktopSHA256=${hash}`);
+    } else {
+      flags.push(`-X main.compiledNativeDesktopSHA256=${hash}`);
+    }
   }
   execFileSync(
     "go",
     [
       "build",
       "-trimpath",
-      ...(signer ? ["-tags", "wallet_payload"] : []),
+      ...(installer && signer
+        ? ["-tags", desktop ? "wallet_payload,wallet_native" : "wallet_payload"]
+        : []),
       ...(flags.length ? ["-ldflags", flags.join(" ")] : []),
       "-o",
       `.evidence/bin/${target}${process.platform === "win32" ? ".exe" : ""}`,
@@ -72,5 +103,5 @@ try {
     },
   );
 } finally {
-  if (owned) await rm(staged);
+  for (const path of owned) await rm(path);
 }

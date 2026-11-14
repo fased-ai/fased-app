@@ -251,8 +251,25 @@ try {
   // from ordinary serve/setup commands and excluded from every release package.
   const guardedSource = path.join(scratch, "guarded-source");
   await mkdir(guardedSource);
-  for (const file of ["cmd", "internal", "dist", "go.mod", "go.sum", "ui.go"])
+  for (const file of [
+    "cmd",
+    "internal",
+    "packaging",
+    "dist",
+    "go.mod",
+    "go.sum",
+    "ui.go",
+  ])
     await cp(file, path.join(guardedSource, file), { recursive: true });
+  // This test binary only supplies the guarded inspection entrypoint. The
+  // custody-maintenance tests exercise a newer contract deliberately removed
+  // from this older-reader projection; they run in the normal core suite.
+  await rm(
+    path.join(
+      guardedSource,
+      "cmd/fased-app/application_custody_maintenance_linux_test.go",
+    ),
+  );
   const guardedContractSHA = await projectPasswordOnlyContract(guardedSource);
   const guardedCommandSHA = sha(
     await readFile(path.join(guardedSource, "cmd/fased-app/updates.go")),

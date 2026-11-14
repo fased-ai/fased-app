@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 	"golang.org/x/sys/unix"
@@ -93,16 +95,70 @@ func openRuntime(s Source, system *custodyinstall.System) (*runtimeHost, io.Clos
 	return &runtimeHost{system, f, parent, filepath.Base(s.Data), filepath.Join(dir, "state.json")}, lock, nil
 }
 
+func pendingOwnerJournals(entries []os.DirEntry) ([]string, error) {
+	var names []string
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".pending-") {
+			if len(names) == 8 {
+				return nil, errState
+			}
+			names = append(names, entry.Name())
+		}
+	}
+	return names, nil
+}
+
 func readOwnerJournal(path string) (journal, error) {
+	j, _, err := readOwnerJournalWithPending(path)
+	return j, err
+}
+
+type pendingReplay struct {
+	Target custodyinstall.Manifest
+	Digest string
+}
+
+func readOwnerJournalWithPending(path string) (journal, pendingReplay, error) {
 	var j journal
-	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	var retained pendingReplay
+	dirFD, err := unix.Open(filepath.Dir(path), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return j, retained, err
+	}
+	dir := os.NewFile(uintptr(dirFD), "owner-journal")
+	defer dir.Close()
+	entries, err := dir.ReadDir(-1)
+	if err != nil {
+		return j, retained, err
+	}
+	names, err := pendingOwnerJournals(entries)
+	if err != nil {
+		return j, retained, err
+	}
+	j, err = readOwnerJournalEntry(dirFD, filepath.Base(path), os.Getuid(), false)
+	if err != nil {
+		if len(names) != 0 {
+			return journal{}, retained, errState
+		}
+		return journal{}, retained, err
+	}
+	retained, err = verifyRetainedPrepared(dirFD, names, j, os.Getuid())
+	if err != nil {
+		return journal{}, pendingReplay{}, err
+	}
+	return j, retained, nil
+}
+
+func readOwnerJournalEntry(dirFD int, name string, owner int, pending bool) (journal, error) {
+	var j journal
+	fd, err := unix.Openat(dirFD, name, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return j, err
 	}
-	f := os.NewFile(uintptr(fd), path)
+	f := os.NewFile(uintptr(fd), name)
 	defer f.Close()
 	var st unix.Stat_t
-	if unix.Fstat(fd, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Mode&07777 != 0600 || int(st.Uid) != os.Getuid() || st.Nlink != 1 || st.Size <= 0 || st.Size > 16384 {
+	if unix.Fstat(fd, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || (st.Mode&07777 != 0600 && !(pending && st.Mode&07777 == 0400)) || int(st.Uid) != owner || st.Nlink != 1 || st.Size <= 0 || st.Size > 16384 {
 		return j, errState
 	}
 	b, err := io.ReadAll(io.LimitReader(f, 16385))
@@ -110,6 +166,106 @@ func readOwnerJournal(path string) (journal, error) {
 		return journal{}, errState
 	}
 	return j, nil
+}
+
+// The first prepared write remains as a witness. A later complete write can
+// be retained too, but it never replaces the committed controller state.
+func verifyRetainedPrepared(dirFD int, names []string, current journal, owner int) (pendingReplay, error) {
+	var retained pendingReplay
+	if len(names) == 0 {
+		return retained, nil
+	}
+	checked := current
+	if checked.Phase == "source-lock-lost" {
+		checked.Phase = "fencing"
+	}
+	if !checked.valid(owner) {
+		return retained, errState
+	}
+	witness := false
+	for _, name := range names {
+		pending, err := readOwnerJournalEntry(dirFD, name, owner, true)
+		if err != nil || !pending.valid(owner) || pending.ID != current.ID || pending.Owner != current.Owner || pending.Source != current.Source || pending.Node != current.Node ||
+			pending.CoreHash != current.CoreHash || pending.SignerHash != current.SignerHash || pending.Network != current.Network || pending.Mode != current.Mode ||
+			pending.Profile != current.Profile || pending.Provenance != current.Provenance || pending.NativeOwnerAccess != current.NativeOwnerAccess {
+			return retained, errState
+		}
+		if pending.Phase == "prepared" && pending.Target == (custodyinstall.Manifest{}) && pending.Digest == "" && pending.CoreRecovery == nil {
+			witness = true
+			continue
+		}
+		// Only the original ordinary-custody topology can replay an additional
+		// complete, uncommitted transition. Remote has no Local native owner.
+		ownerTopology := current.Source.Profile == "local" && current.NativeOwnerAccess || current.Source.Profile == "remote" && !current.NativeOwnerAccess
+		if current.Phase == "source-lock-lost" || !ownerTopology || current.Mode != signer.OrdinaryCustodyMode ||
+			current.CoreRecovery != nil || pending.CoreRecovery != nil || !compatiblePendingWrite(current, pending) {
+			return retained, errState
+		}
+		if pending.Target.ID != "" {
+			if retained.Target.ID != "" && retained.Target != pending.Target {
+				return retained, errState
+			}
+			retained.Target = pending.Target
+		}
+		if pending.Digest != "" {
+			if retained.Digest != "" && retained.Digest != pending.Digest {
+				return retained, errState
+			}
+			retained.Digest = pending.Digest
+		}
+	}
+	if !witness {
+		return retained, errState
+	}
+	return retained, nil
+}
+
+// Re-read the retained writes after external work and before publishing a
+// phase: a replay may not silently replace a previously observed result.
+func checkPendingReplay(path string, current journal, target *custodyinstall.Manifest, digest string) error {
+	saved, retained, err := readOwnerJournalWithPending(path)
+	if err != nil || !reflect.DeepEqual(saved, current) || target != nil && retained.Target.ID != "" && retained.Target != *target || digest != "" && retained.Digest != "" && retained.Digest != digest {
+		return errState
+	}
+	return nil
+}
+
+func compatiblePendingWrite(current, pending journal) bool {
+	currentRank, pendingRank := rank(current.Phase), rank(pending.Phase)
+	if pendingRank > currentRank+1 || (current.Target.ID != "" && current.Target.ID != current.ID) || (pending.Target.ID != "" && pending.Target.ID != pending.ID) {
+		return false
+	}
+	if current.Target != pending.Target {
+		if current.Target == (custodyinstall.Manifest{}) {
+			if current.Phase != "prepared" || pending.Phase != "prepared" || pending.Target.ID == "" {
+				return false
+			}
+		} else if pending.Target != (custodyinstall.Manifest{}) || pendingRank >= currentRank {
+			return false
+		}
+	}
+	if current.Digest != pending.Digest {
+		if current.Digest == "" {
+			if current.Phase != "suspended" || pending.Phase != "importing" || pending.Digest == "" {
+				return false
+			}
+		} else if pending.Digest != "" || pendingRank >= currentRank {
+			return false
+		}
+	}
+	return true
+}
+
+// A successful enrollment transition must survive a power loss after rename.
+func writeOwnerJournal(path string, j journal) error {
+	if err := core.WritePrivateJSON(path, j); err != nil {
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	return errors.Join(dir.Sync(), dir.Close())
 }
 
 func (h *runtimeHost) image(ctx context.Context, m custodyinstall.Manifest, action, path, id, digest string, in io.Reader) error {
@@ -133,7 +289,25 @@ func (w *limitedOutput) Write(b []byte) (int, error) {
 	return w.Buffer.Write(b)
 }
 
-func (h *runtimeHost) export(ctx context.Context, m custodyinstall.Manifest, s sourceRecord) (*imageLease, error) {
+// A privileged caller may compare only with the digest of a stage already
+// verified by the unprivileged app UID. Ordinary callers validate directly.
+func validateExportedFrame(image core.EnrollmentImage, instance, verifiedStageDigest string, privileged bool) error {
+	if image.InstanceID != instance {
+		return errState
+	}
+	if privileged {
+		if len(verifiedStageDigest) != 64 || core.EnrollmentImageDigest(image) != verifiedStageDigest {
+			return errState
+		}
+		return nil
+	}
+	if verifiedStageDigest != "" || core.ValidateEnrollmentImage(image) != nil {
+		return errState
+	}
+	return nil
+}
+
+func (h *runtimeHost) export(ctx context.Context, m custodyinstall.Manifest, s sourceRecord, verifiedStageDigest string) (*imageLease, error) {
 	if err := h.unchangedParent(); err != nil {
 		return nil, err
 	}
@@ -154,7 +328,7 @@ func (h *runtimeHost) export(ctx context.Context, m custodyinstall.Manifest, s s
 		_ = close()
 		return nil, fmt.Errorf("enrollment source helper frame: %w", errState)
 	}
-	if core.ValidateEnrollmentImage(image) != nil || image.InstanceID != s.ExpectedInstanceID {
+	if validateExportedFrame(image, s.ExpectedInstanceID, verifiedStageDigest, os.Getuid() == 0 && os.Geteuid() == 0) != nil {
 		_ = close()
 		return nil, fmt.Errorf("enrollment source payload validation: %w", errState)
 	}
@@ -280,6 +454,9 @@ func (h *runtimeHost) archiveNode(ctx context.Context, path string) (node, error
 }
 
 func (h *runtimeHost) checkFence(ctx context.Context, j journal) error {
+	if j.Target.Version == 3 && os.Getuid() != 0 {
+		return h.protectedCutover(ctx, j, "check")
+	}
 	if err := h.unchangedParent(); err != nil {
 		return err
 	}
@@ -303,6 +480,9 @@ func (h *runtimeHost) checkFence(ctx context.Context, j journal) error {
 }
 
 func (h *runtimeHost) fence(ctx context.Context, j journal) error {
+	if j.Target.Version == 3 && os.Getuid() != 0 {
+		return h.protectedCutover(ctx, j, "fence")
+	}
 	if err := h.unchangedParent(); err != nil {
 		return err
 	}
@@ -363,8 +543,14 @@ func (h *runtimeHost) importImage(ctx context.Context, j journal, image core.Enr
 	stage := stagePath(j)
 	n, err := realNode(stage)
 	if errors.Is(err, os.ErrNotExist) {
-		if _, err = h.system.Run(ctx, nil, "/usr/bin/install", "-d", "-m", "0700", "-o", strconv.Itoa(j.Target.App.UID), "-g", strconv.Itoa(j.Target.App.GID), "--", stage); err != nil {
-			return err
+		if j.Target.Version == 3 {
+			if err = h.system.PrepareEnrollmentStage(ctx, j.Target, j.ID); err != nil {
+				return err
+			}
+		} else {
+			if _, err = h.system.Run(ctx, nil, "/usr/bin/install", "-d", "-m", "0700", "-o", strconv.Itoa(j.Target.App.UID), "-g", strconv.Itoa(j.Target.App.GID), "--", stage); err != nil {
+				return err
+			}
 		}
 		n, err = realNode(stage)
 	}
@@ -375,6 +561,9 @@ func (h *runtimeHost) importImage(ctx context.Context, j journal, image core.Enr
 }
 
 func (h *runtimeHost) publish(ctx context.Context, j journal) error {
+	if j.Target.Version == 3 && os.Getuid() != 0 {
+		return h.protectedCutover(ctx, j, "publish")
+	}
 	if err := h.checkFence(ctx, j); err != nil {
 		return err
 	}
@@ -413,6 +602,9 @@ func (h *runtimeHost) publish(ctx context.Context, j journal) error {
 }
 
 func (h *runtimeHost) finish(ctx context.Context, j journal) error {
+	if j.Target.Version == 3 && os.Getuid() != 0 {
+		return h.protectedCutover(ctx, j, "finish")
+	}
 	if err := h.checkFence(ctx, j); err != nil {
 		return err
 	}
@@ -421,6 +613,30 @@ func (h *runtimeHost) finish(ctx context.Context, j journal) error {
 		return errState
 	}
 	return h.system.EnrollmentRecord(ctx, h.pinned(h.base)+"/ready.json", j.ID, jsonBytes(map[string]any{"version": 1, "binding": hash(jsonBytes(fenceFor(j)))}))
+}
+
+func (h *runtimeHost) protectedCutover(ctx context.Context, j journal, step string) error {
+	if err := h.unchangedParent(); err != nil {
+		return err
+	}
+	if step == "fence" {
+		q := maintenance.CustodyEnrollmentRequest{OperationID: j.ID, Step: "reserve"}
+		if _, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "custody-enrollment-cutover", Enrollment: &q}, h.system.Out); err != nil {
+			return err
+		}
+		// Local's parent belongs to the owner. Create this directory without
+		// privilege; the helper binds its inode before taking ownership.
+		if j.Source.Profile == "local" {
+			if n, err := realNode(h.pinned(h.base)); err == nil && n == j.Node {
+				if err = unix.Mkdirat(int(h.parent.Fd()), ".enrollment-"+j.ID, 0700); err != nil && !errors.Is(err, unix.EEXIST) {
+					return err
+				}
+			}
+		}
+	}
+	q := maintenance.CustodyEnrollmentRequest{OperationID: j.ID, Step: step}
+	_, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "custody-enrollment-cutover", Enrollment: &q}, h.system.Out)
+	return err
 }
 
 func Run(ctx context.Context, s Source, o Options, system *custodyinstall.System) (custodyinstall.Manifest, error) {
@@ -456,6 +672,11 @@ func runInstalled(ctx context.Context, s Source, o Options, system *custodyinsta
 	if err != nil {
 		return out, err
 	}
+	if err = recoverPreparedOwnerJournal(ctx, h, s, o, coreHash, signerHash, func() error {
+		return verifyFreshPreparedAuthority(ctx, s)
+	}); err != nil {
+		return out, err
+	}
 	op := operations{
 		archiveRecovery: func(j journal) error {
 			if err := h.unchangedParent(); err != nil {
@@ -477,9 +698,32 @@ func runInstalled(ctx context.Context, s Source, o Options, system *custodyinsta
 			return system.RecoverEnrollmentCore(ctx, j.CoreRecovery.Previous, j.ID, o.Core, next)
 		},
 		owner: os.Getuid(), load: func() (journal, error) { return readOwnerJournal(h.state) },
-		save: func(j journal) error { return core.WritePrivateJSON(h.state, j) }, node: realNode,
+		checkPending: func(j journal, target *custodyinstall.Manifest, digest string) error {
+			return checkPendingReplay(h.state, j, target, digest)
+		},
+		save: func(j journal) error { return writeOwnerJournal(h.state, j) }, node: realNode,
 		targetExists: func() bool { _, e := os.Lstat(custodyinstall.Root(os.Getuid())); return !errors.Is(e, os.ErrNotExist) },
 		prepare: func(ctx context.Context, j journal, o Options) (custodyinstall.Manifest, error) {
+			if o.Mode == signer.OrdinaryCustodyMode {
+				q := maintenance.CustodyEnrollmentRequest{OperationID: j.ID, Network: o.Network, Listen: j.Source.Listen, PublicOrigin: j.Source.PublicOrigin, NativeOwnerAccess: o.NativeOwnerAccess, CoreSHA256: j.CoreHash, SignerSHA256: j.SignerHash, Sequence: j.Source.ApplicationSequence, ReleaseSHA256: j.Source.ApplicationReleaseSHA256}
+				b, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "custody-enrollment-prepare", Enrollment: &q}, system.Out)
+				if err != nil {
+					return custodyinstall.Manifest{}, err
+				}
+				var reply maintenance.Response
+				var target custodyinstall.Manifest
+				if update.StrictJSON(b, &reply) != nil || update.StrictJSON(reply.Payload, &target) != nil ||
+					target.ID != j.ID || target.Owner != os.Getuid() || target.CoreHash != j.CoreHash || target.SignerHash != j.SignerHash ||
+					target.Mode != o.Mode || target.Profile != o.Profile || target.Provenance != o.Provenance || target.Network != o.Network ||
+					target.Location != j.Source.Profile || target.Listen != j.Source.Listen || target.PublicOrigin != j.Source.PublicOrigin ||
+					target.NativeOwnerAccess != o.NativeOwnerAccess || custodyinstall.Verify(target) != nil {
+					return custodyinstall.Manifest{}, errors.New("protected enrollment target differs from the source")
+				}
+				if err = custodyinstall.RecordConfinedEnrollmentIntent(target); err != nil {
+					return custodyinstall.Manifest{}, err
+				}
+				return target, nil
+			}
 			options := custodyinstall.Options{NativeOwnerAccess: o.NativeOwnerAccess, Mode: o.Mode, Profile: o.Profile, Provenance: o.Provenance, Core: o.Core, Signer: o.Signer, Network: o.Network, Listen: j.Source.Listen, Location: j.Source.Profile, PublicOrigin: j.Source.PublicOrigin, PrepareHost: true, Disposable: true, StageOnly: true}
 			if controlled {
 				return custodyinstall.InstallControlledOwnerCustody(ctx, options, system)
@@ -493,8 +737,10 @@ func runInstalled(ctx context.Context, s Source, o Options, system *custodyinsta
 			}
 			return custodyinstall.Verify(m)
 		},
-		emptySigner: system.EnrollmentSignerEmpty, export: h.export, importImage: h.importImage,
-		fence: h.fence, publish: h.publish,
+		emptySigner: system.EnrollmentSignerEmpty, export: func(ctx context.Context, m custodyinstall.Manifest, s sourceRecord) (*imageLease, error) {
+			return h.export(ctx, m, s, "")
+		}, importImage: h.importImage,
+		fence: h.fence, protectedFence: func(ctx context.Context, j journal) error { return h.protectedCutover(ctx, j, "fence") }, publish: h.publish,
 		verifyTarget: func(ctx context.Context, j journal) error {
 			if err := h.checkFence(ctx, j); err != nil {
 				return err
@@ -505,6 +751,9 @@ func runInstalled(ctx context.Context, s Source, o Options, system *custodyinsta
 			if err := h.checkFence(ctx, j); err != nil {
 				return err
 			}
+			if j.Target.Version == 3 {
+				return h.protectedActivation(ctx, j, "activate")
+			}
 			return custodyinstall.ActivateEnrollment(ctx, j.Target, j.Source.ExpectedInstanceID, j.Digest, j.Source.Running, j.Source.Autostart, system)
 		}, restart: func(ctx context.Context, j journal) error {
 			if err := h.checkFence(ctx, j); err != nil {
@@ -514,12 +763,24 @@ func runInstalled(ctx context.Context, s Source, o Options, system *custodyinsta
 			if err != nil || commit.InstanceID != j.Source.ExpectedInstanceID || commit.Digest != j.Digest {
 				return errState
 			}
+			if j.Target.Version == 3 {
+				return h.protectedActivation(ctx, j, "restart")
+			}
 			// The explicit native resume starts existing roles; it neither reimports
 			// the original image nor enables/disables login/reboot autostart.
 			return custodyinstall.ActivateEnrollment(ctx, j.Target, j.Source.ExpectedInstanceID, j.Digest, true, false, system)
 		}, finish: h.finish,
 	}
 	return run(ctx, s, o, coreHash, signerHash, op)
+}
+
+func (h *runtimeHost) protectedActivation(ctx context.Context, j journal, step string) error {
+	if err := h.unchangedParent(); err != nil {
+		return err
+	}
+	q := maintenance.CustodyEnrollmentRequest{OperationID: j.ID, Step: step}
+	_, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "custody-enrollment-activation", Enrollment: &q}, h.system.Out)
+	return err
 }
 
 // EnrolledTarget reads only root-owned public fence/commit bindings. It grants

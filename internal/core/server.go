@@ -111,14 +111,22 @@ func startModesWithTaskSecrets(ctx context.Context, dir, listen, publicOrigin st
 			return nil, err
 		}
 	}
-	claimed, err := store.Claimed(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if !claimed {
-		if _, err = store.IssueClaimCode(ctx); err != nil {
-			return nil, err
+	if err = func() error {
+		setupLock, err := LockOwnerSetup(dir)
+		if err != nil {
+			return err
 		}
+		defer setupLock.Close()
+		claimed, err := store.Claimed(ctx)
+		if err != nil {
+			return err
+		}
+		if !claimed {
+			_, err = store.IssueClaimCode(ctx)
+		}
+		return err
+	}(); err != nil {
+		return nil, err
 	}
 	listener, err := net.Listen("tcp", listen)
 	if err != nil {

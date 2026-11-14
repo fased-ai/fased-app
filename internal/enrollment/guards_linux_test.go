@@ -95,3 +95,33 @@ func TestEnrollmentFrameUsesImageBound(t *testing.T) {
 		t.Fatal("source image changed")
 	}
 }
+
+func TestExportFrameBindsVerifiedStage(t *testing.T) {
+	image := fixtureImage(t)
+	digest := core.EnrollmentImageDigest(image)
+	if err := validateExportedFrame(image, image.InstanceID, "", false); err != nil {
+		t.Fatal("ordinary exported image was refused", err)
+	}
+	if err := validateExportedFrame(image, image.InstanceID, digest, true); err != nil {
+		t.Fatal("matching protected stage was refused", err)
+	}
+	for _, tc := range []struct {
+		name, instance, stage string
+		privileged            bool
+	}{{"missing stage", image.InstanceID, "", true}, {"foreign instance", "foreign", digest, true}, {"foreign stage", image.InstanceID, strings.Repeat("0", 64), true}, {"ordinary caller cannot assert stage", image.InstanceID, digest, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateExportedFrame(image, tc.instance, tc.stage, tc.privileged); err == nil {
+				t.Fatal("unbound export unexpectedly accepted")
+			}
+		})
+	}
+	tampered := image
+	tampered.Files = append([]core.EnrollmentFile(nil), image.Files...)
+	tampered.Files[0].Path = "../foreign"
+	if err := validateExportedFrame(tampered, image.InstanceID, digest, true); err == nil {
+		t.Fatal("changed source image matched protected stage")
+	}
+	if err := validateExportedFrame(tampered, image.InstanceID, "", false); err == nil {
+		t.Fatal("ordinary caller accepted a damaged source image")
+	}
+}

@@ -27,7 +27,7 @@ test("installer embeds a bounded source-bound signer and cleans only its own sta
     await writeFile(join(dir, "signer"), payload);
     await writeFile(
       join(dir, "bin/go"),
-      '#!/bin/sh\nprintf "%s\\n" "$@" > "$ARGS_FILE"\n/usr/bin/cmp signer cmd/fased-install/wallet-signer.bin || exit 2\nexit "${GO_RESULT:-0}"\n',
+      '#!/bin/sh\nprintf "%s\\n" "$@" > "$ARGS_FILE"\nif [ -e cmd/fased-install/wallet-signer.bin ]; then /usr/bin/cmp signer cmd/fased-install/wallet-signer.bin || exit 2; fi\nif [ -e cmd/fased-install/wallet-desktop.bin ]; then /usr/bin/cmp desktop cmd/fased-install/wallet-desktop.bin || exit 3; fi\nexit "${GO_RESULT:-0}"\n',
       { mode: 0o700 },
     );
     const env = {
@@ -62,6 +62,60 @@ test("installer embeds a bounded source-bound signer and cleans only its own sta
         access(join(dir, "cmd/fased-install/wallet-signer.bin")),
       );
     }
+    const native = Buffer.from("inert native client");
+    await writeFile(join(dir, "desktop"), native);
+    for (const fail of [false, true]) {
+      const r = spawnSync(
+        process.execPath,
+        [...args, "--wallet-desktop=desktop"],
+        {
+          cwd: dir,
+          env: { ...env, GO_RESULT: fail ? "1" : "0" },
+          encoding: "utf8",
+        },
+      );
+      assert.equal(r.status, fail ? 1 : 0, r.stderr);
+      const called = await readFile(join(dir, "args"), "utf8");
+      assert.match(called, /-tags\nwallet_payload,wallet_native/);
+      assert.ok(
+        called.includes(
+          "main.compiledDesktopSHA256=" +
+            createHash("sha256").update(native).digest("hex"),
+        ),
+      );
+      await assert.rejects(
+        access(join(dir, "cmd/fased-install/wallet-desktop.bin")),
+      );
+      await assert.rejects(
+        access(join(dir, "cmd/fased-install/wallet-signer.bin")),
+      );
+    }
+    const coreArgs = args.filter((value) => value !== "--installer");
+    const core = spawnSync(
+      process.execPath,
+      [...coreArgs, "--wallet-desktop=desktop"],
+      {
+        cwd: dir,
+        env,
+        encoding: "utf8",
+      },
+    );
+    assert.equal(core.status, 0, core.stderr);
+    const coreCall = await readFile(join(dir, "args"), "utf8");
+    assert.ok(coreCall.includes("main.compiledNativeSource=" + "a".repeat(40)));
+    assert.ok(
+      coreCall.includes(
+        "main.compiledNativeSignerSHA256=" +
+          createHash("sha256").update(payload).digest("hex"),
+      ),
+    );
+    assert.ok(
+      coreCall.includes(
+        "main.compiledNativeDesktopSHA256=" +
+          createHash("sha256").update(native).digest("hex"),
+      ),
+    );
+    assert.ok(!coreCall.includes("wallet_payload"));
     await writeFile(
       join(dir, "cmd/fased-install/wallet-signer.bin"),
       "unrelated",

@@ -126,6 +126,52 @@ var serveCurlPrefix = []string{
 	"--request", "POST", "--header", "Content-Type: application/json", "--header",
 }
 var serveETag = regexp.MustCompile(`^[a-f0-9]{64}$`)
+var servePublicSocket = regexp.MustCompile(`^unix:(/var/lib/fased-app-(vps|custody)-[1-9][0-9]*/app-state|/tmp/fased-private-[0-9]{1,10})/tailscale[.]sock$`)
+
+// Bound requests are visible to sudo policy and local process inspection.
+// Admit only Fased's credential-free Unix ingress records; preserve and refuse
+// any other existing Serve configuration rather than disclose its contents.
+func serveArgumentSafe(cfg map[string]any) bool {
+	tcp, web, err := inventory(cfg)
+	if err != nil || len(tcp) != len(web) {
+		return false
+	}
+	for hostport, entry := range web {
+		host, port, err := net.SplitHostPort(hostport)
+		if err != nil {
+			return false
+		}
+		origin := "https://" + host
+		if port != "443" {
+			origin += ":" + port
+		}
+		value, ok := entry.(map[string]any)
+		if !ok {
+			return false
+		}
+		handlers, ok := value["Handlers"].(map[string]any)
+		if !ok {
+			return false
+		}
+		root, ok := handlers["/"].(map[string]any)
+		if !ok {
+			return false
+		}
+		target, ok := root["Proxy"].(string)
+		plan := Plan{Mode: "tailscale", Origin: origin, Target: target}
+		if !ok || !servePublicSocket.MatchString(target) {
+			return false
+		}
+		if _, _, err := routeParts(plan); err != nil {
+			return false
+		}
+		want := expected(plan)
+		if !reflect.DeepEqual(entry, want["Web"].(map[string]any)[hostport]) || !reflect.DeepEqual(tcp[port], want["TCP"].(map[string]any)[port]) {
+			return false
+		}
+	}
+	return true
+}
 
 func serveCommand(data []byte, etag string) ([]string, error) {
 	if !serveETag.MatchString(etag) || len(data) > 16*1024 {
@@ -174,17 +220,21 @@ func serveRawCommand(data []byte, etag string) ([]string, error) {
 	if !serveETag.MatchString(etag) || len(data) > 16*1024 {
 		return nil, errors.New("invalid private Serve conditional request")
 	}
+	var compact bytes.Buffer
+	if json.Compact(&compact, data) != nil || !bytes.Equal(compact.Bytes(), data) {
+		return nil, errors.New("private Serve request must be compact JSON")
+	}
 	var cfg map[string]any
 	d := json.NewDecoder(bytes.NewReader(data))
 	d.UseNumber()
 	if d.Decode(&cfg) != nil || cfg == nil || d.Decode(new(any)) != io.EOF {
 		return nil, errors.New("invalid private Serve configuration")
 	}
-	if _, _, err := inventory(cfg); err != nil {
-		return nil, err
+	if !serveArgumentSafe(cfg) {
+		return nil, errors.New("private Serve configuration cannot be safely bound; preserve it")
 	}
 	args := append([]string(nil), serveCurlPrefix...)
-	return append(args, "If-Match: "+etag, "--data-binary", "@-", "--write-out", "%{http_code}", "http://local-tailscaled.sock/localapi/v0/serve-config"), nil
+	return append(args, "If-Match: "+etag, "--data-raw", string(data), "--write-out", "%{http_code}", "http://local-tailscaled.sock/localapi/v0/serve-config"), nil
 }
 
 // AllowedServeCommand is also the OS runner's allowlist. It is deliberately not
