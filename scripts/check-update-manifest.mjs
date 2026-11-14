@@ -66,10 +66,15 @@ try {
   );
   pass(
     "schemaPauseAndApprovalFeatures",
-    contracts[0].state[0].versions.min === 10 &&
-      contracts[0].state[0].versions.max === 10 &&
+    contracts[0].state[0].versions.min === 15 &&
+      contracts[0].state[0].versions.max === 15 &&
       contracts[0].state[0].features.includes("agents-local-v1") &&
       contracts[0].state[0].features.includes("agents-wen-paper-v1") &&
+      contracts[0].state[0].features.includes("wen-research-v1") &&
+      contracts[0].state[0].features.includes("wen-research-turn-v1") &&
+      contracts[0].state[0].features.includes("wen-research-continuation-v2") &&
+      contracts[0].state[0].features.includes("wen-session-rehearsal-v1") &&
+      contracts[0].state[0].features.includes("wen-session-fixture-auto-v1") &&
       contracts[0].state[0].features.includes("core-pause-v1") &&
       contracts[0].lifecycle.entrypoint === 4 &&
       contracts[1].state
@@ -222,9 +227,54 @@ try {
   };
   for (const [name, edit] of [
     [
+      "schema14CoreReaderDenied",
+      (m) => {
+        m.components[0].contract.state[0].versions = { min: 14, max: 14 };
+      },
+    ],
+    [
+      "wenFixtureAutomaticFeatureErasureDenied",
+      (m) => {
+        m.components[0].contract.state[0].features =
+          m.components[0].contract.state[0].features.filter(
+            (f) => f !== "wen-session-fixture-auto-v1",
+          );
+      },
+    ],
+    [
       "schema6CoreReaderDenied",
       (m) => {
         m.components[0].contract.state[0].versions = { min: 6, max: 6 };
+      },
+    ],
+    [
+      "schema13CoreReaderDenied",
+      (m) => {
+        m.components[0].contract.state[0].versions = { min: 13, max: 13 };
+      },
+    ],
+    [
+      "wenSessionRehearsalFeatureErasureDenied",
+      (m) => {
+        m.components[0].contract.state[0].features =
+          m.components[0].contract.state[0].features.filter(
+            (f) => f !== "wen-session-rehearsal-v1",
+          );
+      },
+    ],
+    [
+      "schema12CoreReaderDenied",
+      (m) => {
+        m.components[0].contract.state[0].versions = { min: 12, max: 12 };
+      },
+    ],
+    [
+      "wenResearchContinuationFeatureErasureDenied",
+      (m) => {
+        m.components[0].contract.state[0].features =
+          m.components[0].contract.state[0].features.filter(
+            (f) => f !== "wen-research-continuation-v2",
+          );
       },
     ],
     [

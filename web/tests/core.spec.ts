@@ -595,9 +595,14 @@ test("Satcoin prototype preserves legacy links and disabled authority across cor
       page.getByRole("heading", { name: "WEN Satcoin Mining", exact: true }),
     ).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Execution unavailable" }),
+      page.getByRole("button", {
+        name: "Execution disabled",
+        includeHidden: true,
+      }),
     ).toBeDisabled();
-    await expect(page.getByText("Not loaded", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("strategy-terminal")).toContainText(
+      "Fixture workspace",
+    );
     await expect(page.locator("main")).not.toContainText(
       /Asset Mining|Loss Mining|district|arena/i,
     );
@@ -622,7 +627,10 @@ test("Satcoin prototype preserves legacy links and disabled authority across cor
     page.getByRole("heading", { name: "WEN Satcoin Mining", exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Execution unavailable" }),
+    page.getByRole("button", {
+      name: "Execution disabled",
+      includeHidden: true,
+    }),
   ).toBeDisabled();
   const after = await (await page.request.get(`${url}/api/v1/health`)).json();
   expect(after.instanceId).toBe(before.instanceId);
@@ -1861,7 +1869,11 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
   expect(v.runs).toHaveLength(1);
   expect(v.runs[0].wen.receiptSha256).toBe(result.receiptSha256);
   await expect(
-    page.getByRole("button", { name: "Execution unavailable", exact: true }),
+    page.getByRole("button", {
+      name: "Execution disabled",
+      exact: true,
+      includeHidden: true,
+    }),
   ).toBeDisabled();
   expect(
     await card
@@ -2760,6 +2772,16 @@ test("task run chat shares historical UI and CLI capture, explicit fixture expla
     path: `.evidence/discuss-run/${isMobile ? "mobile" : "desktop"}.png`,
     fullPage: true,
   });
+});
+
+test("F3 private strategy history survives core restart and shares CLI revisions", async ({page})=>{
+ await page.goto(url);const claim=JSON.parse(await readFile(join(dir,'claim-code.json'),'utf8'));await page.getByLabel('One-use claim code').fill(claim.code);await page.getByLabel('Create owner password').fill(fixturePassword);await page.getByRole('button',{name:'Claim workspace'}).click();await expect(page.getByText('PRIVATE CORE · TERMINAL PROTOTYPES',{exact:true})).toBeVisible();
+ const login=spawn(binary,['login','--data-dir',dir,'--password-stdin']);login.stdin!.end(fixturePassword+'\n');expect((await once(login,'exit'))[0]).toBe(0);
+ await page.goto(`${url}/#terminals/satcoin`);const ui=page.getByRole('region',{name:'Strategy research workspace'});await expect(ui).toContainText('Private core');await ui.getByRole('button',{name:'Inspect wide',exact:true}).click();const raw=await ui.getByLabel('Strategy JSON',{exact:true}).inputValue();await ui.getByRole('button',{name:'Save original version'}).click();await ui.getByRole('button',{name:'Mine',exact:true}).click();await expect(ui.getByRole('heading',{name:'wide',exact:true})).toBeVisible();
+ const profile=(await page.getByRole('region',{name:'Strategy research workspace'}).textContent())!.includes('wen-operator')?'wen-operator':'trading-analyst';
+ const persisted=await privateCLI(['wen-research','--profile',profile]);expect(persisted.versions[0].raw).toBe(raw);expect(persisted.revision).toBe(1);const other=await privateCLI(['wen-research','--profile','news-researcher']);expect(other.versions).toEqual([]);
+ const clone=JSON.parse(raw);clone.name='CLI clone';await privateCLI(['wen-research','--request-stdin'],{revision:1,profile,action:'save',raw:JSON.stringify(clone)});await ui.getByRole('button',{name:'Reload library'}).click();await expect(ui.getByRole('heading',{name:'CLI clone',exact:true})).toBeVisible();
+ await stop();await start();await page.goto(`${url}/#terminals/satcoin`);await page.getByLabel('Owner password',{exact:true}).fill(fixturePassword);await page.getByRole('button',{name:'Sign in'}).click();await expect(ui).toContainText('Private core');await ui.getByRole('button',{name:'Mine',exact:true}).click();await expect(ui.getByRole('heading',{name:'CLI clone',exact:true})).toBeVisible();await ui.getByRole('button',{name:'Inspect wide',exact:true}).click();expect(await ui.getByLabel('Strategy JSON',{exact:true}).inputValue()).toBe(raw);
 });
 
 test("news chat shares saved headline UI and CLI capture, reviewed memory, explicit fixture explanation and restart", async ({

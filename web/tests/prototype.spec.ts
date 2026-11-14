@@ -113,13 +113,11 @@ test("terminal mockups cannot execute and make no remote requests", async ({
     await expect(
       page.getByText("All values below are illustrative.", { exact: false }),
     ).toBeVisible();
+    await expect(page.getByTestId("strategy-terminal")).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Execution unavailable" }),
-    ).toBeDisabled();
-    await expect(page.getByText("Not loaded", { exact: true })).toBeVisible();
-    await expect(
-      page.getByRole("heading", { name: "Results & claims", exact: true }),
+      page.getByRole("region", { name: "WEN paper journey" }),
     ).toBeVisible();
+    await expect(page.locator(".fased-mining-host")).toContainText(/fixture/i);
     await expect(page.locator("main")).not.toContainText(
       /Asset Mining|Loss Mining|district|arena|eligible loss|paid winnings/i,
     );

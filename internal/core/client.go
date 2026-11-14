@@ -98,9 +98,19 @@ func (c *Client) Do(ctx context.Context, method, route string, input, output any
 		return fmt.Errorf("core request failed (%d): %s", response.StatusCode, message.Error)
 	}
 	if output != nil {
+		if strings.HasPrefix(route, "/api/v1/wen/financial/") {
+			body, readErr := io.ReadAll(io.LimitReader(response.Body, WENFinancialResponseLimit+1))
+			if readErr != nil || len(body) > WENFinancialResponseLimit || json.Unmarshal(body, output) != nil {
+				return errors.New("invalid financial core response")
+			}
+			return nil
+		}
 		limit := int64(32 * 1024)
 		if route == "/api/v1/agents" || strings.HasPrefix(route, "/api/v1/agents?") {
 			limit = agentDocumentLimit + 32*1024
+		}
+		if route == "/api/v1/wen/sessions" || strings.HasPrefix(route, "/api/v1/wen/sessions?") || strings.HasPrefix(route, "/api/v1/wen/sessions/") || route == "/api/v1/wen/session-runs" || strings.HasPrefix(route, "/api/v1/wen/session-runs?") || strings.HasPrefix(route, "/api/v1/wen/session-runs/") {
+			limit = WENSessionResponseLimit
 		}
 		if err = json.NewDecoder(io.LimitReader(response.Body, limit)).Decode(output); err != nil {
 			return errors.New("invalid core response")

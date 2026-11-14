@@ -1,5 +1,8 @@
+import { ResearchReadPanel, type ResearchSelection } from "./ResearchReadPanel";
 import { MemoryRecall } from "./MemoryRecall";
 import { ChatMemoryReview } from "./ChatMemoryReview";
+import { ChatStrategyRevision } from "./ChatStrategyRevision";
+import { useCore } from "../core";
 import { NewsInputs, NewsSourcePicker } from "./NewsInputs";
 import { AIConnectionSettings } from "./AIConnection";
 import { useEffect, useRef, useState, type FormEvent } from "react";
@@ -85,6 +88,17 @@ export function LocalAgents() {
 }
 function LocalAgentEditor({ view: v }: { view: AgentView }) {
   const { agents, tab, navigate } = useWorkspace();
+  const core = useCore();
+  const [researchOpen, setResearchOpen] = useState(false);
+  const [researchSelection, setResearchSelection] =
+    useState<ResearchSelection>();
+  const [strategySource, setStrategySource] = useState("");
+  const [strategyCard, setStrategyCard] = useState<{
+    profileId: string;
+    sessionId: string;
+    requestId: string;
+    cardId: string;
+  } | null>(null);
   const [newsSourceId, setNewsSourceId] = useState("");
   const [newsAge, setNewsAge] = useState(3600);
   const profile = v.profiles.find((p) => p.id === v.profileId)!;
@@ -123,6 +137,9 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
   }, [tab]);
   const activeSession =
     v.sessions.find((s) => s.id === session) ?? v.sessions.at(-1);
+  useEffect(() => {
+    setStrategySource("");
+  }, [activeSession?.id]);
   const query = search.toLowerCase();
   const matching = v.sessions.filter(
     (s) =>
@@ -232,6 +249,23 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
             {activeSession && (
               <>
                 <h3>{activeSession.name}</h3>
+                {core.mode === "ready" && (
+                  <button
+                    className="secondary"
+                    onClick={() => setResearchOpen(true)}
+                  >
+                    Inspect research
+                  </button>
+                )}
+                {researchOpen && core.mode === "ready" && (
+                  <ResearchReadPanel
+                    key={`research:${v.profileId}:${activeSession.id}`}
+                    view={v}
+                    sessionId={activeSession.id}
+                    onClose={() => setResearchOpen(false)}
+                    onUseAI={setResearchSelection}
+                  />
+                )}
                 <div className="local-messages" aria-live="polite">
                   {v.messages
                     .filter((m) => m.sessionId === activeSession.id)
@@ -242,6 +276,18 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                           {date(m.createdAt)}
                         </small>
                         <p>{m.text}</p>
+                        {m.role === "user" && core.mode === "ready" && (
+                          <button
+                            className="text-button"
+                            disabled={agents.busy}
+                            onClick={() => {
+                              setStrategyCard(null);
+                              setStrategySource(m.id);
+                            }}
+                          >
+                            Revise strategy
+                          </button>
+                        )}
                         {m.role === "user" && (
                           <ChatMemoryReview
                             key={`${v.profileId}:${m.id}`}
@@ -255,6 +301,19 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                       </article>
                     ))}
                 </div>
+                {v.messages.some(
+                  (m) =>
+                    m.id === strategySource &&
+                    m.role === "user" &&
+                    m.sessionId === activeSession.id,
+                ) && (
+                  <ChatStrategyRevision
+                    key={`revision:${v.profileId}:${strategySource}`}
+                    view={v}
+                    sourceId={strategySource}
+                    onClose={() => setStrategySource("")}
+                  />
+                )}
                 <form
                   onSubmit={submit(async () => {
                     if (
@@ -288,7 +347,36 @@ function LocalAgentEditor({ view: v }: { view: AgentView }) {
                     Save message
                   </button>
                 </form>
-                <AgentAIReview view={v} sessionId={activeSession.id} />
+                <AgentAIReview
+                  view={v}
+                  sessionId={activeSession.id}
+                  researchSelection={
+                    researchSelection?.profile === v.profileId &&
+                    researchSelection?.sessionId === activeSession.id
+                      ? researchSelection
+                      : undefined
+                  }
+                  onClearResearch={() => setResearchSelection(undefined)}
+                  onReviewStrategy={(requestId, cardId) => {
+                    setStrategySource("");
+                    setStrategyCard({
+                      profileId: v.profileId,
+                      sessionId: activeSession.id,
+                      requestId,
+                      cardId,
+                    });
+                  }}
+                />
+                {strategyCard &&
+                  strategyCard.profileId === v.profileId &&
+                  strategyCard.sessionId === activeSession.id && (
+                    <ChatStrategyRevision
+                      key={`ai-revision:${v.profileId}:${strategyCard.cardId}`}
+                      view={v}
+                      proposalSource={strategyCard}
+                      onClose={() => setStrategyCard(null)}
+                    />
+                  )}
               </>
             )}
           </div>

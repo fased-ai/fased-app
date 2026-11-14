@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -37,6 +38,9 @@ type AIActionCard struct {
 	Review string `json:"review"`
 }
 type AgentAIRequest struct {
+	researchFrame     *researchLoopFrame // transient parsed result, persisted only in the turn ledger
+	ResearchTurnID    string             `json:"researchTurnId,omitempty"`
+	ResearchStep      int                `json:"researchStep,omitempty"`
 	CachedInputTokens int64              `json:"cachedInputTokens,omitempty"`
 	CostBasis         string             `json:"costBasis,omitempty"`
 	Policy            *OpenAIModelPolicy `json:"policy,omitempty"`
@@ -182,7 +186,7 @@ func aiContextWithMemory(d agentDocument, profile, session, prompt string, now i
 		}
 	}
 	for _, q := range d.AIRequests {
-		if q.ProfileID == profile && q.SessionID == session && q.State == "completed" && q.TaskID == "" {
+		if q.ProfileID == profile && q.SessionID == session && q.State == "completed" && q.TaskID == "" && !isResearchAI(q) {
 			data.Messages = append(data.Messages, message{"user", q.Prompt}, message{"assistant", q.Answer})
 		}
 	}
@@ -290,6 +294,9 @@ func changeAgentAI(d *agentDocument, c AgentCommand, profile, id string, now int
 		}
 		switch c.Action {
 		case "ai-start":
+			if isResearchAI(*q) {
+				return errors.New("research dispatch is disabled, including fixtures; inspect or cancel the prepared turn")
+			}
 			if !fixture {
 				return errors.New("provider execution disabled; only an explicitly started development fixture can run")
 			}
@@ -314,6 +321,9 @@ func changeAgentAI(d *agentDocument, c AgentCommand, profile, id string, now int
 			q.HeldMicrousd = aiRequestReservation(*q)
 			return nil
 		case "ai-cancel":
+			if isResearchAI(*q) {
+				return cancelResearch(d, profile, q.ResearchTurnID, now)
+			}
 			switch q.State {
 			case "prepared", "queued":
 				q.HeldMicrousd = 0
@@ -332,6 +342,11 @@ func aiWire(q AgentAIRequest) ([]byte, error) {
 	card := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"kind": map[string]any{"type": "string", "enum": []string{"reminder-draft", "paper-strategy-draft"}}, "title": map[string]any{"type": "string"}, "text": map[string]any{"type": "string"}}, "required": []string{"kind", "title", "text"}}
 	schema := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"answer": map[string]any{"type": "string"}, "cards": map[string]any{"type": "array", "items": card}}, "required": []string{"answer", "cards"}}
 	wire := map[string]any{"model": q.Model, "instructions": aiInstructions, "input": q.Context, "store": false, "background": false, "service_tier": "default", "tools": []any{}, "tool_choice": "none", "max_output_tokens": q.Limits.MaxOutputTokens, "text": map[string]any{"format": map[string]any{"type": "json_schema", "name": "fased_review", "strict": true, "schema": schema}}}
+	if isResearchLoop(q) {
+		wire["instructions"] = researchLoopInstructions
+		wire["text"] = map[string]any{"format": map[string]any{"type": "json_schema", "name": "fased_research_step_v1", "strict": true, "schema": loopOutputSchema()}}
+	}
+
 	if q.Policy != nil {
 		wire["truncation"] = "disabled"
 	}
@@ -344,6 +359,14 @@ func callAgentAI(ctx context.Context, q AgentAIRequest, rt http.RoundTripper) (A
 	return callAgentAIAt(ctx, q, rt, time.Now)
 }
 func callAgentAIAt(ctx context.Context, q AgentAIRequest, rt http.RoundTripper, now func() time.Time) (AgentAIRequest, error) {
+	if isResearchAI(q) {
+		return q, errors.New("research dispatch is disabled, including fixtures")
+	}
+	return callReviewedAgentAIAt(ctx, q, rt, now)
+}
+
+// Only the worker may call this after persisting the reviewed attempt and hold.
+func callReviewedAgentAIAt(ctx context.Context, q AgentAIRequest, rt http.RoundTripper, now func() time.Time) (AgentAIRequest, error) {
 	if validateAIModelPolicy(q, now().Unix()) != nil {
 		return q, errors.New("model admission unavailable")
 	}
@@ -439,6 +462,20 @@ func callAgentAIAt(ctx context.Context, q AgentAIRequest, rt http.RoundTripper, 
 	if o.Type != "message" || o.Role != "assistant" || o.Status != "completed" || len(o.Content) != 1 || o.Content[0].Type != "output_text" {
 		return q, nil
 	}
+	if isResearchLoop(q) {
+		f, e := loopFrame(q, []byte(o.Content[0].Text))
+		if e != nil {
+			q.Failure = e.Error()
+			return q, nil
+		}
+		q.researchFrame = f
+		q.State, q.Answer, q.Failure = "completed", f.Answer, ""
+		q.Cards = []AIActionCard{}
+		for _, c := range f.Cards {
+			q.Cards = append(q.Cards, AIActionCard{ID: q.ID + ":" + string(rune('1'+len(q.Cards))), Kind: c.Kind, Title: c.Title, Text: c.Text, Review: "unreviewed"})
+		}
+		return q, nil
+	}
 	var out struct {
 		Answer string `json:"answer"`
 		Cards  []struct {
@@ -478,21 +515,32 @@ func aiUsesReviewedContext(q AgentAIRequest) bool {
 // Recheck selected notes/evidence before each admission/count/create operation, as well
 // as the existing consent, worker, in-flight and completion checks.
 type aiMemoryReviewTransport struct {
-	store   *Store
-	request AgentAIRequest
-	next    http.RoundTripper
+	store    *Store
+	request  AgentAIRequest
+	next     http.RoundTripper
+	observed *atomic.Int64
 }
 
 func (rt aiMemoryReviewTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	d, _, err := readAgents(r.Context(), rt.store.db)
-	if err != nil {
+	if rt.observed != nil && !observeAIClock(rt.observed, rt.store.now().Unix()) {
+		return nil, errors.New("research clock moved backward")
+	}
+	if err := rt.store.reviewAIRequest(r.Context(), rt.request); err != nil {
 		return nil, err
 	}
-	current, err := aiRequestContext(d, rt.request, rt.store.now().Unix())
-	if err != nil || current != rt.request.Context {
-		return nil, errors.New("reviewed context changed before provider operation")
-	}
 	return rt.next.RoundTrip(r)
+}
+
+func observeAIClock(last *atomic.Int64, now int64) bool {
+	for {
+		prior := last.Load()
+		if now < prior {
+			return false
+		}
+		if last.CompareAndSwap(prior, now) {
+			return true
+		}
+	}
 }
 func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enabled bool) error {
 	if !s.aiMu.TryLock() {
@@ -508,10 +556,31 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 	if e != nil {
 		return e
 	}
-	changed := false
+	changed := recoverLoopReads(&d, s.now().Unix())
 	var dispatch *AgentAIRequest
 	for i := range d.AIRequests {
 		q := &d.AIRequests[i]
+		if isResearchAI(*q) {
+			ti := researchTurnIndex(d, q.ProfileID, q.ResearchTurnID)
+			if q.State == "queued" && q.DispatchBoot == "" && (ti < 0 || d.ResearchTurns[ti].ConsentBoot != s.bootID) {
+				q.State, q.Failure, q.HeldMicrousd = "cancelled", "Research approval does not cross core restart; prepare a fresh review.", 0
+				settleResearchAI(&d, *q, s.now().Unix())
+				changed = true
+				continue
+			}
+			if q.State == "running" || (q.State == "queued" && (ti < 0 || d.ResearchTurns[ti].State != "queued")) {
+				q.State, q.Failure = "unknown", "Research dispatch interrupted or lacks consent; usage held without replay."
+				settleResearchAI(&d, *q, s.now().Unix())
+				changed = true
+				continue
+			}
+			if !enabled && q.State == "queued" {
+				q.State, q.HeldMicrousd, q.Failure = "cancelled", 0, "Development fixture disabled before dispatch."
+				settleResearchAI(&d, *q, s.now().Unix())
+				changed = true
+				continue
+			}
+		}
 		if q.State == "running" {
 			q.State = "unknown"
 			q.Failure = "Dispatch was interrupted; usage is unknown. Reservation retained; no retry."
@@ -531,11 +600,14 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 			continue
 		}
 		if dispatch == nil && enabled && q.State == "queued" {
-			current, e := aiRequestContext(d, *q, s.now().Unix())
-			if e != nil || validateAIModelPolicy(*q, s.now().Unix()) != nil || current != q.Context || aiDigest(*q) != q.Digest || s.now().Unix() < q.CreatedAt || s.now().Unix()-q.CreatedAt > 600 || taskAIRequestValid(d, *q, s.now().Unix()) != nil || !s.aiConnectionValid(q.ConnectionRef) {
+			current, e := reviewedAIContext(ctx, tx, d, r, *q, s.now().Unix())
+			if e != nil || validateAIModelPolicy(*q, s.now().Unix()) != nil || current != q.Context || aiDigest(*q) != q.Digest || s.now().Unix() < q.CreatedAt || s.now().Unix()-q.CreatedAt > 600 || taskAIRequestValid(d, *q, s.now().Unix()) != nil || !s.aiConnectionValid(q.ConnectionRef) || (isResearchLoop(*q) && !loopFit(d.ResearchTurns[researchTurnIndex(d, q.ProfileID, q.ResearchTurnID)], researchFrameLimit)) {
 				q.State = "cancelled"
 				q.HeldMicrousd = 0
 				q.Failure = "Undispatched request changed, expired or stopped; prepare a fresh review."
+				if isResearchAI(*q) {
+					settleResearchAI(&d, *q, s.now().Unix())
+				}
 				if e = settleTaskAI(&d, q.TaskID, s.now().Unix()); e != nil {
 					return e
 				}
@@ -544,6 +616,14 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 			}
 			q.State = "running"
 			q.DispatchBoot = s.bootID
+			if isResearchAI(*q) {
+				t := &d.ResearchTurns[researchTurnIndex(d, q.ProfileID, q.ResearchTurnID)]
+				t.State, t.Models[q.ResearchStep-1].Attempted, t.LastObservedAt = "running", true, s.now().Unix()
+				if t.StartedAt == 0 {
+					t.StartedAt = s.now().Unix()
+					t.DeadlineAt = t.StartedAt + t.Bounds.WallSeconds
+				}
+			}
 			copy := *q
 			dispatch = &copy
 			changed = true
@@ -561,7 +641,20 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 	if dispatch == nil {
 		return nil
 	}
-	callCtx, cancel := context.WithTimeout(ctx, time.Duration(dispatch.Limits.DeadlineSeconds)*time.Second)
+	var observed *atomic.Int64
+	if isResearchAI(*dispatch) {
+		observed = &atomic.Int64{}
+		observed.Store(s.now().Unix())
+	}
+	callLimit := time.Duration(dispatch.Limits.DeadlineSeconds) * time.Second
+	if isResearchAI(*dispatch) {
+		t := d.ResearchTurns[researchTurnIndex(d, dispatch.ProfileID, dispatch.ResearchTurnID)]
+		remaining := time.Unix(t.DeadlineAt, 0).Sub(s.now())
+		if remaining < callLimit {
+			callLimit = remaining
+		}
+	}
+	callCtx, cancel := context.WithTimeout(ctx, callLimit)
 	monitorDone := make(chan struct{})
 	go func() {
 		defer close(monitorDone)
@@ -588,8 +681,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 					active = false
 				}
 				if dispatch.News != nil || aiUsesReviewedContext(*dispatch) {
-					current, e := aiRequestContext(current, *dispatch, s.now().Unix())
-					if e != nil || current != dispatch.Context {
+					if s.reviewAIRequest(callCtx, *dispatch) != nil || (observed != nil && !observeAIClock(observed, s.now().Unix())) {
 						active = false
 					}
 				}
@@ -604,9 +696,9 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 		rt = authenticatedAITransport{store: s, ref: dispatch.ConnectionRef, next: rt}
 	}
 	if aiUsesReviewedContext(*dispatch) {
-		rt = aiMemoryReviewTransport{store: s, request: *dispatch, next: rt}
+		rt = aiMemoryReviewTransport{store: s, request: *dispatch, next: rt, observed: observed}
 	}
-	result, callErr := callAgentAIAt(callCtx, *dispatch, rt, s.now)
+	result, callErr := callReviewedAgentAIAt(callCtx, *dispatch, rt, s.now)
 	cancel()
 	<-monitorDone
 	// Shutdown/timeout must not erase the dispatched reservation. Persist with a
@@ -623,7 +715,8 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 		return e
 	}
 	for i, q := range d.AIRequests {
-		if q.ID == dispatch.ID && q.State == "running" && q.DispatchBoot == dispatch.DispatchBoot {
+		if q.ID == dispatch.ID && (q.State == "running" || (isResearchAI(q) && q.State == "cancelled")) && q.DispatchBoot == dispatch.DispatchBoot {
+			cancelled := q.State == "cancelled"
 			if callErr != nil {
 				q.Admission = result.Admission
 				q.State = "unknown"
@@ -634,13 +727,23 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 					q.State, q.Failure = "failed", "Model/tariff admission expired before completion; dependent work stopped."
 				}
 				if q.News != nil || aiUsesReviewedContext(q) {
-					current, err := aiRequestContext(d, q, s.now().Unix())
-					if err != nil || current != q.Context {
+					current, err := reviewedAIContext(finish, tx, d, r, q, s.now().Unix())
+					if err != nil || current != q.Context || (observed != nil && !observeAIClock(observed, s.now().Unix())) {
 						q.State = "failed"
 						q.Failure = "Reviewed context expired or changed before completion; dependent work stopped."
 						q.Answer, q.Cards = "", []AIActionCard{}
 					}
 				}
+			}
+			if isResearchAI(q) {
+				if cancelled {
+					q.State, q.Failure, q.Answer, q.Cards = "cancelled", "Research cancelled; verified usage reconciled, uncertain usage held.", "", []AIActionCard{}
+				}
+				last := s.now().Unix()
+				if observed != nil && observed.Load() > last {
+					last = observed.Load()
+				}
+				settleResearchAI(&d, q, last)
 			}
 			d.AIRequests[i] = q
 			if e = settleTaskAI(&d, q.TaskID, s.now().Unix()); e != nil {
@@ -649,7 +752,13 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, enable
 			if e = saveAgents(finish, tx, d, r); e != nil {
 				return e
 			}
-			return tx.Commit()
+			if e = tx.Commit(); e != nil {
+				return e
+			}
+			if isResearchLoop(q) && q.State == "completed" {
+				return s.runLoopReadsLocked(ctx, q.ResearchTurnID)
+			}
+			return nil
 		}
 	}
 	return nil
@@ -670,6 +779,7 @@ func (fixtureAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	var request struct {
 		Model string `json:"model"`
+		Input string `json:"input"`
 	}
 	if json.Unmarshal(b, &request) != nil || !openAIRequestAllowed(r) || (request.Model != fixtureAIModel && request.Model != admittedOpenAIModel) {
 		return nil, errors.New("compiled fixture request refused")
@@ -682,6 +792,10 @@ func (fixtureAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		inputTokens = 256
 	}
 	output, _ := json.Marshal(map[string]any{"answer": "Development fixture response. Compare the fixed paper inputs and inspect the journal before changing a strategy. No model, market feed or wallet was contacted.", "cards": []any{map[string]string{"kind": "reminder-draft", "title": "Review paper journal", "text": "Draft only: review the recorded paper outcomes. Create any task separately after checking its limits."}}})
+	var loop researchLoopEnvelope
+	if json.Unmarshal([]byte(request.Input), &loop) == nil && loop.Version == researchLoopContext {
+		output, _ = json.Marshal(fixtureResearchLoop(loop))
+	}
 	body, _ := json.Marshal(map[string]any{"id": "fixture-response", "model": request.Model, "status": "completed", "service_tier": "default", "usage": map[string]int{"input_tokens": inputTokens, "output_tokens": 128, "total_tokens": inputTokens + 128}, "output": []any{map[string]any{"type": "message", "role": "assistant", "status": "completed", "content": []any{map[string]string{"type": "output_text", "text": string(output)}}}}})
 	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(bytes.NewReader(body)), Request: r}, nil
 }
@@ -759,6 +873,9 @@ func (s *Store) AgentAIRequestDraft(ctx context.Context, profile, id string) (Ag
 	}
 	if profiles != 1 || requests != 1 || sessions != 1 || q.ProfileID != profile || q.TaskID != "" || q.TaskDigest != "" {
 		return v, errors.New("saved manual request unavailable or ambiguous")
+	}
+	if isResearchAI(q) {
+		return v, errors.New("research context cannot become an ordinary draft; inspect the turn and prepare a new explicit selection")
 	}
 	wire, err := aiWire(q)
 	l := q.Limits

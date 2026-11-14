@@ -1,0 +1,47 @@
+[
+  {
+    "name": "valid",
+    "raw": "{\"schema\":\"wen-history-import/1\",\"source\":\"shared fixture\",\"verified\":false,\"scope\":{\"market\":\"fixture\",\"terms\":\"fixture\",\"evidence\":\"paper\",\"from\":\"2026-10-22T00:00:00Z\",\"to\":\"2026-10-22T04:00:00Z\",\"dataset\":\"shared\",\"valuation\":\"native\",\"costs\":\"known\",\"coverage\":\"declared\"},\"initialBankroll\":null,\"skipped\":null,\"pendingExposure\":null,\"rows\":[{\"id\":\"a\",\"cursor\":1,\"strategyDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"at\":\"2026-10-22T00:10:00Z\",\"finality\":\"finalized\",\"category\":\"mining\",\"committed\":\"100\",\"returned\":\"90\",\"fees\":\"0\",\"forfeitures\":\"10\",\"userCosts\":\"1\",\"btcSaleSOL\":\"0\",\"satSaleSOL\":\"0\",\"btcPending\":\"0\",\"btcReceived\":\"5\",\"satEarned\":\"2\",\"satClaimed\":\"2\",\"satSold\":\"0\"}],\"gaps\":[]}",
+    "valid": true
+  },
+  {
+    "name": "verified",
+    "raw": "{\"schema\":\"wen-history-import/1\",\"source\":\"shared fixture\",\"verified\":true,\"scope\":{\"market\":\"fixture\",\"terms\":\"fixture\",\"evidence\":\"paper\",\"from\":\"2026-10-22T00:00:00Z\",\"to\":\"2026-10-22T04:00:00Z\",\"dataset\":\"shared\",\"valuation\":\"native\",\"costs\":\"known\",\"coverage\":\"declared\"},\"initialBankroll\":null,\"skipped\":null,\"pendingExposure\":null,\"rows\":[{\"id\":\"a\",\"cursor\":1,\"strategyDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"at\":\"2026-10-22T00:10:00Z\",\"finality\":\"finalized\",\"category\":\"mining\",\"committed\":\"100\",\"returned\":\"90\",\"fees\":\"0\",\"forfeitures\":\"10\",\"userCosts\":\"1\",\"btcSaleSOL\":\"0\",\"satSaleSOL\":\"0\",\"btcPending\":\"0\",\"btcReceived\":\"5\",\"satEarned\":\"2\",\"satClaimed\":\"2\",\"satSold\":\"0\"}],\"gaps\":[]}",
+    "valid": false
+  },
+  {
+    "name": "amount",
+    "raw": "{\"schema\":\"wen-history-import/1\",\"source\":\"shared fixture\",\"verified\":false,\"scope\":{\"market\":\"fixture\",\"terms\":\"fixture\",\"evidence\":\"paper\",\"from\":\"2026-10-22T00:00:00Z\",\"to\":\"2026-10-22T04:00:00Z\",\"dataset\":\"shared\",\"valuation\":\"native\",\"costs\":\"known\",\"coverage\":\"declared\"},\"initialBankroll\":null,\"skipped\":null,\"pendingExposure\":null,\"rows\":[{\"id\":\"a\",\"cursor\":1,\"strategyDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"at\":\"2026-10-22T00:10:00Z\",\"finality\":\"finalized\",\"category\":\"mining\",\"committed\":\"1e9\",\"returned\":\"90\",\"fees\":\"0\",\"forfeitures\":\"10\",\"userCosts\":\"1\",\"btcSaleSOL\":\"0\",\"satSaleSOL\":\"0\",\"btcPending\":\"0\",\"btcReceived\":\"5\",\"satEarned\":\"2\",\"satClaimed\":\"2\",\"satSold\":\"0\"}],\"gaps\":[]}",
+    "valid": false
+  },
+  {
+    "name": "date",
+    "raw": "{\"schema\":\"wen-history-import/1\",\"source\":\"shared fixture\",\"verified\":false,\"scope\":{\"market\":\"fixture\",\"terms\":\"fixture\",\"evidence\":\"paper\",\"from\":\"2026-10-22T00:00:00Z\",\"to\":\"2026-10-22T04:00:00Z\",\"dataset\":\"shared\",\"valuation\":\"native\",\"costs\":\"known\",\"coverage\":\"declared\"},\"initialBankroll\":null,\"skipped\":null,\"pendingExposure\":null,\"rows\":[{\"id\":\"a\",\"cursor\":1,\"strategyDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"at\":\"2026-02-30T00:00:00Z\",\"finality\":\"finalized\",\"category\":\"mining\",\"committed\":\"100\",\"returned\":\"90\",\"fees\":\"0\",\"forfeitures\":\"10\",\"userCosts\":\"1\",\"btcSaleSOL\":\"0\",\"satSaleSOL\":\"0\",\"btcPending\":\"0\",\"btcReceived\":\"5\",\"satEarned\":\"2\",\"satClaimed\":\"2\",\"satSold\":\"0\"}],\"gaps\":[]}",
+    "valid": false
+  },
+  {
+    "name": "offset",
+    "raw": "{\"schema\":\"wen-history-import/1\",\"source\":\"shared fixture\",\"verified\":false,\"scope\":{\"market\":\"fixture\",\"terms\":\"fixture\",\"evidence\":\"paper\",\"from\":\"2026-10-21T19:00:00-05:00\",\"to\":\"2026-10-22T04:00:00Z\",\"dataset\":\"shared\",\"valuation\":\"native\",\"costs\":\"known\",\"coverage\":\"declared\"},\"initialBankroll\":null,\"skipped\":null,\"pendingExposure\":null,\"rows\":[{\"id\":\"a\",\"cursor\":1,\"strategyDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"at\":\"2026-10-22T00:10:00Z\",\"finality\":\"finalized\",\"category\":\"mining\",\"committed\":\"100\",\"returned\":\"90\",\"fees\":\"0\",\"forfeitures\":\"10\",\"userCosts\":\"1\",\"btcSaleSOL\":\"0\",\"satSaleSOL\":\"0\",\"btcPending\":\"0\",\"btcReceived\":\"5\",\"satEarned\":\"2\",\"satClaimed\":\"2\",\"satSold\":\"0\"}],\"gaps\":[]}",
+    "valid": false
+  },
+  {
+    "name": "unknown",
+    "raw": "{\"schema\":\"wen-history-import/1\",\"source\":\"shared fixture\",\"verified\":false,\"scope\":{\"market\":\"fixture\",\"terms\":\"fixture\",\"evidence\":\"paper\",\"from\":\"2026-10-22T00:00:00Z\",\"to\":\"2026-10-22T04:00:00Z\",\"dataset\":\"shared\",\"valuation\":\"native\",\"costs\":\"known\",\"coverage\":\"declared\"},\"initialBankroll\":null,\"skipped\":null,\"pendingExposure\":null,\"rows\":[{\"id\":\"a\",\"cursor\":1,\"strategyDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"at\":\"2026-10-22T00:10:00Z\",\"finality\":\"finalized\",\"category\":\"mining\",\"committed\":\"100\",\"returned\":\"90\",\"fees\":\"0\",\"forfeitures\":\"10\",\"userCosts\":\"1\",\"btcSaleSOL\":\"0\",\"satSaleSOL\":\"0\",\"btcPending\":\"0\",\"btcReceived\":\"5\",\"satEarned\":\"2\",\"satClaimed\":\"2\",\"satSold\":\"0\"}],\"gaps\":[],\"extra\":1}",
+    "valid": false
+  },
+  {
+    "name": "conflict",
+    "raw": "{\"schema\":\"wen-history-import/1\",\"source\":\"shared fixture\",\"verified\":false,\"scope\":{\"market\":\"fixture\",\"terms\":\"fixture\",\"evidence\":\"paper\",\"from\":\"2026-10-22T00:00:00Z\",\"to\":\"2026-10-22T04:00:00Z\",\"dataset\":\"shared\",\"valuation\":\"native\",\"costs\":\"known\",\"coverage\":\"declared\"},\"initialBankroll\":null,\"skipped\":null,\"pendingExposure\":null,\"rows\":[{\"id\":\"a\",\"cursor\":1,\"strategyDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"at\":\"2026-10-22T00:10:00Z\",\"finality\":\"finalized\",\"category\":\"mining\",\"committed\":\"100\",\"returned\":\"90\",\"fees\":\"0\",\"forfeitures\":\"10\",\"userCosts\":\"1\",\"btcSaleSOL\":\"0\",\"satSaleSOL\":\"0\",\"btcPending\":\"0\",\"btcReceived\":\"5\",\"satEarned\":\"2\",\"satClaimed\":\"2\",\"satSold\":\"0\"},{\"id\":\"a\",\"cursor\":1,\"strategyDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"at\":\"2026-10-22T00:10:00Z\",\"finality\":\"finalized\",\"category\":\"mining\",\"committed\":\"100\",\"returned\":\"1\",\"fees\":\"0\",\"forfeitures\":\"10\",\"userCosts\":\"1\",\"btcSaleSOL\":\"0\",\"satSaleSOL\":\"0\",\"btcPending\":\"0\",\"btcReceived\":\"5\",\"satEarned\":\"2\",\"satClaimed\":\"2\",\"satSold\":\"0\"}],\"gaps\":[]}",
+    "valid": false
+  },
+  {
+    "name": "null-rows",
+    "raw": "{\"schema\":\"wen-history-import/1\",\"source\":\"shared fixture\",\"verified\":false,\"scope\":{\"market\":\"fixture\",\"terms\":\"fixture\",\"evidence\":\"paper\",\"from\":\"2026-10-22T00:00:00Z\",\"to\":\"2026-10-22T04:00:00Z\",\"dataset\":\"shared\",\"valuation\":\"native\",\"costs\":\"known\",\"coverage\":\"declared\"},\"initialBankroll\":null,\"skipped\":null,\"pendingExposure\":null,\"rows\":null,\"gaps\":[]}",
+    "valid": false
+  },
+  {
+    "name": "duplicate-key",
+    "raw": "{\"schema\":\"x\",\"schema\":\"wen-history-import/1\",\"source\":\"shared fixture\",\"verified\":false,\"scope\":{\"market\":\"fixture\",\"terms\":\"fixture\",\"evidence\":\"paper\",\"from\":\"2026-10-22T00:00:00Z\",\"to\":\"2026-10-22T04:00:00Z\",\"dataset\":\"shared\",\"valuation\":\"native\",\"costs\":\"known\",\"coverage\":\"declared\"},\"initialBankroll\":null,\"skipped\":null,\"pendingExposure\":null,\"rows\":[{\"id\":\"a\",\"cursor\":1,\"strategyDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"at\":\"2026-10-22T00:10:00Z\",\"finality\":\"finalized\",\"category\":\"mining\",\"committed\":\"100\",\"returned\":\"90\",\"fees\":\"0\",\"forfeitures\":\"10\",\"userCosts\":\"1\",\"btcSaleSOL\":\"0\",\"satSaleSOL\":\"0\",\"btcPending\":\"0\",\"btcReceived\":\"5\",\"satEarned\":\"2\",\"satClaimed\":\"2\",\"satSold\":\"0\"}],\"gaps\":[]}",
+    "valid": false
+  }
+]
