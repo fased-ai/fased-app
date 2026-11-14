@@ -19,6 +19,7 @@ import (
 )
 
 var applicationUpdatesPublicClient = newApplicationUpdatesClient
+var enrolledOfflineRecovery = recoverEnrolledOffline
 
 // Preserve the existing ordinary-client behavior for an owner directory under
 // a symlinked parent. An enrolled or ambiguous root-owned fence must still fail

@@ -189,8 +189,16 @@ func ordinaryUpdateCommand(args []string, in *os.File, out, errOut io.Writer) er
 				return applicationUpdatesWithClient(ctx, client, "recover", in, out, errOut)
 			}
 			client.Close()
-		} else if !errors.Is(err, core.ErrCoreUnavailable) || !ordinaryUpdateRecoveryData(*dir) {
+		} else if !errors.Is(err, core.ErrCoreUnavailable) {
 			return err
+		} else if !ordinaryUpdateRecoveryData(*dir) {
+			if *prefix != "" {
+				return errors.New("enrolled recovery uses its original installation; omit --prefix")
+			}
+			if recoveryErr := enrolledOfflineRecovery(ctx, *dir, out, errOut); recoveryErr != nil {
+				return errors.Join(err, recoveryErr)
+			}
+			return nil
 		}
 		return recoverInstalledLocalUpdate(*prefix, *dir, in, out, errOut)
 	}

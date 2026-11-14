@@ -138,6 +138,37 @@ func TestUpdateRecoveryDoesNotFallbackAcrossAmbiguousFence(t *testing.T) {
 	}
 }
 
+// An unavailable enrolled core must resume its original protected operation,
+// not fall through to the app-only installer or ask for an app password.
+func TestUpdateRecoveryUsesEnrolledHelperWhenCoreIsOffline(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux custody enrollment only")
+	}
+	dir := filepath.Join(t.TempDir(), "enrolled")
+	if err := os.Symlink("/etc", dir); err != nil {
+		t.Fatal(err)
+	}
+	oldClient, oldRecovery := applicationUpdatesPublicClient, enrolledOfflineRecovery
+	defer func() { applicationUpdatesPublicClient, enrolledOfflineRecovery = oldClient, oldRecovery }()
+	applicationUpdatesPublicClient = func(context.Context, string) (*core.Client, bool, error) {
+		return nil, false, core.ErrCoreUnavailable
+	}
+	called := 0
+	enrolledOfflineRecovery = func(_ context.Context, data string, _, _ io.Writer) error {
+		called++
+		if data != dir {
+			t.Fatal("recovery selected a different workspace")
+		}
+		return nil
+	}
+	if err := ordinaryUpdateCommand([]string{"recover", "--data-dir", dir}, nil, io.Discard, io.Discard); err != nil || called != 1 {
+		t.Fatalf("offline enrolled recovery: calls=%d err=%v", called, err)
+	}
+	if err := ordinaryUpdateCommand([]string{"recover", "--data-dir", dir, "--prefix", "/foreign"}, nil, io.Discard, io.Discard); err == nil || called != 1 {
+		t.Fatal("a caller-selected prefix reached enrolled recovery", err)
+	}
+}
+
 func TestUpdateRecoveryKeepsOrdinaryOfflineEntry(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux custody enrollment only")

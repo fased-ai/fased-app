@@ -120,6 +120,47 @@ type MaintenancePackage struct {
 	Components       []Component `json:"components"`
 }
 
+// RecoveryEligible recognizes only an already admitted operation. It never
+// authorizes acquisition or a new update and retains the original hold.
+func (r MaintenanceRecord) RecoveryEligible() bool {
+	if r.Version != 1 || r.Owner <= 0 || !IDOK(r.OperationID) || r.Package == nil || r.Package.Validate() != nil {
+		return false
+	}
+	requiresHold := false
+	switch r.Phase {
+	case "prepared", "base-recovery":
+		if r.Start != "base" {
+			return false
+		}
+	case "quiescing", "staged":
+		if r.Start != "" {
+			return false
+		}
+	case "held", "replacing":
+		if r.Start != "" {
+			return false
+		}
+		requiresHold = true
+	case "ready", "signer-healthy-held", "signer-committed-held", "signer-completed", "completed":
+		if r.Start != "target" {
+			return false
+		}
+		requiresHold = true
+	default:
+		return false
+	}
+	if requiresHold && r.Installation == nil {
+		return false
+	}
+	if r.Installation != nil {
+		p := r.Installation.Binding.Index.Binding.Pause.Request
+		if !ValidInstallation(*r.Installation) || p == nil || p.IntentID != r.OperationID {
+			return false
+		}
+	}
+	return true
+}
+
 // ValidateIdle checks only the shape of a protected initial journal. Its
 // caller must also bind the deployment and authenticate the package.
 func (r MaintenanceRecord) ValidateIdle() error {

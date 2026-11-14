@@ -783,10 +783,11 @@ func (h *runtimeHost) protectedActivation(ctx context.Context, j journal, step s
 	return err
 }
 
-// EnrolledTarget reads only root-owned public fence/commit bindings. It grants
-// no session, credential, wallet or service-control authority.
-func EnrolledTarget(data string, ownerUID int) (custodyinstall.Manifest, error) {
-	var zero custodyinstall.Manifest
+// readEnrolledFence verifies the original source marker without requiring the
+// managed executable pair to be healthy. A partially replaced pair is expected
+// during recovery, but it must never select another owner or workspace.
+func readEnrolledFence(data string, ownerUID int) (fence, error) {
+	var zero fence
 	if ownerUID <= 0 || !filepath.IsAbs(data) || filepath.Clean(data) != data {
 		return zero, errState
 	}
@@ -815,11 +816,7 @@ func EnrolledTarget(data string, ownerUID int) (custodyinstall.Manifest, error) 
 	if update.StrictJSON(b, &f) != nil || f.Version != 1 || f.Owner != ownerUID || f.Source.Data != data || !sourceValid(f.Source) || !hexID(f.ID, 16) || !hexID(f.Digest, 32) || !f.Target.Enrollment {
 		return zero, errState
 	}
-	m, err := custodyinstall.Load(ownerUID)
-	if err != nil || custodyinstall.EnrollmentIdentity(m) != custodyinstall.EnrollmentIdentity(f.Target) || custodyinstall.Verify(m) != nil {
-		return zero, errState
-	}
-	c, err := custodyinstall.ReadEnrollmentCommit(m)
+	c, err := custodyinstall.ReadEnrollmentCommit(f.Target)
 	if err != nil || c.InstanceID != f.Source.ExpectedInstanceID || c.Digest != f.Digest {
 		return zero, errState
 	}
@@ -831,7 +828,60 @@ func EnrolledTarget(data string, ownerUID int) (custodyinstall.Manifest, error) 
 	if err != nil || update.StrictJSON(b, &ready) != nil || ready.Version != 1 || ready.Binding != hash(jsonBytes(f)) {
 		return zero, errState
 	}
+	return f, nil
+}
+
+// EnrolledTarget reads only root-owned public fence/commit bindings. It grants
+// no session, credential, wallet or service-control authority.
+func EnrolledTarget(data string, ownerUID int) (custodyinstall.Manifest, error) {
+	var zero custodyinstall.Manifest
+	f, err := readEnrolledFence(data, ownerUID)
+	if err != nil {
+		return zero, err
+	}
+	m, err := custodyinstall.Load(ownerUID)
+	if err != nil || custodyinstall.EnrollmentIdentity(m) != custodyinstall.EnrollmentIdentity(f.Target) || custodyinstall.Verify(m) != nil {
+		return zero, errState
+	}
 	return m, nil
+}
+
+// EnrolledRecoveryRequest derives the sole retry from the protected journal and
+// original enrollment marker. It never chooses a release, path, or new intent.
+func EnrolledRecoveryRequest(data string, ownerUID int) (maintenance.CustodyUpdateRequest, error) {
+	var empty maintenance.CustodyUpdateRequest
+	f, err := readEnrolledFence(data, ownerUID)
+	if err != nil {
+		return empty, err
+	}
+	r, err := update.ReadMaintenanceRecord(ownerUID)
+	if err != nil {
+		return empty, err
+	}
+	return enrolledRecoveryRequest(f, r, ownerUID)
+}
+
+func enrolledRecoveryRequest(f fence, r update.MaintenanceRecord, ownerUID int) (maintenance.CustodyUpdateRequest, error) {
+	var empty maintenance.CustodyUpdateRequest
+	if ownerUID <= 0 || f.Owner != ownerUID || f.Source.Profile != "local" || f.Target.Version != 3 || f.Target.Location != "local" || !f.Target.Enrollment || f.Target.Owner != ownerUID || r.Owner != ownerUID || !r.RecoveryEligible() {
+		return empty, errors.New("original Local custody update required")
+	}
+	var base, target custodyinstall.Manifest
+	if update.StrictJSON(r.Base, &base) != nil || update.StrictJSON(r.Target, &target) != nil || custodyinstall.EnrollmentIdentity(base) != custodyinstall.EnrollmentIdentity(f.Target) || custodyinstall.EnrollmentIdentity(target) != custodyinstall.EnrollmentIdentity(f.Target) {
+		return empty, errors.New("custody recovery belongs to another installation")
+	}
+	for _, c := range r.Package.Components {
+		if c.Contract.Component == "core" && c.Artifact.SHA256 != target.CoreHash || c.Contract.Component == "signer" && c.Artifact.SHA256 != target.SignerHash {
+			return empty, errors.New("custody recovery target differs from the original package")
+		}
+	}
+	if r.Installation != nil {
+		binding := r.Installation.Binding
+		if binding.InstallationID != f.Target.ID || binding.PreviousCore != base.CoreHash || binding.PreviousSigner != base.SignerHash || binding.PreviousManifest != hash(jsonBytes(base)) || binding.TargetCore != target.CoreHash || binding.TargetSigner != target.SignerHash {
+			return empty, errors.New("original signer update hold differs")
+		}
+	}
+	return maintenance.CustodyUpdateRequest{OperationID: r.OperationID, Sequence: r.Package.Sequence, ReleaseSHA256: r.Package.ReleaseSHA256, Bootstrap: r.Bootstrap}, nil
 }
 
 // Read a bounded protocol frame without allowing a non-terminating frame to grow.

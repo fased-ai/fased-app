@@ -183,11 +183,20 @@ func (c *custodyMaintenanceController) Recover(ctx context.Context, o core.Appli
 	if done && proof.Phase == "completed" {
 		return nil
 	}
+	return c.resumeWorker(ctx, o.ID)
+}
+
+// Both the running core and an offline owner command resume the same fixed
+// systemd worker. Observation never starts a second worker while one is active.
+func (c *custodyMaintenanceController) resumeWorker(ctx context.Context, id string) error {
+	if c.owner <= 0 || !update.IDOK(id) {
+		return errors.New("original custody worker required")
+	}
 	inspect := c.workerState
 	if inspect == nil {
 		inspect = c.inspectWorker
 	}
-	state, err := inspect(ctx, o.ID)
+	state, err := inspect(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -200,7 +209,7 @@ func (c *custodyMaintenanceController) Recover(ctx context.Context, o core.Appli
 	if state.active != "failed" && state.active != "inactive" {
 		return errors.New("custody worker state is uncertain; preserve it")
 	}
-	return c.launch(ctx, o.ID)
+	return c.launch(ctx, id)
 }
 
 func (c *custodyMaintenanceController) Status(ctx context.Context, o core.ApplicationUpdateOperation) (core.ApplicationUpdateReceipt, error) {
