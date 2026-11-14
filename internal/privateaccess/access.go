@@ -51,6 +51,24 @@ type receipt struct {
 	Plan   Plan   `json:"plan"`
 }
 
+// A route change must not outlive the record needed to reconcile it after a
+// crash. WritePrivateJSON syncs the file; the containing directory must also
+// be synced after its rename (and after a completed removal).
+func syncAccessDirectory(root string) error {
+	dir, err := os.Open(root)
+	if err != nil {
+		return err
+	}
+	return errors.Join(dir.Sync(), dir.Close())
+}
+
+func storeAccessReceipt(root string, r receipt) error {
+	if err := core.WritePrivateJSON(filepath.Join(root, "private-access.json"), r); err != nil {
+		return err
+	}
+	return syncAccessDirectory(root)
+}
+
 func System() Manager {
 	return Manager{GetConfig: systemConfig, SetConfig: systemSetConfig, Run: func(ctx context.Context, args ...string) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -222,7 +240,7 @@ func (m Manager) Enable(ctx context.Context, root string, p Plan, instanceID str
 			return errors.New("existing private route belongs to the owner; refusing to replace or adopt it")
 		}
 		r = receipt{Schema: 1, Phase: "preparing", Plan: p}
-		if err = core.WritePrivateJSON(filepath.Join(root, "private-access.json"), r); err != nil {
+		if err = storeAccessReceipt(root, r); err != nil {
 			return err
 		}
 	} else if err != nil {
@@ -237,6 +255,10 @@ func (m Manager) Enable(ctx context.Context, root string, p Plan, instanceID str
 		return err
 	}
 	if state == "absent" {
+		// A prior process may have published the record before a power cut.
+		if err = syncAccessDirectory(root); err != nil {
+			return err
+		}
 		changed, e := routeChange(cfg, p, true)
 		if e != nil {
 			return e
@@ -262,7 +284,7 @@ func (m Manager) Enable(ctx context.Context, root string, p Plan, instanceID str
 		return err
 	}
 	r.Phase = "ready"
-	return core.WritePrivateJSON(filepath.Join(root, "private-access.json"), r)
+	return storeAccessReceipt(root, r)
 }
 
 var errEndpointStarting = errors.New("private HTTPS is starting; retain SSH/console access")
@@ -451,18 +473,26 @@ func (m Manager) verifyFromDevice(ctx context.Context, p Plan, instanceID, selfI
 	}
 }
 func (m Manager) Remove(ctx context.Context, root string) error {
-	r, err := load(root)
+	lock, err := core.LockInstance(filepath.Join(root, "access.lock"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	lock, err := core.LockInstance(filepath.Join(root, "access.lock"))
+	defer lock.Close()
+	r, err := load(root)
+	if errors.Is(err, os.ErrNotExist) {
+		// A preceding removal may have unlinked the receipt but failed to
+		// sync the directory. Retrying must finish that durability barrier.
+		return syncAccessDirectory(root)
+	}
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
+	if r.Phase == "switching" {
+		return errors.New("private ingress transition is unfinished; resume the recorded route before removal")
+	}
 	cfg, etag, err := m.config(ctx)
 	if err != nil {
 		return err
@@ -486,7 +516,10 @@ func (m Manager) Remove(ctx context.Context, root string) error {
 			return errors.New("route removal is not confirmed; retry after inspection")
 		}
 	}
-	return os.Remove(filepath.Join(root, "private-access.json"))
+	if err = os.Remove(filepath.Join(root, "private-access.json")); err != nil {
+		return err
+	}
+	return syncAccessDirectory(root)
 }
 
 // switchIngress resumes the exact owned transition to protected Unix ingress. A lost response
@@ -504,9 +537,15 @@ func (m Manager) switchIngress(ctx context.Context, root string, r receipt, next
 	if r.Phase != "switching" {
 		r.Phase = "switching"
 		r.Next = &next
-		if err := core.WritePrivateJSON(filepath.Join(root, "private-access.json"), r); err != nil {
+		if err := storeAccessReceipt(root, r); err != nil {
 			return err
 		}
+	}
+	// The retained switching receipt might have been written by a predecessor
+	// that did not sync the directory. Protect both the pending write and the
+	// lost-response path, where the next route already appears in Serve.
+	if err := syncAccessDirectory(root); err != nil {
+		return err
 	}
 	if oldState == "owned" {
 		removed, err := routeChange(cfg, r.Plan, false)
@@ -532,5 +571,5 @@ func (m Manager) switchIngress(ctx context.Context, root string, r receipt, next
 	if state, err := routeState(current, next); err != nil || state != "owned" {
 		return errors.New("private route changed before transition completion")
 	}
-	return core.WritePrivateJSON(filepath.Join(root, "private-access.json"), receipt{Schema: 1, Phase: "ready", Plan: next})
+	return storeAccessReceipt(root, receipt{Schema: 1, Phase: "ready", Plan: next})
 }
