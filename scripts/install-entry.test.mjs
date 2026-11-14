@@ -407,27 +407,55 @@ test("bootstrap uses one protected helper without general sudo grants", () => {
   assert.match(script, /maintenance-register --owner/);
   assert.match(script, /maintenance-bootstrap --owner/);
   assert.match(script, /owner_maintenance_setup "\$installer"/);
-  assert.match(script, /Hash the protected copy before any project executable receives root/);
+  assert.match(
+    script,
+    /Hash the protected copy before any project executable receives root/,
+  );
   const parsed = spawnSync("bash", ["-n"], { input: script });
   assert.equal(parsed.status, 0, parsed.stderr.toString());
 });
 
 test("resuming a held update stops at its result without starting another operation", () => {
-  const start = template.indexOf('  current=$(/usr/bin/sudo -- "$protected" maintenance-register');
-  const end = template.indexOf('  FASED_PROTECTED_INSTALLER=$protected', start);
-  assert.ok(start >= 0 && end > start, "ordinary owner maintenance entry not found");
-  const entry = template.slice(start, end)
-    .replaceAll('/usr/bin/sudo -- "$protected" maintenance-register', 'fake_register')
-    .replaceAll('/usr/bin/sudo -- "$current" maintenance-bootstrap', 'fake_bootstrap');
-  const rootStart = template.indexOf('maintenance_image=$("$protected_installer" maintenance-register');
-  const rootEnd = template.indexOf('# Keep the bootstrap lock', rootStart);
-  assert.ok(rootStart >= 0 && rootEnd > rootStart, "Remote bootstrap entry not found");
-  const rootEntry = template.slice(rootStart, rootEnd)
-    .replaceAll('"$protected_installer" maintenance-register', 'fake_register')
-    .replaceAll('"$maintenance_image" maintenance-bootstrap', 'fake_bootstrap');
-  const h1 = "/var/lib/fased-maintenance/images/" + "a".repeat(64) + "/fased-install";
-  const h2 = "/var/lib/fased-maintenance/images/" + "b".repeat(64) + "/fased-install";
-  const run = (selectedEntry, profile, action, fail) => spawnSync("bash", ["-c", `
+  const start = template.indexOf(
+    '  current=$(/usr/bin/sudo -- "$protected" maintenance-register',
+  );
+  const end = template.indexOf("  FASED_PROTECTED_INSTALLER=$protected", start);
+  assert.ok(
+    start >= 0 && end > start,
+    "ordinary owner maintenance entry not found",
+  );
+  const entry = template
+    .slice(start, end)
+    .replaceAll(
+      '/usr/bin/sudo -- "$protected" maintenance-register',
+      "fake_register",
+    )
+    .replaceAll(
+      '/usr/bin/sudo -- "$current" maintenance-bootstrap',
+      "fake_bootstrap",
+    );
+  const rootStart = template.indexOf(
+    'maintenance_image=$("$protected_installer" maintenance-register',
+  );
+  const rootEnd = template.indexOf("# Keep the bootstrap lock", rootStart);
+  assert.ok(
+    rootStart >= 0 && rootEnd > rootStart,
+    "Remote bootstrap entry not found",
+  );
+  const rootEntry = template
+    .slice(rootStart, rootEnd)
+    .replaceAll('"$protected_installer" maintenance-register', "fake_register")
+    .replaceAll('"$maintenance_image" maintenance-bootstrap', "fake_bootstrap");
+  const h1 =
+    "/var/lib/fased-maintenance/images/" + "a".repeat(64) + "/fased-install";
+  const h2 =
+    "/var/lib/fased-maintenance/images/" + "b".repeat(64) + "/fased-install";
+  const run = (selectedEntry, profile, action, fail) =>
+    spawnSync(
+      "bash",
+      [
+        "-c",
+        `
     set -euo pipefail
     action=$1 protected=$2 protected_installer=$2 old=$3 recovered=0 fail=$4 profile=$5 owner_uid=1800
     die() { printf '%s\\n' "$*" >&2; exit 1; }
@@ -435,15 +463,33 @@ test("resuming a held update stops at its result without starting another operat
     fake_bootstrap() { [[ $fail == 0 ]]; }
     ${selectedEntry}
     printf 'CONTINUE_TO_INSTALLER\\n'
-  `, "entry", action, h2, h1, fail, profile], { encoding: "utf8" });
-  for (const [selectedEntry, profile] of [[entry, "local"], [rootEntry, "remote"]]) {
+  `,
+        "entry",
+        action,
+        h2,
+        h1,
+        fail,
+        profile,
+      ],
+      { encoding: "utf8" },
+    );
+  for (const [selectedEntry, profile] of [
+    [entry, "local"],
+    [rootEntry, "remote"],
+  ]) {
     const resumed = run(selectedEntry, profile, "update", "0");
     assert.notEqual(resumed.status, 0, resumed.stderr);
-    assert.match(resumed.stderr, /app recovery and future updates are not yet verified/);
+    assert.match(
+      resumed.stderr,
+      /app recovery and future updates are not yet verified/,
+    );
     assert.doesNotMatch(resumed.stdout, /CONTINUE_TO_INSTALLER/);
     const failed = run(selectedEntry, profile, "update", "1");
     assert.notEqual(failed.status, 0);
-    assert.doesNotMatch(failed.stderr, /app recovery and future updates are not yet verified/);
+    assert.doesNotMatch(
+      failed.stderr,
+      /app recovery and future updates are not yet verified/,
+    );
     const fresh = run(selectedEntry, profile, "install", "0");
     assert.equal(fresh.status, 0, fresh.stderr);
     assert.match(fresh.stdout, /CONTINUE_TO_INSTALLER/);
@@ -451,14 +497,26 @@ test("resuming a held update stops at its result without starting another operat
 });
 
 test("protected helper publication is durable and never copies into the final image", () => {
-  const block = template.slice(template.indexOf('protected_installer="$helper_root/'));
-  assert.match(block, /install -m 0555 -o root -g root "\$stage\/fased-install" "\$stage\/protected-installer"/);
-  assert.match(block, /sync -f "\$stage\/protected-installer"[\s\S]*mv -T --no-clobber/);
-  assert.doesNotMatch(block, /^\s*\/usr\/bin\/install\s[^\n]*"\$protected_installer"/m);
-  assert.match(block, /Protected maintenance checksum differs[\s\S]*maintenance-register/);
+  const block = template.slice(
+    template.indexOf('protected_installer="$helper_root/'),
+  );
+  assert.match(
+    block,
+    /install -m 0555 -o root -g root "\$stage\/fased-install" "\$stage\/protected-installer"/,
+  );
+  assert.match(
+    block,
+    /sync -f "\$stage\/protected-installer"[\s\S]*mv -T --no-clobber/,
+  );
+  assert.doesNotMatch(
+    block,
+    /^\s*\/usr\/bin\/install\s[^\n]*"\$protected_installer"/m,
+  );
+  assert.match(
+    block,
+    /Protected maintenance checksum differs[\s\S]*maintenance-register/,
+  );
 });
-
-
 
 test("Wallets console consent keeps verified acquisition, owner drop and temporary cleanup", () => {
   const script = renderEntry(template, config);
