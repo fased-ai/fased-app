@@ -39,7 +39,78 @@ func ValidateInitialMaintenanceRecord(r update.MaintenanceRecord) (Manifest, err
 			}
 		}
 	}
+	if !base.NativeOwnerAccess && r.Package.NativeDesktop != nil {
+		return empty, errors.New("headless custody cannot own a Local desktop")
+	}
 	return base, nil
+}
+
+func verifyProtectedDesktop(m Manifest, p *update.MaintenancePackage) error {
+	if !m.NativeOwnerAccess || p == nil || p.Validate() != nil || p.NativeDesktop == nil {
+		return errors.New("protected Local desktop package required")
+	}
+	hash, size, err := maintenance.ProtectedDigest(m.Root+"/fased-desktop", 0755, 64<<20)
+	if err != nil || hash != p.NativeDesktop.SHA256 || size != p.NativeDesktop.Size {
+		return errors.New("protected desktop differs from its release")
+	}
+	return nil
+}
+
+// VerifyProtectedDesktop checks the exact native artifact in a verified
+// release; it grants no start, update, or signing authority.
+func VerifyProtectedDesktop(m Manifest, p *update.MaintenancePackage) error {
+	return verifyProtectedDesktop(m, p)
+}
+
+// ProtectedNativeRelease is the owner-side read-only view of the same durable
+// operation. An unfinished update never selects a desktop for Wallets.
+func ProtectedNativeRelease(m Manifest) (*update.MaintenancePackage, error) {
+	if m.Owner <= 0 || os.Getuid() != m.Owner || os.Geteuid() != m.Owner || !m.NativeOwnerAccess || !m.Enrollment || m.Location != "local" {
+		return nil, errors.New("original Local owner required")
+	}
+	a, err := maintenance.ReadAuthority(m.Owner)
+	if err != nil || a.Profile != "local" || maintenance.VerifyImage(a) != nil || Verify(m) != nil {
+		return nil, errors.New("verified Local maintenance installation required")
+	}
+	if _, err = ReadEnrollmentCommit(m); err != nil {
+		return nil, err
+	}
+	for _, name := range []string{"update-active.json", "update-start-blocked.json"} {
+		if _, e := os.Lstat(m.Root + "/" + name); !errors.Is(e, os.ErrNotExist) {
+			return nil, errors.New("finish the existing custody update first")
+		}
+	}
+	r, err := update.ReadMaintenanceRecord(m.Owner)
+	if err != nil {
+		return nil, err
+	}
+	switch r.Phase {
+	case "idle":
+		base, e := ValidateInitialMaintenanceRecord(r)
+		if e != nil || base != m {
+			return nil, errors.New("initial native installation differs")
+		}
+	case "completed":
+		var target Manifest
+		if r.Start != "target" || update.StrictJSON(r.Target, &target) != nil || target != m || r.Installation == nil || r.Installation.Phase != "completed" || !update.ValidInstallation(*r.Installation) || r.Installation.Binding.InstallationID != m.ID || r.Installation.Binding.TargetCore != m.CoreHash || r.Installation.Binding.TargetSigner != m.SignerHash {
+			return nil, errors.New("the original signer update is not complete")
+		}
+	default:
+		return nil, errors.New("finish the existing custody update first")
+	}
+	p, err := r.InstalledPackage()
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range p.Components {
+		if c.Contract.Component == "core" && c.Artifact.SHA256 != m.CoreHash || c.Contract.Component == "signer" && c.Artifact.SHA256 != m.SignerHash {
+			return nil, errors.New("native release differs from the installed pair")
+		}
+	}
+	if err = verifyProtectedDesktop(m, p); err != nil {
+		return nil, err
+	}
+	return p, nil
 }
 
 // VerifyInitialProtectedDeployment is read-only. A foreign fence remains a
@@ -62,6 +133,11 @@ func VerifyInitialProtectedDeployment(owner int) error {
 	}
 	if err = verifyProtectedPair(m); err != nil {
 		return err
+	}
+	if r.Package.NativeDesktop != nil {
+		if err = verifyProtectedDesktop(m, r.Package); err != nil {
+			return err
+		}
 	}
 	if _, err = ReadEnrollmentCommit(m); err != nil {
 		return err

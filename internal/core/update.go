@@ -39,7 +39,7 @@ func OrdinaryCustodyReadContract() update.Contract {
 
 func OrdinaryUpdateContract() update.Contract {
 	c := OrdinaryCustodyReadContract()
-	c.Features = append(c.Features, update.OrdinaryMaintenanceFeature, update.JournalBasePackageFeature)
+	c.Features = append(c.Features, update.OrdinaryMaintenanceFeature, update.JournalBasePackageFeature, update.NativeDesktopJournalFeature)
 	c.RequiresPeer = []string{update.OrdinaryMaintenanceFeature}
 	return c
 }

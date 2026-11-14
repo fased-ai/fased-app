@@ -402,6 +402,19 @@ func maintenanceCustodyPrepare(ctx context.Context, a maintenance.Authority, q m
 			}
 			return empty, errors.Join(errors.New("verified signer differs from the source"), e)
 		}
+		if q.NativeOwnerAccess {
+			desktopStage := filepath.Join(o.Directory, "enrollment-desktop")
+			if e = maintenance.EnsureProtectedDirectory(desktopStage); e != nil {
+				return empty, e
+			}
+			if _, _, e = maintenance.ProtectedDigest(desktopStage+"/fased-desktop", 0755, 64<<20); errors.Is(e, os.ErrNotExist) {
+				if e = maintenanceAcquireDesktop(ctx, p, a, desktopStage, id, true); e != nil {
+					return empty, e
+				}
+			} else if e != nil {
+				return empty, e
+			}
+		}
 		acq = custodyAcquisition{Version: 1, Request: q, Identity: id, Sequence: report.Sequence, ReleaseSHA256: report.DescriptorSHA256, ProvenanceSHA256: report.ProvenanceSHA256, DevelopmentOnly: report.DevelopmentOnly, SignerBytes: signerSize}
 		raw, _ := json.Marshal(acq)
 		if e = maintenance.PublishEnrollmentRecord(a.Owner, q.OperationID, "enrollment-acquisition.json", raw); e != nil {
@@ -425,15 +438,31 @@ func maintenanceCustodyPrepare(ctx context.Context, a maintenance.Authority, q m
 	if err = maintenance.CopyEnrollmentAsset(a.Owner, q.OperationID, "fased-signer", q.SignerSHA256, acq.SignerBytes); err != nil {
 		return empty, err
 	}
+	if q.NativeOwnerAccess {
+		desktopPath := filepath.Join(o.Directory, "enrollment-desktop", "fased-desktop")
+		hash, size, e := maintenance.ProtectedDigest(desktopPath, 0755, 64<<20)
+		if e != nil || size <= 0 {
+			return empty, errors.New("original verified desktop is unavailable; preserve operation")
+		}
+		if err = maintenance.CopyProtectedBounded(desktopPath, dir+"/fased-desktop", 0755, hash, size); err != nil {
+			return empty, err
+		}
+	}
 	m, err := custodyinstall.InstallProtected(ctx, a.Owner, q.OperationID, options, controlled, io.Discard)
 	if err != nil {
 		return m, err
 	}
-	components, err := custodyinstall.DescribeProtectedPair(ctx, a.Owner, q.OperationID, acq.Identity.Version)
+	var components []update.Component
+	var desktop *update.Artifact
+	if q.NativeOwnerAccess {
+		m, components, desktop, err = custodyinstall.AttachProtectedDesktop(ctx, a.Owner, q.OperationID, acq.Identity.Version, acq.Identity.Source)
+	} else {
+		components, err = custodyinstall.DescribeProtectedPair(ctx, a.Owner, q.OperationID, acq.Identity.Version)
+	}
 	if err != nil {
 		return m, err
 	}
-	pack := update.MaintenancePackage{Version: acq.Identity.Version, Source: acq.Identity.Source, Sequence: acq.Sequence, ReleaseSHA256: acq.ReleaseSHA256, ProvenanceSHA256: acq.ProvenanceSHA256, DevelopmentOnly: acq.DevelopmentOnly, Components: components}
+	pack := update.MaintenancePackage{Version: acq.Identity.Version, Source: acq.Identity.Source, Sequence: acq.Sequence, ReleaseSHA256: acq.ReleaseSHA256, ProvenanceSHA256: acq.ProvenanceSHA256, DevelopmentOnly: acq.DevelopmentOnly, Components: components, NativeDesktop: desktop}
 	base, _ := json.Marshal(m)
 	initial := update.MaintenanceRecord{Version: 1, Owner: a.Owner, OperationID: m.ID, Phase: "idle", Start: "base", Base: base, Target: base, Package: &pack}
 	if _, err = custodyinstall.ValidateInitialMaintenanceRecord(initial); err != nil {
@@ -602,6 +631,10 @@ func maintenanceCustodyAcquire(ctx context.Context, a maintenance.Authority, q m
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	installed, err := custodyinstall.Load(a.Owner)
+	if err != nil || installed.Location != a.Profile || !installed.Enrollment {
+		return errors.New("the original custody installation is required")
+	}
 	// The direct helper entry is also used to resume an already journalled
 	// update and for the explicit legacy bootstrap above. A new non-bootstrap
 	// operation must originate in the same protected core record as the worker.
@@ -639,6 +672,7 @@ func maintenanceCustodyAcquire(ctx context.Context, a maintenance.Authority, q m
 	defer p.Close()
 	dir := update.MaintenanceDirectory(a.Owner, q.OperationID)
 	var components []update.Component
+	var desktop *update.Artifact
 	report, id, err := finishCustodyAcquisition(q, ownerView, now, p, func(report bootstrap.Report, id bootstrap.MaintenanceIdentity) error {
 		if err := maintenance.EnsureProtectedDirectory(filepath.Dir(dir)); err != nil {
 			return err
@@ -663,13 +697,30 @@ func maintenanceCustodyAcquire(ctx context.Context, a maintenance.Authority, q m
 		if err = maintenanceAcquireSigner(ctx, p, a, dir, id, false); err != nil {
 			return err
 		}
+		if installed.NativeOwnerAccess {
+			if err = maintenanceAcquireDesktop(ctx, p, a, dir, id, false); err != nil {
+				return err
+			}
+		}
 		source, err := custodyNativeBindingSource(report, id)
 		if err != nil {
 			return err
 		}
+		if installed.NativeOwnerAccess {
+			// Development candidates must exercise the same exact binding;
+			// only their release trust root differs.
+			source = id.Source
+		}
 		components, err = custodyinstall.DescribeProtectedPair(ctx, a.Owner, q.OperationID, id.Version, source)
 		if err != nil {
 			return err
+		}
+		if installed.NativeOwnerAccess {
+			hash, size, e := maintenance.ProtectedDigest(dir+"/fased-desktop", 0755, 64<<20)
+			if e != nil || size <= 0 {
+				return errors.New("verified Local desktop is unavailable")
+			}
+			desktop = &update.Artifact{File: "fased-desktop", SHA256: hash, Size: size}
 		}
 		// Retire only after the selected pair passed its authenticated binding.
 		// The initial deployment is still current and its receipts are archived
@@ -687,7 +738,7 @@ func maintenanceCustodyAcquire(ctx context.Context, a maintenance.Authority, q m
 	if err != nil {
 		return err
 	}
-	pack := update.MaintenancePackage{Version: id.Version, Source: id.Source, Sequence: report.Sequence, ReleaseSHA256: report.DescriptorSHA256, ProvenanceSHA256: report.ProvenanceSHA256, DevelopmentOnly: report.DevelopmentOnly, Components: components}
+	pack := update.MaintenancePackage{Version: id.Version, Source: id.Source, Sequence: report.Sequence, ReleaseSHA256: report.DescriptorSHA256, ProvenanceSHA256: report.ProvenanceSHA256, DevelopmentOnly: report.DevelopmentOnly, Components: components, NativeDesktop: desktop}
 	if err = custodyinstall.StageProtectedPackage(ctx, a.Owner, q.OperationID, pack, q.Bootstrap); err != nil {
 		return err
 	}
@@ -720,6 +771,29 @@ func maintenanceAcquireSigner(ctx context.Context, p *bootstrap.Prepared, a main
 		}
 		return maintenance.PublishProtected(dir+"/fased-signer", payload.Data, 0755)
 	}
+	return maintenanceExtractPayload(ctx, p, a, dir, id, "signer", enrollment)
+}
+
+func maintenanceAcquireDesktop(ctx context.Context, p *bootstrap.Prepared, a maintenance.Authority, dir string, id bootstrap.MaintenanceIdentity, enrollment bool) error {
+	payload := walletDesktopPayload()
+	if (id.InstallerSHA256 == a.ImageSHA256 || p.Report().DevelopmentOnly) && payload != nil && payload.Version == id.Version && payload.Source == id.Source {
+		if err := bootstrap.WriteWalletPayload(io.Discard, payload); err != nil {
+			return err
+		}
+		return maintenance.PublishProtected(dir+"/fased-desktop", payload.Data, 0755)
+	}
+	return maintenanceExtractPayload(ctx, p, a, dir, id, "desktop", enrollment)
+}
+
+// Extract only a fixed payload from the exact authenticated target installer.
+// The installer runs as an isolated unprivileged identity, not as root.
+func maintenanceExtractPayload(ctx context.Context, p *bootstrap.Prepared, a maintenance.Authority, dir string, id bootstrap.MaintenanceIdentity, kind string, enrollment bool) error {
+	name, action := "fased-signer", "--emit-embedded-signer"
+	if kind == "desktop" {
+		name, action = "fased-desktop", "--emit-embedded-native"
+	} else if kind != "signer" {
+		return errors.New("fixed native payload required")
+	}
 	path, artifact, err := p.AcquireMaintenanceInstaller(ctx)
 	if err != nil {
 		return err
@@ -738,7 +812,7 @@ func maintenanceAcquireSigner(ctx context.Context, p *bootstrap.Prepared, a main
 	}
 	// The authenticated successor is executable input, never a root program.
 	// A transient locked identity has no access to owner/vault data or network.
-	c := exec.CommandContext(ctx, "/usr/bin/systemd-run", "--quiet", "--pipe", "--wait", "--collect", "--property=DynamicUser=yes", "--property=NoNewPrivileges=yes", "--property=ProtectSystem=strict", "--property=ProtectHome=yes", "--property=PrivateNetwork=yes", "--property=PrivateTmp=yes", "--", image, "--emit-embedded-signer")
+	c := exec.CommandContext(ctx, "/usr/bin/systemd-run", "--quiet", "--pipe", "--wait", "--collect", "--property=DynamicUser=yes", "--property=NoNewPrivileges=yes", "--property=ProtectSystem=strict", "--property=ProtectHome=yes", "--property=PrivateNetwork=yes", "--property=PrivateTmp=yes", "--", image, action)
 	c.Env = []string{"PATH=/usr/bin:/bin", "HOME=/nonexistent", "LANG=C"}
 	c.Dir = "/"
 	r, err := c.StdoutPipe()
@@ -748,33 +822,27 @@ func maintenanceAcquireSigner(ctx context.Context, p *bootstrap.Prepared, a main
 	if err = c.Start(); err != nil {
 		return err
 	}
-	var tmp *os.File
-	if enrollment {
-		// The reserved acquisition is root-private and contains no wallet
-		// secrets. Retire only its fixed, incomplete extraction before retry;
-		// random crash leftovers otherwise accumulate without a bound.
-		pending := filepath.Join(dir, ".signer-extraction.pending")
-		if i, statErr := os.Lstat(pending); statErr == nil {
-			st, ok := i.Sys().(*syscall.Stat_t)
-			if !ok || st.Uid != 0 || st.Gid != 0 || st.Nlink != 1 || !i.Mode().IsRegular() || (i.Mode().Perm() != 0755 && i.Mode().Perm()&^0600 != 0) || i.Size() < 0 || i.Size() > 64<<20 {
-				c.Process.Kill()
-				c.Wait()
-				return errors.New("foreign signer extraction; preserve it")
-			}
-			if err = os.Remove(pending); err != nil {
-				c.Process.Kill()
-				c.Wait()
-				return err
-			}
-		} else if !errors.Is(statErr, os.ErrNotExist) {
+	// The operation lock and fixed pending name bound crash leftovers. Never
+	// remove anything that is not this protected, ordinary extraction file.
+	pending := filepath.Join(dir, "."+kind+"-extraction.pending")
+	if i, statErr := os.Lstat(pending); statErr == nil {
+		st, ok := i.Sys().(*syscall.Stat_t)
+		if !ok || st.Uid != 0 || st.Gid != 0 || st.Nlink != 1 || !i.Mode().IsRegular() || (i.Mode().Perm() != 0755 && i.Mode().Perm()&^0600 != 0) || i.Size() < 0 || i.Size() > 64<<20 {
 			c.Process.Kill()
 			c.Wait()
-			return statErr
+			return errors.New("foreign native extraction; preserve it")
 		}
-		tmp, err = os.OpenFile(pending, os.O_RDWR|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0600)
-	} else {
-		tmp, err = os.CreateTemp(dir, ".signer-")
+		if err = os.Remove(pending); err != nil {
+			c.Process.Kill()
+			c.Wait()
+			return err
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		c.Process.Kill()
+		c.Wait()
+		return statErr
 	}
+	tmp, err := os.OpenFile(pending, os.O_RDWR|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0600)
 	if err != nil {
 		c.Process.Kill()
 		c.Wait()
@@ -790,7 +858,7 @@ func maintenanceAcquireSigner(ctx context.Context, p *bootstrap.Prepared, a main
 		return err
 	}
 	if enrollment {
-		return maintenance.CopyProtectedBounded(tmp.Name(), dir+"/fased-signer", 0755, identity.SHA256, identity.Bytes)
+		return maintenance.CopyProtectedBounded(tmp.Name(), dir+"/"+name, 0755, identity.SHA256, identity.Bytes)
 	}
-	return maintenance.CopyProtected(tmp.Name(), dir+"/fased-signer", 0755, identity.SHA256, identity.Bytes, "")
+	return maintenance.CopyProtected(tmp.Name(), dir+"/"+name, 0755, identity.SHA256, identity.Bytes, "")
 }

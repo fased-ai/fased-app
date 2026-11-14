@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 // Exercise the same pair description used immediately before the protected
@@ -78,6 +80,57 @@ func TestProtectedPairChecksNativeReleaseBinding(t *testing.T) {
 			}
 			if tc.bindingSource == "" && bindingCalls != 0 || tc.bindingSource != "" && bindingCalls != 1 {
 				t.Fatal("binding was not checked as required", bindingCalls)
+			}
+		})
+	}
+}
+
+// A Local custody update cannot claim that its native client was updated just
+// because the target core contains a syntactically valid desktop hash.
+func TestProtectedLocalPairRequiresMatchingDesktopBytes(t *testing.T) {
+	source := strings.Repeat("a", 40)
+	coreHash, signerHash, desktopHash := strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64)
+	dir := filepath.Join(t.TempDir(), "operation")
+	read := func(_ context.Context, _ Manifest, _, _ string, args []string, out any) error {
+		var value any
+		switch strings.Join(args, " ") {
+		case "updates ordinary-custody-compatibility":
+			value = map[string]any{"version": 1, "contract": map[string]any{"component": "core", "features": []string{update.NativeDesktopJournalFeature}}}
+		case "ordinary-custody-compatibility":
+			value = map[string]any{"component": "signer", "features": []string{update.NativeDesktopJournalFeature}}
+		case "native-release-binding":
+			value = map[string]any{"version": 1, "productVersion": "0.1.12", "source": source, "desktopSha256": desktopHash, "signerSha256": signerHash}
+		default:
+			return errors.New("unexpected inspection")
+		}
+		b, _ := json.Marshal(value)
+		return json.Unmarshal(b, out)
+	}
+	for _, tc := range []struct {
+		name, desktop string
+		wantOK        bool
+	}{
+		{"matching", desktopHash, true},
+		{"wrong desktop", strings.Repeat("e", 64), false},
+		{"missing desktop", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			digest := func(path string, _ os.FileMode, _ int64) (string, int64, error) {
+				switch filepath.Base(path) {
+				case "fased-app":
+					return coreHash, 100, nil
+				case "fased-signer":
+					return signerHash, 100, nil
+				case "fased-desktop":
+					if tc.desktop != "" {
+						return tc.desktop, 100, nil
+					}
+				}
+				return "", 0, os.ErrNotExist
+			}
+			_, err := describeProtectedPair(t.Context(), Manifest{Owner: 1000, NativeOwnerAccess: true}, dir, "0.1.12", source, read, digest)
+			if (err == nil) != tc.wantOK {
+				t.Fatal("desktop admission did not match authenticated core binding", err)
 			}
 		})
 	}

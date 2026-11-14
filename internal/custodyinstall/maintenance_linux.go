@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -158,7 +159,23 @@ func StageProtectedPackage(ctx context.Context, owner int, id string, p update.M
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	for _, entry := range []struct{ name, path, hash string }{{"previous-core", m.Root + "/fased-app", m.CoreHash}, {"previous-signer", m.Root + "/fased-signer", m.SignerHash}} {
+	previous := []struct{ name, path, hash string }{{"previous-core", m.Root + "/fased-app", m.CoreHash}, {"previous-signer", m.Root + "/fased-signer", m.SignerHash}}
+	if m.NativeOwnerAccess {
+		if p.NativeDesktop == nil || p.Validate() != nil || previousPackage == nil || previousPackage.NativeDesktop == nil {
+			return errors.New("the enrolled Local desktop must join the protected update")
+		}
+		if err = verifyProtectedDesktop(m, previousPackage); err != nil {
+			return err
+		}
+		hash, size, e := maintenance.ProtectedDigest(filepath.Join(update.MaintenanceDirectory(owner, id), "fased-desktop"), 0755, 64<<20)
+		if e != nil || hash != p.NativeDesktop.SHA256 || size != p.NativeDesktop.Size {
+			return errors.New("protected desktop differs from the authenticated package")
+		}
+		previous = append(previous, struct{ name, path, hash string }{"previous-desktop", m.Root + "/fased-desktop", previousPackage.NativeDesktop.SHA256})
+	} else if p.NativeDesktop != nil {
+		return errors.New("headless custody cannot install a Local desktop")
+	}
+	for _, entry := range previous {
 		_, size, err := maintenance.ProtectedDigest(entry.path, 0755, 64<<20)
 		if err != nil {
 			return err
@@ -206,6 +223,39 @@ func DescribeProtectedPair(ctx context.Context, owner int, id, version string, n
 	return describeProtectedPair(ctx, m, dir, version, source, readMaintenanceRole, maintenance.ProtectedDigest)
 }
 
+// AttachProtectedDesktop finishes the same fresh Local enrollment before its
+// commit. The independently verified core binds these exact desktop bytes.
+// A committed enrollment or different existing desktop is never adopted.
+func AttachProtectedDesktop(ctx context.Context, owner int, id, version, source string) (Manifest, []update.Component, *update.Artifact, error) {
+	var empty Manifest
+	if _, err := maintenance.ValidateProcess(owner); err != nil {
+		return empty, nil, nil, err
+	}
+	m, err := Load(owner)
+	if err != nil || m.ID != id || !m.Enrollment || !m.NativeOwnerAccess || m.Location != "local" {
+		return empty, nil, nil, errors.New("exact fresh Local enrollment required")
+	}
+	if _, err = os.Lstat(m.Root + "/enrollment-ready.json"); !errors.Is(err, os.ErrNotExist) {
+		return empty, nil, nil, errors.New("committed enrollment must be preserved")
+	}
+	components, err := DescribeProtectedPair(ctx, owner, id, version, source)
+	if err != nil || len(components) != 2 || components[0].Artifact.SHA256 != m.CoreHash || components[1].Artifact.SHA256 != m.SignerHash {
+		return empty, nil, nil, errors.New("enrollment package differs from the installed pair")
+	}
+	path := filepath.Join(update.MaintenanceDirectory(owner, id), "fased-desktop")
+	hash, size, err := maintenance.ProtectedDigest(path, 0755, 64<<20)
+	if err != nil || size <= 0 {
+		return empty, nil, nil, errors.New("original enrollment desktop differs")
+	}
+	if err = maintenance.CopyProtected(path, m.Root+"/fased-desktop", 0755, hash, size, ""); err != nil {
+		return empty, nil, nil, err
+	}
+	if err = Verify(m); err != nil {
+		return empty, nil, nil, err
+	}
+	return m, components, &update.Artifact{File: "fased-desktop", SHA256: hash, Size: size}, nil
+}
+
 // describeProtectedPair reads only fixed staged images. When the independently
 // authenticated release requires a native pair, the same target core must
 // describe the signer and desktop hashes; an installer's header is not enough.
@@ -213,7 +263,7 @@ func describeProtectedPair(ctx context.Context, m Manifest, dir, version, native
 	read func(context.Context, Manifest, string, string, []string, any) error,
 	digest func(string, os.FileMode, int64) (string, int64, error),
 ) ([]update.Component, error) {
-	if read == nil || digest == nil || nativeSource != "" && !validHex(nativeSource, 20) {
+	if read == nil || digest == nil || nativeSource != "" && !validHex(nativeSource, 20) || m.NativeOwnerAccess && nativeSource == "" {
 		return nil, errors.New("authenticated native release identity required")
 	}
 	var coreContract struct {
@@ -233,6 +283,9 @@ func describeProtectedPair(ctx context.Context, m Manifest, dir, version, native
 	}
 	if coreContract.Version != 1 || coreContract.Contract.Component != "core" || signerContract.Component != "signer" {
 		return nil, errors.New("actual ordinary custody contracts required")
+	}
+	if m.NativeOwnerAccess && (!slices.Contains(coreContract.Contract.Features, update.NativeDesktopJournalFeature) || !slices.Contains(signerContract.Features, update.NativeDesktopJournalFeature)) {
+		return nil, errors.New("the core and signer must both support the protected desktop journal")
 	}
 	var out []update.Component
 	for _, c := range []update.Contract{coreContract.Contract, signerContract} {
@@ -256,6 +309,12 @@ func describeProtectedPair(ctx context.Context, m Manifest, dir, version, native
 		}
 		if err := read(ctx, m, "app", dir+"/fased-app", []string{"native-release-binding"}, &binding); err != nil || binding.Version != 1 || binding.ProductVersion != version || binding.Source != nativeSource || !validHex(binding.DesktopSHA256, 32) || !validHex(binding.SignerSHA256, 32) || binding.SignerSHA256 != out[1].Artifact.SHA256 {
 			return nil, errors.New("protected signer differs from the authenticated native release")
+		}
+		if m.NativeOwnerAccess {
+			desktop, size, err := digest(dir+"/fased-desktop", 0755, 64<<20)
+			if err != nil || size <= 0 || desktop != binding.DesktopSHA256 {
+				return nil, errors.New("protected desktop differs from the authenticated native release")
+			}
 		}
 	}
 	return out, nil
@@ -647,6 +706,11 @@ func runProtectedUpdate(ctx context.Context, a maintenance.Authority, owner int,
 		if err = verifyProtectedPair(target); err != nil {
 			return err
 		}
+		if r.Package.NativeDesktop != nil {
+			if err = verifyProtectedDesktop(target, r.Package); err != nil {
+				return err
+			}
+		}
 		marker := base.Root + "/update-active.json"
 		_, markerErr := os.Lstat(marker)
 		if markerErr != nil && !errors.Is(markerErr, os.ErrNotExist) {
@@ -683,6 +747,11 @@ func runProtectedUpdate(ctx context.Context, a maintenance.Authority, owner int,
 	if boot && r.Phase == "base-recovery" && r.Start == "base" {
 		if err = verifyProtectedPair(base); err != nil {
 			return err
+		}
+		if r.PreviousPackage != nil && r.PreviousPackage.NativeDesktop != nil {
+			if err = verifyProtectedDesktop(base, r.PreviousPackage); err != nil {
+				return err
+			}
 		}
 		_, err = protectedSystemctl(ctx, "start", "--no-block", "--", Unit(owner, "signer"), Unit(owner, "app"))
 		return err
@@ -765,6 +834,19 @@ func runProtectedUpdate(ctx context.Context, a maintenance.Authority, owner int,
 		if err = maintenance.CopyProtected(filepath.Join(dir, c.Artifact.File), filepath.Join(base.Root, c.Artifact.File), 0755, c.Artifact.SHA256, c.Artifact.Size, previous); err != nil {
 			return err
 		}
+	}
+	if base.NativeOwnerAccess && (r.Package.NativeDesktop != nil || r.PreviousPackage != nil && r.PreviousPackage.NativeDesktop != nil) {
+		if r.Package.NativeDesktop == nil || r.PreviousPackage == nil || r.PreviousPackage.NativeDesktop == nil {
+			return errors.New("the original protected desktop update is required")
+		}
+		if err = maintenance.CopyProtected(filepath.Join(dir, "fased-desktop"), filepath.Join(base.Root, "fased-desktop"), 0755, r.Package.NativeDesktop.SHA256, r.Package.NativeDesktop.Size, r.PreviousPackage.NativeDesktop.SHA256); err != nil {
+			return err
+		}
+		if err = verifyProtectedDesktop(target, r.Package); err != nil {
+			return err
+		}
+	} else if !base.NativeOwnerAccess && r.Package.NativeDesktop != nil {
+		return errors.New("headless custody cannot replace a Local desktop")
 	}
 	if err = maintenance.ReplaceProtected(base.Root+"/install.json", mustJSON(target), 0644, sum(mustJSON(base))); err != nil {
 		return err
@@ -1000,6 +1082,11 @@ func completeProtectedUpdate(ctx context.Context, a maintenance.Authority, r *up
 func recoverProtectedBase(ctx context.Context, a maintenance.Authority, r *update.MaintenanceRecord, base Manifest, dir string) error {
 	if err := verifyProtectedPair(base); err != nil {
 		return err
+	}
+	if r.PreviousPackage != nil && r.PreviousPackage.NativeDesktop != nil {
+		if err := verifyProtectedDesktop(base, r.PreviousPackage); err != nil {
+			return err
+		}
 	}
 	if err := servicesStopped(ctx, base, func(ctx context.Context, _ []byte, args ...string) ([]byte, error) {
 		return protectedSystemctl(ctx, args[1:]...)

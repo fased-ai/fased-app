@@ -126,6 +126,38 @@ func TestInitialMaintenanceRecordRefusesForeignOrPendingState(t *testing.T) {
 	}
 }
 
+func TestInitialMaintenanceRecordBindsProtectedDesktop(t *testing.T) {
+	r := initialMaintenanceFixture()
+	var m Manifest
+	if err := strict(r.Base, &m); err != nil {
+		t.Fatal(err)
+	}
+	m.NativeOwnerAccess = true
+	r.Base, r.Target = mustJSON(m), mustJSON(m)
+	if _, err := ValidateInitialMaintenanceRecord(r); err != nil {
+		t.Fatal("legacy Local journal was not preserved", err)
+	}
+	r.Package.NativeDesktop = &update.Artifact{File: "fased-desktop", SHA256: strings.Repeat("f", 64), Size: 100}
+	if _, err := ValidateInitialMaintenanceRecord(r); err != nil {
+		t.Fatal("matching protected desktop was refused", err)
+	}
+	features := r.Package.Components[1].Contract.Features
+	for i, feature := range features {
+		if feature == update.NativeDesktopJournalFeature {
+			r.Package.Components[1].Contract.Features = append(features[:i:i], features[i+1:]...)
+			break
+		}
+	}
+	if _, err := ValidateInitialMaintenanceRecord(r); err == nil {
+		t.Fatal("an older signer that cannot read the desktop record was accepted")
+	}
+	r.Package.Components[1].Contract = signer.OrdinaryUpdateContract()
+	r.Package.NativeDesktop.File = "foreign-desktop"
+	if _, err := ValidateInitialMaintenanceRecord(r); err == nil {
+		t.Fatal("foreign desktop filename was accepted")
+	}
+}
+
 func TestProtectedWorkerRefusesIdleInstallation(t *testing.T) {
 	r := initialMaintenanceFixture()
 	if err := validateProtectedUpdateRecord(r, r.OperationID); err == nil {

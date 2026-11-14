@@ -133,6 +133,35 @@ func TestCustodyCheckUsesCompletedProtectedRelease(t *testing.T) {
 	}
 }
 
+func TestCustodyCheckDoesNotReportCurrentWithChangedDesktop(t *testing.T) {
+	owner := 1800
+	m := custodyinstall.Manifest{Owner: owner, NativeOwnerAccess: true}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &update.MaintenancePackage{Version: "0.1.12", Source: strings.Repeat("a", 40), Sequence: 12, ReleaseSHA256: strings.Repeat("b", 64), DevelopmentOnly: true, NativeDesktop: &update.Artifact{File: "fased-desktop", SHA256: strings.Repeat("c", 64), Size: 1}}
+	r := update.MaintenanceRecord{Phase: "completed", Start: "target", Target: raw, Package: p}
+	checked := 0
+	c := &custodyMaintenanceController{
+		owner:      owner,
+		readRecord: func(int) (update.MaintenanceRecord, error) { return r, nil },
+		check: func(context.Context) (*core.ApplicationRelease, error) {
+			return &core.ApplicationRelease{Sequence: p.Sequence, ManifestSHA256: p.ReleaseSHA256}, nil
+		},
+		verifyNative: func(got custodyinstall.Manifest, pkg *update.MaintenancePackage) error {
+			checked++
+			if got.Owner != owner || pkg != p {
+				t.Fatal("wrong protected desktop was checked")
+			}
+			return errors.New("desktop differs")
+		},
+	}
+	if _, err = c.Check(t.Context()); err == nil || checked != 1 {
+		t.Fatal("changed desktop was reported current", checked, err)
+	}
+}
+
 func TestCustodyUpdateStatusNeverRestartsWorker(t *testing.T) {
 	id := update.NewProbe()
 	release := &core.ApplicationRelease{Sequence: 8, ManifestSHA256: strings.Repeat("a", 64), EngineSHA256: strings.Repeat("b", 64)}

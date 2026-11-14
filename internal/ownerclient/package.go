@@ -27,6 +27,9 @@ func NativePackage(executable string) (Package, error) {
 	if filepath.Base(executable) != localinstall.DesktopName() {
 		return p, errors.New("open Wallets from the installed Fased native client")
 	}
+	if protected, selected, err := protectedNativePackage(executable); selected {
+		return protected, err
+	}
 	if m, err := bundle.Verify(root); err == nil && m.Desktop && m.Version == core.Version && m.Files["fased-signer"].SHA256 != "" {
 		p = Package{Core: filepath.Join(root, localinstall.EngineName()), Signer: filepath.Join(root, "fased-signer"), CoreSHA256: m.Files[localinstall.EngineName()].SHA256, SignerSHA256: m.Files["fased-signer"].SHA256}
 		p.LocalPaths, err = localinstall.DefaultPaths()

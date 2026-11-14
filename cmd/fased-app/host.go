@@ -123,7 +123,23 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			if command == "uninstall" {
 				operation = "remove"
 			}
-			return enrolledLifecycle(ctx, target, operation, *prepareHost, *printOnly, out, enrolledSystem(&custodyinstall.System{In: os.Stdin, Out: errOut}))
+			ops := enrolledSystem(&custodyinstall.System{In: os.Stdin, Out: errOut})
+			if command == "open" && ownerLink != "" {
+				if !target.NativeOwnerAccess {
+					return errors.New("install the protected Local native client to open Wallets")
+				}
+				if _, nativeErr := custodyinstall.ProtectedNativeRelease(target); nativeErr != nil {
+					return errors.New("install the protected Local native client to open Wallets")
+				}
+				ops.open = func(_, _ string) error {
+					process := exec.Command(filepath.Join(target.Root, localinstall.DesktopName()), "--wallet-owner", ownerLink)
+					if err := process.Start(); err != nil {
+						return errors.New("cannot open the protected Fased window")
+					}
+					return process.Process.Release()
+				}
+			}
+			return enrolledLifecycle(ctx, target, operation, *prepareHost, *printOnly, out, ops)
 		}
 	}
 	switch command {
@@ -435,27 +451,22 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			fmt.Fprintln(out, url)
 			return nil
 		}
-		m, err := localinstall.Load(paths)
-		if err != nil {
+		if _, err = localinstall.Load(paths); err != nil {
 			return err
 		}
 		var process *exec.Cmd
-		if m.Files[localinstall.DesktopName()] != "" {
-			process = exec.Command(filepath.Join(m.Root, localinstall.DesktopName()), "--data-dir", m.Data)
-		} else {
-			switch runtime.GOOS {
-			case "linux":
-				process = exec.Command("xdg-open", url)
-			case "darwin":
-				process = exec.Command("open", url)
-			case "windows":
-				process = exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", url)
-			default:
-				return errors.New("no browser opener on this platform")
-			}
+		switch runtime.GOOS {
+		case "linux":
+			process = exec.Command("xdg-open", url)
+		case "darwin":
+			process = exec.Command("open", url)
+		case "windows":
+			process = exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", url)
+		default:
+			return errors.New("no browser opener on this platform")
 		}
 		if err = process.Start(); err != nil {
-			return errors.New("cannot open the window; use open --print for the private URL")
+			return errors.New("cannot open the browser; use open --print for the private URL")
 		}
 		_ = process.Process.Release()
 		fmt.Fprintln(out, url)

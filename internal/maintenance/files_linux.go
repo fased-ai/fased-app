@@ -201,18 +201,18 @@ func resumeEnrollmentCopy(in, dir *os.File, name, expected string, size int64, u
 }
 
 // CopyProtectedBounded keeps one content-bound staging file for a verified
-// helper or signer copy. It is an internal helper, not an IPC path selector.
+// helper, signer, or native owner-window copy. It is not an IPC path selector.
 func CopyProtectedBounded(source, target string, mode os.FileMode, expected string, size int64) error {
+	name := filepath.Base(target)
+	if name != "fased-install" && name != "fased-signer" && name != "fased-desktop" {
+		return errors.New("fixed protected copy target required")
+	}
 	if os.Getuid() != 0 || os.Geteuid() != 0 || (mode != 0555 && mode != 0755) || size <= 0 || size > 128<<20 {
 		return errors.New("bounded protected copy required")
 	}
 	h, err := hex.DecodeString(expected)
 	if err != nil || len(h) != sha256.Size || hex.EncodeToString(h) != expected {
 		return errors.New("verified protected copy hash required")
-	}
-	name := filepath.Base(target)
-	if name != "fased-install" && name != "fased-signer" {
-		return errors.New("fixed protected copy target required")
 	}
 	in, err := openProtected(source, size, mode)
 	if err != nil {

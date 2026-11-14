@@ -8,8 +8,29 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// Exercise the real entry's fixed-name guard without obtaining root authority.
+func TestBoundedProtectedCopyAllowsOnlyInstalledExecutableNames(t *testing.T) {
+	if os.Getuid() == 0 || os.Geteuid() == 0 {
+		t.Skip("this check requires an unprivileged process")
+	}
+	for _, tc := range []struct{ name, want string }{
+		{"fased-install", "bounded protected copy required"},
+		{"fased-signer", "bounded protected copy required"},
+		{"fased-desktop", "bounded protected copy required"},
+		{"other", "fixed protected copy target required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := CopyProtectedBounded("", filepath.Join(t.TempDir(), tc.name), 0755, strings.Repeat("a", 64), 1)
+			if err == nil || err.Error() != tc.want {
+				t.Fatalf("unexpected refusal: %v", err)
+			}
+		})
+	}
+}
 
 func TestEnrollmentCopyResumesOnlyMatchingBoundedPrefix(t *testing.T) {
 	payload := []byte("verified disposable executable")
@@ -79,14 +100,14 @@ func TestEnrollmentCopyResumesOnlyMatchingBoundedPrefix(t *testing.T) {
 	}
 }
 
-func TestProtectedSignerAndHelperStagesResumeVerifiedPrefix(t *testing.T) {
+func TestProtectedExecutableStagesResumeVerifiedPrefix(t *testing.T) {
 	payload := []byte("authenticated public installer bytes")
 	sum := sha256.Sum256(payload)
 	digest := hex.EncodeToString(sum[:])
 	for _, tc := range []struct {
 		name string
 		mode os.FileMode
-	}{{"fased-install", 0555}, {"fased-signer", 0755}} {
+	}{{"fased-install", 0555}, {"fased-signer", 0755}, {"fased-desktop", 0755}} {
 		t.Run(tc.name, func(t *testing.T) {
 			dirPath := t.TempDir()
 			stage := "." + tc.name + "-" + digest + ".pending"

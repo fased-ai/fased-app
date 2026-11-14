@@ -33,6 +33,7 @@ type custodyMaintenanceController struct {
 	workerState   func(context.Context, string) (custodyWorkerState, error)
 	pauseStatus   func(context.Context) (update.CorePauseReceipt, error)
 	verifyTarget  func(custodyinstall.Manifest) error
+	verifyNative  func(custodyinstall.Manifest, *update.MaintenancePackage) error
 }
 
 func (c *custodyMaintenanceController) completionReady(ctx context.Context, r update.MaintenanceRecord, root string) (bool, error) {
@@ -104,6 +105,9 @@ func (c *custodyMaintenanceController) Check(ctx context.Context) (*core.Applica
 	if err != nil {
 		return nil, err
 	}
+	if err = c.verifyInstalledDesktop(r, installed); err != nil {
+		return nil, err
+	}
 	if previous.Sequence != installed.Sequence || previous.ReleaseSHA256 != installed.ReleaseSHA256 {
 		return nil, errors.New("installed release changed during check; check again")
 	}
@@ -117,6 +121,31 @@ func (c *custodyMaintenanceController) Check(ctx context.Context) (*core.Applica
 		return nil, nil
 	}
 	return release, nil
+}
+
+func (c *custodyMaintenanceController) verifyInstalledDesktop(r update.MaintenanceRecord, p *update.MaintenancePackage) error {
+	raw := r.Base
+	if r.Phase == "completed" && r.Start == "target" {
+		raw = r.Target
+	}
+	var m custodyinstall.Manifest
+	if p == nil {
+		return errors.New("protected installed release is unavailable")
+	}
+	if p.NativeDesktop == nil {
+		if update.StrictJSON(raw, &m) == nil && m.NativeOwnerAccess {
+			return errors.New("the Local wallet window needs a compatible installation before it can be reported current")
+		}
+		return nil // Headless and pre-enrollment releases need no native window.
+	}
+	if update.StrictJSON(raw, &m) != nil || m.Owner != c.owner {
+		return errors.New("native installation identity differs from the protected record")
+	}
+	verify := c.verifyNative
+	if verify == nil {
+		verify = custodyinstall.VerifyProtectedDesktop
+	}
+	return verify(m, p)
 }
 
 func custodyInstalledPackage(r update.MaintenanceRecord) (*update.MaintenancePackage, error) {
@@ -293,6 +322,9 @@ func (c *custodyMaintenanceController) custodyRecordStatus(ctx context.Context, 
 		}
 		if update.StrictJSON(r.Target, &target) != nil || target.CoreHash != o.Release.EngineSHA256 || verifyTarget(target) != nil {
 			return proof, true, errors.New("installed target differs from the completed custody record")
+		}
+		if err := c.verifyInstalledDesktop(r, r.Package); err != nil {
+			return proof, true, err
 		}
 		ready, err := c.completionReady(ctx, r, target.Root)
 		if err != nil || !ready {

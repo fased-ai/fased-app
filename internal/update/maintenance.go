@@ -13,6 +13,10 @@ import (
 // optional preserved-release field while a custody update is recovering.
 const JournalBasePackageFeature = "custody-journal-base-package-v1"
 
+// NativeDesktopJournalFeature means the reader understands the optional
+// protected desktop artifact in the existing custody update journal.
+const NativeDesktopJournalFeature = "custody-journal-native-desktop-v1"
+
 const MaintenanceRoot = "/var/lib/fased-maintenance"
 
 type MaintenanceAuthority struct {
@@ -118,6 +122,7 @@ type MaintenancePackage struct {
 	ProvenanceSHA256 string      `json:"provenanceSha256"`
 	DevelopmentOnly  bool        `json:"developmentOnly"`
 	Components       []Component `json:"components"`
+	NativeDesktop    *Artifact   `json:"nativeDesktop,omitempty"`
 }
 
 // RecoveryEligible recognizes only an already admitted operation. It never
@@ -218,6 +223,16 @@ func (p MaintenancePackage) Validate() error {
 	}
 	if !OrdinaryContracts(contracts) {
 		return errors.New("ordinary custody package contracts required")
+	}
+	if p.NativeDesktop != nil && (p.NativeDesktop.File != "fased-desktop" || p.NativeDesktop.Size <= 0 || p.NativeDesktop.Size > 64<<20 || !hashOK(p.NativeDesktop.SHA256)) {
+		return errors.New("invalid protected desktop artifact")
+	}
+	if p.NativeDesktop != nil {
+		for _, c := range p.Components {
+			if !slices.Contains(c.Contract.Features, NativeDesktopJournalFeature) {
+				return errors.New("both installed readers must understand the protected desktop journal")
+			}
+		}
 	}
 	return nil
 }
