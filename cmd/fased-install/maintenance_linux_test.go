@@ -165,3 +165,35 @@ func TestEnrollmentCoreAcceptsOnlyVerifiedBeforeOrAfterMode(t *testing.T) {
 		t.Fatal("foreign mode accepted")
 	}
 }
+
+func TestBoundCandidateRefusesRetargetingBeforeFallback(t *testing.T) {
+	r := maintenance.CandidateReceipt{Version: 1, Owner: 1400, Scope: "update", PacketSHA256: strings.Repeat("a", 64), InstallerSHA256: strings.Repeat("b", 64), EngineSHA256: strings.Repeat("c", 64), ProductVersion: "0.1.12", Sequence: 12, ReleaseSHA256: strings.Repeat("d", 64), Target: update.Target{OS: "linux", Arch: "amd64"}, BaseSequence: 11, BaseReleaseSHA256: strings.Repeat("e", 64), BaseInstallation: strings.Repeat("1", 32), BaseManifestSHA: strings.Repeat("f", 64), ExpiresAt: 100}
+	op := maintenance.CandidateOperation{Version: 1, Owner: r.Owner, Scope: r.Scope, PacketSHA256: r.PacketSHA256, OperationID: strings.Repeat("2", 32), RequestSHA256: strings.Repeat("3", 64)}
+	if err := checkCandidateOriginal(&r, &op, r.Scope, op.OperationID, op.RequestSHA256, r.Sequence, r.ReleaseSHA256, r.EngineSHA256); err != nil {
+		t.Fatal("the exact original request must remain recoverable", err)
+	}
+	if selected, err := candidateSelectsRelease(r, "update", r.Sequence+1, r.ReleaseSHA256, r.EngineSHA256, time.Unix(101, 0), func() error { return nil }); err != nil || selected {
+		t.Fatal("regression setup must reach the old public-fallback decision", selected, err)
+	}
+	for _, tc := range []struct {
+		name, scope, request, release, core string
+		sequence                            uint64
+		receipt                             *maintenance.CandidateReceipt
+	}{
+		{"missing receipt", "update", op.RequestSHA256, r.ReleaseSHA256, r.EngineSHA256, r.Sequence, nil},
+		{"changed scope", "fresh", op.RequestSHA256, r.ReleaseSHA256, r.EngineSHA256, r.Sequence, &r},
+		{"changed sequence", "update", op.RequestSHA256, r.ReleaseSHA256, r.EngineSHA256, r.Sequence + 1, &r},
+		{"changed request", "update", strings.Repeat("4", 64), r.ReleaseSHA256, r.EngineSHA256, r.Sequence, &r},
+		{"changed release", "update", op.RequestSHA256, strings.Repeat("5", 64), r.EngineSHA256, r.Sequence, &r},
+		{"changed core", "update", op.RequestSHA256, r.ReleaseSHA256, strings.Repeat("6", 64), r.Sequence, &r},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := checkCandidateOriginal(tc.receipt, &op, tc.scope, op.OperationID, tc.request, tc.sequence, tc.release, tc.core); err == nil {
+				t.Fatal("the original operation was allowed to select another release")
+			}
+		})
+	}
+	if err := checkCandidateOriginal(&r, &op, "update", strings.Repeat("7", 32), op.RequestSHA256, 13, strings.Repeat("8", 64), ""); err != nil {
+		t.Fatal("another operation's existing admission path was changed", err)
+	}
+}

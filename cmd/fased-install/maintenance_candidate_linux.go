@@ -385,20 +385,34 @@ func candidateDocument(value any) ([]byte, string) {
 	return b, hex.EncodeToString(h[:])
 }
 
-// candidateAcquisition is called only after the existing enrollment or core
-// update operation has been authenticated. The first call binds that original
-// operation; retries of the same request may finish after admission expires.
+// candidateAcquisition pins the matching candidate to the original request;
+// the direct bootstrap caller also reaches it without a core operation. A
+// matching retry may finish after admission expires.
 func candidateAcquisition(ctx context.Context, a maintenance.Authority, o bootstrap.Options, scope, operation, requestSHA string, sequence uint64, releaseSHA, coreSHA string, manual bool) (*bootstrap.Prepared, bool, error) {
+	bound, boundErr := maintenance.ReadCandidateOperation(a.Owner)
+	if boundErr != nil && !errors.Is(boundErr, os.ErrNotExist) {
+		return nil, true, boundErr
+	}
+	var previous *maintenance.CandidateOperation
+	if boundErr == nil {
+		previous = &bound
+	}
 	receipt, err := maintenance.ReadCandidateReceipt(a.Owner)
 	if errors.Is(err, os.ErrNotExist) {
+		if err := checkCandidateOriginal(nil, previous, scope, operation, requestSHA, sequence, releaseSHA, coreSHA); err != nil {
+			return nil, true, err
+		}
 		return nil, false, nil
 	}
 	if err != nil {
-		return nil, false, err
+		return nil, true, err
+	}
+	err = checkCandidateOriginal(&receipt, previous, scope, operation, requestSHA, sequence, releaseSHA, coreSHA)
+	if err != nil {
+		return nil, true, err
 	}
 	selected, err := candidateSelectsRelease(receipt, scope, sequence, releaseSHA, coreSHA, time.Now(), func() error {
-		_, err := maintenance.ReadCandidateOperation(a.Owner)
-		return err
+		return boundErr
 	})
 	if err != nil || !selected {
 		return nil, selected, err
@@ -421,13 +435,6 @@ func candidateAcquisition(ctx context.Context, a maintenance.Authority, o bootst
 		}
 	}
 	want := maintenance.CandidateOperation{Version: 1, Owner: a.Owner, Scope: scope, PacketSHA256: receipt.PacketSHA256, OperationID: operation, RequestSHA256: requestSHA}
-	bound, err := maintenance.ReadCandidateOperation(a.Owner)
-	var previous *maintenance.CandidateOperation
-	if err == nil {
-		previous = &bound
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, true, err
-	}
 	bind, err := candidateBindingRequired(receipt, want, previous, time.Now())
 	if err != nil {
 		return nil, true, err
@@ -457,6 +464,28 @@ func candidateAcquisition(ctx context.Context, a maintenance.Authority, o bootst
 	admission := bootstrap.CandidateAdmission{PacketSHA256: receipt.PacketSHA256, OperationID: operation, BaselineSHA256: baseline, ExpiresAt: time.Now().Add(15 * time.Minute).Unix()}
 	p, err := bootstrap.PrepareMaintenanceCandidate(ctx, a.Owner, o, admission)
 	return p, true, err
+}
+
+// A bound operation must not silently fall back to another release when its
+// receipt or request no longer matches. Other operation IDs still require
+// pending-binding classification before they can safely be admitted.
+func checkCandidateOriginal(receipt *maintenance.CandidateReceipt, bound *maintenance.CandidateOperation, scope, operation, requestSHA string, sequence uint64, releaseSHA, coreSHA string) error {
+	if receipt == nil {
+		if bound != nil {
+			return errors.New("original candidate receipt is unavailable; preserve the operation")
+		}
+		return nil
+	}
+	if bound == nil {
+		return nil
+	}
+	if bound.OperationID != operation {
+		return nil
+	}
+	if bound.Validate() != nil || receipt.Validate() != nil || bound.Owner != receipt.Owner || bound.Scope != receipt.Scope || bound.PacketSHA256 != receipt.PacketSHA256 || bound.Scope != scope || bound.RequestSHA256 != requestSHA || receipt.Sequence != sequence || receipt.ReleaseSHA256 != releaseSHA || coreSHA != "" && receipt.EngineSHA256 != coreSHA {
+		return errors.New("candidate request differs from the original operation")
+	}
+	return nil
 }
 
 func candidateSelectsRelease(receipt maintenance.CandidateReceipt, scope string, sequence uint64, releaseSHA, coreSHA string, now time.Time, readOperation func() error) (bool, error) {
