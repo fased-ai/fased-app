@@ -1,4 +1,11 @@
 import { openOwnerSetup } from "../../scripts/fixture-owner-setup.mjs";
+import {
+  browserRequest,
+  finishNamedConversation,
+  installedConversationAccount,
+  openExactNoticeResult,
+  prepareNamedConversation,
+} from "../../scripts/staged-package-browser.mjs";
 import { expect, test, type Request, type Route } from "@playwright/test";
 import {
   refreshFixtureAccounts,
@@ -5354,9 +5361,45 @@ test("public account records share UI/CLI state without wallet authority", async
   expect(connection.locked).toBe(true);
   expect(JSON.stringify(connection)).not.toContain("disposable-browser");
 
+  await page.getByText("Recovery", { exact: true }).click();
+  const downloadBackup = page.getByRole("button", {
+    name: "Download backup",
+    exact: true,
+  });
+  let backupDownloads = 0;
+  page.on("download", () => backupDownloads++);
+  await expect(downloadBackup).toBeVisible({ timeout: 3000 });
+  await expect(
+    page.getByText("Requires this instance and wallet settings.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page
+    .getByLabel("Vault password", { exact: true })
+    .fill("wrong disposable vault password");
+  await downloadBackup.click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Credential operation failed",
+  );
+  expect(backupDownloads).toBe(0);
+  await page
+    .getByLabel("Vault password", { exact: true })
+    .fill("Disposable browser vault password 123");
+  const downloadPromise = page.waitForEvent("download");
+  await downloadBackup.click();
+  const download = await downloadPromise;
+  expect(backupDownloads).toBe(1);
+  expect(download.suggestedFilename()).toBe("fased-rpc-backup.json");
   const backupPath = join(dir, "rpc-backup.json");
+  await download.saveAs(backupPath);
+  const browserBackup = JSON.parse(await readFile(backupPath, "utf8"));
+  expect(browserBackup.accountId).toBe(state.record.accounts[0].id);
+  expect(JSON.stringify(browserBackup)).not.toContain("disposable-browser");
+  expect(JSON.stringify(browserBackup)).not.toContain("vault password");
+
+  const cliBackupPath = join(dir, "rpc-cli-backup.json");
   const backupStatus = await privateCLI(
-    ["accounts", "--rpc-credential-stdin", "--rpc-backup-out", backupPath],
+    ["accounts", "--rpc-credential-stdin", "--rpc-backup-out", cliBackupPath],
     {
       accountId: state.record.accounts[0].id,
       revision: state.record.revision,
@@ -5366,10 +5409,9 @@ test("public account records share UI/CLI state without wallet authority", async
     },
   );
   expect(backupStatus.backup).toBeUndefined();
-  expect(await readFile(backupPath, "utf8")).not.toContain(
-    "disposable-browser",
+  expect(JSON.parse(await readFile(cliBackupPath, "utf8"))).toEqual(
+    browserBackup,
   );
-  await page.getByText("Recovery", { exact: true }).click();
   await page
     .getByLabel("Backup file", { exact: true })
     .setInputFiles(backupPath);
@@ -5385,6 +5427,9 @@ test("public account records share UI/CLI state without wallet authority", async
   await page
     .getByLabel("Vault password", { exact: true })
     .fill("Disposable browser vault password 123");
+  await expect(
+    page.getByRole("button", { name: "Restore", exact: true }),
+  ).toBeDisabled();
   await page.getByRole("button", { name: "Remove key", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Remove key", exact: true }),
@@ -12209,6 +12254,7 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     .click();
   await expect.poll(async () => (await read()).runs.length).toBe(1);
   expect((await read()).runs[0].outcome).toBe("reminded");
+  const reminderRunId = (await read()).runs[0].id;
   await page.getByRole("button", { name: "Discuss", exact: true }).click();
   await expect(page.locator(".local-messages")).toContainText(
     "Inspect the saved SOL risk limits",
@@ -12316,8 +12362,13 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     .click();
   await expect(inbox).toBeHidden();
   await expect(
-    page.getByRole("complementary", { name: "Task details", exact: true }),
-  ).toContainText("Daily SOL review");
+    page
+      .getByRole("region", { name: "Run results", exact: true })
+      .getByRole("article", {
+        name: `Run ${reminderRunId}`,
+        exact: true,
+      }),
+  ).toBeVisible();
   await page.evaluate(() => {
     location.hash = "activity";
   });
@@ -12328,8 +12379,13 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     .click();
   await expect(page).toHaveURL(/#agents\/tasks$/);
   await expect(
-    page.getByRole("complementary", { name: "Task details", exact: true }),
-  ).toContainText("Daily SOL review");
+    page
+      .getByRole("region", { name: "Run results", exact: true })
+      .getByRole("article", {
+        name: `Run ${reminderRunId}`,
+        exact: true,
+      }),
+  ).toBeVisible();
   await (
     await openSetup()
   )
@@ -12999,11 +13055,21 @@ test("activity and notifications open the exact task run", async ({
   await page.getByLabel("Agent", { exact: true }).selectOption(profileId);
   const read = () => privateCLI(["agents", "--profile", profileId]);
   const command = async (input: Record<string, unknown>) =>
-    privateCLI(["agents", "--request-stdin"], {
+    browserRequest(page, "agents", "POST", {
       profileId,
       revision: (await read()).revision,
       ...input,
     });
+  const unrelated = (
+    await command({
+      action: "task-create",
+      name: "Unrelated reminder",
+      text: "A separate synthetic note",
+      intervalSeconds: 3600,
+      maxRuns: 1,
+    })
+  ).tasks.at(-1);
+  await command({ action: "task-run", id: unrelated.id });
   const task = (
     await command({
       action: "task-create",
@@ -13016,15 +13082,19 @@ test("activity and notifications open the exact task run", async ({
   await command({ action: "task-run", id: task.id });
   await command({ action: "task-run", id: task.id });
   const saved = await read();
-  expect(saved.runs).toHaveLength(2);
-  expect(saved.notices).toHaveLength(2);
-  expect(saved.notices[0].runId).toBe(saved.runs[0].id);
-  expect(saved.notices[1].runId).toBe(saved.runs[1].id);
+  const runs = saved.runs.filter((r: any) => r.taskId === task.id);
+  const notices = saved.notices.filter((n: any) =>
+    runs.some((r: any) => r.id === n.runId),
+  );
+  expect(runs).toHaveLength(2);
+  expect(notices).toHaveLength(2);
+  expect(notices[0].runId).toBe(runs[0].id);
+  expect(notices[1].runId).toBe(runs[1].id);
   await page.goto(url + "/#activity");
   const activity = page.getByRole("list", { name: "Activity events" });
-  await expect(activity.locator("li")).toHaveCount(2);
-  await activity
-    .locator("li")
+  const taskEvents = activity.locator("li").filter({ hasText: task.name });
+  await expect(taskEvents).toHaveCount(2);
+  await taskEvents
     .first()
     .getByRole("button", { name: "Result", exact: true })
     .click();
@@ -13035,40 +13105,30 @@ test("activity and notifications open the exact task run", async ({
   await expect(results).toBeVisible();
   await expect(
     results.getByRole("article", {
-      name: `Run ${saved.runs[0].id}`,
+      name: `Run ${runs[0].id}`,
       exact: true,
     }),
   ).toBeVisible();
   await expect(
     results.getByRole("article", {
-      name: `Run ${saved.runs[1].id}`,
+      name: `Run ${runs[1].id}`,
       exact: true,
     }),
   ).toHaveCount(0);
-  if (isMobile)
-    await page.getByRole("button", { name: "More", exact: true }).click();
-  await page.getByRole("button", { name: /^Notifications,/ }).click();
-  const inbox = page.getByRole("dialog", {
-    name: "Notification inbox",
-    exact: true,
+  await openExactNoticeResult(page, expect, {
+    index: 0,
+    runId: runs[0].id,
+    otherRunId: runs[1].id,
+    noticeText: task.name,
+    isMobile,
   });
-  await inbox
-    .locator(".notice-list article")
-    .nth(1)
-    .getByRole("button", { name: "Result", exact: true })
-    .click();
-  await expect(
-    results.getByRole("article", {
-      name: `Run ${saved.runs[1].id}`,
-      exact: true,
-    }),
-  ).toBeVisible();
-  await expect(
-    results.getByRole("article", {
-      name: `Run ${saved.runs[0].id}`,
-      exact: true,
-    }),
-  ).toHaveCount(0);
+  await openExactNoticeResult(page, expect, {
+    index: 1,
+    runId: runs[1].id,
+    otherRunId: runs[0].id,
+    noticeText: task.name,
+    isMobile,
+  });
 });
 
 test("new conversation keeps its selected account and model through first Send", async ({
@@ -13106,6 +13166,7 @@ test("new conversation keeps its selected account and model through first Send",
     key: "fased-test-new-chat-second-key",
     passphrase,
   });
+  expect(first.ref).not.toBe(second.ref);
   const firstModel = first.catalog.models.find(
     (m: { selectable: boolean; recommended: boolean }) =>
       m.selectable && m.recommended,
@@ -13162,7 +13223,34 @@ test("new conversation keeps its selected account and model through first Send",
       return false;
     return request.postDataJSON()?.action === "chat-review";
   });
-  await form.getByRole("button", { name: "Send", exact: true }).click();
+  let releaseCreation = () => {};
+  let markCreationHeld = () => {};
+  const creationHeld = new Promise<void>((resolve) => {
+    markCreationHeld = resolve;
+  });
+  const resumeCreation = new Promise<void>((resolve) => {
+    releaseCreation = resolve;
+  });
+  let held = false;
+  await page.route("**/api/v1/agents", async (route) => {
+    if (
+      !held &&
+      route.request().method() === "POST" &&
+      route.request().postDataJSON()?.action === "session-create"
+    ) {
+      held = true;
+      markCreationHeld();
+      await resumeCreation;
+    }
+    await route.continue();
+  });
+  try {
+    await form.getByRole("button", { name: "Send", exact: true }).click();
+    await creationHeld;
+    await form.getByLabel("Provider", { exact: true }).selectOption(second.ref);
+  } finally {
+    releaseCreation();
+  }
   expect((await submitted).postDataJSON()).toMatchObject({
     connectionRef: first.ref,
     model: firstModel,
@@ -13201,6 +13289,52 @@ test("new conversation keeps its selected account and model through first Send",
   await expect(replyMenu.getByLabel("Model", { exact: true })).toHaveValue(
     firstModel,
   );
+  await openConversationList(page);
+  await page
+    .locator(".rail-heading")
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Second conversation");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Second conversation", exact: true }),
+  ).toBeVisible();
+  if ((await replyMenu.getAttribute("open")) === null)
+    await replyMenu.locator("summary").click();
+  await expect(replyMenu.getByLabel("Provider", { exact: true })).toHaveValue(
+    second.ref,
+  );
+  await openConversationList(page);
+  await page
+    .locator(".agent-session-list")
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  if ((await replyMenu.getAttribute("open")) === null)
+    await replyMenu.locator("summary").click();
+  await expect(replyMenu.getByLabel("Provider", { exact: true })).toHaveValue(
+    first.ref,
+  );
+  await openConversationList(page);
+  await page
+    .locator(".agent-session-list")
+    .getByRole("button", { name: "Second conversation", exact: true })
+    .click();
+  if ((await replyMenu.getAttribute("open")) === null)
+    await replyMenu.locator("summary").click();
+  await expect(replyMenu.getByLabel("Provider", { exact: true })).toHaveValue(
+    second.ref,
+  );
+  await openConversationList(page);
+  await page
+    .locator(".agent-session-list")
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  if ((await replyMenu.getAttribute("open")) === null)
+    await replyMenu.locator("summary").click();
   await replyMenu
     .getByRole("button", { name: "Use agent default", exact: true })
     .click();
@@ -13215,6 +13349,174 @@ test("new conversation keeps its selected account and model through first Send",
   await expect(replyMenu.getByLabel("Provider", { exact: true })).toHaveValue(
     second.ref,
   );
+});
+
+test("naming an empty conversation keeps its draft and selected account", async ({
+  page,
+}) => {
+  await stop();
+  await start(true);
+  await page.goto(url + "/#agents/chat");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await openOwnerSetup(page, claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+  const passphrase = "disposable-named-chat-vault";
+  const fallback = await privateCLI(["ai-connection", "--request-stdin"], {
+    action: "save",
+    name: "Default account",
+    key: "fased-test-named-chat-default",
+    passphrase,
+  });
+  const request = (route: string, method?: string, body?: unknown) =>
+    browserRequest(page, route, method, body);
+  const defaultModel = fallback.catalog.models.find(
+    (m: any) => m.selectable && m.recommended,
+  ).id;
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  const creation = page.getByRole("dialog", { name: "New agent", exact: true });
+  await creation
+    .getByLabel("Name", { exact: true })
+    .fill("Named conversation agent");
+  await creation
+    .getByLabel("Account", { exact: true })
+    .selectOption(fallback.ref);
+  await creation
+    .getByLabel("Model", { exact: true })
+    .selectOption(defaultModel);
+  await creation
+    .getByRole("button", { name: "Create agent", exact: true })
+    .click();
+  await expect(creation).toBeHidden();
+  const chosen = await installedConversationAccount(
+    request,
+    passphrase,
+    fallback.ref,
+  );
+  expect(
+    (await installedConversationAccount(request, passphrase, fallback.ref)).ref,
+  ).toBe(chosen.ref);
+  expect(chosen.testOnly).toBe(true);
+  expect(chosen.liveCallsEnabled).toBe(false);
+  expect(chosen.ref).not.toBe(fallback.ref);
+  const selectedModel = chosen.catalog.models.find(
+    (m: any) => m.selectable && m.recommended,
+  ).id;
+  expect(selectedModel).toBe(chosen.admissionPolicy.model);
+  const profile = (await privateCLI(["agents"])).profiles.find(
+    (p: any) => p.name === "Named conversation agent",
+  );
+  await page.reload();
+  await page.getByLabel("Agent", { exact: true }).selectOption(profile.id);
+  const form = page.locator(".chat-message-form");
+  await prepareNamedConversation(page, {
+    name: "Named draft",
+    draft: "Keep this draft",
+    ref: chosen.ref,
+    model: selectedModel,
+  });
+  let rejected = false;
+  const refuseOnce = async (route: Route) => {
+    if (
+      !rejected &&
+      route.request().method() === "POST" &&
+      route.request().postDataJSON()?.action === "session-create"
+    ) {
+      rejected = true;
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "Fixture refused creation" }),
+      });
+    } else await route.continue();
+  };
+  await page.route("**/api/v1/agents", refuseOnce);
+  const refused = page.waitForResponse(
+    (response) =>
+      response.status() === 409 &&
+      response.request().method() === "POST" &&
+      response.request().postDataJSON()?.action === "session-create",
+  );
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await refused;
+  await expect(
+    page.getByRole("button", { name: "Create conversation", exact: true }),
+  ).toBeEnabled();
+  await expect(form.getByLabel("Message", { exact: true })).toHaveValue(
+    "Keep this draft",
+  );
+  await page.unroute("**/api/v1/agents", refuseOnce);
+  await finishNamedConversation(page, expect, {
+    name: "Named draft",
+    draft: "Keep this draft",
+    ref: chosen.ref,
+    model: selectedModel,
+  });
+  const replyMenu = page.locator(".chat-composer-toolbar .reply-model-menu");
+  await openConversationList(page);
+  await page
+    .locator(".rail-heading")
+    .getByRole("button", { name: "New conversation", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation name", { exact: true })
+    .fill("Another conversation");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Another conversation", exact: true }),
+  ).toBeVisible();
+  await expect(form.getByLabel("Message", { exact: true })).toHaveValue("");
+  if ((await replyMenu.getAttribute("open")) === null)
+    await replyMenu.locator("summary").click();
+  await expect(replyMenu.getByLabel("Provider", { exact: true })).toHaveValue(
+    fallback.ref,
+  );
+  await openConversationList(page);
+  await page
+    .locator(".agent-session-list")
+    .getByRole("button", { name: "Named draft", exact: true })
+    .click();
+  await expect(form.getByLabel("Message", { exact: true })).toHaveValue(
+    "Keep this draft",
+  );
+  if ((await replyMenu.getAttribute("open")) === null)
+    await replyMenu.locator("summary").click();
+  await expect(replyMenu.getByLabel("Provider", { exact: true })).toHaveValue(
+    chosen.ref,
+  );
+  await form.getByRole("button", { name: "Send", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "Allow replies", exact: true })
+    .getByRole("button", { name: "Allow and send", exact: true })
+    .click();
+  await expect
+    .poll(
+      async () =>
+        (await privateCLI(["agents", "--profile", profile.id])).aiRequests.at(
+          -1,
+        )?.state,
+    )
+    .toBe("completed");
+  expect(
+    (await privateCLI(["agents", "--profile", profile.id])).aiRequests.at(-1),
+  ).toMatchObject({
+    connectionRef: chosen.ref,
+    model: selectedModel,
+  });
 });
 
 test("configured agent joins account Chat task result and memory without partial setup", async ({
@@ -13803,7 +14105,9 @@ test("local provider connects in UI and shares configured agent Chat without API
     .first()
     .click();
   const editor = page.getByRole("region", { name: "Providers", exact: true });
-  await editor.locator('[data-provider="local"] > button').click();
+  await editor
+    .locator('[data-provider="local"] > .provider-brand-button')
+    .click();
   await expect(editor.getByLabel("Endpoint", { exact: true })).toHaveValue(
     "http://127.0.0.1:11434/v1",
   );

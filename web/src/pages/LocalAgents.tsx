@@ -280,6 +280,27 @@ function LocalAgentEditor({
       return next;
     });
   }
+  function moveNewChatDrafts(
+    sessionId: string,
+    text: string,
+    selection?: ChatModelDraft,
+  ) {
+    const target = `${profileDraftKey}:${sessionId}`;
+    setMessageDrafts((drafts) => {
+      if (!text) return drafts;
+      const next = new Map(drafts);
+      next.set(target, text);
+      if (drafts.get(newChatKey) === text) next.delete(newChatKey);
+      return next;
+    });
+    setChatModelDrafts((drafts) => {
+      if (!selection) return drafts;
+      const next = new Map(drafts);
+      next.set(target, selection);
+      if (drafts.get(newChatKey) === selection) next.delete(newChatKey);
+      return next;
+    });
+  }
   function resetMemory() {
     setMemoryOpen(false);
     setMemoryID("");
@@ -404,17 +425,29 @@ function LocalAgentEditor({
               <form
                 className="agent-inline"
                 onSubmit={submit(async () => {
-                  if (
-                    await agents.change({
+                  const wasEmpty = !activeSession;
+                  const existing = new Set(v.sessions.map((s) => s.id));
+                  const draft = message;
+                  const selection = newSelection;
+                  await agents.change(
+                    {
                       action: "session-create",
                       name: sessionName,
-                    })
-                  ) {
-                    setRailOpen(false);
-                    setNewConversation(false);
-                    setSessionName("");
-                    setSession("");
-                  }
+                    },
+                    (created) => {
+                      const thread = created.sessions.find(
+                        (s) =>
+                          s.profileId === v.profileId && !existing.has(s.id),
+                      );
+                      if (wasEmpty && thread)
+                        moveNewChatDrafts(thread.id, draft, selection);
+                      setRailOpen(false);
+                      setNewConversation(false);
+                      setSessionName("");
+                      setSearch("");
+                      setSession(thread?.id ?? "");
+                    },
+                  );
                 })}
               >
                 <label>
@@ -605,24 +638,12 @@ function LocalAgentEditor({
                             s.profileId === v.profileId && !existing.has(s.id),
                         );
                         if (!thread) return;
-                        updateMessage(thread.id, submitted);
-                        updateMessage("new", "");
+                        moveNewChatDrafts(thread.id, submitted, newSelection);
                         setFirstSend({
                           sessionId: thread.id,
                           text: submitted,
                           selection: newSelection,
                         });
-                        if (newSelection)
-                          setChatModelDrafts((drafts) => {
-                            const next = new Map(drafts);
-                            next.set(
-                              `${profileDraftKey}:${thread.id}`,
-                              newSelection,
-                            );
-                            if (drafts.get(newChatKey) === newSelection)
-                              next.delete(newChatKey);
-                            return next;
-                          });
                         setSearch("");
                         setSession(thread.id);
                         setRailOpen(false);

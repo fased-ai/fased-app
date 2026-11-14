@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { constants } from "node:fs";
+import { closeSync, constants, fstatSync, openSync } from "node:fs";
 import {
   readFile,
   lstat,
@@ -11,7 +11,6 @@ import {
   rename,
   link,
   unlink,
-  open,
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
@@ -1699,17 +1698,19 @@ export async function withInstalledTradeLock(directory, run) {
       (expected.mode & 0o777) === 0o700,
     "private acceptance directory required",
   );
-  const fd = await open(
+  // A numeric descriptor has no FileHandle garbage-collection finalizer: the
+  // OS lock must survive even if the pending async chain becomes unreachable.
+  const fd = openSync(
     directory,
     constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
   );
   try {
-    const actual = await fd.stat();
+    const actual = fstatSync(fd);
     assert.equal(actual.dev, expected.dev);
     assert.equal(actual.ino, expected.ino);
     try {
       execFileSync("/usr/bin/flock", ["--exclusive", "--nonblock", "3"], {
-        stdio: ["ignore", "ignore", "pipe", fd.fd],
+        stdio: ["ignore", "ignore", "pipe", fd],
         timeout: 5000,
       });
     } catch (error) {
@@ -1720,7 +1721,7 @@ export async function withInstalledTradeLock(directory, run) {
     }
     return await run();
   } finally {
-    await fd.close();
+    closeSync(fd);
   }
 }
 

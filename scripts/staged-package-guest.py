@@ -487,7 +487,11 @@ def network(work):
         os_tool("/usr/sbin/nft", "delete", "table", "ip", "fased_staged_delivery")
     rules = work / "delivery.nft"
     rules.write_text("table ip fased_staged_delivery {\n chain output { type nat hook output priority -100; policy accept; ip daddr " + ADDRESS + " tcp dport 443 redirect to :8443; }\n}\n")
-    os_tool("/usr/sbin/nft", "-f", str(rules))
+    try:
+        os_tool("/usr/sbin/nft", "-f", str(rules))
+    except subprocess.CalledProcessError as error:
+        detail = redacted((error.stderr or b"").decode(errors="replace"))[-2048:]
+        raise RuntimeError("fixture nft rule failed (" + str(error.returncode) + "): " + (detail or "stderr unavailable")) from error
     process = subprocess.Popen([sys.executable, __file__, "serve", "--work", str(work)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=(work / "server.log").open("ab"), start_new_session=True, env={"PATH": "/usr/bin:/bin", "HOME": str(P.home()), "FASED_DISPOSABLE_VM": "1"})
     wait_delivery(process)
     write_private(work / "server.json", {"pid": process.pid})

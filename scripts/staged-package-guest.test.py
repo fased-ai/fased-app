@@ -320,6 +320,21 @@ class VMLifecycleTest(unittest.TestCase):
     def test_actual_guest_runner_accepts_a_bounded_timeout(self):
         self.assertEqual(guest.run(['/usr/bin/true'], timeout=5).returncode, 0)
 
+    def test_delivery_nft_failure_reports_redacted_stderr(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work=pathlib.Path(directory)
+            (work/'tls.crt').write_text('fixture certificate')
+            addresses=[{'addr_info':[{'local':guest.ADDRESS}]}]
+            def os_tool(tool,*args):
+                if tool=='/usr/sbin/nft' and args[0]=='-f':
+                    raise subprocess.CalledProcessError(1,[tool,*args],stderr=('x'*5000+'Operation not permitted '+guest.PASSWORD+' https://login.tailscale.com/a/secret').encode())
+            with patch.object(guest.P,'read_text',return_value='127.0.0.1 localhost\n'), patch.object(guest,'run',return_value=SimpleNamespace(stdout=json.dumps(addresses).encode())), patch.object(guest,'os_tool',side_effect=os_tool), patch.object(guest.subprocess,'run',return_value=SimpleNamespace(returncode=1)):
+                with self.assertRaisesRegex(RuntimeError,'nft.*Operation not permitted') as caught:
+                    guest.network(work)
+            self.assertNotIn(guest.PASSWORD,str(caught.exception))
+            self.assertNotIn('login.tailscale.com/a/secret',str(caught.exception))
+            self.assertLess(len(str(caught.exception)),2100)
+
     def test_tailnet_preparation_allows_only_fixed_additional_os_commands(self):
         with patch.object(guest, 'run') as invoked:
             for command in [('/usr/bin/apt-get','update','-qq'),('/usr/bin/apt-get','install','-y','tailscale'),
@@ -938,6 +953,36 @@ class ProviderBundleProducerTest(unittest.TestCase):
                 entry=tarfile.TarInfo("fased-app-linux-amd64/bundle.json");entry.type=tarfile.SYMTYPE;entry.linkname="/etc/passwd";archive.addfile(entry)
             with self.assertRaisesRegex(RuntimeError,"bounded original"):
                 guest.verified_provider_bundle({"directory":str(root),"packet":{"bundleSha256":"0"*64}},root/"owned")
+
+class CIUbuntuMirrorTest(unittest.TestCase):
+    def test_signed_mirror_is_local_ci_fixture_only(self):
+        source=pathlib.Path(__file__).with_name('check-inspection-vm.py').read_text()
+        func=next(n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef) and n.name=='ci_signed_mirror_cloud_config')
+        scope={}
+        exec(compile(ast.Module(body=[func],type_ignores=[]),'<ci-mirror>','exec'),scope)
+        apply=scope['ci_signed_mirror_cloud_config']
+        original='#cloud-config\n write_files: []\n packages: [sudo]\n'
+        self.assertEqual(apply(original,'','false',False),original)
+        updated=apply(original,'kernel','true',True)
+        self.assertIn(' $RELEASE-security\n',updated)
+        self.assertIn(' Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n',updated)
+        self.assertEqual(updated.count('https://mirrors.edge.kernel.org/ubuntu/'),1)
+        self.assertIn(' packages: [sudo]',updated)
+        for mode,ci,eligible in [('other','true',True),('kernel','false',True),('kernel','true',False)]:
+            with self.subTest(mode=mode,ci=ci,eligible=eligible),self.assertRaises(ValueError):
+                apply(original,mode,ci,eligible)
+        with self.assertRaises(ValueError):
+            apply(original.replace(' packages:', ' apt: {}\n packages:'),'kernel','true',True)
+
+    def test_mirror_mode_is_limited_to_the_requested_disposable_ci_journeys(self):
+        source=pathlib.Path(__file__).with_name('check-inspection-vm.py').read_text()
+        assignment=next(n for n in ast.walk(ast.parse(source)) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='eligible' for t in n.targets))
+        code=compile(ast.Module(body=[assignment],type_ignores=[]),'<ci-mirror-scope>','exec')
+        defaults=dict(released_local_only=False,installed_agent=False,full=False,maintenance_only=False,installed_finalizer_update_only=False)
+        for changes,want in [({},False),({'released_local_only':True},False),({'released_local_only':True,'installed_agent':True},True),({'full':True},True),({'maintenance_only':True},True),({'installed_finalizer_update_only':True},True)]:
+            scope={'a':SimpleNamespace(**(defaults|changes))}
+            exec(code,scope)
+            self.assertEqual(scope['eligible'],want)
 
 if __name__ == '__main__':
     unittest.main()
