@@ -369,6 +369,29 @@ try {
     } catch (diagnostic) {
       report.macosDiagnostic.error = String(diagnostic);
     }
+    // Diagnose startup with a separate generated state directory. This cannot
+    // turn the failed service acceptance into a pass or alter its data.
+    try {
+      report.macosDiagnostic.directCore = execFileSync(
+        binary,
+        [
+          "serve",
+          "--data-dir",
+          join(root, "diagnostic-state"),
+          "--listen",
+          "127.0.0.1:0",
+        ],
+        { encoding: "utf8", timeout: 8000, maxBuffer: 64 * 1024 },
+      );
+    } catch (diagnostic) {
+      report.macosDiagnostic.directCore = {
+        code: diagnostic.code,
+        status: diagnostic.status,
+        signal: diagnostic.signal,
+        stdout: String(diagnostic.stdout || "").slice(0, 8192),
+        stderr: String(diagnostic.stderr || "").slice(0, 8192),
+      };
+    }
   }
   if (process.platform === "linux") {
     try {

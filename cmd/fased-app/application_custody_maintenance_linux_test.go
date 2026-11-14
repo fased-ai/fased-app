@@ -20,6 +20,15 @@ import (
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
+func TestCustodyMaintenanceSkipsLegacyLocalWithoutOwner(t *testing.T) {
+	if err := bindCompiledCustodyMaintenance(nil, 0, ""); err != nil {
+		t.Fatal("legacy Local custody must start without ordinary maintenance:", err)
+	}
+	if err := bindCompiledCustodyMaintenance(nil, -1, ""); err == nil {
+		t.Fatal("invalid maintenance owner accepted")
+	}
+}
+
 func TestCandidateUsesTheSharedCustodyCheckAndManualWorker(t *testing.T) {
 	packageFor := func(version string, sequence uint64, release string) *update.MaintenancePackage {
 		return &update.MaintenancePackage{Version: version, Source: strings.Repeat("a", 40), Sequence: sequence, ReleaseSHA256: release, DevelopmentOnly: true, Components: []update.Component{

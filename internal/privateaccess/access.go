@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -483,6 +484,11 @@ func (m Manager) Remove(ctx context.Context, root string) error {
 	defer lock.Close()
 	r, err := load(root)
 	if errors.Is(err, os.ErrNotExist) {
+		// Managed Tailscale Serve is Linux-only. Windows directory handles
+		// cannot be synced, and no managed route receipt exists to recover.
+		if runtime.GOOS == "windows" {
+			return nil
+		}
 		// A preceding removal may have unlinked the receipt but failed to
 		// sync the directory. Retrying must finish that durability barrier.
 		return syncAccessDirectory(root)

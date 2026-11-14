@@ -334,6 +334,11 @@ func parseCustodyWorkerState(out []byte) (custodyWorkerState, error) {
 }
 
 func bindCompiledCustodyMaintenance(store *core.Store, owner int, dir string) error {
+	// Legacy Local fixture custody has no ordinary maintenance owner. Its
+	// service must remain usable without acquiring an updater or OS authority.
+	if owner == 0 {
+		return nil
+	}
 	a, err := maintenance.ReadAuthority(owner)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
