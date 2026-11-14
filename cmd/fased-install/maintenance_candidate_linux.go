@@ -396,20 +396,12 @@ func candidateAcquisition(ctx context.Context, a maintenance.Authority, o bootst
 	if err != nil {
 		return nil, false, err
 	}
-	if receipt.Scope != scope || receipt.Sequence != sequence {
-		return nil, false, nil
-	}
-	if receipt.ReleaseSHA256 != releaseSHA || coreSHA != "" && receipt.EngineSHA256 != coreSHA {
-		return nil, true, errors.New("candidate differs from the original operation")
-	}
-	if scope == "update" && time.Now().Unix() >= receipt.ExpiresAt {
-		if _, e := maintenance.ReadCandidateOperation(a.Owner); errors.Is(e, os.ErrNotExist) {
-			// An expired, never-started acceptance does not shadow an ordinary
-			// public release that later has this same verified identity.
-			return nil, false, nil
-		} else if e != nil {
-			return nil, true, e
-		}
+	selected, err := candidateSelectsRelease(receipt, scope, sequence, releaseSHA, coreSHA, time.Now(), func() error {
+		_, err := maintenance.ReadCandidateOperation(a.Owner)
+		return err
+	})
+	if err != nil || !selected {
+		return nil, selected, err
 	}
 	if scope == "update" && !manual {
 		return nil, true, errors.New("candidate admission requires a manual owner update")
@@ -465,6 +457,24 @@ func candidateAcquisition(ctx context.Context, a maintenance.Authority, o bootst
 	admission := bootstrap.CandidateAdmission{PacketSHA256: receipt.PacketSHA256, OperationID: operation, BaselineSHA256: baseline, ExpiresAt: time.Now().Add(15 * time.Minute).Unix()}
 	p, err := bootstrap.PrepareMaintenanceCandidate(ctx, a.Owner, o, admission)
 	return p, true, err
+}
+
+func candidateSelectsRelease(receipt maintenance.CandidateReceipt, scope string, sequence uint64, releaseSHA, coreSHA string, now time.Time, readOperation func() error) (bool, error) {
+	if receipt.Scope != scope || receipt.Sequence != sequence {
+		return false, nil
+	}
+	if scope == "update" && now.Unix() >= receipt.ExpiresAt {
+		if err := readOperation(); errors.Is(err, os.ErrNotExist) {
+			// An unused expired candidate must not shadow a later public release.
+			return false, nil
+		} else if err != nil {
+			return true, err
+		}
+	}
+	if receipt.ReleaseSHA256 != releaseSHA || coreSHA != "" && receipt.EngineSHA256 != coreSHA {
+		return true, errors.New("candidate differs from the original operation")
+	}
+	return true, nil
 }
 
 func candidateBindingRequired(receipt maintenance.CandidateReceipt, want maintenance.CandidateOperation, bound *maintenance.CandidateOperation, now time.Time) (bool, error) {

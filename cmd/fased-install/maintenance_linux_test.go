@@ -43,6 +43,32 @@ func TestCandidateRecoveryKeepsTheOriginalOperationAfterExpiry(t *testing.T) {
 	}
 }
 
+func TestExpiredUnboundCandidateDoesNotShadowPublicRelease(t *testing.T) {
+	r := maintenance.CandidateReceipt{Scope: "update", Sequence: 12, ReleaseSHA256: "candidate", EngineSHA256: "candidate-core", ExpiresAt: 100}
+	for _, tc := range []struct {
+		name      string
+		now       int64
+		release   string
+		core      string
+		operation error
+		selected  bool
+		wantErr   bool
+	}{
+		{"expired unused candidate, different public release", 100, "public", "public-core", os.ErrNotExist, false, false},
+		{"expired bound candidate, different release", 100, "public", "public-core", nil, true, true},
+		{"active candidate, different release", 99, "public", "public-core", os.ErrNotExist, true, true},
+		{"expired bound candidate, original release", 100, "candidate", "candidate-core", nil, true, false},
+		{"expired candidate, unreadable operation", 100, "candidate", "candidate-core", os.ErrPermission, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			selected, err := candidateSelectsRelease(r, "update", 12, tc.release, tc.core, time.Unix(tc.now, 0), func() error { return tc.operation })
+			if selected != tc.selected || (err != nil) != tc.wantErr {
+				t.Fatalf("selected=%t err=%v; want selected=%t error=%t", selected, err, tc.selected, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestFixtureSuccessorSignerCannotCrossProductionBoundary(t *testing.T) {
 	initial := &bootstrap.WalletPayload{Version: "0.1.11", Source: "source-a"}
 	successor := &bootstrap.WalletPayload{Version: "0.1.12", Source: "source-b"}

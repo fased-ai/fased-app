@@ -100,6 +100,24 @@ func TestInitialMaintenanceRecordRefusesForeignOrPendingState(t *testing.T) {
 	}
 }
 
+func TestProtectedWorkerRefusesIdleInstallation(t *testing.T) {
+	r := initialMaintenanceFixture()
+	if err := validateProtectedUpdateRecord(r, r.OperationID); err == nil {
+		t.Fatal("initial idle journal was accepted as an update transaction")
+	}
+	r.Phase = "prepared"
+	if err := validateProtectedUpdateRecord(r, r.OperationID); err != nil {
+		t.Fatalf("matching prepared update refused: %v", err)
+	}
+	if err := validateProtectedUpdateRecord(r, strings.Repeat("e", 32)); err == nil {
+		t.Fatal("worker accepted another operation")
+	}
+	r.Package = nil
+	if err := validateProtectedUpdateRecord(r, r.OperationID); err == nil {
+		t.Fatal("worker accepted a missing package")
+	}
+}
+
 func TestInitialMaintenancePreservesInstalledReleaseDuringRecovery(t *testing.T) {
 	r := initialMaintenanceFixture()
 	base := *r.Package

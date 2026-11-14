@@ -564,8 +564,8 @@ func runProtectedUpdate(ctx context.Context, a maintenance.Authority, owner int,
 	if err != nil {
 		return err
 	}
-	if r.OperationID != id || r.Package == nil {
-		return errors.New("exact pending package required")
+	if err = validateProtectedUpdateRecord(r, id); err != nil {
+		return err
 	}
 	base, target, err := protectedRecordManifests(r)
 	if err != nil {
@@ -733,6 +733,13 @@ func runProtectedUpdate(ctx context.Context, a maintenance.Authority, owner int,
 	}
 	if successor {
 		return reconcileProtectedSuccessor(ctx, a, r, target, successorImage, lock)
+	}
+	return nil
+}
+
+func validateProtectedUpdateRecord(r update.MaintenanceRecord, id string) error {
+	if r.OperationID != id || r.Package == nil || r.Phase == "idle" {
+		return errors.New("exact pending package required")
 	}
 	return nil
 }
