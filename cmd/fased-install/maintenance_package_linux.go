@@ -70,6 +70,8 @@ func maintenancePackageWorkerCommand(action string, args []string) error {
 	if _, err = maintenance.ValidatePackageProcess(owner, location, instance); err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
 	id := ""
 	if boot {
 		lock, e := maintenance.PackageLock(owner, location, instance)
@@ -92,6 +94,9 @@ func maintenancePackageWorkerCommand(action string, args []string) error {
 					validErr = custodyinstall.VerifyPackageInstance(actual)
 				}
 				if validErr == nil {
+					validErr = custodyinstall.VerifyUnconfiguredPackageSigner(ctx, actual)
+				}
+				if validErr == nil {
 					for _, name := range []string{"update-active.json", "update-start-blocked.json"} {
 						if _, e := os.Lstat(actual.Root + "/" + name); !errors.Is(e, os.ErrNotExist) {
 							validErr = errors.New("an existing package recovery fence must be preserved")
@@ -111,8 +116,6 @@ func maintenancePackageWorkerCommand(action string, args []string) error {
 	} else {
 		id = args[7]
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
 	return custodyinstall.RunProtectedPackageUpdate(ctx, owner, location, instance, id, boot)
 }
 

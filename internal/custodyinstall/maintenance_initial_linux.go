@@ -7,12 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
+	"golang.org/x/sys/unix"
 )
 
 // ValidateInitialMaintenanceRecord recognizes an idle, independently verified
@@ -54,7 +57,7 @@ func ValidateInitialPackageMaintenanceRecord(r update.MaintenanceRecord, owner i
 	var base, target Manifest
 	if r.ValidateIdle() != nil || r.Owner != owner || r.OperationID != instance ||
 		strict(r.Base, &base) != nil || strict(r.Target, &target) != nil || base != target ||
-		base.validatePackage() != nil || base.Owner != owner || base.Location != location || base.ID != instance {
+		base.validatePackage() != nil || base.Network != "" || base.Owner != owner || base.Location != location || base.ID != instance {
 		return Manifest{}, errors.New("initial package installation identity differs")
 	}
 	if base.Provenance == signer.OwnerKeyProvenance && r.Package.DevelopmentOnly {
@@ -101,6 +104,14 @@ func InitializeProtectedPackageJournal(ctx context.Context, owner int, location,
 		if _, err = ValidateInitialPackageMaintenanceRecord(old, owner, location, instance); err != nil || update.SnapshotDigest("initial-package", old) != update.SnapshotDigest("initial-package", r) {
 			return errors.New("existing package operation differs; preserve it")
 		}
+		if err = VerifyUnconfiguredPackageSigner(ctx, m); err != nil {
+			return err
+		}
+		for _, name := range []string{"update-active.json", "update-start-blocked.json"} {
+			if _, err = os.Lstat(root + "/" + name); !errors.Is(err, os.ErrNotExist) {
+				return errors.New("existing package recovery fence must be preserved")
+			}
+		}
 		if err = verifyLoadedPackageServices(ctx, m); err != nil {
 			return err
 		}
@@ -114,9 +125,8 @@ func InitializeProtectedPackageJournal(ctx context.Context, owner int, location,
 	}); err != nil {
 		return err
 	}
-	entries, err := os.ReadDir(root + "/signer-state")
-	if err != nil || len(entries) != 0 {
-		return errors.New("existing signer state must be preserved")
+	if err = VerifyUnconfiguredPackageSigner(ctx, m); err != nil {
+		return err
 	}
 	for _, name := range []string{"update-active.json", "update-start-blocked.json"} {
 		if _, err = os.Lstat(root + "/" + name); !errors.Is(err, os.ErrNotExist) {
@@ -134,6 +144,67 @@ func InitializeProtectedPackageJournal(ctx context.Context, owner int, location,
 		return err
 	}
 	return maintenance.PublishProtected(journal+"/custody.json", mustJSON(r), 0644)
+}
+
+// VerifyUnconfiguredPackageSigner is read-only. A missing wallet network in a
+// manifest is not evidence that the real signer is stopped or has no state.
+// The fixed helper calls this before initial journal creation and boot entry.
+func VerifyUnconfiguredPackageSigner(ctx context.Context, m Manifest) error {
+	if os.Getuid() != 0 || os.Geteuid() != 0 {
+		return errors.New("protected package recovery required")
+	}
+	bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return verifyUnconfiguredPackageSigner(bounded, m, protectedSystemctl, emptySignerDirectory)
+}
+
+func verifyUnconfiguredPackageSigner(ctx context.Context, m Manifest, systemctl func(context.Context, ...string) ([]byte, error), inspect func(string, int, int) error) error {
+	if m.validatePackage() != nil || m.Network != "" || systemctl == nil || inspect == nil {
+		return errors.New("exact unconfigured package signer required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	raw, err := systemctl(ctx, "show", instanceUnit(m, "signer"), "--property=ActiveState,MainPID,ControlPID")
+	if err != nil {
+		return errors.New("signer state is unavailable; preserve it")
+	}
+	fields := make(map[string]string)
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || key == "" {
+			return errors.New("signer service state is ambiguous; preserve it")
+		}
+		if _, exists := fields[key]; exists {
+			return errors.New("signer service state is ambiguous; preserve it")
+		}
+		fields[key] = value
+	}
+	if len(fields) != 3 || fields["ActiveState"] != "inactive" || fields["MainPID"] != "0" || fields["ControlPID"] != "0" {
+		return errors.New("signer must be stopped before empty-state recovery")
+	}
+	if err = inspect(m.Root+"/signer-state", m.Signer.UID, m.Signer.GID); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+func emptySignerDirectory(path string, uid, gid int) error {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return errors.New("signer state is unavailable; preserve it")
+	}
+	f := os.NewFile(uintptr(fd), "package-signer-state")
+	defer f.Close()
+	var st unix.Stat_t
+	if unix.Fstat(fd, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFDIR || int(st.Uid) != uid || int(st.Gid) != gid || st.Mode&07777 != 0700 {
+		return errors.New("signer state identity differs; preserve it")
+	}
+	entries, err := f.ReadDir(1)
+	if err != nil && !errors.Is(err, io.EOF) || len(entries) != 0 {
+		return errors.New("existing signer state must be preserved")
+	}
+	return nil
 }
 
 // Verify the actual loaded systemd commands, not just a matching unit file.

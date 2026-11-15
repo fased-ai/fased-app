@@ -5,6 +5,8 @@ package custodyinstall
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,6 +14,81 @@ import (
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 )
+
+func TestInitialPackageRecoveryRequiresStoppedEmptySigner(t *testing.T) {
+	_, m := packageGateInitialRecord(t)
+	dir := filepath.Join(t.TempDir(), "signer-state")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	check := func(path string, uid, gid int) error {
+		if path != m.Root+"/signer-state" || uid != m.Signer.UID || gid != m.Signer.GID {
+			return errors.New("foreign signer target")
+		}
+		return emptySignerDirectory(dir, os.Getuid(), os.Getgid())
+	}
+	ctl := func(_ context.Context, args ...string) ([]byte, error) {
+		if len(args) != 3 || args[0] != "show" || args[1] != instanceUnit(m, "signer") || args[2] != "--property=ActiveState,MainPID,ControlPID" {
+			return nil, errors.New("foreign service")
+		}
+		return []byte("ActiveState=inactive\nMainPID=0\nControlPID=0\n"), nil
+	}
+	if err := verifyUnconfiguredPackageSigner(t.Context(), m, ctl, check); err != nil {
+		t.Fatal("empty stopped signer refused", err)
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := verifyUnconfiguredPackageSigner(cancelled, m, ctl, check); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled recovery continued: %v", err)
+	}
+	for _, value := range []string{
+		"ActiveState=active\nMainPID=1\nControlPID=0\n",
+		"ActiveState=inactive\nMainPID=1\nControlPID=0\n",
+		"ActiveState=inactive\nMainPID=0\nControlPID=2\n",
+		"ActiveState=inactive\nMainPID=0\n",
+		"ActiveState=inactive\nMainPID=0\nControlPID=0\nMainPID=1\n",
+	} {
+		bad := func(context.Context, ...string) ([]byte, error) { return []byte(value), nil }
+		if err := verifyUnconfiguredPackageSigner(t.Context(), m, bad, check); err == nil {
+			t.Fatal("active, ambiguous or incomplete signer state was accepted", value)
+		}
+	}
+	key := filepath.Join(dir, "preserve")
+	if err := os.WriteFile(key, []byte("existing signer state"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyUnconfiguredPackageSigner(t.Context(), m, ctl, check); err == nil {
+		t.Fatal("nonempty signer was accepted as unconfigured")
+	}
+	if got, err := os.ReadFile(key); err != nil || string(got) != "existing signer state" {
+		t.Fatal("signer state was changed", err)
+	}
+	foreign := m
+	foreign.Network = "devnet"
+	if err := verifyUnconfiguredPackageSigner(t.Context(), foreign, ctl, check); err == nil {
+		t.Fatal("configured signer used the empty-signer path")
+	}
+}
+
+func TestEmptySignerDirectoryRejectsSymlinkAndWrongIdentity(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := emptySignerDirectory(dir, os.Getuid(), os.Getgid()); err != nil {
+		t.Fatal(err)
+	}
+	if err := emptySignerDirectory(dir, os.Getuid()+1, os.Getgid()); err == nil {
+		t.Fatal("foreign signer directory was accepted")
+	}
+	link := filepath.Join(filepath.Dir(dir), "linked")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := emptySignerDirectory(link, os.Getuid(), os.Getgid()); err == nil {
+		t.Fatal("symlinked signer directory was accepted")
+	}
+}
 
 func TestInitialServiceRecoveryRefusesRunningProcesses(t *testing.T) {
 	for _, tc := range []struct {
@@ -156,9 +233,17 @@ func TestInitialPackageJournalBindsInstanceAndPair(t *testing.T) {
 	for name, change := range map[string]func(*update.MaintenanceRecord){
 		"operation": func(v *update.MaintenanceRecord) { v.OperationID = strings.Repeat("d", 32) },
 		"held":      func(v *update.MaintenanceRecord) { v.Phase = "held"; v.Installation = &update.Installation{} },
-		"target":    func(v *update.MaintenanceRecord) { v.Target = []byte(`{}`) },
-		"signer":    func(v *update.MaintenanceRecord) { v.Package.Components[1].Artifact.SHA256 = strings.Repeat("d", 64) },
-		"fixture":   func(v *update.MaintenanceRecord) { v.Package.DevelopmentOnly = true },
+		"configured signer": func(v *update.MaintenanceRecord) {
+			var configured Manifest
+			if err := strict(v.Base, &configured); err != nil {
+				t.Fatal(err)
+			}
+			configured.Network = "devnet"
+			v.Base, v.Target = mustJSON(configured), mustJSON(configured)
+		},
+		"target":  func(v *update.MaintenanceRecord) { v.Target = []byte(`{}`) },
+		"signer":  func(v *update.MaintenanceRecord) { v.Package.Components[1].Artifact.SHA256 = strings.Repeat("d", 64) },
+		"fixture": func(v *update.MaintenanceRecord) { v.Package.DevelopmentOnly = true },
 	} {
 		t.Run(name, func(t *testing.T) {
 			bad := makeRecord()

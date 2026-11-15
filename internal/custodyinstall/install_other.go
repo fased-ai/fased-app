@@ -23,6 +23,7 @@ func Load(int) (Manifest, error)                                                
 func LoadPackageInstance(int, string) (Manifest, error)                          { return Manifest{}, unsupported }
 func Verify(Manifest) error                                                      { return unsupported }
 func VerifyPackageInstance(Manifest) error                                       { return unsupported }
+func VerifyUnconfiguredPackageSigner(context.Context, Manifest) error            { return unsupported }
 func ProtectedNativeRelease(Manifest) (*update.MaintenancePackage, error)        { return nil, unsupported }
 func Runtime(Manifest) error                                                     { return unsupported }
 func Remove(context.Context, Manifest, *System) error                            { return unsupported }
