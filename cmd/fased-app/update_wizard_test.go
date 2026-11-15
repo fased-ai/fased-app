@@ -54,8 +54,12 @@ func TestOrdinaryUpdateFailureAndBoundedWait(t *testing.T) {
 			v.Operation.Phase = phase
 			return json.NewEncoder(w).Encode(v)
 		}
-		if e := runUpdateWizard(call, io.Discard, io.Discard, func() {}, 2); e == nil || calls > 3 {
+		e := runUpdateWizard(call, io.Discard, io.Discard, func() {}, 2)
+		if e == nil || calls > 3 {
 			t.Fatal(phase, calls, e)
+		}
+		if phase == "applying" && (!strings.Contains(e.Error(), "same Fased instance") || strings.Contains(e.Error(), "fased update status")) {
+			t.Fatal("pending update must not suggest an ambiguous command belonging to another installation", e)
 		}
 	}
 }

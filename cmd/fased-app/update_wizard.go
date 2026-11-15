@@ -46,13 +46,14 @@ func updateWizard(call func(string, io.Writer) error, out, errOut io.Writer) err
 	return runUpdateWizard(call, out, errOut, func() { time.Sleep(time.Second) }, 900)
 }
 func runUpdateWizard(call func(string, io.Writer) error, out, errOut io.Writer, wait func(), limit int) error {
+	const pending = "update is still running; check its status in the same Fased instance before starting another update"
 	var view core.ApplicationUpdateView
 	deadline := time.Now().Add(15 * time.Minute)
 	var approved *core.ApplicationRelease
 	admittedID := ""
 	read := func(action string) error {
 		if time.Now().After(deadline) {
-			return errors.New("update is still running; use fased update status")
+			return errors.New(pending)
 		}
 		var b bytes.Buffer
 		if e := call(action, &b); e != nil {
@@ -128,7 +129,7 @@ func runUpdateWizard(call func(string, io.Writer) error, out, errOut io.Writer, 
 			return e
 		}
 	}
-	return errors.New("update is still running; use fased update status. Do not start another operation")
+	return errors.New(pending)
 }
 func ordinaryUpdateCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	action := "wizard"
