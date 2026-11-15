@@ -4,6 +4,7 @@ package signer
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -114,5 +115,28 @@ func TestMissingCustodyRootDoesNotImplyNoMaintenance(t *testing.T) {
 	c.Version = 1
 	if !protectedMaintenanceRPCAllowed(c, Request{Action: "unlock"}, true) {
 		t.Fatal("legacy non-custody predecessor was blocked")
+	}
+}
+
+func TestPackageSignerDoesNotAdoptOwnerWideMaintenanceJournal(t *testing.T) {
+	id := strings.Repeat("a", 32)
+	root := "/var/lib/fased-app-package/1800/local/" + id
+	c := Config{Version: 3, OwnerUID: 1800, SignerID: id, StateDir: root + "/signer-state", SocketDir: root + "/signer-ipc"}
+	calls := 0
+	read := func(int) (update.MaintenanceRecord, error) {
+		calls++
+		return update.MaintenanceRecord{Version: 1, Owner: c.OwnerUID, Phase: "completed"}, nil
+	}
+	if protectedMaintenanceRPCAllowedWithRecord(c, Request{Action: "unlock"}, true, read) {
+		t.Fatal("package signer adopted the unrelated owner-wide completed journal")
+	}
+	if !protectedMaintenanceRPCAllowedWithRecord(c, Request{Action: "status"}, true, read) {
+		t.Fatal("safe status should remain available")
+	}
+	if calls != 0 {
+		t.Fatal("package signer inspected an owner-wide journal", calls)
+	}
+	if session, err := OpenMaintenance(c, strings.Repeat("b", 32)); !errors.Is(err, ErrUnavailable) || session != nil {
+		t.Fatal("package signer attempted to use an owner-wide approval", err)
 	}
 }

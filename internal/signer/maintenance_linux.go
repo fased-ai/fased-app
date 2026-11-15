@@ -32,6 +32,9 @@ type MaintenanceSession struct {
 }
 
 func OpenMaintenance(c Config, id string) (*MaintenanceSession, error) {
+	if !legacyMaintenanceConfig(c) {
+		return nil, ErrUnavailable
+	}
 	a, err := update.ReadMaintenanceApproval(c.OwnerUID, id)
 	if err != nil {
 		return nil, err
@@ -229,7 +232,16 @@ func InspectMaintenanceInventory(c Config, probe string) (Response, error) {
 // A root-owned deployment cannot be redirected by the legacy owner RPC.
 // The signer still validates every actual phase and bound preflight.
 func protectedMaintenanceRPCAllowed(c Config, q Request, owner bool) bool {
-	r, err := update.ReadMaintenanceRecord(c.OwnerUID)
+	return protectedMaintenanceRPCAllowedWithRecord(c, q, owner, update.ReadMaintenanceRecord)
+}
+
+func protectedMaintenanceRPCAllowedWithRecord(c Config, q Request, owner bool, read func(int) (update.MaintenanceRecord, error)) bool {
+	// The legacy record is owner-wide. Until the package controller supplies an
+	// instance-bound journal, it must not authorize a different signer's state.
+	if !legacyMaintenanceConfig(c) {
+		return q.Action == "status" || q.Action == "lock"
+	}
+	r, err := read(c.OwnerUID)
 	if errors.Is(err, os.ErrNotExist) {
 		if c.Version == 3 {
 			return completedMaintenanceRPCAllowed(q, func() bool {
@@ -244,6 +256,14 @@ func protectedMaintenanceRPCAllowed(c Config, q Request, owner bool) bool {
 	return protectedMaintenanceRecordRPCAllowed(c, q, owner, r, func() bool {
 		return protectedMaintenanceFenceAbsent(filepath.Dir(c.StateDir))
 	})
+}
+
+func legacyMaintenanceConfig(c Config) bool {
+	if c.Version != 3 {
+		return true
+	}
+	root := filepath.Join("/var/lib", "fased-app-custody-"+strconv.Itoa(c.OwnerUID))
+	return c.StateDir == root+"/signer-state" && c.SocketDir == root+"/signer-ipc"
 }
 
 func protectedMaintenanceRecordRPCAllowed(c Config, q Request, owner bool, r update.MaintenanceRecord, fenceAbsent func() bool) bool {

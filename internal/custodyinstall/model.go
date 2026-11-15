@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 type Options struct {
@@ -74,10 +76,7 @@ func accountName(uid int, role string) string { return fmt.Sprintf("fased-fx-%d-
 // PackageRoot is disjoint from the retained owner-wide custody installation.
 // The random installation identity prevents a recreated profile adopting state.
 func PackageRoot(uid int, location, id string) (string, error) {
-	if uid <= 0 || uint64(uid) > (1<<32)-2 || (location != "local" && location != "remote") || !validHex(id, 16) {
-		return "", errors.New("invalid package instance identity")
-	}
-	return fmt.Sprintf("/var/lib/fased-app-package/%d/%s/%s", uid, location, id), nil
+	return update.PackageInstanceRoot(uid, location, id)
 }
 
 func packageAccountName(uid int, location, id, role string) string {
@@ -95,13 +94,14 @@ func instanceUnit(m Manifest, role string) string {
 	if m.Layout == "" {
 		return Unit(m.Owner, role)
 	}
-	if m.Layout != PackageLayout || (role != "app" && role != "signer") {
+	if m.Layout != PackageLayout {
 		return ""
 	}
-	if _, err := PackageRoot(m.Owner, m.Location, m.ID); err != nil {
+	unit, err := update.PackageInstanceUnit(m.Owner, m.Location, m.ID, role)
+	if err != nil {
 		return ""
 	}
-	return fmt.Sprintf("fased-package-%d-%s-%s-%s.service", m.Owner, m.Location, m.ID, role)
+	return unit
 }
 func sum(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
 func validHex(s string, n int) bool {

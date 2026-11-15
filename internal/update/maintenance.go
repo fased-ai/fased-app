@@ -19,6 +19,22 @@ const NativeDesktopJournalFeature = "custody-journal-native-desktop-v1"
 
 const MaintenanceRoot = "/var/lib/fased-maintenance"
 
+// PackageInstanceRoot and PackageInstanceUnit define one installed instance.
+// Both the installer and signer use these canonical identities at OS boundaries.
+func PackageInstanceRoot(owner int, location, id string) (string, error) {
+	if owner <= 0 || uint64(owner) > (1<<32)-2 || (location != "local" && location != "remote") || !IDOK(id) {
+		return "", errors.New("invalid package instance identity")
+	}
+	return fmt.Sprintf("/var/lib/fased-app-package/%d/%s/%s", owner, location, id), nil
+}
+
+func PackageInstanceUnit(owner int, location, id, role string) (string, error) {
+	if _, err := PackageInstanceRoot(owner, location, id); err != nil || (role != "app" && role != "signer") {
+		return "", errors.New("invalid package service identity")
+	}
+	return fmt.Sprintf("fased-package-%d-%s-%s-%s.service", owner, location, id, role), nil
+}
+
 type MaintenanceAuthority struct {
 	Version     int    `json:"version"`
 	Owner       int    `json:"owner"`

@@ -129,7 +129,8 @@ func TestCustodyBoundaryRequiresBothServicesStopped(t *testing.T) {
 				}
 				return nil, fmt.Errorf("unexpected property")
 			}
-			err := verifyStoppedCustodyServices(context.Background(), 1800, marker, property)
+			boundary := signerInstallationBoundary{app: "fased-custody-1800-app.service", signer: "fased-custody-1800-signer.service"}
+			err := verifyStoppedInstanceServices(context.Background(), boundary, marker, property)
 			if activeRole == "" {
 				if err != nil || !seen["app"] || !seen["signer"] {
 					t.Fatal("both stopped services were not checked", err)
@@ -138,6 +139,75 @@ func TestCustodyBoundaryRequiresBothServicesStopped(t *testing.T) {
 				t.Fatal("active service accepted", activeRole)
 			}
 		})
+	}
+}
+
+func TestInstallationBoundarySelectsOnlyExactPackageInstance(t *testing.T) {
+	id := strings.Repeat("a", 32)
+	c := Config{Version: 3, Mode: OrdinaryCustodyMode, Profile: OwnerCustodyProfile, Provenance: OwnerKeyProvenance, Network: "devnet", SignerID: id, OwnerUID: 1800, AppUID: 1801, SignerUID: 1802}
+	for _, profile := range []string{"local", "remote"} {
+		root := "/var/lib/fased-app-package/1800/" + profile + "/" + id
+		c.StateDir, c.SocketDir = root+"/signer-state", root+"/signer-ipc"
+		boundary, err := installationBoundary(c)
+		if err != nil || boundary.root != root {
+			t.Fatalf("%s exact instance rejected: %v", profile, err)
+		}
+		for _, role := range []string{"app", "signer"} {
+			want := "/org/freedesktop/systemd1/unit/fased_2dpackage_2d1800_2d" + profile + "_2d" + id + "_2d" + role + "_2eservice"
+			if got := boundary.unit(role); got != want {
+				t.Fatalf("%s %s unit = %q, want %q", profile, role, got, want)
+			}
+		}
+		for _, change := range []func(*Config){
+			func(v *Config) { v.OwnerUID++ },
+			func(v *Config) { v.SignerID = strings.Repeat("b", 32) },
+			func(v *Config) { v.StateDir += "/../signer-state" },
+			func(v *Config) { v.SocketDir = "/var/lib/fased-app-custody-1800/signer-ipc" },
+			func(v *Config) { v.Provenance = ControlledCustodyProfile },
+		} {
+			bad := c
+			change(&bad)
+			if _, err := installationBoundary(bad); err == nil {
+				t.Fatal("foreign package installation selected")
+			}
+		}
+	}
+	legacy := "/var/lib/fased-app-custody-1800"
+	c.StateDir, c.SocketDir = legacy+"/signer-state", legacy+"/signer-ipc"
+	b, err := installationBoundary(c)
+	if err != nil || b.root != legacy || b.unit("signer") != "/org/freedesktop/systemd1/unit/fased_2dcustody_2d1800_2dsigner_2eservice" {
+		t.Fatal("legacy boundary changed", b, err)
+	}
+}
+
+func TestPackageSignerGuardChecksItsOwnStoppedServices(t *testing.T) {
+	id := strings.Repeat("a", 32)
+	c := Config{Version: 3, Mode: OrdinaryCustodyMode, Profile: OwnerCustodyProfile, Provenance: OwnerKeyProvenance, Network: "devnet", SignerID: id, OwnerUID: 1800, AppUID: 1801, SignerUID: 1802, StateDir: "/var/lib/fased-app-package/1800/local/" + id + "/signer-state", SocketDir: "/var/lib/fased-app-package/1800/local/" + id + "/signer-ipc"}
+	b, err := installationBoundary(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := b.root + "/update-start-blocked.json"
+	seen := map[string]bool{}
+	property := func(_ context.Context, path, _, name string) ([]byte, error) {
+		if path != b.unit("app") && path != b.unit("signer") {
+			return nil, errors.New("foreign service queried")
+		}
+		seen[path] = true
+		switch name {
+		case "Asserts":
+			return []byte(`{"type":"a(sbbsi)","data":[["AssertPathExists",false,true,"` + marker + `",0]]}`), nil
+		case "ActiveState":
+			return []byte(`{"type":"s","data":"inactive"}`), nil
+		case "MainPID":
+			return []byte(`{"type":"u","data":0}`), nil
+		case "KillMode":
+			return []byte(`{"type":"s","data":"control-group"}`), nil
+		}
+		return nil, errors.New("unexpected property")
+	}
+	if err := verifyStoppedInstanceServices(context.Background(), b, marker, property); err != nil || len(seen) != 2 {
+		t.Fatal("exact instance services were not checked", seen, err)
 	}
 }
 

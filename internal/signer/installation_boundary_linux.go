@@ -12,7 +12,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -29,6 +29,55 @@ type InstallationGuardMarker struct {
 	IntentID  string `json:"intentId"`
 	Digest    string `json:"digest"`
 	Direction string `json:"direction"`
+}
+
+type signerInstallationBoundary struct {
+	root, app, signer string
+}
+
+func (b signerInstallationBoundary) unit(role string) string {
+	name := b.app
+	if role == "signer" {
+		name = b.signer
+	} else if role != "app" {
+		return ""
+	}
+	if name == "" {
+		return ""
+	}
+	// Names are generated from validated numeric IDs and lowercase hex only.
+	name = strings.NewReplacer("-", "_2d", ".", "_2e").Replace(name)
+	return "/org/freedesktop/systemd1/unit/" + name
+}
+
+// The protected configuration chooses an exact installation, not merely an
+// owner: another Local/Remote service must never satisfy this signer's guard.
+func installationBoundary(c Config) (signerInstallationBoundary, error) {
+	if err := c.Validate(); err != nil {
+		return signerInstallationBoundary{}, err
+	}
+	legacy := fmt.Sprintf("/var/lib/fased-app-custody-%d", c.OwnerUID)
+	if c.StateDir == legacy+"/signer-state" && c.SocketDir == legacy+"/signer-ipc" {
+		return signerInstallationBoundary{root: legacy, app: fmt.Sprintf("fased-custody-%d-app.service", c.OwnerUID), signer: fmt.Sprintf("fased-custody-%d-signer.service", c.OwnerUID)}, nil
+	}
+	if c.Version != 3 || c.Mode != OrdinaryCustodyMode || c.Profile != OwnerCustodyProfile || c.Provenance != OwnerKeyProvenance {
+		return signerInstallationBoundary{}, errors.New("ordinary package signer identity required")
+	}
+	for _, location := range []string{"local", "remote"} {
+		root, err := update.PackageInstanceRoot(c.OwnerUID, location, c.SignerID)
+		if err != nil || c.StateDir != root+"/signer-state" || c.SocketDir != root+"/signer-ipc" {
+			continue
+		}
+		app, err := update.PackageInstanceUnit(c.OwnerUID, location, c.SignerID, "app")
+		if err != nil {
+			break
+		}
+		signerUnit, err := update.PackageInstanceUnit(c.OwnerUID, location, c.SignerID, "signer")
+		if err == nil {
+			return signerInstallationBoundary{root: root, app: app, signer: signerUnit}, nil
+		}
+	}
+	return signerInstallationBoundary{}, errors.New("exact signer installation paths required")
 }
 
 // InstallationPreparationFenceBytes is a denial-only marker. It never conveys
@@ -52,8 +101,11 @@ func VerifyInstallationPreparationBoundary(c Config) error {
 	if c.Validate() != nil || os.Getuid() != c.SignerUID || os.Geteuid() != c.SignerUID || os.Getuid() <= 0 {
 		return errors.New("configured unprivileged signer identity required")
 	}
-	root := fmt.Sprintf("/var/lib/fased-app-custody-%d", c.OwnerUID)
-	marker, source := root+"/update-start-blocked.json", root+"/maintenance/preparation-fence.json"
+	boundary, err := installationBoundary(c)
+	if err != nil {
+		return err
+	}
+	marker, source := boundary.root+"/update-start-blocked.json", boundary.root+"/maintenance/preparation-fence.json"
 	want, err := InstallationPreparationFenceBytes(c.OwnerUID, c.SignerID)
 	if err != nil {
 		return err
@@ -70,7 +122,7 @@ func VerifyInstallationPreparationBoundary(c Config) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	if err = verifyStoppedCustodyServices(ctx, c.OwnerUID, marker, systemdGuardProperty); err != nil {
+	if err = verifyStoppedInstanceServices(ctx, boundary, marker, systemdGuardProperty); err != nil {
 		return err
 	}
 	return check()
@@ -82,11 +134,15 @@ func VerifyInstallationPreparationStart(c Config) error {
 	if c.Validate() != nil || os.Getuid() != c.SignerUID || os.Geteuid() != c.SignerUID || os.Getuid() <= 0 {
 		return errors.New("configured unprivileged signer identity required")
 	}
-	marker := fmt.Sprintf("/var/lib/fased-app-custody-%d/update-start-blocked.json", c.OwnerUID)
+	boundary, err := installationBoundary(c)
+	if err != nil {
+		return err
+	}
+	marker := boundary.root + "/update-start-blocked.json"
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	for _, role := range []string{"app", "signer"} {
-		unit := "/org/freedesktop/systemd1/unit/fased_2dcustody_2d" + strconv.Itoa(c.OwnerUID) + "_2d" + role + "_2eservice"
+		unit := boundary.unit(role)
 		assertions, err := systemdGuardProperty(ctx, unit, "org.freedesktop.systemd1.Unit", "Asserts")
 		if err != nil {
 			return err
@@ -113,7 +169,11 @@ func VerifyInstallationGuardBoundary(c Config, intent, digest string) error {
 	if err != nil || len(h) != 32 || hex.EncodeToString(h) != digest {
 		return errors.New("exact installation digest required")
 	}
-	marker := fmt.Sprintf("/var/lib/fased-app-custody-%d/update-start-blocked.json", c.OwnerUID)
+	boundary, err := installationBoundary(c)
+	if err != nil {
+		return err
+	}
+	marker := boundary.root + "/update-start-blocked.json"
 	if err = trustedPath(marker); err != nil {
 		return errors.New("root-managed signer restart guard is unavailable")
 	}
@@ -143,7 +203,7 @@ func VerifyInstallationGuardBoundary(c Config, intent, digest string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	if err = verifyStoppedCustodyServices(ctx, c.OwnerUID, marker, systemdGuardProperty); err != nil {
+	if err = verifyStoppedInstanceServices(ctx, boundary, marker, systemdGuardProperty); err != nil {
 		return err
 	}
 	current, err := os.Lstat(marker)
@@ -165,17 +225,19 @@ func validateInstallationGuardMarker(c Config, intent, digest string, got []byte
 	return nil
 }
 
-func verifyStoppedCustodyServices(ctx context.Context, owner int, marker string, property func(context.Context, string, string, string) ([]byte, error)) error {
+func verifyStoppedInstanceServices(ctx context.Context, boundary signerInstallationBoundary, marker string, property func(context.Context, string, string, string) ([]byte, error)) error {
 	for _, role := range []string{"app", "signer"} {
-		if err := verifyStoppedGuardService(ctx, owner, role, marker, property); err != nil {
+		if err := verifyStoppedGuardService(ctx, boundary.unit(role), marker, property); err != nil {
 			return fmt.Errorf("%s service boundary: %w", role, err)
 		}
 	}
 	return nil
 }
 
-func verifyStoppedGuardService(ctx context.Context, owner int, role, marker string, property func(context.Context, string, string, string) ([]byte, error)) error {
-	unitPath := "/org/freedesktop/systemd1/unit/fased_2dcustody_2d" + strconv.Itoa(owner) + "_2d" + role + "_2eservice"
+func verifyStoppedGuardService(ctx context.Context, unitPath, marker string, property func(context.Context, string, string, string) ([]byte, error)) error {
+	if unitPath == "" {
+		return errors.New("exact signer service identity required")
+	}
 	assertions, err := property(ctx, unitPath, "org.freedesktop.systemd1.Unit", "Asserts")
 	if err != nil {
 		return err
@@ -205,11 +267,11 @@ func VerifyInstallationStartGuard(ctx context.Context, c Config, intent, digest,
 	if c.Version == 3 && c.Provenance != ControlledCustodyProfile {
 		return errors.New("start guard requires controlled disposable custody")
 	}
-	root := fmt.Sprintf("/var/lib/fased-app-custody-%d", c.OwnerUID)
-	if c.StateDir != root+"/signer-state" || c.SocketDir != root+"/signer-ipc" {
-		return errors.New("start guard requires the exact custody installation")
+	boundary, err := installationBoundary(c)
+	if err != nil {
+		return err
 	}
-	marker := root + "/update-start-blocked.json"
+	marker := boundary.root + "/update-start-blocked.json"
 	read := func() ([]byte, error) {
 		var b bytes.Buffer
 		if err := readGuardRootFile(marker, 0644, 8192, &b); err != nil {
@@ -218,7 +280,7 @@ func VerifyInstallationStartGuard(ctx context.Context, c Config, intent, digest,
 		return b.Bytes(), nil
 	}
 	stopped := func() error {
-		return verifyStoppedGuardService(ctx, c.OwnerUID, "signer", marker, systemdGuardProperty)
+		return verifyStoppedGuardService(ctx, boundary.unit("signer"), marker, systemdGuardProperty)
 	}
 	status := func() (Response, error) {
 		return Call(ctx, c, true, Request{Action: "fixture-install-controller", Install: &update.InstallRequest{Action: "status", IntentID: intent}})
