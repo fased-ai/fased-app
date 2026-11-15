@@ -197,6 +197,49 @@ func TestAttestedCandidateFreshLocalUsesVerifiedInstaller(t *testing.T) {
 	}
 }
 
+func TestNativeFreshCandidateVerifiesWithoutEnteringLegacyInstaller(t *testing.T) {
+	f, options, payloads := attestedFixture(t, "native-running-installer")
+	candidate := filepath.Join(f.parent, "native-fresh-candidate")
+	if err := os.Mkdir(candidate, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range payloads {
+		if err := os.WriteFile(filepath.Join(candidate, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	install := InstallOptions{Profile: "local", Prefix: filepath.Join(f.parent, "native-app"), DataDirectory: filepath.Join(f.parent, "native-data"), Start: false}
+	a := CandidateAdmission{PacketSHA256: digest(payloads[AttestedPacketFile]), OperationID: strings.Repeat("1", 32), FreshProfile: "local", FreshOwner: os.Getuid(), FreshRoot: install.Prefix, FreshData: install.DataDirectory, ExpiresAt: f.now.Add(10 * time.Minute).Unix()}
+	o := Options{Seed: options.Seed, SeedSHA256: options.SeedSHA256, Directory: filepath.Join(f.parent, "native-fresh-held"), now: options.now}
+	p, err := PrepareAttestedCandidate(t.Context(), o, candidate, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if err = p.VerifyFreshCandidateInstaller(install); err != nil {
+		t.Fatal("verified native candidate was refused before package admission", err)
+	}
+	wrong := install
+	wrong.DataDirectory = filepath.Join(f.parent, "different-data")
+	if err = p.VerifyFreshCandidateInstaller(wrong); err == nil {
+		t.Fatal("native candidate accepted another installation target")
+	}
+	if err = p.Run(t.Context(), install, nil, io.Discard, io.Discard); err == nil {
+		t.Fatal("native candidate reached the legacy archive installer")
+	}
+	if err = os.WriteFile(filepath.Join(o.Directory, "candidate-rpm"), []byte("changed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = p.VerifyFreshCandidateInstaller(install); err == nil {
+		t.Fatal("changed native package passed fresh admission")
+	}
+	for _, path := range []string{install.Prefix, install.DataDirectory} {
+		if _, err = os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatal("verification changed an installation target", err)
+		}
+	}
+}
+
 func TestFreshCandidateRejectsLinkedTargetParent(t *testing.T) {
 	dir := t.TempDir()
 	link := filepath.Join(dir, "linked")

@@ -46,7 +46,14 @@ func (p *Prepared) VerifyFreshCandidateInstaller(options InstallOptions) error {
 	if p.closed || p.root == nil || p.candidate == nil || p.candidate.FreshProfile != "local" {
 		return errors.New("fresh Local candidate required")
 	}
-	if err := p.revalidate(); err != nil {
+	// Native candidates need the same complete held-input and installer checks,
+	// but this read-only admission must not grant the legacy archive installer
+	// authority to execute them. Run and the legacy updater still use revalidate.
+	verify := p.revalidate
+	if p.report.LinuxPackageDigestsVerified {
+		verify = p.revalidateHeld
+	}
+	if err := verify(); err != nil {
 		return err
 	}
 	return p.checkFreshCandidate(options)

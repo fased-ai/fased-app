@@ -138,7 +138,7 @@ func TestAttestedCandidateCLI(t *testing.T) {
 		t.Setenv("XDG_CACHE_HOME", filepath.Join(parent, "cache"))
 		app, data := filepath.Join(parent, "app"), filepath.Join(parent, "data")
 		args := []string{"--install-candidate", dir, "--candidate-packet-sha256", admission.PacketSHA256, "--profile", "local", "--prefix", app, "--data-dir", data, "--start=false"}
-		if e = run(args, strings.NewReader(""), io.Discard, io.Discard); e == nil || !strings.Contains(e.Error(), "package-aware") {
+		if e = run(args, strings.NewReader(""), io.Discard, io.Discard); e == nil || !strings.Contains(e.Error(), "running installer differs") {
 			t.Fatal("native candidate reached the legacy installer entry", e)
 		}
 		for _, path := range []string{app, data} {
