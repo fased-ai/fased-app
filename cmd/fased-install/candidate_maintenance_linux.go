@@ -20,6 +20,13 @@ import (
 var readPackageCandidateForStage = maintenance.ReadPackageCandidateReceipt
 var packageCandidateCommandForStage = maintenance.PackageCandidateStreamCommand
 
+func stageAttestedFreshPackageCandidate(ctx context.Context, p *bootstrap.Prepared, packetSHA, location, instance string, diagnostics io.Writer) error {
+	if p == nil || p.ValidateFreshPackageCandidate(location, instance) != nil {
+		return errors.New("fresh candidate requires its exact Local package admission")
+	}
+	return stageAttestedScopedPackageCandidate(ctx, p, packetSHA, location, instance, "fresh", "", diagnostics)
+}
+
 func stageAttestedCandidate(ctx context.Context, p *bootstrap.Prepared, packetSHA, scope string, diagnostics io.Writer) error {
 	if p == nil || p.Report().LinuxPackageDigestsVerified {
 		return errors.New("native packages require the package-aware installation controller")
@@ -49,13 +56,18 @@ func stageAttestedCandidate(ctx context.Context, p *bootstrap.Prepared, packetSH
 // helper. Both the caller and the helper verify the same candidate; the
 // helper also binds its receipt to the installed predecessor.
 func stageAttestedPackageCandidate(ctx context.Context, p *bootstrap.Prepared, packetSHA, location, instance, baseline string, diagnostics io.Writer) error {
+	return stageAttestedScopedPackageCandidate(ctx, p, packetSHA, location, instance, "update", baseline, diagnostics)
+}
+
+func stageAttestedScopedPackageCandidate(ctx context.Context, p *bootstrap.Prepared, packetSHA, location, instance, scope, baseline string, diagnostics io.Writer) error {
 	if p == nil {
 		return errors.New("verified native package candidate required")
 	}
 	report := p.Report()
 	hash, err := hex.DecodeString(baseline)
-	if !report.LinuxPackageDigestsVerified || !report.ProvenanceVerified || report.DescriptorSHA256 != packetSHA || len(hash) != 32 || hex.EncodeToString(hash) != baseline || err != nil {
-		return errors.New("verified native package and installed predecessor required")
+	validScope := scope == "fresh" && baseline == "" || scope == "update" && err == nil && len(hash) == 32 && hex.EncodeToString(hash) == baseline
+	if !report.LinuxPackageDigestsVerified || !report.ProvenanceVerified || report.DescriptorSHA256 != packetSHA || !validScope {
+		return errors.New("verified native package and exact installation scope required")
 	}
 	if _, err = update.PackageInstanceRoot(os.Getuid(), location, instance); err != nil {
 		return err
@@ -64,27 +76,27 @@ func stageAttestedPackageCandidate(ctx context.Context, p *bootstrap.Prepared, p
 	defer cancel()
 	reuse := false
 	if old, e := readPackageCandidateForStage(os.Getuid(), location, instance); e == nil {
-		if old.PacketSHA256 == packetSHA && old.Scope == "update" {
-			if old.BaseInstallation != instance || old.BaseReleaseSHA256 != baseline {
+		if old.PacketSHA256 == packetSHA && old.Scope == scope {
+			if old.Validate() != nil || old.Owner != os.Getuid() || scope == "update" && (old.BaseInstallation != instance || old.BaseReleaseSHA256 != baseline) {
 				return errors.New("candidate predecessor differs; preserve its operation")
 			}
 			reuse = true
-		} else if old.Scope != "fresh" {
+		} else if old.Scope != "fresh" || scope != "update" {
 			return errors.New("another candidate is retained; preserve its operation")
 		}
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return e
 	}
-	q := maintenance.CandidateRequest{PacketSHA256: packetSHA, Scope: "update"}
+	q := maintenance.CandidateRequest{PacketSHA256: packetSHA, Scope: scope}
 	cmd, frame, err := packageCandidateCommandForStage(ctx, location, instance, q, diagnostics)
 	if err != nil {
 		return err
 	}
-	receipt, err := streamAttestedCandidate(ctx, p, cmd, frame, reuse, packetSHA, "update")
+	receipt, err := streamAttestedCandidate(ctx, p, cmd, frame, reuse, packetSHA, scope)
 	if err != nil {
 		return err
 	}
-	if receipt.BaseInstallation != instance || receipt.BaseReleaseSHA256 != baseline || receipt.ReleaseSHA256 != packetSHA || receipt.Sequence != report.Sequence || receipt.Target != report.Target {
+	if scope == "update" && (receipt.BaseInstallation != instance || receipt.BaseReleaseSHA256 != baseline) || receipt.ReleaseSHA256 != packetSHA || receipt.Sequence != report.Sequence || receipt.Target != report.Target {
 		return errors.New("protected package candidate differs from its original instance or release")
 	}
 	approved := core.ApplicationRelease{EngineSHA256: receipt.EngineSHA256, Version: receipt.ProductVersion, Sequence: receipt.Sequence, ManifestSHA256: receipt.ReleaseSHA256, Target: receipt.Target}

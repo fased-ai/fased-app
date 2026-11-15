@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,7 +45,16 @@ func (a CandidateAdmission) validate(now time.Time) error {
 		}
 	}
 	scope := updateScope || freshScope
-	if !hashOK(a.PacketSHA256) || !scope || !update.IDOK(a.OperationID) || a.ExpiresAt <= now.Unix() || a.ExpiresAt > now.Add(15*time.Minute).Unix() {
+	packageScope := false
+	if a.FreshProfile == "package-local" && a.FreshOwner > 0 && a.BaselineSHA256 == "" {
+		prefix := "/var/lib/fased-app-package/" + strconv.Itoa(a.FreshOwner) + "/local/"
+		if strings.HasPrefix(a.FreshRoot, prefix) {
+			instance := strings.TrimPrefix(a.FreshRoot, prefix)
+			root, err := update.PackageInstanceRoot(a.FreshOwner, "local", instance)
+			packageScope = err == nil && root == a.FreshRoot && a.FreshData == filepath.Join(root, "app-state")
+		}
+	}
+	if !hashOK(a.PacketSHA256) || !(scope || packageScope) || !update.IDOK(a.OperationID) || a.ExpiresAt <= now.Unix() || a.ExpiresAt > now.Add(15*time.Minute).Unix() {
 		return errors.New("exact candidate, installation scope and at most 15-minute admission required")
 	}
 	return nil

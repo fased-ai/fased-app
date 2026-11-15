@@ -19,6 +19,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/bundle"
 	"github.com/fased-ai/fased-app/internal/localinstall"
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 func owned(i os.FileInfo) bool {
@@ -33,6 +34,51 @@ type InstallOptions struct {
 	Start                         bool
 	Profile, Listen               string
 	upgrade                       *UpgradeOptions
+}
+
+// ValidateFreshPackageCandidate binds the verified inputs to the exact Local
+// instance. The protected receiver still independently verifies the package.
+func (p *Prepared) ValidateFreshPackageCandidate(location, instance string) error {
+	if p == nil || location != "local" || os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
+		return errors.New("fresh Local package owner required")
+	}
+	root, err := update.PackageInstanceRoot(os.Getuid(), location, instance)
+	if err != nil {
+		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.validateFreshPackageCandidate(root)
+}
+
+func (p *Prepared) validateFreshPackageCandidate(root string) error {
+	if p.closed || p.root == nil || p.invoked || p.candidate == nil || p.candidate.FreshProfile != "package-local" ||
+		p.candidate.FreshOwner != os.Getuid() || p.candidate.FreshRoot != root || p.candidate.FreshData != filepath.Join(root, "app-state") ||
+		!p.report.LinuxPackageDigestsVerified || !p.report.ProvenanceVerified || p.candidate.validate(p.options.clock()) != nil {
+		return errors.New("the original fresh package admission is required")
+	}
+	return p.revalidateHeld()
+}
+
+// VerifyFreshPackageCandidateInstaller also requires the running installer to
+// be the exact executable authenticated by the held candidate.
+func (p *Prepared) VerifyFreshPackageCandidateInstaller(location, instance string) error {
+	if p == nil || location != "local" || os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
+		return errors.New("fresh Local package owner required")
+	}
+	root, err := update.PackageInstanceRoot(os.Getuid(), location, instance)
+	if err != nil {
+		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err = p.validateFreshPackageCandidate(root); err != nil {
+		return err
+	}
+	if err = verifyRunningInstaller(p.descriptor.Release.InstallerSHA256); err != nil {
+		return errors.New("running installer differs from the authenticated package")
+	}
+	return nil
 }
 
 // VerifyFreshCandidateInstaller refuses before protected staging unless this

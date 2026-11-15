@@ -104,10 +104,10 @@ func TestPackageCandidateStreamCLI(t *testing.T) {
 	readPackageCandidateForStage = func(int, string, string) (maintenance.CandidateReceipt, error) {
 		return maintenance.CandidateReceipt{}, os.ErrNotExist
 	}
-	badField, reuse, calls := "", false, 0
+	badField, expectedScope, reuse, calls := "", "update", false, 0
 	packageCandidateCommandForStage = func(ctx context.Context, location, id string, q maintenance.CandidateRequest, diagnostics io.Writer) (*exec.Cmd, []byte, error) {
 		calls++
-		if location != "local" || id != instance || q.PacketSHA256 != packetSHA || q.Scope != "update" {
+		if location != "local" || id != instance || q.PacketSHA256 != packetSHA || q.Scope != expectedScope {
 			return nil, nil, errors.New("wrong protected receiver")
 		}
 		sink := filepath.Join(t.TempDir(), "candidate")
@@ -166,6 +166,49 @@ func TestPackageCandidateStreamCLI(t *testing.T) {
 	before := calls
 	if err = stageAttestedPackageCandidate(t.Context(), p, packetSHA, "local", instance, baseline, io.Discard); err == nil || calls != before {
 		t.Fatal("foreign retained candidate reached the receiver", err)
+	}
+
+	// The same verified bytes must reach the scoped fresh receiver without an
+	// invented predecessor. A retained update cannot authorize fresh setup.
+	expectedScope, reuse, calls = "fresh", false, 0
+	receipt.Scope = "fresh"
+	receipt.BaseSequence, receipt.BaseReleaseSHA256, receipt.BaseInstallation, receipt.BaseManifestSHA, receipt.ExpiresAt = 0, "", "", "", 0
+	readPackageCandidateForStage = func(int, string, string) (maintenance.CandidateReceipt, error) {
+		return maintenance.CandidateReceipt{}, os.ErrNotExist
+	}
+	if err = stageAttestedFreshPackageCandidate(t.Context(), p, packetSHA, "local", instance, io.Discard); err == nil || calls != 0 {
+		t.Fatal("update admission was accepted as fresh", err)
+	}
+	root, err := update.PackageInstanceRoot(os.Getuid(), "local", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshAdmission := bootstrap.CandidateAdmission{PacketSHA256: packetSHA, OperationID: strings.Repeat("2", 32), FreshProfile: "package-local", FreshOwner: os.Getuid(), FreshRoot: root, FreshData: filepath.Join(root, "app-state"), ExpiresAt: time.Now().Add(10 * time.Minute).Unix()}
+	freshOptions := bootstrap.Options{Seed: seed, SeedSHA256: hex.EncodeToString(seedHash[:]), Directory: filepath.Join(parent, "fresh-held")}
+	fresh, err := bootstrap.PrepareAttestedCandidate(t.Context(), freshOptions, dir, freshAdmission)
+	if err != nil {
+		t.Fatal("fresh candidate admission", err)
+	}
+	defer fresh.Close()
+	if err = stageAttestedFreshPackageCandidate(t.Context(), fresh, packetSHA, "local", instance, io.Discard); err != nil || calls != 1 {
+		t.Fatal("fresh package did not reach its scoped receiver", err)
+	}
+	for _, field := range []string{"owner", "engine", "version", "installer"} {
+		badField = field
+		if err = stageAttestedFreshPackageCandidate(t.Context(), fresh, packetSHA, "local", instance, io.Discard); err == nil {
+			t.Fatal("foreign fresh receiver response was accepted", field)
+		}
+	}
+	badField, reuse = "", true
+	readPackageCandidateForStage = func(int, string, string) (maintenance.CandidateReceipt, error) { return receipt, nil }
+	if err = stageAttestedFreshPackageCandidate(t.Context(), fresh, packetSHA, "local", instance, io.Discard); err != nil {
+		t.Fatal("matching fresh candidate did not reuse its receipt", err)
+	}
+	foreign.Scope = "update"
+	readPackageCandidateForStage = func(int, string, string) (maintenance.CandidateReceipt, error) { return foreign, nil }
+	before = calls
+	if err = stageAttestedFreshPackageCandidate(t.Context(), fresh, packetSHA, "local", instance, io.Discard); err == nil || calls != before {
+		t.Fatal("retained update was accepted as fresh setup", err)
 	}
 }
 

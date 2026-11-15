@@ -240,6 +240,42 @@ func TestNativeFreshCandidateVerifiesWithoutEnteringLegacyInstaller(t *testing.T
 	}
 }
 
+func TestNativeFreshPackageBindsItsExactProtectedInstance(t *testing.T) {
+	f, options, payloads := attestedFixture(t, "native-running-installer")
+	candidate := filepath.Join(f.parent, "native-package-candidate")
+	if err := os.Mkdir(candidate, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range payloads {
+		if err := os.WriteFile(filepath.Join(candidate, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	instance := strings.Repeat("a", 32)
+	root, err := update.PackageInstanceRoot(os.Getuid(), "local", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := CandidateAdmission{PacketSHA256: digest(payloads[AttestedPacketFile]), OperationID: strings.Repeat("1", 32), FreshProfile: "package-local", FreshOwner: os.Getuid(), FreshRoot: root, FreshData: filepath.Join(root, "app-state"), ExpiresAt: f.now.Add(10 * time.Minute).Unix()}
+	o := Options{Seed: options.Seed, SeedSHA256: options.SeedSHA256, Directory: filepath.Join(f.parent, "package-held"), now: options.now}
+	p, err := PrepareAttestedCandidate(t.Context(), o, candidate, a)
+	if err != nil {
+		t.Fatal("fresh package admission refused", err)
+	}
+	defer p.Close()
+	if err = p.VerifyFreshPackageCandidateInstaller("local", instance); err != nil {
+		t.Fatal("matching fresh package refused", err)
+	}
+	for _, bad := range []struct{ location, instance string }{{"remote", instance}, {"local", strings.Repeat("b", 32)}, {"local", "../other"}} {
+		if err = p.VerifyFreshPackageCandidateInstaller(bad.location, bad.instance); err == nil {
+			t.Fatal("foreign package instance was accepted", bad)
+		}
+	}
+	if err = p.Run(t.Context(), InstallOptions{Profile: "local"}, nil, io.Discard, io.Discard); err == nil {
+		t.Fatal("package admission reached the legacy installer")
+	}
+}
+
 func TestFreshCandidateRejectsLinkedTargetParent(t *testing.T) {
 	dir := t.TempDir()
 	link := filepath.Join(dir, "linked")
