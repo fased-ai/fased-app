@@ -17,6 +17,20 @@ type ApplicationCheckpoint struct {
 	Snapshot             update.MetadataSnapshot `json:"snapshot"`
 }
 
+// The live and offline owner entries must interpret the same durable
+// checkpoint and original pause before either can use it for recovery.
+func applicationCheckpointMatches(c ApplicationCheckpoint, pause update.CorePauseReceipt) bool {
+	if pause.Version != 1 || pause.State != "paused" || !update.IDOK(pause.PauseID) || pause.Request == nil || !update.ValidPauseRequest(*pause.Request) ||
+		c.Version != 1 || !hexValue(c.PreviousEngineSHA256, 32) || c.OperationID != pause.Request.IntentID || c.ManifestSHA256 != pause.Request.ManifestSHA256 ||
+		c.Pause.Version != 1 || c.Pause.State != "paused" || c.Pause.PauseID != pause.PauseID || c.Pause.Request == nil || !update.ValidPauseRequest(*c.Pause.Request) ||
+		update.SnapshotDigest("pause-request", *c.Pause.Request) != update.SnapshotDigest("pause-request", *pause.Request) ||
+		!update.IDOK(c.Pause.Core.BootID) || !update.IDOK(c.Pause.Core.ProbeID) || !update.SameCoreMetadata(c.Pause.Core, pause.Request.Expected) || !update.SameCoreMetadata(c.Pause.Core, pause.Core) ||
+		!hexValue(c.Snapshot.SHA256, 32) || c.Snapshot.File != "application-"+c.Snapshot.SHA256+".sqlite" || c.Snapshot.Size <= 0 || c.Snapshot.Size > update.MaxMetadataBackup {
+		return false
+	}
+	return true
+}
+
 func (s *Store) applicationUpdatePause(ctx context.Context, id string) (update.CorePauseReceipt, error) {
 	// This configuration has no wallet network. The OS controller must still
 	// prove that the signer is stopped and its directory is empty; this metadata

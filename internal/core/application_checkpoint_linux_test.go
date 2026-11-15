@@ -358,6 +358,9 @@ func TestApplicationOwnerOfflineRefusesDamagedCheckpoint(t *testing.T) {
 			if _, err = ReadApplicationOwnerOffline(t.Context(), s.dir, id); err == nil {
 				t.Fatal("damaged checkpoint was accepted for offline recovery")
 			}
+			if _, err = s.PrepareApplicationCheckpoint(t.Context(), id); err == nil {
+				t.Fatal("damaged checkpoint was accepted by the live owner entry")
+			}
 		})
 	}
 	t.Run("different live fence", func(t *testing.T) {
