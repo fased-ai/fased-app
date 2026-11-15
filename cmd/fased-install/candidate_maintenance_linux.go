@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/bootstrap"
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/update"
 )
@@ -85,6 +86,11 @@ func stageAttestedPackageCandidate(ctx context.Context, p *bootstrap.Prepared, p
 	}
 	if receipt.BaseInstallation != instance || receipt.BaseReleaseSHA256 != baseline || receipt.ReleaseSHA256 != packetSHA || receipt.Sequence != report.Sequence || receipt.Target != report.Target {
 		return errors.New("protected package candidate differs from its original instance or release")
+	}
+	approved := core.ApplicationRelease{EngineSHA256: receipt.EngineSHA256, Version: receipt.ProductVersion, Sequence: receipt.Sequence, ManifestSHA256: receipt.ReleaseSHA256, Target: receipt.Target}
+	release, installerSHA256, err := p.PackageApplicationRelease()
+	if err != nil || *release != approved || installerSHA256 != receipt.InstallerSHA256 {
+		return errors.New("protected package candidate differs from the authenticated release")
 	}
 	return nil
 }

@@ -54,6 +54,10 @@ func TestPackageCandidateStreamCLI(t *testing.T) {
 	}
 	packetHash := sha256.Sum256(packet)
 	packetSHA := hex.EncodeToString(packetHash[:])
+	var signed bootstrap.AttestedPacket
+	if update.StrictJSON(packet, &signed) != nil {
+		t.Fatal("invalid signed candidate packet")
+	}
 	baseline, instance := strings.Repeat("4", 64), strings.Repeat("3", 32)
 	parent := t.TempDir()
 	if err = os.Chmod(parent, 0700); err != nil {
@@ -70,8 +74,12 @@ func TestPackageCandidateStreamCLI(t *testing.T) {
 	if report.Sequence < 2 {
 		t.Fatal("fixture must advance an installed release")
 	}
+	release, _, err := p.PackageApplicationRelease()
+	if err != nil {
+		t.Fatal("signed package release unavailable", err)
+	}
 	receipt := maintenance.CandidateReceipt{Version: 1, Owner: os.Getuid(), Scope: "update", PacketSHA256: packetSHA,
-		InstallerSHA256: strings.Repeat("a", 64), EngineSHA256: strings.Repeat("b", 64), ProductVersion: "fixture",
+		InstallerSHA256: signed.Installer.SHA256, EngineSHA256: release.EngineSHA256, ProductVersion: release.Version,
 		Sequence: report.Sequence, ReleaseSHA256: packetSHA, Target: report.Target,
 		BaseSequence: report.Sequence - 1, BaseReleaseSHA256: baseline, BaseInstallation: instance,
 		BaseManifestSHA: strings.Repeat("c", 64), ExpiresAt: time.Now().Add(time.Minute).Unix()}
@@ -114,6 +122,12 @@ func TestPackageCandidateStreamCLI(t *testing.T) {
 			response.BaseInstallation = strings.Repeat("8", 32)
 		case "owner":
 			response.Owner++
+		case "engine":
+			response.EngineSHA256 = strings.Repeat("9", 64)
+		case "version":
+			response.ProductVersion += "-different"
+		case "installer":
+			response.InstallerSHA256 = strings.Repeat("9", 64)
 		}
 		raw, err := json.Marshal(response)
 		if err != nil {
@@ -135,7 +149,7 @@ func TestPackageCandidateStreamCLI(t *testing.T) {
 	if err = run(args, strings.NewReader(""), io.Discard, io.Discard); err != nil || calls != 1 {
 		t.Fatal("candidate CLI did not reach the exact scoped receiver", err)
 	}
-	for _, field := range []string{"base", "instance", "owner"} {
+	for _, field := range []string{"base", "instance", "owner", "engine", "version", "installer"} {
 		badField = field
 		if err = stageAttestedPackageCandidate(t.Context(), p, packetSHA, "local", instance, baseline, io.Discard); err == nil {
 			t.Fatal("foreign receiver response was accepted", field)

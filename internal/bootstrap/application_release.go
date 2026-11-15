@@ -43,3 +43,20 @@ func (p *Prepared) BindApplicationRelease(expected core.ApplicationRelease) erro
 	p.report.DescriptorSHA256 = expected.ManifestSHA256
 	return nil
 }
+
+// PackageApplicationRelease exposes the exact attested package and installer
+// identity without granting the legacy archive updater installation authority.
+func (p *Prepared) PackageApplicationRelease() (*core.ApplicationRelease, string, error) {
+	if p == nil {
+		return nil, "", errors.New("verified native package required")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.root == nil || p.closed || p.invoked || !p.report.BundleVerified || !p.report.ProvenanceVerified || !p.report.LinuxPackageDigestsVerified || p.seed.Version != 4 {
+		return nil, "", errors.New("authenticated native package required")
+	}
+	if err := p.revalidateHeld(); err != nil {
+		return nil, "", err
+	}
+	return &core.ApplicationRelease{EngineSHA256: p.engine.SHA256, Version: p.descriptor.ProductVersion, Sequence: p.descriptor.Sequence, ManifestSHA256: p.report.DescriptorSHA256, Target: p.descriptor.Target}, p.descriptor.Release.InstallerSHA256, nil
+}

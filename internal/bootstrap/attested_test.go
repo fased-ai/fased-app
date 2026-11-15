@@ -282,6 +282,10 @@ func TestPublicNativeReleaseRetainsAttestedPackagesForTheInstalledController(t *
 	if _, err = p.ApplicationRelease(); err == nil {
 		t.Fatal("native packages reached the legacy application updater")
 	}
+	release, installerHash, err := p.PackageApplicationRelease()
+	if err != nil || release.ManifestSHA256 != digest(payloads[AttestedPacketFile]) || release.Sequence != p.Report().Sequence || installerHash != digest(originalInstaller) {
+		t.Fatalf("package updater lost the authenticated release identity: %+v %v", release, err)
+	}
 	if err = p.Run(t.Context(), InstallOptions{Profile: "local"}, nil, io.Discard, io.Discard); err == nil {
 		t.Fatal("native packages reached the legacy archive installer")
 	}
@@ -304,6 +308,9 @@ func TestPublicNativeReleaseRetainsAttestedPackagesForTheInstalledController(t *
 	}
 	if err = p.WriteCandidate(t.Context(), io.Discard); err == nil {
 		t.Fatal("changed native package crossed the handoff")
+	}
+	if _, _, err = p.PackageApplicationRelease(); err == nil {
+		t.Fatal("changed package was offered as an update")
 	}
 }
 
@@ -510,6 +517,9 @@ func TestAttestedBootstrapAndCandidate(t *testing.T) {
 	release, err := p.ApplicationRelease()
 	if err != nil || release.Sequence != 1000002000004 {
 		t.Fatal(release, err)
+	}
+	if _, _, err = p.PackageApplicationRelease(); err == nil {
+		t.Fatal("legacy archive was offered as a native package")
 	}
 	dir := filepath.Join(f.parent, "candidate")
 	if err = os.Mkdir(dir, 0700); err != nil {
