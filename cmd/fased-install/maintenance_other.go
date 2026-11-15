@@ -37,6 +37,10 @@ func maintenancePackageGateCommand([]string) error {
 	return errors.New("protected maintenance requires supported Linux")
 }
 
+func maintenancePackageWorkerCommand(string, []string) error {
+	return errors.New("protected maintenance requires supported Linux")
+}
+
 func maintenanceBootstrapCommand([]string, io.Writer) error {
 	return errors.New("protected maintenance is supported only on Linux")
 }

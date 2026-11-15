@@ -23,7 +23,12 @@ func (t InstallTransaction) dir() string {
 	return t.Base.Root + "/updates/" + t.Binding.Index.Binding.Pause.Request.IntentID
 }
 func (t InstallTransaction) valid() bool {
-	if t.Version != 1 || !((t.Base.Version == 1) || (t.Base.Version == 2 && t.Binding.Index.Binding.Signer.Version == 2 && update.ManagedContracts(t.Binding.Contracts)) || (t.Base.Version == 3 && t.Binding.Index.Binding.Signer.Version == 3 && update.OrdinaryContracts(t.Binding.Contracts))) || t.Base.validate() != nil || t.Target.validate() != nil || update.ValidateInstallBinding(t.Binding) != nil || t.Binding.Index.Binding.Pause.Request == nil {
+	if t.Base.Layout == PackageLayout && t.Base.Network == "" {
+		// No signer exists yet to issue an installation hold. A pre-wallet
+		// update must use the app checkpoint rather than inventing a receipt.
+		return false
+	}
+	if t.Version != 1 || !((t.Base.Version == 1) || (t.Base.Version == 2 && t.Binding.Index.Binding.Signer.Version == 2 && update.ManagedContracts(t.Binding.Contracts)) || (t.Base.Version == 3 && t.Binding.Index.Binding.Signer.Version == 3 && update.OrdinaryContracts(t.Binding.Contracts))) || t.Base.validateMaintenanceIdentity() != nil || t.Target.validateMaintenanceIdentity() != nil || update.ValidateInstallBinding(t.Binding) != nil || t.Binding.Index.Binding.Pause.Request == nil {
 		return false
 	}
 	b := t.Target

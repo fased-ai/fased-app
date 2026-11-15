@@ -27,20 +27,57 @@ import (
 
 func protectedRecordPath(owner int) string { return maintenance.OwnerRoot(owner) + "/custody.json" }
 
-func storeProtectedRecord(r update.MaintenanceRecord) error {
+func protectedRecordPathFor(r update.MaintenanceRecord) (string, error) {
 	if r.Version != 1 || r.Owner <= 0 || !update.IDOK(r.OperationID) {
-		return errors.New("invalid maintenance journal identity")
+		return "", errors.New("invalid maintenance journal identity")
 	}
-	previous, _, err := maintenance.ProtectedDigest(protectedRecordPath(r.Owner), 0644, 256<<10)
+	var base Manifest
+	if strict(r.Base, &base) != nil || base.Owner != r.Owner {
+		return "", errors.New("invalid maintenance journal installation")
+	}
+	if base.Layout == "" {
+		return protectedRecordPath(r.Owner), nil
+	}
+	if base.Layout != PackageLayout {
+		return "", errors.New("unknown maintenance installation layout")
+	}
+	if _, _, err := protectedRecordManifests(r); err != nil {
+		return "", err
+	}
+	root, err := update.PackageMaintenanceRoot(base.Owner, base.Location, base.ID)
+	if err != nil {
+		return "", err
+	}
+	return root + "/custody.json", nil
+}
+
+func storeProtectedRecord(r update.MaintenanceRecord) error {
+	path, err := protectedRecordPathFor(r)
+	if err != nil {
+		return err
+	}
+	if path != protectedRecordPath(r.Owner) {
+		var base Manifest
+		if strict(r.Base, &base) != nil {
+			return errors.New("exact package instance required")
+		}
+		if _, err = maintenance.ValidatePackageProcess(base.Owner, base.Location, base.ID); err != nil {
+			return err
+		}
+	}
+	previous, _, err := maintenance.ProtectedDigest(path, 0644, 256<<10)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return maintenance.ReplaceProtected(protectedRecordPath(r.Owner), mustJSON(r), 0644, previous)
+	if errors.Is(err, os.ErrNotExist) && path != protectedRecordPath(r.Owner) {
+		return errors.New("original package journal is unavailable; preserve the installation")
+	}
+	return maintenance.ReplaceProtected(path, mustJSON(r), 0644, previous)
 }
 
 func protectedRecordManifests(r update.MaintenanceRecord) (Manifest, Manifest, error) {
 	var base, target Manifest
-	if strict(r.Base, &base) != nil || strict(r.Target, &target) != nil || base.validate() != nil || target.validate() != nil || base.Owner != r.Owner {
+	if strict(r.Base, &base) != nil || strict(r.Target, &target) != nil || base.validateMaintenanceIdentity() != nil || target.validateMaintenanceIdentity() != nil || base.Owner != r.Owner {
 		return base, target, errors.New("protected deployment identities differ")
 	}
 	check := target
@@ -59,15 +96,68 @@ func StageProtectedPackage(ctx context.Context, owner int, id string, p update.M
 	if err != nil {
 		return err
 	}
-	if !update.IDOK(id) || p.Sequence == 0 || len(p.ReleaseSHA256) != 64 || len(p.Components) != 2 {
-		return errors.New("verified maintenance package required")
-	}
 	m, err := Load(owner)
 	if err != nil {
 		return err
 	}
-	if err = Verify(m); err != nil {
+	return stageProtectedPackage(ctx, a, m, id, p, bootstrap)
+}
+
+// StageProtectedPackageInstance uses the same paired transaction, confined to
+// the original instance and its independently verified staged artifacts.
+func StageProtectedPackageInstance(ctx context.Context, owner int, location, instance, id string, p update.MaintenancePackage) error {
+	a, err := maintenance.ValidatePackageProcess(owner, location, instance)
+	if err != nil {
 		return err
+	}
+	root, err := PackageRoot(owner, location, instance)
+	if err != nil {
+		return err
+	}
+	m, err := LoadPackageInstance(owner, root)
+	if err != nil || m.Location != location || m.ID != instance {
+		return errors.New("the original package instance is required")
+	}
+	return stageProtectedPackage(ctx, a, m, id, p, false)
+}
+
+func stageProtectedPackage(ctx context.Context, a maintenance.Authority, m Manifest, id string, p update.MaintenancePackage, bootstrap bool) error {
+	owner := m.Owner
+	if !update.IDOK(id) || p.Sequence == 0 || len(p.ReleaseSHA256) != 64 || len(p.Components) != 2 {
+		return errors.New("verified maintenance package required")
+	}
+	var err error
+	if m.Layout == PackageLayout {
+		if bootstrap || m.Network == "" {
+			return errors.New("empty-signer package update requires the application checkpoint")
+		}
+		if p.Validate() != nil {
+			return errors.New("authenticated package is required")
+		}
+		err = VerifyPackageInstance(m)
+	} else {
+		err = Verify(m)
+	}
+	if err != nil {
+		return err
+	}
+	if m.Layout == PackageLayout {
+		// Validate the OS boundary before publishing a new journal or copying
+		// recovery files. A foreign service or policy must not leave a staged
+		// operation behind.
+		if err = verifyPackageRootUnits(ctx, a, m, id); err != nil {
+			return err
+		}
+		if err = verifyLoadedPackageServices(ctx, m); err != nil {
+			return err
+		}
+	}
+	operationDir := update.MaintenanceDirectory(owner, id)
+	if m.Layout == PackageLayout {
+		operationDir, err = update.PackageMaintenanceDirectory(owner, m.Location, m.ID, id)
+		if err != nil {
+			return err
+		}
 	}
 	var live signer.Response
 	live, err = protectedOwnerPeer(ctx, a, m, signer.Request{Action: "fixture-update-inventory", ProbeID: update.NewProbe()})
@@ -91,7 +181,7 @@ func StageProtectedPackage(ctx context.Context, owner int, id string, p update.M
 		if c.Version != p.Version {
 			return errors.New("component version differs from the verified package")
 		}
-		path := filepath.Join(update.MaintenanceDirectory(owner, id), c.Artifact.File)
+		path := filepath.Join(operationDir, c.Artifact.File)
 		hash, size, err := maintenance.ProtectedDigest(path, 0755, 64<<20)
 		if err != nil || hash != c.Artifact.SHA256 || size != c.Artifact.Size {
 			return errors.New("protected artifact differs from authenticated package")
@@ -112,7 +202,13 @@ func StageProtectedPackage(ctx context.Context, owner int, id string, p update.M
 		}
 	}
 	var previousPackage *update.MaintenancePackage
-	if old, err := update.ReadMaintenanceRecord(owner); err == nil {
+	readRecord := func() (update.MaintenanceRecord, error) {
+		if m.Layout == PackageLayout {
+			return update.ReadPackageMaintenanceRecord(owner, m.Location, m.ID)
+		}
+		return update.ReadMaintenanceRecord(owner)
+	}
+	if old, err := readRecord(); err == nil {
 		if old.OperationID == id {
 			if old.Phase == "idle" {
 				return errors.New("installation identity cannot be reused as an update")
@@ -134,7 +230,13 @@ func StageProtectedPackage(ctx context.Context, owner int, id string, p update.M
 		}
 		if old.Phase == "idle" || old.PreviousPackage != nil {
 			if old.Phase == "idle" {
-				if _, e := ValidateInitialMaintenanceRecord(old); e != nil {
+				var e error
+				if m.Layout == PackageLayout {
+					_, e = ValidateInitialPackageMaintenanceRecord(old, owner, m.Location, m.ID)
+				} else {
+					_, e = ValidateInitialMaintenanceRecord(old)
+				}
+				if e != nil {
 					return e
 				}
 			}
@@ -152,12 +254,22 @@ func StageProtectedPackage(ctx context.Context, owner int, id string, p update.M
 			previousPackage = &copy
 		}
 		if old.Phase != "idle" {
-			if err = maintenance.PublishProtected(update.MaintenanceDirectory(owner, old.OperationID)+"/receipt.json", mustJSON(old), 0644); err != nil {
+			oldDir := update.MaintenanceDirectory(owner, old.OperationID)
+			if m.Layout == PackageLayout {
+				oldDir, err = update.PackageMaintenanceDirectory(owner, m.Location, m.ID, old.OperationID)
+				if err != nil {
+					return err
+				}
+			}
+			if err = maintenance.PublishProtected(oldDir+"/receipt.json", mustJSON(old), 0644); err != nil {
 				return err
 			}
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	} else if m.Layout == PackageLayout || !errors.Is(err, os.ErrNotExist) {
 		return err
+	}
+	if m.Layout == PackageLayout && previousPackage == nil {
+		return errors.New("the original authenticated installed package is required")
 	}
 	previous := []struct{ name, path, hash string }{{"previous-core", m.Root + "/fased-app", m.CoreHash}, {"previous-signer", m.Root + "/fased-signer", m.SignerHash}}
 	if m.NativeOwnerAccess {
@@ -167,7 +279,7 @@ func StageProtectedPackage(ctx context.Context, owner int, id string, p update.M
 		if err = verifyProtectedDesktop(m, previousPackage); err != nil {
 			return err
 		}
-		hash, size, e := maintenance.ProtectedDigest(filepath.Join(update.MaintenanceDirectory(owner, id), "fased-desktop"), 0755, 64<<20)
+		hash, size, e := maintenance.ProtectedDigest(filepath.Join(operationDir, "fased-desktop"), 0755, 64<<20)
 		if e != nil || hash != p.NativeDesktop.SHA256 || size != p.NativeDesktop.Size {
 			return errors.New("protected desktop differs from the authenticated package")
 		}
@@ -180,13 +292,16 @@ func StageProtectedPackage(ctx context.Context, owner int, id string, p update.M
 		if err != nil {
 			return err
 		}
-		if err = maintenance.CopyProtected(entry.path, update.MaintenanceDirectory(owner, id)+"/"+entry.name, 0755, entry.hash, size, ""); err != nil {
+		if err = maintenance.CopyProtected(entry.path, operationDir+"/"+entry.name, 0755, entry.hash, size, ""); err != nil {
 			return err
 		}
 	}
 	r := update.MaintenanceRecord{Version: 1, Owner: owner, OperationID: id, Phase: "prepared", Start: "base", Base: mustJSON(m), Target: mustJSON(next), Package: &p, PreviousPackage: previousPackage, Bootstrap: bootstrap}
 	if err = storeProtectedRecord(r); err != nil {
 		return err
+	}
+	if m.Layout == PackageLayout {
+		return nil
 	}
 	if err = installProtectedMaintenanceUnits(ctx, a, m); err != nil {
 		return err
@@ -584,15 +699,24 @@ func startMaintenanceChild(ctx context.Context, m Manifest, role, image string, 
 }
 
 func startMaintenanceChildWithLock(ctx context.Context, m Manifest, role, image string, lock *os.File, args ...string) (*maintenanceChild, error) {
+	if m.Layout == PackageLayout {
+		if err := m.validatePackage(); err != nil {
+			return nil, err
+		}
+	} else if m.Layout != "" {
+		return nil, errors.New("unknown maintenance installation layout")
+	}
 	i := m.App
 	if role == "signer" {
 		i = m.Signer
 	} else if role == "owner" {
-		a, err := maintenance.ReadAuthority(m.Owner)
+		a, err := maintenanceAuthorityForManifest(m)
 		if err != nil {
 			return nil, err
 		}
 		i = Identity{UID: a.Owner, GID: a.Group}
+	} else if role != "app" {
+		return nil, errors.New("unknown maintenance process role")
 	}
 	if i.UID <= 0 || i.GID <= 0 {
 		return nil, errors.New("non-root maintenance role required")
@@ -601,7 +725,7 @@ func startMaintenanceChildWithLock(ctx context.Context, m Manifest, role, image 
 		return nil, err
 	}
 	argv := []string{"--reuid", strconv.Itoa(i.UID), "--regid", strconv.Itoa(i.GID), "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--", image}
-	argv = append(argv, args...)
+	argv = append(argv, packageMaintenanceChildArgs(m, args)...)
 	c := exec.CommandContext(ctx, "/usr/bin/setpriv", argv...)
 	if lock != nil {
 		c.ExtraFiles = []*os.File{lock}
@@ -609,7 +733,7 @@ func startMaintenanceChildWithLock(ctx context.Context, m Manifest, role, image 
 	c.Dir = "/"
 	c.Env = []string{"PATH=/usr/bin:/bin", "HOME=/nonexistent", "LANG=C"}
 	if role == "owner" {
-		a, err := maintenance.ReadAuthority(m.Owner)
+		a, err := maintenanceAuthorityForManifest(m)
 		if err != nil {
 			return nil, err
 		}
@@ -633,6 +757,32 @@ func startMaintenanceChildWithLock(ctx context.Context, m Manifest, role, image 
 		return nil, err
 	}
 	return x, nil
+}
+
+func packageMaintenanceChildArgs(m Manifest, args []string) []string {
+	if m.Layout != PackageLayout || len(args) == 0 {
+		return args
+	}
+	switch args[0] {
+	case "custody-maintenance", "custody-maintenance-inventory", "custody-maintenance-status", "custody-maintenance-verify":
+		out := append([]string(nil), args...)
+		return append(out, "--location", m.Location, "--instance", m.ID)
+	default:
+		return args
+	}
+}
+
+func maintenanceAuthorityForManifest(m Manifest) (maintenance.Authority, error) {
+	if m.Layout == PackageLayout {
+		if err := m.validatePackage(); err != nil {
+			return maintenance.Authority{}, err
+		}
+		return maintenance.ReadPackageAuthority(m.Owner, m.Location, m.ID)
+	}
+	if m.Layout != "" {
+		return maintenance.Authority{}, errors.New("unknown maintenance installation layout")
+	}
+	return maintenance.ReadAuthority(m.Owner)
 }
 
 func (c *maintenanceChild) call(q any, out any) error {
@@ -698,8 +848,36 @@ func RunProtectedUpdate(ctx context.Context, owner int, id string, boot bool) (r
 }
 
 func runProtectedUpdate(ctx context.Context, a maintenance.Authority, owner int, id string, boot bool, successorImage string, lock *os.File) (result error) {
+	return runProtectedUpdateScoped(ctx, a, owner, "", "", id, boot, successorImage, lock)
+}
+
+// RunProtectedPackageUpdate uses the installed instance's fixed authority and
+// one serialized journal. It never falls back to owner-wide custody state.
+func RunProtectedPackageUpdate(ctx context.Context, owner int, location, instance, id string, boot bool) error {
+	a, err := maintenance.ValidatePackageProcess(owner, location, instance)
+	if err != nil || !update.IDOK(id) {
+		return errors.New("exact protected package operation required")
+	}
+	lock, err := maintenance.PackageLock(owner, location, instance)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if _, err = maintenance.ValidatePackageProcess(owner, location, instance); err != nil {
+		return err
+	}
+	return runProtectedUpdateScoped(ctx, a, owner, location, instance, id, boot, "", nil)
+}
+
+func runProtectedUpdateScoped(ctx context.Context, a maintenance.Authority, owner int, location, instance, id string, boot bool, successorImage string, lock *os.File) (result error) {
 	successor := successorImage != ""
-	r, err := update.ReadMaintenanceRecord(owner)
+	readRecord := func() (update.MaintenanceRecord, error) {
+		if location != "" {
+			return update.ReadPackageMaintenanceRecord(owner, location, instance)
+		}
+		return update.ReadMaintenanceRecord(owner)
+	}
+	r, err := readRecord()
 	if err != nil {
 		return err
 	}
@@ -710,8 +888,28 @@ func runProtectedUpdate(ctx context.Context, a maintenance.Authority, owner int,
 	if err != nil {
 		return err
 	}
+	if location != "" && (base.Layout != PackageLayout || base.Location != location || base.ID != instance || successor) {
+		return errors.New("protected package operation belongs to another instance")
+	}
+	if location != "" && (!r.RecoveryEligible() || r.Bootstrap || r.PreviousPackage == nil || !packagePairMatches(*r.PreviousPackage, base) || !packagePairMatches(*r.Package, target) || r.Package.Sequence <= r.PreviousPackage.Sequence) {
+		return errors.New("the original authenticated package transition is required")
+	}
+	if location != "" && base.Network == "" {
+		// The ordinary signer cannot produce a hold before wallet setup. Never
+		// stop services or publish a fence until the empty-signer checkpoint
+		// path is implemented; preserve the running installation instead.
+		return errors.New("empty-signer package recovery is not yet available")
+	}
 	if successorImage == "" {
-		if err = verifyProtectedLoadedUnits(ctx, a, base); err != nil {
+		if location != "" {
+			err = verifyLoadedPackageServices(ctx, base)
+			if err == nil {
+				err = verifyPackageRootUnits(ctx, a, base, id)
+			}
+		} else {
+			err = verifyProtectedLoadedUnits(ctx, a, base)
+		}
+		if err != nil {
 			return err
 		}
 		successorImage = maintenance.ImagePath(a.ImageSHA256)
@@ -740,9 +938,9 @@ func runProtectedUpdate(ctx context.Context, a maintenance.Authority, owner int,
 		if boot {
 			// The app cannot answer while this boot service precedes it. Queue
 			// the same worker after the services to validate any remaining fence.
-			units := []string{Unit(owner, "signer"), Unit(owner, "app")}
+			units := protectedInstanceUnits(base)
 			if markerErr == nil || successor {
-				units = append(units, protectedWorkerUnit(owner, id))
+				units = append(units, instanceWorkerUnit(base, id))
 			}
 			_, err = protectedSystemctl(ctx, append([]string{"start", "--no-block", "--"}, units...)...)
 			return err
@@ -774,15 +972,21 @@ func runProtectedUpdate(ctx context.Context, a maintenance.Authority, owner int,
 				return err
 			}
 		}
-		_, err = protectedSystemctl(ctx, "start", "--no-block", "--", Unit(owner, "signer"), Unit(owner, "app"))
+		_, err = protectedSystemctl(ctx, append([]string{"start", "--no-block", "--"}, protectedInstanceUnits(base)...)...)
 		return err
 	}
 	dir := update.MaintenanceDirectory(owner, id)
+	if location != "" {
+		dir, err = update.PackageMaintenanceDirectory(owner, location, instance, id)
+		if err != nil {
+			return err
+		}
+	}
 	defer func() {
 		if result == nil {
 			return
 		}
-		fresh, e := update.ReadMaintenanceRecord(owner)
+		fresh, e := readRecord()
 		if e == nil && fresh.OperationID == id && fresh.Start == "" {
 			recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 			defer cancel()
@@ -804,8 +1008,8 @@ func runProtectedUpdate(ctx context.Context, a maintenance.Authority, owner int,
 	// During successor boot recovery these units are ordered after this service.
 	// A synchronous stop can cancel or deadlock their queued starts. Refuse an
 	// unexpectedly active process and leave the original operation fenced.
-	if !boot || !successor {
-		if _, err = protectedSystemctl(ctx, "stop", "--", Unit(owner, "app"), Unit(owner, "signer")); err != nil {
+	if !boot || !successor && location == "" {
+		if _, err = protectedSystemctl(ctx, "stop", "--", instanceUnit(base, "app"), instanceUnit(base, "signer")); err != nil {
 			return err
 		}
 	}
@@ -881,13 +1085,13 @@ func runProtectedUpdate(ctx context.Context, a maintenance.Authority, owner int,
 		return err
 	}
 	if boot {
-		_, err = protectedSystemctl(ctx, "start", "--no-block", "--", protectedWorkerUnit(owner, id))
+		_, err = protectedSystemctl(ctx, "start", "--no-block", "--", instanceWorkerUnit(base, id))
 		return err
 	}
-	if _, err = protectedSystemctl(ctx, "reset-failed", "--", Unit(owner, "app"), Unit(owner, "signer")); err != nil {
+	if _, err = protectedSystemctl(ctx, "reset-failed", "--", instanceUnit(base, "app"), instanceUnit(base, "signer")); err != nil {
 		return err
 	}
-	if _, err = protectedSystemctl(ctx, "start", "--", Unit(owner, "signer"), Unit(owner, "app")); err != nil {
+	if _, err = protectedSystemctl(ctx, append([]string{"start", "--"}, protectedInstanceUnits(base)...)...); err != nil {
 		return err
 	}
 	if err = completeProtectedUpdate(ctx, a, &r, target, successorImage, lock); err != nil {
@@ -899,6 +1103,20 @@ func runProtectedUpdate(ctx context.Context, a maintenance.Authority, owner int,
 	return nil
 }
 
+func protectedInstanceUnits(m Manifest) []string {
+	if m.Layout == PackageLayout && m.Network == "" {
+		return []string{instanceUnit(m, "app")}
+	}
+	return []string{instanceUnit(m, "signer"), instanceUnit(m, "app")}
+}
+
+func instanceWorkerUnit(m Manifest, id string) string {
+	if m.Layout == PackageLayout {
+		return fmt.Sprintf("fased-package-maintenance-%d-%s-%s@%s.service", m.Owner, m.Location, m.ID, id)
+	}
+	return protectedWorkerUnit(m.Owner, id)
+}
+
 func validateProtectedUpdateRecord(r update.MaintenanceRecord, id string) error {
 	if r.OperationID != id || r.Package == nil || r.Phase == "idle" {
 		return errors.New("exact pending package required")
@@ -907,7 +1125,13 @@ func validateProtectedUpdateRecord(r update.MaintenanceRecord, id string) error 
 }
 
 func verifyProtectedPair(m Manifest) error {
-	actual, err := Load(m.Owner)
+	var actual Manifest
+	var err error
+	if m.Layout == PackageLayout {
+		actual, err = LoadPackageInstance(m.Owner, m.Root)
+	} else {
+		actual, err = Load(m.Owner)
+	}
 	if err != nil || actual != m {
 		return errors.New("protected manifest differs from selected deployment")
 	}
@@ -950,7 +1174,13 @@ func prepareProtectedHold(ctx context.Context, a maintenance.Authority, r *updat
 		}
 	}
 	if r.Approval == nil {
-		if existing, e := update.ReadMaintenanceApproval(base.Owner, r.OperationID); e == nil {
+		readApproval := func() (update.MaintenanceApproval, error) {
+			if base.Layout == PackageLayout {
+				return update.ReadPackageMaintenanceApproval(base.Owner, base.Location, base.ID, r.OperationID)
+			}
+			return update.ReadMaintenanceApproval(base.Owner, r.OperationID)
+		}
+		if existing, e := readApproval(); e == nil {
 			r.Approval = &existing
 		} else if !errors.Is(e, os.ErrNotExist) {
 			return e
@@ -1142,6 +1372,6 @@ func recoverProtectedBase(ctx context.Context, a maintenance.Authority, r *updat
 	if err = storeProtectedRecord(*r); err != nil {
 		return err
 	}
-	_, err = protectedSystemctl(ctx, "start", "--no-block", "--", Unit(base.Owner, "signer"), Unit(base.Owner, "app"))
+	_, err = protectedSystemctl(ctx, append([]string{"start", "--no-block", "--"}, protectedInstanceUnits(base)...)...)
 	return err
 }

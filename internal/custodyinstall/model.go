@@ -103,6 +103,10 @@ func instanceUnit(m Manifest, role string) string {
 	}
 	return unit
 }
+
+func packageRecoveryUnit(m Manifest) string {
+	return fmt.Sprintf("fased-package-maintenance-%d-%s-%s-recover.service", m.Owner, m.Location, m.ID)
+}
 func sum(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
 func validHex(s string, n int) bool {
 	b, e := hex.DecodeString(s)
@@ -171,6 +175,13 @@ func (m Manifest) validatePackage() error {
 	}
 	return nil
 }
+
+func (m Manifest) validateMaintenanceIdentity() error {
+	if m.Layout == PackageLayout {
+		return m.validatePackage()
+	}
+	return m.validate()
+}
 func (j journal) validate(uid int) error {
 	if j.NativeOwnerAccess && (j.Version != 3 || !j.Enrollment || j.Location != "local") {
 		return errors.New("invalid native owner enrollment")
@@ -213,9 +224,12 @@ func definitions(m Manifest) map[string][]byte {
 		description := "Fased disposable custody fixture"
 		service := shared
 		gate := ""
+		ordering := ""
 		install := "\n[Install]\nWantedBy=multi-user.target\n"
 		if m.Layout == PackageLayout {
 			description = "Fased " + role
+			service += "LimitCORE=0\n"
+			ordering = "Wants=" + packageRecoveryUnit(m) + "\nAfter=" + packageRecoveryUnit(m) + "\n"
 			gateRole := role
 			if gateRole == "application" {
 				gateRole = "app"
@@ -228,7 +242,7 @@ func definitions(m Manifest) map[string][]byte {
 				install = ""
 			}
 		}
-		return []byte(fmt.Sprintf("[Unit]\nDescription=%s\n\n[Service]\nType=simple\nUser=%d\nGroup=%d\n%sExecStart=%s%sReadWritePaths=%s\nRestrictAddressFamilies=%s\n%s", description, i.UID, i.GID, gate, exec, service, write, addresses, install))
+		return []byte(fmt.Sprintf("[Unit]\nDescription=%s\n%s\n[Service]\nType=simple\nUser=%d\nGroup=%d\n%sExecStart=%s%sReadWritePaths=%s\nRestrictAddressFamilies=%s\n%s", description, ordering, i.UID, i.GID, gate, exec, service, write, addresses, install))
 	}
 	profile := ""
 	if m.Location != "" {

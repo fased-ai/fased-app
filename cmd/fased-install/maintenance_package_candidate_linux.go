@@ -3,12 +3,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/bootstrap"
@@ -34,24 +38,28 @@ func maintenancePackageStageCandidate(ctx context.Context, owner int, location, 
 	}
 	old, err := maintenance.ReadPackageCandidateReceipt(owner, location, instance)
 	if err == nil {
-		if old.PacketSHA256 != q.PacketSHA256 || old.Scope != q.Scope {
-			return empty, errors.New("another candidate is retained; preserve its original operation")
-		}
-		if q.Scope == "update" && time.Now().Unix() >= old.ExpiresAt {
-			return empty, errors.New("candidate review expired; preserve its original operation")
-		}
-		identity, e := verifyPackageCandidate(ctx, owner, location, instance, q.PacketSHA256)
-		if e != nil || !matchingPackageCandidate(old, identity, a.ImageSHA256) {
-			return empty, errors.New("retained candidate differs; preserve it")
-		}
-		if q.Scope == "update" {
-			if _, _, e = packageCandidateBaseline(owner, location, instance, &old); e != nil {
-				return empty, e
+		if old.Scope == "fresh" && q.Scope == "update" {
+			if err = retireFreshPackageCandidate(ctx, a, location, instance, old); err != nil {
+				return empty, err
 			}
+		} else if old.PacketSHA256 != q.PacketSHA256 || old.Scope != q.Scope {
+			return empty, errors.New("another candidate is retained; preserve its original operation")
+		} else if q.Scope == "update" && time.Now().Unix() >= old.ExpiresAt {
+			return empty, errors.New("candidate review expired; preserve its original operation")
+		} else {
+			identity, e := verifyPackageCandidate(ctx, owner, location, instance, q.PacketSHA256)
+			if e != nil || !matchingPackageCandidate(old, identity, a.ImageSHA256) {
+				return empty, errors.New("retained candidate differs; preserve it")
+			}
+			if q.Scope == "update" {
+				if _, _, e = packageCandidateBaseline(owner, location, instance, &old); e != nil {
+					return empty, e
+				}
+			}
+			return old, nil
 		}
-		return old, nil
 	}
-	if !errors.Is(err, os.ErrNotExist) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return empty, err
 	}
 	var installed *update.MaintenancePackage
@@ -92,10 +100,8 @@ func maintenancePackageStageCandidate(ctx context.Context, owner int, location, 
 	if err != nil {
 		return empty, err
 	}
-	for _, entry := range entries {
-		if entry.Name() != q.PacketSHA256 && entry.Name() != q.PacketSHA256+".reservation.json" {
-			return empty, errors.New("unclassified candidate input; preserve it")
-		}
+	if err = verifyRetainedPackageInputs(root, parent, a, location, instance, q.PacketSHA256, entries); err != nil {
+		return empty, err
 	}
 	if _, err = os.Lstat(dir); err == nil {
 		// The matching protected reservation proves this is only an
@@ -149,6 +155,117 @@ func maintenancePackageStageCandidate(ctx context.Context, owner int, location, 
 		return empty, err
 	}
 	return receipt, nil
+}
+
+// A completed fresh enrollment may release only its public current-candidate
+// slot. The signed bytes, reservation and original journal stay on disk.
+func retireFreshPackageCandidate(ctx context.Context, a maintenance.Authority, location, instance string, receipt maintenance.CandidateReceipt) error {
+	installed, actual, err := packageCandidateBaseline(a.Owner, location, instance, nil)
+	if err != nil {
+		return err
+	}
+	r, err := update.ReadPackageMaintenanceRecord(a.Owner, location, instance)
+	if err != nil || freshPackageCandidateMatches(a, location, instance, receipt, r) != nil {
+		return errors.New("fresh package is not the original completed installation; preserve it")
+	}
+	m, err := custodyinstall.ValidateInitialPackageMaintenanceRecord(r, a.Owner, location, instance)
+	if err != nil || m != actual || installed.Sequence != receipt.Sequence || installed.ReleaseSHA256 != receipt.ReleaseSHA256 {
+		return errors.New("fresh installed pair differs; preserve its candidate")
+	}
+	if entries, e := os.ReadDir(filepath.Join(actual.Root, "signer-state")); e != nil || len(entries) != 0 {
+		return errors.New("the original signer is not empty; preserve its candidate")
+	}
+	identity, err := verifyPackageCandidate(ctx, a.Owner, location, instance, receipt.PacketSHA256)
+	if err != nil || !matchingPackageCandidate(receipt, identity, a.ImageSHA256) || identity.Source != installed.Source || identity.ProvenanceSHA256 != installed.ProvenanceSHA256 {
+		return errors.New("fresh signed candidate differs; preserve it")
+	}
+	root, err := update.PackageMaintenanceRoot(a.Owner, location, instance)
+	if err != nil {
+		return err
+	}
+	archive := filepath.Join(root, "candidate-archive")
+	if err = maintenance.EnsureProtectedDirectory(archive); err != nil {
+		return err
+	}
+	receiptBytes, receiptHash := candidateDocument(receipt)
+	journalBytes, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	for _, item := range []struct {
+		name string
+		data []byte
+	}{{receipt.PacketSHA256 + ".journal.json", append(journalBytes, '\n')}, {receipt.PacketSHA256 + ".receipt.json", receiptBytes}} {
+		if err = maintenance.PublishProtected(filepath.Join(archive, item.name), item.data, 0644); err != nil {
+			return err
+		}
+	}
+	return maintenance.RemoveProtected(filepath.Join(root, "candidate.json"), receiptHash, 0644)
+}
+
+func freshPackageCandidateMatches(a maintenance.Authority, location, instance string, receipt maintenance.CandidateReceipt, r update.MaintenanceRecord) error {
+	m, err := custodyinstall.ValidateInitialPackageMaintenanceRecord(r, a.Owner, location, instance)
+	if err != nil || a.Owner != receipt.Owner || a.Profile != location || receipt.Validate() != nil || receipt.Scope != "fresh" || m.Network != "" ||
+		receipt.PacketSHA256 != receipt.ReleaseSHA256 || receipt.ReleaseSHA256 != r.Package.ReleaseSHA256 || receipt.Sequence != r.Package.Sequence ||
+		receipt.ProductVersion != r.Package.Version || receipt.EngineSHA256 != m.CoreHash || receipt.InstallerSHA256 != a.ImageSHA256 {
+		return errors.New("fresh candidate differs from the protected initial journal")
+	}
+	return nil
+}
+
+// Previously archived candidate inputs are allowed beside the new candidate
+// only when both their protected receipt and exact original reservation exist.
+func verifyRetainedPackageInputs(root, parent string, a maintenance.Authority, location, instance, current string, entries []os.DirEntry) error {
+	verified := make(map[string]bool)
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == current || name == current+".reservation.json" {
+			continue
+		}
+		packet := strings.TrimSuffix(name, ".reservation.json")
+		raw, err := hex.DecodeString(packet)
+		if err != nil || len(raw) != 32 || hex.EncodeToString(raw) != packet {
+			return errors.New("unclassified candidate input; preserve it")
+		}
+		if verified[packet] {
+			continue
+		}
+		archive := filepath.Join(root, "candidate-archive")
+		read := func(path string, max int64) ([]byte, error) {
+			f, err := update.OpenProtected(path, max, 0644)
+			if err != nil {
+				return nil, err
+			}
+			b, readErr := io.ReadAll(io.LimitReader(f, max+1))
+			return b, errors.Join(readErr, f.Close())
+		}
+		receiptBytes, err := read(filepath.Join(archive, packet+".receipt.json"), 8192)
+		var receipt maintenance.CandidateReceipt
+		if err != nil || update.StrictJSON(receiptBytes, &receipt) != nil || receipt.PacketSHA256 != packet {
+			return errors.New("unclassified candidate receipt; preserve it")
+		}
+		journalBytes, err := read(filepath.Join(archive, packet+".journal.json"), 256<<10)
+		var journal update.MaintenanceRecord
+		if err != nil || update.StrictJSONBounded(journalBytes, &journal, 256<<10) != nil || freshPackageCandidateMatches(a, location, instance, receipt, journal) != nil {
+			return errors.New("unclassified candidate history; preserve it")
+		}
+		reservation, err := read(filepath.Join(parent, packet+".reservation.json"), 8192)
+		expected, _ := candidateDocument(maintenance.CandidateRequest{PacketSHA256: packet, Scope: "fresh"})
+		info, statErr := os.Lstat(filepath.Join(parent, packet))
+		if err != nil || !bytes.Equal(reservation, expected) || statErr != nil || !protectedCandidateDirectory(info) {
+			return errors.New("unclassified retained candidate; preserve it")
+		}
+		verified[packet] = true
+	}
+	return nil
+}
+
+func protectedCandidateDirectory(info os.FileInfo) bool {
+	if info == nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 || info.Mode().Perm() != 0700 {
+		return false
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && st.Uid == 0 && st.Gid == 0
 }
 
 // An already present directory cannot be classified by creating its

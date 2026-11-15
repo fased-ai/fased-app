@@ -20,10 +20,14 @@ func protectedOwnerPeer(ctx context.Context, a maintenance.Authority, m Manifest
 }
 func protectedOwnerPeerImage(ctx context.Context, a maintenance.Authority, m Manifest, image string, lock *os.File, q signer.Request) (signer.Response, error) {
 	var r signer.Response
+	if a.Owner != m.Owner || m.Layout != "" && m.Layout != PackageLayout || m.Layout == PackageLayout && (a.Profile != m.Location || m.validatePackage() != nil) {
+		return r, errors.New("maintenance authority belongs to another installation")
+	}
 	if image != maintenance.ImagePath(a.ImageSHA256) && lock == nil {
 		return r, errors.New("original successor lock required")
 	}
-	c, err := startMaintenanceChildWithLock(ctx, m, "owner", image, lock, "maintenance-peer", "--owner", strconv.Itoa(a.Owner))
+	args := maintenancePeerArgs("maintenance-peer", a.Owner, m)
+	c, err := startMaintenanceChildWithLock(ctx, m, "owner", image, lock, args...)
 	if err != nil {
 		return r, err
 	}
@@ -34,15 +38,27 @@ func protectedAppPeer(ctx context.Context, a maintenance.Authority, m Manifest, 
 	return protectedAppPeerImage(ctx, a, m, maintenance.ImagePath(a.ImageSHA256), nil, q, out)
 }
 func protectedAppPeerImage(ctx context.Context, a maintenance.Authority, m Manifest, image string, lock *os.File, q maintenance.AppMaintenanceRequest, out any) error {
+	if a.Owner != m.Owner || m.Layout != "" && m.Layout != PackageLayout || m.Layout == PackageLayout && (a.Profile != m.Location || m.validatePackage() != nil) {
+		return errors.New("maintenance authority belongs to another installation")
+	}
 	if image != maintenance.ImagePath(a.ImageSHA256) && lock == nil {
 		return errors.New("original successor lock required")
 	}
-	c, err := startMaintenanceChildWithLock(ctx, m, "app", image, lock, "maintenance-app", "--owner", strconv.Itoa(a.Owner))
+	args := maintenancePeerArgs("maintenance-app", a.Owner, m)
+	c, err := startMaintenanceChildWithLock(ctx, m, "app", image, lock, args...)
 	if err != nil {
 		return err
 	}
 	err = c.once(q, out)
 	return errors.Join(err, c.close())
+}
+
+func maintenancePeerArgs(command string, owner int, m Manifest) []string {
+	args := []string{command, "--owner", strconv.Itoa(owner)}
+	if m.Layout == PackageLayout {
+		args = append(args, "--location", m.Location, "--instance", m.ID)
+	}
+	return args
 }
 
 func ReadProtectedApplicationOperation(ctx context.Context, owner int, id string) (core.ApplicationOwnerView, error) {
@@ -228,6 +244,18 @@ func completeProtectedMetadata(ctx context.Context, a maintenance.Authority, r u
 	base, _, err := protectedRecordManifests(r)
 	if err != nil {
 		return err
+	}
+	if m.Layout == PackageLayout {
+		// The isolated package has no legacy owner-wide intent/ready files.
+		// Its protected journal and exact installed pair are the record.
+		if a.Owner != m.Owner || a.Profile != m.Location || base.Layout != PackageLayout || r.Installation == nil || !update.ValidInstallation(*r.Installation) || (r.Installation.Phase != "committed-held" && r.Installation.Phase != "completed") {
+			return errors.New("original committed package hold required")
+		}
+		selected, err := SelectProtectedPackageStart(r, m.Owner, m.Location, m.ID)
+		if err != nil || selected != m {
+			return errors.New("original committed package pair required")
+		}
+		return verifyProtectedPair(m)
 	}
 	for _, entry := range []struct {
 		name           string

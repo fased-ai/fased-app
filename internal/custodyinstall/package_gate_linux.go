@@ -89,6 +89,9 @@ func packageStartSelection(r update.MaintenanceRecord, owner int, location, inst
 		m, err := ValidateInitialPackageMaintenanceRecord(r, owner, location, instance)
 		return m, err
 	}
+	if base.Network == "" && (r.Staged != nil || r.Recovery != nil || r.Installation != nil || r.Start == "target") {
+		return Manifest{}, errors.New("an unconfigured signer cannot supply a held package update")
+	}
 	if !r.RecoveryEligible() || r.Bootstrap || r.PreviousPackage == nil || !packagePairMatches(*r.PreviousPackage, base) || !packagePairMatches(*r.Package, target) || r.Package.Sequence <= r.PreviousPackage.Sequence {
 		return Manifest{}, errors.New("recover the original package operation before service start")
 	}

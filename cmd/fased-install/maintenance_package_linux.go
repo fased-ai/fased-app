@@ -55,6 +55,67 @@ func maintenancePackageGateCommand(args []string) error {
 	return custodyinstall.VerifyPackageStart(owner, location, instance, args[7])
 }
 
+func maintenancePackageWorkerCommand(action string, args []string) error {
+	if action != "maintenance-package-worker" && action != "maintenance-package-recover" || len(args) < 6 {
+		return errors.New("fixed package worker required")
+	}
+	owner, location, instance, err := packageMaintenanceArguments(args[:6])
+	if err != nil {
+		return err
+	}
+	boot := action == "maintenance-package-recover"
+	if boot && len(args) != 6 || !boot && (len(args) != 8 || args[6] != "--operation" || !update.IDOK(args[7])) {
+		return errors.New("one exact package operation required")
+	}
+	if _, err = maintenance.ValidatePackageProcess(owner, location, instance); err != nil {
+		return err
+	}
+	id := ""
+	if boot {
+		lock, e := maintenance.PackageLock(owner, location, instance)
+		if e != nil {
+			return e
+		}
+		if _, e = maintenance.ValidatePackageProcess(owner, location, instance); e != nil {
+			return errors.Join(e, lock.Close())
+		}
+		r, readErr := update.ReadPackageMaintenanceRecord(owner, location, instance)
+		if readErr == nil && r.Phase == "idle" {
+			m, validErr := custodyinstall.ValidateInitialPackageMaintenanceRecord(r, owner, location, instance)
+			if validErr == nil {
+				var actual custodyinstall.Manifest
+				actual, validErr = custodyinstall.LoadPackageInstance(owner, m.Root)
+				if validErr == nil && actual != m {
+					validErr = errors.New("initial package identity changed")
+				}
+				if validErr == nil {
+					validErr = custodyinstall.VerifyPackageInstance(actual)
+				}
+				if validErr == nil {
+					for _, name := range []string{"update-active.json", "update-start-blocked.json"} {
+						if _, e := os.Lstat(actual.Root + "/" + name); !errors.Is(e, os.ErrNotExist) {
+							validErr = errors.New("an existing package recovery fence must be preserved")
+							break
+						}
+					}
+				}
+			}
+			return errors.Join(validErr, lock.Close())
+		}
+		if readErr == nil {
+			id = r.OperationID
+		}
+		if e = errors.Join(readErr, lock.Close()); e != nil {
+			return e
+		}
+	} else {
+		id = args[7]
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	return custodyinstall.RunProtectedPackageUpdate(ctx, owner, location, instance, id, boot)
+}
+
 func maintenancePackageRequestCommand(args []string, in io.Reader, out io.Writer) error {
 	owner, location, instance, err := packageMaintenanceArguments(args)
 	if err != nil {

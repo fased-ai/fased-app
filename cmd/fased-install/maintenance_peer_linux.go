@@ -20,16 +20,33 @@ import (
 )
 
 func maintenancePeerCommand(args []string, in io.Reader, out io.Writer, app bool) error {
-	if len(args) != 2 || args[0] != "--owner" {
-		return errors.New("fixed maintenance peer owner required")
+	var owner int
+	var location, instance string
+	var err error
+	if len(args) == 2 && args[0] == "--owner" {
+		owner, err = strconv.Atoi(args[1])
+		if err != nil || owner <= 0 || strconv.Itoa(owner) != args[1] {
+			return errors.New("invalid maintenance owner")
+		}
+	} else {
+		owner, location, instance, err = packageMaintenanceArguments(args)
+		if err != nil {
+			return err
+		}
 	}
-	owner, err := strconv.Atoi(args[1])
-	if err != nil || owner <= 0 || strconv.Itoa(owner) != args[1] {
-		return errors.New("invalid maintenance owner")
+	var a maintenance.Authority
+	if location == "" {
+		a, err = maintenance.ReadAuthority(owner)
+	} else {
+		a, err = maintenance.ReadPackageAuthority(owner, location, instance)
 	}
-	a, err := maintenance.ReadAuthority(owner)
 	if err != nil {
 		return err
+	}
+	if location != "" {
+		if err = maintenance.ValidateOwnerIdentity(a); err != nil {
+			return err
+		}
 	}
 	if err = maintenance.VerifyImage(a); err != nil {
 		return err
@@ -41,13 +58,15 @@ func maintenancePeerCommand(args []string, in io.Reader, out io.Writer, app bool
 	var successor *maintenance.Successor
 	var handoff maintenance.Successor
 	var bindHandoff bool
-	if self != maintenance.ImagePath(a.ImageSHA256) {
+	if self != maintenance.ImagePath(a.ImageSHA256) && location != "" {
+		return errors.New("the instance's protected maintenance peer is required")
+	} else if self != maintenance.ImagePath(a.ImageSHA256) {
 		handoff, err = maintenance.RunningSuccessor(owner)
 		if err != nil {
 			return errors.New("protected installed maintenance peer required")
 		}
 		bindHandoff = true
-	} else {
+	} else if location == "" {
 		// Rotation must not drop the original-operation restriction while its
 		// durable transition fence remains in place.
 		handoff, err = maintenance.ReadSuccessor(owner)
@@ -70,9 +89,24 @@ func maintenancePeerCommand(args []string, in io.Reader, out io.Writer, app bool
 		successor = &handoff
 	}
 	root := fmt.Sprintf("/var/lib/fased-app-custody-%d", owner)
+	if location != "" {
+		root, err = update.PackageInstanceRoot(owner, location, instance)
+		if err != nil {
+			return err
+		}
+	}
 	cfg, err := signer.LoadConfig(root + "/identity.json")
 	if err != nil {
 		return err
+	}
+	if cfg.OwnerUID != owner || location != "" && (cfg.SignerID != instance || cfg.StateDir != root+"/signer-state" || cfg.SocketDir != root+"/signer-ipc") {
+		return errors.New("maintenance peer belongs to another installation")
+	}
+	readRecord := func() (update.MaintenanceRecord, error) {
+		if location != "" {
+			return update.ReadPackageMaintenanceRecord(owner, location, instance)
+		}
+		return update.ReadMaintenanceRecord(owner)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -152,7 +186,7 @@ func maintenancePeerCommand(args []string, in io.Reader, out io.Writer, app bool
 		if successor == nil || q.Pause != nil || q.ProbeID != "" {
 			return errors.New("one completed successor operation required")
 		}
-		r, err := update.ReadMaintenanceRecord(owner)
+		r, err := readRecord()
 		if err != nil || r.OperationID != q.OperationID || r.Phase != "completed" || r.Installation == nil || r.Installation.Phase != "completed" || !update.ValidInstallation(*r.Installation) || r.Package == nil {
 			return errors.New("actual completed maintenance record required")
 		}
@@ -170,7 +204,7 @@ func maintenancePeerCommand(args []string, in io.Reader, out io.Writer, app bool
 			return errors.New("only held status or exact completion is allowed")
 		}
 		if q.Pause.Action == "complete" {
-			r, err := update.ReadMaintenanceRecord(owner)
+			r, err := readRecord()
 			if err != nil || r.OperationID != q.OperationID || r.Installation == nil || r.Installation.Phase != "completed" || q.Pause.Completed == nil || update.SnapshotDigest("completion", *r.Installation) != update.SnapshotDigest("completion", *q.Pause.Completed) {
 				return errors.New("actual completed signer record required")
 			}

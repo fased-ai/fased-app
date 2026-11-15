@@ -870,7 +870,7 @@ func loadedUnitPolicyFields(m Manifest, role string, wanted []byte, image string
 	if !known(f, wanted, 0644) {
 		return nil, errors.New("installed system unit changed; preserving it")
 	}
-	b, e := exec.Command("/usr/bin/systemctl", "show", instanceUnit(m, role), "--property=FragmentPath,DropInPaths,User,Group,NoNewPrivileges,ProtectSystem,ExecStart,NeedDaemonReload").Output()
+	b, e := exec.Command("/usr/bin/systemctl", "show", instanceUnit(m, role), "--property=FragmentPath,DropInPaths,User,Group,NoNewPrivileges,ProtectSystem,ExecStart,NeedDaemonReload,LimitCORE").Output()
 	if e != nil {
 		return nil, e
 	}
@@ -900,7 +900,7 @@ func validateLoadedUnitFields(m Manifest, role, image string, fields map[string]
 	}
 	dropIns := strings.Fields(fields["DropInPaths"])
 	if m.Layout == PackageLayout {
-		if len(dropIns) != 0 {
+		if fields["LimitCORE"] != "0" || !allowedPackageDropIns(fields["DropInPaths"], read) {
 			return errors.New("unverified package-instance override; preserving it")
 		}
 		return nil

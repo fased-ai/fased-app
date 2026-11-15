@@ -60,6 +60,8 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 			return maintenanceCustodyCommand(args[0], args[1:], out)
 		case "maintenance-peer", "maintenance-app":
 			return maintenancePeerCommand(args[1:], in, out, args[0] == "maintenance-app")
+		case "maintenance-package-worker", "maintenance-package-recover":
+			return maintenancePackageWorkerCommand(args[0], args[1:])
 		}
 	}
 	if len(args) > 0 && args[0] == "maintenance-register" {

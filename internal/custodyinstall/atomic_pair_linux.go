@@ -162,7 +162,7 @@ func passwordFreeSudoPaths(raw []byte) ([]string, error) {
 }
 
 func atomicUnitInspection(ctx context.Context, unit string) (map[string]string, []byte, error) {
-	const props = "--property=LoadState,FragmentPath,DropInPaths,NeedDaemonReload,Type,KillMode,NoNewPrivileges,ProtectSystem,User,Group,Conflicts,After"
+	const props = "--property=LoadState,FragmentPath,DropInPaths,NeedDaemonReload,Type,KillMode,NoNewPrivileges,ProtectSystem,User,Group,Conflicts,After,LimitCORE"
 	b, err := atomicInspectionOutput(ctx, 65536, "/usr/bin/systemctl", "show", unit, props)
 	if err != nil {
 		return nil, nil, errors.New("cannot inspect loaded atomic unit")

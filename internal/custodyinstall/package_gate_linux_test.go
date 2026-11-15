@@ -82,6 +82,8 @@ func TestPackageGateSelectsOnlyBoundStartState(t *testing.T) {
 
 func TestPackageGateAdmitsOnlyTheOriginalHeldTarget(t *testing.T) {
 	r, base := packageGateInitialRecord(t)
+	base.Network = "devnet"
+	r.Base = mustJSON(base)
 	target := base
 	target.CoreHash, target.SignerHash = strings.Repeat("a", 64), strings.Repeat("b", 64)
 	previous := *r.Package
@@ -97,7 +99,7 @@ func TestPackageGateAdmitsOnlyTheOriginalHeldTarget(t *testing.T) {
 		t.Fatal("invalid approval fixture", err)
 	}
 	request := &update.CorePauseRequest{Version: 1, IntentID: op, Sequence: p.Sequence, ManifestSHA256: approval.Digest(), Expected: core}
-	index := update.RecoveryIndex{Version: 1, Phase: "metadata-backed-up", Binding: update.RecoveryBinding{Version: 1, Pause: update.CorePauseReceipt{Version: 1, State: "paused", PauseID: strings.Repeat("5", 32), Request: request, Core: core}, Signer: update.SignerSnapshot{ActiveIntentID: op, RecoveryHold: true, SequenceFloor: p.Sequence}}, Snapshot: update.MetadataSnapshot{File: "metadata.sqlite", Size: 16, SHA256: strings.Repeat("6", 64)}}
+	index := update.RecoveryIndex{Version: 1, Phase: "metadata-backed-up", Binding: update.RecoveryBinding{Version: 1, Pause: update.CorePauseReceipt{Version: 1, State: "paused", PauseID: strings.Repeat("5", 32), Request: request, Core: core}, Signer: update.SignerSnapshot{Version: 3, ActiveIntentID: op, RecoveryHold: true, SequenceFloor: p.Sequence}}, Snapshot: update.MetadataSnapshot{File: "metadata.sqlite", Size: 16, SHA256: strings.Repeat("6", 64)}}
 	staged := update.Intent{ID: op, Sequence: p.Sequence, ManifestSHA256: approval.Digest(), State: "staged", Lifecycle: p.Components[0].Contract.Lifecycle}
 	var contracts []update.Contract
 	for _, component := range p.Components {
@@ -111,6 +113,16 @@ func TestPackageGateAdmitsOnlyTheOriginalHeldTarget(t *testing.T) {
 	installation := &update.Installation{Version: 1, Binding: binding, Digest: update.InstallDigest(binding), Phase: "active"}
 	if !update.ValidInstallation(*installation) {
 		t.Fatal("invalid signer hold fixture")
+	}
+	transaction := InstallTransaction{Version: 1, Base: base, Target: target, Binding: binding}
+	if !transaction.valid() {
+		t.Fatal("the existing recovery transaction refused the exact scoped package pair")
+	}
+	noWallet := transaction
+	noWallet.Base.Network, noWallet.Target.Network = "", ""
+	noWallet.Binding.PreviousManifest = sum(mustJSON(noWallet.Base))
+	if noWallet.valid() {
+		t.Fatal("an unconfigured signer was treated as a real held installation")
 	}
 	r.OperationID, r.Phase, r.Start = op, "ready", "target"
 	r.Target, r.PreviousPackage, r.Package = mustJSON(target), &previous, &p

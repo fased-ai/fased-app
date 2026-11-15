@@ -156,10 +156,16 @@ func (p *Prepared) acquireAttestedInstaller(ctx context.Context) (string, update
 	if p.closed || p.root == nil || p.seed.Version != 4 || p.options.protectedOwner == 0 && (os.Getuid() <= 0 || os.Geteuid() != os.Getuid()) {
 		return "", artifact, errors.New("attested exact installer acquisition required")
 	}
-	if err := p.revalidate(); err != nil {
+	verify := p.revalidate
+	if p.options.protectedOwner > 0 && p.report.LinuxPackageDigestsVerified {
+		// The scoped helper may retain the installer from the already verified
+		// native candidate. This does not admit the legacy installer or updater.
+		verify = p.revalidateHeld
+	}
+	if err := verify(); err != nil {
 		return "", artifact, err
 	}
-	if p.candidate != nil {
+	if p.candidate != nil || p.report.LinuxPackageDigestsVerified {
 		var packet AttestedPacket
 		if update.StrictJSON(p.metadata[AttestedPacketFile], &packet) != nil {
 			return "", artifact, errors.New("attested candidate installer required")

@@ -150,12 +150,22 @@ func TestNativeLinuxCandidateInspectionBindsBothPackagesWithoutInstalling(t *tes
 	if _, err = admitted.PackageIdentity(); err == nil {
 		t.Fatal("ordinary candidate was presented as protected helper verification")
 	}
+	if _, _, err = admitted.AcquireMaintenanceInstaller(t.Context()); err == nil {
+		t.Fatal("ordinary candidate gained protected installer acquisition")
+	}
 	// Only the installed helper sets this internal flag. This controlled test
 	// exercises the same proof and held-file reader without running as root.
 	admitted.options.protectedOwner = os.Getuid()
 	identity, err := admitted.PackageIdentity()
 	if err != nil || identity.ReleaseSHA256 != a.PacketSHA256 || identity.RPM != packet.RPM || identity.Deb != packet.Deb || identity.InstallerSHA256 != packet.Installer.SHA256 {
 		t.Fatal("protected native identity differs from the original proof", err)
+	}
+	installerPath, installer, err := admitted.AcquireMaintenanceInstaller(t.Context())
+	if err != nil || installer != packet.Installer {
+		t.Fatal("protected native candidate could not retain its exact installer", err)
+	}
+	if got, readErr := os.ReadFile(installerPath); readErr != nil || digest(got) != packet.Installer.SHA256 {
+		t.Fatal("protected installer differs from the signed candidate", readErr)
 	}
 	if _, err = admitted.ApplicationRelease(); err == nil {
 		t.Fatal("native package reached the legacy application updater")
@@ -195,6 +205,9 @@ func TestNativeLinuxCandidateInspectionBindsBothPackagesWithoutInstalling(t *tes
 	}
 	if _, err = admitted.PackageIdentity(); err == nil {
 		t.Fatal("changed native package retained protected identity")
+	}
+	if _, _, err = admitted.AcquireMaintenanceInstaller(t.Context()); err == nil {
+		t.Fatal("changed native package retained installer acquisition")
 	}
 	if err = admitted.WriteCandidate(t.Context(), io.Discard); err == nil {
 		t.Fatal("changed held package was streamed")
@@ -252,6 +265,19 @@ func TestPublicNativeReleaseRetainsAttestedPackagesForTheInstalledController(t *
 		if err != nil || !bytes.Equal(got, payloads[name]) {
 			t.Fatalf("held %s differs from the signed release: %v", held, err)
 		}
+	}
+	// The protected helper must reuse the retained attested installer. The
+	// public asset may disappear after acquisition without changing this update.
+	p.options.protectedOwner = os.Getuid()
+	originalInstaller := payloads["fased-install-linux-amd64"]
+	payloads["fased-install-linux-amd64"] = []byte("unavailable after acquisition")
+	defer func() { payloads["fased-install-linux-amd64"] = originalInstaller }()
+	installerPath, installer, err := p.AcquireMaintenanceInstaller(t.Context())
+	if err != nil || installer.SHA256 != digest(originalInstaller) {
+		t.Fatal("verified native installer was downloaded again", err)
+	}
+	if got, readErr := os.ReadFile(installerPath); readErr != nil || !bytes.Equal(got, originalInstaller) {
+		t.Fatal("retained native installer differs", readErr)
 	}
 	if _, err = p.ApplicationRelease(); err == nil {
 		t.Fatal("native packages reached the legacy application updater")

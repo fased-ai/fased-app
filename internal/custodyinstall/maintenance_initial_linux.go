@@ -23,7 +23,7 @@ func ValidateInitialMaintenanceRecord(r update.MaintenanceRecord) (Manifest, err
 		return empty, err
 	}
 	base, target, err := protectedRecordManifests(r)
-	if err != nil || base != target || base.Version != 3 || !base.Enrollment || r.OperationID != base.ID {
+	if err != nil || base.Layout != "" || base != target || base.Version != 3 || !base.Enrollment || r.OperationID != base.ID {
 		return empty, errors.New("initial custody installation identity differs")
 	}
 	if base.Provenance == signer.OwnerKeyProvenance && r.Package.DevelopmentOnly {
@@ -92,9 +92,6 @@ func InitializeProtectedPackageJournal(ctx context.Context, owner int, location,
 	if err != nil || helper != a.ImageSHA256 {
 		return errors.New("the instance gate differs from its pinned helper")
 	}
-	if err = verifyLoadedPackageServices(ctx, m); err != nil {
-		return err
-	}
 	r := update.MaintenanceRecord{Version: 1, Owner: owner, OperationID: instance, Phase: "idle", Start: "base", Base: mustJSON(m), Target: mustJSON(m), Package: &p}
 	if _, err = ValidateInitialPackageMaintenanceRecord(r, owner, location, instance); err != nil {
 		return err
@@ -104,7 +101,10 @@ func InitializeProtectedPackageJournal(ctx context.Context, owner int, location,
 		if _, err = ValidateInitialPackageMaintenanceRecord(old, owner, location, instance); err != nil || update.SnapshotDigest("initial-package", old) != update.SnapshotDigest("initial-package", r) {
 			return errors.New("existing package operation differs; preserve it")
 		}
-		return nil
+		if err = verifyLoadedPackageServices(ctx, m); err != nil {
+			return err
+		}
+		return verifyPackageRootUnits(ctx, a, m, instance)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -122,6 +122,12 @@ func InitializeProtectedPackageJournal(ctx context.Context, owner int, location,
 		if _, err = os.Lstat(root + "/" + name); !errors.Is(err, os.ErrNotExist) {
 			return errors.New("existing package recovery fence must be preserved")
 		}
+	}
+	if err = installPackageMaintenanceUnits(ctx, a, m); err != nil {
+		return err
+	}
+	if err = verifyLoadedPackageServices(ctx, m); err != nil {
+		return err
 	}
 	journal, err := update.PackageMaintenanceRoot(owner, location, instance)
 	if err != nil {

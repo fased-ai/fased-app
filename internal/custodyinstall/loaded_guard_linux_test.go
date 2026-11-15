@@ -17,7 +17,7 @@ func TestPackageRuntimeRejectsLegacyUnitAndUnverifiedOverrides(t *testing.T) {
 	fields := map[string]string{
 		"FragmentPath": "/etc/systemd/system/" + instanceUnit(m, "app"),
 		"User":         strconv.Itoa(m.App.UID), "Group": strconv.Itoa(m.App.GID), "NoNewPrivileges": "yes",
-		"ProtectSystem": "strict", "ExecStart": "{ path=" + m.Root + "/fased-app ; argv[]=... ; }", "NeedDaemonReload": "no",
+		"ProtectSystem": "strict", "ExecStart": "{ path=" + m.Root + "/fased-app ; argv[]=... ; }", "NeedDaemonReload": "no", "LimitCORE": "0",
 	}
 	if err := validateLoadedUnitFields(m, "app", m.Root+"/fased-app", fields, nil, nil); err != nil {
 		t.Fatal("exact instance unit rejected", err)
@@ -30,6 +30,28 @@ func TestPackageRuntimeRejectsLegacyUnitAndUnverifiedOverrides(t *testing.T) {
 	fields["DropInPaths"] = "/etc/systemd/system/foreign.conf"
 	if err := validateLoadedUnitFields(m, "app", m.Root+"/fased-app", fields, nil, nil); err == nil {
 		t.Fatal("unverified override accepted")
+	}
+	const vendor = "/usr/lib/systemd/system/service.d/10-timeout-abort.conf"
+	fields["DropInPaths"] = vendor
+	readVendor := func(path string) (hostFile, error) {
+		if path != vendor {
+			return hostFile{}, os.ErrNotExist
+		}
+		return hostFile{UID: 0, Regular: true, Mode: 0644, Data: []byte("# Fedora default\n[Service]\nTimeoutStopFailureMode=abort\n")}, nil
+	}
+	if err := validateLoadedUnitFields(m, "app", m.Root+"/fased-app", fields, readVendor, nil); err != nil {
+		t.Fatal("safe Fedora systemd default refused", err)
+	}
+	fields["LimitCORE"] = "infinity"
+	if err := validateLoadedUnitFields(m, "app", m.Root+"/fased-app", fields, readVendor, nil); err == nil {
+		t.Fatal("service with unrestricted core dumps accepted")
+	}
+	fields["LimitCORE"] = "0"
+	badVendor := func(string) (hostFile, error) {
+		return hostFile{UID: 0, Regular: true, Mode: 0644, Data: []byte("[Service]\nTimeoutStopFailureMode=abort\nExecStartPre=/tmp/foreign\n")}, nil
+	}
+	if err := validateLoadedUnitFields(m, "app", m.Root+"/fased-app", fields, badVendor, nil); err == nil {
+		t.Fatal("vendor override with an extra command accepted")
 	}
 }
 
