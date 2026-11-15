@@ -54,11 +54,19 @@ func attestedDescriptor(seed Seed, docs map[string][]byte) (Descriptor, error) {
 	if packet.Release.InstallerSHA256 != packet.Installer.SHA256 || !hashOK(packet.Release.InstallerSHA256) {
 		return d, errors.New("attested installer digest required")
 	}
-	if err != nil || sequence < seed.MinimumSequence || (packet.Version != 1 && packet.Version != 2) || packet.Deb != (update.Artifact{}) || packet.RPM != (update.Artifact{}) || release.Tag != "v"+packet.ProductVersion || packet.Source != release.Source || !attestedBuildIdentity(packet, release.TagObject) || !sourceHash(packet.Source) || !sourceHash(packet.Release.SourceTree) || !hashOK(packet.Release.PackageLockSHA256) || !hashOK(packet.Release.GoSumSHA256) || !hashOK(packet.BundleSHA256) {
+	if err != nil || sequence < seed.MinimumSequence || (packet.Version != 1 && packet.Version != 2 && packet.Version != 3) || release.Tag != "v"+packet.ProductVersion || packet.Source != release.Source || !attestedBuildIdentity(packet, release.TagObject) || !sourceHash(packet.Source) || !sourceHash(packet.Release.SourceTree) || !hashOK(packet.Release.PackageLockSHA256) || !hashOK(packet.Release.GoSumSHA256) || !hashOK(packet.BundleSHA256) {
 		return d, errors.New("attested source/tag/sequence mismatch")
 	}
 	expected := map[string]update.Artifact{archiveTarget: packet.Archive, "fased-install-linux-amd64": packet.Installer, "install.sh": packet.Entry, provenanceFile: packet.Release.Provenance}
-	if len(release.Assets) != 5 {
+	if packet.Version == 3 {
+		if packet.Deb.File != "fased-app-linux-amd64.deb" || packet.RPM.File != "fased-app-linux-amd64.rpm" || !hashOK(packet.Deb.SHA256) || !hashOK(packet.RPM.SHA256) || packet.Deb.Size <= 0 || packet.Deb.Size > maxArchiveBytes || packet.RPM.Size <= 0 || packet.RPM.Size > maxArchiveBytes {
+			return d, errors.New("both bounded native package identities are required")
+		}
+		expected[packet.Deb.File], expected[packet.RPM.File] = packet.Deb, packet.RPM
+	} else if packet.Deb != (update.Artifact{}) || packet.RPM != (update.Artifact{}) {
+		return d, errors.New("legacy release cannot authorize native packages")
+	}
+	if len(release.Assets) != len(expected)+1 {
 		return d, errors.New("attested release inventory incomplete")
 	}
 	for name, identity := range expected {
@@ -71,7 +79,7 @@ func attestedDescriptor(seed Seed, docs map[string][]byte) (Descriptor, error) {
 	if !ok || p.SHA256 != digest(docs[AttestedPacketFile]) || p.Size != int64(len(docs[AttestedPacketFile])) {
 		return d, errors.New("attested packet differs from immutable digest")
 	}
-	d = Descriptor{Binding: seed.Binding, Sequence: sequence, ProductVersion: packet.ProductVersion, Source: packet.Source, BundleSHA256: packet.BundleSHA256, Archive: packet.Archive, GitHub: release.Assets[archiveTarget], Release: packet.Release}
+	d = Descriptor{Binding: seed.Binding, Sequence: sequence, ProductVersion: packet.ProductVersion, Source: packet.Source, BundleSHA256: packet.BundleSHA256, Archive: packet.Archive, Deb: packet.Deb, RPM: packet.RPM, GitHub: release.Assets[archiveTarget], Release: packet.Release}
 	if d.provenanceExpected().Validate() != nil {
 		return d, errors.New("attested build identity invalid")
 	}

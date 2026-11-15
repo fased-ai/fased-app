@@ -70,7 +70,11 @@ func validateProductionDescriptor(d Descriptor, target *metadata.TargetFiles) er
 }
 
 func productionProof(seed Seed, d Descriptor, proof []byte, now time.Time) (releaseprovenance.Decision, error) {
-	return productionProofExpected(seed, d, proof, now, d.provenanceExpected())
+	expected := d.provenanceExpected()
+	if d.Deb != (update.Artifact{}) || d.RPM != (update.Artifact{}) {
+		expected.DebSHA256, expected.RPMSHA256 = d.Deb.SHA256, d.RPM.SHA256
+	}
+	return productionProofExpected(seed, d, proof, now, expected)
 }
 
 func productionProofExpected(seed Seed, d Descriptor, proof []byte, now time.Time, expected releaseprovenance.Expected) (releaseprovenance.Decision, error) {
@@ -78,6 +82,9 @@ func productionProofExpected(seed Seed, d Descriptor, proof []byte, now time.Tim
 	base.DebSHA256, base.RPMSHA256 = "", ""
 	if base != d.provenanceExpected() {
 		return releaseprovenance.Decision{}, errors.New("provenance expectations differ from the release descriptor")
+	}
+	if (d.Deb != (update.Artifact{}) || d.RPM != (update.Artifact{})) && (expected.DebSHA256 != d.Deb.SHA256 || expected.RPMSHA256 != d.RPM.SHA256) {
+		return releaseprovenance.Decision{}, errors.New("provenance expectations differ from the native packages")
 	}
 	if seed.Version < 3 {
 		return releaseprovenance.Decision{}, nil

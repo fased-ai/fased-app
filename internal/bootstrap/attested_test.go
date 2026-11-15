@@ -185,6 +185,37 @@ func TestNativeLinuxCandidateInspectionBindsBothPackagesWithoutInstalling(t *tes
 	}
 }
 
+func TestAttestedPublicNativeMetadataKeepsPackageIdentity(t *testing.T) {
+	for _, variant := range []string{"native-published", "native-wrong-subject", "native-missing", "legacy-extra"} {
+		t.Run(variant, func(t *testing.T) {
+			_, o, payloads := attestedFixture(t, variant)
+			descriptor, identity, err := Inspect(t.Context(), o)
+			if variant != "native-published" {
+				if err == nil {
+					t.Fatal("published package inventory bypassed its original provenance")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal("authenticated native public metadata was rejected", err)
+			}
+			if identity != digest(payloads[AttestedPacketFile]) || descriptor.Sequence == 0 {
+				t.Fatal("public native package identity differs from the candidate")
+			}
+			if ApplicationDescriptorMatches(descriptor, ApplicationDescriptorIdentity(descriptor)) {
+				t.Fatal("native release accepted the legacy archive identity")
+			}
+			if p, err := Prepare(t.Context(), o); err == nil {
+				p.Close()
+				t.Fatal("legacy archive installer accepted a native package release")
+			}
+			if _, err := os.Lstat(o.Directory); !os.IsNotExist(err) {
+				t.Fatal("unsupported native release created installation output", err)
+			}
+		})
+	}
+}
+
 func TestOlderPublicInspectionStillRequiresAuthenticProof(t *testing.T) {
 	previous := core.Version
 	core.Version = "1.2.4"
@@ -238,8 +269,14 @@ func attestedFixture(t *testing.T, variant string, profile ...string) (*firstFix
 	expected := releaseprovenance.Expected{InstallerSHA256: digest(installer), ArchiveName: archive.File, ArchiveSHA256: archive.SHA256, SourceCommit: release.WorkflowCommit, WorkflowCommit: release.WorkflowCommit, Tag: "v1.2.3", RunID: "23", RunAttempt: "1"}
 	tagObject := release.TagObject
 	packetVersion := 1
-	if variant == "staged" || variant == "staged-running-installer" || variant == "staged-installer-file" {
+	if variant == "staged" || variant == "staged-running-installer" || variant == "staged-installer-file" || variant == "legacy-extra" || strings.HasPrefix(variant, "native-") {
 		release.BuildRef, release.TagObject, expected.BuildRef, packetVersion = "refs/heads/main", "", "refs/heads/main", 2
+	}
+	native := strings.HasPrefix(variant, "native-")
+	deb, rpm := []byte("disposable Debian package"), []byte("disposable RPM package")
+	if native {
+		packetVersion = 3
+		expected.DebSHA256, expected.RPMSHA256 = digest(deb), digest(rpm)
 	}
 	pub, proof, err := fixture.NewWithOptions(releaseprovenance.Policy{Version: releaseprovenance.PolicyVersion, Repository: policy.Repository, RepositoryID: "7", OwnerID: "8", Workflow: releaseprovenance.WorkflowPath}, expected, f.now, fixture.Options{})
 	if err != nil {
@@ -248,7 +285,21 @@ func attestedFixture(t *testing.T, variant string, profile ...string) (*firstFix
 	f.seed.Provenance = &pub
 	release.Provenance = update.Artifact{File: provenanceFile, Size: int64(len(proof)), SHA256: digest(proof)}
 	packet := AttestedPacket{Version: packetVersion, ProductVersion: "1.2.3", Source: release.WorkflowCommit, BundleSHA256: f.descriptor.BundleSHA256, Archive: archive, Installer: update.Artifact{File: "fased-install-linux-amd64", Size: int64(len(installer)), SHA256: digest(installer)}, Entry: update.Artifact{File: "install.sh", Size: int64(len(entry)), SHA256: digest(entry)}, Release: release}
+	if native {
+		packet.Deb = update.Artifact{File: "fased-app-linux-amd64.deb", Size: int64(len(deb)), SHA256: digest(deb)}
+		packet.RPM = update.Artifact{File: "fased-app-linux-amd64.rpm", Size: int64(len(rpm)), SHA256: digest(rpm)}
+		if variant == "native-wrong-subject" {
+			rpm = []byte("different RPM after the original provenance")
+			packet.RPM.Size, packet.RPM.SHA256 = int64(len(rpm)), digest(rpm)
+		}
+	}
 	payloads := map[string][]byte{archiveTarget: f.archive, provenanceFile: proof, "fased-install-linux-amd64": installer, "install.sh": entry, AttestedPacketFile: jsonBytes(t, packet)}
+	if native {
+		payloads[packet.Deb.File], payloads[packet.RPM.File] = deb, rpm
+	}
+	if variant == "legacy-extra" {
+		payloads["fased-app-linux-amd64.deb"], payloads["fased-app-linux-amd64.rpm"] = deb, rpm
+	}
 	if variant == "bad-installer" {
 		payloads["fased-install-linux-amd64"] = []byte("altered executable")
 		packet.Installer.Size = int64(len(payloads["fased-install-linux-amd64"]))
@@ -263,6 +314,14 @@ func attestedFixture(t *testing.T, variant string, profile ...string) (*firstFix
 		payloads[AttestedPacketFile] = jsonBytes(t, packet)
 	}
 	names := []string{archiveTarget, provenanceFile, "fased-install-linux-amd64", "install.sh", AttestedPacketFile}
+	if native {
+		names = append(names, packet.Deb.File)
+		if variant != "native-missing" {
+			names = append(names, packet.RPM.File)
+		}
+	} else if variant == "legacy-extra" {
+		names = append(names, "fased-app-linux-amd64.deb", "fased-app-linux-amd64.rpm")
+	}
 	assets := []map[string]any{}
 	for i, name := range names {
 		assets = append(assets, map[string]any{"id": 20 + i, "name": name, "size": len(payloads[name]), "state": "uploaded", "digest": "sha256:" + digest(payloads[name])})

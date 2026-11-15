@@ -354,7 +354,14 @@ func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepa
 				return nil, e
 			}
 		}
-		return &Prepared{descriptor: descriptor, report: Report{MetadataVerified: true, DescriptorSHA256: applicationIdentity(descriptor, digest(docs["descriptor.json"]))}}, nil
+		identity := applicationIdentity(descriptor, digest(docs["descriptor.json"]))
+		if descriptor.Deb != (update.Artifact{}) {
+			identity = digest(docs[AttestedPacketFile])
+		}
+		return &Prepared{descriptor: descriptor, report: Report{MetadataVerified: true, DescriptorSHA256: identity}}, nil
+	}
+	if descriptor.Deb != (update.Artifact{}) || descriptor.RPM != (update.Artifact{}) {
+		return nil, errors.New("native packages require the package-aware installation controller")
 	}
 	if seed.Version == 4 {
 		if err = checkReaderRelease(descriptor.Sequence); err != nil {
