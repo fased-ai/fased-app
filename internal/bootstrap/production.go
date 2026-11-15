@@ -70,13 +70,22 @@ func validateProductionDescriptor(d Descriptor, target *metadata.TargetFiles) er
 }
 
 func productionProof(seed Seed, d Descriptor, proof []byte, now time.Time) (releaseprovenance.Decision, error) {
+	return productionProofExpected(seed, d, proof, now, d.provenanceExpected())
+}
+
+func productionProofExpected(seed Seed, d Descriptor, proof []byte, now time.Time, expected releaseprovenance.Expected) (releaseprovenance.Decision, error) {
+	base := expected
+	base.DebSHA256, base.RPMSHA256 = "", ""
+	if base != d.provenanceExpected() {
+		return releaseprovenance.Decision{}, errors.New("provenance expectations differ from the release descriptor")
+	}
 	if seed.Version < 3 {
 		return releaseprovenance.Decision{}, nil
 	}
 	if seed.Provenance == nil || int64(len(proof)) != d.Release.Provenance.Size || digest(proof) != d.Release.Provenance.SHA256 {
 		return releaseprovenance.Decision{}, errors.New("production provenance bytes differ from authenticated target")
 	}
-	return releaseprovenance.Verify(*seed.Provenance, proof, d.provenanceExpected(), now)
+	return releaseprovenance.Verify(*seed.Provenance, proof, expected, now)
 }
 
 func verifyBundleProfile(seed Seed, m bundle.Manifest) error {

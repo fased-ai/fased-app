@@ -34,25 +34,26 @@ type Options struct {
 }
 
 type Report struct {
-	Version            int           `json:"version"`
-	DevelopmentOnly    bool          `json:"developmentOnly"`
-	Purpose            string        `json:"purpose"`
-	MetadataVerified   bool          `json:"metadataVerified"`
-	ArchiveVerified    bool          `json:"archiveVerified"`
-	BundleVerified     bool          `json:"bundleVerified"`
-	InstallerInvoked   bool          `json:"installerInvoked"`
-	Sequence           uint64        `json:"sequence,string"`
-	Target             update.Target `json:"target"`
-	SeedSHA256         string        `json:"seedSha256"`
-	DescriptorSHA256   string        `json:"descriptorSha256"`
-	ArchiveSHA256      string        `json:"archiveSha256"`
-	BundleSHA256       string        `json:"bundleSha256"`
-	BundleDirectory    string        `json:"bundleDirectory"`
-	PublicActivation   bool          `json:"publicActivation"`
-	GitHubTransport    bool          `json:"githubTransport,omitzero"`
-	ProvenanceVerified bool          `json:"provenanceVerified,omitzero"`
-	ProvenanceSHA256   string        `json:"provenanceSha256,omitzero"`
-	TrustPolicySHA256  string        `json:"trustPolicySha256,omitzero"`
+	Version                     int           `json:"version"`
+	DevelopmentOnly             bool          `json:"developmentOnly"`
+	Purpose                     string        `json:"purpose"`
+	MetadataVerified            bool          `json:"metadataVerified"`
+	ArchiveVerified             bool          `json:"archiveVerified"`
+	BundleVerified              bool          `json:"bundleVerified"`
+	InstallerInvoked            bool          `json:"installerInvoked"`
+	Sequence                    uint64        `json:"sequence,string"`
+	Target                      update.Target `json:"target"`
+	SeedSHA256                  string        `json:"seedSha256"`
+	DescriptorSHA256            string        `json:"descriptorSha256"`
+	ArchiveSHA256               string        `json:"archiveSha256"`
+	BundleSHA256                string        `json:"bundleSha256"`
+	BundleDirectory             string        `json:"bundleDirectory"`
+	PublicActivation            bool          `json:"publicActivation"`
+	GitHubTransport             bool          `json:"githubTransport,omitzero"`
+	ProvenanceVerified          bool          `json:"provenanceVerified,omitzero"`
+	LinuxPackageDigestsVerified bool          `json:"linuxPackageDigestsVerified,omitzero"`
+	ProvenanceSHA256            string        `json:"provenanceSha256,omitzero"`
+	TrustPolicySHA256           string        `json:"trustPolicySha256,omitzero"`
 }
 
 // Prepared is deliberately not a JSON-install permit. Run revalidates its

@@ -44,6 +44,101 @@ func TestAttestedInspectOlderPublicReleaseWithoutExecutingIt(t *testing.T) {
 	}
 }
 
+func TestNativeLinuxCandidateInspectionBindsBothPackagesWithoutInstalling(t *testing.T) {
+	f, o, payloads := attestedFixture(t, "staged")
+	var packet AttestedPacket
+	if err := update.StrictJSON(payloads[AttestedPacketFile], &packet); err != nil {
+		t.Fatal(err)
+	}
+	packet.Version = 3
+	deb, rpm := []byte("disposable Debian package"), []byte("disposable RPM package")
+	packet.Deb = update.Artifact{File: "fased-app-linux-amd64.deb", Size: int64(len(deb)), SHA256: digest(deb)}
+	packet.RPM = update.Artifact{File: "fased-app-linux-amd64.rpm", Size: int64(len(rpm)), SHA256: digest(rpm)}
+	d := Descriptor{ProductVersion: packet.ProductVersion, Source: packet.Source, Archive: packet.Archive, Release: packet.Release}
+	expected := d.provenanceExpected()
+	expected.DebSHA256, expected.RPMSHA256 = packet.Deb.SHA256, packet.RPM.SHA256
+	policy, proof, err := fixture.New(*f.seed.Provenance, expected, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := f.seed
+	seed.Provenance = &policy
+	o.Seed = jsonBytes(t, seed)
+	o.SeedSHA256 = digest(o.Seed)
+	packet.Release.Provenance = update.Artifact{File: provenanceFile, Size: int64(len(proof)), SHA256: digest(proof)}
+	payloads[AttestedPacketFile] = jsonBytes(t, packet)
+	payloads[provenanceFile], payloads[packet.Deb.File], payloads[packet.RPM.File] = proof, deb, rpm
+	dir := filepath.Join(f.parent, "native-candidate")
+	if err = os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range payloads {
+		if err = os.WriteFile(filepath.Join(dir, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report, err := VerifyAttestedCandidate(o, dir)
+	if err != nil || !report.LinuxPackageDigestsVerified || !report.ProvenanceVerified || report.InstallerInvoked {
+		t.Fatalf("valid native candidate inspection failed: %+v %v", report, err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "first-install-seed.json"), o.Seed, 0600); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.CommandContext(t.Context(), "go", "test", "./cmd/fased-install", "-run", "^TestAttestedCandidateCLI$", "-count=1")
+	command.Dir = filepath.Join("..", "..")
+	command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly -buildvcs=false", "GOPROXY=off", "GOSUMDB=off", "FASED_ATTESTED_CANDIDATE_FIXTURE=" + dir, "FASED_NATIVE_PACKAGE_CANDIDATE=1"}
+	if output, e := command.CombinedOutput(); e != nil {
+		t.Fatalf("native candidate installer entry: %v %s", e, output)
+	}
+	if err = os.WriteFile(filepath.Join(dir, packet.RPM.File), []byte("changed RPM"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = VerifyAttestedCandidate(o, dir); err == nil {
+		t.Fatal("modified RPM accepted")
+	}
+	if err = os.WriteFile(filepath.Join(dir, packet.RPM.File), rpm, 0600); err != nil {
+		t.Fatal(err)
+	}
+	alteredRPM := []byte("different RPM with a matching inventory")
+	changed := packet
+	changed.RPM.Size, changed.RPM.SHA256 = int64(len(alteredRPM)), digest(alteredRPM)
+	if err = os.WriteFile(filepath.Join(dir, changed.RPM.File), alteredRPM, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, AttestedPacketFile), jsonBytes(t, changed), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = VerifyAttestedCandidate(o, dir); err == nil {
+		t.Fatal("changed RPM and inventory bypassed the original signed proof")
+	}
+	if err = os.WriteFile(filepath.Join(dir, packet.RPM.File), rpm, 0600); err != nil {
+		t.Fatal(err)
+	}
+	legacy := packet
+	legacy.Version = 2
+	if err = os.WriteFile(filepath.Join(dir, AttestedPacketFile), jsonBytes(t, legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = VerifyAttestedCandidate(o, dir); err == nil {
+		t.Fatal("legacy candidate admitted package fields without native proof")
+	}
+	if err = os.WriteFile(filepath.Join(dir, AttestedPacketFile), payloads[AttestedPacketFile], 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Inspecting the new format is read-only. The legacy installed-update
+	// controller must not execute it before a package-aware controller exists.
+	o.githubFixture = nil
+	o.Directory = filepath.Join(f.parent, "must-not-admit")
+	a := CandidateAdmission{PacketSHA256: digest(payloads[AttestedPacketFile]), OperationID: strings.Repeat("1", 32), BaselineSHA256: strings.Repeat("2", 64), ExpiresAt: f.now.Add(10 * time.Minute).Unix()}
+	if admitted, err := PrepareAttestedCandidate(t.Context(), o, dir, a); err == nil {
+		admitted.Close()
+		t.Fatal("legacy controller admitted a native package candidate")
+	}
+	if _, err = os.Stat(o.Directory); !os.IsNotExist(err) {
+		t.Fatal("refused native candidate created an update output")
+	}
+}
+
 func TestOlderPublicInspectionStillRequiresAuthenticProof(t *testing.T) {
 	previous := core.Version
 	core.Version = "1.2.4"

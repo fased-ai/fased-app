@@ -34,6 +34,39 @@ func requireRefusal(t *testing.T, p releaseprovenance.Policy, raw []byte, e rele
 	}
 }
 
+func TestProductionProvenanceBindsBothLinuxPackages(t *testing.T) {
+	p, e, now := inputs()
+	e.InstallerSHA256 = strings.Repeat("d", 64)
+	// A proof for only the old archive and installer must never authenticate
+	// newly supplied package hashes.
+	p, oldProof, err := fixture.New(p, e, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.DebSHA256, e.RPMSHA256 = strings.Repeat("c", 64), strings.Repeat("f", 64)
+	requireRefusal(t, p, oldProof, e, now)
+
+	p, proof, err := fixture.New(p, e, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = releaseprovenance.Verify(p, proof, e, now); err != nil {
+		t.Fatalf("correctly bound package pair was refused: %v", err)
+	}
+	for _, mutate := range []func(*releaseprovenance.Expected){
+		func(v *releaseprovenance.Expected) { v.DebSHA256 = strings.Repeat("e", 64) },
+		func(v *releaseprovenance.Expected) { v.RPMSHA256 = strings.Repeat("e", 64) },
+		func(v *releaseprovenance.Expected) { v.DebSHA256 = "" },
+		func(v *releaseprovenance.Expected) { v.RPMSHA256 = "" },
+		func(v *releaseprovenance.Expected) { v.InstallerSHA256 = "" },
+		func(v *releaseprovenance.Expected) { v.DebSHA256, v.RPMSHA256 = v.RPMSHA256, v.DebSHA256 },
+	} {
+		bad := e
+		mutate(&bad)
+		requireRefusal(t, p, proof, bad, now)
+	}
+}
+
 func TestProductionProvenanceCryptographicRefusals(t *testing.T) {
 	p, e, now := inputs()
 	for name, option := range map[string]fixture.Options{"no-sct": {OmitSCT: true}, "invalid-sct": {CorruptSCT: true}, "no-inclusion": {OmitProof: true}, "no-signed-time": {OmitPromise: true}, "future-signed-time": {IntegratedAt: now.Add(30 * time.Second)}} {

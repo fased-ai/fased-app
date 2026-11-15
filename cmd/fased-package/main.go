@@ -33,14 +33,25 @@ func runArgs(args []string) error {
 	engine := packageFlags.String("engine", ".evidence/bin/fased-app", "native core binary")
 	desktop := packageFlags.String("desktop", "", "optional matching native desktop binary")
 	signer := packageFlags.String("signer", "", "matching Linux signer carried by the native owner client")
+	installer := packageFlags.String("installer", "", "matching verified Linux installation and maintenance binary")
 	out := packageFlags.String("out", ".evidence/packages", "generated package output directory")
 	source := packageFlags.String("source", "working-tree", "source revision identity")
 	releaseFormat := packageFlags.Bool("ubuntu-release-format", false, "headless Ubuntu schema2 format only; no publisher authentication or publication")
+	linuxPackages := packageFlags.Bool("linux-system-packages", false, "build matching Debian and RPM packages without publication")
 	if err := packageFlags.Parse(args); err != nil {
 		return err
 	}
 	if packageFlags.NArg() != 0 {
 		return fmt.Errorf("unexpected packaging argument")
+	}
+	if *linuxPackages {
+		if *releaseFormat || runtime.GOOS != "linux" || *signer == "" || *installer == "" {
+			return fmt.Errorf("Linux system packages require an aligned core, signer and installer")
+		}
+		return packageLinuxSystem(*engine, *signer, *installer, *desktop, *out, *source)
+	}
+	if *installer != "" {
+		return fmt.Errorf("the installer input requires Linux system packages")
 	}
 	if *signer != "" && (runtime.GOOS != "linux" || *desktop == "" || *releaseFormat) {
 		return fmt.Errorf("signer payload requires a Linux native package")

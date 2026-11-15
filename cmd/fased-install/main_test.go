@@ -110,6 +110,9 @@ func TestAttestedCandidateCLI(t *testing.T) {
 	if json.Unmarshal(out.Bytes(), &report) != nil || report.Version != 4 || !report.BundleVerified || !report.ProvenanceVerified || report.MetadataVerified || report.InstallerInvoked {
 		t.Fatal(out.String())
 	}
+	if os.Getenv("FASED_NATIVE_PACKAGE_CANDIDATE") == "1" && !report.LinuxPackageDigestsVerified {
+		t.Fatal("native package inspection did not verify both package identities")
+	}
 	if err = run([]string{"--verify-candidate", dir, "--install"}, strings.NewReader(""), io.Discard, io.Discard); err == nil {
 		t.Fatal("candidate verification accepted execution")
 	}

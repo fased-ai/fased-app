@@ -26,6 +26,8 @@ type AttestedPacket struct {
 	Archive        update.Artifact   `json:"archive"`
 	Installer      update.Artifact   `json:"installer"`
 	Entry          update.Artifact   `json:"entry"`
+	Deb            update.Artifact   `json:"deb,omitzero"`
+	RPM            update.Artifact   `json:"rpm,omitzero"`
 	Release        ProductionRelease `json:"release"`
 }
 
@@ -35,7 +37,7 @@ func attestedBuildIdentity(packet AttestedPacket, tagObject string) bool {
 	if packet.Version == 1 {
 		return packet.Release.BuildRef == "" && sourceHash(packet.Release.TagObject) && packet.Release.TagObject == tagObject
 	}
-	return packet.Version == 2 && packet.Release.BuildRef == "refs/heads/main" && packet.Release.TagObject == ""
+	return (packet.Version == 2 || packet.Version == 3) && packet.Release.BuildRef == "refs/heads/main" && packet.Release.TagObject == ""
 }
 
 func attestedDescriptor(seed Seed, docs map[string][]byte) (Descriptor, error) {
@@ -52,7 +54,7 @@ func attestedDescriptor(seed Seed, docs map[string][]byte) (Descriptor, error) {
 	if packet.Release.InstallerSHA256 != packet.Installer.SHA256 || !hashOK(packet.Release.InstallerSHA256) {
 		return d, errors.New("attested installer digest required")
 	}
-	if err != nil || sequence < seed.MinimumSequence || (packet.Version != 1 && packet.Version != 2) || release.Tag != "v"+packet.ProductVersion || packet.Source != release.Source || !attestedBuildIdentity(packet, release.TagObject) || !sourceHash(packet.Source) || !sourceHash(packet.Release.SourceTree) || !hashOK(packet.Release.PackageLockSHA256) || !hashOK(packet.Release.GoSumSHA256) || !hashOK(packet.BundleSHA256) {
+	if err != nil || sequence < seed.MinimumSequence || (packet.Version != 1 && packet.Version != 2) || packet.Deb != (update.Artifact{}) || packet.RPM != (update.Artifact{}) || release.Tag != "v"+packet.ProductVersion || packet.Source != release.Source || !attestedBuildIdentity(packet, release.TagObject) || !sourceHash(packet.Source) || !sourceHash(packet.Release.SourceTree) || !hashOK(packet.Release.PackageLockSHA256) || !hashOK(packet.Release.GoSumSHA256) || !hashOK(packet.BundleSHA256) {
 		return d, errors.New("attested source/tag/sequence mismatch")
 	}
 	expected := map[string]update.Artifact{archiveTarget: packet.Archive, "fased-install-linux-amd64": packet.Installer, "install.sh": packet.Entry, provenanceFile: packet.Release.Provenance}
