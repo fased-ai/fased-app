@@ -16,7 +16,7 @@ import (
 // runEmptyPackageUpdate uses the real app-owned checkpoint when no wallet has
 // been configured. The stopped signer and its empty directory are checked by
 // the protected helper; an app checkpoint is never treated as a signer hold.
-func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r update.MaintenanceRecord, base, target Manifest, boot bool) error {
+func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r update.MaintenanceRecord, base, target Manifest, boot bool) (result error) {
 	// The package manager is part of this same transaction. Until its exact
 	// RPM/DEB replacement and restart reconciliation are connected, do not
 	// stop the app, replace files, or report an update as complete.
@@ -28,6 +28,14 @@ func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r updat
 		r.Application != nil && r.Application.PreviousEngineSHA256 != base.CoreHash {
 		return errors.New("original empty-signer package operation required")
 	}
+	// All instances share the OS package. Hold its lock across the preflight,
+	// stop and replacement so another instance cannot invalidate the checked
+	// predecessor after this instance has been stopped.
+	lock, err := maintenance.PackageSystemLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { result = errors.Join(result, lock.Close()) }()
 	if err := verifyPackageRootUnits(ctx, a, base, r.OperationID); err != nil {
 		return err
 	}
@@ -140,7 +148,7 @@ func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r updat
 		if err = storeProtectedRecord(r); err != nil {
 			return err
 		}
-		if err = applyNativePackage(ctx, base, r.PreviousPackage, *r.Package, true); err != nil {
+		if err = applyNativePackageLocked(ctx, base, r.PreviousPackage, *r.Package, true); err != nil {
 			return err
 		}
 		for _, component := range r.Package.Components {

@@ -255,6 +255,13 @@ func TestPublicNativeReleaseRetainsAttestedPackagesForTheInstalledController(t *
 	if !p.Report().LinuxPackageDigestsVerified || p.Report().DescriptorSHA256 != digest(payloads[AttestedPacketFile]) {
 		t.Fatal("native acquisition lost its signed release identity")
 	}
+	instance := strings.Repeat("a", 32)
+	if err = p.ValidateFreshPackageCandidate("local", instance); err != nil {
+		t.Fatal("published native package cannot enter fresh Local setup", err)
+	}
+	if err = p.ValidateFreshPackageCandidate("remote", instance); err == nil {
+		t.Fatal("Local package verification admitted Remote setup")
+	}
 	for held, name := range map[string]string{
 		"candidate-deb":       "fased-app-linux-amd64.deb",
 		"candidate-rpm":       "fased-app-linux-amd64.rpm",

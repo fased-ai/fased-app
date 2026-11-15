@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/fased-ai/fased-app/internal/update"
 	"golang.org/x/sys/unix"
@@ -200,7 +201,43 @@ func PackageLock(owner int, location, instance string) (*os.File, error) {
 }
 
 func lockPackage(root string) (*os.File, error) {
-	fd, err := syscall.Open(root+"/operation.lock", syscall.O_RDWR|syscall.O_CREAT|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0600)
+	return lockPackageFile(root+"/operation.lock", 0, 0)
+}
+
+// PackageSystemLock serializes the package-manager files shared by instances.
+// Its root-owned directory already holds the verified maintenance images.
+func PackageSystemLock(ctx context.Context) (*os.File, error) {
+	if os.Getuid() != 0 || os.Geteuid() != 0 {
+		return nil, errors.New("protected system package lock required")
+	}
+	root := StateRoot + "/images"
+	if err := ensureDirectory(root); err != nil {
+		return nil, err
+	}
+	return waitPackageFile(ctx, root+"/system-package.lock", 0, 0)
+}
+
+func waitPackageFile(ctx context.Context, path string, owner, group int) (*os.File, error) {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		f, err := lockPackageFile(path, owner, group)
+		if err == nil || !errors.Is(err, syscall.EWOULDBLOCK) {
+			return f, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func lockPackageFile(path string, owner, group int) (*os.File, error) {
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0600)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +245,7 @@ func lockPackage(root string) (*os.File, error) {
 	i, err := f.Stat()
 	if err == nil {
 		st, ok := i.Sys().(*syscall.Stat_t)
-		if !ok || st.Uid != 0 || st.Gid != 0 || st.Nlink != 1 || !i.Mode().IsRegular() || i.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 || i.Mode().Perm()&^0600 != 0 || i.Size() != 0 {
+		if !ok || int(st.Uid) != owner || int(st.Gid) != group || st.Nlink != 1 || !i.Mode().IsRegular() || i.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 || i.Mode().Perm()&^0600 != 0 || i.Size() != 0 {
 			err = errors.New("foreign package lock; preserve it")
 		}
 	}

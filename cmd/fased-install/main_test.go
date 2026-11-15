@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/fased-ai/fased-app/internal/bootstrap"
 	"io"
 	"os"
@@ -56,6 +57,32 @@ func TestFreshCandidateRejectsUntrustedOrMixedModes(t *testing.T) {
 	}
 }
 
+func TestPublicPackageRequiresExactLocalOwnerAndRelease(t *testing.T) {
+	if os.Getuid() <= 0 || os.Getuid() != os.Geteuid() {
+		t.Skip("ordinary Local owner required")
+	}
+	previous := compiledFirstInstallBinding
+	compiledFirstInstallBinding = &firstInstallBinding{Seed: []byte("not read"), SHA256: strings.Repeat("a", 64)}
+	t.Cleanup(func() { compiledFirstInstallBinding = previous })
+	packet := strings.Repeat("b", 64)
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s\x00local", os.Getuid(), packet)))
+	instance := hex.EncodeToString(sum[:])[:32]
+	for _, args := range [][]string{
+		{"--install-public-package", "--candidate-packet-sha256", packet, "--package-location", "remote", "--package-instance", instance, "--profile", "local"},
+		{"--install-public-package", "--candidate-packet-sha256", strings.ToUpper(packet), "--package-location", "local", "--package-instance", instance, "--profile", "local"},
+		{"--install-public-package", "--candidate-packet-sha256", packet, "--package-location", "local", "--package-instance", strings.Repeat("c", 32), "--profile", "local"},
+		{"--install-public-package", "--candidate-packet-sha256", packet, "--package-location", "local", "--package-instance", instance, "--profile", "local", "--upgrade"},
+	} {
+		if err := run(args, nil, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "fresh Local package") {
+			t.Fatal("mixed or foreign public package accepted", args, err)
+		}
+	}
+	args := []string{"--install-public-package", "--candidate-packet-sha256", packet, "--package-location", "local", "--package-instance", instance, "--profile", "local"}
+	if err := run(args, nil, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "not available yet") {
+		t.Fatal("the incomplete package controller did not refuse before acquisition", err)
+	}
+}
+
 func TestUpdateCandidateRejectsMixedModesBeforeReadingInstallation(t *testing.T) {
 	previous := compiledFirstInstallBinding
 	compiledFirstInstallBinding = &firstInstallBinding{Seed: []byte("not read"), SHA256: strings.Repeat("a", 64)}
@@ -75,7 +102,7 @@ func TestUpdateCandidateRejectsMixedModesBeforeReadingInstallation(t *testing.T)
 			t.Fatal("mixed or unbound candidate update accepted", args, err)
 		}
 	}
-	if err := run([]string{"--package-location", "local", "--package-instance", strings.Repeat("1", 32)}, nil, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "manual candidate update") {
+	if err := run([]string{"--package-location", "local", "--package-instance", strings.Repeat("1", 32)}, nil, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "package candidate identity") {
 		t.Fatal("package identity was accepted outside candidate staging", err)
 	}
 }

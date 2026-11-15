@@ -242,6 +242,30 @@ owner_install() {
       package_instance=${identity:0:32}
       verifier_args+=(--package-location local --package-instance "$package_instance")
     fi
+  elif [[ $profile == local && $action == install && $development_only == 0 ]]; then
+    inspection=$("$installer" --inspect-public-package) || die 'Public release verification failed.'
+    read -r kind public_packet public_version public_installer extra <<< "$inspection"
+    if [[ $kind == native ]]; then
+      [[ $public_packet =~ ^[a-f0-9]{64}$ && $public_version == "$entry_version" && $public_installer == "$installer_sha256" && -z ${extra:-} ]] || die 'Public release identity changed; restart installation.'
+      "$installer" --package-controller-ready || die 'Native package installation and recovery are not available yet.'
+      candidate_packet=$public_packet
+      read -r identity _ < <(printf '%s\0%s\0local' "$(/usr/bin/id -u)" "$candidate_packet" | /usr/bin/sha256sum)
+      [[ $identity =~ ^[a-f0-9]{64}$ ]] || die 'Cannot determine the package instance.'
+      package_instance=${identity:0:32}
+      verifier_args=(--install-public-package --candidate-packet-sha256 "$candidate_packet" --package-location local --package-instance "$package_instance" --profile local --listen "$listen")
+    elif [[ $kind != legacy || -n ${public_packet:-} ]]; then
+      die 'Public release verification returned an invalid result.'
+    fi
+  fi
+  if [[ -n $package_instance ]]; then
+    package_parent="/var/lib/fased-app-package/$(/usr/bin/id -u)/local"
+    if [[ -e $package_parent || -L $package_parent ]]; then
+      [[ -d $package_parent && ! -L $package_parent ]] || die 'Existing package state is unavailable; preserving it.'
+      while IFS= read -r -d '' existing; do
+        name=${existing##*/}
+        [[ $name == "$package_instance" || $name == ".$package_instance.pending" ]] || die 'An existing Local package requires its installed Update command.'
+      done < <(/usr/bin/find "$package_parent" -mindepth 1 -maxdepth 1 -print0)
+    fi
   fi
   if [[ -z ${FASED_PROTECTED_INSTALLER:-} ]]; then
     owner_maintenance_setup "$installer"

@@ -29,6 +29,9 @@ func packageControllerReady() error {
 }
 
 func installFreshPackageCandidate(ctx context.Context, p *bootstrap.Prepared, packetSHA, location, instance, listen string, diagnostics io.Writer) error {
+	if err := packageControllerReady(); err != nil {
+		return err
+	}
 	if p == nil || p.VerifyFreshPackageCandidateInstaller(location, instance) != nil {
 		return errors.New("the running installer must match the original fresh package")
 	}

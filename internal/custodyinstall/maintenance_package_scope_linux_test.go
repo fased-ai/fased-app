@@ -85,6 +85,14 @@ func TestPackageMaintenanceUnitsAreInstanceScoped(t *testing.T) {
 	if !strings.Contains(worker, "maintenance-package-worker "+identity+" --operation %i\n") || !strings.Contains(worker, "ReadWritePaths="+m.Root+" ") || strings.Contains(worker, Root(m.Owner)) {
 		t.Fatal("worker does not remain in the selected instance")
 	}
+	for _, unit := range []string{worker, recovery} {
+		if !strings.Contains(unit, " "+maintenance.StateRoot+"/images ") {
+			t.Fatal("update and recovery cannot serialize package operations or retain the target installer")
+		}
+		if !strings.Contains(unit, " -/usr/lib -/usr/share/doc ") {
+			t.Fatal("package recovery cannot recreate interrupted package directories")
+		}
+	}
 	if !strings.Contains(worker, "LimitCORE=0\n") || !strings.Contains(recovery, "LimitCORE=0\n") {
 		t.Fatal("protected maintenance services must limit crash dumps")
 	}

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -55,6 +56,26 @@ func retailInstallerOptions(binding *firstInstallBinding, cache string) (bootstr
 func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	if len(args) == 1 && args[0] == "--package-controller-ready" {
 		return packageControllerReady()
+	}
+	if len(args) == 1 && args[0] == "--inspect-public-package" {
+		cache, err := os.UserCacheDir()
+		if err != nil {
+			return err
+		}
+		options, err := retailInstallerOptions(compiledFirstInstallBinding, cache)
+		if err != nil {
+			return err
+		}
+		descriptor, packet, err := bootstrap.Inspect(context.Background(), options)
+		if err != nil {
+			return err
+		}
+		if descriptor.Deb == (update.Artifact{}) && descriptor.RPM == (update.Artifact{}) {
+			_, err = fmt.Fprintln(out, "legacy")
+		} else {
+			_, err = fmt.Fprintln(out, "native", packet, descriptor.ProductVersion, descriptor.Release.InstallerSHA256)
+		}
+		return err
 	}
 	if len(args) > 0 {
 		switch args[0] {
@@ -121,6 +142,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	entryAction := f.String("entry-action", "", "fixed installed-instance action for the entry launcher")
 	verifyCandidate := f.String("verify-candidate", "", "verify a retained release candidate without installation")
 	installCandidate := f.String("install-candidate", "", "install one independently attested Local candidate")
+	installPublicPackage := f.Bool("install-public-package", false, "install the authenticated public Local package")
 	stageCandidate := f.String("stage-candidate", "", "admit one independently attested manual update candidate")
 	candidatePacket := f.String("candidate-packet-sha256", "", "exact reviewed candidate packet digest")
 	packageLocation := f.String("package-location", "", "installed package profile for candidate acceptance")
@@ -137,6 +159,66 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 			packageFlags = true
 		}
 	})
+	if *installPublicPackage {
+		mixed := false
+		f.Visit(func(flag *flag.Flag) {
+			switch flag.Name {
+			case "install-public-package", "candidate-packet-sha256", "package-location", "package-instance", "profile", "listen":
+			default:
+				mixed = true
+			}
+		})
+		root, pathErr := update.PackageInstanceRoot(os.Getuid(), *packageLocation, *packageInstance)
+		digest, digestErr := hex.DecodeString(*candidatePacket)
+		instanceHash := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s\x00local", os.Getuid(), *candidatePacket)))
+		if mixed || pathErr != nil || *packageLocation != "local" || *profile != "local" || os.Getuid() <= 0 || os.Getuid() != os.Geteuid() ||
+			digestErr != nil || len(digest) != 32 || hex.EncodeToString(digest) != *candidatePacket ||
+			*packageInstance != hex.EncodeToString(instanceHash[:])[:32] || compiledFirstInstallBinding == nil {
+			return errors.New("fresh Local package requires its exact public release and owner")
+		}
+		if err := packageControllerReady(); err != nil {
+			return err
+		}
+		if *listen == "" {
+			*listen = "127.0.0.1:7331"
+		}
+		request, _ := json.Marshal(maintenance.PackageRequest{Version: 1, Action: "provision", Listen: *listen})
+		if _, err := maintenance.DecodePackageRequest(request); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(filepath.Dir(root))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.Name() != *packageInstance && entry.Name() != "."+*packageInstance+".pending" {
+				return errors.New("an existing Local package requires its installed Update command")
+			}
+		}
+		cache, err := os.UserCacheDir()
+		if err != nil {
+			return err
+		}
+		options, err := retailInstallerOptions(compiledFirstInstallBinding, cache)
+		if err != nil {
+			return err
+		}
+		p, err := bootstrap.PrepareNative(context.Background(), options)
+		if err != nil {
+			return err
+		}
+		defer p.Close()
+		release, _, err := p.PackageApplicationRelease()
+		if err != nil || release == nil || release.ManifestSHA256 != *candidatePacket {
+			return errors.New("the public release changed; restart installation")
+		}
+		if err = installFreshPackageCandidate(context.Background(), p, *candidatePacket, *packageLocation, *packageInstance, *listen, errOut); err != nil {
+			return err
+		}
+		p.RetainAcquisitionEvidence()
+		_, err = fmt.Fprintln(out, "Fased is installed. Run /usr/bin/fased open to continue.")
+		return err
+	}
 	if *stageCandidate != "" {
 		mixed := false
 		f.Visit(func(flag *flag.Flag) {

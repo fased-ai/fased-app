@@ -52,9 +52,12 @@ func (p *Prepared) ValidateFreshPackageCandidate(location, instance string) erro
 }
 
 func (p *Prepared) validateFreshPackageCandidate(root string) error {
-	if p.closed || p.root == nil || p.invoked || p.candidate == nil || p.candidate.FreshProfile != "package-local" ||
-		p.candidate.FreshOwner != os.Getuid() || p.candidate.FreshRoot != root || p.candidate.FreshData != filepath.Join(root, "app-state") ||
-		!p.report.LinuxPackageDigestsVerified || !p.report.ProvenanceVerified || p.candidate.validate(p.options.clock()) != nil {
+	if p.closed || p.root == nil || p.invoked || !p.report.LinuxPackageDigestsVerified || !p.report.ProvenanceVerified ||
+		p.seed.Version != 4 || p.options.Development || p.options.protectedOwner != 0 {
+		return errors.New("the original fresh package admission is required")
+	}
+	if p.candidate != nil && (p.candidate.FreshProfile != "package-local" || p.candidate.FreshOwner != os.Getuid() ||
+		p.candidate.FreshRoot != root || p.candidate.FreshData != filepath.Join(root, "app-state") || p.candidate.validate(p.options.clock()) != nil) {
 		return errors.New("the original fresh package admission is required")
 	}
 	return p.revalidateHeld()

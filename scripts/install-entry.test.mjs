@@ -649,9 +649,14 @@ test("candidate Local entry verifies the pinned installer before protected setup
 
 test("unsupported native candidates stop before protected setup", () => {
   const script = renderEntry(template, config);
-  const anchor = script.indexOf("Installer checksum differs; nothing was executed.");
+  const anchor = script.indexOf(
+    "Installer checksum differs; nothing was executed.",
+  );
   const start = script.indexOf("\n  if [[ -n $candidate_dir ]]; then", anchor);
-  const end = script.indexOf('\n  "$installer" "${verifier_args[@]}" <&3', start);
+  const end = script.indexOf(
+    '\n  "$installer" "${verifier_args[@]}" <&3',
+    start,
+  );
   assert.ok(anchor > 0 && start > anchor && end > start);
   const entry = script.slice(start, end);
   const run = (report, status = "0") =>
@@ -659,8 +664,11 @@ test("unsupported native candidates stop before protected setup", () => {
       "-c",
       `
       set -u
-      candidate_dir=/candidate installer=verifier report=$1 status=$2
-      verifier() { printf '%s\\n' "$report"; return "$status"; }
+      candidate_dir=/candidate candidate_packet='' package_instance='' installer=verifier report=$1 status=$2
+      verifier() {
+        if [[ $1 == --package-controller-ready ]]; then return 1; fi
+        printf '%s\\n' "$report"; return "$status"
+      }
       owner_maintenance_setup() { printf 'SETUP\\n'; }
       die() { printf 'REFUSED: %s\\n' "$*"; exit 23; }
       ${entry}
@@ -678,4 +686,74 @@ test("unsupported native candidates stop before protected setup", () => {
   const legacy = run('{"version":4,"provenanceVerified":true}');
   assert.equal(legacy.status, 0, legacy.stderr.toString());
   assert.match(legacy.stdout.toString(), /SETUP/);
+});
+
+test("public native release reaches only its verified Local package handoff", () => {
+  const script = renderEntry(template, config);
+  const anchor = script.indexOf(
+    "Installer checksum differs; nothing was executed.",
+  );
+  const start = script.indexOf("\n  if [[ -n $candidate_dir ]]; then", anchor);
+  const end = script.indexOf(
+    '\n  "$installer" "${verifier_args[@]}" <&3',
+    start,
+  );
+  assert.ok(anchor > 0 && start > anchor && end > start);
+  const entry = script
+    .slice(start, end)
+    .replace(
+      '"/var/lib/fased-app-package/$(/usr/bin/id -u)/local"',
+      '"$fixture_parent"',
+    );
+  const dir = mkdtempSync(join(tmpdir(), "fased-public-entry-"));
+  try {
+    const packet = "a".repeat(64);
+    const installer = "b".repeat(64);
+    const run = (inspection, ready = 0) =>
+      spawnSync("bash", [
+        "-c",
+        `
+      set -u
+      candidate_dir='' candidate_packet='' package_instance='' profile=local action=install development_only=0 listen=127.0.0.1:7331
+      installer=verifier entry_version=1.0.0 installer_sha256=$1 fixture_parent=$2 inspection=$3 ready=$4
+      verifier_args=()
+      verifier() {
+        if [[ $1 == --inspect-public-package ]]; then printf '%s\\n' "$inspection"; return 0; fi
+        if [[ $1 == --package-controller-ready ]]; then return "$ready"; fi
+        return 1
+      }
+      owner_maintenance_setup() { printf 'SETUP %s\\n' "$package_instance"; }
+      die() { printf 'REFUSED: %s\\n' "$*"; exit 23; }
+      ${entry}
+      printf 'ARGS %s\\n' "$verifier_args"
+      `,
+        "public",
+        installer,
+        dir,
+        inspection,
+        String(ready),
+      ]);
+    const accepted = run(`native ${packet} 1.0.0 ${installer}`);
+    assert.equal(accepted.status, 0, accepted.stderr.toString());
+    assert.match(accepted.stdout.toString(), /SETUP [a-f0-9]{32}/);
+    assert.match(accepted.stdout.toString(), /ARGS --install-public-package/);
+    for (const result of [
+      run(`native ${packet} 1.0.0 ${installer}`, 1),
+      run(`native ${packet} 1.0.1 ${installer}`),
+      run(`native ${packet} 1.0.0 ${"c".repeat(64)}`),
+    ]) {
+      assert.equal(result.status, 23, result.stderr.toString());
+      assert.doesNotMatch(result.stdout.toString(), /SETUP/);
+    }
+    writeFileSync(join(dir, "another-instance"), "preserve");
+    const existing = run(`native ${packet} 1.0.0 ${installer}`);
+    assert.equal(existing.status, 23, existing.stderr.toString());
+    assert.doesNotMatch(existing.stdout.toString(), /SETUP/);
+    assert.equal(
+      readFileSync(join(dir, "another-instance"), "utf8"),
+      "preserve",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

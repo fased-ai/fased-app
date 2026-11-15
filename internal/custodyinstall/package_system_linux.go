@@ -23,6 +23,8 @@ import (
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
+const rpmPackageListingQuery = "%{NAME}\\t%{VERSION}\\t%{RELEASE}\\t%{ARCH}\\n[%{FILENAMES}\\t%{FILEMODES:octal}\\t%{FILEUSERNAME}\\t%{FILEGROUPNAME}\\t%{FILEDIGESTS}\\t%{FILELINKTOS}\\t%{FILECAPS}\\t%{FILEFLAGS}\\n]"
+
 // nativePackageFiles is the whole package-owned surface. Instance state is
 // deliberately absent, so the OS package manager cannot replace user data.
 func nativePackageFiles(p update.MaintenancePackage) (map[string]string, error) {
@@ -85,12 +87,18 @@ func validateRPMListing(raw []byte, version, arch string, files map[string]strin
 	seen := map[string]bool{}
 	for _, line := range lines[1:] {
 		fields := strings.Split(line, "\t")
-		if len(fields) != 8 || !strings.HasPrefix(fields[0], "/") || fields[2] != "root" || fields[3] != "root" || fields[6] != "(none)" || fields[7] != "0" {
+		if len(fields) != 8 || !strings.HasPrefix(fields[0], "/") || fields[2] != "root" || fields[3] != "root" || fields[6] != "(none)" {
 			return errors.New("unsafe RPM file metadata")
 		}
 		name := strings.TrimPrefix(fields[0], "/")
 		if path.Clean(name) != name || seen[name] {
 			return errors.New("duplicate or invalid RPM path")
+		}
+		// RPM marks the two packaged documents as documentation automatically.
+		// Other file flags can affect replacement and are never admitted here.
+		document := name == "usr/share/doc/fased-app/LICENSE" || name == "usr/share/doc/fased-app/NOTICE"
+		if fields[7] != "0" && !(document && fields[7] == "2") {
+			return errors.New("unsafe RPM file flags")
 		}
 		seen[name] = true
 		switch name {
@@ -131,7 +139,7 @@ func inspectDebTar(r io.Reader, control bool, files map[string]string) (map[stri
 		if errors.Is(err, io.EOF) {
 			break
 		}
-		if err != nil || h.Uid != 0 || h.Gid != 0 || h.Size < 0 || h.Size > 64<<20 || len(h.Xattrs) != 0 {
+		if err != nil || h.Uid != 0 || h.Gid != 0 || h.Size < 0 || h.Size > 128<<20 || len(h.Xattrs) != 0 {
 			return nil, errors.New("unsafe Debian archive")
 		}
 		for key := range h.PAXRecords {
@@ -149,6 +157,9 @@ func inspectDebTar(r io.Reader, control bool, files map[string]string) (map[stri
 		}
 		if strings.HasPrefix(name, "/") || path.Clean(name) != name || seen[name] {
 			return nil, errors.New("duplicate or unsafe Debian path")
+		}
+		if h.Size > 64<<20 && (control || name != "usr/lib/fased-app/fased-install") {
+			return nil, errors.New("oversized Debian package file")
 		}
 		seen[name] = true
 		if control {
@@ -209,11 +220,15 @@ func inspectDebTar(r io.Reader, control bool, files map[string]string) (map[stri
 }
 
 func inspectDebianPackage(ctx context.Context, packagePath, version, arch string, files map[string]string) error {
+	return inspectDebianPackageWithTool(ctx, "/usr/bin/dpkg-deb", packagePath, version, arch, files)
+}
+
+func inspectDebianPackageWithTool(ctx context.Context, tool, packagePath, version, arch string, files map[string]string) error {
 	for _, item := range []struct {
 		option  string
 		control bool
 	}{{"--ctrl-tarfile", true}, {"--fsys-tarfile", false}} {
-		cmd := exec.CommandContext(ctx, "/usr/bin/dpkg-deb", item.option, packagePath)
+		cmd := exec.CommandContext(ctx, tool, item.option, packagePath)
 		cmd.Env, cmd.Dir = []string{"PATH=/usr/bin:/bin", "HOME=/nonexistent", "LANG=C"}, "/"
 		out, err := cmd.StdoutPipe()
 		if err != nil {
@@ -301,9 +316,8 @@ func verifyNativePackage(ctx context.Context, m Manifest, p update.MaintenancePa
 	if platform.Family == "apt" {
 		err = inspectDebianPackage(ctx, packagePath, p.Version, debArch, files)
 	} else {
-		query := "%{NAME}\\t%{VERSION}\\t%{RELEASE}\\t%{ARCH}\\n[%{FILENAMES}\\t%{FILEMODES:octal}\\t%{FILEUSERNAME}\\t%{FILEGROUPNAME}\\t%{FILEDIGESTS}\\t%{FILELINKTOS}\\t%{FILECAPS}\\t%{FILEFLAGS}\\n]"
 		var listing []byte
-		listing, err = packageTool(ctx, 64<<10, "/usr/bin/rpm", "-qp", "--queryformat", query, "--", packagePath)
+		listing, err = packageTool(ctx, 64<<10, "/usr/bin/rpm", "-qp", "--queryformat", rpmPackageListingQuery, "--", packagePath)
 		if err == nil {
 			err = validateRPMListing(listing, p.Version, rpmArch, files)
 		}
@@ -499,7 +513,18 @@ func preflightNativePackage(ctx context.Context, m Manifest, previous *update.Ma
 
 // applyNativePackage executes only the already inspected exact package through
 // the host's fixed package manager. Scripts and unrelated triggers are barred.
-func applyNativePackage(ctx context.Context, m Manifest, previous *update.MaintenancePackage, target update.MaintenancePackage, interrupted bool) error {
+func applyNativePackage(ctx context.Context, m Manifest, previous *update.MaintenancePackage, target update.MaintenancePackage, interrupted bool) (result error) {
+	lock, err := maintenance.PackageSystemLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { result = errors.Join(result, lock.Close()) }()
+	return applyNativePackageLocked(ctx, m, previous, target, interrupted)
+}
+
+// The caller holds the shared package lock through its predecessor check and
+// replacement. This entry also lets the update keep that lock while stopping.
+func applyNativePackageLocked(ctx context.Context, m Manifest, previous *update.MaintenancePackage, target update.MaintenancePackage, interrupted bool) error {
 	packagePath, wanted, err := preflightNativePackage(ctx, m, previous, target, interrupted)
 	if err != nil {
 		return err
@@ -511,10 +536,7 @@ func applyNativePackage(ctx context.Context, m Manifest, previous *update.Mainte
 			return nil
 		}
 	}
-	name, args := "/usr/bin/rpm", []string{"-U", "--replacepkgs", "--noscripts", "--notriggers", "--noplugins", "--", packagePath}
-	if family == "apt" {
-		name, args = "/usr/bin/dpkg", []string{"--no-triggers", "--install", "--", packagePath}
-	}
+	name, args := nativePackageInstallCommand(family, packagePath)
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env, cmd.Dir = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/nonexistent", "LANG=C", "DEBIAN_FRONTEND=noninteractive"}, "/"
 	if err = cmd.Run(); err != nil {
@@ -525,4 +547,13 @@ func applyNativePackage(ctx context.Context, m Manifest, previous *update.Mainte
 		return errors.New("native package installation is unconfirmed")
 	}
 	return globalPackageState(nil, wanted, false, true)
+}
+
+// Provenance and the exact package digest are verified before this command.
+// RPM's separate signature policy must not require a second signing system.
+func nativePackageInstallCommand(family, packagePath string) (string, []string) {
+	if family == "apt" {
+		return "/usr/bin/dpkg", []string{"--no-triggers", "--install", "--", packagePath}
+	}
+	return "/usr/bin/rpm", []string{"-U", "--replacepkgs", "--noscripts", "--notriggers", "--noplugins", "--nosignature", "--", packagePath}
 }

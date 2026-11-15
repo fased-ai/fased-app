@@ -71,7 +71,10 @@ func packageMaintenanceFiles(a maintenance.Authority, m Manifest) (map[string][]
 	args := fmt.Sprintf("--owner %d --location %s --instance %s", m.Owner, m.Location, m.ID)
 	units := protectedInstanceUnits(m)
 	ordering := strings.Join(units, " ")
-	protect := fmt.Sprintf("TimeoutStartSec=10min\nNoNewPrivileges=yes\nPrivateTmp=yes\nProtectSystem=strict\nProtectHome=read-only\nReadWritePaths=%s %s -/usr/bin -/usr/lib/fased-app -/usr/share/doc/fased-app -/var/lib/dpkg -/var/lib/rpm -/usr/lib/sysimage/rpm\nRestrictSUIDSGID=yes\nLimitCORE=0\n", m.Root, state)
+	// The package manager must be able to recreate its directories after an
+	// interrupted replacement. The inspected package still limits its files to
+	// Fased's fixed paths, and its maintainer scripts and triggers are disabled.
+	protect := fmt.Sprintf("TimeoutStartSec=10min\nNoNewPrivileges=yes\nPrivateTmp=yes\nProtectSystem=strict\nProtectHome=read-only\nReadWritePaths=%s %s %s/images -/usr/bin -/usr/lib -/usr/share/doc -/var/lib/dpkg -/var/lib/rpm -/usr/lib/sysimage/rpm\nRestrictSUIDSGID=yes\nLimitCORE=0\n", m.Root, state, maintenance.StateRoot)
 	recovery := fmt.Sprintf("[Unit]\nDescription=Fased update recovery\nBefore=%s %s\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=%s maintenance-package-recover %s\n%s[Install]\nWantedBy=multi-user.target\n", instanceUnit(m, "app"), instanceUnit(m, "signer"), image, args, protect)
 	worker := fmt.Sprintf("[Unit]\nDescription=Fased update\nWants=%s\nAfter=%s %s\n[Service]\nType=oneshot\nExecStart=%s maintenance-package-worker %s --operation %%i\n%s", ordering, packageRecoveryUnit(m), ordering, image, args, protect)
 	policy := fmt.Sprintf("polkit.addRule(function(action, subject) {\n  if (action.id == 'org.freedesktop.systemd1.manage-units' && (subject.user == %s || subject.user == %s) && action.lookup('verb') == 'start' && /^fased-package-maintenance-%d-%s-%s@[0-9a-f]{32}\\.service$/.test(action.lookup('unit'))) return polkit.Result.YES;\n});\n", strconv.Quote(u.Username), strconv.Quote(m.App.Name), m.Owner, m.Location, m.ID)

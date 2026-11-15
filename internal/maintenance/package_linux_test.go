@@ -4,11 +4,14 @@ package maintenance
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPackageAuthorityIsScopedToExactInstance(t *testing.T) {
@@ -39,6 +42,62 @@ func TestPackageAuthorityIsScopedToExactInstance(t *testing.T) {
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("policy refused: %v: %s", err, out)
 		}
+	}
+}
+
+func TestPackageSystemLockSerializesAndSurvivesRetry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "system-package.lock")
+	first, err := lockPackageFile(path, os.Getuid(), os.Getgid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second, err := lockPackageFile(path, os.Getuid(), os.Getgid()); err == nil {
+		second.Close()
+		first.Close()
+		t.Fatal("concurrent package operation acquired the same lock")
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := waitPackageFile(cancelled, path, os.Getuid(), os.Getgid()); !errors.Is(err, context.Canceled) {
+		t.Fatal("cancelled package lock wait continued", err)
+	}
+	type lockResult struct {
+		file *os.File
+		err  error
+	}
+	ready := make(chan lockResult, 1)
+	ctx, done := context.WithTimeout(t.Context(), 2*time.Second)
+	defer done()
+	go func() {
+		f, err := waitPackageFile(ctx, path, os.Getuid(), os.Getgid())
+		ready <- lockResult{file: f, err: err}
+	}()
+	select {
+	case result := <-ready:
+		if result.file != nil {
+			result.file.Close()
+		}
+		first.Close()
+		t.Fatal("a concurrent package operation did not wait", result.err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	if err = first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	result := <-ready
+	if result.err != nil {
+		t.Fatal("the waiting package operation did not continue", result.err)
+	}
+	if err = result.file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(filepath.Dir(path), "foreign.lock")
+	if err = os.Symlink(path, link); err != nil {
+		t.Fatal(err)
+	}
+	if bad, err := lockPackageFile(link, os.Getuid(), os.Getgid()); err == nil {
+		bad.Close()
+		t.Fatal("linked package lock was accepted")
 	}
 }
 

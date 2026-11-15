@@ -7,7 +7,11 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -65,6 +69,14 @@ func TestNativePackageInspectionRefusesForeignFilesAndScripts(t *testing.T) {
 	if _, err := inspectDebTar(bytes.NewReader(debTestArchive(t, "./etc/sudoers.d/foreign")), false, testPackageFiles()); err == nil {
 		t.Fatal("package could install an unrelated privileged file")
 	}
+	var oversized bytes.Buffer
+	large := tar.NewWriter(&oversized)
+	if err := large.WriteHeader(&tar.Header{Name: "./usr/lib/fased-app/fased-app", Mode: 0755, Size: (64 << 20) + 1, Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inspectDebTar(&oversized, false, testPackageFiles()); err == nil || !strings.Contains(err.Error(), "oversized") {
+		t.Fatal("oversized application executable was accepted", err)
+	}
 	var control bytes.Buffer
 	w := tar.NewWriter(&control)
 	_ = w.WriteHeader(&tar.Header{Name: "./postinst", Mode: 0755, Typeflag: tar.TypeReg})
@@ -97,11 +109,11 @@ func TestNativeRPMInspectionBindsTheApprovedPair(t *testing.T) {
 	listing.WriteString("/usr/share/doc/fased-app\t40755\troot\troot\t\t\t(none)\t0\n")
 	listing.WriteString("/usr/bin/fased\t120777\troot\troot\t\t../lib/fased-app/fased-app\t(none)\t0\n")
 	for name, hash := range files {
-		mode := "100755"
+		mode, flags := "100755", "0"
 		if strings.Contains(name, "/doc/") {
-			mode, hash = "100644", strings.Repeat("e", 64)
+			mode, hash, flags = "100644", strings.Repeat("e", 64), "2"
 		}
-		fmt.Fprintf(&listing, "/%s\t%s\troot\troot\t%s\t\t(none)\t0\n", name, mode, hash)
+		fmt.Fprintf(&listing, "/%s\t%s\troot\troot\t%s\t\t(none)\t%s\n", name, mode, hash, flags)
 	}
 	if err := validateRPMListing([]byte(listing.String()), "0.1.12", "x86_64", testPackageFiles()); err != nil {
 		t.Fatal("matching RPM was refused", err)
@@ -111,11 +123,86 @@ func TestNativeRPMInspectionBindsTheApprovedPair(t *testing.T) {
 		listing.String() + "/etc/sudoers.d/foreign\t100755\troot\troot\t" + strings.Repeat("e", 64) + "\t\t(none)\t0\n",
 		strings.Replace(listing.String(), "(none)", "cap_net_admin=ep", 1),
 		strings.Replace(listing.String(), "(none)\t0", "(none)\t64", 1),
+		strings.Replace(listing.String(), "(none)\t2", "(none)\t66", 1),
 		strings.Replace(listing.String(), "x86_64", "aarch64", 1),
 	} {
 		if err := validateRPMListing([]byte(bad), "0.1.12", "x86_64", testPackageFiles()); err == nil {
 			t.Fatal("foreign RPM was accepted")
 		}
+	}
+}
+
+func TestNativeRPMInstallUsesAttestedPackageAndKeepsDigestChecks(t *testing.T) {
+	path := "/verified/fased.rpm"
+	name, args := nativePackageInstallCommand("dnf", path)
+	if name != "/usr/bin/rpm" || !slices.Contains(args, "--nosignature") || args[len(args)-1] != path {
+		t.Fatal("the verified RPM command differs", name, args)
+	}
+	for _, forbidden := range []string{"--nodigest", "--noverify", "--ignorepayload", "--ignoresize", "--nodeps"} {
+		if slices.Contains(args, forbidden) {
+			t.Fatal("RPM integrity or safety check was disabled", forbidden)
+		}
+	}
+}
+
+func retainedNativePackage(t *testing.T, packagePath string) (string, map[string]string) {
+	t.Helper()
+	var receipt struct {
+		Product string `json:"product"`
+		Inputs  map[string]struct {
+			SHA256 string `json:"sha256"`
+		} `json:"inputs"`
+	}
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(packagePath), "packages.json"))
+	if err != nil || json.Unmarshal(raw, &receipt) != nil {
+		t.Fatal("the retained package receipt is unavailable", err)
+	}
+	files := map[string]string{
+		"usr/lib/fased-app/fased-app":     receipt.Inputs["fased-app"].SHA256,
+		"usr/lib/fased-app/fased-install": receipt.Inputs["fased-install"].SHA256,
+		"usr/lib/fased-app/fased-signer":  receipt.Inputs["fased-signer"].SHA256,
+		"usr/share/doc/fased-app/LICENSE": "",
+		"usr/share/doc/fased-app/NOTICE":  "",
+	}
+	for _, name := range []string{"fased-app", "fased-install", "fased-signer"} {
+		if len(receipt.Inputs[name].SHA256) != 64 {
+			t.Fatalf("the retained receipt is missing %s", name)
+		}
+	}
+	return receipt.Product, files
+}
+
+func TestNativeRPMInspectionOfRetainedPackage(t *testing.T) {
+	packagePath := os.Getenv("FASED_TEST_RPM")
+	if packagePath == "" {
+		t.Skip("retained RPM fixture not supplied")
+	}
+	version, files := retainedNativePackage(t, packagePath)
+	_, arch, err := packageArch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	listing, err := packageTool(t.Context(), 64<<10, "/usr/bin/rpm", "-qp", "--queryformat", rpmPackageListingQuery, "--", packagePath)
+	if err != nil {
+		t.Fatal("RPM metadata inspection failed", err)
+	}
+	if err = validateRPMListing(listing, version, arch, files); err != nil {
+		t.Fatal("the retained Fased RPM was refused", err)
+	}
+}
+
+func TestNativeDebInspectionOfRetainedPackage(t *testing.T) {
+	packagePath, tool := os.Getenv("FASED_TEST_DEB"), os.Getenv("FASED_TEST_DPKG_DEB")
+	if packagePath == "" || tool == "" {
+		t.Skip("retained Debian package and inspection tool not supplied")
+	}
+	version, files := retainedNativePackage(t, packagePath)
+	arch, _, err := packageArch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = inspectDebianPackageWithTool(t.Context(), tool, packagePath, version, arch, files); err != nil {
+		t.Fatal("the retained Fased Debian package was refused", err)
 	}
 }
 
