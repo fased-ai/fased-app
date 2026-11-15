@@ -646,3 +646,36 @@ test("candidate Local entry verifies the pinned installer before protected setup
     assert.notEqual(run(...args).status, 0);
   }
 });
+
+test("unsupported native candidates stop before protected setup", () => {
+  const script = renderEntry(template, config);
+  const anchor = script.indexOf("Installer checksum differs; nothing was executed.");
+  const start = script.indexOf("\n  if [[ -n $candidate_dir ]]; then", anchor);
+  const end = script.indexOf('\n  "$installer" "${verifier_args[@]}" <&3', start);
+  assert.ok(anchor > 0 && start > anchor && end > start);
+  const entry = script.slice(start, end);
+  const run = (report, status = "0") =>
+    spawnSync("bash", [
+      "-c",
+      `
+      set -u
+      candidate_dir=/candidate installer=verifier report=$1 status=$2
+      verifier() { printf '%s\\n' "$report"; return "$status"; }
+      owner_maintenance_setup() { printf 'SETUP\\n'; }
+      die() { printf 'REFUSED: %s\\n' "$*"; exit 23; }
+      ${entry}
+      `,
+      "candidate",
+      report,
+      status,
+    ]);
+  const native = run('{"version":4,"linuxPackageDigestsVerified":true}');
+  assert.equal(native.status, 23, native.stderr.toString());
+  assert.doesNotMatch(native.stdout.toString(), /SETUP/);
+  const invalid = run("", "1");
+  assert.equal(invalid.status, 23);
+  assert.doesNotMatch(invalid.stdout.toString(), /SETUP/);
+  const legacy = run('{"version":4,"provenanceVerified":true}');
+  assert.equal(legacy.status, 0, legacy.stderr.toString());
+  assert.match(legacy.stdout.toString(), /SETUP/);
+});

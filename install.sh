@@ -228,7 +228,10 @@ owner_install() {
   read -r actual _ < <(/usr/bin/sha256sum "$installer")
   [[ $actual == "$installer_sha256" ]] || die 'Installer checksum differs; nothing was executed.'
   if [[ -n $candidate_dir ]]; then
-    "$installer" --verify-candidate "$candidate_dir" >/dev/null || die 'Candidate verification failed.'
+    candidate_report=$("$installer" --verify-candidate "$candidate_dir") || die 'Candidate verification failed.'
+    # Native package installation is not yet wired to the protected recovery
+    # controller. Refuse before registering or invoking the Fased helper.
+    [[ $candidate_report != *'"linuxPackageDigestsVerified":true'* ]] || die 'Native package installation and recovery are not available yet.'
   fi
   if [[ -z ${FASED_PROTECTED_INSTALLER:-} ]]; then
     owner_maintenance_setup "$installer"
