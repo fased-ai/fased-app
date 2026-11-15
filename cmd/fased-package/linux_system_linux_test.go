@@ -121,6 +121,20 @@ func TestLinuxPackageRejectsSymlinkAndDynamicExecutable(t *testing.T) {
 	}
 }
 
+func TestDebianPackageProvidesInstalledFasedCommand(t *testing.T) {
+	stage := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stage, "fased-app"), []byte("disposable core"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := buildDebPackage(stage, "/usr/bin/true", filepath.Join(stage, "ignored.deb"), map[string]string{"fased-app": "unused"}); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(stage, "deb-root", "usr", "bin", "fased")
+	if target, err := os.Readlink(link); err != nil || target != "../lib/fased-app/fased-app" {
+		t.Fatalf("installed command does not select the packaged core: %q %v", target, err)
+	}
+}
+
 func TestLinuxPackageRequiresCompatibleCoreAndSigner(t *testing.T) {
 	dir := t.TempDir()
 	app := struct {

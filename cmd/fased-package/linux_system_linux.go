@@ -333,7 +333,7 @@ func readLinuxBinaryJSON(ctx context.Context, path string, target any, args ...s
 
 func buildDebPackage(stage, tool, target string, files map[string]string) error {
 	root := filepath.Join(stage, "deb-root")
-	for _, dir := range []string{"DEBIAN", "usr/lib/fased-app", "usr/share/doc/fased-app"} {
+	for _, dir := range []string{"DEBIAN", "usr/bin", "usr/lib/fased-app", "usr/share/doc/fased-app"} {
 		if err := os.MkdirAll(filepath.Join(root, dir), 0755); err != nil {
 			return err
 		}
@@ -350,6 +350,9 @@ func buildDebPackage(stage, tool, target string, files map[string]string) error 
 		if err := os.Link(filepath.Join(stage, name), filepath.Join(root, dir, name)); err != nil {
 			return err
 		}
+	}
+	if err := os.Symlink("../lib/fased-app/fased-app", filepath.Join(root, "usr/bin/fased")); err != nil {
+		return err
 	}
 	return runLinuxPackageTool(stage, tool, "--root-owner-group", "-Zgzip", "--build", root, target)
 }
@@ -376,7 +379,7 @@ func buildRPMPackage(stage, tool, target, arch string, files map[string]string) 
 		fmt.Fprintf(&install, "install -m %s \"%%{_sourcedir}/%s\" \"%%{buildroot}%s/%s\"\n", mode, name, dir, name)
 		fmt.Fprintf(&listing, "%%attr(%s,root,root) %s/%s\n", mode, dir, name)
 	}
-	spec := fmt.Sprintf("Name: fased-app\nVersion: %s\nRelease: 1\nSummary: Fased application\nLicense: LicenseRef-PolyForm-Perimeter-1.0.0\nBuildArch: %s\nAutoReqProv: no\nRequires: ca-certificates, systemd\n\n%%description\nFased application.\n\n%%install\ninstall -d \"%%{buildroot}/usr/lib/fased-app\" \"%%{buildroot}/usr/share/doc/fased-app\"\n%s\n%%files\n%%dir /usr/lib/fased-app\n%%dir /usr/share/doc/fased-app\n%s", core.Version, arch, install.String(), listing.String())
+	spec := fmt.Sprintf("Name: fased-app\nVersion: %s\nRelease: 1\nSummary: Fased application\nLicense: LicenseRef-PolyForm-Perimeter-1.0.0\nBuildArch: %s\nAutoReqProv: no\nRequires: ca-certificates, systemd\n\n%%description\nFased application.\n\n%%install\ninstall -d \"%%{buildroot}/usr/bin\" \"%%{buildroot}/usr/lib/fased-app\" \"%%{buildroot}/usr/share/doc/fased-app\"\nln -s ../lib/fased-app/fased-app \"%%{buildroot}/usr/bin/fased\"\n%s\n%%files\n/usr/bin/fased\n%%dir /usr/lib/fased-app\n%%dir /usr/share/doc/fased-app\n%s", core.Version, arch, install.String(), listing.String())
 	specPath := filepath.Join(top, "SPECS", "fased-app.spec")
 	if err := os.WriteFile(specPath, []byte(spec), 0600); err != nil {
 		return err

@@ -56,6 +56,7 @@ type Store struct {
 	localLaunchHash               string
 	localLaunchExpires            time.Time
 	fixture                       func(context.Context, signer.Request) (signer.Response, error)
+	protectedOwnerUID             int // Verified Local OS-owner identity; never wallet authority.
 	custodyOwnerSupported         bool
 	custodyNetwork                string                                                             // Public immutable v2 configuration; no key material.
 	researchRead                  func(context.Context, researchFactResult) (json.RawMessage, error) // Test-only local projection fault; never configuration/IPC.

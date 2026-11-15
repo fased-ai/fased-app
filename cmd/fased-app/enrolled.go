@@ -35,13 +35,14 @@ func enrolledTarget(data string) (custodyinstall.Manifest, bool, error) {
 }
 
 type enrolledOps struct {
-	commit  func(custodyinstall.Manifest) (custodyinstall.EnrollmentCommit, error)
-	runtime func(custodyinstall.Manifest) error
-	control func(context.Context, custodyinstall.Manifest, string, string) error
-	probe   func(context.Context, string, string) (connection.Result, error)
-	helper  func(context.Context, custodyinstall.Manifest, bool, io.Writer) error
-	remove  func(context.Context, custodyinstall.Manifest) error
-	open    func(string, string) error
+	commit    func(custodyinstall.Manifest) (custodyinstall.EnrollmentCommit, error)
+	runtime   func(custodyinstall.Manifest) error
+	control   func(context.Context, custodyinstall.Manifest, string, string) error
+	probe     func(context.Context, string, string) (connection.Result, error)
+	helper    func(context.Context, custodyinstall.Manifest, bool, io.Writer) error
+	remove    func(context.Context, custodyinstall.Manifest) error
+	open      func(string, string) error
+	ownerLink func(context.Context, string) (string, error)
 }
 
 func enrolledSystem(s *custodyinstall.System) enrolledOps {
@@ -156,6 +157,15 @@ func enrolledLifecycle(ctx context.Context, m custodyinstall.Manifest, action st
 	}
 	if !active {
 		return errors.New("protected instance is not running; use service start --prepare-host")
+	}
+	if action == "open" && o.ownerLink != nil {
+		if !m.NativeOwnerAccess || m.Location != "local" || m.PublicOrigin != "" {
+			return errors.New("protected Local owner access required")
+		}
+		url, err = o.ownerLink(ctx, url)
+		if err != nil {
+			return err
+		}
 	}
 	if action == "open" && !printOnly {
 		if err = o.open(url, c.InstanceID); err != nil {

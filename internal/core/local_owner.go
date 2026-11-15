@@ -91,11 +91,16 @@ func (h *HTTPHandler) localOwnerAllowed() bool {
 	return h.instanceLocation == "local" && h.instanceOwnerUID == 0 && h.publicHost == "" && h.store.fixture == nil
 }
 
+func (h *HTTPHandler) protectedLocalOwnerAllowed() bool {
+	return h.instanceLocation == "local" && h.publicHost == "" && h.instanceOwnerUID > 0 && h.instanceOwnerUID == h.store.protectedOwnerUID
+}
+
 func (h *HTTPHandler) localOwnerAPI(w http.ResponseWriter, r *http.Request) {
 	if !h.mutation(w, r) {
 		return
 	}
-	if !h.localOwnerAllowed() {
+	ordinary := h.localOwnerAllowed()
+	if !ordinary && !h.protectedLocalOwnerAllowed() {
 		writeError(w, 403, "Local OS owner access required")
 		return
 	}
@@ -104,6 +109,10 @@ func (h *HTTPHandler) localOwnerAPI(w http.ResponseWriter, r *http.Request) {
 		Code   string `json:"code"`
 	}
 	if !decodeJSON(w, r, &request) {
+		return
+	}
+	if !ordinary && request.Action != "exchange" {
+		writeError(w, 403, "protected Local owner access required")
 		return
 	}
 	if request.Action != "exchange" && r.Context().Value(privateIPCKey{}) != true {
@@ -151,7 +160,7 @@ func (h *HTTPHandler) nativeLocalOwnerAPI(w http.ResponseWriter, r *http.Request
 		writeError(w, 405, "method not allowed")
 		return
 	}
-	if r.Context().Value(privateIPCKey{}) != true || h.instanceLocation != "local" || h.instanceOwnerUID <= 0 || !h.store.custodyOwnerSupported || h.store.custodyNetwork == "" {
+	if r.Context().Value(privateIPCKey{}) != true || !h.protectedLocalOwnerAllowed() {
 		writeError(w, 403, "protected native owner access required")
 		return
 	}
@@ -164,8 +173,17 @@ func (h *HTTPHandler) nativeLocalOwnerAPI(w http.ResponseWriter, r *http.Request
 	if !decodeJSON(w, r, &request) {
 		return
 	}
+	if request.Action == "launch" {
+		code, err := h.store.issueLocalLaunch(r.Context())
+		if err != nil {
+			writeError(w, 409, "Local owner launch unavailable")
+			return
+		}
+		writeJSON(w, 200, map[string]string{"code": code})
+		return
+	}
 	if request.Action != "session" {
-		writeError(w, 400, "one native session required")
+		writeError(w, 400, "one Local owner action required")
 		return
 	}
 	token, err := h.store.localOwnerSession(r.Context())
@@ -180,10 +198,20 @@ func (c *Client) NativeLocalOwner(ctx context.Context) error {
 	return c.authenticate(ctx, "/api/v1/auth/native-local", map[string]string{"action": "session"})
 }
 func (c *Client) LocalLaunch(ctx context.Context) (string, error) {
+	return c.localLaunch(ctx, "/api/v1/auth/local")
+}
+
+// NativeLocalLaunch uses the same one-use browser handoff over the protected
+// app-identity channel, without granting wallet or financial authority.
+func (c *Client) NativeLocalLaunch(ctx context.Context) (string, error) {
+	return c.localLaunch(ctx, "/api/v1/auth/native-local")
+}
+
+func (c *Client) localLaunch(ctx context.Context, route string) (string, error) {
 	var grant struct {
 		Code string `json:"code"`
 	}
-	if err := c.Do(ctx, http.MethodPost, "/api/v1/auth/local", map[string]string{"action": "launch"}, &grant); err != nil {
+	if err := c.Do(ctx, http.MethodPost, route, map[string]string{"action": "launch"}, &grant); err != nil {
 		return "", err
 	}
 	if len(grant.Code) != 43 {

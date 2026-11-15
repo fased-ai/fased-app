@@ -124,6 +124,18 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 				operation = "remove"
 			}
 			ops := enrolledSystem(&custodyinstall.System{In: os.Stdin, Out: errOut})
+			if command == "open" && ownerLink == "" && target.NativeOwnerAccess && target.Location == "local" {
+				ops.ownerLink = func(ctx context.Context, origin string) (string, error) {
+					return localOwnerSetupLink(ctx, paths.Data, origin)
+				}
+				ops.open = func(url, _ string) error {
+					process := exec.Command("xdg-open", url)
+					if err := process.Start(); err != nil {
+						return errors.New("cannot open the browser; use open --print for the private URL")
+					}
+					return process.Process.Release()
+				}
+			}
 			if command == "open" && ownerLink != "" {
 				if !target.NativeOwnerAccess {
 					return errors.New("install the protected Local native client to open Wallets")
