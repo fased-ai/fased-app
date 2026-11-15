@@ -102,7 +102,7 @@ func ReadApplicationOwnerOffline(ctx context.Context, directory, id string) (App
 		if o.Phase != "applying" {
 			return out, errors.New("unfenced state is not an active original dispatch")
 		}
-	} else if held.Request.IntentID != id || held.Request.Expected.State.Version != schema || held.Request.ManifestSHA256 != o.Release.ManifestSHA256 {
+	} else if held.Request.IntentID != id || held.Request.Expected.State.Version != schema || held.Request.ManifestSHA256 != o.Release.ManifestSHA256 || held.Request.Sequence != o.Release.Sequence {
 		return out, errors.New("exact unchanged metadata hold required")
 	}
 	if phase == "released" && (!oneOf(o.Phase, "completed", "rolled-back") || o.Receipt == nil) {
@@ -130,7 +130,11 @@ func ReadApplicationOwnerOffline(ctx context.Context, directory, id string) (App
 		return out, e
 	}
 	var checkpoint ApplicationCheckpoint
-	if update.StrictJSON(raw, &checkpoint) != nil || checkpoint.OperationID != id || checkpoint.ManifestSHA256 != o.Release.ManifestSHA256 || checkpoint.Pause.PauseID != held.PauseID || checkpoint.Snapshot.File != "application-"+checkpoint.Snapshot.SHA256+".sqlite" {
+	if update.StrictJSON(raw, &checkpoint) != nil || checkpoint.Version != 1 || !hexValue(checkpoint.PreviousEngineSHA256, 32) || checkpoint.OperationID != id || checkpoint.ManifestSHA256 != o.Release.ManifestSHA256 ||
+		checkpoint.Pause.Version != 1 || checkpoint.Pause.State != "paused" || checkpoint.Pause.PauseID != held.PauseID || checkpoint.Pause.Request == nil || !update.ValidPauseRequest(*checkpoint.Pause.Request) ||
+		update.SnapshotDigest("pause-request", *checkpoint.Pause.Request) != update.SnapshotDigest("pause-request", held.Request) ||
+		!update.IDOK(checkpoint.Pause.Core.BootID) || !update.IDOK(checkpoint.Pause.Core.ProbeID) || !update.SameCoreMetadata(checkpoint.Pause.Core, held.Request.Expected) ||
+		!hexValue(checkpoint.Snapshot.SHA256, 32) || checkpoint.Snapshot.File != "application-"+checkpoint.Snapshot.SHA256+".sqlite" || checkpoint.Snapshot.Size <= 0 || checkpoint.Snapshot.Size > update.MaxMetadataBackup {
 		return out, errors.New("offline checkpoint binding mismatch")
 	}
 	reader := &Store{bootID: checkpoint.Pause.Core.BootID}

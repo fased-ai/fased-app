@@ -52,6 +52,13 @@ func ordinaryUpdateRecoveryData(dir string) bool {
 	if err != nil {
 		return false
 	}
+	// A symlink at the requested data directory may hide an enrollment fence.
+	// Never use it to authorize falling back to another recovery controller.
+	// Symlinked parent directories remain supported after this exact-node check.
+	info, err := os.Lstat(abs)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
 	real, err := filepath.EvalSymlinks(abs)
 	if err != nil {
 		return false

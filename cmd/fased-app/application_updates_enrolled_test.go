@@ -169,6 +169,32 @@ func TestUpdateRecoveryUsesEnrolledHelperWhenCoreIsOffline(t *testing.T) {
 	}
 }
 
+func TestUpdateRecoveryRefusesSymlinkedDataButAllowsSymlinkedParent(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux custody enrollment only")
+	}
+	parent := t.TempDir()
+	actualParent := filepath.Join(parent, "actual")
+	data := filepath.Join(actualParent, "data")
+	if err := os.MkdirAll(data, 0700); err != nil {
+		t.Fatal(err)
+	}
+	parentLink := filepath.Join(parent, "parent-link")
+	dataLink := filepath.Join(parent, "data-link")
+	if err := os.Symlink(actualParent, parentLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(data, dataLink); err != nil {
+		t.Fatal(err)
+	}
+	if ordinaryUpdateRecoveryData(dataLink) || ordinaryUpdateRecoveryData(filepath.Join(parent, "missing")) {
+		t.Fatal("ambiguous data directory authorized ordinary fallback")
+	}
+	if !ordinaryUpdateRecoveryData(data) || !ordinaryUpdateRecoveryData(filepath.Join(parentLink, "data")) {
+		t.Fatal("the original data directory or symlinked parent was refused")
+	}
+}
+
 func TestUpdateRecoveryKeepsOrdinaryOfflineEntry(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux custody enrollment only")

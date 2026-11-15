@@ -307,6 +307,93 @@ func TestApplicationCheckpointRefusesCustodyAndTamperedIndex(t *testing.T) {
 		t.Fatal("tampered backup accepted")
 	}
 }
+
+func TestApplicationOwnerOfflineRefusesDamagedCheckpoint(t *testing.T) {
+	s := fixtureStore(t)
+	fixture := fixtureUpdateController()
+	if err := s.BindApplicationMaintenance(fixture.Check, func(context.Context, string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	updateCommandFixture(t, s, "check")
+	updateTickFixture(t, s)
+	updateCommandFixture(t, s, "apply")
+	updateTickFixture(t, s)
+	v, err := s.ApplicationUpdates(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, lease := v.Operation.ID, update.NewProbe()
+	if _, err = s.ApplicationOwnerCommand(t.Context(), ApplicationOwnerCommand{Action: "claim", ID: id, Lease: lease}); err != nil {
+		t.Fatal(err)
+	}
+	view, err := s.ApplicationOwnerCommand(t.Context(), ApplicationOwnerCommand{Action: "prepare", ID: id, Lease: lease})
+	if err != nil || view.Checkpoint == nil {
+		t.Fatal("original checkpoint unavailable", err)
+	}
+	path := filepath.Join(s.dir, "lifecycle", id, "application.json")
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, change := range map[string]func(*ApplicationCheckpoint){
+		"unknown version":    func(c *ApplicationCheckpoint) { c.Version++ },
+		"invalid old binary": func(c *ApplicationCheckpoint) { c.PreviousEngineSHA256 = "invalid" },
+		"pause not held":     func(c *ApplicationCheckpoint) { c.Pause.State = "released" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := *view.Checkpoint
+			change(&c)
+			b, err := json.Marshal(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(path, b, 0600); err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := os.WriteFile(path, original, 0600); err != nil {
+					t.Error(err)
+				}
+			}()
+			if _, err = ReadApplicationOwnerOffline(t.Context(), s.dir, id); err == nil {
+				t.Fatal("damaged checkpoint was accepted for offline recovery")
+			}
+		})
+	}
+	t.Run("different live fence", func(t *testing.T) {
+		var originalPause string
+		if err := s.db.QueryRowContext(t.Context(), "SELECT document FROM update_pause WHERE id=1").Scan(&originalPause); err != nil {
+			t.Fatal(err)
+		}
+		var pause pauseRecord
+		if err := json.Unmarshal([]byte(originalPause), &pause); err != nil {
+			t.Fatal(err)
+		}
+		pause.Request.Expected.State.Anchor = strings.Repeat("f", 64)
+		if pause.Request.Expected.State.Anchor == view.Checkpoint.Pause.Request.Expected.State.Anchor {
+			pause.Request.Expected.State.Anchor = strings.Repeat("e", 64)
+		}
+		changed, err := json.Marshal(pause)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.db.ExecContext(t.Context(), "UPDATE update_pause SET document=? WHERE id=1", string(changed)); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if _, err := s.db.ExecContext(context.Background(), "UPDATE update_pause SET document=? WHERE id=1", originalPause); err != nil {
+				t.Error(err)
+			}
+		}()
+		if _, err = ReadApplicationOwnerOffline(t.Context(), s.dir, id); err == nil {
+			t.Fatal("checkpoint for a different live fence was accepted")
+		}
+	})
+	if got, err := ReadApplicationOwnerOffline(t.Context(), s.dir, id); err != nil || got.Checkpoint == nil || got.View.Operation.OwnerLease != lease {
+		t.Fatal("original recovery was not preserved", err)
+	}
+}
+
 func closeCheckpointDir(d int) { _ = unix.Close(d) }
 func corruptCheckpointFile(d int, name string) error {
 	fd, e := unix.Openat(d, name, unix.O_WRONLY|unix.O_NOFOLLOW, 0)
