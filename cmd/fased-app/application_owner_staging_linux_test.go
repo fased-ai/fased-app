@@ -115,6 +115,9 @@ func TestApplicationOwnerCheckpointFallbackRechecksTheRealBackup(t *testing.T) {
 	if err = os.WriteFile(backup, []byte("damaged backup"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err = core.CheckApplicationRollbackMetadata(t.Context(), dir, op.ID, state.View.Schema); err != nil {
+		t.Fatal("the prior metadata-only fallback did not reproduce", err)
+	}
 	if err = prepareApplicationCheckpoint(t.Context(), state, op, prepare, read); !errors.Is(err, lost) {
 		t.Fatal("a changed backup authorized replacement", err)
 	}
