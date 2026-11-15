@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/fased-ai/fased-app/internal/core"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/bundle"
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/releaseops"
 	"github.com/fased-ai/fased-app/internal/update"
 )
@@ -136,6 +138,28 @@ func revalidateAttested(seed Seed, docs map[string][]byte, d Descriptor, now tim
 	}
 	_, err = productionProof(seed, d, docs["provenance.sigstore.json"], now)
 	return err
+}
+
+// Public package preparation retains the same bytes a protected receiver must
+// independently authenticate. This is not permission to run the old archive
+// installer or to execute a package.
+func (p *Prepared) revalidatePublicPackages() error {
+	var packet AttestedPacket
+	if update.StrictJSON(p.metadata[AttestedPacketFile], &packet) != nil || packet.Version != 3 ||
+		digest(p.metadata[AttestedPacketFile]) != p.report.DescriptorSHA256 ||
+		packet.Deb != p.descriptor.Deb || packet.RPM != p.descriptor.RPM {
+		return errors.New("public native package identity changed")
+	}
+	for _, item := range []struct {
+		artifact update.Artifact
+		held     string
+	}{{packet.Installer, "candidate-installer"}, {packet.Entry, "candidate-entry"}, {packet.Deb, "candidate-deb"}, {packet.RPM, "candidate-rpm"}} {
+		got, err := bundle.Inspect(filepath.Join(p.options.Directory, item.held))
+		if err != nil || got.SHA256 != item.artifact.SHA256 || got.Bytes != item.artifact.Size {
+			return errors.New("public native release asset changed after verification")
+		}
+	}
+	return nil
 }
 
 // Sequence is derived from canonical semantic version, never from GitHub's

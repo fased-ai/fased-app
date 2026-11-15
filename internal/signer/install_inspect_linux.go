@@ -31,6 +31,9 @@ func inspectInstallation(c Config, id string, readOnly bool) (*update.Installati
 }
 func inspectVault(c Config) (*Vault, error) { return inspectVaultMode(c, false) }
 func inspectVaultMode(c Config, readOnly bool) (*Vault, error) {
+	if c.Version == 3 && c.Network == "" {
+		return nil, ErrUnavailable
+	}
 	if e := c.Validate(); e != nil {
 		return nil, e
 	}

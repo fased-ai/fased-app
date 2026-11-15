@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -111,6 +112,29 @@ func Load(uid int) (Manifest, error) {
 	}
 	if m.Owner != uid {
 		return m, errors.New("installation belongs to another owner")
+	}
+	return m, nil
+}
+
+// LoadPackageInstance reads only an exact, protected package installation.
+// It never falls back to the older owner-wide custody root.
+func LoadPackageInstance(uid int, root string) (Manifest, error) {
+	var m Manifest
+	prefix := fmt.Sprintf("/var/lib/fased-app-package/%d/", uid)
+	parts := strings.Split(strings.TrimPrefix(root, prefix), "/")
+	if uid <= 0 || !strings.HasPrefix(root, prefix) || len(parts) != 2 {
+		return m, errors.New("exact package installation root required")
+	}
+	want, err := PackageRoot(uid, parts[0], parts[1])
+	if err != nil || root != want {
+		return m, errors.New("exact package installation root required")
+	}
+	f, err := readRoot(filepath.Join(root, "install.json"))
+	if err != nil {
+		return m, err
+	}
+	if strict(f.Data, &m) != nil || m.validatePackage() != nil || m.Owner != uid || m.Root != root {
+		return Manifest{}, errors.New("protected package instance differs")
 	}
 	return m, nil
 }
@@ -620,10 +644,32 @@ func Verify(m Manifest) error {
 	}
 	return nil
 }
+
+// VerifyPackageInstance does not grant the legacy controller access to this
+// instance; it verifies the protected identity and executable pair for startup.
+func VerifyPackageInstance(m Manifest) error {
+	if err := m.validatePackage(); err != nil {
+		return err
+	}
+	if err := verifyValidatedTopology(m); err != nil {
+		return err
+	}
+	for _, pair := range []struct{ name, hash string }{{"fased-app", m.CoreHash}, {"fased-signer", m.SignerHash}} {
+		if err := verifyRootExecutable(m.Root+"/"+pair.name, pair.hash); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func verifyTopology(m Manifest) error {
 	if e := m.validate(); e != nil {
 		return e
 	}
+	return verifyValidatedTopology(m)
+}
+
+func verifyValidatedTopology(m Manifest) error {
 	if e := verifyProbe(m.Root+"/app-readonly-probe", m.App); e != nil {
 		return e
 	}
@@ -635,7 +681,7 @@ func verifyTopology(m Manifest) error {
 		if e != nil {
 			return e
 		}
-		actual, e := parseAccount(string(b), pair.i.Name, marker(m.ID, pair.role))
+		actual, e := parseAccount(string(b), pair.i.Name, instanceMarker(m, pair.role))
 		if e != nil || actual != pair.i {
 			return errors.New("installed account identity changed; preserving state")
 		}
@@ -748,7 +794,7 @@ func inspectManagedRuntime(m Manifest, allowInactive bool) (bool, error) {
 		if e := loadedUnit(m, role); e != nil {
 			return false, e
 		}
-		b, e := exec.Command("/usr/bin/systemctl", "show", Unit(m.Owner, role), "--property=ActiveState,MainPID,FragmentPath").Output()
+		b, e := exec.Command("/usr/bin/systemctl", "show", instanceUnit(m, role), "--property=ActiveState,MainPID,FragmentPath").Output()
 		if e != nil {
 			return false, e
 		}
@@ -785,7 +831,7 @@ func classifyManagedRuntime(m Manifest, role string, raw []byte, read func(strin
 		fields[key] = value
 	}
 	pid, err := strconv.Atoi(fields["MainPID"])
-	if err != nil || fields["FragmentPath"] != "/etc/systemd/system/"+Unit(m.Owner, role) {
+	if err != nil || fields["FragmentPath"] != "/etc/systemd/system/"+instanceUnit(m, role) {
 		return false, errors.New("managed service is inactive or belongs to another definition")
 	}
 	if (fields["ActiveState"] == "inactive" || fields["ActiveState"] == "failed") && pid == 0 {
@@ -817,14 +863,14 @@ func loadedUnitPolicy(m Manifest, role string, wanted []byte, image string) erro
 	return err
 }
 func loadedUnitPolicyFields(m Manifest, role string, wanted []byte, image string) (map[string]string, error) {
-	f, e := readRoot("/etc/systemd/system/" + Unit(m.Owner, role))
+	f, e := readRoot("/etc/systemd/system/" + instanceUnit(m, role))
 	if e != nil {
 		return nil, e
 	}
 	if !known(f, wanted, 0644) {
 		return nil, errors.New("installed system unit changed; preserving it")
 	}
-	b, e := exec.Command("/usr/bin/systemctl", "show", Unit(m.Owner, role), "--property=FragmentPath,DropInPaths,User,Group,NoNewPrivileges,ProtectSystem,ExecStart,NeedDaemonReload").Output()
+	b, e := exec.Command("/usr/bin/systemctl", "show", instanceUnit(m, role), "--property=FragmentPath,DropInPaths,User,Group,NoNewPrivileges,ProtectSystem,ExecStart,NeedDaemonReload").Output()
 	if e != nil {
 		return nil, e
 	}
@@ -849,10 +895,16 @@ func validateLoadedUnitFields(m Manifest, role, image string, fields map[string]
 	if role == "signer" {
 		i = m.Signer
 	}
-	if fields["FragmentPath"] != "/etc/systemd/system/"+Unit(m.Owner, role) || fields["User"] != strconv.Itoa(i.UID) || fields["Group"] != strconv.Itoa(i.GID) || fields["NoNewPrivileges"] != "yes" || fields["ProtectSystem"] != "strict" || fields["NeedDaemonReload"] != "no" || !strings.Contains(fields["ExecStart"], "path="+image+" ;") {
+	if instanceUnit(m, role) == "" || fields["FragmentPath"] != "/etc/systemd/system/"+instanceUnit(m, role) || fields["User"] != strconv.Itoa(i.UID) || fields["Group"] != strconv.Itoa(i.GID) || fields["NoNewPrivileges"] != "yes" || fields["ProtectSystem"] != "strict" || fields["NeedDaemonReload"] != "no" || !strings.Contains(fields["ExecStart"], "path="+image+" ;") {
 		return errors.New("unexpected systemd identity/override; refusing project code under a different policy")
 	}
 	dropIns := strings.Fields(fields["DropInPaths"])
+	if m.Layout == PackageLayout {
+		if len(dropIns) != 0 {
+			return errors.New("unverified package-instance override; preserving it")
+		}
+		return nil
+	}
 	ingress, ingressBody, err := tailnet.ProtectedSocketDropIn("custody", m.Owner)
 	if err != nil {
 		return err

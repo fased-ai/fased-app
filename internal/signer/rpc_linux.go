@@ -237,6 +237,9 @@ func ServeControlledOwnerCustody(ctx context.Context, c Config) (*Server, error)
 	return serveCustodyConfigured(ctx, c, false, nil, nil, true)
 }
 func serveCustodyConfigured(ctx context.Context, c Config, guarded bool, observer SwapObserver, factory func(onchain.CredentialAccess) (SwapObserver, error), controlledOrdinary bool) (*Server, error) {
+	if c.Version == 3 && c.Network == "" {
+		return nil, ErrUnavailable
+	}
 	if c.Version == 3 && !controlledOrdinary && (!OrdinaryOwnerAdmissionEnabled() || c.Profile != OwnerCustodyProfile || c.Provenance != OwnerKeyProvenance) || controlledOrdinary && (c.Version != 3 || c.Mode != OrdinaryCustodyMode || factory != nil) {
 		return nil, ErrUnavailable
 	}

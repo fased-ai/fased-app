@@ -136,6 +136,9 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if c.Version == 3 && c.Network == "" {
+		return signer.ErrUnavailable
+	}
 	if compiledFixtureHost != nil && c.Version == 3 && !compiledFixtureHost(c.OwnerUID) {
 		return signer.ErrUnavailable
 	}

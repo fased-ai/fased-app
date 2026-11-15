@@ -379,12 +379,24 @@ func parseCustodyWorkerState(out []byte) (custodyWorkerState, error) {
 }
 
 func bindCompiledCustodyMaintenance(store *core.Store, owner int, dir string) error {
+	return bindCustodyMaintenance(store, owner, dir, maintenance.ReadAuthority)
+}
+
+func bindCustodyMaintenance(store *core.Store, owner int, dir string, readAuthority func(int) (maintenance.Authority, error)) error {
 	// Legacy Local fixture custody has no ordinary maintenance owner. Its
 	// service must remain usable without acquiring an updater or OS authority.
 	if owner == 0 {
 		return nil
 	}
-	a, err := maintenance.ReadAuthority(owner)
+	if owner < 0 {
+		return errors.New("invalid custody maintenance owner")
+	}
+	// The old authority is keyed by owner, not instance. Package instances need
+	// their own controller and must never inherit this legacy worker.
+	if dir != filepath.Join(custodyinstall.Root(owner), "app-state") {
+		return nil
+	}
+	a, err := readAuthority(owner)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}

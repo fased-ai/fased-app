@@ -29,6 +29,25 @@ func TestCustodyMaintenanceSkipsLegacyLocalWithoutOwner(t *testing.T) {
 	}
 }
 
+func TestPackageInstanceDoesNotBindLegacyCustodyWorker(t *testing.T) {
+	const owner = 1000
+	root, err := custodyinstall.PackageRoot(owner, "local", strings.Repeat("a", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	readAuthority := func(int) (maintenance.Authority, error) {
+		called = true
+		return maintenance.Authority{}, errors.New("legacy authority consulted")
+	}
+	if err = bindCustodyMaintenance(nil, owner, filepath.Join(root, "app-state"), readAuthority); err != nil || called {
+		t.Fatalf("package instance selected the legacy worker: called=%v err=%v", called, err)
+	}
+	if err = bindCustodyMaintenance(nil, owner, filepath.Join(custodyinstall.Root(owner), "app-state"), readAuthority); err == nil || !called {
+		t.Fatal("legacy instance did not inspect its own authority")
+	}
+}
+
 func TestCandidateUsesTheSharedCustodyCheckAndManualWorker(t *testing.T) {
 	packageFor := func(version string, sequence uint64, release string) *update.MaintenancePackage {
 		return &update.MaintenancePackage{Version: version, Source: strings.Repeat("a", 40), Sequence: sequence, ReleaseSHA256: release, DevelopmentOnly: true, Components: []update.Component{

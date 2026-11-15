@@ -6,10 +6,32 @@ import (
 	"errors"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/fased-ai/fased-app/internal/tailnet"
 )
+
+func TestPackageRuntimeRejectsLegacyUnitAndUnverifiedOverrides(t *testing.T) {
+	m := Manifest{Layout: PackageLayout, Owner: 1000, Location: "local", ID: strings.Repeat("a", 32), Root: "/var/lib/example", App: Identity{UID: 1201, GID: 1201}}
+	fields := map[string]string{
+		"FragmentPath": "/etc/systemd/system/" + instanceUnit(m, "app"),
+		"User":         strconv.Itoa(m.App.UID), "Group": strconv.Itoa(m.App.GID), "NoNewPrivileges": "yes",
+		"ProtectSystem": "strict", "ExecStart": "{ path=" + m.Root + "/fased-app ; argv[]=... ; }", "NeedDaemonReload": "no",
+	}
+	if err := validateLoadedUnitFields(m, "app", m.Root+"/fased-app", fields, nil, nil); err != nil {
+		t.Fatal("exact instance unit rejected", err)
+	}
+	fields["FragmentPath"] = "/etc/systemd/system/" + Unit(m.Owner, "app")
+	if err := validateLoadedUnitFields(m, "app", m.Root+"/fased-app", fields, nil, nil); err == nil {
+		t.Fatal("legacy owner-wide unit accepted")
+	}
+	fields["FragmentPath"] = "/etc/systemd/system/" + instanceUnit(m, "app")
+	fields["DropInPaths"] = "/etc/systemd/system/foreign.conf"
+	if err := validateLoadedUnitFields(m, "app", m.Root+"/fased-app", fields, nil, nil); err == nil {
+		t.Fatal("unverified override accepted")
+	}
+}
 
 func TestLoadedRemoteUnitRequiresExactProtectedIngressAndGuard(t *testing.T) {
 	m := fixtureManifest()

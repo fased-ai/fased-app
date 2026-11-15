@@ -6,12 +6,23 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestPreWalletOfflineInspectionDoesNotOpenSignerState(t *testing.T) {
+	c := Config{Version: 3, StateDir: filepath.Join(t.TempDir(), "must-not-be-created")}
+	if _, err := inspectVaultMode(c, false); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("pre-wallet inspection was not refused", err)
+	}
+	if _, err := os.Lstat(c.StateDir); !os.IsNotExist(err) {
+		t.Fatal("pre-wallet inspection touched signer state", err)
+	}
+}
 
 func TestIdentityConfigurationRejectsSameUIDAndUntrustedSource(t *testing.T) {
 	c := Config{Version: 1, Mode: FixtureNetwork, SignerID: randomID(), OwnerUID: 1001, AppUID: 1002, SignerUID: 1003, StateDir: "/one", SocketDir: "/two"}

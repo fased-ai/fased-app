@@ -26,7 +26,8 @@ type Config struct {
 }
 
 func (c Config) Validate() error {
-	modeOK := c.Version == 1 && c.Mode == FixtureNetwork && c.Network == "" || c.Version == 2 && c.Mode == ManagedFixtureMode && managedNetwork(c.Network) || c.Version == 3 && c.Mode == OrdinaryCustodyMode && managedNetwork(c.Network)
+	preWallet := c.Version == 3 && c.Mode == OrdinaryCustodyMode && c.Network == "" && c.Profile == OwnerCustodyProfile && c.Provenance == OwnerKeyProvenance
+	modeOK := c.Version == 1 && c.Mode == FixtureNetwork && c.Network == "" || c.Version == 2 && c.Mode == ManagedFixtureMode && managedNetwork(c.Network) || c.Version == 3 && c.Mode == OrdinaryCustodyMode && managedNetwork(c.Network) || preWallet
 	contextOK := c.Version != 3 && c.Profile == "" && c.Provenance == "" || c.Version == 3 && c.Profile == OwnerCustodyProfile && (c.Provenance == ControlledCustodyProfile || c.Provenance == OwnerKeyProvenance)
 	if !modeOK || !contextOK || !validID(c.SignerID) || c.OwnerUID <= 0 || c.AppUID <= 0 || c.SignerUID <= 0 ||
 		c.OwnerUID == c.AppUID || c.OwnerUID == c.SignerUID || c.AppUID == c.SignerUID || c.StateDir == c.SocketDir {

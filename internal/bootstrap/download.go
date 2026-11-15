@@ -18,6 +18,7 @@ var productionGitHubActivationEnabled = false
 type downloadSource struct {
 	metadata func(context.Context, string, int64) ([]byte, error)
 	archive  func(context.Context, Descriptor) (io.ReadCloser, error)
+	asset    func(context.Context, releaseops.GitHubAsset, io.Writer) error
 	close    func()
 	attested func(context.Context) (Descriptor, map[string][]byte, error)
 	window   time.Duration
@@ -76,5 +77,5 @@ func initialDownloads(o Options, seed Seed) (downloadSource, error) {
 			return nil, err
 		}
 		return io.NopCloser(bytes.NewReader(b)), nil
-	}, close: func() { g.Close() }, window: 2 * time.Minute}, nil
+	}, asset: g.WritePublishedAsset, close: func() { g.Close() }, window: 2 * time.Minute}, nil
 }

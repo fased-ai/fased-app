@@ -26,7 +26,11 @@ type Identity struct {
 	UID  int    `json:"uid"`
 	GID  int    `json:"gid"`
 }
+
+const PackageLayout = "linux-package-v1"
+
 type Manifest struct {
+	Layout            string   `json:"layout,omitempty"`
 	NativeOwnerAccess bool     `json:"nativeOwnerAccess,omitempty"`
 	Profile           string   `json:"profile,omitempty"`
 	Provenance        string   `json:"provenance,omitempty"`
@@ -66,7 +70,40 @@ type journal struct {
 func Root(uid int) string                     { return fmt.Sprintf("/var/lib/fased-app-custody-%d", uid) }
 func Unit(uid int, role string) string        { return fmt.Sprintf("fased-custody-%d-%s.service", uid, role) }
 func accountName(uid int, role string) string { return fmt.Sprintf("fased-fx-%d-%s", uid, role) }
-func sum(b []byte) string                     { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
+
+// PackageRoot is disjoint from the retained owner-wide custody installation.
+// The random installation identity prevents a recreated profile adopting state.
+func PackageRoot(uid int, location, id string) (string, error) {
+	if uid <= 0 || uint64(uid) > (1<<32)-2 || (location != "local" && location != "remote") || !validHex(id, 16) {
+		return "", errors.New("invalid package instance identity")
+	}
+	return fmt.Sprintf("/var/lib/fased-app-package/%d/%s/%s", uid, location, id), nil
+}
+
+func packageAccountName(uid int, location, id, role string) string {
+	short := "a"
+	if role == "signer" {
+		short = "s"
+	}
+	// Linux account names are limited to 32 bytes. A collision is refused by
+	// the exact installation identity in the protected account comment.
+	identity := sum([]byte(fmt.Sprintf("%d/%s/%s", uid, location, id)))[:24]
+	return "fs-" + identity + "-" + short
+}
+
+func instanceUnit(m Manifest, role string) string {
+	if m.Layout == "" {
+		return Unit(m.Owner, role)
+	}
+	if m.Layout != PackageLayout || (role != "app" && role != "signer") {
+		return ""
+	}
+	if _, err := PackageRoot(m.Owner, m.Location, m.ID); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("fased-package-%d-%s-%s-%s.service", m.Owner, m.Location, m.ID, role)
+}
+func sum(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
 func validHex(s string, n int) bool {
 	b, e := hex.DecodeString(s)
 	return e == nil && len(b) == n && hex.EncodeToString(b) == s
@@ -80,6 +117,9 @@ func validListen(s string) bool {
 	return e == nil && n >= 1024 && n <= 65535 && strconv.Itoa(n) == p
 }
 func (m Manifest) validate() error {
+	if m.Layout != "" {
+		return errors.New("package instance requires its own controller")
+	}
 	if m.NativeOwnerAccess && (m.Version != 3 || !m.Enrollment || m.Location != "local") {
 		return errors.New("native owner access requires Local enrolled ordinary custody")
 	}
@@ -105,6 +145,32 @@ func (m Manifest) validate() error {
 	}
 	return nil
 }
+
+// validatePackage accepts only the new isolated topology. Legacy maintenance
+// callers use validate instead and cannot operate on this layout.
+func (m Manifest) validatePackage() error {
+	root, err := PackageRoot(m.Owner, m.Location, m.ID)
+	if err != nil || m.Layout != PackageLayout || m.Root != root || m.Version != 3 ||
+		m.Mode != "ordinary-custody:v1" || m.Profile != "owner-authorized:v1" || m.Provenance != "owner-input:v1" ||
+		!m.Enrollment || m.NativeOwnerAccess || m.InspectionBridge != "" ||
+		!validLocation(m.Location, m.PublicOrigin) || m.Location == "remote" && m.PublicOrigin == "" ||
+		(m.Network != "" && m.Network != "devnet" && m.Network != "mainnet-beta") ||
+		!validHex(m.CoreHash, 32) || !validHex(m.SignerHash, 32) || !validListen(m.Listen) {
+		return errors.New("invalid isolated package instance")
+	}
+	for _, pair := range []struct {
+		i    Identity
+		role string
+	}{{m.App, "app"}, {m.Signer, "signer"}} {
+		if pair.i.Name != packageAccountName(m.Owner, m.Location, m.ID, pair.role) || pair.i.UID <= 0 || pair.i.GID <= 0 || pair.i.UID == m.Owner {
+			return errors.New("invalid isolated package identity")
+		}
+	}
+	if m.App.UID == m.Signer.UID || m.App.GID == m.Signer.GID {
+		return errors.New("app and signer identities must be separate")
+	}
+	return nil
+}
 func (j journal) validate(uid int) error {
 	if j.NativeOwnerAccess && (j.Version != 3 || !j.Enrollment || j.Location != "local") {
 		return errors.New("invalid native owner enrollment")
@@ -115,6 +181,12 @@ func (j journal) validate(uid int) error {
 	return nil
 }
 func marker(id, role string) string { return "Fased disposable " + id + " " + role }
+func instanceMarker(m Manifest, role string) string {
+	if m.Layout == PackageLayout {
+		return "Fased " + m.ID + " " + role
+	}
+	return marker(m.ID, role)
+}
 func parseAccount(line, name, comment string) (Identity, error) {
 	f := strings.Split(strings.TrimSpace(line), ":")
 	if len(f) != 7 || f[0] != name || f[4] != comment || f[5] != "/nonexistent" || f[6] != "/usr/sbin/nologin" {
@@ -137,8 +209,20 @@ func definitions(m Manifest) map[string][]byte {
 		return fixtureUnits(m, false)
 	}
 	shared := "\nRestart=on-failure\nRestartSec=2\nTimeoutStopSec=15\nUMask=0077\nNoNewPrivileges=yes\nProtectSystem=strict\nProtectHome=yes\nPrivateTmp=yes\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectControlGroups=yes\nRestrictSUIDSGID=yes\nCapabilityBoundingSet=\nAmbientCapabilities=\nWorkingDirectory=/\nEnvironment=HOME=/nonexistent\n"
-	unit := func(i Identity, exec, write, addresses string) []byte {
-		return []byte(fmt.Sprintf("[Unit]\nDescription=Fased disposable custody fixture\n\n[Service]\nType=simple\nUser=%d\nGroup=%d\nExecStart=%s%sReadWritePaths=%s\nRestrictAddressFamilies=%s\n\n[Install]\nWantedBy=multi-user.target\n", i.UID, i.GID, exec, shared, write, addresses))
+	unit := func(role string, i Identity, exec, write, addresses string) []byte {
+		description := "Fased disposable custody fixture"
+		service := shared
+		install := "\n[Install]\nWantedBy=multi-user.target\n"
+		if m.Layout == PackageLayout {
+			description = "Fased " + role
+			if role == "signer" && m.Network == "" {
+				// A fresh installation has no wallet/network yet. Never make its
+				// deliberately unavailable signer restart repeatedly at boot.
+				service = strings.Replace(service, "Restart=on-failure", "Restart=no", 1)
+				install = ""
+			}
+		}
+		return []byte(fmt.Sprintf("[Unit]\nDescription=%s\n\n[Service]\nType=simple\nUser=%d\nGroup=%d\nExecStart=%s%sReadWritePaths=%s\nRestrictAddressFamilies=%s\n%s", description, i.UID, i.GID, exec, service, write, addresses, install))
 	}
 	profile := ""
 	if m.Location != "" {
@@ -148,8 +232,8 @@ func definitions(m Manifest) map[string][]byte {
 		profile += " --public-origin " + m.PublicOrigin
 	}
 	return map[string][]byte{
-		"fased-app.service":    unit(m.App, m.Root+"/fased-app serve --data-dir "+m.Root+"/app-state --listen "+m.Listen+" --require-sandbox --installation-root "+m.Root+" --custody-config "+m.Root+"/identity.json"+profile, m.Root+"/app-state", "AF_UNIX AF_INET AF_INET6"),
-		"fased-signer.service": unit(m.Signer, m.Root+"/fased-signer serve --config "+m.Root+"/identity.json "+signerModeFlag(m), m.Root+"/signer-state "+m.Root+"/signer-ipc", "AF_UNIX"),
+		"fased-app.service":    unit("application", m.App, m.Root+"/fased-app serve --data-dir "+m.Root+"/app-state --listen "+m.Listen+" --require-sandbox --installation-root "+m.Root+" --custody-config "+m.Root+"/identity.json"+profile, m.Root+"/app-state", "AF_UNIX AF_INET AF_INET6"),
+		"fased-signer.service": unit("signer", m.Signer, m.Root+"/fased-signer serve --config "+m.Root+"/identity.json "+signerModeFlag(m), m.Root+"/signer-state "+m.Root+"/signer-ipc", "AF_UNIX"),
 	}
 }
 

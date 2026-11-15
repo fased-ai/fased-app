@@ -117,10 +117,10 @@ func (p *Prepared) Close() error {
 		if cleanupErr == nil {
 			cleanupErr = p.root.Remove("download.tar.gz")
 		}
-		if cleanupErr == nil && p.candidate != nil {
+		if cleanupErr == nil && (p.candidate != nil || p.report.LinuxPackageDigestsVerified) {
 			cleanupErr = p.root.Remove("candidate-installer")
 		}
-		if cleanupErr == nil && p.candidate != nil {
+		if cleanupErr == nil && (p.candidate != nil || p.report.LinuxPackageDigestsVerified) {
 			cleanupErr = p.root.Remove("candidate-entry")
 		}
 		if cleanupErr == nil && p.report.LinuxPackageDigestsVerified {
@@ -204,7 +204,13 @@ func privateDirectory(path string) (os.FileInfo, error) {
 
 // Prepare has no defaults for trust, endpoint or output. It neither reads app
 // state nor installs/executes anything. Old update/rehearsal seeds are refused.
-func Prepare(ctx context.Context, o Options) (*Prepared, error) { return prepare(ctx, o, false) }
+func Prepare(ctx context.Context, o Options) (*Prepared, error) { return prepare(ctx, o, false, false) }
+
+// PrepareNative acquires only an attested native Linux package release. It
+// never grants the legacy archive installer or updater authority over it.
+func PrepareNative(ctx context.Context, o Options) (*Prepared, error) {
+	return prepare(ctx, o, false, true)
+}
 
 // PrepareMaintenance authenticates public release bytes for the installed OS
 // helper. It permits no execution, owner path or caller-selected trust source.
@@ -217,7 +223,7 @@ func PrepareMaintenance(ctx context.Context, owner int, o Options) (*Prepared, e
 		return nil, errors.New("maintenance acquisition must use its protected private directory")
 	}
 	o.protectedOwner = owner
-	return prepare(ctx, o, false)
+	return prepare(ctx, o, false, false)
 }
 
 // InspectMaintenance verifies only metadata under the same fixed helper trust
@@ -236,13 +242,13 @@ func InspectMaintenance(ctx context.Context, owner int, o Options) (Descriptor, 
 // Inspect authenticates only metadata/provenance. It creates no output, downloads
 // no archive and supplies no executable/installation authority.
 func Inspect(ctx context.Context, o Options) (Descriptor, string, error) {
-	p, e := prepare(ctx, o, true)
+	p, e := prepare(ctx, o, true, false)
 	if e != nil {
 		return Descriptor{}, "", e
 	}
 	return p.descriptor, p.report.DescriptorSHA256, nil
 }
-func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepared, err error) {
+func prepare(ctx context.Context, o Options, metadataOnly, nativeOnly bool) (prepared *Prepared, err error) {
 	if runtime.GOOS != "linux" || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") || os.Geteuid() == 0 && o.protectedOwner <= 0 {
 		return nil, errors.New("ordinary-user supported Linux first-install bootstrap required")
 	}
@@ -360,8 +366,12 @@ func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepa
 		}
 		return &Prepared{descriptor: descriptor, report: Report{MetadataVerified: true, DescriptorSHA256: identity}}, nil
 	}
-	if descriptor.Deb != (update.Artifact{}) || descriptor.RPM != (update.Artifact{}) {
+	nativePackages := descriptor.Deb != (update.Artifact{}) || descriptor.RPM != (update.Artifact{})
+	if nativePackages && !nativeOnly {
 		return nil, errors.New("native packages require the package-aware installation controller")
+	}
+	if nativeOnly && !nativePackages {
+		return nil, errors.New("an authenticated native Linux package release is required")
 	}
 	if seed.Version == 4 {
 		if err = checkReaderRelease(descriptor.Sequence); err != nil {
@@ -406,24 +416,60 @@ func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepa
 		return nil, err
 	}
 	prepared = &Prepared{options: o, seed: seed, descriptor: descriptor, directoryInfo: created, root: root, metadata: docs, startedAt: start}
-	body, err := source.archive(ctx, descriptor)
-	if err != nil {
-		return prepared, err
+	if nativePackages {
+		if seed.Version != 4 || source.asset == nil {
+			return prepared, errors.New("authenticated public native packages required")
+		}
+		var packet AttestedPacket
+		var release releaseops.PublishedRelease
+		if update.StrictJSON(docs[AttestedPacketFile], &packet) != nil || packet.Version != 3 || update.StrictJSON(docs["github-release.json"], &release) != nil {
+			return prepared, errors.New("authenticated public package inventory required")
+		}
+		for _, item := range []struct {
+			artifact update.Artifact
+			held     string
+		}{{packet.Installer, "candidate-installer"}, {packet.Entry, "candidate-entry"}, {packet.Deb, "candidate-deb"}, {packet.RPM, "candidate-rpm"}} {
+			asset, ok := release.Assets[item.artifact.File]
+			if !ok || asset.SHA256 != item.artifact.SHA256 || asset.Size != item.artifact.Size {
+				return prepared, errors.New("native release asset identity changed")
+			}
+			file, e := root.OpenFile(item.held, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+			if e != nil {
+				return prepared, e
+			}
+			if e = file.Chmod(0600); e == nil {
+				e = source.asset(ctx, asset, file)
+			}
+			if e = errors.Join(e, file.Sync(), file.Close()); e != nil {
+				return prepared, errors.New("native release asset acquisition failed")
+			}
+		}
 	}
 	f, err := root.OpenFile("download.tar.gz", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
-		body.Close()
 		return prepared, err
 	}
 	if err = f.Chmod(0600); err != nil {
-		body.Close()
 		f.Close()
 		return prepared, err
 	}
-	h := sha256.New()
-	n, copyErr := io.Copy(io.MultiWriter(f, h), io.LimitReader(body, descriptor.Archive.Size+1))
-	err = errors.Join(copyErr, body.Close(), f.Sync(), f.Close())
-	if err != nil || n != descriptor.Archive.Size || hex.EncodeToString(h.Sum(nil)) != descriptor.Archive.SHA256 {
+	if nativePackages {
+		err = source.asset(ctx, descriptor.GitHub, f)
+	} else {
+		var body io.ReadCloser
+		body, err = source.archive(ctx, descriptor)
+		if err == nil {
+			h := sha256.New()
+			var n int64
+			n, err = io.Copy(io.MultiWriter(f, h), io.LimitReader(body, descriptor.Archive.Size+1))
+			err = errors.Join(err, body.Close())
+			if n != descriptor.Archive.Size || hex.EncodeToString(h.Sum(nil)) != descriptor.Archive.SHA256 {
+				err = errors.New("bootstrap archive incomplete or mismatched")
+			}
+		}
+	}
+	err = errors.Join(err, f.Sync(), f.Close())
+	if err != nil {
 		return prepared, errors.New("bootstrap archive incomplete or mismatched")
 	}
 	m, err := bundle.ExtractVerifiedArchive(filepath.Join(o.Directory, "download.tar.gz"), filepath.Join(o.Directory, "bundle"), bundle.File{SHA256: descriptor.Archive.SHA256, Bytes: descriptor.Archive.Size}, descriptor.BundleSHA256)
@@ -453,6 +499,13 @@ func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepa
 		return prepared, err
 	}
 	prepared.report = Report{Version: seed.Version, DevelopmentOnly: seed.DevelopmentOnly, Purpose: seed.Purpose, MetadataVerified: true, ArchiveVerified: true, BundleVerified: true, Sequence: descriptor.Sequence, Target: descriptor.Target, SeedSHA256: o.SeedSHA256, DescriptorSHA256: applicationIdentity(descriptor, digest(docs["descriptor.json"])), ArchiveSHA256: descriptor.Archive.SHA256, BundleSHA256: descriptor.BundleSHA256, BundleDirectory: filepath.Join(o.Directory, "bundle"), GitHubTransport: seed.Version >= 2, ProvenanceVerified: seed.Version >= 3, ProvenanceSHA256: decision.BundleSHA256, TrustPolicySHA256: decision.PolicySHA256}
+	if nativePackages {
+		prepared.report.LinuxPackageDigestsVerified = true
+		prepared.report.DescriptorSHA256 = digest(docs[AttestedPacketFile])
+		if err = prepared.revalidateHeld(); err != nil {
+			return prepared, err
+		}
+	}
 	b, err := json.Marshal(prepared.report)
 	if err != nil {
 		return prepared, err
@@ -498,6 +551,11 @@ func (p *Prepared) revalidateHeld() error {
 	} else if seed.Version == 4 {
 		if err = revalidateAttested(seed, p.metadata, d, now); err != nil {
 			return err
+		}
+		if p.report.LinuxPackageDigestsVerified {
+			if err = p.revalidatePublicPackages(); err != nil {
+				return err
+			}
 		}
 	} else {
 		chain, err := initialChain(seed, p.metadata["timestamp.json"], p.metadata["snapshot.json"], p.metadata["targets.json"], now)

@@ -550,8 +550,19 @@ func verifiedCustodyInstallationSource(configPath, root, dir, location, origin s
 	if err != nil {
 		return "", err
 	}
-	m, err := custodyinstall.Load(c.OwnerUID)
-	if err != nil || custodyinstall.Verify(m) != nil {
+	var m custodyinstall.Manifest
+	if root == custodyinstall.Root(c.OwnerUID) {
+		m, err = custodyinstall.Load(c.OwnerUID)
+		if err == nil {
+			err = custodyinstall.Verify(m)
+		}
+	} else {
+		m, err = custodyinstall.LoadPackageInstance(c.OwnerUID, root)
+		if err == nil {
+			err = custodyinstall.VerifyPackageInstance(m)
+		}
+	}
+	if err != nil {
 		return "", errors.New("custody installation source is not verified")
 	}
 	return custodySourceProjection(m, c, root, dir, location, origin)

@@ -20,7 +20,9 @@ var unsupported = errors.New("installer-managed custody identities are supported
 
 func Install(context.Context, Options, *System) (Manifest, error)                { return Manifest{}, unsupported }
 func Load(int) (Manifest, error)                                                 { return Manifest{}, unsupported }
+func LoadPackageInstance(int, string) (Manifest, error)                          { return Manifest{}, unsupported }
 func Verify(Manifest) error                                                      { return unsupported }
+func VerifyPackageInstance(Manifest) error                                       { return unsupported }
 func ProtectedNativeRelease(Manifest) (*update.MaintenancePackage, error)        { return nil, unsupported }
 func Runtime(Manifest) error                                                     { return unsupported }
 func Remove(context.Context, Manifest, *System) error                            { return unsupported }

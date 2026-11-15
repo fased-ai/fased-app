@@ -216,6 +216,79 @@ func TestAttestedPublicNativeMetadataKeepsPackageIdentity(t *testing.T) {
 	}
 }
 
+func TestPublicNativeReleaseRetainsAttestedPackagesForTheInstalledController(t *testing.T) {
+	_, o, payloads := attestedFixture(t, "native-published")
+	p, err := PrepareNative(t.Context(), o)
+	if err != nil {
+		t.Fatalf("authenticated native release acquisition: %v", err)
+	}
+	defer p.Close()
+	if !p.Report().LinuxPackageDigestsVerified || p.Report().DescriptorSHA256 != digest(payloads[AttestedPacketFile]) {
+		t.Fatal("native acquisition lost its signed release identity")
+	}
+	for held, name := range map[string]string{
+		"candidate-deb":       "fased-app-linux-amd64.deb",
+		"candidate-rpm":       "fased-app-linux-amd64.rpm",
+		"candidate-installer": "fased-install-linux-amd64",
+		"candidate-entry":     "install.sh",
+	} {
+		got, err := os.ReadFile(filepath.Join(o.Directory, held))
+		if err != nil || !bytes.Equal(got, payloads[name]) {
+			t.Fatalf("held %s differs from the signed release: %v", held, err)
+		}
+	}
+	if _, err = p.ApplicationRelease(); err == nil {
+		t.Fatal("native packages reached the legacy application updater")
+	}
+	if err = p.Run(t.Context(), InstallOptions{Profile: "local"}, nil, io.Discard, io.Discard); err == nil {
+		t.Fatal("native packages reached the legacy archive installer")
+	}
+	var stream bytes.Buffer
+	if err = p.WriteCandidate(t.Context(), &stream); err != nil {
+		t.Fatalf("verified package handoff: %v", err)
+	}
+	received := t.TempDir()
+	if err = os.Chmod(received, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = ReceiveCandidate(t.Context(), bytes.NewReader(stream.Bytes()), received, p.Report().DescriptorSHA256); err != nil {
+		t.Fatalf("package receiver: %v", err)
+	}
+	if _, err = VerifyAttestedCandidate(o, received); err != nil {
+		t.Fatalf("receiver lost the original release proof: %v", err)
+	}
+	if err = os.WriteFile(filepath.Join(o.Directory, "candidate-rpm"), []byte("changed package"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = p.WriteCandidate(t.Context(), io.Discard); err == nil {
+		t.Fatal("changed native package crossed the handoff")
+	}
+}
+
+func TestPublicNativeAcquisitionRejectsChangedDownload(t *testing.T) {
+	_, o, payloads := attestedFixture(t, "native-published")
+	// The release's immutable asset identity was recorded before this change.
+	payloads["fased-app-linux-amd64.rpm"] = []byte("different RPM")
+	if p, err := PrepareNative(t.Context(), o); err == nil {
+		p.Close()
+		t.Fatal("changed package was acquired")
+	}
+	if _, err := os.Lstat(o.Directory); !os.IsNotExist(err) {
+		t.Fatal("failed acquisition left a package directory", err)
+	}
+}
+
+func TestNativeAcquisitionRefusesLegacyArchive(t *testing.T) {
+	_, o, _ := attestedFixture(t, "")
+	if p, err := PrepareNative(t.Context(), o); err == nil {
+		p.Close()
+		t.Fatal("native acquisition accepted a legacy archive")
+	}
+	if _, err := os.Lstat(o.Directory); !os.IsNotExist(err) {
+		t.Fatal("refused legacy archive created package output", err)
+	}
+}
+
 func TestOlderPublicInspectionStillRequiresAuthenticProof(t *testing.T) {
 	previous := core.Version
 	core.Version = "1.2.4"

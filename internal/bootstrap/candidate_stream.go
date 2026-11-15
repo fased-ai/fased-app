@@ -21,7 +21,7 @@ func (p *Prepared) WriteCandidate(ctx context.Context, out io.Writer) error {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.closed || p.root == nil || p.candidate == nil {
+	if p.closed || p.root == nil || p.candidate == nil && !p.report.LinuxPackageDigestsVerified {
 		return errors.New("held candidate required")
 	}
 	if err := p.revalidateHeld(); err != nil {
