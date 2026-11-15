@@ -90,6 +90,9 @@ func TestNativeLinuxCandidateInspectionBindsBothPackagesWithoutInstalling(t *tes
 	command := exec.CommandContext(t.Context(), "go", "test", "./cmd/fased-install", "-run", "^TestAttestedCandidateCLI$", "-count=1")
 	command.Dir = filepath.Join("..", "..")
 	command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly -buildvcs=false", "GOPROXY=off", "GOSUMDB=off", "FASED_ATTESTED_CANDIDATE_FIXTURE=" + dir, "FASED_NATIVE_PACKAGE_CANDIDATE=1"}
+	if cache := os.Getenv("GOCACHE"); cache != "" {
+		command.Env = append(command.Env, "GOCACHE="+cache)
+	}
 	if output, e := command.CombinedOutput(); e != nil {
 		t.Fatalf("native candidate installer entry: %v %s", e, output)
 	}
@@ -144,6 +147,16 @@ func TestNativeLinuxCandidateInspectionBindsBothPackagesWithoutInstalling(t *tes
 	if got := admitted.Report(); !got.LinuxPackageDigestsVerified || got.DescriptorSHA256 != a.PacketSHA256 {
 		t.Fatal("native package identity was not retained")
 	}
+	if _, err = admitted.PackageIdentity(); err == nil {
+		t.Fatal("ordinary candidate was presented as protected helper verification")
+	}
+	// Only the installed helper sets this internal flag. This controlled test
+	// exercises the same proof and held-file reader without running as root.
+	admitted.options.protectedOwner = os.Getuid()
+	identity, err := admitted.PackageIdentity()
+	if err != nil || identity.ReleaseSHA256 != a.PacketSHA256 || identity.RPM != packet.RPM || identity.Deb != packet.Deb || identity.InstallerSHA256 != packet.Installer.SHA256 {
+		t.Fatal("protected native identity differs from the original proof", err)
+	}
 	if _, err = admitted.ApplicationRelease(); err == nil {
 		t.Fatal("native package reached the legacy application updater")
 	}
@@ -179,6 +192,9 @@ func TestNativeLinuxCandidateInspectionBindsBothPackagesWithoutInstalling(t *tes
 	}
 	if err = os.WriteFile(filepath.Join(o.Directory, "candidate-rpm"), []byte("changed RPM"), 0600); err != nil {
 		t.Fatal(err)
+	}
+	if _, err = admitted.PackageIdentity(); err == nil {
+		t.Fatal("changed native package retained protected identity")
 	}
 	if err = admitted.WriteCandidate(t.Context(), io.Discard); err == nil {
 		t.Fatal("changed held package was streamed")

@@ -43,11 +43,14 @@ func TestPackageAuthorityIsScopedToExactInstance(t *testing.T) {
 }
 
 func TestPackageRequestCannotSelectCommandsOrPaths(t *testing.T) {
-	if _, err := DecodePackageRequest([]byte(`{"version":1,"action":"status"}`)); err != nil {
-		t.Fatal(err)
+	for _, input := range []string{`{"version":1,"action":"status"}`, `{"version":1,"action":"initialize"}`, `{"version":1,"action":"candidate-stage","candidate":{"packetSha256":"` + strings.Repeat("a", 64) + `","scope":"fresh"}}`} {
+		if _, err := DecodePackageRequest([]byte(input)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, input := range []string{
-		`{"version":1,"action":"initialize"}`,
+		`{"version":1,"action":"initialize","path":"/tmp"}`,
+		`{"version":1,"action":"candidate-stage","candidate":{"packetSha256":"` + strings.Repeat("a", 64) + `","scope":"fresh","path":"/tmp"}}`,
 		`{"version":1,"action":"status","path":"/etc/shadow"}`,
 		`{"version":1,"action":"status","action":"update"}`,
 		`{"version":1,"action":"status","instance":"other"}`,

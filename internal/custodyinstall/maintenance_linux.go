@@ -223,6 +223,23 @@ func DescribeProtectedPair(ctx context.Context, owner int, id, version string, n
 	return describeProtectedPair(ctx, m, dir, version, source, readMaintenanceRole, maintenance.ProtectedDigest)
 }
 
+// DescribeProtectedPackagePair runs the exact protected core and signer under
+// their own unprivileged identities. The verified core must bind the signer.
+func DescribeProtectedPackagePair(ctx context.Context, owner int, location, instance, version, source string) ([]update.Component, error) {
+	if _, err := maintenance.ValidatePackageProcess(owner, location, instance); err != nil {
+		return nil, err
+	}
+	root, err := PackageRoot(owner, location, instance)
+	if err != nil {
+		return nil, err
+	}
+	m, err := LoadPackageInstance(owner, root)
+	if err != nil || m.Location != location || m.ID != instance || VerifyPackageInstance(m) != nil {
+		return nil, errors.New("exact protected package pair required")
+	}
+	return describeProtectedPair(ctx, m, root, version, source, readMaintenanceRole, maintenance.ProtectedDigest)
+}
+
 // AttachProtectedDesktop finishes the same fresh Local enrollment before its
 // commit. The independently verified core binds these exact desktop bytes.
 // A committed enrollment or different existing desktop is never adopted.

@@ -44,6 +44,17 @@ func maintenancePackageRegisterCommand(args []string, out io.Writer) error {
 	return err
 }
 
+func maintenancePackageGateCommand(args []string) error {
+	if len(args) != 8 || args[6] != "--role" || (args[7] != "app" && args[7] != "signer") {
+		return errors.New("fixed package service role required")
+	}
+	owner, location, instance, err := packageMaintenanceArguments(args[:6])
+	if err != nil {
+		return err
+	}
+	return custodyinstall.VerifyPackageStart(owner, location, instance, args[7])
+}
+
 func maintenancePackageRequestCommand(args []string, in io.Reader, out io.Writer) error {
 	owner, location, instance, err := packageMaintenanceArguments(args)
 	if err != nil {
@@ -55,12 +66,15 @@ func maintenancePackageRequestCommand(args []string, in io.Reader, out io.Writer
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	b, stream, err := readMaintenanceFrame(ctx, in)
-	if err != nil || stream != nil {
+	if err != nil {
 		return errors.New("one bounded package request required")
 	}
 	r, err := maintenance.DecodePackageRequest(b)
 	if err != nil {
 		return err
+	}
+	if (r.Action == "candidate-stage") != (stream != nil) {
+		return errors.New("candidate staging requires its fixed private stream")
 	}
 	lock, err := maintenance.PackageLock(owner, location, instance)
 	if err != nil {
@@ -70,8 +84,31 @@ func maintenancePackageRequestCommand(args []string, in io.Reader, out io.Writer
 	if _, err = maintenance.ValidatePackageProcess(owner, location, instance); err != nil {
 		return err
 	}
-	// Status is intentionally the only admitted action until the installer,
-	// authenticated package writer and recovery worker are connected.
+	workCtx, stop := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer stop()
+	if stream != nil {
+		if closer, ok := in.(io.Closer); ok {
+			stopClose := context.AfterFunc(workCtx, func() { _ = closer.Close() })
+			defer stopClose()
+		}
+	}
+	if r.Action == "candidate-stage" {
+		receipt, err := maintenancePackageStageCandidate(workCtx, owner, location, instance, *r.Candidate, stream)
+		if err != nil {
+			return err
+		}
+		payload, err := json.Marshal(receipt)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(maintenance.Response{Version: 1, Action: r.Action, Complete: true, Payload: payload})
+	}
+	if r.Action == "initialize" {
+		if err := maintenancePackageInitialize(workCtx, owner, location, instance); err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(maintenance.Response{Version: 1, Action: r.Action, Complete: true})
+	}
 	record, err := update.ReadPackageMaintenanceRecord(owner, location, instance)
 	var payload json.RawMessage
 	if errors.Is(err, os.ErrNotExist) {

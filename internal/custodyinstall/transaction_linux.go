@@ -284,7 +284,11 @@ func clearActive(ctx context.Context, t InstallTransaction, o installOps) error 
 }
 func servicesStopped(ctx context.Context, m Manifest, run runHost) error {
 	for _, role := range []string{"app", "signer"} {
-		b, e := run(ctx, nil, "/usr/bin/systemctl", "show", Unit(m.Owner, role), "--property=ActiveState,MainPID")
+		unit := instanceUnit(m, role)
+		if unit == "" {
+			return errors.New("exact managed service required")
+		}
+		b, e := run(ctx, nil, "/usr/bin/systemctl", "show", unit, "--property=ActiveState,MainPID")
 		if e != nil {
 			return e
 		}

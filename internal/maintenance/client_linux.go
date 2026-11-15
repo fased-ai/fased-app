@@ -60,6 +60,25 @@ func ReadCandidateReceipt(owner int) (CandidateReceipt, error) {
 	return r, nil
 }
 
+// ReadPackageCandidateReceipt reads only the exact instance's protected
+// candidate. It never adopts the older owner-wide candidate or another instance.
+func ReadPackageCandidateReceipt(owner int, location, instance string) (CandidateReceipt, error) {
+	var r CandidateReceipt
+	root, err := update.PackageMaintenanceRoot(owner, location, instance)
+	if err != nil {
+		return r, err
+	}
+	f, err := openProtected(root+"/candidate.json", 8192, 0644)
+	if err != nil {
+		return r, err
+	}
+	b, readErr := io.ReadAll(io.LimitReader(f, 8193))
+	if err = errors.Join(readErr, f.Close()); err != nil || len(b) > 8192 || update.StrictJSON(b, &r) != nil || r.Owner != owner || r.Validate() != nil || r.Scope == "update" && r.BaseInstallation != instance {
+		return CandidateReceipt{}, errors.New("protected package candidate receipt is invalid")
+	}
+	return r, nil
+}
+
 func ReadCandidateOperation(owner int) (CandidateOperation, error) {
 	var r CandidateOperation
 	if owner <= 0 {

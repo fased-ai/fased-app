@@ -212,9 +212,15 @@ func definitions(m Manifest) map[string][]byte {
 	unit := func(role string, i Identity, exec, write, addresses string) []byte {
 		description := "Fased disposable custody fixture"
 		service := shared
+		gate := ""
 		install := "\n[Install]\nWantedBy=multi-user.target\n"
 		if m.Layout == PackageLayout {
 			description = "Fased " + role
+			gateRole := role
+			if gateRole == "application" {
+				gateRole = "app"
+			}
+			gate = fmt.Sprintf("ExecStartPre=%s/fased-install maintenance-package-gate --owner %d --location %s --instance %s --role %s\n", m.Root, m.Owner, m.Location, m.ID, gateRole)
 			if role == "signer" && m.Network == "" {
 				// A fresh installation has no wallet/network yet. Never make its
 				// deliberately unavailable signer restart repeatedly at boot.
@@ -222,7 +228,7 @@ func definitions(m Manifest) map[string][]byte {
 				install = ""
 			}
 		}
-		return []byte(fmt.Sprintf("[Unit]\nDescription=%s\n\n[Service]\nType=simple\nUser=%d\nGroup=%d\nExecStart=%s%sReadWritePaths=%s\nRestrictAddressFamilies=%s\n%s", description, i.UID, i.GID, exec, service, write, addresses, install))
+		return []byte(fmt.Sprintf("[Unit]\nDescription=%s\n\n[Service]\nType=simple\nUser=%d\nGroup=%d\n%sExecStart=%s%sReadWritePaths=%s\nRestrictAddressFamilies=%s\n%s", description, i.UID, i.GID, gate, exec, service, write, addresses, install))
 	}
 	profile := ""
 	if m.Location != "" {

@@ -71,6 +71,9 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	if len(args) > 0 && args[0] == "maintenance-package-request" {
 		return maintenancePackageRequestCommand(args[1:], in, out)
 	}
+	if len(args) > 0 && args[0] == "maintenance-package-gate" {
+		return maintenancePackageGateCommand(args[1:])
+	}
 	if len(args) > 0 && args[0] == "maintenance-bootstrap" {
 		return maintenanceBootstrapCommand(args[1:], errOut)
 	}

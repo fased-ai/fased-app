@@ -48,11 +48,57 @@ func (p *Prepared) DiscardMaintenance() error {
 	return parent.RemoveAll(filepath.Base(p.options.Directory))
 }
 
-type MaintenanceIdentity struct {
-	Version         string
-	Source          string
-	InstallerSHA256 string
-	Core            bundle.File
+// PreparePackageMaintenanceCandidate rechecks the original candidate with the
+// installed instance's pinned helper and a fixed protected input directory.
+func PreparePackageMaintenanceCandidate(ctx context.Context, owner int, location, instance string, o Options, admission CandidateAdmission) (*Prepared, error) {
+	if _, err := maintenance.ValidatePackageProcess(owner, location, instance); err != nil {
+		return nil, err
+	}
+	root, err := update.PackageMaintenanceRoot(owner, location, instance)
+	if err != nil || filepath.Dir(o.Directory) != filepath.Join(root, "fased-app", "install") || filepath.Base(o.Directory) != "candidate-verification" || !hashOK(admission.PacketSHA256) || o.Development || len(o.TLSCA) != 0 {
+		return nil, errors.New("fixed package candidate acquisition required")
+	}
+	o.protectedOwner = owner
+	return prepareAttestedCandidate(ctx, o, filepath.Join(root, "candidate", admission.PacketSHA256), admission)
+}
+
+// DiscardIncompletePackageMaintenance removes only this exact verification
+// scratch directory. The original retained candidate and all journals remain.
+func DiscardIncompletePackageMaintenance(owner int, location, instance string, o Options) error {
+	if _, err := maintenance.ValidatePackageProcess(owner, location, instance); err != nil {
+		return err
+	}
+	root, err := update.PackageMaintenanceRoot(owner, location, instance)
+	parent := filepath.Join(root, "fased-app", "install")
+	if err != nil || filepath.Dir(o.Directory) != parent || filepath.Base(o.Directory) != "candidate-verification" {
+		return errors.New("fixed package candidate acquisition required")
+	}
+	return discardIncompleteMaintenance(parent, o.Directory)
+}
+
+// PackageIdentity revalidates both package subjects and the inner core. The
+// signer must still be independently extracted and matched before deployment.
+func (p *Prepared) PackageIdentity() (PackageMaintenanceIdentity, error) {
+	var identity PackageMaintenanceIdentity
+	if p == nil {
+		return identity, errors.New("protected native acquisition required")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed || p.root == nil || p.options.protectedOwner <= 0 || !p.report.ProvenanceVerified || !p.report.LinuxPackageDigestsVerified || p.seed.Version != 4 {
+		return identity, errors.New("protected native acquisition required")
+	}
+	if err := p.revalidateHeld(); err != nil {
+		return identity, err
+	}
+	var packet AttestedPacket
+	if update.StrictJSON(p.metadata[AttestedPacketFile], &packet) != nil || packet.Version != 3 || packet.Source != p.descriptor.Source || packet.ProductVersion != p.descriptor.ProductVersion || digest(p.metadata[AttestedPacketFile]) != p.report.DescriptorSHA256 {
+		return identity, errors.New("protected native package identity differs")
+	}
+	return PackageMaintenanceIdentity{
+		MaintenanceIdentity: MaintenanceIdentity{Version: p.descriptor.ProductVersion, Source: p.descriptor.Source, InstallerSHA256: p.descriptor.Release.InstallerSHA256, Core: p.engine},
+		Sequence:            p.descriptor.Sequence, ReleaseSHA256: p.report.DescriptorSHA256, ProvenanceSHA256: p.report.ProvenanceSHA256, Target: p.descriptor.Target, Deb: packet.Deb, RPM: packet.RPM,
+	}, nil
 }
 
 // PrepareMaintenanceCandidate re-verifies one retained CI candidate inside

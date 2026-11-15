@@ -4,7 +4,9 @@ package custodyinstall
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 
@@ -68,6 +70,105 @@ func ValidateInitialPackageMaintenanceRecord(r update.MaintenanceRecord, owner i
 		return Manifest{}, errors.New("browser-first package cannot own a desktop")
 	}
 	return base, nil
+}
+
+// InitializeProtectedPackageJournal is called by the fixed helper while its
+// instance lock is held, after the helper independently authenticates p. It
+// publishes only an empty-signer initial record, never an existing hold.
+func InitializeProtectedPackageJournal(ctx context.Context, owner int, location, instance string, p update.MaintenancePackage) error {
+	a, err := maintenance.ValidatePackageProcess(owner, location, instance)
+	if err != nil {
+		return err
+	}
+	root, err := PackageRoot(owner, location, instance)
+	if err != nil {
+		return err
+	}
+	m, err := LoadPackageInstance(owner, root)
+	if err != nil || m.ID != instance || m.Location != location || m.Network != "" || VerifyPackageInstance(m) != nil {
+		return errors.New("fresh unconfigured package instance required")
+	}
+	helper, _, err := maintenance.ProtectedDigest(root+"/fased-install", 0755, 128<<20)
+	if err != nil || helper != a.ImageSHA256 {
+		return errors.New("the instance gate differs from its pinned helper")
+	}
+	if err = verifyLoadedPackageServices(ctx, m); err != nil {
+		return err
+	}
+	r := update.MaintenanceRecord{Version: 1, Owner: owner, OperationID: instance, Phase: "idle", Start: "base", Base: mustJSON(m), Target: mustJSON(m), Package: &p}
+	if _, err = ValidateInitialPackageMaintenanceRecord(r, owner, location, instance); err != nil {
+		return err
+	}
+	old, err := update.ReadPackageMaintenanceRecord(owner, location, instance)
+	if err == nil {
+		if _, err = ValidateInitialPackageMaintenanceRecord(old, owner, location, instance); err != nil || update.SnapshotDigest("initial-package", old) != update.SnapshotDigest("initial-package", r) {
+			return errors.New("existing package operation differs; preserve it")
+		}
+		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err = servicesStopped(ctx, m, func(ctx context.Context, _ []byte, args ...string) ([]byte, error) {
+		return protectedSystemctl(ctx, args[1:]...)
+	}); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(root + "/signer-state")
+	if err != nil || len(entries) != 0 {
+		return errors.New("existing signer state must be preserved")
+	}
+	for _, name := range []string{"update-active.json", "update-start-blocked.json"} {
+		if _, err = os.Lstat(root + "/" + name); !errors.Is(err, os.ErrNotExist) {
+			return errors.New("existing package recovery fence must be preserved")
+		}
+	}
+	journal, err := update.PackageMaintenanceRoot(owner, location, instance)
+	if err != nil {
+		return err
+	}
+	return maintenance.PublishProtected(journal+"/custody.json", mustJSON(r), 0644)
+}
+
+// Verify the actual loaded systemd commands, not just a matching unit file.
+func verifyLoadedPackageServices(ctx context.Context, m Manifest) error {
+	for _, role := range []string{"app", "signer"} {
+		definition := definitions(m)["fased-"+role+".service"]
+		if _, err := loadedUnitPolicyFields(m, role, definition, m.Root+"/fased-"+role); err != nil {
+			return err
+		}
+		raw, err := atomicUnitServiceProperties(ctx, instanceUnit(m, role))
+		if err != nil {
+			return err
+		}
+		var snapshot struct {
+			Type string                       `json:"type"`
+			Data []map[string]json.RawMessage `json:"data"`
+		}
+		if json.Unmarshal(raw, &snapshot) != nil || snapshot.Type != "a{sv}" || len(snapshot.Data) != 1 {
+			return errors.New("actual package service commands required")
+		}
+		for _, property := range []string{"ExecCondition", "ExecStartPre", "ExecStart", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecReload"} {
+			var expected []atomicPairCommand
+			if property == "ExecStartPre" || property == "ExecStart" {
+				for _, line := range strings.Split(string(definition), "\n") {
+					if strings.HasPrefix(line, property+"=") {
+						expected = append(expected, atomicPairCommand{argv: strings.Fields(strings.TrimPrefix(line, property+"="))})
+					}
+				}
+				if len(expected) != 1 {
+					return errors.New("one exact package gate and start command required")
+				}
+			}
+			if err = validateAtomicCommandRows(snapshot.Data[0][property], expected); err != nil {
+				return fmt.Errorf("loaded package %s %s: %w", role, property, err)
+			}
+		}
+		if commands, ok := snapshot.Data[0]["ExecReloadPost"]; ok && validateAtomicCommandRows(commands, nil) != nil {
+			return errors.New("unreviewed package service execution is present")
+		}
+	}
+	return nil
 }
 
 func verifyProtectedDesktop(m Manifest, p *update.MaintenancePackage) error {

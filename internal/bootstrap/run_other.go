@@ -34,6 +34,10 @@ func (*Prepared) VerifyFreshCandidateInstaller(InstallOptions) error {
 	return errors.New("candidate execution supports Linux amd64 only")
 }
 
+func (*Prepared) PackageIdentity() (PackageMaintenanceIdentity, error) {
+	return PackageMaintenanceIdentity{}, errors.New("protected native acquisition requires Linux")
+}
+
 func (*Prepared) RunUpgrade(context.Context, UpgradeOptions, io.Reader, io.Writer, io.Writer) error {
 	return errors.New("installed upgrade execution supports Linux amd64 only")
 }

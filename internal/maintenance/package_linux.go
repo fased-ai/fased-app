@@ -4,6 +4,7 @@ package maintenance
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -222,6 +223,102 @@ func lockPackage(root string) (*os.File, error) {
 		return nil, fmt.Errorf("package maintenance already running or unsafe lock: %w", err)
 	}
 	return f, nil
+}
+
+// PackageCandidateStreamCommand gives the owner only the fixed scoped entry.
+// The privileged receiver independently verifies every streamed byte.
+func PackageCandidateStreamCommand(ctx context.Context, location, instance string, request CandidateRequest, diagnostics io.Writer) (*exec.Cmd, []byte, error) {
+	owner := os.Getuid()
+	if owner <= 0 || os.Geteuid() != owner {
+		return nil, nil, errors.New("ordinary package owner required")
+	}
+	a, err := ReadPackageAuthority(owner, location, instance)
+	if err != nil {
+		return nil, nil, err
+	}
+	config, err := os.UserConfigDir()
+	if err != nil || config != filepath.Join(a.Home, ".config") || ValidateOwnerIdentity(a) != nil || VerifyImage(a) != nil {
+		return nil, nil, errors.New("protected package owner and helper required")
+	}
+	b, err := json.Marshal(PackageRequest{Version: 1, Action: "candidate-stage", Candidate: &request})
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err = DecodePackageRequest(b); err != nil {
+		return nil, nil, err
+	}
+	cmd := exec.CommandContext(ctx, "/usr/bin/sudo", "-n", "--", ImagePath(a.ImageSHA256), "maintenance-package-request", "--owner", strconv.Itoa(owner), "--location", location, "--instance", instance)
+	cmd.Dir = "/"
+	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=" + a.Home, "LANG=C"}
+	cmd.Stderr = diagnostics
+	frame := append([]byte(CandidateStreamPrefix), b...)
+	frame = append(frame, '\n')
+	return cmd, frame, nil
+}
+
+// ReservePackageCandidate publishes only the exact public candidate identity
+// under this instance. A crash can resume matching partial reservation bytes.
+func ReservePackageCandidate(owner int, location, instance string, request CandidateRequest) error {
+	if _, err := ValidatePackageProcess(owner, location, instance); err != nil {
+		return err
+	}
+	b, err := json.Marshal(PackageRequest{Version: 1, Action: "candidate-stage", Candidate: &request})
+	if err != nil {
+		return err
+	}
+	if _, err = DecodePackageRequest(b); err != nil {
+		return err
+	}
+	root, err := update.PackageMaintenanceRoot(owner, location, instance)
+	if err != nil {
+		return err
+	}
+	b, err = json.Marshal(request)
+	if err != nil {
+		return err
+	}
+	return publishResumableFixed(filepath.Join(root, "candidate", request.PacketSHA256+".reservation.json"), append(b, '\n'), 0644)
+}
+
+// EnsurePackageAcquisition prepares only the instance's fixed private verifier
+// directory. Symlinks and foreign ownership are never adopted or repaired.
+func EnsurePackageAcquisition(owner int, location, instance string) error {
+	if _, err := ValidatePackageProcess(owner, location, instance); err != nil {
+		return err
+	}
+	root, err := update.PackageMaintenanceRoot(owner, location, instance)
+	if err != nil {
+		return err
+	}
+	for _, dir := range []string{filepath.Join(root, "fased-app"), filepath.Join(root, "fased-app", "install")} {
+		if err = os.Mkdir(dir, 0700); err != nil && !errors.Is(err, os.ErrExist) {
+			return err
+		}
+		i, e := os.Lstat(dir)
+		if e != nil || !packagePrivateDirectory(i, 0, 0) {
+			return errors.New("foreign package acquisition directory; preserve it")
+		}
+		if i.Mode().Perm() != 0700 {
+			if err = os.Chmod(dir, 0700); err != nil {
+				return err
+			}
+		}
+		if err = syncDirectory(dir); err != nil {
+			return err
+		}
+		if err = syncDirectory(filepath.Dir(dir)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func packagePrivateDirectory(i os.FileInfo, uid, gid uint32) bool {
+	if i == nil || !i.IsDir() || i.Mode()&os.ModeSymlink != 0 || i.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 || i.Mode().Perm()&^0700 != 0 {
+		return false
+	}
+	st, ok := i.Sys().(*syscall.Stat_t)
+	return ok && st.Uid == uid && st.Gid == gid
 }
 
 // publishResumableFixed uses one deterministic, root-owned temporary name.

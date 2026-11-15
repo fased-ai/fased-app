@@ -39,14 +39,32 @@ type Request struct {
 // identity supplied in the request body. Mutating package actions must be
 // added only when their complete protected operation is implemented.
 type PackageRequest struct {
-	Version int    `json:"version"`
-	Action  string `json:"action"`
+	Version   int               `json:"version"`
+	Action    string            `json:"action"`
+	Candidate *CandidateRequest `json:"candidate,omitempty"`
 }
 
 func DecodePackageRequest(data []byte) (PackageRequest, error) {
 	var r PackageRequest
 	var fields map[string]json.RawMessage
-	if len(data) > 4096 || update.StrictJSON(data, &fields) != nil || len(fields) != 2 || fields["version"] == nil || fields["action"] == nil || update.StrictJSON(data, &r) != nil || r.Version != 1 || r.Action != "status" {
+	if len(data) > 4096 || update.StrictJSON(data, &fields) != nil || fields["version"] == nil || fields["action"] == nil || update.StrictJSON(data, &r) != nil || r.Version != 1 {
+		return PackageRequest{}, errors.New("invalid package maintenance request")
+	}
+	switch r.Action {
+	case "status":
+		if len(fields) != 2 || r.Candidate != nil {
+			return PackageRequest{}, errors.New("status accepts no package input")
+		}
+	case "initialize":
+		if len(fields) != 2 || r.Candidate != nil {
+			return PackageRequest{}, errors.New("initialization accepts no caller-selected package")
+		}
+	case "candidate-stage":
+		var candidateFields map[string]json.RawMessage
+		if len(fields) != 3 || fields["candidate"] == nil || update.StrictJSON(fields["candidate"], &candidateFields) != nil || len(candidateFields) != 2 || candidateFields["packetSha256"] == nil || candidateFields["scope"] == nil || r.Candidate == nil || !canonicalSHA256(r.Candidate.PacketSHA256) || (r.Candidate.Scope != "fresh" && r.Candidate.Scope != "update") {
+			return PackageRequest{}, errors.New("one exact native candidate required")
+		}
+	default:
 		return PackageRequest{}, errors.New("invalid package maintenance request")
 	}
 	return r, nil

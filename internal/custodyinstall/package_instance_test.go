@@ -1,6 +1,7 @@
 package custodyinstall
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -23,6 +24,12 @@ func TestPackageInstanceIdentityIsSeparateFromLegacyAndOtherProfiles(t *testing.
 		for _, unit := range definitions(m) {
 			if strings.Contains(string(unit), "fixture") || strings.Contains(string(unit), "disposable") {
 				t.Fatal("package instance exposes a fixture label")
+			}
+		}
+		for _, item := range []struct{ name, role string }{{"fased-app.service", "app"}, {"fased-signer.service", "signer"}} {
+			gate := m.Root + "/fased-install maintenance-package-gate --owner " + fmt.Sprint(m.Owner) + " --location " + m.Location + " --instance " + m.ID + " --role " + item.role
+			if !strings.Contains(string(definitions(m)[item.name]), "ExecStartPre="+gate+"\n") {
+				t.Fatal("package service is missing its exact instance gate", item.name)
 			}
 		}
 		signerUnit := string(definitions(m)["fased-signer.service"])
