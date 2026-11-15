@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   bindingOverlay,
+  attestedCandidatePacket,
   compatibilityConfig,
   candidateInventory,
   expectedProvenance,
@@ -12,6 +13,7 @@ import {
   validateConfig,
   verifiedCandidate,
 } from "./prepare-ubuntu-release.mjs";
+import { attestedInventory } from "./release-acceptance.mjs";
 
 test("compatibility reader is explicitly private and cannot replace the target config", () => {
   const original = { ...complete(), version: "0.1.6" };
@@ -215,6 +217,7 @@ test("production public inputs bind the signing identity, seed and pre-build app
 test("candidate preparation CLI reaches verified metadata output without a publisher request", async (t) => {
   for (const variant of [
     "complete",
+    "package-only",
     "changed-tracked-seed",
     "wrong-provenance-owner",
   ]) {
@@ -288,6 +291,17 @@ return options.encoding?value.toString():Buffer.from(value);
             ...env,
             GITHUB_REF: `refs/tags/v${rawConfig.version}`,
             GITHUB_WORKFLOW_REF: `${rawConfig.repository}/.github/workflows/release.yml@refs/tags/v${rawConfig.version}`,
+            FASED_PACKAGE_ONLY: "false",
+            FASED_FEDORA_PREDECESSOR: "false",
+            ...(variant === "package-only"
+              ? {
+                  GITHUB_EVENT_NAME: "workflow_dispatch",
+                  GITHUB_REF: "refs/heads/main",
+                  GITHUB_WORKFLOW_REF: `${rawConfig.repository}/.github/workflows/release.yml@refs/heads/main`,
+                  FASED_RELEASE_SOURCE: source.commit,
+                  FASED_PACKAGE_ONLY: "true",
+                }
+              : {}),
             GITHUB_OUTPUT: workflowOutput,
           },
           encoding: "utf8",
@@ -295,13 +309,14 @@ return options.encoding?value.toString():Buffer.from(value);
         },
       );
       const output = join(f.parent, ".evidence/ubuntu-release");
-      if (variant !== "complete") {
+      if (variant !== "complete" && variant !== "package-only") {
         assert.equal(child.status, 1);
         assert.match(
           child.stderr,
           variant === "changed-tracked-seed"
             ? /Approved tracked public seed changed/
             : /Production public trust repository changed/,
+          `child stdout=${child.stdout} signal=${child.signal} error=${child.error}`,
         );
         assert.equal(existsSync(output), false);
         assert.equal(existsSync(workflowOutput), false);
@@ -312,7 +327,14 @@ return options.encoding?value.toString():Buffer.from(value);
         readFileSync(join(output, "build-inputs.json")),
       );
       assert.equal(inputs.sourceCommit, source.commit);
-      assert.equal(inputs.tagObject, source.tagObject);
+      assert.equal(
+        inputs.tagObject,
+        variant === "package-only" ? "" : source.tagObject,
+      );
+      assert.equal(
+        inputs.nativePackages,
+        variant === "package-only" ? true : undefined,
+      );
       assert.equal(inputs.seedSha256, rawConfig.seedSha256);
       assert.equal(inputs.packageLockSha256, sha("fixture-package-lock"));
       assert.equal(inputs.goSumSha256, sha("fixture-go-sum"));
@@ -479,6 +501,162 @@ test("actual package identities and provenance expectations cannot drift apart",
       report,
     ),
   );
+});
+
+test("unpublished browser-first candidate binds both native packages", () => {
+  const nativeInput = {
+    ...input,
+    buildRef: "refs/heads/main",
+    tagObject: "",
+    releaseAuthority: "github-attestation-v1",
+    nativePackages: true,
+  };
+  const app = { sha256: "d".repeat(64), bytes: 31 };
+  const signer = { sha256: "e".repeat(64), bytes: 32 };
+  const deb = {
+    file: "fased-app-linux-amd64.deb",
+    size: 33,
+    sha256: "1".repeat(64),
+  };
+  const rpm = {
+    file: "fased-app-linux-amd64.rpm",
+    size: 34,
+    sha256: "2".repeat(64),
+  };
+  const nativeReport = {
+    ...report,
+    manifest: { ...report.manifest, files: { "fased-app": app } },
+  };
+  const receipt = {
+    version: 1,
+    product: input.version,
+    source: input.sourceCommit,
+    architecture: "amd64",
+    publicRelease: false,
+    inputs: {
+      "fased-app": app,
+      "fased-signer": signer,
+      "fased-install": { sha256: installer.sha256, bytes: installer.size },
+    },
+    packages: {
+      [deb.file]: { sha256: deb.sha256, bytes: deb.size },
+      [rpm.file]: { sha256: rpm.sha256, bytes: rpm.size },
+    },
+  };
+  const inventory = candidateInventory(
+    nativeInput,
+    archive,
+    installer,
+    nativeReport,
+    { deb, rpm, receipt },
+  );
+  assert.deepEqual([inventory.deb, inventory.rpm], [deb, rpm]);
+  const expected = expectedProvenance(
+    nativeInput,
+    archive,
+    installer,
+    inventory,
+  );
+  assert.equal(expected.debSha256, deb.sha256);
+  assert.equal(expected.rpmSha256, rpm.sha256);
+  const entry = { file: "install.sh", size: 15, sha256: "3".repeat(64) };
+  const proof = {
+    file: "fased-app-linux-amd64.provenance.sigstore.json",
+    size: 16,
+    sha256: "4".repeat(64),
+  };
+  const packet = attestedCandidatePacket(nativeInput, inventory, entry, proof);
+  assert.equal(packet.version, 3);
+  assert.deepEqual([packet.deb, packet.rpm], [deb, rpm]);
+  const legacy = candidateInventory(input, archive, installer, report);
+  assert.equal(attestedCandidatePacket(input, legacy, entry, proof).version, 1);
+  assert.equal(
+    attestedCandidatePacket(
+      { ...input, buildRef: "refs/heads/main", tagObject: "" },
+      legacy,
+      entry,
+      proof,
+    ).version,
+    2,
+  );
+  assert.throws(() =>
+    attestedCandidatePacket(
+      { ...nativeInput, buildRef: "refs/tags/v0.1.0" },
+      inventory,
+      entry,
+      proof,
+    ),
+  );
+  assert.throws(
+    () =>
+      attestedInventory(
+        { ...rawConfig, version: input.version },
+        packet,
+        Buffer.from(JSON.stringify(packet)),
+      ),
+    /Attested release authority\/version required/,
+  );
+  for (const bad of [
+    { ...receipt, source: "f".repeat(40) },
+    { ...receipt, inputs: { ...receipt.inputs, "fased-app": signer } },
+    { ...receipt, inputs: { ...receipt.inputs, "fased-install": signer } },
+    { ...receipt, inputs: { ...receipt.inputs, "fased-desktop": signer } },
+    {
+      ...receipt,
+      packages: {
+        ...receipt.packages,
+        [rpm.file]: { sha256: deb.sha256, bytes: rpm.size },
+      },
+    },
+  ])
+    assert.throws(() =>
+      candidateInventory(nativeInput, archive, installer, nativeReport, {
+        deb,
+        rpm,
+        receipt: bad,
+      }),
+    );
+  assert.throws(() =>
+    candidateInventory(nativeInput, archive, installer, nativeReport),
+  );
+  assert.throws(() =>
+    candidateInventory(input, archive, installer, nativeReport, {
+      deb,
+      rpm,
+      receipt,
+    }),
+  );
+});
+
+test("package-only workflow builds and attests both formats without a desktop", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/release.yml", import.meta.url),
+    "utf8",
+  );
+  const build = workflow.slice(
+    workflow.indexOf("- name: Build and package the reviewed"),
+    workflow.indexOf("- name: Attest the actual archive"),
+  );
+  const nativeBranch = build.slice(
+    build.indexOf('if [[ "$FASED_PACKAGE_ONLY" == true ]]'),
+    build.indexOf("          else\n"),
+  );
+  assert.match(nativeBranch, /install -y --no-install-recommends rpm/);
+  assert.match(nativeBranch, /export CGO_ENABLED=0/);
+  assert.doesNotMatch(nativeBranch, /gtk|webkit|build-desktop/i);
+  assert.match(build, /fased-package --linux-system-packages/);
+  const attest = workflow.slice(
+    workflow.indexOf("- name: Attest the browser-first Linux package pair"),
+    workflow.indexOf("- name: Verify original provenance"),
+  );
+  assert.match(attest, /if: \$\{\{ inputs\.package_only \}\}/);
+  for (const name of [
+    "fased-app-linux-amd64.tar.gz",
+    "fased-install-linux-amd64",
+    "fased-app-linux-amd64.deb",
+    "fased-app-linux-amd64.rpm",
+  ])
+    assert.ok(attest.includes(name), `missing attested ${name}`);
 });
 
 test("staging requires actual verifier timestamp enums, exact policy and tag identity", () => {
