@@ -37,6 +37,9 @@ func newApplicationUpdatesClient(ctx context.Context, dir string) (*core.Client,
 	if pathErr != nil || real == abs {
 		return nil, false, err
 	}
+	if _, packaged, _ := desktop.PackageLocalDataRoot(real, os.Getuid()); packaged {
+		return nil, false, err
+	}
 	if _, fenceErr := enrollment.EnrolledTarget(real, os.Getuid()); !errors.Is(fenceErr, os.ErrNotExist) {
 		return nil, false, err
 	}
@@ -61,6 +64,9 @@ func ordinaryUpdateRecoveryData(dir string) bool {
 	}
 	real, err := filepath.EvalSymlinks(abs)
 	if err != nil {
+		return false
+	}
+	if _, packaged, _ := desktop.PackageLocalDataRoot(real, os.Getuid()); packaged {
 		return false
 	}
 	_, err = enrollment.EnrolledTarget(real, os.Getuid())
@@ -88,6 +94,11 @@ func applicationUpdatesCommand(args []string, in *os.File, out, errOut io.Writer
 	}
 	if f.NArg() != 0 {
 		return errors.New("unexpected update arguments")
+	}
+	explicit := false
+	f.Visit(func(option *flag.Flag) { explicit = explicit || option.Name == "data-dir" })
+	if *dir, e = defaultPackageLocalData(*dir, explicit); e != nil {
+		return e
 	}
 	ctx := context.Background()
 	c, e := openApplicationUpdatesClient(ctx, *dir)

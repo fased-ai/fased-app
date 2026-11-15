@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/fased-ai/fased-app/internal/core"
 	"io"
 	"net/http"
@@ -55,6 +56,18 @@ func TestProtectedLocalSetupLinkUsesPrivateOwnerLaunch(t *testing.T) {
 	link, err := url.Parse(strings.TrimSpace(output.String()))
 	if err != nil || link.Query().Get("instance") != instance || link.Fragment != "local="+code || strings.Join(calls, ",") != "GET /api/v1/health,POST /api/v1/auth/native-local" {
 		t.Fatal("protected browser handoff differs", link, calls, err)
+	}
+	if os.Getuid() > 0 {
+		calls = nil
+		output.Reset()
+		packageData := filepath.Join("/var/lib/fased-app-package", fmt.Sprint(os.Getuid()), "local", strings.Repeat("a", 32), "app-state")
+		if err = run([]string{"open", "--data-dir", packageData, "--print"}, nil, &output, io.Discard); err != nil {
+			t.Fatal("package open did not use the protected browser handoff", err)
+		}
+		link, err = url.Parse(strings.TrimSpace(output.String()))
+		if err != nil || link.Query().Get("instance") != instance || link.Fragment != "local="+code || strings.Join(calls, ",") != "GET /api/v1/health,POST /api/v1/auth/native-local" {
+			t.Fatal("package open selected a different owner", link, calls, err)
+		}
 	}
 	for _, change := range []func(){
 		func() { owner++ },

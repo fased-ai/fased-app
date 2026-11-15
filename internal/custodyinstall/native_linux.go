@@ -3,11 +3,14 @@
 package custodyinstall
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
@@ -16,7 +19,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/maintenance"
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 func nativeArgs(m Manifest) []string {
@@ -30,6 +35,14 @@ func nativePolicy(m Manifest) []byte {
 }
 
 func (s *System) EnsureNativeRunning(ctx context.Context, m Manifest) error {
+	if m.Layout == PackageLayout {
+		if m.Owner != os.Getuid() || os.Geteuid() != os.Getuid() || VerifyPackageOwnerTarget(m) != nil {
+			return errors.New("protected Local package owner required")
+		}
+		// Package services are started by their installed systemd units; the
+		// owner channel never grants direct systemctl or sudo tool access.
+		return nil
+	}
 	if !m.NativeOwnerAccess || m.Owner != os.Getuid() || Verify(m) != nil {
 		return errors.New("protected native owner enrollment required")
 	}
@@ -164,18 +177,160 @@ func verifyNativePolicy(ctx context.Context, m Manifest, s *System) error {
 	return nil
 }
 
+// VerifyPackageOwnerTarget binds owner access to the running instance and its
+// existing protected update direction. It never selects a legacy owner root.
+func VerifyPackageOwnerTarget(m Manifest) error {
+	if m.validatePackage() != nil || m.Location != "local" || !m.Enrollment {
+		return errors.New("exact protected Local package required")
+	}
+	r, err := update.ReadPackageMaintenanceRecord(m.Owner, m.Location, m.ID)
+	if err != nil {
+		return err
+	}
+	selected, err := SelectProtectedPackageStart(r, m.Owner, m.Location, m.ID)
+	if err != nil || selected != m || VerifyPackageInstance(m) != nil {
+		return errors.New("package owner target differs from its protected recovery state")
+	}
+	return verifyPackageStartFences(m, r, readRoot)
+}
+
+// PackageOwnerChannel is reached only through the instance's fixed root
+// helper and its already-held instance lock. The app itself runs as AppUID.
+func PackageOwnerChannel(ctx context.Context, owner int, location, instance string, lock *os.File, in io.Reader, out io.Writer) error {
+	if in == nil || out == nil || lock == nil || location != "local" {
+		return errors.New("one protected Local owner request required")
+	}
+	if _, err := maintenance.ValidatePackageProcess(owner, location, instance); err != nil {
+		return err
+	}
+	root, err := PackageRoot(owner, location, instance)
+	if err != nil {
+		return err
+	}
+	m, err := LoadPackageInstance(owner, root)
+	if err != nil || VerifyPackageOwnerTarget(m) != nil || loadedUnit(m, "app") != nil {
+		return errors.New("original protected Local package required")
+	}
+	request, err := http.ReadRequest(bufio.NewReader(io.LimitReader(in, 64*1024+1)))
+	if err != nil || request.ContentLength < 0 || request.ContentLength > 16*1024 || len(request.TransferEncoding) != 0 {
+		return errors.New("bounded Local owner request required")
+	}
+	defer request.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(request.Body, 16*1024+1))
+	if err != nil || len(body) > 16*1024 || int64(len(body)) != request.ContentLength {
+		return errors.New("bounded Local owner request required")
+	}
+	defer clear(body)
+	request.Body = io.NopCloser(bytes.NewReader(body))
+	request.ContentLength = int64(len(body))
+	request.Close = true
+	var wire bytes.Buffer
+	if err = request.Write(&wire); err != nil || wire.Len() > 64*1024 {
+		return errors.New("bounded Local owner request required")
+	}
+	defer clear(wire.Bytes())
+	commitPath := m.Root + "/enrollment-ready.json"
+	if _, err = os.Lstat(commitPath); errors.Is(err, os.ErrNotExist) {
+		r, readErr := update.ReadPackageMaintenanceRecord(owner, location, instance)
+		if readErr != nil || r.Phase != "idle" || m.Network != "" || VerifyUnconfiguredPackageSigner(ctx, m) != nil {
+			return errors.New("only the original empty Local installation can establish its owner")
+		}
+		var response bytes.Buffer
+		probe := []byte("GET /api/v1/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+		if err = packageOwnerExchange(ctx, m, probe, &response, 64*1024); err != nil {
+			return err
+		}
+		res, parseErr := http.ReadResponse(bufio.NewReader(&response), nil)
+		if parseErr != nil || res.StatusCode != http.StatusOK || !strings.HasPrefix(res.Header.Get("Content-Type"), "application/json") {
+			return errors.New("running Local package health is unavailable")
+		}
+		data, readErr := io.ReadAll(io.LimitReader(res.Body, 32*1024+1))
+		closeErr := res.Body.Close()
+		var health core.Health
+		if readErr != nil || closeErr != nil || len(data) > 32*1024 || json.Unmarshal(data, &health) != nil {
+			return errors.New("running Local package health is invalid")
+		}
+		commit, commitErr := packageOwnerCommit(m, health)
+		if commitErr != nil {
+			return commitErr
+		}
+		if err = maintenance.PublishProtected(commitPath, mustJSON(commit), 0644); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	if _, err = ReadEnrollmentCommit(m); err != nil {
+		return err
+	}
+	// The app's Apply handler can start the package worker before the HTTP
+	// response returns. Release the instance lock first so that worker does not
+	// fail on its own owner's request. The app-UID client revalidates the
+	// protected manifest, journal, fence and endpoint after this release.
+	return packageOwnerAfterUnlock(lock, func() error {
+		return packageOwnerExchange(ctx, m, wire.Bytes(), out, 8<<20)
+	})
+}
+
+func packageOwnerAfterUnlock(lock *os.File, request func() error) error {
+	if lock == nil || request == nil {
+		return errors.New("original package lock required")
+	}
+	if err := lock.Close(); err != nil {
+		return err
+	}
+	return request()
+}
+
+func packageOwnerExchange(ctx context.Context, m Manifest, request []byte, out io.Writer, limit int64) error {
+	child, err := startMaintenanceChild(ctx, m, "app", m.Root+"/fased-app", "native-client", "--data-dir", m.Root+"/app-state", "--owner-config", m.Root+"/identity.json")
+	if err != nil {
+		return err
+	}
+	_, writeErr := child.in.Write(request)
+	writeErr = errors.Join(writeErr, child.in.Close())
+	n, readErr := io.Copy(out, io.LimitReader(child.out, limit+1))
+	if n > limit {
+		readErr = errors.Join(readErr, errors.New("Local owner response exceeds its bound"))
+	}
+	if writeErr != nil || readErr != nil {
+		// The bounded reader may have stopped before the child finished writing.
+		// End only that app-UID transport process before waiting for it.
+		_ = child.cmd.Process.Kill()
+	}
+	return errors.Join(writeErr, readErr, child.close())
+}
+
 // NativeChannel is one exact existing app-identity client. The rule installed
 // at initial OS consent grants only the OS owner this fixed command, without a
 // later sudo/app/signing password. AppUID receives no sudo permission.
 func (s *System) NativeChannel(ctx context.Context, m Manifest) (net.Conn, error) {
-	if !m.NativeOwnerAccess || !m.Enrollment || m.Location != "local" || m.Owner != os.Getuid() || Verify(m) != nil {
+	if !m.Enrollment || m.Location != "local" || m.Owner != os.Getuid() || os.Geteuid() != os.Getuid() {
+		return nil, errors.New("protected native owner enrollment required")
+	}
+	if m.Layout == PackageLayout {
+		if VerifyPackageOwnerTarget(m) != nil {
+			return nil, errors.New("protected Local package owner required")
+		}
+	} else if !m.NativeOwnerAccess || Verify(m) != nil {
 		return nil, errors.New("protected native owner enrollment required")
 	}
 	if err := loadedUnit(m, "app"); err != nil {
 		return nil, err
 	}
 	child, cancel := context.WithCancel(ctx)
-	cmd := exec.CommandContext(child, "/usr/bin/sudo", append([]string{"-n", "--"}, nativeArgs(m)...)...)
+	var cmd *exec.Cmd
+	var frame []byte
+	var err error
+	if m.Layout == PackageLayout {
+		cmd, frame, err = maintenance.PackageOwnerStreamCommand(child, m.Location, m.ID, io.Discard)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+	} else {
+		cmd = exec.CommandContext(child, "/usr/bin/sudo", append([]string{"-n", "--"}, nativeArgs(m)...)...)
+	}
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
@@ -193,6 +348,15 @@ func (s *System) NativeChannel(ctx context.Context, m Manifest) (net.Conn, error
 		out.Close()
 		cancel()
 		return nil, err
+	}
+	if len(frame) != 0 {
+		if _, err = in.Write(frame); err != nil {
+			cancel()
+			in.Close()
+			out.Close()
+			_ = cmd.Wait()
+			return nil, err
+		}
 	}
 	c := &nativeConn{in: in, out: out, cancel: cancel, cmd: cmd}
 	return c, nil

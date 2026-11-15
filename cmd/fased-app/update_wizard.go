@@ -157,6 +157,13 @@ func ordinaryUpdateCommand(args []string, in *os.File, out, errOut io.Writer) er
 	if f.NArg() != 0 {
 		return errors.New("unexpected update arguments")
 	}
+	if !*remote {
+		explicit := false
+		f.Visit(func(option *flag.Flag) { explicit = explicit || option.Name == "data-dir" })
+		if *dir, e = defaultPackageLocalData(*dir, explicit); e != nil {
+			return e
+		}
+	}
 	if *remote {
 		ctx := context.Background()
 		client, err := connectedRemoteClient(ctx, *dir)

@@ -20,6 +20,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/bundle"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	desktopclient "github.com/fased-ai/fased-app/internal/desktop"
 	"github.com/fased-ai/fased-app/internal/hostprep"
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/ownerclient"
@@ -70,6 +71,13 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	if err = f.Parse(remaining); err != nil {
 		return err
 	}
+	if command == "open" {
+		explicit := false
+		f.Visit(func(option *flag.Flag) { explicit = explicit || option.Name == "data-dir" })
+		if *data, err = defaultPackageLocalData(*data, explicit); err != nil {
+			return err
+		}
+	}
 	ownerLink := ""
 	if command == "open" && f.NArg() == 1 {
 		ownerLink = f.Arg(0)
@@ -108,6 +116,37 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	if command == "service" || command == "open" || command == "uninstall" || command == "install" {
+		abs, pathErr := filepath.Abs(paths.Data)
+		if pathErr != nil {
+			return pathErr
+		}
+		if real, e := filepath.EvalSymlinks(abs); e == nil && real != abs {
+			if _, packaged, _ := desktopclient.PackageLocalDataRoot(real, os.Getuid()); packaged {
+				return errors.New("use the original package data directory, not a symbolic link")
+			}
+		}
+		_, packaged, packageErr := desktopclient.PackageLocalDataRoot(abs, os.Getuid())
+		if packageErr != nil {
+			return packageErr
+		}
+		if packaged {
+			if command != "open" || ownerLink != "" || *origin != "" {
+				return errors.New("this Local package operation is unavailable; preserve its instance")
+			}
+			address, e := localOwnerSetupLink(ctx, abs, "")
+			if e != nil {
+				return e
+			}
+			if *printOnly {
+				_, e = fmt.Fprintln(out, address)
+				return e
+			}
+			process := exec.Command("xdg-open", address)
+			if e = process.Start(); e != nil {
+				return errors.New("cannot open the browser; use open --print for the private URL")
+			}
+			return process.Process.Release()
+		}
 		target, found, e := enrolledTarget(paths.Data)
 		if e != nil {
 			return e

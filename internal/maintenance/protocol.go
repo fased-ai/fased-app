@@ -59,6 +59,10 @@ func DecodePackageRequest(data []byte) (PackageRequest, error) {
 		if len(fields) != 2 || r.Candidate != nil {
 			return PackageRequest{}, errors.New("initialization accepts no caller-selected package")
 		}
+	case "owner-channel":
+		if len(fields) != 2 || r.Candidate != nil {
+			return PackageRequest{}, errors.New("owner channel accepts no caller-selected identity or command")
+		}
 	case "candidate-stage":
 		var candidateFields map[string]json.RawMessage
 		if len(fields) != 3 || fields["candidate"] == nil || update.StrictJSON(fields["candidate"], &candidateFields) != nil || len(candidateFields) != 2 || candidateFields["packetSha256"] == nil || candidateFields["scope"] == nil || r.Candidate == nil || !canonicalSHA256(r.Candidate.PacketSHA256) || (r.Candidate.Scope != "fresh" && r.Candidate.Scope != "update") {
@@ -72,6 +76,7 @@ func DecodePackageRequest(data []byte) (PackageRequest, error) {
 
 const EnrollmentStreamPrefix = "FASED-ENROLLMENT-STREAM-1\n"
 const CandidateStreamPrefix = "FASED-CANDIDATE-STREAM-1\n"
+const PackageOwnerStreamPrefix = "FASED-PACKAGE-OWNER-STREAM-1\n"
 
 // CandidateRequest carries an exact public CI artifact identity, never a
 // caller-selected root path, command, trust root, or network endpoint.

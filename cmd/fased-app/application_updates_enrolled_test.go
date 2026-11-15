@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,45 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/core"
 )
+
+func TestPackageLocalCLIUpdateUsesSelectedOwner(t *testing.T) {
+	if os.Getuid() <= 0 {
+		t.Skip("ordinary OS owner required")
+	}
+	data := filepath.Join("/var/lib/fased-app-package", fmt.Sprint(os.Getuid()), "local", strings.Repeat("a", 32), "app-state")
+	previous := applicationUpdatesPublicClient
+	t.Cleanup(func() { applicationUpdatesPublicClient = previous })
+	var calls []string
+	applicationUpdatesPublicClient = func(_ context.Context, selected string) (*core.Client, bool, error) {
+		if selected != data {
+			t.Fatal("CLI update changed the selected package instance", selected)
+		}
+		transport := ownerSetupRoundTripper(func(r *http.Request) (*http.Response, error) {
+			calls = append(calls, r.Method+" "+r.URL.Path)
+			var body []byte
+			switch r.URL.Path {
+			case "/api/v1/auth/native-local":
+				body, _ = json.Marshal(map[string]string{"sessionToken": "owner", "csrfToken": "csrf"})
+			case "/api/v1/updates/application":
+				if r.Header.Get("Authorization") != "Bearer owner" {
+					t.Fatal("the selected owner was not authenticated")
+				}
+				body, _ = json.Marshal(core.ApplicationUpdateView{InstanceID: "instance", ControllerAvailable: true})
+			default:
+				t.Fatal("unexpected update request", r.URL.Path)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(body))}, nil
+		})
+		return &core.Client{Endpoint: core.Endpoint{URL: "http://127.0.0.1:7331", InstanceID: "instance"}, HTTP: &http.Client{Transport: transport}}, true, nil
+	}
+	var out bytes.Buffer
+	if err := run([]string{"update", "status", "--data-dir", data}, nil, &out, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(calls, ",") != "POST /api/v1/auth/native-local,GET /api/v1/updates/application" {
+		t.Fatal("CLI update bypassed the selected owner or shared update record", calls)
+	}
+}
 
 // The real CLI and core API are exercised; only the already-reviewed native
 // owner transport is substituted. This is not installed OS-identity proof.

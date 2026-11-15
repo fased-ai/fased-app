@@ -46,6 +46,30 @@ func TestNativeEnrollmentRebindsOnlySameInstanceAfterUpdate(t *testing.T) {
 	}
 }
 
+func TestPackageLocalDataRootRefusesForeignInstances(t *testing.T) {
+	id := strings.Repeat("a", 32)
+	root := "/var/lib/fased-app-package/1000/local/" + id
+	got, packaged, err := PackageLocalDataRoot(root+"/app-state", 1000)
+	if err != nil || !packaged || got != root {
+		t.Fatal("exact Local package was refused", got, packaged, err)
+	}
+	for _, dir := range []string{
+		"/var/lib/fased-app-package/1001/local/" + id + "/app-state",
+		"/var/lib/fased-app-package/1000/remote/" + id + "/app-state",
+		root + "/signer-state",
+		root + "/app-state/other",
+		"/var/lib/fased-app-package/1000/local/INVALID/app-state",
+		"/var/lib/fased-app-package",
+	} {
+		if _, packaged, err := PackageLocalDataRoot(dir, 1000); !packaged || err == nil {
+			t.Fatal("foreign package data reached an ordinary core fallback", dir)
+		}
+	}
+	if _, packaged, err := PackageLocalDataRoot("/home/owner/.local/share/fased", 1000); packaged || err != nil {
+		t.Fatal("unrelated Local data was reclassified", err)
+	}
+}
+
 func TestNativeHealthIsFreshBoundAndPreservesResponse(t *testing.T) {
 	const instance = "fixture-local-instance"
 	for _, tc := range []struct {

@@ -137,8 +137,9 @@ func maintenancePackageRequestCommand(args []string, in io.Reader, out io.Writer
 	if err != nil {
 		return err
 	}
-	if (r.Action == "candidate-stage") != (stream != nil) {
-		return errors.New("candidate staging requires its fixed private stream")
+	streamAction := r.Action == "candidate-stage" || r.Action == "owner-channel"
+	if streamAction != (stream != nil) {
+		return errors.New("package operation requires its fixed request framing")
 	}
 	lock, err := maintenance.PackageLock(owner, location, instance)
 	if err != nil {
@@ -155,6 +156,19 @@ func maintenancePackageRequestCommand(args []string, in io.Reader, out io.Writer
 			stopClose := context.AfterFunc(workCtx, func() { _ = closer.Close() })
 			defer stopClose()
 		}
+	}
+	if r.Action == "owner-channel" {
+		ownerCtx, cancelOwner := context.WithTimeout(workCtx, 20*time.Second)
+		defer cancelOwner()
+		if closer, ok := in.(io.Closer); ok {
+			stopClose := context.AfterFunc(ownerCtx, func() { _ = closer.Close() })
+			defer stopClose()
+		}
+		if closer, ok := out.(io.Closer); ok {
+			stopClose := context.AfterFunc(ownerCtx, func() { _ = closer.Close() })
+			defer stopClose()
+		}
+		return custodyinstall.PackageOwnerChannel(ownerCtx, owner, location, instance, lock, stream, out)
 	}
 	if r.Action == "candidate-stage" {
 		receipt, err := maintenancePackageStageCandidate(workCtx, owner, location, instance, *r.Candidate, stream)

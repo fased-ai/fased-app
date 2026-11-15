@@ -283,6 +283,14 @@ func TestMaintenanceEnrollmentFramePreservesPrivateStream(t *testing.T) {
 	if rest, err = io.ReadAll(stream); err != nil || !bytes.Equal(rest, body) {
 		t.Fatal("candidate stream bytes changed")
 	}
+	owner := append([]byte(maintenance.PackageOwnerStreamPrefix+head), body...)
+	got, stream, err = readMaintenanceFrame(t.Context(), bytes.NewReader(owner))
+	if err != nil || string(got) != head || stream == nil {
+		t.Fatal("package owner stream header not recognized", err)
+	}
+	if rest, err = io.ReadAll(stream); err != nil || !bytes.Equal(rest, body) {
+		t.Fatal("package owner stream bytes changed")
+	}
 	normal := []byte(`{"version":1,"action":"remote-status"}`)
 	got, stream, err = readMaintenanceFrame(t.Context(), bytes.NewReader(normal))
 	if err != nil || stream != nil || !bytes.Equal(got, normal) {

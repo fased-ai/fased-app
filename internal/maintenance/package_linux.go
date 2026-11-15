@@ -228,17 +228,9 @@ func lockPackage(root string) (*os.File, error) {
 // PackageCandidateStreamCommand gives the owner only the fixed scoped entry.
 // The privileged receiver independently verifies every streamed byte.
 func PackageCandidateStreamCommand(ctx context.Context, location, instance string, request CandidateRequest, diagnostics io.Writer) (*exec.Cmd, []byte, error) {
-	owner := os.Getuid()
-	if owner <= 0 || os.Geteuid() != owner {
-		return nil, nil, errors.New("ordinary package owner required")
-	}
-	a, err := ReadPackageAuthority(owner, location, instance)
+	cmd, err := packageRequestCommand(ctx, location, instance, diagnostics)
 	if err != nil {
 		return nil, nil, err
-	}
-	config, err := os.UserConfigDir()
-	if err != nil || config != filepath.Join(a.Home, ".config") || ValidateOwnerIdentity(a) != nil || VerifyImage(a) != nil {
-		return nil, nil, errors.New("protected package owner and helper required")
 	}
 	b, err := json.Marshal(PackageRequest{Version: 1, Action: "candidate-stage", Candidate: &request})
 	if err != nil {
@@ -247,13 +239,42 @@ func PackageCandidateStreamCommand(ctx context.Context, location, instance strin
 	if _, err = DecodePackageRequest(b); err != nil {
 		return nil, nil, err
 	}
+	frame := append([]byte(CandidateStreamPrefix), b...)
+	frame = append(frame, '\n')
+	return cmd, frame, nil
+}
+
+// PackageOwnerStreamCommand reaches the same exact installed helper. The
+// helper and the app-UID client independently restrict the HTTP operation.
+func PackageOwnerStreamCommand(ctx context.Context, location, instance string, diagnostics io.Writer) (*exec.Cmd, []byte, error) {
+	if location != "local" {
+		return nil, nil, errors.New("Local package owner required")
+	}
+	cmd, err := packageRequestCommand(ctx, location, instance, diagnostics)
+	if err != nil {
+		return nil, nil, err
+	}
+	return cmd, []byte(PackageOwnerStreamPrefix + `{"version":1,"action":"owner-channel"}` + "\n"), nil
+}
+
+func packageRequestCommand(ctx context.Context, location, instance string, diagnostics io.Writer) (*exec.Cmd, error) {
+	owner := os.Getuid()
+	if owner <= 0 || os.Geteuid() != owner {
+		return nil, errors.New("ordinary package owner required")
+	}
+	a, err := ReadPackageAuthority(owner, location, instance)
+	if err != nil {
+		return nil, err
+	}
+	config, err := os.UserConfigDir()
+	if err != nil || config != filepath.Join(a.Home, ".config") || ValidateOwnerIdentity(a) != nil || VerifyImage(a) != nil {
+		return nil, errors.New("protected package owner and helper required")
+	}
 	cmd := exec.CommandContext(ctx, "/usr/bin/sudo", "-n", "--", ImagePath(a.ImageSHA256), "maintenance-package-request", "--owner", strconv.Itoa(owner), "--location", location, "--instance", instance)
 	cmd.Dir = "/"
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=" + a.Home, "LANG=C"}
 	cmd.Stderr = diagnostics
-	frame := append([]byte(CandidateStreamPrefix), b...)
-	frame = append(frame, '\n')
-	return cmd, frame, nil
+	return cmd, nil
 }
 
 // ReservePackageCandidate publishes only the exact public candidate identity

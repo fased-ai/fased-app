@@ -27,17 +27,36 @@ func enrollmentInstance(s string) bool {
 
 func ReadEnrollmentCommit(m Manifest) (EnrollmentCommit, error) {
 	var c EnrollmentCommit
-	if m.validate() != nil || !m.Enrollment {
+	if m.validateMaintenanceIdentity() != nil || !m.Enrollment {
 		return c, errors.New("exact enrolled installation required")
 	}
 	f, err := readRoot(m.Root + "/enrollment-ready.json")
 	if err != nil {
 		return c, errors.New("enrollment is not committed; managed startup is disabled")
 	}
-	if f.Mode != 0644 || strict(f.Data, &c) != nil || c.Version != 1 || c.ManifestSHA256 != sum(mustJSON(EnrollmentIdentity(m))) || !enrollmentInstance(c.InstanceID) || !validHex(c.Digest, 32) {
+	if f.Mode != 0644 || strict(f.Data, &c) != nil || c.Version != 1 || c.ManifestSHA256 != sum(mustJSON(EnrollmentIdentity(m))) || !enrollmentInstance(c.InstanceID) || !validHex(c.Digest, 32) || m.Layout == PackageLayout && !validPackageOwnerCommit(m, c) {
 		return EnrollmentCommit{}, errors.New("enrollment commit changed; preserve all state")
 	}
 	return c, nil
+}
+
+// The fresh package has no imported source image. Its protected owner record
+// binds the actual running core identity and the immutable instance topology.
+func packageOwnerCommit(m Manifest, health core.Health) (EnrollmentCommit, error) {
+	if m.validatePackage() != nil || m.Location != "local" || m.Network != "" || health.Status != "ok" || health.APIVersion != core.APIVersion || !enrollmentInstance(health.InstanceID) ||
+		health.Connection == nil || health.Connection.Location != "local" || health.Connection.Transport != "loopback" || health.Connection.OwnerUID != m.Owner {
+		return EnrollmentCommit{}, errors.New("original running Local package owner required")
+	}
+	return EnrollmentCommit{Version: 1, ManifestSHA256: sum(mustJSON(EnrollmentIdentity(m))), InstanceID: health.InstanceID, Digest: packageOwnerDigest(m, health.InstanceID)}, nil
+}
+
+func validPackageOwnerCommit(m Manifest, c EnrollmentCommit) bool {
+	return m.validatePackage() == nil && m.Location == "local" && c.Version == 1 && enrollmentInstance(c.InstanceID) &&
+		c.ManifestSHA256 == sum(mustJSON(EnrollmentIdentity(m))) && c.Digest == packageOwnerDigest(m, c.InstanceID)
+}
+
+func packageOwnerDigest(m Manifest, instance string) string {
+	return sum([]byte("fased-package-local-owner:v1\x00" + m.ID + "\x00" + instance))
 }
 
 func (s *System) enrollmentCommand(ctx context.Context, m Manifest, uid, gid int, action, dir, instance, digest string) (*exec.Cmd, []byte, error) {

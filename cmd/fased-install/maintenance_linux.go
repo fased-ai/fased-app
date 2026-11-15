@@ -304,7 +304,7 @@ func readMaintenanceFrame(ctx context.Context, in io.Reader) ([]byte, io.Reader,
 	ch := make(chan result, 1)
 	go func() {
 		reader := bufio.NewReaderSize(in, (32<<10)+1)
-		for _, prefix := range []string{maintenance.EnrollmentStreamPrefix, maintenance.CandidateStreamPrefix} {
+		for _, prefix := range []string{maintenance.EnrollmentStreamPrefix, maintenance.CandidateStreamPrefix, maintenance.PackageOwnerStreamPrefix} {
 			peeked, e := reader.Peek(len(prefix))
 			if e != nil || string(peeked) != prefix {
 				continue

@@ -3,15 +3,90 @@
 package custodyinstall
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 )
+
+func TestPackageOwnerReleasesLockBeforeUpdateRequest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "operation.lock")
+	first, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := os.OpenFile(path, os.O_RDWR, 0600)
+	if err != nil {
+		first.Close()
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if err = syscall.Flock(int(first.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		first.Close()
+		t.Fatal(err)
+	}
+	called := false
+	if err = packageOwnerAfterUnlock(first, func() error {
+		called = true
+		if err := syscall.Flock(int(second.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+			return err
+		}
+		return syscall.Flock(int(second.Fd()), syscall.LOCK_UN)
+	}); err != nil || !called {
+		t.Fatal("owner request ran while the worker lock was held", err)
+	}
+	called = false
+	if err = packageOwnerAfterUnlock(first, func() error { called = true; return nil }); err == nil || called {
+		t.Fatal("request ran after lock release failed", err)
+	}
+}
+
+func TestPackageOwnerCommitBindsTheRunningLocalInstance(t *testing.T) {
+	_, m := packageGateInitialRecord(t)
+	instance := base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("x", 32)))
+	health := core.Health{Status: "ok", APIVersion: core.APIVersion, InstanceID: instance,
+		Connection: &core.ConnectionInfo{Location: "local", Transport: "loopback", OwnerUID: m.Owner}}
+	commit, err := packageOwnerCommit(m, health)
+	if err != nil || !validPackageOwnerCommit(m, commit) || commit.InstanceID != instance {
+		t.Fatal("original Local owner was not bound", err)
+	}
+	for name, change := range map[string]func(*core.Health){
+		"instance":  func(h *core.Health) { h.InstanceID = "other" },
+		"owner":     func(h *core.Health) { h.Connection.OwnerUID++ },
+		"location":  func(h *core.Health) { h.Connection.Location = "remote" },
+		"transport": func(h *core.Health) { h.Connection.Transport = "private-https" },
+		"API":       func(h *core.Health) { h.APIVersion = "different" },
+		"status":    func(h *core.Health) { h.Status = "starting" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := health
+			connection := *health.Connection
+			bad.Connection = &connection
+			change(&bad)
+			if _, err := packageOwnerCommit(m, bad); err == nil {
+				t.Fatal("foreign Local owner was accepted")
+			}
+		})
+	}
+	changed := commit
+	changed.InstanceID = base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("y", 32)))
+	if validPackageOwnerCommit(m, changed) {
+		t.Fatal("changed instance retained the original owner commitment")
+	}
+	other := m
+	other.ID = strings.Repeat("f", 32)
+	if validPackageOwnerCommit(other, commit) {
+		t.Fatal("another installation retained the original owner commitment")
+	}
+}
 
 func packageGateInitialRecord(t *testing.T) (update.MaintenanceRecord, Manifest) {
 	t.Helper()
