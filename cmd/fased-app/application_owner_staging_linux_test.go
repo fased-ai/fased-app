@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,108 @@ import (
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/update"
 )
+
+func TestApplicationOwnerCheckpointFallbackUsesTheOriginalOperation(t *testing.T) {
+	id, lease := update.NewProbe(), update.NewProbe()
+	release := &core.ApplicationRelease{Version: "0.1.12", Sequence: 12, ManifestSHA256: strings.Repeat("a", 64), EngineSHA256: strings.Repeat("b", 64)}
+	op := core.ApplicationUpdateOperation{ID: id, OwnerLease: lease, Phase: "applying", Release: release}
+	state := core.ApplicationOwnerView{View: core.ApplicationUpdateView{InstanceID: "original-instance", Schema: 37, Operation: op}}
+	checkpoint := &core.ApplicationCheckpoint{Version: 1, OperationID: id, ManifestSHA256: release.ManifestSHA256, PreviousEngineSHA256: strings.Repeat("c", 64)}
+	offline := state
+	offline.Checkpoint = checkpoint
+	lost := errors.New("owner reply lost")
+	for name, change := range map[string]func(*core.ApplicationOwnerView){
+		"missing backup":  func(v *core.ApplicationOwnerView) { v.Checkpoint = nil },
+		"other instance":  func(v *core.ApplicationOwnerView) { v.View.InstanceID = "other" },
+		"other schema":    func(v *core.ApplicationOwnerView) { v.View.Schema++ },
+		"other operation": func(v *core.ApplicationOwnerView) { v.View.Operation.ID = update.NewProbe() },
+		"other lease":     func(v *core.ApplicationOwnerView) { v.View.Operation.OwnerLease = update.NewProbe() },
+		"other policy":    func(v *core.ApplicationOwnerView) { v.View.Operation.PolicySHA256 = strings.Repeat("f", 64) },
+		"automatic mode":  func(v *core.ApplicationOwnerView) { v.View.Operation.Automatic = true },
+		"other release": func(v *core.ApplicationOwnerView) {
+			changed := *v.View.Operation.Release
+			changed.EngineSHA256 = strings.Repeat("d", 64)
+			v.View.Operation.Release = &changed
+		},
+		"terminal operation": func(v *core.ApplicationOwnerView) { v.View.Operation.Phase = "completed" },
+		"different checkpoint": func(v *core.ApplicationOwnerView) {
+			changed := *v.Checkpoint
+			changed.PreviousEngineSHA256 = strings.Repeat("e", 64)
+			v.Checkpoint = &changed
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			expected, current := state, offline
+			if name == "different checkpoint" {
+				expected.Checkpoint = checkpoint
+			}
+			change(&current)
+			err := prepareApplicationCheckpoint(t.Context(), expected, op,
+				func(context.Context) error { return lost },
+				func(context.Context) (core.ApplicationOwnerView, error) { return current, nil })
+			if !errors.Is(err, lost) {
+				t.Fatal("foreign or missing checkpoint authorized replacement", err)
+			}
+		})
+	}
+	reads := 0
+	read := func(context.Context) (core.ApplicationOwnerView, error) { reads++; return offline, nil }
+	if err := prepareApplicationCheckpoint(t.Context(), state, op, func(context.Context) error { return nil }, read); err != nil || reads != 0 {
+		t.Fatal("successful preparation performed unnecessary offline recovery", err, reads)
+	}
+	if err := prepareApplicationCheckpoint(t.Context(), state, op, func(context.Context) error { return lost }, read); err != nil || reads != 1 {
+		t.Fatal("the exact checkpoint could not recover a lost response", err, reads)
+	}
+	if err := prepareApplicationCheckpoint(t.Context(), state, op, func(context.Context) error { return lost }, func(context.Context) (core.ApplicationOwnerView, error) { return offline, errors.New("backup changed") }); !errors.Is(err, lost) {
+		t.Fatal("unreadable checkpoint authorized replacement", err)
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := prepareApplicationCheckpoint(cancelled, state, op, func(context.Context) error { return nil }, read); !errors.Is(err, context.Canceled) {
+		t.Fatal("cancelled update authorized replacement", err)
+	}
+}
+
+func TestApplicationOwnerCheckpointFallbackRechecksTheRealBackup(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "core")
+	store, err := core.OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(dir, "core.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	op := core.ApplicationUpdateOperation{ID: update.NewProbe(), OwnerLease: update.NewProbe(), Phase: "applying", Release: &core.ApplicationRelease{Version: "0.1.12", Sequence: 12, ManifestSHA256: strings.Repeat("a", 64), EngineSHA256: strings.Repeat("b", 64), Target: update.Target{OS: runtime.GOOS, Arch: runtime.GOARCH}}}
+	body, err := json.Marshal(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec("UPDATE application_updates SET document=? WHERE id=1", string(body)); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.ApplicationOwnerCommand(t.Context(), core.ApplicationOwnerCommand{Action: "prepare", ID: op.ID, Lease: op.OwnerLease})
+	if err != nil || state.Checkpoint == nil {
+		t.Fatal("real application checkpoint was not prepared", err)
+	}
+	lost := errors.New("owner reply lost")
+	prepare := func(context.Context) error { return lost }
+	read := func(ctx context.Context) (core.ApplicationOwnerView, error) {
+		return core.ReadApplicationOwnerOffline(ctx, dir, op.ID)
+	}
+	if err = prepareApplicationCheckpoint(t.Context(), state, op, prepare, read); err != nil {
+		t.Fatal("original retained backup was refused", err)
+	}
+	backup := filepath.Join(dir, "lifecycle", op.ID, state.Checkpoint.Snapshot.File)
+	if err = os.WriteFile(backup, []byte("damaged backup"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = prepareApplicationCheckpoint(t.Context(), state, op, prepare, read); !errors.Is(err, lost) {
+		t.Fatal("a changed backup authorized replacement", err)
+	}
+}
 
 func TestApplicationOwnerPrestageRecoveryDecision(t *testing.T) {
 	id, lease := strings.Repeat("1", 32), strings.Repeat("2", 32)
