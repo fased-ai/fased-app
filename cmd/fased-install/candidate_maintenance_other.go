@@ -25,3 +25,9 @@ func candidatePackageUpdateBaseline(string, string) (string, error) {
 func stageAttestedPackageCandidate(context.Context, *bootstrap.Prepared, string, string, string, string, io.Writer) error {
 	return errors.New("protected package candidate staging requires Linux")
 }
+
+func installFreshPackageCandidate(context.Context, *bootstrap.Prepared, string, string, string, string, io.Writer) error {
+	return errors.New("package installation requires Linux")
+}
+
+func packageControllerReady() error { return errors.New("package installation requires Linux") }

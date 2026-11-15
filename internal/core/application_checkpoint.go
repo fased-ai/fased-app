@@ -6,16 +6,10 @@ import (
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
-// ApplicationCheckpoint is app metadata only, never signer or financial restore.
-// Its private SQLite image stays in the existing app-owned recovery directory.
-type ApplicationCheckpoint struct {
-	PreviousEngineSHA256 string                  `json:"previousEngineSha256"`
-	Version              int                     `json:"version"`
-	OperationID          string                  `json:"operationId"`
-	ManifestSHA256       string                  `json:"manifestSha256"`
-	Pause                update.CorePauseReceipt `json:"pause"`
-	Snapshot             update.MetadataSnapshot `json:"snapshot"`
-}
+// ApplicationCheckpoint remains an alias for the existing app-only recovery
+// record; sharing its type lets the protected package journal retain the same
+// checkpoint without inventing a signer hold.
+type ApplicationCheckpoint = update.ApplicationCheckpoint
 
 // The live and offline owner entries must interpret the same durable
 // checkpoint and original pause before either can use it for recovery.

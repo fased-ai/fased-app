@@ -257,6 +257,36 @@ func PackageOwnerStreamCommand(ctx context.Context, location, instance string, d
 	return cmd, []byte(PackageOwnerStreamPrefix + `{"version":1,"action":"owner-channel"}` + "\n"), nil
 }
 
+// PackageCall uses only this instance's fixed installed helper and a bounded
+// semantic request. It accepts neither a path nor an executable from callers.
+func PackageCall(ctx context.Context, location, instance string, request PackageRequest, diagnostics io.Writer) error {
+	if request.Action != "provision" {
+		return errors.New("unsupported package operation")
+	}
+	b, err := json.Marshal(request)
+	if err != nil {
+		return err
+	}
+	if _, err = DecodePackageRequest(b); err != nil {
+		return err
+	}
+	cmd, err := packageRequestCommand(ctx, location, instance, diagnostics)
+	if err != nil {
+		return err
+	}
+	cmd.Stdin = bytes.NewReader(b)
+	var output boundedResponse
+	cmd.Stdout = &output
+	if err = cmd.Run(); err != nil {
+		return err
+	}
+	var response Response
+	if update.StrictJSON(output.data, &response) != nil || response.Version != 1 || response.Action != request.Action || !response.Complete || len(response.Payload) != 0 {
+		return errors.New("package provisioning result is unconfirmed")
+	}
+	return nil
+}
+
 func packageRequestCommand(ctx context.Context, location, instance string, diagnostics io.Writer) (*exec.Cmd, error) {
 	owner := os.Getuid()
 	if owner <= 0 || os.Geteuid() != owner {

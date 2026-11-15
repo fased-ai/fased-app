@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/bootstrap"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -52,6 +53,9 @@ func retailInstallerOptions(binding *firstInstallBinding, cache string) (bootstr
 	return bootstrap.Options{Seed: append([]byte(nil), binding.Seed...), SeedSHA256: binding.SHA256, Directory: filepath.Join(parent, "verified-"+update.NewProbe())}, nil
 }
 func run(args []string, in io.Reader, out, errOut io.Writer) error {
+	if len(args) == 1 && args[0] == "--package-controller-ready" {
+		return packageControllerReady()
+	}
 	if len(args) > 0 {
 		switch args[0] {
 		case "maintenance-successor":
@@ -188,8 +192,51 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		}
 		return e
 	}
+	if packageFlags && *installCandidate != "" {
+		mixed := false
+		f.Visit(func(flag *flag.Flag) {
+			switch flag.Name {
+			case "install-candidate", "candidate-packet-sha256", "package-location", "package-instance", "profile", "listen":
+			default:
+				mixed = true
+			}
+		})
+		root, pathErr := update.PackageInstanceRoot(os.Getuid(), *packageLocation, *packageInstance)
+		digest, digestErr := hex.DecodeString(*candidatePacket)
+		if mixed || pathErr != nil || *packageLocation != "local" || *profile != "local" || !filepath.IsAbs(*installCandidate) || filepath.Clean(*installCandidate) != *installCandidate ||
+			digestErr != nil || len(digest) != 32 || hex.EncodeToString(digest) != *candidatePacket || compiledFirstInstallBinding == nil {
+			return errors.New("fresh Local package requires its exact candidate and instance")
+		}
+		if *listen == "" {
+			*listen = "127.0.0.1:7331"
+		}
+		request, _ := json.Marshal(maintenance.PackageRequest{Version: 1, Action: "provision", Listen: *listen})
+		if _, err := maintenance.DecodePackageRequest(request); err != nil {
+			return err
+		}
+		cache, err := os.UserCacheDir()
+		if err != nil {
+			return err
+		}
+		options, err := retailInstallerOptions(compiledFirstInstallBinding, cache)
+		if err != nil {
+			return err
+		}
+		admission := bootstrap.CandidateAdmission{PacketSHA256: *candidatePacket, OperationID: update.NewProbe(), FreshProfile: "package-local", FreshOwner: os.Getuid(), FreshRoot: root, FreshData: filepath.Join(root, "app-state"), ExpiresAt: time.Now().Add(15 * time.Minute).Unix()}
+		p, err := bootstrap.PrepareAttestedCandidate(context.Background(), options, *installCandidate, admission)
+		if err != nil {
+			return err
+		}
+		defer p.Close()
+		if err = installFreshPackageCandidate(context.Background(), p, *candidatePacket, *packageLocation, *packageInstance, *listen, errOut); err != nil {
+			return err
+		}
+		p.RetainAcquisitionEvidence()
+		_, err = fmt.Fprintln(out, "Fased is installed. Run /usr/bin/fased open to continue.")
+		return err
+	}
 	if packageFlags {
-		return errors.New("package candidate identity requires a manual candidate update")
+		return errors.New("package candidate identity requires a matching install or update")
 	}
 	if *installCandidate != "" || *candidatePacket != "" {
 		mixed := false

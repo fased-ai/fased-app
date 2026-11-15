@@ -156,12 +156,16 @@ func directory(ctx context.Context, path string, uid, gid int, mode os.FileMode,
 	return e
 }
 func account(ctx context.Context, name, id, role string, s *System) (Identity, error) {
+	return accountWithMarker(ctx, name, marker(id, role), s)
+}
+
+func accountWithMarker(ctx context.Context, name, comment string, s *System) (Identity, error) {
 	lookup := func() (Identity, error) {
 		b, e := exec.CommandContext(ctx, "/usr/bin/getent", "passwd", name).Output()
 		if e != nil {
 			return Identity{}, e
 		}
-		return parseAccount(string(b), name, marker(id, role))
+		return parseAccount(string(b), name, comment)
 	}
 	i, e := lookup()
 	if e == nil {
@@ -177,7 +181,7 @@ func account(ctx context.Context, name, id, role string, s *System) (Identity, e
 	} else if !errors.As(ge, &exit) || exit.ExitCode() != 2 {
 		return i, ge
 	}
-	if _, e = s.Run(ctx, nil, "/usr/sbin/useradd", "--system", "--user-group", "--no-create-home", "--home-dir", "/nonexistent", "--shell", "/usr/sbin/nologin", "--password", "!", "--comment", marker(id, role), name); e != nil {
+	if _, e = s.Run(ctx, nil, "/usr/sbin/useradd", "--system", "--user-group", "--no-create-home", "--home-dir", "/nonexistent", "--shell", "/usr/sbin/nologin", "--password", "!", "--comment", comment, name); e != nil {
 		return i, e
 	}
 	return lookup()

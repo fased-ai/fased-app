@@ -75,6 +75,26 @@ func ReadProtectedApplicationOperation(ctx context.Context, owner int, id string
 	return r, err
 }
 
+// ReadProtectedPackageApplicationOperation reads the original operation over
+// the app's private IPC, using only this package instance's fixed authority.
+func ReadProtectedPackageApplicationOperation(ctx context.Context, owner int, location, instance, id string) (core.ApplicationOwnerView, error) {
+	a, err := maintenance.ValidatePackageProcess(owner, location, instance)
+	if err != nil || !update.IDOK(id) {
+		return core.ApplicationOwnerView{}, errors.New("exact protected package operation required")
+	}
+	root, err := PackageRoot(owner, location, instance)
+	if err != nil {
+		return core.ApplicationOwnerView{}, err
+	}
+	m, err := LoadPackageInstance(owner, root)
+	if err != nil || m.Location != location || m.ID != instance || VerifyPackageInstance(m) != nil {
+		return core.ApplicationOwnerView{}, errors.New("the original package instance is required")
+	}
+	var result core.ApplicationOwnerView
+	err = protectedAppPeer(ctx, a, m, maintenance.AppMaintenanceRequest{Action: "operation", OperationID: id}, &result)
+	return result, err
+}
+
 func protectedLivePreflight(ctx context.Context, a maintenance.Authority, r *update.MaintenanceRecord, m Manifest, appImage string, lock *os.File) (update.Preflight, error) {
 	probe := update.NewProbe()
 	var paused update.CorePauseReceipt

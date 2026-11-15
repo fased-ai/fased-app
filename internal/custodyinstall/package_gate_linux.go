@@ -3,9 +3,11 @@
 package custodyinstall
 
 import (
+	"context"
 	"errors"
 	"os"
 
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
@@ -60,6 +62,13 @@ func VerifyPackageStart(owner int, location, instance, role string) error {
 	if err != nil || actual != selected || VerifyPackageInstance(actual) != nil {
 		return errors.New("installed package pair differs from the selected recovery state")
 	}
+	if role == "app" && r.Application != nil && r.Phase != "completed" {
+		view, e := core.ReadApplicationOwnerOffline(context.Background(), root+"/app-state", r.OperationID)
+		if e != nil || view.Checkpoint == nil || view.View.Operation.OwnerLease != r.OwnerLease ||
+			update.SnapshotDigest("package-application-checkpoint", *view.Checkpoint) != update.SnapshotDigest("package-application-checkpoint", *r.Application) {
+			return errors.New("the original application checkpoint is unavailable; preserve recovery")
+		}
+	}
 	return verifyPackageStartFences(selected, r, readRoot)
 }
 
@@ -88,6 +97,19 @@ func packageStartSelection(r update.MaintenanceRecord, owner int, location, inst
 	if r.Phase == "idle" {
 		m, err := ValidateInitialPackageMaintenanceRecord(r, owner, location, instance)
 		return m, err
+	}
+	if r.OwnerLease != "" || r.Application != nil {
+		if base.Network != "" || !r.RecoveryEligible() || r.PreviousPackage == nil || !packagePairMatches(*r.PreviousPackage, base) || !packagePairMatches(*r.Package, target) ||
+			r.Application != nil && r.Application.PreviousEngineSHA256 != base.CoreHash {
+			return Manifest{}, errors.New("the original app-only package recovery is required")
+		}
+		if r.Start == "base" && r.Phase == "prepared" {
+			return base, nil
+		}
+		if r.Start == "target" && (r.Phase == "ready" || r.Phase == "completed") && r.Application != nil {
+			return target, nil
+		}
+		return Manifest{}, errors.New("package recovery must finish before starting the service")
 	}
 	if base.Network == "" && (r.Staged != nil || r.Recovery != nil || r.Installation != nil || r.Start == "target") {
 		return Manifest{}, errors.New("an unconfigured signer cannot supply a held package update")

@@ -43,7 +43,7 @@ func TestPackageAuthorityIsScopedToExactInstance(t *testing.T) {
 }
 
 func TestPackageRequestCannotSelectCommandsOrPaths(t *testing.T) {
-	for _, input := range []string{`{"version":1,"action":"status"}`, `{"version":1,"action":"initialize"}`, `{"version":1,"action":"owner-channel"}`, `{"version":1,"action":"candidate-stage","candidate":{"packetSha256":"` + strings.Repeat("a", 64) + `","scope":"fresh"}}`} {
+	for _, input := range []string{`{"version":1,"action":"status"}`, `{"version":1,"action":"initialize"}`, `{"version":1,"action":"owner-channel"}`, `{"version":1,"action":"provision","listen":"127.0.0.1:7331"}`, `{"version":1,"action":"candidate-stage","candidate":{"packetSha256":"` + strings.Repeat("a", 64) + `","scope":"fresh"}}`} {
 		if _, err := DecodePackageRequest([]byte(input)); err != nil {
 			t.Fatal(err)
 		}
@@ -55,6 +55,10 @@ func TestPackageRequestCannotSelectCommandsOrPaths(t *testing.T) {
 		`{"version":1,"action":"status","action":"update"}`,
 		`{"version":1,"action":"status","instance":"other"}`,
 		`{"version":1,"action":"owner-channel","path":"/etc/shadow"}`,
+		`{"version":1,"action":"provision","listen":"0.0.0.0:7331"}`,
+		`{"version":1,"action":"provision","listen":"127.0.0.1:80"}`,
+		`{"version":1,"action":"provision","listen":"127.0.0.1:07331"}`,
+		`{"version":1,"action":"provision","listen":"127.0.0.1:7331","path":"/tmp"}`,
 		`{"Version":1,"action":"status"}`,
 		`{"version":1,"Action":"status"}`,
 	} {

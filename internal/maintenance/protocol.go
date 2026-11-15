@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net"
+	"strconv"
 
 	"github.com/fased-ai/fased-app/internal/tailnet"
 	"github.com/fased-ai/fased-app/internal/update"
@@ -42,6 +44,7 @@ type PackageRequest struct {
 	Version   int               `json:"version"`
 	Action    string            `json:"action"`
 	Candidate *CandidateRequest `json:"candidate,omitempty"`
+	Listen    string            `json:"listen,omitempty"`
 }
 
 func DecodePackageRequest(data []byte) (PackageRequest, error) {
@@ -67,6 +70,12 @@ func DecodePackageRequest(data []byte) (PackageRequest, error) {
 		var candidateFields map[string]json.RawMessage
 		if len(fields) != 3 || fields["candidate"] == nil || update.StrictJSON(fields["candidate"], &candidateFields) != nil || len(candidateFields) != 2 || candidateFields["packetSha256"] == nil || candidateFields["scope"] == nil || r.Candidate == nil || !canonicalSHA256(r.Candidate.PacketSHA256) || (r.Candidate.Scope != "fresh" && r.Candidate.Scope != "update") {
 			return PackageRequest{}, errors.New("one exact native candidate required")
+		}
+	case "provision":
+		host, port, err := net.SplitHostPort(r.Listen)
+		n, numberErr := strconv.Atoi(port)
+		if len(fields) != 3 || fields["listen"] == nil || r.Candidate != nil || err != nil || host != "127.0.0.1" || numberErr != nil || n < 1024 || n > 65535 || strconv.Itoa(n) != port {
+			return PackageRequest{}, errors.New("one fixed Local listener is required")
 		}
 	default:
 		return PackageRequest{}, errors.New("invalid package maintenance request")

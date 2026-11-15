@@ -62,6 +62,21 @@ func PreparePackageMaintenanceCandidate(ctx context.Context, owner int, location
 	return prepareAttestedCandidate(ctx, o, filepath.Join(root, "candidate", admission.PacketSHA256), admission)
 }
 
+// PreparePackageMaintenanceNative fetches the public native release only
+// inside the exact instance's protected acquisition directory. The caller
+// must compare it with the already approved core operation before retaining it.
+func PreparePackageMaintenanceNative(ctx context.Context, owner int, location, instance string, o Options) (*Prepared, error) {
+	if _, err := maintenance.ValidatePackageProcess(owner, location, instance); err != nil {
+		return nil, err
+	}
+	root, err := update.PackageMaintenanceRoot(owner, location, instance)
+	if err != nil || filepath.Dir(o.Directory) != filepath.Join(root, "fased-app", "install") || o.Development || len(o.TLSCA) != 0 {
+		return nil, errors.New("fixed package acquisition required")
+	}
+	o.protectedOwner = owner
+	return prepare(ctx, o, false, true)
+}
+
 // DiscardIncompletePackageMaintenance removes only this exact verification
 // scratch directory. The original retained candidate and all journals remain.
 func DiscardIncompletePackageMaintenance(owner int, location, instance string, o Options) error {

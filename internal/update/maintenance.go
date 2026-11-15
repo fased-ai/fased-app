@@ -18,6 +18,10 @@ const JournalBasePackageFeature = "custody-journal-base-package-v1"
 // protected desktop artifact in the existing custody update journal.
 const NativeDesktopJournalFeature = "custody-journal-native-desktop-v1"
 
+// NativePackageJournalFeature binds OS package identity to the same protected
+// pair transaction. Both installed readers must refuse unknown journal fields.
+const NativePackageJournalFeature = "linux-package-journal-v1"
+
 const MaintenanceRoot = "/var/lib/fased-maintenance"
 const PackageInstanceLayout = "linux-package-v1"
 
@@ -201,34 +205,54 @@ type MaintenanceCommand struct {
 	Binding     *InstallBinding   `json:"binding,omitempty"`
 }
 
+// ApplicationCheckpoint describes the actual app-owned metadata backup. It
+// contains no signer state and cannot create or clear a wallet recovery hold.
+type ApplicationCheckpoint struct {
+	PreviousEngineSHA256 string           `json:"previousEngineSha256"`
+	Version              int              `json:"version"`
+	OperationID          string           `json:"operationId"`
+	ManifestSHA256       string           `json:"manifestSha256"`
+	Pause                CorePauseReceipt `json:"pause"`
+	Snapshot             MetadataSnapshot `json:"snapshot"`
+}
+
 // MaintenanceRecord is the helper's single durable deployment/recovery journal.
 // Component identities and the financial installation hold remain independent.
 type MaintenanceRecord struct {
-	Version         int                  `json:"version"`
-	Owner           int                  `json:"owner"`
-	OperationID     string               `json:"operationId"`
-	Phase           string               `json:"phase"`
-	Start           string               `json:"start"`
-	Base            json.RawMessage      `json:"base"`
-	Target          json.RawMessage      `json:"target,omitempty"`
-	Approval        *MaintenanceApproval `json:"approval,omitempty"`
-	Staged          *Intent              `json:"staged,omitempty"`
-	Recovery        *RecoveryIndex       `json:"recovery,omitempty"`
-	Installation    *Installation        `json:"installation,omitempty"`
-	Package         *MaintenancePackage  `json:"package,omitempty"`
-	PreviousPackage *MaintenancePackage  `json:"previousPackage,omitempty"`
-	Bootstrap       bool                 `json:"bootstrap,omitempty"`
+	Version         int                    `json:"version"`
+	Owner           int                    `json:"owner"`
+	OperationID     string                 `json:"operationId"`
+	Phase           string                 `json:"phase"`
+	Start           string                 `json:"start"`
+	Base            json.RawMessage        `json:"base"`
+	Target          json.RawMessage        `json:"target,omitempty"`
+	Approval        *MaintenanceApproval   `json:"approval,omitempty"`
+	Staged          *Intent                `json:"staged,omitempty"`
+	Recovery        *RecoveryIndex         `json:"recovery,omitempty"`
+	Installation    *Installation          `json:"installation,omitempty"`
+	Package         *MaintenancePackage    `json:"package,omitempty"`
+	PreviousPackage *MaintenancePackage    `json:"previousPackage,omitempty"`
+	Bootstrap       bool                   `json:"bootstrap,omitempty"`
+	Application     *ApplicationCheckpoint `json:"applicationCheckpoint,omitempty"`
+	OwnerLease      string                 `json:"ownerLease,omitempty"`
 }
 
 type MaintenancePackage struct {
-	Version          string      `json:"version"`
-	Source           string      `json:"source"`
-	Sequence         uint64      `json:"sequence,string"`
-	ReleaseSHA256    string      `json:"releaseSha256"`
-	ProvenanceSHA256 string      `json:"provenanceSha256"`
-	DevelopmentOnly  bool        `json:"developmentOnly"`
-	Components       []Component `json:"components"`
-	NativeDesktop    *Artifact   `json:"nativeDesktop,omitempty"`
+	Version          string         `json:"version"`
+	Source           string         `json:"source"`
+	Sequence         uint64         `json:"sequence,string"`
+	ReleaseSHA256    string         `json:"releaseSha256"`
+	ProvenanceSHA256 string         `json:"provenanceSha256"`
+	DevelopmentOnly  bool           `json:"developmentOnly"`
+	Components       []Component    `json:"components"`
+	NativeDesktop    *Artifact      `json:"nativeDesktop,omitempty"`
+	NativePackage    *NativePackage `json:"nativePackage,omitempty"`
+}
+
+type NativePackage struct {
+	Family          string   `json:"family"`
+	Artifact        Artifact `json:"artifact"`
+	InstallerSHA256 string   `json:"installerSha256"`
 }
 
 // RecoveryEligible recognizes only an already admitted operation. It never
@@ -236,6 +260,9 @@ type MaintenancePackage struct {
 func (r MaintenanceRecord) RecoveryEligible() bool {
 	if r.Version != 1 || r.Owner <= 0 || !IDOK(r.OperationID) || r.Package == nil || r.Package.Validate() != nil {
 		return false
+	}
+	if r.OwnerLease != "" || r.Application != nil {
+		return r.applicationRecoveryEligible()
 	}
 	requiresHold := false
 	switch r.Phase {
@@ -272,12 +299,60 @@ func (r MaintenanceRecord) RecoveryEligible() bool {
 	return true
 }
 
+// applicationRecoveryEligible recognizes an app-only checkpoint; it does not
+// prove the real signer is empty or the saved database image is intact. The
+// installed controller must independently verify both before replacement.
+func (r MaintenanceRecord) applicationRecoveryEligible() bool {
+	if r.OwnerLease != r.OperationID || r.PreviousPackage == nil || r.PreviousPackage.Validate() != nil || r.Package.Sequence <= r.PreviousPackage.Sequence ||
+		r.PreviousPackage.NativePackage == nil || r.Package.NativePackage == nil || r.PreviousPackage.NativePackage.Family != r.Package.NativePackage.Family ||
+		r.Approval != nil || r.Staged != nil || r.Recovery != nil || r.Installation != nil || r.Bootstrap {
+		return false
+	}
+	if r.Application == nil {
+		return r.Phase == "prepared" && r.Start == "base"
+	}
+	c := r.Application
+	p := c.Pause
+	if c.Version != 1 || c.OperationID != r.OperationID || c.ManifestSHA256 != r.Package.ReleaseSHA256 || !hashOK(c.PreviousEngineSHA256) ||
+		p.Version != 1 || p.State != "paused" || !IDOK(p.PauseID) || p.Request == nil || !ValidPauseRequest(*p.Request) ||
+		p.Request.IntentID != r.OperationID || p.Request.Sequence != r.Package.Sequence || p.Request.ManifestSHA256 != r.Package.ReleaseSHA256 ||
+		!IDOK(p.Core.BootID) || !IDOK(p.Core.ProbeID) || !SameCoreMetadata(p.Core, p.Request.Expected) ||
+		!hashOK(c.Snapshot.SHA256) || c.Snapshot.File != "application-"+c.Snapshot.SHA256+".sqlite" || c.Snapshot.Size <= 0 || c.Snapshot.Size > MaxMetadataBackup {
+		return false
+	}
+	if !applicationCheckpointReadable(*r.Package, p.Core.State) {
+		return false
+	}
+	switch r.Phase {
+	case "held", "replacing":
+		return r.Start == ""
+	case "ready", "completed":
+		return r.Start == "target"
+	default:
+		return false
+	}
+}
+
+func applicationCheckpointReadable(p MaintenancePackage, state State) bool {
+	for _, component := range p.Components {
+		if component.Contract.Component != "core" {
+			continue
+		}
+		for _, support := range component.Contract.State {
+			if support.Name == "core-db" {
+				return state.Name == "core-db" && hashOK(state.Anchor) && stateFeaturesOK(state.Features) && support.Versions.has(state.Version) && containsAll(support.Features, state.Features)
+			}
+		}
+	}
+	return false
+}
+
 // ValidateIdle checks only the shape of a protected initial journal. Its
 // caller must also bind the deployment and authenticate the package.
 func (r MaintenanceRecord) ValidateIdle() error {
 	if r.Version != 1 || r.Owner <= 0 || !IDOK(r.OperationID) || r.Phase != "idle" || r.Start != "base" ||
 		len(r.Base) == 0 || !bytes.Equal(r.Base, r.Target) || r.Package == nil || r.PreviousPackage != nil ||
-		r.Approval != nil || r.Staged != nil || r.Recovery != nil || r.Installation != nil || r.Bootstrap {
+		r.Approval != nil || r.Staged != nil || r.Recovery != nil || r.Installation != nil || r.Bootstrap || r.Application != nil || r.OwnerLease != "" {
 		return errors.New("invalid initial custody maintenance state")
 	}
 	return r.Package.Validate()
@@ -337,6 +412,19 @@ func (p MaintenancePackage) Validate() error {
 		for _, c := range p.Components {
 			if !slices.Contains(c.Contract.Features, NativeDesktopJournalFeature) {
 				return errors.New("both installed readers must understand the protected desktop journal")
+			}
+		}
+	}
+	if p.NativePackage != nil {
+		n := p.NativePackage
+		if (n.Family != "apt" && n.Family != "dnf") || n.Artifact.Size <= 0 || n.Artifact.Size > 128<<20 || !hashOK(n.Artifact.SHA256) || !hashOK(n.InstallerSHA256) ||
+			(n.Family == "apt" && n.Artifact.File != "fased-app-linux-amd64.deb" && n.Artifact.File != "fased-app-linux-arm64.deb" ||
+				n.Family == "dnf" && n.Artifact.File != "fased-app-linux-amd64.rpm" && n.Artifact.File != "fased-app-linux-arm64.rpm") {
+			return errors.New("invalid authenticated Linux package")
+		}
+		for _, c := range p.Components {
+			if !slices.Contains(c.Contract.Features, NativePackageJournalFeature) {
+				return errors.New("both readers must understand the native package journal")
 			}
 		}
 	}

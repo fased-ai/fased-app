@@ -155,6 +155,16 @@ func maintenancePeerCommand(args []string, in io.Reader, out io.Writer, app bool
 	if successor != nil && (q.OperationID != successor.OperationID || q.Action != "operation" && q.Action != "pause" && q.Action != "reconcile") {
 		return errors.New("successor is limited to its held operation")
 	}
+	if q.Action == "application-offline" {
+		if err = validatePackageApplicationPeerRequest(location, instance, cfg, q, readRecord); err != nil {
+			return err
+		}
+		view, err := core.ReadApplicationOwnerOffline(ctx, root+"/app-state", q.OperationID)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(view)
+	}
 	client, err := core.NewClient(ctx, root+"/app-state")
 	if err != nil {
 		return err
@@ -164,6 +174,38 @@ func maintenancePeerCommand(args []string, in io.Reader, out io.Writer, app bool
 		return err
 	}
 	switch q.Action {
+	case "application-claim", "application-prepare", "application-finish":
+		if err = validatePackageApplicationPeerRequest(location, instance, cfg, q, readRecord); err != nil {
+			return err
+		}
+		record, err := readRecord()
+		if err != nil {
+			return err
+		}
+		command := core.ApplicationOwnerCommand{ID: q.OperationID, Lease: record.OwnerLease}
+		switch q.Action {
+		case "application-claim":
+			command.Action = "claim"
+		case "application-prepare":
+			command.Action = "prepare"
+		case "application-finish":
+			command.Action = "finish"
+			var engine string
+			for _, component := range record.Package.Components {
+				if component.Contract.Component == "core" {
+					engine = component.Artifact.SHA256
+				}
+			}
+			command.Receipt = &core.ApplicationUpdateReceipt{ID: q.OperationID, Sequence: record.Package.Sequence, ManifestSHA256: record.Package.ReleaseSHA256, EngineSHA256: engine, Phase: "completed"}
+		}
+		var view core.ApplicationOwnerView
+		if err = client.Do(ctx, http.MethodPost, "/api/v1/updates/application/owner", command, &view); err != nil {
+			return err
+		}
+		if view.View.Operation.ID != q.OperationID || view.View.Operation.OwnerLease != record.OwnerLease {
+			return errors.New("application operation or lease changed")
+		}
+		return json.NewEncoder(out).Encode(view)
 	case "inventory":
 		if !update.IDOK(q.ProbeID) || q.Pause != nil {
 			return errors.New("actual inventory challenge required")
@@ -217,6 +259,36 @@ func maintenancePeerCommand(args []string, in io.Reader, out io.Writer, app bool
 	default:
 		return errors.New("unsupported app maintenance metadata")
 	}
+}
+
+// The app peer cannot turn the metadata channel into a general owner command.
+// It derives the lease and outcome from the exact protected package journal.
+func validatePackageApplicationPeerRequest(location, instance string, cfg signer.Config, q maintenance.AppMaintenanceRequest, readRecord func() (update.MaintenanceRecord, error)) error {
+	if location == "" || instance != cfg.SignerID || cfg.Network != "" || !update.IDOK(q.OperationID) || q.Pause != nil || q.ProbeID != "" || readRecord == nil {
+		return errors.New("the original empty-signer package operation is required")
+	}
+	r, err := readRecord()
+	if err != nil || r.OperationID != q.OperationID || r.Owner != cfg.OwnerUID || !r.RecoveryEligible() || r.OwnerLease != q.OperationID {
+		return errors.New("protected application recovery record differs")
+	}
+	base, err := update.PackageManifestIdentityFromJSON(r.Base)
+	if err != nil || base.ID != instance || base.Location != location || base.Owner != cfg.OwnerUID || base.Network != "" || base.App.UID != cfg.AppUID || base.Signer.UID != cfg.SignerUID {
+		return errors.New("package application identity differs")
+	}
+	switch q.Action {
+	case "application-claim", "application-prepare":
+		if r.Phase != "prepared" || r.Start != "base" || r.Application != nil {
+			return errors.New("only the original prepared application may be claimed")
+		}
+	case "application-offline":
+	case "application-finish":
+		if r.Phase != "ready" || r.Start != "target" || r.Application == nil {
+			return errors.New("the original target checkpoint is required")
+		}
+	default:
+		return errors.New("unsupported application recovery action")
+	}
+	return nil
 }
 
 // A successor can use the existing owner socket only for the protected

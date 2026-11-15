@@ -106,10 +106,23 @@ func RemoveProtected(path, hash string, mode os.FileMode) error {
 }
 
 func CopyProtected(source, target string, mode os.FileMode, hash string, size int64, previous string) error {
+	return copyProtectedModes(source, target, mode, mode, hash, size, previous)
+}
+
+// CopyProtectedExecutable installs the pinned helper from its fixed read-only
+// image with the executable mode required by the per-instance service gate.
+func CopyProtectedExecutable(source, target, hash string, size int64) error {
+	if filepath.Base(source) != "fased-install" || filepath.Base(target) != "fased-install" {
+		return errors.New("fixed maintenance executable required")
+	}
+	return copyProtectedModes(source, target, 0555, 0755, hash, size, "")
+}
+
+func copyProtectedModes(source, target string, sourceMode, mode os.FileMode, hash string, size int64, previous string) error {
 	if os.Getuid() != 0 || os.Geteuid() != 0 || size <= 0 || size > 128<<20 {
 		return errors.New("bounded protected copy required")
 	}
-	in, err := openProtected(source, size, mode)
+	in, err := openProtected(source, size, sourceMode)
 	if err != nil {
 		return err
 	}
@@ -204,7 +217,7 @@ func resumeEnrollmentCopy(in, dir *os.File, name, expected string, size int64, u
 // helper, signer, or native owner-window copy. It is not an IPC path selector.
 func CopyProtectedBounded(source, target string, mode os.FileMode, expected string, size int64) error {
 	name := filepath.Base(target)
-	if name != "fased-install" && name != "fased-signer" && name != "fased-desktop" {
+	if name != "fased-install" && name != "fased-app" && name != "fased-signer" && name != "fased-desktop" {
 		return errors.New("fixed protected copy target required")
 	}
 	if os.Getuid() != 0 || os.Geteuid() != 0 || (mode != 0555 && mode != 0755) || size <= 0 || size > 128<<20 {

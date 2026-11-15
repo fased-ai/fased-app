@@ -128,8 +128,11 @@ func stageProtectedPackage(ctx context.Context, a maintenance.Authority, m Manif
 	}
 	var err error
 	if m.Layout == PackageLayout {
-		if bootstrap || m.Network == "" {
-			return errors.New("empty-signer package update requires the application checkpoint")
+		if bootstrap {
+			return errors.New("package update cannot use legacy bootstrap")
+		}
+		if err = validateNativePackageUpdateScope(m, p, nativePackageManagerConnected); err != nil {
+			return err
 		}
 		if p.Validate() != nil {
 			return errors.New("authenticated package is required")
@@ -159,13 +162,21 @@ func stageProtectedPackage(ctx context.Context, a maintenance.Authority, m Manif
 			return err
 		}
 	}
-	var live signer.Response
-	live, err = protectedOwnerPeer(ctx, a, m, signer.Request{Action: "fixture-update-inventory", ProbeID: update.NewProbe()})
-	if err != nil || live.UpdateInventory == nil {
-		return errors.Join(err, errors.New("actual predecessor signer inventory required before migration"))
-	}
-	if live.UpdateInventory.ActiveIntentID != "" {
-		return errors.New("original signer intent requires its own recovery; no new update was admitted")
+	if m.Layout == PackageLayout && m.Network == "" {
+		// This only admits the signed files into the prepared journal. Actual
+		// replacement still requires the real application checkpoint and a
+		// second stopped/empty-signer check under the same instance lock.
+		if err = VerifyUnconfiguredPackageSigner(ctx, m); err != nil {
+			return err
+		}
+	} else {
+		live, e := protectedOwnerPeer(ctx, a, m, signer.Request{Action: "fixture-update-inventory", ProbeID: update.NewProbe()})
+		if e != nil || live.UpdateInventory == nil {
+			return errors.Join(e, errors.New("actual predecessor signer inventory required before migration"))
+		}
+		if live.UpdateInventory.ActiveIntentID != "" {
+			return errors.New("original signer intent requires its own recovery; no new update was admitted")
+		}
 	}
 	if m.Location != a.Profile || m.Version != 3 {
 		return errors.New("matching ordinary Local/Remote custody required")
@@ -245,8 +256,10 @@ func stageProtectedPackage(ctx context.Context, a maintenance.Authority, m Manif
 				return errors.New("custody release must advance the authenticated installed pair")
 			}
 			base, target, e := protectedRecordManifests(old)
+			completedEmpty := old.Phase == "completed" && m.Layout == PackageLayout && m.Network == "" && old.Application != nil && old.RecoveryEligible()
+			completedSigner := old.Phase == "completed" && old.Installation != nil && old.Installation.Phase == "completed" && update.ValidInstallation(*old.Installation)
 			if e != nil || old.Phase == "idle" && (base != m || target != m) ||
-				old.Phase == "completed" && (old.Start != "target" || target != m || old.Installation == nil || old.Installation.Phase != "completed" || !update.ValidInstallation(*old.Installation)) ||
+				old.Phase == "completed" && (old.Start != "target" || target != m || !completedEmpty && !completedSigner) ||
 				old.Phase == "refused" && (old.Start != "base" || base != m) {
 				return errors.New("installed custody pair differs from the prior journal")
 			}
@@ -309,6 +322,25 @@ func stageProtectedPackage(ctx context.Context, a maintenance.Authority, m Manif
 	return verifyProtectedLoadedUnits(ctx, a, m)
 }
 
+// New native-package operations may not enter the older key-bearing updater:
+// that path does not yet replace the OS package. Existing held operations keep
+// their original recovery path; this check applies only before staging.
+func validateNativePackageUpdateScope(m Manifest, p update.MaintenancePackage, enabled bool) error {
+	if m.Layout != PackageLayout {
+		return nil
+	}
+	if m.Network == "" && p.NativePackage == nil {
+		return errors.New("the original native package is required")
+	}
+	if (m.Network == "" || p.NativePackage != nil) && !enabled {
+		return errors.New("native package-manager recovery is not yet connected; preserve the installation")
+	}
+	if m.Network != "" && p.NativePackage != nil {
+		return errors.New("key-bearing native package updates require signer and package recovery")
+	}
+	return nil
+}
+
 func unheldCorePause(p update.CorePauseReceipt, probe string) bool {
 	if p.Version != 1 || p.Core.Version != 1 || p.Core.ProbeID != probe || !update.IDOK(probe) || !update.IDOK(p.Core.BootID) {
 		return false
@@ -353,6 +385,27 @@ func DescribeProtectedPackagePair(ctx context.Context, owner int, location, inst
 		return nil, errors.New("exact protected package pair required")
 	}
 	return describeProtectedPair(ctx, m, root, version, source, readMaintenanceRole, maintenance.ProtectedDigest)
+}
+
+// DescribeProtectedPackageUpdatePair reads only the fixed staged pair for the
+// original operation. Both programs run under their ordinary service UIDs.
+func DescribeProtectedPackageUpdatePair(ctx context.Context, owner int, location, instance, operation, version, source string) ([]update.Component, error) {
+	if _, err := maintenance.ValidatePackageProcess(owner, location, instance); err != nil || !update.IDOK(operation) {
+		return nil, errors.New("exact protected package update required")
+	}
+	root, err := PackageRoot(owner, location, instance)
+	if err != nil {
+		return nil, err
+	}
+	m, err := LoadPackageInstance(owner, root)
+	if err != nil || m.Location != location || m.ID != instance || VerifyPackageInstance(m) != nil {
+		return nil, errors.New("the original protected package instance is required")
+	}
+	dir, err := update.PackageMaintenanceDirectory(owner, location, instance, operation)
+	if err != nil {
+		return nil, err
+	}
+	return describeProtectedPair(ctx, m, dir, version, source, readMaintenanceRole, maintenance.ProtectedDigest)
 }
 
 // AttachProtectedDesktop finishes the same fresh Local enrollment before its
@@ -895,10 +948,7 @@ func runProtectedUpdateScoped(ctx context.Context, a maintenance.Authority, owne
 		return errors.New("the original authenticated package transition is required")
 	}
 	if location != "" && base.Network == "" {
-		// The ordinary signer cannot produce a hold before wallet setup. Never
-		// stop services or publish a fence until the empty-signer checkpoint
-		// path is implemented; preserve the running installation instead.
-		return errors.New("empty-signer package recovery is not yet available")
+		return runEmptyPackageUpdate(ctx, a, r, base, target, boot)
 	}
 	if successorImage == "" {
 		if location != "" {
@@ -1112,9 +1162,18 @@ func protectedInstanceUnits(m Manifest) []string {
 
 func instanceWorkerUnit(m Manifest, id string) string {
 	if m.Layout == PackageLayout {
-		return fmt.Sprintf("fased-package-maintenance-%d-%s-%s@%s.service", m.Owner, m.Location, m.ID, id)
+		unit, _ := PackageWorkerUnit(m.Owner, m.Location, m.ID, id)
+		return unit
 	}
 	return protectedWorkerUnit(m.Owner, id)
+}
+
+// PackageWorkerUnit identifies only the existing fixed instance worker.
+func PackageWorkerUnit(owner int, location, instance, operation string) (string, error) {
+	if _, err := PackageRoot(owner, location, instance); err != nil || !update.IDOK(operation) {
+		return "", errors.New("exact package worker required")
+	}
+	return fmt.Sprintf("fased-package-maintenance-%d-%s-%s@%s.service", owner, location, instance, operation), nil
 }
 
 func validateProtectedUpdateRecord(r update.MaintenanceRecord, id string) error {

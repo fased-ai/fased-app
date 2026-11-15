@@ -16,8 +16,12 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/bootstrap"
+	"github.com/fased-ai/fased-app/internal/bundle"
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/hostplatform"
 	"github.com/fased-ai/fased-app/internal/maintenance"
+	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -40,6 +44,10 @@ func maintenancePackageStageCandidate(ctx context.Context, owner int, location, 
 	if err == nil {
 		if old.Scope == "fresh" && q.Scope == "update" {
 			if err = retireFreshPackageCandidate(ctx, a, location, instance, old); err != nil {
+				return empty, err
+			}
+		} else if old.Scope == "update" && q.Scope == "update" && old.PacketSHA256 != q.PacketSHA256 {
+			if err = retireCompletedPackageCandidate(ctx, a, location, instance, old); err != nil {
 				return empty, err
 			}
 		} else if old.PacketSHA256 != q.PacketSHA256 || old.Scope != q.Scope {
@@ -179,6 +187,28 @@ func retireFreshPackageCandidate(ctx context.Context, a maintenance.Authority, l
 	if err != nil || !matchingPackageCandidate(receipt, identity, a.ImageSHA256) || identity.Source != installed.Source || identity.ProvenanceSHA256 != installed.ProvenanceSHA256 {
 		return errors.New("fresh signed candidate differs; preserve it")
 	}
+	return archivePackageCandidate(a, location, instance, receipt, r)
+}
+
+// A completed update can release its candidate slot only after the exact
+// installed target and original protected record are independently checked.
+func retireCompletedPackageCandidate(ctx context.Context, a maintenance.Authority, location, instance string, receipt maintenance.CandidateReceipt) error {
+	installed, actual, err := packageCandidateBaseline(a.Owner, location, instance, nil)
+	if err != nil {
+		return err
+	}
+	r, err := update.ReadPackageMaintenanceRecord(a.Owner, location, instance)
+	if err != nil || completedPackageCandidateMatches(a, location, instance, receipt, r) != nil || actual.CoreHash != receipt.EngineSHA256 || installed.Sequence != receipt.Sequence || installed.ReleaseSHA256 != receipt.ReleaseSHA256 {
+		return errors.New("the original completed package must be preserved")
+	}
+	identity, err := verifyPackageCandidate(ctx, a.Owner, location, instance, receipt.PacketSHA256)
+	if err != nil || !matchingPackageCandidate(receipt, identity, a.ImageSHA256) || identity.Source != installed.Source || identity.ProvenanceSHA256 != installed.ProvenanceSHA256 {
+		return errors.New("completed candidate differs from its signed package")
+	}
+	return archivePackageCandidate(a, location, instance, receipt, r)
+}
+
+func archivePackageCandidate(a maintenance.Authority, location, instance string, receipt maintenance.CandidateReceipt, r update.MaintenanceRecord) error {
 	root, err := update.PackageMaintenanceRoot(a.Owner, location, instance)
 	if err != nil {
 		return err
@@ -201,6 +231,27 @@ func retireFreshPackageCandidate(ctx context.Context, a maintenance.Authority, l
 		}
 	}
 	return maintenance.RemoveProtected(filepath.Join(root, "candidate.json"), receiptHash, 0644)
+}
+
+func completedPackageCandidateMatches(a maintenance.Authority, location, instance string, receipt maintenance.CandidateReceipt, r update.MaintenanceRecord) error {
+	var base, target custodyinstall.Manifest
+	if a.Owner != receipt.Owner || a.Profile != location || receipt.Validate() != nil || receipt.Scope != "update" || r.Owner != a.Owner || r.Phase != "completed" || r.Start != "target" || !r.RecoveryEligible() || r.Package == nil || r.PreviousPackage == nil ||
+		update.StrictJSON(r.Base, &base) != nil || update.StrictJSON(r.Target, &target) != nil || base.ID != instance || target.ID != instance || base.Location != location || target.Location != location ||
+		!receipt.MatchesBase(a.Owner, r.PreviousPackage.Sequence, r.PreviousPackage.ReleaseSHA256, instance, update.SnapshotDigest("candidate-base-manifest:v1", base)) ||
+		receipt.PacketSHA256 != receipt.ReleaseSHA256 || receipt.ReleaseSHA256 != r.Package.ReleaseSHA256 || receipt.Sequence != r.Package.Sequence || receipt.ProductVersion != r.Package.Version || receipt.EngineSHA256 != target.CoreHash {
+		return errors.New("completed candidate differs from the protected update")
+	}
+	if r.Application == nil && (r.Installation == nil || r.Installation.Phase != "completed" || !update.ValidInstallation(*r.Installation)) {
+		return errors.New("completed candidate has no original completion")
+	}
+	if r.Package.NativePackage == nil || r.Package.NativePackage.InstallerSHA256 != receipt.InstallerSHA256 {
+		return errors.New("completed package installer identity differs")
+	}
+	selected, err := custodyinstall.SelectProtectedPackageStart(r, a.Owner, location, instance)
+	if err != nil || selected != target {
+		return errors.New("completed package target is not the recorded deployment")
+	}
+	return nil
 }
 
 func freshPackageCandidateMatches(a maintenance.Authority, location, instance string, receipt maintenance.CandidateReceipt, r update.MaintenanceRecord) error {
@@ -241,16 +292,16 @@ func verifyRetainedPackageInputs(root, parent string, a maintenance.Authority, l
 		}
 		receiptBytes, err := read(filepath.Join(archive, packet+".receipt.json"), 8192)
 		var receipt maintenance.CandidateReceipt
-		if err != nil || update.StrictJSON(receiptBytes, &receipt) != nil || receipt.PacketSHA256 != packet {
+		if err != nil || update.StrictJSON(receiptBytes, &receipt) != nil || receipt.Validate() != nil || receipt.PacketSHA256 != packet {
 			return errors.New("unclassified candidate receipt; preserve it")
 		}
 		journalBytes, err := read(filepath.Join(archive, packet+".journal.json"), 256<<10)
 		var journal update.MaintenanceRecord
-		if err != nil || update.StrictJSONBounded(journalBytes, &journal, 256<<10) != nil || freshPackageCandidateMatches(a, location, instance, receipt, journal) != nil {
+		if err != nil || update.StrictJSONBounded(journalBytes, &journal, 256<<10) != nil || (receipt.Scope == "fresh" && freshPackageCandidateMatches(a, location, instance, receipt, journal) != nil) || (receipt.Scope == "update" && completedPackageCandidateMatches(a, location, instance, receipt, journal) != nil) {
 			return errors.New("unclassified candidate history; preserve it")
 		}
 		reservation, err := read(filepath.Join(parent, packet+".reservation.json"), 8192)
-		expected, _ := candidateDocument(maintenance.CandidateRequest{PacketSHA256: packet, Scope: "fresh"})
+		expected, _ := candidateDocument(maintenance.CandidateRequest{PacketSHA256: packet, Scope: receipt.Scope})
 		info, statErr := os.Lstat(filepath.Join(parent, packet))
 		if err != nil || !bytes.Equal(reservation, expected) || statErr != nil || !protectedCandidateDirectory(info) {
 			return errors.New("unclassified retained candidate; preserve it")
@@ -302,20 +353,7 @@ func packageCandidateOptions(owner int, location, instance string) (bootstrap.Op
 
 func verifyPackageCandidate(ctx context.Context, owner int, location, instance, packet string) (bootstrap.PackageMaintenanceIdentity, error) {
 	var empty bootstrap.PackageMaintenanceIdentity
-	o, err := packageCandidateOptions(owner, location, instance)
-	if err != nil {
-		return empty, err
-	}
-	o.Directory = filepath.Join(filepath.Dir(o.Directory), "candidate-verification")
-	if _, err = os.Lstat(o.Directory); err == nil {
-		if err = bootstrap.DiscardIncompletePackageMaintenance(owner, location, instance, o); err != nil {
-			return empty, err
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return empty, err
-	}
-	admission := bootstrap.CandidateAdmission{PacketSHA256: packet, OperationID: update.NewProbe(), BaselineSHA256: packet, ExpiresAt: time.Now().Add(15 * time.Minute).Unix()}
-	p, err := bootstrap.PreparePackageMaintenanceCandidate(ctx, owner, location, instance, o, admission)
+	p, err := preparePackageCandidate(ctx, owner, location, instance, packet)
 	if err != nil {
 		return empty, err
 	}
@@ -324,8 +362,175 @@ func verifyPackageCandidate(ctx context.Context, owner int, location, instance, 
 	return identity, errors.Join(identityErr, discardErr)
 }
 
+// The caller must discard this root-private verification copy after consuming
+// the independently verified candidate. The retained candidate is unchanged.
+func preparePackageCandidate(ctx context.Context, owner int, location, instance, packet string) (*bootstrap.Prepared, error) {
+	o, err := packageCandidateOptions(owner, location, instance)
+	if err != nil {
+		return nil, err
+	}
+	o.Directory = filepath.Join(filepath.Dir(o.Directory), "candidate-verification")
+	if _, err = os.Lstat(o.Directory); err == nil {
+		if err = bootstrap.DiscardIncompletePackageMaintenance(owner, location, instance, o); err != nil {
+			return nil, err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	admission := bootstrap.CandidateAdmission{PacketSHA256: packet, OperationID: update.NewProbe(), BaselineSHA256: packet, ExpiresAt: time.Now().Add(15 * time.Minute).Unix()}
+	return bootstrap.PreparePackageMaintenanceCandidate(ctx, owner, location, instance, o, admission)
+}
+
 func matchingPackageCandidate(r maintenance.CandidateReceipt, i bootstrap.PackageMaintenanceIdentity, helper string) bool {
 	return r.Validate() == nil && r.ReleaseSHA256 == i.ReleaseSHA256 && r.PacketSHA256 == i.ReleaseSHA256 && r.Sequence == i.Sequence && r.ProductVersion == i.Version && r.EngineSHA256 == i.Core.SHA256 && r.InstallerSHA256 == i.InstallerSHA256 && r.Target == i.Target && (r.Scope != "fresh" || i.InstallerSHA256 == helper)
+}
+
+func nativePackageForHost(identity bootstrap.PackageMaintenanceIdentity) (*update.NativePackage, error) {
+	p, err := hostplatform.Current()
+	if err != nil {
+		return nil, err
+	}
+	var artifact update.Artifact
+	switch p.Family {
+	case "apt":
+		artifact = identity.Deb
+	case "dnf":
+		artifact = identity.RPM
+	default:
+		return nil, errors.New("unsupported Linux package family")
+	}
+	return &update.NativePackage{Family: p.Family, Artifact: artifact, InstallerSHA256: identity.InstallerSHA256}, nil
+}
+
+// A protected worker may only acquire the release selected by the original
+// manual core operation and the candidate admitted for this exact instance.
+func approvedPackageCandidate(view core.ApplicationOwnerView, operation string, installed update.MaintenancePackage, manifest custodyinstall.Manifest, candidate maintenance.CandidateReceipt, now time.Time) (maintenance.CustodyUpdateRequest, error) {
+	q, release, manual, err := approvedCustodyOperation(view, operation, now)
+	if err != nil || !manual || view.View.Operation.Automatic || release == nil || now.Unix() >= candidate.ExpiresAt ||
+		!candidate.MatchesBase(manifest.Owner, installed.Sequence, installed.ReleaseSHA256, manifest.ID, update.SnapshotDigest("candidate-base-manifest:v1", manifest)) ||
+		candidate.Sequence != release.Sequence || candidate.ReleaseSHA256 != release.ManifestSHA256 || candidate.EngineSHA256 != release.EngineSHA256 || candidate.ProductVersion != release.Version || candidate.Target != release.Target {
+		return maintenance.CustodyUpdateRequest{}, errors.New("the original manual package operation and candidate must match")
+	}
+	return q, nil
+}
+
+// maintenancePackageAcquire is called under the instance lock by the fixed
+// worker. It re-verifies the retained candidate before copying either member of
+// the pair, then stages the existing durable update journal.
+func maintenancePackageAcquire(ctx context.Context, a maintenance.Authority, location, instance, operation string) (result error) {
+	installed, manifest, err := packageCandidateBaseline(a.Owner, location, instance, nil)
+	if err != nil || installed == nil {
+		return errors.Join(err, errors.New("the original installed package is required"))
+	}
+	view, err := custodyinstall.ReadProtectedPackageApplicationOperation(ctx, a.Owner, location, instance, operation)
+	if err != nil {
+		return err
+	}
+	_, expected, manual, err := approvedCustodyOperation(view, operation, time.Now())
+	if err != nil || !manual || view.View.Operation.Automatic || expected == nil {
+		return errors.New("the original manual application operation is required")
+	}
+	receipt, err := maintenance.ReadPackageCandidateReceipt(a.Owner, location, instance)
+	if errors.Is(err, os.ErrNotExist) || err == nil && packageNeedsAcquisition(receipt, *expected) {
+		receipt, err = acquirePublicPackageCandidate(ctx, a, location, instance, *expected)
+	}
+	if err != nil {
+		return errors.Join(err, errors.New("the approved package candidate is unavailable"))
+	}
+	q, err := approvedPackageCandidate(view, operation, *installed, manifest, receipt, time.Now())
+	if err != nil {
+		return err
+	}
+	if compiledFixtureSourceAllowed != nil && manifest.Provenance != signer.ControlledCustodyProfile {
+		return errors.New("the real-host fixture cannot update owner-key custody")
+	}
+	p, err := preparePackageCandidate(ctx, a.Owner, location, instance, receipt.PacketSHA256)
+	if err != nil {
+		return err
+	}
+	defer func() { result = errors.Join(result, p.DiscardMaintenance()) }()
+	identity, err := p.PackageIdentity()
+	if err != nil || !matchingPackageCandidate(receipt, identity, a.ImageSHA256) || identity.Sequence != q.Sequence || identity.ReleaseSHA256 != q.ReleaseSHA256 {
+		return errors.New("the independently verified package differs from the original operation")
+	}
+	dir, err := update.PackageMaintenanceDirectory(a.Owner, location, instance, operation)
+	if err != nil {
+		return err
+	}
+	if err = maintenance.EnsureProtectedDirectory(filepath.Dir(dir)); err != nil {
+		return err
+	}
+	if err = maintenance.EnsureProtectedDirectory(dir); err != nil {
+		return err
+	}
+	engine, _ := bundle.Names()
+	corePath := filepath.Join(p.Report().BundleDirectory, engine)
+	f, err := update.OpenProtected(corePath, identity.Core.Bytes, 0700)
+	if err != nil {
+		return err
+	}
+	if err = errors.Join(f.Chmod(0755), f.Sync(), f.Close()); err != nil {
+		return err
+	}
+	if err = maintenance.CopyProtectedBounded(corePath, filepath.Join(dir, "fased-app"), 0755, identity.Core.SHA256, identity.Core.Bytes); err != nil {
+		return err
+	}
+	if err = maintenanceAcquireSigner(ctx, p, a, dir, identity.MaintenanceIdentity, true); err != nil {
+		return err
+	}
+	components, err := custodyinstall.DescribeProtectedPackageUpdatePair(ctx, a.Owner, location, instance, operation, identity.Version, identity.Source)
+	if err != nil {
+		return err
+	}
+	native, err := nativePackageForHost(identity)
+	if err != nil {
+		return err
+	}
+	pack := update.MaintenancePackage{Version: identity.Version, Source: identity.Source, Sequence: identity.Sequence, ReleaseSHA256: identity.ReleaseSHA256, ProvenanceSHA256: identity.ProvenanceSHA256, Components: components, NativePackage: native}
+	if err = pack.Validate(); err != nil {
+		return err
+	}
+	return custodyinstall.StageProtectedPackageInstance(ctx, a.Owner, location, instance, operation, pack)
+}
+
+// A retained earlier candidate cannot select the next release. The receiver
+// still verifies that the previous candidate's exact operation completed
+// before it archives that receipt and admits a new one.
+func packageNeedsAcquisition(receipt maintenance.CandidateReceipt, expected core.ApplicationRelease) bool {
+	return receipt.Scope == "fresh" || receipt.Scope == "update" && receipt.ReleaseSHA256 != expected.ManifestSHA256
+}
+
+// A normal Update fetches and retains the independently authenticated public
+// package selected by the core operation. A changed latest release is refused.
+func acquirePublicPackageCandidate(ctx context.Context, a maintenance.Authority, location, instance string, expected core.ApplicationRelease) (receipt maintenance.CandidateReceipt, result error) {
+	o, err := packageCandidateOptions(a.Owner, location, instance)
+	if err != nil {
+		return receipt, err
+	}
+	p, err := bootstrap.PreparePackageMaintenanceNative(ctx, a.Owner, location, instance, o)
+	if err != nil {
+		return receipt, err
+	}
+	defer func() { result = errors.Join(result, p.DiscardMaintenance()) }()
+	actual, _, err := p.PackageApplicationRelease()
+	if err != nil || actual == nil || *actual != expected {
+		return receipt, errors.New("public release changed after approval; check again")
+	}
+	reader, writer := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		e := p.WriteCandidate(ctx, writer)
+		_ = writer.CloseWithError(e)
+		done <- e
+	}()
+	q := maintenance.CandidateRequest{PacketSHA256: expected.ManifestSHA256, Scope: "update"}
+	receipt, err = maintenancePackageStageCandidate(ctx, a.Owner, location, instance, q, reader)
+	_ = reader.CloseWithError(err)
+	writeErr := <-done
+	if err != nil {
+		return maintenance.CandidateReceipt{}, errors.Join(err, writeErr)
+	}
+	return receipt, nil
 }
 
 func packageCandidateBaseline(owner int, location, instance string, receipt *maintenance.CandidateReceipt) (*update.MaintenancePackage, custodyinstall.Manifest, error) {
@@ -382,6 +587,65 @@ func maintenancePackageInitialize(ctx context.Context, owner int, location, inst
 	if err != nil {
 		return err
 	}
-	p := update.MaintenancePackage{Version: identity.Version, Source: identity.Source, Sequence: identity.Sequence, ReleaseSHA256: identity.ReleaseSHA256, ProvenanceSHA256: identity.ProvenanceSHA256, Components: components}
+	native, err := nativePackageForHost(identity)
+	if err != nil {
+		return err
+	}
+	p := update.MaintenancePackage{Version: identity.Version, Source: identity.Source, Sequence: identity.Sequence, ReleaseSHA256: identity.ReleaseSHA256, ProvenanceSHA256: identity.ProvenanceSHA256, Components: components, NativePackage: native}
 	return custodyinstall.InitializeProtectedPackageJournal(ctx, owner, location, instance, p)
+}
+
+func maintenancePackageProvision(ctx context.Context, owner int, location, instance, listen string) (result error) {
+	a, err := maintenance.ValidatePackageProcess(owner, location, instance)
+	if err != nil || location != "local" || !custodyinstall.NativePackageUpdateAvailable() {
+		return errors.New("native package provisioning and recovery are unavailable")
+	}
+	receipt, err := maintenance.ReadPackageCandidateReceipt(owner, location, instance)
+	if err != nil || receipt.Scope != "fresh" || receipt.InstallerSHA256 != a.ImageSHA256 {
+		return errors.New("the original fresh package candidate is required")
+	}
+	p, err := preparePackageCandidate(ctx, owner, location, instance, receipt.PacketSHA256)
+	if err != nil {
+		return err
+	}
+	defer func() { result = errors.Join(result, p.DiscardMaintenance()) }()
+	identity, err := p.PackageIdentity()
+	if err != nil || !matchingPackageCandidate(receipt, identity, a.ImageSHA256) {
+		return errors.New("the original fresh package proof differs")
+	}
+	state, err := update.PackageMaintenanceRoot(owner, location, instance)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(state, "provision")
+	if err = maintenance.EnsureProtectedDirectory(dir); err != nil {
+		return err
+	}
+	engine, _ := bundle.Names()
+	corePath := filepath.Join(p.Report().BundleDirectory, engine)
+	f, err := update.OpenProtected(corePath, identity.Core.Bytes, 0700)
+	if err != nil {
+		return err
+	}
+	if err = errors.Join(f.Chmod(0755), f.Sync(), f.Close()); err != nil {
+		return err
+	}
+	if err = maintenance.CopyProtectedBounded(corePath, filepath.Join(dir, "fased-app"), 0755, identity.Core.SHA256, identity.Core.Bytes); err != nil {
+		return err
+	}
+	if err = maintenanceAcquireSigner(ctx, p, a, dir, identity.MaintenanceIdentity, true); err != nil {
+		return err
+	}
+	signerHash, signerSize, err := maintenance.ProtectedDigest(filepath.Join(dir, "fased-signer"), 0755, 64<<20)
+	if err != nil {
+		return err
+	}
+	native, err := nativePackageForHost(identity)
+	if err != nil {
+		return err
+	}
+	input := custodyinstall.PackageProvisionInput{Version: identity.Version, Source: identity.Source, ReleaseSHA256: identity.ReleaseSHA256, ProvenanceSHA256: identity.ProvenanceSHA256,
+		Sequence: identity.Sequence, Listen: listen, Core: update.Artifact{File: "fased-app", Size: identity.Core.Bytes, SHA256: identity.Core.SHA256},
+		Signer: update.Artifact{File: "fased-signer", Size: signerSize, SHA256: signerHash}, Native: *native}
+	return custodyinstall.ProvisionProtectedPackage(ctx, owner, location, instance, input)
 }

@@ -155,6 +155,94 @@ func TestPackageGateSelectsOnlyBoundStartState(t *testing.T) {
 	}
 }
 
+func TestPackageGateRequiresOriginalEmptySignerCheckpoint(t *testing.T) {
+	r, base := packageGateInitialRecord(t)
+	r.Package.NativePackage = &update.NativePackage{Family: "dnf", Artifact: update.Artifact{File: "fased-app-linux-amd64.rpm", Size: 1, SHA256: strings.Repeat("6", 64)}, InstallerSHA256: strings.Repeat("7", 64)}
+	target := base
+	target.CoreHash, target.SignerHash = strings.Repeat("a", 64), strings.Repeat("b", 64)
+	previous := *r.Package
+	p := previous
+	p.Sequence++
+	p.ReleaseSHA256 = strings.Repeat("c", 64)
+	p.Components = append([]update.Component(nil), previous.Components...)
+	p.Components[0].Artifact.SHA256, p.Components[1].Artifact.SHA256 = target.CoreHash, target.SignerHash
+	r.OperationID, r.Phase, r.Start = strings.Repeat("f", 32), "prepared", "base"
+	r.PreviousPackage, r.Package, r.Target, r.OwnerLease = &previous, &p, mustJSON(target), r.OperationID
+	if selected, err := packageStartSelection(r, base.Owner, base.Location, base.ID, nil); err != nil || selected != base {
+		t.Fatal("prepared base was refused", err)
+	}
+	snapshot := update.CoreSnapshot{Version: 1, BootID: strings.Repeat("1", 32), ProbeID: strings.Repeat("2", 32), InstanceID: "fixture-instance", State: update.State{Name: "core-db", Version: core.StateSchema, Anchor: strings.Repeat("3", 64)}}
+	request := &update.CorePauseRequest{Version: 1, IntentID: r.OperationID, Sequence: p.Sequence, ManifestSHA256: p.ReleaseSHA256, Expected: snapshot}
+	checkpoint := &update.ApplicationCheckpoint{Version: 1, OperationID: r.OperationID, ManifestSHA256: p.ReleaseSHA256, PreviousEngineSHA256: base.CoreHash, Pause: update.CorePauseReceipt{Version: 1, State: "paused", PauseID: strings.Repeat("4", 32), Request: request, Core: snapshot}, Snapshot: update.MetadataSnapshot{Size: 64, SHA256: strings.Repeat("5", 64)}}
+	checkpoint.Snapshot.File = "application-" + checkpoint.Snapshot.SHA256 + ".sqlite"
+	r.Application, r.Phase, r.Start = checkpoint, "held", ""
+	if _, err := packageStartSelection(r, base.Owner, base.Location, base.ID, nil); err == nil {
+		t.Fatal("held replacement started a service")
+	}
+	r.Phase, r.Start = "ready", "target"
+	if selected, err := packageStartSelection(r, base.Owner, base.Location, base.ID, nil); err != nil || selected != target {
+		t.Fatal("original checkpoint did not select its target", err)
+	}
+	for name, change := range map[string]func(*update.MaintenanceRecord){
+		"other lease":        func(v *update.MaintenanceRecord) { v.OwnerLease = strings.Repeat("9", 32) },
+		"missing checkpoint": func(v *update.MaintenanceRecord) { v.Application = nil },
+		"different predecessor": func(v *update.MaintenanceRecord) {
+			c := *v.Application
+			c.PreviousEngineSHA256 = strings.Repeat("9", 64)
+			v.Application = &c
+		},
+		"fake signer hold": func(v *update.MaintenanceRecord) { v.Installation = &update.Installation{} },
+		"different release": func(v *update.MaintenanceRecord) {
+			c := *v.Application
+			c.ManifestSHA256 = strings.Repeat("9", 64)
+			v.Application = &c
+		},
+		"unreadable metadata": func(v *update.MaintenanceRecord) {
+			c := *v.Application
+			request := *c.Pause.Request
+			request.Expected.State.Version = 999
+			c.Pause.Request = &request
+			c.Pause.Core.State.Version = 999
+			v.Application = &c
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := r
+			change(&bad)
+			if _, err := packageStartSelection(bad, base.Owner, base.Location, base.ID, nil); err == nil {
+				t.Fatal("foreign or fabricated recovery was accepted")
+			}
+		})
+	}
+	r.Phase = "completed"
+	if selected, err := packageStartSelection(r, base.Owner, base.Location, base.ID, nil); err != nil || selected != target {
+		t.Fatal("completed target did not survive restart", err)
+	}
+}
+
+func TestPackageStagingRefusesUnprotectedNativeAndKeyBearingUpdates(t *testing.T) {
+	_, m := packageGateInitialRecord(t)
+	p := update.MaintenancePackage{NativePackage: &update.NativePackage{}}
+	if validateNativePackageUpdateScope(m, p, false) == nil {
+		t.Fatal("disabled native package update was admitted")
+	}
+	if err := validateNativePackageUpdateScope(m, p, true); err != nil {
+		t.Fatal("empty signer was refused after enabling native recovery", err)
+	}
+	m.Network = "mainnet-beta"
+	if validateNativePackageUpdateScope(m, p, true) == nil {
+		t.Fatal("key-bearing signer was sent through app-only native recovery")
+	}
+	p.NativePackage = nil
+	if err := validateNativePackageUpdateScope(m, p, false); err != nil {
+		t.Fatal("existing legacy signer recovery was changed", err)
+	}
+	m.Network = ""
+	if validateNativePackageUpdateScope(m, p, true) == nil {
+		t.Fatal("empty-signer update without native package was admitted")
+	}
+}
+
 func TestPackageGateAdmitsOnlyTheOriginalHeldTarget(t *testing.T) {
 	r, base := packageGateInitialRecord(t)
 	base.Network = "devnet"

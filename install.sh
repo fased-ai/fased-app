@@ -35,7 +35,7 @@ install_packages() {
 }
 profile='' operator='' action=install listen='127.0.0.1:7331'
 wallet_instance='' wallet_network=''
-candidate_dir='' candidate_packet=''
+candidate_dir='' candidate_packet='' package_instance=''
 while (($#)); do
   case "$1" in
     --local) profile=local; shift ;;
@@ -153,6 +153,12 @@ owner_maintenance_setup() {
   read -r actual _ < <(/usr/bin/sha256sum -- "$protected")
   [[ $actual == "$installer_sha256" ]] || die 'Protected installer checksum differs.'
   /usr/bin/sudo -- /usr/bin/sync -f -- "$protected"
+  if [[ -n $package_instance ]]; then
+    current=$(/usr/bin/sudo -- "$protected" maintenance-package-register --owner "$(/usr/bin/id -u)" --location local --instance "$package_instance")
+    [[ $current == "$protected" ]] || die 'Package maintenance identity differs.'
+    FASED_PROTECTED_INSTALLER=$protected
+    return
+  fi
   current=$(/usr/bin/sudo -- "$protected" maintenance-register --owner "$(/usr/bin/id -u)" --profile "$profile")
   if [[ $action == update && $current != "$protected" ]]; then
     # The protected helper selects only this owner's existing held operation.
@@ -229,9 +235,13 @@ owner_install() {
   [[ $actual == "$installer_sha256" ]] || die 'Installer checksum differs; nothing was executed.'
   if [[ -n $candidate_dir ]]; then
     candidate_report=$("$installer" --verify-candidate "$candidate_dir") || die 'Candidate verification failed.'
-    # Native package installation is not yet wired to the protected recovery
-    # controller. Refuse before registering or invoking the Fased helper.
-    [[ $candidate_report != *'"linuxPackageDigestsVerified":true'* ]] || die 'Native package installation and recovery are not available yet.'
+    if [[ $candidate_report == *'"linuxPackageDigestsVerified":true'* ]]; then
+      "$installer" --package-controller-ready || die 'Native package installation and recovery are not available yet.'
+      read -r identity _ < <(printf '%s\0%s\0local' "$(/usr/bin/id -u)" "$candidate_packet" | /usr/bin/sha256sum)
+      [[ $identity =~ ^[a-f0-9]{64}$ ]] || die 'Cannot determine the package instance.'
+      package_instance=${identity:0:32}
+      verifier_args+=(--package-location local --package-instance "$package_instance")
+    fi
   fi
   if [[ -z ${FASED_PROTECTED_INSTALLER:-} ]]; then
     owner_maintenance_setup "$installer"

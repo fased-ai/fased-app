@@ -19,6 +19,7 @@ func TestBoundedProtectedCopyAllowsOnlyInstalledExecutableNames(t *testing.T) {
 	}
 	for _, tc := range []struct{ name, want string }{
 		{"fased-install", "bounded protected copy required"},
+		{"fased-app", "bounded protected copy required"},
 		{"fased-signer", "bounded protected copy required"},
 		{"fased-desktop", "bounded protected copy required"},
 		{"other", "fixed protected copy target required"},

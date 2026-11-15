@@ -67,7 +67,8 @@ func maintenancePackageWorkerCommand(action string, args []string) error {
 	if boot && len(args) != 6 || !boot && (len(args) != 8 || args[6] != "--operation" || !update.IDOK(args[7])) {
 		return errors.New("one exact package operation required")
 	}
-	if _, err = maintenance.ValidatePackageProcess(owner, location, instance); err != nil {
+	a, err := maintenance.ValidatePackageProcess(owner, location, instance)
+	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -115,6 +116,20 @@ func maintenancePackageWorkerCommand(action string, args []string) error {
 		}
 	} else {
 		id = args[7]
+		lock, e := maintenance.PackageLock(owner, location, instance)
+		if e != nil {
+			return e
+		}
+		if _, e = maintenance.ValidatePackageProcess(owner, location, instance); e == nil {
+			var record update.MaintenanceRecord
+			record, e = update.ReadPackageMaintenanceRecord(owner, location, instance)
+			if e == nil && record.OperationID != id {
+				e = maintenancePackageAcquire(ctx, a, location, instance, id)
+			}
+		}
+		if e = errors.Join(e, lock.Close()); e != nil {
+			return e
+		}
 	}
 	return custodyinstall.RunProtectedPackageUpdate(ctx, owner, location, instance, id, boot)
 }
@@ -183,6 +198,12 @@ func maintenancePackageRequestCommand(args []string, in io.Reader, out io.Writer
 	}
 	if r.Action == "initialize" {
 		if err := maintenancePackageInitialize(workCtx, owner, location, instance); err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(maintenance.Response{Version: 1, Action: r.Action, Complete: true})
+	}
+	if r.Action == "provision" {
+		if err := maintenancePackageProvision(workCtx, owner, location, instance, r.Listen); err != nil {
 			return err
 		}
 		return json.NewEncoder(out).Encode(maintenance.Response{Version: 1, Action: r.Action, Complete: true})

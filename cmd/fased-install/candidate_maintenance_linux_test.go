@@ -36,6 +36,26 @@ func TestPackageCandidateStageRefusesUnverifiedInputBeforeHelper(t *testing.T) {
 	}
 }
 
+func TestPackageCandidateReuseKeepsTheOriginalPredecessor(t *testing.T) {
+	owner, instance := 1400, strings.Repeat("a", 32)
+	old := maintenance.CandidateReceipt{Version: 1, Owner: owner, Scope: "update", PacketSHA256: strings.Repeat("1", 64), InstallerSHA256: strings.Repeat("2", 64), EngineSHA256: strings.Repeat("3", 64), ProductVersion: "0.1.12", Sequence: 12, ReleaseSHA256: strings.Repeat("1", 64), Target: update.Target{OS: "linux", Arch: "amd64"}, BaseSequence: 11, BaseReleaseSHA256: strings.Repeat("4", 64), BaseInstallation: instance, BaseManifestSHA: strings.Repeat("5", 64), ExpiresAt: 1}
+	if reuse, err := reusePackageCandidate(old, owner, "update", old.PacketSHA256, instance, old.BaseReleaseSHA256); err != nil || !reuse {
+		t.Fatal("the exact candidate was not reused", err)
+	}
+	if reuse, err := reusePackageCandidate(old, owner, "update", strings.Repeat("6", 64), instance, old.ReleaseSHA256); err != nil || reuse {
+		t.Fatal("the next candidate could not reach the protected completion check", err)
+	}
+	if _, err := reusePackageCandidate(old, owner, "update", old.PacketSHA256, instance, strings.Repeat("7", 64)); err == nil {
+		t.Fatal("the same candidate accepted another predecessor")
+	}
+	if _, err := reusePackageCandidate(old, owner+1, "update", strings.Repeat("6", 64), instance, old.ReleaseSHA256); err == nil {
+		t.Fatal("another owner's candidate was accepted")
+	}
+	if _, err := reusePackageCandidate(old, owner, "fresh", strings.Repeat("6", 64), instance, ""); err == nil {
+		t.Fatal("an update receipt was accepted for fresh installation")
+	}
+}
+
 // Run by the existing signed native-candidate fixture. The sink is an ordinary
 // subprocess and does not impersonate or execute the installed root helper.
 func TestPackageCandidateStreamCLI(t *testing.T) {

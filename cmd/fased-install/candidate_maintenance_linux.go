@@ -13,12 +13,30 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/bootstrap"
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
 var readPackageCandidateForStage = maintenance.ReadPackageCandidateReceipt
 var packageCandidateCommandForStage = maintenance.PackageCandidateStreamCommand
+
+func packageControllerReady() error {
+	if !custodyinstall.NativePackageUpdateAvailable() {
+		return errors.New("native package installation and recovery are not available yet")
+	}
+	return nil
+}
+
+func installFreshPackageCandidate(ctx context.Context, p *bootstrap.Prepared, packetSHA, location, instance, listen string, diagnostics io.Writer) error {
+	if p == nil || p.VerifyFreshPackageCandidateInstaller(location, instance) != nil {
+		return errors.New("the running installer must match the original fresh package")
+	}
+	if err := stageAttestedFreshPackageCandidate(ctx, p, packetSHA, location, instance, diagnostics); err != nil {
+		return err
+	}
+	return maintenance.PackageCall(ctx, location, instance, maintenance.PackageRequest{Version: 1, Action: "provision", Listen: listen}, diagnostics)
+}
 
 func stageAttestedFreshPackageCandidate(ctx context.Context, p *bootstrap.Prepared, packetSHA, location, instance string, diagnostics io.Writer) error {
 	if p == nil || p.ValidateFreshPackageCandidate(location, instance) != nil {
@@ -76,13 +94,9 @@ func stageAttestedScopedPackageCandidate(ctx context.Context, p *bootstrap.Prepa
 	defer cancel()
 	reuse := false
 	if old, e := readPackageCandidateForStage(os.Getuid(), location, instance); e == nil {
-		if old.PacketSHA256 == packetSHA && old.Scope == scope {
-			if old.Validate() != nil || old.Owner != os.Getuid() || scope == "update" && (old.BaseInstallation != instance || old.BaseReleaseSHA256 != baseline) {
-				return errors.New("candidate predecessor differs; preserve its operation")
-			}
-			reuse = true
-		} else if old.Scope != "fresh" || scope != "update" {
-			return errors.New("another candidate is retained; preserve its operation")
+		reuse, err = reusePackageCandidate(old, os.Getuid(), scope, packetSHA, instance, baseline)
+		if err != nil {
+			return err
 		}
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return e
@@ -101,10 +115,28 @@ func stageAttestedScopedPackageCandidate(ctx context.Context, p *bootstrap.Prepa
 	}
 	approved := core.ApplicationRelease{EngineSHA256: receipt.EngineSHA256, Version: receipt.ProductVersion, Sequence: receipt.Sequence, ManifestSHA256: receipt.ReleaseSHA256, Target: receipt.Target}
 	release, installerSHA256, err := p.PackageApplicationRelease()
-	if err != nil || *release != approved || installerSHA256 != receipt.InstallerSHA256 {
+	if err != nil || release == nil || *release != approved || installerSHA256 != receipt.InstallerSHA256 {
 		return errors.New("protected package candidate differs from the authenticated release")
 	}
 	return nil
+}
+
+func reusePackageCandidate(old maintenance.CandidateReceipt, owner int, scope, packet, instance, baseline string) (bool, error) {
+	if old.Validate() != nil || old.Owner != owner {
+		return false, errors.New("candidate owner or record differs; preserve its operation")
+	}
+	if old.PacketSHA256 == packet && old.Scope == scope {
+		if scope == "update" && (old.BaseInstallation != instance || old.BaseReleaseSHA256 != baseline) {
+			return false, errors.New("candidate predecessor differs; preserve its operation")
+		}
+		return true, nil
+	}
+	if scope == "update" && (old.Scope == "fresh" || old.Scope == "update") {
+		// The protected receiver must prove completion before replacing this
+		// receipt; the caller does not get authority to retire it.
+		return false, nil
+	}
+	return false, errors.New("another candidate is retained; preserve its operation")
 }
 
 func streamAttestedCandidate(ctx context.Context, p *bootstrap.Prepared, cmd *exec.Cmd, frame []byte, reuse bool, packetSHA, scope string) (maintenance.CandidateReceipt, error) {
