@@ -25,6 +25,14 @@ func maintenanceRegisterCommand([]string, io.Writer) error {
 	return errors.New("protected maintenance requires supported Linux")
 }
 
+func maintenancePackageRegisterCommand([]string, io.Writer) error {
+	return errors.New("protected maintenance requires supported Linux")
+}
+
+func maintenancePackageRequestCommand([]string, io.Reader, io.Writer) error {
+	return errors.New("protected maintenance requires supported Linux")
+}
+
 func maintenanceBootstrapCommand([]string, io.Writer) error {
 	return errors.New("protected maintenance is supported only on Linux")
 }

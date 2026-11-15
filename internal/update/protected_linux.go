@@ -3,11 +3,13 @@
 package update
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"syscall"
 )
 
@@ -143,9 +145,37 @@ func packageRecordMatchesInstance(r MaintenanceRecord, owner int, location, inst
 	if err != nil || r.Owner != owner || len(r.Base) == 0 {
 		return false
 	}
-	match := func(raw json.RawMessage) bool {
+	match := func(raw json.RawMessage) (PackageManifestIdentity, bool) {
 		m, err := PackageManifestIdentityFromJSON(raw)
-		return err == nil && m.Layout == PackageInstanceLayout && m.Version == 3 && m.Owner == owner && m.ID == instance && m.Root == root && m.Location == location
+		return m, err == nil && m.Layout == PackageInstanceLayout && m.Version == 3 && m.Owner == owner && m.ID == instance && m.Root == root && m.Location == location
 	}
-	return match(r.Base) && (len(r.Target) == 0 || match(r.Target))
+	base, valid := match(r.Base)
+	if !valid || len(r.Target) == 0 {
+		return valid
+	}
+	target, valid := match(r.Target)
+	return valid && SamePackageManifestIdentity(base, target) && samePackageDeployment(r.Base, r.Target)
+}
+
+// Only the two executable digests may differ across one package update. In
+// particular, account names/groups, network and listener are also identity,
+// even though a signer cannot independently see all of those fields.
+func samePackageDeployment(base, target json.RawMessage) bool {
+	decode := func(raw []byte) (map[string]any, error) {
+		var m map[string]any
+		d := json.NewDecoder(bytes.NewReader(raw))
+		d.UseNumber()
+		if err := d.Decode(&m); err != nil || m == nil {
+			return nil, errors.New("invalid package deployment")
+		}
+		delete(m, "coreHash")
+		delete(m, "signerHash")
+		return m, nil
+	}
+	a, err := decode(base)
+	if err != nil {
+		return false
+	}
+	b, err := decode(target)
+	return err == nil && reflect.DeepEqual(a, b)
 }

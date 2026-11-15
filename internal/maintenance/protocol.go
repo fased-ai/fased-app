@@ -35,6 +35,23 @@ type Request struct {
 	Candidate  *CandidateRequest              `json:"candidate,omitempty"`
 }
 
+// PackageRequest is scoped by the fixed helper arguments, not by a path or
+// identity supplied in the request body. Mutating package actions must be
+// added only when their complete protected operation is implemented.
+type PackageRequest struct {
+	Version int    `json:"version"`
+	Action  string `json:"action"`
+}
+
+func DecodePackageRequest(data []byte) (PackageRequest, error) {
+	var r PackageRequest
+	var fields map[string]json.RawMessage
+	if len(data) > 4096 || update.StrictJSON(data, &fields) != nil || len(fields) != 2 || fields["version"] == nil || fields["action"] == nil || update.StrictJSON(data, &r) != nil || r.Version != 1 || r.Action != "status" {
+		return PackageRequest{}, errors.New("invalid package maintenance request")
+	}
+	return r, nil
+}
+
 const EnrollmentStreamPrefix = "FASED-ENROLLMENT-STREAM-1\n"
 const CandidateStreamPrefix = "FASED-CANDIDATE-STREAM-1\n"
 

@@ -45,6 +45,31 @@ func ValidateInitialMaintenanceRecord(r update.MaintenanceRecord) (Manifest, err
 	return base, nil
 }
 
+// ValidateInitialPackageMaintenanceRecord checks the shape and identities of
+// an initial record. Its caller must independently authenticate the package
+// and verify signer state; this check alone cannot create or clear a hold.
+func ValidateInitialPackageMaintenanceRecord(r update.MaintenanceRecord, owner int, location, instance string) (Manifest, error) {
+	var base, target Manifest
+	if r.ValidateIdle() != nil || r.Owner != owner || r.OperationID != instance ||
+		strict(r.Base, &base) != nil || strict(r.Target, &target) != nil || base != target ||
+		base.validatePackage() != nil || base.Owner != owner || base.Location != location || base.ID != instance {
+		return Manifest{}, errors.New("initial package installation identity differs")
+	}
+	if base.Provenance == signer.OwnerKeyProvenance && r.Package.DevelopmentOnly {
+		return Manifest{}, errors.New("development release cannot initialize owner custody")
+	}
+	for _, component := range r.Package.Components {
+		if component.Contract.Component == "core" && component.Artifact.SHA256 != base.CoreHash ||
+			component.Contract.Component == "signer" && component.Artifact.SHA256 != base.SignerHash {
+			return Manifest{}, errors.New("initial package core or signer differs")
+		}
+	}
+	if r.Package.NativeDesktop != nil {
+		return Manifest{}, errors.New("browser-first package cannot own a desktop")
+	}
+	return base, nil
+}
+
 func verifyProtectedDesktop(m Manifest, p *update.MaintenancePackage) error {
 	if !m.NativeOwnerAccess || p == nil || p.Validate() != nil || p.NativeDesktop == nil {
 		return errors.New("protected Local desktop package required")

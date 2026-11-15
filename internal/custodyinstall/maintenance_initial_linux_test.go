@@ -126,6 +126,53 @@ func TestInitialMaintenanceRecordRefusesForeignOrPendingState(t *testing.T) {
 	}
 }
 
+func TestInitialPackageJournalBindsInstanceAndPair(t *testing.T) {
+	makeRecord := func() update.MaintenanceRecord {
+		r := initialMaintenanceFixture()
+		var m Manifest
+		if err := strict(r.Base, &m); err != nil {
+			t.Fatal(err)
+		}
+		m.Layout, m.Provenance, m.Network = PackageLayout, signer.OwnerKeyProvenance, ""
+		m.Root, _ = PackageRoot(m.Owner, m.Location, m.ID)
+		m.App = Identity{Name: packageAccountName(m.Owner, m.Location, m.ID, "app"), UID: 2001, GID: 2001}
+		m.Signer = Identity{Name: packageAccountName(m.Owner, m.Location, m.ID, "signer"), UID: 2002, GID: 2002}
+		r.Package.DevelopmentOnly = false
+		r.Package.ProvenanceSHA256 = strings.Repeat("e", 64)
+		r.Base, r.Target = mustJSON(m), mustJSON(m)
+		return r
+	}
+	r := makeRecord()
+	var m Manifest
+	if err := strict(r.Base, &m); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ValidateInitialPackageMaintenanceRecord(r, m.Owner, m.Location, m.ID); err != nil {
+		t.Fatal("exact package journal refused", err)
+	}
+	if _, err := ValidateInitialMaintenanceRecord(r); err == nil {
+		t.Fatal("legacy owner-wide controller accepted a package journal")
+	}
+	for name, change := range map[string]func(*update.MaintenanceRecord){
+		"operation": func(v *update.MaintenanceRecord) { v.OperationID = strings.Repeat("d", 32) },
+		"held":      func(v *update.MaintenanceRecord) { v.Phase = "held"; v.Installation = &update.Installation{} },
+		"target":    func(v *update.MaintenanceRecord) { v.Target = []byte(`{}`) },
+		"signer":    func(v *update.MaintenanceRecord) { v.Package.Components[1].Artifact.SHA256 = strings.Repeat("d", 64) },
+		"fixture":   func(v *update.MaintenanceRecord) { v.Package.DevelopmentOnly = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := makeRecord()
+			change(&bad)
+			if _, err := ValidateInitialPackageMaintenanceRecord(bad, m.Owner, m.Location, m.ID); err == nil {
+				t.Fatal("foreign or held initial journal accepted")
+			}
+		})
+	}
+	if _, err := ValidateInitialPackageMaintenanceRecord(r, m.Owner, "remote", m.ID); err == nil {
+		t.Fatal("another profile accepted")
+	}
+}
+
 func TestInitialMaintenanceRecordBindsProtectedDesktop(t *testing.T) {
 	r := initialMaintenanceFixture()
 	var m Manifest

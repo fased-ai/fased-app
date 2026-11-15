@@ -104,7 +104,7 @@ func PackageMaintenanceRecordMatchesIdentity(r MaintenanceRecord, expected Packa
 func PackageManifestIdentityFromJSON(raw []byte) (PackageManifestIdentity, error) {
 	var m PackageManifestIdentity
 	var obj map[string]json.RawMessage
-	if StrictJSON(raw, &obj) != nil || obj == nil || rejectPackageAliases(obj, "layout", "mode", "profile", "provenance", "network", "id", "root", "location", "signerHash", "inspectionBridge", "enrollment", "nativeOwnerAccess", "version", "owner", "app", "signer") {
+	if StrictJSON(raw, &obj) != nil || obj == nil || rejectPackageAliases(obj, "layout", "mode", "profile", "provenance", "network", "id", "root", "location", "coreHash", "signerHash", "inspectionBridge", "enrollment", "nativeOwnerAccess", "version", "owner", "app", "signer") {
 		return m, errors.New("invalid package manifest identity")
 	}
 	var app, signer map[string]json.RawMessage
