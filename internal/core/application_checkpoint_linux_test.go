@@ -3,15 +3,179 @@
 package core
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 	"golang.org/x/sys/unix"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestUnconfiguredProtectedSignerAllowsLocalOwnerAndApplicationCheckpoint(t *testing.T) {
+	uid := os.Getuid()
+	if uid <= 0 {
+		t.Skip("ordinary app identity required")
+	}
+	s := fixtureStore(t)
+	config := signer.Config{Version: 3, Mode: signer.OrdinaryCustodyMode, Profile: signer.OwnerCustodyProfile, Provenance: signer.OwnerKeyProvenance,
+		SignerID: strings.Repeat("a", 32), OwnerUID: uid + 1, AppUID: uid, SignerUID: uid + 2, StateDir: "/fixture/signer-state", SocketDir: "/fixture/signer-ipc"}
+	if err := s.configureVerifiedSigner(config); err != nil {
+		t.Fatal("valid unconfigured signer was refused", err)
+	}
+	foreign := &Server{Store: s, HTTP: &http.Server{Handler: &HTTPHandler{store: s}}}
+	if err := foreign.ConfigureConnection("local", config.OwnerUID+1); err == nil {
+		t.Fatal("a different Local owner was accepted")
+	}
+	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{Store: s, HTTP: &http.Server{Handler: h}}
+	if err := server.ConfigureConnection("local", config.OwnerUID); err != nil {
+		t.Fatal("the verified Local owner could not open the fresh installation", err)
+	}
+	if !h.protectedLocalOwnerAllowed() || h.localOwnerAllowed() {
+		t.Fatal("fresh custody did not retain the protected Local owner boundary")
+	}
+	request := func(private bool) int {
+		r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/v1/auth/native-local", bytes.NewBufferString(`{"action":"launch"}`))
+		r.Header.Set("Origin", "http://127.0.0.1:7331")
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		if private {
+			privateIPCHandler(h).ServeHTTP(w, r)
+		} else {
+			h.ServeHTTP(w, r)
+		}
+		return w.Code
+	}
+	if request(false) != http.StatusForbidden || request(true) != http.StatusOK {
+		t.Fatal("Local launch must be available only through the protected owner entry")
+	}
+	remoteHandler := &HTTPHandler{store: s}
+	remote := &Server{Store: s, HTTP: &http.Server{Handler: remoteHandler}}
+	if err := remote.ConfigureConnection("remote", config.OwnerUID); err != nil || remoteHandler.instanceOwnerKind != "custody" {
+		t.Fatal("the original Remote custody owner was not retained", err)
+	}
+	if state := s.walletSetup(FixtureView{}); state.State != "unavailable" {
+		t.Fatalf("unverified signer files must remain unavailable, got %q", state.State)
+	}
+	calls := 0
+	s.fixture = func(context.Context, signer.Request) (signer.Response, error) {
+		calls++
+		return signer.Response{}, errors.New("unconfigured signer must not be contacted")
+	}
+	view, err := s.Accounts(t.Context())
+	if err != nil || calls != 0 || view.Setup.State != "unavailable" {
+		t.Fatal("pre-wallet account view contacted or assumed an empty signer", calls, err)
+	}
+	status := s.ReadUpdateStatus(t.Context())
+	if calls != 0 || status.State != "not-configured" || status.Signer.State != "not-configured" || status.Signer.Locked != nil || status.Signer.UpdateHeld != nil || status.Signer.RecoveryRequired != nil {
+		t.Fatal("pre-wallet update status contacted or inferred signer state", calls, status)
+	}
+	for _, guidance := range status.Guidance {
+		if guidance.Code == "owner-review" {
+			t.Fatal("pre-wallet update status exposed a fixture-only owner command")
+		}
+	}
+	d := fixtureUpdateController()
+	if err := s.BindApplicationUpdateController(d); err != nil {
+		t.Fatal(err)
+	}
+	updateCommandFixture(t, s, "check")
+	updateTickFixture(t, s)
+	updateCommandFixture(t, s, "apply")
+	v, err := s.ApplicationUpdates(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := v.Operation
+	op.Phase = "applying"
+	if err = s.publishApplicationUpdate(t.Context(), op, v.Revision); err != nil {
+		t.Fatal(err)
+	}
+	ownerCall := func(private bool, command ApplicationOwnerCommand) *httptest.ResponseRecorder {
+		t.Helper()
+		body, err := json.Marshal(command)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/v1/updates/application/owner", bytes.NewReader(body))
+		r.Header.Set("Origin", "http://127.0.0.1:7331")
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		if private {
+			privateIPCHandler(h).ServeHTTP(w, r)
+		} else {
+			h.ServeHTTP(w, r)
+		}
+		return w
+	}
+	lease := update.NewProbe()
+	claim := ApplicationOwnerCommand{Action: "claim", ID: op.ID, Lease: lease}
+	if w := ownerCall(false, claim); w.Code != http.StatusForbidden {
+		t.Fatal("browser reached the protected update owner entry", w.Code)
+	}
+	if w := ownerCall(true, claim); w.Code != http.StatusOK {
+		t.Fatal("protected update owner claim failed", w.Code, w.Body.String())
+	}
+	if w := ownerCall(true, ApplicationOwnerCommand{Action: "prepare", ID: op.ID, Lease: update.NewProbe()}); w.Code != http.StatusConflict {
+		t.Fatal("another lease reached the checkpoint", w.Code)
+	}
+	w := ownerCall(true, ApplicationOwnerCommand{Action: "prepare", ID: op.ID, Lease: lease})
+	var prepared ApplicationOwnerView
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &prepared) != nil || prepared.Checkpoint == nil || prepared.Checkpoint.OperationID != op.ID || prepared.Checkpoint.Pause.State != "paused" {
+		t.Fatal("the original pre-wallet application checkpoint was refused", w.Code, w.Body.String())
+	}
+	if s.custodyOwnerSupported || s.custodyNetwork != "" {
+		t.Fatal("application checkpoint enabled wallet authority")
+	}
+}
+
+func TestUnconfiguredProtectedSignerCheckpointRefusesSignerBoundAccounts(t *testing.T) {
+	uid := os.Getuid()
+	if uid <= 0 {
+		t.Skip("ordinary app identity required")
+	}
+	s := fixtureStore(t)
+	config := signer.Config{Version: 3, Mode: signer.OrdinaryCustodyMode, Profile: signer.OwnerCustodyProfile, Provenance: signer.OwnerKeyProvenance,
+		SignerID: strings.Repeat("a", 32), OwnerUID: uid + 1, AppUID: uid, SignerUID: uid + 2, StateDir: "/fixture/signer-state", SocketDir: "/fixture/signer-ipc"}
+	if err := s.configureVerifiedSigner(config); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.BindApplicationUpdateController(fixtureUpdateController()); err != nil {
+		t.Fatal(err)
+	}
+	updateCommandFixture(t, s, "check")
+	updateTickFixture(t, s)
+	updateCommandFixture(t, s, "apply")
+	v, err := s.ApplicationUpdates(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := v.Operation
+	op.Phase = "applying"
+	if err = s.publishApplicationUpdate(t.Context(), op, v.Revision); err != nil {
+		t.Fatal(err)
+	}
+	document, err := json.Marshal(AccountsRecord{Version: 1, Accounts: []Account{{Signer: &signer.AccountRef{}}}, Proposals: []ProposalDraft{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.db.ExecContext(t.Context(), "UPDATE accounts SET document=? WHERE id=1", string(document)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.PrepareApplicationCheckpoint(t.Context(), op.ID); err == nil {
+		t.Fatal("a signer-bound account entered the empty-signer checkpoint")
+	}
+}
 
 type checkpointController struct {
 	*updateControllerFixture

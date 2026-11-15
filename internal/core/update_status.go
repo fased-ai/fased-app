@@ -49,7 +49,7 @@ func (s *Store) ReadUpdateStatus(ctx context.Context) UpdateStatus {
 			v.Core.IntentID = record.Request.IntentID
 		}
 	}
-	if s.fixture != nil {
+	if s.fixture != nil && !s.unconfiguredProtectedSigner {
 		v.Signer.State = "unavailable"
 		r, e := s.fixture(ctx, signer.Request{Action: "status"})
 		if e == nil && r.Error == "" && r.Status.FixtureOnly && !r.Status.WalletSigner && !r.Status.FinancialExecution && !r.Status.UnattendedUnlock {
@@ -85,7 +85,11 @@ func (s *Store) ReadUpdateStatus(ctx context.Context) UpdateStatus {
 	}
 	switch v.Signer.State {
 	case "not-configured":
-		v.Guidance = append(v.Guidance, UpdateGuidance{Code: "not-configured", Message: "No managed signer is configured for this core. An ordinary installation has no wallet custody."})
+		message := "No managed signer is configured for this core. An ordinary installation has no wallet custody."
+		if s.unconfiguredProtectedSigner {
+			message = "No wallet network is configured. Signer files and recovery holds have not been checked by this view."
+		}
+		v.Guidance = append(v.Guidance, UpdateGuidance{Code: "not-configured", Message: message})
 	case "unavailable":
 		v.Guidance = append(v.Guidance, UpdateGuidance{Code: "signer-unavailable", Message: "The configured signer did not return supported public status. Its lock, update hold and recovery state are unknown. Reconnect to the existing services and refresh; do not create a replacement wallet."})
 	case "available":
@@ -96,7 +100,7 @@ func (s *Store) ReadUpdateStatus(ctx context.Context) UpdateStatus {
 			v.Guidance = append(v.Guidance, UpdateGuidance{Code: "recovery-required", Message: "The signer reports a recovery hold. Key-only recovery cannot reconstruct financial history. Preserve keys, original records, counters and holds; never restore old signer databases or unlock automatically."})
 		}
 	}
-	if s.fixture != nil {
+	if s.fixture != nil && !s.unconfiguredProtectedSigner {
 		v.Guidance = append(v.Guidance, UpdateGuidance{Code: "owner-review", Message: "On the installed Linux owner's terminal, inspect actual core/signer inventory. This command requires the existing owner OS authorization and CLI login; it grants no installation, resume or unlock permission.", Command: "fased-app custody updates inventory --disposable-fixture --prepare-host"})
 	}
 	return v

@@ -18,7 +18,10 @@ type ApplicationCheckpoint struct {
 }
 
 func (s *Store) applicationUpdatePause(ctx context.Context, id string) (update.CorePauseReceipt, error) {
-	if s.fixture != nil || s.custodyNetwork != "" {
+	// This configuration has no wallet network. The OS controller must still
+	// prove that the signer is stopped and its directory is empty; this metadata
+	// checkpoint never makes either assertion or clears any hold.
+	if s.custodyNetwork != "" || s.fixture != nil && !s.unconfiguredProtectedSigner {
 		return update.CorePauseReceipt{}, errors.New("installed custody requires the existing paired update controller")
 	}
 	if !s.aiMu.TryLock() {

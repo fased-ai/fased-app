@@ -271,7 +271,11 @@ func (s *Server) ConfigureConnection(location string, owner ...int) error {
 	if len(owner) == 1 {
 		uid = owner[0]
 	}
-	managedLocal := location == "local" && s.Store != nil && s.Store.fixture != nil && s.Store.custodyNetwork != ""
+	if s.Store != nil && s.Store.unconfiguredProtectedSigner && uid != s.Store.protectedOwnerUID {
+		return errors.New("verified pre-wallet owner identity required")
+	}
+	managedCustody := s.Store != nil && s.Store.fixture != nil && (s.Store.custodyNetwork != "" || s.Store.unconfiguredProtectedSigner)
+	managedLocal := location == "local" && managedCustody
 	if uid < 0 || int64(uid) > 4294967294 || (uid > 0 && location != "remote" && !managedLocal) {
 		return errors.New("dedicated owner identity requires a verified managed profile and a valid UID")
 	}
@@ -306,7 +310,7 @@ func (s *Server) ConfigureConnection(location string, owner ...int) error {
 	}
 	h.instanceLocation, h.instanceOwnerUID = location, uid
 	h.instanceOwnerKind = ""
-	if uid > 0 && s.Store != nil && s.Store.fixture != nil && s.Store.custodyNetwork != "" {
+	if uid > 0 && managedCustody {
 		h.instanceOwnerKind = "custody"
 	}
 	return nil

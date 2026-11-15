@@ -105,6 +105,7 @@ func (s *Store) configureVerifiedSigner(c signer.Config) error {
 	if s.fixture != nil {
 		return errors.New("signer identity is already configured")
 	}
+	s.unconfiguredProtectedSigner = c.Version == 3 && c.Mode == signer.OrdinaryCustodyMode && c.Profile == signer.OwnerCustodyProfile && c.Provenance == signer.OwnerKeyProvenance && c.Network == ""
 	s.fixture = func(ctx context.Context, r signer.Request) (signer.Response, error) {
 		// This bridge is read-only even if a future caller constructs another action.
 		if r.Action != "status" && r.Action != "fixture-approvals" {
@@ -124,7 +125,7 @@ func (s *Store) configureVerifiedSigner(c signer.Config) error {
 	return nil
 }
 func (s *Store) fixtureView(ctx context.Context) FixtureView {
-	if s.fixture == nil {
+	if s.fixture == nil || s.unconfiguredProtectedSigner {
 		return FixtureView{}
 	}
 	r, e := s.fixture(ctx, signer.Request{Action: "status"})
