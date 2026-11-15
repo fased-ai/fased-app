@@ -217,3 +217,29 @@ func TestNativePackageTrailerIsBoundedAndEmpty(t *testing.T) {
 		t.Fatal("unbounded package trailer was accepted")
 	}
 }
+
+func TestNativeBaseRecoveryRequiresOriginalCompletePackage(t *testing.T) {
+	for _, test := range []struct {
+		name, family, version, status string
+		filesErr                      error
+		wantOK, wantFileCheck         bool
+	}{
+		{"original RPM", "dnf", "0.1.10", "installed", nil, true, true},
+		{"original DEB", "apt", "0.1.10", "install ok installed", nil, true, true},
+		{"newer target", "dnf", "0.1.12", "installed", nil, false, false},
+		{"interrupted DEB", "apt", "0.1.10", "install ok unpacked", nil, false, false},
+		{"changed package files", "dnf", "0.1.10", "installed", fmt.Errorf("changed files"), false, true},
+		{"unknown package family", "other", "0.1.10", "installed", nil, false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			checked := false
+			err := requireInstalledNativeBase(test.family, "0.1.10", test.version, test.status, func() error {
+				checked = true
+				return test.filesErr
+			})
+			if (err == nil) != test.wantOK || checked != test.wantFileCheck {
+				t.Fatalf("original package decision: err=%v, files checked=%v", err, checked)
+			}
+		})
+	}
+}

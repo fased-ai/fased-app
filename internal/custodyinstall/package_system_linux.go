@@ -443,6 +443,34 @@ func installedNativePackage(ctx context.Context, family string) (version, status
 	return fields[1], fields[3], nil
 }
 
+// A stopped key-bearing instance may restart its predecessor only while the
+// complete system package is still the exact authenticated predecessor.
+func verifyInstalledNativePackage(ctx context.Context, m Manifest, p update.MaintenancePackage) error {
+	if p.NativePackage == nil {
+		return errors.New("the original native package is unavailable")
+	}
+	_, files, err := verifyNativePackage(ctx, m, p)
+	if err != nil {
+		return err
+	}
+	version, status, err := installedNativePackage(ctx, p.NativePackage.Family)
+	if err != nil {
+		return errors.New("the original native package is not completely installed; preserve recovery")
+	}
+	return requireInstalledNativeBase(p.NativePackage.Family, p.Version, version, status, func() error {
+		return globalPackageState(nil, files, false, true)
+	})
+}
+
+func requireInstalledNativeBase(family, expected, actual, status string, checkFiles func() error) error {
+	if expected == "" || actual != expected || checkFiles == nil ||
+		family == "apt" && status != "install ok installed" ||
+		family == "dnf" && status != "installed" || family != "apt" && family != "dnf" {
+		return errors.New("the original native package is not completely installed; preserve recovery")
+	}
+	return checkFiles()
+}
+
 func nativePackagePresent(ctx context.Context, family string) (bool, error) {
 	name, args := "/usr/bin/rpm", []string{"-q", "--", "fased-app"}
 	if family == "apt" {

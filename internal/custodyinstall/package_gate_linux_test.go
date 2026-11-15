@@ -220,7 +220,7 @@ func TestPackageGateRequiresOriginalEmptySignerCheckpoint(t *testing.T) {
 	}
 }
 
-func TestPackageStagingRefusesUnprotectedNativeAndKeyBearingUpdates(t *testing.T) {
+func TestPackageStagingRequiresProtectedNativeRecovery(t *testing.T) {
 	_, m := packageGateInitialRecord(t)
 	p := update.MaintenancePackage{NativePackage: &update.NativePackage{}}
 	if validateNativePackageUpdateScope(m, p, false) == nil {
@@ -230,12 +230,20 @@ func TestPackageStagingRefusesUnprotectedNativeAndKeyBearingUpdates(t *testing.T
 		t.Fatal("empty signer was refused after enabling native recovery", err)
 	}
 	m.Network = "mainnet-beta"
-	if validateNativePackageUpdateScope(m, p, true) == nil {
-		t.Fatal("key-bearing signer was sent through app-only native recovery")
+	if validateNativePackageUpdateScope(m, p, false) == nil {
+		t.Fatal("key-bearing package update bypassed the disabled recovery controller")
+	}
+	if err := validateNativePackageUpdateScope(m, p, true); err != nil {
+		t.Fatal("key-bearing package update could not enter the protected signer transaction", err)
 	}
 	p.NativePackage = nil
-	if err := validateNativePackageUpdateScope(m, p, false); err != nil {
-		t.Fatal("existing legacy signer recovery was changed", err)
+	if validateNativePackageUpdateScope(m, p, true) == nil {
+		t.Fatal("a package installation admitted a signer update without its OS package")
+	}
+	legacy := m
+	legacy.Layout = ""
+	if err := validateNativePackageUpdateScope(legacy, p, false); err != nil {
+		t.Fatal("an existing legacy signer recovery was changed", err)
 	}
 	m.Network = ""
 	if validateNativePackageUpdateScope(m, p, true) == nil {

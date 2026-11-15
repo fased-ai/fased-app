@@ -322,21 +322,18 @@ func stageProtectedPackage(ctx context.Context, a maintenance.Authority, m Manif
 	return verifyProtectedLoadedUnits(ctx, a, m)
 }
 
-// New native-package operations may not enter the older key-bearing updater:
-// that path does not yet replace the OS package. Existing held operations keep
-// their original recovery path; this check applies only before staging.
+// Native-package operations use the protected package transaction. Existing
+// held operations keep their original recovery path; this check applies only
+// before staging a new operation.
 func validateNativePackageUpdateScope(m Manifest, p update.MaintenancePackage, enabled bool) error {
 	if m.Layout != PackageLayout {
 		return nil
 	}
-	if m.Network == "" && p.NativePackage == nil {
+	if p.NativePackage == nil {
 		return errors.New("the original native package is required")
 	}
-	if (m.Network == "" || p.NativePackage != nil) && !enabled {
+	if !enabled {
 		return errors.New("native package-manager recovery is not yet connected; preserve the installation")
-	}
-	if m.Network != "" && p.NativePackage != nil {
-		return errors.New("key-bearing native package updates require signer and package recovery")
 	}
 	return nil
 }
@@ -950,6 +947,25 @@ func runProtectedUpdateScoped(ctx context.Context, a maintenance.Authority, owne
 	if location != "" && base.Network == "" {
 		return runEmptyPackageUpdate(ctx, a, r, base, target, boot)
 	}
+	// Package instances share the OS package even though their signer and app
+	// state are separate. Keep the package lock through the predecessor check,
+	// signer hold, replacement and any attempted base recovery.
+	nativePackage := location != "" && r.Package.NativePackage != nil
+	if nativePackage {
+		if r.PreviousPackage == nil || r.PreviousPackage.NativePackage == nil {
+			return errors.New("the original native package is required for signer recovery")
+		}
+		packageLock, e := maintenance.PackageSystemLock(ctx)
+		if e != nil {
+			return e
+		}
+		defer func() { result = errors.Join(result, packageLock.Close()) }()
+		if r.Phase == "prepared" {
+			if _, _, e = preflightNativePackage(ctx, base, r.PreviousPackage, *r.Package, false); e != nil {
+				return e
+			}
+		}
+	}
 	if successorImage == "" {
 		if location != "" {
 			err = verifyLoadedPackageServices(ctx, base)
@@ -1016,6 +1032,11 @@ func runProtectedUpdateScoped(ctx context.Context, a maintenance.Authority, owne
 	if boot && r.Phase == "base-recovery" && r.Start == "base" {
 		if err = verifyProtectedPair(base); err != nil {
 			return err
+		}
+		if nativePackage {
+			if err = verifyInstalledNativePackage(ctx, base, *r.PreviousPackage); err != nil {
+				return err
+			}
 		}
 		if r.PreviousPackage != nil && r.PreviousPackage.NativeDesktop != nil {
 			if err = verifyProtectedDesktop(base, r.PreviousPackage); err != nil {
@@ -1100,6 +1121,11 @@ func runProtectedUpdateScoped(ctx context.Context, a maintenance.Authority, owne
 	r.Phase = "replacing"
 	if err = storeProtectedRecord(r); err != nil {
 		return err
+	}
+	if nativePackage {
+		if err = applyNativePackageLocked(ctx, base, r.PreviousPackage, *r.Package, true); err != nil {
+			return err
+		}
 	}
 	for _, c := range r.Package.Components {
 		previous := base.CoreHash
@@ -1392,6 +1418,14 @@ func completeProtectedUpdate(ctx context.Context, a maintenance.Authority, r *up
 func recoverProtectedBase(ctx context.Context, a maintenance.Authority, r *update.MaintenanceRecord, base Manifest, dir string) error {
 	if err := verifyProtectedPair(base); err != nil {
 		return err
+	}
+	if base.Layout == PackageLayout && r.Package != nil && r.Package.NativePackage != nil {
+		if r.PreviousPackage == nil || r.PreviousPackage.NativePackage == nil {
+			return errors.New("the original native package is required before restarting the base")
+		}
+		if err := verifyInstalledNativePackage(ctx, base, *r.PreviousPackage); err != nil {
+			return err
+		}
 	}
 	if r.PreviousPackage != nil && r.PreviousPackage.NativeDesktop != nil {
 		if err := verifyProtectedDesktop(base, r.PreviousPackage); err != nil {
