@@ -90,8 +90,8 @@ func TestPackageMaintenanceUnitsAreInstanceScoped(t *testing.T) {
 	}
 	for _, role := range []string{"app", "signer"} {
 		unit := string(definitions(m)["fased-"+role+".service"])
-		if !strings.Contains(unit, "Wants="+packageRecoveryUnit(m)+"\nAfter="+packageRecoveryUnit(m)+"\n") {
-			t.Fatal("service is not ordered behind its recovery", role)
+		if !strings.Contains(unit, "Requires="+packageRecoveryUnit(m)+"\nAfter="+packageRecoveryUnit(m)+"\n") || strings.Contains(unit, "Wants="+packageRecoveryUnit(m)+"\n") {
+			t.Fatal("service does not require successful recovery before startup", role)
 		}
 		if !strings.Contains(unit, "LimitCORE=0\n") {
 			t.Fatal("instance service must limit crash dumps", role)

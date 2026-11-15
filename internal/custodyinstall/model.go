@@ -229,7 +229,7 @@ func definitions(m Manifest) map[string][]byte {
 		if m.Layout == PackageLayout {
 			description = "Fased " + role
 			service += "LimitCORE=0\n"
-			ordering = "Wants=" + packageRecoveryUnit(m) + "\nAfter=" + packageRecoveryUnit(m) + "\n"
+			ordering = "Requires=" + packageRecoveryUnit(m) + "\nAfter=" + packageRecoveryUnit(m) + "\n"
 			gateRole := role
 			if gateRole == "application" {
 				gateRole = "app"

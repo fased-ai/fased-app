@@ -18,9 +18,18 @@ func TestPackageRuntimeRejectsLegacyUnitAndUnverifiedOverrides(t *testing.T) {
 		"FragmentPath": "/etc/systemd/system/" + instanceUnit(m, "app"),
 		"User":         strconv.Itoa(m.App.UID), "Group": strconv.Itoa(m.App.GID), "NoNewPrivileges": "yes",
 		"ProtectSystem": "strict", "ExecStart": "{ path=" + m.Root + "/fased-app ; argv[]=... ; }", "NeedDaemonReload": "no", "LimitCORE": "0",
+		"Requires": packageRecoveryUnit(m), "After": packageRecoveryUnit(m),
 	}
 	if err := validateLoadedUnitFields(m, "app", m.Root+"/fased-app", fields, nil, nil); err != nil {
 		t.Fatal("exact instance unit rejected", err)
+	}
+	for _, property := range []string{"Requires", "After"} {
+		original := fields[property]
+		fields[property] = "different-recovery.service"
+		if err := validateLoadedUnitFields(m, "app", m.Root+"/fased-app", fields, nil, nil); err == nil {
+			t.Fatalf("loaded service without recovery %s was accepted", property)
+		}
+		fields[property] = original
 	}
 	fields["FragmentPath"] = "/etc/systemd/system/" + Unit(m.Owner, "app")
 	if err := validateLoadedUnitFields(m, "app", m.Root+"/fased-app", fields, nil, nil); err == nil {
