@@ -24,7 +24,7 @@ func (p *Prepared) WriteCandidate(ctx context.Context, out io.Writer) error {
 	if p.closed || p.root == nil || p.candidate == nil {
 		return errors.New("held candidate required")
 	}
-	if err := p.revalidate(); err != nil {
+	if err := p.revalidateHeld(); err != nil {
 		return err
 	}
 	var packet AttestedPacket
@@ -53,10 +53,20 @@ func (p *Prepared) WriteCandidate(ctx context.Context, out io.Writer) error {
 			return err
 		}
 	}
-	for _, item := range []struct {
+	items := []struct {
 		name, held string
 		size       int64
-	}{{packet.Archive.File, "download.tar.gz", packet.Archive.Size}, {packet.Installer.File, "candidate-installer", packet.Installer.Size}, {packet.Entry.File, "candidate-entry", packet.Entry.Size}} {
+	}{{packet.Archive.File, "download.tar.gz", packet.Archive.Size}, {packet.Installer.File, "candidate-installer", packet.Installer.Size}, {packet.Entry.File, "candidate-entry", packet.Entry.Size}}
+	if packet.Version == 3 {
+		items = append(items, struct {
+			name, held string
+			size       int64
+		}{packet.Deb.File, "candidate-deb", packet.Deb.Size}, struct {
+			name, held string
+			size       int64
+		}{packet.RPM.File, "candidate-rpm", packet.RPM.Size})
+	}
+	for _, item := range items {
 		f, err := p.root.Open(item.held)
 		if err != nil {
 			return err
@@ -75,10 +85,10 @@ func (p *Prepared) WriteCandidate(ctx context.Context, out io.Writer) error {
 	if err := tw.Close(); err != nil {
 		return err
 	}
-	return errors.Join(ctx.Err(), p.revalidate())
+	return errors.Join(ctx.Err(), p.revalidateHeld())
 }
 
-// ReceiveCandidate accepts only the five fixed files in an empty private
+// ReceiveCandidate accepts only the fixed files in an empty private
 // directory. It authenticates their packet-bound sizes and digests; the caller
 // must still verify the original provenance with the independently pinned seed.
 func ReceiveCandidate(ctx context.Context, in io.Reader, directory, packetSHA256 string) error {
@@ -102,7 +112,9 @@ func ReceiveCandidate(ctx context.Context, in io.Reader, directory, packetSHA256
 	if err != nil && !errors.Is(err, io.EOF) || len(entries) != 0 {
 		return errors.New("candidate destination is not empty; preserve it")
 	}
-	tr := tar.NewReader(io.LimitReader(in, 2*maxArchiveBytes+4*int64(update.MaxDocument)+2<<20))
+	// The archive, installer, entry and two native packages each have their own
+	// size limit. Leave room for their tar headers and bounded metadata too.
+	tr := tar.NewReader(io.LimitReader(in, 5*maxArchiveBytes+2*int64(update.MaxDocument)+(2<<20)))
 	header, err := tr.Next()
 	if err != nil || header.Name != AttestedPacketFile || header.Typeflag != tar.TypeReg || header.Size <= 0 || header.Size > update.MaxDocument {
 		return errors.New("candidate packet must be first and bounded")
@@ -112,13 +124,19 @@ func ReceiveCandidate(ctx context.Context, in io.Reader, directory, packetSHA256
 		return errors.New("candidate stream packet differs from the reviewed identity")
 	}
 	var packet AttestedPacket
-	if update.StrictJSON(raw, &packet) != nil || packet.Version != 2 || !attestedBuildIdentity(packet, "") || packet.Archive.File != archiveTarget || packet.Installer.File != "fased-install-linux-amd64" || packet.Entry.File != "install.sh" || packet.Release.Provenance.File != provenanceFile {
+	if update.StrictJSON(raw, &packet) != nil || (packet.Version != 2 && packet.Version != 3) || !attestedBuildIdentity(packet, "") || packet.Archive.File != archiveTarget || packet.Installer.File != "fased-install-linux-amd64" || packet.Entry.File != "install.sh" || packet.Release.Provenance.File != provenanceFile ||
+		packet.Version == 2 && (packet.Deb != (update.Artifact{}) || packet.RPM != (update.Artifact{})) ||
+		packet.Version == 3 && (packet.Deb.File != "fased-app-linux-amd64.deb" || packet.RPM.File != "fased-app-linux-amd64.rpm") {
 		return errors.New("candidate stream inventory invalid")
 	}
 	if err = writeNew(root, AttestedPacketFile, raw); err != nil {
 		return err
 	}
-	for _, artifact := range []update.Artifact{packet.Release.Provenance, packet.Archive, packet.Installer, packet.Entry} {
+	artifacts := []update.Artifact{packet.Release.Provenance, packet.Archive, packet.Installer, packet.Entry}
+	if packet.Version == 3 {
+		artifacts = append(artifacts, packet.Deb, packet.RPM)
+	}
+	for _, artifact := range artifacts {
 		if err = ctx.Err(); err != nil {
 			return err
 		}

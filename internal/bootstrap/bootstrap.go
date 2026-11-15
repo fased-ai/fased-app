@@ -123,6 +123,12 @@ func (p *Prepared) Close() error {
 		if cleanupErr == nil && p.candidate != nil {
 			cleanupErr = p.root.Remove("candidate-entry")
 		}
+		if cleanupErr == nil && p.report.LinuxPackageDigestsVerified {
+			cleanupErr = p.root.Remove("candidate-deb")
+		}
+		if cleanupErr == nil && p.report.LinuxPackageDigestsVerified {
+			cleanupErr = p.root.Remove("candidate-rpm")
+		}
 	}
 	return errors.Join(cleanupErr, p.root.Close())
 }
@@ -451,6 +457,15 @@ func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepa
 }
 
 func (p *Prepared) revalidate() error {
+	if p.report.LinuxPackageDigestsVerified {
+		return errors.New("native packages require the package-aware installation controller")
+	}
+	return p.revalidateHeld()
+}
+
+// revalidateHeld verifies the original acquisition without granting the legacy
+// archive installer authority over a native package candidate.
+func (p *Prepared) revalidateHeld() error {
 	now := p.options.clock()
 	if now.Before(p.startedAt) {
 		return errors.New("bootstrap clock moved backwards")

@@ -1,16 +1,19 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -125,17 +128,60 @@ func TestNativeLinuxCandidateInspectionBindsBothPackagesWithoutInstalling(t *tes
 	if err = os.WriteFile(filepath.Join(dir, AttestedPacketFile), payloads[AttestedPacketFile], 0600); err != nil {
 		t.Fatal(err)
 	}
-	// Inspecting the new format is read-only. The legacy installed-update
-	// controller must not execute it before a package-aware controller exists.
-	o.githubFixture = nil
-	o.Directory = filepath.Join(f.parent, "must-not-admit")
-	a := CandidateAdmission{PacketSHA256: digest(payloads[AttestedPacketFile]), OperationID: strings.Repeat("1", 32), BaselineSHA256: strings.Repeat("2", 64), ExpiresAt: f.now.Add(10 * time.Minute).Unix()}
-	if admitted, err := PrepareAttestedCandidate(t.Context(), o, dir, a); err == nil {
-		admitted.Close()
-		t.Fatal("legacy controller admitted a native package candidate")
+	if runtime.GOOS != "linux" {
+		return // The protected installer and update entry are Linux-only.
 	}
-	if _, err = os.Stat(o.Directory); !os.IsNotExist(err) {
-		t.Fatal("refused native candidate created an update output")
+	// Preparation retains both attested packages, but the legacy installed
+	// controller must not execute the archive as a package installation.
+	o.githubFixture = nil
+	o.Directory = filepath.Join(f.parent, "native-held")
+	a := CandidateAdmission{PacketSHA256: digest(payloads[AttestedPacketFile]), OperationID: strings.Repeat("1", 32), BaselineSHA256: strings.Repeat("2", 64), ExpiresAt: f.now.Add(10 * time.Minute).Unix()}
+	admitted, err := PrepareAttestedCandidate(t.Context(), o, dir, a)
+	if err != nil {
+		t.Fatal("native candidate preparation failed", err)
+	}
+	defer admitted.Close()
+	if got := admitted.Report(); !got.LinuxPackageDigestsVerified || got.DescriptorSHA256 != a.PacketSHA256 {
+		t.Fatal("native package identity was not retained")
+	}
+	if _, err = admitted.ApplicationRelease(); err == nil {
+		t.Fatal("native package reached the legacy application updater")
+	}
+	if err = admitted.Run(t.Context(), InstallOptions{Profile: "local"}, nil, io.Discard, io.Discard); err == nil {
+		t.Fatal("native package reached the legacy installer")
+	}
+	var stream bytes.Buffer
+	if err = admitted.WriteCandidate(t.Context(), &stream); err != nil {
+		t.Fatal("native candidate stream failed", err)
+	}
+	received := filepath.Join(f.parent, "native-received")
+	if err = os.Mkdir(received, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = ReceiveCandidate(t.Context(), bytes.NewReader(stream.Bytes()), received, a.PacketSHA256); err != nil {
+		t.Fatal("native candidate receiver failed", err)
+	}
+	if _, err = VerifyAttestedCandidate(o, received); err != nil {
+		t.Fatal("native candidate stream lost its provenance", err)
+	}
+	bad := append([]byte(nil), stream.Bytes()...)
+	index := bytes.Index(bad, rpm)
+	if index < 0 {
+		t.Fatal("RPM package was not streamed")
+	}
+	bad[index] ^= 1
+	corrupt := filepath.Join(f.parent, "native-corrupt")
+	if err = os.Mkdir(corrupt, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = ReceiveCandidate(t.Context(), bytes.NewReader(bad), corrupt, a.PacketSHA256); err == nil {
+		t.Fatal("changed package crossed the candidate receiver")
+	}
+	if err = os.WriteFile(filepath.Join(o.Directory, "candidate-rpm"), []byte("changed RPM"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = admitted.WriteCandidate(t.Context(), io.Discard); err == nil {
+		t.Fatal("changed held package was streamed")
 	}
 }
 

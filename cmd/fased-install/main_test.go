@@ -11,8 +11,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestInitialInstallerHasNoPublicOrImplicitExecutionDefaults(t *testing.T) {
@@ -112,6 +114,38 @@ func TestAttestedCandidateCLI(t *testing.T) {
 	}
 	if os.Getenv("FASED_NATIVE_PACKAGE_CANDIDATE") == "1" && !report.LinuxPackageDigestsVerified {
 		t.Fatal("native package inspection did not verify both package identities")
+	}
+	if os.Getenv("FASED_NATIVE_PACKAGE_CANDIDATE") == "1" && runtime.GOOS == "linux" {
+		packet, e := os.ReadFile(filepath.Join(dir, bootstrap.AttestedPacketFile))
+		if e != nil {
+			t.Fatal(e)
+		}
+		digest := sha256.Sum256(packet)
+		admission := bootstrap.CandidateAdmission{PacketSHA256: hex.EncodeToString(digest[:]), OperationID: strings.Repeat("1", 32), BaselineSHA256: strings.Repeat("2", 64), ExpiresAt: time.Now().Add(10 * time.Minute).Unix()}
+		parent := t.TempDir()
+		if e = os.Chmod(parent, 0700); e != nil {
+			t.Fatal(e)
+		}
+		options := bootstrap.Options{Seed: seed, SeedSHA256: hex.EncodeToString(sum[:]), Directory: filepath.Join(parent, "held")}
+		prepared, e := bootstrap.PrepareAttestedCandidate(t.Context(), options, dir, admission)
+		if e != nil {
+			t.Fatal("native candidate could not be retained", e)
+		}
+		defer prepared.Close()
+		if e = stageAttestedCandidate(t.Context(), prepared, admission.PacketSHA256, "update", io.Discard); e == nil || !strings.Contains(e.Error(), "package-aware") {
+			t.Fatal("native candidate reached the legacy maintenance helper", e)
+		}
+		t.Setenv("XDG_CACHE_HOME", filepath.Join(parent, "cache"))
+		app, data := filepath.Join(parent, "app"), filepath.Join(parent, "data")
+		args := []string{"--install-candidate", dir, "--candidate-packet-sha256", admission.PacketSHA256, "--profile", "local", "--prefix", app, "--data-dir", data, "--start=false"}
+		if e = run(args, strings.NewReader(""), io.Discard, io.Discard); e == nil || !strings.Contains(e.Error(), "package-aware") {
+			t.Fatal("native candidate reached the legacy installer entry", e)
+		}
+		for _, path := range []string{app, data} {
+			if _, e = os.Lstat(path); !errors.Is(e, os.ErrNotExist) {
+				t.Fatal("held native entry changed an installation target", e)
+			}
+		}
 	}
 	if err = run([]string{"--verify-candidate", dir, "--install"}, strings.NewReader(""), io.Discard, io.Discard); err == nil {
 		t.Fatal("candidate verification accepted execution")

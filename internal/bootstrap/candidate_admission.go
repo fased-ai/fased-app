@@ -98,7 +98,7 @@ func prepareAttestedCandidate(ctx context.Context, o Options, directory string, 
 		return nil, errors.New("candidate differs from the reviewed packet")
 	}
 	var packet AttestedPacket
-	if update.StrictJSON(raw, &packet) != nil || packet.Version != 2 || !attestedBuildIdentity(packet, "") {
+	if update.StrictJSON(raw, &packet) != nil || (packet.Version != 2 && packet.Version != 3) || !attestedBuildIdentity(packet, "") {
 		return nil, errors.New("only protected main-dispatch candidates admit installed acceptance")
 	}
 	sequence, err := releaseSequence(packet.ProductVersion)
@@ -113,7 +113,11 @@ func prepareAttestedCandidate(ctx context.Context, o Options, directory string, 
 	if err != nil {
 		return nil, err
 	}
-	decision, err := productionProof(seed, d, proof, o.clock())
+	expected := d.provenanceExpected()
+	if packet.Version == 3 {
+		expected.DebSHA256, expected.RPMSHA256 = packet.Deb.SHA256, packet.RPM.SHA256
+	}
+	decision, err := productionProofExpected(seed, d, proof, o.clock(), expected)
 	if err != nil {
 		return nil, err
 	}
@@ -161,55 +165,23 @@ func prepareAttestedCandidate(ctx context.Context, o Options, directory string, 
 		return p, err
 	}
 	defer sourceRoot.Close()
-	in, err := sourceRoot.Open(packet.Archive.File)
-	if err != nil {
-		return p, err
+	artifacts := []struct {
+		artifact update.Artifact
+		held     string
+	}{{packet.Archive, "download.tar.gz"}, {packet.Installer, "candidate-installer"}, {packet.Entry, "candidate-entry"}}
+	if packet.Version == 3 {
+		artifacts = append(artifacts, struct {
+			artifact update.Artifact
+			held     string
+		}{packet.Deb, "candidate-deb"}, struct {
+			artifact update.Artifact
+			held     string
+		}{packet.RPM, "candidate-rpm"})
 	}
-	defer in.Close()
-	out, err := root.OpenFile("download.tar.gz", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		return p, err
-	}
-	n, copyErr := io.Copy(out, io.LimitReader(in, packet.Archive.Size+1))
-	if err = errors.Join(copyErr, out.Sync(), out.Close(), ctx.Err()); err != nil {
-		return p, err
-	}
-	if n != packet.Archive.Size {
-		return p, errors.New("candidate archive copy incomplete")
-	}
-	installer, err := sourceRoot.Open(packet.Installer.File)
-	if err != nil {
-		return p, err
-	}
-	heldInstaller, err := root.OpenFile("candidate-installer", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		installer.Close()
-		return p, err
-	}
-	h := sha256.New()
-	if err = heldInstaller.Chmod(0600); err == nil {
-		n, err = io.CopyBuffer(io.MultiWriter(heldInstaller, h), io.LimitReader(installer, packet.Installer.Size+1), make([]byte, 32<<10))
-	}
-	err = errors.Join(err, installer.Close(), heldInstaller.Sync(), heldInstaller.Close(), ctx.Err())
-	if err != nil || n != packet.Installer.Size || hex.EncodeToString(h.Sum(nil)) != packet.Installer.SHA256 {
-		return p, errors.New("candidate installer copy differs from the attested pair")
-	}
-	entry, err := sourceRoot.Open(packet.Entry.File)
-	if err != nil {
-		return p, err
-	}
-	heldEntry, err := root.OpenFile("candidate-entry", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		entry.Close()
-		return p, err
-	}
-	h.Reset()
-	if err = heldEntry.Chmod(0600); err == nil {
-		n, err = io.CopyBuffer(io.MultiWriter(heldEntry, h), io.LimitReader(entry, packet.Entry.Size+1), make([]byte, 32<<10))
-	}
-	err = errors.Join(err, entry.Close(), heldEntry.Sync(), heldEntry.Close(), ctx.Err())
-	if err != nil || n != packet.Entry.Size || hex.EncodeToString(h.Sum(nil)) != packet.Entry.SHA256 {
-		return p, errors.New("candidate entry copy differs from the reviewed packet")
+	for _, item := range artifacts {
+		if err = copyHeldCandidate(ctx, sourceRoot, root, item.artifact, item.held); err != nil {
+			return p, err
+		}
 	}
 	m, err := bundle.ExtractVerifiedArchive(filepath.Join(o.Directory, "download.tar.gz"), filepath.Join(o.Directory, "bundle"), bundle.File{SHA256: packet.Archive.SHA256, Bytes: packet.Archive.Size}, packet.BundleSHA256)
 	if err != nil || m.Version != packet.ProductVersion || m.Source != packet.Source {
@@ -220,7 +192,13 @@ func prepareAttestedCandidate(ctx context.Context, o Options, directory string, 
 	}
 	engine, _ := bundle.Names()
 	p.engine = m.Files[engine]
-	p.report = Report{Version: 4, Purpose: "fased-app-installed-candidate-acceptance:v1", MetadataVerified: true, ArchiveVerified: true, BundleVerified: true, Sequence: sequence, Target: d.Target, SeedSHA256: o.SeedSHA256, DescriptorSHA256: ApplicationDescriptorIdentity(d), ArchiveSHA256: d.Archive.SHA256, BundleSHA256: d.BundleSHA256, BundleDirectory: filepath.Join(o.Directory, "bundle"), ProvenanceVerified: true, ProvenanceSHA256: decision.BundleSHA256, TrustPolicySHA256: decision.PolicySHA256}
+	identity := ApplicationDescriptorIdentity(d)
+	if packet.Version == 3 {
+		// The packet digest includes both package identities; the legacy
+		// archive-only descriptor does not.
+		identity = admission.PacketSHA256
+	}
+	p.report = Report{Version: 4, Purpose: "fased-app-installed-candidate-acceptance:v1", MetadataVerified: true, ArchiveVerified: true, BundleVerified: true, Sequence: sequence, Target: d.Target, SeedSHA256: o.SeedSHA256, DescriptorSHA256: identity, ArchiveSHA256: d.Archive.SHA256, BundleSHA256: d.BundleSHA256, BundleDirectory: filepath.Join(o.Directory, "bundle"), ProvenanceVerified: true, LinuxPackageDigestsVerified: packet.Version == 3, ProvenanceSHA256: decision.BundleSHA256, TrustPolicySHA256: decision.PolicySHA256}
 	for name, data := range p.metadata {
 		if err = writeNew(root, name, data); err != nil {
 			return p, err
@@ -229,7 +207,36 @@ func prepareAttestedCandidate(ctx context.Context, o Options, directory string, 
 	if err = writeNew(root, "seed.json", o.Seed); err != nil {
 		return p, err
 	}
-	return p, p.revalidate()
+	return p, p.revalidateHeld()
+}
+
+func copyHeldCandidate(ctx context.Context, source, target *os.Root, artifact update.Artifact, name string) error {
+	entry, err := source.Lstat(artifact.File)
+	if err != nil || !entry.Mode().IsRegular() || entry.Size() != artifact.Size {
+		return errors.New("candidate artifact is not a bounded regular file")
+	}
+	in, err := source.Open(artifact.File)
+	if err != nil {
+		return err
+	}
+	opened, err := in.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(entry, opened) || opened.Size() != artifact.Size {
+		return errors.Join(errors.New("candidate artifact changed during acquisition"), in.Close())
+	}
+	out, err := target.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return errors.Join(err, in.Close())
+	}
+	h := sha256.New()
+	var n int64
+	if err = out.Chmod(0600); err == nil {
+		n, err = io.CopyBuffer(io.MultiWriter(out, h), io.LimitReader(in, artifact.Size+1), make([]byte, 32<<10))
+	}
+	err = errors.Join(err, in.Close(), out.Sync(), out.Close(), ctx.Err())
+	if err != nil || n != artifact.Size || hex.EncodeToString(h.Sum(nil)) != artifact.SHA256 {
+		return errors.New("candidate copy differs from the attested artifact")
+	}
+	return nil
 }
 
 func (p *Prepared) revalidateCandidate(seed Seed, now time.Time) error {
@@ -240,7 +247,7 @@ func (p *Prepared) revalidateCandidate(seed Seed, now time.Time) error {
 		return errors.New("reviewed candidate identity changed")
 	}
 	var packet AttestedPacket
-	if update.StrictJSON(p.metadata[AttestedPacketFile], &packet) != nil || packet.Version != 2 || !attestedBuildIdentity(packet, "") {
+	if update.StrictJSON(p.metadata[AttestedPacketFile], &packet) != nil || (packet.Version != 2 && packet.Version != 3) || !attestedBuildIdentity(packet, "") || (packet.Version == 3) != p.report.LinuxPackageDigestsVerified {
 		return errors.New("candidate packet changed")
 	}
 	d := Descriptor{Binding: seed.Binding, Sequence: p.descriptor.Sequence, ProductVersion: packet.ProductVersion, Source: packet.Source, BundleSHA256: packet.BundleSHA256, Archive: packet.Archive, Release: packet.Release}
@@ -255,7 +262,20 @@ func (p *Prepared) revalidateCandidate(seed Seed, now time.Time) error {
 	if err != nil || entry.SHA256 != packet.Entry.SHA256 || entry.Bytes != packet.Entry.Size {
 		return errors.New("candidate entry changed after verification")
 	}
-	_, err = productionProof(seed, d, p.metadata["provenance.sigstore.json"], now)
+	expected := d.provenanceExpected()
+	if packet.Version == 3 {
+		for _, item := range []struct {
+			artifact update.Artifact
+			held     string
+		}{{packet.Deb, "candidate-deb"}, {packet.RPM, "candidate-rpm"}} {
+			identity, e := bundle.Inspect(filepath.Join(p.options.Directory, item.held))
+			if e != nil || identity.SHA256 != item.artifact.SHA256 || identity.Bytes != item.artifact.Size {
+				return errors.New("native candidate package changed after verification")
+			}
+		}
+		expected.DebSHA256, expected.RPMSHA256 = packet.Deb.SHA256, packet.RPM.SHA256
+	}
+	_, err = productionProofExpected(seed, d, p.metadata["provenance.sigstore.json"], now, expected)
 	return err
 }
 

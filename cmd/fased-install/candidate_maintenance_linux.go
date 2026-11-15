@@ -15,6 +15,9 @@ import (
 )
 
 func stageAttestedCandidate(ctx context.Context, p *bootstrap.Prepared, packetSHA, scope string, diagnostics io.Writer) error {
+	if p == nil || p.Report().LinuxPackageDigestsVerified {
+		return errors.New("native packages require the package-aware installation controller")
+	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	reuse := false
