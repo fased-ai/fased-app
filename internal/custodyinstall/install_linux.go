@@ -799,11 +799,11 @@ func inspectManagedRuntime(m Manifest, allowInactive bool) (bool, error) {
 		if e != nil {
 			return false, e
 		}
-		active, e := classifyManagedRuntime(m, role, b, os.ReadFile)
+		roleReady, e := managedRuntimeReady(m, role, b, os.ReadFile)
 		if e != nil {
 			return false, e
 		}
-		if !active {
+		if !roleReady {
 			if !allowInactive {
 				return false, errors.New("managed service is inactive or belongs to another definition")
 			}
@@ -811,6 +811,23 @@ func inspectManagedRuntime(m Manifest, allowInactive bool) (bool, error) {
 		}
 	}
 	return ready, nil
+}
+
+// A fresh package intentionally keeps its unconfigured signer stopped. This
+// observes only the service state; update admission must still independently
+// verify the signer directory and preserve any existing keys or holds.
+func managedRuntimeReady(m Manifest, role string, raw []byte, read func(string) ([]byte, error)) (bool, error) {
+	active, err := classifyManagedRuntime(m, role, raw, read)
+	if err != nil {
+		return false, err
+	}
+	if m.Layout == PackageLayout && m.Network == "" && role == "signer" {
+		if active || !slices.Contains(strings.Split(string(raw), "\n"), "ActiveState=inactive") {
+			return false, errors.New("unconfigured signer must remain stopped; preserve its state")
+		}
+		return true, nil
+	}
+	return active, nil
 }
 
 func classifyManagedRuntime(m Manifest, role string, raw []byte, read func(string) ([]byte, error)) (bool, error) {

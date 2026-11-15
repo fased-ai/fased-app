@@ -51,6 +51,28 @@ func TestManagedRuntimeSeparatesInactiveFromForeign(t *testing.T) {
 		})
 	}
 }
+
+func TestPackageRuntimeRequiresAnUnconfiguredSignerToStayStopped(t *testing.T) {
+	_, m := packageGateInitialRecord(t)
+	fragment := "/etc/systemd/system/" + instanceUnit(m, "signer")
+	inactive := []byte("ActiveState=inactive\nMainPID=0\nFragmentPath=" + fragment + "\n")
+	failed := []byte("ActiveState=failed\nMainPID=0\nFragmentPath=" + fragment + "\n")
+	active := []byte("ActiveState=active\nMainPID=123\nFragmentPath=" + fragment + "\n")
+	status := []byte(fmt.Sprintf("Uid:\t%d\t%d\t%d\t%d\nNoNewPrivs:\t1\n", m.Signer.UID, m.Signer.UID, m.Signer.UID, m.Signer.UID))
+	read := func(string) ([]byte, error) { return status, nil }
+	if ready, err := managedRuntimeReady(m, "signer", inactive, read); err != nil || !ready {
+		t.Fatal("the intentionally stopped pre-wallet signer blocked the app", ready, err)
+	}
+	for _, raw := range [][]byte{active, failed} {
+		if _, err := managedRuntimeReady(m, "signer", raw, read); err == nil {
+			t.Fatal("an active or failed unconfigured signer was treated as ready")
+		}
+	}
+	m.Network = "devnet"
+	if ready, err := managedRuntimeReady(m, "signer", inactive, read); err != nil || ready {
+		t.Fatal("a configured but stopped signer was treated as running", ready, err)
+	}
+}
 func TestIdentityAndPrivateListenerContract(t *testing.T) {
 	m := fixtureManifest()
 	if e := m.validate(); e != nil {
