@@ -262,6 +262,14 @@ func TestApplicationCheckpointFencesBacksUpAndRecoversWithoutWallet(t *testing.T
 	if e = other.CompleteApplicationCheckpoint(t.Context(), v.Operation.ID, d.receipt); e != nil {
 		t.Fatal("idempotent release", e)
 	}
+	// A replay after restart is idempotent only for the original outcome. In
+	// particular, a different rollback must not be acknowledged as completed.
+	changed := d.receipt
+	changed.Phase = "rolled-back"
+	changed.EngineSHA256 = strings.Repeat("b", 64)
+	if e = other.CompleteApplicationCheckpoint(t.Context(), v.Operation.ID, changed); e == nil {
+		t.Fatal("a different outcome was accepted after the original fence was released")
+	}
 	got, e := os.ReadFile(filepath.Join(s.dir, "retained-ciphertext"))
 	if e != nil || string(got) != string(marker) {
 		t.Fatal("ciphertext changed", e)
@@ -271,6 +279,45 @@ func TestApplicationCheckpointFencesBacksUpAndRecoversWithoutWallet(t *testing.T
 		t.Fatal("owner records changed", setup, e)
 	}
 }
+
+func TestApplicationCheckpointRetryRequiresExactRolledBackOutcome(t *testing.T) {
+	s := fixtureStore(t)
+	fixture := fixtureUpdateController()
+	if err := s.BindApplicationMaintenance(fixture.Check, func(context.Context, string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	updateCommandFixture(t, s, "check")
+	updateTickFixture(t, s)
+	updateCommandFixture(t, s, "apply")
+	updateTickFixture(t, s)
+	v, err := s.ApplicationUpdates(t.Context())
+	if err != nil || v.Operation.Release == nil {
+		t.Fatal("missing update", err)
+	}
+	id, lease := v.Operation.ID, update.NewProbe()
+	if _, err = s.ApplicationOwnerCommand(t.Context(), ApplicationOwnerCommand{Action: "claim", ID: id, Lease: lease}); err != nil {
+		t.Fatal(err)
+	}
+	held, err := s.ApplicationOwnerCommand(t.Context(), ApplicationOwnerCommand{Action: "prepare", ID: id, Lease: lease})
+	if err != nil || held.Checkpoint == nil {
+		t.Fatal("missing original checkpoint", err)
+	}
+	proof := ApplicationUpdateReceipt{ID: id, Sequence: v.Operation.Release.Sequence, ManifestSHA256: v.Operation.Release.ManifestSHA256, EngineSHA256: held.Checkpoint.PreviousEngineSHA256, Phase: "rolled-back"}
+	if err = s.CompleteApplicationCheckpoint(t.Context(), id, proof); err != nil {
+		t.Fatal("original rollback", err)
+	}
+	if err = s.CompleteApplicationCheckpoint(t.Context(), id, proof); err != nil {
+		t.Fatal("identical rollback retry", err)
+	}
+	proof.EngineSHA256 = strings.Repeat("b", 64)
+	if proof.EngineSHA256 == held.Checkpoint.PreviousEngineSHA256 {
+		proof.EngineSHA256 = strings.Repeat("c", 64)
+	}
+	if err = s.CompleteApplicationCheckpoint(t.Context(), id, proof); err == nil {
+		t.Fatal("different rollback executable was accepted after release")
+	}
+}
+
 func TestApplicationCheckpointRefusesCustodyAndTamperedIndex(t *testing.T) {
 	s := fixtureStore(t)
 	d := fixtureUpdateController()

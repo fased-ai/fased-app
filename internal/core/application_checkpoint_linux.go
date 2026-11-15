@@ -131,7 +131,9 @@ func (s *Store) CompleteApplicationCheckpoint(ctx context.Context, id string, pr
 		defer tx.Rollback()
 		phase, p, err := readPause(ctx, tx)
 		o, _, oe := readApplicationUpdate(ctx, tx)
-		if err == nil && oe == nil && phase == "released" && p.Request.IntentID == id && o.ID == id {
+		if err == nil && oe == nil && phase == "released" && p.Request.IntentID == id &&
+			p.Request.Sequence == proof.Sequence && p.Request.ManifestSHA256 == proof.ManifestSHA256 &&
+			o.ID == id && o.Phase == proof.Phase && o.Receipt != nil && *o.Receipt == proof {
 			return nil
 		}
 		return e
