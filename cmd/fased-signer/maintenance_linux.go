@@ -19,10 +19,18 @@ func signerMaintenanceCommand(args []string, in io.Reader, out io.Writer) (resul
 	owner := f.Int("owner", 0, "")
 	id := f.String("operation", "", "")
 	probe := f.String("probe", "", "")
+	location := f.String("location", "", "")
+	instance := f.String("instance", "", "")
 	if err := f.Parse(args[1:]); err != nil || f.NArg() != 0 || *owner <= 0 {
 		return errors.New("fixed maintenance owner required")
 	}
-	c, err := signer.MaintenanceConfig(*owner)
+	var c signer.Config
+	var err error
+	if *location == "" && *instance == "" {
+		c, err = signer.MaintenanceConfig(*owner)
+	} else {
+		c, err = signer.PackageMaintenanceConfig(*owner, *location, *instance)
+	}
 	if err != nil {
 		return err
 	}
@@ -33,7 +41,12 @@ func signerMaintenanceCommand(args []string, in io.Reader, out io.Writer) (resul
 		if !update.IDOK(*id) || *probe != "" {
 			return signer.ErrUnavailable
 		}
-		a, err := update.ReadMaintenanceApproval(*owner, *id)
+		var a update.MaintenanceApproval
+		if *location == "" && *instance == "" {
+			a, err = update.ReadMaintenanceApproval(*owner, *id)
+		} else {
+			a, err = update.ReadPackageMaintenanceApproval(*owner, *location, *instance, *id)
+		}
 		if err != nil || a.InstallationID != c.SignerID {
 			return errors.New("protected installation approval required")
 		}

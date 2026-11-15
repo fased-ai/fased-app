@@ -4,7 +4,6 @@ package signer
 
 import (
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,22 +120,76 @@ func TestMissingCustodyRootDoesNotImplyNoMaintenance(t *testing.T) {
 func TestPackageSignerDoesNotAdoptOwnerWideMaintenanceJournal(t *testing.T) {
 	id := strings.Repeat("a", 32)
 	root := "/var/lib/fased-app-package/1800/local/" + id
-	c := Config{Version: 3, OwnerUID: 1800, SignerID: id, StateDir: root + "/signer-state", SocketDir: root + "/signer-ipc"}
+	c := Config{Version: 3, Mode: OrdinaryCustodyMode, Profile: OwnerCustodyProfile, Provenance: OwnerKeyProvenance, Network: "devnet", OwnerUID: 1800, AppUID: 1801, SignerUID: 1802, SignerID: id, StateDir: root + "/signer-state", SocketDir: root + "/signer-ipc"}
 	calls := 0
 	read := func(int) (update.MaintenanceRecord, error) {
 		calls++
 		return update.MaintenanceRecord{Version: 1, Owner: c.OwnerUID, Phase: "completed"}, nil
 	}
-	if protectedMaintenanceRPCAllowedWithRecord(c, Request{Action: "unlock"}, true, read) {
+	scopedCalls := 0
+	scoped := func(owner int, location, instance string) (update.MaintenanceRecord, error) {
+		scopedCalls++
+		if owner != c.OwnerUID || location != "local" || instance != id {
+			t.Fatal("another instance selected")
+		}
+		return update.MaintenanceRecord{}, os.ErrNotExist
+	}
+	fence := func(string) bool { return true }
+	if protectedMaintenanceRPCAllowedWithReaders(c, Request{Action: "unlock"}, true, read, scoped, fence) {
 		t.Fatal("package signer adopted the unrelated owner-wide completed journal")
 	}
-	if !protectedMaintenanceRPCAllowedWithRecord(c, Request{Action: "status"}, true, read) {
+	if !protectedMaintenanceRPCAllowedWithReaders(c, Request{Action: "status"}, true, read, scoped, fence) {
 		t.Fatal("safe status should remain available")
 	}
-	if calls != 0 {
-		t.Fatal("package signer inspected an owner-wide journal", calls)
+	if calls != 0 || scopedCalls != 2 {
+		t.Fatal("wrong journal selected", calls, scopedCalls)
 	}
-	if session, err := OpenMaintenance(c, strings.Repeat("b", 32)); !errors.Is(err, ErrUnavailable) || session != nil {
-		t.Fatal("package signer attempted to use an owner-wide approval", err)
+	if session, err := OpenMaintenance(c, strings.Repeat("b", 32)); err == nil || session != nil {
+		t.Fatal("missing package approval was accepted", err)
+	}
+}
+
+func TestPackageSignerUsesOnlyMatchingInstanceJournal(t *testing.T) {
+	id, keyHash := strings.Repeat("a", 32), strings.Repeat("b", 64)
+	root := "/var/lib/fased-app-package/1800/local/" + id
+	c := Config{Version: 3, Mode: OrdinaryCustodyMode, Profile: OwnerCustodyProfile, Provenance: OwnerKeyProvenance, Network: "devnet", OwnerUID: 1800, AppUID: 1801, SignerUID: 1802, SignerID: id, StateDir: root + "/signer-state", SocketDir: root + "/signer-ipc"}
+	manifest := map[string]any{"version": 3, "layout": update.PackageInstanceLayout, "mode": c.Mode, "profile": c.Profile, "provenance": c.Provenance, "network": c.Network, "enrollment": true, "owner": c.OwnerUID, "id": id, "root": root, "location": "local", "signerHash": keyHash, "app": map[string]any{"uid": c.AppUID}, "signer": map[string]any{"uid": c.SignerUID}}
+	base, _ := json.Marshal(manifest)
+	core := update.Contract{Lifecycle: update.CurrentLifecycle(), Version: 1, Component: "core", Protocol: 1, PeerProtocol: update.Range{Min: 3, Max: 3}, Features: []string{"account-registry-v1", "fixture-proposals-v1", update.OrdinaryMaintenanceFeature, update.JournalBasePackageFeature}, RequiresPeer: []string{update.OrdinaryMaintenanceFeature}, State: []update.StateSupport{{Name: "core-db", Versions: update.Range{Min: 36, Max: 36}}}}
+	p := &update.MaintenancePackage{Version: "0.1.0", Source: strings.Repeat("c", 40), Sequence: 1, ReleaseSHA256: strings.Repeat("d", 64), ProvenanceSHA256: strings.Repeat("f", 64), Components: []update.Component{
+		{Version: "0.1.0", Contract: core, Artifact: update.Artifact{File: "fased-app", Size: 1, SHA256: strings.Repeat("e", 64)}},
+		{Version: "0.1.0", Contract: OrdinaryUpdateContract(), Artifact: update.Artifact{File: "fased-signer", Size: 1, SHA256: keyHash}},
+	}}
+	r := update.MaintenanceRecord{Version: 1, Owner: c.OwnerUID, OperationID: id, Phase: "idle", Start: "base", Base: base, Target: base, Package: p}
+	legacy := func(int) (update.MaintenanceRecord, error) {
+		t.Fatal("owner-wide journal used")
+		return update.MaintenanceRecord{}, nil
+	}
+	scoped := func(owner int, location, instance string) (update.MaintenanceRecord, error) {
+		if owner != c.OwnerUID || location != "local" || instance != id {
+			t.Fatal("wrong instance selected")
+		}
+		return r, nil
+	}
+	fence := func(path string) bool { return path == root }
+	if !protectedMaintenanceRPCAllowedWithReaders(c, Request{Action: "unlock"}, true, legacy, scoped, fence) {
+		t.Fatal("exact protected idle journal refused")
+	}
+	manifest["id"] = strings.Repeat("9", 32)
+	r.Base, _ = json.Marshal(manifest)
+	if protectedMaintenanceRPCAllowedWithReaders(c, Request{Action: "unlock"}, true, legacy, scoped, fence) {
+		t.Fatal("another instance's journal authorized this signer")
+	}
+	manifest["id"] = id
+	r.Base, _ = json.Marshal(manifest)
+	r.Target = append([]byte(nil), r.Base...)
+	r.OperationID, r.Phase, r.Start = strings.Repeat("9", 32), "prepared", "base"
+	if !protectedMaintenanceRPCAllowedWithReaders(c, Request{Action: "fixture-update-inventory"}, true, legacy, scoped, fence) {
+		t.Fatal("matching prepared package denied inspection")
+	}
+	manifest["signerHash"] = strings.Repeat("0", 64)
+	r.Target, _ = json.Marshal(manifest)
+	if protectedMaintenanceRPCAllowedWithReaders(c, Request{Action: "fixture-update-inventory"}, true, legacy, scoped, fence) {
+		t.Fatal("target signer hash differed from the protected package")
 	}
 }

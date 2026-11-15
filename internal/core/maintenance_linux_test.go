@@ -8,8 +8,22 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestPackageMetadataMaintenanceRefusesAnotherInstance(t *testing.T) {
+	id := strings.Repeat("a", 32)
+	root, err := update.PackageInstanceRoot(1800, "local", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{root + "/../foreign/app-state", root + "/signer-state", "/var/lib/fased-app-custody-1800/app-state"} {
+		if s, err := OpenPackageMetadataMaintenance(t.Context(), dir, 1800, "local", id, strings.Repeat("b", 32), update.PackageManifestIdentity{}); err == nil || s != nil {
+			t.Fatal("foreign package state reached the maintenance store", dir)
+		}
+	}
+}
 
 func TestMaintenanceColdStoreRecoversCommittedWALWithoutMigration(t *testing.T) {
 	s := fixtureStore(t)

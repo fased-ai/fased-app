@@ -127,7 +127,17 @@ func ordinaryHandoffRPCAllowed(c Config, action string, vault ...*Vault) bool {
 		return true
 	}
 	root := filepath.Dir(c.StateDir)
-	if r, err := update.ReadMaintenanceRecord(c.OwnerUID); err == nil {
+	readRecord := func() (update.MaintenanceRecord, error) {
+		if legacyMaintenanceConfig(c) {
+			return update.ReadMaintenanceRecord(c.OwnerUID)
+		}
+		b, err := installationBoundary(c)
+		if err != nil || b.location == "" {
+			return update.MaintenanceRecord{}, ErrUnavailable
+		}
+		return update.ReadPackageMaintenanceRecord(c.OwnerUID, b.location, c.SignerID)
+	}
+	if r, err := readRecord(); err == nil {
 		if f, e := update.OpenProtected(root+"/update-active.json", 8192, 0644); e == nil {
 			b, e := io.ReadAll(f)
 			f.Close()

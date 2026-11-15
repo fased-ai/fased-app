@@ -22,27 +22,43 @@ func metadataMaintenanceCommand(args []string, in io.Reader, out io.Writer) (res
 	owner := f.Int("owner", 0, "")
 	id := f.String("operation", "", "")
 	probe := f.String("probe", "", "")
+	location := f.String("location", "", "")
+	instance := f.String("instance", "", "")
 	if err := f.Parse(args[1:]); err != nil || f.NArg() != 0 || *owner <= 0 {
 		return errors.New("fixed maintenance owner required")
 	}
 	root := fmt.Sprintf("/var/lib/fased-app-custody-%d", *owner)
+	if *location != "" || *instance != "" {
+		var err error
+		root, err = update.PackageInstanceRoot(*owner, *location, *instance)
+		if err != nil {
+			return err
+		}
+	}
 	c, err := signer.LoadConfig(root + "/identity.json")
 	if err != nil {
 		return err
 	}
-	if c.OwnerUID != *owner || os.Getuid() != c.AppUID || os.Geteuid() != c.AppUID {
+	if c.OwnerUID != *owner || *instance != "" && c.SignerID != *instance || os.Getuid() != c.AppUID || os.Geteuid() != c.AppUID {
 		return errors.New("original app identity required")
 	}
 	if err = signer.CheckApplication(root+"/identity.json", root, root+"/app-state"); err != nil {
 		return err
 	}
+	expected := update.PackageManifestIdentity{Layout: update.PackageInstanceLayout, Enrollment: true, Version: c.Version, Mode: c.Mode, Profile: c.Profile, Provenance: c.Provenance, Network: c.Network, ID: c.SignerID, Owner: c.OwnerUID, Root: root, Location: *location}
+	expected.App.UID, expected.Signer.UID = c.AppUID, c.SignerUID
 	ctx := context.Background()
 	if args[0] == "custody-maintenance-verify" {
 		if !update.IDOK(*id) || *probe != "" {
 			return errors.New("one exact original recovery required")
 		}
-		r, err := update.ReadMaintenanceRecord(*owner)
-		if err != nil || r.OperationID != *id || r.Recovery == nil {
+		var r update.MaintenanceRecord
+		if *location == "" {
+			r, err = update.ReadMaintenanceRecord(*owner)
+		} else {
+			r, err = update.ReadPackageMaintenanceRecord(*owner, *location, *instance)
+		}
+		if err != nil || r.OperationID != *id || r.Recovery == nil || *location != "" && !update.PackageMaintenanceRecordMatchesIdentity(r, expected) {
 			return errors.New("protected original recovery index required")
 		}
 		if err = core.VerifyFixtureColdRecovery(ctx, root+"/app-state", *r.Recovery); err != nil {
@@ -63,7 +79,12 @@ func metadataMaintenanceCommand(args []string, in io.Reader, out io.Writer) (res
 	if !update.IDOK(*id) || *probe != "" {
 		return errors.New("one maintenance operation required")
 	}
-	s, err := core.OpenMetadataMaintenance(ctx, root+"/app-state", *owner, *id)
+	var s *core.MetadataMaintenanceSession
+	if *location == "" {
+		s, err = core.OpenMetadataMaintenance(ctx, root+"/app-state", *owner, *id)
+	} else {
+		s, err = core.OpenPackageMetadataMaintenance(ctx, root+"/app-state", *owner, *location, *instance, *id, expected)
+	}
 	if err != nil {
 		return err
 	}

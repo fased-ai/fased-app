@@ -3,6 +3,7 @@
 package update
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -72,12 +73,44 @@ func ReadMaintenanceApproval(owner int, id string) (MaintenanceApproval, error) 
 	return a, nil
 }
 
-func ReadMaintenanceRecord(owner int) (MaintenanceRecord, error) {
-	var r MaintenanceRecord
-	if owner <= 0 {
-		return r, errors.New("maintenance owner required")
+// ReadPackageMaintenanceApproval never falls back to an owner-wide approval.
+// The instance path and the approved installation identity must both match.
+func ReadPackageMaintenanceApproval(owner int, location, instance, operation string) (MaintenanceApproval, error) {
+	var a MaintenanceApproval
+	root, err := PackageMaintenanceRoot(owner, location, instance)
+	if err != nil || !IDOK(operation) {
+		return a, errors.New("exact package maintenance identity required")
 	}
-	f, err := OpenProtected(MaintenanceOwnerRoot(owner)+"/custody.json", 256<<10, 0644)
+	f, err := OpenProtected(root+"/updates/"+operation+"/approval.json", 64<<10, 0644)
+	if err != nil {
+		return a, err
+	}
+	b, readErr := io.ReadAll(io.LimitReader(f, (64<<10)+1))
+	if err = errors.Join(readErr, f.Close()); err != nil || StrictJSON(b, &a) != nil || a.Validate() != nil || a.Owner != owner || a.InstallationID != instance || a.OperationID != operation {
+		return MaintenanceApproval{}, errors.New("protected package approval differs")
+	}
+	f, err = OpenProtected(root+"/authority.json", 8192, 0644)
+	if err != nil {
+		return MaintenanceApproval{}, err
+	}
+	b, readErr = io.ReadAll(io.LimitReader(f, 8193))
+	var authority MaintenanceAuthority
+	if err = errors.Join(readErr, f.Close()); err != nil || StrictJSON(b, &authority) != nil || authority.Version != 1 || authority.Owner != owner || authority.Profile != location || authority.ImageSHA256 != a.HelperSHA256 {
+		return MaintenanceApproval{}, errors.New("package approval is not bound to its installed helper")
+	}
+	return a, nil
+}
+
+func ReadMaintenanceRecord(owner int) (MaintenanceRecord, error) {
+	if owner <= 0 {
+		return MaintenanceRecord{}, errors.New("maintenance owner required")
+	}
+	return readMaintenanceRecord(MaintenanceOwnerRoot(owner)+"/custody.json", owner)
+}
+
+func readMaintenanceRecord(path string, owner int) (MaintenanceRecord, error) {
+	var r MaintenanceRecord
+	f, err := OpenProtected(path, 256<<10, 0644)
 	if err != nil {
 		return r, err
 	}
@@ -87,4 +120,32 @@ func ReadMaintenanceRecord(owner int) (MaintenanceRecord, error) {
 		return r, errors.New("invalid protected maintenance record")
 	}
 	return r, nil
+}
+
+// ReadPackageMaintenanceRecord reads only this instance's protected journal.
+func ReadPackageMaintenanceRecord(owner int, location, instance string) (MaintenanceRecord, error) {
+	root, err := PackageMaintenanceRoot(owner, location, instance)
+	if err != nil {
+		return MaintenanceRecord{}, err
+	}
+	r, err := readMaintenanceRecord(root+"/custody.json", owner)
+	if err != nil {
+		return MaintenanceRecord{}, err
+	}
+	if !packageRecordMatchesInstance(r, owner, location, instance) {
+		return MaintenanceRecord{}, errors.New("package maintenance journal belongs to another instance")
+	}
+	return r, nil
+}
+
+func packageRecordMatchesInstance(r MaintenanceRecord, owner int, location, instance string) bool {
+	root, err := PackageInstanceRoot(owner, location, instance)
+	if err != nil || r.Owner != owner || len(r.Base) == 0 {
+		return false
+	}
+	match := func(raw json.RawMessage) bool {
+		m, err := PackageManifestIdentityFromJSON(raw)
+		return err == nil && m.Layout == PackageInstanceLayout && m.Version == 3 && m.Owner == owner && m.ID == instance && m.Root == root && m.Location == location
+	}
+	return match(r.Base) && (len(r.Target) == 0 || match(r.Target))
 }

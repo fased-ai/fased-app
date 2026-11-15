@@ -70,20 +70,54 @@ func openMaintenanceStore(ctx context.Context, dir string) (*Store, io.Closer, e
 }
 
 type MetadataMaintenanceSession struct {
-	s    *Store
-	lock io.Closer
-	a    update.MaintenanceApproval
+	s        *Store
+	lock     io.Closer
+	a        update.MaintenanceApproval
+	location string
+	instance string
+	expected *update.PackageManifestIdentity
 }
 
 func OpenMetadataMaintenance(ctx context.Context, dir string, owner int, id string) (*MetadataMaintenanceSession, error) {
-	record, err := update.ReadMaintenanceRecord(owner)
+	return openMetadataMaintenance(ctx, dir, owner, "", "", id, nil)
+}
+
+// OpenPackageMetadataMaintenance binds the same cold-store operation to one
+// protected package instance. It never selects another instance's journal.
+func OpenPackageMetadataMaintenance(ctx context.Context, dir string, owner int, location, instance, id string, expected update.PackageManifestIdentity) (*MetadataMaintenanceSession, error) {
+	root, err := update.PackageInstanceRoot(owner, location, instance)
+	if err != nil || dir != root+"/app-state" || expected.Layout != update.PackageInstanceLayout || expected.Owner != owner || expected.Location != location || expected.ID != instance || expected.Root != root {
+		return nil, errors.New("exact package app state required")
+	}
+	return openMetadataMaintenance(ctx, dir, owner, location, instance, id, &expected)
+}
+
+func readMetadataRecord(owner int, location, instance string) (update.MaintenanceRecord, error) {
+	if location == "" && instance == "" {
+		return update.ReadMaintenanceRecord(owner)
+	}
+	return update.ReadPackageMaintenanceRecord(owner, location, instance)
+}
+
+func readMetadataApproval(owner int, location, instance, id string) (update.MaintenanceApproval, error) {
+	if location == "" && instance == "" {
+		return update.ReadMaintenanceApproval(owner, id)
+	}
+	return update.ReadPackageMaintenanceApproval(owner, location, instance, id)
+}
+
+func openMetadataMaintenance(ctx context.Context, dir string, owner int, location, instance, id string, expected *update.PackageManifestIdentity) (*MetadataMaintenanceSession, error) {
+	record, err := readMetadataRecord(owner, location, instance)
 	if err != nil {
 		return nil, err
+	}
+	if expected != nil && !update.PackageMaintenanceRecordMatchesIdentity(record, *expected) {
+		return nil, errors.New("package maintenance identity changed")
 	}
 	if record.OperationID != id || record.Start != "" || record.Package == nil {
 		return nil, errors.New("cold metadata requires the protected stopped-service transaction")
 	}
-	a, err := update.ReadMaintenanceApproval(owner, id)
+	a, err := readMetadataApproval(owner, location, instance, id)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
@@ -101,7 +135,15 @@ func OpenMetadataMaintenance(ctx context.Context, dir string, owner int, id stri
 		lock.Close()
 		return nil, errors.New("existing app metadata differs from maintenance approval")
 	}
-	return &MetadataMaintenanceSession{s: s, lock: lock, a: a}, nil
+	return &MetadataMaintenanceSession{s: s, lock: lock, a: a, location: location, instance: instance, expected: expected}, nil
+}
+
+func (s *MetadataMaintenanceSession) record() (update.MaintenanceRecord, error) {
+	r, err := readMetadataRecord(s.a.Owner, s.location, s.instance)
+	if err == nil && s.expected != nil && !update.PackageMaintenanceRecordMatchesIdentity(r, *s.expected) {
+		return update.MaintenanceRecord{}, errors.New("package maintenance identity changed")
+	}
+	return r, err
 }
 
 func (s *MetadataMaintenanceSession) Close() error {
@@ -130,7 +172,7 @@ func (s *MetadataMaintenanceSession) Request(ctx context.Context, q update.Maint
 		r.Snapshot = &v
 		return r, err
 	case "initialize":
-		record, err := update.ReadMaintenanceRecord(s.a.Owner)
+		record, err := s.record()
 		if err != nil {
 			return r, err
 		}
@@ -157,12 +199,12 @@ func (s *MetadataMaintenanceSession) Request(ctx context.Context, q update.Maint
 		op := ApplicationUpdateOperation{ID: q.OperationID, Phase: "applying", Release: &ApplicationRelease{EngineSHA256: engine, Version: p.Version, Sequence: p.Sequence, ManifestSHA256: p.ReleaseSHA256, Target: update.Target{OS: "linux", Arch: "amd64"}}, PolicySHA256: update.SnapshotDigest("application-update-policy", view.Policy), BootID: s.s.bootID}
 		return r, s.s.publishApplicationUpdate(ctx, op, view.Revision)
 	case "pause":
-		approval, err := update.ReadMaintenanceApproval(s.a.Owner, q.OperationID)
+		approval, err := readMetadataApproval(s.a.Owner, s.location, s.instance, q.OperationID)
 		if err != nil {
 			return r, err
 		}
 		s.a = approval
-		record, err := update.ReadMaintenanceRecord(s.a.Owner)
+		record, err := s.record()
 		if err != nil {
 			return r, err
 		}

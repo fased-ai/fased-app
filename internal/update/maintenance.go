@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // JournalBasePackageFeature declares that both installed roles understand the
@@ -18,6 +19,7 @@ const JournalBasePackageFeature = "custody-journal-base-package-v1"
 const NativeDesktopJournalFeature = "custody-journal-native-desktop-v1"
 
 const MaintenanceRoot = "/var/lib/fased-maintenance"
+const PackageInstanceLayout = "linux-package-v1"
 
 // PackageInstanceRoot and PackageInstanceUnit define one installed instance.
 // Both the installer and signer use these canonical identities at OS boundaries.
@@ -33,6 +35,94 @@ func PackageInstanceUnit(owner int, location, id, role string) (string, error) {
 		return "", errors.New("invalid package service identity")
 	}
 	return fmt.Sprintf("fased-package-%d-%s-%s-%s.service", owner, location, id, role), nil
+}
+
+// PackageMaintenanceRoot confines the existing maintenance journal and
+// approvals to one installed package instance.
+func PackageMaintenanceRoot(owner int, location, instance string) (string, error) {
+	if _, err := PackageInstanceRoot(owner, location, instance); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s/instances/%d/%s/%s", MaintenanceRoot, owner, location, instance), nil
+}
+
+func PackageMaintenanceDirectory(owner int, location, instance, operation string) (string, error) {
+	root, err := PackageMaintenanceRoot(owner, location, instance)
+	if err != nil || !IDOK(operation) {
+		return "", errors.New("exact package maintenance operation required")
+	}
+	return root + "/updates/" + operation, nil
+}
+
+// PackageManifestIdentity is the public identity needed to bind a protected
+// journal to its signer. It carries no credentials or execution authority.
+type PackageManifestIdentity struct {
+	Layout            string `json:"layout"`
+	Mode              string `json:"mode"`
+	Profile           string `json:"profile"`
+	Provenance        string `json:"provenance"`
+	Network           string `json:"network"`
+	ID                string `json:"id"`
+	Root              string `json:"root"`
+	Location          string `json:"location"`
+	SignerHash        string `json:"signerHash"`
+	InspectionBridge  string `json:"inspectionBridge"`
+	Enrollment        bool   `json:"enrollment"`
+	NativeOwnerAccess bool   `json:"nativeOwnerAccess"`
+	Version           int    `json:"version"`
+	Owner             int    `json:"owner"`
+	App               struct {
+		UID int `json:"uid"`
+	} `json:"app"`
+	Signer struct {
+		UID int `json:"uid"`
+	} `json:"signer"`
+}
+
+// SamePackageManifestIdentity allows the executable hash to change while the
+// owner, app, signer and installed instance remain exactly the same.
+func SamePackageManifestIdentity(a, b PackageManifestIdentity) bool {
+	a.SignerHash, b.SignerHash = "", ""
+	return a == b
+}
+
+func PackageMaintenanceRecordMatchesIdentity(r MaintenanceRecord, expected PackageManifestIdentity) bool {
+	if r.Owner != expected.Owner || expected.Layout != PackageInstanceLayout {
+		return false
+	}
+	base, err := PackageManifestIdentityFromJSON(r.Base)
+	if err != nil || !SamePackageManifestIdentity(base, expected) {
+		return false
+	}
+	if len(r.Target) == 0 {
+		return false
+	}
+	target, err := PackageManifestIdentityFromJSON(r.Target)
+	return err == nil && SamePackageManifestIdentity(target, expected)
+}
+
+func PackageManifestIdentityFromJSON(raw []byte) (PackageManifestIdentity, error) {
+	var m PackageManifestIdentity
+	var obj map[string]json.RawMessage
+	if StrictJSON(raw, &obj) != nil || obj == nil || rejectPackageAliases(obj, "layout", "mode", "profile", "provenance", "network", "id", "root", "location", "signerHash", "inspectionBridge", "enrollment", "nativeOwnerAccess", "version", "owner", "app", "signer") {
+		return m, errors.New("invalid package manifest identity")
+	}
+	var app, signer map[string]json.RawMessage
+	if StrictJSON(obj["app"], &app) != nil || app == nil || rejectPackageAliases(app, "uid") || StrictJSON(obj["signer"], &signer) != nil || signer == nil || rejectPackageAliases(signer, "uid") || json.Unmarshal(raw, &m) != nil || !m.Enrollment || m.NativeOwnerAccess || m.InspectionBridge != "" || m.App.UID <= 0 || m.Signer.UID <= 0 || m.App.UID == m.Signer.UID || m.Owner == m.App.UID || m.Owner == m.Signer.UID {
+		return PackageManifestIdentity{}, errors.New("invalid package signer identity")
+	}
+	return m, nil
+}
+
+func rejectPackageAliases(obj map[string]json.RawMessage, names ...string) bool {
+	for key := range obj {
+		for _, name := range names {
+			if key != name && strings.EqualFold(key, name) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type MaintenanceAuthority struct {

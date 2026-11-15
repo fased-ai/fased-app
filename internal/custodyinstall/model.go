@@ -29,7 +29,7 @@ type Identity struct {
 	GID  int    `json:"gid"`
 }
 
-const PackageLayout = "linux-package-v1"
+const PackageLayout = update.PackageInstanceLayout
 
 type Manifest struct {
 	Layout            string   `json:"layout,omitempty"`

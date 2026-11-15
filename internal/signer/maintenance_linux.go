@@ -26,16 +26,29 @@ func Maintenance(c Config, q update.MaintenanceCommand) (Response, error) {
 }
 
 type MaintenanceSession struct {
-	v *Vault
-	c Config
-	a update.MaintenanceApproval
+	v         *Vault
+	a         update.MaintenanceApproval
+	directory string
 }
 
 func OpenMaintenance(c Config, id string) (*MaintenanceSession, error) {
-	if !legacyMaintenanceConfig(c) {
-		return nil, ErrUnavailable
+	var a update.MaintenanceApproval
+	var dir string
+	var err error
+	if legacyMaintenanceConfig(c) {
+		a, err = update.ReadMaintenanceApproval(c.OwnerUID, id)
+		dir = update.MaintenanceDirectory(c.OwnerUID, id)
+	} else {
+		boundary, e := installationBoundary(c)
+		if e != nil || boundary.location == "" {
+			return nil, ErrUnavailable
+		}
+		a, err = update.ReadPackageMaintenanceApproval(c.OwnerUID, boundary.location, c.SignerID, id)
+		dir, e = update.PackageMaintenanceDirectory(c.OwnerUID, boundary.location, c.SignerID, id)
+		if e != nil {
+			return nil, e
+		}
 	}
-	a, err := update.ReadMaintenanceApproval(c.OwnerUID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -46,11 +59,11 @@ func OpenMaintenance(c Config, id string) (*MaintenanceSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &MaintenanceSession{v: v, c: c, a: a}, nil
+	return &MaintenanceSession{v: v, a: a, directory: dir}, nil
 }
 func (s *MaintenanceSession) Close() error { return s.v.Close() }
 func (s *MaintenanceSession) Request(q update.MaintenanceCommand) (Response, error) {
-	v, c, a := s.v, s.c, s.a
+	v, a := s.v, s.a
 	if q.OperationID != a.OperationID {
 		return Response{}, errors.New("maintenance operation cannot change")
 	}
@@ -126,7 +139,7 @@ func (s *MaintenanceSession) Request(q update.MaintenanceCommand) (Response, err
 				if status.Files[index].Artifact != artifact {
 					return r, errors.New("staged artifact binding changed")
 				}
-				f, err := update.OpenProtected(filepath.Join(update.MaintenanceDirectory(c.OwnerUID, q.OperationID), artifact.File), artifact.Size, 0755)
+				f, err := update.OpenProtected(filepath.Join(s.directory, artifact.File), artifact.Size, 0755)
 				if err != nil {
 					return r, err
 				}
@@ -206,6 +219,27 @@ func MaintenanceConfig(owner int) (Config, error) {
 	return LoadConfig(filepath.Join("/var/lib", "fased-app-custody-"+strconv.Itoa(owner), "identity.json"))
 }
 
+// PackageMaintenanceConfig selects one protected installed instance. The
+// ordinary owner cannot impersonate the signer UID through this entry.
+func PackageMaintenanceConfig(owner int, location, instance string) (Config, error) {
+	if owner <= 0 || os.Getuid() == 0 || os.Geteuid() != os.Getuid() {
+		return Config{}, ErrUnavailable
+	}
+	root, err := update.PackageInstanceRoot(owner, location, instance)
+	if err != nil {
+		return Config{}, err
+	}
+	c, err := LoadConfig(root + "/identity.json")
+	if err != nil {
+		return Config{}, err
+	}
+	b, err := installationBoundary(c)
+	if err != nil || b.root != root || b.location != location || c.OwnerUID != owner || c.SignerID != instance || os.Getuid() != c.SignerUID {
+		return Config{}, ErrUnavailable
+	}
+	return c, nil
+}
+
 func InspectMaintenanceInventory(c Config, probe string) (Response, error) {
 	if !update.IDOK(probe) {
 		return Response{}, ErrUnavailable
@@ -232,20 +266,27 @@ func InspectMaintenanceInventory(c Config, probe string) (Response, error) {
 // A root-owned deployment cannot be redirected by the legacy owner RPC.
 // The signer still validates every actual phase and bound preflight.
 func protectedMaintenanceRPCAllowed(c Config, q Request, owner bool) bool {
-	return protectedMaintenanceRPCAllowedWithRecord(c, q, owner, update.ReadMaintenanceRecord)
+	return protectedMaintenanceRPCAllowedWithReaders(c, q, owner, update.ReadMaintenanceRecord, update.ReadPackageMaintenanceRecord, protectedMaintenanceFenceAbsent)
 }
 
-func protectedMaintenanceRPCAllowedWithRecord(c Config, q Request, owner bool, read func(int) (update.MaintenanceRecord, error)) bool {
-	// The legacy record is owner-wide. Until the package controller supplies an
-	// instance-bound journal, it must not authorize a different signer's state.
+func protectedMaintenanceRPCAllowedWithReaders(c Config, q Request, owner bool, legacy func(int) (update.MaintenanceRecord, error), scoped func(int, string, string) (update.MaintenanceRecord, error), fence func(string) bool) bool {
+	// Never substitute the owner-wide record for a missing instance record.
 	if !legacyMaintenanceConfig(c) {
-		return q.Action == "status" || q.Action == "lock"
+		boundary, err := installationBoundary(c)
+		if err != nil || boundary.location == "" {
+			return q.Action == "status" || q.Action == "lock"
+		}
+		r, err := scoped(c.OwnerUID, boundary.location, c.SignerID)
+		if err != nil || !packageMaintenanceRecordMatchesSigner(c, boundary, r) {
+			return q.Action == "status" || q.Action == "lock"
+		}
+		return protectedMaintenanceRecordRPCAllowed(c, q, owner, r, func() bool { return fence(boundary.root) })
 	}
-	r, err := read(c.OwnerUID)
+	r, err := legacy(c.OwnerUID)
 	if errors.Is(err, os.ErrNotExist) {
 		if c.Version == 3 {
 			return completedMaintenanceRPCAllowed(q, func() bool {
-				return protectedMaintenanceFenceAbsent(filepath.Dir(c.StateDir))
+				return fence(filepath.Dir(c.StateDir))
 			})
 		}
 		return true
@@ -254,8 +295,55 @@ func protectedMaintenanceRPCAllowedWithRecord(c Config, q Request, owner bool, r
 		return false
 	}
 	return protectedMaintenanceRecordRPCAllowed(c, q, owner, r, func() bool {
-		return protectedMaintenanceFenceAbsent(filepath.Dir(c.StateDir))
+		return fence(filepath.Dir(c.StateDir))
 	})
+}
+
+func packageMaintenanceRecordMatchesSigner(c Config, b signerInstallationBoundary, r update.MaintenanceRecord) bool {
+	if r.Version != 1 || r.Owner != c.OwnerUID || b.location == "" || b.root != filepath.Dir(c.StateDir) {
+		return false
+	}
+	expected := update.PackageManifestIdentity{Layout: update.PackageInstanceLayout, Enrollment: true, Version: c.Version, Mode: c.Mode, Profile: c.Profile, Provenance: c.Provenance, Network: c.Network, ID: c.SignerID, Owner: c.OwnerUID, Root: b.root, Location: b.location}
+	expected.App.UID, expected.Signer.UID = c.AppUID, c.SignerUID
+	match := func(raw json.RawMessage) (update.PackageManifestIdentity, bool) {
+		m, err := update.PackageManifestIdentityFromJSON(raw)
+		return m, err == nil && update.SamePackageManifestIdentity(m, expected)
+	}
+	base, baseOK := match(r.Base)
+	target, targetOK := match(r.Target)
+	if !baseOK || !targetOK {
+		return false
+	}
+	if r.Phase == "idle" {
+		return r.ValidateIdle() == nil
+	}
+	if !r.RecoveryEligible() || r.Package == nil {
+		return false
+	}
+	signerHash := func(components []update.Component) string {
+		for _, component := range components {
+			if component.Contract.Component == "signer" {
+				return component.Artifact.SHA256
+			}
+		}
+		return ""
+	}
+	if target.SignerHash == "" || signerHash(r.Package.Components) != target.SignerHash {
+		return false
+	}
+	if r.Installation != nil && (r.Installation.Binding.InstallationID != c.SignerID || r.Installation.Binding.PreviousSigner != base.SignerHash || r.Installation.Binding.TargetSigner != target.SignerHash) {
+		return false
+	}
+	if r.Approval != nil {
+		a := r.Approval
+		if a.Validate() != nil || a.Owner != c.OwnerUID || a.InstallationID != c.SignerID || a.OperationID != r.OperationID || a.ReleaseSHA256 != r.Package.ReleaseSHA256 || a.PreviousSigner != base.SignerHash || signerHash(a.Plan.Components) != target.SignerHash {
+			return false
+		}
+	}
+	if r.Staged != nil && (r.Approval == nil || r.Staged.ID != r.OperationID || r.Staged.ManifestSHA256 != r.Approval.Digest()) {
+		return false
+	}
+	return r.Phase != "completed" || r.Installation != nil && r.Installation.Phase == "completed"
 }
 
 func legacyMaintenanceConfig(c Config) bool {
@@ -285,7 +373,7 @@ func protectedMaintenanceRecordRPCAllowed(c Config, q Request, owner bool, r upd
 		if r.ValidateIdle() != nil || c.Version != 3 || r.Owner != c.OwnerUID || r.OperationID != c.SignerID ||
 			json.Unmarshal(r.Base, &identity) != nil || identity.Version != 3 || !identity.Enrollment || identity.Owner != c.OwnerUID ||
 			identity.ID != c.SignerID || identity.Signer.UID != c.SignerUID || identity.Root != filepath.Dir(c.StateDir) ||
-			identity.Root != "/var/lib/fased-app-custody-"+strconv.Itoa(c.OwnerUID) ||
+			legacyMaintenanceConfig(c) && identity.Root != "/var/lib/fased-app-custody-"+strconv.Itoa(c.OwnerUID) ||
 			c.Provenance == OwnerKeyProvenance && r.Package.DevelopmentOnly {
 			return false
 		}

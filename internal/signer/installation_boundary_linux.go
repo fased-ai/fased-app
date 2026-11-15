@@ -32,7 +32,7 @@ type InstallationGuardMarker struct {
 }
 
 type signerInstallationBoundary struct {
-	root, app, signer string
+	root, app, signer, location string
 }
 
 func (b signerInstallationBoundary) unit(role string) string {
@@ -74,7 +74,7 @@ func installationBoundary(c Config) (signerInstallationBoundary, error) {
 		}
 		signerUnit, err := update.PackageInstanceUnit(c.OwnerUID, location, c.SignerID, "signer")
 		if err == nil {
-			return signerInstallationBoundary{root: root, app: app, signer: signerUnit}, nil
+			return signerInstallationBoundary{root: root, app: app, signer: signerUnit, location: location}, nil
 		}
 	}
 	return signerInstallationBoundary{}, errors.New("exact signer installation paths required")
@@ -106,6 +106,13 @@ func VerifyInstallationPreparationBoundary(c Config) error {
 		return err
 	}
 	marker, source := boundary.root+"/update-start-blocked.json", boundary.root+"/maintenance/preparation-fence.json"
+	if boundary.location != "" {
+		maintenanceRoot, err := update.PackageMaintenanceRoot(c.OwnerUID, boundary.location, c.SignerID)
+		if err != nil {
+			return err
+		}
+		source = maintenanceRoot + "/preparation-fence.json"
+	}
 	want, err := InstallationPreparationFenceBytes(c.OwnerUID, c.SignerID)
 	if err != nil {
 		return err
