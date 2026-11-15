@@ -38,6 +38,8 @@ var compiledFirstInstallBinding *firstInstallBinding
 // Tests can substitute a nonprivileged receiver; production keeps the fixed
 // installed maintenance entry and has no runtime override.
 var candidateMaintenanceStage = stageAttestedCandidate
+var packageCandidateUpdateBaseline = candidatePackageUpdateBaseline
+var packageCandidateMaintenanceStage = stageAttestedPackageCandidate
 
 func retailInstallerOptions(binding *firstInstallBinding, cache string) (bootstrap.Options, error) {
 	if binding == nil || len(binding.Seed) == 0 {
@@ -117,24 +119,42 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	installCandidate := f.String("install-candidate", "", "install one independently attested Local candidate")
 	stageCandidate := f.String("stage-candidate", "", "admit one independently attested manual update candidate")
 	candidatePacket := f.String("candidate-packet-sha256", "", "exact reviewed candidate packet digest")
+	packageLocation := f.String("package-location", "", "installed package profile for candidate acceptance")
+	packageInstance := f.String("package-instance", "", "exact installed package instance for candidate acceptance")
 	if err := f.Parse(args); err != nil {
 		return err
 	}
 	if f.NArg() != 0 {
 		return errors.New("unexpected installer arguments")
 	}
+	packageFlags := false
+	f.Visit(func(flag *flag.Flag) {
+		if flag.Name == "package-location" || flag.Name == "package-instance" {
+			packageFlags = true
+		}
+	})
 	if *stageCandidate != "" {
 		mixed := false
 		f.Visit(func(flag *flag.Flag) {
-			if flag.Name != "stage-candidate" && flag.Name != "candidate-packet-sha256" {
+			if flag.Name != "stage-candidate" && flag.Name != "candidate-packet-sha256" && flag.Name != "package-location" && flag.Name != "package-instance" {
 				mixed = true
 			}
 		})
 		digest, e := hex.DecodeString(*candidatePacket)
+		if packageFlags {
+			if _, err := update.PackageInstanceRoot(os.Getuid(), *packageLocation, *packageInstance); err != nil {
+				mixed = true
+			}
+		}
 		if mixed || !filepath.IsAbs(*stageCandidate) || filepath.Clean(*stageCandidate) != *stageCandidate || len(digest) != 32 || hex.EncodeToString(digest) != *candidatePacket || e != nil || compiledFirstInstallBinding == nil {
 			return errors.New("manual candidate update requires its exact packet and compiled installer trust")
 		}
-		baseline, e := candidateUpdateBaseline()
+		var baseline string
+		if packageFlags {
+			baseline, e = packageCandidateUpdateBaseline(*packageLocation, *packageInstance)
+		} else {
+			baseline, e = candidateUpdateBaseline()
+		}
 		if e != nil {
 			return e
 		}
@@ -152,12 +172,24 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 			return e
 		}
 		defer p.Close()
-		if e = candidateMaintenanceStage(context.Background(), p, *candidatePacket, "update", errOut); e != nil {
+		if packageFlags {
+			e = packageCandidateMaintenanceStage(context.Background(), p, *candidatePacket, *packageLocation, *packageInstance, baseline, errOut)
+		} else {
+			e = candidateMaintenanceStage(context.Background(), p, *candidatePacket, "update", errOut)
+		}
+		if e != nil {
 			return e
 		}
 		p.RetainAcquisitionEvidence()
-		_, e = fmt.Fprintln(out, "Candidate ready for manual Update.")
+		if packageFlags {
+			_, e = fmt.Fprintln(out, "Candidate staged for the selected installation.")
+		} else {
+			_, e = fmt.Fprintln(out, "Candidate ready for manual Update.")
+		}
 		return e
+	}
+	if packageFlags {
+		return errors.New("package candidate identity requires a manual candidate update")
 	}
 	if *installCandidate != "" || *candidatePacket != "" {
 		mixed := false

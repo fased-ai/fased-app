@@ -87,7 +87,7 @@ func TestNativeLinuxCandidateInspectionBindsBothPackagesWithoutInstalling(t *tes
 	if err = os.WriteFile(filepath.Join(dir, "first-install-seed.json"), o.Seed, 0600); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.CommandContext(t.Context(), "go", "test", "./cmd/fased-install", "-run", "^TestAttestedCandidateCLI$", "-count=1")
+	command := exec.CommandContext(t.Context(), "go", "test", "./cmd/fased-install", "-run", "^(TestAttestedCandidateCLI|TestPackageCandidateStreamCLI)$", "-count=1")
 	command.Dir = filepath.Join("..", "..")
 	command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly -buildvcs=false", "GOPROXY=off", "GOSUMDB=off", "FASED_ATTESTED_CANDIDATE_FIXTURE=" + dir, "FASED_NATIVE_PACKAGE_CANDIDATE=1"}
 	if cache := os.Getenv("GOCACHE"); cache != "" {

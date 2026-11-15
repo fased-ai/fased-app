@@ -17,3 +17,11 @@ func stageAttestedCandidate(context.Context, *bootstrap.Prepared, string, string
 func candidateUpdateBaseline() (string, error) {
 	return "", errors.New("protected candidate staging requires Linux")
 }
+
+func candidatePackageUpdateBaseline(string, string) (string, error) {
+	return "", errors.New("protected package candidate staging requires Linux")
+}
+
+func stageAttestedPackageCandidate(context.Context, *bootstrap.Prepared, string, string, string, string, io.Writer) error {
+	return errors.New("protected package candidate staging requires Linux")
+}

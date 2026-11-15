@@ -68,10 +68,15 @@ func TestUpdateCandidateRejectsMixedModesBeforeReadingInstallation(t *testing.T)
 		{"--stage-candidate", directory, "--candidate-packet-sha256", packet, "--profile", "local"},
 		{"--stage-candidate", directory, "--candidate-packet-sha256", packet, "--development"},
 		{"--stage-candidate", directory, "--candidate-packet-sha256", packet, "--upgrade"},
+		{"--stage-candidate", directory, "--candidate-packet-sha256", packet, "--package-location", "local"},
+		{"--stage-candidate", directory, "--candidate-packet-sha256", packet, "--package-location", "local", "--package-instance", "../foreign"},
 	} {
 		if err := run(args, nil, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "manual candidate update") {
 			t.Fatal("mixed or unbound candidate update accepted", args, err)
 		}
+	}
+	if err := run([]string{"--package-location", "local", "--package-instance", strings.Repeat("1", 32)}, nil, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "manual candidate update") {
+		t.Fatal("package identity was accepted outside candidate staging", err)
 	}
 }
 
