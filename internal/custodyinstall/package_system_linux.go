@@ -494,12 +494,90 @@ func nativePackagePresent(ctx context.Context, family string) (bool, error) {
 	return false, errors.New("native package database cannot be inspected")
 }
 
+func verifyInstalledDebianControls(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return errors.New("installed Debian package metadata is unavailable; preserve it")
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		for _, suffix := range []string{".preinst", ".postinst", ".prerm", ".postrm"} {
+			if !strings.HasSuffix(name, suffix) {
+				continue
+			}
+			pkg := strings.TrimSuffix(name, suffix)
+			if pkg == "fased-app" || strings.HasPrefix(pkg, "fased-app:") {
+				return errors.New("installed Fased package has an unverified maintainer script; preserve it")
+			}
+		}
+	}
+	return nil
+}
+
+var errIncompleteNativePackageInventory = errors.New("installed package inventory is incomplete; preserve it")
+
+func verifyInstalledPackagePaths(raw []byte, family string, files map[string]string, interrupted bool) error {
+	if (family != "apt" && family != "dnf") || len(files) != 5 || len(raw) == 0 {
+		return errors.New("installed package inventory is unavailable; preserve it")
+	}
+	required := map[string]bool{"/usr/bin/fased": false}
+	for name := range files {
+		required["/"+name] = false
+	}
+	directories := map[string]bool{"/usr/lib/fased-app": true, "/usr/share/doc/fased-app": true}
+	if family == "apt" {
+		for _, dir := range []string{"/.", "/usr", "/usr/bin", "/usr/lib", "/usr/share", "/usr/share/doc"} {
+			directories[dir] = true
+		}
+	}
+	seen := make(map[string]bool)
+	for _, name := range strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n") {
+		if seen[name] || !strings.HasPrefix(name, "/") || name != "/." && path.Clean(name) != name {
+			return errors.New("installed package inventory is ambiguous; preserve it")
+		}
+		seen[name] = true
+		if _, ok := required[name]; ok {
+			required[name] = true
+		} else if !directories[name] {
+			return errors.New("installed package owns an unclassified path; preserve it")
+		}
+	}
+	if !interrupted {
+		for _, found := range required {
+			if !found {
+				return errIncompleteNativePackageInventory
+			}
+		}
+	}
+	return nil
+}
+
+func verifyInstalledNativePaths(ctx context.Context, family string, files map[string]string, interrupted bool) error {
+	name, args := "/usr/bin/rpm", []string{"-ql", "--", "fased-app"}
+	if family == "apt" {
+		name, args = "/usr/bin/dpkg-query", []string{"-L", "--", "fased-app"}
+	}
+	listing, err := packageTool(ctx, 64<<10, name, args...)
+	if err != nil {
+		return errors.New("installed package inventory is unavailable; preserve it")
+	}
+	return verifyInstalledPackagePaths(listing, family, files, interrupted)
+}
+
 func preflightNativePackage(ctx context.Context, m Manifest, previous *update.MaintenancePackage, target update.MaintenancePackage, interrupted bool) (string, map[string]string, error) {
 	packagePath, wanted, err := verifyNativePackage(ctx, m, target)
 	if err != nil {
 		return "", nil, err
 	}
 	family := target.NativePackage.Family
+	// dpkg may run the old package's prerm/postrm even when the new package
+	// has no scripts and triggers are disabled. Never execute unknown retained
+	// scripts; this check also applies to interrupted package recovery.
+	if family == "apt" {
+		if err = verifyInstalledDebianControls("/var/lib/dpkg/info"); err != nil {
+			return "", nil, err
+		}
+	}
 	if previous != nil && (previous.NativePackage == nil || previous.NativePackage.Family != family) {
 		return "", nil, errors.New("the recorded native package predecessor is required")
 	}
@@ -519,6 +597,9 @@ func preflightNativePackage(ctx context.Context, m Manifest, previous *update.Ma
 		validDebStatus := status == "install ok installed" || interrupted && (status == "install ok unpacked" || status == "install ok half-configured" || status == "install reinstreq half-installed")
 		if err != nil || version != target.Version && (previous == nil || version != previous.Version) || family == "apt" && !validDebStatus {
 			return "", nil, errors.New("installed native package differs; preserve it")
+		}
+		if err = verifyInstalledNativePaths(ctx, family, wanted, interrupted); err != nil {
+			return "", nil, err
 		}
 		if version == target.Version && (family != "apt" || status == "install ok installed") && globalPackageState(nil, wanted, false, true) == nil {
 			return packagePath, wanted, nil
@@ -558,10 +639,40 @@ func applyNativePackageLocked(ctx context.Context, m Manifest, previous *update.
 		return err
 	}
 	family := target.NativePackage.Family
-	if present, e := nativePackagePresent(ctx, family); e == nil && present {
+	present, err := nativePackagePresent(ctx, family)
+	if err != nil {
+		return err
+	}
+	if present {
 		version, status, e := installedNativePackage(ctx, family)
-		if e == nil && version == target.Version && (family != "apt" || status == "install ok installed") && globalPackageState(nil, wanted, false, true) == nil {
-			return nil
+		if e != nil {
+			return e
+		}
+		validDebStatus := status == "install ok installed" || interrupted && (status == "install ok unpacked" || status == "install ok half-configured" || status == "install reinstreq half-installed")
+		if version != target.Version && (previous == nil || version != previous.Version) || family == "apt" && !validDebStatus {
+			return errors.New("installed native package differs; preserve it")
+		}
+		if err = verifyInstalledNativePaths(ctx, family, wanted, interrupted); err != nil {
+			return err
+		}
+		if version == target.Version && (family != "apt" || status == "install ok installed") && globalPackageState(nil, wanted, false, true) == nil {
+			err = verifyInstalledNativePaths(ctx, family, wanted, false)
+			if err == nil {
+				return nil
+			}
+			// A journalled interruption may have left the package manager's
+			// inventory incomplete even when the files match. Reinstall the
+			// same verified target; never report that state as complete.
+			if !interrupted || !errors.Is(err, errIncompleteNativePackageInventory) {
+				return err
+			}
+		}
+	} else if previous != nil && !interrupted {
+		return errors.New("the recorded native package is missing; preserve it")
+	}
+	if family == "apt" {
+		if err = verifyInstalledDebianControls("/var/lib/dpkg/info"); err != nil {
+			return err
 		}
 	}
 	name, args := nativePackageInstallCommand(family, packagePath)
@@ -574,7 +685,10 @@ func applyNativePackageLocked(ctx context.Context, m Manifest, previous *update.
 	if err != nil || version != target.Version || family == "apt" && status != "install ok installed" {
 		return errors.New("native package installation is unconfirmed")
 	}
-	return globalPackageState(nil, wanted, false, true)
+	if err = globalPackageState(nil, wanted, false, true); err != nil {
+		return err
+	}
+	return verifyInstalledNativePaths(ctx, family, wanted, false)
 }
 
 // Provenance and the exact package digest are verified before this command.

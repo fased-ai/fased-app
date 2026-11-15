@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -142,6 +143,72 @@ func TestNativeRPMInstallUsesAttestedPackageAndKeepsDigestChecks(t *testing.T) {
 		if slices.Contains(args, forbidden) {
 			t.Fatal("RPM integrity or safety check was disabled", forbidden)
 		}
+	}
+}
+
+func TestDebianPredecessorMaintainerScriptsAreRefused(t *testing.T) {
+	for _, name := range []string{
+		"fased-app.prerm", "fased-app.postrm", "fased-app.preinst", "fased-app.postinst",
+		"fased-app:amd64.prerm", "fased-app:arm64.postrm",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, name), []byte("foreign"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyInstalledDebianControls(dir); err == nil {
+				t.Fatal("installed package maintainer script was accepted")
+			}
+		})
+	}
+	dir := t.TempDir()
+	for _, name := range []string{"fased-app.list", "fased-app.md5sums", "other-package.prerm", "fased-app-helper.postrm"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := verifyInstalledDebianControls(dir); err != nil {
+		t.Fatal("normal and unrelated package metadata must remain usable", err)
+	}
+	if err := verifyInstalledDebianControls(filepath.Join(dir, "missing")); err == nil {
+		t.Fatal("unavailable package metadata was accepted")
+	}
+}
+
+func TestNativePredecessorInventoryPreservesForeignFiles(t *testing.T) {
+	for _, family := range []string{"apt", "dnf"} {
+		t.Run(family, func(t *testing.T) {
+			paths := []string{"/usr/bin/fased", "/usr/lib/fased-app", "/usr/share/doc/fased-app"}
+			for name := range testPackageFiles() {
+				paths = append(paths, "/"+name)
+			}
+			if family == "apt" {
+				paths = append(paths, "/.", "/usr", "/usr/bin", "/usr/lib", "/usr/share", "/usr/share/doc")
+			}
+			list := func(values []string) []byte { return []byte(strings.Join(values, "\n") + "\n") }
+			if err := verifyInstalledPackagePaths(list(paths), family, testPackageFiles(), false); err != nil {
+				t.Fatal("the package's own paths were refused", err)
+			}
+			for name, bad := range map[string][]string{
+				"foreign data":    append(slices.Clone(paths), "/var/lib/fased/owner.db"),
+				"unexpected path": append(slices.Clone(paths), "/etc/sudoers.d/fased"),
+				"duplicate":       append(slices.Clone(paths), "/usr/bin/fased"),
+				"unclean":         append(slices.Clone(paths), "/usr/lib/../local/foreign"),
+			} {
+				t.Run(name, func(t *testing.T) {
+					if err := verifyInstalledPackagePaths(list(bad), family, testPackageFiles(), true); err == nil {
+						t.Fatal("foreign package inventory was accepted")
+					}
+				})
+			}
+			missing := []string{"/usr/bin/fased"}
+			if err := verifyInstalledPackagePaths(list(missing), family, testPackageFiles(), false); !errors.Is(err, errIncompleteNativePackageInventory) {
+				t.Fatal("incomplete installed package inventory was not classified", err)
+			}
+			if err := verifyInstalledPackagePaths(list(missing), family, testPackageFiles(), true); err != nil {
+				t.Fatal("a bounded interrupted inventory was refused", err)
+			}
+		})
 	}
 }
 
