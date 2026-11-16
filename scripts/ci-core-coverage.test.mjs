@@ -90,17 +90,20 @@ test("full race groups retain every package and require parallel scenarios and d
     workflow.indexOf("  handoff:\n"),
     workflow.indexOf("  handoff-uid:\n"),
   );
-  for (const [name, goos, arch] of [
-    ["Headless Windows compilation", "windows", "amd64"],
-    ["Headless macOS compilation", "darwin", "arm64"],
-  ]) {
-    const output = goos === "windows" ? "windows.exe" : "macos";
-    const command = `run: GOOS=${goos} GOARCH=${arch} CGO_ENABLED=0 go build -o .evidence/bin/${output} ./cmd/fased-app`;
+  const retainedNative = await readFile(
+    new URL("../.github/workflows/desktop-compatibility.yml", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(core, /GOOS=(?:windows|darwin)/);
+  for (const [goos, arch] of [
+    ["windows", "amd64"],
+    ["darwin", "arm64"],
+  ])
     assert.ok(
-      core.includes(`- name: ${name}\n        ${command}`),
-      "headless compilation remains in the core job",
+      retainedNative.includes(
+        `GOOS=${goos} GOARCH=${arch} CGO_ENABLED=0 go build`,
+      ),
     );
-  }
   assert.match(
     core,
     /go list \.\/internal\/\.\.\. \.\/cmd\/fased-app \.\/cmd\/fased-signer \.\/cmd\/fased-install \.\/cmd\/fased-package/,

@@ -1,6 +1,7 @@
 // One disposable UI/API/CLI observation journey, reused by local and installed acceptance.
 import assert from "node:assert/strict";
 import { join } from "node:path";
+import { openPasswordSignIn } from "./fixture-owner-setup.mjs";
 
 export async function walletReadJourney({
   view,
@@ -85,6 +86,7 @@ export async function walletReadJourney({
     const page = await ctx.newPage();
     page.setDefaultTimeout(10000);
     await page.goto(url + "/#wallets/accounts");
+    await openPasswordSignIn(page);
     await page
       .getByLabel("Owner password", { exact: true })
       .fill(ownerPassword);

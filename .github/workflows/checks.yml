@@ -132,10 +132,6 @@ jobs:
             .evidence/native-provider-secret/result.json
             .evidence/native-provider-secret/service-starts.log
           retention-days: 7
-      - name: Headless Windows compilation
-        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o .evidence/bin/windows.exe ./cmd/fased-app
-      - name: Headless macOS compilation
-        run: GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o .evidence/bin/macos ./cmd/fased-app
       - uses: actions/upload-artifact@v4
         if: failure() || cancelled()
         with:

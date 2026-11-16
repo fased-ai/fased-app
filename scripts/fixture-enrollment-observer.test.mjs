@@ -18,6 +18,91 @@ import {
   removeEnrollmentUnitLink,
 } from "./fixture-enrollment-observer.mjs";
 import { protectedPathMissing } from "./fixture-enrollment-helper.mjs";
+import { walletReadJourney } from "./fixture-wallet-read-journey.mjs";
+
+test("installed Wallets reader selects preserved password access before filling it", async (t) => {
+  for (const optional of [false, true]) {
+    await t.test(
+      optional ? "Local password choice" : "password form",
+      async () => {
+        const actions = [];
+        const reachedPassword = new Error(
+          "fixture reached original password input",
+        );
+        let formVisible = !optional;
+        const choice = {
+          isVisible: async () => optional,
+          click: async () => {
+            actions.push("choose password");
+            formVisible = true;
+          },
+          or: () => ({ first: () => ({ waitFor: async () => {} }) }),
+        };
+        const page = {
+          setDefaultTimeout: () => {},
+          goto: async () => {},
+          getByRole: (_role, value) => {
+            assert.equal(value.name, "Use password");
+            return choice;
+          },
+          getByLabel: (name) => {
+            assert.equal(name, "Owner password");
+            return {
+              fill: async (value) => {
+                assert.equal(formVisible, true);
+                assert.equal(value, "original fixture password");
+                actions.push("fill original password");
+                throw reachedPassword;
+              },
+            };
+          },
+        };
+        const snapshot = {
+          address: "fixture-address",
+          lamports: "9007199254740993",
+          fixtureOnly: true,
+          liveRPC: false,
+          activity: [{}],
+          transaction: {
+            payer: "fixture-address",
+            feeLamports: "5000",
+            nativeChange: "-5000",
+            tokens: [{ change: "1000000" }],
+          },
+        };
+        await assert.rejects(
+          walletReadJourney({
+            view: {
+              record: { accounts: [{ id: "a", name: "Disposable" }] },
+              addresses: { a: "fixture-address" },
+            },
+            accountId: "a",
+            ownerPassword: "original fixture password",
+            url: "http://127.0.0.1:1",
+            api: async (path) =>
+              path.endsWith("rpc-credential")
+                ? { saved: true, locked: true }
+                : snapshot,
+            cliRead: async () => snapshot,
+            browser: {
+              newContext: async () => ({
+                route: async () => {},
+                newPage: async () => page,
+                close: async () => actions.push("close"),
+              }),
+            },
+          }),
+          (error) => error === reachedPassword,
+        );
+        assert.deepEqual(actions, [
+          ...(optional ? ["choose password"] : []),
+          "fill original password",
+          "close",
+        ]);
+      },
+    );
+  }
+});
 
 async function fixture(t) {
   const dir = await mkdtemp(join(tmpdir(), "fased-enrollment-observer-"));

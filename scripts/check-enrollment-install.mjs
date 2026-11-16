@@ -107,7 +107,7 @@ const report = {
   class: ordinary
     ? "actual disposable Ubuntu Local same-instance enrollment"
     : "controlled Ubuntu Local/Remote same-instance enrollment",
-  profiles,
+  testedProfiles: profiles,
   privateRemoteAcceptance: false,
   fixtureOnly: true,
   ordinaryCustody: ordinary,
