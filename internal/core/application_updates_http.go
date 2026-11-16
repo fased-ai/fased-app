@@ -9,7 +9,7 @@ import (
 
 func (h *HTTPHandler) applicationUpdatesAPI(w http.ResponseWriter, r *http.Request, token string) {
 	if r.Method == http.MethodGet {
-		v, e := h.store.ApplicationUpdates(r.Context())
+		v, e := h.store.applicationUpdatesForUser(r.Context())
 		if e != nil {
 			writeError(w, 500, "Update status unavailable. Preserve the installation.")
 			return
@@ -32,13 +32,18 @@ func (h *HTTPHandler) applicationUpdatesAPI(w http.ResponseWriter, r *http.Reque
 		writeError(w, 400, "invalid update request")
 		return
 	}
-	v, e := h.store.CommandApplicationUpdate(r.Context(), c)
+	_, e = h.store.CommandApplicationUpdate(r.Context(), c)
 	if errors.Is(e, ErrConflict) {
 		writeError(w, 409, e.Error())
 		return
 	}
 	if e != nil {
 		writeError(w, 409, e.Error())
+		return
+	}
+	v, e := h.store.applicationUpdatesForUser(r.Context())
+	if e != nil {
+		writeError(w, 500, "Update status unavailable. Preserve the installation.")
 		return
 	}
 	writeJSON(w, 202, v)
