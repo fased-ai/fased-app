@@ -279,12 +279,15 @@ if [[ $(/usr/bin/id -u) != 0 ]]; then
   [[ -x /usr/bin/sudo ]] || die 'This account needs administrator preparation (sudo).'
   missing=()
   packages=(ca-certificates curl)
+  if [[ $profile == local && $action == install ]]; then
+    case "$package_family" in apt) packages+=(polkitd) ;; dnf) packages+=(polkit) ;; esac
+  fi
   if [[ $profile == remote ]]; then packages+=(nftables openssh-server); fi
   for package in "${packages[@]}"; do
     package_installed "$package" || missing+=("$package")
   done
   if ((${#missing[@]})); then
-    printf 'Preparing required download tools with administrator approval…\n' >&2
+    printf 'Preparing required system packages with administrator approval…\n' >&2
     install_packages "${missing[@]}"
   fi
 
@@ -297,6 +300,9 @@ fi
 printf 'Preparing Linux for Fased…\n' >&2
 missing=()
 packages=(ca-certificates curl sudo util-linux)
+if [[ $profile == local && $action == install ]]; then
+  case "$package_family" in apt) packages+=(polkitd) ;; dnf) packages+=(polkit) ;; esac
+fi
 if [[ $profile == remote ]]; then packages+=(nftables openssh-server); fi
 for package in "${packages[@]}"; do
   package_installed "$package" || missing+=("$package")

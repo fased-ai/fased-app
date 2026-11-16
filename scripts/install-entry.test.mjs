@@ -64,6 +64,47 @@ test("unstamped source cannot modify a host", () => {
   assert.match(r.stderr.toString(), /No trusted installer release/);
 });
 
+test("Local installation prepares the update authorization prerequisite", () => {
+  const ownerStart = template.indexOf(
+    "  missing=()\n  packages=(ca-certificates curl)",
+  );
+  const rootStart = template.indexOf(
+    "\nmissing=()\npackages=(ca-certificates curl sudo util-linux)",
+  );
+  assert.ok(ownerStart >= 0 && rootStart >= 0);
+  for (const [start, endMarker] of [
+    [ownerStart, "  for package in"],
+    [rootStart, "\nfor package in"],
+  ]) {
+    const end = template.indexOf(endMarker, start);
+    assert.ok(end > start);
+    const selection = template.slice(start, end);
+    for (const [family, action, expected] of [
+      ["apt", "install", "polkitd"],
+      ["dnf", "install", "polkit"],
+      ["apt", "status", ""],
+    ]) {
+      const result = spawnSync("bash", [
+        "-c",
+        `
+        set -eu
+        profile=local package_family=$1 action=$2
+        ${selection}
+        printf '%s\\n' "\${packages[@]}"
+      `,
+        "entry",
+        family,
+        action,
+      ]);
+      assert.equal(result.status, 0, result.stderr.toString());
+      const packages = result.stdout.toString().trim().split("\n");
+      assert.equal(packages.includes("polkitd"), expected === "polkitd");
+      assert.equal(packages.includes("polkit"), expected === "polkit");
+      assert.ok(!packages.some((name) => /gtk|webkit/i.test(name)));
+    }
+  }
+});
+
 test("Local entry detects apt/dnf families before setup and refuses ambiguous hosts", () => {
   const dir = mkdtempSync(join(tmpdir(), "fased-os-entry-"));
   try {
