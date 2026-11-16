@@ -311,6 +311,9 @@ jobs:
       - name: Native Linux window and separate-core journey
         if: runner.os == 'Linux'
         run: |
+          # The browser-first platform installer does not install desktop GUI
+          # libraries. Restore them for this separate legacy native UI check.
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-0
           dbus-run-session -- npm run test:native-window
       - name: Packaged Ubuntu desktop first-launch preparation
         if: runner.os == 'Linux'
