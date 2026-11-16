@@ -1,23 +1,31 @@
 // CI runner configuration only; never used by the application or installer.
 // Keep Ubuntu's signing key while tolerating an unavailable CI archive mirror.
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
-export function archiveMirrorList() {
-  return [
-    "https://mirrors.edge.kernel.org/ubuntu/\tpriority:1",
-    "https://archive.ubuntu.com/ubuntu/\tpriority:2",
-    "",
-  ].join("\n");
+const archives = [
+  "https://archive.ubuntu.com/ubuntu/",
+  "https://mirrors.edge.kernel.org/ubuntu/",
+];
+
+export async function selectArchiveMirror(probe) {
+  const reachable = await Promise.all(
+    archives.map(async (uri) => {
+      try {
+        return await probe(uri);
+      } catch {
+        return false;
+      }
+    }),
+  );
+  const selected = archives.find((_, index) => reachable[index]);
+  assert.ok(selected, "No reachable Ubuntu archive for CI");
+  return selected;
 }
 
-export function mainArchiveSources(source, mirrorListPath) {
-  assert.match(
-    mirrorListPath,
-    /^\/tmp\/fased-ci-ubuntu-[A-Za-z0-9]+\/mirrors\.txt$/,
-    "Expected the CI-owned mirror list",
-  );
+export function mainArchiveSources(source, mirror) {
+  assert.ok(archives.includes(mirror), "Expected a known HTTPS Ubuntu archive");
   const ubuntuSource =
     /^URIs: (?:(?:http|https):\/\/(?:azure\.archive|archive|security)\.ubuntu\.com\/ubuntu\/?|mirror\+file:\/etc\/apt\/apt-mirrors\.txt)[ \t]*$/m;
   let replaced = 0;
@@ -46,10 +54,7 @@ export function mainArchiveSources(source, mirrorListPath) {
         /^(Trusted|Allow-Insecure|Allow-Weak|Allow-Downgrade-To-Insecure):/im,
       );
       replaced++;
-      return stanza.replace(
-        ubuntuSource,
-        `URIs: mirror+file:${mirrorListPath}`,
-      );
+      return stanza.replace(ubuntuSource, `URIs: ${mirror}`);
     })
     .join("");
   assert.ok(
@@ -80,16 +85,18 @@ if (
       .filter((line) => line.startsWith("URIs:"))
       .join("\n"),
   );
-  // _apt must be able to traverse the private CI-created directory, while
-  // only the runner owner can alter the list. The hosted runner removes it.
-  const mirrorDir = await mkdtemp("/tmp/fased-ci-ubuntu-");
-  await chmod(mirrorDir, 0o755);
-  const mirrorListPath = `${mirrorDir}/mirrors.txt`;
-  await writeFile(mirrorListPath, archiveMirrorList(), {
-    flag: "wx",
-    mode: 0o644,
+  // Probe once rather than making APT retry a dead mirror for every index.
+  // APT still verifies the archive with the distribution signing key.
+  const mirror = await selectArchiveMirror(async (uri) => {
+    const response = await fetch(new URL("dists/noble/InRelease", uri), {
+      method: "GET",
+      redirect: "error",
+      signal: AbortSignal.timeout(5000),
+    });
+    await response.body?.cancel();
+    return response.ok;
   });
-  const result = mainArchiveSources(source, mirrorListPath);
+  const result = mainArchiveSources(source, mirror);
   await mkdir(".evidence", { recursive: true });
   await writeFile(".evidence/ubuntu.sources", result, { mode: 0o644 });
 }
