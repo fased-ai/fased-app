@@ -218,6 +218,7 @@ test("candidate preparation CLI reaches verified metadata output without a publi
   for (const variant of [
     "complete",
     "package-only",
+    "main-build",
     "changed-tracked-seed",
     "wrong-provenance-owner",
   ]) {
@@ -293,13 +294,13 @@ return options.encoding?value.toString():Buffer.from(value);
             GITHUB_WORKFLOW_REF: `${rawConfig.repository}/.github/workflows/release.yml@refs/tags/v${rawConfig.version}`,
             FASED_PACKAGE_ONLY: "false",
             FASED_FEDORA_PREDECESSOR: "false",
-            ...(variant === "package-only"
+            ...(["package-only", "main-build"].includes(variant)
               ? {
                   GITHUB_EVENT_NAME: "workflow_dispatch",
                   GITHUB_REF: "refs/heads/main",
                   GITHUB_WORKFLOW_REF: `${rawConfig.repository}/.github/workflows/release.yml@refs/heads/main`,
                   FASED_RELEASE_SOURCE: source.commit,
-                  FASED_PACKAGE_ONLY: "true",
+                  FASED_PACKAGE_ONLY: String(variant === "package-only"),
                 }
               : {}),
             GITHUB_OUTPUT: workflowOutput,
@@ -309,7 +310,7 @@ return options.encoding?value.toString():Buffer.from(value);
         },
       );
       const output = join(f.parent, ".evidence/ubuntu-release");
-      if (variant !== "complete" && variant !== "package-only") {
+      if (!["complete", "package-only", "main-build"].includes(variant)) {
         assert.equal(child.status, 1);
         assert.match(
           child.stderr,
@@ -329,11 +330,11 @@ return options.encoding?value.toString():Buffer.from(value);
       assert.equal(inputs.sourceCommit, source.commit);
       assert.equal(
         inputs.tagObject,
-        variant === "package-only" ? "" : source.tagObject,
+        variant === "complete" ? source.tagObject : "",
       );
       assert.equal(
         inputs.linuxBundle,
-        variant === "package-only" ? true : undefined,
+        variant === "complete" ? undefined : true,
       );
       assert.equal(inputs.seedSha256, rawConfig.seedSha256);
       assert.equal(inputs.packageLockSha256, sha("fixture-package-lock"));
@@ -679,31 +680,27 @@ test("unpublished browser bundle contains the signer without native packages", (
   );
 });
 
-test("package-only workflow builds one browser-first bundle", () => {
+test("every new candidate builds and attests the same browser-first bundle", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/release.yml", import.meta.url),
     "utf8",
   );
   const build = workflow.slice(
     workflow.indexOf("- name: Build and package the reviewed"),
-    workflow.indexOf("- name: Attest the actual archive"),
+    workflow.indexOf("- name: Attest the browser-first"),
   );
-  const nativeBranch = build.slice(
-    build.indexOf('if [[ "$FASED_PACKAGE_ONLY" == true ]]'),
-    build.indexOf("          else\n"),
-  );
-  assert.match(nativeBranch, /export CGO_ENABLED=0/);
-  assert.doesNotMatch(nativeBranch, /rpm|gtk|webkit|build-desktop/);
-  assert.match(
+  assert.match(build, /export CGO_ENABLED=0/);
+  assert.doesNotMatch(
     build,
-    /build-core\.mjs --installer[^\n]*"\$\{desktop_args\[@\]\}"/,
+    /gtk|webkit|build-desktop|wallet-desktop|ubuntu-release-format|FASED_PACKAGE_ONLY/,
   );
+  assert.match(build, /build-core\.mjs --installer[^\n]*--wallet-signer=/);
   assert.match(build, /--linux-bundle-format/);
   const attest = workflow.slice(
     workflow.indexOf("- name: Attest the browser-first Linux bundle"),
     workflow.indexOf("- name: Verify original provenance"),
   );
-  assert.match(attest, /if: \$\{\{ inputs\.package_only \}\}/);
+  assert.doesNotMatch(attest, /if:/);
   for (const name of [
     "fased-app-linux-amd64.tar.gz",
     "fased-install-linux-amd64",
@@ -785,7 +782,7 @@ test("an explicit package-only run cannot start VM acceptance", () => {
   );
   assert.match(
     release,
-    /package_only:\n(?:.*\n)*?\s+default: false\n\s+type: boolean/,
+    /package_only:\n(?:.*\n)*?\s+default: true\n\s+type: boolean/,
   );
   const acceptance = release.slice(
     release.indexOf("  installed-acceptance:\n"),
@@ -794,6 +791,7 @@ test("an explicit package-only run cannot start VM acceptance", () => {
     .split("\n")
     .find((line) => line.trimStart().startsWith("if:"));
   assert.match(condition ?? "", /!inputs\.package_only/);
+  assert.match(condition ?? "", /inputs\.candidate_run != ''/);
   const inspection = readFileSync(
     new URL("../.github/workflows/inspection-acceptance.yml", import.meta.url),
     "utf8",

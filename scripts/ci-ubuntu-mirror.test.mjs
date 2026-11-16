@@ -124,9 +124,9 @@ test("runner changes and unsigned or trust-bypassing sources fail closed", () =>
     ),
   );
 });
-test("workflow prepares sources without root project execution or timeout expansion", () => {
+test("optional native compatibility prepares sources without root project execution or timeout expansion", () => {
   const workflow = readFileSync(
-    new URL("../.github/workflows/checks.yml", import.meta.url),
+    new URL("../.github/workflows/desktop-compatibility.yml", import.meta.url),
     "utf8",
   );
   const desktop = workflow

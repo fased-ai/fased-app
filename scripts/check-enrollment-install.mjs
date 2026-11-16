@@ -55,6 +55,9 @@ assert.ok(
   args.length === 0 || (args.length === 1 && args[0] === "--ordinary-custody"),
 );
 const ordinary = args[0] === "--ordinary-custody";
+// The ordinary CI helper is bound to a Local owner. Its authority cannot
+// enroll a Remote device. Real Tailscale acceptance uses the recorded VPS.
+const profiles = ordinary ? ["local"] : ["local", "remote"];
 const evidence = resolve(
   ordinary
     ? ".evidence/b05-ordinary-installed"
@@ -101,8 +104,11 @@ const scrub = (value) =>
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const report = {
   result: "FAIL",
-  class:
-    "actual disposable Ubuntu Local/Remote same-instance enrollment; not owner/VPS/native/live acceptance",
+  class: ordinary
+    ? "actual disposable Ubuntu Local same-instance enrollment"
+    : "controlled Ubuntu Local/Remote same-instance enrollment",
+  profiles,
+  privateRemoteAcceptance: false,
   fixtureOnly: true,
   ordinaryCustody: ordinary,
   mining: false,
@@ -1043,7 +1049,7 @@ try {
     startedManager = true;
   }
   browser = await chromium.launch({ headless: true });
-  for (const mode of ["local", "remote"]) {
+  for (const mode of profiles) {
     const listen = await freeListen(),
       url = "http://" + listen;
     const base = join(evidence, mode);

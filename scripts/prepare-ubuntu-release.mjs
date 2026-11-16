@@ -332,7 +332,7 @@ function prepare(c) {
   write("build-inputs.json", {
     ...context,
     releaseAuthority: c.releaseAuthority,
-    ...(process.env.FASED_PACKAGE_ONLY === "true" ? { linuxBundle: true } : {}),
+    ...(context.buildRef === "refs/heads/main" ? { linuxBundle: true } : {}),
     configSha256: sha(readFileSync("release/ubuntu.json")),
     seedSha256: c.seedSha256,
     custodyApprovalSha256: c.custodyApprovalSha256,

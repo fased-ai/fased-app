@@ -10,7 +10,6 @@ test("docs, RPC, UI and coupled changes select bounded coverage", () => {
   ]);
   assert.equal(rpc.scope, "rpc");
   assert.equal(rpc.core, true);
-  assert.equal(rpc.desktop, false);
   assert.equal(rpc.vm, false);
   assert.equal(classify(["web/src/pages/Wallets.tsx"]).scope, "ui");
   assert.equal(
@@ -56,7 +55,7 @@ function result(plan) {
   };
   for (const [job, flag] of [
     ["core", "core"],
-    ["desktop", "desktop"],
+    ["browser", "core"],
     ["signer", "signer"],
     ["handoff", "handoff"],
     ["handoff-uid", "handoff_uid"],
@@ -268,82 +267,54 @@ test("ordinary recovery checks leave signer time for privileged bootstrap withou
   }
 });
 
-test("full UI journey uses the existing Linux job while focused paths retain core coverage", async () => {
+test("browser and joined CLI coverage run independently of retained native clients", async () => {
   const { readFile } = await import("node:fs/promises");
   const workflow = await readFile(
     new URL("../.github/workflows/checks.yml", import.meta.url),
     "utf8",
   );
-  const core = workflow.slice(
-    workflow.indexOf("  core:\n"),
-    workflow.indexOf("  core-scenarios:\n"),
-  );
-  const desktop = workflow.slice(
-    workflow.indexOf("  desktop:\n"),
-    workflow.indexOf("  signer:\n"),
-  );
+  const browser = workflow.split("\n  browser:\n")[1].split("\n  signer:\n")[0];
+  assert.match(browser, /if: needs.classify.outputs.core == 'true'/);
+  assert.match(browser, /npm run test:ui/);
+  assert.match(browser, /npm run test:core-ui -- --fully-parallel --workers=3/);
+  assert.match(browser, /npm run test:core-ui -- --grep/);
   assert.doesNotMatch(
-    core,
-    /if: needs.classify.outputs.scope == 'full'\n\s+run: npm run test:core-ui/,
+    workflow,
+    /build:desktop|build-desktop|gtk|webkit|package:native|test:native-window/,
   );
-  assert.match(
-    core,
-    /if: needs.classify.outputs.scope == 'ui'\n\s+env:[\s\S]*?run: \|[\s\S]*?npm run test:core-ui\n/,
-  );
-  assert.match(
-    core,
-    /if: needs.classify.outputs.scope == 'rpc'\n\s+run: npm run test:core-ui -- --grep/,
-  );
-  assert.match(
-    desktop,
-    /if: runner.os == 'Linux' && needs.classify.outputs.scope == 'full'\n\s+env:[\s\S]*?run: \|[\s\S]*?npm run test:core-ui -- --fully-parallel --workers=3\n/,
-  );
-  assert.ok(
-    !workflow.includes("--project="),
-    "every selected journey retains desktop and mobile",
-  );
-  assert.match(desktop, /npx playwright install --only-shell chromium/);
-  assert.match(desktop, /timeout-minutes: 15\n/);
-  for (const job of [core, desktop]) {
-    for (const [env, binary, pkg] of [
-      ["FASED_WALLET_BROWSER_BINARY", "wallet-core.test", "core"],
-      ["FASED_WALLET_OWNER_BINARY", "wallet-owner.test", "signer"],
-    ]) {
-      assert.ok(job.includes(`${env}: .evidence/bin/${binary}`));
-      assert.ok(
-        job.includes(`go test -c -o .evidence/bin/${binary} ./internal/${pkg}`),
-      );
-    }
-  }
-  const coreSteps = core.split("\n      - ");
-  assert.ok(
-    !coreSteps.some(
-      (step) =>
-        step.includes("scope == 'full'") &&
-        step.includes("npm run test:core-ui"),
-    ),
-    "full joined UI stays in the existing Linux desktop job",
-  );
-  for (const job of [core, desktop])
+  assert.doesNotMatch(browser, /--project=/);
+  for (const [env, binary, pkg] of [
+    ["FASED_WALLET_BROWSER_BINARY", "wallet-core.test", "core"],
+    ["FASED_WALLET_OWNER_BINARY", "wallet-owner.test", "signer"],
+  ]) {
+    assert.ok(browser.includes(`${env}: .evidence/bin/${binary}`));
     assert.ok(
-      job.includes("if: failure() || cancelled()"),
-      "retain traces on failure or job cancellation",
+      browser.includes(
+        `go test -c -o .evidence/bin/${binary} ./internal/${pkg}`,
+      ),
     );
-  assert.match(desktop, /\.evidence\/core-browser\//);
-  assert.ok(desktop.includes(".evidence/*.png"), "retain moved screenshots");
-  assert.match(core, /timeout-minutes: 20/);
-  assert.match(desktop, /timeout-minutes: 15/);
-  const full = classify([".github/workflows/checks.yml"]);
-  assert.equal(full.core, true);
-  assert.equal(full.desktop, true);
+  }
+  assert.match(browser, /if: failure\(\) \|\| cancelled\(\)/);
+  assert.match(browser, /\.evidence\/core-browser\//);
   for (const paths of [
+    [],
     ["web/src/pages/Agents.tsx"],
     ["internal/core/rpc_check.go"],
   ]) {
-    const plan = classify(paths);
-    assert.equal(plan.core, true);
-    assert.equal(plan.desktop, false);
+    const needs = result(classify(paths));
+    assert.equal(needs.browser.result, "success");
+    assert.doesNotThrow(() => verifyGate(needs));
+    for (const state of ["skipped", "failure", "cancelled", undefined]) {
+      const broken = structuredClone(needs);
+      if (state === undefined) delete broken.browser;
+      else broken.browser.result = state;
+      assert.throws(() => verifyGate(broken), /browser/);
+    }
   }
+  // The trusted base router can still emit the retired desktop flag.
+  const base = result(classify([]));
+  base.classify.outputs.desktop = "true";
+  assert.doesNotThrow(() => verifyGate(base));
 });
 
 test("Mintlify configuration and static assets are docs, executable or mixed paths stay conservative", () => {
