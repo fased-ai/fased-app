@@ -82,9 +82,41 @@ func maintenanceCustodyEnrollmentImage(ctx context.Context, a maintenance.Author
 	c.Env = []string{"PATH=/usr/bin:/bin", "HOME=/nonexistent", "LANG=C"}
 	c.Stdin = io.LimitReader(in, core.MaxEnrollmentEncodedBytes+1)
 	c.Stdout = out
-	c.Stderr = io.Discard
 	c.WaitDelay = 2 * time.Second
-	return c.Run()
+	return runProtectedEnrollmentImage(c, q.Action)
+}
+
+// Only the fixed conflict diagnostic may cross the privileged boundary.
+// Other child output may contain private state, so retain it in bounded memory
+// and report a generic failure instead of forwarding it.
+func runProtectedEnrollmentImage(c *exec.Cmd, action string) error {
+	var diagnostic enrollmentDiagnostic
+	c.Stderr = &diagnostic
+	if err := c.Run(); err != nil {
+		const conflict = "enrollment import stage: invalid or conflicting enrollment image; preserve original state"
+		var exit *exec.ExitError
+		if action == "import" && errors.As(err, &exit) && exit.ExitCode() == 1 && !diagnostic.overflow && string(diagnostic.data) == "fased-app: "+conflict+"\n" {
+			return errors.New(conflict)
+		}
+		return errors.New("protected enrollment image operation failed; preserve original state")
+	}
+	return nil
+}
+
+type enrollmentDiagnostic struct {
+	data     []byte
+	overflow bool
+}
+
+func (d *enrollmentDiagnostic) Write(p []byte) (int, error) {
+	if !d.overflow {
+		if len(p) > 4096-len(d.data) {
+			d.data, d.overflow = nil, true
+		} else {
+			d.data = append(d.data, p...)
+		}
+	}
+	return len(p), nil
 }
 
 func verifyEnrollmentOSTool(path string) error {
